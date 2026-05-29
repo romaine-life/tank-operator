@@ -318,10 +318,21 @@ export function inputReplyAnnotations(
 // zod preprocess does the same join for arrays:
 //   `Array.isArray(H) && H.every($=>typeof $==="string") ? H.join(", ") : H`
 // — so we match that contract directly.
-export function joinAnswersForSDK(answers: Record<string, string[]>): Record<string, string> {
+function answerTextForProvider(labels: string[], notes?: string): string {
+  const answer = labels.join(", ");
+  const trimmedNotes = notes?.trim() ?? "";
+  if (!trimmedNotes) return answer;
+  if (labels.length === 1 && labels[0] === "Other") return trimmedNotes;
+  return `${answer}\n\nAdditional context: ${trimmedNotes}`;
+}
+
+export function joinAnswersForSDK(
+  answers: Record<string, string[]>,
+  annotations: Record<string, InputReplyAnnotation> = {},
+): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [question, labels] of Object.entries(answers)) {
-    out[question] = labels.join(", ");
+    out[question] = answerTextForProvider(labels, annotations[question]?.notes);
   }
   return out;
 }
@@ -1240,7 +1251,7 @@ export class Runner {
           behavior: "allow",
           updatedInput: {
             ...input,
-            answers: joinAnswersForSDK(answers),
+            answers: joinAnswersForSDK(answers, annotations),
             ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
           },
         });
@@ -1339,7 +1350,7 @@ export class Runner {
       behavior: "allow",
       updatedInput: {
         ...(pending.input ?? {}),
-        answers: joinAnswersForSDK(answers),
+        answers: joinAnswersForSDK(answers, annotations),
         ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
       },
     });

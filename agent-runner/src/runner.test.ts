@@ -265,6 +265,25 @@ test("joinAnswersForSDK joins multi-select arrays with the SDK preprocess separa
   );
 });
 
+test("joinAnswersForSDK includes free-form notes in provider-visible answer text", () => {
+  assert.deepEqual(
+    joinAnswersForSDK(
+      {
+        "Question type": ["Personality (Recommended)"],
+        "Pure free-form": ["Other"],
+      },
+      {
+        "Question type": { notes: "ask about chat box behavior" },
+        "Pure free-form": { notes: "use this as the answer" },
+      },
+    ),
+    {
+      "Question type": "Personality (Recommended)\n\nAdditional context: ask about chat box behavior",
+      "Pure free-form": "use this as the answer",
+    },
+  );
+});
+
 // Regression test for the "Stop doesn't interrupt deep tool-use loops"
 // failure mode that PR #481's durable-stop migration left open. Before
 // the data/control plane split, both submit_turn and interrupt_turn rode

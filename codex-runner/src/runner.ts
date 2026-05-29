@@ -274,6 +274,43 @@ function inputReplyAnswers(record: SessionCommandRecord): Record<string, string[
   return out;
 }
 
+interface InputReplyAnnotation {
+  preview?: string;
+  notes?: string;
+}
+
+function inputReplyAnnotations(
+  record: SessionCommandRecord,
+): Record<string, InputReplyAnnotation> {
+  const raw = record.annotations;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const out: Record<string, InputReplyAnnotation> = {};
+  for (const [question, value] of Object.entries(raw as Record<string, unknown>)) {
+    const trimmedQuestion = String(question).trim();
+    if (!trimmedQuestion || !value || typeof value !== "object") continue;
+    const ann = value as { preview?: unknown; notes?: unknown };
+    const cleaned: InputReplyAnnotation = {};
+    if (typeof ann.preview === "string" && ann.preview.trim()) {
+      cleaned.preview = ann.preview.trim();
+    }
+    if (typeof ann.notes === "string" && ann.notes.trim()) {
+      cleaned.notes = ann.notes.trim();
+    }
+    if (cleaned.preview || cleaned.notes) out[trimmedQuestion] = cleaned;
+  }
+  return out;
+}
+
+export function answersForCodexAppServer(
+  labels: string[],
+  annotation?: InputReplyAnnotation,
+): string[] {
+  const trimmedNotes = annotation?.notes?.trim() ?? "";
+  if (!trimmedNotes) return labels;
+  if (labels.length === 1 && labels[0] === "Other") return [trimmedNotes];
+  return [...labels, `Additional context: ${trimmedNotes}`];
+}
+
 // codexQuestionsToTankShape normalizes codex's app-server
 // AppServerUserInputQuestion[] into the Tank conversation protocol's
 // question shape. The frontend renders the Tank shape only — codex's
@@ -780,11 +817,17 @@ export class Runner {
       return;
     }
     this.pendingUserInputs.delete(providerItemID);
+    const annotations = inputReplyAnnotations(record);
     const answersByQuestionID: Record<string, { answers: string[] }> = {};
     for (const question of pending.request.questions) {
       const labels = answers[question.question] ?? answers[question.id];
       if (labels && labels.length > 0) {
-        answersByQuestionID[question.id] = { answers: labels };
+        answersByQuestionID[question.id] = {
+          answers: answersForCodexAppServer(
+            labels,
+            annotations[question.question] ?? annotations[question.id],
+          ),
+        };
       }
     }
     pending.resolve({ answers: answersByQuestionID });
@@ -802,6 +845,7 @@ export class Runner {
           kind: "needs_input",
           resolved: true,
           answers,
+          ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
         },
       }),
     );
