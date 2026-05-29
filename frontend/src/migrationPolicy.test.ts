@@ -293,20 +293,22 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(indexCssSource.includes(".run-turn-view"), true);
   assert.equal(indexCssSource.includes('.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"]'), true);
   assert.equal(indexCssSource.includes(".run-turn-thinking-content"), true);
-  assert.equal(indexCssSource.includes(".run-turn-thinking-dots"), true);
-  assert.equal(indexCssSource.includes("@keyframes run-thinking-dot-bounce"), true);
+  assert.equal(indexCssSource.includes(".run-turn-thinking-label"), true);
+  assert.equal(indexCssSource.includes("@keyframes run-thinking-shimmer"), true);
+  assert.equal(indexCssSource.includes("@keyframes run-thinking-dot-bounce"), false);
   assert.equal(indexCssSource.includes(".run-msg-turn"), true);
   assert.equal(styleguidePortfolioTranscriptSource.includes("TurnViewSpecimen"), true);
   assert.equal(styleguidePortfolioTranscriptSource.includes("showAssistantAvatar"), true);
   assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-content"), true);
-  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-dots"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-label"), true);
+  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-last-activity"), true);
 });
 
 test("thinking bubble renders an elapsed-time readout while a turn is live", () => {
-  // The bouncing-dots indicator alone gave no signal for how long a turn
-  // had been working, which made stuck-vs-slow indistinguishable. The
-  // duration component sits alongside the dots and ticks every second
-  // while the turn remains active.
+  // The original dots-only indicator gave no signal for how long a turn
+  // had been working or whether activity was still landing. The richer
+  // indicator keeps "Thinking..." as the primary state, with duration and
+  // last-activity metadata under it.
   //
   // The timer is a purely client-side stopwatch anchored to the first
   // moment the UI renders the bubble for a (user, turn) pair. Backend
@@ -318,14 +320,24 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   // from the same baseline.
   assert.equal(appSource.includes("function formatThinkingElapsed"), true);
   assert.equal(appSource.includes("function RunTurnThinkingDuration"), true);
+  assert.equal(appSource.includes("function formatThinkingLastActivity"), true);
+  assert.equal(appSource.includes('if (totalSeconds === 0) return "0s";'), true);
+  assert.equal(appSource.includes('if (totalSeconds < 5) return "now";'), false);
+  assert.equal(appSource.includes("function RunTurnThinkingLastActivity"), true);
   assert.equal(appSource.includes("run-turn-thinking-duration"), true);
+  assert.equal(appSource.includes("run-turn-thinking-last-activity"), true);
+  assert.equal(appSource.includes("lastActivityAt"), true);
   assert.match(
     appSource,
-    /<RunTurnThinkingBubble[\s\S]{0,200}userKey=\{userKey\}[\s\S]{0,80}turnId=\{g\.turnId\}/,
+    /<RunTurnThinkingBubble[\s\S]{0,260}userKey=\{userKey\}[\s\S]{0,80}turnId=\{g\.turnId\}/,
   );
   assert.match(
     appSource,
     /<RunTurnThinkingDuration userKey=\{userKey\} turnId=\{selected\.turnId\}/,
+  );
+  assert.match(
+    appSource,
+    /<RunTurnThinkingLastActivity lastActivityAt=\{selected\.lastActivityAt\} turnId=\{selected\.turnId\}/,
   );
   // No backend timestamp should leak into the timer's anchor — the
   // resolver takes only (userKey, turnId) and never reads a startedAt
@@ -356,8 +368,13 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
     /userKey=\{user\?\.sub \?\? user\?\.email \?\? "anon"\}/,
   );
   assert.equal(indexCssSource.includes(".run-turn-thinking-duration"), true);
+  assert.equal(indexCssSource.includes(".run-turn-thinking-last-activity"), true);
   assert.equal(
     styleguidePortfolioTranscriptSource.includes("run-turn-thinking-duration"),
+    true,
+  );
+  assert.equal(
+    styleguidePortfolioTranscriptSource.includes("run-turn-thinking-last-activity"),
     true,
   );
 });

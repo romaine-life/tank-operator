@@ -190,21 +190,30 @@ function TurnThinkingMessage({
         </span>
       )}
       <button type="button" className="run-transcript-message-content run-turn-thinking-content">
-        <span className="run-turn-thinking-dots" aria-hidden="true">
-          <span>.</span>
-          <span>.</span>
-          <span>.</span>
-        </span>
-        {/* Static specimen mirrors a mid-run turn so the styleguide shows the
-            same elapsed-time slot the live transcript renders. The actual
-            App.tsx bubble drives the readout off the activity shell's
-            startedAt; here we just freeze a representative value so layout
-            and color decisions can be reviewed without a live timer. */}
-        <span
-          className="run-turn-thinking-duration"
-          data-design-element="thinking-duration"
-        >
-          6m 12s
+        <span className="run-turn-thinking-lines">
+          <span className="run-turn-thinking-label run-turn-thinking-shimmer">Thinking...</span>
+          {/* Static specimen mirrors a mid-run turn so the styleguide shows the
+              same metadata rows the live transcript renders. App.tsx drives the
+              runtime from the local turn stopwatch and last activity from the
+              projected activity shell; here we freeze representative values. */}
+          <span className="run-turn-thinking-meta-row">
+            <span className="run-turn-thinking-meta-label">Runtime</span>
+            <span
+              className="run-turn-thinking-duration"
+              data-design-element="thinking-duration"
+            >
+              6m 12s
+            </span>
+          </span>
+          <span className="run-turn-thinking-meta-row">
+            <span className="run-turn-thinking-meta-label">Last activity</span>
+            <span
+              className="run-turn-thinking-last-activity"
+              data-design-element="thinking-last-activity"
+            >
+              8s ago
+            </span>
+          </span>
         </span>
       </button>
     </div>

@@ -899,6 +899,13 @@ func turnActivitySummaryMap(activityEntries, compactedEntries []map[string]any, 
 		last := activityEntries[len(activityEntries)-1]
 		out["startedAt"] = projectionFirstNonEmpty(transcriptMapString(first, "startedAt"), transcriptMapString(first, "time"))
 		out["completedAt"] = projectionFirstNonEmpty(transcriptMapString(last, "completedAt"), transcriptMapString(last, "turnTerminalAt"), transcriptMapString(last, "time"))
+		out["lastActivityAt"] = projectionFirstNonEmpty(
+			transcriptMapString(last, "completedAt"),
+			transcriptMapString(last, "updatedAt"),
+			transcriptMapString(last, "turnTerminalAt"),
+			transcriptMapString(last, "time"),
+			transcriptMapString(last, "startedAt"),
+		)
 		out["startOrderKey"] = transcriptMapString(first, "orderKey")
 		out["endOrderKey"] = projectionFirstNonEmpty(transcriptMapString(last, "turnTerminalOrderKey"), transcriptMapString(last, "orderKey"))
 		out["sourceEventId"] = transcriptMapString(first, "sourceEventId")
