@@ -195,8 +195,9 @@ import {
 } from "./sessionWorkspace";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
 import {
-  estimateTranscriptCostUSD,
+  estimateTranscriptCost,
   formatComposerCostUsd,
+  type SessionCostEstimateBasis,
 } from "./sessionCostEstimate";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
@@ -1438,17 +1439,24 @@ function ComposerUsageRing({
 
 interface ComposerCostEstimateProps {
   amountUsd: number | null;
+  basis?: SessionCostEstimateBasis | null;
   placeholder?: boolean;
   title?: string;
 }
 
 function ComposerCostEstimate({
   amountUsd,
+  basis = null,
   placeholder = false,
   title,
 }: ComposerCostEstimateProps) {
   const unavailable = placeholder || amountUsd === null;
   const label = unavailable ? "$--" : formatComposerCostUsd(amountUsd);
+  const defaultTitle = unavailable
+    ? "Cost estimate appears after token usage or transcript text is available"
+    : basis === "visible_transcript"
+      ? `Estimated API-equivalent session token cost from visible transcript text: ${label}`
+      : `Estimated API-equivalent session token cost from provider usage: ${label}`;
   return (
     <span
       className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
@@ -1458,11 +1466,7 @@ function ComposerCostEstimate({
           : `Estimated session cost ${label}`
       }
       aria-disabled={unavailable || undefined}
-      title={title ?? (
-        unavailable
-          ? "Cost estimate appears after token usage is reported"
-          : `Estimated API-equivalent session token cost: ${label}`
-      )}
+      title={title ?? defaultTitle}
     >
       {label}
     </span>
@@ -11255,7 +11259,7 @@ function ChatPane({
   const contextWindow = getContextWindow(modelForContext);
   const modelForCostEstimate = appliedModelId || modelForContext;
   const sessionCostEstimate = useMemo(
-    () => estimateTranscriptCostUSD(entries, modelForCostEstimate),
+    () => estimateTranscriptCost(entries, modelForCostEstimate),
     [entries, modelForCostEstimate],
   );
 
@@ -12327,7 +12331,10 @@ function ChatPane({
                 tokensUsed={tokensUsed}
                 contextWindow={contextWindow}
               />
-              <ComposerCostEstimate amountUsd={sessionCostEstimate} />
+              <ComposerCostEstimate
+                amountUsd={sessionCostEstimate?.amountUsd ?? null}
+                basis={sessionCostEstimate?.basis ?? null}
+              />
               {GUI_ROLLOUT_MODES.has(session.mode) && (
                 <button
                   type="button"

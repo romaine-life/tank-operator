@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  estimateTranscriptCost,
   estimateTranscriptCostUSD,
   estimateUsageCostUSD,
   formatComposerCostUsd,
@@ -51,6 +52,51 @@ test("deduplicates transcript usage rows by turn", () => {
   ], "gpt-5.4-mini");
 
   assertNearlyEqual(cost, 0.01575);
+});
+
+test("falls back to visible transcript text when provider usage is missing", () => {
+  const estimate = estimateTranscriptCost([
+    {
+      id: "u",
+      kind: "message",
+      role: "user",
+      turnId: "turn-1",
+      text: "x".repeat(400),
+    },
+    {
+      id: "a",
+      kind: "message",
+      role: "assistant",
+      turnId: "turn-1",
+      text: "y".repeat(800),
+    },
+  ], "gpt-5.4-mini");
+
+  assert.equal(estimate?.basis, "visible_transcript");
+  assertNearlyEqual(estimate?.amountUsd ?? null, 0.000975);
+});
+
+test("reported usage wins over visible text fallback for the same turn", () => {
+  const estimate = estimateTranscriptCost([
+    {
+      id: "u",
+      kind: "message",
+      role: "user",
+      turnId: "turn-1",
+      turnUsage: { input_tokens: 1_000, output_tokens: 1_000 },
+      text: "x".repeat(10_000),
+    },
+    {
+      id: "a",
+      kind: "message",
+      role: "assistant",
+      turnId: "turn-1",
+      text: "y".repeat(10_000),
+    },
+  ], "gpt-5.4-mini");
+
+  assert.equal(estimate?.basis, "reported_usage");
+  assertNearlyEqual(estimate?.amountUsd ?? null, 0.00525);
 });
 
 test("formats compact composer costs", () => {

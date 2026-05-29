@@ -1,7 +1,17 @@
 type UsageRow = {
   id?: string;
+  kind?: string;
+  role?: string;
+  text?: string;
   turnId?: string;
   turnUsage?: unknown;
+};
+
+export type SessionCostEstimateBasis = "reported_usage" | "visible_transcript";
+
+export type SessionCostEstimate = {
+  amountUsd: number;
+  basis: SessionCostEstimateBasis;
 };
 
 type ModelRates = {
@@ -61,22 +71,38 @@ export function estimateUsageCostUSD(usage: unknown, modelId: string): number | 
 }
 
 export function estimateTranscriptCostUSD(rows: UsageRow[], modelId: string): number | null {
-  let total = 0;
-  let found = false;
-  const seen = new Set<string>();
+  return estimateTranscriptCost(rows, modelId)?.amountUsd ?? null;
+}
 
-  for (const row of rows) {
-    if (row.turnUsage === undefined || row.turnUsage === null) continue;
-    const dedupeKey = row.turnId || row.id || JSON.stringify(row.turnUsage) || `usage-${seen.size}`;
-    if (seen.has(dedupeKey)) continue;
-    seen.add(dedupeKey);
-    const estimate = estimateUsageCostUSD(row.turnUsage, modelId);
-    if (estimate === null) continue;
-    total += estimate;
-    found = true;
+export function estimateTranscriptCost(rows: UsageRow[], modelId: string): SessionCostEstimate | null {
+  let total = 0;
+  let reportedTurns = 0;
+  let fallbackTurns = 0;
+  const turns = transcriptTurns(rows);
+
+  for (const turn of turns.values()) {
+    let reportedCost: number | null = null;
+    for (const usage of turn.usage) {
+      reportedCost = estimateUsageCostUSD(usage, modelId);
+      if (reportedCost !== null) break;
+    }
+    if (reportedCost !== null) {
+      total += reportedCost;
+      reportedTurns += 1;
+      continue;
+    }
+    const visibleCost = estimateVisibleTurnCostUSD(turn, modelId);
+    if (visibleCost !== null) {
+      total += visibleCost;
+      fallbackTurns += 1;
+    }
   }
 
-  return found ? total : null;
+  if (reportedTurns + fallbackTurns === 0) return null;
+  return {
+    amountUsd: total,
+    basis: fallbackTurns > 0 ? "visible_transcript" : "reported_usage",
+  };
 }
 
 export function formatComposerCostUsd(value: number): string {
@@ -89,6 +115,53 @@ export function formatComposerCostUsd(value: number): string {
 
 function costFromTokens(tokens: number, ratePerMillion: number): number {
   return (Math.max(0, tokens) / PER_MILLION) * ratePerMillion;
+}
+
+function transcriptTurns(rows: UsageRow[]): Map<string, { usage: unknown[]; inputText: string[]; outputText: string[] }> {
+  const turns = new Map<string, { usage: unknown[]; inputText: string[]; outputText: string[] }>();
+  let anonymousUsageIndex = 0;
+
+  for (const row of rows) {
+    const turnId = row.turnId || (
+      row.turnUsage !== undefined && row.turnUsage !== null
+        ? `usage:${row.id || anonymousUsageIndex++}`
+        : ""
+    );
+    if (!turnId) continue;
+    let turn = turns.get(turnId);
+    if (!turn) {
+      turn = { usage: [], inputText: [], outputText: [] };
+      turns.set(turnId, turn);
+    }
+    if (row.turnUsage !== undefined && row.turnUsage !== null) {
+      turn.usage.push(row.turnUsage);
+    }
+    if (row.kind === "message" && typeof row.text === "string" && row.text.trim()) {
+      if (row.role === "assistant") {
+        turn.outputText.push(row.text);
+      } else if (row.role === "user") {
+        turn.inputText.push(row.text);
+      }
+    }
+  }
+
+  return turns;
+}
+
+function estimateVisibleTurnCostUSD(
+  turn: { inputText: string[]; outputText: string[] },
+  modelId: string,
+): number | null {
+  const inputTokens = estimateTextTokens(turn.inputText.join("\n"));
+  const outputTokens = estimateTextTokens(turn.outputText.join("\n"));
+  if (inputTokens + outputTokens === 0) return null;
+  return estimateUsageCostUSD({ input_tokens: inputTokens, output_tokens: outputTokens }, modelId);
+}
+
+function estimateTextTokens(text: string): number {
+  const trimmed = text.trim();
+  if (!trimmed) return 0;
+  return Math.max(1, Math.ceil(trimmed.length / 4));
 }
 
 function openAiCachedInputTokens(usage: Record<string, unknown>): number {
