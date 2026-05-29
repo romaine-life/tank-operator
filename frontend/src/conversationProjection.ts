@@ -28,6 +28,11 @@ export interface ConversationMessageEntry extends ConversationEntryBase {
   // this to pick the parent session's avatar instead of the human
   // owner's Gravatar. See conversationReducer.applyUserMessage.
   originSessionId?: string;
+  // Set when a user-role message was authored by a non-interactive
+  // principal (an auth.romaine.life bot token). "system" tells the renderer
+  // to draw the session's system identity instead of the human owner's
+  // Gravatar. originSessionId takes precedence when both are present.
+  authorKind?: string;
   // Severity tag for system-role messages — drives the renderer's
   // styling. Set on session.status:failed banners; absent on neutral
   // loading/ready notices. user/assistant messages ignore it.
@@ -158,6 +163,7 @@ export function projectConversationState(
             sourceEventId: message.sourceEventId,
             orderKey: message.orderKey,
             ...(message.originSessionId ? { originSessionId: message.originSessionId } : {}),
+            ...(message.authorKind ? { authorKind: message.authorKind } : {}),
             ...(message.severity ? { severity: message.severity } : {}),
             ...(message.action ? { action: message.action } : {}),
           },

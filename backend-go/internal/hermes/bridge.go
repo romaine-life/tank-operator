@@ -157,8 +157,12 @@ type SubmitArgs struct {
 	Instructions    string // optional; layered on top of Hermes' core prompt
 	SkillName       string
 	OmitUserMessage bool
-	Now             time.Time
-	OrderBase       time.Time
+	// AuthorKind attributes the turn to a non-interactive principal (an
+	// auth.romaine.life bot token) so the transcript renders the session's
+	// system identity instead of the human owner. Empty for human turns.
+	AuthorKind string
+	Now        time.Time
+	OrderBase  time.Time
 }
 
 type SubmitResult struct {
@@ -204,6 +208,7 @@ func (b *Bridge) SubmitTurn(ctx context.Context, args SubmitArgs) (SubmitResult,
 		ClientNonce:       args.ClientNonce,
 		Runtime:           "hermes",
 		SkillName:         args.SkillName,
+		AuthorKind:        strings.TrimSpace(args.AuthorKind),
 		Now:               now,
 	})
 	if err != nil {

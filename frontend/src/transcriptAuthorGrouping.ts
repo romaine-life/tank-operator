@@ -5,6 +5,7 @@ export type TranscriptAuthorGroupingEntry = {
   role?: unknown;
   time?: unknown;
   originSessionId?: unknown;
+  authorKind?: unknown;
   messageKind?: unknown;
   skillName?: unknown;
   severity?: unknown;
@@ -34,7 +35,17 @@ export function transcriptAuthorGroupKey(
 
   if (entry.role === "user") {
     const originSessionId = optionalString(entry.originSessionId);
-    return `user:${originSessionId ? `session:${originSessionId}` : "human"}:${messageKind}:${skillName}`;
+    const authorKind = optionalString(entry.authorKind);
+    // Precedence mirrors the renderer's avatar selection: a sibling-session
+    // handoff (origin) first, then a bot-authored "system" turn, then the
+    // interactive human owner. Distinct keys keep a bot turn from grouping
+    // into a human's avatar run (and vice versa).
+    const author = originSessionId
+      ? `session:${originSessionId}`
+      : authorKind === "system"
+        ? "system"
+        : "human";
+    return `user:${author}:${messageKind}:${skillName}`;
   }
 
   if (entry.role === "system") {
