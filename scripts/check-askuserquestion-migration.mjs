@@ -78,6 +78,14 @@ const ignoredFiles = new Set([
 const ignoredRelativePaths = new Set([
   "scripts/check-askuserquestion-migration.mjs",
   "frontend/src/migrationPolicy.test.ts",
+  // codex-runner provider boundary: the JSONRPC parser MUST read
+  // codex's native `isOther`/`isSecret` flags to map them into the Tank
+  // shape. Reads here are the adapter contract, not a regression.
+  "codex-runner/src/appServerTransport.ts",
+  // codex-runner inline adapter for AskUserQuestion question shape.
+  // Houses codexQuestionsToTankShape, the only Tank-side site that maps
+  // codex's `isOther` → `allowFreeForm` and `isSecret` → `secret`.
+  "codex-runner/src/runner.ts",
 ]);
 
 // Forbidden: must NOT appear in any non-excluded file. Each entry is the
@@ -169,6 +177,56 @@ const forbidden = [
   {
     name: "removed allowDangerouslySkipPermissions flag in agent-runner",
     pattern: /\ballowDangerouslySkipPermissions\b/,
+  },
+
+  // --- Retired showPreNotesField gate ---------------------------------------
+  //
+  // The notes textarea used to render only when a selected option had a
+  // `preview` field (`showPreNotesField` in ToolAskUserBody). That gate
+  // made the free-form path unreachable for the wild codex case
+  // (options=null + isOther=true → no preview, no selection → no
+  // textarea), and for any Claude question whose option set had no
+  // previews. The replacement is a Tank-canonical `allowFreeForm` flag
+  // surfaced as an always-on textarea when set. Pin the retired symbol
+  // so a future PR can't quietly reintroduce the conditional gate.
+  {
+    name: "removed showPreNotesField gate on the notes textarea",
+    pattern: /\bshowPreNotesField\b/,
+  },
+  // The legacy submit gate required every question to have ≥1 selected
+  // option, which made codex's `isOther + options=null` questions
+  // unanswerable. Replacement is `questionHasResponse(q)` which accepts
+  // either an option pick or free-form text. The old shape was a single
+  // `.every((q) => (selections[q.question]?.length ?? 0) > 0)`
+  // expression; pin against it directly.
+  {
+    name: "removed selections-only readiness gate (every question must have one selected option)",
+    pattern: /questions\.every\(\(\s*q\s*\)\s*=>\s*\(selections\[q\.question\]\?\.length\s*\?\?\s*0\)\s*>\s*0\)/,
+  },
+
+  // --- Raw codex question fields outside the adapter boundary --------------
+  //
+  // codex-runner/src/appServerTransport.ts is the provider-shape boundary
+  // (it's where the codex JSONRPC `item/tool/requestUserInput` is parsed),
+  // and codex-runner/src/runner.ts hosts the codex → Tank mapping. Any
+  // other read of `isOther`/`isSecret` means the codex-shaped fields have
+  // leaked past the adapter — exactly the violation
+  // docs/product-inspirations.md → "Provider-specific event streams are
+  // adapter inputs. The frontend renders the Tank conversation protocol,
+  // not raw provider wire formats" forbids.
+  // Match actual property-access or property-key usage of the codex
+  // field names — `q.isOther`, `record.isOther`, `isOther:` as an
+  // object-key. Doc comments referring to "codex's isOther flag" are
+  // fine; only code reads/writes outside the allowlisted adapter files
+  // are forbidden. Without this narrowing, the rule overreaches into
+  // comments documenting WHY the codex mapping exists.
+  {
+    name: "no isOther property access outside codex provider boundary",
+    pattern: /\.isOther\b|\bisOther\s*:/,
+  },
+  {
+    name: "no isSecret property access outside codex provider boundary",
+    pattern: /\.isSecret\b|\bisSecret\s*:/,
   },
 
   // --- "Answer questions?" placeholder string -------------------------------
@@ -287,6 +345,21 @@ const required = [
     name: "ToolAskUserBody renders option.preview content",
     pattern: /opt\.preview\b|option\.preview\b/,
   },
+  // Tank-canonical question shape: allowFreeForm gates the always-on
+  // free-form textarea ("say something else") and the submit gate
+  // accepts free-form text in lieu of an option pick. Without this
+  // anchor, the renderer reverts to the option-list-only failure mode
+  // codex's wild `isOther + options=null` traffic exposed.
+  {
+    file: "frontend/src/App.tsx",
+    name: "ToolAskUserBody surfaces the allowFreeForm-driven free-form textarea",
+    pattern: /\bshowFreeForm\b/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "parseAskUserQuestions reads q.allowFreeForm from the Tank-canonical shape",
+    pattern: /allowFreeForm:\s*q\.allowFreeForm\s*===\s*true/,
+  },
   {
     file: "frontend/src/App.tsx",
     name: "ToolAskUserBody reads answers from the durable event payload (not only local React state)",
@@ -311,6 +384,51 @@ const required = [
     file: "schemas/tank-conversation-event.fixtures.json",
     name: "approval_resolved fixture carries an answers field",
     pattern: /tool\.approval_resolved[\s\S]{0,800}"answers"/,
+  },
+
+  // --- Adapter normalization to Tank-canonical question shape --------------
+  //
+  // Both runners must normalize their provider's question shape into
+  // the same Tank shape before publishing the durable
+  // `tool.approval_requested` event. The frontend renders the Tank
+  // shape only — codex's `isOther`/`isSecret`/`options=null` and
+  // Claude's own SDK quirks must NOT reach the renderer.
+  {
+    file: "agent-runner/src/adapters/claude.ts",
+    name: "Claude adapter normalizes AskUserQuestion input via claudeQuestionsToTankShape",
+    pattern: /\bclaudeQuestionsToTankShape\b/,
+  },
+  {
+    file: "agent-runner/src/adapters/claude.ts",
+    name: "Claude adapter sets allowFreeForm=true on every Tank-shape question",
+    pattern: /allowFreeForm:\s*true/,
+  },
+  {
+    file: "codex-runner/src/runner.ts",
+    name: "Codex runner normalizes AskUserQuestion input via codexQuestionsToTankShape",
+    pattern: /\bcodexQuestionsToTankShape\b/,
+  },
+  {
+    file: "codex-runner/src/runner.ts",
+    name: "Codex adapter maps isOther → allowFreeForm",
+    pattern: /allowFreeForm:\s*q\.isOther\s*===\s*true/,
+  },
+
+  // --- Backend transcript projection emits the handoff announcement --------
+  {
+    file: "backend-go/cmd/tank-operator/transcript_projection.go",
+    name: "projection emits needs_input_announcement meta row per AskUserQuestion",
+    pattern: /projectNeedsInputAnnouncement\b/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/transcript_projection.go",
+    name: "announcement opt-out skips Turn-activity compact via isProjectionNeedsInputAnnouncement",
+    pattern: /isProjectionNeedsInputAnnouncement\b/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "frontend renders RunNeedsInputAnnouncement for the handoff meta row",
+    pattern: /RunNeedsInputAnnouncement\b/,
   },
 
   // --- Codex app-server parity is intentional, legacy exec fallback is not --

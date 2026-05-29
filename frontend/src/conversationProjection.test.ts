@@ -760,14 +760,35 @@ test("surfaces durable AskUserQuestion answers on the projected tool entry", () 
     ]),
   );
 
-  assert.equal(projection.entries.length, 1);
-  assert.equal(projection.entries[0]?.kind, "tool");
-  if (projection.entries[0]?.kind === "tool") {
-    assert.deepEqual(projection.entries[0].askUserAnswers, {
+  // The projection emits TWO entries per AskUserQuestion item: the
+  // original tool entry (carries the question card UI in Turn activity)
+  // and a meta-kind `needs_input_announcement` row promoted into the
+  // main transcript as a handoff signal. The announcement is companion
+  // to the tool entry, not a replacement; both are sourced from the
+  // same durable AskUserQuestion item and share the underlying answer
+  // state via `askUserAnswers`.
+  assert.equal(projection.entries.length, 2);
+  const toolEntry = projection.entries.find((entry) => entry.kind === "tool");
+  const announcement = projection.entries.find(
+    (entry) => entry.kind === "meta" && entry.metaKind === "needs_input_announcement",
+  );
+  assert.ok(toolEntry, "expected the AskUserQuestion tool entry to be projected");
+  assert.ok(announcement, "expected a needs_input_announcement meta entry to be projected");
+  if (toolEntry?.kind === "tool") {
+    assert.deepEqual(toolEntry.askUserAnswers, {
       "Which features do you want to enable?": {
         labels: ["Search", "Tags"],
         notes: "Drop notes for now, we'll revisit",
       },
     });
+  }
+  if (announcement?.kind === "meta") {
+    // The announcement reflects the durable answered state — its title
+    // flips to "Answered" once the matching tool.approval_resolved
+    // lands. The targetTurnId is the only navigation hint the
+    // RunNeedsInputAnnouncement click handler depends on.
+    assert.equal(announcement.announcement?.answered, true);
+    assert.equal(announcement.announcement?.targetTurnId, "turn-active");
+    assert.equal(announcement.meta?.title, "Answered");
   }
 });

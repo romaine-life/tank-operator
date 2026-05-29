@@ -274,6 +274,77 @@ function inputReplyAnswers(record: SessionCommandRecord): Record<string, string[
   return out;
 }
 
+// codexQuestionsToTankShape normalizes codex's app-server
+// AppServerUserInputQuestion[] into the Tank conversation protocol's
+// question shape. The frontend renders the Tank shape only — codex's
+// `isOther`, `isSecret`, stable `id`, and nullable `options` field never
+// reach the renderer directly.
+//
+//   isOther          → allowFreeForm  (codex's "say something else" flag;
+//                                       in every wild codex AskUserQuestion
+//                                       observed in 2026-05, isOther=true,
+//                                       and the absence of this mapping
+//                                       silently disabled the free-form path)
+//   isSecret         → secret
+//   options ?? []    → options[]      (codex permits pure free-form questions
+//                                       with options=null; without
+//                                       allowFreeForm support upstream, those
+//                                       are unanswerable in the current UI)
+//   id               → dropped at this boundary; the Tank shape keys on
+//                       question text (mirrors Claude's adapter). Codex
+//                       deduplicates by id internally; the runner returns
+//                       answers keyed by id elsewhere.
+//   multiSelect      → false (codex has no multi-select primitive today;
+//                              if it grows one, route the flag through here)
+export function codexQuestionsToTankShape(
+  questions: AppServerUserInputQuestion[] | undefined,
+): TankAskUserQuestion[] {
+  if (!Array.isArray(questions)) return [];
+  return questions.flatMap((q): TankAskUserQuestion[] => {
+    const question = typeof q?.question === "string" ? q.question : "";
+    if (!question) return [];
+    const options = Array.isArray(q.options)
+      ? q.options.flatMap((opt): TankAskUserQuestionOption[] => {
+          if (!opt || typeof opt !== "object") return [];
+          const label = typeof opt.label === "string" ? opt.label : "";
+          if (!label) return [];
+          return [
+            {
+              label,
+              ...(typeof opt.description === "string" && opt.description
+                ? { description: opt.description }
+                : {}),
+            },
+          ];
+        })
+      : [];
+    return [
+      {
+        question,
+        ...(typeof q.header === "string" && q.header ? { header: q.header } : {}),
+        multiSelect: false,
+        options,
+        allowFreeForm: q.isOther === true,
+        secret: q.isSecret === true,
+      },
+    ];
+  });
+}
+
+interface TankAskUserQuestionOption {
+  label: string;
+  description?: string;
+}
+
+interface TankAskUserQuestion {
+  question: string;
+  header?: string;
+  multiSelect: boolean;
+  options: TankAskUserQuestionOption[];
+  allowFreeForm: boolean;
+  secret: boolean;
+}
+
 export function interruptTargetMatchesTurn(
   targetTurnID: string,
   turn: Pick<AcceptedTurn, "turnID" | "clientNonce">,
@@ -654,7 +725,14 @@ export class Runner {
           kind: "needs_input",
           title: "Ask user question",
           name: "AskUserQuestion",
-          input: { questions: request.questions },
+          // Provider-specific shape is adapter input; the frontend renders
+          // the Tank conversation protocol. codexQuestionsToTankShape
+          // normalizes codex's `isOther` → `allowFreeForm`, `isSecret` →
+          // `secret`, and a nullable `options` field to an empty array.
+          // Without this, codex's raw question shape (id/isOther/isSecret/
+          // options=null) leaks into the durable event and the frontend
+          // silently drops every flag it does not recognize.
+          input: { questions: codexQuestionsToTankShape(request.questions) },
         },
       }),
     );
