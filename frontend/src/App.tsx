@@ -125,6 +125,7 @@ import {
   splitLegacyAttachmentDisplayText,
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
+import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -6158,6 +6159,12 @@ function ToolAskUserBody({
                   value={liveNote}
                   disabled={submitting}
                   onChange={(e) => setNoteFor(q.question, e.target.value)}
+                  onKeyDown={(e) => {
+                    if (!shouldSubmitAskUserFreeFormKey(e)) return;
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void submit();
+                  }}
                   placeholder={
                     q.options.length === 0
                       ? "Type your answer…"
