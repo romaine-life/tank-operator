@@ -5,9 +5,9 @@
 // touching ~hundreds of unrelated lines.
 //
 // Each assertion catches a specific user-trust failure if it regresses:
-//   - "Opus 4.7 is the default" — a re-order of CLAUDE_MODELS that
-//     puts Sonnet/Haiku first would silently change every new
-//     session's model. Pin the first id.
+//   - "Opus 4.8 is the default" — a re-order of CLAUDE_MODELS that
+//     puts Opus 4.7 / Sonnet / Haiku first would silently change every
+//     new session's model. Pin the first id.
 //   - "high is the default effort" — same shape, but for the effort
 //     enum.
 //   - "RunPrefs persists model + effort" — without these keys the
@@ -26,12 +26,12 @@ import test from "node:test";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
 
-test("CLAUDE_MODELS lists claude-opus-4-7 first so it is the default selection", () => {
+test("CLAUDE_MODELS lists claude-opus-4-8 first so it is the default selection", () => {
   const match = appSource.match(/const CLAUDE_MODELS:\s*ModelOption\[\][^[]*\[([\s\S]*?)\];/);
   assert.ok(match, "CLAUDE_MODELS literal should be present");
   const firstId = match[1]!.match(/id:\s*"([^"]+)"/);
   assert.ok(firstId, "CLAUDE_MODELS first entry should have an id");
-  assert.equal(firstId[1], "claude-opus-4-7");
+  assert.equal(firstId[1], "claude-opus-4-8");
 });
 
 test("DEFAULT_CLAUDE_MODEL_ID and DEFAULT_CLAUDE_EFFORT_ID match the agent-runner constants", () => {
@@ -40,7 +40,7 @@ test("DEFAULT_CLAUDE_MODEL_ID and DEFAULT_CLAUDE_EFFORT_ID match the agent-runne
   // backend-go/cmd/tank-operator/middleware.go allowedClaudeEfforts.
   // If product changes the defaults, ALL three layers must move
   // together — that's the cross-layer contract this test enforces.
-  assert.match(appSource, /const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-7";/);
+  assert.match(appSource, /const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";/);
   assert.match(appSource, /const DEFAULT_CLAUDE_EFFORT_ID = "high";/);
 });
 

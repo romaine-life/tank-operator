@@ -119,6 +119,9 @@ export function StyleguideNewSessionRow() {
                   </div>
                   <div className="home-model-list" role="group" aria-label="model">
                     <button className="home-model is-selected" type="button" aria-pressed="true">
+                      <span className="home-model-title">Claude Opus 4.8</span>
+                    </button>
+                    <button className="home-model" type="button" aria-pressed="false">
                       <span className="home-model-title">Claude Opus 4.7</span>
                     </button>
                     <button className="home-model" type="button" aria-pressed="false">
