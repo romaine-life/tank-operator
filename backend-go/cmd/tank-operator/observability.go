@@ -1654,6 +1654,7 @@ func sessionEventTypeLabel(raw string) string {
 	case "user_message.created",
 		"turn.submitted",
 		"turn.started",
+		"turn.usage",
 		"turn.completed",
 		"turn.failed",
 		"turn.command_failed",

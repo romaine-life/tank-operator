@@ -171,6 +171,72 @@ test("turn.completed produces no meta entry — success speaks through the bubbl
   assert.equal(metas.length, 0);
 });
 
+test("turn.usage projects a stable usage meta entry while the turn is active", () => {
+  const usage = { input_tokens: 100, output_tokens: 25, total_tokens: 125 };
+  const usageObservation = {
+    usage_source: "thread.tokenUsage.updated",
+    provider_turn_id: "provider-turn-1",
+    update_count: 1,
+  };
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "run-1",
+        payload: { text: "think" },
+      }),
+      ev("2", "turn.submitted", { client_nonce: "run-1" }),
+      ev("3", "turn.started", { source: "codex" }),
+      ev("4", "turn.usage", {
+        source: "codex",
+        payload: {
+          usage,
+          usage_observation: usageObservation,
+        },
+      }),
+    ]),
+  );
+
+  const meta = projection.entries.find((entry) => entry.kind === "meta");
+  assert.ok(meta, "turn.usage should produce a projected usage row");
+  if (meta?.kind === "meta") {
+    assert.equal(meta.id, "turn-usage:turn-1");
+    assert.equal(meta.metaKind, "turn_usage");
+    assert.deepEqual(meta.turnUsage, usage);
+    assert.deepEqual(meta.usageObservation, usageObservation);
+  }
+});
+
+test("turn.usage meta row is suppressed once terminal usage can annotate transcript rows", () => {
+  const midUsage = { input_tokens: 100, output_tokens: 25, total_tokens: 125 };
+  const terminalUsage = { input_tokens: 120, output_tokens: 30, total_tokens: 150 };
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "run-1",
+        payload: { text: "think" },
+      }),
+      ev("2", "turn.started", { source: "codex" }),
+      ev("3", "turn.usage", {
+        source: "codex",
+        payload: { usage: midUsage },
+      }),
+      ev("4", "turn.completed", {
+        source: "codex",
+        payload: { usage: terminalUsage },
+      }),
+    ]),
+  );
+
+  assert.equal(
+    projection.entries.some((entry) => entry.kind === "meta" && entry.metaKind === "turn_usage"),
+    false,
+  );
+  const user = projection.entries.find((entry) => entry.kind === "message" && entry.role === "user");
+  assert.deepEqual(user?.turnUsage, terminalUsage);
+});
+
 test("session.status:failed with provider extension carries severity + action onto the system message", () => {
   const projection = projectConversationState(
     reduceConversationEvents([

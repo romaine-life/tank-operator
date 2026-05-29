@@ -1,17 +1,11 @@
 type UsageRow = {
   id?: string;
-  kind?: string;
-  role?: string;
-  text?: string;
   turnId?: string;
   turnUsage?: unknown;
 };
 
-export type SessionCostEstimateBasis = "reported_usage" | "visible_transcript";
-
 export type SessionCostEstimate = {
   amountUsd: number;
-  basis: SessionCostEstimateBasis;
 };
 
 type ModelRates = {
@@ -70,10 +64,6 @@ export function estimateUsageCostUSD(usage: unknown, modelId: string): number | 
     costFromTokens(outputTokens, rates.output);
 }
 
-export function estimateTranscriptCostUSD(rows: UsageRow[], modelId: string): number | null {
-  return estimateTranscriptCost(rows, modelId)?.amountUsd ?? null;
-}
-
 export function estimateTurnCost(
   rows: UsageRow[],
   modelId: string,
@@ -90,7 +80,6 @@ export function estimateTurnCost(
 export function estimateTranscriptCost(rows: UsageRow[], modelId: string): SessionCostEstimate | null {
   let total = 0;
   let reportedTurns = 0;
-  let fallbackTurns = 0;
   const turns = transcriptTurns(rows);
 
   for (const turn of turns.values()) {
@@ -104,17 +93,11 @@ export function estimateTranscriptCost(rows: UsageRow[], modelId: string): Sessi
       reportedTurns += 1;
       continue;
     }
-    const visibleCost = estimateVisibleTurnCostUSD(turn, modelId);
-    if (visibleCost !== null) {
-      total += visibleCost;
-      fallbackTurns += 1;
-    }
   }
 
-  if (reportedTurns + fallbackTurns === 0) return null;
+  if (reportedTurns === 0) return null;
   return {
     amountUsd: total,
-    basis: fallbackTurns > 0 ? "visible_transcript" : "reported_usage",
   };
 }
 
@@ -137,8 +120,8 @@ function costFromTokens(tokens: number, ratePerMillion: number): number {
   return (Math.max(0, tokens) / PER_MILLION) * ratePerMillion;
 }
 
-function transcriptTurns(rows: UsageRow[]): Map<string, { usage: unknown[]; inputText: string[]; outputText: string[] }> {
-  const turns = new Map<string, { usage: unknown[]; inputText: string[]; outputText: string[] }>();
+function transcriptTurns(rows: UsageRow[]): Map<string, { usage: unknown[] }> {
+  const turns = new Map<string, { usage: unknown[] }>();
   let anonymousUsageIndex = 0;
 
   for (const row of rows) {
@@ -150,38 +133,15 @@ function transcriptTurns(rows: UsageRow[]): Map<string, { usage: unknown[]; inpu
     if (!turnId) continue;
     let turn = turns.get(turnId);
     if (!turn) {
-      turn = { usage: [], inputText: [], outputText: [] };
+      turn = { usage: [] };
       turns.set(turnId, turn);
     }
     if (row.turnUsage !== undefined && row.turnUsage !== null) {
       turn.usage.push(row.turnUsage);
     }
-    if (row.kind === "message" && typeof row.text === "string" && row.text.trim()) {
-      if (row.role === "assistant") {
-        turn.outputText.push(row.text);
-      } else if (row.role === "user") {
-        turn.inputText.push(row.text);
-      }
-    }
   }
 
   return turns;
-}
-
-function estimateVisibleTurnCostUSD(
-  turn: { inputText: string[]; outputText: string[] },
-  modelId: string,
-): number | null {
-  const inputTokens = estimateTextTokens(turn.inputText.join("\n"));
-  const outputTokens = estimateTextTokens(turn.outputText.join("\n"));
-  if (inputTokens + outputTokens === 0) return null;
-  return estimateUsageCostUSD({ input_tokens: inputTokens, output_tokens: outputTokens }, modelId);
-}
-
-function estimateTextTokens(text: string): number {
-  const trimmed = text.trim();
-  if (!trimmed) return 0;
-  return Math.max(1, Math.ceil(trimmed.length / 4));
 }
 
 function openAiCachedInputTokens(usage: Record<string, unknown>): number {

@@ -193,6 +193,57 @@ func TestProjectTranscriptEventsCollapsesActiveTurnBeforeFinalAnswer(t *testing.
 	}
 }
 
+func TestProjectTranscriptEventsCarriesMidTurnUsageOnActiveActivity(t *testing.T) {
+	usage := map[string]any{
+		"input_tokens":  float64(100),
+		"output_tokens": float64(25),
+		"total_tokens":  float64(125),
+	}
+	usageObservation := map[string]any{
+		"usage_source":     "thread.tokenUsage.updated",
+		"provider_turn_id": "provider-turn-1",
+		"update_count":     float64(1),
+	}
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "think for a while",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("started", "003", "turn.started", "runner", "codex", "turn-1", "", nil),
+		projectionTestEvent("usage", "004", "turn.usage", "runner", "codex", "turn-1", "", map[string]any{
+			"usage":             usage,
+			"usage_observation": usageObservation,
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 2; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	shell := projection.Entries[1]
+	if got, want := shell["kind"], "turn_activity"; got != want {
+		t.Fatalf("usage entry should project as active turn_activity, got %#v", shell)
+	}
+	if got := transcriptAnyMap(shell["turnUsage"]); got["input_tokens"] != float64(100) {
+		t.Fatalf("shell turnUsage = %#v, want usage payload", shell["turnUsage"])
+	}
+	if got := transcriptAnyMap(shell["usageObservation"]); got["usage_source"] != "thread.tokenUsage.updated" {
+		t.Fatalf("shell usageObservation = %#v, want observation payload", shell["usageObservation"])
+	}
+	activity := transcriptAnyMap(shell["activity"])
+	if got := transcriptAnyMap(activity["turnUsage"]); got["total_tokens"] != float64(125) {
+		t.Fatalf("activity turnUsage = %#v, want usage payload", activity["turnUsage"])
+	}
+	body := projection.ActivityBodies["turn-1"]
+	if got, want := body.CompactedEntryIDs, []string{"turn-usage:turn-1"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("compacted ids = %#v, want %#v", got, want)
+	}
+	if got := body.Entries[0]["metaKind"]; got != "turn_usage" {
+		t.Fatalf("activity body metaKind = %#v, want turn_usage", got)
+	}
+}
+
 func TestProjectTranscriptEventsKeepsInterruptedTurnActivityOutOfMainTranscript(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

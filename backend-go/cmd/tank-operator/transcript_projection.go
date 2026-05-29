@@ -36,6 +36,7 @@ type projectionState struct {
 	backgroundTasks   []*projectionBackgroundTask
 	backgroundIndex   map[string]int
 	interruptRequests []projectedEntryItem
+	turnUsages        map[string]turnUsageProjection
 	turnTerminals     map[string]turnTerminalProjection
 	runStatus         string
 	activeTurnID      string
@@ -88,21 +89,32 @@ type projectionBackgroundTask struct {
 }
 
 type turnTerminalProjection struct {
-	TurnID         string
-	Status         string
-	ClientNonce    string
-	OrderKey       string
-	Time           string
-	SourceEventID  string
-	Detail         string
-	Usage          any
-	FinalAnswerIDs map[string]bool
+	TurnID           string
+	Status           string
+	ClientNonce      string
+	OrderKey         string
+	Time             string
+	SourceEventID    string
+	Detail           string
+	Usage            any
+	UsageObservation any
+	FinalAnswerIDs   map[string]bool
+}
+
+type turnUsageProjection struct {
+	TurnID           string
+	OrderKey         string
+	Time             string
+	SourceEventID    string
+	Usage            any
+	UsageObservation any
 }
 
 func projectTranscriptEvents(events []map[string]any) transcriptProjection {
 	state := projectionState{
 		itemIndex:       map[string]int{},
 		backgroundIndex: map[string]int{},
+		turnUsages:      map[string]turnUsageProjection{},
 		turnTerminals:   map[string]turnTerminalProjection{},
 		runStatus:       "ready",
 	}
@@ -156,6 +168,8 @@ func (s *projectionState) apply(event map[string]any) {
 		s.runStatus = "streaming"
 		s.activeTurnID = transcriptString(event, "turn_id")
 		s.needsInput = false
+	case "turn.usage":
+		s.applyTurnUsage(event)
 	case "turn.completed":
 		s.applyTurnTerminal(event, "completed")
 		s.runStatus = "ready"
@@ -295,15 +309,41 @@ func (s *projectionState) applyTurnTerminal(event map[string]any, status string)
 		return
 	}
 	s.turnTerminals[turnID] = turnTerminalProjection{
-		TurnID:         turnID,
-		Status:         status,
-		ClientNonce:    transcriptString(event, "client_nonce"),
-		OrderKey:       transcriptString(event, "order_key"),
-		Time:           transcriptString(event, "created_at"),
-		SourceEventID:  transcriptString(event, "event_id"),
-		Detail:         projectionErrorText(event),
-		Usage:          transcriptPayloadValue(event, "usage"),
-		FinalAnswerIDs: projectionFinalAnswerIDs(event),
+		TurnID:           turnID,
+		Status:           status,
+		ClientNonce:      transcriptString(event, "client_nonce"),
+		OrderKey:         transcriptString(event, "order_key"),
+		Time:             transcriptString(event, "created_at"),
+		SourceEventID:    transcriptString(event, "event_id"),
+		Detail:           projectionErrorText(event),
+		Usage:            transcriptPayloadValue(event, "usage"),
+		UsageObservation: transcriptPayloadValue(event, "usage_observation"),
+		FinalAnswerIDs:   projectionFinalAnswerIDs(event),
+	}
+}
+
+func (s *projectionState) applyTurnUsage(event map[string]any) {
+	turnID := transcriptString(event, "turn_id")
+	usage := transcriptPayloadValue(event, "usage")
+	if turnID == "" || usage == nil {
+		return
+	}
+	s.turnUsages[turnID] = turnUsageProjection{
+		TurnID:           turnID,
+		OrderKey:         transcriptString(event, "order_key"),
+		Time:             transcriptString(event, "created_at"),
+		SourceEventID:    transcriptString(event, "event_id"),
+		Usage:            usage,
+		UsageObservation: transcriptPayloadValue(event, "usage_observation"),
+	}
+	if _, terminal := s.turnTerminals[turnID]; terminal {
+		return
+	}
+	if s.activeTurnID == "" {
+		s.activeTurnID = turnID
+	}
+	if s.runStatus == "ready" || s.runStatus == "submitted" {
+		s.runStatus = "streaming"
 	}
 }
 
@@ -474,7 +514,7 @@ func (s *projectionState) upsertBackgroundTask(event map[string]any, status stri
 }
 
 func (s *projectionState) projectFlatEntries() []map[string]any {
-	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.turnTerminals))
+	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.turnUsages)+len(s.turnTerminals))
 	items = append(items, s.messages...)
 	baseIndex := len(items)
 	backgroundProviderIDs := s.backgroundProviderItemIDs()
@@ -528,6 +568,20 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 	}
 	baseIndex += len(s.interruptRequests)
 	offset := 0
+	for _, usage := range s.turnUsages {
+		if terminal, ok := s.turnTerminals[usage.TurnID]; ok && terminal.Usage != nil {
+			continue
+		}
+		entry := projectTurnUsage(usage)
+		items = append(items, projectedEntryItem{
+			entry:    entry,
+			orderKey: usage.OrderKey,
+			index:    baseIndex + offset,
+		})
+		offset += 1
+	}
+	baseIndex += len(s.turnUsages)
+	offset = 0
 	for _, terminal := range s.turnTerminals {
 		if terminal.Status == "completed" {
 			continue
@@ -703,6 +757,27 @@ func projectProjectionBackgroundTask(task *projectionBackgroundTask) map[string]
 	return entry
 }
 
+func projectTurnUsage(usage turnUsageProjection) map[string]any {
+	entry := map[string]any{
+		"id":       "turn-usage:" + usage.TurnID,
+		"kind":     "meta",
+		"metaKind": "turn_usage",
+		"meta": map[string]any{
+			"title":    "Token usage updated",
+			"severity": "info",
+		},
+		"turnId":        usage.TurnID,
+		"time":          usage.Time,
+		"sourceEventId": usage.SourceEventID,
+		"orderKey":      usage.OrderKey,
+		"turnUsage":     usage.Usage,
+	}
+	if usage.UsageObservation != nil {
+		entry["usageObservation"] = usage.UsageObservation
+	}
+	return entry
+}
+
 func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnTerminalProjection) map[string]any {
 	turnID := transcriptMapString(entry, "turnId")
 	if turnID == "" {
@@ -719,6 +794,9 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 	out["turnTerminalOrderKey"] = terminal.OrderKey
 	if terminal.Usage != nil {
 		out["turnUsage"] = terminal.Usage
+	}
+	if terminal.UsageObservation != nil {
+		out["usageObservation"] = terminal.UsageObservation
 	}
 	return out
 }
@@ -757,6 +835,12 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, t
 				"activity":      activity.Summary,
 				"activityIds":   activity.CompactedEntryIDs,
 				"sourceEventId": transcriptMapString(activity.Summary, "sourceEventId"),
+			}
+			if turnUsage := activity.Summary["turnUsage"]; turnUsage != nil {
+				shell["turnUsage"] = turnUsage
+			}
+			if usageObservation := activity.Summary["usageObservation"]; usageObservation != nil {
+				shell["usageObservation"] = usageObservation
 			}
 			out = append(out, shell)
 			bodies[activity.TurnID] = activity
@@ -870,6 +954,12 @@ func turnActivitySummaryMap(activityEntries, compactedEntries []map[string]any, 
 		"active":              active,
 	}
 	for _, entry := range activityEntries {
+		if turnUsage := entry["turnUsage"]; turnUsage != nil {
+			out["turnUsage"] = turnUsage
+		}
+		if usageObservation := entry["usageObservation"]; usageObservation != nil {
+			out["usageObservation"] = usageObservation
+		}
 		switch transcriptMapString(entry, "kind") {
 		case "tool":
 			out["toolCount"] = out["toolCount"].(int) + 1
@@ -1006,12 +1096,12 @@ func projectNeedsInputAnnouncement(item *projectionItem) map[string]any {
 			"severity": "info",
 		},
 		"announcement": map[string]any{
-			"targetTurnId":           item.TurnID,
-			"targetProviderItemId":   item.ProviderItemID,
-			"targetTimelineId":       item.ID,
-			"questionSummary":        summary,
-			"questionCount":          len(questions),
-			"answered":               answered,
+			"targetTurnId":         item.TurnID,
+			"targetProviderItemId": item.ProviderItemID,
+			"targetTimelineId":     item.ID,
+			"questionSummary":      summary,
+			"questionCount":        len(questions),
+			"answered":             answered,
 		},
 	}
 	return entry

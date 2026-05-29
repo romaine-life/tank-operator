@@ -11,6 +11,7 @@ export const TANK_EVENT_TYPES: readonly [
   "user_message.created",
   "turn.submitted",
   "turn.started",
+  "turn.usage",
   "turn.completed",
   "turn.failed",
   "turn.command_failed",

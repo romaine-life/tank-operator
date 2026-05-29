@@ -207,7 +207,6 @@ import {
   formatComposerCostUsd,
   formatTurnCostUsd,
   type SessionCostEstimate,
-  type SessionCostEstimateBasis,
 } from "./sessionCostEstimate";
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
@@ -262,6 +261,8 @@ type TurnActivitySummary = {
   startOrderKey?: string;
   endOrderKey?: string;
   sourceEventId?: string;
+  turnUsage?: unknown;
+  usageObservation?: unknown;
 };
 export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   kind: SandboxTranscriptEntry["kind"] | "background_task" | "turn_activity";
@@ -285,6 +286,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   turnTerminalEventId?: string;
   turnTerminalOrderKey?: string;
   turnUsage?: unknown;
+  usageObservation?: unknown;
   attachments?: MessageAttachmentDisplay[];
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
@@ -308,7 +310,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // on rows it wants surfaced specially in chat — see
   // backend-go/cmd/tank-operator/transcript_projection.go →
   // projectNeedsInputAnnouncement.
-  metaKind?: "needs_input_announcement";
+  metaKind?: "needs_input_announcement" | "turn_usage";
   // For `needs_input_announcement` rows: the AskUserQuestion item's
   // provider id and the turn it lives on, so RunNeedsInputAnnouncement's
   // click handler can navigate the user to the Turns tab scrolled to the
@@ -1450,7 +1452,6 @@ function ComposerUsageRing({
 
 interface ComposerCostEstimateProps {
   amountUsd: number | null;
-  basis?: SessionCostEstimateBasis | null;
   placeholder?: boolean;
   scopeLabel?: string;
   title?: string;
@@ -1458,24 +1459,22 @@ interface ComposerCostEstimateProps {
 
 function ComposerCostEstimate({
   amountUsd,
-  basis = null,
   placeholder = false,
   scopeLabel = "session",
   title,
 }: ComposerCostEstimateProps) {
   const unavailable = placeholder || amountUsd === null;
   const normalizedScope = scopeLabel.trim() || "session";
-  const label = unavailable
+  const formattedAmount = unavailable
     ? "$--"
     : normalizedScope === "turn"
       ? formatTurnCostUsd(amountUsd)
       : formatComposerCostUsd(amountUsd);
+  const label = formattedAmount;
   const sentenceScope = `${normalizedScope.charAt(0).toUpperCase()}${normalizedScope.slice(1)}`;
   const defaultTitle = unavailable
-    ? "Cost estimate appears after token usage or transcript text is available"
-    : basis === "visible_transcript"
-      ? `Estimated API-equivalent ${normalizedScope} token cost from visible transcript text: ${label}`
-      : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label}`;
+    ? "Cost estimate appears after token usage is available"
+    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label}`;
   return (
     <span
       className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
@@ -3521,6 +3520,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           activityIds: entry.activityIds,
           orderKey: entry.orderKey,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "message") {
@@ -3535,6 +3536,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
           turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "tool") {
@@ -3551,6 +3553,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
           turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "reasoning") {
@@ -3562,6 +3565,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
           turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "background_task") {
@@ -3586,6 +3590,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
           turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       return {
@@ -3597,6 +3602,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
         turnTerminalAt: entry.turnTerminalAt,
         turnTerminalOrderKey: entry.turnTerminalOrderKey,
         turnUsage: entry.turnUsage,
+        usageObservation: entry.usageObservation,
       };
     }),
   );
@@ -3670,6 +3676,8 @@ function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undef
     startOrderKey: stringRecordValue(record, "startOrderKey"),
     endOrderKey: stringRecordValue(record, "endOrderKey"),
     sourceEventId: stringRecordValue(record, "sourceEventId"),
+    turnUsage: record.turnUsage,
+    usageObservation: record.usageObservation,
   };
 }
 
@@ -6664,7 +6672,6 @@ function buildTurnViewItems(
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.turnTerminalAt ??
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.time;
       const lastActivityAt = turnActivityLastActivityAt(shell, turnEntries);
-      const isActive = turnId === active;
       const costRows = Array.from(costRowsByTurn.get(turnId)?.values() ?? []);
       return {
         turnId,
@@ -6674,7 +6681,7 @@ function buildTurnViewItems(
         shell,
         active: turnId === active,
         loaded: Boolean(loadedEntries),
-        costEstimate: isActive ? null : estimateTurnCost(costRows, modelId, turnId),
+        costEstimate: estimateTurnCost(costRows, modelId, turnId),
         startedAt,
         completedAt,
         lastActivityAt,
@@ -7367,10 +7374,9 @@ function RunTurnActivityScreen({
             <span>{selected.summary}</span>
             {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
             {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
-            {!selected.active && selected.costEstimate && (
+            {selected.costEstimate && (
               <ComposerCostEstimate
                 amountUsd={selected.costEstimate.amountUsd}
-                basis={selected.costEstimate.basis}
                 scopeLabel="turn"
               />
             )}
@@ -7801,6 +7807,9 @@ export function RunMessages({
               showTimestamps={showTimestamps}
             />
           );
+        }
+        if (g.entry.metaKind === "turn_usage") {
+          return null;
         }
         return <RunMetaBlock entry={g.entry} />;
       }
@@ -12482,7 +12491,6 @@ function ChatPane({
               />
               <ComposerCostEstimate
                 amountUsd={sessionCostEstimate?.amountUsd ?? null}
-                basis={sessionCostEstimate?.basis ?? null}
               />
               {GUI_ROLLOUT_MODES.has(session.mode) && (
                 <button

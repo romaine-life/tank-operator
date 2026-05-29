@@ -116,6 +116,32 @@ test("Normal turn reaches ready with one user message and assistant item", () =>
   assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "5");
 });
 
+test("turn.usage records latest usage without closing the active turn", () => {
+  const usage = { input_tokens: 100, output_tokens: 25, total_tokens: 125 };
+  const usageObservation = {
+    usage_source: "thread.tokenUsage.updated",
+    provider_turn_id: "provider-turn-1",
+    update_count: 1,
+  };
+  const state = reduceConversationEvents([
+    ev("1", "turn.submitted", { source: "codex" }),
+    ev("2", "turn.started", { source: "codex" }),
+    ev("3", "turn.usage", {
+      source: "codex",
+      payload: {
+        usage,
+        usage_observation: usageObservation,
+      },
+    }),
+  ]);
+
+  assert.equal(state.runStatus, "streaming");
+  assert.equal(state.activeTurnId, "turn-1");
+  assert.deepEqual(state.lastUsage, usage);
+  assert.deepEqual(state.turnUsages["turn-1"]?.usage, usage);
+  assert.deepEqual(state.turnUsages["turn-1"]?.usageObservation, usageObservation);
+});
+
 test("origin_session_id on user message flows onto ConversationMessage", () => {
   // Cross-session handoff path: a sibling tank-operator session
   // (id=42) posted this turn via mcp-tank-operator. The orchestrator
@@ -742,6 +768,11 @@ test("contract guard rejects malformed per-type events", () => {
     payload: { status: "loading", text: "Session is loading." },
   })), true);
 
+  assert.equal(isTankConversationEvent(ev("turn-1:usage:1", "turn.usage", {
+    source: "codex",
+    payload: { usage: { input_tokens: 1, output_tokens: 1 } },
+  })), true);
+
   assert.equal(isTankConversationEvent({
     event_id: "bad-user",
     order_key: "bad-user",
@@ -766,6 +797,19 @@ test("contract guard rejects malformed per-type events", () => {
     created_at: "2026-05-12T00:00:00.000Z",
     visibility: "durable",
     payload: { status: "loading" },
+  }), false);
+
+  assert.equal(isTankConversationEvent({
+    event_id: "bad-usage",
+    order_key: "bad-usage",
+    session_id: "63",
+    turn_id: "turn-1",
+    actor: "runner",
+    source: "codex",
+    type: "turn.usage",
+    created_at: "2026-05-12T00:00:00.000Z",
+    visibility: "durable",
+    payload: {},
   }), false);
 
   assert.equal(isTankConversationEvent({

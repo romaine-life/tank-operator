@@ -88,10 +88,21 @@ export interface ConversationTurnTerminal {
   orderKey?: string;
   time: string;
   sourceEventId: string;
+  usage?: unknown;
+  usageObservation?: unknown;
   // Unwrapped error text for failed/command_failed turns. Drives the
   // transcript meta line that renders at the turn's terminal order_key.
   // Undefined on completed/interrupted turns.
   detail?: string;
+}
+
+export interface ConversationTurnUsage {
+  turnId: string;
+  orderKey?: string;
+  time: string;
+  sourceEventId: string;
+  usage: unknown;
+  usageObservation?: unknown;
 }
 
 export interface ConversationBackgroundTask {
@@ -126,6 +137,7 @@ export interface ConversationReducerState {
   messages: ConversationMessage[];
   items: ConversationItem[];
   interruptRequests: ConversationInterruptRequest[];
+  turnUsages: Record<string, ConversationTurnUsage>;
   turnTerminals: Record<string, ConversationTurnTerminal>;
   backgroundTasks: ConversationBackgroundTask[];
   runStatus: ConversationRunStatus;
@@ -144,6 +156,7 @@ export const initialConversationState: ConversationReducerState = {
   messages: [],
   items: [],
   interruptRequests: [],
+  turnUsages: {},
   turnTerminals: {},
   backgroundTasks: [],
   runStatus: "ready",
@@ -187,6 +200,8 @@ export function conversationReducer(
         failed: false,
         lastError: null,
       };
+    case "turn.usage":
+      return applyTurnUsage(next, event);
     case "turn.completed":
       return {
         ...applyTurnTerminal(next, event, "completed"),
@@ -230,6 +245,7 @@ export function conversationReducer(
         needsInput: false,
         failed: false,
         lastError: null,
+        lastUsage: event.payload?.usage ?? next.lastUsage,
       };
     case "session.status":
       return applySessionStatusMessage(next, event);
@@ -315,9 +331,47 @@ function applyTurnTerminal(
         orderKey: event.order_key,
         time: event.created_at,
         sourceEventId: event.event_id,
+        ...(event.payload?.usage !== undefined ? { usage: event.payload.usage } : {}),
+        ...(event.payload?.usage_observation !== undefined
+          ? { usageObservation: event.payload.usage_observation }
+          : {}),
         ...(detail ? { detail } : {}),
       },
     },
+  };
+}
+
+function applyTurnUsage(
+  state: ConversationReducerState,
+  event: TankConversationEvent,
+): ConversationReducerState {
+  const usage = event.payload?.usage;
+  if (!event.turn_id || usage === undefined || usage === null) return state;
+  const terminal = state.turnTerminals[event.turn_id];
+  const terminalSeen = terminal !== undefined;
+  const terminalHasUsage = terminal?.usage !== undefined && terminal.usage !== null;
+  const runStatus =
+    !terminalSeen && (state.runStatus === "ready" || state.runStatus === "submitted")
+      ? "streaming"
+      : state.runStatus;
+  return {
+    ...state,
+    runStatus,
+    activeTurnId: terminalSeen ? state.activeTurnId : state.activeTurnId ?? event.turn_id,
+    turnUsages: {
+      ...state.turnUsages,
+      [event.turn_id]: {
+        turnId: event.turn_id,
+        orderKey: event.order_key,
+        time: event.created_at,
+        sourceEventId: event.event_id,
+        usage,
+        ...(event.payload?.usage_observation !== undefined
+          ? { usageObservation: event.payload.usage_observation }
+          : {}),
+      },
+    },
+    lastUsage: terminalHasUsage ? state.lastUsage : usage,
   };
 }
 

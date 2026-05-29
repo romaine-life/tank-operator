@@ -81,6 +81,35 @@ func TestFixtureEventsValidate(t *testing.T) {
 	}
 }
 
+func TestValidateEventMapAcceptsTurnUsage(t *testing.T) {
+	event := map[string]any{
+		"event_id":   "turn-1:turn.usage:provider-usage-1",
+		"order_key":  "1768179842000-00000003-turn-1:turn.usage:provider-usage-1",
+		"session_id": "63",
+		"turn_id":    "turn-1",
+		"actor":      "runner",
+		"source":     "codex",
+		"type":       "turn.usage",
+		"created_at": "2026-05-29T00:00:00.000Z",
+		"visibility": "durable",
+		"payload": map[string]any{
+			"usage": map[string]any{
+				"input_tokens":  float64(100),
+				"output_tokens": float64(25),
+				"total_tokens":  float64(125),
+			},
+			"usage_observation": map[string]any{
+				"usage_source":     "thread.tokenUsage.updated",
+				"provider_turn_id": "provider-turn-1",
+				"update_count":     float64(1),
+			},
+		},
+	}
+	if err := ValidateEventMap(event); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUserSubmissionEventMapsStampsOriginSessionID(t *testing.T) {
 	// Origin-stamping case: a sibling tank-operator session posted this
 	// turn via the mcp-tank-operator handoff path. The orchestrator
