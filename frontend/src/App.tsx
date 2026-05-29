@@ -402,6 +402,29 @@ function writeSessionViewScopePreference(scope: string): void {
   }
 }
 
+// Initial value for the prod-session-view override. A `?session_view=prod`
+// query param is an admin deep-link into the prod-session view: it sets the
+// override before first render and persists it so in-app navigation keeps the
+// choice. `?session_view=local` (or any other value) clears it. The deep-link
+// exists so the view is reachable without the Settings toggle — bookmarkable
+// for admins, and drivable by URL-only browser automation (the slot Playwright
+// inspector can seed a URL but not click the toggle). The admin-capability
+// gate (`canViewProdSessions`) still applies downstream, so a non-admin
+// deep-link is inert and gets reconciled away by the clearing effect.
+function readInitialSessionViewScopeOverride(): string {
+  try {
+    const raw = new URLSearchParams(window.location.search).get("session_view");
+    if (raw !== null) {
+      const next = raw === "prod" ? PROD_SESSION_SCOPE : "";
+      writeSessionViewScopePreference(next);
+      return next;
+    }
+  } catch {
+    // ignore malformed URL / missing window
+  }
+  return readSessionViewScopePreference();
+}
+
 function appendQueryParam(path: string, key: string, value: string): string {
   const [base, query = ""] = path.split("?");
   const params = new URLSearchParams(query);
@@ -12147,6 +12170,7 @@ export function App() {
   const [booted, setBooted] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
+  const [appConfigLoaded, setAppConfigLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -12338,7 +12362,7 @@ export function App() {
     useState<DefaultSessionMode>(readDefaultSessionMode);
   const [homeActiveTab, setHomeActiveTab] = useState<HomeTab>("chat");
   const [sessionViewScopeOverride, setSessionViewScopeOverride] = useState(
-    readSessionViewScopePreference,
+    readInitialSessionViewScopeOverride,
   );
   // The home composer's permission-mode pick. Carries into the first turn
   // when the user types a prompt and presses Enter from the home screen,
@@ -12524,7 +12548,10 @@ export function App() {
   useEffect(() => {
     let cancelled = false;
     void fetchAppPublicConfig().then((config) => {
-      if (!cancelled) setAppConfig(config);
+      if (!cancelled) {
+        setAppConfig(config);
+        setAppConfigLoaded(true);
+      }
     });
     return () => {
       cancelled = true;
@@ -12532,10 +12559,18 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    // Only reconcile the persisted prod-view preference once we actually
+    // know the caller's admin capability and the live session scope. During
+    // the auth/config bootstrap window canViewProdSessions is transiently
+    // false (user === null, appConfig === {}), so clearing here would destroy
+    // an admin's persisted "view prod sessions" choice on every reload or
+    // deep link — the toggle would never survive a refresh. Gate on both the
+    // auth bootstrap (booted) and the public-config fetch (appConfigLoaded).
+    if (!booted || !appConfigLoaded) return;
     if (canViewProdSessions || !sessionViewScopeOverride) return;
     setSessionViewScopeOverride("");
     writeSessionViewScopePreference("");
-  }, [canViewProdSessions, sessionViewScopeOverride]);
+  }, [booted, appConfigLoaded, canViewProdSessions, sessionViewScopeOverride]);
 
   useEffect(() => {
     bootstrapAuth()
