@@ -191,6 +191,26 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
   assert.match(appSource, /toolGroupDefaultOpen\(g\.entries, autoExpandTools, toolExpansionOverrides\)/);
 });
 
+test("AskUserQuestion handoff renders as the session system identity", () => {
+  const componentMatch = appSource.match(
+    /function RunNeedsInputAnnouncement\([\s\S]*?\n}\n\nfunction RunMetaBlock/,
+  );
+  assert.ok(componentMatch, "RunNeedsInputAnnouncement component should be present");
+  const componentSource = componentMatch[0]!;
+  assert.equal(componentSource.includes("systemAvatar: AgentAvatar | null"), true);
+  assert.equal(componentSource.includes('className="run-transcript-message"'), true);
+  assert.equal(componentSource.includes('data-variant="system"'), true);
+  assert.equal(componentSource.includes('data-kind="needs-input-announcement"'), true);
+  assert.equal(componentSource.includes('className="run-msg-system-avatar"'), true);
+  assert.equal(componentSource.includes("AgentAvatarIcon avatar={systemAvatar}"), true);
+  assert.equal(componentSource.includes("<BotIcon"), true);
+  assert.match(
+    appSource,
+    /<RunNeedsInputAnnouncement[\s\S]*systemAvatar=\{systemAvatar\}[\s\S]*showTimestamps=\{showTimestamps\}/,
+  );
+  assert.equal(indexCssSource.includes(".run-needs-input-announcement-copy"), true);
+});
+
 test("AskUserQuestion placeholder 'Answer questions?' never leaks into App source", () => {
   // The Claude Agent SDK ships this string as the AskUserQuestion
   // checkPermissions message. If it shows up in our renderer, the
