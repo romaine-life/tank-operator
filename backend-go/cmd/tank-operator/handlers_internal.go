@@ -285,6 +285,51 @@ func (s *appServer) handleInternalSessionCapabilities(w http.ResponseWriter, r *
 	s.doInternalSessionCapabilities(w, r, user.ActorEmail)
 }
 
+// handleInternalSessionTimeline returns the projected transcript-row read
+// model for one of the caller's sessions, scoped to the service token's
+// actor_email. This is the service-principal read path that backs the
+// mcp-tank-operator read_transcript tool: it lets a session pod inspect a
+// sibling session's conversation — for example, to triage a sibling session
+// that stalled — without a browser or a human bearer token.
+//
+// Authorization, pagination, and projection are deliberately the *same code
+// path* the browser uses (sessionTimelineBody → authorizeSessionReadInScope).
+// There is no second transcript read model and no service-only relaxation of
+// the ownership rule:
+//
+//   - role=service may read only sessions whose owner == actor_email; a
+//     super-admin service token additionally inherits the admin cross-user
+//     read already documented on authorizeSessionRead.
+//   - a cross-user or missing session collapses to 404 so the surface does
+//     not leak the existence of sessions the caller can't read.
+//
+// The query contract matches GET /api/sessions/{session_id}/timeline
+// (anchor=newest|oldest, rows, before_cursor, timeline_id). The default
+// newest-anchored tail is the right default for "what was this session doing
+// when it stalled"; callers page backward through history with the returned
+// prev_cursor. The response body shape is identical to the browser endpoint.
+func (s *appServer) handleInternalSessionTimeline(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/timeline")
+	if user == nil {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(*user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	body, status, err := s.sessionTimelineBody(r.Context(), r, *user, sessionID, sessionScope)
+	if err != nil {
+		if status >= 500 {
+			recordSessionEventTimelineFailure()
+		}
+		writeError(w, status, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, body)
+}
+
 func (s *appServer) doInternalSessionCapabilities(w http.ResponseWriter, r *http.Request, email string) {
 	if email == "" {
 		writeError(w, http.StatusBadRequest, "could not resolve caller email")
