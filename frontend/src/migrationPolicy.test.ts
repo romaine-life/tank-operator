@@ -387,12 +387,29 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   );
 });
 
-test("thinking bubble opens the turn view at the live turn bottom", () => {
+test("turn view entry points open at the turn bottom", () => {
   assert.equal(appSource.includes('type TurnViewScrollAnchor = "bottom"'), true);
   assert.equal(
     appSource.includes('onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}'),
     true,
   );
+  assert.equal(
+    appSource.includes('onOpenTurn?.(targetTurnId, { anchor: "bottom" })'),
+    true,
+  );
+  assert.equal(
+    appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })'),
+    true,
+  );
+  assert.equal(
+    appSource.includes('else openTurnPage(undefined, { anchor: "bottom" });'),
+    true,
+  );
+  assert.equal(
+    appSource.includes("const [pendingTurnViewRouteAnchor, setPendingTurnViewRouteAnchor]"),
+    true,
+  );
+  assert.equal(appSource.includes('setPendingTurnViewRouteAnchor("bottom")'), true);
   assert.equal(
     appSource.includes("const [turnViewScrollRequest, setTurnViewScrollRequest]"),
     true,
@@ -407,6 +424,7 @@ test("thinking bubble opens the turn view at the live turn bottom", () => {
     appSource.includes("onScrollRequestConsumed={clearTurnViewScrollRequest}"),
     true,
   );
+  assert.equal(appSource.includes("if (!selected.loaded) return;"), true);
   assert.equal(appSource.includes("if (loading && detailGroups.length === 0) return;"), true);
   assert.equal(
     appSource.includes('body.scrollTo({ top: body.scrollHeight, behavior: "auto" });'),
