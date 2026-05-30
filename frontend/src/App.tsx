@@ -5337,7 +5337,21 @@ function RunNeedsInputAnnouncement({
   );
 }
 
-function RunMetaBlock({ entry }: { entry: TranscriptEntry }) {
+// RunMetaBlock renders the transcript's "headless" status lines — the
+// per-turn terminal notices ("Stopped" / "Turn stopped by user.", "Turn
+// failed" + provider error), "Stop requested", and any generic non-tool
+// item meta. These are not authored by the human owner or the assistant;
+// they're spoken by the session's *system identity*. So they render inside
+// the same system-avatar message frame as session.status banners and the
+// AskUserQuestion handoff row — attributed to the system user rather than
+// floating in the column with no author. See docs/features/transcript/contract.md.
+function RunMetaBlock({
+  entry,
+  systemAvatar,
+}: {
+  entry: TranscriptEntry;
+  systemAvatar: AgentAvatar | null;
+}) {
   const isError = entry.meta?.severity === "error";
   const title = entry.meta?.title ?? entry.text ?? "";
   const detail = entry.meta?.detail;
@@ -5352,19 +5366,41 @@ function RunMetaBlock({ entry }: { entry: TranscriptEntry }) {
     }
   }
   return (
-    <div className={`run-meta${isError ? " run-meta-error" : ""}`}>
-      <span className="run-meta-icon">
-        {isError ? (
-          <AlertCircleIcon size={14} aria-hidden="true" />
+    <div
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant="system"
+      data-role="system"
+      data-kind="meta"
+      data-severity={isError ? "error" : undefined}
+      data-message-id={entry.id}
+    >
+      <span
+        className="run-msg-system-avatar"
+        aria-hidden={systemAvatar ? undefined : "true"}
+      >
+        {systemAvatar ? (
+          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
         ) : (
-          <InfoIcon size={14} aria-hidden="true" />
+          <BotIcon size={16} strokeWidth={2.1} />
         )}
       </span>
-      <div className="run-meta-body">
-        <div className="run-meta-title">{title}</div>
-        {detail && (
-          <pre className="run-meta-detail">{prettyDetail ?? detail}</pre>
-        )}
+      <div className="run-transcript-message-content" data-slot="message-content">
+        <div className={`run-meta${isError ? " run-meta-error" : ""}`}>
+          <span className="run-meta-icon">
+            {isError ? (
+              <AlertCircleIcon size={14} aria-hidden="true" />
+            ) : (
+              <InfoIcon size={14} aria-hidden="true" />
+            )}
+          </span>
+          <div className="run-meta-body">
+            <div className="run-meta-title">{title}</div>
+            {detail && (
+              <pre className="run-meta-detail">{prettyDetail ?? detail}</pre>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -7232,7 +7268,13 @@ function RunTurnActivityGroup({
                   );
                 }
                 if (child.kind === "meta") {
-                  return <RunMetaBlock key={child.entry.id} entry={child.entry} />;
+                  return (
+                    <RunMetaBlock
+                      key={child.entry.id}
+                      entry={child.entry}
+                      systemAvatar={systemAvatar}
+                    />
+                  );
                 }
                 if (child.kind === "background_task") {
                   return (
@@ -7402,7 +7444,13 @@ function RunTurnActivityScreen({
       return <RunReasoningBlock key={group.entry.id} entry={group.entry} showThinking={showThinking} />;
     }
     if (group.kind === "meta") {
-      return <RunMetaBlock key={group.entry.id} entry={group.entry} />;
+      return (
+        <RunMetaBlock
+          key={group.entry.id}
+          entry={group.entry}
+          systemAvatar={systemAvatar}
+        />
+      );
     }
     if (group.kind === "background_task") {
       return (
@@ -7926,7 +7974,7 @@ export function RunMessages({
         if (g.entry.metaKind === "turn_usage") {
           return null;
         }
-        return <RunMetaBlock entry={g.entry} />;
+        return <RunMetaBlock entry={g.entry} systemAvatar={systemAvatar} />;
       }
       if (g.kind === "background_task") {
         return (
