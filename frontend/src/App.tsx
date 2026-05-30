@@ -101,6 +101,7 @@ import {
   navigationModeTelemetryEvent,
   transitionNavigationMode,
 } from "./navigationMode";
+import { isTranscriptRefreshShortcut } from "./transcriptRefreshShortcut";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   type ConversationBackgroundTaskStatus,
@@ -384,7 +385,9 @@ type SdkHistoryRefreshSource =
   | "projected-refresh"
   | "visible-reactivation"
   | "resync"
-  | "terminal-refresh";
+  | "terminal-refresh"
+  // User-initiated force-pull of the durable tail via the R shortcut.
+  | "keyboard-refresh";
 type ScrollToLatestBehavior = "auto" | "smooth";
 type ScrollToLatestReason = SdkHistoryRefreshSource | "submit" | "manual" | "keyboard";
 type ScrollToLatestRequest = {
@@ -8504,6 +8507,28 @@ function RunHelpScreen() {
           </div>
         </div>
       </section>
+      <section className="run-help-section">
+        <h2 className="run-help-title">Keyboard</h2>
+        <div className="run-help-list">
+          <div className="run-help-row">
+            <span className="run-help-key">R</span>
+            <span>
+              Refresh the transcript — force-pull any durable messages that
+              haven&apos;t been delivered yet. Works on the chat transcript and
+              the Turns page; click the transcript (or press Tab) to focus it
+              first.
+            </span>
+          </div>
+          <div className="run-help-row">
+            <span className="run-help-key">Home / End</span>
+            <span>Jump to the start or the live tail of the conversation.</span>
+          </div>
+          <div className="run-help-row">
+            <span className="run-help-key">Tab</span>
+            <span>Move focus between the composer and the transcript.</span>
+          </div>
+        </div>
+      </section>
       <section className="run-help-section" aria-labelledby="run-help-sidebar-status-title">
         <h2 className="run-help-title" id="run-help-sidebar-status-title">Sidebar Status</h2>
         <div className="run-help-status-list">
@@ -8806,6 +8831,9 @@ function ChatPane({
   const sdkLoadingOlderRef = useRef(false);
   const sdkTimelineRequestSeqRef = useRef(0);
   const sdkTranscriptKeyboardNavInFlightRef = useRef<"oldest" | "newest" | null>(null);
+  // Dedupes overlapping R-refresh force-pulls (held key / rapid presses) so a
+  // single user-visible refresh never fans out into a timeline-request storm.
+  const keyboardRefreshInFlightRef = useRef(false);
   const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
@@ -9489,8 +9517,15 @@ function ChatPane({
       }
       const scrollToLatestOnReady =
         timelineBootstrapScrollToLatestRef.current && anchor === "newest";
+      // A keyboard refresh behaves like resync/projected-refresh for the
+      // viewport: it re-anchors to the freshly pulled tail only when the reader
+      // is already following live-tail. A reader in historical-anchor mode
+      // keeps their position — the Transcript Navigation contract forbids
+      // load/ready/reconnect/resync from yanking the viewport away from
+      // someone reading history.
       const stickToLatestAfterLoad =
-        source === "projected-refresh" && navigationModeRef.current === "live-tail";
+        (source === "projected-refresh" || source === "keyboard-refresh") &&
+        navigationModeRef.current === "live-tail";
       if (timelineBootstrapScrollToLatestRef.current && anchor !== "newest") {
         timelineBootstrapScrollToLatestRef.current = false;
       }
@@ -11498,10 +11533,17 @@ function ChatPane({
   const effectiveSelectedTurnId = selectedTurnExists ? selectedTurnId : latestTurnId;
   const routedSelectedTurnId =
     activeTab === "turns" ? (pendingRouteTurnId ?? effectiveSelectedTurnId) : null;
-  const ensureTurnActivityLoaded = useCallback((turnId: string) => {
+  const ensureTurnActivityLoaded = useCallback((
+    turnId: string,
+    options?: { force?: boolean },
+  ) => {
     const trimmedTurnId = turnId.trim();
     if (!trimmedTurnId) return;
-    if (activityEntriesByTurn[trimmedTurnId]) return;
+    // `force` re-pulls even when activity is already cached. The R refresh uses
+    // it so a turn whose live activity silently lagged is reconciled in place,
+    // mirroring the main transcript's durable tail force-pull. Without force we
+    // keep the cache short-circuit so opening a turn never re-fetches.
+    if (!options?.force && activityEntriesByTurn[trimmedTurnId]) return;
     if (loadingActivityTurns[trimmedTurnId]) return;
     setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
     void authedFetch(
@@ -11597,6 +11639,81 @@ function ChatPane({
     }
     setActiveTab("turns");
   }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
+
+  // R refreshes the transcript: a keyboard-driven force-pull of the durable
+  // tail for the focused transcript region. Users reported that a live SSE gap
+  // can leave the newest messages undelivered until a full browser reload;
+  // this is the lighter, in-place recovery the Transcript contract blesses
+  // ("refresh may recover from a broken browser state"). It applies to both the
+  // chat transcript and the Turns page, which share the focusable <main>
+  // (transcriptScrollEl) scaffold, so the same focus gate covers both.
+  //
+  // Force-pull semantics: refreshSdkRunHistoryResult re-fetches the newest
+  // durable timeline window and reconciles it into the rendered rows — unlike
+  // jumpSdkToLatest it has no "already at newest" short-circuit, so it genuinely
+  // re-pulls even when the client believes it is caught up (the exact case that
+  // forces a manual reload today). On the Turns page we additionally force the
+  // open turn's activity detail to re-load, since its cache otherwise
+  // short-circuits the re-pull. Per the Transcript Navigation contract the pull
+  // must not move the viewport for a reader in historical-anchor mode; that is
+  // enforced by stickToLatestAfterLoad gating on live-tail.
+  useEffect(() => {
+    if (!visible || !transcriptScrollEl) return;
+    if (activeTab !== "chat" && activeTab !== "turns") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        !isTranscriptRefreshShortcut({
+          key: e.key,
+          repeat: e.repeat,
+          altKey: e.altKey,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          shiftKey: e.shiftKey,
+          isComposing: e.isComposing,
+          targetIsTranscript: e.target === transcriptScrollEl,
+          activeTab,
+          palettesOpen: slashOpen || mentionOpen || mcpOpen,
+        })
+      ) {
+        return;
+      }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      logChatScrollEvent("keyboard-refresh", {
+        surface: "session",
+        sessionId: session.id,
+        sessionMode: session.mode,
+        tab: activeTab,
+        navigationMode: navigationModeRef.current,
+        inFlight: keyboardRefreshInFlightRef.current,
+        ...chatScrollElementSnapshot(transcriptScrollEl),
+      });
+      if (keyboardRefreshInFlightRef.current) return;
+      keyboardRefreshInFlightRef.current = true;
+      // clearRealtime=false keeps any in-flight optimistic local echo; the
+      // refreshed server rows are deduped against it by syncSdkRenderedEntries.
+      const pull = refreshSdkRunHistoryResult(false, "keyboard-refresh");
+      if (activeTab === "turns" && effectiveSelectedTurnId) {
+        ensureTurnActivityLoaded(effectiveSelectedTurnId, { force: true });
+      }
+      void pull.finally(() => {
+        keyboardRefreshInFlightRef.current = false;
+      });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    effectiveSelectedTurnId,
+    ensureTurnActivityLoaded,
+    mcpOpen,
+    mentionOpen,
+    session.id,
+    session.mode,
+    slashOpen,
+    transcriptScrollEl,
+    visible,
+  ]);
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
   const canStopBackgroundEntry = useCallback(
     (entry: TranscriptEntry) =>
