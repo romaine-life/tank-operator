@@ -8079,6 +8079,19 @@ textarea.run-files-viewer-editor:focus {
   padding-block: 0.64rem;
 }
 
+/* Meta status lines ("Stopped", "Turn failed", "Stop requested") ride the
+   system-avatar frame so they're attributed to the session's system user,
+   but the .run-meta block already owns its own border/background/padding.
+   Strip the generic system-bubble chrome so we don't render a box-in-a-box,
+   and let the status line use the full transcript width like it did before
+   it gained an avatar gutter. */
+.run-transcript [data-slot="message"][data-kind="meta"] .run-transcript-message-content {
+  max-width: 100%;
+  padding: 0;
+  background: transparent;
+  border: none;
+}
+
 .run-transcript-system-group {
   display: grid;
   gap: 0.42rem;

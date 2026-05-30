@@ -193,7 +193,7 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
 
 test("AskUserQuestion handoff renders as the session system identity", () => {
   const componentMatch = appSource.match(
-    /function RunNeedsInputAnnouncement\([\s\S]*?\n}\n\nfunction RunMetaBlock/,
+    /function RunNeedsInputAnnouncement\([\s\S]*?\n}\n\n(?:\/\/[^\n]*\n)*function RunMetaBlock/,
   );
   assert.ok(componentMatch, "RunNeedsInputAnnouncement component should be present");
   const componentSource = componentMatch[0]!;
@@ -209,6 +209,36 @@ test("AskUserQuestion handoff renders as the session system identity", () => {
     /<RunNeedsInputAnnouncement[\s\S]*systemAvatar=\{systemAvatar\}[\s\S]*showTimestamps=\{showTimestamps\}/,
   );
   assert.equal(indexCssSource.includes(".run-needs-input-announcement-copy"), true);
+});
+
+test("transcript meta status lines are attributed to the session system identity", () => {
+  // "Stopped" / "Turn stopped by user.", "Turn failed" + provider error,
+  // and "Stop requested" are not authored by the human owner or the
+  // assistant — they're the session's system identity speaking. They must
+  // render inside the same system-avatar frame as session.status banners,
+  // not as a headless info/error line floating in the column with no author.
+  const componentMatch = appSource.match(
+    /function RunMetaBlock\([\s\S]*?\n}\n\n(?:\/\/[^\n]*\n)*function isBackgroundTaskRunning/,
+  );
+  assert.ok(componentMatch, "RunMetaBlock component should be present");
+  const componentSource = componentMatch[0]!;
+  assert.equal(componentSource.includes("systemAvatar: AgentAvatar | null"), true);
+  assert.equal(componentSource.includes('className="run-transcript-message"'), true);
+  assert.equal(componentSource.includes('data-variant="system"'), true);
+  assert.equal(componentSource.includes('data-kind="meta"'), true);
+  assert.equal(componentSource.includes('className="run-msg-system-avatar"'), true);
+  assert.equal(componentSource.includes("AgentAvatarIcon avatar={systemAvatar}"), true);
+  assert.equal(componentSource.includes("<BotIcon"), true);
+  // Every call site must pass the resolved session systemAvatar so the
+  // attribution holds in the main transcript, the Turns detail view, and
+  // compacted history.
+  const metaCallSites = appSource.match(/<RunMetaBlock\b/g) ?? [];
+  assert.equal(metaCallSites.length >= 3, true);
+  assert.equal(appSource.includes("<RunMetaBlock entry={g.entry} systemAvatar={systemAvatar} />"), true);
+  assert.equal(
+    indexCssSource.includes('[data-slot="message"][data-kind="meta"] .run-transcript-message-content'),
+    true,
+  );
 });
 
 test("AskUserQuestion placeholder 'Answer questions?' never leaks into App source", () => {
