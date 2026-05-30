@@ -102,6 +102,10 @@ import {
   transitionNavigationMode,
 } from "./navigationMode";
 import { isTranscriptRefreshShortcut } from "./transcriptRefreshShortcut";
+import {
+  REFRESH_FLASH_DURATION_MS,
+  refreshFlashLabel,
+} from "./transcriptRefreshIndicator";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   type ConversationBackgroundTaskStatus,
@@ -8558,6 +8562,7 @@ function ChatPane({
   visible,
   onSessionPatch,
   onConnectionLabelChange,
+  onRefreshFlashChange,
   onForkMessage,
   pendingScrollMessageId,
   onScrollConsumed,
@@ -8577,6 +8582,10 @@ function ChatPane({
   visible: boolean;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onConnectionLabelChange: (id: string, label: string | null) => void;
+  // Transient "Refreshed" confirmation, surfaced in the same title-overlay
+  // slot as the connection pill. Bubbled per-session so the parent shows it
+  // for the active pane only.
+  onRefreshFlashChange: (id: string, label: string | null) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
   // Deep-link target the parent extracted from ?message=<id>. Only set
   // for the ChatPane whose session matches ?session=<id>; other panes
@@ -8834,6 +8843,26 @@ function ChatPane({
   // Dedupes overlapping R-refresh force-pulls (held key / rapid presses) so a
   // single user-visible refresh never fans out into a timeline-request storm.
   const keyboardRefreshInFlightRef = useRef(false);
+  // Brief, transient confirmation that an R-refresh registered. The pull
+  // itself is otherwise invisible when it delivers no new rows, so we flash a
+  // plain "Refreshed" pill in the connection-pill slot for a moment. The timer
+  // ref lets a rapid second press restart (not stack) the display window.
+  const [refreshFlashActive, setRefreshFlashActive] = useState(false);
+  const refreshFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerRefreshFlash = useCallback(() => {
+    setRefreshFlashActive(true);
+    if (refreshFlashTimerRef.current) clearTimeout(refreshFlashTimerRef.current);
+    refreshFlashTimerRef.current = setTimeout(() => {
+      setRefreshFlashActive(false);
+      refreshFlashTimerRef.current = null;
+    }, REFRESH_FLASH_DURATION_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (refreshFlashTimerRef.current) clearTimeout(refreshFlashTimerRef.current);
+    },
+    [],
+  );
   const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
@@ -11688,6 +11717,10 @@ function ChatPane({
         inFlight: keyboardRefreshInFlightRef.current,
         ...chatScrollElementSnapshot(transcriptScrollEl),
       });
+      // Confirm the keypress on every accepted R, even when the force-pull is
+      // deduped against one already in flight — the user still pressed R and
+      // should see it landed.
+      triggerRefreshFlash();
       if (keyboardRefreshInFlightRef.current) return;
       keyboardRefreshInFlightRef.current = true;
       // clearRealtime=false keeps any in-flight optimistic local echo; the
@@ -11712,6 +11745,7 @@ function ChatPane({
     session.mode,
     slashOpen,
     transcriptScrollEl,
+    triggerRefreshFlash,
     visible,
   ]);
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
@@ -11856,6 +11890,16 @@ function ChatPane({
     onConnectionLabelChange(session.id, visibleConnectionLabel);
     return () => onConnectionLabelChange(session.id, null);
   }, [onConnectionLabelChange, session.id, visibleConnectionLabel]);
+
+  const visibleRefreshFlash = refreshFlashLabel({
+    visible,
+    activeTab,
+    active: refreshFlashActive,
+  });
+  useEffect(() => {
+    onRefreshFlashChange(session.id, visibleRefreshFlash);
+    return () => onRefreshFlashChange(session.id, null);
+  }, [onRefreshFlashChange, session.id, visibleRefreshFlash]);
 
   async function sendInputReply(
     entry: TranscriptEntry,
@@ -13352,6 +13396,18 @@ export function App() {
   const [sessionConnectionLabels, setSessionConnectionLabels] = useState<Record<string, string | undefined>>({});
   const updateSessionConnectionLabel = useCallback((id: string, label: string | null) => {
     setSessionConnectionLabels((prev) => {
+      if (prev[id] === (label ?? undefined)) return prev;
+      const next = { ...prev };
+      if (label) next[id] = label;
+      else delete next[id];
+      return next;
+    });
+  }, []);
+  // Transient per-session "Refreshed" confirmation, mirrored from the active
+  // ChatPane and rendered alongside the connection pill.
+  const [sessionRefreshFlashes, setSessionRefreshFlashes] = useState<Record<string, string | undefined>>({});
+  const updateSessionRefreshFlash = useCallback((id: string, label: string | null) => {
+    setSessionRefreshFlashes((prev) => {
       if (prev[id] === (label ?? undefined)) return prev;
       const next = { ...prev };
       if (label) next[id] = label;
@@ -14948,6 +15004,10 @@ export function App() {
     activeWorkspaceSession == null
       ? null
       : sessionConnectionLabels[activeWorkspaceSession.id] ?? null;
+  const activeRefreshFlash =
+    activeWorkspaceSession == null
+      ? null
+      : sessionRefreshFlashes[activeWorkspaceSession.id] ?? null;
   const useHomeTitleChrome =
     active == null || homeEditingTitle || pendingCreateTitleSessionId != null;
   const showWorkspaceTitleChrome =
@@ -15044,6 +15104,15 @@ export function App() {
           aria-live="polite"
         >
           <span className="run-connection-label">{activeConnectionLabel}</span>
+        </span>
+      )}
+      {!useHomeTitleChrome && activeRefreshFlash && (
+        <span
+          className="run-connection-pill run-refresh-pill"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="run-connection-label run-refresh-label">{activeRefreshFlash}</span>
         </span>
       )}
     </div>
@@ -15715,6 +15784,7 @@ export function App() {
                       visible={active === s.id}
                       onSessionPatch={patchSession}
                       onConnectionLabelChange={updateSessionConnectionLabel}
+                      onRefreshFlashChange={updateSessionRefreshFlash}
                       onForkMessage={forkSessionFromMessage}
                       pendingScrollMessageId={
                         pendingScrollMessageId && active === s.id
