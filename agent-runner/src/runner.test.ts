@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
+  classifyProviderFailure,
   dispatch,
   inputReplyAnnotations,
   inputReplyAnswers,
@@ -24,6 +25,38 @@ import {
   userSubmissionEvents,
 } from "../../runner-shared/conversation-builders.js";
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
+
+test("classifyProviderFailure pins the extended-thinking resume 400 (session 340)", () => {
+  // Verbatim shape of the API error that killed session 340 on resume.
+  const msg =
+    "API Error: 400 messages.1.content.9: `thinking` or `redacted_thinking` " +
+    "blocks in the latest assistant message cannot be modified. These blocks " +
+    "must remain as they were in the original response.";
+  assert.equal(classifyProviderFailure(msg), "thinking_block_modified");
+});
+
+test("classifyProviderFailure maps the other known provider failure shapes", () => {
+  assert.equal(
+    classifyProviderFailure("API Error: 529 Overloaded"),
+    "overloaded",
+  );
+  assert.equal(
+    classifyProviderFailure("API Error: 429 rate limit exceeded"),
+    "rate_limit",
+  );
+  assert.equal(
+    classifyProviderFailure("prompt is too long: 250000 tokens > 200000"),
+    "context_length",
+  );
+  assert.equal(
+    classifyProviderFailure("API Error: 401 authentication_error"),
+    "auth",
+  );
+  assert.equal(
+    classifyProviderFailure("ECONNRESET socket hang up"),
+    "other",
+  );
+});
 
 type Order = string[];
 
