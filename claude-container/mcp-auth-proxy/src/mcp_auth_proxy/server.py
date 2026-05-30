@@ -106,6 +106,23 @@ SA_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 GITHUB_MCP_PORT = 9992
 GLIMMUNG_MCP_PORT = 9995
 TANK_OPERATOR_MCP_PORT = 9996
+SPIRELENS_MCP_PORT = 9997
+
+# Optional tailnet upstream: the SpireLens game-host MCP (spire-lens-mcp's
+# server.py --transport http). Unlike the in-cluster .svc upstreams below it
+# lives on the Tailscale tailnet (tag:spirelens-host), so its requests are
+# routed through tailscaled's userspace outbound HTTP proxy (TAILNET_HTTP_PROXY)
+# and authenticated with the pod's auth.romaine.life service JWT (the server
+# validates it with --auth-mode jwt). The listener is added only when
+# SPIRELENS_MCP_UPSTREAM is set (e.g. http://nelsonlaptop:15527), so a pod that
+# never joins the tailnet does not expose a dead port. See
+# docs/tailnet-host-access.md.
+SPIRELENS_MCP_UPSTREAM = (os.environ.get("SPIRELENS_MCP_UPSTREAM") or "").strip()
+# CONNECT proxy into the tailnet (tailscaled --outbound-http-proxy-listen).
+# Applied ONLY to the SpireLens upstream, passed per-request rather than via the
+# HTTP_PROXY env so the in-cluster .svc upstreams keep reaching cluster IPs
+# directly (aiohttp would otherwise proxy every request).
+TAILNET_HTTP_PROXY = (os.environ.get("TAILNET_HTTP_PROXY") or "").strip() or None
 
 # auth.romaine.life service-principal exchange (see
 # nelsong6/tank-operator#486). The session pod mounts a projected SA
@@ -320,6 +337,7 @@ def _make_handler(
     *,
     extra_header_provider=None,
     static_headers=None,
+    proxy: str | None = None,
 ):
     """Build the request handler for an MCP upstream.
 
@@ -407,6 +425,7 @@ def _make_handler(
                         headers=forwarded_headers,
                         data=body,
                         allow_redirects=False,
+                        proxy=proxy,
                     ) as upstream_resp:
                         status = upstream_resp.status
 
@@ -539,20 +558,35 @@ async def run() -> None:
     # session.
     auth_romaine_provider = AuthRomaineServiceProvider(http)
 
+    # The SpireLens game-host MCP is a tailnet upstream, added only when
+    # configured (SPIRELENS_MCP_UPSTREAM) and reached through the tailscaled
+    # outbound HTTP proxy. See docs/tailnet-host-access.md.
+    effective_listeners = list(LISTENERS)
+    if SPIRELENS_MCP_UPSTREAM:
+        effective_listeners.append((SPIRELENS_MCP_PORT, SPIRELENS_MCP_UPSTREAM))
+        if not TAILNET_HTTP_PROXY:
+            log.warning(
+                "SPIRELENS_MCP_UPSTREAM set but TAILNET_HTTP_PROXY is empty; the "
+                "tailnet upstream on :%d will be unreachable until the pod joins "
+                "the tailnet and exposes its outbound HTTP proxy",
+                SPIRELENS_MCP_PORT,
+            )
+
     try:
-        for port, upstream in LISTENERS:
+        for port, upstream in effective_listeners:
             app = web.Application()
             for discovery_path in _OAUTH_DISCOVERY_PATHS:
                 app.router.add_route("GET", discovery_path, _oauth_discovery_not_configured)
             # RFC 7591 Dynamic Client Registration â€” also intercepted so the
             # SDK gets a JSON 404 rather than an upstream plain-text one.
             app.router.add_route("POST", "/register", _oauth_discovery_not_configured)
-            if port == GITHUB_MCP_PORT:
-                # mcp-github verifies the auth.romaine.life service JWT
-                # against the IdP's JWKS and resolves the caller's GitHub
-                # App installation by calling tank-operator's
-                # /api/internal/github/installation with this same bearer
-                # forwarded.
+            if port in (GITHUB_MCP_PORT, SPIRELENS_MCP_PORT):
+                # Both authenticate with the auth.romaine.life service JWT as
+                # the bearer. mcp-github verifies it against the IdP's JWKS and
+                # resolves the caller's GitHub App installation by calling
+                # tank-operator's /api/internal/github/installation with the
+                # same bearer forwarded; the SpireLens game-host MCP validates
+                # it directly with --auth-mode jwt.
                 token_provider = auth_romaine_provider
             else:
                 token_provider = ServiceAccountTokenProvider()
@@ -585,6 +619,11 @@ async def run() -> None:
             if port == TANK_OPERATOR_MCP_PORT and ORIGIN_SESSION_ID:
                 static_headers = {ORIGIN_SESSION_FORWARD_HEADER: ORIGIN_SESSION_ID}
 
+            # The SpireLens upstream is on the tailnet; route it through the
+            # tailscaled outbound HTTP proxy. Every other upstream is an
+            # in-cluster .svc and must connect directly (proxy=None).
+            request_proxy = TAILNET_HTTP_PROXY if port == SPIRELENS_MCP_PORT else None
+
             app.router.add_route(
                 "*",
                 "/{tail:.*}",
@@ -594,6 +633,7 @@ async def run() -> None:
                     token_provider,
                     extra_header_provider=extra_header_provider,
                     static_headers=static_headers,
+                    proxy=request_proxy,
                 ),
             )
             runner = web.AppRunner(app)
