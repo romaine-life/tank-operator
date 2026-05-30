@@ -5332,12 +5332,12 @@ function RunNeedsInputAnnouncement({
   const targetTurnId = announcement?.targetTurnId ?? entry.turnId ?? "";
   // This row is the conversational handoff — "Claude is waiting on you" —
   // that surfaces in the main transcript where the user is reading. The
-  // interactive answer form itself lives in the Turns/activity card, which
-  // is fed live off the same server-projected question payload (see
-  // liveAskUserActivityByTurn) so it renders without a reload. We read the
-  // streamed `questions` here only to (a) decide whether the live card can
-  // be built and (b) emit the observability miss-counter when it can't.
-  // See docs/features/transcript/contract.md → Live Behavior.
+  // interactive answer form itself lives in the Turns/activity card, whose
+  // detail re-hydrates live off the streamed turn_activity shell cursor (see
+  // ensureTurnActivityLoaded / shellOrderKeyByTurn) so it renders without a
+  // reload. We read the streamed `questions` here only to (a) decide whether
+  // the live card can be built and (b) emit the observability miss-counter
+  // when it can't. See docs/features/transcript/contract.md → Live Behavior.
   const questions = Array.isArray(announcement?.questions) ? announcement.questions : [];
   const hasQuestions = questions.length > 0;
   // Observability: an unanswered handoff that streamed without its question
@@ -6031,13 +6031,14 @@ function ToolBody({ entry }: { entry: TranscriptEntry }) {
   }
   if (name === "AskUserQuestion") {
     // The AskUserQuestion answer surface lives here, in the Turns/activity
-    // card — the same place every other tool entry renders. It is fed live
-    // off the server-streamed needs_input_announcement payload (see
-    // liveAskUserActivityByTurn), so a question raised in an already-open
-    // session appears here without a reload, and resolves live when
-    // tool.approval_resolved re-projects the row. The main-transcript
-    // announcement row is the conversational handoff/pointer, not a second
-    // answer form — there is exactly one interactive surface.
+    // card — the same place every other tool entry renders. The card's detail
+    // re-hydrates live off the streamed turn_activity shell cursor (see
+    // ensureTurnActivityLoaded / shellOrderKeyByTurn), so a question raised in
+    // an already-open session appears here without a reload, and its answered
+    // state resolves instantly via the liveAskUserAnswers overlay when
+    // tool.approval_resolved re-projects the announcement row. The
+    // main-transcript announcement row is the conversational handoff/pointer,
+    // not a second answer form — there is exactly one interactive surface.
     return <ToolAskUserBody entry={entry} input={input} />;
   }
   return <ToolDefaultBody entry={entry} input={input} />;
@@ -6089,12 +6090,13 @@ function ToolAskUserBody({
   input: Record<string, unknown> | null;
   // The interactive answer form (clickable options, free-form textarea,
   // submit) renders here, in the Turns/activity card — the single surface
-  // that owns the AskUserQuestion answer. The question payload and the
-  // answered state both arrive live over the durable cursor stream (the
-  // synthesized card from liveAskUserActivityByTurn for the question,
-  // RunContext.liveAskUserAnswers for the resolution), so the card needs no
-  // one-shot fetch to appear or to resolve. The main-transcript announcement
-  // row is a handoff/pointer only, so this is the lone submit path
+  // that owns the AskUserQuestion answer. The card's detail re-hydrates live
+  // off the streamed turn_activity shell cursor (ensureTurnActivityLoaded /
+  // shellOrderKeyByTurn), so a question raised mid-turn appears without a
+  // reload; the answered state then resolves instantly via
+  // RunContext.liveAskUserAnswers when tool.approval_resolved re-projects the
+  // announcement row. The main-transcript announcement row is a
+  // handoff/pointer only, so this is the lone submit path
   // (docs/migration-policy.md → single source, no parallel surface).
 }) {
   const { sendInputReply, liveAskUserAnswers } = useContext(RunContext);
@@ -6114,10 +6116,9 @@ function ToolAskUserBody({
   //       so the user can keep clicking
   //   (b) the free-form textarea stays open because `answered` is still
   //       false until the durable resolve arrives
-  //   (c) the selected option dot "vanishes" when the parent re-renders
-  //       with a stale activity-cache entry whose toolStatus is still
-  //       "started" — the durable cache for the Turns tab doesn't refresh
-  //       on its own (one-shot fetch in loadActivityForTurn).
+  //   (c) the selected option dot "vanishes" for the ~400ms debounce window
+  //       before the shell-cursor re-hydration refetches the Turns detail
+  //       with the resolved toolStatus.
   // The optimistic snapshot is a *fallback*: durable state still wins when
   // it eventually arrives, so a fresh tab opened later renders the same
   // answer from the projection.
@@ -6134,12 +6135,11 @@ function ToolAskUserBody({
   // this or any other tab) still renders the selections. Local
   // `selections` state only powers the pre-submit click-to-pick UX.
   //
-  // The live cursor stream wins over the entry's own answers: a cold-loaded
-  // Turns/activity card carries answers from a one-shot fetch that never
-  // refreshes, so when the live `needs_input_announcement` row reports the
-  // resolved answer we prefer it. The live-synthesized card
-  // (liveAskUserActivityByTurn) is built from that same row, so an in-flight
-  // and a cold-loaded card resolve to the same answered state.
+  // The live announcement overlay wins over the entry's own answers: between
+  // the resolve and the shell-cursor re-hydration refetch, the cached Turns
+  // detail still carries the pre-resolve answers, so when the live
+  // `needs_input_announcement` row reports the resolved answer we prefer it.
+  // Both paths derive from the same projected row, so they converge.
   const live = liveAskUserAnswers.get(entry.id);
   const durableAnswers = (live?.answers && Object.keys(live.answers).length > 0)
     ? live.answers
@@ -8691,6 +8691,13 @@ function ChatPane({
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [activityEntriesByTurn, setActivityEntriesByTurn] =
     useState<Record<string, TranscriptEntry[] | undefined>>({});
+  // Per-turn streamed shell order key the cached detail reflects. A turn whose
+  // live shell has advanced past this value has stale detail and must be
+  // re-fetched (the raw detail is not streamed; the shell is). Recorded at the
+  // moment each /activity fetch is issued so a shell that advances during the
+  // fetch re-triggers convergent re-hydration.
+  const [activityLoadedOrderKey, setActivityLoadedOrderKey] =
+    useState<Record<string, string>>({});
   const [loadingActivityTurns, setLoadingActivityTurns] =
     useState<Record<string, boolean | undefined>>({});
   const [renderedActiveTurnId, setRenderedActiveTurnId] = useState<string | null>(null);
@@ -11584,81 +11591,45 @@ function ChatPane({
     ? DEFAULT_CODEX_MODEL_ID
     : selectedModelId;
   const modelForCostEstimate = appliedModelId || modelForContext;
-  // liveAskUserActivityByTurn synthesizes the AskUserQuestion tool card for
-  // the Turns view directly from the server-projected needs_input_announcement
-  // rows on the durable cursor stream. This is the fix for the "follow-up
-  // dialog only appears after a refresh" bug: the one-shot /turns/{id}/activity
-  // fetch never re-runs once a turn is loaded, so a question raised AFTER that
-  // fetch would be missing from the Turns card until a reload. The announcement
-  // carries the canonical question payload, so the card is built straight off
-  // the stream — no refetch, no polling (which the transcript contract forbids
-  // as a transcript-live path). The synthesized card is keyed by the durable
-  // tool timeline id so sendInputReply targets the real approval item and
-  // RunContext.liveAskUserAnswers resolves it live.
-  const liveAskUserActivityByTurn = useMemo(() => {
-    const map = new Map<string, TranscriptEntry[]>();
-    for (const entry of renderedEntries) {
-      if (entry.metaKind !== "needs_input_announcement") continue;
-      const ann = entry.announcement;
-      const timelineId = ann?.targetTimelineId;
-      const turnId = (ann?.targetTurnId ?? entry.turnId ?? "").trim();
-      const questions = Array.isArray(ann?.questions) ? ann.questions : [];
-      if (!timelineId || !turnId || questions.length === 0) continue;
-      const card = {
-        id: timelineId,
-        kind: "tool",
-        toolName: "AskUserQuestion",
-        toolStatus: ann?.answered ? "completed" : "started",
-        turnId,
-        providerItemId: ann?.targetProviderItemId,
-        toolInput: JSON.stringify({ questions }),
-        askUserAnswers: ann?.answers,
-      } as TranscriptEntry;
-      const existing = map.get(turnId);
-      if (existing) existing.push(card);
-      else map.set(turnId, [card]);
-    }
-    return map;
-  }, [renderedEntries]);
-  // Merge the live AskUserQuestion cards into the fetched activity entries.
-  // For a turn whose cold-load fetch already placed the card (historical /
-  // answered turns), we keep the fetched copy in its durable position and let
-  // liveAskUserAnswers carry the live resolution; we only append the streamed
-  // card when the fetch lacks it — the in-flight case the refresh bug was
-  // about. This keeps a single card per timeline id (no duplicate, no stale
-  // parallel surface).
-  const activityEntriesWithLiveAsk = useMemo(() => {
-    if (liveAskUserActivityByTurn.size === 0) return activityEntriesByTurn;
-    const out: Record<string, TranscriptEntry[] | undefined> = { ...activityEntriesByTurn };
-    for (const [turnId, liveCards] of liveAskUserActivityByTurn) {
-      const fetched = activityEntriesByTurn[turnId];
-      const fetchedIds = new Set((fetched ?? []).map((e) => e.id));
-      const missing = liveCards.filter((card) => !fetchedIds.has(card.id));
-      if (missing.length === 0) continue;
-      out[turnId] = [...(fetched ?? []), ...missing];
-    }
-    return out;
-  }, [activityEntriesByTurn, liveAskUserActivityByTurn]);
   const turnViewItems = useMemo(
     () => buildTurnViewItems(
       renderedEntries,
       renderedActiveTurnId,
-      activityEntriesWithLiveAsk,
+      activityEntriesByTurn,
       modelForCostEstimate,
     ),
-    [activityEntriesWithLiveAsk, modelForCostEstimate, renderedActiveTurnId, renderedEntries],
+    [activityEntriesByTurn, modelForCostEstimate, renderedActiveTurnId, renderedEntries],
   );
   const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
   const latestTurnId = turnViewItems[turnViewItems.length - 1]?.turnId ?? null;
-  // liveAskUserAnswers is the single live source of AskUserQuestion
-  // answered-state, keyed by the durable tool item's timeline id. It is
-  // derived from the server-projected `needs_input_announcement` rows that
-  // ride the durable cursor stream, so the interactive AskUserQuestion form
-  // (rendered in the Turns/activity card, synthesized live via
-  // liveAskUserActivityByTurn) reflects the resolved answer live — without the
-  // one-shot /turns/{id}/activity fetch, which never refreshes after the
-  // question arrives. See docs/features/transcript/contract.md → Live Behavior.
+  // The Turns/activity detail is deliberately NOT carried on the live SSE
+  // stream — the backend promotes only compacted turn_activity *shells* to the
+  // main transcript and keeps raw item/tool events behind the
+  // `/turns/{turn_id}/activity` endpoint (see handlers_session_events.go). The
+  // shell, however, DOES stream live and carries `endOrderKey` — the furthest
+  // durable order key the turn has reached, advancing on every new event and
+  // flipping to the terminal order key when the turn completes. We use that
+  // streamed cursor to re-hydrate the detail: when a turn's shell advances past
+  // the order key its cached detail reflects, the detail is stale and must be
+  // refetched. This is the single mechanism that keeps the Turns view live
+  // (a question raised mid-turn, the answer, the final tool results, the turn
+  // going terminal) without a page reload, per
+  // docs/features/transcript/contract.md → Live Behavior.
+  const shellOrderKeyByTurn = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const turn of turnViewItems) {
+      map.set(turn.turnId, turnActivityShellTailOrderKey(turn.shell));
+    }
+    return map;
+  }, [turnViewItems]);
+  // liveAskUserAnswers is the live source of AskUserQuestion answered-state,
+  // keyed by the durable tool item's timeline id. It is derived from the
+  // server-projected `needs_input_announcement` rows that ride the durable
+  // cursor stream, so the interactive AskUserQuestion form (rendered in the
+  // Turns/activity card) shows the resolved answer the instant the durable
+  // resolve lands — without waiting for the detail re-hydration round trip.
+  // See docs/features/transcript/contract.md → Live Behavior.
   const liveAskUserAnswers = useMemo(() => {
     const map = new Map<string, { answered: boolean; answers?: Record<string, AskUserQuestionAnswer> }>();
     for (const entry of renderedEntries) {
@@ -11675,12 +11646,23 @@ function ChatPane({
   const effectiveSelectedTurnId = selectedTurnExists ? selectedTurnId : latestTurnId;
   const routedSelectedTurnId =
     activeTab === "turns" ? (pendingRouteTurnId ?? effectiveSelectedTurnId) : null;
-  const ensureTurnActivityLoaded = useCallback((turnId: string) => {
+  const ensureTurnActivityLoaded = useCallback((turnId: string, shellOrderKey = "") => {
     const trimmedTurnId = turnId.trim();
     if (!trimmedTurnId) return;
-    if (activityEntriesByTurn[trimmedTurnId]) return;
     if (loadingActivityTurns[trimmedTurnId]) return;
+    const alreadyLoaded = activityEntriesByTurn[trimmedTurnId] !== undefined;
+    // Fresh iff we have detail AND the streamed shell has not advanced past the
+    // order key that detail reflects. When the caller has no shell key yet
+    // (first open before the shell is known), a single load is enough; once the
+    // shell key is known and advances, the cached detail is stale and refetched.
+    if (alreadyLoaded) {
+      const loadedKey = activityLoadedOrderKey[trimmedTurnId] ?? "";
+      if (shellOrderKey === "" || loadedKey >= shellOrderKey) return;
+    }
     setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
+    // Record the order key this fetch targets up front: a shell that advances
+    // while the request is in flight then re-triggers the re-hydration effect.
+    setActivityLoadedOrderKey((prev) => ({ ...prev, [trimmedTurnId]: shellOrderKey }));
     void authedFetch(
       scopedSessionPathForPane(
         `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(trimmedTurnId)}/activity`,
@@ -11695,12 +11677,12 @@ function ChatPane({
         setActivityEntriesByTurn((prev) => ({ ...prev, [trimmedTurnId]: loaded }));
       })
       .catch(() => {
-        setActivityEntriesByTurn((prev) => ({ ...prev, [trimmedTurnId]: [] }));
+        setActivityEntriesByTurn((prev) => ({ ...prev, [trimmedTurnId]: prev[trimmedTurnId] ?? [] }));
       })
       .finally(() => {
         setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
       });
-  }, [activityEntriesByTurn, loadingActivityTurns, scopedSessionPathForPane, session.id]);
+  }, [activityEntriesByTurn, activityLoadedOrderKey, loadingActivityTurns, scopedSessionPathForPane, session.id]);
   useEffect(() => {
     if (turnViewItems.length === 0) {
       if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);
@@ -11738,11 +11720,23 @@ function ChatPane({
       replaceSessionRoute(session.id, "chat");
     }
   }, [activeTab, pendingScrollMessageId, routedSelectedTurnId, session.id, visible]);
+  // The streamed shell tail order key for the turn currently shown in the Turns
+  // view. When this advances (a new durable event, the answer, or the turn going
+  // terminal), the cached `/activity` detail is stale and must be re-hydrated.
+  const selectedTurnShellOrderKey = effectiveSelectedTurnId
+    ? (shellOrderKeyByTurn.get(effectiveSelectedTurnId) ?? "")
+    : "";
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
-    ensureTurnActivityLoaded(effectiveSelectedTurnId);
-  }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded]);
+    // Debounce so a burst of active-turn events coalesces into one refetch:
+    // each shell advance re-runs this effect and resets the timer, so we only
+    // hit `/activity` once the shell settles (or ~400ms after the last event).
+    const handle = window.setTimeout(() => {
+      ensureTurnActivityLoaded(effectiveSelectedTurnId, selectedTurnShellOrderKey);
+    }, 400);
+    return () => window.clearTimeout(handle);
+  }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded, selectedTurnShellOrderKey]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (pendingTurnViewRouteAnchor !== "bottom") return;
@@ -11762,7 +11756,7 @@ function ChatPane({
       setPendingRouteTurnId(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnId(target);
-      ensureTurnActivityLoaded(target);
+      ensureTurnActivityLoaded(target, shellOrderKeyByTurn.get(target) ?? "");
       if (options?.anchor) {
         turnViewScrollRequestSeqRef.current += 1;
         setTurnViewScrollRequest({
@@ -11773,7 +11767,7 @@ function ChatPane({
       }
     }
     setActiveTab("turns");
-  }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
+  }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId, shellOrderKeyByTurn]);
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
   const canStopBackgroundEntry = useCallback(
     (entry: TranscriptEntry) =>
@@ -12402,7 +12396,7 @@ function ChatPane({
             onSelectTurn={(turnId) => {
               setPendingRouteTurnId(null);
               setSelectedTurnId(turnId);
-              ensureTurnActivityLoaded(turnId);
+              ensureTurnActivityLoaded(turnId, shellOrderKeyByTurn.get(turnId) ?? "");
             }}
             avatar={sessionAvatar}
             systemAvatar={systemAvatar}
@@ -12552,9 +12546,11 @@ function ChatPane({
               scrollToLatestReason={scrollToLatestRequest.reason}
               onScrollToLatestConsumed={clearScrollToLatestRequest}
               scrollToOldestSignal={scrollToOldestSignal}
-              activityEntriesByTurn={activityEntriesWithLiveAsk}
+              activityEntriesByTurn={activityEntriesByTurn}
               loadingActivityTurns={loadingActivityTurns}
-              onActivityOpen={ensureTurnActivityLoaded}
+              onActivityOpen={(turnId) =>
+                ensureTurnActivityLoaded(turnId, shellOrderKeyByTurn.get(turnId) ?? "")
+              }
             />
           </>
         )}

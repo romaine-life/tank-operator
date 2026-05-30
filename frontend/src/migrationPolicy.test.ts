@@ -218,46 +218,70 @@ test("AskUserQuestion handoff renders as the session system identity", () => {
   assert.equal(indexCssSource.includes(".run-needs-input-announcement-copy"), true);
 });
 
-test("AskUserQuestion interactive form is delivered over the durable cursor stream, not a one-shot activity cache", () => {
-  // Root-cause guard for the "follow-up dialog only appears after a page
-  // refresh" bug. The interactive AskUserQuestion form lives in the Turns/
-  // activity card, which used to be sourced ONLY from the one-shot
-  // `/turns/{id}/activity` fetch (`activityEntriesByTurn`). That fetch never
-  // re-runs once a turn is loaded, so a question raised AFTER the fetch was
-  // invisible in an already-open client until a reload. The fix keeps the form
-  // in the Turns view but synthesizes its card live from the canonical
-  // questions[]/answers payload that the server projects onto the
-  // already-live-streamed `needs_input_announcement` handoff row, per
-  // docs/features/transcript/contract.md ("an already-open transcript client
-  // must receive and render post-cursor durable events without reload").
+test("Turns/activity detail re-hydrates live off the streamed shell cursor, not a frozen one-shot fetch", () => {
+  // Root-cause guard for the "follow-up dialog (and any post-fetch turn detail)
+  // only appears after a page refresh" bug. The Turns/activity detail — where
+  // the interactive AskUserQuestion form and every other tool entry render — is
+  // sourced from the one-shot `/turns/{id}/activity` fetch
+  // (`activityEntriesByTurn`). The backend deliberately does NOT stream raw
+  // item/tool detail over SSE; it streams only the compacted `turn_activity`
+  // shell, which DOES carry a live `endOrderKey` cursor. The old code
+  // early-returned once a turn was fetched, freezing the detail, so a question
+  // raised (or the turn completing) AFTER the fetch was invisible in an
+  // already-open client until a reload. The fix re-fetches `/activity` whenever
+  // the streamed shell's tail order key advances past the order key the cached
+  // detail reflects, per docs/features/transcript/contract.md ("an already-open
+  // transcript client must receive and render post-cursor durable events
+  // without reload").
 
   // 1. The interactive form is the Turns/activity AskUserQuestion card — the
-  //    same place every other tool entry renders — fed live (no fetch), and it
-  //    is the single answer surface (the announcement row is handoff-only).
+  //    same place every other tool entry renders — and it is the single answer
+  //    surface (the announcement row is handoff-only).
   assert.match(
     appSource,
     /if \(name === "AskUserQuestion"\)[\s\S]*?return <ToolAskUserBody entry=\{entry\} input=\{input\} \/>;/,
     "the interactive AskUserQuestion form must render in the Turns/activity tool card",
   );
 
-  // 2. The Turns card is synthesized live from the streamed announcement rows
-  //    (keyed by the durable tool timeline id) and merged into the fetched
-  //    activity entries only when the cold fetch lacks it — one card per
-  //    timeline id, no parallel/stale surface (docs/migration-policy.md).
+  // 2. The detail re-hydrates off the live streamed shell cursor: a per-turn map
+  //    of the shell tail order key, an order key the cached detail reflects, and
+  //    a refetch when the shell advances past it. No parallel/synthesized
+  //    surface — the single fetch cache stays canonical (docs/migration-policy.md).
   assert.match(
     appSource,
-    /const liveAskUserActivityByTurn = useMemo\(\(\) => \{/,
-    "the Turns AskUserQuestion card must be synthesized live off the announcement stream",
+    /const shellOrderKeyByTurn = useMemo\(\(\) => \{/,
+    "the Turns view must track each turn's streamed shell tail order key",
   );
   assert.match(
     appSource,
-    /const activityEntriesWithLiveAsk = useMemo\(\(\) => \{/,
-    "the live card must merge into activity entries fed to the Turns/transcript views",
+    /map\.set\(turn\.turnId, turnActivityShellTailOrderKey\(turn\.shell\)\)/,
+    "the shell cursor must come from the streamed turn_activity shell, not the fetch",
   );
   assert.match(
     appSource,
-    /buildTurnViewItems\(\s*renderedEntries,\s*renderedActiveTurnId,\s*activityEntriesWithLiveAsk,/,
-    "buildTurnViewItems must consume the live-merged activity entries, not the raw fetch cache",
+    /const \[activityLoadedOrderKey, setActivityLoadedOrderKey\] =/,
+    "the cached detail must record the shell order key it reflects",
+  );
+  assert.match(
+    appSource,
+    /const ensureTurnActivityLoaded = useCallback\(\(turnId: string, shellOrderKey = ""\) => \{/,
+    "ensureTurnActivityLoaded must accept the streamed shell order key as a freshness cursor",
+  );
+  assert.match(
+    appSource,
+    /if \(shellOrderKey === "" \|\| loadedKey >= shellOrderKey\) return;/,
+    "a cached turn must refetch only when the streamed shell advances past the loaded order key",
+  );
+  assert.match(
+    appSource,
+    /ensureTurnActivityLoaded\(effectiveSelectedTurnId, selectedTurnShellOrderKey\)/,
+    "the selected turn must re-hydrate when its streamed shell cursor advances",
+  );
+  // The raw fetch cache (not a live-merged copy) feeds the views directly.
+  assert.match(
+    appSource,
+    /buildTurnViewItems\(\s*renderedEntries,\s*renderedActiveTurnId,\s*activityEntriesByTurn,/,
+    "buildTurnViewItems must consume the re-hydrated fetch cache directly",
   );
 
   // 3. The streamed announcement carries the canonical question payload, read
@@ -269,8 +293,8 @@ test("AskUserQuestion interactive form is delivered over the durable cursor stre
   );
   assert.equal(appSource.includes("const hasQuestions = questions.length > 0"), true);
 
-  // 4. Answered state is a single live source resolved from the stream, shared
-  //    by the in-flight (live-synthesized) and cold-loaded Turns cards.
+  // 4. Answered state is a single live source resolved from the stream, used as
+  //    the instant overlay before the shell-cursor re-hydration refetch lands.
   assert.equal(
     appSource.includes(
       "liveAskUserAnswers: Map<string, { answered: boolean; answers?: Record<string, AskUserQuestionAnswer> }>",

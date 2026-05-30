@@ -431,19 +431,23 @@ const required = [
     pattern: /RunNeedsInputAnnouncement\b/,
   },
 
-  // --- Live delivery: the Turns form is fed off the durable cursor stream ----
+  // --- Live delivery: the Turns detail re-hydrates off the streamed shell -----
   //
-  // The AskUserQuestion follow-up dialog lives in the Turns/activity tool card.
-  // That card used to be sourced ONLY from the one-shot `/turns/{id}/activity`
-  // fetch (`activityEntriesByTurn`), which never re-runs once a turn is loaded —
-  // so an already-open client never saw a question raised AFTER the fetch until
-  // it reloaded the page. Per docs/features/transcript/contract.md ("an
-  // already-open transcript client must receive and render post-cursor durable
-  // events without reload") the fix keeps the form in the Turns view but
-  // synthesizes its card live from the canonical questions[]/answers payload
-  // that the server projects onto the already-live-streamed
-  // `needs_input_announcement` handoff row. These anchors pin that delivery
-  // path so a future PR can't quietly revert to the fetch-only model.
+  // The AskUserQuestion follow-up dialog (and every other tool entry) lives in
+  // the Turns/activity tool card, sourced from the one-shot `/turns/{id}/activity`
+  // fetch (`activityEntriesByTurn`). The backend deliberately does NOT stream raw
+  // item/tool detail over SSE; it streams only the compacted `turn_activity`
+  // shell, which DOES carry a live `endOrderKey` cursor. The old code
+  // early-returned once a turn was fetched, freezing the detail — so an
+  // already-open client never saw a question raised (or the turn completing)
+  // AFTER the fetch until it reloaded the page. Per
+  // docs/features/transcript/contract.md ("an already-open transcript client
+  // must receive and render post-cursor durable events without reload") the fix
+  // re-fetches `/activity` whenever the streamed shell's tail order key advances
+  // past the order key the cached detail reflects. These anchors pin that
+  // re-hydration path so a future PR can't quietly revert to the fetch-only
+  // (frozen) model. The instant answered-state overlay (liveAskUserAnswers) is
+  // pinned separately below.
   {
     file: "backend-go/cmd/tank-operator/transcript_projection.go",
     name: "announcement embeds the canonical questions[] payload for live render",
@@ -457,17 +461,27 @@ const required = [
   {
     file: "frontend/src/App.tsx",
     name: "the interactive AskUserQuestion form renders in the Turns/activity tool card",
-    pattern: /if \(name === "AskUserQuestion"\)[\s\S]{0,600}return <ToolAskUserBody entry=\{entry\} input=\{input\} \/>;/,
+    pattern: /if \(name === "AskUserQuestion"\)[\s\S]{0,900}return <ToolAskUserBody entry=\{entry\} input=\{input\} \/>;/,
   },
   {
     file: "frontend/src/App.tsx",
-    name: "the Turns AskUserQuestion card is synthesized live off the announcement stream",
-    pattern: /const liveAskUserActivityByTurn = useMemo\(/,
+    name: "the Turns view tracks each turn's streamed shell tail order key (the live cursor)",
+    pattern: /const shellOrderKeyByTurn = useMemo\([\s\S]{0,200}turnActivityShellTailOrderKey\(turn\.shell\)/,
   },
   {
     file: "frontend/src/App.tsx",
-    name: "the live card merges into the activity entries fed to Turns/transcript",
-    pattern: /const activityEntriesWithLiveAsk = useMemo\(/,
+    name: "the cached Turns detail records the shell order key it reflects",
+    pattern: /const \[activityLoadedOrderKey, setActivityLoadedOrderKey\] =/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "ensureTurnActivityLoaded re-fetches when the streamed shell advances past the loaded order key",
+    pattern: /ensureTurnActivityLoaded = useCallback\(\(turnId: string, shellOrderKey = ""\)[\s\S]{0,900}if \(shellOrderKey === "" \|\| loadedKey >= shellOrderKey\) return;/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "the selected turn re-hydrates when its streamed shell cursor advances",
+    pattern: /ensureTurnActivityLoaded\(effectiveSelectedTurnId, selectedTurnShellOrderKey\)/,
   },
   {
     file: "frontend/src/App.tsx",
