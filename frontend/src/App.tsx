@@ -4493,7 +4493,7 @@ function TurnViewButton({
       aria-label="Open turn"
       onClick={(e) => {
         e.stopPropagation();
-        onOpenTurn(turnId);
+        onOpenTurn(turnId, { anchor: "bottom" });
       }}
     >
       <ActivityIcon size={12} aria-hidden="true" />
@@ -5205,7 +5205,7 @@ function RunNeedsInputAnnouncement({
   const targetTurnId = announcement?.targetTurnId ?? entry.turnId ?? "";
   const handleOpen = (): void => {
     if (!targetTurnId) return;
-    onOpenTurn?.(targetTurnId);
+    onOpenTurn?.(targetTurnId, { anchor: "bottom" });
   };
   const interactive = !answered && Boolean(targetTurnId && onOpenTurn);
   return (
@@ -7306,6 +7306,7 @@ function RunTurnActivityScreen({
     if (scrollRequest.turnId !== selected.turnId) return;
     if (consumedScrollRequestRef.current === scrollRequest.signal) return;
     if (scrollRequest.anchor !== "bottom") return;
+    if (!selected.loaded) return;
     if (loading && detailGroups.length === 0) return;
     const body = bodyRef.current;
     if (!body) return;
@@ -8462,6 +8463,8 @@ function ChatPane({
   const [pendingRouteTurnId, setPendingRouteTurnId] = useState<string | null>(
     initialRunRoute?.tab === "turns" ? initialRunRoute.turnId : null,
   );
+  const [pendingTurnViewRouteAnchor, setPendingTurnViewRouteAnchor] =
+    useState<TurnViewScrollAnchor | null>(initialRunRoute?.tab === "turns" ? "bottom" : null);
   const [backgroundView, setBackgroundView] = useState<BackgroundView>("shells");
   const [selectedBackgroundId, setSelectedBackgroundId] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
@@ -9279,10 +9282,12 @@ function ChatPane({
       setActiveTab("turns");
       setPendingRouteTurnId(route.turnId);
       if (route.turnId) setSelectedTurnId(route.turnId);
+      setPendingTurnViewRouteAnchor("bottom");
       return;
     }
     setActiveTab("chat");
     setPendingRouteTurnId(null);
+    setPendingTurnViewRouteAnchor(null);
   }, [session.id, visible]);
   useEffect(() => {
     applyCurrentSessionRoute();
@@ -11415,10 +11420,24 @@ function ChatPane({
     if (!effectiveSelectedTurnId) return;
     ensureTurnActivityLoaded(effectiveSelectedTurnId);
   }, [activeTab, effectiveSelectedTurnId, ensureTurnActivityLoaded]);
+  useEffect(() => {
+    if (activeTab !== "turns") return;
+    if (pendingTurnViewRouteAnchor !== "bottom") return;
+    if (pendingRouteTurnId) return;
+    if (!effectiveSelectedTurnId) return;
+    turnViewScrollRequestSeqRef.current += 1;
+    setTurnViewScrollRequest({
+      turnId: effectiveSelectedTurnId,
+      anchor: pendingTurnViewRouteAnchor,
+      signal: turnViewScrollRequestSeqRef.current,
+    });
+    setPendingTurnViewRouteAnchor(null);
+  }, [activeTab, effectiveSelectedTurnId, pendingRouteTurnId, pendingTurnViewRouteAnchor]);
   const openTurnPage = useCallback((turnId?: string, options?: TurnPageOpenOptions) => {
     const target = turnId?.trim() || activeTurnViewId || effectiveSelectedTurnId || latestTurnId;
     if (target) {
       setPendingRouteTurnId(null);
+      setPendingTurnViewRouteAnchor(null);
       setSelectedTurnId(target);
       ensureTurnActivityLoaded(target);
       if (options?.anchor) {
@@ -11745,7 +11764,7 @@ function ChatPane({
             title={turnsAvailable ? "Turns" : "Turns are available once the agent has turn activity"}
             onOpen={() => {
               if (activeTab === "turns") setActiveTab("chat");
-              else openTurnPage();
+              else openTurnPage(undefined, { anchor: "bottom" });
             }}
           />
           <BackgroundLedger
