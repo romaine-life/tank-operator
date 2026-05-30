@@ -143,6 +143,10 @@ import {
 } from "./sessionStore";
 import { decideFollowupSubmit } from "./submitLatch";
 import {
+  resolveThinkingInsertIndex,
+  type ThinkingPlacementGroup,
+} from "./transcriptThinkingPlacement";
+import {
   logSessionListEvent,
   logSessionListSnapshot,
   logSessionListSseOpen,
@@ -3810,7 +3814,7 @@ type EntryGroup =
   | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
   | { kind: "message_group"; entries: TranscriptEntry[] }
   | { kind: "tools"; entries: TranscriptEntry[] }
-  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry; startedAt?: string; lastActivityAt?: string }
+  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry; startedAt?: string; lastActivityAt?: string; orderKey?: string }
   | {
       kind: "activity";
       id: string;
@@ -3995,6 +3999,38 @@ function entryGroupIncludesTurn(group: EntryGroup, turnId: string): boolean {
   return transcriptEntryTurnId(group.entry) === turnId;
 }
 
+// The group's representative durable order key — the latest order key among
+// its member rows. Groups are contiguous in the order-sorted transcript, so
+// the latest member key positions the whole group. Mirrors
+// projectedTranscriptEntryOrderKey for the shapes that reach this path.
+function entryGroupOrderKey(group: EntryGroup): string {
+  if (group.kind === "thinking") return group.orderKey ?? "";
+  if (group.kind === "activity") {
+    return group.shell?.activity?.endOrderKey ?? group.shell?.orderKey ?? "";
+  }
+  if (group.kind === "tools" || group.kind === "message_group") {
+    let key = "";
+    for (const entry of group.entries) {
+      const candidate = entry.orderKey ?? "";
+      if (candidate && (key === "" || candidate > key)) key = candidate;
+    }
+    return key;
+  }
+  return group.entry.orderKey ?? "";
+}
+
+// The turn-activity shell's live-tail order key: the furthest durable order key
+// the turn's compacted activity has reached. resolveThinkingInsertIndex unions
+// this with any turn-tagged row still in the main transcript.
+function turnActivityShellTailOrderKey(shell?: TranscriptEntry): string {
+  return (
+    shell?.activity?.endOrderKey ??
+    shell?.activity?.startOrderKey ??
+    shell?.orderKey ??
+    ""
+  );
+}
+
 function insertActiveTurnThinkingGroups(
   groups: EntryGroup[],
   thinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[],
@@ -4004,18 +4040,23 @@ function insertActiveTurnThinkingGroups(
   const out = [...groups];
   for (const thinking of thinkingGroups) {
     const turnId = thinking.turnId.trim();
-    let latestTurnGroupIndex = -1;
-    for (let index = 0; index < out.length; index += 1) {
-      if (entryGroupIncludesTurn(out[index]!, turnId)) {
-        latestTurnGroupIndex = index;
-      }
-    }
-    const fallbackIndex = Math.min(
-      Math.max(fallbackIndexes.get(turnId) ?? out.length, 0),
-      out.length,
+    // Position the placeholder by durable order, not by which rows carry the
+    // turnId. Session-lifecycle notices (loading/ready) are durable rows with
+    // no turnId; a turnId-structural rule strands the placeholder above them.
+    const placement: ThinkingPlacementGroup[] = out.map((group) => ({
+      orderKey: entryGroupOrderKey(group),
+      includesTurn: entryGroupIncludesTurn(group, turnId),
+    }));
+    const shellTailOrderKey = turnActivityShellTailOrderKey(thinking.shell);
+    const fallbackIndex = fallbackIndexes.get(turnId) ?? out.length;
+    const insertIndex = resolveThinkingInsertIndex(
+      placement,
+      shellTailOrderKey,
+      fallbackIndex,
     );
-    const insertIndex =
-      latestTurnGroupIndex >= 0 ? latestTurnGroupIndex + 1 : fallbackIndex;
+    // Record the resolved live-tail key so a second active turn's placeholder
+    // (rare, multi-turn) orders consistently against this one.
+    thinking.orderKey = shellTailOrderKey;
     out.splice(insertIndex, 0, thinking);
   }
   return out;

@@ -265,11 +265,18 @@ test("server-projected active turn activity shells own thinking row active state
   assert.equal(chatScrollMetricsHandlerSource.includes('"thinking-row-missing"'), true);
 });
 
-test("active turn thinking row follows the latest visible turn row", () => {
+test("active turn thinking row is placed by durable order key, not a turnId-structural rule", () => {
   assert.equal(appSource.includes("function insertActiveTurnThinkingGroups"), true);
   assert.equal(appSource.includes("function entryGroupIncludesTurn"), true);
   assert.equal(appSource.includes("pendingThinkingFallbackIndexes.set(group.turnId, groups.length)"), true);
-  assert.equal(appSource.includes("latestTurnGroupIndex + 1"), true);
+  // The placeholder position is resolved by durable order keys via the pure
+  // transcriptThinkingPlacement module — not by "latest turn-tagged group + 1",
+  // which stranded the row above untagged session.status notices on a new
+  // session's first turn.
+  assert.equal(appSource.includes("resolveThinkingInsertIndex"), true);
+  assert.equal(appSource.includes("turnActivityShellTailOrderKey"), true);
+  assert.equal(appSource.includes("function entryGroupOrderKey"), true);
+  assert.equal(appSource.includes("latestTurnGroupIndex + 1"), false);
   assert.equal(appSource.includes("groups.push(turnThinkingGroup(group.turnId, entry));"), false);
 });
 
