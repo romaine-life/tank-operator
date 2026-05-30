@@ -83,10 +83,18 @@ answer; it must not visibly move a rendered row from one surface to the other.
   waiting for a separately-delivered activity summary to set the same active
   turn id.
 - The running placeholder's active state comes from that shell, but its chat
-  placement follows the latest visible row for the same turn. Companion rows
-  that intentionally stay in the main transcript, such as answered
-  AskUserQuestion handoffs, must not be visually overtaken by a placeholder
-  anchored to the shell's earlier compacted-activity order.
+  placement is resolved from durable `order_key`, not from a structural
+  "latest row carrying this turnId" rule. The placeholder sorts at the turn's
+  live-tail order key — the furthest order key the turn has reached across both
+  the shell's compacted activity (`endOrderKey`) and any turn-tagged row that
+  stays in the main transcript. Two cases this must satisfy together:
+  companion rows anchored to a later order key, such as answered
+  AskUserQuestion handoffs, must not be overtaken by the placeholder; and
+  untagged durable rows that precede the turn's activity, such as the
+  `Session is loading.` / `Session is ready.` `session.status` notices on a new
+  session's first turn, must stay above the placeholder. A turnId-structural
+  placement rule strands the placeholder above those untagged notices because
+  they carry no `turnId`.
 - Turn activity may show a log copy of assistant prose, including prose that
   later becomes the final answer, but that copy is not a second settled
   transcript message.
