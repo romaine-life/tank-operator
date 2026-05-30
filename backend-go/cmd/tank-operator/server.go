@@ -304,6 +304,28 @@ func publicConfig() map[string]string {
 			os.Getenv("TANK_FORK_SESSION_PROMPT_FILE"),
 			defaultForkSessionPromptTemplate,
 		),
+		// Splash-page initial-message mode directives. Source of truth is the
+		// markdown under k8s/app-config/, rendered into the app-config
+		// ConfigMap and mounted into this pod; editing those files on main
+		// (ArgoCD sync) changes the directive with no image rebuild. The
+		// const fallbacks below only apply during first-install ordering
+		// before the ConfigMap is mounted (mirrors fork_session_prompt_template).
+		"initial_mode_diagnose_directive": readOptionalFile(
+			os.Getenv("TANK_INITIAL_MODE_DIAGNOSE_FILE"),
+			defaultInitialModeDiagnoseDirective,
+		),
+		"initial_mode_quality_gaps_directive": readOptionalFile(
+			os.Getenv("TANK_INITIAL_MODE_QUALITY_GAPS_FILE"),
+			defaultInitialModeQualityGapsDirective,
+		),
+		"initial_mode_go_long_directive": readOptionalFile(
+			os.Getenv("TANK_INITIAL_MODE_GO_LONG_FILE"),
+			defaultInitialModeGoLongDirective,
+		),
+		"initial_mode_test_directive": readOptionalFile(
+			os.Getenv("TANK_INITIAL_MODE_TEST_FILE"),
+			defaultInitialModeTestDirective,
+		),
 	}
 }
 
@@ -318,6 +340,43 @@ Source session pointer:
 ` + "```json" + `
 {{source_session_json}}
 ` + "```"
+
+// Initial-message mode directive fallbacks. These mirror the canonical text in
+// k8s/app-config/initial-mode-*.md and are served only when the ConfigMap file
+// is not mounted (first-install ordering / local dev). The mounted file is the
+// live source of truth in-cluster, so these consts are allowed to lag a live
+// edit — the SPA carries the same fallback for the offline path.
+const defaultInitialModeDiagnoseDirective = `Initial message type: diagnose — first message only.
+
+When you respond to this first message, investigate the issue, gather evidence, and report findings only; do not edit files or make code changes in this turn.
+
+The no-code stance applies to this first turn only — once I reply, treat the session normally and make code changes when the work calls for it.`
+
+const defaultInitialModeQualityGapsDirective = `Initial message type: address this issue and inspect the quality/migration gaps it exposes.
+
+Read /workspace/.tank/docs/quality-timeframes.md and /workspace/.tank/docs/migration-policy.md before planning.
+
+If either policy doc is missing, report that as a session setup gap before proceeding.
+
+Make the required code changes and call out any gaps against those docs.`
+
+const defaultInitialModeGoLongDirective = `Initial message type: go long. This is the long-horizon, heavy-solution bar — the durable solution is the only acceptable outcome, and the docs named below are binding invariants, not suggestions.
+
+Before planning, read /workspace/.tank/docs/quality-timeframes.md, /workspace/.tank/docs/migration-policy.md, and /workspace/.tank/docs/product-inspirations.md.
+
+If any of those docs is missing, report it as a session setup gap before proceeding.
+
+Once the in-scope repo is cloned, also read whichever of its own design/quality docs exist (docs/quality-timeframes*.md, docs/migration-policy*.md, docs/design-system*.md, docs/product-inspirations*.md, docs/architecture*.md, any design-system/SKILL.md, plus AGENTS.md and CLAUDE.md). The repo's own docs win where they are more specific; the global invariants set the floor.
+
+Heavy is the default: do not present a minimal fix as the option and do not ask me to choose quick-vs-thorough. If the full solution is too large for one PR, write the full plan first and stage it so each step leaves the system coherent.
+
+Settled decisions stay settled: do not reintroduce a route, flag, type, test, doc, or UI path that a prior change deliberately removed. Treat legacy, compatibility, fallback, and temporary as deletion targets, not design options.
+
+Definition of done is quality-timeframes.md — check the work against it before calling it complete, and name any remaining hardening as unfinished scope rather than optional.`
+
+const defaultInitialModeTestDirective = `Initial message type: make code changes and immediately run the test skill for this.
+
+Use the test skill workflow as part of implementation and keep the test environment updated while validating.`
 
 func readOptionalFile(path string, fallback string) string {
 	if strings.TrimSpace(path) == "" {
