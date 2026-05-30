@@ -428,6 +428,14 @@ type ForkSessionRequest = {
 type AppPublicConfig = {
   session_scope?: string;
   fork_session_prompt_template?: string;
+  // Splash-page initial-message mode directives, sourced live from the
+  // app-config ConfigMap via /api/config so they can be edited against main
+  // without a frontend rebuild. The DEFAULT_INITIAL_MODE_*_DIRECTIVE consts
+  // below are the offline fallback when the fetch is empty or fails.
+  initial_mode_diagnose_directive?: string;
+  initial_mode_quality_gaps_directive?: string;
+  initial_mode_go_long_directive?: string;
+  initial_mode_test_directive?: string;
 };
 
 const DEFAULT_FORK_SESSION_PROMPT_TEMPLATE = [
@@ -442,6 +450,50 @@ const DEFAULT_FORK_SESSION_PROMPT_TEMPLATE = [
   "```json",
   "{{source_session_json}}",
   "```",
+].join("\n");
+
+// Offline fallbacks for the splash-page initial-message directives. The live
+// value comes from /api/config (app-config ConfigMap); these only apply when
+// that fetch is empty or fails. They mirror k8s/app-config/initial-mode-*.md
+// and the Go const fallbacks in server.go, and are allowed to lag a live edit.
+const DEFAULT_INITIAL_MODE_DIAGNOSE_DIRECTIVE = [
+  "Initial message type: diagnose — first message only.",
+  "",
+  "When you respond to this first message, investigate the issue, gather evidence, and report findings only; do not edit files or make code changes in this turn.",
+  "",
+  "The no-code stance applies to this first turn only — once I reply, treat the session normally and make code changes when the work calls for it.",
+].join("\n");
+
+const DEFAULT_INITIAL_MODE_QUALITY_GAPS_DIRECTIVE = [
+  "Initial message type: address this issue and inspect the quality/migration gaps it exposes.",
+  "",
+  "Read /workspace/.tank/docs/quality-timeframes.md and /workspace/.tank/docs/migration-policy.md before planning.",
+  "",
+  "If either policy doc is missing, report that as a session setup gap before proceeding.",
+  "",
+  "Make the required code changes and call out any gaps against those docs.",
+].join("\n");
+
+const DEFAULT_INITIAL_MODE_GO_LONG_DIRECTIVE = [
+  "Initial message type: go long. This is the long-horizon, heavy-solution bar — the durable solution is the only acceptable outcome, and the docs named below are binding invariants, not suggestions.",
+  "",
+  "Before planning, read /workspace/.tank/docs/quality-timeframes.md, /workspace/.tank/docs/migration-policy.md, and /workspace/.tank/docs/product-inspirations.md.",
+  "",
+  "If any of those docs is missing, report it as a session setup gap before proceeding.",
+  "",
+  "Once the in-scope repo is cloned, also read whichever of its own design/quality docs exist (docs/quality-timeframes*.md, docs/migration-policy*.md, docs/design-system*.md, docs/product-inspirations*.md, docs/architecture*.md, any design-system/SKILL.md, plus AGENTS.md and CLAUDE.md). The repo's own docs win where they are more specific; the global invariants set the floor.",
+  "",
+  "Heavy is the default: do not present a minimal fix as the option and do not ask me to choose quick-vs-thorough. If the full solution is too large for one PR, write the full plan first and stage it so each step leaves the system coherent.",
+  "",
+  "Settled decisions stay settled: do not reintroduce a route, flag, type, test, doc, or UI path that a prior change deliberately removed. Treat legacy, compatibility, fallback, and temporary as deletion targets, not design options.",
+  "",
+  "Definition of done is quality-timeframes.md — check the work against it before calling it complete, and name any remaining hardening as unfinished scope rather than optional.",
+].join("\n");
+
+const DEFAULT_INITIAL_MODE_TEST_DIRECTIVE = [
+  "Initial message type: make code changes and immediately run the test skill for this.",
+  "",
+  "Use the test skill workflow as part of implementation and keep the test environment updated while validating.",
 ].join("\n");
 
 let appConfigPromise: Promise<AppPublicConfig> | null = null;
@@ -2721,45 +2773,32 @@ function attachmentDisplayTitle(attachment: { errorMsg?: string; label?: string;
   return label === attachment.name ? label : `${label} (${attachment.name})`;
 }
 
-function initialMessageModeDirective(mode: InitialMessageMode): string {
-  if (mode === "diagnose") {
-    return [
-      "Initial message type: diagnose issue without writing code.",
-      "Investigate, gather evidence, and report findings only.",
-      "Do not edit files or make code changes unless I explicitly ask in a later message.",
-    ].join(" ");
-  }
-  if (mode === "quality_gaps") {
-    return [
-      "Initial message type: address this issue and inspect the quality/migration gaps it exposes.",
-      "Read /workspace/.tank/docs/quality-timeframes.md and /workspace/.tank/docs/migration-policy.md before planning.",
-      "If either policy doc is missing, report that as a session setup gap before proceeding.",
-      "Make the required code changes and call out any gaps against those docs.",
-    ].join(" ");
-  }
-  if (mode === "go_long") {
-    return [
-      "Initial message type: go long. This is the long-horizon, heavy-solution bar — the durable solution is the only acceptable outcome, and the docs named below are binding invariants, not suggestions.",
-      "Before planning, read /workspace/.tank/docs/quality-timeframes.md, /workspace/.tank/docs/migration-policy.md, and /workspace/.tank/docs/product-inspirations.md.",
-      "If any of those docs is missing, report it as a session setup gap before proceeding.",
-      "Once the in-scope repo is cloned, also read whichever of its own design/quality docs exist (docs/quality-timeframes*.md, docs/migration-policy*.md, docs/design-system*.md, docs/product-inspirations*.md, docs/architecture*.md, any design-system/SKILL.md, plus AGENTS.md and CLAUDE.md). The repo's own docs win where they are more specific; the global invariants set the floor.",
-      "Heavy is the default: do not present a minimal fix as the option and do not ask me to choose quick-vs-thorough. If the full solution is too large for one PR, write the full plan first and stage it so each step leaves the system coherent.",
-      "Settled decisions stay settled: do not reintroduce a route, flag, type, test, doc, or UI path that a prior change deliberately removed. Treat legacy, compatibility, fallback, and temporary as deletion targets, not design options.",
-      "Definition of done is quality-timeframes.md — check the work against it before calling it complete, and name any remaining hardening as unfinished scope rather than optional.",
-    ].join(" ");
-  }
-  if (mode === "test") {
-    return [
-      "Initial message type: make code changes and immediately run the test skill for this.",
-      "Use the test skill workflow as part of implementation and keep the test environment updated while validating.",
-    ].join(" ");
-  }
-  return "";
+// Resolve the directive prepended to the first turn for a given initial-message
+// mode. The live text comes from /api/config (the app-config ConfigMap, so it
+// is editable against main without a frontend rebuild); the baked-in
+// DEFAULT_INITIAL_MODE_*_DIRECTIVE consts are the offline fallback when the
+// fetch is empty or fails. Mirrors forkSessionPromptTemplate().
+async function initialMessageModeDirective(mode: InitialMessageMode): Promise<string> {
+  if (mode === "direct") return "";
+  const config = await fetchAppPublicConfig();
+  const [served, fallback] = ((): [string | undefined, string] => {
+    switch (mode) {
+      case "diagnose":
+        return [config.initial_mode_diagnose_directive, DEFAULT_INITIAL_MODE_DIAGNOSE_DIRECTIVE];
+      case "quality_gaps":
+        return [config.initial_mode_quality_gaps_directive, DEFAULT_INITIAL_MODE_QUALITY_GAPS_DIRECTIVE];
+      case "go_long":
+        return [config.initial_mode_go_long_directive, DEFAULT_INITIAL_MODE_GO_LONG_DIRECTIVE];
+      case "test":
+        return [config.initial_mode_test_directive, DEFAULT_INITIAL_MODE_TEST_DIRECTIVE];
+    }
+  })();
+  return typeof served === "string" && served.trim() ? served.trim() : fallback;
 }
 
-function composeInitialMessageModePrompt(mode: InitialMessageMode, text: string): string {
+async function composeInitialMessageModePrompt(mode: InitialMessageMode, text: string): Promise<string> {
   const trimmed = text.trim();
-  const directive = initialMessageModeDirective(mode);
+  const directive = await initialMessageModeDirective(mode);
   if (!directive) return trimmed;
   return trimmed ? `${directive}\n\n${trimmed}` : directive;
 }
@@ -14372,7 +14411,7 @@ export function App() {
       homeEditingDefaultTitleRef.current,
     );
     const requestedInitialSkillName = initialSkillName ?? initialMessageModeSkillName(initialMessageMode);
-    const seedPrompt = composeInitialMessageModePrompt(initialMessageMode, initialPrompt?.trim() ?? "");
+    const seedPrompt = await composeInitialMessageModePrompt(initialMessageMode, initialPrompt?.trim() ?? "");
     const pendingHomeAttachments = sessionModeSupportsWorkspaceFiles(mode) ? [...homeAttachments] : [];
     const seedTurnRequested =
       (seedPrompt || pendingHomeAttachments.length > 0 || requestedInitialSkillName) &&

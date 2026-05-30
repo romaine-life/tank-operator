@@ -9,4 +9,12 @@ metadata:
 data:
   fork-session.md: |
 {{ .Files.Get "app-config/fork-session.md" | indent 4 }}
+  initial-mode-diagnose.md: |
+{{ .Files.Get "app-config/initial-mode-diagnose.md" | indent 4 }}
+  initial-mode-quality-gaps.md: |
+{{ .Files.Get "app-config/initial-mode-quality-gaps.md" | indent 4 }}
+  initial-mode-go-long.md: |
+{{ .Files.Get "app-config/initial-mode-go-long.md" | indent 4 }}
+  initial-mode-test.md: |
+{{ .Files.Get "app-config/initial-mode-test.md" | indent 4 }}
 {{- end }}
