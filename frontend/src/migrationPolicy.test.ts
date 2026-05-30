@@ -213,32 +213,57 @@ test("AskUserQuestion handoff renders as the session system identity", () => {
 
 test("AskUserQuestion interactive form is delivered over the durable cursor stream, not a one-shot activity cache", () => {
   // Root-cause guard for the "follow-up dialog only appears after a page
-  // refresh" bug. The interactive AskUserQuestion form used to live only in
-  // the one-shot Turn-activity children (`activityEntriesByTurn`), which never
-  // re-projected from the SSE cursor stream — so an already-open client never
-  // saw the question until it reloaded and re-ran the cold `/turns/{id}/activity`
-  // fetch. The fix makes the canonical questions[]/answers payload a
-  // server-projected surface carried on the already-live-streamed
-  // `needs_input_announcement` handoff row, per
+  // refresh" bug. The interactive AskUserQuestion form lives in the Turns/
+  // activity card, which used to be sourced ONLY from the one-shot
+  // `/turns/{id}/activity` fetch (`activityEntriesByTurn`). That fetch never
+  // re-runs once a turn is loaded, so a question raised AFTER the fetch was
+  // invisible in an already-open client until a reload. The fix keeps the form
+  // in the Turns view but synthesizes its card live from the canonical
+  // questions[]/answers payload that the server projects onto the
+  // already-live-streamed `needs_input_announcement` handoff row, per
   // docs/features/transcript/contract.md ("an already-open transcript client
   // must receive and render post-cursor durable events without reload").
 
-  // 1. The streamed announcement carries the canonical question payload, and
-  //    the interactive form renders from THAT payload (not from a fetch).
+  // 1. The interactive form is the Turns/activity AskUserQuestion card — the
+  //    same place every other tool entry renders — fed live (no fetch), and it
+  //    is the single answer surface (the announcement row is handoff-only).
+  assert.match(
+    appSource,
+    /if \(name === "AskUserQuestion"\)[\s\S]*?return <ToolAskUserBody entry=\{entry\} input=\{input\} \/>;/,
+    "the interactive AskUserQuestion form must render in the Turns/activity tool card",
+  );
+
+  // 2. The Turns card is synthesized live from the streamed announcement rows
+  //    (keyed by the durable tool timeline id) and merged into the fetched
+  //    activity entries only when the cold fetch lacks it — one card per
+  //    timeline id, no parallel/stale surface (docs/migration-policy.md).
+  assert.match(
+    appSource,
+    /const liveAskUserActivityByTurn = useMemo\(\(\) => \{/,
+    "the Turns AskUserQuestion card must be synthesized live off the announcement stream",
+  );
+  assert.match(
+    appSource,
+    /const activityEntriesWithLiveAsk = useMemo\(\(\) => \{/,
+    "the live card must merge into activity entries fed to the Turns/transcript views",
+  );
+  assert.match(
+    appSource,
+    /buildTurnViewItems\(\s*renderedEntries,\s*renderedActiveTurnId,\s*activityEntriesWithLiveAsk,/,
+    "buildTurnViewItems must consume the live-merged activity entries, not the raw fetch cache",
+  );
+
+  // 3. The streamed announcement carries the canonical question payload, read
+  //    here to decide whether the live card can be built and for telemetry.
   assert.match(
     appSource,
     /const questions = Array\.isArray\(announcement\?\.questions\)/,
     "RunNeedsInputAnnouncement must read questions[] off the streamed announcement row",
   );
   assert.equal(appSource.includes("const hasQuestions = questions.length > 0"), true);
-  assert.match(
-    appSource,
-    /hasQuestions && \(\s*\n\s*<div className="run-needs-input-announcement-form"/,
-    "the inline interactive form must be gated on the streamed question payload",
-  );
 
-  // 2. Answered state is a single live source resolved from the stream, shared
-  //    by both the chat handoff form and the read-only Turns/activity child.
+  // 4. Answered state is a single live source resolved from the stream, shared
+  //    by the in-flight (live-synthesized) and cold-loaded Turns cards.
   assert.equal(
     appSource.includes(
       "liveAskUserAnswers: Map<string, { answered: boolean; answers?: Record<string, AskUserQuestionAnswer> }>",
@@ -247,7 +272,7 @@ test("AskUserQuestion interactive form is delivered over the durable cursor stre
   );
   assert.equal(appSource.includes("const live = liveAskUserAnswers.get(entry.id)"), true);
 
-  // 3. The band-aid is deleted, not kept as a fallback (docs/migration-policy.md).
+  // 5. The band-aid is deleted, not kept as a fallback (docs/migration-policy.md).
   //    sendInputReply must NOT patch the one-shot activity cache to fake a
   //    resolution; the durable tool.approval_resolved event re-projects the row.
   const sendInputReplyMatch = appSource.match(
@@ -260,7 +285,7 @@ test("AskUserQuestion interactive form is delivered over the durable cursor stre
     "sendInputReply must not mutate the one-shot activity cache — the durable resolve flows over SSE",
   );
 
-  // 4. Observability: the contract requires a durable-row gap to be localizable
+  // 6. Observability: the contract requires a durable-row gap to be localizable
   //    from telemetry. An unanswered announcement that streamed without its
   //    question payload emits a counted client event, and the backend counts it
   //    (not bucketed as "other") in both the metric-label and structured-log

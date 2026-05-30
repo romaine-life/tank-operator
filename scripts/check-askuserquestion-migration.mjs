@@ -431,16 +431,17 @@ const required = [
     pattern: /RunNeedsInputAnnouncement\b/,
   },
 
-  // --- Live delivery: the interactive form rides the durable cursor stream --
+  // --- Live delivery: the Turns form is fed off the durable cursor stream ----
   //
-  // The AskUserQuestion follow-up dialog used to live ONLY in the one-shot
-  // Turn-activity children (`activityEntriesByTurn`), which never re-projected
-  // from the SSE cursor stream — so an already-open client never saw the
-  // question until it reloaded the page and re-ran the cold
-  // `/turns/{id}/activity` fetch. Per docs/features/transcript/contract.md
-  // ("an already-open transcript client must receive and render post-cursor
-  // durable events without reload") the canonical questions[]/answers payload
-  // is now a server-projected surface carried on the already-live-streamed
+  // The AskUserQuestion follow-up dialog lives in the Turns/activity tool card.
+  // That card used to be sourced ONLY from the one-shot `/turns/{id}/activity`
+  // fetch (`activityEntriesByTurn`), which never re-runs once a turn is loaded —
+  // so an already-open client never saw a question raised AFTER the fetch until
+  // it reloaded the page. Per docs/features/transcript/contract.md ("an
+  // already-open transcript client must receive and render post-cursor durable
+  // events without reload") the fix keeps the form in the Turns view but
+  // synthesizes its card live from the canonical questions[]/answers payload
+  // that the server projects onto the already-live-streamed
   // `needs_input_announcement` handoff row. These anchors pin that delivery
   // path so a future PR can't quietly revert to the fetch-only model.
   {
@@ -452,6 +453,21 @@ const required = [
     file: "backend-go/cmd/tank-operator/transcript_projection.go",
     name: "announcement mirrors durable answers once tool.approval_resolved lands",
     pattern: /announcement\["answers"\]\s*=\s*answers/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "the interactive AskUserQuestion form renders in the Turns/activity tool card",
+    pattern: /if \(name === "AskUserQuestion"\)[\s\S]{0,600}return <ToolAskUserBody entry=\{entry\} input=\{input\} \/>;/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "the Turns AskUserQuestion card is synthesized live off the announcement stream",
+    pattern: /const liveAskUserActivityByTurn = useMemo\(/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "the live card merges into the activity entries fed to Turns/transcript",
+    pattern: /const activityEntriesWithLiveAsk = useMemo\(/,
   },
   {
     file: "frontend/src/App.tsx",

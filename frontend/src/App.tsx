@@ -5291,45 +5291,16 @@ function RunNeedsInputAnnouncement({
   const summary = announcement?.questionSummary ?? entry.meta?.detail ?? "";
   const title = entry.meta?.title ?? (answered ? "Answered" : "Claude is waiting on you");
   const targetTurnId = announcement?.targetTurnId ?? entry.turnId ?? "";
-  // The interactive answer form is rendered inline from the question
-  // payload the server projected onto this streamed handoff row. Because
-  // the handoff row is delivered over the durable cursor stream like every
-  // other transcript row, the form appears live for an already-open client
-  // and resolves live when tool.approval_resolved lands — no page refresh,
-  // no one-shot /turns/{id}/activity fetch. See
-  // docs/features/transcript/contract.md → Live Behavior.
+  // This row is the conversational handoff — "Claude is waiting on you" —
+  // that surfaces in the main transcript where the user is reading. The
+  // interactive answer form itself lives in the Turns/activity card, which
+  // is fed live off the same server-projected question payload (see
+  // liveAskUserActivityByTurn) so it renders without a reload. We read the
+  // streamed `questions` here only to (a) decide whether the live card can
+  // be built and (b) emit the observability miss-counter when it can't.
+  // See docs/features/transcript/contract.md → Live Behavior.
   const questions = Array.isArray(announcement?.questions) ? announcement.questions : [];
   const hasQuestions = questions.length > 0;
-  // askEntry adapts the announcement back into the shape ToolAskUserBody
-  // expects. The timeline id MUST be the underlying tool item's id (not the
-  // synthetic announcement id) so sendInputReply targets the durable
-  // approval item; turnId + providerItemId likewise come from the durable
-  // announcement, not from local state.
-  const askEntry = useMemo<TranscriptEntry>(
-    () =>
-      ({
-        id: announcement?.targetTimelineId ?? entry.id,
-        kind: "tool",
-        toolName: "AskUserQuestion",
-        toolStatus: answered ? "completed" : "started",
-        turnId: targetTurnId,
-        providerItemId: announcement?.targetProviderItemId ?? entry.providerItemId,
-        askUserAnswers: announcement?.answers,
-      }) as TranscriptEntry,
-    [
-      announcement?.targetTimelineId,
-      announcement?.targetProviderItemId,
-      announcement?.answers,
-      answered,
-      entry.id,
-      entry.providerItemId,
-      targetTurnId,
-    ],
-  );
-  const askInput = useMemo<Record<string, unknown>>(
-    () => ({ questions }),
-    [questions],
-  );
   // Observability: an unanswered handoff that streamed without its question
   // payload is the server-side miss the transcript contract requires us to
   // localize ("a durable terminal event that exists but is not visible ...
@@ -5363,11 +5334,10 @@ function RunNeedsInputAnnouncement({
     if (!targetTurnId) return;
     onOpenTurn?.(targetTurnId, { anchor: "bottom" });
   };
-  // The deep-link CTA is the fallback path for rows that streamed without a
-  // question payload (older durable rows). When the payload is present the
-  // form is answered inline, and a quieter "View in Turns" link offers the
-  // full activity context without being the primary affordance.
-  const interactive = !answered && !hasQuestions && Boolean(targetTurnId && onOpenTurn);
+  // The handoff offers a CTA that jumps to the Turns tab scrolled to this
+  // turn, where the live AskUserQuestion card is the answer surface. The
+  // same link (relabelled) opens the answered question for review.
+  const canOpenTurn = Boolean(targetTurnId && onOpenTurn);
   return (
     <div
       className="run-transcript-message"
@@ -5405,7 +5375,7 @@ function RunNeedsInputAnnouncement({
               <p className="run-needs-input-announcement-detail">{summary}</p>
             )}
           </div>
-          {interactive && (
+          {!answered && canOpenTurn && (
             <button
               type="button"
               className="run-needs-input-announcement-cta"
@@ -5415,7 +5385,7 @@ function RunNeedsInputAnnouncement({
               Open in Turns
             </button>
           )}
-          {!hasQuestions && answered && targetTurnId && onOpenTurn && (
+          {answered && canOpenTurn && (
             <button
               type="button"
               className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
@@ -5426,21 +5396,6 @@ function RunNeedsInputAnnouncement({
             </button>
           )}
         </div>
-        {hasQuestions && (
-          <div className="run-needs-input-announcement-form" data-answered={answered ? "true" : "false"}>
-            <ToolAskUserBody entry={askEntry} input={askInput} />
-            {targetTurnId && onOpenTurn && (
-              <button
-                type="button"
-                className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
-                onClick={handleOpen}
-                aria-label={answered ? "View answered question in Turns" : "Open the question in Turns"}
-              >
-                View in Turns
-              </button>
-            )}
-          </div>
-        )}
         {showTimestamps && entry.time && (
           <div className="run-msg-footer" data-always-visible="">
             <div className="run-msg-timings">
@@ -6036,12 +5991,15 @@ function ToolBody({ entry }: { entry: TranscriptEntry }) {
     return <ToolReadBody input={input} />;
   }
   if (name === "AskUserQuestion") {
-    // The activity/Turns child is read-only. The single interactive answer
-    // surface is the live chat handoff (RunNeedsInputAnnouncement), which
-    // renders ToolAskUserBody with the default interactive=true off the
-    // server-streamed question payload. Keeping the child non-interactive
-    // is what removes the stale, one-shot-cache-fed second answer path.
-    return <ToolAskUserBody entry={entry} input={input} interactive={false} />;
+    // The AskUserQuestion answer surface lives here, in the Turns/activity
+    // card — the same place every other tool entry renders. It is fed live
+    // off the server-streamed needs_input_announcement payload (see
+    // liveAskUserActivityByTurn), so a question raised in an already-open
+    // session appears here without a reload, and resolves live when
+    // tool.approval_resolved re-projects the row. The main-transcript
+    // announcement row is the conversational handoff/pointer, not a second
+    // answer form — there is exactly one interactive surface.
+    return <ToolAskUserBody entry={entry} input={input} />;
   }
   return <ToolDefaultBody entry={entry} input={input} />;
 }
@@ -6087,18 +6045,18 @@ function parseAskUserQuestions(input: Record<string, unknown> | null): AskUserQu
 function ToolAskUserBody({
   entry,
   input,
-  interactive = true,
 }: {
   entry: TranscriptEntry;
   input: Record<string, unknown> | null;
   // The interactive answer form (clickable options, free-form textarea,
-  // submit) renders only on the live chat handoff row — the single
-  // server-streamed surface that owns the AskUserQuestion answer. The
-  // read-only Turns/activity child passes interactive={false}: it shows
-  // what was asked and (live, via RunContext.liveAskUserAnswers) what was
-  // answered, but never offers a second, possibly-stale submit path. This
-  // is what keeps the answer surface single-sourced per docs/migration-policy.md.
-  interactive?: boolean;
+  // submit) renders here, in the Turns/activity card — the single surface
+  // that owns the AskUserQuestion answer. The question payload and the
+  // answered state both arrive live over the durable cursor stream (the
+  // synthesized card from liveAskUserActivityByTurn for the question,
+  // RunContext.liveAskUserAnswers for the resolution), so the card needs no
+  // one-shot fetch to appear or to resolve. The main-transcript announcement
+  // row is a handoff/pointer only, so this is the lone submit path
+  // (docs/migration-policy.md → single source, no parallel surface).
 }) {
   const { sendInputReply, liveAskUserAnswers } = useContext(RunContext);
   // Per-question selections (multi-select carries an array; single-select
@@ -6137,11 +6095,12 @@ function ToolAskUserBody({
   // this or any other tab) still renders the selections. Local
   // `selections` state only powers the pre-submit click-to-pick UX.
   //
-  // The live cursor stream wins over the entry's own answers: a read-only
-  // Turns/activity child carries answers from a one-shot fetch that never
+  // The live cursor stream wins over the entry's own answers: a cold-loaded
+  // Turns/activity card carries answers from a one-shot fetch that never
   // refreshes, so when the live `needs_input_announcement` row reports the
-  // resolved answer we prefer it. The chat handoff already builds its entry
-  // from that same live row, so the two surfaces agree.
+  // resolved answer we prefer it. The live-synthesized card
+  // (liveAskUserActivityByTurn) is built from that same row, so an in-flight
+  // and a cold-loaded card resolve to the same answered state.
   const live = liveAskUserAnswers.get(entry.id);
   const durableAnswers = (live?.answers && Object.keys(live.answers).length > 0)
     ? live.answers
@@ -6322,7 +6281,7 @@ function ToolAskUserBody({
         // (options=null + isOther=true → no preview, no selection → no
         // textarea). Tank's Other path is a first-class affordance,
         // not a side-effect of preview content.
-        const showFreeForm = !answered && interactive && q.allowFreeForm;
+        const showFreeForm = !answered && q.allowFreeForm;
         return (
           <div key={qi} className="run-tool-ask-question">
             {q.header && <span className="run-tool-ask-chip">{q.header}</span>}
@@ -6351,7 +6310,7 @@ function ToolAskUserBody({
                     type="button"
                     className={optionClass}
                     aria-pressed={selected}
-                    disabled={submitting || answered || !interactive}
+                    disabled={submitting || answered}
                     onClick={() => toggleSelection(q, opt.label)}
                   >
                     <span
@@ -6421,7 +6380,7 @@ function ToolAskUserBody({
           </div>
         );
       })}
-      {!answered && interactive && (
+      {!answered && (
         <div className="run-tool-ask-submit-row">
           <button
             type="button"
@@ -6432,14 +6391,6 @@ function ToolAskUserBody({
             {submitting ? "Sending…" : "Submit answer"}
           </button>
         </div>
-      )}
-      {!answered && !interactive && (
-        // Read-only surface (Turns / activity log). The answer is given on
-        // the live chat handoff, which streams the durable resolution back
-        // here — this is a pointer, not a second submit path.
-        <p className="run-tool-ask-text run-tool-ask-text-muted run-tool-ask-pending-hint">
-          Waiting for your answer in chat.
-        </p>
       )}
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
     </div>
@@ -11594,14 +11545,69 @@ function ChatPane({
     ? DEFAULT_CODEX_MODEL_ID
     : selectedModelId;
   const modelForCostEstimate = appliedModelId || modelForContext;
+  // liveAskUserActivityByTurn synthesizes the AskUserQuestion tool card for
+  // the Turns view directly from the server-projected needs_input_announcement
+  // rows on the durable cursor stream. This is the fix for the "follow-up
+  // dialog only appears after a refresh" bug: the one-shot /turns/{id}/activity
+  // fetch never re-runs once a turn is loaded, so a question raised AFTER that
+  // fetch would be missing from the Turns card until a reload. The announcement
+  // carries the canonical question payload, so the card is built straight off
+  // the stream — no refetch, no polling (which the transcript contract forbids
+  // as a transcript-live path). The synthesized card is keyed by the durable
+  // tool timeline id so sendInputReply targets the real approval item and
+  // RunContext.liveAskUserAnswers resolves it live.
+  const liveAskUserActivityByTurn = useMemo(() => {
+    const map = new Map<string, TranscriptEntry[]>();
+    for (const entry of renderedEntries) {
+      if (entry.metaKind !== "needs_input_announcement") continue;
+      const ann = entry.announcement;
+      const timelineId = ann?.targetTimelineId;
+      const turnId = (ann?.targetTurnId ?? entry.turnId ?? "").trim();
+      const questions = Array.isArray(ann?.questions) ? ann.questions : [];
+      if (!timelineId || !turnId || questions.length === 0) continue;
+      const card = {
+        id: timelineId,
+        kind: "tool",
+        toolName: "AskUserQuestion",
+        toolStatus: ann?.answered ? "completed" : "started",
+        turnId,
+        providerItemId: ann?.targetProviderItemId,
+        toolInput: JSON.stringify({ questions }),
+        askUserAnswers: ann?.answers,
+      } as TranscriptEntry;
+      const existing = map.get(turnId);
+      if (existing) existing.push(card);
+      else map.set(turnId, [card]);
+    }
+    return map;
+  }, [renderedEntries]);
+  // Merge the live AskUserQuestion cards into the fetched activity entries.
+  // For a turn whose cold-load fetch already placed the card (historical /
+  // answered turns), we keep the fetched copy in its durable position and let
+  // liveAskUserAnswers carry the live resolution; we only append the streamed
+  // card when the fetch lacks it — the in-flight case the refresh bug was
+  // about. This keeps a single card per timeline id (no duplicate, no stale
+  // parallel surface).
+  const activityEntriesWithLiveAsk = useMemo(() => {
+    if (liveAskUserActivityByTurn.size === 0) return activityEntriesByTurn;
+    const out: Record<string, TranscriptEntry[] | undefined> = { ...activityEntriesByTurn };
+    for (const [turnId, liveCards] of liveAskUserActivityByTurn) {
+      const fetched = activityEntriesByTurn[turnId];
+      const fetchedIds = new Set((fetched ?? []).map((e) => e.id));
+      const missing = liveCards.filter((card) => !fetchedIds.has(card.id));
+      if (missing.length === 0) continue;
+      out[turnId] = [...(fetched ?? []), ...missing];
+    }
+    return out;
+  }, [activityEntriesByTurn, liveAskUserActivityByTurn]);
   const turnViewItems = useMemo(
     () => buildTurnViewItems(
       renderedEntries,
       renderedActiveTurnId,
-      activityEntriesByTurn,
+      activityEntriesWithLiveAsk,
       modelForCostEstimate,
     ),
-    [activityEntriesByTurn, modelForCostEstimate, renderedActiveTurnId, renderedEntries],
+    [activityEntriesWithLiveAsk, modelForCostEstimate, renderedActiveTurnId, renderedEntries],
   );
   const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
@@ -11609,11 +11615,11 @@ function ChatPane({
   // liveAskUserAnswers is the single live source of AskUserQuestion
   // answered-state, keyed by the durable tool item's timeline id. It is
   // derived from the server-projected `needs_input_announcement` rows that
-  // ride the durable cursor stream, so any AskUserQuestion surface that
-  // reads it (the inline chat handoff form, and the read-only Turns/activity
-  // child) reflects the resolved answer live — without the one-shot
-  // /turns/{id}/activity fetch, which never refreshes after the question
-  // arrives. See docs/features/transcript/contract.md → Live Behavior.
+  // ride the durable cursor stream, so the interactive AskUserQuestion form
+  // (rendered in the Turns/activity card, synthesized live via
+  // liveAskUserActivityByTurn) reflects the resolved answer live — without the
+  // one-shot /turns/{id}/activity fetch, which never refreshes after the
+  // question arrives. See docs/features/transcript/contract.md → Live Behavior.
   const liveAskUserAnswers = useMemo(() => {
     const map = new Map<string, { answered: boolean; answers?: Record<string, AskUserQuestionAnswer> }>();
     for (const entry of renderedEntries) {
@@ -12507,7 +12513,7 @@ function ChatPane({
               scrollToLatestReason={scrollToLatestRequest.reason}
               onScrollToLatestConsumed={clearScrollToLatestRequest}
               scrollToOldestSignal={scrollToOldestSignal}
-              activityEntriesByTurn={activityEntriesByTurn}
+              activityEntriesByTurn={activityEntriesWithLiveAsk}
               loadingActivityTurns={loadingActivityTurns}
               onActivityOpen={ensureTurnActivityLoaded}
             />
