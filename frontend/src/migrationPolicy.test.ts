@@ -698,11 +698,18 @@ test("web search transcript tools use the web glyph", () => {
 });
 
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
-  assert.match(appSource, /type InitialMessageMode = "direct" \| "diagnose" \| "quality_gaps" \| "test"/);
+  assert.match(appSource, /type InitialMessageMode = "direct" \| "diagnose" \| "quality_gaps" \| "go_long" \| "test"/);
   assert.equal(appSource.includes("composeInitialMessageModePrompt"), true);
   assert.equal(appSource.includes("Initial message type: diagnose issue without writing code."), true);
   assert.equal(appSource.includes("/workspace/.tank/docs/quality-timeframes.md"), true);
   assert.equal(appSource.includes("/workspace/.tank/docs/migration-policy.md"), true);
+  // "Go long" is the creation-time twin of the /north-star skill: a directive
+  // mode that bakes the three binding invariant docs into turn one with no
+  // skill dependency (the directive is pure prompt text persisted at create,
+  // so it does not require any on-disk skill to exist yet).
+  assert.equal(appSource.includes("Initial message type: go long."), true);
+  assert.equal(appSource.includes("/workspace/.tank/docs/product-inspirations.md"), true);
+  assert.match(appSource, /go_long[\s\S]*Settled decisions stay settled/);
   assert.match(appSource, /initialMessageModeSkillName\(mode: InitialMessageMode\): SkillStateName \| undefined/);
   assert.match(appSource, /initialMode !== "direct"[\s\S]*chatModeForHomePrompt\(defaultSessionMode\)/);
 });
