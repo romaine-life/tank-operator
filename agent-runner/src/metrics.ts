@@ -38,6 +38,30 @@ export const providerErrorTotal = new Counter({
   registers: [registry],
 });
 
+// providerFailureClassTotal classifies every turn.failed{reason:
+// "provider_failure"} terminal by the *shape* of the upstream Anthropic
+// error, not just that one occurred. The load-bearing class is
+// `thinking_block_modified`: the extended-thinking resume bug behind
+// session 340, where resuming a long interleaved-thinking turn (e.g.
+// after an AskUserQuestion permission-pause) replays the latest
+// assistant message with a mutated `thinking`/`redacted_thinking` block
+// and Anthropic rejects it with a 400 ("thinking blocks ... cannot be
+// modified"). The SDK owns the message array and the replay, so this is
+// an engine-version signal: it should fall to zero on the
+// @anthropic-ai/claude-agent-sdk ^0.3.158 bump (nelsong6/tank-operator
+// #743) and any later non-zero rate is a regression worth paging on.
+// The other classes (`overloaded`, `rate_limit`, `context_length`,
+// `auth`, `other`) keep the counter useful for the general "why did a
+// turn fail at the provider boundary?" question without inflating
+// cardinality — the class set is closed and derived from a fixed
+// message-signature table (see classifyProviderFailure in runner.ts).
+export const providerFailureClassTotal = new Counter({
+  name: "tank_runner_provider_failure_class_total",
+  help: "turn.failed{reason:provider_failure} terminals classified by upstream Anthropic error signature. `thinking_block_modified` is the extended-thinking resume bug (session 340); it must stay at zero after the SDK ^0.3.158 bump (nelsong6/tank-operator#743) — any increment is a regression.",
+  labelNames: ["class"],
+  registers: [registry],
+});
+
 export const providerControlTotal = new Counter({
   name: "tank_runner_provider_control_total",
   help: "Provider control-plane calls issued by the runner, such as interrupt and background foreground tasks.",

@@ -69,6 +69,7 @@ import {
   pendingWakeupsGauge,
   providerControlTotal,
   providerErrorTotal,
+  providerFailureClassTotal,
   recordTurnStart,
   recordTurnTerminal,
 } from "./metrics.js";
@@ -148,6 +149,56 @@ const UNHANDLED_LOG_FIELDS = [
   "patch",
   "uuid",
 ] as const;
+
+// classifyProviderFailure maps an upstream Anthropic/SDK error message to
+// one of a fixed, closed set of classes for providerFailureClassTotal.
+// The match table is intentionally signature-based (substring on the
+// stable parts of the error text) rather than HTTP-status-based, because
+// several distinct 400s share a status but mean very different things and
+// the operator question is "which provider failure mode is firing?".
+//
+// `thinking_block_modified` is the load-bearing class: it pins the
+// extended-thinking resume bug behind session 340 (a long
+// interleaved-thinking turn replayed on resume with a mutated
+// thinking/redacted_thinking block, rejected by the API). It must stay at
+// zero after the @anthropic-ai/claude-agent-sdk ^0.3.158 bump
+// (nelsong6/tank-operator#743); a later non-zero rate is a regression.
+export type ProviderFailureClass =
+  | "thinking_block_modified"
+  | "overloaded"
+  | "rate_limit"
+  | "context_length"
+  | "auth"
+  | "other";
+
+export function classifyProviderFailure(message: string): ProviderFailureClass {
+  const m = message.toLowerCase();
+  // The API phrases this as: `thinking` or `redacted_thinking` blocks in
+  // the latest assistant message cannot be modified.
+  if (m.includes("thinking") && m.includes("cannot be modified")) {
+    return "thinking_block_modified";
+  }
+  if (m.includes("overloaded")) return "overloaded";
+  if (m.includes("rate limit") || m.includes("rate_limit") || m.includes(" 429")) {
+    return "rate_limit";
+  }
+  if (
+    m.includes("prompt is too long") ||
+    m.includes("maximum context length") ||
+    m.includes("context_length_exceeded")
+  ) {
+    return "context_length";
+  }
+  if (
+    m.includes("authentication") ||
+    m.includes("unauthorized") ||
+    m.includes(" 401") ||
+    m.includes(" 403")
+  ) {
+    return "auth";
+  }
+  return "other";
+}
 
 export function logUnhandledSdkMessage(message: SDKMessage): void {
   const m = message as Record<string, unknown> & { type?: unknown };
@@ -1557,6 +1608,12 @@ export class Runner {
     const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
     if (!turn?.commandRecord) return;
     if (!turn.terminalEmitted) {
+      const message = err instanceof Error ? err.message : String(err);
+      // Classify the provider failure before it becomes an opaque
+      // turn.failed terminal. `thinking_block_modified` is the regression
+      // sentinel for the extended-thinking resume bug (session 340); it
+      // must stay at zero after the SDK ^0.3.158 bump.
+      providerFailureClassTotal.labels(classifyProviderFailure(message)).inc();
       const dispatched = await dispatch(
         this.sink,
         turnEvent({
@@ -1566,7 +1623,7 @@ export class Runner {
           source: "claude",
           type: "turn.failed",
           reason: "provider_failure",
-          error: err instanceof Error ? err.message : String(err),
+          error: message,
         }),
       );
       if (!dispatched) return;
