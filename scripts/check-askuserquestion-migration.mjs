@@ -431,6 +431,49 @@ const required = [
     pattern: /RunNeedsInputAnnouncement\b/,
   },
 
+  // --- Live delivery: the interactive form rides the durable cursor stream --
+  //
+  // The AskUserQuestion follow-up dialog used to live ONLY in the one-shot
+  // Turn-activity children (`activityEntriesByTurn`), which never re-projected
+  // from the SSE cursor stream — so an already-open client never saw the
+  // question until it reloaded the page and re-ran the cold
+  // `/turns/{id}/activity` fetch. Per docs/features/transcript/contract.md
+  // ("an already-open transcript client must receive and render post-cursor
+  // durable events without reload") the canonical questions[]/answers payload
+  // is now a server-projected surface carried on the already-live-streamed
+  // `needs_input_announcement` handoff row. These anchors pin that delivery
+  // path so a future PR can't quietly revert to the fetch-only model.
+  {
+    file: "backend-go/cmd/tank-operator/transcript_projection.go",
+    name: "announcement embeds the canonical questions[] payload for live render",
+    pattern: /announcement\["questions"\]\s*=|"questions":\s*questionPayload/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/transcript_projection.go",
+    name: "announcement mirrors durable answers once tool.approval_resolved lands",
+    pattern: /announcement\["answers"\]\s*=\s*answers/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "RunNeedsInputAnnouncement reads questions[] off the streamed announcement row",
+    pattern: /Array\.isArray\(announcement\?\.questions\)/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "answered state is a single live source resolved from the stream (RunContext.liveAskUserAnswers)",
+    pattern: /\bliveAskUserAnswers\b/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "observability: missing-question-payload gap is counted (transcript contract observability clause)",
+    pattern: /logChatScrollEvent\(\s*["']needs-input-questions-missing["']/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/handlers_client_metrics.go",
+    name: "backend counts the needs-input-questions-missing client event (not bucketed as other)",
+    pattern: /"needs-input-questions-missing":\s*\{\}/,
+  },
+
   // --- Codex app-server parity is intentional, legacy exec fallback is not --
   //
   // Codex app-server now has a host-call path for request_user_input. The

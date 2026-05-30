@@ -330,6 +330,23 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     questionSummary: string;
     questionCount: number;
     answered: boolean;
+    // The full canonical AskUserQuestion payload, projected by the server
+    // onto this streamed handoff row so an already-open client renders the
+    // interactive answer form live off the durable cursor stream — never
+    // from the one-shot /turns/{id}/activity fetch, which does not refresh
+    // after the question arrives. See
+    // backend-go/cmd/tank-operator/transcript_projection.go →
+    // projectNeedsInputAnnouncement and docs/features/transcript/contract.md.
+    // Older durable rows (projected before this field existed) carry no
+    // questions; RunNeedsInputAnnouncement counts that miss via telemetry
+    // and falls back to the Turns deep link rather than retrofitting a
+    // read-time shim.
+    questions?: unknown[];
+    // Durable answers (with annotations), mirrored from
+    // tool.approval_resolved once the user responds, so the answered card
+    // and any fresh tab render identical selections without the activity
+    // fetch.
+    answers?: Record<string, AskUserQuestionAnswer>;
   };
   taskId?: string;
   taskStatus?: ConversationBackgroundTaskStatus;
@@ -4902,10 +4919,16 @@ const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   sendInputReply: (entry: TranscriptEntry, payload: InputReplyPayload) => Promise<void>;
   user: SessionUser | null;
+  // Live AskUserQuestion answered-state from the durable cursor stream,
+  // keyed by the tool item's timeline id. ToolAskUserBody prefers this over
+  // a possibly-stale one-shot activity entry so the read-only Turns/activity
+  // child reflects an answer submitted live in the chat handoff.
+  liveAskUserAnswers: Map<string, { answered: boolean; answers?: Record<string, AskUserQuestionAnswer> }>;
 }>({
   openWorkspacePath: () => {},
   sendInputReply: async () => {},
   user: null,
+  liveAskUserAnswers: new Map(),
 });
 
 function RunMessageBubble({
@@ -5251,22 +5274,100 @@ function RunNeedsInputAnnouncement({
   systemAvatar,
   onOpenTurn,
   showTimestamps,
+  sessionId,
+  sessionMode,
+  telemetrySurface,
 }: {
   entry: TranscriptEntry;
   systemAvatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   showTimestamps: boolean;
+  sessionId?: string;
+  sessionMode?: string;
+  telemetrySurface?: string;
 }) {
   const announcement = entry.announcement;
   const answered = announcement?.answered ?? false;
   const summary = announcement?.questionSummary ?? entry.meta?.detail ?? "";
   const title = entry.meta?.title ?? (answered ? "Answered" : "Claude is waiting on you");
   const targetTurnId = announcement?.targetTurnId ?? entry.turnId ?? "";
+  // The interactive answer form is rendered inline from the question
+  // payload the server projected onto this streamed handoff row. Because
+  // the handoff row is delivered over the durable cursor stream like every
+  // other transcript row, the form appears live for an already-open client
+  // and resolves live when tool.approval_resolved lands — no page refresh,
+  // no one-shot /turns/{id}/activity fetch. See
+  // docs/features/transcript/contract.md → Live Behavior.
+  const questions = Array.isArray(announcement?.questions) ? announcement.questions : [];
+  const hasQuestions = questions.length > 0;
+  // askEntry adapts the announcement back into the shape ToolAskUserBody
+  // expects. The timeline id MUST be the underlying tool item's id (not the
+  // synthetic announcement id) so sendInputReply targets the durable
+  // approval item; turnId + providerItemId likewise come from the durable
+  // announcement, not from local state.
+  const askEntry = useMemo<TranscriptEntry>(
+    () =>
+      ({
+        id: announcement?.targetTimelineId ?? entry.id,
+        kind: "tool",
+        toolName: "AskUserQuestion",
+        toolStatus: answered ? "completed" : "started",
+        turnId: targetTurnId,
+        providerItemId: announcement?.targetProviderItemId ?? entry.providerItemId,
+        askUserAnswers: announcement?.answers,
+      }) as TranscriptEntry,
+    [
+      announcement?.targetTimelineId,
+      announcement?.targetProviderItemId,
+      announcement?.answers,
+      answered,
+      entry.id,
+      entry.providerItemId,
+      targetTurnId,
+    ],
+  );
+  const askInput = useMemo<Record<string, unknown>>(
+    () => ({ questions }),
+    [questions],
+  );
+  // Observability: an unanswered handoff that streamed without its question
+  // payload is the server-side miss the transcript contract requires us to
+  // localize ("a durable terminal event that exists but is not visible ...
+  // must leave enough telemetry to localize the miss"). Count it once per
+  // provider item so a regression in the projection is visible in metrics
+  // instead of only as a user complaint.
+  const missingQuestionsReportedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (answered || hasQuestions) return;
+    const providerItemId = announcement?.targetProviderItemId ?? entry.providerItemId ?? entry.id;
+    if (missingQuestionsReportedRef.current === providerItemId) return;
+    missingQuestionsReportedRef.current = providerItemId;
+    logChatScrollEvent("needs-input-questions-missing", {
+      surface: telemetrySurface,
+      sessionId,
+      sessionMode,
+      key: providerItemId,
+      reason: "announcement_without_questions",
+    });
+  }, [
+    announcement?.targetProviderItemId,
+    answered,
+    entry.id,
+    entry.providerItemId,
+    hasQuestions,
+    sessionId,
+    sessionMode,
+    telemetrySurface,
+  ]);
   const handleOpen = (): void => {
     if (!targetTurnId) return;
     onOpenTurn?.(targetTurnId, { anchor: "bottom" });
   };
-  const interactive = !answered && Boolean(targetTurnId && onOpenTurn);
+  // The deep-link CTA is the fallback path for rows that streamed without a
+  // question payload (older durable rows). When the payload is present the
+  // form is answered inline, and a quieter "View in Turns" link offers the
+  // full activity context without being the primary affordance.
+  const interactive = !answered && !hasQuestions && Boolean(targetTurnId && onOpenTurn);
   return (
     <div
       className="run-transcript-message"
@@ -5314,7 +5415,7 @@ function RunNeedsInputAnnouncement({
               Open in Turns
             </button>
           )}
-          {answered && targetTurnId && onOpenTurn && (
+          {!hasQuestions && answered && targetTurnId && onOpenTurn && (
             <button
               type="button"
               className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
@@ -5325,6 +5426,21 @@ function RunNeedsInputAnnouncement({
             </button>
           )}
         </div>
+        {hasQuestions && (
+          <div className="run-needs-input-announcement-form" data-answered={answered ? "true" : "false"}>
+            <ToolAskUserBody entry={askEntry} input={askInput} />
+            {targetTurnId && onOpenTurn && (
+              <button
+                type="button"
+                className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
+                onClick={handleOpen}
+                aria-label={answered ? "View answered question in Turns" : "Open the question in Turns"}
+              >
+                View in Turns
+              </button>
+            )}
+          </div>
+        )}
         {showTimestamps && entry.time && (
           <div className="run-msg-footer" data-always-visible="">
             <div className="run-msg-timings">
@@ -5920,7 +6036,12 @@ function ToolBody({ entry }: { entry: TranscriptEntry }) {
     return <ToolReadBody input={input} />;
   }
   if (name === "AskUserQuestion") {
-    return <ToolAskUserBody entry={entry} input={input} />;
+    // The activity/Turns child is read-only. The single interactive answer
+    // surface is the live chat handoff (RunNeedsInputAnnouncement), which
+    // renders ToolAskUserBody with the default interactive=true off the
+    // server-streamed question payload. Keeping the child non-interactive
+    // is what removes the stale, one-shot-cache-fed second answer path.
+    return <ToolAskUserBody entry={entry} input={input} interactive={false} />;
   }
   return <ToolDefaultBody entry={entry} input={input} />;
 }
@@ -5966,11 +6087,20 @@ function parseAskUserQuestions(input: Record<string, unknown> | null): AskUserQu
 function ToolAskUserBody({
   entry,
   input,
+  interactive = true,
 }: {
   entry: TranscriptEntry;
   input: Record<string, unknown> | null;
+  // The interactive answer form (clickable options, free-form textarea,
+  // submit) renders only on the live chat handoff row — the single
+  // server-streamed surface that owns the AskUserQuestion answer. The
+  // read-only Turns/activity child passes interactive={false}: it shows
+  // what was asked and (live, via RunContext.liveAskUserAnswers) what was
+  // answered, but never offers a second, possibly-stale submit path. This
+  // is what keeps the answer surface single-sourced per docs/migration-policy.md.
+  interactive?: boolean;
 }) {
-  const { sendInputReply } = useContext(RunContext);
+  const { sendInputReply, liveAskUserAnswers } = useContext(RunContext);
   // Per-question selections (multi-select carries an array; single-select
   // is a single-element array or empty). Submission converts to the wire
   // shape `Record<questionText, string[]>` so single + multi share a
@@ -6006,9 +6136,19 @@ function ToolAskUserBody({
   // via projection, so a fresh tab opened after the user answered (in
   // this or any other tab) still renders the selections. Local
   // `selections` state only powers the pre-submit click-to-pick UX.
-  const durableAnswers = entry.askUserAnswers;
+  //
+  // The live cursor stream wins over the entry's own answers: a read-only
+  // Turns/activity child carries answers from a one-shot fetch that never
+  // refreshes, so when the live `needs_input_announcement` row reports the
+  // resolved answer we prefer it. The chat handoff already builds its entry
+  // from that same live row, so the two surfaces agree.
+  const live = liveAskUserAnswers.get(entry.id);
+  const durableAnswers = (live?.answers && Object.keys(live.answers).length > 0)
+    ? live.answers
+    : entry.askUserAnswers;
   const hasDurableAnswers =
     !!durableAnswers && Object.keys(durableAnswers).length > 0;
+  const liveAnswered = live?.answered ?? false;
   // `answered` flips to true the instant the user submits, not just when
   // the durable event lands. Otherwise the post-submit window leaves the
   // card behaving as if the user hasn't answered: button re-clickable,
@@ -6016,6 +6156,7 @@ function ToolAskUserBody({
   // is what makes that lock honest about the user's pick.
   const answered =
     hasDurableAnswers ||
+    liveAnswered ||
     entry.toolStatus === "completed" ||
     optimisticSubmit !== null;
 
@@ -6181,7 +6322,7 @@ function ToolAskUserBody({
         // (options=null + isOther=true → no preview, no selection → no
         // textarea). Tank's Other path is a first-class affordance,
         // not a side-effect of preview content.
-        const showFreeForm = !answered && q.allowFreeForm;
+        const showFreeForm = !answered && interactive && q.allowFreeForm;
         return (
           <div key={qi} className="run-tool-ask-question">
             {q.header && <span className="run-tool-ask-chip">{q.header}</span>}
@@ -6210,7 +6351,7 @@ function ToolAskUserBody({
                     type="button"
                     className={optionClass}
                     aria-pressed={selected}
-                    disabled={submitting || answered}
+                    disabled={submitting || answered || !interactive}
                     onClick={() => toggleSelection(q, opt.label)}
                   >
                     <span
@@ -6280,7 +6421,7 @@ function ToolAskUserBody({
           </div>
         );
       })}
-      {!answered && (
+      {!answered && interactive && (
         <div className="run-tool-ask-submit-row">
           <button
             type="button"
@@ -6291,6 +6432,14 @@ function ToolAskUserBody({
             {submitting ? "Sending…" : "Submit answer"}
           </button>
         </div>
+      )}
+      {!answered && !interactive && (
+        // Read-only surface (Turns / activity log). The answer is given on
+        // the live chat handoff, which streams the durable resolution back
+        // here — this is a pointer, not a second submit path.
+        <p className="run-tool-ask-text run-tool-ask-text-muted run-tool-ask-pending-hint">
+          Waiting for your answer in chat.
+        </p>
       )}
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
     </div>
@@ -7968,6 +8117,9 @@ export function RunMessages({
               systemAvatar={systemAvatar}
               onOpenTurn={onOpenTurn}
               showTimestamps={showTimestamps}
+              sessionId={sessionId}
+              sessionMode={sessionMode}
+              telemetrySurface={telemetrySurface}
             />
           );
         }
@@ -11454,6 +11606,25 @@ function ChatPane({
   const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
   const latestTurnId = turnViewItems[turnViewItems.length - 1]?.turnId ?? null;
+  // liveAskUserAnswers is the single live source of AskUserQuestion
+  // answered-state, keyed by the durable tool item's timeline id. It is
+  // derived from the server-projected `needs_input_announcement` rows that
+  // ride the durable cursor stream, so any AskUserQuestion surface that
+  // reads it (the inline chat handoff form, and the read-only Turns/activity
+  // child) reflects the resolved answer live — without the one-shot
+  // /turns/{id}/activity fetch, which never refreshes after the question
+  // arrives. See docs/features/transcript/contract.md → Live Behavior.
+  const liveAskUserAnswers = useMemo(() => {
+    const map = new Map<string, { answered: boolean; answers?: Record<string, AskUserQuestionAnswer> }>();
+    for (const entry of renderedEntries) {
+      if (entry.metaKind !== "needs_input_announcement") continue;
+      const ann = entry.announcement;
+      const timelineId = ann?.targetTimelineId;
+      if (!timelineId) continue;
+      map.set(timelineId, { answered: ann?.answered ?? false, answers: ann?.answers });
+    }
+    return map;
+  }, [renderedEntries]);
   const selectedTurnExists =
     selectedTurnId != null && turnViewItems.some((turn) => turn.turnId === selectedTurnId);
   const effectiveSelectedTurnId = selectedTurnExists ? selectedTurnId : latestTurnId;
@@ -11739,42 +11910,15 @@ function ChatPane({
       }
       throw new Error(detail);
     }
-    // Patch the Turns-tab activity cache with the answer the user just
-    // submitted. The Turns view's activityEntriesByTurn is a one-shot
-    // fetch (loadActivityForTurn), so without this update the cached
-    // AskUserQuestion entry stays at toolStatus="started" with no
-    // askUserAnswers — the durable tool.approval_resolved that the
-    // backend persists never makes it into the Turns render. Chat tab
-    // is fine because it consumes the SSE stream and keeps refreshing
-    // sdkServerProjectedEntriesRef; Turns is the regression surface.
-    // We mirror the shape projectionAskUserAnswers emits, so when the
-    // durable update eventually lands the entry is byte-identical.
-    const projected: Record<string, AskUserQuestionAnswer> = {};
-    for (const [question, labels] of Object.entries(payload.answers)) {
-      if (!Array.isArray(labels) || labels.length === 0) continue;
-      const ann = payload.annotations?.[question];
-      const answer: AskUserQuestionAnswer = { labels };
-      if (typeof ann?.preview === "string" && ann.preview) answer.preview = ann.preview;
-      if (typeof ann?.notes === "string" && ann.notes) answer.notes = ann.notes;
-      projected[question] = answer;
-    }
-    if (Object.keys(projected).length > 0) {
-      setActivityEntriesByTurn((prev) => {
-        const cached = prev[turnID];
-        if (!cached) return prev;
-        let mutated = false;
-        const next = cached.map((cachedEntry) => {
-          if (cachedEntry.id !== entry.id) return cachedEntry;
-          mutated = true;
-          return {
-            ...cachedEntry,
-            toolStatus: "completed",
-            askUserAnswers: projected,
-          } as TranscriptEntry;
-        });
-        return mutated ? { ...prev, [turnID]: next } : prev;
-      });
-    }
+    // No client-side cache patch. The durable `tool.approval_resolved`
+    // event flows back over the SSE cursor stream and re-projects the
+    // `needs_input_announcement` row with `answered` + `answers`; both the
+    // chat handoff form and the read-only Turns/activity child read that
+    // live state via RunContext.liveAskUserAnswers. The previous patch here
+    // mutated the one-shot activity cache to paper over the fact that the
+    // Turns view never refreshed from the stream — that one-shot cache is
+    // no longer an answer surface, so the patch is deleted rather than kept
+    // as a fallback (docs/migration-policy.md).
   }
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
@@ -11804,6 +11948,7 @@ function ChatPane({
             }
           : sendInputReply,
         user,
+        liveAskUserAnswers,
       }}
     >
     <WorkspaceShell

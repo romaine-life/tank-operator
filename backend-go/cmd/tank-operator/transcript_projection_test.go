@@ -387,6 +387,10 @@ func TestProjectTranscriptEventsPromotesAskUserQuestionHandoff(t *testing.T) {
 						"multiSelect":   false,
 						"allowFreeForm": true,
 						"secret":        false,
+						"options": []any{
+							map[string]any{"label": "OAuth", "description": "Use OAuth"},
+							map[string]any{"label": "API key", "description": "Use API key"},
+						},
 					},
 				},
 			},
@@ -424,6 +428,29 @@ func TestProjectTranscriptEventsPromotesAskUserQuestionHandoff(t *testing.T) {
 	// orderKey so historical replay and live streaming agree on placement.
 	if !strings.HasSuffix(ann["orderKey"].(string), "~needs_input_announcement") {
 		t.Errorf("announcement orderKey = %q, want suffix ~needs_input_announcement", ann["orderKey"])
+	}
+	// The full canonical question payload (with options) rides on the
+	// streamed handoff row so an already-open client renders the live
+	// interactive answer form off the durable cursor stream — never from a
+	// one-shot /turns/{id}/activity fetch. See docs/features/transcript/contract.md.
+	questions, ok := announcement["questions"].([]any)
+	if !ok || len(questions) != 1 {
+		t.Fatalf("announcement.questions = %#v, want 1 embedded question", announcement["questions"])
+	}
+	q0, _ := questions[0].(map[string]any)
+	if q0["question"] != "Which auth method?" {
+		t.Errorf("embedded question text = %v, want Which auth method?", q0["question"])
+	}
+	if q0["allowFreeForm"] != true {
+		t.Errorf("embedded allowFreeForm = %v, want true", q0["allowFreeForm"])
+	}
+	opts, ok := q0["options"].([]any)
+	if !ok || len(opts) != 2 {
+		t.Fatalf("embedded options = %#v, want 2 options so the live form can render answer buttons", q0["options"])
+	}
+	// Unresolved announcements carry no answers map.
+	if _, hasAnswers := announcement["answers"]; hasAnswers {
+		t.Errorf("unresolved announcement must not carry answers, got %#v", announcement["answers"])
 	}
 }
 
@@ -468,6 +495,21 @@ func TestProjectTranscriptEventsAnnouncementAnsweredAfterResolution(t *testing.T
 			ann := entry["announcement"].(map[string]any)
 			if ann["answered"] != true {
 				t.Errorf("answered = %v, want true after tool.approval_resolved", ann["answered"])
+			}
+			// The durable answer is mirrored onto the streamed handoff so an
+			// open client and any fresh tab render identical selections live,
+			// without the one-shot activity fetch.
+			answers, ok := ann["answers"].(map[string]any)
+			if !ok {
+				t.Fatalf("resolved announcement.answers = %#v, want durable answers map", ann["answers"])
+			}
+			picked, ok := answers["Pick one"].(map[string]any)
+			if !ok {
+				t.Fatalf("answers[Pick one] = %#v, want answer record", answers["Pick one"])
+			}
+			labels, ok := picked["labels"].([]string)
+			if !ok || len(labels) != 1 || labels[0] != "A" {
+				t.Errorf("answers[Pick one].labels = %#v, want [A]", picked["labels"])
 			}
 			return
 		}

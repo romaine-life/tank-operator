@@ -1081,6 +1081,35 @@ func projectNeedsInputAnnouncement(item *projectionItem) map[string]any {
 	if orderKey != "" {
 		orderKey = orderKey + "~needs_input_announcement"
 	}
+	// The full canonical question payload rides on the streamed handoff row
+	// so an already-open client renders the interactive answer form live,
+	// off the same durable cursor stream as every other transcript row —
+	// not from a one-shot `/turns/{id}/activity` fetch that never refreshes
+	// after the question arrives. See docs/features/transcript/contract.md
+	// → "An already-open transcript client must receive and render
+	// post-cursor durable events without reload." The `~needs_input_announcement`
+	// order key keeps this row beyond the live cursor at first appearance,
+	// and the durable `tool.approval_resolved` re-projection advances the
+	// underlying item so the answered row streams without a reload.
+	questionPayload := make([]any, 0, len(questions))
+	for _, q := range questions {
+		questionPayload = append(questionPayload, q)
+	}
+	announcement := map[string]any{
+		"targetTurnId":         item.TurnID,
+		"targetProviderItemId": item.ProviderItemID,
+		"targetTimelineId":     item.ID,
+		"questionSummary":      summary,
+		"questionCount":        len(questions),
+		"answered":             answered,
+		"questions":            questionPayload,
+	}
+	// Durable answers (with annotations) are mirrored onto the handoff once
+	// `tool.approval_resolved` lands, so the live answered card and any
+	// fresh tab render identical selections without the activity fetch.
+	if answers := projectionAskUserAnswers(item); len(answers) > 0 {
+		announcement["answers"] = answers
+	}
 	entry := map[string]any{
 		"id":             item.ID + ":needs_input_announcement",
 		"kind":           "meta",
@@ -1095,14 +1124,7 @@ func projectNeedsInputAnnouncement(item *projectionItem) map[string]any {
 			"detail":   summary,
 			"severity": "info",
 		},
-		"announcement": map[string]any{
-			"targetTurnId":         item.TurnID,
-			"targetProviderItemId": item.ProviderItemID,
-			"targetTimelineId":     item.ID,
-			"questionSummary":      summary,
-			"questionCount":        len(questions),
-			"answered":             answered,
-		},
+		"announcement": announcement,
 	}
 	return entry
 }

@@ -211,6 +211,70 @@ test("AskUserQuestion handoff renders as the session system identity", () => {
   assert.equal(indexCssSource.includes(".run-needs-input-announcement-copy"), true);
 });
 
+test("AskUserQuestion interactive form is delivered over the durable cursor stream, not a one-shot activity cache", () => {
+  // Root-cause guard for the "follow-up dialog only appears after a page
+  // refresh" bug. The interactive AskUserQuestion form used to live only in
+  // the one-shot Turn-activity children (`activityEntriesByTurn`), which never
+  // re-projected from the SSE cursor stream — so an already-open client never
+  // saw the question until it reloaded and re-ran the cold `/turns/{id}/activity`
+  // fetch. The fix makes the canonical questions[]/answers payload a
+  // server-projected surface carried on the already-live-streamed
+  // `needs_input_announcement` handoff row, per
+  // docs/features/transcript/contract.md ("an already-open transcript client
+  // must receive and render post-cursor durable events without reload").
+
+  // 1. The streamed announcement carries the canonical question payload, and
+  //    the interactive form renders from THAT payload (not from a fetch).
+  assert.match(
+    appSource,
+    /const questions = Array\.isArray\(announcement\?\.questions\)/,
+    "RunNeedsInputAnnouncement must read questions[] off the streamed announcement row",
+  );
+  assert.equal(appSource.includes("const hasQuestions = questions.length > 0"), true);
+  assert.match(
+    appSource,
+    /hasQuestions && \(\s*\n\s*<div className="run-needs-input-announcement-form"/,
+    "the inline interactive form must be gated on the streamed question payload",
+  );
+
+  // 2. Answered state is a single live source resolved from the stream, shared
+  //    by both the chat handoff form and the read-only Turns/activity child.
+  assert.equal(
+    appSource.includes(
+      "liveAskUserAnswers: Map<string, { answered: boolean; answers?: Record<string, AskUserQuestionAnswer> }>",
+    ),
+    true,
+  );
+  assert.equal(appSource.includes("const live = liveAskUserAnswers.get(entry.id)"), true);
+
+  // 3. The band-aid is deleted, not kept as a fallback (docs/migration-policy.md).
+  //    sendInputReply must NOT patch the one-shot activity cache to fake a
+  //    resolution; the durable tool.approval_resolved event re-projects the row.
+  const sendInputReplyMatch = appSource.match(
+    /async function sendInputReply\([\s\S]*?\n  \}\n\n  const toggleRunTab/,
+  );
+  assert.ok(sendInputReplyMatch, "sendInputReply should be present");
+  assert.equal(
+    sendInputReplyMatch[0]!.includes("setActivityEntriesByTurn"),
+    false,
+    "sendInputReply must not mutate the one-shot activity cache — the durable resolve flows over SSE",
+  );
+
+  // 4. Observability: the contract requires a durable-row gap to be localizable
+  //    from telemetry. An unanswered announcement that streamed without its
+  //    question payload emits a counted client event, and the backend counts it
+  //    (not bucketed as "other") in both the metric-label and structured-log
+  //    allowlists.
+  assert.equal(appSource.includes('logChatScrollEvent("needs-input-questions-missing"'), true);
+  const missingEventMatches =
+    chatScrollMetricsHandlerSource.match(/"needs-input-questions-missing":\s*\{\}/g) ?? [];
+  assert.equal(
+    missingEventMatches.length,
+    2,
+    "needs-input-questions-missing must be in both chatScrollStructuredLogEvents and chatScrollMetricEventLabels",
+  );
+});
+
 test("transcript meta status lines are attributed to the session system identity", () => {
   // "Stopped" / "Turn stopped by user.", "Turn failed" + provider error,
   // and "Stop requested" are not authored by the human owner or the

@@ -187,6 +187,17 @@ var chatScrollStructuredLogEvents = map[string]struct{}{
 	"thinking-row-missing":                          {},
 	"navigation-mode-entered-live-tail":             {},
 	"navigation-mode-entered-historical-anchor":     {},
+	// Emitted from frontend/src/App.tsx → RunNeedsInputAnnouncement when a
+	// streamed needs_input_announcement row arrives with no canonical
+	// questions[] payload while still unanswered. Per
+	// docs/features/transcript/contract.md the interactive AskUserQuestion
+	// form is now a server-projected surface delivered over the durable
+	// cursor stream; an announcement that promotes without its question
+	// payload means the live form cannot render and the client would be
+	// stuck waiting for a refresh — the exact regression this work removed.
+	// This is the observability guard that localizes such a durable-row gap
+	// from telemetry instead of a user bug report.
+	"needs-input-questions-missing":                 {},
 }
 
 func logChatScrollClientEvent(email string, event chatScrollMetricEvent) {
@@ -321,6 +332,11 @@ var chatScrollMetricEventLabels = map[string]struct{}{
 	// log payload, not in metric labels.
 	"navigation-mode-entered-live-tail":         {},
 	"navigation-mode-entered-historical-anchor": {},
+	// Live-delivery guard for the AskUserQuestion interactive form: a
+	// streamed needs_input_announcement that promoted without its canonical
+	// questions[] payload. See docs/features/transcript/contract.md and the
+	// matching entry in chatScrollStructuredLogEvents above.
+	"needs-input-questions-missing":             {},
 }
 
 func chatScrollEventLabel(raw string) string {
