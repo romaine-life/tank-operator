@@ -49,6 +49,35 @@ type QueuedEvent =
   | { kind: "event"; event: CodexEvent }
   | { kind: "error"; error: Error };
 
+type CodexUsage = {
+  input_tokens: number;
+  cached_input_tokens: number;
+  output_tokens: number;
+  reasoning_output_tokens: number;
+  total_tokens: number;
+};
+
+type ObservedCodexUsage = {
+  usage: CodexUsage;
+  firstUpdatedAtMs: number;
+  lastUpdatedAtMs: number;
+  updateCount: number;
+};
+
+type CodexUsageObservation = {
+  provider_turn_id: string;
+  usage_source: "turn.usage" | "turn.tokenUsage" | "thread.tokenUsage.updated" | "missing";
+  terminal_had_usage: boolean;
+  terminal_had_token_usage: boolean;
+  cached_usage_available: boolean;
+  update_count: number;
+  event_at?: string;
+  terminal_at?: string;
+  first_update_at?: string;
+  last_update_at?: string;
+  last_update_age_ms?: number;
+};
+
 function abortError(message = "turn interrupted"): Error {
   const err = new Error(message);
   err.name = "AbortError";
@@ -127,6 +156,7 @@ export class CodexAppServerTransport {
     interruptSent: boolean;
   } | null = null;
   private readonly itemsByID = new Map<string, JsonRecord>();
+  private readonly latestUsageByProviderTurnID = new Map<string, ObservedCodexUsage>();
 
   constructor(private readonly opts: AppServerTransportOptions) {}
 
@@ -267,6 +297,7 @@ export class CodexAppServerTransport {
         this.activeProviderTurnID = null;
       }
       this.itemsByID.clear();
+      this.latestUsageByProviderTurnID.clear();
       queue.close();
     }
   }
@@ -359,10 +390,32 @@ export class CodexAppServerTransport {
     if (!queue) return;
     if (method === "turn/completed") {
       const turn = params?.turn;
+      const providerTurnID =
+        turn && typeof turn === "object" && typeof (turn as JsonRecord).id === "string"
+          ? (turn as JsonRecord).id as string
+          : this.activeProviderTurnID ?? "";
       const status =
         turn && typeof turn === "object" && typeof (turn as JsonRecord).status === "string"
           ? (turn as JsonRecord).status
           : "";
+      const turnUsage = appServerUsageFromValue((turn as JsonRecord | undefined)?.usage);
+      const turnTokenUsage = appServerUsageFromValue((turn as JsonRecord | undefined)?.tokenUsage);
+      const cachedUsage = this.latestUsageByProviderTurnID.get(providerTurnID);
+      const usage =
+        turnUsage ??
+        turnTokenUsage ??
+        cachedUsage?.usage;
+      const terminalAtMs = Date.now();
+      const usageObservation = usageObservationForTerminal(
+        providerTurnID,
+        {
+          turnUsage,
+          turnTokenUsage,
+          cachedUsage,
+        },
+        terminalAtMs,
+      );
+      if (providerTurnID) this.latestUsageByProviderTurnID.delete(providerTurnID);
       queue.push({
         kind: "event",
         event: {
@@ -372,9 +425,36 @@ export class CodexAppServerTransport {
               : status === "failed"
                 ? "turn.failed"
                 : "turn.completed",
-          usage: null,
+          ...(usage ? { usage } : {}),
+          usage_observation: usageObservation,
         },
       });
+      return;
+    }
+    if (method === "thread/tokenUsage/updated") {
+      const providerTurnID = typeof params?.turnId === "string" ? params.turnId : "";
+      const usage = appServerUsageFromValue(params?.tokenUsage);
+      if (providerTurnID && usage) {
+        const nowMs = Date.now();
+        const existing = this.latestUsageByProviderTurnID.get(providerTurnID);
+        const observed = {
+          usage,
+          firstUpdatedAtMs: existing?.firstUpdatedAtMs ?? nowMs,
+          lastUpdatedAtMs: nowMs,
+          updateCount: (existing?.updateCount ?? 0) + 1,
+        };
+        this.latestUsageByProviderTurnID.set(providerTurnID, observed);
+        if (!this.activeProviderTurnID) this.activeProviderTurnID = providerTurnID;
+        queue.push({
+          kind: "event",
+          event: {
+            type: "turn.usage",
+            id: `${providerTurnID}:usage:${observed.updateCount}`,
+            usage,
+            usage_observation: usageObservationForUpdate(providerTurnID, observed),
+          },
+        });
+      }
       return;
     }
     if (method === "item/started" || method === "item/completed" || method === "item/updated") {
@@ -492,6 +572,87 @@ function turnIDFromTurnStartResponse(result: unknown): string {
   if (!turn || typeof turn !== "object") return "";
   const id = (turn as JsonRecord).id;
   return typeof id === "string" ? id : "";
+}
+
+function appServerUsageFromValue(value: unknown): CodexUsage | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as JsonRecord;
+  const source = record.total && typeof record.total === "object"
+    ? record.total as JsonRecord
+    : record;
+  const inputTokens = finiteNumber(source.inputTokens) ?? finiteNumber(source.input_tokens);
+  const cachedInputTokens = finiteNumber(source.cachedInputTokens) ?? finiteNumber(source.cached_input_tokens) ?? 0;
+  const outputTokens = finiteNumber(source.outputTokens) ?? finiteNumber(source.output_tokens);
+  const reasoningOutputTokens =
+    finiteNumber(source.reasoningOutputTokens) ?? finiteNumber(source.reasoning_output_tokens) ?? 0;
+  const totalTokens =
+    finiteNumber(source.totalTokens) ??
+    finiteNumber(source.total_tokens) ??
+    ((inputTokens ?? 0) + cachedInputTokens + (outputTokens ?? 0));
+  if (inputTokens === undefined || outputTokens === undefined) return undefined;
+  return {
+    input_tokens: inputTokens,
+    cached_input_tokens: cachedInputTokens,
+    output_tokens: outputTokens,
+    reasoning_output_tokens: reasoningOutputTokens,
+    total_tokens: totalTokens,
+  };
+}
+
+function usageObservationForTerminal(
+  providerTurnID: string,
+  values: {
+    turnUsage?: CodexUsage;
+    turnTokenUsage?: CodexUsage;
+    cachedUsage?: ObservedCodexUsage;
+  },
+  terminalAtMs: number,
+): CodexUsageObservation {
+  const usageSource =
+    values.turnUsage
+      ? "turn.usage"
+      : values.turnTokenUsage
+        ? "turn.tokenUsage"
+        : values.cachedUsage
+          ? "thread.tokenUsage.updated"
+          : "missing";
+  const observation: CodexUsageObservation = {
+    provider_turn_id: providerTurnID,
+    usage_source: usageSource,
+    terminal_had_usage: Boolean(values.turnUsage),
+    terminal_had_token_usage: Boolean(values.turnTokenUsage),
+    cached_usage_available: Boolean(values.cachedUsage),
+    update_count: values.cachedUsage?.updateCount ?? 0,
+    terminal_at: new Date(terminalAtMs).toISOString(),
+  };
+  if (values.cachedUsage) {
+    observation.first_update_at = new Date(values.cachedUsage.firstUpdatedAtMs).toISOString();
+    observation.last_update_at = new Date(values.cachedUsage.lastUpdatedAtMs).toISOString();
+    observation.last_update_age_ms = Math.max(0, terminalAtMs - values.cachedUsage.lastUpdatedAtMs);
+  }
+  return observation;
+}
+
+function usageObservationForUpdate(
+  providerTurnID: string,
+  observed: ObservedCodexUsage,
+): CodexUsageObservation {
+  const updateAt = new Date(observed.lastUpdatedAtMs).toISOString();
+  return {
+    provider_turn_id: providerTurnID,
+    usage_source: "thread.tokenUsage.updated",
+    terminal_had_usage: false,
+    terminal_had_token_usage: false,
+    cached_usage_available: true,
+    update_count: observed.updateCount,
+    event_at: updateAt,
+    first_update_at: new Date(observed.firstUpdatedAtMs).toISOString(),
+    last_update_at: updateAt,
+  };
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 export function appServerItemToCodexItem(item: JsonRecord): JsonRecord {

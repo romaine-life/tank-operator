@@ -34,9 +34,10 @@ export interface TurnEventArgs {
   turnID: string;
   clientNonce?: string;
   source: "claude" | "codex";
-  type: "turn.started" | "turn.completed" | "turn.failed" | "turn.interrupted";
+  type: "turn.started" | "turn.usage" | "turn.completed" | "turn.failed" | "turn.interrupted";
   reason?: string;
   usage?: unknown;
+  usageObservation?: unknown;
   error?: unknown;
   finalAnswer?: TankFinalAnswer;
   providerEventID?: string;

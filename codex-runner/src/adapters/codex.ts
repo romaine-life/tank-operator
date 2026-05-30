@@ -43,6 +43,20 @@ export class CodexTankEventAdapter {
     event: CodexEvent,
   ): TankConversationEvent[] {
     const providerID = codexProviderEventID(event);
+    if (event.type === "turn.usage") {
+      return [
+        turnEvent({
+          sessionID: this.cfg.sessionId,
+          turnID: turn.turnID,
+          clientNonce: turn.clientNonce,
+          source: "codex",
+          type: "turn.usage",
+          usage: event.usage,
+          usageObservation: event.usage_observation,
+          providerEventID: providerID,
+        }),
+      ];
+    }
     if (event.type === "turn.completed") {
       const shellEvents = this.promotePendingUnifiedExecStarts(turn);
       const finalAnswer = this.finalAnswerByTurn.get(turn.turnID);
@@ -56,6 +70,7 @@ export class CodexTankEventAdapter {
           source: "codex",
           type: "turn.completed",
           usage: event.usage,
+          usageObservation: event.usage_observation,
           finalAnswer,
           providerEventID: providerID,
         }),
@@ -73,6 +88,8 @@ export class CodexTankEventAdapter {
           source: "codex",
           type: "turn.interrupted",
           reason: "client_interrupt",
+          usage: event.usage,
+          usageObservation: event.usage_observation,
           providerEventID: providerID,
         }),
       ];
@@ -89,6 +106,8 @@ export class CodexTankEventAdapter {
           source: "codex",
           type: "turn.failed",
           reason: "provider_failure",
+          usage: event.usage,
+          usageObservation: event.usage_observation,
           error: event.error ?? event.message ?? event,
           providerEventID: providerID,
         }),

@@ -95,6 +95,7 @@ export function turnEvent(args) {
   const payload = {};
   if (args.reason) payload.reason = args.reason;
   if (args.usage !== undefined) payload.usage = args.usage;
+  if (args.usageObservation !== undefined) payload.usage_observation = args.usageObservation;
   if (args.error !== undefined) payload.error = args.error;
   if (args.finalAnswer !== undefined) payload.final_answer = normalizeFinalAnswer(args.finalAnswer);
   const event = {

@@ -70,6 +70,7 @@ const (
 	EventUserMessageCreated     EventType = "user_message.created"
 	EventTurnSubmitted          EventType = "turn.submitted"
 	EventTurnStarted            EventType = "turn.started"
+	EventTurnUsage              EventType = "turn.usage"
 	EventTurnCompleted          EventType = "turn.completed"
 	EventTurnFailed             EventType = "turn.failed"
 	EventTurnCommandFailed      EventType = "turn.command_failed"
@@ -199,6 +200,14 @@ func validateEventMap(event map[string]any) error {
 		if Actor(stringField(event, "actor")) != ActorRunner {
 			return fmt.Errorf("%s must be actor=runner", eventType)
 		}
+	case EventTurnUsage:
+		if err := requireFields(event, "turn_id"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorRunner {
+			return fmt.Errorf("%s must be actor=runner", eventType)
+		}
+		return validateTurnUsagePayload(event)
 	case EventTurnCompleted:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
@@ -431,6 +440,21 @@ func validateTurnCompletedPayload(event map[string]any) error {
 	return nil
 }
 
+func validateTurnUsagePayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	usage, ok := payload["usage"]
+	if !ok {
+		return fmt.Errorf("payload.usage is required for %s", stringField(event, "type"))
+	}
+	if _, ok := usage.(map[string]any); !ok {
+		return fmt.Errorf("payload.usage must be an object for %s", stringField(event, "type"))
+	}
+	return nil
+}
+
 func requireNonEmptyStringArray(record map[string]any, key string) error {
 	raw, ok := record[key]
 	if !ok {
@@ -651,6 +675,7 @@ func validEventType(eventType EventType) bool {
 	case EventUserMessageCreated,
 		EventTurnSubmitted,
 		EventTurnStarted,
+		EventTurnUsage,
 		EventTurnCompleted,
 		EventTurnFailed,
 		EventTurnCommandFailed,

@@ -456,18 +456,40 @@ test("maps Codex execution errors to Tank item.failed", () => {
 
 test("maps Codex terminal events to Tank turn lifecycle", () => {
   const adapter = new CodexTankEventAdapter(cfg());
-  const completed = mappedEvent(adapter, { type: "turn.completed", usage: { input_tokens: 10 } });
+  const usageObservation = {
+    usage_source: "thread.tokenUsage.updated",
+    provider_turn_id: "turn-provider-1",
+  };
+  const usageUpdate = mappedEvent(adapter, {
+    type: "turn.usage",
+    id: "turn-provider-1:usage:1",
+    usage: { input_tokens: 9 },
+    usage_observation: usageObservation,
+  });
+  assert.equal(usageUpdate.type, "turn.usage");
+  assert.equal(usageUpdate.event_id, "turn-run-123:turn.usage:turn-provider-1:usage:1");
+  assert.deepEqual(usageUpdate.payload?.usage, { input_tokens: 9 });
+  assert.deepEqual(usageUpdate.payload?.usage_observation, usageObservation);
+
+  const completed = mappedEvent(adapter, {
+    type: "turn.completed",
+    usage: { input_tokens: 10 },
+    usage_observation: usageObservation,
+  });
   assert.equal(completed.type, "turn.completed");
   assert.deepEqual(completed.payload?.usage, { input_tokens: 10 });
+  assert.deepEqual(completed.payload?.usage_observation, usageObservation);
 
-  const interrupted = mappedEvent(adapter, { type: "turn.interrupted" });
+  const interrupted = mappedEvent(adapter, { type: "turn.interrupted", usage: { input_tokens: 5 } });
   assert.equal(interrupted.type, "turn.interrupted");
   assert.equal(interrupted.payload?.reason, "client_interrupt");
+  assert.deepEqual(interrupted.payload?.usage, { input_tokens: 5 });
 
-  const failed = mappedEvent(adapter, { type: "error", message: "quota exceeded" });
+  const failed = mappedEvent(adapter, { type: "error", message: "quota exceeded", usage: { input_tokens: 7 } });
   assert.equal(failed.type, "turn.failed");
   assert.equal(failed.payload?.reason, "provider_failure");
   assert.equal(failed.payload?.error, "quota exceeded");
+  assert.deepEqual(failed.payload?.usage, { input_tokens: 7 });
 });
 
 test("ignores unknown Codex provider event types", () => {

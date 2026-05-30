@@ -3,7 +3,6 @@ import test from "node:test";
 
 import {
   estimateTranscriptCost,
-  estimateTranscriptCostUSD,
   estimateTurnCost,
   estimateUsageCostUSD,
   formatComposerCostUsd,
@@ -47,57 +46,34 @@ test("prefers provider-reported cost when present", () => {
 });
 
 test("deduplicates transcript usage rows by turn", () => {
-  const cost = estimateTranscriptCostUSD([
+  const estimate = estimateTranscriptCost([
     { id: "a", turnId: "turn-1", turnUsage: { input_tokens: 1_000, output_tokens: 1_000 } },
     { id: "b", turnId: "turn-1", turnUsage: { input_tokens: 1_000, output_tokens: 1_000 } },
     { id: "c", turnId: "turn-2", turnUsage: { input_tokens: 2_000, output_tokens: 2_000 } },
   ], "gpt-5.4-mini");
 
-  assertNearlyEqual(cost, 0.01575);
+  assertNearlyEqual(estimate?.amountUsd ?? null, 0.01575);
 });
 
-test("falls back to visible transcript text when provider usage is missing", () => {
+test("ignores transcript rows when provider usage is missing", () => {
   const estimate = estimateTranscriptCost([
-    {
-      id: "u",
-      kind: "message",
-      role: "user",
-      turnId: "turn-1",
-      text: "x".repeat(400),
-    },
-    {
-      id: "a",
-      kind: "message",
-      role: "assistant",
-      turnId: "turn-1",
-      text: "y".repeat(800),
-    },
+    { id: "u", turnId: "turn-1" },
+    { id: "a", turnId: "turn-1" },
   ], "gpt-5.4-mini");
 
-  assert.equal(estimate?.basis, "visible_transcript");
-  assertNearlyEqual(estimate?.amountUsd ?? null, 0.000975);
+  assert.equal(estimate, null);
 });
 
-test("reported usage wins over visible text fallback for the same turn", () => {
+test("uses provider usage when available", () => {
   const estimate = estimateTranscriptCost([
     {
       id: "u",
-      kind: "message",
-      role: "user",
       turnId: "turn-1",
       turnUsage: { input_tokens: 1_000, output_tokens: 1_000 },
-      text: "x".repeat(10_000),
     },
-    {
-      id: "a",
-      kind: "message",
-      role: "assistant",
-      turnId: "turn-1",
-      text: "y".repeat(10_000),
-    },
+    { id: "a", turnId: "turn-1" },
   ], "gpt-5.4-mini");
 
-  assert.equal(estimate?.basis, "reported_usage");
   assertNearlyEqual(estimate?.amountUsd ?? null, 0.00525);
 });
 
@@ -108,7 +84,6 @@ test("estimates one selected turn from mixed transcript rows", () => {
     { id: "c", turnId: "turn-2", turnUsage: { input_tokens: 2_000, output_tokens: 2_000 } },
   ], "gpt-5.4-mini", "turn-2");
 
-  assert.equal(estimate?.basis, "reported_usage");
   assertNearlyEqual(estimate?.amountUsd ?? null, 0.0105);
 });
 

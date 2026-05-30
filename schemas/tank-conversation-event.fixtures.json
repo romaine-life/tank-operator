@@ -126,6 +126,40 @@
       }
     },
     {
+      "name": "turn usage",
+      "event": {
+        "event_id": "turn_contract:turn.usage:provider-usage-1",
+        "order_key": "1768179841500-00000003-turn_contract:turn.usage:provider-usage-1",
+        "sequence": 3,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "client_nonce": "client-nonce-contract",
+        "actor": "runner",
+        "source": "codex",
+        "type": "turn.usage",
+        "created_at": "2026-05-12T00:00:04.500Z",
+        "producer": {
+          "name": "codex-runner",
+          "runtime": "codex",
+          "provider_event_id": "provider-usage-1"
+        },
+        "visibility": "durable",
+        "payload": {
+          "usage": {
+            "input_tokens": 10,
+            "output_tokens": 8,
+            "total_tokens": 18
+          },
+          "usage_observation": {
+            "usage_source": "thread.tokenUsage.updated",
+            "provider_turn_id": "provider-turn-1",
+            "update_count": 1
+          }
+        }
+      }
+    },
+    {
       "name": "turn completed",
       "event": {
         "event_id": "turn_contract:turn.completed:provider-result-1",

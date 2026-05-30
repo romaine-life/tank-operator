@@ -106,6 +106,7 @@
         "user_message.created",
         "turn.submitted",
         "turn.started",
+        "turn.usage",
         "turn.completed",
         "turn.failed",
         "turn.command_failed",
@@ -276,6 +277,21 @@
         "final_answer": { "$ref": "#/$defs/finalAnswer" }
       }
     },
+    "turnUsagePayload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["usage"],
+      "properties": {
+        "usage": {
+          "type": "object",
+          "additionalProperties": true
+        },
+        "usage_observation": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
     "sessionStatusPayload": {
       "type": "object",
       "additionalProperties": true,
@@ -379,7 +395,7 @@
       "if": {
         "properties": {
           "type": {
-            "enum": ["turn.started", "turn.completed", "turn.failed", "turn.interrupted"]
+            "enum": ["turn.started", "turn.usage", "turn.completed", "turn.failed", "turn.interrupted"]
           }
         },
         "required": ["type"]
@@ -388,6 +404,15 @@
         "required": ["turn_id"],
         "properties": {
           "actor": { "const": "runner" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "turn.usage" } }, "required": ["type"] },
+      "then": {
+        "required": ["payload"],
+        "properties": {
+          "payload": { "$ref": "#/$defs/turnUsagePayload" }
         }
       }
     },

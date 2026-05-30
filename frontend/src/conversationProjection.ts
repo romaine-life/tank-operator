@@ -6,6 +6,7 @@ import type {
   ConversationRunStatus,
   ConversationTurnTerminal,
   ConversationTurnTerminalStatus,
+  ConversationTurnUsage,
 } from "./conversationReducer";
 import type { UserMessageDisplay } from "../../runner-shared/conversation.js";
 import type { MessageAttachmentDisplay } from "./attachmentLabels";
@@ -118,7 +119,7 @@ export interface ConversationMetaEntry extends ConversationEntryBase {
   // same protocol class as session.status and "Stop requested" entries
   // that already land in the main transcript. See
   // docs/features/transcript/contract.md → "promotion-only".
-  metaKind?: "needs_input_announcement";
+  metaKind?: "needs_input_announcement" | "turn_usage";
   // For needs_input_announcement entries: the AskUserQuestion item's
   // provider id and the turn it lives on, so the renderer's click
   // handler can navigate the user to the Turns tab scrolled to the
@@ -145,6 +146,8 @@ interface ConversationEntryBase {
   turnTerminalStatus?: ConversationTurnTerminalStatus;
   turnTerminalAt?: string;
   turnTerminalEventId?: string;
+  turnUsage?: unknown;
+  usageObservation?: unknown;
 }
 
 export interface ConversationProjection {
@@ -244,6 +247,7 @@ export function projectConversationState(
         orderKey: request.orderKey,
       },
     })),
+    ...turnUsageMetaEntries(state),
     // Per-turn terminal failures and interruptions become durable transcript
     // meta lines, replacing the floating run-status pill. turn.completed
     // emits no meta entry — successful completion speaks through the
@@ -514,8 +518,51 @@ function annotateTurnTerminals(
       turnTerminalStatus: terminal.status,
       turnTerminalAt: terminal.time,
       turnTerminalEventId: terminal.sourceEventId,
+      ...(terminal.usage !== undefined ? { turnUsage: terminal.usage } : {}),
+      ...(terminal.usageObservation !== undefined ? { usageObservation: terminal.usageObservation } : {}),
     };
   });
+}
+
+function turnUsageMetaEntries(
+  state: ConversationReducerState,
+): Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> {
+  const baseIndex =
+    state.messages.length +
+    state.items.length +
+    state.backgroundTasks.length +
+    state.interruptRequests.length;
+  const out: Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> = [];
+  let offset = 0;
+  for (const usage of Object.values(state.turnUsages)) {
+    const terminal = state.turnTerminals[usage.turnId];
+    if (terminal?.usage !== undefined && terminal.usage !== null) continue;
+    out.push({
+      index: baseIndex + offset,
+      orderKey: usage.orderKey,
+      entry: projectTurnUsage(usage),
+    });
+    offset += 1;
+  }
+  return out;
+}
+
+function projectTurnUsage(usage: ConversationTurnUsage): ConversationViewEntry {
+  return {
+    id: `turn-usage:${usage.turnId}`,
+    kind: "meta",
+    metaKind: "turn_usage",
+    meta: {
+      title: "Token usage updated",
+      severity: "info",
+    },
+    turnId: usage.turnId,
+    time: usage.time,
+    sourceEventId: usage.sourceEventId,
+    orderKey: usage.orderKey,
+    turnUsage: usage.usage,
+    ...(usage.usageObservation !== undefined ? { usageObservation: usage.usageObservation } : {}),
+  };
 }
 
 function turnTerminalMetaEntries(
@@ -525,7 +572,8 @@ function turnTerminalMetaEntries(
     state.messages.length +
     state.items.length +
     state.backgroundTasks.length +
-    state.interruptRequests.length;
+    state.interruptRequests.length +
+    Object.keys(state.turnUsages).length;
   const out: Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> = [];
   let offset = 0;
   for (const terminal of Object.values(state.turnTerminals)) {

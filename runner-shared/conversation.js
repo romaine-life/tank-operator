@@ -24,6 +24,7 @@ export const TANK_EVENT_TYPES = [
   "user_message.created",
   "turn.submitted",
   "turn.started",
+  "turn.usage",
   "turn.completed",
   "turn.failed",
   "turn.command_failed",
@@ -96,6 +97,10 @@ function isValidEventByType(event) {
     case "turn.failed":
     case "turn.interrupted":
       return event.actor === "runner" && hasStrings(event, ["turn_id"]);
+    case "turn.usage":
+      return event.actor === "runner" &&
+        hasStrings(event, ["turn_id"]) &&
+        isTurnUsagePayload(event.payload);
     case "turn.completed":
       return event.actor === "runner" &&
         hasStrings(event, ["turn_id"]) &&
@@ -185,6 +190,12 @@ function isTurnCompletedPayload(payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
   if (payload.final_answer === undefined) return true;
   return isFinalAnswer(payload.final_answer);
+}
+
+function isTurnUsagePayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  const usage = payload.usage;
+  return Boolean(usage && typeof usage === "object" && !Array.isArray(usage));
 }
 
 function isFinalAnswer(value) {
