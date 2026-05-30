@@ -66,6 +66,53 @@ func TestConfig(t *testing.T) {
 	if body["fork_session_prompt_template"] == "" {
 		t.Fatalf("missing fork_session_prompt_template: %#v", body)
 	}
+	// Initial-message mode directives default to their const fallback when no
+	// ConfigMap file is mounted, so /api/config is never empty pre-mount.
+	for _, key := range []string{
+		"initial_mode_diagnose_directive",
+		"initial_mode_quality_gaps_directive",
+		"initial_mode_go_long_directive",
+		"initial_mode_test_directive",
+	} {
+		if body[key] == "" {
+			t.Fatalf("missing %s: %#v", key, body)
+		}
+	}
+}
+
+func TestConfigReadsInitialModeDirectiveFiles(t *testing.T) {
+	// Each directive key reads its mounted ConfigMap file when present, so a
+	// live edit on main flows through without a frontend rebuild.
+	cases := []struct{ env, key string }{
+		{"TANK_INITIAL_MODE_DIAGNOSE_FILE", "initial_mode_diagnose_directive"},
+		{"TANK_INITIAL_MODE_QUALITY_GAPS_FILE", "initial_mode_quality_gaps_directive"},
+		{"TANK_INITIAL_MODE_GO_LONG_FILE", "initial_mode_go_long_directive"},
+		{"TANK_INITIAL_MODE_TEST_FILE", "initial_mode_test_directive"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.key, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "directive.md")
+			want := "live-edited directive for " + tc.key
+			if err := os.WriteFile(path, []byte(want), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv(tc.env, path)
+			response := httptest.NewRecorder()
+
+			config(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d", response.Code)
+			}
+			var body map[string]string
+			if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			if got := body[tc.key]; got != want {
+				t.Fatalf("%s = %q, want %q", tc.key, got, want)
+			}
+		})
+	}
 }
 
 func TestConfigDefaultsAuthURL(t *testing.T) {

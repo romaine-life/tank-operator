@@ -45,6 +45,13 @@ const appChromeCapabilitiesSource = readSource(
 const chatScrollMetricsHandlerSource = readSource(
   "../../backend-go/cmd/tank-operator/handlers_client_metrics.go",
 );
+const appConfigMapSource = readSource("../../k8s/templates/app-configmap.yaml");
+const appDeploymentSource = readSource("../../k8s/templates/deployment.yaml");
+const tankServerGoSource = readSource("../../backend-go/cmd/tank-operator/server.go");
+const initialModeDiagnoseSource = readSource("../../k8s/app-config/initial-mode-diagnose.md");
+const initialModeQualityGapsSource = readSource("../../k8s/app-config/initial-mode-quality-gaps.md");
+const initialModeGoLongSource = readSource("../../k8s/app-config/initial-mode-go-long.md");
+const initialModeTestSource = readSource("../../k8s/app-config/initial-mode-test.md");
 
 test("session activity is not refreshed by a steady interval", () => {
   assert.equal(appSource.includes("POLL_INTERVAL_MS"), false);
@@ -730,18 +737,87 @@ test("web search transcript tools use the web glyph", () => {
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
   assert.match(appSource, /type InitialMessageMode = "direct" \| "diagnose" \| "quality_gaps" \| "go_long" \| "test"/);
   assert.equal(appSource.includes("composeInitialMessageModePrompt"), true);
-  assert.equal(appSource.includes("Initial message type: diagnose issue without writing code."), true);
-  assert.equal(appSource.includes("/workspace/.tank/docs/quality-timeframes.md"), true);
-  assert.equal(appSource.includes("/workspace/.tank/docs/migration-policy.md"), true);
-  // "Go long" is the creation-time twin of the /north-star skill: a directive
-  // mode that bakes the three binding invariant docs into turn one with no
-  // skill dependency (the directive is pure prompt text persisted at create,
-  // so it does not require any on-disk skill to exist yet).
-  assert.equal(appSource.includes("Initial message type: go long."), true);
-  assert.equal(appSource.includes("/workspace/.tank/docs/product-inspirations.md"), true);
-  assert.match(appSource, /go_long[\s\S]*Settled decisions stay settled/);
   assert.match(appSource, /initialMessageModeSkillName\(mode: InitialMessageMode\): SkillStateName \| undefined/);
   assert.match(appSource, /initialMode !== "direct"[\s\S]*chatModeForHomePrompt\(defaultSessionMode\)/);
+});
+
+test("initial-message directives are sourced from the app-config ConfigMap, not baked into the SPA", () => {
+  // The directive text moved out of compiled SPA code into k8s/app-config/*.md
+  // so it is editable against main without a frontend rebuild: markdown file ->
+  // app-config ConfigMap (.Files.Get) -> /api/config (readOptionalFile) -> SPA
+  // fetch with an offline const fallback. This mirrors fork_session_prompt_template.
+  // The migration is complete when the four directive files exist, are wired
+  // through the ConfigMap + deployment env + server.go, and the SPA resolves
+  // them async from config instead of returning inline literals.
+
+  // SPA reads directives from /api/config, with const fallbacks, async.
+  assert.match(
+    appSource,
+    /async function initialMessageModeDirective\(mode: InitialMessageMode\): Promise<string>/,
+  );
+  assert.match(appSource, /await fetchAppPublicConfig\(\)/);
+  for (const key of [
+    "initial_mode_diagnose_directive",
+    "initial_mode_quality_gaps_directive",
+    "initial_mode_go_long_directive",
+    "initial_mode_test_directive",
+  ]) {
+    assert.equal(appSource.includes(key), true, `App.tsx missing config key ${key}`);
+    assert.equal(tankServerGoSource.includes(key), true, `server.go missing config key ${key}`);
+  }
+  assert.match(appSource, /await composeInitialMessageModePrompt\(/);
+
+  // The old persistent-stance diagnose phrasing must not be reintroduced
+  // anywhere — it is the bug this change fixes (agents read it as a
+  // never-write-code stance for the whole session, not just turn one).
+  assert.equal(appSource.includes("diagnose issue without writing code"), false);
+  assert.equal(initialModeDiagnoseSource.includes("diagnose issue without writing code"), false);
+
+  // Reworded diagnose directive scopes the no-code stance to the first turn.
+  assert.equal(initialModeDiagnoseSource.includes("first message only"), true);
+  assert.equal(initialModeDiagnoseSource.includes("this first turn only"), true);
+
+  // Other modes relocated to markdown with their invariants intact.
+  assert.equal(initialModeQualityGapsSource.includes("/workspace/.tank/docs/quality-timeframes.md"), true);
+  assert.equal(initialModeQualityGapsSource.includes("/workspace/.tank/docs/migration-policy.md"), true);
+  assert.equal(initialModeGoLongSource.includes("Initial message type: go long."), true);
+  assert.equal(initialModeGoLongSource.includes("/workspace/.tank/docs/product-inspirations.md"), true);
+  assert.equal(initialModeGoLongSource.includes("Settled decisions stay settled"), true);
+  assert.equal(initialModeTestSource.includes("run the test skill"), true);
+
+  // ConfigMap renders all four files via .Files.Get.
+  for (const file of [
+    "initial-mode-diagnose.md",
+    "initial-mode-quality-gaps.md",
+    "initial-mode-go-long.md",
+    "initial-mode-test.md",
+  ]) {
+    assert.equal(
+      appConfigMapSource.includes(`.Files.Get "app-config/${file}"`),
+      true,
+      `app-configmap.yaml does not render ${file}`,
+    );
+  }
+
+  // Deployment points each directive env var at the mounted ConfigMap file.
+  for (const [envVar, file] of [
+    ["TANK_INITIAL_MODE_DIAGNOSE_FILE", "initial-mode-diagnose.md"],
+    ["TANK_INITIAL_MODE_QUALITY_GAPS_FILE", "initial-mode-quality-gaps.md"],
+    ["TANK_INITIAL_MODE_GO_LONG_FILE", "initial-mode-go-long.md"],
+    ["TANK_INITIAL_MODE_TEST_FILE", "initial-mode-test.md"],
+  ]) {
+    assert.equal(appDeploymentSource.includes(envVar), true, `deployment.yaml missing ${envVar}`);
+    assert.equal(
+      appDeploymentSource.includes(`/etc/tank-operator/app-config/${file}`),
+      true,
+      `deployment.yaml missing mount path for ${file}`,
+    );
+    assert.equal(
+      tankServerGoSource.includes(`os.Getenv("${envVar}")`),
+      true,
+      `server.go does not read ${envVar}`,
+    );
+  }
 });
 
 test("quality gap policy docs are bundled into session config", () => {

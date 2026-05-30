@@ -75,6 +75,14 @@ spec:
               value: /app/static
             - name: TANK_FORK_SESSION_PROMPT_FILE
               value: /etc/tank-operator/app-config/fork-session.md
+            - name: TANK_INITIAL_MODE_DIAGNOSE_FILE
+              value: /etc/tank-operator/app-config/initial-mode-diagnose.md
+            - name: TANK_INITIAL_MODE_QUALITY_GAPS_FILE
+              value: /etc/tank-operator/app-config/initial-mode-quality-gaps.md
+            - name: TANK_INITIAL_MODE_GO_LONG_FILE
+              value: /etc/tank-operator/app-config/initial-mode-go-long.md
+            - name: TANK_INITIAL_MODE_TEST_FILE
+              value: /etc/tank-operator/app-config/initial-mode-test.md
             {{- if and (eq (include "tank-operator.isTestEnv" .) "true") .Values.staticOverride.enabled }}
             - name: TANK_OPERATOR_STATIC_OVERRIDE_DIR
               value: {{ .Values.staticOverride.mountPath | quote }}
