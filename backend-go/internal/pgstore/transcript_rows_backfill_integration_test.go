@@ -99,12 +99,12 @@ func TestTranscriptRowBackfillIgnoresMigrationStatusRows(t *testing.T) {
 	}
 
 	rowStore := store.NewPostgresSessionTranscriptRowStore(pool, scope)
-	ids, err := rowStore.BackfillSessionIDs(ctx)
+	needsBackfill, err := rowStore.NeedsBackfill(ctx, sessionID)
 	if err != nil {
-		t.Fatalf("BackfillSessionIDs before marker: %v", err)
+		t.Fatalf("NeedsBackfill before marker: %v", err)
 	}
-	if len(ids) != 1 || ids[0] != sessionID {
-		t.Fatalf("BackfillSessionIDs before marker = %#v, want [%q]", ids, sessionID)
+	if !needsBackfill {
+		t.Fatal("NeedsBackfill before marker = false, want true")
 	}
 
 	if err := rowStore.ReplaceForSession(ctx, sessionID, []map[string]any{{
@@ -117,11 +117,11 @@ func TestTranscriptRowBackfillIgnoresMigrationStatusRows(t *testing.T) {
 	}}); err != nil {
 		t.Fatalf("ReplaceForSession: %v", err)
 	}
-	ids, err = rowStore.BackfillSessionIDs(ctx)
+	needsBackfill, err = rowStore.NeedsBackfill(ctx, sessionID)
 	if err != nil {
-		t.Fatalf("BackfillSessionIDs after marker: %v", err)
+		t.Fatalf("NeedsBackfill after marker: %v", err)
 	}
-	if len(ids) != 0 {
-		t.Fatalf("BackfillSessionIDs after marker = %#v, want none", ids)
+	if needsBackfill {
+		t.Fatal("NeedsBackfill after marker = true, want false")
 	}
 }

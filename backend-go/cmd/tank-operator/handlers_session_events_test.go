@@ -2,12 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
@@ -117,13 +119,27 @@ type fakeSessionTranscriptRowStore struct {
 	resolveTimeline map[string]string
 	pages           map[string]store.TranscriptRowPage
 	deltaPages      map[string]store.TranscriptRowDeltaPage
+	needsBackfill   bool
+	needsErr        error
+	needsCalls      int
+	replaceSessions []string
 }
 
 func (s *fakeSessionTranscriptRowStore) ReplaceForTurn(context.Context, string, string, []map[string]any) error {
 	return nil
 }
 
-func (s *fakeSessionTranscriptRowStore) ReplaceForSession(context.Context, string, []map[string]any) error {
+func (s *fakeSessionTranscriptRowStore) ReplaceForSession(_ context.Context, sessionID string, entries []map[string]any) error {
+	s.replaceSessions = append(s.replaceSessions, sessionID)
+	s.needsBackfill = false
+	if s.pages == nil {
+		s.pages = map[string]store.TranscriptRowPage{}
+	}
+	s.pages["latest"] = store.TranscriptRowPage{
+		Rows:        entries,
+		FoundOldest: true,
+		FoundNewest: true,
+	}
 	return nil
 }
 
@@ -164,8 +180,12 @@ func (s *fakeSessionTranscriptRowStore) ResolveCursorForTimelineID(_ context.Con
 	return s.resolveTimeline[timelineID], nil
 }
 
-func (s *fakeSessionTranscriptRowStore) BackfillSessionIDs(context.Context) ([]string, error) {
-	return nil, nil
+func (s *fakeSessionTranscriptRowStore) NeedsBackfill(context.Context, string) (bool, error) {
+	s.needsCalls++
+	if s.needsErr != nil {
+		return false, s.needsErr
+	}
+	return s.needsBackfill, nil
 }
 
 func TestSessionEventCursorFromRequestUsesOrderKeyOnly(t *testing.T) {
@@ -367,6 +387,80 @@ func TestRunSessionTranscriptRowReadUsesRowStore(t *testing.T) {
 	_, _, status, err = runSessionTranscriptRowRead(context.Background(), rowStore, "63", missing)
 	if err == nil || status != http.StatusNotFound {
 		t.Fatalf("missing status=%d err=%v, want 404", status, err)
+	}
+}
+
+func TestSessionTimelineMaterializesStaleTranscriptRowsBeforeRead(t *testing.T) {
+	app := adminTestServer(t)
+	eventStore := fakeSessionEventStore{
+		pages: map[string]store.SessionEventPage{
+			"": {
+				Events: []map[string]any{
+					projectionTestEvent("turn-1:user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+						"text": "hello",
+					}),
+				},
+				FoundOldest: true,
+				FoundNewest: true,
+			},
+		},
+	}
+	rowStore := &fakeSessionTranscriptRowStore{needsBackfill: true}
+	app.sessionEvents = eventStore
+	app.transcriptRows = rowStore
+	app.sessionScope = "default"
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/timeline", nil)
+	body, status, err := app.sessionTimelineBody(context.Background(), req, auth.User{
+		Email: otherUser,
+		Role:  auth.RoleUser,
+	}, "63", "default")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("timeline status=%d err=%v", status, err)
+	}
+	if rowStore.needsCalls < 2 {
+		t.Fatalf("NeedsBackfill calls = %d, want initial check and pre-replace recheck", rowStore.needsCalls)
+	}
+	if len(rowStore.replaceSessions) != 1 || rowStore.replaceSessions[0] != "63" {
+		t.Fatalf("ReplaceForSession sessions = %#v, want [63]", rowStore.replaceSessions)
+	}
+	rowsBody, _ := body["rows"].([]map[string]any)
+	if len(rowsBody) != 1 || rowsBody[0]["id"] != "turn-1:user" {
+		t.Fatalf("timeline rows = %#v", body["rows"])
+	}
+}
+
+func TestSessionEventStreamFailsBeforeReadyWhenTranscriptMaterializationFails(t *testing.T) {
+	app := adminTestServer(t)
+	app.streamAuthTickets = &fakeStreamAuthTicketStore{
+		validateResponse: pgstore.StreamAuthTicket{
+			Sub:          "sub-" + otherUser,
+			Email:        otherUser,
+			Role:         auth.RoleUser,
+			StreamKind:   streamKindSessionEvents,
+			SessionScope: "default",
+			SessionID:    "63",
+		},
+	}
+	app.sessionScope = "default"
+	app.sessionEvents = fakeSessionEventStore{pages: map[string]store.SessionEventPage{}}
+	app.transcriptRows = &fakeSessionTranscriptRowStore{
+		needsBackfill: true,
+		needsErr:      errors.New("row marker unavailable"),
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/events?stream_ticket=ticket-123", nil)
+	req.SetPathValue("session_id", "63")
+	rec := httptest.NewRecorder()
+
+	app.handleSessionEventStream(rec, req)
+
+	body := rec.Body.String()
+	if !strings.Contains(body, "transcript_materialization_failed") {
+		t.Fatalf("SSE body missing materialization failure:\n%s", body)
+	}
+	if strings.Contains(body, "event: ready") {
+		t.Fatalf("SSE wrote ready after materialization failure:\n%s", body)
 	}
 }
 

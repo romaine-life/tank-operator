@@ -357,15 +357,15 @@ func main() {
 
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, rowPublisher, sessions.ManagerOptions{
 		ManifestOpts: sessionmodel.ManifestOptions{
-			SessionsNamespace:       namespace,
-			SessionServiceAccount:   sessionServiceAccount,
-			SessionConfigMap:        envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
-			ArgoCDTrackingApp:       envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
-			SessionImage:            sessionImage,
-			CodexSessionImage:       codexSessionImage,
-			GeminiSessionImage:      geminiSessionImage,
-			SessionScope:            sessionScope,
-			TankOperatorInternalURL: tankOperatorInternalURL,
+			SessionsNamespace:           namespace,
+			SessionServiceAccount:       sessionServiceAccount,
+			SessionConfigMap:            envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
+			ArgoCDTrackingApp:           envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
+			SessionImage:                sessionImage,
+			CodexSessionImage:           codexSessionImage,
+			GeminiSessionImage:          geminiSessionImage,
+			SessionScope:                sessionScope,
+			TankOperatorInternalURL:     tankOperatorInternalURL,
 			GitHubAppSecret:             envDefault("GITHUB_APP_SECRET", sessionmodel.DefaultGitHubAppSecret),
 			GeminiCredentialsTestSecret: envDefault("GEMINI_CREDENTIALS_TEST_SECRET", "gemini-credentials-test"),
 			NATSURL:                     envDefault("NATS_URL", ""),
@@ -377,9 +377,9 @@ func main() {
 			// docs in sessionmodel.ManifestOptions.HotSwapAgentRunner.
 			HotSwapAgentRunner: envBool("SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED"),
 		},
-		OAuthGatewayHost:  os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
-		APIProxyHost:      os.Getenv("CLAUDE_API_PROXY_HOST"),
-		CodexAPIProxyHost: os.Getenv("CODEX_API_PROXY_HOST"),
+		OAuthGatewayHost:   os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
+		APIProxyHost:       os.Getenv("CLAUDE_API_PROXY_HOST"),
+		CodexAPIProxyHost:  os.Getenv("CODEX_API_PROXY_HOST"),
 		GeminiAPIProxyHost: os.Getenv("GEMINI_API_PROXY_HOST"),
 	})
 
@@ -580,9 +580,6 @@ func main() {
 		providerHealth:           providerHealthManager,
 	}
 	srv.registerRoutes(mux)
-	if pgPool != nil {
-		startTranscriptRowBackfills(ctx, transcriptBackfillScopes(pgPool, sessionScope, transcriptMaterializer))
-	}
 
 	// 13.5. Start the conversation read-cursor stagnation sampler.
 	// It snapshots the open-SSE-stream registry every 60s, joins each

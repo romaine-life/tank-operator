@@ -10,8 +10,13 @@ import (
 )
 
 type recordingTranscriptRowsStore struct {
-	turnID  string
-	entries []map[string]any
+	turnID          string
+	entries         []map[string]any
+	needsBackfill   bool
+	needsCalls      int
+	sessionID       string
+	sessionEntries  []map[string]any
+	replaceSessions []string
 }
 
 func (s *recordingTranscriptRowsStore) ReplaceForTurn(_ context.Context, _ string, turnID string, entries []map[string]any) error {
@@ -20,7 +25,11 @@ func (s *recordingTranscriptRowsStore) ReplaceForTurn(_ context.Context, _ strin
 	return nil
 }
 
-func (s *recordingTranscriptRowsStore) ReplaceForSession(context.Context, string, []map[string]any) error {
+func (s *recordingTranscriptRowsStore) ReplaceForSession(_ context.Context, sessionID string, entries []map[string]any) error {
+	s.sessionID = sessionID
+	s.sessionEntries = entries
+	s.replaceSessions = append(s.replaceSessions, sessionID)
+	s.needsBackfill = false
 	return nil
 }
 
@@ -52,16 +61,20 @@ func (s *recordingTranscriptRowsStore) ResolveCursorForTimelineID(context.Contex
 	return "", nil
 }
 
-func (s *recordingTranscriptRowsStore) BackfillSessionIDs(context.Context) ([]string, error) {
-	return nil, nil
+func (s *recordingTranscriptRowsStore) NeedsBackfill(context.Context, string) (bool, error) {
+	s.needsCalls++
+	return s.needsBackfill, nil
 }
 
 type lockingTranscriptRowsStore struct {
 	recordingTranscriptRowsStore
-	t                   *testing.T
-	lockHeld            bool
-	eventsReadUnderLock bool
-	replaceUnderLock    bool
+	t                    *testing.T
+	lockHeld             bool
+	needsBackfillTx      bool
+	needsBackfillTxCalls int
+	eventsReadUnderLock  bool
+	replaceUnderLock     bool
+	replaceSessionTx     bool
 }
 
 func (s *lockingTranscriptRowsStore) WithTranscriptMaterializationTx(ctx context.Context, _ string, fn func(context.Context, pgx.Tx) error) error {
@@ -92,6 +105,7 @@ func (s *lockingTranscriptRowsStore) ReplaceForSessionTx(context.Context, pgx.Tx
 	if !s.lockHeld {
 		s.t.Fatal("ReplaceForSessionTx called outside materialization lock")
 	}
+	s.replaceSessionTx = true
 	return nil
 }
 
@@ -100,6 +114,14 @@ func (s *lockingTranscriptRowsStore) UpsertRowsTx(context.Context, pgx.Tx, strin
 		s.t.Fatal("UpsertRowsTx called outside materialization lock")
 	}
 	return nil
+}
+
+func (s *lockingTranscriptRowsStore) NeedsBackfillTx(context.Context, pgx.Tx, string) (bool, error) {
+	if !s.lockHeld {
+		s.t.Fatal("NeedsBackfillTx called outside materialization lock")
+	}
+	s.needsBackfillTxCalls++
+	return s.needsBackfillTx, nil
 }
 
 type txAwareSessionEventStore struct {
@@ -207,5 +229,88 @@ func TestTranscriptRowsMaterializerLocksReadProjectionAndReplace(t *testing.T) {
 	}
 	if !rowStore.replaceUnderLock {
 		t.Fatal("ReplaceForTurnTx was not called under materialization lock")
+	}
+}
+
+func TestTranscriptRowsMaterializerEnsureSessionBackfillsStaleSession(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("turn-1:user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "hello",
+		}),
+	}
+	eventStore := fakeSessionEventStore{
+		pages: map[string]store.SessionEventPage{
+			"": {Events: events, FoundOldest: true, FoundNewest: true},
+		},
+	}
+	rowStore := &recordingTranscriptRowsStore{needsBackfill: true}
+	materializer := transcriptRowsMaterializer{events: eventStore, rows: rowStore}
+
+	if err := materializer.EnsureSession(context.Background(), "63"); err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+	if rowStore.needsCalls < 2 {
+		t.Fatalf("NeedsBackfill calls = %d, want initial check and pre-replace recheck", rowStore.needsCalls)
+	}
+	if rowStore.sessionID != "63" {
+		t.Fatalf("sessionID = %q, want 63", rowStore.sessionID)
+	}
+	if len(rowStore.sessionEntries) != 1 || rowStore.sessionEntries[0]["id"] != "turn-1:user" {
+		t.Fatalf("sessionEntries = %#v", rowStore.sessionEntries)
+	}
+}
+
+func TestTranscriptRowsMaterializerEnsureSessionSkipsFreshSession(t *testing.T) {
+	rowStore := &recordingTranscriptRowsStore{needsBackfill: false}
+	materializer := transcriptRowsMaterializer{
+		events: fakeSessionEventStore{pages: map[string]store.SessionEventPage{
+			"": {Events: []map[string]any{
+				projectionTestEvent("turn-1:user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+					"text": "hello",
+				}),
+			}, FoundNewest: true},
+		}},
+		rows: rowStore,
+	}
+
+	if err := materializer.EnsureSession(context.Background(), "63"); err != nil {
+		t.Fatalf("EnsureSession: %v", err)
+	}
+	if rowStore.needsCalls != 1 {
+		t.Fatalf("NeedsBackfill calls = %d, want 1", rowStore.needsCalls)
+	}
+	if len(rowStore.replaceSessions) != 0 {
+		t.Fatalf("ReplaceForSession called for fresh session: %#v", rowStore.replaceSessions)
+	}
+}
+
+func TestTranscriptRowsMaterializerBackfillRechecksUnderLock(t *testing.T) {
+	rowStore := &lockingTranscriptRowsStore{t: t, needsBackfillTx: false}
+	eventStore := txAwareSessionEventStore{
+		fakeSessionEventStore: fakeSessionEventStore{
+			pages: map[string]store.SessionEventPage{
+				"": {Events: []map[string]any{
+					projectionTestEvent("turn-1:user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+						"text": "hello",
+					}),
+				}, FoundNewest: true},
+			},
+		},
+		rows: rowStore,
+	}
+	materializer := transcriptRowsMaterializer{events: eventStore, rows: rowStore}
+
+	backfilled, err := materializer.BackfillSession(context.Background(), "63")
+	if err != nil {
+		t.Fatalf("BackfillSession: %v", err)
+	}
+	if backfilled {
+		t.Fatal("BackfillSession reported backfilled after locked freshness recheck returned fresh")
+	}
+	if rowStore.needsBackfillTxCalls != 1 {
+		t.Fatalf("NeedsBackfillTx calls = %d, want 1", rowStore.needsBackfillTxCalls)
+	}
+	if rowStore.replaceSessionTx {
+		t.Fatal("ReplaceForSessionTx called after locked freshness recheck returned fresh")
 	}
 }
