@@ -30,3 +30,12 @@ test("chat composer cost estimate keeps a fixed-width footprint", () => {
   assert.match(turnRule, /width:\s*auto;/);
   assert.match(turnRule, /flex:\s*0\s+0\s+auto;/);
 });
+
+test("turn view transcript rows share the same avatar gutter", () => {
+  const turnViewRowRule = cssRule(".run-turn-view-body .run-transcript-message");
+  assert.match(turnViewRowRule, /width:\s*100%;/);
+  assert.match(turnViewRowRule, /padding-left:\s*0;/);
+
+  const ownedActivityRule = cssRule('.run-transcript [data-slot="message"][data-owner="activity"]');
+  assert.match(ownedActivityRule, /padding-left:\s*0;/);
+});
