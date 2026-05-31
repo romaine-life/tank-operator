@@ -23,7 +23,10 @@ configure_gemini() {
 EOF
   chmod 600 "$HOME/.gemini/settings.json"
 
-  cat > "$HOME/.gemini/oauth_creds.json" <<EOF
+  if [ -f /etc/gemini-credentials/oauth_creds.json ]; then
+    cp /etc/gemini-credentials/oauth_creds.json "$HOME/.gemini/oauth_creds.json"
+  else
+    cat > "$HOME/.gemini/oauth_creds.json" <<EOF
 {
   "access_token": "managed-by-tank-operator",
   "refresh_token": "managed-by-tank-operator",
@@ -33,6 +36,7 @@ EOF
   "expiry_date": 9999999999000
 }
 EOF
+  fi
   chmod 600 "$HOME/.gemini/oauth_creds.json"
 }
 
