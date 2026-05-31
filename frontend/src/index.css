@@ -1770,44 +1770,6 @@ button:disabled {
   z-index: 1;
 }
 
-/* Repo chips: the union of a session's create-time selection and the repos
-   its pod actually checked out (sessionRepoSlugs). Aligned under the status
-   row, muted so they read as metadata, not controls. Hidden when collapsed
-   (also gated in JSX). */
-.session-repos {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  padding-left: 62px;
-  padding-right: 28px;
-  margin-top: 2px;
-  z-index: 1;
-}
-
-.session-repo-chip {
-  max-width: 100%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  padding: 1px 6px;
-  font-family: var(--font-primary);
-  font-size: 10.5px;
-  line-height: 1.4;
-  color: var(--text-muted);
-  background: var(--bg-sidebar-control);
-  border-radius: var(--radius-pill);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
-}
-
-.session-repo-chip.session-repo-more {
-  color: var(--text-faint);
-}
-
-.sidebar.is-collapsed .session-repos {
-  display: none;
-}
-
 .sessions li:not(.is-closing):hover {
   background: var(--bg-hover);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.09);

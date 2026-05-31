@@ -20,7 +20,9 @@ Named behaviors in the session-bar surface. See
      called out.
 
   The sidebar exposes a filter input that matches the union of both sets (plus
-  name / id / mode), and each session row shows repo chips for that union.
+  name / id / mode). The repo metadata is intentionally not rendered in each
+  compact session row; it remains durable and searchable without increasing row
+  height.
 
 - **Affected contracts:** Session Bar (this surface). The durable source of
   truth stays `session_registry` ("…repositories, and clone state"); the new

@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  repoShortName,
   sessionMatchesFilterFields,
   sessionRepoSlugs,
 } from "./sessionRepos";
@@ -48,12 +47,6 @@ test("sessionRepoSlugs tolerates missing/null fields (degraded snapshots)", () =
     sessionRepoSlugs({ discovered_repos: ["owner/only-discovered"] }),
     ["owner/only-discovered"],
   );
-});
-
-test("repoShortName returns the repo half of a slug", () => {
-  assert.equal(repoShortName("nelsong6/tank-operator"), "tank-operator");
-  assert.equal(repoShortName("no-slash"), "no-slash");
-  assert.equal(repoShortName("a/b/c"), "c");
 });
 
 test("sessionMatchesFilterFields: empty query matches everything", () => {

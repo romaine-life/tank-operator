@@ -1,8 +1,7 @@
-// sessionRepos.ts — pure helpers for the sidebar repo attribution + filter
+// sessionRepos.ts — pure helpers for sidebar repo attribution search
 // feature. Kept out of App.tsx so the union/dedup/match logic is unit
 // testable without standing up the React tree (mirrors repos.ts /
-// homeRepos.ts). The wiring (state, chips render) stays in App.tsx; the
-// load-bearing logic lives here.
+// homeRepos.ts).
 
 // A session shape carrying just the repo fields these helpers read. Both
 // fields are optional so degraded snapshots (older server, pod-only
@@ -15,7 +14,7 @@ export interface RepoBearingSession {
 // sessionRepoSlugs returns the union of a session's create-time selection
 // (repos) and the repos its pod actually checked out at runtime
 // (discovered_repos), deduped case-insensitively with first-seen casing
-// preserved, sorted for stable rendering. This is "every repo the session
+// preserved, sorted for stable matching. This is "every repo the session
 // worked on", whether it was tagged up front or cloned on demand.
 export function sessionRepoSlugs(session: RepoBearingSession): string[] {
   const seen = new Set<string>();
@@ -33,13 +32,6 @@ export function sessionRepoSlugs(session: RepoBearingSession): string[] {
     out.push(trimmed);
   }
   return out.sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase()));
-}
-
-// repoShortName is the chip label: the repo half of an owner/name slug. The
-// full slug stays in the chip's title so the owner is one hover away.
-export function repoShortName(slug: string): string {
-  const slash = slug.lastIndexOf("/");
-  return slash >= 0 ? slug.slice(slash + 1) : slug;
 }
 
 // Fields the sidebar filter matches against. Pulled out so the matcher is a

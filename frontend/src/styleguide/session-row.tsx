@@ -41,9 +41,7 @@ export function StyleguideSessionRow() {
         <p style={captionStyle}>
           Current sidebar rows: agent avatar, read-only name label, status dot,
           provider and interaction chips, boot/runtime stats, activity chips,
-          inline actions such as save for config sessions, and repo chips for
-          the repos a session worked on (create-time selection unioned with
-          the repos its pod checked out at runtime).
+          and inline actions such as save for config sessions.
         </p>
         <section style={sectionStyle}>
           <ul className="sessions" style={{ maxWidth: 420, listStyle: "none", padding: 0, margin: 0 }}>
@@ -69,13 +67,6 @@ export function StyleguideSessionRow() {
                     <span aria-hidden="true">↑</span>
                     <span>12m</span>
                   </span>
-                </span>
-              </div>
-              <div className="session-repos" aria-label="repos">
-                <span className="session-repo-chip" title="nelsong6/tank-operator">tank-operator</span>
-                <span className="session-repo-chip" title="nelsong6/glimmung">glimmung</span>
-                <span className="session-repo-chip session-repo-more" title="nelsong6/infra-bootstrap, nelsong6/auth">
-                  +2
                 </span>
               </div>
             </li>

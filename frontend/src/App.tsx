@@ -129,7 +129,6 @@ import {
   writeHomeSelectedRepos,
 } from "./homeRepos";
 import {
-  repoShortName,
   sessionMatchesFilterFields,
   sessionRepoSlugs,
 } from "./sessionRepos";
@@ -586,9 +585,8 @@ interface Session {
   activity?: SessionActivitySummary | null;
   // repos is the durable owner/name slug list the user picked at
   // session creation. Always an array on the wire (empty when none
-  // picked). The splash chips for existing sessions read from here
-  // — never from localStorage — so the chip list never contradicts
-  // the server's view.
+  // picked). Existing sessions read from here — never from
+  // localStorage — so the UI never contradicts the server's view.
   repos: string[];
   // clone_state is the per-repo repo-cloner init-container outcome.
   // Optional until the cloner writes back.
@@ -598,7 +596,7 @@ interface Session {
   // runtime. Always an array on the wire (empty when nothing observed
   // yet). Distinct from repos (the write-once create-time selection):
   // this also captures repos the agent cloned on demand mid-session.
-  // The sidebar repo filter and chips union the two.
+  // The sidebar repo filter unions the two.
   discovered_repos: string[];
   model?: string;
   effort?: string;
@@ -15510,29 +15508,6 @@ export function App() {
                       </button>
                     )}
                   </div>
-                  {!sidebarCollapsed && (() => {
-                    const slugs = sessionRepoSlugs(s);
-                    if (slugs.length === 0) return null;
-                    const shown = slugs.slice(0, 3);
-                    const extra = slugs.length - shown.length;
-                    return (
-                      <div className="session-repos" aria-label="repos">
-                        {shown.map((slug) => (
-                          <span key={slug} className="session-repo-chip" title={slug}>
-                            {repoShortName(slug)}
-                          </span>
-                        ))}
-                        {extra > 0 && (
-                          <span
-                            className="session-repo-chip session-repo-more"
-                            title={slugs.join(", ")}
-                          >
-                            +{extra}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })()}
                 </li>
               );
               });

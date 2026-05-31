@@ -961,7 +961,7 @@ var schemaMigrations = []migration{
 	// which also captures repos the agent cloned on demand mid-session
 	// (the "agent will mint clone tokens on demand at runtime" shape
 	// 0035 called out as having no durable record). Both ride the
-	// session row payload; the sidebar search/chips union them. Empty
+	// session row payload; the sidebar search unions them. Empty
 	// array means "nothing observed yet", matching the create-time
 	// default for a session whose reporter hasn't reported.
 	{ID: "0078", SQL: `ALTER TABLE sessions

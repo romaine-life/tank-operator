@@ -84,8 +84,8 @@ func TestPublishCurrentRowWakesTranscriptStream(t *testing.T) {
 // for the new field: discovered_repos rides every row-update payload, and —
 // like repos — serializes as an empty array (never null/absent) so the SPA
 // never has to distinguish "field missing" from "no repos observed". This
-// is what lets the sidebar chips/filter converge from the SSE stream without
-// a refresh (Session Bar contract: status converges without reload).
+// is what lets the sidebar repo filter converge from the SSE stream without a
+// refresh (Session Bar contract: status converges without reload).
 func TestMarshalRowUpdateIncludesDiscoveredRepos(t *testing.T) {
 	payload, err := MarshalRowUpdate(sessionmodel.SessionRecord{
 		ID:              "7",

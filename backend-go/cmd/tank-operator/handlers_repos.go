@@ -91,9 +91,7 @@ var errReposUnsupportedForMode = errors.New("repos selection is not supported fo
 // entry or over-cap.
 //
 // Empty input returns ([], nil). Order is preserved so the picker's
-// presentation order survives the round trip (the SPA reads chips
-// back from the durable row on existing sessions; preserving order
-// keeps the chip list stable across re-renders).
+// presentation order survives the round trip through the durable row.
 func validateRepoSlugs(raw []string) ([]string, error) {
 	if len(raw) == 0 {
 		return []string{}, nil
