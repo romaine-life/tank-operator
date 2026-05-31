@@ -6249,6 +6249,36 @@ textarea.run-files-viewer-editor:focus {
   letter-spacing: 0;
 }
 
+/* Transient "Refreshed" confirmation after an R-driven transcript refresh.
+   Shares the connection-pill geometry/position but uses a distinct emerald
+   tint so it reads as a momentary success cue, not a connection state. */
+.run-refresh-pill {
+  border-color: rgba(52, 211, 153, 0.3);
+  background: linear-gradient(180deg, rgba(52, 211, 153, 0.12), rgba(52, 211, 153, 0.04));
+  animation: run-refresh-pill-in 140ms ease-out;
+}
+
+.run-refresh-label {
+  color: rgba(52, 211, 153, 0.92);
+}
+
+@keyframes run-refresh-pill-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .run-refresh-pill {
+    animation: none;
+  }
+}
+
 /* "Load earlier messages" pill — sits at the top of the transcript when
    the loaded window doesn't yet include the head of the ledger. */
 .run-transcript-load-older {
