@@ -1344,6 +1344,11 @@ function replaceSessionRoute(id: string, tab: "chat" | "turns" = "chat", turnId?
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
+function replaceSessionTranscriptRoute(id: string): void {
+  const next = sessionRouteUrl(id, "chat");
+  if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
 function readInitialSessionId(): string | null {
   const route = readSessionRouteFromPath();
   if (route?.sessionId) return route.sessionId;
@@ -8671,6 +8676,7 @@ function ChatPane({
   readOnly = false,
   sessionScope,
   avatarCatalogVersion,
+  sidebarTranscriptOpenRequest = 0,
 }: {
   session: Session;
   visible: boolean;
@@ -8712,6 +8718,7 @@ function ChatPane({
   readOnly?: boolean;
   sessionScope: string;
   avatarCatalogVersion: number;
+  sidebarTranscriptOpenRequest?: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [activityEntriesByTurn, setActivityEntriesByTurn] =
@@ -9597,6 +9604,17 @@ function ChatPane({
     window.addEventListener("popstate", applyCurrentSessionRoute);
     return () => window.removeEventListener("popstate", applyCurrentSessionRoute);
   }, [applyCurrentSessionRoute, visible]);
+  useEffect(() => {
+    if (!visible || sidebarTranscriptOpenRequest === 0) return;
+    setActiveTab("chat");
+    setPendingRouteTurnId(null);
+    setPendingTurnViewRouteAnchor(null);
+    slashManualOpenRef.current = false;
+    setSlashOpen(false);
+    setMentionOpen(false);
+    setMcpOpen(false);
+    replaceSessionTranscriptRoute(session.id);
+  }, [session.id, sidebarTranscriptOpenRequest, visible]);
 
   // History replay and live tail both hit the server-owned transcript-row read
   // model. Raw Tank item events stay behind the Turn activity detail endpoint
@@ -13377,6 +13395,8 @@ export function App() {
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
+  const [sessionTranscriptOpenRequests, setSessionTranscriptOpenRequests] =
+    useState<Record<string, number>>({});
   const [sessionActivities, setSessionActivities] = useState<Record<string, SessionActivitySummary>>({});
   // Refs mirror the latest sessions + activities state so the SSE event
   // reducer (which closes over the user-keyed useEffect) can read the
@@ -14280,6 +14300,16 @@ export function App() {
       });
       return changed ? next : prev;
     });
+    setSessionTranscriptOpenRequests((prev) => {
+      const existing = new Set(sessions.map((s) => s.id));
+      let changed = false;
+      const next: Record<string, number> = {};
+      for (const [id, signal] of Object.entries(prev)) {
+        if (existing.has(id) && !closingIds.has(id)) next[id] = signal;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
     setSessionActivities((prev) => {
       const existing = new Set(sessions.map((s) => s.id));
       let changed = false;
@@ -14460,6 +14490,13 @@ export function App() {
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
+  function requestSessionTranscriptOpen(id: string) {
+    setSessionTranscriptOpenRequests((prev) => ({
+      ...prev,
+      [id]: (prev[id] ?? 0) + 1,
+    }));
+  }
+
   function goHome() {
     const url = new URL(window.location.href);
     url.pathname = "/";
@@ -14475,6 +14512,8 @@ export function App() {
       window.open(sessionUrl(id), "_blank", "noopener,noreferrer");
       return;
     }
+    requestSessionTranscriptOpen(id);
+    replaceSessionTranscriptRoute(id);
     activate(id);
   }
 
@@ -15965,6 +16004,7 @@ export function App() {
                       readOnly={readOnlySessionView}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
+                      sidebarTranscriptOpenRequest={sessionTranscriptOpenRequests[s.id] ?? 0}
                     />
                   </div>
                 ) : (
