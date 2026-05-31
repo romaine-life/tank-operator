@@ -155,3 +155,37 @@ Evidence:
   evidence for avatar create/read/delete/update_kind outcomes.
 - PRs touching kind reassignment should prove the unused-deck-entry cleanup
   is atomic with the kind flip and that used entries are preserved.
+
+## Admin Useful Files
+
+Status: active
+
+Intent:
+Give administrators one-click access, from the "Useful files" list in the
+Settings -> Admin controls pane, to the canonical session-config and policy
+documents that govern how session pods behave: the default session primer, the
+quality/migration/product policy docs, the whole session-config bundle, and the
+repo developer guide.
+
+Affected contracts:
+- App Chrome
+
+Contract impact:
+- These links are content references, not product state. The canonical list is a
+  typed frontend module (`frontend/src/adminReferenceLinks.ts`), not a durable
+  store, consistent with this contract's rule that external documentation URLs
+  are content references.
+- The section is admin-only: it renders inside the Settings -> Admin controls
+  view, which is gated on `is_admin` (`adminControls.visible`).
+- Links open canonical sources on the repository's default branch in a new tab.
+  They are external navigations, not durable actions, so they carry no
+  outcome telemetry; if a future entry points at an internal/authenticated
+  route, it must adopt this contract's "fail visibly" rule and the matching
+  telemetry.
+
+Evidence:
+- `frontend/src/adminReferenceLinks.test.ts` pins the curated set, asserts every
+  href is an absolute https URL on the tank-operator repo, and forbids
+  duplicate ids/hrefs.
+- PRs changing the list should keep that test green and update this entry if the
+  set's intent changes.
