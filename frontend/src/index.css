@@ -5060,6 +5060,7 @@ button:disabled {
   background: transparent !important;
   border-color: transparent !important;
   box-shadow: none !important;
+  position: relative;
 }
 
 /* Interactive composer shells keep the text box + send button visually live
@@ -5165,6 +5166,83 @@ button:disabled {
 
 .run-composer.run-composer-interactive .run-composer-textarea::placeholder {
   color: rgba(255, 255, 255, 0.42);
+}
+
+.run-composer-skill-mirror {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 1;
+  min-height: 3rem;
+  max-height: 14rem;
+  overflow: hidden;
+  padding: 0.75rem 1rem;
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--run-chat-font-sm);
+  line-height: 1.5;
+  overflow-wrap: break-word;
+  pointer-events: none;
+  white-space: pre-wrap;
+}
+
+.run-composer-skill-highlighted .run-composer-textarea {
+  position: relative;
+  z-index: 2;
+  color: transparent !important;
+  caret-color: var(--text-primary);
+}
+
+.run-composer-skill-highlighted .run-composer-textarea::selection {
+  background: rgba(147, 197, 253, 0.28);
+  color: transparent;
+}
+
+.run-composer-skill-token {
+  --run-composer-skill-token-fg: var(--accent-fg);
+  --run-composer-skill-token-bg: var(--accent-soft);
+  --run-composer-skill-token-border: rgba(147, 197, 253, 0.34);
+  position: relative;
+  border-radius: 0.38rem;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+  box-shadow:
+    -0.22rem 0 0 var(--run-composer-skill-token-bg),
+    0.22rem 0 0 var(--run-composer-skill-token-bg),
+    inset 0 0 0 1px var(--run-composer-skill-token-border);
+  background: var(--run-composer-skill-token-bg);
+  color: var(--run-composer-skill-token-fg);
+  font-weight: 650;
+}
+
+.run-composer-skill-token[data-skill="test"] {
+  --run-composer-skill-token-fg: var(--skill-test-fg);
+  --run-composer-skill-token-bg: var(--skill-test-bg);
+  --run-composer-skill-token-border: var(--skill-test-border);
+}
+
+.run-composer-skill-token[data-skill="rollout"] {
+  --run-composer-skill-token-fg: var(--skill-rollout-fg);
+  --run-composer-skill-token-bg: var(--skill-rollout-bg);
+  --run-composer-skill-token-border: var(--skill-rollout-border);
+}
+
+.run-composer-skill-token-icon {
+  position: absolute;
+  left: -0.92rem;
+  top: 50%;
+  display: inline-flex;
+  width: 0.82rem;
+  height: 0.82rem;
+  align-items: center;
+  justify-content: center;
+  color: var(--run-composer-skill-token-fg);
+  transform: translateY(-50%);
+}
+
+.run-composer-skill-token-icon svg {
+  width: 0.82rem;
+  height: 0.82rem;
+  stroke-width: 2.25;
 }
 
 .run-composer.run-composer-readonly {
@@ -5481,10 +5559,10 @@ button:disabled {
   padding: 0.75rem 1rem !important;
   font-family: var(--font-primary) !important;
   font-size: var(--run-chat-font-sm) !important;
+  line-height: 1.5 !important;
   color: var(--text-primary) !important;
   background: transparent !important;
   border: none !important;
-  line-height: 1.5;
   overflow-y: auto;
 }
 

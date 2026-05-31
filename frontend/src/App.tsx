@@ -24,7 +24,7 @@ import {
 import { cachedTurnActivityRefreshRequests } from "./turnActivityCache";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
-import { ChatComposer, type RunComposerMode } from "./ChatComposer";
+import { ChatComposer, type ChatComposerSkillVisual, type RunComposerMode } from "./ChatComposer";
 import {
   Select,
   SelectContent,
@@ -3179,6 +3179,10 @@ interface SkillEntry {
   source: string;
   description: string;
   body_preview: string;
+}
+
+function skillEntryInvocationName(skill: SkillEntry): string {
+  return skill.name.replace(/^[$/]/, "").trim();
 }
 
 interface QueuedMessage {
@@ -8939,6 +8943,7 @@ function ChatPane({
   const [slashIndex, setSlashIndex] = useState(0);
 
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
+  const [composerSkills, setComposerSkills] = useState<SkillEntry[]>([]);
   const [mcpOpen, setMcpOpen] = useState(false);
   // @filename mention palette state. paths is lazily loaded from
   // /api/sessions/{id}/files/walk on first `@` keystroke.
@@ -9730,6 +9735,23 @@ function ChatPane({
   }
 
   const slashFiltered = slashOpen ? filterSlashCommands(slashCommands, slashQuery) : [];
+  const composerSkillVisuals = useMemo<ChatComposerSkillVisual[]>(() => {
+    const visuals: ChatComposerSkillVisual[] = [];
+    const seen = new Set<string>();
+    for (const skill of composerSkills) {
+      const name = skillEntryInvocationName(skill);
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      const icon =
+        name === "test"
+          ? <FlaskConicalIcon aria-hidden="true" />
+          : name === "rollout"
+            ? <TankIcon />
+            : <ListChecksIcon aria-hidden="true" />;
+      visuals.push({ name, icon });
+    }
+    return visuals;
+  }, [composerSkills]);
   const mentionFiltered =
     mentionOpen && mentionPaths
       ? filterMentionPaths(mentionPaths, mentionQuery)
@@ -10607,6 +10629,7 @@ function ChatPane({
   useEffect(() => {
     if (readOnly || session.status !== "Active") {
       setSlashCommands(SLASH_COMMANDS);
+      setComposerSkills([]);
       return;
     }
     let cancelled = false;
@@ -10617,10 +10640,14 @@ function ChatPane({
       })
       .then((body) => {
         if (cancelled) return;
+        const entries = body.entries ?? [];
+        setComposerSkills(entries);
         const byName = new Map<string, SlashCommand>();
         for (const command of SLASH_COMMANDS) byName.set(command.name, command);
-        for (const skill of body.entries ?? []) {
-          const normalizedName = skill.name.startsWith("/") ? skill.name : `/${skill.name}`;
+        for (const skill of entries) {
+          const invocationName = skillEntryInvocationName(skill);
+          if (!invocationName) continue;
+          const normalizedName = `/${invocationName}`;
           byName.set(normalizedName, {
             name: normalizedName,
             desc: skill.description || skill.body_preview || `${skill.source} skill`,
@@ -10629,7 +10656,10 @@ function ChatPane({
         setSlashCommands([...byName.values()]);
       })
       .catch(() => {
-        if (!cancelled) setSlashCommands(SLASH_COMMANDS);
+        if (!cancelled) {
+          setSlashCommands(SLASH_COMMANDS);
+          setComposerSkills([]);
+        }
       });
     return () => {
       cancelled = true;
@@ -13392,6 +13422,8 @@ function ChatPane({
           onStop={cancelRun}
           isStopping={runStatus === "stopping"}
           onTextChange={setComposerText}
+          skillTriggerPrefix={isClaude ? "/" : "$"}
+          skillVisuals={composerSkillVisuals}
           toolButtons={
             <>
               {/* Image-attach — opens the hidden file input. Drag-and-drop

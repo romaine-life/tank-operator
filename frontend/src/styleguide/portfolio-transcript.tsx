@@ -13,7 +13,7 @@ import {
   TimerIcon,
   XIcon,
 } from "lucide-react";
-import { ChatComposer, type RunComposerMode } from "../ChatComposer";
+import { ChatComposer, type ChatComposerSkillVisual, type RunComposerMode } from "../ChatComposer";
 import { McpIcon } from "../McpIcon";
 import { WorkspaceShell } from "../WorkspaceShell";
 import {
@@ -43,9 +43,13 @@ const HIGHLIGHT_TARGETS: { id: HighlightTarget; label: string }[] = [
 ];
 
 const COMPOSER_STATES: { id: ComposerSpecimenState; label: string }[] = [
-  { id: "ready", label: "ready with text" },
+  { id: "ready", label: "ready with skill" },
   { id: "streaming", label: "streaming stop" },
   { id: "readonly", label: "read only" },
+];
+
+const COMPOSER_SKILL_VISUALS: ChatComposerSkillVisual[] = [
+  { name: "test", icon: <FlaskConicalIcon aria-hidden="true" /> },
 ];
 
 const ACTIVE_SURFACES: { id: ActiveSurface; label: string }[] = [
@@ -371,7 +375,7 @@ function ComposerSpecimen({
       initialText={
         readonly
           ? "This session is read only, but the composer remains in place for visual parity."
-          : "Tune the highlighted transcript bubble and keep the active turn easy to scan."
+          : "$test Tune the highlighted transcript bubble and keep the active turn easy to scan."
       }
       onSubmit={() => {}}
       permissionMode={permissionMode}
@@ -383,6 +387,8 @@ function ComposerSpecimen({
       controlsDisabled={readonly}
       submitStatus={state === "streaming" ? "streaming" : undefined}
       onStop={() => {}}
+      skillTriggerPrefix="$"
+      skillVisuals={COMPOSER_SKILL_VISUALS}
       toolButtons={<ComposerToolButtons />}
     />
   );

@@ -20,6 +20,20 @@ test("chat composer textarea does not expose a native resize handle", () => {
   assert.doesNotMatch(cssRule(".run-composer textarea"), /resize:\s*vertical;/);
 });
 
+test("recognized skill tokens use a mirrored visual layer without replacing the textarea", () => {
+  const mirrorRule = cssRule(".run-composer-skill-mirror");
+  assert.match(mirrorRule, /position:\s*absolute;/);
+  assert.match(mirrorRule, /pointer-events:\s*none;/);
+  assert.match(mirrorRule, /white-space:\s*pre-wrap;/);
+
+  const textareaRule = cssRule(".run-composer-skill-highlighted .run-composer-textarea");
+  assert.match(textareaRule, /color:\s*transparent\s*!important;/);
+  assert.match(textareaRule, /caret-color:\s*var\(--text-primary\);/);
+
+  const baseTextareaRule = cssRule(".run-composer-textarea");
+  assert.match(baseTextareaRule, /line-height:\s*1\.5\s*!important;/);
+});
+
 test("chat composer cost estimate keeps a fixed-width footprint", () => {
   const composerRule = cssRule(".run-cost-estimate");
   assert.match(composerRule, /width:\s*4\.75rem;/);

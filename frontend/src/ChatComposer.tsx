@@ -21,6 +21,7 @@ import {
   XIcon,
 } from "lucide-react";
 import type { ChatStatus } from "ai";
+import { recognizeLeadingSkillToken } from "./skillTokenRecognition";
 
 // The composer is the single source of truth for the chat-style prompt box.
 // One component is rendered on the home screen, on the unauthenticated demo
@@ -79,6 +80,11 @@ export interface ChatComposerSubmitArgs {
   permissionMode: RunComposerMode;
 }
 
+export interface ChatComposerSkillVisual {
+  name: string;
+  icon?: ReactNode;
+}
+
 export interface ChatComposerProps {
   /** Extra class on the PromptInput form — composes with `run-composer`. */
   className?: string;
@@ -115,6 +121,10 @@ export interface ChatComposerProps {
   initialText?: string;
   /** Fires whenever the textarea's content changes — including programmatic clears. */
   onTextChange?: (text: string) => void;
+  /** Provider-specific explicit skill trigger used for composer-only visual recognition. */
+  skillTriggerPrefix?: "$" | "/";
+  /** Installed skills that should receive distinct typed-token styling. */
+  skillVisuals?: ChatComposerSkillVisual[];
 }
 
 /**
@@ -141,6 +151,8 @@ export function ChatComposer({
   toolButtons,
   initialText,
   onTextChange,
+  skillTriggerPrefix,
+  skillVisuals = [],
 }: ChatComposerProps) {
   // Internal mirror of the textarea's value so the hint can fade and the
   // clear-X can show/hide without making the textarea itself controlled
@@ -148,7 +160,15 @@ export function ChatComposer({
   // controlled input would fight its uncontrolled clear-on-submit reset).
   const [text, setText] = useState(initialText ?? "");
   const composerRef = useRef<HTMLDivElement | null>(null);
+  const skillMirrorRef = useRef<HTMLDivElement | null>(null);
   const seededInitialTextRef = useRef(false);
+  const recognizedSkillToken =
+    skillTriggerPrefix && skillVisuals.length > 0
+      ? recognizeLeadingSkillToken(text, skillVisuals, skillTriggerPrefix)
+      : null;
+  const recognizedSkillVisual = recognizedSkillToken
+    ? skillVisuals.find((skill) => skill.name === recognizedSkillToken.skillName)
+    : undefined;
 
   useEffect(() => {
     if (!initialText || seededInitialTextRef.current) return;
@@ -233,6 +253,12 @@ export function ChatComposer({
     ta.focus();
   }, [onTextChange]);
 
+  const syncSkillMirrorScroll = useCallback((textarea: HTMLTextAreaElement) => {
+    if (!skillMirrorRef.current) return;
+    skillMirrorRef.current.scrollTop = textarea.scrollTop;
+    skillMirrorRef.current.scrollLeft = textarea.scrollLeft;
+  }, []);
+
   const hintText = hintOverride
     ?? (sendByCtrlEnter
       ? `⌘/Ctrl+Enter to send · Enter for new line${hintSuffix ?? ""}`
@@ -245,6 +271,7 @@ export function ChatComposer({
       onInput={(e) => {
         const target = e.target as HTMLElement | null;
         if (target?.tagName !== "TEXTAREA") return;
+        syncSkillMirrorScroll(target as HTMLTextAreaElement);
         const value = (target as HTMLTextAreaElement).value;
         setText((prev) => {
           if (prev === value) return prev;
@@ -256,12 +283,40 @@ export function ChatComposer({
       <PromptInput
         onSubmit={handleSubmit}
         onSubmitCapture={handleSubmitCapture}
-        className={["run-composer", className].filter(Boolean).join(" ")}
+        className={[
+          "run-composer",
+          recognizedSkillToken ? "run-composer-skill-highlighted" : "",
+          className,
+        ].filter(Boolean).join(" ")}
       >
+        {recognizedSkillToken && (
+          <div
+            ref={skillMirrorRef}
+            className="run-composer-skill-mirror"
+            aria-hidden="true"
+          >
+            {recognizedSkillToken.leadingText}
+            <span
+              className="run-composer-skill-token"
+              data-skill={recognizedSkillToken.skillName}
+            >
+              {recognizedSkillVisual?.icon && (
+                <span className="run-composer-skill-token-icon">
+                  {recognizedSkillVisual.icon}
+                </span>
+              )}
+              {recognizedSkillToken.tokenText}
+            </span>
+            {recognizedSkillToken.trailingText}
+          </div>
+        )}
         <PromptInputTextarea
           className="run-composer-textarea"
           placeholder={placeholder}
           disabled={disabled}
+          onScroll={(event) => {
+            syncSkillMirrorScroll(event.currentTarget);
+          }}
         />
         <PromptInputFooter className="run-composer-footer">
           <PromptInputTools className="run-composer-tools">
