@@ -12,14 +12,14 @@ set -eu
 configure_gemini() {
   mkdir -p "$HOME/.gemini"
 
-  cat > "$HOME/.gemini/settings.json" <<EOF
+  cat > "$HOME/.gemini/oauth_creds.json" <<EOF
 {
   "access_token": "managed-by-tank-operator",
   "refresh_token": "managed-by-tank-operator",
   "expiry_date": 9999999999000
 }
 EOF
-  chmod 600 "$HOME/.gemini/settings.json"
+  chmod 600 "$HOME/.gemini/oauth_creds.json"
 }
 
 # Git identity for any commits the agent makes from /workspace.
