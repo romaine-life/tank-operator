@@ -25,7 +25,10 @@ import {
   isDurableTankConversationEvent,
   type TankConversationEvent,
 } from "../../runner-shared/conversation.js";
-import { stampTankEvent } from "../../runner-shared/conversation-builders.js";
+import {
+  stampTankEvent,
+  turnIDForClientNonce,
+} from "../../runner-shared/conversation-builders.js";
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 
 class AsyncQueue<T> {
@@ -68,7 +71,6 @@ export class Runner {
   }>();
   private readonly adapter: GeminiTankEventAdapter;
   private currentAbort: AbortController | null = null;
-  private turnSeq = 0;
   private sessionExists = false;
 
   constructor(private readonly cfg: Config) {
@@ -130,9 +132,8 @@ export class Runner {
         if (next.done) break;
 
         const { text: input, clientNonce, commandRecord } = next.value;
-        const turnSeq = ++this.turnSeq;
         const clientNonceStr = clientNonce ?? `gen-${randomUUID()}`;
-        const turnID = `turn-${turnSeq}`;
+        const turnID = turnIDForClientNonce(clientNonceStr);
         const turn = { turnID, clientNonce: clientNonceStr };
 
         recordTurnStart(turnID);
