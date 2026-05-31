@@ -10,8 +10,7 @@ import type {
   MouseEvent as ReactMouseEvent,
   ReactNode,
 } from "react";
-import { ProcessTerminal, type TranscriptEntry as SandboxTranscriptEntry } from "@sandbox-agent/react";
-import { SandboxAgent } from "sandbox-agent";
+import type { TranscriptEntry as SandboxTranscriptEntry } from "@sandbox-agent/react";
 import {
   Streamdown,
   type Components as StreamdownComponents,
@@ -22,6 +21,7 @@ import {
   pruneLocalRealtimeEchoes,
   pruneRealtimeEntries,
 } from "./transcriptMerge";
+import { cachedTurnActivityRefreshRequests } from "./turnActivityCache";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
@@ -90,7 +90,7 @@ import {
   XIcon,
   type LucideIcon,
 } from "lucide-react";
-import { AUTH_TOKEN_UPDATED_EVENT, authedEventSource, authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
+import { authedEventSource, authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import {
   createSilenceWatchdog,
   logSessionEventStreamEvent,
@@ -230,6 +230,14 @@ import {
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
+const CliProcessTerminal = lazy(() =>
+  import("./CliProcessTerminal").then((module) => ({
+    default: module.CliProcessTerminal,
+  })),
+);
+const TURN_ACTIVITY_LIVE_REFRESH_DELAY_MS = 120;
+const TURN_ACTIVITY_LIVE_REFRESH_RETRY_DELAY_MS = 1_500;
+const TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS = 3;
 
 type SessionMode =
   | "api_key"
@@ -6881,6 +6889,11 @@ type TurnViewItem = {
   lastActivityAt?: string;
 };
 
+type ActivityRefreshProblem = {
+  kind: "load" | "live-refresh";
+  attempts: number;
+};
+
 function turnEntryTimestamp(entry: TranscriptEntry): string | undefined {
   return entry.startedAt ?? entry.time ?? entry.completedAt ?? entry.updatedAt;
 }
@@ -7504,6 +7517,8 @@ function RunTurnActivityScreen({
   showDuration,
   userKey,
   loadingActivityTurns,
+  activityRefreshProblemsByTurn,
+  onRetryActivityRefresh,
   onOpenBackgroundTask,
   scrollRequest,
   onScrollRequestConsumed,
@@ -7522,6 +7537,8 @@ function RunTurnActivityScreen({
   // matching prop on RunMessages for the rationale.
   userKey: string;
   loadingActivityTurns: Record<string, boolean | undefined>;
+  activityRefreshProblemsByTurn: Record<string, ActivityRefreshProblem | undefined>;
+  onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollRequest?: TurnViewScrollRequest | null;
   onScrollRequestConsumed?: (signal: number) => void;
@@ -7553,6 +7570,8 @@ function RunTurnActivityScreen({
     ));
   }, []);
   const loading = selected ? loadingActivityTurns[selected.turnId] === true : false;
+  const refreshProblem = selected ? activityRefreshProblemsByTurn[selected.turnId] : undefined;
+  const showRefreshProblemOnly = Boolean(refreshProblem) && detailGroups.length === 0;
   useLayoutEffect(() => {
     if (!scrollRequest || !selected) return;
     if (scrollRequest.turnId !== selected.turnId) return;
@@ -7703,12 +7722,30 @@ function RunTurnActivityScreen({
             onCopy={handleTranscriptCopy}
             ref={bodyRef}
           >
+            {selected && refreshProblem ? (
+              <div className="run-turn-view-alert" role="alert">
+                <AlertCircleIcon size={14} strokeWidth={2} aria-hidden="true" />
+                <span>
+                  {refreshProblem.kind === "live-refresh" && detailGroups.length > 0
+                    ? "Activity refresh failed; showing last loaded details."
+                    : "Activity details failed to load."}
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary run-turn-view-alert-action"
+                  onClick={() => onRetryActivityRefresh(selected.turnId)}
+                  disabled={loading}
+                >
+                  {loading ? "Retrying..." : "Retry"}
+                </button>
+              </div>
+            ) : null}
             {loading && detailGroups.length === 0 ? (
               <div className="run-shell-loading run-turn-view-loading" role="status" aria-live="polite">
                 <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
                 <span>Loading activity...</span>
               </div>
-            ) : selected.active && detailGroups.length === 0 ? (
+            ) : showRefreshProblemOnly ? null : selected.active && detailGroups.length === 0 ? (
               <div className="run-turn-view-thinking" aria-label="Turn is running">
                 <span className="run-turn-thinking-lines">
                   <span className="run-turn-thinking-label run-turn-thinking-shimmer">Thinking...</span>
@@ -8757,8 +8794,17 @@ function ChatPane({
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [activityEntriesByTurn, setActivityEntriesByTurn] =
     useState<Record<string, TranscriptEntry[] | undefined>>({});
+  const activityEntriesByTurnRef = useRef<Record<string, TranscriptEntry[] | undefined>>({});
+  activityEntriesByTurnRef.current = activityEntriesByTurn;
+  const activityLiveRefreshTimersRef = useRef<Map<string, number>>(new Map());
+  const activityLiveRefreshInFlightRef = useRef<Set<string>>(new Set());
+  const activityLiveRefreshPendingCursorRef = useRef<Map<string, string>>(new Map());
+  const activityLiveRefreshLastRequestedCursorRef = useRef<Map<string, string>>(new Map());
+  const activityLiveRefreshAttemptsRef = useRef<Map<string, number>>(new Map());
   const [loadingActivityTurns, setLoadingActivityTurns] =
     useState<Record<string, boolean | undefined>>({});
+  const [activityRefreshProblemsByTurn, setActivityRefreshProblemsByTurn] =
+    useState<Record<string, ActivityRefreshProblem | undefined>>({});
   const [renderedActiveTurnId, setRenderedActiveTurnId] = useState<string | null>(null);
   const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkServerProjectedEntriesRef = useRef<TranscriptEntry[]>([]);
@@ -9291,6 +9337,141 @@ function ChatPane({
       prev?.signal === signal ? null : prev,
     );
   }, []);
+  function cachedTurnActivityIsLoaded(turnId: string): boolean {
+    return Object.prototype.hasOwnProperty.call(activityEntriesByTurnRef.current, turnId);
+  }
+  function activityRefreshRetryDelayMs(attempts: number): number {
+    const exponent = Math.max(0, attempts - 1);
+    const multiplier = Math.min(4, 2 ** exponent);
+    return TURN_ACTIVITY_LIVE_REFRESH_RETRY_DELAY_MS * multiplier;
+  }
+  function clearActivityRefreshProblem(turnId: string): void {
+    setActivityRefreshProblemsByTurn((prev) => {
+      if (!prev[turnId]) return prev;
+      const next = { ...prev };
+      delete next[turnId];
+      return next;
+    });
+  }
+  function markActivityRefreshProblem(
+    turnId: string,
+    problem: ActivityRefreshProblem,
+  ): void {
+    setActivityRefreshProblemsByTurn((prev) => ({
+      ...prev,
+      [turnId]: problem,
+    }));
+  }
+  function clearActivityLiveRefreshState(): void {
+    for (const timer of activityLiveRefreshTimersRef.current.values()) {
+      window.clearTimeout(timer);
+    }
+    activityLiveRefreshTimersRef.current.clear();
+    activityLiveRefreshInFlightRef.current.clear();
+    activityLiveRefreshPendingCursorRef.current.clear();
+    activityLiveRefreshLastRequestedCursorRef.current.clear();
+    activityLiveRefreshAttemptsRef.current.clear();
+  }
+  const fetchTurnActivityEntries = useCallback(async (
+    trimmedTurnId: string,
+  ): Promise<TranscriptEntry[]> => {
+    const res = await fetchPaneResource(turnActivityRequestPathForPane(trimmedTurnId));
+    if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
+    const body = (await res.json()) as { entries?: unknown[] };
+    return normalizeProjectedTranscriptEntries(
+      Array.isArray(body.entries) ? body.entries : [],
+    );
+  }, [fetchPaneResource, turnActivityRequestPathForPane]);
+  function silentlyRefreshCachedTurnActivity(turnId: string): void {
+    if (activityLiveRefreshInFlightRef.current.has(turnId)) return;
+    if (!cachedTurnActivityIsLoaded(turnId)) {
+      activityLiveRefreshPendingCursorRef.current.delete(turnId);
+      activityLiveRefreshAttemptsRef.current.delete(turnId);
+      return;
+    }
+    activityLiveRefreshPendingCursorRef.current.delete(turnId);
+    activityLiveRefreshInFlightRef.current.add(turnId);
+    void fetchTurnActivityEntries(turnId)
+      .then((loaded) => {
+        const hadRetryAttempts = activityLiveRefreshAttemptsRef.current.has(turnId);
+        activityLiveRefreshAttemptsRef.current.delete(turnId);
+        clearActivityRefreshProblem(turnId);
+        if (hadRetryAttempts) {
+          logSessionEventStreamEvent("turn_activity_refresh_recovered", {
+            sessionMode: session.mode,
+          });
+        }
+        setActivityEntriesByTurn((prev) => {
+          if (!Object.prototype.hasOwnProperty.call(prev, turnId)) return prev;
+          const next = { ...prev, [turnId]: loaded };
+          activityEntriesByTurnRef.current = next;
+          return next;
+        });
+      })
+      .catch(() => {
+        const attempts = (activityLiveRefreshAttemptsRef.current.get(turnId) ?? 0) + 1;
+        activityLiveRefreshAttemptsRef.current.set(turnId, attempts);
+        logSessionEventStreamEvent("turn_activity_refresh_failed", {
+          sessionMode: session.mode,
+        });
+        if (attempts < TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS && cachedTurnActivityIsLoaded(turnId)) {
+          const existing = activityLiveRefreshTimersRef.current.get(turnId);
+          if (existing !== undefined) window.clearTimeout(existing);
+          const timer = window.setTimeout(() => {
+            activityLiveRefreshTimersRef.current.delete(turnId);
+            silentlyRefreshCachedTurnActivity(turnId);
+          }, activityRefreshRetryDelayMs(attempts));
+          activityLiveRefreshTimersRef.current.set(turnId, timer);
+          return;
+        }
+        markActivityRefreshProblem(turnId, {
+          kind: "live-refresh",
+          attempts,
+        });
+        logSessionEventStreamEvent("turn_activity_refresh_gave_up", {
+          sessionMode: session.mode,
+        });
+      })
+      .finally(() => {
+        activityLiveRefreshInFlightRef.current.delete(turnId);
+        if (
+          activityLiveRefreshPendingCursorRef.current.has(turnId) &&
+          cachedTurnActivityIsLoaded(turnId) &&
+          !activityLiveRefreshTimersRef.current.has(turnId)
+        ) {
+          const timer = window.setTimeout(() => {
+            activityLiveRefreshTimersRef.current.delete(turnId);
+            silentlyRefreshCachedTurnActivity(turnId);
+          }, TURN_ACTIVITY_LIVE_REFRESH_DELAY_MS);
+          activityLiveRefreshTimersRef.current.set(turnId, timer);
+        }
+      });
+  }
+  function scheduleCachedTurnActivityRefreshes(rows: TranscriptEntry[]): void {
+    const requests = cachedTurnActivityRefreshRequests(
+      activityEntriesByTurnRef.current,
+      rows,
+    );
+    for (const [turnId, cursor] of requests) {
+      const previous = activityLiveRefreshLastRequestedCursorRef.current.get(turnId) ?? "";
+      if (previous && cursor && cursor <= previous) continue;
+      if (cursor) {
+        activityLiveRefreshLastRequestedCursorRef.current.set(turnId, cursor);
+        activityLiveRefreshAttemptsRef.current.delete(turnId);
+      }
+      const pending = activityLiveRefreshPendingCursorRef.current.get(turnId) ?? "";
+      if (!pending || (cursor && cursor > pending)) {
+        activityLiveRefreshPendingCursorRef.current.set(turnId, cursor);
+      }
+      const existing = activityLiveRefreshTimersRef.current.get(turnId);
+      if (existing !== undefined) window.clearTimeout(existing);
+      const timer = window.setTimeout(() => {
+        activityLiveRefreshTimersRef.current.delete(turnId);
+        silentlyRefreshCachedTurnActivity(turnId);
+      }, TURN_ACTIVITY_LIVE_REFRESH_DELAY_MS);
+      activityLiveRefreshTimersRef.current.set(turnId, timer);
+    }
+  }
   function resetSdkTimelineBootstrapState(
     reason: string,
     options: {
@@ -9336,8 +9517,11 @@ function ChatPane({
     setSdkOlderError(null);
     setEntries([]);
     setTokensUsed(0);
+    clearActivityLiveRefreshState();
+    activityEntriesByTurnRef.current = {};
     setActivityEntriesByTurn({});
     setLoadingActivityTurns({});
+    setActivityRefreshProblemsByTurn({});
     setSdkConnectionState("idle");
     dispatchTimelineBootstrap({
       type: "reset",
@@ -9355,6 +9539,7 @@ function ChatPane({
       scrollToLatestOnReady: timelineBootstrapScrollToLatestRef.current,
     });
   }
+  useEffect(() => () => clearActivityLiveRefreshState(), []);
   function appendSdkRealtimeEntries(localEntries: TranscriptEntry[]): void {
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
       sdkServerEntriesRef.current,
@@ -9467,6 +9652,7 @@ function ChatPane({
       );
       syncSdkRenderedEntries();
     }
+    scheduleCachedTurnActivityRefreshes(rows);
     applySdkTurnActivityRowsToUi(rows);
 
     const run = currentRunRef.current;
@@ -11758,22 +11944,26 @@ function ChatPane({
     if (!options?.force && activityEntriesByTurn[trimmedTurnId]) return;
     if (loadingActivityTurns[trimmedTurnId]) return;
     setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
-    void fetchPaneResource(turnActivityRequestPathForPane(trimmedTurnId))
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
-        const body = (await res.json()) as { entries?: unknown[] };
-        const loaded = normalizeProjectedTranscriptEntries(
-          Array.isArray(body.entries) ? body.entries : [],
-        );
-        setActivityEntriesByTurn((prev) => ({ ...prev, [trimmedTurnId]: loaded }));
+    clearActivityRefreshProblem(trimmedTurnId);
+    void fetchTurnActivityEntries(trimmedTurnId)
+      .then((loaded) => {
+        activityLiveRefreshAttemptsRef.current.delete(trimmedTurnId);
+        setActivityEntriesByTurn((prev) => {
+          const next = { ...prev, [trimmedTurnId]: loaded };
+          activityEntriesByTurnRef.current = next;
+          return next;
+        });
       })
       .catch(() => {
-        setActivityEntriesByTurn((prev) => ({ ...prev, [trimmedTurnId]: [] }));
+        markActivityRefreshProblem(trimmedTurnId, {
+          kind: "load",
+          attempts: 1,
+        });
       })
       .finally(() => {
         setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
       });
-  }, [activityEntriesByTurn, fetchPaneResource, loadingActivityTurns, turnActivityRequestPathForPane]);
+  }, [activityEntriesByTurn, fetchTurnActivityEntries, loadingActivityTurns]);
   useEffect(() => {
     if (turnViewItems.length === 0) {
       if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);
@@ -12268,7 +12458,10 @@ function ChatPane({
             askUserAnswers: projected,
           } as TranscriptEntry;
         });
-        return mutated ? { ...prev, [turnID]: next } : prev;
+        if (!mutated) return prev;
+        const updated = { ...prev, [turnID]: next };
+        activityEntriesByTurnRef.current = updated;
+        return updated;
       });
     }
   }
@@ -12748,6 +12941,10 @@ function ChatPane({
             showDuration={runPrefs.showDuration}
             userKey={user?.sub ?? user?.email ?? "anon"}
             loadingActivityTurns={loadingActivityTurns}
+            activityRefreshProblemsByTurn={activityRefreshProblemsByTurn}
+            onRetryActivityRefresh={(turnId) => {
+              ensureTurnActivityLoaded(turnId, { force: true });
+            }}
             onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
             scrollRequest={turnViewScrollRequest}
             onScrollRequestConsumed={clearTurnViewScrollRequest}
@@ -13456,78 +13653,6 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
   );
 }
 
-function CliProcessTerminal({
-  session,
-  visible,
-}: {
-  session: Session;
-  visible: boolean;
-}) {
-  const [processId, setProcessId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [clientToken, setClientToken] = useState<string | undefined>(() => getStoredToken() ?? undefined);
-  const client = useMemo(
-    () =>
-      new SandboxAgent({
-        baseUrl: `${location.origin}/api/sessions/${session.id}/sandbox-agent`,
-        token: clientToken,
-        skipHealthCheck: true,
-      }),
-    [clientToken, session.id],
-  );
-
-  useEffect(() => {
-    const syncToken = () => setClientToken(getStoredToken() ?? undefined);
-    syncToken();
-    window.addEventListener(AUTH_TOKEN_UPDATED_EVENT, syncToken);
-    return () => window.removeEventListener(AUTH_TOKEN_UPDATED_EVENT, syncToken);
-  }, [session.id]);
-
-  useEffect(() => {
-    if (!visible) return;
-    let cancelled = false;
-    setError(null);
-    authedFetch(`/api/sessions/${session.id}/cli-process`, { method: "POST" })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`CLI process create failed: ${res.status}`);
-        return (await res.json()) as { process_id: string };
-      })
-      .then((body) => {
-        if (!cancelled) {
-          setClientToken(getStoredToken() ?? undefined);
-          setProcessId(body.process_id);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setError(String((err as Error).message ?? err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [session.id, visible]);
-
-  if (error) {
-    return <div className="run-shell-error">{error}</div>;
-  }
-  if (!processId) {
-    return (
-      <div className="run-shell-loading">
-        <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
-        <span>starting CLI...</span>
-      </div>
-    );
-  }
-  return (
-    <ProcessTerminal
-      client={client}
-      processId={processId}
-      className="run-process-terminal"
-      height="100%"
-      showStatusBar={false}
-    />
-  );
-}
-
 function CliSession({ session, visible }: { session: Session; visible: boolean }) {
   // The sidebar already shows the session title, mode badge, and status —
   // a duplicate header inside the pane is wasted vertical space and made
@@ -13537,7 +13662,16 @@ function CliSession({ session, visible }: { session: Session; visible: boolean }
     <section className="run-panel">
       <main className="run-main">
         <div className="run-shell">
-          <CliProcessTerminal session={session} visible={visible} />
+          <Suspense
+            fallback={
+              <div className="run-shell-loading">
+                <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
+                <span>loading CLI...</span>
+              </div>
+            }
+          >
+            <CliProcessTerminal sessionId={session.id} visible={visible} />
+          </Suspense>
         </div>
       </main>
     </section>

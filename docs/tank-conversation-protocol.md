@@ -944,7 +944,9 @@ Storage:
 - Mark completed transcript-row backfills in
   `session_transcript_row_backfills`. Migration-created status rows are
   visible transcript rows, but they are not proof that historical turns have
-  been projected.
+  been projected. Projection-version catch-up is per requested session at
+  `/timeline` and transcript SSE open, under the session materialization lock;
+  serving pods must not run fleet-wide transcript-row backfills at startup.
 - Use NATS JetStream as the durable command/event fabric, not as the product
   history database. Commands are acked only after durable terminal events are
   published; events are acknowledged by the backend persister after the

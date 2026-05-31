@@ -3612,6 +3612,35 @@ button:disabled {
   min-height: 12rem;
 }
 
+.run-turn-view-alert {
+  width: min(100%, 42rem);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid rgba(248, 113, 113, 0.38);
+  border-radius: var(--radius-sm);
+  background: rgba(127, 29, 29, 0.22);
+  color: #fecaca;
+  padding: 0.55rem 0.65rem;
+  font-size: var(--text-sm);
+}
+
+.run-turn-view-alert svg {
+  flex: 0 0 auto;
+  color: #fca5a5;
+}
+
+.run-turn-view-alert span {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.run-turn-view-alert-action {
+  flex: 0 0 auto;
+  height: 1.75rem;
+  padding: 0 0.55rem;
+}
+
 .run-turn-view-thinking {
   display: inline-grid;
   align-items: center;

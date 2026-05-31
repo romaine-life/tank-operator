@@ -99,6 +99,11 @@ answer; it must not visibly move a rendered row from one surface to the other.
   buffered status line. The projected usage row keeps the transcript position
   of the first `turn.usage` event for that turn while its payload and the
   activity shell's live-tail cursor advance with later usage updates.
+- Already-open Turn activity details are a cached view of the server projection,
+  not a second browser-owned ledger. A live `transcript_rows` batch for a turn
+  whose details are already loaded must invalidate that cache and re-read
+  `/turns/{id}/activity`; the browser must not synthesize child activity rows
+  from the live shell.
 - Turn activity may show a log copy of assistant prose, including prose that
   later becomes the final answer, but that copy is not a second settled
   transcript message.
@@ -126,6 +131,10 @@ answer; it must not visibly move a rendered row from one surface to the other.
   then live stream telemetry.
 - A durable terminal event that exists but is not visible in an open transcript
   must leave enough telemetry to localize the miss.
+- A live Turn activity detail refresh that cannot re-read the server projection
+  must be counted by bounded client telemetry and leave a visible, retryable
+  state in the Turns detail instead of silently leaving stale activity on
+  screen.
 - A server-projected active Turn activity shell that does not produce a visible
   `...` row must emit bounded client telemetry so the missing placeholder can be
   diagnosed without guessing from screenshots. The telemetry must count active
@@ -149,6 +158,11 @@ answer; it must not visibly move a rendered row from one surface to the other.
 - An active turn that emits assistant prose and then later emits more work does
   not show that prose as a settled main-transcript row before moving it into
   Turn activity.
+- With a Turns detail already loaded and an SSE stream already open, a later
+  durable activity row for the same turn causes the browser to re-read
+  `/turns/{id}/activity` without refresh; repeated refresh failures surface a
+  retryable Turns detail error and `tank_session_event_client_events_total`
+  labels for the failure.
 - A completed turn may show the final assistant prose in the main transcript
   while also retaining a log copy in Turn activity, without counting it as two
   transcript messages.

@@ -582,9 +582,6 @@ func main() {
 		providerHealth:           providerHealthManager,
 	}
 	srv.registerRoutes(mux)
-	if pgPool != nil {
-		startTranscriptRowBackfills(ctx, transcriptBackfillScopes(pgPool, sessionScope, transcriptMaterializer))
-	}
 
 	// 13.5. Start the conversation read-cursor stagnation sampler.
 	// It snapshots the open-SSE-stream registry every 60s, joins each
