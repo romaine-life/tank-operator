@@ -72,6 +72,8 @@ export class Runner {
     // Initialize the Google GenAI client.
     // Outgoing requests carry the Authorization header which Envoy intercepts.
     this.ai = new GoogleGenAI({
+      vertexai: true,
+      project: process.env.GOOGLE_CLOUD_PROJECT || undefined,
       apiKey: "managed-by-tank-operator",
       httpOptions: {
         headers: {

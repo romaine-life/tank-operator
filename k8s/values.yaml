@@ -328,8 +328,8 @@ externalSecret:
   geminiCredentials:
     secretName: gemini-credentials
     # Key inside the K8s Secret. The proxy mounts this as
-    # /etc/gemini-credentials/settings.json.
-    secretKey: settings.json
+    # /etc/gemini-credentials/oauth_creds.json.
+    secretKey: oauth_creds.json
     kvKey: gemini-credentials
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are

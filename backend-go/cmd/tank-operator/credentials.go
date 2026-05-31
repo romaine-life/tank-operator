@@ -33,7 +33,7 @@ func doSaveCredentials(w http.ResponseWriter, r *http.Request, s *appServer, ema
 		kvKeyEnv = "CODEX_CREDENTIALS_KV_KEY"
 		kvDefault = "codex-credentials"
 	case sessionmodel.GeminiConfigMode:
-		execCmd = []string{"sh", "-c", "cat $HOME/.gemini/settings.json"}
+		execCmd = []string{"sh", "-c", "cat $HOME/.gemini/oauth_creds.json"}
 		kvKeyEnv = "GEMINI_CREDENTIALS_KV_KEY"
 		kvDefault = "gemini-credentials"
 	default:
