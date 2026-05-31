@@ -951,11 +951,17 @@ var schemaMigrations = []migration{
 	{ID: "0077", SQL: `CREATE INDEX IF NOT EXISTS provider_credential_health_status
 		ON provider_credential_health (status, provider)`},
 
+	// discovered_repos was applied to production under migration 0078 before
+	// the feature branch that introduced it was reverted from main. Keep this
+	// immutable SQL here so the durable migration ledger continues to match.
+	{ID: "0078", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS discovered_repos text[] NOT NULL DEFAULT '{}'`},
+
 	// Per-session capability opt-ins. Empty array is the default pod surface;
 	// named values are rare create-time capabilities such as spirelens_mcp.
 	// The list is persisted on the row so the pod manifest is not the only
 	// place to inspect why a session joined extra infrastructure.
-	{ID: "0078", SQL: `ALTER TABLE sessions
+	{ID: "0079", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS capabilities text[] NOT NULL DEFAULT '{}'`},
 }
 
