@@ -47,7 +47,6 @@ try {
 }
 
 const scopes = [
-  'https://www.googleapis.com/auth/generative-language',
   'https://www.googleapis.com/auth/cloud-platform',
   'openid',
   'https://www.googleapis.com/auth/userinfo.profile',
