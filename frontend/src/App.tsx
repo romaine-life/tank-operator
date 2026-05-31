@@ -104,6 +104,10 @@ import {
 } from "./navigationMode";
 import { isTranscriptRefreshShortcut } from "./transcriptRefreshShortcut";
 import {
+  isTranscriptToTurnsShortcut,
+  isTurnsToTranscriptShortcut,
+} from "./transcriptViewShortcuts";
+import {
   REFRESH_FLASH_DURATION_MS,
   refreshFlashLabel,
 } from "./transcriptRefreshIndicator";
@@ -10700,6 +10704,7 @@ function ChatPane({
     if (!visible || !running) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !slashOpen && !mentionOpen && !mcpOpen) {
+        if (activeTab === "turns") return;
         if (e.target instanceof Element && e.target.closest(".run-header-name-input")) return;
         e.preventDefault();
         cancelRun();
@@ -10707,7 +10712,7 @@ function ChatPane({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [mcpOpen, mentionOpen, running, slashOpen, visible]);
+  }, [activeTab, mcpOpen, mentionOpen, running, slashOpen, visible]);
 
   // Slash- + mention-palette typing detection + composer-text mirror.
   // Listens at the composer wrap; reads the textarea's value + cursor on
@@ -11743,6 +11748,58 @@ function ChatPane({
     }
     setActiveTab("turns");
   }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
+
+  // T opens the turn-detail view from the focused transcript; Escape returns
+  // from Turns to the transcript. The T side uses the same "highlighted
+  // transcript" focus gate as transcript R/Home/End shortcuts: the shared
+  // <main> must be the event target.
+  useEffect(() => {
+    if (!visible || !transcriptScrollEl) return;
+    if (activeTab !== "chat" && activeTab !== "turns") return;
+    const onKey = (e: KeyboardEvent) => {
+      const ctx = {
+        key: e.key,
+        repeat: e.repeat,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
+        targetIsTranscript: e.target === transcriptScrollEl,
+        targetIsTextEntry: isTextEntryShortcutTarget(e.target),
+        activeTab,
+        turnsAvailable,
+        palettesOpen: slashOpen || mentionOpen || mcpOpen,
+      };
+      if (isTranscriptToTurnsShortcut(ctx)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        openTurnPage(undefined, { anchor: "bottom" });
+        return;
+      }
+      if (!isTurnsToTranscriptShortcut(ctx)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setPendingRouteTurnId(null);
+      setPendingTurnViewRouteAnchor(null);
+      setActiveTab("chat");
+      requestAnimationFrame(() => {
+        focusTranscriptSection();
+      });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    focusTranscriptSection,
+    mcpOpen,
+    mentionOpen,
+    openTurnPage,
+    slashOpen,
+    transcriptScrollEl,
+    turnsAvailable,
+    visible,
+  ]);
 
   // R refreshes the transcript: a keyboard-driven force-pull of the durable
   // tail for the focused transcript region. Users reported that a live SSE gap
