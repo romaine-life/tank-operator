@@ -80,6 +80,42 @@ func TestMigrationChecksumGuardsImmutability(t *testing.T) {
 	}
 }
 
+func TestMigration0078PreservesAppliedMessageLinkShareChecksum(t *testing.T) {
+	const appliedChecksum = "78cab788b19fe45e654b518add42d0308531815c1a48124cb1b7e7499dd12f40"
+	for _, m := range schemaMigrations {
+		if m.ID != "0078" {
+			continue
+		}
+		if !strings.Contains(m.SQL, "CREATE TABLE IF NOT EXISTS message_link_shares") {
+			t.Fatalf("migration 0078 SQL = %q, want message_link_shares table", m.SQL)
+		}
+		if got := migrationChecksum(m.SQL); !migrationChecksumMatches(m.ID, appliedChecksum, got) {
+			t.Fatalf("migration 0078 checksum alias for %s is not accepted by code checksum %s", appliedChecksum, got)
+		}
+		return
+	}
+	t.Fatal("migration 0078 not found")
+}
+
+func TestMigrationChecksumAliasesCoverCrossedRolloutIDs(t *testing.T) {
+	for _, tc := range []struct {
+		id       string
+		checksum string
+	}{
+		{id: "0078", checksum: "78cab788b19fe45e654b518add42d0308531815c1a48124cb1b7e7499dd12f40"},
+		{id: "0078", checksum: "d28c98d2034d7f09593b6644d5046ae84a76e4babb559f11c501ae73f9c8f6b0"},
+		{id: "0079", checksum: "fffee94ed46953d048b144feae047404479fb2d47310ae8046f107246ce94aba"},
+		{id: "0080", checksum: "fffee94ed46953d048b144feae047404479fb2d47310ae8046f107246ce94aba"},
+	} {
+		if !migrationChecksumMatches(tc.id, tc.checksum, "current-code-checksum") {
+			t.Fatalf("migration %s does not accept legacy checksum %s", tc.id, tc.checksum)
+		}
+	}
+	if migrationChecksumMatches("0078", "unexpected", "current-code-checksum") {
+		t.Fatal("unexpected migration checksum alias was accepted")
+	}
+}
+
 // joinedMigrationSQL concatenates every migration's SQL in declaration order.
 // The string-content tests below assert on the SQL bodies and their relative
 // order, which is preserved by the []migration slice.
