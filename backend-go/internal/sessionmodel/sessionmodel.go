@@ -543,7 +543,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	if (mode == GeminiGUIMode || mode == GeminiConfigMode) && opts.GeminiAPIProxyIP != "" {
 		hostAliases = append(hostAliases, map[string]any{
 			"ip":        opts.GeminiAPIProxyIP,
-			"hostnames": []any{"generativelanguage.googleapis.com", "us-central1-aiplatform.googleapis.com", "oauth2.googleapis.com", "www.googleapis.com"},
+			"hostnames": []any{"generativelanguage.googleapis.com", "us-central1-aiplatform.googleapis.com", "oauth2.googleapis.com", "www.googleapis.com", "cloudcode-pa.googleapis.com"},
 		})
 		if opts.OAuthGatewayCAConfigMap != "" {
 			env = append(env,

@@ -295,6 +295,7 @@ func TestPodManifestGeminiUsesAPIProxy(t *testing.T) {
 	spec := manifest["spec"].(map[string]any)
 	assertHostAlias(t, spec, "10.0.0.60", "generativelanguage.googleapis.com")
 	assertHostAlias(t, spec, "10.0.0.60", "us-central1-aiplatform.googleapis.com")
+	assertHostAlias(t, spec, "10.0.0.60", "cloudcode-pa.googleapis.com")
 	assertVolume(t, spec["volumes"].([]any), "oauth-gateway-ca")
 
 	containers := spec["containers"].([]any)
