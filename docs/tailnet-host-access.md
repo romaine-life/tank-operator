@@ -128,6 +128,63 @@ mints for other MCPs — **no shared secret**. The server validates it against
 `auth.romaine.life`'s JWKS (issuer + `role=service`, optional `actor_email`
 allowlist); see `spire-lens-mcp` `--auth-mode jwt`.
 
+## Running commands on the host (the IdP SSH CA)
+
+To run *setup/admin* commands on the game host (e.g. install the supervised
+MCP-server scheduled task), a session pod opens an SSH session — authenticated by
+the **same IdP**, not a hand-distributed key. `auth.romaine.life` is the sole SSH
+CA; the host's `sshd` trusts it via `TrustedUserCAKeys` (`GET
+https://auth.romaine.life/api/ssh/ca`). The session SA
+`tank-operator-sessions/claude-session` is **already allowlisted** for the cert
+exchange (`auth/k8s/values.yaml` `sshCertSaAllowlist`), and principal
+`spirelens-agent` matches `sshCertPrincipalPattern` — so a session pod can mint a
+host login cert with no new surface.
+
+Proven recipe (run from a session pod; needs the baked `openssh-client` +
+`tailscale`):
+
+```sh
+# 1. ed25519 keypair + an auth.romaine.life-signed user cert (principal spirelens-agent)
+ssh-keygen -t ed25519 -N '' -f /tmp/hk
+cert=$(curl -fsS -X POST https://auth.romaine.life/api/auth/exchange/ssh-cert \
+  -H "Authorization: Bearer $(cat /var/run/secrets/auth.romaine.life/token)" \
+  -H 'Content-Type: application/json' \
+  -d "$(jq -nc --arg pk "$(cat /tmp/hk.pub)" '{public_key:$pk,key_id:"tank-session",principals:["spirelens-agent"],extensions:["permit-pty"],ttl_seconds:600}')" \
+  | jq -r .certificate)
+printf '%s\n' "$cert" > /tmp/hk-cert.pub
+
+# 2. join the tailnet (self-mint authkey as above) → resolve the host by tag
+host_ip=$(tailscale --socket=$SOCK status --json | jq -r '.Peer[]|select((.Tags//[])|index("tag:spirelens-host"))|.TailscaleIPs[]|select(test("^100\\."))' | head -1)
+
+# 3. SSH as the local account `nelsonlaptopuser` (NOT spirelens-agent — that's the
+#    cert PRINCIPAL, matched by the host's AuthorizedPrincipalsFile). Under userspace
+#    networking, dial through tailscale, e.g. ProxyCommand `tailscale nc` or a SOCKS5
+#    proxy (`tailscaled --socks5-server`).
+ssh -i /tmp/hk -o CertificateFile=/tmp/hk-cert.pub \
+    -o UserKnownHostsFile=/dev/null -o StrictHostKeyChecking=accept-new \
+    -o "ProxyCommand=tailscale --socket=$SOCK nc %h %p" \
+    nelsonlaptopuser@"$host_ip" "pwsh -NoProfile -Command -" <<'PS'
+  whoami
+PS
+```
+
+Gotchas learned the hard way (so you don't relearn them):
+- **SSH username = `nelsonlaptopuser`**, cert **principal = `spirelens-agent`** (`scripts/glimmung-native/lib.sh` `native_ssh_user`). Connecting *as* `spirelens-agent` fails auth.
+- The host's `D:\repos\spire-lens-mcp` is **run-managed** — it's only `git pull`ed during a glimmung run and is `reset --hard` per run, so it can sit on a stale commit (it was pre-PR-#11 here) and carry discardable local edits that block `git pull --ff-only`. To update it manually: `git -C D:\repos\spire-lens-mcp fetch origin <ref>; git -C ... reset --hard origin/<ref>`.
+- A pod *without* `openssh-client` baked yet can drive the same flow from Python
+  (`paramiko` cert auth + `pysocks` over `tailscaled --socks5-server`).
+
+## Proven end-to-end (2026-05-31)
+
+From an unmodified session pod, using only IdP-issued credentials, the full chain
+was validated live against the real game host: mint service JWT + tailnet key +
+SSH cert → join tailnet → SSH the laptop → run `server.py --transport http
+--bind-host <ts-ip> --bind-port 15527 --auth-mode jwt` → MCP `initialize` from the
+pod over the tailnet returned **401 without** the `auth.romaine.life` bearer and
+**200 + `serverInfo{"name":"spire-lens-mcp"}` with** it. Two server-side fixes were
+required and are on `spire-lens-mcp` PR #12: the `--auth-mode jwt` validator, and
+disabling the MCP SDK's DNS-rebinding Host check (it 421s remote binds otherwise).
+
 ## What is console-managed (outside any repo)
 
 These live in the Tailscale admin console / `nelsong6/auth`, not in this repo,
