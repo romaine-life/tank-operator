@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from "./components/ui/select";
 import { AdminAvatarManager } from "./AdminAvatarManager";
+import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
@@ -8354,6 +8355,7 @@ function RunSettingsPanel({
             <AdminAvatarManager onCatalogChanged={adminControls.onAvatarCatalogChanged} />
           </>
         ) : (
+          <>
           <section className="run-settings-section">
             <h2 className="run-settings-title">Admin Controls</h2>
             <button
@@ -8415,6 +8417,26 @@ function RunSettingsPanel({
               <SessionListDebugCaptureControls source="SettingsAdmin" />
             </div>
           </section>
+          <section className="run-settings-section">
+            <h2 className="run-settings-title">Useful files</h2>
+            {ADMIN_REFERENCE_LINKS.map((link) => (
+              <a
+                key={link.id}
+                className="run-settings-link"
+                href={link.href}
+                target="_blank"
+                rel="noreferrer"
+                title={link.description}
+              >
+                <span className="run-settings-link-label">
+                  <FileTextIcon className="run-settings-link-icon" aria-hidden="true" />
+                  <span>{link.label}</span>
+                </span>
+                <span className="run-settings-scope-value">Open</span>
+              </a>
+            ))}
+          </section>
+          </>
         )
       ) : (
         <>
