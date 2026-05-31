@@ -3032,7 +3032,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 
 type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
 type BackgroundView = "shells" | "detached";
-type TurnViewScrollAnchor = "bottom";
+type TurnViewScrollAnchor = "bottom" | "top";
 
 type TurnPageOpenOptions = {
   anchor?: TurnViewScrollAnchor;
@@ -7486,13 +7486,16 @@ function RunTurnActivityScreen({
     if (!scrollRequest || !selected) return;
     if (scrollRequest.turnId !== selected.turnId) return;
     if (consumedScrollRequestRef.current === scrollRequest.signal) return;
-    if (scrollRequest.anchor !== "bottom") return;
     if (!selected.loaded) return;
     if (loading && detailGroups.length === 0) return;
     const body = bodyRef.current;
     if (!body) return;
     consumedScrollRequestRef.current = scrollRequest.signal;
-    body.scrollTo({ top: body.scrollHeight, behavior: "auto" });
+    if (scrollRequest.anchor === "top") {
+      body.scrollTo({ top: 0, behavior: "auto" });
+    } else {
+      body.scrollTo({ top: body.scrollHeight, behavior: "auto" });
+    }
     onScrollRequestConsumed?.(scrollRequest.signal);
   }, [
     detailGroups.length,
@@ -11780,6 +11783,65 @@ function ChatPane({
     slashOpen,
     transcriptScrollEl,
     triggerRefreshFlash,
+    visible,
+  ]);
+  // On the Turns page, Home/End move the focused turn-detail view to its
+  // top/bottom edge — the same intent Home/End satisfy on the chat transcript
+  // (jump to the conversation's oldest/newest edge), translated to the Turns
+  // surface. The Turns body (.run-turn-view-body) is its own scroll container,
+  // not the chat virtuoso, so we reuse the turn-view scroll-request channel the
+  // route-open path already drives instead of touching the DOM here. The focus
+  // gate matches the chat Home/End and R-refresh handlers: the shared focusable
+  // <main> (transcriptScrollEl) must be the key event target, so the keys stay
+  // inert while the composer or a palette holds focus.
+  useEffect(() => {
+    if (!visible || activeTab !== "turns" || !transcriptScrollEl) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.isComposing ||
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.shiftKey ||
+        e.target !== transcriptScrollEl ||
+        slashOpen ||
+        mentionOpen ||
+        mcpOpen
+      ) {
+        return;
+      }
+      if (e.key !== "Home" && e.key !== "End") return;
+      if (!effectiveSelectedTurnId) return;
+      const anchor: TurnViewScrollAnchor = e.key === "Home" ? "top" : "bottom";
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      logChatScrollEvent("keyboard-edge-navigation", {
+        surface: "session",
+        sessionId: session.id,
+        sessionMode: session.mode,
+        key: e.key,
+        tab: "turns",
+        targetEdge: anchor === "top" ? "oldest" : "newest",
+        ...chatScrollElementSnapshot(transcriptScrollEl),
+      });
+      turnViewScrollRequestSeqRef.current += 1;
+      setTurnViewScrollRequest({
+        turnId: effectiveSelectedTurnId,
+        anchor,
+        signal: turnViewScrollRequestSeqRef.current,
+      });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    effectiveSelectedTurnId,
+    mcpOpen,
+    mentionOpen,
+    session.id,
+    session.mode,
+    slashOpen,
+    transcriptScrollEl,
     visible,
   ]);
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
