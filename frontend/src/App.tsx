@@ -22,6 +22,7 @@ import {
   pruneLocalRealtimeEchoes,
   pruneRealtimeEntries,
 } from "./transcriptMerge";
+import { turnActivityRefreshTargetsForTranscriptRows } from "./turnActivityLiveRefresh";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer, type RunComposerMode } from "./ChatComposer";
@@ -3056,6 +3057,11 @@ type TurnViewScrollAnchor = "bottom" | "top";
 
 type TurnPageOpenOptions = {
   anchor?: TurnViewScrollAnchor;
+};
+type LoadTurnActivityOptions = {
+  force?: boolean;
+  loadedOnly?: boolean;
+  preserveOnError?: boolean;
 };
 
 type TurnViewScrollRequest = {
@@ -8695,6 +8701,10 @@ function ChatPane({
     useState<Record<string, TranscriptEntry[] | undefined>>({});
   const [loadingActivityTurns, setLoadingActivityTurns] =
     useState<Record<string, boolean | undefined>>({});
+  const activityEntriesByTurnRef = useRef(activityEntriesByTurn);
+  const loadingActivityTurnsRef = useRef(loadingActivityTurns);
+  activityEntriesByTurnRef.current = activityEntriesByTurn;
+  loadingActivityTurnsRef.current = loadingActivityTurns;
   const [renderedActiveTurnId, setRenderedActiveTurnId] = useState<string | null>(null);
   const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkServerProjectedEntriesRef = useRef<TranscriptEntry[]>([]);
@@ -8969,6 +8979,9 @@ function ChatPane({
   const sdkReadStateInFlightRef = useRef<string | null>(null);
   const sdkReadStateTimerRef = useRef<number | null>(null);
   const sessionIdRef = useRef(session.id);
+  const activityRefreshTimersRef = useRef<Record<string, number | undefined>>({});
+  const pendingActivityRefreshTurnsRef = useRef<Set<string>>(new Set());
+  const loadActivityForTurnRef = useRef<((turnId: string, options?: LoadTurnActivityOptions) => void) | null>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   // runningRef is read from the SSE silence watchdog so we can tell
@@ -9001,6 +9014,99 @@ function ChatPane({
     turnStart: number;
     submitAccepted: boolean;
   } | null>(null);
+  const setActivityEntriesForTurn = useCallback((turnId: string, entriesForTurn: TranscriptEntry[]): void => {
+    setActivityEntriesByTurn((prev) => {
+      const next = { ...prev, [turnId]: entriesForTurn };
+      activityEntriesByTurnRef.current = next;
+      return next;
+    });
+  }, []);
+  const setActivityLoadingForTurn = useCallback((turnId: string, loading: boolean): void => {
+    setLoadingActivityTurns((prev) => {
+      const next = { ...prev, [turnId]: loading };
+      loadingActivityTurnsRef.current = next;
+      return next;
+    });
+  }, []);
+  const scheduleLoadedTurnActivityRefresh = useCallback((turnId: string): void => {
+    const trimmedTurnId = turnId.trim();
+    if (!trimmedTurnId) return;
+    if (activityEntriesByTurnRef.current[trimmedTurnId] === undefined) return;
+    pendingActivityRefreshTurnsRef.current.add(trimmedTurnId);
+    if (activityRefreshTimersRef.current[trimmedTurnId] != null) return;
+    activityRefreshTimersRef.current[trimmedTurnId] = window.setTimeout(() => {
+      delete activityRefreshTimersRef.current[trimmedTurnId];
+      if (!pendingActivityRefreshTurnsRef.current.delete(trimmedTurnId)) return;
+      loadActivityForTurnRef.current?.(trimmedTurnId, {
+        force: true,
+        loadedOnly: true,
+        preserveOnError: true,
+      });
+    }, 250);
+  }, []);
+  const loadActivityForTurn = useCallback((
+    turnId: string,
+    options: LoadTurnActivityOptions = {},
+  ): void => {
+    const trimmedTurnId = turnId.trim();
+    if (!trimmedTurnId) return;
+    const cached = activityEntriesByTurnRef.current[trimmedTurnId];
+    if (options.loadedOnly && cached === undefined) return;
+    if (!options.force && cached !== undefined) return;
+    if (loadingActivityTurnsRef.current[trimmedTurnId]) {
+      if (options.force) pendingActivityRefreshTurnsRef.current.add(trimmedTurnId);
+      return;
+    }
+    const requestSessionId = session.id;
+    setActivityLoadingForTurn(trimmedTurnId, true);
+    void authedFetch(
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(requestSessionId)}/turns/${encodeURIComponent(trimmedTurnId)}/activity`,
+      ),
+    )
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
+        const body = (await res.json()) as { entries?: unknown[] };
+        if (sessionIdRef.current !== requestSessionId) return;
+        const loaded = normalizeProjectedTranscriptEntries(
+          Array.isArray(body.entries) ? body.entries : [],
+        );
+        setActivityEntriesForTurn(trimmedTurnId, loaded);
+      })
+      .catch(() => {
+        if (sessionIdRef.current !== requestSessionId) return;
+        if (
+          options.preserveOnError &&
+          activityEntriesByTurnRef.current[trimmedTurnId] !== undefined
+        ) {
+          return;
+        }
+        setActivityEntriesForTurn(trimmedTurnId, []);
+      })
+      .finally(() => {
+        if (sessionIdRef.current !== requestSessionId) return;
+        setActivityLoadingForTurn(trimmedTurnId, false);
+        if (pendingActivityRefreshTurnsRef.current.has(trimmedTurnId)) {
+          scheduleLoadedTurnActivityRefresh(trimmedTurnId);
+        }
+      });
+  }, [
+    scheduleLoadedTurnActivityRefresh,
+    scopedSessionPathForPane,
+    session.id,
+    setActivityEntriesForTurn,
+    setActivityLoadingForTurn,
+  ]);
+  loadActivityForTurnRef.current = loadActivityForTurn;
+  useEffect(() => {
+    return () => {
+      for (const timer of Object.values(activityRefreshTimersRef.current)) {
+        if (timer != null) window.clearTimeout(timer);
+      }
+      activityRefreshTimersRef.current = {};
+      pendingActivityRefreshTurnsRef.current.clear();
+    };
+  }, [session.id]);
   const terminalCorrelationReportedRef = useRef<Set<string>>(new Set());
   const queuedFollowupBlockedReportedRef = useRef<string | null>(null);
   // Mirror of the durable activity summary's active turn. The main transcript
@@ -9250,6 +9356,8 @@ function ChatPane({
     setSdkOlderError(null);
     setEntries([]);
     setTokensUsed(0);
+    activityEntriesByTurnRef.current = {};
+    loadingActivityTurnsRef.current = {};
     setActivityEntriesByTurn({});
     setLoadingActivityTurns({});
     setSdkConnectionState("idle");
@@ -9380,6 +9488,12 @@ function ChatPane({
       syncSdkRenderedEntries();
     }
     applySdkTurnActivityRowsToUi(rows);
+    for (const turnId of turnActivityRefreshTargetsForTranscriptRows(
+      rows,
+      activityEntriesByTurnRef.current,
+    )) {
+      scheduleLoadedTurnActivityRefresh(turnId);
+    }
 
     const run = currentRunRef.current;
     if (run) {
@@ -11640,35 +11754,12 @@ function ChatPane({
     turnId: string,
     options?: { force?: boolean },
   ) => {
-    const trimmedTurnId = turnId.trim();
-    if (!trimmedTurnId) return;
     // `force` re-pulls even when activity is already cached. The R refresh uses
     // it so a turn whose live activity silently lagged is reconciled in place,
     // mirroring the main transcript's durable tail force-pull. Without force we
     // keep the cache short-circuit so opening a turn never re-fetches.
-    if (!options?.force && activityEntriesByTurn[trimmedTurnId]) return;
-    if (loadingActivityTurns[trimmedTurnId]) return;
-    setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
-    void authedFetch(
-      scopedSessionPathForPane(
-        `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(trimmedTurnId)}/activity`,
-      ),
-    )
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
-        const body = (await res.json()) as { entries?: unknown[] };
-        const loaded = normalizeProjectedTranscriptEntries(
-          Array.isArray(body.entries) ? body.entries : [],
-        );
-        setActivityEntriesByTurn((prev) => ({ ...prev, [trimmedTurnId]: loaded }));
-      })
-      .catch(() => {
-        setActivityEntriesByTurn((prev) => ({ ...prev, [trimmedTurnId]: [] }));
-      })
-      .finally(() => {
-        setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
-      });
-  }, [activityEntriesByTurn, loadingActivityTurns, scopedSessionPathForPane, session.id]);
+    loadActivityForTurn(turnId, { force: options?.force });
+  }, [loadActivityForTurn]);
   useEffect(() => {
     if (turnViewItems.length === 0) {
       if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);
@@ -12105,7 +12196,10 @@ function ChatPane({
             askUserAnswers: projected,
           } as TranscriptEntry;
         });
-        return mutated ? { ...prev, [turnID]: next } : prev;
+        if (!mutated) return prev;
+        const nextByTurn = { ...prev, [turnID]: next };
+        activityEntriesByTurnRef.current = nextByTurn;
+        return nextByTurn;
       });
     }
   }

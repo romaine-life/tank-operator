@@ -1065,6 +1065,17 @@ test("session-event SSE stream emits browser-side observability", () => {
   );
 });
 
+test("live transcript rows refresh already-open Turns activity bodies", () => {
+  // The session-event stream emits compacted turn_activity shell rows for active
+  // turns. The expanded Turns tab body lives behind /turns/{id}/activity, so a
+  // loaded turn must schedule a body refresh when its live shell changes.
+  assert.equal(appSource.includes("turnActivityRefreshTargetsForTranscriptRows"), true);
+  assert.match(
+    appSource,
+    /turnActivityRefreshTargetsForTranscriptRows\(\s*rows,\s*activityEntriesByTurnRef\.current,\s*\)[\s\S]{0,180}scheduleLoadedTurnActivityRefresh/,
+  );
+});
+
 test("chat scroll diagnostics are prometheus backed", () => {
   assert.equal(chatScrollTelemetrySource.includes('DEBUG_TOKEN = "chat-scroll"'), true);
   assert.equal(chatScrollTelemetrySource.includes("isChatScrollDebugEnabled"), true);
