@@ -234,6 +234,7 @@ type ManifestOptions struct {
 	SessionImage            string
 	CodexSessionImage       string
 	PiSessionImage          string
+	GeminiSessionImage      string
 	SessionsNamespace       string
 	SessionScope            string
 	SessionServiceAccount   string
@@ -362,6 +363,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 	if mode == PiConfigMode || mode == PiCLIMode {
 		sessionImage = opts.PiSessionImage
+	}
+	if mode == GeminiConfigMode || mode == GeminiGUIMode {
+		sessionImage = opts.GeminiSessionImage
 	}
 
 	// Build configmap volume mounts for both containers.
