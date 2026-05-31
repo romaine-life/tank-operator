@@ -610,6 +610,9 @@ window without Tank authentication, gated by the opaque share token rather than
 the guessable session/message query pair. Browser navigation to such a link
 renders the public transcript surface without the authenticated sidebar,
 composer, Files, Settings, or Background controls.
+`sessions.visible=false` is a sidebar tombstone, not a transcript-retention or
+access-control boundary: owned/admin transcript reads continue to resolve as
+long as the durable session row and transcript ledger remain in Postgres.
 The JSON contract carries an `agent_recipe` array with copyable curl commands:
 send the projected service-account token to auth.romaine.life as
 `Authorization: Bearer <token>`, exchange the returned `auth_jwt` at this Tank

@@ -97,22 +97,50 @@ func (s *appServer) getRegisteredByOwnerInScope(ctx context.Context, owner, sess
 	return sessions.InfoFromRecord(owner, record), nil
 }
 
+func (s *appServer) getRegisteredTranscriptByOwnerInScope(ctx context.Context, owner, sessionID, scope string) (sessions.Info, bool, error) {
+	scope = normalizeSessionScope(scope)
+	if scope == s.localSessionScope() {
+		return s.mgr.GetRegisteredByOwnerAnyVisibility(ctx, owner, sessionID)
+	}
+	reg := s.sessionRegistryForScope(scope)
+	if reg == nil {
+		return sessions.Info{}, false, sessions.ErrNotFound
+	}
+	record, found, err := reg.Get(ctx, owner, sessionID)
+	if err != nil {
+		return sessions.Info{}, false, err
+	}
+	if !found {
+		return sessions.Info{}, false, sessions.ErrNotFound
+	}
+	return sessions.InfoFromRecord(owner, record), record.Visible, nil
+}
+
 func (s *appServer) ownerForSessionInScope(ctx context.Context, scope, sessionID string) (string, error) {
+	scope = normalizeSessionScope(scope)
+	if scope == s.localSessionScope() && s.mgr != nil {
+		owner, err := s.mgr.RegisteredOwnerForSession(ctx, scope, sessionID)
+		if err != nil || owner != "" {
+			return owner, err
+		}
+	}
 	reg := s.sessionRegistryForScope(scope)
 	if reg == nil {
 		return "", nil
 	}
-	return reg.OwnerForSession(ctx, normalizeSessionScope(scope), sessionID)
+	return reg.OwnerForSession(ctx, scope, sessionID)
 }
 
 // authorizeSessionRead resolves a session by id and decides whether the
 // caller is allowed to read it.
 //
-// Read paths: events list + SSE stream, single-session metadata, read-state
-// marker, file reads, MCP listings, skills listings. Write paths (turns,
-// uploads, terminal attach, name/test/rollout patches, delete) intentionally
-// keep their per-owner GetByOwner gate so an admin token cannot mutate
-// someone else's session — admin lift is read-only by construction.
+// General read paths: SSE stream, single-session metadata, read-state marker,
+// file reads, MCP listings, skills listings. Durable transcript history uses
+// authorizeSessionTranscriptReadInScope below because sidebar visibility is
+// not a transcript-history boundary. Write paths (turns, uploads, terminal
+// attach, name/test/rollout patches, delete) intentionally keep their
+// per-owner GetByOwner gate so an admin token cannot mutate someone else's
+// session — admin lift is read-only by construction.
 //
 // Authorization rule:
 //   - admin power    → allowed for any owner
@@ -193,6 +221,82 @@ func (s *appServer) authorizeSessionReadInScope(
 		// Mask existence — same 404 the caller would have seen if the
 		// session truly didn't exist. Don't surface owner email; that
 		// would leak who owns the session id.
+		return sessions.Info{}, http.StatusNotFound, errors.New("session not found")
+	}
+	return info, http.StatusOK, nil
+}
+
+// authorizeSessionTranscriptReadInScope gates durable transcript-history reads.
+//
+// The key distinction from authorizeSessionReadInScope is visibility:
+// sessions.visible is a sidebar/list tombstone, not a history-retention or
+// access-control boundary. Copied message links, /timeline, Turn activity, and
+// the mcp-tank-operator read_transcript tool are explicit durable-ledger reads,
+// so an authorized owner/admin can read a registry row even after the session
+// was soft-deleted from the sidebar. Live streams, metadata, files, skills, and
+// other read surfaces keep the visible-row gate above.
+func (s *appServer) authorizeSessionTranscriptReadInScope(
+	ctx context.Context,
+	user auth.User,
+	sessionID string,
+	scope string,
+) (sessions.Info, int, error) {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return sessions.Info{}, http.StatusBadRequest, errors.New("missing session_id")
+	}
+	scope = normalizeSessionScope(scope)
+
+	owner := user.OwnerEmail()
+	if registered, visible, regErr := s.getRegisteredTranscriptByOwnerInScope(ctx, owner, sessionID, scope); regErr == nil {
+		if !visible {
+			recordSessionTranscriptInvisibleRead()
+		}
+		return registered, http.StatusOK, nil
+	} else if regErr != nil && !errors.Is(regErr, sessions.ErrNotFound) {
+		return sessions.Info{}, http.StatusInternalServerError, regErr
+	}
+
+	if hasAdminPower(user) {
+		sessionOwner, ownerErr := s.ownerForSessionInScope(ctx, scope, sessionID)
+		if ownerErr != nil {
+			return sessions.Info{}, http.StatusInternalServerError, ownerErr
+		}
+		if sessionOwner != "" {
+			info, visible, err := s.getRegisteredTranscriptByOwnerInScope(ctx, sessionOwner, sessionID, scope)
+			if err == nil {
+				if !strings.EqualFold(info.Owner, owner) {
+					recordAdminCrossUserRead()
+				}
+				if !visible {
+					recordSessionTranscriptInvisibleRead()
+				}
+				return info, http.StatusOK, nil
+			}
+			if !errors.Is(err, sessions.ErrNotFound) {
+				return sessions.Info{}, http.StatusInternalServerError, err
+			}
+		}
+	}
+
+	if scope != s.localSessionScope() {
+		return sessions.Info{}, http.StatusNotFound, errors.New("session not found")
+	}
+
+	info, err := s.mgr.GetByID(ctx, sessionID)
+	if err != nil {
+		if errors.Is(err, sessions.ErrNotFound) {
+			return sessions.Info{}, http.StatusNotFound, errors.New("session not found")
+		}
+		return sessions.Info{}, http.StatusInternalServerError, err
+	}
+	if hasAdminPower(user) {
+		if !strings.EqualFold(info.Owner, owner) {
+			recordAdminCrossUserRead()
+		}
+		return info, http.StatusOK, nil
+	}
+	if !strings.EqualFold(info.Owner, owner) {
 		return sessions.Info{}, http.StatusNotFound, errors.New("session not found")
 	}
 	return info, http.StatusOK, nil

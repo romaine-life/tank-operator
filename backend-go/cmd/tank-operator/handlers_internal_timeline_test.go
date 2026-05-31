@@ -12,11 +12,12 @@ import (
 
 // The internal timeline endpoint is the service-principal read path that
 // backs the mcp-tank-operator read_transcript tool. It must reuse the same
-// ownership gate the browser /timeline uses (a role=service caller reads
-// only sessions whose owner == actor_email) and reject human callers, since
-// it is a service-only route. adminTestServer seeds session "63" owned by
-// otherUser with stub event/transcript/read-state stores, so the projection
-// returns an empty-but-well-formed body.
+// transcript ownership gate the browser /timeline uses (a role=service caller
+// reads only sessions whose owner == actor_email; sessions.visible does not
+// hide durable history) and reject human callers, since it is a service-only
+// route. adminTestServer seeds session "63" owned by otherUser with stub
+// event/transcript/read-state stores, so the projection returns an
+// empty-but-well-formed body.
 
 func TestHandleInternalSessionTimeline_ServiceActorOwnSessionOK(t *testing.T) {
 	app := adminTestServer(t)

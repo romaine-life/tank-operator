@@ -8,6 +8,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
 func TestTankStaticFilePrefersOverride(t *testing.T) {
@@ -123,6 +127,65 @@ func TestTankMessageLinkJSONWithoutAuthReturnsContract(t *testing.T) {
 		if !strings.Contains(string(recipeJSON), want) {
 			t.Fatalf("agent_recipe missing %q: %s", want, recipeJSON)
 		}
+	}
+}
+
+func TestTankMessageLinkJSONResolvesInvisibleOwnedSession(t *testing.T) {
+	const timelineID = "turn_1:item:msg_1"
+	targetCursor := "cursor-for-msg-1"
+	app := registryOnlyAuthTestServer(t, sessionmodel.SessionRecord{
+		ID:      "93",
+		Email:   otherUser,
+		Scope:   prodSessionScope,
+		Mode:    sessionmodel.CodexGUIMode,
+		Visible: false,
+		Status:  "Failed",
+	})
+	app.transcriptRows = &fakeSessionTranscriptRowStore{
+		resolveTimeline: map[string]string{timelineID: targetCursor},
+		pages: map[string]store.TranscriptRowPage{
+			"around": {
+				Rows: []map[string]any{{
+					"id":   timelineID,
+					"kind": "message",
+					"role": "assistant",
+				}},
+				FoundOldest: true,
+				FoundNewest: true,
+			},
+		},
+	}
+	req := httptest.NewRequest(http.MethodGet, "/?session=93&message=turn_1%3Aitem%3Amsg_1&format=json", nil)
+	req.Host = "tank.example.test"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, otherUser, auth.RoleUser))
+	res := httptest.NewRecorder()
+
+	app.handleTankMessageLink(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["authenticated"] != true || body["resolved"] != true {
+		t.Fatalf("resolution flags = %#v", body)
+	}
+	if body["target_cursor"] != targetCursor {
+		t.Fatalf("target_cursor = %v, want %q", body["target_cursor"], targetCursor)
+	}
+	timeline, ok := body["timeline"].(map[string]any)
+	if !ok {
+		t.Fatalf("timeline missing: %#v", body)
+	}
+	if timeline["target_timeline_id"] != timelineID {
+		t.Fatalf("target_timeline_id = %v, want %q", timeline["target_timeline_id"], timelineID)
+	}
+	rows, ok := timeline["rows"].([]any)
+	if !ok || len(rows) != 1 {
+		t.Fatalf("timeline rows = %#v", timeline["rows"])
 	}
 }
 

@@ -51,10 +51,14 @@ All metric names are prefixed `tank_`. The full namespace:
   (`validate_*`), image field failures (`read_avatar` / `read_backing`),
   blob-storage failures (`store_*`), and metadata-write failures
   (`create_metadata`) without using browser devtools.
+- `tank_session_transcript_invisible_row_reads_total` — authorized
+  projected transcript reads requested against `sessions.visible=false` rows.
+  This counts copied-link or MCP recovery after sidebar deletion without
+  logging session ids or message contents.
 - `tank_admin_debug_session_event_ledger_reads_total{result}` — admin
   reads of `GET /api/debug/session-event-ledger` (the durable
-  `session_events` audit surface that bypasses the registry visibility
-  gate). Bounded `result` labels: `ok`, `empty`, `bad_request`,
+  `session_events` raw audit surface for cases where projected transcript
+  rows are not enough). Bounded `result` labels: `ok`, `empty`, `bad_request`,
   `forbidden`, `store_error`, `not_configured`. `empty` is its own
   label so a wave of misdirected lookups (wrong scope, wrong id) is
   visible without grepping the audit slog line.
@@ -357,13 +361,12 @@ API response, including `attempt_id` on success or failure.
 ## Session Event Ledger Debug Surface
 
 `GET /api/debug/session-event-ledger` (admin-only) returns events from
-the durable `session_events` Postgres table for one tank session,
-bypassing the registry visibility gate. Use this when picking up work
-from a session whose `sessions.visible` row is `false` (the user
-deleted it through the SPA) and whose pod is gone — the user-facing
-`GET /api/sessions/{id}/timeline` returns 404 in that case by design,
-but the underlying `session_events` rows are durable (no FK, no
-cascade) and recoverable through this surface.
+the durable `session_events` Postgres table for one tank session. Use
+this when the projected transcript is not enough for a deleted session:
+`sessions.visible=false` tombstones sidebar/list membership, but owner
+and admin `/timeline` and copied-message-link reads still resolve while
+the durable session row and transcript ledger remain. The debug endpoint
+is the raw-ledger counterpart, not the only recovery path.
 
 Query params:
 
@@ -386,13 +389,18 @@ Standard workflow for "pick up a deleted session":
 
 1. `GET /api/debug/session-list-state?owner=<email>` to locate the
    `visible=false` row and confirm the session id.
-2. `GET /api/debug/session-event-ledger?session_id=<id>` to read the
-   chat. Page with `after_order_key=<next_order_key>` if needed.
+2. Prefer the projected transcript path for normal pickup:
+   `GET /api/sessions/<id>/timeline?anchor=newest&rows=24` or a copied
+   message link's `timeline_url`.
+3. Use `GET /api/debug/session-event-ledger?session_id=<id>` only when
+   raw event audit detail is needed. Page with
+   `after_order_key=<next_order_key>` if needed.
 
-This is the admin counterpart to the deliberate visibility gate on the
-user-facing timeline (the SPA tombstones soft-deleted sessions; an
-admin pickup-the-prior-codex-pod workflow shouldn't have to
-un-soft-delete or open a one-off `psql` pod to recover the chat).
+Authorized `/timeline` or copied-message-link reads requested against
+`visible=false` rows increment
+`tank_session_transcript_invisible_row_reads_total`, so the volume of
+post-sidebar-deletion transcript recovery is visible without logging
+session ids or message contents.
 
 Counts as an admin cross-user audit read. Emits a structured `slog`
 line per call (`caller_email`, `session_id`, `session_scope`,
