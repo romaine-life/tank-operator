@@ -530,6 +530,49 @@ func TestProjectTranscriptEventsAnnouncementInterruptedCarriesTerminalStatus(t *
 	t.Fatalf("missing needs_input_announcement entry: %#v", projection.Entries)
 }
 
+func TestProjectTranscriptEventsPopulatesActivityBodiesForTurnsWithoutCompactedEntries(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "hello",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("final", "002", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:final", map[string]any{
+			"kind": "agent_message",
+			"text": "hi there",
+		}),
+		projectionTestEvent("terminal", "003", "turn.completed", "runner", "codex", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:final")),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	// We expect the main timeline entries to NOT contain a turn_activity shell.
+	// So we should have exactly 2 entries (user message and assistant message).
+	if got, want := len(projection.Entries), 2; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	if got, want := projection.Entries[0]["kind"], "message"; got != want {
+		t.Fatalf("first entry kind = %v, want %s", got, want)
+	}
+	if got, want := projection.Entries[1]["kind"], "message"; got != want {
+		t.Fatalf("second entry kind = %v, want %s", got, want)
+	}
+
+	// We expect the activity body for the turn to be populated.
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatal("missing activity body for turn-1")
+	}
+	if got, want := len(body.Entries), 1; got != want {
+		t.Fatalf("activity body entries = %d, want %d", got, want)
+	}
+	if got, want := body.Entries[0]["id"], "turn-1:item:final"; got != want {
+		t.Fatalf("activity body entry id = %v, want %s", got, want)
+	}
+	if got, want := len(body.CompactedEntryIDs), 0; got != want {
+		t.Fatalf("compacted ids count = %d, want %d", got, want)
+	}
+}
+
 func projectionTestEvent(eventID, orderKey, eventType, actor, source, turnID, timelineID string, payload map[string]any) map[string]any {
 	event := map[string]any{
 		"event_id":   eventID,
