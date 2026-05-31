@@ -70,6 +70,7 @@ import {
   ListChecksIcon,
   Loader2Icon,
   MessageSquareIcon,
+  MessageSquareOffIcon,
   MinusIcon,
   MonitorIcon,
   NotebookPenIcon,
@@ -102,6 +103,10 @@ import {
   transitionNavigationMode,
 } from "./navigationMode";
 import { isTranscriptRefreshShortcut } from "./transcriptRefreshShortcut";
+import {
+  REFRESH_FLASH_DURATION_MS,
+  refreshFlashLabel,
+} from "./transcriptRefreshIndicator";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   type ConversationBackgroundTaskStatus,
@@ -128,6 +133,7 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
+import { needsInputAnnouncementState } from "./needsInputAnnouncement";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -5302,13 +5308,36 @@ function RunNeedsInputAnnouncement({
   const announcement = entry.announcement;
   const answered = announcement?.answered ?? false;
   const summary = announcement?.questionSummary ?? entry.meta?.detail ?? "";
-  const title = entry.meta?.title ?? (answered ? "Answered" : "Claude is waiting on you");
+  // The handoff row has three states (see needsInputAnnouncement.ts). Only
+  // "waiting" — unanswered and the turn still live — is genuinely awaiting
+  // the user. Once the turn reaches a terminal status without an answer (the
+  // user stopped it, or it failed), the row is "settled": nothing is being
+  // waited on, so it must drop the attention-grabbing active styling.
+  const state = needsInputAnnouncementState({
+    answered,
+    turnTerminalStatus: entry.turnTerminalStatus,
+  });
+  // For "settled" we override the projection's "Claude is waiting on you"
+  // default — that title was chosen at projection time, before the terminal
+  // event landed and could not know the turn would end unanswered. The live
+  // "waiting"/"answered" states keep honoring any server-provided title.
+  const title =
+    state === "settled"
+      ? "No longer waiting"
+      : entry.meta?.title ?? (state === "answered" ? "Answered" : "Claude is waiting on you");
   const targetTurnId = announcement?.targetTurnId ?? entry.turnId ?? "";
   const handleOpen = (): void => {
     if (!targetTurnId) return;
     onOpenTurn?.(targetTurnId, { anchor: "bottom" });
   };
-  const interactive = !answered && Boolean(targetTurnId && onOpenTurn);
+  const navigable = Boolean(targetTurnId && onOpenTurn);
+  // Only the live "waiting" state earns the high-emphasis primary CTA. The
+  // two settled states (answered / no-longer-waiting) keep the same
+  // navigation affordance but render it muted (secondary) so the row stops
+  // competing for attention once there is nothing to act on. The function is
+  // unchanged — the user can still open the question in Turns.
+  const showPrimaryCta = state === "waiting" && navigable;
+  const showSecondaryCta = state !== "waiting" && navigable;
   return (
     <div
       className="run-transcript-message"
@@ -5327,15 +5356,20 @@ function RunNeedsInputAnnouncement({
       </span>
       <div className="run-needs-input-announcement-body">
         <div
-          className={`run-needs-input-announcement${answered ? " run-needs-input-announcement-answered" : ""}`}
+          className={`run-needs-input-announcement${
+            state === "answered" ? " run-needs-input-announcement-answered" : ""
+          }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
           data-slot="message-content"
+          data-state={state}
           data-answered={answered ? "true" : "false"}
           role="group"
           aria-label={title}
         >
           <span className="run-needs-input-announcement-icon" aria-hidden="true">
-            {answered ? (
+            {state === "answered" ? (
               <CheckIcon size={14} aria-hidden="true" />
+            ) : state === "settled" ? (
+              <MessageSquareOffIcon size={14} aria-hidden="true" />
             ) : (
               <MessageSquareIcon size={14} aria-hidden="true" />
             )}
@@ -5346,7 +5380,7 @@ function RunNeedsInputAnnouncement({
               <p className="run-needs-input-announcement-detail">{summary}</p>
             )}
           </div>
-          {interactive && (
+          {showPrimaryCta && (
             <button
               type="button"
               className="run-needs-input-announcement-cta"
@@ -5356,12 +5390,16 @@ function RunNeedsInputAnnouncement({
               Open in Turns
             </button>
           )}
-          {answered && targetTurnId && onOpenTurn && (
+          {showSecondaryCta && (
             <button
               type="button"
               className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
               onClick={handleOpen}
-              aria-label="View answered question in Turns"
+              aria-label={
+                state === "answered"
+                  ? "View answered question in Turns"
+                  : "View the question in Turns"
+              }
             >
               View in Turns
             </button>
@@ -8561,6 +8599,7 @@ function ChatPane({
   visible,
   onSessionPatch,
   onConnectionLabelChange,
+  onRefreshFlashChange,
   onForkMessage,
   pendingScrollMessageId,
   onScrollConsumed,
@@ -8580,6 +8619,10 @@ function ChatPane({
   visible: boolean;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onConnectionLabelChange: (id: string, label: string | null) => void;
+  // Transient "Refreshed" confirmation, surfaced in the same title-overlay
+  // slot as the connection pill. Bubbled per-session so the parent shows it
+  // for the active pane only.
+  onRefreshFlashChange: (id: string, label: string | null) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
   // Deep-link target the parent extracted from ?message=<id>. Only set
   // for the ChatPane whose session matches ?session=<id>; other panes
@@ -8837,6 +8880,26 @@ function ChatPane({
   // Dedupes overlapping R-refresh force-pulls (held key / rapid presses) so a
   // single user-visible refresh never fans out into a timeline-request storm.
   const keyboardRefreshInFlightRef = useRef(false);
+  // Brief, transient confirmation that an R-refresh registered. The pull
+  // itself is otherwise invisible when it delivers no new rows, so we flash a
+  // plain "Refreshed" pill in the connection-pill slot for a moment. The timer
+  // ref lets a rapid second press restart (not stack) the display window.
+  const [refreshFlashActive, setRefreshFlashActive] = useState(false);
+  const refreshFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerRefreshFlash = useCallback(() => {
+    setRefreshFlashActive(true);
+    if (refreshFlashTimerRef.current) clearTimeout(refreshFlashTimerRef.current);
+    refreshFlashTimerRef.current = setTimeout(() => {
+      setRefreshFlashActive(false);
+      refreshFlashTimerRef.current = null;
+    }, REFRESH_FLASH_DURATION_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (refreshFlashTimerRef.current) clearTimeout(refreshFlashTimerRef.current);
+    },
+    [],
+  );
   const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
@@ -11691,6 +11754,10 @@ function ChatPane({
         inFlight: keyboardRefreshInFlightRef.current,
         ...chatScrollElementSnapshot(transcriptScrollEl),
       });
+      // Confirm the keypress on every accepted R, even when the force-pull is
+      // deduped against one already in flight — the user still pressed R and
+      // should see it landed.
+      triggerRefreshFlash();
       if (keyboardRefreshInFlightRef.current) return;
       keyboardRefreshInFlightRef.current = true;
       // clearRealtime=false keeps any in-flight optimistic local echo; the
@@ -11715,6 +11782,7 @@ function ChatPane({
     session.mode,
     slashOpen,
     transcriptScrollEl,
+    triggerRefreshFlash,
     visible,
   ]);
   // On the Turns page, Home/End move the focused turn-detail view to its
@@ -11918,6 +11986,16 @@ function ChatPane({
     onConnectionLabelChange(session.id, visibleConnectionLabel);
     return () => onConnectionLabelChange(session.id, null);
   }, [onConnectionLabelChange, session.id, visibleConnectionLabel]);
+
+  const visibleRefreshFlash = refreshFlashLabel({
+    visible,
+    activeTab,
+    active: refreshFlashActive,
+  });
+  useEffect(() => {
+    onRefreshFlashChange(session.id, visibleRefreshFlash);
+    return () => onRefreshFlashChange(session.id, null);
+  }, [onRefreshFlashChange, session.id, visibleRefreshFlash]);
 
   async function sendInputReply(
     entry: TranscriptEntry,
@@ -13414,6 +13492,18 @@ export function App() {
   const [sessionConnectionLabels, setSessionConnectionLabels] = useState<Record<string, string | undefined>>({});
   const updateSessionConnectionLabel = useCallback((id: string, label: string | null) => {
     setSessionConnectionLabels((prev) => {
+      if (prev[id] === (label ?? undefined)) return prev;
+      const next = { ...prev };
+      if (label) next[id] = label;
+      else delete next[id];
+      return next;
+    });
+  }, []);
+  // Transient per-session "Refreshed" confirmation, mirrored from the active
+  // ChatPane and rendered alongside the connection pill.
+  const [sessionRefreshFlashes, setSessionRefreshFlashes] = useState<Record<string, string | undefined>>({});
+  const updateSessionRefreshFlash = useCallback((id: string, label: string | null) => {
+    setSessionRefreshFlashes((prev) => {
       if (prev[id] === (label ?? undefined)) return prev;
       const next = { ...prev };
       if (label) next[id] = label;
@@ -15010,6 +15100,10 @@ export function App() {
     activeWorkspaceSession == null
       ? null
       : sessionConnectionLabels[activeWorkspaceSession.id] ?? null;
+  const activeRefreshFlash =
+    activeWorkspaceSession == null
+      ? null
+      : sessionRefreshFlashes[activeWorkspaceSession.id] ?? null;
   const useHomeTitleChrome =
     active == null || homeEditingTitle || pendingCreateTitleSessionId != null;
   const showWorkspaceTitleChrome =
@@ -15106,6 +15200,15 @@ export function App() {
           aria-live="polite"
         >
           <span className="run-connection-label">{activeConnectionLabel}</span>
+        </span>
+      )}
+      {!useHomeTitleChrome && activeRefreshFlash && (
+        <span
+          className="run-connection-pill run-refresh-pill"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="run-connection-label run-refresh-label">{activeRefreshFlash}</span>
         </span>
       )}
     </div>
@@ -15777,6 +15880,7 @@ export function App() {
                       visible={active === s.id}
                       onSessionPatch={patchSession}
                       onConnectionLabelChange={updateSessionConnectionLabel}
+                      onRefreshFlashChange={updateSessionRefreshFlash}
                       onForkMessage={forkSessionFromMessage}
                       pendingScrollMessageId={
                         pendingScrollMessageId && active === s.id

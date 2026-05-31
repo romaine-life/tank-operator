@@ -364,6 +364,14 @@ function isStatic(file) {
 }
 
 function isBackend(file) {
+  // Go test files (`*_test.go`) are never compiled into the runtime binary —
+  // `go build` excludes them — so a test-only backend change has no artifact
+  // to hot-swap and must not raise a "backend impact" that forces a backend
+  // hot-swap on top of, say, a frontend-only validation. Contract-sensitive
+  // test files (handlers_turns_test.go, anything under internal/sessionbus/)
+  // are still caught explicitly by isSessionBusContract, so dropping them here
+  // only removes the false positive a pure test change would otherwise raise.
+  if (file.endsWith("_test.go")) return false;
   return file.startsWith("backend-go/");
 }
 
@@ -453,6 +461,31 @@ function runSelfTests() {
     CLASS_IMAGE,
   );
   assert.equal(c(["docs/testing.md"], { artifactKind: "auto", validationTarget: "full_runtime" }).classification, CLASS_FAITHFUL);
+
+  // A backend-only *_test.go change has no runtime artifact, so a frontend
+  // (static) validation stays faithful — the added Go test must not force a
+  // backend hot-swap. Paired with a real frontend change, still static-only.
+  assert.equal(
+    c(["backend-go/cmd/tank-operator/transcript_projection_test.go"], { artifactKind: "static" }).classification,
+    CLASS_FAITHFUL,
+  );
+  assert.equal(
+    c(
+      ["backend-go/cmd/tank-operator/transcript_projection_test.go", "frontend/src/App.tsx"],
+      { artifactKind: "static", validationTarget: "existing_session" },
+    ).classification,
+    CLASS_FAITHFUL,
+  );
+  // But contract-sensitive test files (explicit allowlist) and non-test
+  // backend sources still require a backend artifact.
+  assert.deepEqual(
+    [...requiredArtifactsForImpacts(collectImpacts(["backend-go/cmd/tank-operator/handlers_turns_test.go"]))].sort(),
+    ["agent_runner", "backend", "codex_runner"],
+  );
+  assert.equal(
+    c(["backend-go/cmd/tank-operator/transcript_projection.go"], { artifactKind: "static", validationTarget: "existing_session" }).classification,
+    CLASS_PARTIAL,
+  );
 
   console.log("Tank test-fidelity classifier self-test passed.");
 }
