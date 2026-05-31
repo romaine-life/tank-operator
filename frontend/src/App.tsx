@@ -1141,7 +1141,7 @@ const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
-const PROVIDERS: Provider[] = ["anthropic", "codex", "gemini", "hermes", "pi"];
+const PROVIDERS: Provider[] = ["anthropic", "codex", "gemini", "hermes"];
 
 
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
