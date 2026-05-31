@@ -18,7 +18,15 @@ import {
   providerErrorTotal,
   recordTurnStart,
   recordTurnTerminal,
+  eventTruncatedTotal,
+  natsPublishFailureTotal,
 } from "./metrics.js";
+import {
+  isDurableTankConversationEvent,
+  type TankConversationEvent,
+} from "../../runner-shared/conversation.js";
+import { stampTankEvent } from "../../runner-shared/conversation-builders.js";
+import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 
 class AsyncQueue<T> {
   private readonly items: T[] = [];
@@ -130,7 +138,7 @@ export class Runner {
         recordTurnStart(turnID);
 
         // Emit turn.started
-        await this.sink.upsert(this.adapter.turnStarted(turn) as any);
+        await this.dispatch(this.adapter.turnStarted(turn));
 
         this.currentAbort = new AbortController();
         const turnSignal = this.currentAbort.signal;
@@ -142,13 +150,13 @@ export class Runner {
           const errMessage = err instanceof Error ? err.message : String(err);
 
           if (turnSignal.aborted) {
-            await this.sink.upsert(this.adapter.turnInterrupted(turn) as any);
+            await this.dispatch(this.adapter.turnInterrupted(turn));
             if (commandRecord) {
               await this.commandBus.markCompleted(commandRecord);
             }
             recordTurnTerminal(turnID, "interrupted");
           } else {
-            await this.sink.upsert(this.adapter.turnFailed(turn, errMessage) as any);
+            await this.dispatch(this.adapter.turnFailed(turn, errMessage));
             if (commandRecord) {
               await this.commandBus.markFailed(commandRecord, err);
             }
@@ -264,8 +272,8 @@ export class Runner {
               const toolItemID = event.tool_id || `tool-${randomUUID()}`;
               toolIdToInfo.set(toolItemID, { name: event.tool_name, input: event.parameters });
               timelineIDs.push(toolItemID);
-              await this.sink.upsert(
-                this.adapter.toolStarted(turn, toolItemID, event.tool_name, event.parameters) as any
+              await this.dispatch(
+                this.adapter.toolStarted(turn, toolItemID, event.tool_name, event.parameters)
               );
               break;
             }
@@ -275,12 +283,12 @@ export class Runner {
               const name = info?.name || "unknown";
               const input = info?.input || {};
               if (event.status === "success") {
-                await this.sink.upsert(
-                  this.adapter.toolCompleted(turn, toolItemID, name, input, event.output || "") as any
+                await this.dispatch(
+                  this.adapter.toolCompleted(turn, toolItemID, name, input, event.output || "")
                 );
               } else {
-                await this.sink.upsert(
-                  this.adapter.toolFailed(turn, toolItemID, name, input, event.output || "Error") as any
+                await this.dispatch(
+                  this.adapter.toolFailed(turn, toolItemID, name, input, event.output || "Error")
                 );
               }
               break;
@@ -327,17 +335,17 @@ export class Runner {
       const assistantItemID = `msg-${randomUUID()}`;
       if (assistantText) {
         timelineIDs.push(assistantItemID);
-        await this.sink.upsert(
-          this.adapter.messageCompleted(turn, assistantItemID, assistantText) as any
+        await this.dispatch(
+          this.adapter.messageCompleted(turn, assistantItemID, assistantText)
         );
       }
 
       // Emit turn.completed
-      await this.sink.upsert(
+      await this.dispatch(
         this.adapter.turnCompleted(turn, {
           timelineIDs,
           providerItemIDs: timelineIDs
-        }) as any
+        })
       );
 
       if (commandRecord) {
@@ -397,5 +405,36 @@ export class Runner {
     return () => {
       void stopControl?.();
     };
+  }
+  private async dispatch(message: TankConversationEvent): Promise<boolean> {
+    const stamped = stampTankEvent(message);
+    if (!isDurableTankConversationEvent(stamped)) {
+      return true;
+    }
+    const sizeGuard = truncateEventIfOversized(
+      stamped as unknown as Record<string, unknown>,
+    );
+    if (sizeGuard.truncated) {
+      const severity = sizeGuard.payloadDropped ? "payload-dropped" : "strings-truncated";
+      eventTruncatedTotal.labels(stamped.type, severity).inc();
+      console.warn(
+        "session bus event truncated:",
+        JSON.stringify({
+          event_type: stamped.type,
+          original_bytes: sizeGuard.originalBytes,
+          final_bytes: sizeGuard.finalBytes,
+          fields: sizeGuard.fields,
+          severity,
+        }),
+      );
+    }
+    try {
+      await this.sink.upsert(sizeGuard.event as any);
+    } catch (err) {
+      console.error("session bus publish failed:", err);
+      natsPublishFailureTotal.inc();
+      return false;
+    }
+    return true;
   }
 }
