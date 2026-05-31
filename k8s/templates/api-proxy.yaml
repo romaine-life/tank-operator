@@ -629,6 +629,8 @@ spec:
   renewBefore: 360h
   dnsNames:
     - generativelanguage.googleapis.com
+    - oauth2.googleapis.com
+    - www.googleapis.com
   issuerRef:
     name: claude-oauth-ca-issuer
     kind: Issuer
