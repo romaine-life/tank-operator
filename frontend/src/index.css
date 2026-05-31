@@ -3597,6 +3597,7 @@ button:disabled {
 
 .run-turn-view-body .run-transcript-message {
   width: 100%;
+  padding-left: 0;
 }
 
 .run-turn-view-loading {
