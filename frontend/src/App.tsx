@@ -250,7 +250,7 @@ type DefaultSessionMode = Extract<
   | "gemini_test"
   | "hermes_gui"
 >;
-type Provider = "anthropic" | "codex" | "gemini" | "hermes";
+type Provider = "anthropic" | "codex" | "gemini" | "gemini_test" | "hermes";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 type AskUserQuestionAnswer = {
@@ -668,6 +668,7 @@ const PROVIDER_INTERACTION_MODES: Record<
   anthropic: { gui: "claude_gui", cli: "claude_cli" },
   codex: { gui: "codex_gui", cli: "codex_cli" },
   gemini: { gui: "gemini_gui", cli: null },
+  gemini_test: { gui: "gemini_test", cli: null },
   hermes: { gui: "hermes_gui", cli: null },
 };
 
@@ -688,6 +689,7 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
   codex: "Codex",
   gemini: "Gemini",
+  gemini_test: "Gemini Test",
   hermes: "Hermes",
 };
 
@@ -1148,7 +1150,7 @@ const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
-const PROVIDERS: Provider[] = ["anthropic", "codex", "gemini", "hermes"];
+const PROVIDERS: Provider[] = ["anthropic", "codex", "gemini", "gemini_test", "hermes"];
 
 
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
