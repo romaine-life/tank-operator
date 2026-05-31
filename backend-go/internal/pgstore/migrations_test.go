@@ -80,6 +80,27 @@ func TestMigrationChecksumGuardsImmutability(t *testing.T) {
 	}
 }
 
+func TestAppliedMigration0078ChecksumIsStable(t *testing.T) {
+	const (
+		id       = "0078"
+		checksum = "78cab788b19fe45e654b518add42d0308531815c1a48124cb1b7e7499dd12f40"
+	)
+
+	for _, m := range schemaMigrations {
+		if m.ID != id {
+			continue
+		}
+		if got := migrationChecksum(m.SQL); got != checksum {
+			t.Fatalf("migration %s checksum = %s, want %s", id, got, checksum)
+		}
+		if !strings.Contains(m.SQL, "discovered_repos") {
+			t.Fatalf("migration %s no longer preserves the applied discovered_repos SQL", id)
+		}
+		return
+	}
+	t.Fatalf("migration %s not found", id)
+}
+
 // joinedMigrationSQL concatenates every migration's SQL in declaration order.
 // The string-content tests below assert on the SQL bodies and their relative
 // order, which is preserved by the []migration slice.
