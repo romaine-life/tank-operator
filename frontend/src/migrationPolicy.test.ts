@@ -1021,6 +1021,15 @@ test("focused Turns page Home and End keys scroll the turn detail to its edges",
   assert.match(appSource, /if \(scrollRequest\.anchor === "top"\) \{\s*body\.scrollTo\(\{ top: 0, behavior: "auto" \}\);/);
 });
 
+test("focused transcript T opens Turns and Escape returns from Turns", () => {
+  assert.equal(appSource.includes("isTranscriptToTurnsShortcut"), true);
+  assert.equal(appSource.includes("isTurnsToTranscriptShortcut"), true);
+  assert.match(appSource, /targetIsTranscript: e\.target === transcriptScrollEl/);
+  assert.match(appSource, /openTurnPage\(undefined, \{ anchor: "bottom" \}\)/);
+  assert.match(appSource, /if \(activeTab === "turns"\) return;/);
+  assert.match(appSource, /setActiveTab\("chat"\);[\s\S]{0,120}focusTranscriptSection\(\);/);
+});
+
 test("chat back-pagination keeps the focused load button mounted while loading", () => {
   assert.equal(appSource.includes("aria-disabled={sdkLoadingOlder || undefined}"), true);
   assert.equal(appSource.includes("aria-busy={sdkLoadingOlder || undefined}"), true);
