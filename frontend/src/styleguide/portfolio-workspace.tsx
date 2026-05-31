@@ -9,7 +9,6 @@ import {
   InfoIcon,
   MonitorIcon,
   SettingsIcon,
-  TerminalIcon,
   XIcon,
 } from "lucide-react";
 import { ProviderIcon } from "../providerIcons";
