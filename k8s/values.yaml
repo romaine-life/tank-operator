@@ -54,10 +54,10 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-1741f231081fa3d9cc5c2ff07c7f52032952b31d3f9a8cb7ffdbca198843668f
-  codexImage: romainecr.azurecr.io/codex-container:codex-3c1b02dc0c8de7ceed8218b2864f43ea1517c4fb5de62b6c029ed09c23779930
-  piImage: romainecr.azurecr.io/pi-container:pi-80666072abdb0a3b9e26001e414e0083bbe5898739d06e695da55a71b74a766b
-  geminiImage: romainecr.azurecr.io/gemini-container:gemini-401c1463d1cd5b074e4af068507695d9c86aca9fd8b330661f515a20bb8db00b
+  image: romainecr.azurecr.io/claude-container:claude-bc4fcbedda5887df6900580ad084887d4933f1c86fdda28fd9e7a96d695870b7
+  codexImage: romainecr.azurecr.io/codex-container:codex-d75e3ce27613aa3d63d3a697a07c10476c261b1bb855f09909da9d21764476f0
+  piImage: romainecr.azurecr.io/pi-container:pi-a3b60a4d1f9e8f1b7d9fcaacef9ed7c51b90c5ccab7046d32ebdf2640f38e50c
+  geminiImage: romainecr.azurecr.io/gemini-container:gemini-892d01c8eb0504853f64b37049ea62ea90923c60274bb113577085e8d3646ca0
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
