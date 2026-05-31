@@ -969,7 +969,7 @@ var schemaMigrations = []migration{
 	// monotonic and transcript timeline ids are not secrets, so public
 	// unauthenticated transcript reads must validate one of these opaque
 	// tokens instead of treating ?session=&message= as authority.
-	{ID: "0079", SQL: `CREATE TABLE IF NOT EXISTS message_link_shares (
+	{ID: "0080", SQL: `CREATE TABLE IF NOT EXISTS message_link_shares (
 		token_hash      text PRIMARY KEY,
 		created_by      text NOT NULL,
 		owner_email     text NOT NULL,
@@ -980,7 +980,7 @@ var schemaMigrations = []migration{
 		last_used_at    timestamptz,
 		revoked_at      timestamptz
 	)`},
-	{ID: "0080", SQL: `CREATE INDEX IF NOT EXISTS message_link_shares_session
+	{ID: "0081", SQL: `CREATE INDEX IF NOT EXISTS message_link_shares_session
 		ON message_link_shares (owner_email, session_scope, session_id)
 		WHERE revoked_at IS NULL`},
 }
