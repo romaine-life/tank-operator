@@ -1,6 +1,9 @@
 import { spawn } from "node:child_process";
 import * as readline from "node:readline";
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { mkdirSync, writeFileSync } from "node:fs";
 
 import type { Config } from "./config.js";
 import { SessionEventSink } from "./sessionEvents.js";
@@ -67,6 +70,27 @@ export class Runner {
   }
 
   async run(signal: AbortSignal): Promise<void> {
+    // Ensure settings.json exists to configure oauth-personal auth selectedType
+    try {
+      const gDir = join(homedir(), ".gemini");
+      mkdirSync(gDir, { recursive: true });
+      const settingsPath = join(gDir, "settings.json");
+      writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          security: {
+            auth: {
+              selectedType: "oauth-personal"
+            }
+          }
+        }, null, 2),
+        { mode: 0o600 }
+      );
+      console.log("Runner ensured settings.json is written to:", settingsPath);
+    } catch (err) {
+      console.error("Failed to write settings.json:", err);
+    }
+
     const stopConsumer = this.startCommandConsumer(signal);
     const stopControl = this.startControlConsumer(signal);
 

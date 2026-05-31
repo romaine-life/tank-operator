@@ -12,6 +12,17 @@ set -eu
 configure_gemini() {
   mkdir -p "$HOME/.gemini"
 
+  cat > "$HOME/.gemini/settings.json" <<EOF
+{
+  "security": {
+    "auth": {
+      "selectedType": "oauth-personal"
+    }
+  }
+}
+EOF
+  chmod 600 "$HOME/.gemini/settings.json"
+
   cat > "$HOME/.gemini/oauth_creds.json" <<EOF
 {
   "access_token": "managed-by-tank-operator",
