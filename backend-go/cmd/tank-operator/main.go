@@ -376,7 +376,7 @@ func main() {
 			SpireLensTailscaleAuthTag:      envDefault("SESSION_SPIRELENS_TAILSCALE_AUTH_TAG", sessionmodel.DefaultSpireLensTailscaleTag),
 			SpireLensHost:                  envDefault("SESSION_SPIRELENS_HOST", ""),
 			SpireLensMCPPort:               envInt("SESSION_SPIRELENS_MCP_PORT", sessionmodel.DefaultSpireLensMCPPort),
-			// Test-slot agent-runner hot-swap. Off by default; the chart
+			// Test-slot SDK-runner hot-swap. Off by default; the chart
 			// turns this on only when the chart runs in hot test-slot mode.
 			// See scripts/check-session-pod-hot-swap-migration.mjs and
 			// docs in sessionmodel.ManifestOptions.HotSwapAgentRunner.

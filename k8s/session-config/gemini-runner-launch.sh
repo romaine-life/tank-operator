@@ -2,10 +2,10 @@
 # Pod-side launch shim for the gemini-runner Node service. Sibling of
 # agent-runner-launch.sh and codex-runner-launch.sh.
 #
-# Gemini auth path: write a synthetic settings.json whose access and refresh
-# tokens are the managed-by-tank-operator placeholders. The in-cluster
-# gemini-api-proxy hostAlias swaps that placeholder for the current real
-# Google OAuth token and centrally owns refresh/write-back.
+# Gemini auth path: write settings.json for oauth-personal auth. gemini_test
+# mounts real test credentials and runs without the proxy; normal Gemini modes
+# fall back to managed-by-tank-operator placeholders that the in-cluster
+# gemini-api-proxy swaps for current Google OAuth tokens.
 
 set -eu
 
@@ -59,5 +59,11 @@ if [ -f /opt/tank/session-config/install-tank-skills.sh ]; then
   sh /opt/tank/session-config/install-tank-skills.sh || true
 fi
 
-# Hand off to the runner.
+# Hand off to the runner. In test-slot mode (orchestrator sets
+# GLIMMUNG_SUPERVISOR_CHILD on the container), exec tank-supervisor as
+# PID 1 so the gemini-runner code can be hot-swapped via SIGHUP re-exec.
+# In production, GLIMMUNG_SUPERVISOR_CHILD is unset and node runs as PID 1.
+if [ -n "${GLIMMUNG_SUPERVISOR_CHILD:-}" ] && [ -x /app/tank-supervisor ]; then
+  exec /app/tank-supervisor
+fi
 exec node /opt/gemini-runner/dist/index.js

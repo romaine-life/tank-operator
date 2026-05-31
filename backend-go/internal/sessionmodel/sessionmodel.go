@@ -1066,6 +1066,21 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		geminiRunnerEnv = append(geminiRunnerEnv, map[string]any{
 			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(GeminiRunnerMetricsPort),
 		})
+		if opts.HotSwapAgentRunner {
+			volumes = append(volumes, map[string]any{
+				"name":     "gemini-runner-hot",
+				"emptyDir": map[string]any{},
+			})
+			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+				"name":      "gemini-runner-hot",
+				"mountPath": "/var/run/gemini-runner-hot",
+			})
+			geminiRunnerEnv = append(geminiRunnerEnv,
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_CHILD", "value": "/app/gemini-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_HOT_ARTIFACT", "value": "/var/run/gemini-runner-hot/gemini-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_RESTART_ENABLED", "value": "true"},
+			)
+		}
 		geminiRunnerContainer := map[string]any{
 			"name":            "gemini-runner",
 			"image":           sessionImage,

@@ -111,7 +111,7 @@ spec:
             {{- if (eq (include "tank-operator.isTestEnv" .) "true") }}
             # Tells the orchestrator runtime to attach test-slot hot-swap
             # surface (writable volume + supervisor env vars) onto the
-            # agent-runner container in session pods it spawns. Off in
+            # SDK runner containers in session pods it spawns. Off in
             # production. See sessionmodel.ManifestOptions.HotSwapAgentRunner
             # and scripts/check-session-pod-hot-swap-migration.mjs.
             - name: SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED

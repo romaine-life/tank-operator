@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Completion manifest for the session-pod agent-runner hot-swap migration.
+// Completion manifest for the session-pod SDK runner hot-swap migration.
 //
 // This script is the spec. "Done" = exit 0. Same workflow as
 // scripts/check-stop-request-migration.mjs: committed as commit 1 of the
@@ -10,9 +10,9 @@
 // THE CONTRACT — three user-named checkboxes:
 //
 //   1. We can hot-swap whatever we couldn't hot-swap before — specifically
-//      the agent-runner code inside session pods (today only the orchestrator
+//      the SDK runner code inside session pods (today only the orchestrator
 //      pod is hot-swappable; this PR closes that gap for the runner code
-//      that drives Claude SDK integration).
+//      that drives Claude, Codex, and Gemini SDK integration).
 //
 //   2. Prod doesn't suffer because of a dev practice — the hot-swap path
 //      is gated on renderMode=hot, exactly like the orchestrator's
@@ -22,9 +22,9 @@
 //
 //   3. Nothing else is touched that already works — orchestrator hot-swap
 //      paths, tank-supervisor source, the orchestrator Dockerfile, the
-//      orchestrator deployment.yaml, k8s/values.yaml's orchestrator
+//      orchestrator backend hot-swap wiring, k8s/values.yaml's orchestrator
 //      hot-swap defaults, and the existing static + backend sub-blocks of
-//      README's test_slot_hot_swap entry are byte-identical to main.
+//      README's test_slot_hot_swap entry retain their behavior.
 //
 // After merge, this script stays in scripts/ as a regression guard.
 //
@@ -65,6 +65,14 @@ const CHECKS = [
     description: "session image bakes a launch shim at /app/agent-runner-launch-binary.sh",
     kind: "grep-present",
     pattern: /\/app\/agent-runner-launch-binary\.sh/,
+  },
+  {
+    id: "session-image-baked-gemini-shim",
+    from: "Checkbox 1: hot-swap works",
+    file: "claude-container/Dockerfile",
+    description: "session image bakes a launch shim at /app/gemini-runner-launch-binary.sh",
+    kind: "grep-present",
+    pattern: /\/app\/gemini-runner-launch-binary\.sh/,
   },
   {
     id: "session-image-shim-execs-node",
@@ -111,6 +119,14 @@ const CHECKS = [
     from: "Checkbox 1: hot-swap works",
     file: "k8s/session-config/agent-runner-launch.sh",
     description: "launch script has a branch that exec's /app/tank-supervisor when supervisor env vars are present",
+    kind: "grep-present",
+    pattern: /exec\s+\/app\/tank-supervisor/,
+  },
+  {
+    id: "gemini-launch-script-supervisor-branch",
+    from: "Checkbox 1: hot-swap works",
+    file: "k8s/session-config/gemini-runner-launch.sh",
+    description: "Gemini launch script has a branch that exec's /app/tank-supervisor when supervisor env vars are present",
     kind: "grep-present",
     pattern: /exec\s+\/app\/tank-supervisor/,
   },
@@ -210,12 +226,52 @@ const CHECKS = [
     pattern: /"codex_runner"[\s\S]{0,1200}?"pod_selector"\s*:\s*"tank-operator\/session-id,tank-operator\/mode in \(codex_gui,codex_exec_gui,codex_app_server\)"/,
   },
   {
+    id: "readme-gemini-runner-source",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "gemini_runner entry declares source: gemini-runner/hot so dist and runner-shared are swapped together",
+    kind: "grep-present",
+    pattern: /"gemini_runner"[\s\S]{0,900}?"source"\s*:\s*"gemini-runner\/hot"/,
+  },
+  {
+    id: "readme-gemini-runner-target",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "gemini_runner entry declares target: /var/run/gemini-runner-hot so the hot artifact can include runner-shared",
+    kind: "grep-present",
+    pattern: /"gemini_runner"[\s\S]{0,900}?"target"\s*:\s*"\/var\/run\/gemini-runner-hot"/,
+  },
+  {
+    id: "readme-gemini-runner-bundles-shared",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "gemini_runner build command copies runner-shared into the hot artifact and rewrites imports to that hot copy",
+    kind: "grep-present",
+    pattern: /"gemini_runner"[\s\S]{0,500}?"build_command"[\s\S]{0,500}?cp -R \.\.\/runner-shared hot\/runner-shared[\s\S]{0,500}?\/var\/run\/gemini-runner-hot\/runner-shared/,
+  },
+  {
+    id: "readme-gemini-runner-selector-mode",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "gemini_runner pod selector is narrowed to Gemini GUI/test session pods",
+    kind: "grep-present",
+    pattern: /"gemini_runner"[\s\S]{0,1200}?"pod_selector"\s*:\s*"tank-operator\/session-id,tank-operator\/mode in \(gemini_gui,gemini_test\)"/,
+  },
+  {
     id: "sessionmodel-test-slot-mode-attaches-volume",
     from: "Checkbox 1: hot-swap works",
     file: "backend-go/internal/sessionmodel/sessionmodel_test.go",
     description: "sessionmodel test asserts: with testEnv enabled, agent-runner container gets agent-runner-hot volumeMount + supervisor env vars",
     kind: "grep-present",
     pattern: /TestPodManifestSlotModeAttachesAgentRunnerHotSwap|testEnv[^\n]{0,200}agent-runner-hot/,
+  },
+  {
+    id: "sessionmodel-test-slot-mode-attaches-gemini-volume",
+    from: "Checkbox 1: hot-swap works",
+    file: "backend-go/internal/sessionmodel/sessionmodel_test.go",
+    description: "sessionmodel test asserts: with testEnv enabled, gemini-runner container gets gemini-runner-hot volumeMount + supervisor env vars",
+    kind: "grep-present",
+    pattern: /TestPodManifestSlotModeAttachesGeminiRunnerHotSwap|gemini-runner-hot/,
   },
 
   // ───────────── Checkbox 2: prod doesn't suffer ─────────────
@@ -235,6 +291,14 @@ const CHECKS = [
     description: "launch script still has `exec node /opt/agent-runner/dist/index.js` as the fallback path when supervisor env vars are not set",
     kind: "grep-present",
     pattern: /exec\s+node\s+\/opt\/agent-runner\/dist\/index\.js/,
+  },
+  {
+    id: "gemini-launch-script-prod-fallback",
+    from: "Checkbox 2: prod unchanged",
+    file: "k8s/session-config/gemini-runner-launch.sh",
+    description: "Gemini launch script still has `exec node /opt/gemini-runner/dist/index.js` as the fallback path when supervisor env vars are not set",
+    kind: "grep-present",
+    pattern: /exec\s+node\s+\/opt\/gemini-runner\/dist\/index\.js/,
   },
   {
     id: "launch-script-conditional-on-env",
@@ -315,7 +379,7 @@ const CHECKS = [
   {
     id: "readme-static-block-unchanged",
     from: "Checkbox 3: nothing else touched",
-    description: "the static sub-block of README's test_slot_hot_swap is unchanged (only the new agent_runner sub-block is added)",
+    description: "the static sub-block of README's test_slot_hot_swap is unchanged (only SDK runner sub-blocks are added)",
     kind: "json-block-unchanged",
     file: "README.md",
     parentJSONPath: ["test_slot_hot_swap"],
