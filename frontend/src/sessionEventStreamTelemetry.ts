@@ -1,4 +1,4 @@
-import { authedFetch } from "./auth";
+import { authedFetch, getStoredToken } from "./auth";
 
 // Per-session transcript-row SSE telemetry. The candidate-B (zombie SSE)
 // and candidate-C (row-drop) stethoscope on the browser side.
@@ -117,6 +117,7 @@ function flush(): void {
   if (typeof window === "undefined" || pendingMetrics.length === 0) return;
   const events = pendingMetrics.splice(0, MAX_BATCH_EVENTS);
   if (typeof fetch !== "function") return;
+  if (!getStoredToken()) return;
   authedFetch(METRICS_ENDPOINT, {
     method: "POST",
     headers: {
