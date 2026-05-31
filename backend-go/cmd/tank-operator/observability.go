@@ -140,6 +140,15 @@ var (
 		Name: "tank_transcript_materialization_invariant_violation_total",
 		Help: "Transcript row materialization produced a projection that violates a durable transcript invariant.",
 	}, []string{"invariant", "terminal_status"})
+	transcriptRowMaterializationTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_transcript_row_materialization_total",
+		Help: "Transcript row materialization checks and backfills, labeled by trigger and bounded result.",
+	}, []string{"trigger", "result"})
+	transcriptRowMaterializationDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "tank_transcript_row_materialization_duration_seconds",
+		Help:    "Duration of transcript row materialization checks and backfills.",
+		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60},
+	}, []string{"trigger"})
 
 	// Provider-credential health: the durable Layer 1 surface for
 	// "Codex / Claude sign-in expired" banners. Replaces the SPA pill
@@ -1487,6 +1496,33 @@ func recordTranscriptMaterializationInvariantViolation(invariant string, termina
 		transcriptMaterializationInvariantLabel(invariant),
 		transcriptMaterializationTerminalStatusLabel(terminalStatus),
 	).Inc()
+}
+
+func recordTranscriptRowMaterialization(trigger string, result string, duration time.Duration) {
+	trigger = transcriptRowMaterializationTriggerLabel(trigger)
+	transcriptRowMaterializationTotal.WithLabelValues(
+		trigger,
+		transcriptRowMaterializationResultLabel(result),
+	).Inc()
+	transcriptRowMaterializationDurationSeconds.WithLabelValues(trigger).Observe(duration.Seconds())
+}
+
+func transcriptRowMaterializationTriggerLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "on_demand":
+		return "on_demand"
+	default:
+		return "unknown"
+	}
+}
+
+func transcriptRowMaterializationResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "fresh", "backfilled", "failed", "timeout":
+		return strings.TrimSpace(raw)
+	default:
+		return "unknown"
+	}
 }
 
 func transcriptMaterializationInvariantLabel(raw string) string {

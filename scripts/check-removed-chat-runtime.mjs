@@ -373,6 +373,12 @@ const blocked = [
   { name: "removed unread-centered default transcript anchor", pattern: /\bfirst_unread\b/ },
   { name: "removed localStorage transcript position anchor", pattern: /\btank\.transcript\.position\b|\bSDK_TRANSCRIPT_POSITION\b|\breadSdkTranscriptPosition\b|\bwriteSdkTranscriptPosition\b|\bclearSdkTranscriptPosition\b/ },
   { name: "removed legacy forward transcript timeline read", pattern: /\blegacy_forward\b|\bsessionEventReadLegacyForward\b/ },
+  // Transcript-row projection-version catch-up is a per-request,
+  // per-session materialization concern. Serving pods must not run a
+  // fleet-wide backfill scan at startup, and test slots must not backfill
+  // prod/default just because their Postgres pool can read it.
+  { name: "retired startup transcript row backfill launcher", pattern: /\bstartTranscriptRowBackfills\b|\btranscriptBackfillScopes\b/ },
+  { name: "retired fleet transcript row backfill selector", pattern: /\bBackfillSessionIDs\b/ },
   // Stage 3 (PR #503): hand-rolled scroll-detect hysteresis. Replaced
   // by react-virtuoso's atBottomStateChange callback, which is the
   // durable boolean source for "is the user viewing the live tail." The

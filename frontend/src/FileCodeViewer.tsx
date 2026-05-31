@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import CodeMirror from "@uiw/react-codemirror";
 import { EditorSelection, type Extension } from "@codemirror/state";
 import {
@@ -10,18 +10,6 @@ import {
   StreamLanguage,
   syntaxHighlighting,
 } from "@codemirror/language";
-import { javascript } from "@codemirror/lang-javascript";
-import { json as jsonLanguage } from "@codemirror/lang-json";
-import { css as cssLanguage } from "@codemirror/lang-css";
-import { html as htmlLanguage } from "@codemirror/lang-html";
-import { markdown as markdownLanguage } from "@codemirror/lang-markdown";
-import { python as pythonLanguage } from "@codemirror/lang-python";
-import { go as goLanguage } from "@codemirror/lang-go";
-import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
-import { shell } from "@codemirror/legacy-modes/mode/shell";
-import { toml } from "@codemirror/legacy-modes/mode/toml";
-import { rust } from "@codemirror/legacy-modes/mode/rust";
-import { yaml } from "@codemirror/legacy-modes/mode/yaml";
 
 /** Map a filename to a language hint. Viewers fall back to plain text
  *  for unknown languages, which is fine for workspace browsing. */
@@ -105,42 +93,73 @@ const FILE_CODE_VIEWER_THEME = EditorView.theme({
   },
 }, { dark: true });
 
-function codeMirrorLanguageForPath(path: string): Extension[] {
-  switch (syntaxLangForPath(path)) {
+async function loadCodeMirrorLanguage(lang: string): Promise<Extension[]> {
+  switch (lang) {
     case "ts":
-      return [javascript({ typescript: true })];
+      return [
+        (await import("@codemirror/lang-javascript")).javascript({
+          typescript: true,
+        }),
+      ];
     case "tsx":
-      return [javascript({ jsx: true, typescript: true })];
+      return [
+        (await import("@codemirror/lang-javascript")).javascript({
+          jsx: true,
+          typescript: true,
+        }),
+      ];
     case "js":
-      return [javascript()];
+      return [(await import("@codemirror/lang-javascript")).javascript()];
     case "jsx":
-      return [javascript({ jsx: true })];
+      return [
+        (await import("@codemirror/lang-javascript")).javascript({ jsx: true }),
+      ];
     case "json":
-      return [jsonLanguage()];
+      return [(await import("@codemirror/lang-json")).json()];
     case "css":
     case "scss":
     case "sass":
     case "less":
-      return [cssLanguage()];
+      return [(await import("@codemirror/lang-css")).css()];
     case "html":
     case "xml":
-      return [htmlLanguage()];
+      return [(await import("@codemirror/lang-html")).html()];
     case "markdown":
-      return [markdownLanguage()];
+      return [(await import("@codemirror/lang-markdown")).markdown()];
     case "python":
-      return [pythonLanguage()];
+      return [(await import("@codemirror/lang-python")).python()];
     case "go":
-      return [goLanguage()];
+      return [(await import("@codemirror/lang-go")).go()];
     case "rust":
-      return [StreamLanguage.define(rust)];
+      return [
+        StreamLanguage.define(
+          (await import("@codemirror/legacy-modes/mode/rust")).rust,
+        ),
+      ];
     case "bash":
-      return [StreamLanguage.define(shell)];
+      return [
+        StreamLanguage.define(
+          (await import("@codemirror/legacy-modes/mode/shell")).shell,
+        ),
+      ];
     case "yaml":
-      return [StreamLanguage.define(yaml)];
+      return [
+        StreamLanguage.define(
+          (await import("@codemirror/legacy-modes/mode/yaml")).yaml,
+        ),
+      ];
     case "toml":
-      return [StreamLanguage.define(toml)];
+      return [
+        StreamLanguage.define(
+          (await import("@codemirror/legacy-modes/mode/toml")).toml,
+        ),
+      ];
     case "dockerfile":
-      return [StreamLanguage.define(dockerFile)];
+      return [
+        StreamLanguage.define(
+          (await import("@codemirror/legacy-modes/mode/dockerfile")).dockerFile,
+        ),
+      ];
     default:
       return [];
   }
@@ -174,11 +193,29 @@ export default function FileCodeViewer({
 }) {
   const viewRef = useRef<EditorView | null>(null);
   const scrolledKeyRef = useRef<string | null>(null);
+  const lang = useMemo(() => syntaxLangForPath(path), [path]);
+  const [languageExtensions, setLanguageExtensions] = useState<Extension[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLanguageExtensions([]);
+    loadCodeMirrorLanguage(lang)
+      .then((loadedExtensions) => {
+        if (!cancelled) setLanguageExtensions(loadedExtensions);
+      })
+      .catch(() => {
+        if (!cancelled) setLanguageExtensions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [lang]);
+
   const extensions = useMemo<Extension[]>(() => [
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-    ...codeMirrorLanguageForPath(path),
+    ...languageExtensions,
     ...highlightedLineExtension(targetLine),
-  ], [path, targetLine]);
+  ], [languageExtensions, targetLine]);
 
   useEffect(() => {
     if (!targetLine) return;
