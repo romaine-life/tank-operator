@@ -224,8 +224,8 @@ func (s *Store) SetCloneState(ctx context.Context, email, sessionID string, stat
 // each time it observes a new GitHub remote under /workspace.
 //
 // The union is monotonic: a repo cloned then deleted mid-session still
-// counts as "this session worked on it" for later search, and a transient
-// scan that misses a repo never removes it. The `@>` containment guard
+// counts as "this session worked on it" for later querying/reporting, and
+// a transient scan that misses a repo never removes it. The `@>` containment guard
 // makes a report that adds nothing new a no-op — no row_version bump, no
 // SSE fan-out — so the reporter can poll on a tight loop without churning
 // the sidebar stream. Empty input is a no-op (callers normalize first).

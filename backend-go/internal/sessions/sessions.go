@@ -57,11 +57,10 @@ type Info struct {
 	// DiscoveredRepos is the durable set of "owner/name" slugs the
 	// workspace-repo-reporter observed checked out under /workspace at
 	// runtime (sessions.discovered_repos). Always present on the wire
-	// (empty array when nothing observed yet) so the sidebar search can
-	// union it with Repos without special-casing
-	// "absent vs. empty". Distinct from Repos: Repos is the write-once
-	// create-time selection; this is observed reality, including repos
-	// the agent cloned on demand mid-session.
+	// (empty array when nothing observed yet) so callers can query it
+	// without special-casing "absent vs. empty". Distinct from Repos:
+	// Repos is the write-once create-time selection; this is observed
+	// reality, including repos the agent cloned on demand mid-session.
 	DiscoveredRepos []string `json:"discovered_repos"`
 	// RowVersion is the per-(owner, scope) monotonic cursor each
 	// sessions row carries (docs/session-list-redesign.md Phase 1).

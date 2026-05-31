@@ -151,8 +151,8 @@ type SessionRecord struct {
 	// under /workspace at runtime (migration 0078). Distinct from
 	// Repos: Repos is the write-once create-time selection ("intent"),
 	// DiscoveredRepos is observed reality and also captures repos the
-	// agent cloned on demand mid-session. The sidebar search unions
-	// the two without rendering per-row repo metadata.
+	// agent cloned on demand mid-session. It is queryable through the
+	// session row/API payload without adding sidebar UI.
 	DiscoveredRepos []string
 
 	// Model/Effort are the session-owned run configuration accepted at

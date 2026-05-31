@@ -7,8 +7,8 @@ Named behaviors in the session-bar surface. See
 ## session-repo-attribution
 
 - **Status:** shipped
-- **Intent:** Make a session findable later by the GitHub repos it worked
-  on. Two sources feed one searchable set:
+- **Intent:** Make a session's GitHub repo activity durable and queryable
+  later, without changing the sidebar UI. Two sources feed the stored set:
   1. **Create-time selection** — the `owner/name` slugs the user staged on
      the splash page, persisted write-once on `sessions.repos` (this already
      existed; it drives the repo-cloner init container).
@@ -19,10 +19,9 @@ Named behaviors in the session-bar surface. See
      a plain public clone) — the "no durable record" shape migration 0035
      called out.
 
-  The sidebar exposes a filter input that matches the union of both sets (plus
-  name / id / mode). The repo metadata is intentionally not rendered in each
-  compact session row; it remains durable and searchable without increasing row
-  height.
+  The repo metadata is intentionally not rendered in each compact session row
+  and does not add sidebar controls; it remains durable and queryable through
+  the API/database.
 
 - **Affected contracts:** Session Bar (this surface). The durable source of
   truth stays `session_registry` ("…repositories, and clone state"); the new
@@ -46,9 +45,9 @@ Named behaviors in the session-bar surface. See
     `/workspace`, strips any embedded credentials, and POSTs the observed set
     only when it grows. Best-effort: never blocks the runner, retries next
     tick on transient failure.
-  - UI: client-side filter over the already-reconciled rows
-    (`sessionMatchesFilter` → `sessionRepos.ts`); it never touches
-    `sidebar_position` / `row_version` or the durable snapshot.
+  - UI: no visible surface in this PR. The SPA still normalizes
+    `discovered_repos` from the shared row payload for wire compatibility, but
+    it does not render, filter, or otherwise expose repo attribution.
 
 - **Observability:**
   - `tank_session_discovered_repos_reported_total{result=merged|noop|empty|error}`
@@ -62,7 +61,6 @@ Named behaviors in the session-bar surface. See
     drop-not-reject, dedup, cap, credential-junk rejected).
   - `sessioncontroller` `TestMarshalRowUpdateIncludesDiscoveredRepos` (wire
     contract: rides every row payload, empty serializes as `[]`).
-  - `frontend` `sessionRepos.test.ts` (union/dedup/sort + filter match).
-  - End-to-end clone→report→search validated on a Glimmung test slot (real
+  - End-to-end clone→report→query validated on a Glimmung test slot (real
     Postgres exercises the `MergeDiscoveredRepos` SQL, which the pure-function
     registry unit tests do not cover).

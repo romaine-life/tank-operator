@@ -611,10 +611,10 @@ func (s *appServer) handleInternalSetCloneState(w http.ResponseWriter, r *http.R
 
 // handleInternalSetDiscoveredRepos folds the "owner/name" slugs a session
 // pod observed checked out under /workspace into the durable
-// sessions.discovered_repos set, so the sidebar can search/show every repo
-// the session worked on — not just the ones picked at create time. The
-// caller is the pod-side workspace-repo-reporter, a service-principal token
-// whose actor_email owns the target session (the same auth path the
+// sessions.discovered_repos set, so the API/database can answer which repos
+// the session worked on — not just the ones picked at create time. The caller
+// is the pod-side workspace-repo-reporter, a service-principal token whose
+// actor_email owns the target session (the same auth path the
 // repo-cloner uses for clone-state).
 //
 // Best-effort by design: malformed slugs are dropped (not 400'd) so a

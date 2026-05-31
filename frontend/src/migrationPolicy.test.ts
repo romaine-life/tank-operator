@@ -42,6 +42,9 @@ const bundledMigrationPolicySource = readSource(
 const appChromeCapabilitiesSource = readSource(
   "../../docs/features/app-chrome/capabilities.md",
 );
+const sessionBarCapabilitiesSource = readSource(
+  "../../docs/features/session-bar/capabilities.md",
+);
 const chatScrollMetricsHandlerSource = readSource(
   "../../backend-go/cmd/tank-operator/handlers_client_metrics.go",
 );
@@ -1091,6 +1094,16 @@ test("chat scroll diagnostics are prometheus backed", () => {
   assert.equal(chatScrollMetricsHandlerSource.includes('"browser chat scroll event"'), true);
   assert.equal(chatScrollMetricsHandlerSource.includes('"session_id"'), true);
   assert.equal(chatScrollMetricsHandlerSource.includes('"page_search"'), true);
+});
+
+test("repo attribution stays queryable without sidebar UI", () => {
+  assert.equal(appSource.includes("sessionFilter"), false);
+  assert.equal(appSource.includes("sessionMatchesFilter"), false);
+  assert.equal(appSource.includes("repoShortName"), false);
+  assert.equal(appSource.includes("filter by repo"), false);
+  assert.equal(indexCssSource.includes(".sidebar-filter"), false);
+  assert.equal(sessionBarCapabilitiesSource.includes("no visible surface"), true);
+  assert.equal(sessionBarCapabilitiesSource.includes("filter input"), false);
 });
 
 test("long-chat scroll lab route is admin gated and uses prometheus metrics", () => {

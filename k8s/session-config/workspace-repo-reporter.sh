@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # workspace-repo-reporter.sh — pod-side background loop that records which
 # GitHub repos a session actually has checked out under /workspace, so the
-# Tank sidebar can search and show every repo a session worked on, not just
-# the ones the user picked at create time (the durable sessions.repos list).
+# API/database can answer every repo a session worked on, not just the ones
+# the user picked at create time (the durable sessions.repos list).
 #
 # Why this exists: sessions.repos is write-once "intent" — the slugs picked
 # on the splash page that drive the repo-cloner init container. But an agent

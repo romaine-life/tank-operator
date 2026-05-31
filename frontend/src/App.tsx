@@ -129,10 +129,6 @@ import {
   writeHomeSelectedRepos,
 } from "./homeRepos";
 import {
-  sessionMatchesFilterFields,
-  sessionRepoSlugs,
-} from "./sessionRepos";
-import {
   composeAttachmentDisplayText,
   composeAttachmentPathText,
   labelAttachments,
@@ -596,7 +592,7 @@ interface Session {
   // runtime. Always an array on the wire (empty when nothing observed
   // yet). Distinct from repos (the write-once create-time selection):
   // this also captures repos the agent cloned on demand mid-session.
-  // The sidebar repo filter unions the two.
+  // Not rendered in the sidebar; it remains queryable via the API/database.
   discovered_repos: string[];
   model?: string;
   effort?: string;
@@ -1434,22 +1430,6 @@ function sessionDisplayNameParts(session: Session): {
 
 function sessionDisplayName(session: Session): string {
   return sessionDisplayNameParts(session).value;
-}
-
-// sessionMatchesFilter reports whether a session matches the sidebar filter
-// query. `query` must already be trimmed and lowercased. The union/match
-// logic lives in ./sessionRepos (unit tested there); this thin wrapper
-// supplies the resolved display name the row already computes.
-function sessionMatchesFilter(session: Session, query: string): boolean {
-  return sessionMatchesFilterFields(
-    {
-      slugs: sessionRepoSlugs(session),
-      name: sessionDisplayName(session),
-      id: session.id,
-      mode: session.mode,
-    },
-    query,
-  );
 }
 
 function sessionListDebugRow(session: Session): SessionListDebugRow {
@@ -13270,11 +13250,6 @@ export function App() {
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
   const [appConfigLoaded, setAppConfigLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
-  // Sidebar filter query. Client-side only (per docs/session-list-redesign.md
-  // the filter is a view over the already-reconciled rows; it never touches
-  // sidebar_position / row_version or the durable snapshot). Matches repo
-  // slugs, display name, id, and mode — see sessionMatchesFilter.
-  const [sessionFilter, setSessionFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
@@ -15398,48 +15373,11 @@ export function App() {
               <span className="row-icon"><IconPlus /></span>
             </button>
           </div>
-          {!sidebarCollapsed && sessions.length > 0 && (
-            <div className="sidebar-filter">
-              <input
-                className="sidebar-filter-input"
-                type="text"
-                value={sessionFilter}
-                onChange={(e) => setSessionFilter(e.target.value)}
-                placeholder="filter by repo or name"
-                aria-label="filter sessions by repo, name, id, or mode"
-                spellCheck={false}
-                autoCorrect="off"
-                autoCapitalize="off"
-              />
-              {sessionFilter && (
-                <button
-                  className="sidebar-filter-clear"
-                  onClick={() => setSessionFilter("")}
-                  aria-label="clear filter"
-                  title="clear filter"
-                >
-                  <IconClose />
-                </button>
-              )}
-            </div>
-          )}
           <ul className="sessions">
-            {(() => {
-              const q = sessionFilter.trim().toLowerCase();
-              const visible = q
-                ? sessions.filter((s) => sessionMatchesFilter(s, q))
-                : sessions;
-              if (sessions.length === 0) {
-                return <li className="sessions-empty">no sessions</li>;
-              }
-              if (visible.length === 0) {
-                return (
-                  <li className="sessions-empty">
-                    no sessions match “{sessionFilter.trim()}”
-                  </li>
-                );
-              }
-              return visible.map((s) => {
+            {sessions.length === 0 ? (
+              <li className="sessions-empty">no sessions</li>
+            ) : (
+              sessions.map((s) => {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
@@ -15510,8 +15448,8 @@ export function App() {
                   </div>
                 </li>
               );
-              });
-            })()}
+              })
+            )}
           </ul>
         </div>
 
