@@ -334,18 +334,20 @@ export class Runner {
 
       // Emit assistant message complete if text was generated
       const assistantItemID = `msg-${randomUUID()}`;
+      let timelineItemID = assistantItemID;
       if (assistantText) {
-        timelineIDs.push(assistantItemID);
-        await this.dispatch(
-          this.adapter.messageCompleted(turn, assistantItemID, assistantText)
-        );
+        const event = this.adapter.messageCompleted(turn, assistantItemID, assistantText);
+        if (event.timeline_id) {
+          timelineItemID = event.timeline_id;
+        }
+        await this.dispatch(event);
       }
 
       // Emit turn.completed
       await this.dispatch(
         this.adapter.turnCompleted(turn, {
-          timelineIDs,
-          providerItemIDs: timelineIDs
+          timelineIDs: assistantText ? [timelineItemID] : [],
+          providerItemIDs: assistantText ? [assistantItemID] : []
         })
       );
 
