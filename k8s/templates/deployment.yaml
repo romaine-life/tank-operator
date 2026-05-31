@@ -112,6 +112,8 @@ spec:
               value: {{ include "tank-operator.apiProxyHost" . | quote }}
             - name: CODEX_API_PROXY_HOST
               value: {{ include "tank-operator.codexApiProxyHost" . | quote }}
+            - name: GEMINI_API_PROXY_HOST
+              value: {{ include "tank-operator.geminiApiProxyHost" . | quote }}
             # Workload-identity wiring for the orchestrator's KV writes.
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state

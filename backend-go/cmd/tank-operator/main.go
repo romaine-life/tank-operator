@@ -379,6 +379,7 @@ func main() {
 		OAuthGatewayHost:  os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
 		APIProxyHost:      os.Getenv("CLAUDE_API_PROXY_HOST"),
 		CodexAPIProxyHost: os.Getenv("CODEX_API_PROXY_HOST"),
+		GeminiAPIProxyHost: os.Getenv("GEMINI_API_PROXY_HOST"),
 	})
 
 	// 10. Init auth. Tank verifies the upstream auth.romaine.life JWT

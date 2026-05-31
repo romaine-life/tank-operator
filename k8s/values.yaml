@@ -142,6 +142,12 @@ apiProxy:
 codexApiProxy:
   serviceHost: codex-api-proxy.tank-operator.svc.cluster.local
 
+# Gemini API proxy: a third Envoy + ext_proc deployment using the same image
+# and UAMI as apiProxy. It fronts generativelanguage.googleapis.com and owns the
+# real Google OAuth refresh chain for Gemini sessions.
+geminiApiProxy:
+  serviceHost: gemini-api-proxy.tank-operator.svc.cluster.local
+
 # Anthropic credential rotation: lives in the api-proxy's ext_proc sidecar
 # (api-proxy/src/tank_api_proxy/server.py). The sidecar caches the access
 # token, observes upstream 401s, calls platform.claude.com with the current
@@ -313,6 +319,17 @@ externalSecret:
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
     kvKey: codex-credentials
+  # Google Gemini subscription credentials. The primary Secret lives in the
+  # ORCHESTRATOR namespace and is mounted by gemini-api-proxy. Gemini CLI/GUI
+  # session launchers write a placeholder settings.json and route
+  # generativelanguage.googleapis.com through the proxy, which injects/rotates
+  # the real tokens and writes back to KV.
+  geminiCredentials:
+    secretName: gemini-credentials
+    # Key inside the K8s Secret. The proxy mounts this as
+    # /etc/gemini-credentials/settings.json.
+    secretKey: settings.json
+    kvKey: gemini-credentials
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

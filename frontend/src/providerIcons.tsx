@@ -1,5 +1,5 @@
 type ProviderIconProps = {
-  provider: "anthropic" | "codex" | "hermes" | "pi";
+  provider: "anthropic" | "codex" | "hermes" | "pi" | "gemini";
   className?: string;
 };
 
@@ -21,6 +21,11 @@ const ICONS: Record<
     viewBox: "0 0 24 24",
     fill: "hsl(187, 78%, 58%)",
     path: "M4 4h3.6v6.3h8.8V4H20v16h-3.6v-6.5H7.6V20H4V4Zm6.1 2.7h3.8v10.6h-3.8V6.7Z",
+  },
+  gemini: {
+    viewBox: "0 0 24 24",
+    fill: "hsl(217, 89%, 61%)",
+    path: "M12 2c0 5.522-4.478 10-10 10 5.522 0 10 4.478 10 10 0-5.522 4.478-10 10-10-5.522 0-10-4.478-10-10z",
   },
 };
 
