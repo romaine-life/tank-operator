@@ -236,6 +236,7 @@ type SessionMode =
   | "codex_app_server"
   | "codex_config"
   | "gemini_gui"
+  | "gemini_test"
   | "gemini_config"
   | "hermes_gui";
 type DefaultSessionMode = Extract<
@@ -246,6 +247,7 @@ type DefaultSessionMode = Extract<
   | "codex_gui"
   | "codex_exec_gui"
   | "gemini_gui"
+  | "gemini_test"
   | "hermes_gui"
 >;
 type Provider = "anthropic" | "codex" | "gemini" | "hermes";
@@ -608,6 +610,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   gemini_gui: "Gemini GUI",
+  gemini_test: "Gemini Test",
   gemini_config: "Gemini config",
   hermes_gui: "Hermes",
 };
@@ -625,6 +628,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   gemini_gui: "gemini-gui",
+  gemini_test: "gemini-test",
   gemini_config: "gemini-cfg",
   hermes_gui: "hermes",
 };
@@ -637,6 +641,7 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_exec_gui: "codex",
   codex_app_server: "codex",
   gemini_gui: "gemini",
+  gemini_test: "gemini",
   hermes_gui: "hermes",
 };
 
@@ -651,6 +656,7 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   codex_app_server: "codex",
   codex_config: "codex",
   gemini_gui: "gemini",
+  gemini_test: "gemini",
   gemini_config: "gemini",
   hermes_gui: "hermes",
 };
@@ -696,6 +702,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   gemini_gui: "GUI chat pane for Gemini transport",
+  gemini_test: "Unproxied Gemini test mode",
   gemini_config: "gemini login · seeds KV for Gemini",
   hermes_gui: "Shared Hermes memory + MCP tools",
 };
@@ -845,14 +852,14 @@ function demoTerminalLines(session: Session, promptText?: string): string[] {
     ? DEMO_CODEX_LINES
     : session.mode === "hermes_gui"
       ? DEMO_HERMES_LINES
-    : session.mode === "gemini_gui"
+    : session.mode === "gemini_gui" || session.mode === "gemini_test"
       ? DEMO_GEMINI_LINES
       : DEMO_CLAUDE_LINES;
   const lines = [...template];
   if (promptText) {
     if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
-    } else if (session.mode === "hermes_gui" || session.mode === "gemini_gui") {
+    } else if (session.mode === "hermes_gui" || session.mode === "gemini_gui" || session.mode === "gemini_test") {
       lines[lines.length - 1] = `> ${promptText}`;
     } else {
       const promptIndex = lines.findIndex((line) => line.startsWith("❯"));
@@ -1127,8 +1134,8 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config", "gemini_config"]);
-const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui", "gemini_gui"]);
-const SDK_CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "gemini_gui"]);
+const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui", "gemini_gui", "gemini_test"]);
+const SDK_CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "gemini_gui", "gemini_test"]);
 const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>([...SDK_CHAT_MODES, "hermes_gui"]);
 const SDK_TIMELINE_TAIL_ROWS = 24;
 const SDK_TIMELINE_OLDER_ROWS = 8;
@@ -1136,7 +1143,7 @@ const SDK_TIMELINE_DEEPLINK_ROWS_BEFORE = 12;
 const SDK_TIMELINE_DEEPLINK_ROWS_AFTER = 12;
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui", "gemini_gui"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui", "gemini_gui", "gemini_test"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
@@ -2910,7 +2917,7 @@ function isCodexRunMode(mode: SessionMode): boolean {
 }
 
 function isGeminiRunMode(mode: SessionMode): boolean {
-  return mode === "gemini_gui";
+  return mode === "gemini_gui" || mode === "gemini_test";
 }
 
 // (formerly: getRunToolGroupSummary — replaced by RunToolGroup's inline
@@ -3359,7 +3366,7 @@ function modelOptionsForMode(mode: SessionMode): ModelOption[] {
   if (mode === "codex_gui" || mode === "codex_exec_gui" || mode === "codex_app_server") {
     return CODEX_MODELS;
   }
-  if (mode === "gemini_gui") return GEMINI_MODELS;
+  if (mode === "gemini_gui" || mode === "gemini_test") return GEMINI_MODELS;
   return [];
 }
 
