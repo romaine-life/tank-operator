@@ -30,6 +30,7 @@ const (
 	CodexAppServerMode = "codex_app_server"
 	GeminiGUIMode      = "gemini_gui"
 	GeminiConfigMode   = "gemini_config"
+	GeminiTestMode     = "gemini_test"
 	// HermesGUIMode routes chat turns to Hermes Agent's OpenAI-compatible
 	// API server (cluster-internal at hermes-api.hermes.svc.cluster.local)
 	// via POST /v1/runs, instead of spawning a session pod. The "pod is
@@ -83,6 +84,7 @@ var (
 		CodexAppServerMode: {},
 		GeminiGUIMode:      {},
 		GeminiConfigMode:   {},
+		GeminiTestMode:     {},
 		HermesGUIMode:      {},
 	}
 
@@ -223,6 +225,7 @@ var noClaudeHijackModes = map[string]bool{
 	CodexAppServerMode: true,
 	GeminiConfigMode:   true,
 	GeminiGUIMode:      true,
+	GeminiTestMode:     true,
 }
 
 type ManifestOptions struct {
@@ -355,7 +358,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	if mode == CodexConfigMode || mode == CodexCLIMode || mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode {
 		sessionImage = opts.CodexSessionImage
 	}
-	if mode == GeminiConfigMode || mode == GeminiGUIMode {
+	if mode == GeminiConfigMode || mode == GeminiGUIMode || mode == GeminiTestMode {
 		sessionImage = opts.GeminiSessionImage
 	}
 
@@ -427,7 +430,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Codex GUI modes use codex-runner. Both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
 	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
-	wantGeminiRunner := mode == GeminiGUIMode
+	wantGeminiRunner := mode == GeminiGUIMode || mode == GeminiTestMode
 	wantSDKRunner := wantAgentRunner || wantCodexRunner || wantGeminiRunner
 	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
@@ -559,6 +562,21 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				"configMap": map[string]any{"name": opts.OAuthGatewayCAConfigMap},
 			})
 		}
+	}
+
+	if mode == GeminiTestMode {
+		volumes = append(volumes, map[string]any{
+			"name": "gemini-credentials",
+			"secret": map[string]any{
+				"secretName": "gemini-credentials",
+				"optional":   true,
+			},
+		})
+		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+			"name":      "gemini-credentials",
+			"mountPath": "/etc/gemini-credentials",
+			"readOnly":  true,
+		})
 	}
 
 	// envFrom on the claude container. GitHub App is used for git auth.
@@ -887,10 +905,17 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"mountPath": "/var/run/secrets/auth.romaine.life",
 			"readOnly":  true,
 		})
-		if opts.GeminiAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
+		if mode != GeminiTestMode && opts.GeminiAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
 			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
 				"name":      "oauth-gateway-ca",
 				"mountPath": "/etc/oauth-gateway-ca",
+				"readOnly":  true,
+			})
+		}
+		if mode == GeminiTestMode {
+			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+				"name":      "gemini-credentials",
+				"mountPath": "/etc/gemini-credentials",
 				"readOnly":  true,
 			})
 		}
@@ -927,7 +952,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 		}
-		if opts.GeminiAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
+		if mode != GeminiTestMode && opts.GeminiAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != "" {
 			geminiRunnerEnv = append(geminiRunnerEnv,
 				map[string]any{"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/oauth-gateway-ca/ca.crt"},
 			)
