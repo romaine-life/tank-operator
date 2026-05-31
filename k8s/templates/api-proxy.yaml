@@ -629,6 +629,7 @@ spec:
   renewBefore: 360h
   dnsNames:
     - generativelanguage.googleapis.com
+    - us-central1-aiplatform.googleapis.com
   issuerRef:
     name: claude-oauth-ca-issuer
     kind: Issuer
@@ -751,13 +752,13 @@ data:
                   - endpoint:
                       address:
                         socket_address:
-                          address: generativelanguage.googleapis.com
+                          address: us-central1-aiplatform.googleapis.com
                           port_value: 443
           transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
-              sni: generativelanguage.googleapis.com
+              sni: us-central1-aiplatform.googleapis.com
               common_tls_context:
                 validation_context:
                   trusted_ca:
