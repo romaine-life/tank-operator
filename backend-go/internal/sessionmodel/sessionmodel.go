@@ -580,7 +580,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		})
 		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
 			"name":      "gemini-credentials-test",
-			"mountPath": "/home/node/.gemini/oauth_creds.json",
+			"mountPath": "/etc/gemini-credentials/oauth_creds.json",
 			"subPath":   "oauth_creds.json",
 			"readOnly":  true,
 		})
@@ -922,7 +922,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		if mode == GeminiTestMode {
 			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
 				"name":      "gemini-credentials-test",
-				"mountPath": "/home/node/.gemini/oauth_creds.json",
+				"mountPath": "/etc/gemini-credentials/oauth_creds.json",
 				"subPath":   "oauth_creds.json",
 				"readOnly":  true,
 			})
