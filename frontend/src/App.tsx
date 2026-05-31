@@ -8811,6 +8811,11 @@ function ChatPane({
       `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnId)}/activity`,
     );
   }, [publicShareTokenValue, publicView, scopedSessionPathForPane, session.id]);
+  const fetchPaneResource = useCallback(
+    (input: RequestInfo, init?: RequestInit) =>
+      publicView ? fetch(input, init) : authedFetch(input, init),
+    [publicView],
+  );
   const supportsFileAttachments = !readOnly && !publicView && sessionModeSupportsWorkspaceFiles(session.mode);
   const filesAvailable = !readOnly && !publicView && sessionFilesAvailable(session);
   const filesTabTitle = sessionFilesTabTitle(session);
@@ -9741,7 +9746,7 @@ function ChatPane({
         ...chatScrollPreviousEntrySnapshot(previousSnapshot),
         ...chatScrollElementSnapshot(transcriptScrollEl),
       });
-      const res = await authedFetch(
+      const res = await fetchPaneResource(
         timelineRequestPathForPane(refreshSessionId, params.toString()),
       );
       if (!res.ok) {
@@ -9911,7 +9916,7 @@ function ChatPane({
         before_cursor: beforeCursor,
         rows: String(SDK_TIMELINE_OLDER_ROWS),
       });
-      const res = await authedFetch(
+      const res = await fetchPaneResource(
         timelineRequestPathForPane(refreshSessionId, params.toString()),
       );
       if (!res.ok) {
@@ -10019,7 +10024,7 @@ function ChatPane({
       ...chatScrollPreviousEntrySnapshot(previousSnapshot),
       ...chatScrollElementSnapshot(transcriptScrollEl),
     });
-    const res = await authedFetch(
+    const res = await fetchPaneResource(
       timelineRequestPathForPane(refreshSessionId, params.toString()),
     );
     if (!res.ok) {
@@ -10102,7 +10107,7 @@ function ChatPane({
       ...chatScrollPreviousEntrySnapshot(previousSnapshot),
       ...chatScrollElementSnapshot(transcriptScrollEl),
     });
-    const res = await authedFetch(
+    const res = await fetchPaneResource(
       timelineRequestPathForPane(refreshSessionId, params.toString()),
     );
     if (!res.ok) {
@@ -11752,7 +11757,7 @@ function ChatPane({
     if (!options?.force && activityEntriesByTurn[trimmedTurnId]) return;
     if (loadingActivityTurns[trimmedTurnId]) return;
     setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
-    void authedFetch(turnActivityRequestPathForPane(trimmedTurnId))
+    void fetchPaneResource(turnActivityRequestPathForPane(trimmedTurnId))
       .then(async (res) => {
         if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
         const body = (await res.json()) as { entries?: unknown[] };
@@ -11767,7 +11772,7 @@ function ChatPane({
       .finally(() => {
         setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
       });
-  }, [activityEntriesByTurn, loadingActivityTurns, turnActivityRequestPathForPane]);
+  }, [activityEntriesByTurn, fetchPaneResource, loadingActivityTurns, turnActivityRequestPathForPane]);
   useEffect(() => {
     if (turnViewItems.length === 0) {
       if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);
