@@ -280,6 +280,11 @@ type CreateOptions struct {
 	// calling Create; Manager persists them unchanged.
 	Model  string
 	Effort string
+	// Capabilities is the normalized per-session capability list. Empty keeps
+	// the default pod surface. Capabilities are durable row state and pod
+	// manifest input; unsupported modes/configurations are rejected before a
+	// row or pod is created.
+	Capabilities []string
 }
 
 // Create creates a new session pod and registers it in the registry.
@@ -297,6 +302,18 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	repos := opts.Repos
 	if repos == nil {
 		repos = []string{}
+	}
+	capabilities := opts.Capabilities
+	if capabilities == nil {
+		capabilities = []string{}
+	}
+	if sessionmodel.HasSessionCapability(capabilities, sessionmodel.SessionCapabilitySpireLensMCP) {
+		if sessionmodel.IsNoPodMode(mode) {
+			return Info{}, fmt.Errorf("%s capability requires a session pod", sessionmodel.SessionCapabilitySpireLensMCP)
+		}
+		if !sessionmodel.SpireLensMCPConfigured(m.manifestOpts) {
+			return Info{}, fmt.Errorf("%s capability is not configured for this deployment", sessionmodel.SessionCapabilitySpireLensMCP)
+		}
 	}
 	model := opts.Model
 	effort := opts.Effort
@@ -353,6 +370,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
 	manifestOpts.Name = name
+	manifestOpts.Capabilities = capabilities
 
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)
@@ -398,6 +416,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			RequestedAt:    requestedAt,
 			UpdatedAt:      requestedAt,
 			Repos:          repos,
+			Capabilities:   capabilities,
 			Model:          model,
 			Effort:         effort,
 			AgentAvatarID:  assignment.AgentAvatarID,
@@ -440,6 +459,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		CreatedAt:      createdAt,
 		Name:           name,
 		Repos:          repos,
+		Capabilities:   capabilities,
 		Model:          model,
 		Effort:         effort,
 		AgentAvatarID:  assignment.AgentAvatarID,
@@ -461,6 +481,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			CreatedAt:      *createdAt,
 			UpdatedAt:      requestedAt,
 			Repos:          repos,
+			Capabilities:   capabilities,
 			Model:          model,
 			Effort:         effort,
 			AgentAvatarID:  assignment.AgentAvatarID,

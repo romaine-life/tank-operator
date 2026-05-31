@@ -436,6 +436,7 @@ type ForkSessionRequest = {
 
 type AppPublicConfig = {
   session_scope?: string;
+  spirelens_mcp_available?: string;
   fork_session_prompt_template?: string;
   // Splash-page initial-message mode directives, sourced live from the
   // app-config ConfigMap via /api/config so they can be edited against main
@@ -593,6 +594,7 @@ interface Session {
   // clone_state is the per-repo repo-cloner init-container outcome.
   // Optional until the cloner writes back.
   clone_state?: Record<string, unknown> | null;
+  capabilities: string[];
   model?: string;
   effort?: string;
   runtime_model?: string;
@@ -751,6 +753,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
     repos: [],
+    capabilities: [],
     agent_avatar_id: demoAgentAvatarID(1),
   },
   {
@@ -764,6 +767,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
     repos: [],
+    capabilities: [],
     agent_avatar_id: demoAgentAvatarID(2),
   },
   {
@@ -777,6 +781,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 24 * 60 * 1000).toISOString(),
     name: "Gemini",
     repos: [],
+    capabilities: [],
     agent_avatar_id: demoAgentAvatarID(4),
   },
 ];
@@ -1001,6 +1006,7 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     ready_at: null,
     name: `${label} ${index}`,
     repos: [],
+    capabilities: [],
     agent_avatar_id: demoAgentAvatarID(index),
   };
 }
@@ -1110,6 +1116,9 @@ function normalizeSession(session: Session): Session {
   // array so downstream renderers can `.map` without a guard.
   next.repos = Array.isArray(session.repos) ? session.repos : [];
   next.clone_state = session.clone_state ?? null;
+  next.capabilities = Array.isArray(session.capabilities)
+    ? session.capabilities.filter((entry): entry is string => typeof entry === "string")
+    : [];
   next.model = typeof session.model === "string" ? session.model : "";
   next.effort = typeof session.effort === "string" ? session.effort : "";
   next.runtime_model = typeof session.runtime_model === "string" ? session.runtime_model : "";
@@ -13991,6 +14000,7 @@ function AuthenticatedApp() {
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
+  const [homeSpireLensMcpEnabled, setHomeSpireLensMcpEnabled] = useState(false);
   const recentRepoShortcuts = useMemo(
     () => recentRepoShortcutSlugs(recentRepos),
     [recentRepos],
@@ -14049,6 +14059,7 @@ function AuthenticatedApp() {
     readGlimmungLaunchContext()
   );
   const currentSessionScope = normalizeSessionScopeValue(appConfig.session_scope);
+  const spireLensMcpAvailable = appConfig.spirelens_mcp_available === "true";
   const hasAdminAccess = userIsAdmin(user);
   const canViewProdSessions =
     hasAdminAccess && currentSessionScope !== PROD_SESSION_SCOPE;
@@ -14226,6 +14237,12 @@ function AuthenticatedApp() {
   }, [defaultSessionMode, repoPickerOpen, repoError]);
 
   useEffect(() => {
+    if (!spireLensMcpAvailable || defaultSessionMode === "hermes_gui") {
+      setHomeSpireLensMcpEnabled(false);
+    }
+  }, [defaultSessionMode, spireLensMcpAvailable]);
+
+  useEffect(() => {
     writeHomeSelectedRepos(selectedRepos);
   }, [selectedRepos]);
 
@@ -14322,6 +14339,7 @@ function AuthenticatedApp() {
       activity: undefined, // activities live in the parallel sessionActivities map
       repos: Array.isArray(row.repos) ? row.repos : [],
       clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
+      capabilities: Array.isArray(row.capabilities) ? row.capabilities : [],
       model: row.model ?? "",
       effort: row.effort ?? "",
       runtime_model: row.runtime_model ?? "",
@@ -14360,6 +14378,7 @@ function AuthenticatedApp() {
       rollout_state: raw.rollout_state ?? undefined,
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
+      capabilities: Array.isArray(raw.capabilities) ? raw.capabilities.map(String) : [],
       model: typeof raw.model === "string" ? raw.model : undefined,
       effort: typeof raw.effort === "string" ? raw.effort : undefined,
       runtime_model: typeof raw.runtime_model === "string" ? raw.runtime_model : undefined,
@@ -15077,6 +15096,10 @@ function AuthenticatedApp() {
     // mode-override createSession() call could otherwise send repos for a
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
+    const capabilities =
+      spireLensMcpAvailable && homeSpireLensMcpEnabled && mode !== "hermes_gui"
+        ? ["spirelens_mcp"]
+        : [];
     const requestedName = normalizedHomeTitleNameFrom(
       homeSessionNameRef.current,
       homeEditingDefaultTitleRef.current,
@@ -15127,6 +15150,7 @@ function AuthenticatedApp() {
         body: JSON.stringify({
           mode,
           repos,
+          ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(requestedName ? { name: requestedName } : {}),
           ...(sessionModel || sessionEffort ? { model: sessionModel, effort: sessionEffort } : {}),
           ...(initialTurnPayload ? { initial_turn: initialTurnPayload } : {}),
@@ -16261,6 +16285,22 @@ function AuthenticatedApp() {
                         setRepoError(null);
                       }}
                     />
+                  )}
+                  {spireLensMcpAvailable && defaultSessionMode !== "hermes_gui" && (
+                    <button
+                      type="button"
+                      className={`home-quick-action home-capability-action${homeSpireLensMcpEnabled ? " is-selected" : ""}`}
+                      onClick={() => setHomeSpireLensMcpEnabled((value) => !value)}
+                      disabled={busy}
+                      aria-pressed={homeSpireLensMcpEnabled}
+                      title="Add the SpireLens game-host MCP to this session"
+                    >
+                      <McpIcon className="home-quick-icon" />
+                      <span className="home-quick-main">
+                        <span className="home-quick-title">SpireLens MCP</span>
+                        <span className="home-quick-sub">Game host tools</span>
+                      </span>
+                    </button>
                   )}
                 </section>
               </div>

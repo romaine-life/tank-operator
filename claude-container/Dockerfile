@@ -67,6 +67,7 @@ ARG TOFU_VERSION=1.9.0
 ARG HELM_VERSION=v3.16.3
 ARG YQ_VERSION=v4.44.3
 ARG UV_VERSION=0.5.18
+ARG TAILSCALE_VERSION=1.98.4
 ARG RUFF_VERSION=0.15.12
 ARG PYTEST_VERSION=8.4.2
 ARG GO_VERSION=1.26.2
@@ -88,6 +89,7 @@ RUN apk add --no-cache \
         jq \
         less \
         make \
+        openssh-client \
         py3-pip \
         python3 \
         ripgrep \
@@ -131,6 +133,20 @@ RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/
     && mv /tmp/uv-x86_64-unknown-linux-musl/uvx /usr/local/bin/uvx \
     && rm -rf /tmp/uv-x86_64-unknown-linux-musl \
     && chmod +x /usr/local/bin/uv /usr/local/bin/uvx
+
+# tailscale â€” lets a session pod join the tailnet in userspace mode to reach
+# hosts that live off-cluster (e.g. the SpireLens game host on
+# tag:spirelens-host). Baked in but dormant: only a session that opts in runs
+# the join (see session-pod-bootstrap.sh + docs/tailnet-host-access.md), so the
+# binaries are present for instant, offline opt-in without changing the image.
+# Statically linked Go binaries, so they run on alpine/musl (verified on this
+# same node:20-alpine base).
+RUN curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${TARGETARCH}.tgz" \
+        | tar -xz -C /tmp \
+    && mv "/tmp/tailscale_${TAILSCALE_VERSION}_${TARGETARCH}/tailscale" /usr/local/bin/tailscale \
+    && mv "/tmp/tailscale_${TAILSCALE_VERSION}_${TARGETARCH}/tailscaled" /usr/local/bin/tailscaled \
+    && rm -rf "/tmp/tailscale_${TAILSCALE_VERSION}_${TARGETARCH}" \
+    && chmod +x /usr/local/bin/tailscale /usr/local/bin/tailscaled
 
 RUN case "${TANK_AGENT}" in \
         claude) npm install -g @anthropic-ai/claude-code "vite@${VITE_VERSION}" "typescript@${TYPESCRIPT_VERSION}" ;; \

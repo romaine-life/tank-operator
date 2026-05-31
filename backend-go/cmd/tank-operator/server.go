@@ -317,6 +317,11 @@ func publicConfig() map[string]string {
 		// at auth.romaine.life; tank-operator verifies that JWT directly.
 		"auth_url":      envDefault("AUTH_URL", "https://auth.romaine.life"),
 		"session_scope": envDefault("SESSION_REGISTRY_SCOPE", "default"),
+		"spirelens_mcp_available": boolConfigString(
+			envDefault("SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", "") != "" &&
+				envDefault("SESSION_SPIRELENS_TAILSCALE_TAILNET", "") != "" &&
+				envDefault("SESSION_SPIRELENS_HOST", "") != "",
+		),
 		"fork_session_prompt_template": readOptionalFile(
 			os.Getenv("TANK_FORK_SESSION_PROMPT_FILE"),
 			defaultForkSessionPromptTemplate,
@@ -344,6 +349,13 @@ func publicConfig() map[string]string {
 			defaultInitialModeTestDirective,
 		),
 	}
+}
+
+func boolConfigString(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 const defaultForkSessionPromptTemplate = `The user forked this session from an assistant message in another Tank Operator session to deal with a divergent issue.

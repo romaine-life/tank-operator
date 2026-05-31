@@ -45,6 +45,29 @@ func TestNormalizeName(t *testing.T) {
 	}
 }
 
+func TestNormalizeSessionCapabilities(t *testing.T) {
+	got, err := NormalizeSessionCapabilities([]string{
+		"  " + SessionCapabilitySpireLensMCP + "  ",
+		SessionCapabilitySpireLensMCP,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0] != SessionCapabilitySpireLensMCP {
+		t.Fatalf("capabilities = %#v, want single normalized spirelens capability", got)
+	}
+	if !HasSessionCapability(got, SessionCapabilitySpireLensMCP) {
+		t.Fatalf("HasSessionCapability(%#v, %q) = false", got, SessionCapabilitySpireLensMCP)
+	}
+
+	if _, err := NormalizeSessionCapabilities([]string{"unknown"}); err == nil {
+		t.Fatal("unknown capability accepted")
+	}
+	if _, err := NormalizeSessionCapabilities([]string{""}); err == nil {
+		t.Fatal("empty capability accepted")
+	}
+}
+
 func TestDocumentIDsAndShapes(t *testing.T) {
 	if got, want := SessionDocID("default", "12"), "session:12"; got != want {
 		t.Fatalf("SessionDocID(default) = %q, want %q", got, want)
@@ -80,6 +103,51 @@ func TestDocumentIDsAndShapes(t *testing.T) {
 		t.Fatalf("session doc email = %v, want %q", got, want)
 	}
 
+}
+
+func TestPodManifestSpireLensCapabilityWiresTailnetMCP(t *testing.T) {
+	manifest := PodManifest("12", "nelson@romaine.life", ClaudeGUIMode, ManifestOptions{
+		SessionImage:                   "claude-image",
+		CodexSessionImage:              "codex-image",
+		GeminiSessionImage:             "gemini-image",
+		Capabilities:                   []string{SessionCapabilitySpireLensMCP},
+		SpireLensTailscaleOIDCClientID: "oidc-client",
+		SpireLensTailscaleTailnet:      "-",
+		SpireLensTailscaleAuthTag:      "tag:spirelens-orchestrator",
+		SpireLensHost:                  "nelsonlaptop",
+		SpireLensMCPPort:               15527,
+	})
+
+	metadata := manifest["metadata"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	if got, want := annotations["tank-operator/capabilities"], `["spirelens_mcp"]`; got != want {
+		t.Fatalf("capabilities annotation = %v, want %q", got, want)
+	}
+	spec := manifest["spec"].(map[string]any)
+	containers := spec["containers"].([]any)
+	claude := findContainer(t, containers, "claude")
+	claudeEnv := containerEnv(claude)
+	if got, want := claudeEnv["SPIRELENS_MCP_ENABLED"], "true"; got != want {
+		t.Fatalf("SPIRELENS_MCP_ENABLED = %v, want %q", got, want)
+	}
+	if got, want := claudeEnv["SPIRELENS_TAILSCALE_OIDC_CLIENT_ID"], "oidc-client"; got != want {
+		t.Fatalf("SPIRELENS_TAILSCALE_OIDC_CLIENT_ID = %v, want %q", got, want)
+	}
+	hostnameRef := claudeEnv["SPIRELENS_TAILSCALE_HOSTNAME"].(map[string]any)["fieldRef"].(map[string]any)
+	if got, want := hostnameRef["fieldPath"], "metadata.name"; got != want {
+		t.Fatalf("SPIRELENS_TAILSCALE_HOSTNAME fieldPath = %v, want %q", got, want)
+	}
+
+	proxy := findContainer(t, containers, "mcp-auth-proxy")
+	proxyEnv := containerEnv(proxy)
+	if got, want := proxyEnv["SPIRELENS_MCP_UPSTREAM"], "http://nelsonlaptop:15527"; got != want {
+		t.Fatalf("SPIRELENS_MCP_UPSTREAM = %v, want %q", got, want)
+	}
+	if got, want := proxyEnv["TAILNET_HTTP_PROXY"], "http://127.0.0.1:1055"; got != want {
+		t.Fatalf("TAILNET_HTTP_PROXY = %v, want %q", got, want)
+	}
+	assertConfigMapMountSubPath(t, claude, "/workspace/.mcp.json", "mcp.spirelens.json")
+	assertConfigMapMountSubPath(t, proxy, "/workspace/.mcp.json", "mcp.spirelens.json")
 }
 
 func TestPodManifestCompatibilityCore(t *testing.T) {
@@ -755,6 +823,20 @@ func assertVolumeMount(t *testing.T, container map[string]any, name string) {
 		}
 	}
 	t.Fatalf("volumeMount %q not found", name)
+}
+
+func assertConfigMapMountSubPath(t *testing.T, container map[string]any, mountPath, subPath string) {
+	t.Helper()
+	for _, item := range container["volumeMounts"].([]any) {
+		mount := item.(map[string]any)
+		if mount["mountPath"] == mountPath {
+			if got := mount["subPath"]; got != subPath {
+				t.Fatalf("mount %s subPath = %v, want %q", mountPath, got, subPath)
+			}
+			return
+		}
+	}
+	t.Fatalf("mountPath %q not found", mountPath)
 }
 
 func assertNoVolumeMount(t *testing.T, container map[string]any, name string) {

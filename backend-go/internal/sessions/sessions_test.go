@@ -42,6 +42,7 @@ func TestListReadsEverythingFromTheRegistryRow(t *testing.T) {
 			ActivitySummary: activity,
 			TestState:       map[string]any{"active": true},
 			RolloutState:    map[string]any{"active": true},
+			Capabilities:    []string{sessionmodel.SessionCapabilitySpireLensMCP},
 		},
 	}
 	// Empty K8s client — proves the snapshot doesn't touch K8s.
@@ -76,6 +77,9 @@ func TestListReadsEverythingFromTheRegistryRow(t *testing.T) {
 	}
 	if session.Activity == nil || session.Activity.UnreadCount != 3 {
 		t.Fatalf("activity = %#v, want unread_count=3", session.Activity)
+	}
+	if !slices.Equal(session.Capabilities, []string{sessionmodel.SessionCapabilitySpireLensMCP}) {
+		t.Fatalf("capabilities = %#v, want spirelens_mcp", session.Capabilities)
 	}
 	// Verify no K8s API calls were made.
 	if actions := client.Actions(); len(actions) > 0 {

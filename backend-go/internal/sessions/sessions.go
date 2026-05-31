@@ -19,6 +19,7 @@ import (
 const (
 	defaultNamespace       = sessionmodel.SessionsNamespace
 	nameAnnotation         = "tank-operator/display-name"
+	capabilitiesAnnotation = "tank-operator/capabilities"
 	testStateAnnotation    = "tank-operator/test-state"
 	rolloutStateAnnotation = "tank-operator/rollout-state"
 )
@@ -54,6 +55,9 @@ type Info struct {
 	// the cloner publishes its first state. Omitted from the wire when
 	// nil to keep the snapshot lean for the every-row today shape.
 	CloneState map[string]any `json:"clone_state,omitempty"`
+	// Capabilities is the durable per-session capability list selected at
+	// create time. Empty means the default pod surface.
+	Capabilities []string `json:"capabilities"`
 	// RowVersion is the per-(owner, scope) monotonic cursor each
 	// sessions row carries (docs/session-list-redesign.md Phase 1).
 	// The SPA's SessionStore reads this to seed its EventSource
@@ -233,6 +237,10 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 	if repos == nil {
 		repos = []string{}
 	}
+	capabilities := record.Capabilities
+	if capabilities == nil {
+		capabilities = []string{}
+	}
 	scope := strings.TrimSpace(record.Scope)
 	if scope == "" {
 		scope = "default"
@@ -252,6 +260,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		RolloutState:        record.RolloutState,
 		Repos:               repos,
 		CloneState:          record.CloneState,
+		Capabilities:        capabilities,
 		RowVersion:          record.RowVersion,
 		SidebarPosition:     record.SidebarPosition,
 		Model:               record.Model,
@@ -323,7 +332,8 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		// source is the registry row, and any caller hitting this
 		// path is in degraded mode anyway. Default to empty so the
 		// wire shape stays consistent with infoFromRecord.
-		Repos: []string{},
+		Repos:        []string{},
+		Capabilities: annotationStringList(pod.Annotations, capabilitiesAnnotation),
 	}
 }
 
@@ -422,6 +432,17 @@ func annotationObject(annotations map[string]string, key string) map[string]any 
 	var out map[string]any
 	if err := json.Unmarshal([]byte(annotations[key]), &out); err != nil {
 		return nil
+	}
+	return out
+}
+
+func annotationStringList(annotations map[string]string, key string) []string {
+	if annotations == nil || annotations[key] == "" {
+		return []string{}
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(annotations[key]), &out); err != nil {
+		return []string{}
 	}
 	return out
 }
