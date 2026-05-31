@@ -9,8 +9,11 @@ from aiohttp import ClientSession, ClientTimeout, web
 from aiohttp.test_utils import TestClient, TestServer
 
 from mcp_auth_proxy.server import (
+    LISTENERS,
     _MAX_UPSTREAM_ATTEMPTS,
     AuthRomaineServiceProvider,
+    SPIRELENS_MCP_PORT,
+    _effective_listeners,
     _make_handler,
 )
 
@@ -127,6 +130,21 @@ def test_auth_romaine_service_provider_rejects_expired_response(tmp_path) -> Non
 
     with pytest.raises(RuntimeError, match="response was invalid"):
         asyncio.run(provider.token())
+
+
+def test_effective_listeners_omit_spirelens_by_default() -> None:
+    listeners = _effective_listeners("")
+
+    assert listeners == LISTENERS
+    assert all(port != SPIRELENS_MCP_PORT for port, _upstream in listeners)
+
+
+def test_effective_listeners_add_spirelens_when_configured() -> None:
+    upstream = "http://nelsonlaptop:15527"
+    listeners = _effective_listeners(upstream)
+
+    assert listeners[:-1] == LISTENERS
+    assert listeners[-1] == (SPIRELENS_MCP_PORT, upstream)
 
 
 # --- retry-loop tests ----------------------------------------------

@@ -950,6 +950,13 @@ var schemaMigrations = []migration{
 	)`},
 	{ID: "0077", SQL: `CREATE INDEX IF NOT EXISTS provider_credential_health_status
 		ON provider_credential_health (status, provider)`},
+
+	// Per-session capability opt-ins. Empty array is the default pod surface;
+	// named values are rare create-time capabilities such as spirelens_mcp.
+	// The list is persisted on the row so the pod manifest is not the only
+	// place to inspect why a session joined extra infrastructure.
+	{ID: "0078", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS capabilities text[] NOT NULL DEFAULT '{}'`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
@@ -989,7 +996,7 @@ type MigrationMetrics interface {
 
 type noopMigrationMetrics struct{}
 
-func (noopMigrationMetrics) SetMigrationsPending(int)      {}
+func (noopMigrationMetrics) SetMigrationsPending(int)       {}
 func (noopMigrationMetrics) RecordMigrationApplied(float64) {}
 func (noopMigrationMetrics) RecordMigrationSkipped()        {}
 func (noopMigrationMetrics) RecordMigrationFailed(string)   {}

@@ -161,7 +161,7 @@ ORIGIN_SESSION_ID = (os.environ.get("SESSION_ID") or "").strip()
 # (port, upstream URL). Mirrors k8s/session-config/mcp.json. Adding an
 # MCP means: append here, append a port mapping in mcp.json, ship.
 #
-# Port allocation (next free: 9997):
+# Port allocation (next free: 9998):
 #   9991 â€” mcp-azure-personal
 #   9992 â€” mcp-github
 #   9993 â€” mcp-k8s
@@ -176,6 +176,14 @@ LISTENERS: list[tuple[int, str]] = [
     (9995, "http://mcp-glimmung.mcp-glimmung.svc:80"),
     (9996, "http://mcp-tank-operator.mcp-tank-operator.svc:80"),
 ]
+
+
+def _effective_listeners(spirelens_upstream: str = SPIRELENS_MCP_UPSTREAM) -> list[tuple[int, str]]:
+    listeners = list(LISTENERS)
+    upstream = (spirelens_upstream or "").strip()
+    if upstream:
+        listeners.append((SPIRELENS_MCP_PORT, upstream))
+    return listeners
 
 # Headers we strip from the inbound request before forwarding. Host is
 # rebuilt by aiohttp for the upstream; Authorization gets replaced with
@@ -561,9 +569,8 @@ async def run() -> None:
     # The SpireLens game-host MCP is a tailnet upstream, added only when
     # configured (SPIRELENS_MCP_UPSTREAM) and reached through the tailscaled
     # outbound HTTP proxy. See docs/tailnet-host-access.md.
-    effective_listeners = list(LISTENERS)
+    effective_listeners = _effective_listeners()
     if SPIRELENS_MCP_UPSTREAM:
-        effective_listeners.append((SPIRELENS_MCP_PORT, SPIRELENS_MCP_UPSTREAM))
         if not TAILNET_HTTP_PROXY:
             log.warning(
                 "SPIRELENS_MCP_UPSTREAM set but TAILNET_HTTP_PROXY is empty; the "

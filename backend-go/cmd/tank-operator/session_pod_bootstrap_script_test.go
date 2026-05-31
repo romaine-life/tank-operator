@@ -98,3 +98,142 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionPodBootstrapScript_SpireLensTailnetOptIn(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bootstrap script test runs on POSIX only")
+	}
+
+	scriptPath, err := filepath.Abs("../../../k8s/session-config/session-pod-bootstrap.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+
+	home := t.TempDir()
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatalf("mkdir fake bin: %v", err)
+	}
+	tailnetLog := filepath.Join(t.TempDir(), "tailnet.log")
+	curlLog := filepath.Join(t.TempDir(), "curl.log")
+	socketPath := filepath.Join(t.TempDir(), "tailscaled.sock")
+	stateDir := filepath.Join(t.TempDir(), "state")
+	tokenPath := filepath.Join(t.TempDir(), "auth-token")
+	if err := os.WriteFile(tokenPath, []byte("pod-token"), 0o600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+
+	writeExecutable(t, filepath.Join(fakeBin, "jq"), `#!/bin/sh
+if [ "$1" = "-nc" ]; then
+  printf '{}\n'
+  exit 0
+fi
+if [ "$1" = "-r" ]; then
+  filter="$2"
+  case "$filter" in
+    *access_token*) printf 'ts-access\n' ;;
+    *token*) printf 'fed-jwt\n' ;;
+    *key*) printf 'tskey-auth\n' ;;
+    *) exit 1 ;;
+  esac
+  exit 0
+fi
+exit 1
+`)
+	writeExecutable(t, filepath.Join(fakeBin, "curl"), `#!/bin/sh
+printf 'curl %s\n' "$*" >> "$FAKE_CURL_LOG"
+case "$*" in
+  *exchange/federation*) printf '{"token":"fed-jwt"}\n' ;;
+  *oauth/token-exchange*) printf '{"access_token":"ts-access"}\n' ;;
+  *'/keys'*) printf '{"key":"tskey-auth"}\n' ;;
+  *) exit 1 ;;
+esac
+`)
+	writeExecutable(t, filepath.Join(fakeBin, "tailscaled"), `#!/bin/sh
+printf 'tailscaled %s\n' "$*" >> "$FAKE_TAILNET_LOG"
+socket=""
+for arg in "$@"; do
+  case "$arg" in
+    --socket=*) socket="${arg#--socket=}" ;;
+  esac
+done
+if [ -n "$socket" ]; then
+  socket_dir="${socket%/*}"
+  if [ "$socket_dir" != "$socket" ]; then
+    mkdir -p "$socket_dir"
+  fi
+  : > "$socket"
+fi
+exit 0
+`)
+	writeExecutable(t, filepath.Join(fakeBin, "tailscale"), `#!/bin/sh
+printf 'tailscale %s\n' "$*" >> "$FAKE_TAILNET_LOG"
+case "$*" in
+  *status*) exit 1 ;;
+esac
+exit 0
+`)
+
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TANK_SESSION_MODE=claude_gui",
+		"SPIRELENS_MCP_ENABLED=true",
+		"AUTH_ROMAINE_TOKEN_PATH="+tokenPath,
+		"AUTH_ROMAINE_URL=https://auth.romaine.life",
+		"SPIRELENS_TAILSCALE_OIDC_CLIENT_ID=oidc-client",
+		"SPIRELENS_TAILSCALE_TAILNET=-",
+		"SPIRELENS_TAILSCALE_AUTH_TAG=tag:spirelens-orchestrator",
+		"SPIRELENS_TAILSCALE_SOCKET="+socketPath,
+		"SPIRELENS_TAILSCALE_STATE_DIR="+stateDir,
+		"SPIRELENS_TAILSCALE_OUTBOUND_HTTP_PROXY_LISTEN=127.0.0.1:1055",
+		"SPIRELENS_TAILSCALE_HOSTNAME=session-test",
+		"SPIRELENS_TAILSCALE_AUTHKEY_EXPIRY_SECONDS=1200",
+		"FAKE_TAILNET_LOG="+tailnetLog,
+		"FAKE_CURL_LOG="+curlLog,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed: %v\noutput:\n%s", err, string(out))
+	}
+
+	tailnetRaw, err := os.ReadFile(tailnetLog)
+	if err != nil {
+		t.Fatalf("read tailnet log: %v", err)
+	}
+	tailnet := string(tailnetRaw)
+	for _, want := range []string{
+		"tailscaled --tun=userspace-networking",
+		"--statedir=" + stateDir,
+		"--socket=" + socketPath,
+		"--outbound-http-proxy-listen=127.0.0.1:1055",
+		"tailscale --socket=" + socketPath + " up --authkey=tskey-auth --hostname=session-test --accept-routes=false --accept-dns=false",
+	} {
+		if !strings.Contains(tailnet, want) {
+			t.Fatalf("tailnet log missing %q\ngot:\n%s", want, tailnet)
+		}
+	}
+
+	curlRaw, err := os.ReadFile(curlLog)
+	if err != nil {
+		t.Fatalf("read curl log: %v", err)
+	}
+	curlCalls := string(curlRaw)
+	for _, want := range []string{
+		"/api/auth/exchange/federation",
+		"oauth/token-exchange",
+		"/api/v2/tailnet/-/keys",
+	} {
+		if !strings.Contains(curlCalls, want) {
+			t.Fatalf("curl log missing %q\ngot:\n%s", want, curlCalls)
+		}
+	}
+}
+
+func writeExecutable(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write executable %s: %v", path, err)
+	}
+}

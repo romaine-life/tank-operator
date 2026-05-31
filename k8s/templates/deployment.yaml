@@ -71,6 +71,16 @@ spec:
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
             - name: REAPER_INTERVAL_SECONDS
               value: {{ .Values.session.reaperIntervalSeconds | quote }}
+            - name: SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID
+              value: {{ .Values.session.spirelens.oidcClientId | quote }}
+            - name: SESSION_SPIRELENS_TAILSCALE_TAILNET
+              value: {{ .Values.session.spirelens.tailnet | quote }}
+            - name: SESSION_SPIRELENS_TAILSCALE_AUTH_TAG
+              value: {{ .Values.session.spirelens.authTag | quote }}
+            - name: SESSION_SPIRELENS_HOST
+              value: {{ .Values.session.spirelens.host | quote }}
+            - name: SESSION_SPIRELENS_MCP_PORT
+              value: {{ .Values.session.spirelens.port | quote }}
             - name: TANK_OPERATOR_STATIC_DIR
               value: /app/static
             - name: TANK_FORK_SESSION_PROMPT_FILE

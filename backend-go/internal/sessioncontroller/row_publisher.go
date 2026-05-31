@@ -142,6 +142,7 @@ type rowWireShape struct {
 	// state is omitted until the repo-cloner init container writes back.
 	Repos               []string       `json:"repos"`
 	CloneState          map[string]any `json:"clone_state,omitempty"`
+	Capabilities        []string       `json:"capabilities"`
 	Model               string         `json:"model,omitempty"`
 	Effort              string         `json:"effort,omitempty"`
 	RuntimeModel        string         `json:"runtime_model,omitempty"`
@@ -167,6 +168,10 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 	if repos == nil {
 		repos = []string{}
 	}
+	capabilities := record.Capabilities
+	if capabilities == nil {
+		capabilities = []string{}
+	}
 	wire := RowUpdatePayload{
 		Row: rowWireShape{
 			ID:                  record.ID,
@@ -187,6 +192,7 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			RolloutState:        record.RolloutState,
 			Repos:               repos,
 			CloneState:          record.CloneState,
+			Capabilities:        capabilities,
 			Model:               record.Model,
 			Effort:              record.Effort,
 			RuntimeModel:        record.RuntimeModel,

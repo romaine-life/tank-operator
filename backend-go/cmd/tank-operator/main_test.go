@@ -127,6 +127,47 @@ func TestConfigDefaultsAuthURL(t *testing.T) {
 	}
 }
 
+func TestConfigSpireLensAvailability(t *testing.T) {
+	cases := []struct {
+		name string
+		env  map[string]string
+		want string
+	}{
+		{
+			name: "missing config disables capability",
+			env: map[string]string{
+				"SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID": "oidc-client",
+				"SESSION_SPIRELENS_TAILSCALE_TAILNET":        "-",
+				"SESSION_SPIRELENS_HOST":                     "",
+			},
+			want: "false",
+		},
+		{
+			name: "all required config enables capability",
+			env: map[string]string{
+				"SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID": "oidc-client",
+				"SESSION_SPIRELENS_TAILSCALE_TAILNET":        "-",
+				"SESSION_SPIRELENS_HOST":                     "nelsonlaptop",
+			},
+			want: "true",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			for key, value := range tc.env {
+				t.Setenv(key, value)
+			}
+			response := httptest.NewRecorder()
+			config(response, httptest.NewRequest(http.MethodGet, "/api/config", nil))
+			var body map[string]string
+			_ = json.Unmarshal(response.Body.Bytes(), &body)
+			if got := body["spirelens_mcp_available"]; got != tc.want {
+				t.Fatalf("spirelens_mcp_available = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestConfigReadsForkSessionPromptTemplateFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "fork-session.md")
 	if err := os.WriteFile(path, []byte("fork template {{forked_message}}"), 0o600); err != nil {

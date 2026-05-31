@@ -105,8 +105,48 @@ tailscale --socket=/tmp/tailscaled.sock up --authkey="$authkey" \
 `--outbound-http-proxy-listen` matters: under userspace networking a bare
 `curl http://100.x:<port>` does **not** route; an HTTP client must go through
 tailscaled's local HTTP proxy (or `tailscale nc`). The `mcp-auth-proxy` sidecar
-sets `HTTP_PROXY=http://127.0.0.1:1055` so its outbound requests reach the
-tailnet.
+receives `TAILNET_HTTP_PROXY=http://127.0.0.1:1055` and applies it only to the
+SpireLens upstream request path, so the normal in-cluster `.svc` MCPs never route
+through the tailnet proxy.
+
+## Tank Operator session capability
+
+Tank exposes this path as an explicit create-time session capability:
+`spirelens_mcp`. It is rare infrastructure access, so it is opt-in per session,
+not part of the default pod surface.
+
+The orchestrator behavior is:
+
+- `POST /api/sessions` and the internal create paths accept
+  `capabilities: ["spirelens_mcp"]`.
+- handlers normalize and reject unknown capability names; no-pod modes such as
+  `hermes_gui` reject all session capabilities because there is no workspace pod
+  to join the tailnet.
+- `Manager.Create` refuses `spirelens_mcp` unless
+  `SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID`, `SESSION_SPIRELENS_TAILSCALE_TAILNET`,
+  and `SESSION_SPIRELENS_HOST` are configured.
+- `PodManifest` persists the capability as `tank-operator/capabilities`, mounts
+  `mcp.spirelens.json` over `/workspace/.mcp.json`, sets the bootstrap tailnet
+  env on the user container, and sets `SPIRELENS_MCP_UPSTREAM` plus
+  `TAILNET_HTTP_PROXY` on `mcp-auth-proxy`.
+- `session-pod-bootstrap.sh` joins the tailnet only when
+  `SPIRELENS_MCP_ENABLED=true`.
+- `mcp-auth-proxy` opens `127.0.0.1:9997` only when
+  `SPIRELENS_MCP_UPSTREAM` is set.
+- `/api/config` exposes `spirelens_mcp_available=true|false`; the SPA shows the
+  home-screen toggle only when the deployment is configured.
+
+Chart defaults live under `session.spirelens` in `k8s/values.yaml`:
+
+```yaml
+session:
+  spirelens:
+    oidcClientId: T6vFBk1dAa11CNTRL-kf6kJRvG5T11CNTRL
+    tailnet: "-"
+    authTag: tag:spirelens-orchestrator
+    host: nelsonlaptop
+    port: 15527
+```
 
 ## Reaching the game-host MCP
 
@@ -236,7 +276,7 @@ and must be set/confirmed out of band:
 - **ACL grants.** The host only accepts what the policy allows. Current grants:
   - `tag:spirelens-orchestrator → tag:spirelens-host:22` (SSH; the glimmung-native run flow)
   - **`tag:spirelens-orchestrator → tag:spirelens-host:15527`** — required for the
-    HTTP MCP; add this accept rule.
+    HTTP MCP.
 
 ## Verifying (run from a session pod)
 

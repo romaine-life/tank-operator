@@ -236,6 +236,95 @@ func TestManagerCreateThreadsSelectedReposIntoPodManifest(t *testing.T) {
 	}
 }
 
+func TestManagerCreateThreadsSpireLensCapabilityIntoPodManifest(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, nil, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			SessionImage:                   "claude-image",
+			CodexSessionImage:              "codex-image",
+			PiSessionImage:                 "pi-image",
+			SpireLensTailscaleOIDCClientID: "oidc-client",
+			SpireLensTailscaleTailnet:      "-",
+			SpireLensHost:                  "nelsonlaptop",
+		},
+	})
+
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner:        "nelson@romaine.life",
+		Mode:         sessionmodel.ClaudeGUIMode,
+		Capabilities: []string{sessionmodel.SessionCapabilitySpireLensMCP},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !sessionmodel.HasSessionCapability(info.Capabilities, sessionmodel.SessionCapabilitySpireLensMCP) {
+		t.Fatalf("info capabilities = %#v, want spirelens_mcp", info.Capabilities)
+	}
+
+	pod, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := pod.Annotations[capabilitiesAnnotation], `["spirelens_mcp"]`; got != want {
+		t.Fatalf("pod capabilities annotation = %q, want %q", got, want)
+	}
+	claudeEnv := containerEnvMap(t, pod, "claude")
+	if got, want := claudeEnv["SPIRELENS_MCP_ENABLED"], "true"; got != want {
+		t.Fatalf("SPIRELENS_MCP_ENABLED = %q, want %q", got, want)
+	}
+	proxyEnv := containerEnvMap(t, pod, "mcp-auth-proxy")
+	if got, want := proxyEnv["SPIRELENS_MCP_UPSTREAM"], "http://nelsonlaptop:15527"; got != want {
+		t.Fatalf("SPIRELENS_MCP_UPSTREAM = %q, want %q", got, want)
+	}
+}
+
+func TestManagerCreateRejectsSpireLensCapabilityWhenUnconfigured(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, nil, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			SessionImage:      "claude-image",
+			CodexSessionImage: "codex-image",
+			PiSessionImage:    "pi-image",
+		},
+	})
+
+	_, err := mgr.Create(context.Background(), CreateOptions{
+		Owner:        "nelson@romaine.life",
+		Mode:         sessionmodel.ClaudeGUIMode,
+		Capabilities: []string{sessionmodel.SessionCapabilitySpireLensMCP},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not configured") {
+		t.Fatalf("Create error = %v, want not configured", err)
+	}
+	pods, listErr := client.CoreV1().Pods(sessionmodel.SessionsNamespace).List(context.Background(), metav1.ListOptions{})
+	if listErr != nil {
+		t.Fatal(listErr)
+	}
+	if len(pods.Items) != 0 {
+		t.Fatalf("created pods = %d, want none", len(pods.Items))
+	}
+}
+
+func TestManagerCreateRejectsSpireLensCapabilityForNoPodMode(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, nil, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			SpireLensTailscaleOIDCClientID: "oidc-client",
+			SpireLensTailscaleTailnet:      "-",
+			SpireLensHost:                  "nelsonlaptop",
+		},
+	})
+
+	_, err := mgr.Create(context.Background(), CreateOptions{
+		Owner:        "nelson@romaine.life",
+		Mode:         sessionmodel.HermesGUIMode,
+		Capabilities: []string{sessionmodel.SessionCapabilitySpireLensMCP},
+	})
+	if err == nil || !strings.Contains(err.Error(), "requires a session pod") {
+		t.Fatalf("Create error = %v, want requires pod", err)
+	}
+}
+
 func TestManagerCreatePersistsInitialDisplayName(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	registry := &managerTestRegistry{
@@ -419,6 +508,22 @@ func assertSkillStateActive(t *testing.T, label string, state map[string]any, wa
 	if got := state["active"]; got != want {
 		t.Fatalf("%s active = %#v, want %v (state=%#v)", label, got, want, state)
 	}
+}
+
+func containerEnvMap(t *testing.T, pod *corev1.Pod, containerName string) map[string]string {
+	t.Helper()
+	for _, container := range pod.Spec.Containers {
+		if container.Name != containerName {
+			continue
+		}
+		out := map[string]string{}
+		for _, env := range container.Env {
+			out[env.Name] = env.Value
+		}
+		return out
+	}
+	t.Fatalf("container %q not found", containerName)
+	return nil
 }
 
 type recordingRowEmitter struct {

@@ -67,6 +67,15 @@ session:
   # running over a long weekend.
   idleTimeoutSeconds: 604800
   reaperIntervalSeconds: 60
+  spirelens:
+    # Non-secret OIDC federation trust used by opted-in session pods to join
+    # the tailnet and reach the SpireLens game-host MCP. Dormant unless a
+    # session is created with capabilities: ["spirelens_mcp"].
+    oidcClientId: T6vFBk1dAa11CNTRL-kf6kJRvG5T11CNTRL
+    tailnet: "-"
+    authTag: tag:spirelens-orchestrator
+    host: nelsonlaptop
+    port: 15527
 
 appConfig:
   configMap: tank-operator-app-config

@@ -2806,6 +2806,11 @@ button:disabled {
   color: var(--text-primary);
 }
 
+.home-quick-action.is-selected {
+  background: var(--bg-sidebar-active);
+  color: var(--text-primary);
+}
+
 .home-quick-main,
 .home-quick-title,
 .home-quick-sub {
@@ -2857,6 +2862,10 @@ button:disabled {
   font-size: var(--text-xs);
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.home-capability-action {
+  margin-top: var(--space-1);
 }
 
 /* Pre-session, the composer wrap is the same `.run-composer-wrap` the
