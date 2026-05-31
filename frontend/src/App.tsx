@@ -288,6 +288,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   transcriptSource?: "server" | "realtime";
   sourceEventId?: string;
   orderKey?: string;
+  activityEndOrderKey?: string;
   localOnly?: boolean;
   turnId?: string;
   clientNonce?: string;
