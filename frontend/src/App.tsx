@@ -10,8 +10,7 @@ import type {
   MouseEvent as ReactMouseEvent,
   ReactNode,
 } from "react";
-import { ProcessTerminal, type TranscriptEntry as SandboxTranscriptEntry } from "@sandbox-agent/react";
-import { SandboxAgent } from "sandbox-agent";
+import type { TranscriptEntry as SandboxTranscriptEntry } from "@sandbox-agent/react";
 import {
   Streamdown,
   type Components as StreamdownComponents,
@@ -90,7 +89,7 @@ import {
   XIcon,
   type LucideIcon,
 } from "lucide-react";
-import { AUTH_TOKEN_UPDATED_EVENT, authedEventSource, authedFetch, bootstrapAuth, getStoredToken, logout, startLogin } from "./auth";
+import { authedEventSource, authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import {
   createSilenceWatchdog,
   logSessionEventStreamEvent,
@@ -229,6 +228,11 @@ import {
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
+const CliProcessTerminal = lazy(() =>
+  import("./CliProcessTerminal").then((module) => ({
+    default: module.CliProcessTerminal,
+  })),
+);
 
 type SessionMode =
   | "api_key"
@@ -13201,78 +13205,6 @@ function ChatPane({
   );
 }
 
-function CliProcessTerminal({
-  session,
-  visible,
-}: {
-  session: Session;
-  visible: boolean;
-}) {
-  const [processId, setProcessId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [clientToken, setClientToken] = useState<string | undefined>(() => getStoredToken() ?? undefined);
-  const client = useMemo(
-    () =>
-      new SandboxAgent({
-        baseUrl: `${location.origin}/api/sessions/${session.id}/sandbox-agent`,
-        token: clientToken,
-        skipHealthCheck: true,
-      }),
-    [clientToken, session.id],
-  );
-
-  useEffect(() => {
-    const syncToken = () => setClientToken(getStoredToken() ?? undefined);
-    syncToken();
-    window.addEventListener(AUTH_TOKEN_UPDATED_EVENT, syncToken);
-    return () => window.removeEventListener(AUTH_TOKEN_UPDATED_EVENT, syncToken);
-  }, [session.id]);
-
-  useEffect(() => {
-    if (!visible) return;
-    let cancelled = false;
-    setError(null);
-    authedFetch(`/api/sessions/${session.id}/cli-process`, { method: "POST" })
-      .then(async (res) => {
-        if (!res.ok) throw new Error(`CLI process create failed: ${res.status}`);
-        return (await res.json()) as { process_id: string };
-      })
-      .then((body) => {
-        if (!cancelled) {
-          setClientToken(getStoredToken() ?? undefined);
-          setProcessId(body.process_id);
-        }
-      })
-      .catch((err) => {
-        if (!cancelled) setError(String((err as Error).message ?? err));
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [session.id, visible]);
-
-  if (error) {
-    return <div className="run-shell-error">{error}</div>;
-  }
-  if (!processId) {
-    return (
-      <div className="run-shell-loading">
-        <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
-        <span>starting CLI...</span>
-      </div>
-    );
-  }
-  return (
-    <ProcessTerminal
-      client={client}
-      processId={processId}
-      className="run-process-terminal"
-      height="100%"
-      showStatusBar={false}
-    />
-  );
-}
-
 function CliSession({ session, visible }: { session: Session; visible: boolean }) {
   // The sidebar already shows the session title, mode badge, and status —
   // a duplicate header inside the pane is wasted vertical space and made
@@ -13282,7 +13214,16 @@ function CliSession({ session, visible }: { session: Session; visible: boolean }
     <section className="run-panel">
       <main className="run-main">
         <div className="run-shell">
-          <CliProcessTerminal session={session} visible={visible} />
+          <Suspense
+            fallback={
+              <div className="run-shell-loading">
+                <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
+                <span>loading CLI...</span>
+              </div>
+            }
+          >
+            <CliProcessTerminal sessionId={session.id} visible={visible} />
+          </Suspense>
         </div>
       </main>
     </section>
