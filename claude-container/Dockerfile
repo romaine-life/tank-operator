@@ -183,10 +183,10 @@ COPY --from=agent-runner-build /src/agent-runner/package.json /opt/agent-runner/
 
 COPY runner-shared /opt/runner-shared
 
-# tank-supervisor + baked launch shim for test-slot agent-runner hot-swap.
-# The supervisor runs as PID 1 in the agent-runner container only when the
+# tank-supervisor + baked launch shims for test-slot SDK-runner hot-swap.
+# The supervisor runs as PID 1 in a runner container only when the
 # orchestrator sets GLIMMUNG_SUPERVISOR_CHILD on the container (see
-# k8s/session-config/agent-runner-launch.sh's conditional exec). In
+# k8s/session-config/*-runner-launch.sh's conditional exec). In
 # production, both files are dormant: the supervisor binary is never invoked,
 # the shim is never resolved. Image gains ~5MB of dead weight in prod; the
 # tradeoff is "the same image works for both prod and test-slot iteration."

@@ -387,6 +387,45 @@ func TestPodManifestGeminiUsesAPIProxy(t *testing.T) {
 	assertVolumeMount(t, geminiRunner, "oauth-gateway-ca")
 }
 
+func TestPodManifestGeminiTestUsesMountedCredentialsWithoutAPIProxy(t *testing.T) {
+	manifest := PodManifest("12", "nelson@romaine.life", GeminiTestMode, ManifestOptions{
+		SessionImage:                "claude-image",
+		GeminiSessionImage:          "gemini-image",
+		GeminiAPIProxyIP:            "10.0.0.60",
+		OAuthGatewayCAConfigMap:     "claude-oauth-ca",
+		GeminiCredentialsTestSecret: "gemini-test-secret",
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	assertNoHostAliases(t, spec)
+	volumes := spec["volumes"].([]any)
+	assertSecretVolume(t, volumes, "gemini-credentials-test", "gemini-test-secret")
+	assertNoVolume(t, volumes, "oauth-gateway-ca")
+
+	containers := spec["containers"].([]any)
+	claude := findContainer(t, containers, "claude")
+	if got, want := claude["image"], "gemini-image"; got != want {
+		t.Fatalf("claude image = %v, want %q", got, want)
+	}
+	claudeEnv := containerEnv(claude)
+	if _, present := claudeEnv["NODE_EXTRA_CA_CERTS"]; present {
+		t.Fatalf("claude NODE_EXTRA_CA_CERTS present for gemini_test: %v", claudeEnv["NODE_EXTRA_CA_CERTS"])
+	}
+	assertConfigMapMountSubPath(t, claude, "/etc/gemini-credentials/oauth_creds.json", "oauth_creds.json")
+	assertVolumeMount(t, claude, "gemini-credentials-test")
+
+	geminiRunner := findContainer(t, containers, "gemini-runner")
+	if got, want := geminiRunner["image"], "gemini-image"; got != want {
+		t.Fatalf("runner image = %v, want %q", got, want)
+	}
+	runnerEnv := containerEnv(geminiRunner)
+	if _, present := runnerEnv["NODE_EXTRA_CA_CERTS"]; present {
+		t.Fatalf("runner NODE_EXTRA_CA_CERTS present for gemini_test: %v", runnerEnv["NODE_EXTRA_CA_CERTS"])
+	}
+	assertConfigMapMountSubPath(t, geminiRunner, "/etc/gemini-credentials/oauth_creds.json", "oauth_creds.json")
+	assertVolumeMount(t, geminiRunner, "gemini-credentials-test")
+}
+
 func TestPodManifestCodexRunnerAlwaysUsesAppServerTransport(t *testing.T) {
 	for _, mode := range []string{CodexGUIMode, CodexAppServerMode} {
 		t.Run(mode, func(t *testing.T) {
@@ -708,6 +747,51 @@ func TestPodManifestSlotModeAttachesCodexRunnerHotSwap(t *testing.T) {
 	}
 }
 
+func TestPodManifestSlotModeAttachesGeminiRunnerHotSwap(t *testing.T) {
+	manifest := PodManifest("63", "user@example.com", GeminiTestMode, ManifestOptions{
+		SessionImage:       "claude-image",
+		CodexSessionImage:  "codex-image",
+		GeminiSessionImage: "gemini-image",
+		HotSwapAgentRunner: true,
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	volumes := spec["volumes"].([]any)
+	assertVolume(t, volumes, "gemini-runner-hot")
+
+	containers := spec["containers"].([]any)
+	runner := findContainer(t, containers, "gemini-runner")
+	assertVolumeMount(t, runner, "gemini-runner-hot")
+
+	mounts := runner["volumeMounts"].([]any)
+	var hotMountPath string
+	for _, m := range mounts {
+		mm := m.(map[string]any)
+		if mm["name"] == "gemini-runner-hot" {
+			hotMountPath, _ = mm["mountPath"].(string)
+		}
+	}
+	if hotMountPath != "/var/run/gemini-runner-hot" {
+		t.Fatalf("gemini-runner-hot mountPath = %q, want /var/run/gemini-runner-hot", hotMountPath)
+	}
+
+	env := containerEnv(runner)
+	if got, want := env["GLIMMUNG_SUPERVISOR_CHILD"], "/app/gemini-runner-launch-binary.sh"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_CHILD = %v, want %q", got, want)
+	}
+	if got, want := env["GLIMMUNG_SUPERVISOR_HOT_ARTIFACT"], "/var/run/gemini-runner-hot/gemini-runner-launch-binary.sh"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_HOT_ARTIFACT = %v, want %q", got, want)
+	}
+	if got, want := env["GLIMMUNG_SUPERVISOR_RESTART_ENABLED"], "true"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_RESTART_ENABLED = %v, want %q", got, want)
+	}
+
+	cmd := runner["command"].([]any)
+	if len(cmd) != 2 || cmd[0] != "bash" || cmd[1] != "/opt/tank/gemini-runner-launch.sh" {
+		t.Fatalf("gemini-runner command = %v, want [bash /opt/tank/gemini-runner-launch.sh]", cmd)
+	}
+}
+
 // TestPodManifestProdLeavesAgentRunnerUnchanged pins Checkbox 2 of
 // scripts/check-session-pod-hot-swap-migration.mjs: with testEnv disabled
 // (HotSwapAgentRunner=false, the default), the agent-runner container has
@@ -766,6 +850,33 @@ func TestPodManifestProdLeavesCodexRunnerUnchanged(t *testing.T) {
 	}
 }
 
+func TestPodManifestProdLeavesGeminiRunnerUnchanged(t *testing.T) {
+	manifest := PodManifest("63", "user@example.com", GeminiTestMode, ManifestOptions{
+		SessionImage:       "claude-image",
+		CodexSessionImage:  "codex-image",
+		GeminiSessionImage: "gemini-image",
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	volumes := spec["volumes"].([]any)
+	assertNoVolume(t, volumes, "gemini-runner-hot")
+
+	containers := spec["containers"].([]any)
+	runner := findContainer(t, containers, "gemini-runner")
+	assertNoVolumeMount(t, runner, "gemini-runner-hot")
+
+	env := containerEnv(runner)
+	for _, name := range []string{
+		"GLIMMUNG_SUPERVISOR_CHILD",
+		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT",
+		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED",
+	} {
+		if _, present := env[name]; present {
+			t.Fatalf("env %s leaked into prod (HotSwapAgentRunner=false); value=%v", name, env[name])
+		}
+	}
+}
+
 func findContainer(t *testing.T, containers []any, name string) map[string]any {
 	t.Helper()
 	for _, item := range containers {
@@ -794,6 +905,13 @@ func assertHostAlias(t *testing.T, spec map[string]any, ip, hostname string) {
 	t.Fatalf("hostAlias %s -> %s not found", hostname, ip)
 }
 
+func assertNoHostAliases(t *testing.T, spec map[string]any) {
+	t.Helper()
+	if aliases, present := spec["hostAliases"]; present {
+		t.Fatalf("hostAliases should not be present: %v", aliases)
+	}
+}
+
 func assertVolume(t *testing.T, volumes []any, name string) {
 	t.Helper()
 	for _, item := range volumes {
@@ -803,6 +921,22 @@ func assertVolume(t *testing.T, volumes []any, name string) {
 		}
 	}
 	t.Fatalf("volume %q not found", name)
+}
+
+func assertSecretVolume(t *testing.T, volumes []any, name, secretName string) {
+	t.Helper()
+	for _, item := range volumes {
+		volume := item.(map[string]any)
+		if volume["name"] != name {
+			continue
+		}
+		secret := volume["secret"].(map[string]any)
+		if got := secret["secretName"]; got != secretName {
+			t.Fatalf("secret volume %q secretName = %v, want %q", name, got, secretName)
+		}
+		return
+	}
+	t.Fatalf("secret volume %q not found", name)
 }
 
 func assertNoVolume(t *testing.T, volumes []any, name string) {
