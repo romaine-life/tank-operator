@@ -171,7 +171,6 @@ func TestManagerCreateDefaultsManifestNamespaceToManagerNamespace(t *testing.T) 
 		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionImage:      "claude-image",
 			CodexSessionImage: "codex-image",
-			PiSessionImage:    "pi-image",
 		},
 	})
 
@@ -202,7 +201,6 @@ func TestManagerCreateThreadsSelectedReposIntoPodManifest(t *testing.T) {
 		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionImage:            "claude-image",
 			CodexSessionImage:       "codex-image",
-			PiSessionImage:          "pi-image",
 			TankOperatorInternalURL: "http://tank-operator.test",
 		},
 	})
@@ -242,7 +240,7 @@ func TestManagerCreateThreadsSpireLensCapabilityIntoPodManifest(t *testing.T) {
 		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionImage:                   "claude-image",
 			CodexSessionImage:              "codex-image",
-			PiSessionImage:                 "pi-image",
+			GeminiSessionImage:             "gemini-image",
 			SpireLensTailscaleOIDCClientID: "oidc-client",
 			SpireLensTailscaleTailnet:      "-",
 			SpireLensHost:                  "nelsonlaptop",
@@ -282,9 +280,9 @@ func TestManagerCreateRejectsSpireLensCapabilityWhenUnconfigured(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, nil, nil, ManagerOptions{
 		ManifestOpts: sessionmodel.ManifestOptions{
-			SessionImage:      "claude-image",
-			CodexSessionImage: "codex-image",
-			PiSessionImage:    "pi-image",
+			SessionImage:       "claude-image",
+			CodexSessionImage:  "codex-image",
+			GeminiSessionImage: "gemini-image",
 		},
 	})
 

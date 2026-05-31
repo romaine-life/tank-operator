@@ -99,7 +99,9 @@ export interface ConversationTurnTerminal {
 export interface ConversationTurnUsage {
   turnId: string;
   orderKey?: string;
+  endOrderKey?: string;
   time: string;
+  updatedAt?: string;
   sourceEventId: string;
   usage: unknown;
   usageObservation?: unknown;
@@ -354,22 +356,36 @@ function applyTurnUsage(
     !terminalSeen && (state.runStatus === "ready" || state.runStatus === "submitted")
       ? "streaming"
       : state.runStatus;
+  const existing = state.turnUsages[event.turn_id];
+  const turnUsage: ConversationTurnUsage = existing
+    ? {
+        ...existing,
+        endOrderKey: event.order_key ?? existing.endOrderKey ?? existing.orderKey,
+        updatedAt: event.created_at || existing.updatedAt || existing.time,
+        usage,
+        ...(event.payload?.usage_observation !== undefined
+          ? { usageObservation: event.payload.usage_observation }
+          : {}),
+      }
+    : {
+        turnId: event.turn_id,
+        orderKey: event.order_key,
+        endOrderKey: event.order_key,
+        time: event.created_at,
+        updatedAt: event.created_at,
+        sourceEventId: event.event_id,
+        usage,
+        ...(event.payload?.usage_observation !== undefined
+          ? { usageObservation: event.payload.usage_observation }
+          : {}),
+      };
   return {
     ...state,
     runStatus,
     activeTurnId: terminalSeen ? state.activeTurnId : state.activeTurnId ?? event.turn_id,
     turnUsages: {
       ...state.turnUsages,
-      [event.turn_id]: {
-        turnId: event.turn_id,
-        orderKey: event.order_key,
-        time: event.created_at,
-        sourceEventId: event.event_id,
-        usage,
-        ...(event.payload?.usage_observation !== undefined
-          ? { usageObservation: event.payload.usage_observation }
-          : {}),
-      },
+      [event.turn_id]: turnUsage,
     },
     lastUsage: terminalHasUsage ? state.lastUsage : usage,
   };

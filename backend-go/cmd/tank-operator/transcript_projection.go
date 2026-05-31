@@ -104,7 +104,9 @@ type turnTerminalProjection struct {
 type turnUsageProjection struct {
 	TurnID           string
 	OrderKey         string
+	EndOrderKey      string
 	Time             string
+	UpdatedAt        string
 	SourceEventID    string
 	Usage            any
 	UsageObservation any
@@ -328,13 +330,26 @@ func (s *projectionState) applyTurnUsage(event map[string]any) {
 	if turnID == "" || usage == nil {
 		return
 	}
-	s.turnUsages[turnID] = turnUsageProjection{
-		TurnID:           turnID,
-		OrderKey:         transcriptString(event, "order_key"),
-		Time:             transcriptString(event, "created_at"),
-		SourceEventID:    transcriptString(event, "event_id"),
-		Usage:            usage,
-		UsageObservation: transcriptPayloadValue(event, "usage_observation"),
+	orderKey := transcriptString(event, "order_key")
+	eventTime := transcriptString(event, "created_at")
+	existing, ok := s.turnUsages[turnID]
+	if ok {
+		existing.EndOrderKey = projectionFirstNonEmpty(orderKey, existing.EndOrderKey, existing.OrderKey)
+		existing.UpdatedAt = projectionFirstNonEmpty(eventTime, existing.UpdatedAt, existing.Time)
+		existing.Usage = usage
+		existing.UsageObservation = transcriptPayloadValue(event, "usage_observation")
+		s.turnUsages[turnID] = existing
+	} else {
+		s.turnUsages[turnID] = turnUsageProjection{
+			TurnID:           turnID,
+			OrderKey:         orderKey,
+			EndOrderKey:      orderKey,
+			Time:             eventTime,
+			UpdatedAt:        eventTime,
+			SourceEventID:    transcriptString(event, "event_id"),
+			Usage:            usage,
+			UsageObservation: transcriptPayloadValue(event, "usage_observation"),
+		}
 	}
 	if _, terminal := s.turnTerminals[turnID]; terminal {
 		return
@@ -569,9 +584,6 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 	baseIndex += len(s.interruptRequests)
 	offset := 0
 	for _, usage := range s.turnUsages {
-		if terminal, ok := s.turnTerminals[usage.TurnID]; ok && terminal.Usage != nil {
-			continue
-		}
 		entry := projectTurnUsage(usage)
 		items = append(items, projectedEntryItem{
 			entry:    entry,
@@ -768,9 +780,14 @@ func projectTurnUsage(usage turnUsageProjection) map[string]any {
 		},
 		"turnId":        usage.TurnID,
 		"time":          usage.Time,
+		"updatedAt":     usage.UpdatedAt,
 		"sourceEventId": usage.SourceEventID,
 		"orderKey":      usage.OrderKey,
-		"turnUsage":     usage.Usage,
+		"activityEndOrderKey": projectionFirstNonEmpty(
+			usage.EndOrderKey,
+			usage.OrderKey,
+		),
+		"turnUsage": usage.Usage,
 	}
 	if usage.UsageObservation != nil {
 		entry["usageObservation"] = usage.UsageObservation
@@ -803,12 +820,19 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 
 func compactProjectedTranscript(entries []map[string]any, activeTurnID string, terminals map[string]turnTerminalProjection) transcriptProjection {
 	activities := append(terminalProjectedActivities(entries, terminals), activeProjectedActivities(entries, activeTurnID)...)
+	bodies := map[string]turnActivityBody{}
+	for _, activity := range activities {
+		bodies[activity.TurnID] = activity
+	}
 	if len(activities) == 0 {
-		return transcriptProjection{Entries: entries, ActivityBodies: map[string]turnActivityBody{}}
+		return transcriptProjection{Entries: entries, ActivityBodies: bodies}
 	}
 	activityByInsertIndex := map[int]turnActivityBody{}
 	compactedIndexes := map[int]bool{}
 	for _, activity := range activities {
+		if len(activity.CompactedEntryIDs) == 0 {
+			continue
+		}
 		insertBefore := 0
 		if len(activity.Entries) > 0 {
 			insertBefore = projectedEntryIndex(entries, activity.Entries[0])
@@ -823,7 +847,6 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, t
 		}
 	}
 	out := make([]map[string]any, 0, len(entries))
-	bodies := map[string]turnActivityBody{}
 	for idx, entry := range entries {
 		if activity, ok := activityByInsertIndex[idx]; ok {
 			shell := map[string]any{
@@ -843,7 +866,6 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, t
 				shell["usageObservation"] = usageObservation
 			}
 			out = append(out, shell)
-			bodies[activity.TurnID] = activity
 		}
 		if !compactedIndexes[idx] {
 			out = append(out, entry)
@@ -895,7 +917,7 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 				compacted = append(compacted, entry)
 			}
 		}
-		if len(compacted) == 0 {
+		if len(activityEntries) == 0 {
 			continue
 		}
 		activities = append(activities, makeTurnActivityBody(turnID, terminal.Status, activityEntries, compacted, false))
@@ -986,7 +1008,15 @@ func turnActivitySummaryMap(activityEntries, compactedEntries []map[string]any, 
 	}
 	if len(activityEntries) > 0 {
 		first := activityEntries[0]
-		last := activityEntries[len(activityEntries)-1]
+		last := first
+		lastOrderKey := projectionActivityEntryEndOrderKey(first)
+		for _, entry := range activityEntries[1:] {
+			candidate := projectionActivityEntryEndOrderKey(entry)
+			if candidate != "" && (lastOrderKey == "" || candidate > lastOrderKey) {
+				last = entry
+				lastOrderKey = candidate
+			}
+		}
 		out["startedAt"] = projectionFirstNonEmpty(transcriptMapString(first, "startedAt"), transcriptMapString(first, "time"))
 		out["completedAt"] = projectionFirstNonEmpty(transcriptMapString(last, "completedAt"), transcriptMapString(last, "turnTerminalAt"), transcriptMapString(last, "time"))
 		out["lastActivityAt"] = projectionFirstNonEmpty(
@@ -997,11 +1027,19 @@ func turnActivitySummaryMap(activityEntries, compactedEntries []map[string]any, 
 			transcriptMapString(last, "startedAt"),
 		)
 		out["startOrderKey"] = transcriptMapString(first, "orderKey")
-		out["endOrderKey"] = projectionFirstNonEmpty(transcriptMapString(last, "turnTerminalOrderKey"), transcriptMapString(last, "orderKey"))
+		out["endOrderKey"] = projectionFirstNonEmpty(lastOrderKey, transcriptMapString(last, "orderKey"))
 		out["sourceEventId"] = transcriptMapString(first, "sourceEventId")
 	}
 	out["compactedCount"] = len(compactedEntries)
 	return out
+}
+
+func projectionActivityEntryEndOrderKey(entry map[string]any) string {
+	return projectionFirstNonEmpty(
+		transcriptMapString(entry, "turnTerminalOrderKey"),
+		transcriptMapString(entry, "activityEndOrderKey"),
+		transcriptMapString(entry, "orderKey"),
+	)
 }
 
 func finalAnswerProjectedIndexes(entries []map[string]any, indexes []int, finalAnswerIDs map[string]bool) map[int]bool {

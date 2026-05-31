@@ -325,19 +325,19 @@ func main() {
 	// Session image tags come from the chart's values.yaml session.*
 	// keys, bumped per-commit to fingerprinted tags by the
 	// claude-container-build workflow. Fail loudly at startup if any
-	// are missing â€” a silent `:latest` fallback hid this exact bug for
+	// are missing — a silent `:latest` fallback hid this exact bug for
 	// 15 hours after the Go cutover (the Python orchestrator read these
 	// env vars; the Go port forgot, every new session pod fell back to
 	// an April-25 `:latest` that didn't have mcp-auth-proxy installed,
 	// every claude_gui session crashlooped).
 	sessionImage := os.Getenv("SESSION_IMAGE")
 	codexSessionImage := os.Getenv("CODEX_SESSION_IMAGE")
-	piSessionImage := os.Getenv("PI_SESSION_IMAGE")
-	if sessionImage == "" || codexSessionImage == "" || piSessionImage == "" {
-		slog.Error("session image env vars missing â€” chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE / PI_SESSION_IMAGE to fingerprinted tags",
+	geminiSessionImage := os.Getenv("GEMINI_SESSION_IMAGE")
+	if sessionImage == "" || codexSessionImage == "" || geminiSessionImage == "" {
+		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE / GEMINI_SESSION_IMAGE to fingerprinted tags",
 			"SESSION_IMAGE", sessionImage,
 			"CODEX_SESSION_IMAGE", codexSessionImage,
-			"PI_SESSION_IMAGE", piSessionImage,
+			"GEMINI_SESSION_IMAGE", geminiSessionImage,
 		)
 		os.Exit(1)
 	}
@@ -347,7 +347,7 @@ func main() {
 	// chat-activity emitter). The Fetcher reads post-write row state
 	// from the registry; the Publisher hands the marshaled payload to
 	// NATS. Per docs/session-list-redesign.md Phase 3 this is the
-	// single wire path the SPA's SessionStore consumes â€” no typed-
+	// single wire path the SPA's SessionStore consumes — no typed-
 	// event reducer, no event-type switch.
 	rowPublisher := &sessioncontroller.RowPublisher{
 		Fetcher:   rowFetcherFor(sessionReg),
@@ -363,10 +363,11 @@ func main() {
 			ArgoCDTrackingApp:              envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
 			SessionImage:                   sessionImage,
 			CodexSessionImage:              codexSessionImage,
-			PiSessionImage:                 piSessionImage,
+			GeminiSessionImage:             geminiSessionImage,
 			SessionScope:                   sessionScope,
 			TankOperatorInternalURL:        tankOperatorInternalURL,
 			GitHubAppSecret:                envDefault("GITHUB_APP_SECRET", sessionmodel.DefaultGitHubAppSecret),
+			GeminiCredentialsTestSecret:    envDefault("GEMINI_CREDENTIALS_TEST_SECRET", "gemini-credentials-test"),
 			NATSURL:                        envDefault("NATS_URL", ""),
 			NATSStream:                     envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
 			NATSAuthSecret:                 envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
@@ -381,9 +382,10 @@ func main() {
 			// docs in sessionmodel.ManifestOptions.HotSwapAgentRunner.
 			HotSwapAgentRunner: envBool("SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED"),
 		},
-		OAuthGatewayHost:  os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
-		APIProxyHost:      os.Getenv("CLAUDE_API_PROXY_HOST"),
-		CodexAPIProxyHost: os.Getenv("CODEX_API_PROXY_HOST"),
+		OAuthGatewayHost:   os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
+		APIProxyHost:       os.Getenv("CLAUDE_API_PROXY_HOST"),
+		CodexAPIProxyHost:  os.Getenv("CODEX_API_PROXY_HOST"),
+		GeminiAPIProxyHost: os.Getenv("GEMINI_API_PROXY_HOST"),
 	})
 
 	// 10. Init auth. Tank verifies the upstream auth.romaine.life JWT

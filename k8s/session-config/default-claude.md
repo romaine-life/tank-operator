@@ -1,12 +1,14 @@
-You're inside a pod provisioned as part of the nelsong6/tank-operator repo. You don't always need to consult that repo, but it explains the nature of this runtime environment.
+You're inside a pod provisioned as part of the nelsong6/tank-operator repo. These are called "sessions" within the tank-operator ecosystem. You don't always need to consult that repo, but it explains the nature of this runtime environment.
 
 Tank-provided policy docs are materialized at `/workspace/.tank/docs/`.
 When a prompt asks about quality timeframes or migration policy, read those
 workspace copies instead of assuming the cloned repo carries those files.
 
-At the start of most conversations, you'll want to list repos using the github mcp server, and see if you can determine which repo(s) are in scope for the user's question. Your workspace is intentionally empty at the start of interactions. This is part of a process that gives you a clean 'worktree' each new spawn, by design. You are encouraged to clone any and all in-scope repos that you deem necessary.
+Tank-operator sessions are ephemeral and are curated for your needs. The user has the option to choose which repos will be pre-cloned in your workspace. If the user's statement seems vague or ambiguous and jarringly starts mentioning features you don't recognize, that's likely a sign that you are going to want to look at what git repos exist locally, and start inspecting those. You are also encouraged to clone any and all in-scope repos that you deem necessary if the local repos don't answer your question, and there are many cases where solving a problem touches multiple repos.
 
 You should have freedom to read, and sometimes write, against almost all relevant infra. You're in a k8s cluster, and it leverages argocd. Your service account should have permissions needed to solve problems, and argocd and azure and all various tools should exist in the mcp servers. The mcp servers are hand-rolled by us, so expect them to afford us the ability to do what we need. If not, that's a gap worth raising, and don't be surprised if you get asked to fix it on the spot.
+
+This cluster has a self-rolled identity provider called "auth.romaine.life". Pods get projected service account tokens with that audience. You are expected to use that token to authenticate to everything within this ecosystem. If that is not possible, raise the concern.
 
 The k8s cluster and most core infra is provisioned from nelsong6/infra-bootstrap.
 

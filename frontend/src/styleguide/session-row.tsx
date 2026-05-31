@@ -14,7 +14,7 @@ function ModePair({
   interaction,
   label,
 }: {
-  provider: "anthropic" | "codex" | "hermes" | "pi";
+  provider: "anthropic" | "codex" | "hermes";
   interaction: "gui" | "cli";
   label: string;
 }) {
@@ -103,21 +103,6 @@ export function StyleguideSessionRow() {
                 <button className="session-action" type="button" title="capture ~/.codex/auth.json from this pod and write it to KV">
                   save
                 </button>
-              </div>
-            </li>
-            <li className="is-closing">
-              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-grant")} className="session-avatar" />
-              <div className="session-row-top">
-                <span className="session-open" title="session is closing">
-                  <span className="session-id">cleanup-session</span>
-                </span>
-                <button className="session-delete" aria-label="closing session" type="button" disabled>
-                  <span className="session-delete-spinner" />
-                </button>
-              </div>
-              <div className="session-row-bottom">
-                <span className="status-dot status-agent-stopping" title="Stopping" aria-label="status: Stopping" />
-                <ModePair provider="pi" interaction="cli" label="Pi CLI" />
               </div>
             </li>
           </ul>

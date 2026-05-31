@@ -70,7 +70,9 @@ func sessionModeSupportsRepos(mode string) bool {
 	switch sessionmodel.NormalizeSessionMode(mode) {
 	case sessionmodel.ClaudeGUIMode,
 		sessionmodel.CodexGUIMode,
-		sessionmodel.CodexAppServerMode:
+		sessionmodel.CodexAppServerMode,
+		sessionmodel.GeminiGUIMode,
+		sessionmodel.GeminiTestMode:
 		return true
 	default:
 		return false

@@ -66,14 +66,6 @@ jobs:
             image-repo: codex-container
             fingerprint-image: codex
             fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared
-          - name: session-agent-pi
-            file: claude-container/Dockerfile
-            context: .
-            build_args: TANK_AGENT=pi
-            cache-ref: romainecr.azurecr.io/pi-container-build-cache:pi
-            image-repo: pi-container
-            fingerprint-image: pi
-            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared
           # Standalone mcp-auth-proxy image for sibling consumers
           # (nelsong6/hermes today). Built from the same package source
           # Tank session pods bake inline, but published as its own

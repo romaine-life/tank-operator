@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from "./components/ui/select";
 import { AdminAvatarManager } from "./AdminAvatarManager";
+import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
@@ -70,6 +71,7 @@ import {
   ListChecksIcon,
   Loader2Icon,
   MessageSquareIcon,
+  MessageSquareOffIcon,
   MinusIcon,
   MonitorIcon,
   NotebookPenIcon,
@@ -101,6 +103,15 @@ import {
   navigationModeTelemetryEvent,
   transitionNavigationMode,
 } from "./navigationMode";
+import { isTranscriptRefreshShortcut } from "./transcriptRefreshShortcut";
+import {
+  isTranscriptToTurnsShortcut,
+  isTurnsToTranscriptShortcut,
+} from "./transcriptViewShortcuts";
+import {
+  REFRESH_FLASH_DURATION_MS,
+  refreshFlashLabel,
+} from "./transcriptRefreshIndicator";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   type ConversationBackgroundTaskStatus,
@@ -127,6 +138,7 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
+import { needsInputAnnouncementState } from "./needsInputAnnouncement";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -228,9 +240,10 @@ type SessionMode =
   | "codex_exec_gui"
   | "codex_app_server"
   | "codex_config"
-  | "hermes_gui"
-  | "pi_cli"
-  | "pi_config";
+  | "gemini_gui"
+  | "gemini_test"
+  | "gemini_config"
+  | "hermes_gui";
 type DefaultSessionMode = Extract<
   SessionMode,
   | "claude_cli"
@@ -238,10 +251,11 @@ type DefaultSessionMode = Extract<
   | "codex_cli"
   | "codex_gui"
   | "codex_exec_gui"
+  | "gemini_gui"
+  | "gemini_test"
   | "hermes_gui"
-  | "pi_cli"
 >;
-type Provider = "anthropic" | "codex" | "hermes" | "pi";
+type Provider = "anthropic" | "codex" | "gemini" | "gemini_test" | "hermes";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 type AskUserQuestionAnswer = {
@@ -279,6 +293,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   transcriptSource?: "server" | "realtime";
   sourceEventId?: string;
   orderKey?: string;
+  activityEndOrderKey?: string;
   localOnly?: boolean;
   turnId?: string;
   clientNonce?: string;
@@ -384,7 +399,9 @@ type SdkHistoryRefreshSource =
   | "projected-refresh"
   | "visible-reactivation"
   | "resync"
-  | "terminal-refresh";
+  | "terminal-refresh"
+  // User-initiated force-pull of the durable tail via the R shortcut.
+  | "keyboard-refresh";
 type ScrollToLatestBehavior = "auto" | "smooth";
 type ScrollToLatestReason = SdkHistoryRefreshSource | "submit" | "manual" | "keyboard";
 type ScrollToLatestRequest = {
@@ -600,9 +617,10 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "Codex Legacy",
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
+  gemini_gui: "Gemini GUI",
+  gemini_test: "Gemini Test",
+  gemini_config: "Gemini config",
   hermes_gui: "Hermes",
-  pi_cli: "Pi CLI",
-  pi_config: "Pi config",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -617,9 +635,10 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
+  gemini_gui: "gemini-gui",
+  gemini_test: "gemini-test",
+  gemini_config: "gemini-cfg",
   hermes_gui: "hermes",
-  pi_cli: "pi-cli",
-  pi_config: "pi-cfg",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -629,8 +648,9 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
+  gemini_gui: "gemini",
+  gemini_test: "gemini_test",
   hermes_gui: "hermes",
-  pi_cli: "pi",
 };
 
 const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
@@ -643,9 +663,10 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   codex_exec_gui: "codex",
   codex_app_server: "codex",
   codex_config: "codex",
+  gemini_gui: "gemini",
+  gemini_test: "gemini_test",
+  gemini_config: "gemini",
   hermes_gui: "hermes",
-  pi_cli: "pi",
-  pi_config: "pi",
 };
 
 const PROVIDER_INTERACTION_MODES: Record<
@@ -654,8 +675,9 @@ const PROVIDER_INTERACTION_MODES: Record<
 > = {
   anthropic: { gui: "claude_gui", cli: "claude_cli" },
   codex: { gui: "codex_gui", cli: "codex_cli" },
+  gemini: { gui: "gemini_gui", cli: null },
+  gemini_test: { gui: "gemini_test", cli: null },
   hermes: { gui: "hermes_gui", cli: null },
-  pi: { gui: null, cli: "pi_cli" },
 };
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
@@ -668,14 +690,15 @@ const INTERACTION_OPTIONS: SessionInteraction[] = ["gui", "cli"];
 const PROVIDER_CONFIG_MODES: Partial<Record<Provider, SessionMode>> = {
   anthropic: "config",
   codex: "codex_config",
-  pi: "pi_config",
+  gemini: "gemini_config",
 };
 
 const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
   codex: "Codex",
+  gemini: "Gemini",
+  gemini_test: "Gemini Test",
   hermes: "Hermes",
-  pi: "Pi",
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -688,9 +711,10 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_exec_gui: "Fallback GUI for legacy codex exec transport",
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
+  gemini_gui: "GUI chat pane for Gemini transport",
+  gemini_test: "Unproxied Gemini test mode",
+  gemini_config: "gemini login · seeds KV for Gemini",
   hermes_gui: "Shared Hermes memory + MCP tools",
-  pi_cli: "Uses Tank Claude/Codex subscriptions",
-  pi_config: "Pi /login sandbox",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -738,18 +762,18 @@ const DEMO_BASE_SESSIONS: Session[] = [
     agent_avatar_id: demoAgentAvatarID(2),
   },
   {
-    id: "pi-agent",
-    pod_name: "tank-demo-pi-agent",
+    id: "gemini-gui",
+    pod_name: "tank-demo-gemini-gui",
     owner: "preview",
     status: "Active",
-    mode: "pi_cli",
-    requested_at: new Date(Date.now() - 3 * 60 * 60 * 1000 - 3 * 1000).toISOString(),
-    created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-    ready_at: new Date(Date.now() - 3 * 60 * 60 * 1000 + 85 * 1000).toISOString(),
-    name: "Pi",
+    mode: "gemini_gui",
+    requested_at: new Date(Date.now() - 25 * 60 * 1000 - 5 * 1000).toISOString(),
+    created_at: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+    ready_at: new Date(Date.now() - 24 * 60 * 1000).toISOString(),
+    name: "Gemini",
     repos: [],
     capabilities: [],
-    agent_avatar_id: demoAgentAvatarID(3),
+    agent_avatar_id: demoAgentAvatarID(4),
   },
 ];
 
@@ -806,16 +830,20 @@ const DEMO_CODEX_LINES = [
   "\x1b[2m  gpt-5.5 default · /workspace\x1b[0m",
 ];
 
-const DEMO_PI_LINES = [
-  "Pi Coding Agent",
+const DEMO_GEMINI_LINES = [
+  "\x1b[34m ▐\x1b[40m▛███▜\x1b[49m▌\x1b[39m   \x1b[1mGemini CLI\x1b[22m \x1b[37mv0.44.1\x1b[39m",
+  "\x1b[34m▝▜\x1b[40m█████\x1b[49m▛▘\x1b[39m  \x1b[37mgemini-3.5-flash · Gemini Advanced\x1b[39m",
+  "\x1b[34m  ▘▘ ▝▝  \x1b[39m  \x1b[37m/workspace\x1b[39m",
   "",
-  "  working directory: /workspace",
-  "  context files: AGENTS.md, CLAUDE.md",
-  "  tools: read, write, edit, bash",
+  "  \x1b[1m\x1b[94mWelcome to Gemini 3.5 Flash!\x1b[22m\x1b[37m · Google GenAI coding agent\x1b[39m",
   "",
-  "Type /login to manage providers, /model to switch models, or enter a task.",
   "",
-  "> Summarize this repo and run the checks.",
+  "",
+  "                                                                                  \x1b[37m◉ 3.5-flash\x1b[39m",
+  "\x1b[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────\x1b[39m",
+  "❯\u00a0\x1b[7m \x1b[27m",
+  "\x1b[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────\x1b[39m",
+  "  \x1b[95m⏵⏵ bypass permissions on\x1b[37m (shift+tab to cycle)\x1b[39m",
 ];
 
 const DEMO_HERMES_LINES = [
@@ -837,14 +865,14 @@ function demoTerminalLines(session: Session, promptText?: string): string[] {
     ? DEMO_CODEX_LINES
     : session.mode === "hermes_gui"
       ? DEMO_HERMES_LINES
-    : session.mode === "pi_cli"
-      ? DEMO_PI_LINES
+    : session.mode === "gemini_gui" || session.mode === "gemini_test"
+      ? DEMO_GEMINI_LINES
       : DEMO_CLAUDE_LINES;
   const lines = [...template];
   if (promptText) {
     if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
-    } else if (session.mode === "pi_cli" || session.mode === "hermes_gui") {
+    } else if (session.mode === "hermes_gui" || session.mode === "gemini_gui" || session.mode === "gemini_test") {
       lines[lines.length - 1] = `> ${promptText}`;
     } else {
       const promptIndex = lines.findIndex((line) => line.startsWith("❯"));
@@ -957,8 +985,6 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     ? "Codex"
     : mode === "hermes_gui"
       ? "Hermes"
-    : mode === "pi_cli"
-      ? "Pi"
       : "Claude Code";
   return {
     id: `${provider}-preview-${index}`,
@@ -980,7 +1006,7 @@ const DEMO_LANDING_LINES = [
   "$ tank-operator preview",
   "Welcome. This is the real app shell with demo sessions.",
   "",
-  "Click the provider icon to switch between Claude, Codex, Hermes, and Pi.",
+  "Click the provider icon to switch between Claude, Codex, and Hermes.",
   "Click + to add a local preview session.",
   "The key and wrench buttons are present but disabled in preview mode.",
   "",
@@ -1002,8 +1028,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
     value === "codex_cli" ||
     value === "codex_gui" ||
     value === "codex_exec_gui" ||
-    value === "hermes_gui" ||
-    value === "pi_cli"
+    value === "hermes_gui"
   );
 }
 
@@ -1125,9 +1150,9 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // Modes whose pods carry harvestable credentials — the "save" button
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
-const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
-const SDK_CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
+const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config", "gemini_config"]);
+const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui", "gemini_gui", "gemini_test"]);
+const SDK_CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "gemini_gui", "gemini_test"]);
 const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>([...SDK_CHAT_MODES, "hermes_gui"]);
 const SDK_TIMELINE_TAIL_ROWS = 24;
 const SDK_TIMELINE_OLDER_ROWS = 8;
@@ -1135,12 +1160,12 @@ const SDK_TIMELINE_DEEPLINK_ROWS_BEFORE = 12;
 const SDK_TIMELINE_DEEPLINK_ROWS_AFTER = 12;
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui", "gemini_gui", "gemini_test"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
-const PROVIDERS: Provider[] = ["anthropic", "codex", "hermes", "pi"];
+const PROVIDERS: Provider[] = ["anthropic", "codex", "gemini", "gemini_test", "hermes"];
 
 
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
@@ -1329,6 +1354,11 @@ function routeHasMessageTarget(): boolean {
 function replaceSessionRoute(id: string, tab: "chat" | "turns" = "chat", turnId?: string | null): void {
   if (routeHasMessageTarget()) return;
   const next = sessionRouteUrl(id, tab, turnId);
+  if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+function replaceSessionTranscriptRoute(id: string): void {
+  const next = sessionRouteUrl(id, "chat");
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -1895,7 +1925,7 @@ function sessionInteractionForSession(session: Session): SessionInteraction | nu
   const stored = readSessionInteraction(session.id);
   if (stored) return stored;
   if (CHAT_MODES.has(session.mode)) return "gui";
-  return session.mode === "claude_cli" || session.mode === "codex_cli" || session.mode === "pi_cli"
+  return session.mode === "claude_cli" || session.mode === "codex_cli"
     ? "cli"
     : null;
 }
@@ -2227,6 +2257,7 @@ function DemoLanding() {
   const [demoClaudeEffortId, setDemoClaudeEffortId] = useState(DEFAULT_CLAUDE_EFFORT_ID);
   const [demoCodexModelId, setDemoCodexModelId] = useState(DEFAULT_CODEX_MODEL_ID);
   const [demoCodexEffortId, setDemoCodexEffortId] = useState(DEFAULT_CODEX_EFFORT_ID);
+  const [demoGeminiModelId, setDemoGeminiModelId] = useState(DEFAULT_GEMINI_MODEL_ID);
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
   const [demoComposerMode, setDemoComposerMode] = useState<RunComposerMode>("default");
@@ -2240,14 +2271,18 @@ function DemoLanding() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : [];
+        : selectedProvider === "gemini" || selectedProvider === "gemini_test"
+          ? GEMINI_MODELS
+          : [];
   const demoModelApplies = demoInteraction === "gui" && demoModelOptions.length > 0;
   const selectedDemoModelId =
     selectedProvider === "anthropic"
       ? demoClaudeModelId
       : selectedProvider === "codex"
         ? demoCodexModelId
-        : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+        : selectedProvider === "gemini" || selectedProvider === "gemini_test"
+          ? demoGeminiModelId
+          : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -2536,6 +2571,7 @@ function DemoLanding() {
                               onClick={() => {
                                 if (selectedProvider === "anthropic") setDemoClaudeModelId(model.id);
                                 if (selectedProvider === "codex") setDemoCodexModelId(model.id);
+                                if (selectedProvider === "gemini" || selectedProvider === "gemini_test") setDemoGeminiModelId(model.id);
                               }}
                               aria-pressed={modelSelected}
                             >
@@ -2902,6 +2938,10 @@ function isCodexRunMode(mode: SessionMode): boolean {
   return mode === "codex_gui" || mode === "codex_app_server";
 }
 
+function isGeminiRunMode(mode: SessionMode): boolean {
+  return mode === "gemini_gui" || mode === "gemini_test";
+}
+
 // (formerly: getRunToolGroupSummary — replaced by RunToolGroup's inline
 // summary computation now that AgentTranscript is unused.)
 
@@ -3032,7 +3072,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 
 type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
 type BackgroundView = "shells" | "detached";
-type TurnViewScrollAnchor = "bottom";
+type TurnViewScrollAnchor = "bottom" | "top";
 
 type TurnPageOpenOptions = {
   anchor?: TurnViewScrollAnchor;
@@ -3307,6 +3347,10 @@ const CODEX_MODELS: ModelOption[] = [
   { id: "gpt-5.3-codex-spark", label: "Codex · GPT-5.3 Codex Spark" },
   { id: CODEX_ACCOUNT_DEFAULT_MODEL_ID, label: "Codex · Account default" },
 ];
+const GEMINI_MODELS: ModelOption[] = [
+  { id: "gemini-3.5-flash", label: "Gemini · 3.5 Flash" },
+  { id: "gemini-3.1-pro", label: "Gemini · 3.1 Pro" },
+];
 
 // Extended-thinking effort levels exposed by the Claude Agent SDK
 // (EffortLevel union). The ids are the wire values; the labels carry
@@ -3337,12 +3381,14 @@ const CODEX_EFFORTS: EffortOption[] = [
 ];
 const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 const DEFAULT_CODEX_EFFORT_ID = "xhigh";
+const DEFAULT_GEMINI_MODEL_ID = "gemini-3.5-flash";
 
 function modelOptionsForMode(mode: SessionMode): ModelOption[] {
   if (mode === "claude_gui") return CLAUDE_MODELS;
   if (mode === "codex_gui" || mode === "codex_exec_gui" || mode === "codex_app_server") {
     return CODEX_MODELS;
   }
+  if (mode === "gemini_gui" || mode === "gemini_test") return GEMINI_MODELS;
   return [];
 }
 
@@ -3403,6 +3449,7 @@ interface RunPrefs {
   claudeEffort: string;
   codexModelId: string;
   codexEffort: string;
+  geminiModelId: string;
   initialMessageMode: InitialMessageMode;
 }
 
@@ -3421,6 +3468,7 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
   codexModelId: DEFAULT_CODEX_MODEL_ID,
   codexEffort: DEFAULT_CODEX_EFFORT_ID,
+  geminiModelId: DEFAULT_GEMINI_MODEL_ID,
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
@@ -3522,6 +3570,8 @@ function loadRunPrefs(): RunPrefs {
         out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
       } else if (key === "codexEffort") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
+      } else if (key === "geminiModelId") {
+        out[key] = pickAllowedPrefId(raw, GEMINI_MODELS, DEFAULT_GEMINI_MODEL_ID);
       } else if (key === "initialMessageMode") {
         out[key] = pickInitialMessageMode(raw, DEFAULT_INITIAL_MESSAGE_MODE);
       } else if (raw === "true" || raw === "false") {
@@ -3564,6 +3614,10 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
     } else if (key === "codexEffort") {
       if (typeof raw === "string") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, prev.codexEffort);
+      }
+    } else if (key === "geminiModelId") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, GEMINI_MODELS, prev.geminiModelId);
       }
     } else if (key === "initialMessageMode") {
       if (typeof raw === "string") {
@@ -5308,13 +5362,36 @@ function RunNeedsInputAnnouncement({
   const announcement = entry.announcement;
   const answered = announcement?.answered ?? false;
   const summary = announcement?.questionSummary ?? entry.meta?.detail ?? "";
-  const title = entry.meta?.title ?? (answered ? "Answered" : "Claude is waiting on you");
+  // The handoff row has three states (see needsInputAnnouncement.ts). Only
+  // "waiting" — unanswered and the turn still live — is genuinely awaiting
+  // the user. Once the turn reaches a terminal status without an answer (the
+  // user stopped it, or it failed), the row is "settled": nothing is being
+  // waited on, so it must drop the attention-grabbing active styling.
+  const state = needsInputAnnouncementState({
+    answered,
+    turnTerminalStatus: entry.turnTerminalStatus,
+  });
+  // For "settled" we override the projection's "Claude is waiting on you"
+  // default — that title was chosen at projection time, before the terminal
+  // event landed and could not know the turn would end unanswered. The live
+  // "waiting"/"answered" states keep honoring any server-provided title.
+  const title =
+    state === "settled"
+      ? "No longer waiting"
+      : entry.meta?.title ?? (state === "answered" ? "Answered" : "Claude is waiting on you");
   const targetTurnId = announcement?.targetTurnId ?? entry.turnId ?? "";
   const handleOpen = (): void => {
     if (!targetTurnId) return;
     onOpenTurn?.(targetTurnId, { anchor: "bottom" });
   };
-  const interactive = !answered && Boolean(targetTurnId && onOpenTurn);
+  const navigable = Boolean(targetTurnId && onOpenTurn);
+  // Only the live "waiting" state earns the high-emphasis primary CTA. The
+  // two settled states (answered / no-longer-waiting) keep the same
+  // navigation affordance but render it muted (secondary) so the row stops
+  // competing for attention once there is nothing to act on. The function is
+  // unchanged — the user can still open the question in Turns.
+  const showPrimaryCta = state === "waiting" && navigable;
+  const showSecondaryCta = state !== "waiting" && navigable;
   return (
     <div
       className="run-transcript-message"
@@ -5333,15 +5410,20 @@ function RunNeedsInputAnnouncement({
       </span>
       <div className="run-needs-input-announcement-body">
         <div
-          className={`run-needs-input-announcement${answered ? " run-needs-input-announcement-answered" : ""}`}
+          className={`run-needs-input-announcement${
+            state === "answered" ? " run-needs-input-announcement-answered" : ""
+          }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
           data-slot="message-content"
+          data-state={state}
           data-answered={answered ? "true" : "false"}
           role="group"
           aria-label={title}
         >
           <span className="run-needs-input-announcement-icon" aria-hidden="true">
-            {answered ? (
+            {state === "answered" ? (
               <CheckIcon size={14} aria-hidden="true" />
+            ) : state === "settled" ? (
+              <MessageSquareOffIcon size={14} aria-hidden="true" />
             ) : (
               <MessageSquareIcon size={14} aria-hidden="true" />
             )}
@@ -5352,7 +5434,7 @@ function RunNeedsInputAnnouncement({
               <p className="run-needs-input-announcement-detail">{summary}</p>
             )}
           </div>
-          {interactive && (
+          {showPrimaryCta && (
             <button
               type="button"
               className="run-needs-input-announcement-cta"
@@ -5362,12 +5444,16 @@ function RunNeedsInputAnnouncement({
               Open in Turns
             </button>
           )}
-          {answered && targetTurnId && onOpenTurn && (
+          {showSecondaryCta && (
             <button
               type="button"
               className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
               onClick={handleOpen}
-              aria-label="View answered question in Turns"
+              aria-label={
+                state === "answered"
+                  ? "View answered question in Turns"
+                  : "View the question in Turns"
+              }
             >
               View in Turns
             </button>
@@ -7454,13 +7540,16 @@ function RunTurnActivityScreen({
     if (!scrollRequest || !selected) return;
     if (scrollRequest.turnId !== selected.turnId) return;
     if (consumedScrollRequestRef.current === scrollRequest.signal) return;
-    if (scrollRequest.anchor !== "bottom") return;
     if (!selected.loaded) return;
     if (loading && detailGroups.length === 0) return;
     const body = bodyRef.current;
     if (!body) return;
     consumedScrollRequestRef.current = scrollRequest.signal;
-    body.scrollTo({ top: body.scrollHeight, behavior: "auto" });
+    if (scrollRequest.anchor === "top") {
+      body.scrollTo({ top: 0, behavior: "auto" });
+    } else {
+      body.scrollTo({ top: body.scrollHeight, behavior: "auto" });
+    }
     onScrollRequestConsumed?.(scrollRequest.signal);
   }, [
     detailGroups.length,
@@ -8284,6 +8373,7 @@ function RunSettingsPanel({
             <AdminAvatarManager onCatalogChanged={adminControls.onAvatarCatalogChanged} />
           </>
         ) : (
+          <>
           <section className="run-settings-section">
             <h2 className="run-settings-title">Admin Controls</h2>
             <button
@@ -8345,6 +8435,26 @@ function RunSettingsPanel({
               <SessionListDebugCaptureControls source="SettingsAdmin" />
             </div>
           </section>
+          <section className="run-settings-section">
+            <h2 className="run-settings-title">Useful files</h2>
+            {ADMIN_REFERENCE_LINKS.map((link) => (
+              <a
+                key={link.id}
+                className="run-settings-link"
+                href={link.href}
+                target="_blank"
+                rel="noreferrer"
+                title={link.description}
+              >
+                <span className="run-settings-link-label">
+                  <FileTextIcon className="run-settings-link-icon" aria-hidden="true" />
+                  <span>{link.label}</span>
+                </span>
+                <span className="run-settings-scope-value">Open</span>
+              </a>
+            ))}
+          </section>
+          </>
         )
       ) : (
         <>
@@ -8513,6 +8623,28 @@ function RunHelpScreen() {
           </div>
         </div>
       </section>
+      <section className="run-help-section">
+        <h2 className="run-help-title">Keyboard</h2>
+        <div className="run-help-list">
+          <div className="run-help-row">
+            <span className="run-help-key">R</span>
+            <span>
+              Refresh the transcript — force-pull any durable messages that
+              haven&apos;t been delivered yet. Works on the chat transcript and
+              the Turns page; click the transcript (or press Tab) to focus it
+              first.
+            </span>
+          </div>
+          <div className="run-help-row">
+            <span className="run-help-key">Home / End</span>
+            <span>Jump to the start or the live tail of the conversation.</span>
+          </div>
+          <div className="run-help-row">
+            <span className="run-help-key">Tab</span>
+            <span>Move focus between the composer and the transcript.</span>
+          </div>
+        </div>
+      </section>
       <section className="run-help-section" aria-labelledby="run-help-sidebar-status-title">
         <h2 className="run-help-title" id="run-help-sidebar-status-title">Sidebar Status</h2>
         <div className="run-help-status-list">
@@ -8542,6 +8674,7 @@ function ChatPane({
   visible,
   onSessionPatch,
   onConnectionLabelChange,
+  onRefreshFlashChange,
   onForkMessage,
   pendingScrollMessageId,
   onScrollConsumed,
@@ -8556,11 +8689,16 @@ function ChatPane({
   readOnly = false,
   sessionScope,
   avatarCatalogVersion,
+  sidebarTranscriptOpenRequest = 0,
 }: {
   session: Session;
   visible: boolean;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onConnectionLabelChange: (id: string, label: string | null) => void;
+  // Transient "Refreshed" confirmation, surfaced in the same title-overlay
+  // slot as the connection pill. Bubbled per-session so the parent shows it
+  // for the active pane only.
+  onRefreshFlashChange: (id: string, label: string | null) => void;
   onForkMessage: (request: ForkSessionRequest) => Promise<void>;
   // Deep-link target the parent extracted from ?message=<id>. Only set
   // for the ChatPane whose session matches ?session=<id>; other panes
@@ -8593,6 +8731,7 @@ function ChatPane({
   readOnly?: boolean;
   sessionScope: string;
   avatarCatalogVersion: number;
+  sidebarTranscriptOpenRequest?: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [activityEntriesByTurn, setActivityEntriesByTurn] =
@@ -8627,6 +8766,7 @@ function ChatPane({
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
+  const isGemini = isGeminiRunMode(session.mode);
   const ready = session.mode === "hermes_gui"
     ? session.status === "Active"
     : sessionContainerAvailable(session);
@@ -8652,7 +8792,9 @@ function ChatPane({
     ? runPrefs.claudeModelId
     : isCodex
       ? runPrefs.codexModelId
-      : "";
+      : isGemini
+        ? runPrefs.geminiModelId
+        : "";
   const preferredEffortId = isClaude
     ? runPrefs.claudeEffort
     : isCodex
@@ -8815,6 +8957,29 @@ function ChatPane({
   const sdkLoadingOlderRef = useRef(false);
   const sdkTimelineRequestSeqRef = useRef(0);
   const sdkTranscriptKeyboardNavInFlightRef = useRef<"oldest" | "newest" | null>(null);
+  // Dedupes overlapping R-refresh force-pulls (held key / rapid presses) so a
+  // single user-visible refresh never fans out into a timeline-request storm.
+  const keyboardRefreshInFlightRef = useRef(false);
+  // Brief, transient confirmation that an R-refresh registered. The pull
+  // itself is otherwise invisible when it delivers no new rows, so we flash a
+  // plain "Refreshed" pill in the connection-pill slot for a moment. The timer
+  // ref lets a rapid second press restart (not stack) the display window.
+  const [refreshFlashActive, setRefreshFlashActive] = useState(false);
+  const refreshFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const triggerRefreshFlash = useCallback(() => {
+    setRefreshFlashActive(true);
+    if (refreshFlashTimerRef.current) clearTimeout(refreshFlashTimerRef.current);
+    refreshFlashTimerRef.current = setTimeout(() => {
+      setRefreshFlashActive(false);
+      refreshFlashTimerRef.current = null;
+    }, REFRESH_FLASH_DURATION_MS);
+  }, []);
+  useEffect(
+    () => () => {
+      if (refreshFlashTimerRef.current) clearTimeout(refreshFlashTimerRef.current);
+    },
+    [],
+  );
   const [sdkFoundOldest, setSdkFoundOldest] = useState(false);
   const [sdkFoundNewest, setSdkFoundNewest] = useState(false);
   const [sdkLoadingOlder, setSdkLoadingOlder] = useState(false);
@@ -9452,6 +9617,17 @@ function ChatPane({
     window.addEventListener("popstate", applyCurrentSessionRoute);
     return () => window.removeEventListener("popstate", applyCurrentSessionRoute);
   }, [applyCurrentSessionRoute, visible]);
+  useEffect(() => {
+    if (!visible || sidebarTranscriptOpenRequest === 0) return;
+    setActiveTab("chat");
+    setPendingRouteTurnId(null);
+    setPendingTurnViewRouteAnchor(null);
+    slashManualOpenRef.current = false;
+    setSlashOpen(false);
+    setMentionOpen(false);
+    setMcpOpen(false);
+    replaceSessionTranscriptRoute(session.id);
+  }, [session.id, sidebarTranscriptOpenRequest, visible]);
 
   // History replay and live tail both hit the server-owned transcript-row read
   // model. Raw Tank item events stay behind the Turn activity detail endpoint
@@ -9498,8 +9674,15 @@ function ChatPane({
       }
       const scrollToLatestOnReady =
         timelineBootstrapScrollToLatestRef.current && anchor === "newest";
+      // A keyboard refresh behaves like resync/projected-refresh for the
+      // viewport: it re-anchors to the freshly pulled tail only when the reader
+      // is already following live-tail. A reader in historical-anchor mode
+      // keeps their position — the Transcript Navigation contract forbids
+      // load/ready/reconnect/resync from yanking the viewport away from
+      // someone reading history.
       const stickToLatestAfterLoad =
-        source === "projected-refresh" && navigationModeRef.current === "live-tail";
+        (source === "projected-refresh" || source === "keyboard-refresh") &&
+        navigationModeRef.current === "live-tail";
       if (timelineBootstrapScrollToLatestRef.current && anchor !== "newest") {
         timelineBootstrapScrollToLatestRef.current = false;
       }
@@ -10570,6 +10753,7 @@ function ChatPane({
     if (!visible || !running) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !slashOpen && !mentionOpen && !mcpOpen) {
+        if (activeTab === "turns") return;
         if (e.target instanceof Element && e.target.closest(".run-header-name-input")) return;
         e.preventDefault();
         cancelRun();
@@ -10577,7 +10761,7 @@ function ChatPane({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [mcpOpen, mentionOpen, running, slashOpen, visible]);
+  }, [activeTab, mcpOpen, mentionOpen, running, slashOpen, visible]);
 
   // Slash- + mention-palette typing detection + composer-text mirror.
   // Listens at the composer wrap; reads the textarea's value + cursor on
@@ -11507,10 +11691,17 @@ function ChatPane({
   const effectiveSelectedTurnId = selectedTurnExists ? selectedTurnId : latestTurnId;
   const routedSelectedTurnId =
     activeTab === "turns" ? (pendingRouteTurnId ?? effectiveSelectedTurnId) : null;
-  const ensureTurnActivityLoaded = useCallback((turnId: string) => {
+  const ensureTurnActivityLoaded = useCallback((
+    turnId: string,
+    options?: { force?: boolean },
+  ) => {
     const trimmedTurnId = turnId.trim();
     if (!trimmedTurnId) return;
-    if (activityEntriesByTurn[trimmedTurnId]) return;
+    // `force` re-pulls even when activity is already cached. The R refresh uses
+    // it so a turn whose live activity silently lagged is reconciled in place,
+    // mirroring the main transcript's durable tail force-pull. Without force we
+    // keep the cache short-circuit so opening a turn never re-fetches.
+    if (!options?.force && activityEntriesByTurn[trimmedTurnId]) return;
     if (loadingActivityTurns[trimmedTurnId]) return;
     setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
     void authedFetch(
@@ -11606,6 +11797,197 @@ function ChatPane({
     }
     setActiveTab("turns");
   }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
+
+  // T opens the turn-detail view from the focused transcript; Escape returns
+  // from Turns to the transcript. The T side uses the same "highlighted
+  // transcript" focus gate as transcript R/Home/End shortcuts: the shared
+  // <main> must be the event target.
+  useEffect(() => {
+    if (!visible || !transcriptScrollEl) return;
+    if (activeTab !== "chat" && activeTab !== "turns") return;
+    const onKey = (e: KeyboardEvent) => {
+      const ctx = {
+        key: e.key,
+        repeat: e.repeat,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
+        targetIsTranscript: e.target === transcriptScrollEl,
+        targetIsTextEntry: isTextEntryShortcutTarget(e.target),
+        activeTab,
+        turnsAvailable,
+        palettesOpen: slashOpen || mentionOpen || mcpOpen,
+      };
+      if (isTranscriptToTurnsShortcut(ctx)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        openTurnPage(undefined, { anchor: "bottom" });
+        return;
+      }
+      if (!isTurnsToTranscriptShortcut(ctx)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setPendingRouteTurnId(null);
+      setPendingTurnViewRouteAnchor(null);
+      setActiveTab("chat");
+      requestAnimationFrame(() => {
+        focusTranscriptSection();
+      });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    focusTranscriptSection,
+    mcpOpen,
+    mentionOpen,
+    openTurnPage,
+    slashOpen,
+    transcriptScrollEl,
+    turnsAvailable,
+    visible,
+  ]);
+
+  // R refreshes the transcript: a keyboard-driven force-pull of the durable
+  // tail for the focused transcript region. Users reported that a live SSE gap
+  // can leave the newest messages undelivered until a full browser reload;
+  // this is the lighter, in-place recovery the Transcript contract blesses
+  // ("refresh may recover from a broken browser state"). It applies to both the
+  // chat transcript and the Turns page, which share the focusable <main>
+  // (transcriptScrollEl) scaffold, so the same focus gate covers both.
+  //
+  // Force-pull semantics: refreshSdkRunHistoryResult re-fetches the newest
+  // durable timeline window and reconciles it into the rendered rows — unlike
+  // jumpSdkToLatest it has no "already at newest" short-circuit, so it genuinely
+  // re-pulls even when the client believes it is caught up (the exact case that
+  // forces a manual reload today). On the Turns page we additionally force the
+  // open turn's activity detail to re-load, since its cache otherwise
+  // short-circuits the re-pull. Per the Transcript Navigation contract the pull
+  // must not move the viewport for a reader in historical-anchor mode; that is
+  // enforced by stickToLatestAfterLoad gating on live-tail.
+  useEffect(() => {
+    if (!visible || !transcriptScrollEl) return;
+    if (activeTab !== "chat" && activeTab !== "turns") return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        !isTranscriptRefreshShortcut({
+          key: e.key,
+          repeat: e.repeat,
+          altKey: e.altKey,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          shiftKey: e.shiftKey,
+          isComposing: e.isComposing,
+          targetIsTranscript: e.target === transcriptScrollEl,
+          activeTab,
+          palettesOpen: slashOpen || mentionOpen || mcpOpen,
+        })
+      ) {
+        return;
+      }
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      logChatScrollEvent("keyboard-refresh", {
+        surface: "session",
+        sessionId: session.id,
+        sessionMode: session.mode,
+        tab: activeTab,
+        navigationMode: navigationModeRef.current,
+        inFlight: keyboardRefreshInFlightRef.current,
+        ...chatScrollElementSnapshot(transcriptScrollEl),
+      });
+      // Confirm the keypress on every accepted R, even when the force-pull is
+      // deduped against one already in flight — the user still pressed R and
+      // should see it landed.
+      triggerRefreshFlash();
+      if (keyboardRefreshInFlightRef.current) return;
+      keyboardRefreshInFlightRef.current = true;
+      // clearRealtime=false keeps any in-flight optimistic local echo; the
+      // refreshed server rows are deduped against it by syncSdkRenderedEntries.
+      const pull = refreshSdkRunHistoryResult(false, "keyboard-refresh");
+      if (activeTab === "turns" && effectiveSelectedTurnId) {
+        ensureTurnActivityLoaded(effectiveSelectedTurnId, { force: true });
+      }
+      void pull.finally(() => {
+        keyboardRefreshInFlightRef.current = false;
+      });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    effectiveSelectedTurnId,
+    ensureTurnActivityLoaded,
+    mcpOpen,
+    mentionOpen,
+    session.id,
+    session.mode,
+    slashOpen,
+    transcriptScrollEl,
+    triggerRefreshFlash,
+    visible,
+  ]);
+  // On the Turns page, Home/End move the focused turn-detail view to its
+  // top/bottom edge — the same intent Home/End satisfy on the chat transcript
+  // (jump to the conversation's oldest/newest edge), translated to the Turns
+  // surface. The Turns body (.run-turn-view-body) is its own scroll container,
+  // not the chat virtuoso, so we reuse the turn-view scroll-request channel the
+  // route-open path already drives instead of touching the DOM here. The focus
+  // gate matches the chat Home/End and R-refresh handlers: the shared focusable
+  // <main> (transcriptScrollEl) must be the key event target, so the keys stay
+  // inert while the composer or a palette holds focus.
+  useEffect(() => {
+    if (!visible || activeTab !== "turns" || !transcriptScrollEl) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.isComposing ||
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.shiftKey ||
+        e.target !== transcriptScrollEl ||
+        slashOpen ||
+        mentionOpen ||
+        mcpOpen
+      ) {
+        return;
+      }
+      if (e.key !== "Home" && e.key !== "End") return;
+      if (!effectiveSelectedTurnId) return;
+      const anchor: TurnViewScrollAnchor = e.key === "Home" ? "top" : "bottom";
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      logChatScrollEvent("keyboard-edge-navigation", {
+        surface: "session",
+        sessionId: session.id,
+        sessionMode: session.mode,
+        key: e.key,
+        tab: "turns",
+        targetEdge: anchor === "top" ? "oldest" : "newest",
+        ...chatScrollElementSnapshot(transcriptScrollEl),
+      });
+      turnViewScrollRequestSeqRef.current += 1;
+      setTurnViewScrollRequest({
+        turnId: effectiveSelectedTurnId,
+        anchor,
+        signal: turnViewScrollRequestSeqRef.current,
+      });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    effectiveSelectedTurnId,
+    mcpOpen,
+    mentionOpen,
+    session.id,
+    session.mode,
+    slashOpen,
+    transcriptScrollEl,
+    visible,
+  ]);
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
   const canStopBackgroundEntry = useCallback(
     (entry: TranscriptEntry) =>
@@ -11748,6 +12130,16 @@ function ChatPane({
     onConnectionLabelChange(session.id, visibleConnectionLabel);
     return () => onConnectionLabelChange(session.id, null);
   }, [onConnectionLabelChange, session.id, visibleConnectionLabel]);
+
+  const visibleRefreshFlash = refreshFlashLabel({
+    visible,
+    activeTab,
+    active: refreshFlashActive,
+  });
+  useEffect(() => {
+    onRefreshFlashChange(session.id, visibleRefreshFlash);
+    return () => onRefreshFlashChange(session.id, null);
+  }, [onRefreshFlashChange, session.id, visibleRefreshFlash]);
 
   async function sendInputReply(
     entry: TranscriptEntry,
@@ -13069,6 +13461,8 @@ export function App() {
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
+  const [sessionTranscriptOpenRequests, setSessionTranscriptOpenRequests] =
+    useState<Record<string, number>>({});
   const [sessionActivities, setSessionActivities] = useState<Record<string, SessionActivitySummary>>({});
   // Refs mirror the latest sessions + activities state so the SSE event
   // reducer (which closes over the user-keyed useEffect) can read the
@@ -13245,6 +13639,18 @@ export function App() {
   const [sessionConnectionLabels, setSessionConnectionLabels] = useState<Record<string, string | undefined>>({});
   const updateSessionConnectionLabel = useCallback((id: string, label: string | null) => {
     setSessionConnectionLabels((prev) => {
+      if (prev[id] === (label ?? undefined)) return prev;
+      const next = { ...prev };
+      if (label) next[id] = label;
+      else delete next[id];
+      return next;
+    });
+  }, []);
+  // Transient per-session "Refreshed" confirmation, mirrored from the active
+  // ChatPane and rendered alongside the connection pill.
+  const [sessionRefreshFlashes, setSessionRefreshFlashes] = useState<Record<string, string | undefined>>({});
+  const updateSessionRefreshFlash = useCallback((id: string, label: string | null) => {
+    setSessionRefreshFlashes((prev) => {
       if (prev[id] === (label ?? undefined)) return prev;
       const next = { ...prev };
       if (label) next[id] = label;
@@ -13970,6 +14376,16 @@ export function App() {
       });
       return changed ? next : prev;
     });
+    setSessionTranscriptOpenRequests((prev) => {
+      const existing = new Set(sessions.map((s) => s.id));
+      let changed = false;
+      const next: Record<string, number> = {};
+      for (const [id, signal] of Object.entries(prev)) {
+        if (existing.has(id) && !closingIds.has(id)) next[id] = signal;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
     setSessionActivities((prev) => {
       const existing = new Set(sessions.map((s) => s.id));
       let changed = false;
@@ -14150,6 +14566,13 @@ export function App() {
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
+  function requestSessionTranscriptOpen(id: string) {
+    setSessionTranscriptOpenRequests((prev) => ({
+      ...prev,
+      [id]: (prev[id] ?? 0) + 1,
+    }));
+  }
+
   function goHome() {
     const url = new URL(window.location.href);
     url.pathname = "/";
@@ -14165,6 +14588,8 @@ export function App() {
       window.open(sessionUrl(id), "_blank", "noopener,noreferrer");
       return;
     }
+    requestSessionTranscriptOpen(id);
+    replaceSessionTranscriptRoute(id);
     activate(id);
   }
 
@@ -14830,14 +15255,18 @@ export function App() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : [];
+        : selectedProvider === "gemini" || selectedProvider === "gemini_test"
+          ? GEMINI_MODELS
+          : [];
   const homeModelApplies = defaultInteraction === "gui" && homeModelOptions.length > 0;
   const selectedHomeModelId =
     selectedProvider === "anthropic"
       ? runPrefs.claudeModelId
       : selectedProvider === "codex"
         ? runPrefs.codexModelId
-        : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+        : selectedProvider === "gemini" || selectedProvider === "gemini_test"
+          ? runPrefs.geminiModelId
+          : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
   const selectedHomeEffortId =
     selectedProvider === "anthropic"
       ? runPrefs.claudeEffort
@@ -14855,6 +15284,10 @@ export function App() {
     activeWorkspaceSession == null
       ? null
       : sessionConnectionLabels[activeWorkspaceSession.id] ?? null;
+  const activeRefreshFlash =
+    activeWorkspaceSession == null
+      ? null
+      : sessionRefreshFlashes[activeWorkspaceSession.id] ?? null;
   const useHomeTitleChrome =
     active == null || homeEditingTitle || pendingCreateTitleSessionId != null;
   const showWorkspaceTitleChrome =
@@ -14951,6 +15384,15 @@ export function App() {
           aria-live="polite"
         >
           <span className="run-connection-label">{activeConnectionLabel}</span>
+        </span>
+      )}
+      {!useHomeTitleChrome && activeRefreshFlash && (
+        <span
+          className="run-connection-pill run-refresh-pill"
+          role="status"
+          aria-live="polite"
+        >
+          <span className="run-connection-label run-refresh-label">{activeRefreshFlash}</span>
         </span>
       )}
     </div>
@@ -15338,6 +15780,8 @@ export function App() {
                                   setRunPref("claudeModelId", model.id);
                                 } else if (selectedProvider === "codex") {
                                   setRunPref("codexModelId", model.id);
+                                } else if (selectedProvider === "gemini" || selectedProvider === "gemini_test") {
+                                  setRunPref("geminiModelId", model.id);
                                 }
                               }}
                               aria-pressed={selected}
@@ -15638,6 +16082,7 @@ export function App() {
                       visible={active === s.id}
                       onSessionPatch={patchSession}
                       onConnectionLabelChange={updateSessionConnectionLabel}
+                      onRefreshFlashChange={updateSessionRefreshFlash}
                       onForkMessage={forkSessionFromMessage}
                       pendingScrollMessageId={
                         pendingScrollMessageId && active === s.id
@@ -15656,6 +16101,7 @@ export function App() {
                       readOnly={readOnlySessionView}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
+                      sidebarTranscriptOpenRequest={sessionTranscriptOpenRequests[s.id] ?? 0}
                     />
                   </div>
                 ) : (

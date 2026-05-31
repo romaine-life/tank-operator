@@ -128,7 +128,6 @@ func TestSessionModeSupportsRepos(t *testing.T) {
 		sessionmodel.ClaudeCLIMode:      false,
 		sessionmodel.CodexCLIMode:       false,
 		sessionmodel.CodexConfigMode:    false,
-		sessionmodel.PiCLIMode:          false,
 		sessionmodel.APIKeyMode:         false,
 		sessionmodel.ConfigMode:         false,
 		sessionmodel.HermesGUIMode:      false,

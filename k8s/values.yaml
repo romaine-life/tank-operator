@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-32146127700d122c6cbf6a905fe6ae7180af8fb003393fcde3a723cfd6ce7819"
+  tag: "app-ea65c875914804ad6db643d531bae6e9a9b0f3c756ea7f4e8349370d40804ae9"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -54,9 +54,9 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-a7bd9503cdabf938faef4f5ab39f1fd69ccfffc11d3c03c0350095d95a3b73c2
-  codexImage: romainecr.azurecr.io/codex-container:codex-ccb48c4e7d5fd8a3822bbabf73909063af091ccb8c96387b6f0ebfd1909724c1
-  piImage: romainecr.azurecr.io/pi-container:pi-52c44bbf0032c4f2f5cdbc9993c85e36f06dcd5c71f2dda27a46ac40d908175d
+  image: romainecr.azurecr.io/claude-container:claude-7fd6f21f74c2edddeaed6b9a0d9c024f6fff6d3b47fef0b959fe6d07c93a982b
+  codexImage: romainecr.azurecr.io/codex-container:codex-2a1d2809a9cb4ab412437979c263ed3053e2e105b6d9e283978755fa74803566
+  geminiImage: romainecr.azurecr.io/gemini-container:gemini-ce985aa80fec66f64c92a5688665d40b50d48e3bca1b869492360683dbf39425
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -135,7 +135,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-13c2404235044f911e5d1432d80bc3196fe53ec3422d0266b3fce8ee13090f4b"
+    tag: "api-proxy-667b87d322560ae4b9173709b5be6c6e780106c737f63bab2113cc0d898a8a3e"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   serviceAccount: claude-api-proxy
@@ -150,6 +150,12 @@ apiProxy:
 # real ChatGPT OAuth refresh chain for Codex sessions.
 codexApiProxy:
   serviceHost: codex-api-proxy.tank-operator.svc.cluster.local
+
+# Gemini API proxy: a third Envoy + ext_proc deployment using the same image
+# and UAMI as apiProxy. It fronts generativelanguage.googleapis.com and owns the
+# real Google OAuth refresh chain for Gemini sessions.
+geminiApiProxy:
+  serviceHost: gemini-api-proxy.tank-operator.svc.cluster.local
 
 # Anthropic credential rotation: lives in the api-proxy's ext_proc sidecar
 # (api-proxy/src/tank_api_proxy/server.py). The sidecar caches the access
@@ -322,6 +328,17 @@ externalSecret:
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
     kvKey: codex-credentials
+  # Google Gemini subscription credentials. The primary Secret lives in the
+  # ORCHESTRATOR namespace and is mounted by gemini-api-proxy. Gemini CLI/GUI
+  # session launchers write a placeholder settings.json and route
+  # generativelanguage.googleapis.com through the proxy, which injects/rotates
+  # the real tokens and writes back to KV.
+  geminiCredentials:
+    secretName: gemini-credentials
+    # Key inside the K8s Secret. The proxy mounts this as
+    # /etc/gemini-credentials/oauth_creds.json.
+    secretKey: oauth_creds.json
+    kvKey: gemini-credentials
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

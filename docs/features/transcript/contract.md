@@ -95,6 +95,10 @@ answer; it must not visibly move a rendered row from one surface to the other.
   session's first turn, must stay above the placeholder. A turnId-structural
   placement rule strands the placeholder above those untagged notices because
   they carry no `turnId`.
+- Mid-turn token usage updates are durable turn activity, not a live-only
+  buffered status line. The projected usage row keeps the transcript position
+  of the first `turn.usage` event for that turn while its payload and the
+  activity shell's live-tail cursor advance with later usage updates.
 - Turn activity may show a log copy of assistant prose, including prose that
   later becomes the final answer, but that copy is not a second settled
   transcript message.
