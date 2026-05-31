@@ -1,9 +1,6 @@
-import { GoogleGenAI, Type } from "@google/genai";
-import { exec } from "node:child_process";
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
+import { spawn } from "node:child_process";
+import * as readline from "node:readline";
 import { randomUUID } from "node:crypto";
-
 
 import type { Config } from "./config.js";
 import { SessionEventSink } from "./sessionEvents.js";
@@ -12,7 +9,7 @@ import {
   commandClientNonce,
   type SessionCommandRecord,
 } from "./sessionCommands.js";
-import { GeminiTankEventAdapter } from "./adapters/gemini.js";
+import { GeminiTankEventAdapter, type GeminiAdapterTurn } from "./adapters/gemini.js";
 import {
   commandsConsumedTotal,
   providerErrorTotal,
@@ -59,24 +56,14 @@ export class Runner {
     commandRecord?: SessionCommandRecord;
   }>();
   private readonly adapter: GeminiTankEventAdapter;
-  private readonly ai: GoogleGenAI;
-  private chat: any = null;
   private currentAbort: AbortController | null = null;
   private turnSeq = 0;
+  private sessionExists = false;
 
   constructor(private readonly cfg: Config) {
     this.sink = new SessionEventSink(cfg);
     this.commandBus = new SessionCommandBus(cfg);
     this.adapter = new GeminiTankEventAdapter(cfg);
-
-    this.ai = new GoogleGenAI({
-      apiKey: "managed-by-tank-operator",
-      httpOptions: {
-        headers: {
-          "Authorization": "Bearer managed-by-tank-operator",
-        },
-      },
-    });
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -109,138 +96,7 @@ export class Runner {
         const turnSignal = this.currentAbort.signal;
 
         try {
-          // Initialize chat on first turn
-          if (!this.chat) {
-            const model = commandRecord?.model || "gemini-3.5-flash";
-            this.chat = this.ai.chats.create({
-              model: model,
-              config: {
-                tools: [
-                  {
-                    functionDeclarations: [
-                      {
-                        name: "execute_bash",
-                        description: "Execute a bash command in the workspace directory",
-                        parameters: {
-                          type: Type.OBJECT,
-                          properties: {
-                            command: { type: Type.STRING, description: "The command to run" },
-                          },
-                          required: ["command"],
-                        },
-                      },
-                      {
-                        name: "read_file",
-                        description: "Read the contents of a file from the workspace",
-                        parameters: {
-                          type: Type.OBJECT,
-                          properties: {
-                            path: { type: Type.STRING, description: "Path to the file relative to the workspace" },
-                          },
-                          required: ["path"],
-                        },
-                      },
-                      {
-                        name: "write_file",
-                        description: "Write content to a file in the workspace",
-                        parameters: {
-                          type: Type.OBJECT,
-                          properties: {
-                            path: { type: Type.STRING, description: "Path to the file relative to the workspace" },
-                            content: { type: Type.STRING, description: "The content to write" },
-                          },
-                          required: ["path", "content"],
-                        },
-                      },
-                      {
-                        name: "list_dir",
-                        description: "List the contents of a directory in the workspace",
-                        parameters: {
-                          type: Type.OBJECT,
-                          properties: {
-                            path: { type: Type.STRING, description: "Path to the directory relative to the workspace" },
-                          },
-                          required: ["path"],
-                        },
-                      },
-                    ],
-                  },
-                ],
-              },
-            });
-          }
-
-          let response = await this.chat.sendMessage({ message: input });
-
-          // ReAct loop
-          while (response.functionCalls && response.functionCalls.length > 0 && !turnSignal.aborted) {
-            const parts: any[] = [];
-
-            for (const call of response.functionCalls) {
-              if (turnSignal.aborted) break;
-
-              const toolItemID = `tool-${randomUUID()}`;
-              await this.sink.upsert(
-                this.adapter.toolStarted(turn, toolItemID, call.name, call.args) as any
-              );
-
-              try {
-                const result = await this.executeTool(call.name, call.args, turnSignal);
-                await this.sink.upsert(
-                  this.adapter.toolCompleted(turn, toolItemID, call.name, call.args, result) as any
-                );
-
-                parts.push({
-                  functionResponse: {
-                    name: call.name,
-                    response: { result },
-                  },
-                });
-              } catch (err: any) {
-                const errMsg = err instanceof Error ? err.message : String(err);
-                await this.sink.upsert(
-                  this.adapter.toolFailed(turn, toolItemID, call.name, call.args, errMsg) as any
-                );
-
-                parts.push({
-                  functionResponse: {
-                    name: call.name,
-                    response: { error: errMsg },
-                  },
-                });
-              }
-            }
-
-            if (parts.length > 0 && !turnSignal.aborted) {
-              response = await this.chat.sendMessage({ parts });
-            } else {
-              break;
-            }
-          }
-
-          if (turnSignal.aborted) {
-            throw new Error("Turn was aborted/interrupted");
-          }
-
-          const assistantText = response.text || "";
-          const assistantItemID = `msg-${randomUUID()}`;
-          await this.sink.upsert(
-            this.adapter.messageCompleted(turn, assistantItemID, assistantText) as any
-          );
-
-          // Emit turn.completed
-          await this.sink.upsert(
-            this.adapter.turnCompleted(turn, {
-              timelineIDs: [assistantItemID],
-              providerItemIDs: [assistantItemID],
-            }) as any
-          );
-
-          if (commandRecord) {
-            await this.commandBus.markCompleted(commandRecord);
-          }
-          recordTurnTerminal(turnID, "completed");
-
+          await this.executeCliTurn(input, turn, turnSignal, commandRecord);
         } catch (err: any) {
           providerErrorTotal.labels("query").inc();
           const errMessage = err instanceof Error ? err.message : String(err);
@@ -271,80 +127,180 @@ export class Runner {
     }
   }
 
-  private async executeTool(name: string, args: any, signal: AbortSignal): Promise<any> {
-    if (signal.aborted) throw new Error("Aborted");
+  private async executeCliTurn(
+    input: string,
+    turn: GeminiAdapterTurn,
+    turnSignal: AbortSignal,
+    commandRecord?: SessionCommandRecord
+  ): Promise<void> {
+    let proc;
 
-    const getAbsPath = (relPath: string) => {
-      const normalized = path.normalize(relPath);
-      if (path.isAbsolute(normalized)) {
-        if (normalized.startsWith(this.cfg.workspace)) {
-          return normalized;
-        }
-        throw new Error("Access outside workspace is denied");
-      }
-      const resolved = path.resolve(this.cfg.workspace, normalized);
-      if (resolved.startsWith(this.cfg.workspace)) {
-        return resolved;
-      }
-      throw new Error("Access outside workspace is denied");
+    if (process.platform === "win32") {
+      const escapedInput = `"${input.replace(/"/g, '\\"')}"`;
+      const runArgs = [
+        this.sessionExists ? "--resume" : "--session-id",
+        this.cfg.sessionId,
+        "--skip-trust",
+        "--yolo",
+        "-o", "stream-json",
+        "-p", escapedInput
+      ];
+      console.log(`Spawning on Windows: gemini.cmd ${runArgs.join(" ")}`);
+      proc = spawn("gemini.cmd", runArgs, {
+        cwd: this.cfg.workspace,
+        env: {
+          ...process.env
+        },
+        shell: true
+      });
+    } else {
+      const runArgs = [
+        this.sessionExists ? "--resume" : "--session-id",
+        this.cfg.sessionId,
+        "--skip-trust",
+        "--yolo",
+        "-o", "stream-json",
+        "-p", input
+      ];
+      console.log(`Spawning on Linux: gemini ${runArgs.join(" ")}`);
+      proc = spawn("gemini", runArgs, {
+        cwd: this.cfg.workspace,
+        env: {
+          ...process.env
+        },
+        shell: false
+      });
+    }
+
+    const onAbort = () => {
+      console.log(`Abort signal received. Terminating process PID ${proc.pid}`);
+      proc.kill("SIGINT");
+      setTimeout(() => {
+        try {
+          proc.kill("SIGKILL");
+        } catch {}
+      }, 2000);
     };
+    turnSignal.addEventListener("abort", onAbort);
 
-    switch (name) {
-      case "execute_bash": {
-        const cmd = String(args.command ?? "");
-        return new Promise((resolve, reject) => {
-          const process = exec(
-            cmd,
-            { cwd: this.cfg.workspace },
-            (error, stdout, stderr) => {
-              if (error) {
-                resolve({
-                  exitCode: error.code || 1,
-                  stdout: stdout,
-                  stderr: stderr || error.message,
-                });
-              } else {
-                resolve({
-                  exitCode: 0,
-                  stdout,
-                  stderr,
-                });
+    try {
+      let isResumeFailure = false;
+      let isAlreadyExistsFailure = false;
+      let stderrText = "";
+      proc.stderr?.on("data", (chunk) => {
+        stderrText += chunk.toString();
+      });
+
+      const rl = readline.createInterface({
+        input: proc.stdout,
+        terminal: false
+      });
+
+      let assistantText = "";
+      const toolIdToInfo = new Map<string, { name: string, input: any }>();
+      const timelineIDs: string[] = [];
+
+      for await (const line of rl) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line.trim());
+          switch (event.type) {
+            case "init":
+              break;
+            case "message":
+              if (event.role === "assistant" && event.content) {
+                assistantText += event.content;
               }
+              break;
+            case "tool_use": {
+              const toolItemID = event.tool_id || `tool-${randomUUID()}`;
+              toolIdToInfo.set(toolItemID, { name: event.tool_name, input: event.parameters });
+              timelineIDs.push(toolItemID);
+              await this.sink.upsert(
+                this.adapter.toolStarted(turn, toolItemID, event.tool_name, event.parameters) as any
+              );
+              break;
             }
-          );
-          signal.addEventListener("abort", () => {
-            process.kill();
-            reject(new Error("Bash process killed via abort"));
-          });
-        });
+            case "tool_result": {
+              const toolItemID = event.tool_id;
+              const info = toolIdToInfo.get(toolItemID);
+              const name = info?.name || "unknown";
+              const input = info?.input || {};
+              if (event.status === "success") {
+                await this.sink.upsert(
+                  this.adapter.toolCompleted(turn, toolItemID, name, input, event.output || "") as any
+                );
+              } else {
+                await this.sink.upsert(
+                  this.adapter.toolFailed(turn, toolItemID, name, input, event.output || "Error") as any
+                );
+              }
+              break;
+            }
+            case "result":
+              break;
+          }
+        } catch (err) {
+          if (line.includes("Error resuming session") || line.includes("Invalid session identifier")) {
+            isResumeFailure = true;
+          }
+          if (line.includes("already exists") || line.includes("Error starting session")) {
+            isAlreadyExistsFailure = true;
+          }
+        }
       }
 
-      case "read_file": {
-        const absPath = getAbsPath(String(args.path ?? ""));
-        const content = await fs.readFile(absPath, "utf-8");
-        return { content };
+      const exitCode = await new Promise<number>((resolve) => {
+        proc.on("close", (code) => resolve(code ?? 0));
+      });
+
+      // Symmetric fallback logic
+      if (exitCode !== 0) {
+        // Fallback from resume to create
+        if (this.sessionExists && (isResumeFailure || stderrText.includes("Error resuming session"))) {
+          console.log(`Resume failed for session ${this.cfg.sessionId}. Retrying with session creation...`);
+          turnSignal.removeEventListener("abort", onAbort);
+          this.sessionExists = false;
+          return await this.executeCliTurn(input, turn, turnSignal, commandRecord);
+        }
+        // Fallback from create to resume
+        if (!this.sessionExists && (isAlreadyExistsFailure || stderrText.includes("already exists") || stderrText.includes("Error starting session"))) {
+          console.log(`Session ${this.cfg.sessionId} already exists. Retrying with resume...`);
+          turnSignal.removeEventListener("abort", onAbort);
+          this.sessionExists = true;
+          return await this.executeCliTurn(input, turn, turnSignal, commandRecord);
+        }
+
+        throw new Error(`Gemini CLI exited with code ${exitCode}. Stderr: ${stderrText}`);
       }
 
-      case "write_file": {
-        const absPath = getAbsPath(String(args.path ?? ""));
-        await fs.mkdir(path.dirname(absPath), { recursive: true });
-        await fs.writeFile(absPath, String(args.content ?? ""), "utf-8");
-        return { success: true };
+      // Session successfully active now
+      this.sessionExists = true;
+
+      // Emit assistant message complete if text was generated
+      const assistantItemID = `msg-${randomUUID()}`;
+      if (assistantText) {
+        timelineIDs.push(assistantItemID);
+        await this.sink.upsert(
+          this.adapter.messageCompleted(turn, assistantItemID, assistantText) as any
+        );
       }
 
-      case "list_dir": {
-        const absPath = getAbsPath(String(args.path ?? "."));
-        const entries = await fs.readdir(absPath, { withFileTypes: true });
-        const list = entries.map((entry) => ({
-          name: entry.name,
-          isDirectory: entry.isDirectory(),
-          isFile: entry.isFile(),
-        }));
-        return { list };
-      }
+      // Emit turn.completed
+      await this.sink.upsert(
+        this.adapter.turnCompleted(turn, {
+          timelineIDs,
+          providerItemIDs: timelineIDs
+        }) as any
+      );
 
-      default:
-        throw new Error(`Unknown tool: ${name}`);
+      if (commandRecord) {
+        await this.commandBus.markCompleted(commandRecord);
+      }
+      recordTurnTerminal(turn.turnID, "completed");
+
+    } finally {
+      turnSignal.removeEventListener("abort", onAbort);
     }
   }
 
@@ -377,8 +333,6 @@ export class Runner {
   }
 
   private startControlConsumer(signal: AbortSignal): () => void {
-    // Listen for interrupts or control signals (like stop_turn / interrupt_turn)
-    // and abort the active turn execution
     let stopControl: (() => Promise<void>) | null = null;
     void this.commandBus
       .startControlConsumer(async (record) => {
