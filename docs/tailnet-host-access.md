@@ -185,6 +185,44 @@ pod over the tailnet returned **401 without** the `auth.romaine.life` bearer and
 required and are on `spire-lens-mcp` PR #12: the `--auth-mode jwt` validator, and
 disabling the MCP SDK's DNS-rebinding Host check (it 421s remote binds otherwise).
 
+## Supervised MCP-server task on the host (installed)
+
+The server runs as a Windows Scheduled Task **`SpireLens MCP HTTP`** (machine env
+`SPIRELENS_HOST_MCP_TASK` names it, mirroring `SPIRELENS_HOST_STS2_LAUNCH_TASK`).
+It is logon-triggered for `nelsonlaptop\nelsonlaptopuser`, `InteractiveToken` /
+`HighestAvailable`, no execution time limit, `IgnoreNew` multiple-instances, and
+restart-on-failure (1 min, 999×) — so it comes back after a crash or sign-in. Its
+action runs a launcher that resolves the tailnet IP at start (it isn't known
+until tailscale is up) then serves jwt-mode:
+
+```powershell
+# D:\automation\spirelens-mcp\run-mcp-http.ps1
+$ErrorActionPreference='Stop'
+$ts=$null
+for($i=0;$i -lt 60;$i++){ $ts=(& tailscale ip -4 2>$null | Select-Object -First 1); if($ts){break}; Start-Sleep 5 }
+if(-not $ts){ throw 'tailscale IP unavailable' }
+Set-Location 'D:\repos\spire-lens-mcp\mcp'
+& uv run --frozen python server.py --transport http --bind-host $ts --bind-port 15527 --auth-mode jwt
+```
+
+Register it (cmdlet API — `Register-ScheduledTask -Xml` is finicky about schema/encoding):
+
+```powershell
+$action    = New-ScheduledTaskAction -Execute (Get-Command pwsh.exe).Source -Argument '-NoProfile -WindowStyle Hidden -File D:\automation\spirelens-mcp\run-mcp-http.ps1'
+$trigger   = New-ScheduledTaskTrigger -AtLogOn -User 'nelsonlaptop\nelsonlaptopuser'
+$principal = New-ScheduledTaskPrincipal -UserId 'nelsonlaptop\nelsonlaptopuser' -LogonType Interactive -RunLevel Highest
+$settings  = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -RestartInterval (New-TimeSpan -Minutes 1) -RestartCount 999 -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+$settings.ExecutionTimeLimit = 'PT0S'
+Register-ScheduledTask -TaskName 'SpireLens MCP HTTP' -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
+New-NetFirewallRule -DisplayName 'SpireLens MCP 15527' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 15527 -ErrorAction SilentlyContinue
+[Environment]::SetEnvironmentVariable('SPIRELENS_HOST_MCP_TASK','SpireLens MCP HTTP','Machine')
+Start-ScheduledTask -TaskName 'SpireLens MCP HTTP'
+```
+
+The host's `spire-lens-mcp` checkout must be current (it's run-managed and can lag);
+`--auth-mode jwt` requires PR #12. To-do for full reproducibility: version-control
+this launcher (e.g. `spire-lens-mcp/host/`) instead of only living on the laptop.
+
 ## What is console-managed (outside any repo)
 
 These live in the Tailscale admin console / `nelsong6/auth`, not in this repo,
