@@ -53,8 +53,6 @@ spec:
               value: {{ .Values.session.image | quote }}
             - name: CODEX_SESSION_IMAGE
               value: {{ .Values.session.codexImage | quote }}
-            - name: PI_SESSION_IMAGE
-              value: {{ .Values.session.piImage | quote }}
             - name: GEMINI_SESSION_IMAGE
               value: {{ .Values.session.geminiImage | quote }}
             - name: SESSION_SERVICE_ACCOUNT

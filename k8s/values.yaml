@@ -56,7 +56,6 @@ session:
   # every push to main via a `[skip ci]` follow-up commit.
   image: romainecr.azurecr.io/claude-container:claude-bc4fcbedda5887df6900580ad084887d4933f1c86fdda28fd9e7a96d695870b7
   codexImage: romainecr.azurecr.io/codex-container:codex-d75e3ce27613aa3d63d3a697a07c10476c261b1bb855f09909da9d21764476f0
-  piImage: romainecr.azurecr.io/pi-container:pi-a3b60a4d1f9e8f1b7d9fcaacef9ed7c51b90c5ccab7046d32ebdf2640f38e50c
   geminiImage: romainecr.azurecr.io/gemini-container:gemini-892d01c8eb0504853f64b37049ea62ea90923c60274bb113577085e8d3646ca0
   configMap: tank-session-config
   serviceAccount: claude-session

@@ -813,6 +813,28 @@ const blocked = [
     name: "hermes_gui wired into codex-runner pod path",
     pattern: /wantCodexRunner\s*:=.*HermesGUIMode/,
   },
+  // Pi agent retirement: block reintroduction of the Pi runtime modes,
+  // image tags, and build settings.
+  {
+    name: "retired Pi session mode pi_cli",
+    pattern: /\bpi_cli\b/,
+  },
+  {
+    name: "retired Pi session mode pi_config",
+    pattern: /\bpi_config\b/,
+  },
+  {
+    name: "retired Pi image configuration piImage",
+    pattern: /\bpiImage\b/,
+  },
+  {
+    name: "retired Pi image environment variable PI_SESSION_IMAGE",
+    pattern: /\bPI_SESSION_IMAGE\b/,
+  },
+  {
+    name: "retired pi-container image identifier",
+    pattern: /\bpi-container\b/,
+  },
 ];
 
 const failures = [];

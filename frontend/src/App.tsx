@@ -237,9 +237,7 @@ type SessionMode =
   | "codex_config"
   | "gemini_gui"
   | "gemini_config"
-  | "hermes_gui"
-  | "pi_cli"
-  | "pi_config";
+  | "hermes_gui";
 type DefaultSessionMode = Extract<
   SessionMode,
   | "claude_cli"
@@ -249,9 +247,8 @@ type DefaultSessionMode = Extract<
   | "codex_exec_gui"
   | "gemini_gui"
   | "hermes_gui"
-  | "pi_cli"
 >;
-type Provider = "anthropic" | "codex" | "gemini" | "hermes" | "pi";
+type Provider = "anthropic" | "codex" | "gemini" | "hermes";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 type AskUserQuestionAnswer = {
@@ -613,8 +610,6 @@ const MODE_LABELS: Record<SessionMode, string> = {
   gemini_gui: "Gemini GUI",
   gemini_config: "Gemini config",
   hermes_gui: "Hermes",
-  pi_cli: "Pi CLI",
-  pi_config: "Pi config",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -632,8 +627,6 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   gemini_gui: "gemini-gui",
   gemini_config: "gemini-cfg",
   hermes_gui: "hermes",
-  pi_cli: "pi-cli",
-  pi_config: "pi-cfg",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -645,7 +638,6 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_app_server: "codex",
   gemini_gui: "gemini",
   hermes_gui: "hermes",
-  pi_cli: "pi",
 };
 
 const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
@@ -661,8 +653,6 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   gemini_gui: "gemini",
   gemini_config: "gemini",
   hermes_gui: "hermes",
-  pi_cli: "pi",
-  pi_config: "pi",
 };
 
 const PROVIDER_INTERACTION_MODES: Record<
@@ -673,7 +663,6 @@ const PROVIDER_INTERACTION_MODES: Record<
   codex: { gui: "codex_gui", cli: "codex_cli" },
   gemini: { gui: "gemini_gui", cli: null },
   hermes: { gui: "hermes_gui", cli: null },
-  pi: { gui: null, cli: "pi_cli" },
 };
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
@@ -687,7 +676,6 @@ const PROVIDER_CONFIG_MODES: Partial<Record<Provider, SessionMode>> = {
   anthropic: "config",
   codex: "codex_config",
   gemini: "gemini_config",
-  pi: "pi_config",
 };
 
 const PROVIDER_LABELS: Record<Provider, string> = {
@@ -695,7 +683,6 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   codex: "Codex",
   gemini: "Gemini",
   hermes: "Hermes",
-  pi: "Pi",
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -711,8 +698,6 @@ const MODE_HINTS: Record<SessionMode, string> = {
   gemini_gui: "GUI chat pane for Gemini transport",
   gemini_config: "gemini login · seeds KV for Gemini",
   hermes_gui: "Shared Hermes memory + MCP tools",
-  pi_cli: "Uses Tank Claude/Codex subscriptions",
-  pi_config: "Pi /login sandbox",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -769,19 +754,6 @@ const DEMO_BASE_SESSIONS: Session[] = [
     name: "Gemini",
     repos: [],
     agent_avatar_id: demoAgentAvatarID(4),
-  },
-  {
-    id: "pi-agent",
-    pod_name: "tank-demo-pi-agent",
-    owner: "preview",
-    status: "Active",
-    mode: "pi_cli",
-    requested_at: new Date(Date.now() - 3 * 60 * 60 * 1000 - 3 * 1000).toISOString(),
-    created_at: new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString(),
-    ready_at: new Date(Date.now() - 3 * 60 * 60 * 1000 + 85 * 1000).toISOString(),
-    name: "Pi",
-    repos: [],
-    agent_avatar_id: demoAgentAvatarID(3),
   },
 ];
 
@@ -854,18 +826,6 @@ const DEMO_GEMINI_LINES = [
   "  \x1b[95m⏵⏵ bypass permissions on\x1b[37m (shift+tab to cycle)\x1b[39m",
 ];
 
-const DEMO_PI_LINES = [
-  "Pi Coding Agent",
-  "",
-  "  working directory: /workspace",
-  "  context files: AGENTS.md, CLAUDE.md",
-  "  tools: read, write, edit, bash",
-  "",
-  "Type /login to manage providers, /model to switch models, or enter a task.",
-  "",
-  "> Summarize this repo and run the checks.",
-];
-
 const DEMO_HERMES_LINES = [
   "Hermes",
   "",
@@ -885,8 +845,6 @@ function demoTerminalLines(session: Session, promptText?: string): string[] {
     ? DEMO_CODEX_LINES
     : session.mode === "hermes_gui"
       ? DEMO_HERMES_LINES
-    : session.mode === "pi_cli"
-      ? DEMO_PI_LINES
     : session.mode === "gemini_gui"
       ? DEMO_GEMINI_LINES
       : DEMO_CLAUDE_LINES;
@@ -894,7 +852,7 @@ function demoTerminalLines(session: Session, promptText?: string): string[] {
   if (promptText) {
     if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
-    } else if (session.mode === "pi_cli" || session.mode === "hermes_gui" || session.mode === "gemini_gui") {
+    } else if (session.mode === "hermes_gui" || session.mode === "gemini_gui") {
       lines[lines.length - 1] = `> ${promptText}`;
     } else {
       const promptIndex = lines.findIndex((line) => line.startsWith("❯"));
@@ -1007,8 +965,6 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     ? "Codex"
     : mode === "hermes_gui"
       ? "Hermes"
-    : mode === "pi_cli"
-      ? "Pi"
       : "Claude Code";
   return {
     id: `${provider}-preview-${index}`,
@@ -1029,7 +985,7 @@ const DEMO_LANDING_LINES = [
   "$ tank-operator preview",
   "Welcome. This is the real app shell with demo sessions.",
   "",
-  "Click the provider icon to switch between Claude, Codex, Hermes, and Pi.",
+  "Click the provider icon to switch between Claude, Codex, and Hermes.",
   "Click + to add a local preview session.",
   "The key and wrench buttons are present but disabled in preview mode.",
   "",
@@ -1051,8 +1007,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
     value === "codex_cli" ||
     value === "codex_gui" ||
     value === "codex_exec_gui" ||
-    value === "hermes_gui" ||
-    value === "pi_cli"
+    value === "hermes_gui"
   );
 }
 
@@ -1941,7 +1896,7 @@ function sessionInteractionForSession(session: Session): SessionInteraction | nu
   const stored = readSessionInteraction(session.id);
   if (stored) return stored;
   if (CHAT_MODES.has(session.mode)) return "gui";
-  return session.mode === "claude_cli" || session.mode === "codex_cli" || session.mode === "pi_cli"
+  return session.mode === "claude_cli" || session.mode === "codex_cli"
     ? "cli"
     : null;
 }

@@ -30,8 +30,6 @@ const (
 	CodexAppServerMode = "codex_app_server"
 	GeminiGUIMode      = "gemini_gui"
 	GeminiConfigMode   = "gemini_config"
-	PiConfigMode       = "pi_config"
-	PiCLIMode          = "pi_cli"
 	// HermesGUIMode routes chat turns to Hermes Agent's OpenAI-compatible
 	// API server (cluster-internal at hermes-api.hermes.svc.cluster.local)
 	// via POST /v1/runs, instead of spawning a session pod. The "pod is
@@ -61,7 +59,7 @@ const (
 	// (k8s/values.yaml's session.* keys are bumped per-commit to
 	// fingerprinted tags by .github/workflows/claude-container-build.yml),
 	// passes them in via SESSION_IMAGE / CODEX_SESSION_IMAGE /
-	// PI_SESSION_IMAGE env vars. A `:latest` fallback here would silently
+	// GEMINI_SESSION_IMAGE env vars. A `:latest` fallback here would silently
 	// pin every session pod to whichever stale image happened to carry
 	// that tag — which is exactly what bricked claude_gui session creation
 	// for the 15h between the Go cutover and the env-var wiring.
@@ -85,8 +83,6 @@ var (
 		CodexAppServerMode: {},
 		GeminiGUIMode:      {},
 		GeminiConfigMode:   {},
-		PiConfigMode:       {},
-		PiCLIMode:          {},
 		HermesGUIMode:      {},
 	}
 
@@ -227,13 +223,11 @@ var noClaudeHijackModes = map[string]bool{
 	CodexAppServerMode: true,
 	GeminiConfigMode:   true,
 	GeminiGUIMode:      true,
-	PiConfigMode:       true,
 }
 
 type ManifestOptions struct {
 	SessionImage            string
 	CodexSessionImage       string
-	PiSessionImage          string
 	GeminiSessionImage      string
 	SessionsNamespace       string
 	SessionScope            string
@@ -360,9 +354,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	sessionImage := opts.SessionImage
 	if mode == CodexConfigMode || mode == CodexCLIMode || mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode {
 		sessionImage = opts.CodexSessionImage
-	}
-	if mode == PiConfigMode || mode == PiCLIMode {
-		sessionImage = opts.PiSessionImage
 	}
 	if mode == GeminiConfigMode || mode == GeminiGUIMode {
 		sessionImage = opts.GeminiSessionImage
@@ -497,7 +488,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// OAuth gateway + API proxy host aliases and CA cert.
 	var hostAliases []any
 	if !noClaudeHijackModes[mode] && (opts.OAuthGatewayIP != "" || opts.APIProxyIP != "") {
-		if mode != PiCLIMode && opts.OAuthGatewayIP != "" {
+		if opts.OAuthGatewayIP != "" {
 			hostAliases = append(hostAliases, map[string]any{
 				"ip":        opts.OAuthGatewayIP,
 				"hostnames": []any{"platform.claude.com"},

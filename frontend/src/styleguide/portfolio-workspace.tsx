@@ -120,27 +120,6 @@ function PortfolioWorkspaceScene() {
                 </span>
               </div>
             </li>
-            <li>
-              <AgentAvatarIcon avatar={requireSessionAvatar("jp1-grant")} className="session-avatar" />
-              <div className="session-row-top">
-                <span className="session-open">
-                  <span className="session-id">pi-review</span>
-                </span>
-                <button className="session-delete" aria-label="delete session" type="button">
-                  <XIcon size={14} aria-hidden="true" />
-                </button>
-              </div>
-              <div className="session-row-bottom">
-                <span className="status-dot status-pending" aria-label="status: Pending" />
-                <span className="mode mode-icon-only mode-provider-chip" title="Pi CLI" aria-label="Pi CLI">
-                  <ProviderIcon provider="pi" className="mode-provider-icon" />
-                  <span className="sr-only">pi-cli</span>
-                </span>
-                <span className="mode mode-icon-only mode-interaction-chip" title="cli" aria-label="cli">
-                  <TerminalIcon className="mode-interaction-icon" aria-hidden="true" />
-                </span>
-              </div>
-            </li>
           </ul>
         </div>
         <div className="sidebar-footer">
