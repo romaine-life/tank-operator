@@ -475,6 +475,61 @@ func TestProjectTranscriptEventsAnnouncementAnsweredAfterResolution(t *testing.T
 	t.Fatalf("missing needs_input_announcement entry after resolution: %#v", projection.Entries)
 }
 
+// TestProjectTranscriptEventsAnnouncementInterruptedCarriesTerminalStatus
+// locks the server-projection half of the "settled handoff" contract the
+// SPA renderer depends on. When the user declines to answer and stops the
+// turn, no tool.approval_resolved ever arrives, so the announcement stays
+// unanswered — but turn.interrupted lands on the same turn and must annotate
+// the announcement row with turnTerminalStatus. A fresh tab loading from the
+// server projection therefore has exactly the fact RunNeedsInputAnnouncement
+// needs to drop the "Claude is waiting on you" active state instead of
+// rendering a stuck, attention-grabbing card with nothing to act on.
+func TestProjectTranscriptEventsAnnouncementInterruptedCarriesTerminalStatus(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "where should this live?",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("ask-approval", "002", "tool.approval_requested", "tool", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
+			"kind": "needs_input",
+			"name": "AskUserQuestion",
+			"input": map[string]any{
+				"questions": []any{
+					map[string]any{
+						"question": "Where should this \"useful files\" links section live?",
+						"header":   "Placement",
+					},
+				},
+			},
+		}),
+		// User stopped the turn instead of answering.
+		projectionTestEvent("interrupt", "003", "turn.interrupted", "system", "tank", "turn-1", "", map[string]any{
+			"reason": "client_interrupt",
+		}),
+	}
+	projection := projectTranscriptEvents(events)
+	for _, entry := range projection.Entries {
+		if entry["metaKind"] != "needs_input_announcement" {
+			continue
+		}
+		ann := entry["announcement"].(map[string]any)
+		if ann["answered"] != false {
+			t.Errorf("answered = %v, want false (the user never answered)", ann["answered"])
+		}
+		if got := entry["turnTerminalStatus"]; got != "interrupted" {
+			t.Errorf("turnTerminalStatus = %v, want interrupted", got)
+		}
+		// The projection still emits the pre-terminal default title; the SPA
+		// renderer overrides it to "No longer waiting" for the settled state.
+		meta := entry["meta"].(map[string]any)
+		if meta["title"] != "Claude is waiting on you" {
+			t.Errorf("announcement title = %q, want the pre-terminal default", meta["title"])
+		}
+		return
+	}
+	t.Fatalf("missing needs_input_announcement entry: %#v", projection.Entries)
+}
+
 func projectionTestEvent(eventID, orderKey, eventType, actor, source, turnID, timelineID string, payload map[string]any) map[string]any {
 	event := map[string]any{
 		"event_id":   eventID,

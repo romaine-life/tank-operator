@@ -70,6 +70,7 @@ import {
   ListChecksIcon,
   Loader2Icon,
   MessageSquareIcon,
+  MessageSquareOffIcon,
   MinusIcon,
   MonitorIcon,
   NotebookPenIcon,
@@ -132,6 +133,7 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
+import { needsInputAnnouncementState } from "./needsInputAnnouncement";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -5306,13 +5308,36 @@ function RunNeedsInputAnnouncement({
   const announcement = entry.announcement;
   const answered = announcement?.answered ?? false;
   const summary = announcement?.questionSummary ?? entry.meta?.detail ?? "";
-  const title = entry.meta?.title ?? (answered ? "Answered" : "Claude is waiting on you");
+  // The handoff row has three states (see needsInputAnnouncement.ts). Only
+  // "waiting" — unanswered and the turn still live — is genuinely awaiting
+  // the user. Once the turn reaches a terminal status without an answer (the
+  // user stopped it, or it failed), the row is "settled": nothing is being
+  // waited on, so it must drop the attention-grabbing active styling.
+  const state = needsInputAnnouncementState({
+    answered,
+    turnTerminalStatus: entry.turnTerminalStatus,
+  });
+  // For "settled" we override the projection's "Claude is waiting on you"
+  // default — that title was chosen at projection time, before the terminal
+  // event landed and could not know the turn would end unanswered. The live
+  // "waiting"/"answered" states keep honoring any server-provided title.
+  const title =
+    state === "settled"
+      ? "No longer waiting"
+      : entry.meta?.title ?? (state === "answered" ? "Answered" : "Claude is waiting on you");
   const targetTurnId = announcement?.targetTurnId ?? entry.turnId ?? "";
   const handleOpen = (): void => {
     if (!targetTurnId) return;
     onOpenTurn?.(targetTurnId, { anchor: "bottom" });
   };
-  const interactive = !answered && Boolean(targetTurnId && onOpenTurn);
+  const navigable = Boolean(targetTurnId && onOpenTurn);
+  // Only the live "waiting" state earns the high-emphasis primary CTA. The
+  // two settled states (answered / no-longer-waiting) keep the same
+  // navigation affordance but render it muted (secondary) so the row stops
+  // competing for attention once there is nothing to act on. The function is
+  // unchanged — the user can still open the question in Turns.
+  const showPrimaryCta = state === "waiting" && navigable;
+  const showSecondaryCta = state !== "waiting" && navigable;
   return (
     <div
       className="run-transcript-message"
@@ -5331,15 +5356,20 @@ function RunNeedsInputAnnouncement({
       </span>
       <div className="run-needs-input-announcement-body">
         <div
-          className={`run-needs-input-announcement${answered ? " run-needs-input-announcement-answered" : ""}`}
+          className={`run-needs-input-announcement${
+            state === "answered" ? " run-needs-input-announcement-answered" : ""
+          }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
           data-slot="message-content"
+          data-state={state}
           data-answered={answered ? "true" : "false"}
           role="group"
           aria-label={title}
         >
           <span className="run-needs-input-announcement-icon" aria-hidden="true">
-            {answered ? (
+            {state === "answered" ? (
               <CheckIcon size={14} aria-hidden="true" />
+            ) : state === "settled" ? (
+              <MessageSquareOffIcon size={14} aria-hidden="true" />
             ) : (
               <MessageSquareIcon size={14} aria-hidden="true" />
             )}
@@ -5350,7 +5380,7 @@ function RunNeedsInputAnnouncement({
               <p className="run-needs-input-announcement-detail">{summary}</p>
             )}
           </div>
-          {interactive && (
+          {showPrimaryCta && (
             <button
               type="button"
               className="run-needs-input-announcement-cta"
@@ -5360,12 +5390,16 @@ function RunNeedsInputAnnouncement({
               Open in Turns
             </button>
           )}
-          {answered && targetTurnId && onOpenTurn && (
+          {showSecondaryCta && (
             <button
               type="button"
               className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
               onClick={handleOpen}
-              aria-label="View answered question in Turns"
+              aria-label={
+                state === "answered"
+                  ? "View answered question in Turns"
+                  : "View the question in Turns"
+              }
             >
               View in Turns
             </button>

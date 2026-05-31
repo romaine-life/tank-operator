@@ -6664,7 +6664,11 @@ textarea.run-files-viewer-editor:focus {
   color: var(--text-strong, #f5f5f4);
 }
 
-.run-needs-input-announcement-answered {
+/* Settled handoff rows (answered, or unanswered past a terminal turn) drop
+   the active needs-input accent for a muted, low-demand treatment so the row
+   stops competing for attention once nothing is being waited on. */
+.run-needs-input-announcement-answered,
+.run-needs-input-announcement-settled {
   border-color: color-mix(in oklch, var(--text-muted) 28%, transparent);
   background: color-mix(in oklch, var(--text-muted) 6%, transparent);
   color: var(--text-muted);
@@ -6682,7 +6686,8 @@ textarea.run-files-viewer-editor:focus {
   color: var(--status-agent-needs-input);
 }
 
-.run-needs-input-announcement-answered .run-needs-input-announcement-icon {
+.run-needs-input-announcement-answered .run-needs-input-announcement-icon,
+.run-needs-input-announcement-settled .run-needs-input-announcement-icon {
   background: color-mix(in oklch, var(--text-muted) 14%, transparent);
   color: var(--text-muted);
 }

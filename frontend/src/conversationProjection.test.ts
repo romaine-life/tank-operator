@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import { reduceConversationEvents } from "./conversationReducer.ts";
 import { projectConversationState } from "./conversationProjection.ts";
+import { needsInputAnnouncementState } from "./needsInputAnnouncement.ts";
 import type { TankConversationEvent } from "../../runner-shared/conversation.js";
 
 function ev(
@@ -856,5 +857,72 @@ test("surfaces durable AskUserQuestion answers on the projected tool entry", () 
     assert.equal(announcement.announcement?.answered, true);
     assert.equal(announcement.announcement?.targetTurnId, "turn-active");
     assert.equal(announcement.meta?.title, "Answered");
+  }
+});
+
+test("interrupted AskUserQuestion announcement carries terminal status so the row settles", () => {
+  // The reported bug: the user declined to answer and stopped the turn. The
+  // question never resolves, but turn.interrupted lands on the same turn.
+  // The announcement entry must therefore stay unanswered AND pick up the
+  // turn's terminal status via annotateTurnTerminals, which is exactly what
+  // the renderer needs to drop the "Claude is waiting on you" active state.
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "turn.started", { source: "claude", turn_id: "turn-active" }),
+      ev("2", "tool.approval_requested", {
+        actor: "tool",
+        source: "claude",
+        turn_id: "turn-active",
+        timeline_id: "turn-active:item:toolu_ask",
+        provider_item_id: "toolu_ask",
+        payload: {
+          kind: "needs_input",
+          name: "AskUserQuestion",
+          input: {
+            questions: [
+              {
+                question: "Where should this \"useful files\" links section live?",
+                header: "Placement",
+                options: [
+                  { label: "Sidebar", description: "Always visible" },
+                  { label: "Footer", description: "Out of the way" },
+                ],
+              },
+            ],
+          },
+        },
+      }),
+      ev("3", "turn.interrupted", {
+        source: "claude",
+        turn_id: "turn-active",
+        payload: { reason: "client_interrupt" },
+      }),
+    ]),
+  );
+
+  // turn.interrupted clears the global needs-input signal — nothing is being
+  // waited on at the session level either.
+  assert.equal(projection.needsInput, false);
+
+  const announcement = projection.entries.find(
+    (entry) => entry.kind === "meta" && entry.metaKind === "needs_input_announcement",
+  );
+  assert.ok(announcement, "expected a needs_input_announcement meta entry to be projected");
+  if (announcement?.kind === "meta") {
+    // Still unanswered (no tool.approval_resolved ever arrived)...
+    assert.equal(announcement.announcement?.answered, false);
+    // ...but the entry now carries the owning turn's terminal status, the
+    // fact the renderer uses to settle the row.
+    assert.equal(announcement.turnTerminalStatus, "interrupted");
+    // The projection's title is still the pre-terminal default; the renderer
+    // overrides it to "No longer waiting" for the settled state.
+    assert.equal(announcement.meta?.title, "Claude is waiting on you");
+    assert.equal(
+      needsInputAnnouncementState({
+        answered: announcement.announcement?.answered ?? false,
+        turnTerminalStatus: announcement.turnTerminalStatus,
+      }),
+      "settled",
+    );
   }
 });
