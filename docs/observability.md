@@ -137,8 +137,9 @@ All metric names are prefixed `tank_`. The full namespace:
   `event` (opened, ready, transcript_rows_received,
   stream_silent_while_running, terminal_matched_by_turn_id,
   terminal_local_run_mismatch, queued_followup_blocked_after_terminal,
-  stale_running_blocked_submit, resync_required, stream_error, closed_unmount, closed_error,
-  reconnect_scheduled),
+  stale_running_blocked_submit, turn_activity_refresh_failed,
+  turn_activity_refresh_gave_up, turn_activity_refresh_recovered,
+  resync_required, stream_error, closed_unmount, closed_error, reconnect_scheduled),
   `session_mode`, and on the `_received_total` variant `event_type`.
   The `_stream_silent_seconds{session_mode}` histogram is the
   candidate-B zombie-SSE detector: the browser's silence watchdog

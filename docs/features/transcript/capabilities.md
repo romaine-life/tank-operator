@@ -82,6 +82,40 @@ Evidence:
   transient label per-session into the same pill channel as the connection
   label.
 
+## Live Turns Activity Reconciliation
+
+Status: in progress
+
+Intent:
+Keep an already-open Turns detail synchronized with the durable server
+projection while the per-session SSE stream is active. The live stream wakes the
+browser; it does not become the child-row source of truth. When projected
+transcript rows arrive for a turn whose activity detail is already cached, the
+browser invalidates that cache and re-reads `/turns/{id}/activity`.
+
+Affected contracts:
+- Transcript
+
+Contract impact:
+- Turn activity detail remains a cached server projection over
+  `session_events`, not a browser-local reducer fed by live shell rows.
+- The browser only refreshes details the user has already loaded, so a busy live
+  turn cannot fan out one request per unseen historical turn.
+- Refresh failures are bounded: the SPA retries, emits
+  `tank_session_event_client_events_total` labels for failure/give-up/recovery,
+  and leaves a visible retry state in the Turns detail instead of silently
+  showing stale rows.
+
+Evidence:
+- Shipped in this PR: `frontend/src/turnActivityCache.ts` and
+  `frontend/src/turnActivityCache.test.ts` prove cached-vs-uncached invalidation
+  and cursor coalescing.
+- Shipped in this PR: `backend-go/cmd/tank-operator/handlers_client_metrics_session_events_test.go`
+  proves the bounded telemetry labels are accepted and unknown labels clamp.
+- Required before status becomes active: browser/test-slot evidence that a
+  loaded Turns detail re-reads `/turns/{id}/activity` after a live
+  `transcript_rows` update without using a full page refresh.
+
 ## AskUserQuestion Handoff Row
 
 Status: active
