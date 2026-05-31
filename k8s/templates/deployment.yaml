@@ -67,6 +67,9 @@ spec:
               value: {{ include "tank-operator.githubAppSecret" . | quote }}
             - name: CODEX_CREDENTIALS_SECRET
               value: {{ include "tank-operator.codexCredentialsSecret" . | quote }}
+            - name: GEMINI_CREDENTIALS_TEST_SECRET
+              value: {{ include "tank-operator.geminiCredentialsTestSecret" . | quote }}
+
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
             - name: REAPER_INTERVAL_SECONDS
