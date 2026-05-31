@@ -56,8 +56,7 @@ var repoSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z
 
 // sessionModeSupportsRepos reports whether a session mode has a
 // /workspace volume the repo-cloner init container can clone into.
-// Today only the SDK-runner modes (claude_gui, codex_gui,
-// codex_app_server) provision a workspace emptyDir — see
+// Today only the SDK-runner modes provision a workspace emptyDir — see
 // sessionmodel.PodManifest: `wantSDKRunner`. CLI / config / api_key
 // / hermes_gui modes do not, so accepting a repo selection for them
 // would persist data with no runtime path to use it.
@@ -70,6 +69,7 @@ func sessionModeSupportsRepos(mode string) bool {
 	switch sessionmodel.NormalizeSessionMode(mode) {
 	case sessionmodel.ClaudeGUIMode,
 		sessionmodel.CodexGUIMode,
+		sessionmodel.CodexExecGUIMode,
 		sessionmodel.CodexAppServerMode,
 		sessionmodel.GeminiGUIMode,
 		sessionmodel.GeminiTestMode:
@@ -91,9 +91,7 @@ var errReposUnsupportedForMode = errors.New("repos selection is not supported fo
 // entry or over-cap.
 //
 // Empty input returns ([], nil). Order is preserved so the picker's
-// presentation order survives the round trip (the SPA reads chips
-// back from the durable row on existing sessions; preserving order
-// keeps the chip list stable across re-renders).
+// presentation order survives the round trip through the durable row.
 func validateRepoSlugs(raw []string) ([]string, error) {
 	if len(raw) == 0 {
 		return []string{}, nil
@@ -122,6 +120,55 @@ func validateRepoSlugs(raw []string) ([]string, error) {
 		out = append(out, trimmed)
 	}
 	return out, nil
+}
+
+// maxDiscoveredReposPerSession bounds how many distinct runtime-observed
+// repo slugs we fold into sessions.discovered_repos. Unlike the create-
+// time selection (capped at maxReposPerSession = 5, a deliberate
+// clone-cost ceiling), discovered repos reflect whatever the agent
+// actually checked out under /workspace, which can legitimately exceed 5
+// for a multi-repo task. The cap is purely an abuse bound on a
+// service-principal-authenticated best-effort reporter, so it sits well
+// above any realistic workspace.
+const maxDiscoveredReposPerSession = 64
+
+// normalizeDiscoveredRepoSlugs validates and dedups the runtime-observed
+// slug list reported by the pod-side workspace-repo-reporter. Returns the
+// normalized slice (trimmed, valid-only, deduped case-insensitively with
+// first-seen casing preserved, capped) plus the count of entries dropped
+// for being malformed or over the cap.
+//
+// Unlike validateRepoSlugs (the create-time handler boundary, which
+// rejects the whole request on a bad slug), this drops bad entries and
+// keeps the good ones: the reporter is a best-effort background loop, and
+// failing its POST on one weird remote (a non-GitHub fork, a detached
+// worktree) would stall every subsequent report behind a retry. The
+// dropped count feeds a counter so a systematically-bad reporter is still
+// visible.
+func normalizeDiscoveredRepoSlugs(raw []string) (slugs []string, dropped int) {
+	if len(raw) == 0 {
+		return []string{}, 0
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, slug := range raw {
+		trimmed := strings.TrimSpace(slug)
+		if trimmed == "" || !repoSlugPattern.MatchString(trimmed) {
+			dropped++
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		if len(out) >= maxDiscoveredReposPerSession {
+			dropped++
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out, dropped
 }
 
 // recentRepoLimit caps the recent-repos response size. Picked to

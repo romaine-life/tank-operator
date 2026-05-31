@@ -157,6 +157,14 @@ type SessionRecord struct {
 	// slug, value {status, error?, started_at?, finished_at?}. nil
 	// until the init container writes back the first state.
 	CloneState map[string]any
+	// DiscoveredRepos is the durable monotonic union of "owner/name"
+	// slugs the workspace-repo-reporter sidecar observed checked out
+	// under /workspace at runtime (migration 0078). Distinct from
+	// Repos: Repos is the write-once create-time selection ("intent"),
+	// DiscoveredRepos is observed reality and also captures repos the
+	// agent cloned on demand mid-session. It is queryable through the
+	// session row/API payload without adding sidebar UI.
+	DiscoveredRepos []string
 	// Capabilities is the durable per-session opt-in list. Empty means
 	// the default pod surface. Values are normalized through
 	// NormalizeSessionCapabilities before Manager.Create writes the row.
@@ -227,6 +235,7 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"codex-runner-launch.sh", "/opt/tank/codex-runner-launch.sh"},
 	{"gemini-runner-launch.sh", "/opt/tank/gemini-runner-launch.sh"},
 	{"repo-cloner.sh", "/opt/tank/repo-cloner.sh"},
+	{"workspace-repo-reporter.sh", "/opt/tank/workspace-repo-reporter.sh"},
 	{"session-pod-bootstrap.sh", "/opt/tank/session-pod-bootstrap.sh"},
 }
 

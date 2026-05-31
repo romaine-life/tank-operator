@@ -32,6 +32,8 @@ data:
 {{ .Files.Get "session-config/gemini-runner-launch.sh" | indent 4 }}
   repo-cloner.sh: |
 {{ .Files.Get "session-config/repo-cloner.sh" | indent 4 }}
+  workspace-repo-reporter.sh: |
+{{ .Files.Get "session-config/workspace-repo-reporter.sh" | indent 4 }}
 {{- range $path, $_ := $.Files.Glob "session-config/docs/**" }}
   docs__{{ trimPrefix "session-config/docs/" $path | replace "/" "__" }}: |
 {{ $.Files.Get $path | indent 4 }}

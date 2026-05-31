@@ -246,8 +246,8 @@ func TestMarshalRowUpdateIncludesAvatarAssignments(t *testing.T) {
 // TestMarshalRowUpdateRepos pins the SSE wire contract for the
 // repo-selection field: always an array, never absent, even when
 // the row has no repos picked. The SPA reads this directly into the
-// SessionStore so the chips on existing sessions stay in lockstep
-// with the durable column — local optimism never overrides the
+// SessionStore so existing sessions stay in lockstep with the durable
+// column — local optimism never overrides the
 // server's view of "which repos belong to session N."
 func TestMarshalRowUpdateRepos(t *testing.T) {
 	cases := []struct {

@@ -83,6 +83,17 @@ if [ -f /opt/tank/session-config/install-tank-skills.sh ]; then
   sh /opt/tank/session-config/install-tank-skills.sh || true
 fi
 
+# Background: report which github repos actually get checked out under
+# /workspace to sessions.discovered_repos, so the API/database can answer
+# every repo this session worked on — not just the create-time selection.
+# Best-effort and self-healing; it must never block or fail the
+# runner. Backgrounded here (not as a separate container) so it shares this
+# sidecar's /workspace mount, SESSION_ID, and auth token; it reparents to
+# PID 1 and keeps running across the exec below.
+if [ -f /opt/tank/workspace-repo-reporter.sh ]; then
+  bash /opt/tank/workspace-repo-reporter.sh >/tmp/workspace-repo-reporter.log 2>&1 &
+fi
+
 # Hand off to the runner. In test-slot mode (orchestrator sets
 # GLIMMUNG_SUPERVISOR_CHILD on the container), exec tank-supervisor as
 # PID 1 so the agent-runner code can be hot-swapped via SIGHUP re-exec.

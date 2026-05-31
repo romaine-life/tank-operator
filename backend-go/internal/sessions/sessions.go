@@ -55,6 +55,14 @@ type Info struct {
 	// the cloner publishes its first state. Omitted from the wire when
 	// nil to keep the snapshot lean for the every-row today shape.
 	CloneState map[string]any `json:"clone_state,omitempty"`
+	// DiscoveredRepos is the durable set of "owner/name" slugs the
+	// workspace-repo-reporter observed checked out under /workspace at
+	// runtime (sessions.discovered_repos). Always present on the wire
+	// (empty array when nothing observed yet) so callers can query it
+	// without special-casing "absent vs. empty". Distinct from Repos:
+	// Repos is the write-once create-time selection; this is observed
+	// reality, including repos the agent cloned on demand mid-session.
+	DiscoveredRepos []string `json:"discovered_repos"`
 	// Capabilities is the durable per-session capability list selected at
 	// create time. Empty means the default pod surface.
 	Capabilities []string `json:"capabilities"`
@@ -237,6 +245,10 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 	if repos == nil {
 		repos = []string{}
 	}
+	discoveredRepos := record.DiscoveredRepos
+	if discoveredRepos == nil {
+		discoveredRepos = []string{}
+	}
 	capabilities := record.Capabilities
 	if capabilities == nil {
 		capabilities = []string{}
@@ -260,6 +272,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		RolloutState:        record.RolloutState,
 		Repos:               repos,
 		CloneState:          record.CloneState,
+		DiscoveredRepos:     discoveredRepos,
 		Capabilities:        capabilities,
 		RowVersion:          record.RowVersion,
 		SidebarPosition:     record.SidebarPosition,
@@ -332,8 +345,9 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		// source is the registry row, and any caller hitting this
 		// path is in degraded mode anyway. Default to empty so the
 		// wire shape stays consistent with infoFromRecord.
-		Repos:        []string{},
-		Capabilities: annotationStringList(pod.Annotations, capabilitiesAnnotation),
+		Repos:           []string{},
+		DiscoveredRepos: []string{},
+		Capabilities:    annotationStringList(pod.Annotations, capabilitiesAnnotation),
 	}
 }
 

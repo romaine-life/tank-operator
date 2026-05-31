@@ -587,13 +587,19 @@ interface Session {
   activity?: SessionActivitySummary | null;
   // repos is the durable owner/name slug list the user picked at
   // session creation. Always an array on the wire (empty when none
-  // picked). The splash chips for existing sessions read from here
-  // — never from localStorage — so the chip list never contradicts
-  // the server's view.
+  // picked). Existing sessions read from here — never from
+  // localStorage — so the UI never contradicts the server's view.
   repos: string[];
   // clone_state is the per-repo repo-cloner init-container outcome.
   // Optional until the cloner writes back.
   clone_state?: Record<string, unknown> | null;
+  // discovered_repos is the durable set of owner/name slugs the pod's
+  // workspace-repo-reporter observed checked out under /workspace at
+  // runtime. Always an array on the wire (empty when nothing observed
+  // yet). Distinct from repos (the write-once create-time selection):
+  // this also captures repos the agent cloned on demand mid-session.
+  // Not rendered in the sidebar; it remains queryable via the API/database.
+  discovered_repos: string[];
   capabilities: string[];
   model?: string;
   effort?: string;
@@ -753,6 +759,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
     repos: [],
+    discovered_repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(1),
   },
@@ -767,6 +774,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
     repos: [],
+    discovered_repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(2),
   },
@@ -781,6 +789,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 24 * 60 * 1000).toISOString(),
     name: "Gemini",
     repos: [],
+    discovered_repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(4),
   },
@@ -1006,6 +1015,7 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     ready_at: null,
     name: `${label} ${index}`,
     repos: [],
+    discovered_repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(index),
   };
@@ -1116,6 +1126,9 @@ function normalizeSession(session: Session): Session {
   // array so downstream renderers can `.map` without a guard.
   next.repos = Array.isArray(session.repos) ? session.repos : [];
   next.clone_state = session.clone_state ?? null;
+  next.discovered_repos = Array.isArray(session.discovered_repos)
+    ? session.discovered_repos
+    : [];
   next.capabilities = Array.isArray(session.capabilities)
     ? session.capabilities.filter((entry): entry is string => typeof entry === "string")
     : [];
@@ -14339,6 +14352,7 @@ function AuthenticatedApp() {
       activity: undefined, // activities live in the parallel sessionActivities map
       repos: Array.isArray(row.repos) ? row.repos : [],
       clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
+      discovered_repos: Array.isArray(row.discovered_repos) ? row.discovered_repos : [],
       capabilities: Array.isArray(row.capabilities) ? row.capabilities : [],
       model: row.model ?? "",
       effort: row.effort ?? "",
@@ -14378,6 +14392,7 @@ function AuthenticatedApp() {
       rollout_state: raw.rollout_state ?? undefined,
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
+      discovered_repos: Array.isArray(raw.discovered_repos) ? raw.discovered_repos.map(String) : [],
       capabilities: Array.isArray(raw.capabilities) ? raw.capabilities.map(String) : [],
       model: typeof raw.model === "string" ? raw.model : undefined,
       effort: typeof raw.effort === "string" ? raw.effort : undefined,
@@ -15839,8 +15854,10 @@ function AuthenticatedApp() {
             </button>
           </div>
           <ul className="sessions">
-            {sessions.length === 0 && <li className="sessions-empty">no sessions</li>}
-            {sessions.map((s) => {
+            {sessions.length === 0 ? (
+              <li className="sessions-empty">no sessions</li>
+            ) : (
+              sessions.map((s) => {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
@@ -15911,7 +15928,8 @@ function AuthenticatedApp() {
                   </div>
                 </li>
               );
-            })}
+              })
+            )}
           </ul>
         </div>
 

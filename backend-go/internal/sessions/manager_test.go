@@ -596,6 +596,9 @@ func (r *managerTestRegistry) SetRolloutState(context.Context, string, string, m
 func (r *managerTestRegistry) SetCloneState(context.Context, string, string, map[string]any) error {
 	return nil
 }
+func (r *managerTestRegistry) MergeDiscoveredRepos(context.Context, string, string, []string) error {
+	return nil
+}
 
 func (r *managerTestRegistry) SetRuntimeConfig(_ context.Context, email, sessionID, model, effort string) error {
 	for i, record := range r.records {
