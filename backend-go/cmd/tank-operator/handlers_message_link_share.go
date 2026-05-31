@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
 )
@@ -196,6 +197,64 @@ func (s *appServer) handlePublicMessageLinkTurnActivity(w http.ResponseWriter, r
 	writeJSON(w, http.StatusOK, body)
 }
 
+func (s *appServer) handlePublicMessageLinkAvatars(w http.ResponseWriter, r *http.Request) {
+	share, info, status, err := s.resolvePublicMessageLink(r.Context(), r.PathValue("share_token"))
+	if err != nil {
+		recordMessageLinkShare("resolve", messageLinkShareResolveResult(status, err))
+		writeError(w, status, err.Error())
+		return
+	}
+	entries := []avatarAssetResponse{}
+	if s.avatars != nil {
+		for _, id := range publicMessageLinkAvatarIDs(info) {
+			meta, err := s.avatars.Get(r.Context(), id)
+			if err != nil {
+				if errors.Is(err, avatarassets.ErrNotFound) {
+					continue
+				}
+				recordAvatarAssetRequest("public_list", "", "store_error")
+				writeError(w, http.StatusInternalServerError, err.Error())
+				return
+			}
+			entries = append(entries, publicMessageLinkAvatarResponseFromMeta(share.Token, meta))
+		}
+	}
+	recordAvatarAssetRequest("public_list", "", "ok")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"entries": entries,
+		"public":  true,
+	})
+}
+
+func (s *appServer) handlePublicMessageLinkAvatarImage(w http.ResponseWriter, r *http.Request) {
+	s.handlePublicMessageLinkAvatarBinary(w, r, avatarassets.VariantAvatar)
+}
+
+func (s *appServer) handlePublicMessageLinkAvatarBacking(w http.ResponseWriter, r *http.Request) {
+	s.handlePublicMessageLinkAvatarBinary(w, r, avatarassets.VariantBacking)
+}
+
+func (s *appServer) handlePublicMessageLinkAvatarBinary(w http.ResponseWriter, r *http.Request, variant string) {
+	_, info, status, err := s.resolvePublicMessageLink(r.Context(), r.PathValue("share_token"))
+	if err != nil {
+		recordMessageLinkShare("resolve", messageLinkShareResolveResult(status, err))
+		writeError(w, status, err.Error())
+		return
+	}
+	id := strings.TrimSpace(r.PathValue("avatar_id"))
+	if id == "" {
+		recordAvatarAssetRequest("public_read_image", "", "bad_request")
+		writeError(w, http.StatusBadRequest, "missing avatar id")
+		return
+	}
+	if !publicMessageLinkSessionAllowsAvatar(info, id) {
+		recordAvatarAssetRequest("public_read_image", "", "not_found")
+		writeError(w, http.StatusNotFound, "avatar not found")
+		return
+	}
+	s.writeAvatarBinary(w, r, id, variant)
+}
+
 func (s *appServer) resolvePublicMessageLink(ctx context.Context, token string) (pgstore.MessageLinkShare, sessions.Info, int, error) {
 	if s.messageLinkShares == nil {
 		return pgstore.MessageLinkShare{}, sessions.Info{}, http.StatusServiceUnavailable, errors.New("message link share store not configured")
@@ -305,6 +364,56 @@ func publicMessageLinkSessionBody(info sessions.Info) map[string]any {
 		"runtime_configured_at": info.RuntimeConfiguredAt,
 		"agent_avatar_id":       info.AgentAvatarID,
 		"system_avatar_id":      info.SystemAvatarID,
+	}
+}
+
+func publicMessageLinkAvatarIDs(info sessions.Info) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	for _, id := range []string{info.AgentAvatarID, info.SystemAvatarID} {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func publicMessageLinkSessionAllowsAvatar(info sessions.Info, avatarID string) bool {
+	avatarID = strings.TrimSpace(avatarID)
+	if avatarID == "" {
+		return false
+	}
+	for _, allowed := range publicMessageLinkAvatarIDs(info) {
+		if allowed == avatarID {
+			return true
+		}
+	}
+	return false
+}
+
+func publicMessageLinkAvatarResponseFromMeta(token string, meta avatarassets.Metadata) avatarAssetResponse {
+	escapedToken := url.PathEscape(token)
+	escapedID := url.PathEscape(meta.ID)
+	basePath := "/api/public/message-links/" + escapedToken + "/avatars/" + escapedID
+	avatarURL := basePath + "/image"
+	if !meta.UpdatedAt.IsZero() {
+		avatarURL += "?v=" + fmt.Sprint(meta.UpdatedAt.UTC().UnixNano())
+	}
+	return avatarAssetResponse{
+		ID:         meta.ID,
+		Kind:       meta.Kind,
+		Name:       meta.Name,
+		AvatarURL:  avatarURL,
+		BackingURL: basePath + "/backing",
+		Crop:       meta.Crop,
+		CreatedAt:  meta.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
+		UpdatedAt:  meta.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z07:00"),
 	}
 }
 

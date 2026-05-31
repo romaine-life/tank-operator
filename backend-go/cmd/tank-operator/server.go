@@ -256,6 +256,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// general unauthenticated session routes: every read validates an
 	// opaque token minted by the authenticated copy-message-link action.
 	mux.HandleFunc("GET /api/public/message-links/{share_token}", s.handleGetPublicMessageLink)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars", s.handlePublicMessageLinkAvatars)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars/{avatar_id}/image", s.handlePublicMessageLinkAvatarImage)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars/{avatar_id}/backing", s.handlePublicMessageLinkAvatarBacking)
 	mux.HandleFunc("GET /api/public/message-links/{share_token}/timeline", s.handlePublicMessageLinkTimeline)
 	mux.HandleFunc("GET /api/public/message-links/{share_token}/turns/{turn_id}/activity", s.handlePublicMessageLinkTurnActivity)
 

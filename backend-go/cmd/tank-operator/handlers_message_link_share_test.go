@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
@@ -158,6 +160,108 @@ func TestHandlePublicMessageLinkTimelineReadsThroughShareToken(t *testing.T) {
 	}
 	if _, ok := body["read_state"]; !ok || body["read_state"] != nil {
 		t.Fatalf("read_state = %#v", body["read_state"])
+	}
+}
+
+func TestHandlePublicMessageLinkAvatarsExposeOnlySessionAssignedAvatars(t *testing.T) {
+	token := "share-token"
+	shares := &fakeMessageLinkShareStore{shares: map[string]pgstore.MessageLinkShare{
+		token: {
+			Token:        token,
+			OwnerEmail:   otherUser,
+			SessionScope: "default",
+			SessionID:    "63",
+			TimelineID:   "turn-1:item:msg-1",
+		},
+	}}
+	app := messageLinkShareTestApp(t, shares, &fakeSessionTranscriptRowStore{}, fakeSessionEventStore{})
+	avatars := avatarassets.NewMemoryStore()
+	images := avatarassets.NewMemoryImageStore()
+	if err := avatars.Ensure(t.Context(), avatarassets.NewAsset{
+		ID:             "jp1-grant",
+		Kind:           avatarassets.KindAgent,
+		Name:           "Dr. Grant",
+		Crop:           avatarassets.Crop{CenterX: 0.5, CenterY: 0.5, Size: 1},
+		AvatarMIME:     "image/png",
+		AvatarBlobKey:  "avatars/jp1-grant/avatar.png",
+		BackingMIME:    "image/png",
+		BackingBlobKey: "avatars/jp1-grant/backing.png",
+		CreatedBy:      adminEmail,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := avatars.Ensure(t.Context(), avatarassets.NewAsset{
+		ID:             "unassigned",
+		Kind:           avatarassets.KindAgent,
+		Name:           "Unassigned",
+		Crop:           avatarassets.Crop{CenterX: 0.5, CenterY: 0.5, Size: 1},
+		AvatarMIME:     "image/png",
+		AvatarBlobKey:  "avatars/unassigned/avatar.png",
+		BackingMIME:    "image/png",
+		BackingBlobKey: "avatars/unassigned/backing.png",
+		CreatedBy:      adminEmail,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := images.Put(t.Context(), "avatars/jp1-grant/avatar.png", avatarassets.Image{MIME: "image/png", Bytes: tinyPNG}); err != nil {
+		t.Fatal(err)
+	}
+	if err := images.Put(t.Context(), "avatars/jp1-grant/backing.png", avatarassets.Image{MIME: "image/png", Bytes: []byte("backing")}); err != nil {
+		t.Fatal(err)
+	}
+	app.avatars = avatars
+	app.avatarImages = images
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/public/message-links/"+token+"/avatars", nil)
+	listReq.SetPathValue("share_token", token)
+	listResp := httptest.NewRecorder()
+	app.handlePublicMessageLinkAvatars(listResp, listReq)
+	if listResp.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listResp.Code, listResp.Body.String())
+	}
+	var listBody struct {
+		Entries []avatarAssetResponse `json:"entries"`
+		Public  bool                  `json:"public"`
+	}
+	if err := json.Unmarshal(listResp.Body.Bytes(), &listBody); err != nil {
+		t.Fatal(err)
+	}
+	if !listBody.Public || len(listBody.Entries) != 1 {
+		t.Fatalf("list body = %#v", listBody)
+	}
+	entry := listBody.Entries[0]
+	if entry.ID != "jp1-grant" || entry.Kind != avatarassets.KindAgent || entry.CreatedBy != "" {
+		t.Fatalf("entry = %#v", entry)
+	}
+	if !strings.Contains(entry.AvatarURL, "/api/public/message-links/"+token+"/avatars/jp1-grant/image") {
+		t.Fatalf("avatar_url = %q", entry.AvatarURL)
+	}
+	if !strings.Contains(entry.BackingURL, "/api/public/message-links/"+token+"/avatars/jp1-grant/backing") {
+		t.Fatalf("backing_url = %q", entry.BackingURL)
+	}
+
+	imageReq := httptest.NewRequest(http.MethodGet, "/api/public/message-links/"+token+"/avatars/jp1-grant/image", nil)
+	imageReq.SetPathValue("share_token", token)
+	imageReq.SetPathValue("avatar_id", "jp1-grant")
+	imageResp := httptest.NewRecorder()
+	app.handlePublicMessageLinkAvatarImage(imageResp, imageReq)
+	if imageResp.Code != http.StatusOK {
+		t.Fatalf("image status=%d body=%s", imageResp.Code, imageResp.Body.String())
+	}
+	if got := imageResp.Header().Get("Content-Type"); got != "image/png" {
+		t.Fatalf("image content-type = %q", got)
+	}
+	if !bytes.Equal(imageResp.Body.Bytes(), tinyPNG) {
+		t.Fatalf("image body did not round-trip")
+	}
+
+	unassignedReq := httptest.NewRequest(http.MethodGet, "/api/public/message-links/"+token+"/avatars/unassigned/image", nil)
+	unassignedReq.SetPathValue("share_token", token)
+	unassignedReq.SetPathValue("avatar_id", "unassigned")
+	unassignedResp := httptest.NewRecorder()
+	app.handlePublicMessageLinkAvatarImage(unassignedResp, unassignedReq)
+	if unassignedResp.Code != http.StatusNotFound {
+		t.Fatalf("unassigned image status=%d body=%s", unassignedResp.Code, unassignedResp.Body.String())
 	}
 }
 

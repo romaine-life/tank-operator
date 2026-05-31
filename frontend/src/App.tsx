@@ -200,6 +200,7 @@ import {
   AgentAvatarIcon,
   getSessionAvatarByID,
   getSystemAvatarByID,
+  loadPublicRuntimeAvatarCatalog,
   loadRuntimeAvatarCatalog,
   type AgentAvatar,
 } from "./sessionAvatars";
@@ -13321,6 +13322,7 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
   );
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [avatarCatalogVersion, setAvatarCatalogVersion] = useState(0);
   const noopSetRunPref: SetRunPref = useCallback(() => undefined, []);
   const noop = useCallback(() => undefined, []);
   const readonlyFork = useCallback(async () => {
@@ -13367,6 +13369,21 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
     };
   }, [route.messageId, route.token]);
 
+  useEffect(() => {
+    let cancelled = false;
+    void loadPublicRuntimeAvatarCatalog(route.token)
+      .then(() => {
+        if (!cancelled) setAvatarCatalogVersion((version) => version + 1);
+      })
+      .catch(() => {
+        // Public links still render with built-in avatars or the missing-avatar
+        // glyph if the share-scoped custom avatar catalog is unavailable.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [route.token]);
+
   if (loading) {
     return <div className="boot-state"><span className="boot-text">loading…</span></div>;
   }
@@ -13412,7 +13429,7 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
               publicView
               publicShareToken={route.token}
               sessionScope={normalizeSessionScopeValue(session.session_scope)}
-              avatarCatalogVersion={0}
+              avatarCatalogVersion={avatarCatalogVersion}
             />
           </div>
         </div>
