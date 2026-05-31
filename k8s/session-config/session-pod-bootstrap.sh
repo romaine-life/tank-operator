@@ -41,6 +41,23 @@ notification_condition = "always"
 notification_method = "bel"
 TOML
     ;;
+  gemini_gui | gemini_config | gemini_test)
+    mkdir -p "$HOME/.gemini"
+    cat > "$HOME/.gemini/settings.json" <<'JSON'
+{
+  "security": {
+    "auth": {
+      "selectedType": "oauth-personal"
+    }
+  }
+}
+JSON
+    chmod 600 "$HOME/.gemini/settings.json"
+    if [ -f /etc/gemini-credentials/oauth_creds.json ]; then
+      cp /etc/gemini-credentials/oauth_creds.json "$HOME/.gemini/oauth_creds.json"
+      chmod 600 "$HOME/.gemini/oauth_creds.json"
+    fi
+    ;;
   config)
     # Minimal seeds for the claude credentials-refresh wizard. The
     # save-credentials button later reads $HOME/.claude/.credentials.json
