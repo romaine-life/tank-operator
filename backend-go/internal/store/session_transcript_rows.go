@@ -15,7 +15,7 @@ import (
 )
 
 const transcriptRowCursorSeparator = "\x1f"
-const transcriptRowBackfillVersion = 2
+const transcriptRowBackfillVersion = 3
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error
