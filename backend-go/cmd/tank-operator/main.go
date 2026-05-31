@@ -366,10 +366,11 @@ func main() {
 			GeminiSessionImage:      geminiSessionImage,
 			SessionScope:            sessionScope,
 			TankOperatorInternalURL: tankOperatorInternalURL,
-			GitHubAppSecret:         envDefault("GITHUB_APP_SECRET", sessionmodel.DefaultGitHubAppSecret),
-			NATSURL:                 envDefault("NATS_URL", ""),
-			NATSStream:              envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
-			NATSAuthSecret:          envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
+			GitHubAppSecret:             envDefault("GITHUB_APP_SECRET", sessionmodel.DefaultGitHubAppSecret),
+			GeminiCredentialsTestSecret: envDefault("GEMINI_CREDENTIALS_TEST_SECRET", "gemini-credentials-test"),
+			NATSURL:                     envDefault("NATS_URL", ""),
+			NATSStream:                  envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+			NATSAuthSecret:              envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
 			// Test-slot agent-runner hot-swap. Off by default; the chart
 			// turns this on only when the chart runs in hot test-slot mode.
 			// See scripts/check-session-pod-hot-swap-migration.mjs and
