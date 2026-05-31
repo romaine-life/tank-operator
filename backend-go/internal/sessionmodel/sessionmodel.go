@@ -248,6 +248,8 @@ type ManifestOptions struct {
 	OAuthGatewayCAConfigMap string
 	// Secret name for GitHub App credentials (envFrom on claude container).
 	GitHubAppSecret string
+	// Secret name for Gemini test credentials.
+	GeminiCredentialsTestSecret string
 	// SDK runners use NATS JetStream for durable command/event delivery.
 	NATSURL        string
 	NATSStream     string
@@ -565,16 +567,21 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	if mode == GeminiTestMode {
+		secretName := opts.GeminiCredentialsTestSecret
+		if secretName == "" {
+			secretName = "gemini-credentials-test"
+		}
 		volumes = append(volumes, map[string]any{
-			"name": "gemini-credentials",
+			"name": "gemini-credentials-test",
 			"secret": map[string]any{
-				"secretName": "gemini-credentials",
+				"secretName": secretName,
 				"optional":   true,
 			},
 		})
 		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
-			"name":      "gemini-credentials",
-			"mountPath": "/etc/gemini-credentials",
+			"name":      "gemini-credentials-test",
+			"mountPath": "/home/node/.gemini/oauth_creds.json",
+			"subPath":   "oauth_creds.json",
 			"readOnly":  true,
 		})
 	}
@@ -914,8 +921,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		}
 		if mode == GeminiTestMode {
 			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
-				"name":      "gemini-credentials",
-				"mountPath": "/etc/gemini-credentials",
+				"name":      "gemini-credentials-test",
+				"mountPath": "/home/node/.gemini/oauth_creds.json",
+				"subPath":   "oauth_creds.json",
 				"readOnly":  true,
 			})
 		}

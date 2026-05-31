@@ -25,6 +25,9 @@ EOF
 
   if [ -f /etc/gemini-credentials/oauth_creds.json ]; then
     cp /etc/gemini-credentials/oauth_creds.json "$HOME/.gemini/oauth_creds.json"
+    chmod 600 "$HOME/.gemini/oauth_creds.json"
+  elif [ -f "$HOME/.gemini/oauth_creds.json" ]; then
+    echo "oauth_creds.json already exists (possibly mounted). Skipping generation."
   else
     cat > "$HOME/.gemini/oauth_creds.json" <<EOF
 {
@@ -36,8 +39,8 @@ EOF
   "expiry_date": 9999999999000
 }
 EOF
+    chmod 600 "$HOME/.gemini/oauth_creds.json"
   fi
-  chmod 600 "$HOME/.gemini/oauth_creds.json"
 }
 
 # Git identity for any commits the agent makes from /workspace.
