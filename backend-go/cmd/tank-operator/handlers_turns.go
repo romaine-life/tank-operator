@@ -964,10 +964,10 @@ func promptMatchesSkillTrigger(provider, skillName, prompt string) bool {
 }
 
 func skillPromptTrigger(provider, skillName string) string {
-	if provider == "codex" || provider == "hermes" {
-		return "$" + skillName
+	if provider == "claude" {
+		return "/" + skillName
 	}
-	return "/" + skillName
+	return "$" + skillName
 }
 
 func sdkProviderForMode(mode string) (string, bool) {
