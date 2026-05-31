@@ -138,11 +138,13 @@ export interface ConversationMetaEntry extends ConversationEntryBase {
 interface ConversationEntryBase {
   id: string;
   time: string;
+  updatedAt?: string;
   turnId?: string;
   clientNonce?: string;
   providerItemId?: string;
   sourceEventId?: string;
   orderKey?: string;
+  activityEndOrderKey?: string;
   turnTerminalStatus?: ConversationTurnTerminalStatus;
   turnTerminalAt?: string;
   turnTerminalEventId?: string;
@@ -535,8 +537,6 @@ function turnUsageMetaEntries(
   const out: Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> = [];
   let offset = 0;
   for (const usage of Object.values(state.turnUsages)) {
-    const terminal = state.turnTerminals[usage.turnId];
-    if (terminal?.usage !== undefined && terminal.usage !== null) continue;
     out.push({
       index: baseIndex + offset,
       orderKey: usage.orderKey,
@@ -558,8 +558,10 @@ function projectTurnUsage(usage: ConversationTurnUsage): ConversationViewEntry {
     },
     turnId: usage.turnId,
     time: usage.time,
+    updatedAt: usage.updatedAt,
     sourceEventId: usage.sourceEventId,
     orderKey: usage.orderKey,
+    activityEndOrderKey: usage.endOrderKey ?? usage.orderKey,
     turnUsage: usage.usage,
     ...(usage.usageObservation !== undefined ? { usageObservation: usage.usageObservation } : {}),
   };
