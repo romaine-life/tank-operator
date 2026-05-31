@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-eb1cb10e0c41f99082281ca36c309668b8b709a922bca250f0052c5401124320"
+  tag: "app-a2d8593dcbfd5137a8c08061b48846ab8357bae69c0250c732841fbcda5b86f5"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -54,10 +54,10 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-00852e69fa32ac12440c6f26d380d87a9b5deb2e226aca1d024d37e7d28d5494
-  codexImage: romainecr.azurecr.io/codex-container:codex-7a864f2026d1ec18d9add476a9a369f60acb7161b76fb82d70c7a0790c1af31a
-  piImage: romainecr.azurecr.io/pi-container:pi-a76eb5dddac512608b6ad28acdb6c21758cdba95b169cce16763e109e4a50ae3
-  geminiImage: romainecr.azurecr.io/gemini-container:gemini-placeholder
+  image: romainecr.azurecr.io/claude-container:claude-cea9610ee524e2338c73c42f6324c0f288df34246deac65a2a5fe8d4f4735443
+  codexImage: romainecr.azurecr.io/codex-container:codex-e2f5b19471df34a123aac9b9feca0dde893e1f5aa6890a041ed213a3f8156b54
+  piImage: romainecr.azurecr.io/pi-container:pi-63666e5ba8b6c7c6f548153a02aa3942eb6b425c1df5d66871e30421aa63b36a
+  geminiImage: romainecr.azurecr.io/gemini-container:gemini-d0c20fcd01cdfa3ddccc9cf4f6a02022bb56ca70aeec9311a466fbe8f1e7f84c
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
