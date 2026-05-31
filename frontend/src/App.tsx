@@ -13297,6 +13297,7 @@ function ChatPane({
 
 type PublicMessageLinkResponse = {
   session?: unknown;
+  user?: unknown;
   session_id?: unknown;
   timeline_id?: unknown;
   message?: unknown;
@@ -13315,8 +13316,23 @@ const PUBLIC_MESSAGE_LINK_USER: SessionUser = {
   run_prefs: null,
 };
 
+function publicMessageLinkUserFromResponse(value: unknown): SessionUser {
+  if (!value || typeof value !== "object") return PUBLIC_MESSAGE_LINK_USER;
+  const raw = value as Record<string, unknown>;
+  const avatarURL = typeof raw.avatar_url === "string" ? raw.avatar_url : "";
+  const name = typeof raw.name === "string" && raw.name.trim()
+    ? raw.name.trim()
+    : PUBLIC_MESSAGE_LINK_USER.name;
+  return {
+    ...PUBLIC_MESSAGE_LINK_USER,
+    name,
+    avatar_url: avatarURL,
+  };
+}
+
 function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
   const [session, setSession] = useState<Session | null>(null);
+  const [publicUser, setPublicUser] = useState<SessionUser>(PUBLIC_MESSAGE_LINK_USER);
   const [pendingScrollMessageId, setPendingScrollMessageId] = useState<string | null>(
     route.messageId,
   );
@@ -13333,6 +13349,7 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
     let cancelled = false;
     setLoading(true);
     setError(null);
+    setPublicUser(PUBLIC_MESSAGE_LINK_USER);
     void fetch(`/api/public/message-links/${encodeURIComponent(route.token)}`)
       .then(async (res) => {
         const body = (await res.json().catch(() => ({}))) as PublicMessageLinkResponse;
@@ -13354,6 +13371,7 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
               : null;
         if (cancelled) return;
         setSession(normalizeSession(body.session as Session));
+        setPublicUser(publicMessageLinkUserFromResponse(body.user));
         if (!route.messageId && linkedMessage) {
           setPendingScrollMessageId(linkedMessage);
         }
@@ -13420,7 +13438,7 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
               onScrollConsumed={() => setPendingScrollMessageId(null)}
               runPrefs={DEFAULT_RUN_PREFS}
               setRunPref={noopSetRunPref}
-              user={PUBLIC_MESSAGE_LINK_USER}
+              user={publicUser}
               autoFocusComposer={false}
               onAutoFocusComposerConsumed={noop}
               primeTurnCompleteSound={noop}

@@ -111,6 +111,7 @@ func (s *appServer) handleCreateMessageLinkShare(w http.ResponseWriter, r *http.
 		"version":     1,
 		"token":       token,
 		"session":     publicMessageLinkSessionBody(info),
+		"user":        publicMessageLinkUserBody(info),
 		"session_id":  sessionID,
 		"timeline_id": timelineID,
 		"message":     timelineID,
@@ -134,6 +135,7 @@ func (s *appServer) handleGetPublicMessageLink(w http.ResponseWriter, r *http.Re
 		"kind":        "tank.message_link_public",
 		"version":     1,
 		"session":     publicMessageLinkSessionBody(info),
+		"user":        publicMessageLinkUserBody(info),
 		"session_id":  share.SessionID,
 		"timeline_id": share.TimelineID,
 		"message":     share.TimelineID,
@@ -308,6 +310,7 @@ func (s *appServer) publicMessageLinkTimelineBody(ctx context.Context, r *http.R
 		"activity":          info.Activity,
 		"read_state":        nil,
 		"public":            true,
+		"user":              publicMessageLinkUserBody(info),
 		"share_timeline_id": share.TimelineID,
 	}
 	if intent.timelineID != "" {
@@ -364,6 +367,18 @@ func publicMessageLinkSessionBody(info sessions.Info) map[string]any {
 		"runtime_configured_at": info.RuntimeConfiguredAt,
 		"agent_avatar_id":       info.AgentAvatarID,
 		"system_avatar_id":      info.SystemAvatarID,
+	}
+}
+
+func publicMessageLinkUserBody(info sessions.Info) map[string]any {
+	owner := strings.TrimSpace(info.Owner)
+	avatarURL := ""
+	if owner != "" {
+		avatarURL = auth.GravatarURL(owner, 64)
+	}
+	return map[string]any{
+		"name":       "Session owner",
+		"avatar_url": avatarURL,
 	}
 }
 

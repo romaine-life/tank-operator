@@ -163,6 +163,51 @@ func TestHandlePublicMessageLinkTimelineReadsThroughShareToken(t *testing.T) {
 	}
 }
 
+func TestHandleGetPublicMessageLinkIncludesOwnerAvatarWithoutOwnerEmail(t *testing.T) {
+	token := "share-token"
+	shares := &fakeMessageLinkShareStore{shares: map[string]pgstore.MessageLinkShare{
+		token: {
+			Token:        token,
+			OwnerEmail:   otherUser,
+			SessionScope: "default",
+			SessionID:    "63",
+			TimelineID:   "turn-1:item:msg-1",
+		},
+	}}
+	app := messageLinkShareTestApp(t, shares, &fakeSessionTranscriptRowStore{}, fakeSessionEventStore{})
+	req := httptest.NewRequest(http.MethodGet, "/api/public/message-links/"+token, nil)
+	req.SetPathValue("share_token", token)
+	rec := httptest.NewRecorder()
+
+	app.handleGetPublicMessageLink(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	session, ok := body["session"].(map[string]any)
+	if !ok {
+		t.Fatalf("session = %#v", body["session"])
+	}
+	if session["owner"] != "" {
+		t.Fatalf("public session owner = %#v, want redacted", session["owner"])
+	}
+	user, ok := body["user"].(map[string]any)
+	if !ok {
+		t.Fatalf("user = %#v", body["user"])
+	}
+	if user["email"] != nil {
+		t.Fatalf("public user should not include email: %#v", user)
+	}
+	avatarURL, _ := user["avatar_url"].(string)
+	if avatarURL == "" || !strings.Contains(avatarURL, "gravatar.com/avatar/") || strings.Contains(avatarURL, otherUser) {
+		t.Fatalf("avatar_url = %q", avatarURL)
+	}
+}
+
 func TestHandlePublicMessageLinkAvatarsExposeOnlySessionAssignedAvatars(t *testing.T) {
 	token := "share-token"
 	shares := &fakeMessageLinkShareStore{shares: map[string]pgstore.MessageLinkShare{
