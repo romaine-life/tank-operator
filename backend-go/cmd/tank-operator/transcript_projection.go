@@ -803,12 +803,19 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 
 func compactProjectedTranscript(entries []map[string]any, activeTurnID string, terminals map[string]turnTerminalProjection) transcriptProjection {
 	activities := append(terminalProjectedActivities(entries, terminals), activeProjectedActivities(entries, activeTurnID)...)
+	bodies := map[string]turnActivityBody{}
+	for _, activity := range activities {
+		bodies[activity.TurnID] = activity
+	}
 	if len(activities) == 0 {
-		return transcriptProjection{Entries: entries, ActivityBodies: map[string]turnActivityBody{}}
+		return transcriptProjection{Entries: entries, ActivityBodies: bodies}
 	}
 	activityByInsertIndex := map[int]turnActivityBody{}
 	compactedIndexes := map[int]bool{}
 	for _, activity := range activities {
+		if len(activity.CompactedEntryIDs) == 0 {
+			continue
+		}
 		insertBefore := 0
 		if len(activity.Entries) > 0 {
 			insertBefore = projectedEntryIndex(entries, activity.Entries[0])
@@ -823,7 +830,6 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, t
 		}
 	}
 	out := make([]map[string]any, 0, len(entries))
-	bodies := map[string]turnActivityBody{}
 	for idx, entry := range entries {
 		if activity, ok := activityByInsertIndex[idx]; ok {
 			shell := map[string]any{
@@ -843,7 +849,6 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, t
 				shell["usageObservation"] = usageObservation
 			}
 			out = append(out, shell)
-			bodies[activity.TurnID] = activity
 		}
 		if !compactedIndexes[idx] {
 			out = append(out, entry)
@@ -895,7 +900,7 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 				compacted = append(compacted, entry)
 			}
 		}
-		if len(compacted) == 0 {
+		if len(activityEntries) == 0 {
 			continue
 		}
 		activities = append(activities, makeTurnActivityBody(turnID, terminal.Status, activityEntries, compacted, false))
