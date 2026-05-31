@@ -62,10 +62,6 @@ export function StyleguideNewSessionRow() {
                       <ProviderIcon provider="hermes" className="home-choice-icon" />
                       <span>Hermes</span>
                     </button>
-                    <button className="home-choice" type="button" aria-pressed="false" title="Pi CLI">
-                      <ProviderIcon provider="pi" className="home-choice-icon" />
-                      <span>Pi</span>
-                    </button>
                   </div>
                   <div className="home-choice-grid" role="group" aria-label="interaction">
                     <button className="home-choice is-selected" type="button" aria-pressed="true">

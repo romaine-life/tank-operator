@@ -171,7 +171,6 @@ func TestManagerCreateDefaultsManifestNamespaceToManagerNamespace(t *testing.T) 
 		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionImage:      "claude-image",
 			CodexSessionImage: "codex-image",
-			PiSessionImage:    "pi-image",
 		},
 	})
 
@@ -202,7 +201,6 @@ func TestManagerCreateThreadsSelectedReposIntoPodManifest(t *testing.T) {
 		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionImage:            "claude-image",
 			CodexSessionImage:       "codex-image",
-			PiSessionImage:          "pi-image",
 			TankOperatorInternalURL: "http://tank-operator.test",
 		},
 	})

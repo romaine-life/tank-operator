@@ -13,7 +13,7 @@ import (
 // against each wizard mode in a temp HOME and asserts the right config files
 // land on disk. This is the regression guard the deletion in 650c282 (which
 // labelled this script "dead") didn't have — the bootstrap is load-bearing
-// for codex_config / config / pi_config and a future "remove this, looks
+// for codex_config / config and a future "remove this, looks
 // dead" PR should be blocked by a failing test, not by user reports.
 func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -45,12 +45,6 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 			wantFiles: map[string]string{
 				".claude/settings.json": `"theme":"dark"`,
 				".claude.json":          `"hasCompletedOnboarding": true`,
-			},
-		},
-		{
-			mode: "pi_config",
-			wantFiles: map[string]string{
-				".pi/agent/AGENTS.md": "Tank Pi Config Session",
 			},
 		},
 		{

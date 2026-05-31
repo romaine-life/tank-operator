@@ -999,6 +999,20 @@ test("focused transcript Home and End keys resolve durable conversation edges", 
   assert.match(appSource, /consumedScrollToOldestSignalRef\.current === scrollToOldestSignal/);
 });
 
+test("focused Turns page Home and End keys scroll the turn detail to its edges", () => {
+  // Turns is its own scroll surface (.run-turn-view-body), so Home/End reuse the
+  // turn-view scroll-request channel (anchor "top"/"bottom") instead of the chat
+  // SDK jump. Mirrors the chat Home/End focus gate: the shared <main>
+  // (transcriptScrollEl) must be the key event target. transcript-navigation
+  // contract — keyboard edge navigation extends to the Turns surface.
+  assert.match(appSource, /type TurnViewScrollAnchor = "bottom" \| "top"/);
+  assert.match(appSource, /if \(!visible \|\| activeTab !== "turns" \|\| !transcriptScrollEl\) return;/);
+  assert.match(appSource, /if \(e\.key !== "Home" && e\.key !== "End"\) return;/);
+  assert.match(appSource, /const anchor: TurnViewScrollAnchor = e\.key === "Home" \? "top" : "bottom";/);
+  assert.match(appSource, /setTurnViewScrollRequest\(\{\s*turnId: effectiveSelectedTurnId,\s*anchor,/);
+  assert.match(appSource, /if \(scrollRequest\.anchor === "top"\) \{\s*body\.scrollTo\(\{ top: 0, behavior: "auto" \}\);/);
+});
+
 test("chat back-pagination keeps the focused load button mounted while loading", () => {
   assert.equal(appSource.includes("aria-disabled={sdkLoadingOlder || undefined}"), true);
   assert.equal(appSource.includes("aria-busy={sdkLoadingOlder || undefined}"), true);

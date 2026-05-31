@@ -78,6 +78,7 @@ type Manager struct {
 	oauthGatewayIP  string
 	apiProxyIP      string
 	codexAPIProxyIP string
+	geminiAPIProxyIP string
 
 	localCounter     int64
 	localCounterLock sync.Mutex
@@ -91,6 +92,7 @@ type ManagerOptions struct {
 	OAuthGatewayHost  string
 	APIProxyHost      string
 	CodexAPIProxyHost string
+	GeminiAPIProxyHost string
 }
 
 func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, emitter RowEmitter, opts ManagerOptions) *Manager {
@@ -134,6 +136,9 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	}
 	if opts.CodexAPIProxyHost != "" {
 		m.codexAPIProxyIP = resolveIP(opts.CodexAPIProxyHost)
+	}
+	if opts.GeminiAPIProxyHost != "" {
+		m.geminiAPIProxyIP = resolveIP(opts.GeminiAPIProxyHost)
 	}
 	return m
 }
@@ -326,6 +331,9 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	if m.codexAPIProxyIP == "" {
 		m.codexAPIProxyIP = resolveIP(os.Getenv("CODEX_API_PROXY_HOST"))
 	}
+	if m.geminiAPIProxyIP == "" {
+		m.geminiAPIProxyIP = resolveIP(os.Getenv("GEMINI_API_PROXY_HOST"))
+	}
 
 	sessionID, err := m.nextSessionID(ctx)
 	if err != nil {
@@ -342,6 +350,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.OAuthGatewayIP = m.oauthGatewayIP
 	manifestOpts.APIProxyIP = m.apiProxyIP
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
+	manifestOpts.GeminiAPIProxyIP = m.geminiAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
 	manifestOpts.Name = name

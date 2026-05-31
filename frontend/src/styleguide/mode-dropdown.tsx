@@ -38,10 +38,6 @@ export function StyleguideModeDropdown() {
                 <ProviderIcon provider="hermes" className="home-choice-icon" />
                 <span>Hermes</span>
               </button>
-              <button className="home-choice" type="button" aria-pressed="false" title="Pi CLI">
-                <ProviderIcon provider="pi" className="home-choice-icon" />
-                <span>Pi</span>
-              </button>
             </div>
             <div className="home-panel-head home-panel-subhead">
               <h3>Interaction</h3>

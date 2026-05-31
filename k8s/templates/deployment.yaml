@@ -53,8 +53,8 @@ spec:
               value: {{ .Values.session.image | quote }}
             - name: CODEX_SESSION_IMAGE
               value: {{ .Values.session.codexImage | quote }}
-            - name: PI_SESSION_IMAGE
-              value: {{ .Values.session.piImage | quote }}
+            - name: GEMINI_SESSION_IMAGE
+              value: {{ .Values.session.geminiImage | quote }}
             - name: SESSION_SERVICE_ACCOUNT
               value: {{ include "tank-operator.sessionServiceAccount" . | quote }}
             - name: SESSION_CONFIGMAP
@@ -67,6 +67,9 @@ spec:
               value: {{ include "tank-operator.githubAppSecret" . | quote }}
             - name: CODEX_CREDENTIALS_SECRET
               value: {{ include "tank-operator.codexCredentialsSecret" . | quote }}
+            - name: GEMINI_CREDENTIALS_TEST_SECRET
+              value: {{ include "tank-operator.geminiCredentialsTestSecret" . | quote }}
+
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
             - name: REAPER_INTERVAL_SECONDS
@@ -112,6 +115,8 @@ spec:
               value: {{ include "tank-operator.apiProxyHost" . | quote }}
             - name: CODEX_API_PROXY_HOST
               value: {{ include "tank-operator.codexApiProxyHost" . | quote }}
+            - name: GEMINI_API_PROXY_HOST
+              value: {{ include "tank-operator.geminiApiProxyHost" . | quote }}
             # Workload-identity wiring for the orchestrator's KV writes.
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state

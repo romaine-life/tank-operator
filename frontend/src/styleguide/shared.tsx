@@ -15,8 +15,6 @@ export const MODES = [
   "codex_app_server",
   "codex_config",
   "hermes_gui",
-  "pi_cli",
-  "pi_config",
 ] as const;
 export const MODE_LABELS: Record<(typeof MODES)[number], string> = {
   claude_cli: "claude-cli",
@@ -29,8 +27,6 @@ export const MODE_LABELS: Record<(typeof MODES)[number], string> = {
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   hermes_gui: "hermes",
-  pi_cli: "pi-cli",
-  pi_config: "pi-cfg",
 };
 export const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
   claude_cli: "Claude CLI",
@@ -43,10 +39,8 @@ export const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   hermes_gui: "Hermes",
-  pi_cli: "Pi CLI",
-  pi_config: "Pi config",
 };
-export const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "codex" | "hermes" | "pi">> = {
+export const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "codex" | "hermes">> = {
   claude_cli: "anthropic",
   claude_gui: "anthropic",
   codex_cli: "codex",
@@ -54,7 +48,6 @@ export const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "c
   codex_exec_gui: "codex",
   codex_app_server: "codex",
   hermes_gui: "hermes",
-  pi_cli: "pi",
 };
 export const MODE_INTERACTIONS: Partial<Record<(typeof MODES)[number], "gui" | "cli">> = {
   claude_cli: "cli",
@@ -64,7 +57,6 @@ export const MODE_INTERACTIONS: Partial<Record<(typeof MODES)[number], "gui" | "
   codex_exec_gui: "gui",
   codex_app_server: "gui",
   hermes_gui: "gui",
-  pi_cli: "cli",
 };
 export const STATUSES = [
   ["active", "Active"],

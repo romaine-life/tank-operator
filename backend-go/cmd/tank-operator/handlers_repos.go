@@ -56,8 +56,7 @@ var repoSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z
 
 // sessionModeSupportsRepos reports whether a session mode has a
 // /workspace volume the repo-cloner init container can clone into.
-// Today only the SDK-runner modes (claude_gui, codex_gui,
-// codex_app_server) provision a workspace emptyDir — see
+// Today only the SDK-runner modes provision a workspace emptyDir — see
 // sessionmodel.PodManifest: `wantSDKRunner`. CLI / config / api_key
 // / hermes_gui modes do not, so accepting a repo selection for them
 // would persist data with no runtime path to use it.
@@ -70,7 +69,10 @@ func sessionModeSupportsRepos(mode string) bool {
 	switch sessionmodel.NormalizeSessionMode(mode) {
 	case sessionmodel.ClaudeGUIMode,
 		sessionmodel.CodexGUIMode,
-		sessionmodel.CodexAppServerMode:
+		sessionmodel.CodexExecGUIMode,
+		sessionmodel.CodexAppServerMode,
+		sessionmodel.GeminiGUIMode,
+		sessionmodel.GeminiTestMode:
 		return true
 	default:
 		return false

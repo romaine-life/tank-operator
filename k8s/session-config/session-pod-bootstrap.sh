@@ -1,7 +1,7 @@
 #!/bin/bash
 # Session-pod bootstrap. Runs once at pod boot, before sandbox-agent's HTTP
 # listener comes up, so any state the in-browser CLI shell (or a later
-# `codex` / `claude` / `pi` invocation) depends on is on disk before the
+# `codex` / `claude` / `gemini` invocation) depends on is on disk before the
 # user can issue commands.
 #
 # Required env: TANK_SESSION_MODE (set on the claude container by the
@@ -53,14 +53,5 @@ JSON
     cat > "$HOME/.claude.json" <<'JSON'
 {"hasCompletedOnboarding": true}
 JSON
-    ;;
-  pi_config)
-    mkdir -p "$HOME/.pi/agent"
-    cat > "$HOME/.pi/agent/AGENTS.md" <<'MD'
-# Tank Pi Config Session
-
-Run `/login`, choose your provider, and complete the login flow. This mode is
-for manual Pi testing; Tank does not persist Pi's native auth.json.
-MD
     ;;
 esac

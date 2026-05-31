@@ -42,7 +42,14 @@ test("isValidRepoSlug trims whitespace before validating", () => {
 });
 
 test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
-  for (const mode of ["claude_gui", "codex_gui", "codex_app_server"]) {
+  for (const mode of [
+    "claude_gui",
+    "codex_gui",
+    "codex_exec_gui",
+    "codex_app_server",
+    "gemini_gui",
+    "gemini_test",
+  ]) {
     assert.ok(REPO_SUPPORTED_MODES.has(mode), `${mode} should support repos`);
   }
   for (const mode of [
@@ -50,8 +57,7 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "codex_cli",
     "config",
     "codex_config",
-    "pi_cli",
-    "pi_config",
+    "gemini_config",
     "api_key",
     "hermes_gui",
   ]) {

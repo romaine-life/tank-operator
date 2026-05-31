@@ -964,10 +964,10 @@ func promptMatchesSkillTrigger(provider, skillName, prompt string) bool {
 }
 
 func skillPromptTrigger(provider, skillName string) string {
-	if provider == "codex" || provider == "hermes" {
-		return "$" + skillName
+	if provider == "claude" {
+		return "/" + skillName
 	}
-	return "/" + skillName
+	return "$" + skillName
 }
 
 func sdkProviderForMode(mode string) (string, bool) {
@@ -980,6 +980,10 @@ func sdkProviderForMode(mode string) (string, bool) {
 		return "codex", true
 	case sessionmodel.CodexAppServerMode:
 		return "codex", true
+	case sessionmodel.GeminiGUIMode:
+		return "gemini", true
+	case sessionmodel.GeminiTestMode:
+		return "gemini", true
 	default:
 		return "", false
 	}
