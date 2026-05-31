@@ -443,10 +443,25 @@ var sessionRuntimeConfigUpdateTotal = promauto.NewCounterVec(
 	[]string{"provider", "result"},
 )
 
+var messageLinkShareTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_message_link_share_total",
+		Help: "Message-link share create and public resolve attempts, labeled by bounded operation and result.",
+	},
+	[]string{"operation", "result"},
+)
+
 func recordSessionRuntimeConfigUpdate(provider, result string) {
 	sessionRuntimeConfigUpdateTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),
 		sessionRuntimeConfigResultLabel(result),
+	).Inc()
+}
+
+func recordMessageLinkShare(operation, result string) {
+	messageLinkShareTotal.WithLabelValues(
+		messageLinkShareOperationLabel(operation),
+		messageLinkShareResultLabel(result),
 	).Inc()
 }
 
@@ -538,6 +553,24 @@ func sessionRuntimeConfigProviderLabel(provider string) string {
 func sessionRuntimeConfigResultLabel(result string) string {
 	switch result {
 	case "ok", "bad_request", "forbidden", "not_found", "manager_unavailable", "update_failed":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func messageLinkShareOperationLabel(operation string) string {
+	switch operation {
+	case "create", "resolve":
+		return operation
+	default:
+		return "unknown"
+	}
+}
+
+func messageLinkShareResultLabel(result string) string {
+	switch result {
+	case "ok", "bad_request", "denied", "not_found", "store_unavailable", "store_error":
 		return result
 	default:
 		return "other"

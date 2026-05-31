@@ -1300,6 +1300,12 @@ type SessionRoute = {
   turnId: string | null;
 };
 
+type PublicMessageLinkRoute = {
+  token: string;
+  sessionId: string | null;
+  messageId: string | null;
+};
+
 function decodeRouteSegment(segment: string): string {
   try {
     return decodeURIComponent(segment);
@@ -1337,6 +1343,17 @@ function routeHasMessageTarget(): boolean {
   return params.has("message") || params.has("timeline_id");
 }
 
+function readInitialPublicMessageLinkRoute(): PublicMessageLinkRoute | null {
+  const params = new URLSearchParams(window.location.search);
+  const token = (params.get("share") ?? "").trim();
+  if (!token) return null;
+  return {
+    token,
+    sessionId: params.get("session"),
+    messageId: params.get("message") ?? params.get("timeline_id"),
+  };
+}
+
 function replaceSessionRoute(id: string, tab: "chat" | "turns" = "chat", turnId?: string | null): void {
   if (routeHasMessageTarget()) return;
   const next = sessionRouteUrl(id, tab, turnId);
@@ -1365,23 +1382,26 @@ function sessionUrl(id: string): string {
 // session's transcript to the referenced entry. Shape mirrors the
 // existing ?session= contract so URLs compose cleanly when an agent
 // or human pastes one as a shareable pointer.
-function messageUrl(sessionId: string, entryId: string): string {
+function messageUrl(sessionId: string, entryId: string, shareToken?: string | null): string {
   const url = new URL(window.location.href);
+  url.pathname = "/";
   url.search = "";
   url.hash = "";
   url.searchParams.set("session", sessionId);
   url.searchParams.set("message", entryId);
+  if (shareToken?.trim()) url.searchParams.set("share", shareToken.trim());
   return url.toString();
 }
 
 function readInitialMessageId(): string | null {
   const params = new URLSearchParams(window.location.search);
-  return params.get("message");
+  return params.get("message") ?? params.get("timeline_id");
 }
 
 function clearInitialMessageId(): void {
   const url = new URL(window.location.href);
   url.searchParams.delete("message");
+  url.searchParams.delete("timeline_id");
   window.history.replaceState({}, "", url.toString());
 }
 
@@ -4593,25 +4613,28 @@ function LinkButton({
   sessionId: string;
   entryId: string;
 }) {
-  const [copied, setCopied] = useState(false);
+  const { createMessageLink } = useContext(RunContext);
+  const [status, setStatus] = useState<"idle" | "copied" | "error">("idle");
   return (
     <button
       type="button"
       className="run-msg-action run-msg-link"
-      title="Copy link to message"
-      aria-label={copied ? "Link copied" : "Copy link to message"}
+      title={status === "error" ? "Could not copy link" : "Copy link to message"}
+      aria-label={status === "copied" ? "Link copied" : "Copy link to message"}
       onClick={async (e) => {
         e.stopPropagation();
         try {
-          await navigator.clipboard.writeText(messageUrl(sessionId, entryId));
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1500);
+          const url = await createMessageLink(sessionId, entryId);
+          await navigator.clipboard.writeText(url);
+          setStatus("copied");
+          setTimeout(() => setStatus("idle"), 1500);
         } catch {
-          /* ignore */
+          setStatus("error");
+          setTimeout(() => setStatus("idle"), 1500);
         }
       }}
     >
-      {copied ? (
+      {status === "copied" ? (
         <CheckIcon size={12} aria-hidden="true" />
       ) : (
         <LinkIcon size={12} aria-hidden="true" />
@@ -4984,10 +5007,12 @@ interface InputReplyPayload {
 const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   sendInputReply: (entry: TranscriptEntry, payload: InputReplyPayload) => Promise<void>;
+  createMessageLink: (sessionId: string, entryId: string) => Promise<string>;
   user: SessionUser | null;
 }>({
   openWorkspacePath: () => {},
   sendInputReply: async () => {},
+  createMessageLink: async (sessionId, entryId) => messageUrl(sessionId, entryId),
   user: null,
 });
 
@@ -8647,6 +8672,8 @@ function ChatPane({
   playTurnCompleteSound,
   adminControls,
   readOnly = false,
+  publicView = false,
+  publicShareToken = null,
   sessionScope,
   avatarCatalogVersion,
 }: {
@@ -8688,6 +8715,8 @@ function ChatPane({
     onViewingProdSessionsChange: (value: boolean) => void;
   };
   readOnly?: boolean;
+  publicView?: boolean;
+  publicShareToken?: string | null;
   sessionScope: string;
   avatarCatalogVersion: number;
 }) {
@@ -8732,8 +8761,25 @@ function ChatPane({
     (path: string) => appendQueryParam(path, "session_scope", sessionScope),
     [sessionScope],
   );
-  const supportsFileAttachments = !readOnly && sessionModeSupportsWorkspaceFiles(session.mode);
-  const filesAvailable = !readOnly && sessionFilesAvailable(session);
+  const publicShareTokenValue = publicShareToken?.trim() ?? "";
+  const timelineRequestPathForPane = useCallback((targetSessionId: string, query: string) => {
+    if (publicView && publicShareTokenValue) {
+      return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/timeline${query ? `?${query}` : ""}`;
+    }
+    return scopedSessionPathForPane(
+      `/api/sessions/${encodeURIComponent(targetSessionId)}/timeline${query ? `?${query}` : ""}`,
+    );
+  }, [publicShareTokenValue, publicView, scopedSessionPathForPane]);
+  const turnActivityRequestPathForPane = useCallback((turnId: string) => {
+    if (publicView && publicShareTokenValue) {
+      return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/turns/${encodeURIComponent(turnId)}/activity`;
+    }
+    return scopedSessionPathForPane(
+      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnId)}/activity`,
+    );
+  }, [publicShareTokenValue, publicView, scopedSessionPathForPane, session.id]);
+  const supportsFileAttachments = !readOnly && !publicView && sessionModeSupportsWorkspaceFiles(session.mode);
+  const filesAvailable = !readOnly && !publicView && sessionFilesAvailable(session);
   const filesTabTitle = sessionFilesTabTitle(session);
   // Seed model + effort from RunPrefs (browser-persisted). State is local
   // because the runners seal model + effort from the first submit_turn —
@@ -9280,6 +9326,7 @@ function ChatPane({
     syncSdkRenderedEntries();
   }
   function scheduleSdkReadStateUpdate(): void {
+    if (publicView) return;
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
     // Read-cursor advancement is gated on navigation mode. The durable
@@ -9301,6 +9348,7 @@ function ChatPane({
     }, 400);
   }
   async function flushSdkReadStateUpdate(): Promise<void> {
+    if (publicView) return;
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
     if (navigationModeRef.current !== "live-tail") return;
@@ -9493,7 +9541,7 @@ function ChatPane({
   }, [session.id, visible]);
 
   useEffect(() => {
-    if (readOnly || !visible || session.status !== "Active") return;
+    if (publicView || readOnly || !visible || session.status !== "Active") return;
     const touch = () => {
       void authedFetch(`/api/sessions/${session.id}/touch`, {
         method: "POST",
@@ -9502,7 +9550,7 @@ function ChatPane({
     touch();
     const interval = window.setInterval(touch, 30_000);
     return () => window.clearInterval(interval);
-  }, [readOnly, session.id, session.status, visible]);
+  }, [publicView, readOnly, session.id, session.status, visible]);
 
 
   // Auto-send the next queued message once the current run finishes.
@@ -9553,6 +9601,7 @@ function ChatPane({
   );
   const historyBootstrapped = timelineBootstrap.status === "ready";
   const applyCurrentSessionRoute = useCallback(() => {
+    if (publicView) return;
     if (!visible) return;
     const route = readSessionRouteFromPath();
     if (route?.sessionId !== session.id) return;
@@ -9566,15 +9615,16 @@ function ChatPane({
     setActiveTab("chat");
     setPendingRouteTurnId(null);
     setPendingTurnViewRouteAnchor(null);
-  }, [session.id, visible]);
+  }, [publicView, session.id, visible]);
   useEffect(() => {
     applyCurrentSessionRoute();
   }, [applyCurrentSessionRoute]);
   useEffect(() => {
+    if (publicView) return;
     if (!visible) return;
     window.addEventListener("popstate", applyCurrentSessionRoute);
     return () => window.removeEventListener("popstate", applyCurrentSessionRoute);
-  }, [applyCurrentSessionRoute, visible]);
+  }, [applyCurrentSessionRoute, publicView, visible]);
 
   // History replay and live tail both hit the server-owned transcript-row read
   // model. Raw Tank item events stay behind the Turn activity detail endpoint
@@ -9647,7 +9697,7 @@ function ChatPane({
         ...chatScrollElementSnapshot(transcriptScrollEl),
       });
       const res = await authedFetch(
-        scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
+        timelineRequestPathForPane(refreshSessionId, params.toString()),
       );
       if (!res.ok) {
         logChatScrollEvent("timeline-error", {
@@ -9817,7 +9867,7 @@ function ChatPane({
         rows: String(SDK_TIMELINE_OLDER_ROWS),
       });
       const res = await authedFetch(
-        scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
+        timelineRequestPathForPane(refreshSessionId, params.toString()),
       );
       if (!res.ok) {
         logChatScrollEvent("older-error", {
@@ -9925,7 +9975,7 @@ function ChatPane({
       ...chatScrollElementSnapshot(transcriptScrollEl),
     });
     const res = await authedFetch(
-      scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
+      timelineRequestPathForPane(refreshSessionId, params.toString()),
     );
     if (!res.ok) {
       logChatScrollEvent("timeline-error", {
@@ -10008,7 +10058,7 @@ function ChatPane({
       ...chatScrollElementSnapshot(transcriptScrollEl),
     });
     const res = await authedFetch(
-      scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(refreshSessionId)}/timeline?${params.toString()}`),
+      timelineRequestPathForPane(refreshSessionId, params.toString()),
     );
     if (!res.ok) {
       logChatScrollEvent("timeline-error", {
@@ -11403,6 +11453,7 @@ function ChatPane({
   }
 
   function scheduleSdkEventStreamReconnect(): void {
+    if (publicView) return;
     if (sdkEventReconnectTimerRef.current !== null) {
       window.clearTimeout(sdkEventReconnectTimerRef.current);
     }
@@ -11416,6 +11467,10 @@ function ChatPane({
   }
 
   async function openSdkEventStream(): Promise<EventSource | null> {
+    if (publicView) {
+      setSdkConnectionState("idle");
+      return null;
+    }
     setSdkConnectionState("connecting");
     const params = new URLSearchParams();
     if (sdkTimelineCursorRef.current) {
@@ -11509,6 +11564,7 @@ function ChatPane({
   }
 
   useEffect(() => {
+    if (publicView) return;
     if (!visible || !CHAT_MODES.has(session.mode) || !historyBootstrapped) return;
     // Long-task correlation: switching active sessions triggers a
     // reducer reset + transcript bootstrap + scroll rewire. Attribute
@@ -11538,7 +11594,7 @@ function ChatPane({
     };
   // openSdkEventStream closes over the current session cursor and reducer state.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyBootstrapped, visible, session.id, session.mode, sessionScope]);
+  }, [historyBootstrapped, publicView, visible, session.id, session.mode, sessionScope]);
 
   const submitStatus =
     runStatus === "running" || runStatus === "stopping"
@@ -11650,11 +11706,7 @@ function ChatPane({
     if (!options?.force && activityEntriesByTurn[trimmedTurnId]) return;
     if (loadingActivityTurns[trimmedTurnId]) return;
     setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
-    void authedFetch(
-      scopedSessionPathForPane(
-        `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(trimmedTurnId)}/activity`,
-      ),
-    )
+    void authedFetch(turnActivityRequestPathForPane(trimmedTurnId))
       .then(async (res) => {
         if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
         const body = (await res.json()) as { entries?: unknown[] };
@@ -11669,7 +11721,7 @@ function ChatPane({
       .finally(() => {
         setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
       });
-  }, [activityEntriesByTurn, loadingActivityTurns, scopedSessionPathForPane, session.id]);
+  }, [activityEntriesByTurn, loadingActivityTurns, turnActivityRequestPathForPane]);
   useEffect(() => {
     if (turnViewItems.length === 0) {
       if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);
@@ -11700,13 +11752,14 @@ function ChatPane({
     setActiveTab("chat");
   }, [activeTab, historyBootstrapped, pendingRouteTurnId, turnsAvailable]);
   useEffect(() => {
+    if (publicView) return;
     if (!visible || pendingScrollMessageId) return;
     if (activeTab === "turns") {
       replaceSessionRoute(session.id, "turns", routedSelectedTurnId);
     } else {
       replaceSessionRoute(session.id, "chat");
     }
-  }, [activeTab, pendingScrollMessageId, routedSelectedTurnId, session.id, visible]);
+  }, [activeTab, pendingScrollMessageId, publicView, routedSelectedTurnId, session.id, visible]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -11885,10 +11938,11 @@ function ChatPane({
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
   const canStopBackgroundEntry = useCallback(
     (entry: TranscriptEntry) =>
-      !readOnly && canStopBackgroundActivity(entry, codexBackgroundStopAvailable),
-    [codexBackgroundStopAvailable, readOnly],
+      !publicView && !readOnly && canStopBackgroundActivity(entry, codexBackgroundStopAvailable),
+    [codexBackgroundStopAvailable, publicView, readOnly],
   );
   const openBackgroundPage = useCallback((entry?: TranscriptEntry) => {
+    if (publicView) return;
     if (entry?.id) setSelectedBackgroundId(entry.id);
     setBackgroundView(
       entry && isDetachedShellCandidateEntry(entry)
@@ -11898,7 +11952,7 @@ function ChatPane({
           : "shells",
     );
     setActiveTab("background");
-  }, [activeBackgroundEntries.length, detachedShellEntries.length]);
+  }, [activeBackgroundEntries.length, detachedShellEntries.length, publicView]);
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
@@ -11925,6 +11979,7 @@ function ChatPane({
   );
 
   useEffect(() => {
+    if (publicView) return;
     if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready) return;
     const activeElement = document.activeElement;
     if (
@@ -11944,17 +11999,19 @@ function ChatPane({
     autoFocusComposer,
     focusComposerTextarea,
     onAutoFocusComposerConsumed,
+    publicView,
     ready,
     visible,
   ]);
 
   useEffect(() => {
+    if (publicView) return;
     if (!visible || activeTab !== "chat" || !pendingComposerFocusRef.current) return;
     pendingComposerFocusRef.current = false;
     requestAnimationFrame(() => {
       focusComposerTextarea();
     });
-  }, [activeTab, focusComposerTextarea, visible]);
+  }, [activeTab, focusComposerTextarea, publicView, visible]);
 
   useEffect(() => {
     if (activeTab !== "background") return;
@@ -11985,6 +12042,7 @@ function ChatPane({
   // composer textarea. Once the textarea is focused, `/` keeps its normal
   // typing behavior and opens the slash-command palette through input events.
   useEffect(() => {
+    if (publicView) return;
     if (!visible) return;
     const onKey = (e: KeyboardEvent) => {
       if (
@@ -12014,7 +12072,7 @@ function ChatPane({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [activeTab, focusComposerTextarea, visible]);
+  }, [activeTab, focusComposerTextarea, publicView, visible]);
 
   const connectionLabel = sdkConnectionLabel(sdkConnectionState);
   const visibleConnectionLabel =
@@ -12112,6 +12170,7 @@ function ChatPane({
   }
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
+    if (publicView && tab !== "turns") return;
     if (tab === "files" && !filesAvailable) return;
     setActiveTab((current) => (current === tab ? "chat" : tab));
   };
@@ -12127,6 +12186,28 @@ function ChatPane({
       epoch: sdkWindowEpochRef.current,
     });
   };
+  const createMessageLink = useCallback(async (targetSessionId: string, entryId: string) => {
+    if (publicView && publicShareTokenValue) {
+      return messageUrl(targetSessionId, entryId, publicShareTokenValue);
+    }
+    const res = await authedFetch(
+      scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(targetSessionId)}/message-links`),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ timeline_id: entryId }),
+      },
+    );
+    if (!res.ok) {
+      const body = (await res.json().catch(() => null)) as { detail?: unknown } | null;
+      const detail = typeof body?.detail === "string" ? body.detail : `link request failed: ${res.status}`;
+      throw new Error(detail);
+    }
+    const body = (await res.json()) as { browser_url?: unknown };
+    return typeof body.browser_url === "string" && body.browser_url
+      ? body.browser_url
+      : messageUrl(targetSessionId, entryId);
+  }, [publicShareTokenValue, publicView, scopedSessionPathForPane]);
 
   return (
     <RunContext.Provider
@@ -12137,15 +12218,17 @@ function ChatPane({
               throw new Error("session is read-only");
             }
           : sendInputReply,
+        createMessageLink,
         user,
       }}
     >
     <WorkspaceShell
+      className={publicView ? "run-panel-public-share" : undefined}
       style={chatFontScaleStyle}
       bodyClassName={`run-main-${runStatus}`}
       bodyRef={transcriptScrollCallbackRef}
       bodyAriaLabel={activeTab === "chat" ? "Transcript" : "Workspace panel"}
-      composerVisible={activeTab === "chat"}
+      composerVisible={activeTab === "chat" && !publicView}
       composerWrapRef={composerWrapRef}
       composerWrapStyle={chatFontScaleStyle}
       composerWrapClassName={dragActive ? "run-composer-wrap-drag" : ""}
@@ -12208,49 +12291,53 @@ function ChatPane({
               else openTurnPage(undefined, { anchor: "bottom" });
             }}
           />
-          <BackgroundLedger
-            entries={backgroundLedgerEntries}
-            active={activeTab === "background"}
-            onOpen={() => {
-              if (activeTab === "background") setActiveTab("chat");
-              else openBackgroundPage();
-            }}
-          />
-          <button
-            type="button"
-            className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
-            onClick={() => toggleRunTab("files")}
-            aria-pressed={activeTab === "files"}
-            disabled={!filesAvailable}
-            title={filesTabTitle}
-          >
-            <FolderIcon
-              className="run-tab-icon"
-              strokeWidth={1.8}
-              aria-hidden="true"
-            />
-            <span>Files</span>
-          </button>
-          <button
-            type="button"
-            className={`run-tab${activeTab === "settings" ? " run-tab-active" : ""}`}
-            onClick={() => toggleRunTab("settings")}
-            aria-pressed={activeTab === "settings"}
-            title="Settings"
-          >
-            <SettingsIcon className="run-tab-icon" aria-hidden="true" />
-            <span>Settings</span>
-          </button>
-          <button
-            type="button"
-            className={`run-tab${activeTab === "help" ? " run-tab-active" : ""}`}
-            onClick={() => toggleRunTab("help")}
-            aria-pressed={activeTab === "help"}
-            title="Help"
-          >
-            <InfoIcon className="run-tab-icon" aria-hidden="true" />
-            <span>Help</span>
-          </button>
+          {!publicView && (
+            <>
+              <BackgroundLedger
+                entries={backgroundLedgerEntries}
+                active={activeTab === "background"}
+                onOpen={() => {
+                  if (activeTab === "background") setActiveTab("chat");
+                  else openBackgroundPage();
+                }}
+              />
+              <button
+                type="button"
+                className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
+                onClick={() => toggleRunTab("files")}
+                aria-pressed={activeTab === "files"}
+                disabled={!filesAvailable}
+                title={filesTabTitle}
+              >
+                <FolderIcon
+                  className="run-tab-icon"
+                  strokeWidth={1.8}
+                  aria-hidden="true"
+                />
+                <span>Files</span>
+              </button>
+              <button
+                type="button"
+                className={`run-tab${activeTab === "settings" ? " run-tab-active" : ""}`}
+                onClick={() => toggleRunTab("settings")}
+                aria-pressed={activeTab === "settings"}
+                title="Settings"
+              >
+                <SettingsIcon className="run-tab-icon" aria-hidden="true" />
+                <span>Settings</span>
+              </button>
+              <button
+                type="button"
+                className={`run-tab${activeTab === "help" ? " run-tab-active" : ""}`}
+                onClick={() => toggleRunTab("help")}
+                aria-pressed={activeTab === "help"}
+                title="Help"
+              >
+                <InfoIcon className="run-tab-icon" aria-hidden="true" />
+                <span>Help</span>
+              </button>
+            </>
+          )}
       </>)}
       body={(<>
         {activeTab === "files" ? (
@@ -12557,7 +12644,7 @@ function ChatPane({
             showDuration={runPrefs.showDuration}
             userKey={user?.sub ?? user?.email ?? "anon"}
             loadingActivityTurns={loadingActivityTurns}
-            onOpenBackgroundTask={openBackgroundPage}
+            onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
             scrollRequest={turnViewScrollRequest}
             onScrollRequestConsumed={clearTurnViewScrollRequest}
           />
@@ -12681,7 +12768,7 @@ function ChatPane({
                         permissionMode: composerMode,
                       })
               }
-              onOpenBackgroundTask={openBackgroundPage}
+              onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
               onOpenTurn={openTurnPage}
               scrollParent={transcriptScrollEl}
               onStartReached={() => {
@@ -13104,6 +13191,133 @@ function ChatPane({
   );
 }
 
+type PublicMessageLinkResponse = {
+  session?: unknown;
+  session_id?: unknown;
+  timeline_id?: unknown;
+  message?: unknown;
+  detail?: unknown;
+};
+
+const PUBLIC_MESSAGE_LINK_USER: SessionUser = {
+  sub: "public-message-link",
+  email: "",
+  name: "Public viewer",
+  role: "user",
+  is_admin: false,
+  avatar_url: "",
+  github_login: null,
+  installation_id: null,
+  run_prefs: null,
+};
+
+function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
+  const [session, setSession] = useState<Session | null>(null);
+  const [pendingScrollMessageId, setPendingScrollMessageId] = useState<string | null>(
+    route.messageId,
+  );
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const noopSetRunPref: SetRunPref = useCallback(() => undefined, []);
+  const noop = useCallback(() => undefined, []);
+  const readonlyFork = useCallback(async () => {
+    throw new Error("public message links are read-only");
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    void fetch(`/api/public/message-links/${encodeURIComponent(route.token)}`)
+      .then(async (res) => {
+        const body = (await res.json().catch(() => ({}))) as PublicMessageLinkResponse;
+        if (!res.ok) {
+          const detail =
+            typeof body.detail === "string" && body.detail
+              ? body.detail
+              : `message link failed: ${res.status}`;
+          throw new Error(detail);
+        }
+        if (!body.session || typeof body.session !== "object") {
+          throw new Error("message link response did not include a session");
+        }
+        const linkedMessage =
+          typeof body.timeline_id === "string" && body.timeline_id
+            ? body.timeline_id
+            : typeof body.message === "string" && body.message
+              ? body.message
+              : null;
+        if (cancelled) return;
+        setSession(normalizeSession(body.session as Session));
+        if (!route.messageId && linkedMessage) {
+          setPendingScrollMessageId(linkedMessage);
+        }
+      })
+      .catch((err) => {
+        if (!cancelled) setError(errorMessage(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [route.messageId, route.token]);
+
+  if (loading) {
+    return <div className="boot-state"><span className="boot-text">loading…</span></div>;
+  }
+
+  if (error || !session) {
+    return (
+      <div className="boot-state">
+        <pre className="error">{error ?? "message link not found"}</pre>
+      </div>
+    );
+  }
+
+  if (!CHAT_MODES.has(session.mode)) {
+    return (
+      <div className="boot-state">
+        <pre className="error">public message links are only available for chat transcripts</pre>
+      </div>
+    );
+  }
+
+  return (
+    <div className="shell public-share-shell">
+      <main className="workspace public-share-workspace">
+        <div className="terminals">
+          <div className="run-body">
+            <ChatPane
+              session={session}
+              visible
+              onSessionPatch={noop}
+              onConnectionLabelChange={noop}
+              onRefreshFlashChange={noop}
+              onForkMessage={readonlyFork}
+              pendingScrollMessageId={pendingScrollMessageId}
+              onScrollConsumed={() => setPendingScrollMessageId(null)}
+              runPrefs={DEFAULT_RUN_PREFS}
+              setRunPref={noopSetRunPref}
+              user={PUBLIC_MESSAGE_LINK_USER}
+              autoFocusComposer={false}
+              onAutoFocusComposerConsumed={noop}
+              primeTurnCompleteSound={noop}
+              playTurnCompleteSound={noop}
+              readOnly
+              publicView
+              publicShareToken={route.token}
+              sessionScope={normalizeSessionScopeValue(session.session_scope)}
+              avatarCatalogVersion={0}
+            />
+          </div>
+        </div>
+      </main>
+    </div>
+  );
+}
+
 function CliProcessTerminal({
   session,
   visible,
@@ -13193,6 +13407,14 @@ function CliSession({ session, visible }: { session: Session; visible: boolean }
 }
 
 export function App() {
+  const publicRoute = readInitialPublicMessageLinkRoute();
+  if (publicRoute) {
+    return <PublicMessageLinkApp route={publicRoute} />;
+  }
+  return <AuthenticatedApp />;
+}
+
+function AuthenticatedApp() {
   const [user, setUser] = useState<SessionUser | null>(null);
   const [booted, setBooted] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
