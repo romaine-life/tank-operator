@@ -951,40 +951,35 @@ var schemaMigrations = []migration{
 	{ID: "0077", SQL: `CREATE INDEX IF NOT EXISTS provider_credential_health_status
 		ON provider_credential_health (status, provider)`},
 
-	// message_link_shares stores durable bearer grants created by the
-	// authenticated "copy link to message" action. Session ids are
-	// monotonic and transcript timeline ids are not secrets, so public
-	// unauthenticated transcript reads must validate one of these opaque
-	// tokens instead of treating ?session=&message= as authority.
-	{ID: "0078", SQL: `CREATE TABLE IF NOT EXISTS message_link_shares (
-		token_hash      text PRIMARY KEY,
-		created_by      text NOT NULL,
-		owner_email     text NOT NULL,
-		session_scope   text NOT NULL,
-		session_id      text NOT NULL,
-		timeline_id     text NOT NULL,
-		created_at      timestamptz NOT NULL DEFAULT now(),
-		last_used_at    timestamptz,
-		revoked_at      timestamptz
-	)`},
-	{ID: "0079", SQL: `CREATE TABLE IF NOT EXISTS message_link_shares (
-		token_hash      text PRIMARY KEY,
-		created_by      text NOT NULL,
-		owner_email     text NOT NULL,
-		session_scope   text NOT NULL,
-		session_id      text NOT NULL,
-		timeline_id     text NOT NULL,
-		created_at      timestamptz NOT NULL DEFAULT now(),
-		last_used_at    timestamptz,
-		revoked_at      timestamptz
-	)`},
+	// discovered_repos was applied to production under migration 0078 before
+	// the feature branch that introduced it was reverted from main. Keep this
+	// immutable SQL here so the durable migration ledger continues to match.
+	{ID: "0078", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS discovered_repos text[] NOT NULL DEFAULT '{}'`},
 
 	// Per-session capability opt-ins. Empty array is the default pod surface;
 	// named values are rare create-time capabilities such as spirelens_mcp.
 	// The list is persisted on the row so the pod manifest is not the only
 	// place to inspect why a session joined extra infrastructure.
-	{ID: "0080", SQL: `ALTER TABLE sessions
+	{ID: "0079", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS capabilities text[] NOT NULL DEFAULT '{}'`},
+
+	// message_link_shares stores durable bearer grants created by the
+	// authenticated "copy link to message" action. Session ids are
+	// monotonic and transcript timeline ids are not secrets, so public
+	// unauthenticated transcript reads must validate one of these opaque
+	// tokens instead of treating ?session=&message= as authority.
+	{ID: "0080", SQL: `CREATE TABLE IF NOT EXISTS message_link_shares (
+		token_hash      text PRIMARY KEY,
+		created_by      text NOT NULL,
+		owner_email     text NOT NULL,
+		session_scope   text NOT NULL,
+		session_id      text NOT NULL,
+		timeline_id     text NOT NULL,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		last_used_at    timestamptz,
+		revoked_at      timestamptz
+	)`},
 	{ID: "0081", SQL: `CREATE INDEX IF NOT EXISTS message_link_shares_session
 		ON message_link_shares (owner_email, session_scope, session_id)
 		WHERE revoked_at IS NULL`},
@@ -1038,39 +1033,6 @@ func migrationChecksum(sql string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// migrationChecksumAliases is intentionally narrow rollout recovery for
-// migration IDs that were observed in live ledgers before two concurrent PRs
-// were renumbered. The canonical SQL above remains the source for fresh
-// databases; aliases only let already-applied ledgers continue so later
-// idempotent migrations can repair any missing schema.
-var migrationChecksumAliases = map[string]map[string]string{
-	"0078": {
-		// Live production ledger observed during the 2026-05-31 rollout.
-		"78cab788b19fe45e654b518add42d0308531815c1a48124cb1b7e7499dd12f40": "live rollout ledger",
-		// Session capabilities briefly shipped as 0078 in PR #789.
-		"d28c98d2034d7f09593b6644d5046ae84a76e4babb559f11c501ae73f9c8f6b0": "session capabilities misnumbered as 0078",
-	},
-	"0079": {
-		// The message_link_shares index was 0079 before #789 and #791 crossed.
-		"fffee94ed46953d048b144feae047404479fb2d47310ae8046f107246ce94aba": "message link index previously numbered 0079",
-	},
-	"0080": {
-		// The message_link_shares index briefly shipped as 0080 in PR #791.
-		"fffee94ed46953d048b144feae047404479fb2d47310ae8046f107246ce94aba": "message link index briefly numbered 0080",
-	},
-}
-
-func migrationChecksumMatches(id, recorded, code string) bool {
-	if recorded == code {
-		return true
-	}
-	if aliases, ok := migrationChecksumAliases[id]; ok {
-		_, ok := aliases[recorded]
-		return ok
-	}
-	return false
-}
-
 // RunMigrations applies the un-applied entries in schemaMigrations under a
 // session-scoped advisory lock, recording each in the durable schema_migrations
 // ledger so it never runs twice. Safe to invoke at backend startup.
@@ -1118,7 +1080,7 @@ func RunMigrationsWithMetrics(ctx context.Context, pool *pgxpool.Pool, metrics M
 	for _, m := range schemaMigrations {
 		sum := migrationChecksum(m.SQL)
 		if recorded, ok := applied[m.ID]; ok {
-			if !migrationChecksumMatches(m.ID, recorded, sum) {
+			if recorded != sum {
 				return fmt.Errorf(
 					"pgstore: migration %s checksum mismatch (ledger=%s code=%s): applied migrations are immutable; add a new migration instead of editing this one",
 					m.ID, recorded, sum,
