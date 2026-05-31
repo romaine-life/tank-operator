@@ -27,7 +27,7 @@ type SessionTranscriptRowStore interface {
 	ListBefore(ctx context.Context, tankSessionID, beforeCursor string, rows int) (TranscriptRowPage, error)
 	ListAround(ctx context.Context, tankSessionID, rowCursor string, rowsBefore, rowsAfter int) (TranscriptRowPage, error)
 	ResolveCursorForTimelineID(ctx context.Context, tankSessionID, timelineID string) (string, error)
-	BackfillSessionIDs(ctx context.Context) ([]string, error)
+	NeedsBackfill(ctx context.Context, tankSessionID string) (bool, error)
 }
 
 type TranscriptRowPage struct {
@@ -53,6 +53,10 @@ type TranscriptRowDeltaPage struct {
 type transcriptRowStore struct {
 	pool  *pgxpool.Pool
 	scope string
+}
+
+type transcriptRowQueryer interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 }
 
 func NewPostgresSessionTranscriptRowStore(pool *pgxpool.Pool, scope string) SessionTranscriptRowStore {
@@ -152,6 +156,31 @@ func (s *transcriptRowStore) ReplaceForSessionTx(ctx context.Context, tx pgx.Tx,
 
 func (s *transcriptRowStore) UpsertRowsTx(ctx context.Context, tx pgx.Tx, tankSessionID string, entries []map[string]any) error {
 	return s.upsertRowsTx(ctx, tx, sessionmodel.SessionStorageKey(s.scope, tankSessionID), entries)
+}
+
+func (s *transcriptRowStore) NeedsBackfill(ctx context.Context, tankSessionID string) (bool, error) {
+	return s.needsBackfill(ctx, s.pool, tankSessionID)
+}
+
+func (s *transcriptRowStore) NeedsBackfillTx(ctx context.Context, tx pgx.Tx, tankSessionID string) (bool, error) {
+	return s.needsBackfill(ctx, tx, tankSessionID)
+}
+
+func (s *transcriptRowStore) needsBackfill(ctx context.Context, q transcriptRowQueryer, tankSessionID string) (bool, error) {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	var version int
+	err := q.QueryRow(ctx, `
+		SELECT projection_version
+		FROM session_transcript_row_backfills
+		WHERE tank_session_id = $1
+	`, storageKey).Scan(&version)
+	if err == pgx.ErrNoRows {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return version != transcriptRowBackfillVersion, nil
 }
 
 func (s *transcriptRowStore) lockTranscriptMaterializationTx(ctx context.Context, tx pgx.Tx, storageKey string) error {
@@ -317,46 +346,6 @@ func (s *transcriptRowStore) ResolveCursorForTimelineID(ctx context.Context, tan
 		return "", err
 	}
 	return EncodeTranscriptRowCursor(rawCursor), nil
-}
-
-func (s *transcriptRowStore) BackfillSessionIDs(ctx context.Context) ([]string, error) {
-	scope := strings.TrimSpace(s.scope)
-	if scope == "" {
-		scope = "default"
-	}
-	scopeClause := "AND position(':' in se.tank_session_id) = 0"
-	args := []any{transcriptRowBackfillVersion}
-	if scope != "default" {
-		scopeClause = "AND left(se.tank_session_id, length($2)) = $2"
-		args = append(args, scope+":")
-	}
-	q := `
-		SELECT DISTINCT se.payload ->> 'session_id'
-		FROM session_events se
-		WHERE coalesce(se.payload ->> 'session_id', '') <> ''
-			` + scopeClause + `
-			AND NOT EXISTS (
-				SELECT 1
-				FROM session_transcript_row_backfills bf
-				WHERE bf.tank_session_id = se.tank_session_id
-					AND bf.projection_version = $1
-			)
-		ORDER BY 1
-	`
-	rows, err := s.pool.Query(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var sessionID string
-		if err := rows.Scan(&sessionID); err != nil {
-			return nil, err
-		}
-		out = append(out, sessionID)
-	}
-	return out, rows.Err()
 }
 
 func (s *transcriptRowStore) listRows(ctx context.Context, query string, args []any, limit int, direction string, foundOldestAtStart, foundNewestAtStart bool) (TranscriptRowPage, error) {
@@ -645,6 +634,6 @@ func (StubSessionTranscriptRowStore) ListAround(context.Context, string, string,
 func (StubSessionTranscriptRowStore) ResolveCursorForTimelineID(context.Context, string, string) (string, error) {
 	return "", nil
 }
-func (StubSessionTranscriptRowStore) BackfillSessionIDs(context.Context) ([]string, error) {
-	return nil, nil
+func (StubSessionTranscriptRowStore) NeedsBackfill(context.Context, string) (bool, error) {
+	return false, nil
 }

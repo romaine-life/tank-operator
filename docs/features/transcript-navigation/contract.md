@@ -24,7 +24,9 @@ yanking the viewport away from a user reading history.
   position.
 - `session_transcript_row_backfills` owns whether a session's historical
   `session_events` ledger has been projected into transcript rows for the
-  current projection version. Status rows alone do not satisfy backfill.
+  current projection version. Status rows alone do not satisfy backfill; stale
+  sessions are materialized on demand for the requested session before
+  `/timeline` or transcript SSE read from `session_transcript_rows`.
 - Server timeline pages own bounded windows of top-level transcript rows. Raw
   events inside a collapsed Turn activity row are loaded only through the
   explicit Turn activity endpoint.

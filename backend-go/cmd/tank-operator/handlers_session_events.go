@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	sessionEventStreamPageLimit = 100
-	sessionEventStreamHeartbeat = 15 * time.Second
+	sessionEventStreamPageLimit              = 100
+	sessionEventStreamHeartbeat              = 15 * time.Second
+	transcriptMaterializationOnDemandTimeout = 60 * time.Second
 )
 
 // handleListSessionEvents returns the projected transcript-row read model.
@@ -65,6 +66,9 @@ func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, us
 		return nil, status, err
 	}
 	recordSessionEventTimelineRequest(intent.metricLabel)
+	if err := s.ensureSessionTranscriptRows(ctx, sessionID, sessionScope); err != nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("transcript materialization failed: %w", err)
+	}
 	page, targetCursor, status, err := runSessionTranscriptRowRead(ctx, rowStore, sessionID, intent)
 	if err != nil {
 		return nil, status, err
@@ -198,6 +202,21 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		writeSSEJSONEvent(w, "resync_required", "", map[string]any{
 			"reason":         "cursor_not_found",
 			"last_order_key": cursor.AfterOrderKey,
+		})
+		flusher.Flush()
+		return
+	}
+
+	if err := s.ensureSessionTranscriptRows(r.Context(), sessionID, sessionScope); err != nil {
+		recordSessionEventStreamError()
+		slog.Warn("session event stream transcript materialization failed",
+			"session_id", sessionID,
+			"email", user.Email,
+			"error", err,
+		)
+		writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+			"reason": "transcript_materialization_failed",
+			"detail": err.Error(),
 		})
 		flusher.Flush()
 		return
@@ -407,6 +426,16 @@ func (s *appServer) sessionTranscriptRowStoreForScope(scope string) store.Sessio
 		return store.NewPostgresSessionTranscriptRowStore(s.pgPool, scope)
 	}
 	return store.StubSessionTranscriptRowStore{}
+}
+
+func (s *appServer) ensureSessionTranscriptRows(ctx context.Context, sessionID, scope string) error {
+	materializer := transcriptRowsMaterializer{
+		events: s.sessionEventStoreForScope(scope),
+		rows:   s.sessionTranscriptRowStoreForScope(scope),
+	}
+	ctx, cancel := context.WithTimeout(ctx, transcriptMaterializationOnDemandTimeout)
+	defer cancel()
+	return materializer.EnsureSession(ctx, sessionID)
 }
 
 func sessionEventCursorFromRequest(r *http.Request) store.SessionEventCursor {

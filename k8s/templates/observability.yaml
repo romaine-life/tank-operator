@@ -458,6 +458,26 @@ spec:
               the locked projection input. This is a backend
               materializer regression, not a browser queueing bug.
 
+        - alert: TankTranscriptRowMaterializationFailing
+          expr: |
+            sum by (result) (
+              increase(tank_transcript_row_materialization_total{result=~"failed|timeout"}[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "transcript row materialization {{`{{ $labels.result }}`}} before serving timeline/SSE"
+            runbook: |
+              The backend could not refresh session_transcript_rows from
+              the canonical session_events ledger before a user-facing
+              /timeline or transcript SSE read. This is a per-session
+              on-demand path; it should not scale with pod count or slot
+              count. Inspect orchestrator slog for
+              "transcript materialization failed" and query
+              tank_pg_backend_connections to distinguish a single huge
+              historical session from database saturation.
+
         # Candidate C — reducer drop. Server emits a Tank event the
         # browser never confirms receiving. Threshold: 5% sustained
         # divergence on the same event_type for 10m. Sum across

@@ -241,6 +241,16 @@ All metric names are prefixed `tank_`. The full namespace:
   `TestLedgerAppliesOnceThenSkips` integration test, and the engine shape
   is pinned by the `TestMigrationEngineRetiredPathStaysOut` reintroduction
   guard.
+- `tank_transcript_row_materialization_total{trigger,result}` and
+  `tank_transcript_row_materialization_duration_seconds{trigger}` —
+  per-session transcript-row freshness checks and backfills before `/timeline`
+  or transcript SSE read from `session_transcript_rows`. `trigger` is bounded
+  to `on_demand` and `unknown`; `result` is bounded to `fresh`, `backfilled`,
+  `failed`, `timeout`, and `unknown`. These metrics replace the retired
+  serving-pod startup fleet backfill surface: projection-version catch-up is
+  now visible as user-requested per-session work, not pod-count-scaled
+  background work. `TankTranscriptRowMaterializationFailing` alerts on
+  `failed`/`timeout` results.
 
 ## Scripted access via Grafana
 
