@@ -42,11 +42,11 @@ const (
 	HermesGUIMode           = "hermes_gui"
 	DefaultSessionMode      = ClaudeGUIMode
 	GeminiRunnerMetricsPort = 9097
-	MaxNameLength         = 80
-	SessionsNamespace     = "tank-operator-sessions"
-	SessionServiceAccount = "claude-session"
-	SessionConfigMap      = "tank-session-config"
-	SandboxAgentPort      = 2468
+	MaxNameLength           = 80
+	SessionsNamespace       = "tank-operator-sessions"
+	SessionServiceAccount   = "claude-session"
+	SessionConfigMap        = "tank-session-config"
+	SandboxAgentPort        = 2468
 	// SessionCapabilitySpireLensMCP opts a pod into the SpireLens game-host
 	// MCP path. The default session surface stays cluster-local; this rare
 	// capability joins the tailnet and mounts an MCP config with
@@ -255,9 +255,9 @@ type ManifestOptions struct {
 	SandboxAgentPort        int
 	TankOperatorInternalURL string
 	// Optional: in-cluster Service IPs for host alias injection.
-	OAuthGatewayIP  string
-	APIProxyIP      string
-	CodexAPIProxyIP string
+	OAuthGatewayIP   string
+	APIProxyIP       string
+	CodexAPIProxyIP  string
 	GeminiAPIProxyIP string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
@@ -469,6 +469,13 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	claudeVolumeMounts := append([]any{}, configMounts...)
+	if spireLensMCPEnabled {
+		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+			"name":      "auth-romaine-sa-token",
+			"mountPath": "/var/run/secrets/auth.romaine.life",
+			"readOnly":  true,
+		})
+	}
 	volumes := []any{
 		map[string]any{"name": "session-config", "configMap": map[string]any{"name": opts.SessionConfigMap}},
 		map[string]any{

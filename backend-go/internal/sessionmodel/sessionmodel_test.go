@@ -147,6 +147,7 @@ func TestPodManifestSpireLensCapabilityWiresTailnetMCP(t *testing.T) {
 		t.Fatalf("TAILNET_HTTP_PROXY = %v, want %q", got, want)
 	}
 	assertConfigMapMountSubPath(t, claude, "/workspace/.mcp.json", "mcp.spirelens.json")
+	assertVolumeMount(t, claude, "auth-romaine-sa-token")
 	assertConfigMapMountSubPath(t, proxy, "/workspace/.mcp.json", "mcp.spirelens.json")
 }
 
