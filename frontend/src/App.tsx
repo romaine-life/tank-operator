@@ -641,7 +641,7 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_exec_gui: "codex",
   codex_app_server: "codex",
   gemini_gui: "gemini",
-  gemini_test: "gemini",
+  gemini_test: "gemini_test",
   hermes_gui: "hermes",
 };
 
@@ -656,7 +656,7 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   codex_app_server: "codex",
   codex_config: "codex",
   gemini_gui: "gemini",
-  gemini_test: "gemini",
+  gemini_test: "gemini_test",
   gemini_config: "gemini",
   hermes_gui: "hermes",
 };
@@ -2251,7 +2251,7 @@ function DemoLanding() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : selectedProvider === "gemini"
+        : selectedProvider === "gemini" || selectedProvider === "gemini_test"
           ? GEMINI_MODELS
           : [];
   const demoModelApplies = demoInteraction === "gui" && demoModelOptions.length > 0;
@@ -2260,7 +2260,7 @@ function DemoLanding() {
       ? demoClaudeModelId
       : selectedProvider === "codex"
         ? demoCodexModelId
-        : selectedProvider === "gemini"
+        : selectedProvider === "gemini" || selectedProvider === "gemini_test"
           ? demoGeminiModelId
           : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
   const terminalLines = selected
@@ -2551,7 +2551,7 @@ function DemoLanding() {
                               onClick={() => {
                                 if (selectedProvider === "anthropic") setDemoClaudeModelId(model.id);
                                 if (selectedProvider === "codex") setDemoCodexModelId(model.id);
-                                if (selectedProvider === "gemini") setDemoGeminiModelId(model.id);
+                                if (selectedProvider === "gemini" || selectedProvider === "gemini_test") setDemoGeminiModelId(model.id);
                               }}
                               aria-pressed={modelSelected}
                             >
@@ -15112,7 +15112,7 @@ export function App() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : selectedProvider === "gemini"
+        : selectedProvider === "gemini" || selectedProvider === "gemini_test"
           ? GEMINI_MODELS
           : [];
   const homeModelApplies = defaultInteraction === "gui" && homeModelOptions.length > 0;
@@ -15121,7 +15121,7 @@ export function App() {
       ? runPrefs.claudeModelId
       : selectedProvider === "codex"
         ? runPrefs.codexModelId
-        : selectedProvider === "gemini"
+        : selectedProvider === "gemini" || selectedProvider === "gemini_test"
           ? runPrefs.geminiModelId
           : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
   const selectedHomeEffortId =
@@ -15637,7 +15637,7 @@ export function App() {
                                   setRunPref("claudeModelId", model.id);
                                 } else if (selectedProvider === "codex") {
                                   setRunPref("codexModelId", model.id);
-                                } else if (selectedProvider === "gemini") {
+                                } else if (selectedProvider === "gemini" || selectedProvider === "gemini_test") {
                                   setRunPref("geminiModelId", model.id);
                                 }
                               }}
