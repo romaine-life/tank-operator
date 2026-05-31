@@ -76,6 +76,7 @@ RUN apk add --no-cache \
         jq \
         less \
         make \
+        openssh-client \
         py3-pip \
         python3 \
         ripgrep \
