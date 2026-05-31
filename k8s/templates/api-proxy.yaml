@@ -762,6 +762,27 @@ data:
                                 - header:
                                     key: "content-type"
                                     value: "application/json"
+                            - match: { path: "/v1internal:retrieveUserQuota" }
+                              direct_response:
+                                status: 200
+                                body:
+                                  inline_string: '{"quotas":[]}'
+                              response_headers_to_add:
+                                - header:
+                                    key: "content-type"
+                                    value: "application/json"
+                            - match: { path: "/v1internal:generateContent" }
+                              route:
+                                cluster: gemini_api
+                                prefix_rewrite: "/v1beta/models/gemini-2.5-pro:generateContent"
+                                timeout: 600s
+                                auto_host_rewrite: true
+                            - match: { path: "/v1internal:streamGenerateContent" }
+                              route:
+                                cluster: gemini_api
+                                prefix_rewrite: "/v1beta/models/gemini-2.5-pro:streamGenerateContent"
+                                timeout: 600s
+                                auto_host_rewrite: true
                             - match: { prefix: "/" }
                               route:
                                 cluster: gemini_api
