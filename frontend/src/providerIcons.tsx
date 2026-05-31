@@ -1,10 +1,10 @@
 type ProviderIconProps = {
-  provider: "anthropic" | "codex" | "hermes" | "pi" | "gemini";
+  provider: "anthropic" | "codex" | "hermes" | "pi" | "gemini" | "gemini_test";
   className?: string;
 };
 
 const ICONS: Record<
-  Exclude<ProviderIconProps["provider"], "codex">,
+  Exclude<ProviderIconProps["provider"], "codex" | "gemini_test">,
   { path: string; viewBox: string; fill: string }
 > = {
   anthropic: {
@@ -30,7 +30,8 @@ const ICONS: Record<
 };
 
 export function ProviderIcon({ provider, className }: ProviderIconProps) {
-  if (provider === "codex") {
+  const resolvedProvider = provider === "gemini_test" ? "gemini" : provider;
+  if (resolvedProvider === "codex") {
     return (
       <img
         className={className}
@@ -42,7 +43,7 @@ export function ProviderIcon({ provider, className }: ProviderIconProps) {
     );
   }
 
-  const icon = ICONS[provider];
+  const icon = ICONS[resolvedProvider as Exclude<ProviderIconProps["provider"], "codex" | "gemini_test">];
 
   return (
     <svg
