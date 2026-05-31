@@ -84,6 +84,10 @@ var (
 		Name: "tank_session_event_timeline_request_total",
 		Help: "GET /timeline requests labeled by anchor shape the SPA chose.",
 	}, []string{"anchor"})
+	sessionTranscriptInvisibleReadsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_transcript_invisible_row_reads_total",
+		Help: "Authorized transcript-history reads requested against sessions rows whose sidebar visibility is false.",
+	})
 	sessionEventStreamEmittedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_session_event_stream_emitted_total",
 		Help: "Projected transcript-row batches emitted to a connected SSE consumer.",
@@ -1470,6 +1474,10 @@ func recordSessionEventTimelineFailure() {
 // shape the SPA chose. Centralized so the label set stays disciplined.
 func recordSessionEventTimelineRequest(anchor string) {
 	sessionEventTimelineRequestTotal.WithLabelValues(anchor).Inc()
+}
+
+func recordSessionTranscriptInvisibleRead() {
+	sessionTranscriptInvisibleReadsTotal.Inc()
 }
 
 func recordSessionEventPersistSchemaRejected() {

@@ -100,6 +100,25 @@ func adminTestServer(t *testing.T) *appServer {
 	}
 }
 
+func registryOnlyAuthTestServer(t *testing.T, records ...sessionmodel.SessionRecord) *appServer {
+	t.Helper()
+	registry := newTestSessionRegistry(records...)
+	return &appServer{
+		verifier: auth.NewVerifier(testJWT(t)),
+		mgr: sessions.NewManager(
+			fake.NewSimpleClientset(),
+			nil,
+			sessionmodel.SessionsNamespace,
+			registry,
+			nil,
+			sessions.ManagerOptions{},
+		),
+		sessionEvents: store.StubSessionEventStore{},
+		readStates:    store.NewStubConversationReadStateStore(),
+		sessionScope:  prodSessionScope,
+	}
+}
+
 type fakeStreamAuthTicketStore struct {
 	created          pgstore.StreamAuthTicket
 	validateToken    string
@@ -255,6 +274,19 @@ func (r *testSessionRegistry) Get(_ context.Context, owner, sessionID string) (s
 	}
 	record, ok := records[sessionID]
 	return record, ok, nil
+}
+
+func (r *testSessionRegistry) OwnerForSession(_ context.Context, scope, sessionID string) (string, error) {
+	scope = normalizeSessionScope(scope)
+	for owner, records := range r.records {
+		if record, ok := records[sessionID]; ok {
+			recordScope := normalizeSessionScope(record.Scope)
+			if recordScope == scope {
+				return owner, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 func (r *testSessionRegistry) NextSessionID(_ context.Context) (string, error) {
@@ -433,6 +465,104 @@ func TestAuthorizeSessionRead_ServiceActorCrossUserReturns404(t *testing.T) {
 	}
 	if err == nil || err.Error() == otherUser {
 		t.Fatalf("error should not leak owner email; got %q", err)
+	}
+}
+
+func TestAuthorizeSessionRead_InvisibleRegistryRowStillHiddenFromGeneralRead(t *testing.T) {
+	app := registryOnlyAuthTestServer(t, sessionmodel.SessionRecord{
+		ID:      "71",
+		Email:   otherUser,
+		Scope:   prodSessionScope,
+		Mode:    sessionmodel.CodexGUIMode,
+		Visible: false,
+		Status:  "Failed",
+	})
+	user := auth.User{Email: otherUser, Role: auth.RoleUser}
+
+	_, status, err := app.authorizeSessionReadInScope(context.Background(), user, "71", prodSessionScope)
+	if status != http.StatusNotFound {
+		t.Fatalf("general read status=%d err=%v, want 404", status, err)
+	}
+}
+
+func TestAuthorizeSessionTranscriptRead_OwnerCanReadInvisibleRegistryRow(t *testing.T) {
+	app := registryOnlyAuthTestServer(t, sessionmodel.SessionRecord{
+		ID:      "71",
+		Email:   otherUser,
+		Scope:   prodSessionScope,
+		Mode:    sessionmodel.CodexGUIMode,
+		Visible: false,
+		Status:  "Failed",
+	})
+	user := auth.User{Email: otherUser, Role: auth.RoleUser}
+
+	info, status, err := app.authorizeSessionTranscriptReadInScope(context.Background(), user, "71", prodSessionScope)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("transcript read status=%d err=%v", status, err)
+	}
+	if info.ID != "71" || info.Owner != otherUser || info.Status != "Failed" {
+		t.Fatalf("transcript info = %+v", info)
+	}
+}
+
+func TestAuthorizeSessionTranscriptRead_ServiceActorOwnInvisibleRowAllowed(t *testing.T) {
+	app := registryOnlyAuthTestServer(t, sessionmodel.SessionRecord{
+		ID:      "71",
+		Email:   otherUser,
+		Scope:   prodSessionScope,
+		Mode:    sessionmodel.CodexGUIMode,
+		Visible: false,
+		Status:  "Failed",
+	})
+	user := auth.User{
+		Email:      "pod-71@service.tank.romaine.life",
+		Role:       auth.RoleService,
+		ActorEmail: otherUser,
+	}
+
+	info, status, err := app.authorizeSessionTranscriptReadInScope(context.Background(), user, "71", prodSessionScope)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("service transcript read status=%d err=%v", status, err)
+	}
+	if info.Owner != otherUser {
+		t.Fatalf("service transcript owner = %q, want %q", info.Owner, otherUser)
+	}
+}
+
+func TestAuthorizeSessionTranscriptRead_InvisibleCrossUserMasked(t *testing.T) {
+	app := registryOnlyAuthTestServer(t, sessionmodel.SessionRecord{
+		ID:      "71",
+		Email:   otherUser,
+		Scope:   prodSessionScope,
+		Mode:    sessionmodel.CodexGUIMode,
+		Visible: false,
+		Status:  "Failed",
+	})
+	user := auth.User{Email: "intruder@example.com", Role: auth.RoleUser}
+
+	_, status, err := app.authorizeSessionTranscriptReadInScope(context.Background(), user, "71", prodSessionScope)
+	if status != http.StatusNotFound {
+		t.Fatalf("cross-user transcript status=%d err=%v, want 404", status, err)
+	}
+}
+
+func TestAuthorizeSessionTranscriptRead_AdminCanReadInvisibleCrossUserRow(t *testing.T) {
+	app := registryOnlyAuthTestServer(t, sessionmodel.SessionRecord{
+		ID:      "71",
+		Email:   otherUser,
+		Scope:   prodSessionScope,
+		Mode:    sessionmodel.CodexGUIMode,
+		Visible: false,
+		Status:  "Failed",
+	})
+	user := auth.User{Email: adminEmail, Role: auth.RoleAdmin}
+
+	info, status, err := app.authorizeSessionTranscriptReadInScope(context.Background(), user, "71", prodSessionScope)
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("admin transcript status=%d err=%v", status, err)
+	}
+	if info.Owner != otherUser || info.ID != "71" {
+		t.Fatalf("admin transcript info = %+v", info)
 	}
 }
 

@@ -204,13 +204,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// memory/feedback_no_devtools_build_surfaces_instead.md.
 	mux.HandleFunc("GET /api/debug/session-event-streams", s.handleDebugSessionEventStreams)
 	// Admin-only audit surface for the durable session_events ledger.
-	// Bypasses the registry visibility gate so a deleted session's
-	// chat is reachable via curl + bot token — closes the gap that
-	// would otherwise force an un-soft-delete write or a one-off psql
-	// pod just to pick up a codex agent's prior conversation. Pairs
-	// with /api/debug/session-list-state for invisible-session lookup
-	// and with the avatar-upload-attempts surface as the existing
-	// "admin debug counterpart to a user-facing read" template.
+	// The projected transcript/message-link paths are the normal
+	// owner-readable pickup flow, including visible=false sidebar
+	// tombstones; this raw-ledger surface is for audit/debug detail
+	// when the projection is not enough.
 	mux.HandleFunc("GET /api/debug/session-event-ledger", s.handleDebugSessionEventLedger)
 	// Admin-only debug surface for the durable conversation_read_state
 	// cursor + sessions.activity_summary view. Pairs with the

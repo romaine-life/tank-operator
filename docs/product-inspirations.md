@@ -53,7 +53,9 @@ state is separate from work state.
 - Transcript deep links resolve through the durable conversation ledger. A
   copied message URL may name the rendered transcript `timeline_id`, but the
   server translates it to an `order_key` and returns a bounded page around
-  that persisted cursor; the browser DOM is never the source of truth.
+  that persisted cursor; the browser DOM is never the source of truth. Sidebar
+  visibility is not a transcript-history boundary: if the durable session row
+  and ledger remain, owned/admin copied links stay resolvable.
 - Work delivery should use a real command/event fabric. Browser polling,
   process memory fanout, and database polling are not the normal live path for
   app-managed GUI chat.

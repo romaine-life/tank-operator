@@ -49,7 +49,7 @@ func (s *appServer) handleListSessionEvents(w http.ResponseWriter, r *http.Reque
 }
 
 func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, user auth.User, sessionID, sessionScope string) (map[string]any, int, error) {
-	info, status, err := s.authorizeSessionReadInScope(ctx, user, sessionID, sessionScope)
+	info, status, err := s.authorizeSessionTranscriptReadInScope(ctx, user, sessionID, sessionScope)
 	if err != nil {
 		return nil, status, err
 	}
@@ -116,7 +116,7 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		writeError(w, status, scopeErr.Error())
 		return
 	}
-	if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
+	if _, status, err := s.authorizeSessionTranscriptReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
 		writeError(w, status, err.Error())
 		return
 	}

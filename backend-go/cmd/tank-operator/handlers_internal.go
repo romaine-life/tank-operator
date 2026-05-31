@@ -307,6 +307,9 @@ func (s *appServer) handleInternalSessionCapabilities(w http.ResponseWriter, r *
 //   - role=service may read only sessions whose owner == actor_email; a
 //     super-admin service token additionally inherits the admin cross-user
 //     read already documented on authorizeSessionRead.
+//   - copied transcript/history reads intentionally ignore sessions.visible:
+//     visible=false is a sidebar tombstone, while the session_events ledger
+//     remains durable and owner-readable.
 //   - a cross-user or missing session collapses to 404 so the surface does
 //     not leak the existence of sessions the caller can't read.
 //
