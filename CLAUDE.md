@@ -56,6 +56,8 @@ the test directly proves the contract invariant. Do not mark a PR ready, ask
 for merge, or merge it yourself when the Feature Contracts section is missing
 or incomplete.
 
+Always wait for all CI checks/tests to complete successfully on GitHub before merging a PR. Merging a PR before checks finish will break the image build/tagging workflow on main.
+
 When adding or substantially changing named product behavior, check whether the
 relevant feature folder needs a `capabilities.md` entry. Capability ledgers are
 for behavior a future agent should be able to name, audit, or retire without
