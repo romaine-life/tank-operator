@@ -631,6 +631,7 @@ spec:
     - generativelanguage.googleapis.com
     - oauth2.googleapis.com
     - www.googleapis.com
+    - cloudcode-pa.googleapis.com
   issuerRef:
     name: claude-oauth-ca-issuer
     kind: Issuer
@@ -739,6 +740,15 @@ data:
                                 status: 200
                                 body:
                                   inline_string: '{"email":"fullnelsongrip@gmail.com","email_verified":true}'
+                              response_headers_to_add:
+                                - header:
+                                    key: "content-type"
+                                    value: "application/json"
+                            - match: { path: "/v1internal:loadCodeAssist" }
+                              direct_response:
+                                status: 200
+                                body:
+                                  inline_string: '{"currentTier":{"id":"standard","name":"Standard","hasOnboardedPreviously":true},"cloudaicompanionProject":"dummy-project"}'
                               response_headers_to_add:
                                 - header:
                                     key: "content-type"
