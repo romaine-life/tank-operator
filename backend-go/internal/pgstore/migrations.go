@@ -950,6 +950,22 @@ var schemaMigrations = []migration{
 	)`},
 	{ID: "0077", SQL: `CREATE INDEX IF NOT EXISTS provider_credential_health_status
 		ON provider_credential_health (status, provider)`},
+
+	// discovered_repos is the durable set of "owner/name" GitHub slugs a
+	// session's pod actually had checked out under /workspace, observed
+	// at runtime by the workspace-repo-reporter sidecar loop. It is
+	// distinct from `repos` (migration 0035): `repos` is the user's
+	// write-once selection at create time that drives the repo-cloner
+	// init container ("intent"); discovered_repos is the reporter's
+	// monotonic union of remotes it found in the workspace ("reality"),
+	// which also captures repos the agent cloned on demand mid-session
+	// (the "agent will mint clone tokens on demand at runtime" shape
+	// 0035 called out as having no durable record). Both ride the
+	// session row payload; the sidebar search/chips union them. Empty
+	// array means "nothing observed yet", matching the create-time
+	// default for a session whose reporter hasn't reported.
+	{ID: "0078", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS discovered_repos text[] NOT NULL DEFAULT '{}'`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

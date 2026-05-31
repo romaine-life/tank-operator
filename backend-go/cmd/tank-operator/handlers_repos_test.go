@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strconv"
 	"strings"
 	"testing"
 
@@ -110,6 +111,80 @@ func TestValidateRepoSlugs(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestNormalizeDiscoveredRepoSlugs locks the runtime-report boundary. Unlike
+// validateRepoSlugs (create-time, reject-the-request semantics), this drops
+// bad entries and keeps the good ones so a single weird remote can't wedge
+// the best-effort reporter, and it caps the set as an abuse bound.
+func TestNormalizeDiscoveredRepoSlugs(t *testing.T) {
+	cases := []struct {
+		name        string
+		in          []string
+		wantOut     []string
+		wantDropped int
+	}{
+		{
+			name:    "empty stays empty",
+			in:      nil,
+			wantOut: []string{},
+		},
+		{
+			name:    "valid slugs preserve order",
+			in:      []string{"nelsong6/tank-operator", "nelsong6/glimmung"},
+			wantOut: []string{"nelsong6/tank-operator", "nelsong6/glimmung"},
+		},
+		{
+			name:    "whitespace trimmed",
+			in:      []string{"  owner/repo  "},
+			wantOut: []string{"owner/repo"},
+		},
+		{
+			name:    "case-insensitive dedup, first-seen wins, not counted as dropped",
+			in:      []string{"NelsonG6/Tank-Operator", "nelsong6/tank-operator"},
+			wantOut: []string{"NelsonG6/Tank-Operator"},
+		},
+		{
+			name:        "malformed entries dropped, valid kept",
+			in:          []string{"owner/good", "https://github.com/o/r", "../bad", "", "owner/good2"},
+			wantOut:     []string{"owner/good", "owner/good2"},
+			wantDropped: 3,
+		},
+		{
+			name:        "credential-bearing junk dropped",
+			in:          []string{"x-access-token:secret@github.com/o/r"},
+			wantOut:     []string{},
+			wantDropped: 1,
+		},
+		{
+			name: "over cap drops the excess",
+			in: func() []string {
+				in := make([]string, 0, maxDiscoveredReposPerSession+3)
+				for i := 0; i < maxDiscoveredReposPerSession+3; i++ {
+					in = append(in, "owner/repo"+strconv.Itoa(i))
+				}
+				return in
+			}(),
+			wantDropped: 3,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, dropped := normalizeDiscoveredRepoSlugs(tc.in)
+			if dropped != tc.wantDropped {
+				t.Fatalf("dropped = %d, want %d", dropped, tc.wantDropped)
+			}
+			if tc.name == "over cap drops the excess" {
+				if len(out) != maxDiscoveredReposPerSession {
+					t.Fatalf("len(out) = %d, want %d (cap)", len(out), maxDiscoveredReposPerSession)
+				}
+				return
+			}
+			if !stringSliceEqual(out, tc.wantOut) {
+				t.Fatalf("out = %v, want %v", out, tc.wantOut)
 			}
 		})
 	}

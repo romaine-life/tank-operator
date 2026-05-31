@@ -122,6 +122,55 @@ func validateRepoSlugs(raw []string) ([]string, error) {
 	return out, nil
 }
 
+// maxDiscoveredReposPerSession bounds how many distinct runtime-observed
+// repo slugs we fold into sessions.discovered_repos. Unlike the create-
+// time selection (capped at maxReposPerSession = 5, a deliberate
+// clone-cost ceiling), discovered repos reflect whatever the agent
+// actually checked out under /workspace, which can legitimately exceed 5
+// for a multi-repo task. The cap is purely an abuse bound on a
+// service-principal-authenticated best-effort reporter, so it sits well
+// above any realistic workspace.
+const maxDiscoveredReposPerSession = 64
+
+// normalizeDiscoveredRepoSlugs validates and dedups the runtime-observed
+// slug list reported by the pod-side workspace-repo-reporter. Returns the
+// normalized slice (trimmed, valid-only, deduped case-insensitively with
+// first-seen casing preserved, capped) plus the count of entries dropped
+// for being malformed or over the cap.
+//
+// Unlike validateRepoSlugs (the create-time handler boundary, which
+// rejects the whole request on a bad slug), this drops bad entries and
+// keeps the good ones: the reporter is a best-effort background loop, and
+// failing its POST on one weird remote (a non-GitHub fork, a detached
+// worktree) would stall every subsequent report behind a retry. The
+// dropped count feeds a counter so a systematically-bad reporter is still
+// visible.
+func normalizeDiscoveredRepoSlugs(raw []string) (slugs []string, dropped int) {
+	if len(raw) == 0 {
+		return []string{}, 0
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, slug := range raw {
+		trimmed := strings.TrimSpace(slug)
+		if trimmed == "" || !repoSlugPattern.MatchString(trimmed) {
+			dropped++
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		if len(out) >= maxDiscoveredReposPerSession {
+			dropped++
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out, dropped
+}
+
 // recentRepoLimit caps the recent-repos response size. Picked to
 // roughly fill the picker's "Recent" section on screen without
 // crowding the search list.

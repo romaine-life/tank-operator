@@ -1,7 +1,9 @@
 package sessioncontroller
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
@@ -75,5 +77,52 @@ func TestPublishCurrentRowWakesTranscriptStream(t *testing.T) {
 	}
 	if want := sessionmodel.SessionStorageKey("team-a", "42"); publisher.wakes[0] != want {
 		t.Fatalf("event wake storage key = %q, want %q", publisher.wakes[0], want)
+	}
+}
+
+// TestMarshalRowUpdateIncludesDiscoveredRepos locks the live-wire contract
+// for the new field: discovered_repos rides every row-update payload, and —
+// like repos — serializes as an empty array (never null/absent) so the SPA
+// never has to distinguish "field missing" from "no repos observed". This
+// is what lets the sidebar chips/filter converge from the SSE stream without
+// a refresh (Session Bar contract: status converges without reload).
+func TestMarshalRowUpdateIncludesDiscoveredRepos(t *testing.T) {
+	payload, err := MarshalRowUpdate(sessionmodel.SessionRecord{
+		ID:              "7",
+		Email:           "u@example.com",
+		Mode:            sessionmodel.ClaudeGUIMode,
+		Scope:           "default",
+		Visible:         true,
+		Status:          "Active",
+		Repos:           []string{"nelsong6/tank-operator"},
+		DiscoveredRepos: []string{"nelsong6/glimmung", "nelsong6/auth"},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	var wire struct {
+		Row struct {
+			Repos           []string `json:"repos"`
+			DiscoveredRepos []string `json:"discovered_repos"`
+		} `json:"row"`
+	}
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(wire.Row.DiscoveredRepos) != 2 ||
+		wire.Row.DiscoveredRepos[0] != "nelsong6/glimmung" ||
+		wire.Row.DiscoveredRepos[1] != "nelsong6/auth" {
+		t.Fatalf("discovered_repos = %v, want the two reported slugs", wire.Row.DiscoveredRepos)
+	}
+
+	// nil DiscoveredRepos must still serialize as [] on the wire.
+	emptyPayload, err := MarshalRowUpdate(sessionmodel.SessionRecord{
+		ID: "8", Email: "u@example.com", Mode: sessionmodel.ClaudeGUIMode, Scope: "default",
+	})
+	if err != nil {
+		t.Fatalf("marshal empty: %v", err)
+	}
+	if !bytes.Contains(emptyPayload, []byte(`"discovered_repos":[]`)) {
+		t.Fatalf("empty record must emit discovered_repos:[]; got %s", emptyPayload)
 	}
 }

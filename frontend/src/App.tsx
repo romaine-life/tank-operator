@@ -124,6 +124,11 @@ import {
   writeHomeSelectedRepos,
 } from "./homeRepos";
 import {
+  repoShortName,
+  sessionMatchesFilterFields,
+  sessionRepoSlugs,
+} from "./sessionRepos";
+import {
   composeAttachmentDisplayText,
   composeAttachmentPathText,
   labelAttachments,
@@ -574,6 +579,13 @@ interface Session {
   // clone_state is the per-repo repo-cloner init-container outcome.
   // Optional until the cloner writes back.
   clone_state?: Record<string, unknown> | null;
+  // discovered_repos is the durable set of owner/name slugs the pod's
+  // workspace-repo-reporter observed checked out under /workspace at
+  // runtime. Always an array on the wire (empty when nothing observed
+  // yet). Distinct from repos (the write-once create-time selection):
+  // this also captures repos the agent cloned on demand mid-session.
+  // The sidebar repo filter and chips union the two.
+  discovered_repos: string[];
   model?: string;
   effort?: string;
   runtime_model?: string;
@@ -725,6 +737,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
     repos: [],
+    discovered_repos: [],
     agent_avatar_id: demoAgentAvatarID(1),
   },
   {
@@ -738,6 +751,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
     repos: [],
+    discovered_repos: [],
     agent_avatar_id: demoAgentAvatarID(2),
   },
   {
@@ -751,6 +765,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 3 * 60 * 60 * 1000 + 85 * 1000).toISOString(),
     name: "Pi",
     repos: [],
+    discovered_repos: [],
     agent_avatar_id: demoAgentAvatarID(3),
   },
 ];
@@ -973,6 +988,7 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     ready_at: null,
     name: `${label} ${index}`,
     repos: [],
+    discovered_repos: [],
     agent_avatar_id: demoAgentAvatarID(index),
   };
 }
@@ -1083,6 +1099,9 @@ function normalizeSession(session: Session): Session {
   // array so downstream renderers can `.map` without a guard.
   next.repos = Array.isArray(session.repos) ? session.repos : [];
   next.clone_state = session.clone_state ?? null;
+  next.discovered_repos = Array.isArray(session.discovered_repos)
+    ? session.discovered_repos
+    : [];
   next.model = typeof session.model === "string" ? session.model : "";
   next.effort = typeof session.effort === "string" ? session.effort : "";
   next.runtime_model = typeof session.runtime_model === "string" ? session.runtime_model : "";
@@ -1390,6 +1409,22 @@ function sessionDisplayNameParts(session: Session): {
 
 function sessionDisplayName(session: Session): string {
   return sessionDisplayNameParts(session).value;
+}
+
+// sessionMatchesFilter reports whether a session matches the sidebar filter
+// query. `query` must already be trimmed and lowercased. The union/match
+// logic lives in ./sessionRepos (unit tested there); this thin wrapper
+// supplies the resolved display name the row already computes.
+function sessionMatchesFilter(session: Session, query: string): boolean {
+  return sessionMatchesFilterFields(
+    {
+      slugs: sessionRepoSlugs(session),
+      name: sessionDisplayName(session),
+      id: session.id,
+      mode: session.mode,
+    },
+    query,
+  );
 }
 
 function sessionListDebugRow(session: Session): SessionListDebugRow {
@@ -13065,6 +13100,11 @@ export function App() {
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
   const [appConfigLoaded, setAppConfigLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
+  // Sidebar filter query. Client-side only (per docs/session-list-redesign.md
+  // the filter is a view over the already-reconciled rows; it never touches
+  // sidebar_position / row_version or the durable snapshot). Matches repo
+  // slugs, display name, id, and mode — see sessionMatchesFilter.
+  const [sessionFilter, setSessionFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
@@ -13692,6 +13732,7 @@ export function App() {
       activity: undefined, // activities live in the parallel sessionActivities map
       repos: Array.isArray(row.repos) ? row.repos : [],
       clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
+      discovered_repos: Array.isArray(row.discovered_repos) ? row.discovered_repos : [],
       model: row.model ?? "",
       effort: row.effort ?? "",
       runtime_model: row.runtime_model ?? "",
@@ -13730,6 +13771,7 @@ export function App() {
       rollout_state: raw.rollout_state ?? undefined,
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
+      discovered_repos: Array.isArray(raw.discovered_repos) ? raw.discovered_repos.map(String) : [],
       model: typeof raw.model === "string" ? raw.model : undefined,
       effort: typeof raw.effort === "string" ? raw.effort : undefined,
       runtime_model: typeof raw.runtime_model === "string" ? raw.runtime_model : undefined,
@@ -15161,9 +15203,48 @@ export function App() {
               <span className="row-icon"><IconPlus /></span>
             </button>
           </div>
+          {!sidebarCollapsed && sessions.length > 0 && (
+            <div className="sidebar-filter">
+              <input
+                className="sidebar-filter-input"
+                type="text"
+                value={sessionFilter}
+                onChange={(e) => setSessionFilter(e.target.value)}
+                placeholder="filter by repo or name"
+                aria-label="filter sessions by repo, name, id, or mode"
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
+              />
+              {sessionFilter && (
+                <button
+                  className="sidebar-filter-clear"
+                  onClick={() => setSessionFilter("")}
+                  aria-label="clear filter"
+                  title="clear filter"
+                >
+                  <IconClose />
+                </button>
+              )}
+            </div>
+          )}
           <ul className="sessions">
-            {sessions.length === 0 && <li className="sessions-empty">no sessions</li>}
-            {sessions.map((s) => {
+            {(() => {
+              const q = sessionFilter.trim().toLowerCase();
+              const visible = q
+                ? sessions.filter((s) => sessionMatchesFilter(s, q))
+                : sessions;
+              if (sessions.length === 0) {
+                return <li className="sessions-empty">no sessions</li>;
+              }
+              if (visible.length === 0) {
+                return (
+                  <li className="sessions-empty">
+                    no sessions match “{sessionFilter.trim()}”
+                  </li>
+                );
+              }
+              return visible.map((s) => {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
@@ -15232,9 +15313,33 @@ export function App() {
                       </button>
                     )}
                   </div>
+                  {!sidebarCollapsed && (() => {
+                    const slugs = sessionRepoSlugs(s);
+                    if (slugs.length === 0) return null;
+                    const shown = slugs.slice(0, 3);
+                    const extra = slugs.length - shown.length;
+                    return (
+                      <div className="session-repos" aria-label="repos">
+                        {shown.map((slug) => (
+                          <span key={slug} className="session-repo-chip" title={slug}>
+                            {repoShortName(slug)}
+                          </span>
+                        ))}
+                        {extra > 0 && (
+                          <span
+                            className="session-repo-chip session-repo-more"
+                            title={slugs.join(", ")}
+                          >
+                            +{extra}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </li>
               );
-            })}
+              });
+            })()}
           </ul>
         </div>
 

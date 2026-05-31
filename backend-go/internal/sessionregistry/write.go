@@ -218,6 +218,38 @@ func (s *Store) SetCloneState(ctx context.Context, email, sessionID string, stat
 	return s.setJSONBColumn(ctx, "clone_state", "", email, sessionID, state)
 }
 
+// MergeDiscoveredRepos folds newly-observed "owner/name" slugs into the
+// row's discovered_repos text[] as a monotonic set union. Written by the
+// pod-side workspace-repo-reporter via the internal service-principal API
+// each time it observes a new GitHub remote under /workspace.
+//
+// The union is monotonic: a repo cloned then deleted mid-session still
+// counts as "this session worked on it" for later search, and a transient
+// scan that misses a repo never removes it. The `@>` containment guard
+// makes a report that adds nothing new a no-op — no row_version bump, no
+// SSE fan-out — so the reporter can poll on a tight loop without churning
+// the sidebar stream. Empty input is a no-op (callers normalize first).
+func (s *Store) MergeDiscoveredRepos(ctx context.Context, email, sessionID string, slugs []string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	sessionID = strings.TrimSpace(sessionID)
+	if normalized == "" || sessionID == "" || len(slugs) == 0 {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET discovered_repos = ARRAY(
+				SELECT DISTINCT e
+				FROM unnest(COALESCE(discovered_repos, '{}'::text[]) || $4::text[]) AS e
+			),
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+			AND NOT (COALESCE(discovered_repos, '{}'::text[]) @> $4::text[])
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, slugs)
+	return err
+}
+
 // SetHermesActiveRun stores the upstream Hermes run currently driving a
 // hermes_gui turn. Unlike most sidebar-state updates, a missing row is an
 // error: the bridge has already accepted the turn and needs to know whether
@@ -420,6 +452,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			rollout_state,
 			COALESCE(repos, '{}'::text[]),
 			clone_state,
+			COALESCE(discovered_repos, '{}'::text[]),
 			model,
 			effort,
 			runtime_model,
@@ -438,7 +471,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		name                                                  *string
 		visible                                               bool
 		activitySummary, testState, rolloutState, cloneState  []byte
-		repos                                                 []string
+		repos, discoveredRepos                                []string
 		model, effort, runtimeModel, runtimeEffort, runtimeAt string
 		agentAvatarID, systemAvatarID                         string
 		sidebarPosition, rowVersion                           int64
@@ -448,7 +481,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&requestedAt, &createdAt, &updatedAt,
 		&status, &readyAt, &terminatingAt,
 		&activitySummary, &testState, &rolloutState,
-		&repos, &cloneState, &model, &effort,
+		&repos, &cloneState, &discoveredRepos, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
 		&agentAvatarID, &systemAvatarID,
 		&sidebarPosition,
@@ -482,6 +515,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		RolloutState:        unmarshalJSONB(rolloutState),
 		Repos:               repos,
 		CloneState:          unmarshalJSONB(cloneState),
+		DiscoveredRepos:     discoveredRepos,
 		Model:               model,
 		Effort:              effort,
 		RuntimeModel:        runtimeModel,

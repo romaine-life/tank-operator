@@ -1101,6 +1101,67 @@ button:disabled {
   height: 1.6rem;
 }
 
+/* Sidebar session filter. A calm, dense control under the list head; the
+   match logic (repo slugs / name / id / mode) lives in sessionMatchesFilter.
+   Hidden in the collapsed sidebar (also gated in JSX). */
+.sidebar-filter {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 0 var(--space-2) var(--space-1);
+}
+
+.sidebar-filter-input {
+  flex: 1;
+  min-width: 0;
+  height: 1.7rem;
+  padding: 0 1.6rem 0 0.5rem;
+  font-family: var(--font-primary);
+  font-size: 12px;
+  color: var(--text-body);
+  background: var(--bg-sidebar-control);
+  border: none;
+  border-radius: var(--radius-sm);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04);
+  outline: none;
+  transition: background 120ms ease, box-shadow 120ms ease;
+}
+
+.sidebar-filter-input::placeholder {
+  color: var(--text-faint);
+}
+
+.sidebar-filter-input:focus {
+  background: var(--bg-sidebar-hover);
+  box-shadow: inset 0 0 0 1px rgba(79, 140, 247, 0.4);
+}
+
+.sidebar-filter-clear {
+  position: absolute;
+  right: 0.25rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.2rem;
+  height: 1.2rem;
+  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+}
+
+.sidebar-filter-clear:hover {
+  color: var(--text-body);
+  background: var(--bg-sidebar-hover);
+}
+
+.sidebar-filter-clear svg {
+  width: 0.8rem;
+  height: 0.8rem;
+}
+
+.sidebar.is-collapsed .sidebar-filter {
+  display: none;
+}
+
 /* + New session row — OWUI Sidebar.svelte:1064-1084.
    Transparent until hover, NOT a filled CTA. */
 .new-row {
@@ -1711,6 +1772,44 @@ button:disabled {
   padding-left: 62px;
   padding-right: 28px;
   z-index: 1;
+}
+
+/* Repo chips: the union of a session's create-time selection and the repos
+   its pod actually checked out (sessionRepoSlugs). Aligned under the status
+   row, muted so they read as metadata, not controls. Hidden when collapsed
+   (also gated in JSX). */
+.session-repos {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding-left: 62px;
+  padding-right: 28px;
+  margin-top: 2px;
+  z-index: 1;
+}
+
+.session-repo-chip {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 1px 6px;
+  font-family: var(--font-primary);
+  font-size: 10.5px;
+  line-height: 1.4;
+  color: var(--text-muted);
+  background: var(--bg-sidebar-control);
+  border-radius: var(--radius-pill);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+.session-repo-chip.session-repo-more {
+  color: var(--text-faint);
+}
+
+.sidebar.is-collapsed .session-repos {
+  display: none;
 }
 
 .sessions li:not(.is-closing):hover {

@@ -54,6 +54,15 @@ type Info struct {
 	// the cloner publishes its first state. Omitted from the wire when
 	// nil to keep the snapshot lean for the every-row today shape.
 	CloneState map[string]any `json:"clone_state,omitempty"`
+	// DiscoveredRepos is the durable set of "owner/name" slugs the
+	// workspace-repo-reporter observed checked out under /workspace at
+	// runtime (sessions.discovered_repos). Always present on the wire
+	// (empty array when nothing observed yet) so the sidebar search and
+	// repo chips can union it with Repos without special-casing
+	// "absent vs. empty". Distinct from Repos: Repos is the write-once
+	// create-time selection; this is observed reality, including repos
+	// the agent cloned on demand mid-session.
+	DiscoveredRepos []string `json:"discovered_repos"`
 	// RowVersion is the per-(owner, scope) monotonic cursor each
 	// sessions row carries (docs/session-list-redesign.md Phase 1).
 	// The SPA's SessionStore reads this to seed its EventSource
@@ -233,6 +242,10 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 	if repos == nil {
 		repos = []string{}
 	}
+	discoveredRepos := record.DiscoveredRepos
+	if discoveredRepos == nil {
+		discoveredRepos = []string{}
+	}
 	scope := strings.TrimSpace(record.Scope)
 	if scope == "" {
 		scope = "default"
@@ -252,6 +265,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		RolloutState:        record.RolloutState,
 		Repos:               repos,
 		CloneState:          record.CloneState,
+		DiscoveredRepos:     discoveredRepos,
 		RowVersion:          record.RowVersion,
 		SidebarPosition:     record.SidebarPosition,
 		Model:               record.Model,
@@ -323,7 +337,8 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		// source is the registry row, and any caller hitting this
 		// path is in degraded mode anyway. Default to empty so the
 		// wire shape stays consistent with infoFromRecord.
-		Repos: []string{},
+		Repos:           []string{},
+		DiscoveredRepos: []string{},
 	}
 }
 

@@ -36,6 +36,7 @@ type SessionRegistry interface {
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
+	MergeDiscoveredRepos(ctx context.Context, email, sessionID string, slugs []string) error
 	Reorder(ctx context.Context, email string, orderedIDs []string) ([]string, error)
 	MarkDeleted(ctx context.Context, email, sessionID string) error
 }
@@ -675,6 +676,24 @@ func (m *Manager) SetRolloutState(ctx context.Context, owner, sessionID string, 
 func (m *Manager) SetCloneState(ctx context.Context, owner, sessionID string, state map[string]any) (Info, error) {
 	if m.registry != nil {
 		if err := m.registry.SetCloneState(ctx, owner, sessionID, state); err != nil {
+			return Info{}, err
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// MergeDiscoveredRepos folds runtime-observed repo slugs into the
+// session's durable discovered_repos set and publishes the updated row
+// to the sidebar stream. Like SetCloneState it does not touch pod
+// annotations: discovered_repos is a durable search/reporting surface,
+// not runtime input for a live container. A merge that adds nothing new
+// is a registry no-op (see Store.MergeDiscoveredRepos); we still publish
+// the current row so a reconnecting client converges, but the row_version
+// only advances when the set actually grew.
+func (m *Manager) MergeDiscoveredRepos(ctx context.Context, owner, sessionID string, slugs []string) (Info, error) {
+	if m.registry != nil {
+		if err := m.registry.MergeDiscoveredRepos(ctx, owner, sessionID, slugs); err != nil {
 			return Info{}, err
 		}
 	}

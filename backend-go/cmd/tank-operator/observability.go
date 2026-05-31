@@ -435,6 +435,44 @@ var sessionReposSelectedTotal = promauto.NewCounterVec(
 	[]string{"count_bucket"},
 )
 
+// sessionDiscoveredReposReportedTotal counts pod-side workspace-repo-reporter
+// POSTs to the discovered-repos endpoint, labeled by bounded outcome:
+//
+//   - merged   — at least one new slug folded into discovered_repos
+//   - noop      — all reported slugs were already recorded (the common
+//                 steady-state: the reporter polls but the workspace
+//                 hasn't changed)
+//   - empty     — the report carried no valid slugs after normalization
+//   - error     — the registry write failed
+//
+// Bounded to 4 series. The "merged vs noop" split is the operational
+// signal: a healthy reporter is mostly noop with occasional merges when
+// the agent clones something; a flood of merges means slugs are churning
+// (a casing/normalization bug re-adding the same repo). Which repos /
+// which users is recoverable from the DB, so it stays out of labels per
+// the docs/observability.md cardinality rules.
+var sessionDiscoveredReposReportedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_discovered_repos_reported_total",
+		Help: "Pod-side discovered-repos reports, labeled by bounded outcome (merged|noop|empty|error).",
+	},
+	[]string{"result"},
+)
+
+func recordDiscoveredReposReport(result string) {
+	sessionDiscoveredReposReportedTotal.WithLabelValues(result).Inc()
+}
+
+// sessionDiscoveredReposDroppedTotal counts individual slugs the
+// discovered-repos endpoint dropped during normalization (malformed or
+// over the per-session cap). Steady-state expectation is zero; a non-zero
+// rate means a reporter is emitting junk remotes and the pod-side parser
+// or the slug contract needs a look.
+var sessionDiscoveredReposDroppedTotal = promauto.NewCounter(prometheus.CounterOpts{
+	Name: "tank_session_discovered_repos_dropped_total",
+	Help: "Reported discovered-repo slugs dropped during normalization (malformed or over cap).",
+})
+
 var sessionRuntimeConfigUpdateTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_session_runtime_config_update_total",
