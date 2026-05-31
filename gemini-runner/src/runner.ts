@@ -70,10 +70,11 @@ export class Runner {
   }
 
   async run(signal: AbortSignal): Promise<void> {
-    // Ensure settings.json exists to configure oauth-personal auth selectedType
+    // Ensure settings.json and oauth_creds.json exist to configure oauth-personal auth
     try {
       const gDir = join(homedir(), ".gemini");
       mkdirSync(gDir, { recursive: true });
+      
       const settingsPath = join(gDir, "settings.json");
       writeFileSync(
         settingsPath,
@@ -87,8 +88,23 @@ export class Runner {
         { mode: 0o600 }
       );
       console.log("Runner ensured settings.json is written to:", settingsPath);
+
+      const credsPath = join(gDir, "oauth_creds.json");
+      writeFileSync(
+        credsPath,
+        JSON.stringify({
+          access_token: "managed-by-tank-operator",
+          refresh_token: "managed-by-tank-operator",
+          scope: "https://www.googleapis.com/auth/cloud-platform openid https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/userinfo.email",
+          token_type: "Bearer",
+          id_token: "eyJhbGciOiJSUzI1NiIsImtpZCI6IjA2YzdjNDc2NzliODA4ZmNlZGY3MzkxZDdiMWUzNjU3YmNhMzBkYmIiLCJ0eXAiOiJKV1QifQ.eyJpc3MiOiJodHRwczovL2FjY291bnRzLmdvb2dsZS5jb20iLCJhenAiOiI2ODEyNTU4MDkzOTUtb284ZnQyb3ByZHJucDllM2FxZjZhdjNobWRpYjEzNWouYXBwcy5nb29nbGV1c2VyY29udGVudC5jb20iLCJhdWQiOiI2ODEyNTU4MDkzOTUtb284ZnQyb3ByZHJucDllM2FxZjZhdjNobWRpYjEzNWouYXBwcy5nb29nbGV1c2VyY29udGVudC5jb20iLCJzdWIiOiIxMTM0ODIwNTYxMTIzMTA2Mzc5NjIiLCJlbWFpbCI6ImZ1bGxuZWxzb25ncmlwQGdtYWlsLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJpYXQiOjE3ODAyMTEwMzQsImV4cCI6OTk5OTk5OTk5OX0.dummy-signature",
+          expiry_date: 9999999999000
+        }, null, 2),
+        { mode: 0o600 }
+      );
+      console.log("Runner ensured oauth_creds.json is written to:", credsPath);
     } catch (err) {
-      console.error("Failed to write settings.json:", err);
+      console.error("Failed to write gemini config files:", err);
     }
 
     const stopConsumer = this.startCommandConsumer(signal);
