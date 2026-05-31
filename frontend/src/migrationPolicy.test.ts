@@ -279,15 +279,23 @@ test("historical transcript bootstrap requires server-projected turn activity", 
   assert.equal(appSource.includes("before_order_key"), false);
   assert.equal(appSource.includes("min_transcript_entries"), false);
   assert.equal(appSource.includes("SDK_TIMELINE_TAIL_EVENT_LIMIT"), false);
+  assert.equal(appSource.includes("turnActivityRequestPathForPane(trimmedTurnId)"), true);
   assert.match(
     appSource,
-    /\/turns\/\$\{encodeURIComponent\(trimmedTurnId\)\}\/activity/,
-  );
-  assert.match(
-    appSource,
-    /authedFetch\(\s*scopedSessionPathForPane\([\s\S]{0,220}\/turns\/\$\{encodeURIComponent\(trimmedTurnId\)\}\/activity/,
+    /\/api\/public\/message-links\/\$\{encodeURIComponent\(publicShareTokenValue\)\}\/turns\/\$\{encodeURIComponent\(turnId\)\}\/activity/,
   );
   assert.equal(appSource.includes('kind !== "turn_activity"'), true);
+});
+
+test("public message links render a read-only unauthenticated transcript shell", () => {
+  assert.equal(appSource.includes("readInitialPublicMessageLinkRoute"), true);
+  assert.equal(appSource.includes("function PublicMessageLinkApp"), true);
+  assert.equal(appSource.includes("/api/public/message-links/"), true);
+  assert.equal(appSource.includes("publicShareToken={route.token}"), true);
+  assert.equal(appSource.includes('composerVisible={activeTab === "chat" && !publicView}'), true);
+  assert.equal(appSource.includes("{!publicView && ("), true);
+  assert.equal(indexCssSource.includes(".shell.public-share-shell"), true);
+  assert.equal(indexCssSource.includes("grid-template-columns: minmax(0, 1fr);"), true);
 });
 
 test("server-projected active turn activity shells own thinking row active state", () => {
@@ -652,7 +660,7 @@ test("files tab is gated until the session container is available", () => {
 });
 
 test("read-only cross-scope sessions keep an explicit composer affordance", () => {
-  assert.match(appSource, /composerVisible=\{activeTab === "chat"\}/);
+  assert.match(appSource, /composerVisible=\{activeTab === "chat" && !publicView\}/);
   assert.equal(
     appSource.includes("Production sessions are read-only in this test slot"),
     true,

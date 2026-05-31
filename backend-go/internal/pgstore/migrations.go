@@ -951,21 +951,38 @@ var schemaMigrations = []migration{
 	{ID: "0077", SQL: `CREATE INDEX IF NOT EXISTS provider_credential_health_status
 		ON provider_credential_health (status, provider)`},
 
-	// discovered_repos is the durable set of "owner/name" GitHub slugs a
-	// session's pod actually had checked out under /workspace, observed
-	// at runtime by the workspace-repo-reporter sidecar loop. It is
-	// distinct from `repos` (migration 0035): `repos` is the user's
-	// write-once selection at create time that drives the repo-cloner
-	// init container ("intent"); discovered_repos is the reporter's
-	// monotonic union of remotes it found in the workspace ("reality"),
-	// which also captures repos the agent cloned on demand mid-session
-	// (the "agent will mint clone tokens on demand at runtime" shape
-	// 0035 called out as having no durable record). The field rides the
-	// session row/API payload for operational querying. Empty array means
-	// "nothing observed yet", matching the create-time
-	// default for a session whose reporter hasn't reported.
+	// discovered_repos was applied to production under migration 0078 before
+	// the feature branch that introduced it was reverted from main. Keep this
+	// immutable SQL here so the durable migration ledger continues to match.
 	{ID: "0078", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS discovered_repos text[] NOT NULL DEFAULT '{}'`},
+
+	// Per-session capability opt-ins. Empty array is the default pod surface;
+	// named values are rare create-time capabilities such as spirelens_mcp.
+	// The list is persisted on the row so the pod manifest is not the only
+	// place to inspect why a session joined extra infrastructure.
+	{ID: "0079", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS capabilities text[] NOT NULL DEFAULT '{}'`},
+
+	// message_link_shares stores durable bearer grants created by the
+	// authenticated "copy link to message" action. Session ids are
+	// monotonic and transcript timeline ids are not secrets, so public
+	// unauthenticated transcript reads must validate one of these opaque
+	// tokens instead of treating ?session=&message= as authority.
+	{ID: "0080", SQL: `CREATE TABLE IF NOT EXISTS message_link_shares (
+		token_hash      text PRIMARY KEY,
+		created_by      text NOT NULL,
+		owner_email     text NOT NULL,
+		session_scope   text NOT NULL,
+		session_id      text NOT NULL,
+		timeline_id     text NOT NULL,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		last_used_at    timestamptz,
+		revoked_at      timestamptz
+	)`},
+	{ID: "0081", SQL: `CREATE INDEX IF NOT EXISTS message_link_shares_session
+		ON message_link_shares (owner_email, session_scope, session_id)
+		WHERE revoked_at IS NULL`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
@@ -1005,7 +1022,7 @@ type MigrationMetrics interface {
 
 type noopMigrationMetrics struct{}
 
-func (noopMigrationMetrics) SetMigrationsPending(int)      {}
+func (noopMigrationMetrics) SetMigrationsPending(int)       {}
 func (noopMigrationMetrics) RecordMigrationApplied(float64) {}
 func (noopMigrationMetrics) RecordMigrationSkipped()        {}
 func (noopMigrationMetrics) RecordMigrationFailed(string)   {}

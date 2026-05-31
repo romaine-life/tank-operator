@@ -80,6 +80,7 @@ export interface SessionRow {
   // present on the wire (empty array when nothing observed yet). Distinct
   // from repos (the create-time selection): captures on-demand clones too.
   discovered_repos: string[];
+  capabilities: string[];
   model?: string;
   effort?: string;
   runtime_model?: string;
@@ -506,6 +507,11 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
         : undefined,
       discovered_repos: Array.isArray(rowRaw.discovered_repos)
         ? (rowRaw.discovered_repos as unknown[]).filter(
+            (entry): entry is string => typeof entry === "string",
+          )
+        : [],
+      capabilities: Array.isArray(rowRaw.capabilities)
+        ? (rowRaw.capabilities as unknown[]).filter(
             (entry): entry is string => typeof entry === "string",
           )
         : [],

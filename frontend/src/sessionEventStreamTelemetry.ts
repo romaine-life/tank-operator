@@ -1,4 +1,4 @@
-import { authedFetch } from "./auth";
+import { authedFetch, getStoredToken } from "./auth";
 
 // Per-session transcript-row SSE telemetry. The candidate-B (zombie SSE)
 // and candidate-C (row-drop) stethoscope on the browser side.
@@ -28,6 +28,9 @@ export type SessionEventStreamMetricName =
   | "terminal_local_run_mismatch"
   | "queued_followup_blocked_after_terminal"
   | "stale_running_blocked_submit"
+  | "turn_activity_refresh_failed"
+  | "turn_activity_refresh_gave_up"
+  | "turn_activity_refresh_recovered"
   | "resync_required"
   | "stream_error"
   | "closed_unmount"
@@ -117,6 +120,7 @@ function flush(): void {
   if (typeof window === "undefined" || pendingMetrics.length === 0) return;
   const events = pendingMetrics.splice(0, MAX_BATCH_EVENTS);
   if (typeof fetch !== "function") return;
+  if (!getStoredToken()) return;
   authedFetch(METRICS_ENDPOINT, {
     method: "POST",
     headers: {

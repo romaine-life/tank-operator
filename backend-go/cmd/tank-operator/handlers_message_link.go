@@ -50,6 +50,7 @@ func tankMessageLinkParts(r *http.Request) (string, string) {
 
 func tankMessageLinkContract(r *http.Request) map[string]any {
 	sessionID, timelineID := tankMessageLinkParts(r)
+	shareToken := tankMessageLinkShareToken(r)
 	origin := requestOrigin(r)
 	browserURL := absoluteURL(origin, r.URL)
 	jsonURL := cloneURL(r.URL)
@@ -73,7 +74,7 @@ func tankMessageLinkContract(r *http.Request) map[string]any {
 	beforeQuery.Set("rows", "8")
 	beforeURL.RawQuery = beforeQuery.Encode()
 
-	return map[string]any{
+	body := map[string]any{
 		"kind":        "tank.message_link",
 		"version":     1,
 		"session_id":  sessionID,
@@ -115,6 +116,26 @@ func tankMessageLinkContract(r *http.Request) map[string]any {
 			"If found_oldest is false, use prev_cursor as before_cursor to page backward for earlier transcript context.",
 		},
 	}
+	if shareToken != "" {
+		publicURL := &url.URL{Path: "/api/public/message-links/" + url.PathEscape(shareToken)}
+		publicTimelineURL := &url.URL{
+			Path: "/api/public/message-links/" + url.PathEscape(shareToken) + "/timeline",
+		}
+		publicTimelineQuery := url.Values{}
+		publicTimelineQuery.Set("message", timelineID)
+		publicTimelineQuery.Set("rows_before", "12")
+		publicTimelineQuery.Set("rows_after", "12")
+		publicTimelineURL.RawQuery = publicTimelineQuery.Encode()
+		body["share_token_present"] = true
+		body["public_api"] = map[string]any{
+			"share_url":    absoluteURL(origin, publicURL),
+			"timeline_url": absoluteURL(origin, publicTimelineURL),
+		}
+		body["usage"] = append(body["usage"].([]string),
+			"When share_token_present is true, public_api.timeline_url resolves a read-only transcript page without Tank authentication.",
+		)
+	}
+	return body
 }
 
 func (s *appServer) handleTankMessageLink(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +144,34 @@ func (s *appServer) handleTankMessageLink(w http.ResponseWriter, r *http.Request
 	body := tankMessageLinkContract(r)
 	body["authenticated"] = false
 	body["resolved"] = false
+
+	if shareToken := tankMessageLinkShareToken(r); shareToken != "" {
+		share, info, status, err := s.resolvePublicMessageLink(r.Context(), shareToken)
+		if err != nil {
+			recordMessageLinkShare("resolve", messageLinkShareResolveResult(status, err))
+			body["detail"] = err.Error()
+			writeJSON(w, status, body)
+			return
+		}
+		timeline, status, err := s.publicMessageLinkTimelineBody(r.Context(), r, share, info)
+		if err != nil {
+			recordMessageLinkShare("resolve", messageLinkShareResolveResult(status, err))
+			body["detail"] = err.Error()
+			writeJSON(w, status, body)
+			return
+		}
+		recordMessageLinkShare("resolve", "ok")
+		body["auth_required"] = false
+		body["public"] = true
+		body["resolved"] = true
+		body["session"] = publicMessageLinkSessionBody(info)
+		body["timeline"] = timeline
+		if v, ok := timeline["target_cursor"]; ok {
+			body["target_cursor"] = v
+		}
+		writeJSON(w, http.StatusOK, body)
+		return
+	}
 
 	if !tankMessageLinkHasCredentials(r) {
 		body["auth_required"] = true
@@ -172,6 +221,13 @@ func tankMessageLinkHasCredentials(r *http.Request) bool {
 	return false
 }
 
+func tankMessageLinkShareToken(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.URL.Query().Get("share"))
+}
+
 func serveTankStaticIndexWithMessageLink(w http.ResponseWriter, r *http.Request, path string) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -212,6 +268,11 @@ func setTankMessageLinkHeaders(w http.ResponseWriter, r *http.Request) {
 			w.Header().Add("Link", fmt.Sprintf("<%s>; rel=\"related\"; type=\"application/json\"; title=\"Tank timeline window\"", timelineURL))
 		}
 	}
+	if publicAPI, ok := contract["public_api"].(map[string]any); ok {
+		if timelineURL, _ := publicAPI["timeline_url"].(string); timelineURL != "" {
+			w.Header().Add("Link", fmt.Sprintf("<%s>; rel=\"related\"; type=\"application/json\"; title=\"Tank public timeline window\"", timelineURL))
+		}
+	}
 }
 
 func tankMessageLinkHeadTags(r *http.Request) string {
@@ -224,6 +285,11 @@ func tankMessageLinkHeadTags(r *http.Request) string {
 	if api, ok := contract["api"].(map[string]any); ok {
 		if timelineURL, _ := api["timeline_url"].(string); timelineURL != "" {
 			tags += fmt.Sprintf("\n<link rel=\"related\" type=\"application/json\" title=\"Tank timeline window\" href=\"%s\" />", html.EscapeString(timelineURL))
+		}
+	}
+	if publicAPI, ok := contract["public_api"].(map[string]any); ok {
+		if timelineURL, _ := publicAPI["timeline_url"].(string); timelineURL != "" {
+			tags += fmt.Sprintf("\n<link rel=\"related\" type=\"application/json\" title=\"Tank public timeline window\" href=\"%s\" />", html.EscapeString(timelineURL))
 		}
 	}
 	if tags != "" {

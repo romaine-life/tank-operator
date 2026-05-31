@@ -1,4 +1,4 @@
-import { authedFetch } from "./auth";
+import { authedFetch, getStoredToken } from "./auth";
 
 // Browser long-task probe. Wraps PerformanceObserver({ type: "longtask" })
 // to surface main-thread blocks ≥50 ms — the input-blocking failure mode
@@ -201,6 +201,7 @@ function flushLongTaskMetrics(): void {
   if (typeof window === "undefined" || pendingMetrics.length === 0) return;
   const events = pendingMetrics.splice(0, MAX_BATCH_EVENTS);
   if (typeof fetch !== "function") return;
+  if (!getStoredToken()) return;
   authedFetch(METRICS_ENDPOINT, {
     method: "POST",
     headers: {

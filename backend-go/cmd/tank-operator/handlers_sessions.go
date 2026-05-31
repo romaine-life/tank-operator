@@ -38,6 +38,17 @@ func repoSelectionBucket(count int) string {
 	}
 }
 
+func validateCreateSessionCapabilities(mode string, raw []string) ([]string, int, string) {
+	capabilities, err := sessionmodel.NormalizeSessionCapabilities(raw)
+	if err != nil {
+		return nil, http.StatusBadRequest, err.Error()
+	}
+	if len(capabilities) > 0 && sessionmodel.IsNoPodMode(mode) {
+		return nil, http.StatusBadRequest, "session capabilities require a session workspace"
+	}
+	return capabilities, 0, ""
+}
+
 type createSessionInitialTurnRequest struct {
 	ClientNonce        string                               `json:"client_nonce"`
 	Prompt             string                               `json:"prompt"`
@@ -125,12 +136,13 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	var body struct {
-		Mode        string                           `json:"mode"`
-		Model       string                           `json:"model,omitempty"`
-		Effort      string                           `json:"effort,omitempty"`
-		Name        *string                          `json:"name,omitempty"`
-		Repos       []string                         `json:"repos"`
-		InitialTurn *createSessionInitialTurnRequest `json:"initial_turn,omitempty"`
+		Mode         string                           `json:"mode"`
+		Model        string                           `json:"model,omitempty"`
+		Effort       string                           `json:"effort,omitempty"`
+		Name         *string                          `json:"name,omitempty"`
+		Repos        []string                         `json:"repos"`
+		Capabilities []string                         `json:"capabilities"`
+		InitialTurn  *createSessionInitialTurnRequest `json:"initial_turn,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
@@ -148,6 +160,11 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	}
 	if len(repos) > 0 && !sessionModeSupportsRepos(mode) {
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
+		return
+	}
+	capabilities, status, detail := validateCreateSessionCapabilities(mode, body.Capabilities)
+	if status != 0 {
+		writeError(w, status, detail)
 		return
 	}
 	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
@@ -176,13 +193,14 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		requestedAt = launchTurnAt.Add(2 * time.Millisecond).Format(time.RFC3339Nano)
 	}
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
-		Owner:       owner,
-		Mode:        mode,
-		Name:        body.Name,
-		Repos:       repos,
-		Model:       runConfig.Model,
-		Effort:      runConfig.Effort,
-		RequestedAt: requestedAt,
+		Owner:        owner,
+		Mode:         mode,
+		Name:         body.Name,
+		Repos:        repos,
+		Capabilities: capabilities,
+		Model:        runConfig.Model,
+		Effort:       runConfig.Effort,
+		RequestedAt:  requestedAt,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -840,6 +858,7 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		Effort                string   `json:"effort,omitempty"`
 		Name                  *string  `json:"name,omitempty"`
 		Repos                 []string `json:"repos"`
+		Capabilities          []string `json:"capabilities"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -875,6 +894,11 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
 		return
 	}
+	capabilities, status, detail := validateCreateSessionCapabilities(mode, body.Capabilities)
+	if status != 0 {
+		writeError(w, status, detail)
+		return
+	}
 	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
 	if status != 0 {
 		writeError(w, status, detail)
@@ -887,6 +911,7 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 		GlimmungContext: glimmungContext,
 		Name:            body.Name,
 		Repos:           repos,
+		Capabilities:    capabilities,
 		Model:           runConfig.Model,
 		Effort:          runConfig.Effort,
 	})

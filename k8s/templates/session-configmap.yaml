@@ -1,4 +1,7 @@
 {{- if eq (include "tank-operator.renderWarm" .) "true" }}
+{{- $mcpSpireLens := (.Files.Get "session-config/mcp.json" | fromJson) -}}
+{{- $mcpSpireLensServers := (get $mcpSpireLens "mcpServers") -}}
+{{- $_ := set $mcpSpireLensServers "spire-lens-mcp" (dict "type" "http" "url" "http://127.0.0.1:9997/mcp") -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -9,6 +12,8 @@ metadata:
 data:
   mcp.json: |
 {{ .Files.Get "session-config/mcp.json" | indent 4 }}
+  mcp.spirelens.json: |
+{{ $mcpSpireLens | toPrettyJson | indent 4 }}
   default-claude.md: |
 {{ .Files.Get "session-config/default-claude.md" | indent 4 }}
   write-glimmung-context.sh: |

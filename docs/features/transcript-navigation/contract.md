@@ -24,12 +24,18 @@ yanking the viewport away from a user reading history.
   position.
 - `session_transcript_row_backfills` owns whether a session's historical
   `session_events` ledger has been projected into transcript rows for the
-  current projection version. Status rows alone do not satisfy backfill.
+  current projection version. Status rows alone do not satisfy backfill; stale
+  sessions are materialized on demand for the requested session before
+  `/timeline` or transcript SSE read from `session_transcript_rows`.
 - Server timeline pages own bounded windows of top-level transcript rows. Raw
   events inside a collapsed Turn activity row are loaded only through the
   explicit Turn activity endpoint.
 - Copied message links may name rendered timeline IDs, but the server must
   translate them to durable cursors.
+- `sessions.visible` owns sidebar/list membership only. Soft-deleting a session
+  tombstones it from navigation, but it does not revoke owner/admin access to
+  copied transcript links or `/timeline` history while the durable row and
+  transcript ledger remain in Postgres.
 - Durable read state owns unread/new indicators when the indicator affects
   session or transcript state.
 - Browser scroll offsets are layout state only; they are not transcript
@@ -78,8 +84,9 @@ yanking the viewport away from a user reading history.
 - Reconnect and visibility changes continue from the current navigation mode:
   live-tail mode follows the tail, while historical mode preserves the anchor
   and surfaces new activity separately.
-- If a target message was deleted or is outside the durability boundary, the UI
-  should show a clear unavailable-target state.
+- If a target message is absent from the durable transcript projection or is
+  outside the durability boundary, the UI should show a clear
+  unavailable-target state. Sidebar deletion by itself is not such a boundary.
 
 ## Observability
 

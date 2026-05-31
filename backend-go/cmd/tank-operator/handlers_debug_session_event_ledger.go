@@ -1,17 +1,14 @@
 // Admin-only debug surface for the durable session_events ledger.
-// Returns event rows by tank session id without going through the
-// registry visibility gate, so an operator (or the AI support agent)
-// can audit a deleted session's chat history through curl without
-// flipping `sessions.visible=true` first.
+// Returns raw event rows by tank session id, so an operator (or the AI
+// support agent) can audit the durable ledger directly when the projected
+// transcript is not enough.
 //
-// The user-facing per-session timeline (`GET /api/sessions/{id}/timeline`)
-// intentionally 404s once a session row is soft-deleted (visible=false)
-// — the SPA should tombstone it and never render it again. The
-// `session_events` rows themselves are durable (no FK, no cascade) so
-// the chat is recoverable in principle, just not through the public
-// surface. This endpoint closes that observability gap so admin
-// pickup-the-prior-codex-pod workflows don't require a one-off psql
-// pod or an un-soft-delete write.
+// The user-facing sidebar still tombstones sessions when
+// `sessions.visible=false`, but the projected timeline and copied message-link
+// paths intentionally remain owner/admin-readable because visible=false is not
+// a transcript retention boundary. The `session_events` rows themselves are
+// durable (no FK, no cascade); this endpoint remains the raw-ledger diagnostic
+// counterpart for cases where the transcript projection is insufficient.
 //
 // Pair with `/api/debug/session-list-state` to find an invisible
 // session's id, then call this endpoint with that id. Pair with
@@ -149,18 +146,18 @@ func (s *appServer) handleDebugSessionEventLedger(w http.ResponseWriter, r *http
 	)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"description":      debugSessionEventLedgerDescription,
-		"session_id":       sessionID,
-		"session_scope":    scope,
-		"storage_key":      sessionmodel.SessionStorageKey(scope, sessionID),
-		"count":            len(page.Events),
-		"events":           page.Events,
-		"has_more":         page.HasMore,
-		"next_order_key":   page.NextOrderKey,
-		"prev_order_key":   page.PrevOrderKey,
-		"found_oldest":     page.FoundOldest,
-		"found_newest":     page.FoundNewest,
-		"fetched_at":       time.Now().UTC().Format(time.RFC3339Nano),
+		"description":    debugSessionEventLedgerDescription,
+		"session_id":     sessionID,
+		"session_scope":  scope,
+		"storage_key":    sessionmodel.SessionStorageKey(scope, sessionID),
+		"count":          len(page.Events),
+		"events":         page.Events,
+		"has_more":       page.HasMore,
+		"next_order_key": page.NextOrderKey,
+		"prev_order_key": page.PrevOrderKey,
+		"found_oldest":   page.FoundOldest,
+		"found_newest":   page.FoundNewest,
+		"fetched_at":     time.Now().UTC().Format(time.RFC3339Nano),
 	})
 }
 
@@ -175,14 +172,12 @@ var errDebugSessionEventLedgerNotConfigured = errors.New("session event store no
 // "Observability exists for the bugs a user would otherwise have to
 // guess about." Pair with docs/observability.md → "Session Event Ledger
 // Debug Surface" for the playbook.
-const debugSessionEventLedgerDescription = `Durable session_events ledger for one tank session, bypassing the visibility gate.
+const debugSessionEventLedgerDescription = `Durable session_events ledger for one tank session.
 
-Use this when you need to audit chat events for a session whose
-sessions.visible row is false (the user deleted it through the SPA)
-and whose pod is gone. The user-facing GET /api/sessions/{id}/timeline
-returns 404 in that case by design — this endpoint is the operator
-counterpart for "I deleted the session, but the codex agent's chat is
-the input I need to pick up the work."
+Use this when you need raw event audit detail beyond the projected
+transcript. sessions.visible=false tombstones the sidebar only; owner/admin
+GET /api/sessions/{id}/timeline and copied message links continue to resolve
+while the durable row and transcript ledger remain in Postgres.
 
 Query params:
   session_id        Required. Public session id (e.g., "203").

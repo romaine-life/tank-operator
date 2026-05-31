@@ -403,6 +403,9 @@ History reads:
 - Explicit message links open a bounded page around a durable transcript
   identity:
   `GET /api/sessions/{session_id}/timeline?timeline_id=<timeline_id>&rows_before=12&rows_after=12`
+- Public copied-message shares use an opaque bearer token and the same
+  transcript-row read model:
+  `GET /api/public/message-links/{token}/timeline?timeline_id=<timeline_id>&rows_before=12&rows_after=12`
 - Manual upward pagination reads older transcript rows:
   `GET /api/sessions/{session_id}/timeline?before_cursor=<row_cursor>&rows=8`
 - `/timeline` pages `session_transcript_rows`, the server-owned visible
@@ -601,6 +604,15 @@ directly; unauthenticated callers get the contract plus auth instructions,
 while authenticated callers get the resolved timeline payload inline. The
 payload is the same durable `/timeline` response: `target_timeline_id`,
 `target_cursor`, and a bounded `rows` window around the persisted row cursor.
+When the URL includes a minted `share=<token>` parameter, the JSON contract
+also names `public_api.timeline_url`; that route resolves a read-only transcript
+window without Tank authentication, gated by the opaque share token rather than
+the guessable session/message query pair. Browser navigation to such a link
+renders the public transcript surface without the authenticated sidebar,
+composer, Files, Settings, or Background controls.
+`sessions.visible=false` is a sidebar tombstone, not a transcript-retention or
+access-control boundary: owned/admin transcript reads continue to resolve as
+long as the durable session row and transcript ledger remain in Postgres.
 The JSON contract carries an `agent_recipe` array with copyable curl commands:
 send the projected service-account token to auth.romaine.life as
 `Authorization: Bearer <token>`, exchange the returned `auth_jwt` at this Tank
@@ -935,7 +947,9 @@ Storage:
 - Mark completed transcript-row backfills in
   `session_transcript_row_backfills`. Migration-created status rows are
   visible transcript rows, but they are not proof that historical turns have
-  been projected.
+  been projected. Projection-version catch-up is per requested session at
+  `/timeline` and transcript SSE open, under the session materialization lock;
+  serving pods must not run fleet-wide transcript-row backfills at startup.
 - Use NATS JetStream as the durable command/event fabric, not as the product
   history database. Commands are acked only after durable terminal events are
   published; events are acknowledged by the backend persister after the

@@ -159,15 +159,19 @@ func (s *appServer) handleGetAvatarBinary(w http.ResponseWriter, r *http.Request
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
 	}
-	if s.avatars == nil || s.avatarImages == nil {
-		recordAvatarAssetRequest("read_image", "", "store_unavailable")
-		writeError(w, http.StatusServiceUnavailable, "avatar store not configured")
-		return
-	}
 	id := strings.TrimSpace(r.PathValue("avatar_id"))
 	if id == "" {
 		recordAvatarAssetRequest("read_image", "", "bad_request")
 		writeError(w, http.StatusBadRequest, "missing avatar id")
+		return
+	}
+	s.writeAvatarBinary(w, r, id, variant)
+}
+
+func (s *appServer) writeAvatarBinary(w http.ResponseWriter, r *http.Request, id, variant string) {
+	if s.avatars == nil || s.avatarImages == nil {
+		recordAvatarAssetRequest("read_image", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "avatar store not configured")
 		return
 	}
 	meta, err := s.avatars.Get(r.Context(), id)

@@ -84,6 +84,10 @@ var (
 		Name: "tank_session_event_timeline_request_total",
 		Help: "GET /timeline requests labeled by anchor shape the SPA chose.",
 	}, []string{"anchor"})
+	sessionTranscriptInvisibleReadsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_transcript_invisible_row_reads_total",
+		Help: "Authorized transcript-history reads requested against sessions rows whose sidebar visibility is false.",
+	})
 	sessionEventStreamEmittedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_session_event_stream_emitted_total",
 		Help: "Projected transcript-row batches emitted to a connected SSE consumer.",
@@ -140,6 +144,15 @@ var (
 		Name: "tank_transcript_materialization_invariant_violation_total",
 		Help: "Transcript row materialization produced a projection that violates a durable transcript invariant.",
 	}, []string{"invariant", "terminal_status"})
+	transcriptRowMaterializationTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_transcript_row_materialization_total",
+		Help: "Transcript row materialization checks and backfills, labeled by trigger and bounded result.",
+	}, []string{"trigger", "result"})
+	transcriptRowMaterializationDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "tank_transcript_row_materialization_duration_seconds",
+		Help:    "Duration of transcript row materialization checks and backfills.",
+		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60},
+	}, []string{"trigger"})
 
 	// Provider-credential health: the durable Layer 1 surface for
 	// "Codex / Claude sign-in expired" banners. Replaces the SPA pill
@@ -481,10 +494,25 @@ var sessionRuntimeConfigUpdateTotal = promauto.NewCounterVec(
 	[]string{"provider", "result"},
 )
 
+var messageLinkShareTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_message_link_share_total",
+		Help: "Message-link share create and public resolve attempts, labeled by bounded operation and result.",
+	},
+	[]string{"operation", "result"},
+)
+
 func recordSessionRuntimeConfigUpdate(provider, result string) {
 	sessionRuntimeConfigUpdateTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),
 		sessionRuntimeConfigResultLabel(result),
+	).Inc()
+}
+
+func recordMessageLinkShare(operation, result string) {
+	messageLinkShareTotal.WithLabelValues(
+		messageLinkShareOperationLabel(operation),
+		messageLinkShareResultLabel(result),
 	).Inc()
 }
 
@@ -576,6 +604,24 @@ func sessionRuntimeConfigProviderLabel(provider string) string {
 func sessionRuntimeConfigResultLabel(result string) string {
 	switch result {
 	case "ok", "bad_request", "forbidden", "not_found", "manager_unavailable", "update_failed":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func messageLinkShareOperationLabel(operation string) string {
+	switch operation {
+	case "create", "resolve":
+		return operation
+	default:
+		return "unknown"
+	}
+}
+
+func messageLinkShareResultLabel(result string) string {
+	switch result {
+	case "ok", "bad_request", "denied", "not_found", "store_unavailable", "store_error":
 		return result
 	default:
 		return "other"
@@ -1468,6 +1514,10 @@ func recordSessionEventTimelineRequest(anchor string) {
 	sessionEventTimelineRequestTotal.WithLabelValues(anchor).Inc()
 }
 
+func recordSessionTranscriptInvisibleRead() {
+	sessionTranscriptInvisibleReadsTotal.Inc()
+}
+
 func recordSessionEventPersistSchemaRejected() {
 	sessionEventPersistSchemaRejectedTotal.Inc()
 }
@@ -1525,6 +1575,33 @@ func recordTranscriptMaterializationInvariantViolation(invariant string, termina
 		transcriptMaterializationInvariantLabel(invariant),
 		transcriptMaterializationTerminalStatusLabel(terminalStatus),
 	).Inc()
+}
+
+func recordTranscriptRowMaterialization(trigger string, result string, duration time.Duration) {
+	trigger = transcriptRowMaterializationTriggerLabel(trigger)
+	transcriptRowMaterializationTotal.WithLabelValues(
+		trigger,
+		transcriptRowMaterializationResultLabel(result),
+	).Inc()
+	transcriptRowMaterializationDurationSeconds.WithLabelValues(trigger).Observe(duration.Seconds())
+}
+
+func transcriptRowMaterializationTriggerLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "on_demand":
+		return "on_demand"
+	default:
+		return "unknown"
+	}
+}
+
+func transcriptRowMaterializationResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "fresh", "backfilled", "failed", "timeout":
+		return strings.TrimSpace(raw)
+	default:
+		return "unknown"
+	}
 }
 
 func transcriptMaterializationInvariantLabel(raw string) string {

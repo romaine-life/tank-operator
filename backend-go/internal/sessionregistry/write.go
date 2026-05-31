@@ -69,8 +69,8 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 	// Determine the effective visible value (default true if unset).
 	visible := record.Visible
 
-	// `repos` is written on INSERT (the user's selection at create
-	// time) and intentionally NOT overwritten on conflict — the row
+	// `repos` and `capabilities` are written on INSERT (the user's selection at
+	// create time) and intentionally NOT overwritten on conflict — the row
 	// is owned by the create call; subsequent manager updates
 	// (SetName, mark-deleted, lifecycle row writes) must not stomp
 	// the selection. `clone_state` is not touched here at all; the
@@ -81,6 +81,10 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 	if repos == nil {
 		repos = []string{}
 	}
+	capabilities := record.Capabilities
+	if capabilities == nil {
+		capabilities = []string{}
+	}
 	sidebarPosition := record.SidebarPosition
 	const q = `
 		INSERT INTO sessions (
@@ -88,12 +92,12 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 			mode, pod_name, name, visible,
 			requested_at, created_at, updated_at,
 			status, ready_at,
-			repos, model, effort, agent_avatar_id, system_avatar_id, sidebar_position
+			repos, capabilities, model, effort, agent_avatar_id, system_avatar_id, sidebar_position
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7,
 			$8, COALESCE($9, now()), $10,
 			COALESCE(NULLIF($11, ''), 'Pending'), $12,
-			$13, $14, $15, NULLIF($16, ''), NULLIF($17, ''), COALESCE(NULLIF($18, 0), nextval('sessions_row_version_seq'))
+			$13, $14, $15, $16, NULLIF($17, ''), NULLIF($18, ''), COALESCE(NULLIF($19, 0), nextval('sessions_row_version_seq'))
 		)
 		ON CONFLICT (email, session_scope, session_id) DO UPDATE
 		SET mode         = EXCLUDED.mode,
@@ -125,6 +129,7 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		status,
 		nullableTimestamp(readyAt),
 		repos,
+		capabilities,
 		strings.TrimSpace(record.Model),
 		strings.TrimSpace(record.Effort),
 		strings.TrimSpace(record.AgentAvatarID),
@@ -453,6 +458,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			COALESCE(repos, '{}'::text[]),
 			clone_state,
 			COALESCE(discovered_repos, '{}'::text[]),
+			COALESCE(capabilities, '{}'::text[]),
 			model,
 			effort,
 			runtime_model,
@@ -471,7 +477,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		name                                                  *string
 		visible                                               bool
 		activitySummary, testState, rolloutState, cloneState  []byte
-		repos, discoveredRepos                                []string
+		repos, discoveredRepos, capabilities                  []string
 		model, effort, runtimeModel, runtimeEffort, runtimeAt string
 		agentAvatarID, systemAvatarID                         string
 		sidebarPosition, rowVersion                           int64
@@ -481,7 +487,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&requestedAt, &createdAt, &updatedAt,
 		&status, &readyAt, &terminatingAt,
 		&activitySummary, &testState, &rolloutState,
-		&repos, &cloneState, &discoveredRepos, &model, &effort,
+		&repos, &cloneState, &discoveredRepos, &capabilities, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
 		&agentAvatarID, &systemAvatarID,
 		&sidebarPosition,
@@ -516,6 +522,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		Repos:               repos,
 		CloneState:          unmarshalJSONB(cloneState),
 		DiscoveredRepos:     discoveredRepos,
+		Capabilities:        capabilities,
 		Model:               model,
 		Effort:              effort,
 		RuntimeModel:        runtimeModel,

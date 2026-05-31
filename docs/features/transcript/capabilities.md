@@ -4,6 +4,41 @@ This ledger names user-facing behavior under the Transcript feature area. It is
 not a backlog; entries exist when behavior needs a stable handle for planning,
 review, tests, incident follow-up, or retirement.
 
+## Public Message Links
+
+Status: active
+
+Intent:
+Copying a transcript message link mints a durable opaque bearer share token so
+the URL can open for unauthenticated viewers without exposing transcripts by
+guessable `session` and `message` query parameters alone. The public view is a
+read-only transcript surface: no session sidebar, no composer, no Files,
+Settings, Background, or mutable controls. The Turns detail view remains
+available because it is part of understanding the transcript.
+
+Affected contracts:
+- Transcript
+- Transcript Navigation
+- Auth And Streams
+- App Chrome
+
+Contract impact:
+- Public reads are explicitly bearer-token gated through
+  `/api/public/message-links/{token}` and
+  `/api/public/message-links/{token}/timeline`; unauthenticated access to the
+  authenticated session API remains unsupported.
+- The copied link still targets durable transcript-row identities and can page
+  the same server-owned transcript row model as authenticated timeline reads.
+- The public SPA route renders a distinct full-screen workspace without the
+  authenticated app sidebar or composer, preserving App Chrome's ownership of
+  signed-in navigation.
+
+Evidence:
+- Backend: `backend-go/cmd/tank-operator/handlers_message_link_share_test.go`
+  covers share creation and unauthenticated public timeline reads.
+- Frontend: `frontend/src/migrationPolicy.test.ts` pins the public message-link
+  shell and public API path wiring.
+
 ## Compact Agent Activity
 
 Status: active
@@ -81,6 +116,40 @@ Evidence:
   (`refreshSdkRunHistoryResult(..., "keyboard-refresh")`) and bubbles the
   transient label per-session into the same pill channel as the connection
   label.
+
+## Live Turns Activity Reconciliation
+
+Status: in progress
+
+Intent:
+Keep an already-open Turns detail synchronized with the durable server
+projection while the per-session SSE stream is active. The live stream wakes the
+browser; it does not become the child-row source of truth. When projected
+transcript rows arrive for a turn whose activity detail is already cached, the
+browser invalidates that cache and re-reads `/turns/{id}/activity`.
+
+Affected contracts:
+- Transcript
+
+Contract impact:
+- Turn activity detail remains a cached server projection over
+  `session_events`, not a browser-local reducer fed by live shell rows.
+- The browser only refreshes details the user has already loaded, so a busy live
+  turn cannot fan out one request per unseen historical turn.
+- Refresh failures are bounded: the SPA retries, emits
+  `tank_session_event_client_events_total` labels for failure/give-up/recovery,
+  and leaves a visible retry state in the Turns detail instead of silently
+  showing stale rows.
+
+Evidence:
+- Shipped in this PR: `frontend/src/turnActivityCache.ts` and
+  `frontend/src/turnActivityCache.test.ts` prove cached-vs-uncached invalidation
+  and cursor coalescing.
+- Shipped in this PR: `backend-go/cmd/tank-operator/handlers_client_metrics_session_events_test.go`
+  proves the bounded telemetry labels are accepted and unknown labels clamp.
+- Required before status becomes active: browser/test-slot evidence that a
+  loaded Turns detail re-reads `/turns/{id}/activity` after a live
+  `transcript_rows` update without using a full page refresh.
 
 ## AskUserQuestion Handoff Row
 

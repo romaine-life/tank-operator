@@ -50,6 +50,7 @@ type appServer struct {
 	verifier            *auth.Verifier
 	gitHubInstallStates gitHubInstallStateStore
 	streamAuthTickets   streamAuthTicketStore
+	messageLinkShares   messageLinkShareStore
 	// streamRegistry tracks every open /api/sessions/{id}/events SSE
 	// handler so the /api/debug/session-event-streams admin endpoint
 	// can surface per-stream wake/page/emit state for diagnosis.
@@ -112,6 +113,11 @@ type sessionCommandBus interface {
 type streamAuthTicketStore interface {
 	Create(context.Context, pgstore.StreamAuthTicket) error
 	Validate(ctx context.Context, token, streamKind, sessionScope, sessionID string) (pgstore.StreamAuthTicket, error)
+}
+
+type messageLinkShareStore interface {
+	Create(context.Context, pgstore.MessageLinkShare) error
+	Get(context.Context, string) (pgstore.MessageLinkShare, error)
 }
 
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
@@ -198,13 +204,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// memory/feedback_no_devtools_build_surfaces_instead.md.
 	mux.HandleFunc("GET /api/debug/session-event-streams", s.handleDebugSessionEventStreams)
 	// Admin-only audit surface for the durable session_events ledger.
-	// Bypasses the registry visibility gate so a deleted session's
-	// chat is reachable via curl + bot token — closes the gap that
-	// would otherwise force an un-soft-delete write or a one-off psql
-	// pod just to pick up a codex agent's prior conversation. Pairs
-	// with /api/debug/session-list-state for invisible-session lookup
-	// and with the avatar-upload-attempts surface as the existing
-	// "admin debug counterpart to a user-facing read" template.
+	// The projected transcript/message-link paths are the normal
+	// owner-readable pickup flow, including visible=false sidebar
+	// tombstones; this raw-ledger surface is for audit/debug detail
+	// when the projection is not enough.
 	mux.HandleFunc("GET /api/debug/session-event-ledger", s.handleDebugSessionEventLedger)
 	// Admin-only debug surface for the durable conversation_read_state
 	// cursor + sessions.activity_summary view. Pairs with the
@@ -222,6 +225,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/save-credentials", s.handleSaveCredentials)
 	mux.HandleFunc("POST /api/sessions/{session_id}/paste-image", s.handlePasteImage)
 	mux.HandleFunc("POST /api/sessions/{session_id}/messages", s.handleSendMessage)
+	mux.HandleFunc("POST /api/sessions/{session_id}/message-links", s.handleCreateMessageLinkShare)
 	mux.HandleFunc("POST /api/sessions/with-context", s.handleCreateSessionWithContext)
 
 	// File endpoints.
@@ -244,6 +248,16 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/read-state", s.handleUpdateSessionReadState)
+
+	// Public read-only transcript shares. These are intentionally not
+	// general unauthenticated session routes: every read validates an
+	// opaque token minted by the authenticated copy-message-link action.
+	mux.HandleFunc("GET /api/public/message-links/{share_token}", s.handleGetPublicMessageLink)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars", s.handlePublicMessageLinkAvatars)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars/{avatar_id}/image", s.handlePublicMessageLinkAvatarImage)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars/{avatar_id}/backing", s.handlePublicMessageLinkAvatarBacking)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/timeline", s.handlePublicMessageLinkTimeline)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/turns/{turn_id}/activity", s.handlePublicMessageLinkTurnActivity)
 
 	// CLI / sandbox agent.
 	mux.HandleFunc("POST /api/sessions/{session_id}/cli-process", s.handleCLIProcess)
@@ -301,6 +315,11 @@ func publicConfig() map[string]string {
 		// at auth.romaine.life; tank-operator verifies that JWT directly.
 		"auth_url":      envDefault("AUTH_URL", "https://auth.romaine.life"),
 		"session_scope": envDefault("SESSION_REGISTRY_SCOPE", "default"),
+		"spirelens_mcp_available": boolConfigString(
+			envDefault("SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", "") != "" &&
+				envDefault("SESSION_SPIRELENS_TAILSCALE_TAILNET", "") != "" &&
+				envDefault("SESSION_SPIRELENS_HOST", "") != "",
+		),
 		"fork_session_prompt_template": readOptionalFile(
 			os.Getenv("TANK_FORK_SESSION_PROMPT_FILE"),
 			defaultForkSessionPromptTemplate,
@@ -328,6 +347,13 @@ func publicConfig() map[string]string {
 			defaultInitialModeTestDirective,
 		),
 	}
+}
+
+func boolConfigString(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
 }
 
 const defaultForkSessionPromptTemplate = `The user forked this session from an assistant message in another Tank Operator session to deal with a divergent issue.

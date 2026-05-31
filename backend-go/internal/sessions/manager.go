@@ -45,6 +45,10 @@ type sessionRegistryGetter interface {
 	Get(ctx context.Context, owner, sessionID string) (sessionmodel.SessionRecord, bool, error)
 }
 
+type sessionRegistryOwnerResolver interface {
+	OwnerForSession(ctx context.Context, scope, sessionID string) (string, error)
+}
+
 // RowEmitter publishes the current state of one sessions row on the
 // per-(owner, scope) NATS row-update subject. After
 // docs/session-list-redesign.md Phase 3 every Manager mutation calls
@@ -75,9 +79,9 @@ type Manager struct {
 	reaperInterval time.Duration
 
 	// Resolved ClusterIPs for host-alias injection.
-	oauthGatewayIP  string
-	apiProxyIP      string
-	codexAPIProxyIP string
+	oauthGatewayIP   string
+	apiProxyIP       string
+	codexAPIProxyIP  string
 	geminiAPIProxyIP string
 
 	localCounter     int64
@@ -86,12 +90,12 @@ type Manager struct {
 
 // ManagerOptions configures a new Manager.
 type ManagerOptions struct {
-	ManifestOpts      sessionmodel.ManifestOptions
-	IdleTimeout       time.Duration
-	ReaperInterval    time.Duration
-	OAuthGatewayHost  string
-	APIProxyHost      string
-	CodexAPIProxyHost string
+	ManifestOpts       sessionmodel.ManifestOptions
+	IdleTimeout        time.Duration
+	ReaperInterval     time.Duration
+	OAuthGatewayHost   string
+	APIProxyHost       string
+	CodexAPIProxyHost  string
 	GeminiAPIProxyHost string
 }
 
@@ -281,6 +285,11 @@ type CreateOptions struct {
 	// calling Create; Manager persists them unchanged.
 	Model  string
 	Effort string
+	// Capabilities is the normalized per-session capability list. Empty keeps
+	// the default pod surface. Capabilities are durable row state and pod
+	// manifest input; unsupported modes/configurations are rejected before a
+	// row or pod is created.
+	Capabilities []string
 }
 
 // Create creates a new session pod and registers it in the registry.
@@ -298,6 +307,18 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	repos := opts.Repos
 	if repos == nil {
 		repos = []string{}
+	}
+	capabilities := opts.Capabilities
+	if capabilities == nil {
+		capabilities = []string{}
+	}
+	if sessionmodel.HasSessionCapability(capabilities, sessionmodel.SessionCapabilitySpireLensMCP) {
+		if sessionmodel.IsNoPodMode(mode) {
+			return Info{}, fmt.Errorf("%s capability requires a session pod", sessionmodel.SessionCapabilitySpireLensMCP)
+		}
+		if !sessionmodel.SpireLensMCPConfigured(m.manifestOpts) {
+			return Info{}, fmt.Errorf("%s capability is not configured for this deployment", sessionmodel.SessionCapabilitySpireLensMCP)
+		}
 	}
 	model := opts.Model
 	effort := opts.Effort
@@ -354,6 +375,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
 	manifestOpts.Name = name
+	manifestOpts.Capabilities = capabilities
 
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)
@@ -399,6 +421,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			RequestedAt:    requestedAt,
 			UpdatedAt:      requestedAt,
 			Repos:          repos,
+			Capabilities:   capabilities,
 			Model:          model,
 			Effort:         effort,
 			AgentAvatarID:  assignment.AgentAvatarID,
@@ -441,6 +464,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		CreatedAt:      createdAt,
 		Name:           name,
 		Repos:          repos,
+		Capabilities:   capabilities,
 		Model:          model,
 		Effort:         effort,
 		AgentAvatarID:  assignment.AgentAvatarID,
@@ -462,6 +486,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			CreatedAt:      *createdAt,
 			UpdatedAt:      requestedAt,
 			Repos:          repos,
+			Capabilities:   capabilities,
 			Model:          model,
 			Effort:         effort,
 			AgentAvatarID:  assignment.AgentAvatarID,
@@ -842,8 +867,10 @@ func (m *Manager) GetByID(ctx context.Context, sessionID string) (Info, error) {
 }
 
 // GetRegisteredByOwner retrieves a durable session row for read-only paths
-// that do not require a live pod. Transcript links must continue to resolve
-// after the session pod exits; the registry row is the cold-open authority.
+// that should only expose sidebar-visible sessions and do not require a live
+// pod. Transcript surfaces use GetRegisteredByOwnerAnyVisibility instead:
+// copied transcript links are explicit durable-history reads, while
+// visible=false is only the sidebar tombstone.
 func (m *Manager) GetRegisteredByOwner(ctx context.Context, owner, sessionID string) (Info, error) {
 	getter, ok := m.registry.(sessionRegistryGetter)
 	if !ok {
@@ -857,6 +884,44 @@ func (m *Manager) GetRegisteredByOwner(ctx context.Context, owner, sessionID str
 		return Info{}, ErrNotFound
 	}
 	return infoFromRecord(owner, record), nil
+}
+
+// GetRegisteredByOwnerAnyVisibility retrieves a durable session row for
+// transcript history reads. The returned bool reports the row's sidebar
+// visibility so callers can emit observability for explicit reads of
+// soft-deleted sessions without leaking the flag on the public Info wire.
+//
+// The registry row is the cold-open authority for copied transcript links and
+// MCP transcript reads: pod death and sidebar tombstoning must not hide durable
+// conversation history from an authorized owner/admin.
+func (m *Manager) GetRegisteredByOwnerAnyVisibility(ctx context.Context, owner, sessionID string) (Info, bool, error) {
+	getter, ok := m.registry.(sessionRegistryGetter)
+	if !ok {
+		return Info{}, false, ErrNotFound
+	}
+	record, found, err := getter.Get(ctx, owner, sessionID)
+	if err != nil {
+		return Info{}, false, err
+	}
+	if !found {
+		return Info{}, false, ErrNotFound
+	}
+	return infoFromRecord(owner, record), record.Visible, nil
+}
+
+// RegisteredOwnerForSession resolves a session id to its durable registry
+// owner without consulting Kubernetes. It intentionally includes invisible
+// rows so admin transcript reads can recover soft-deleted conversation history
+// without flipping sidebar state back to visible.
+func (m *Manager) RegisteredOwnerForSession(ctx context.Context, scope, sessionID string) (string, error) {
+	resolver, ok := m.registry.(sessionRegistryOwnerResolver)
+	if !ok {
+		return "", nil
+	}
+	if scope == "" {
+		scope = m.scope
+	}
+	return resolver.OwnerForSession(ctx, scope, sessionID)
 }
 
 // GetPodName waits up to 90s for the session pod to be ready and returns its name.

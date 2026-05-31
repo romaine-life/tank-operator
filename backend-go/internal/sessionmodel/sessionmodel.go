@@ -42,11 +42,18 @@ const (
 	HermesGUIMode           = "hermes_gui"
 	DefaultSessionMode      = ClaudeGUIMode
 	GeminiRunnerMetricsPort = 9097
-	MaxNameLength         = 80
-	SessionsNamespace     = "tank-operator-sessions"
-	SessionServiceAccount = "claude-session"
-	SessionConfigMap      = "tank-session-config"
-	SandboxAgentPort      = 2468
+	MaxNameLength           = 80
+	SessionsNamespace       = "tank-operator-sessions"
+	SessionServiceAccount   = "claude-session"
+	SessionConfigMap        = "tank-session-config"
+	SandboxAgentPort        = 2468
+	// SessionCapabilitySpireLensMCP opts a pod into the SpireLens game-host
+	// MCP path. The default session surface stays cluster-local; this rare
+	// capability joins the tailnet and mounts an MCP config with
+	// spire-lens-mcp on localhost :9997.
+	SessionCapabilitySpireLensMCP = "spirelens_mcp"
+	DefaultSpireLensMCPPort       = 15527
+	DefaultSpireLensTailscaleTag  = "tag:spirelens-orchestrator"
 	// Per-container metrics ports inside session pods. The
 	// k8s/templates/podmonitor-sessions.yaml PodMonitor scrapes each by
 	// the named container port (mcp-auth-proxy: "metrics", runners:
@@ -96,6 +103,10 @@ var (
 	// unaware of where the model actually runs.
 	noPodModes = map[string]struct{}{
 		HermesGUIMode: {},
+	}
+
+	sessionCapabilities = map[string]struct{}{
+		SessionCapabilitySpireLensMCP: {},
 	}
 )
 
@@ -154,6 +165,10 @@ type SessionRecord struct {
 	// agent cloned on demand mid-session. It is queryable through the
 	// session row/API payload without adding sidebar UI.
 	DiscoveredRepos []string
+	// Capabilities is the durable per-session opt-in list. Empty means
+	// the default pod surface. Values are normalized through
+	// NormalizeSessionCapabilities before Manager.Create writes the row.
+	Capabilities []string
 
 	// Model/Effort are the session-owned run configuration accepted at
 	// create time. Runners consume these values through submit_turn
@@ -249,9 +264,9 @@ type ManifestOptions struct {
 	SandboxAgentPort        int
 	TankOperatorInternalURL string
 	// Optional: in-cluster Service IPs for host alias injection.
-	OAuthGatewayIP  string
-	APIProxyIP      string
-	CodexAPIProxyIP string
+	OAuthGatewayIP   string
+	APIProxyIP       string
+	CodexAPIProxyIP  string
 	GeminiAPIProxyIP string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
@@ -273,6 +288,17 @@ type ManifestOptions struct {
 	// creation. It is stamped on the pod annotation so degraded pod-only
 	// reads match the registry row.
 	Name *string
+	// Capabilities is the normalized per-session capability list for the pod
+	// being materialized. The registry persists the same list so the runtime
+	// surface stays inspectable after creation.
+	Capabilities []string
+	// Non-secret SpireLens tailnet configuration. Only used when
+	// Capabilities includes SessionCapabilitySpireLensMCP.
+	SpireLensTailscaleOIDCClientID string
+	SpireLensTailscaleTailnet      string
+	SpireLensTailscaleAuthTag      string
+	SpireLensHost                  string
+	SpireLensMCPPort               int
 	// HotSwapAgentRunner gates the test-slot hot-swap surface on SDK
 	// runner containers. When true, PodManifest attaches a writable
 	// emptyDir at /var/run/<runner>-hot, mounts it on the active runner
@@ -295,6 +321,39 @@ func NormalizeSessionMode(mode string) string {
 func IsSessionMode(mode string) bool {
 	_, ok := sessionModes[NormalizeSessionMode(mode)]
 	return ok
+}
+
+func NormalizeSessionCapabilities(in []string) ([]string, error) {
+	if len(in) == 0 {
+		return []string{}, nil
+	}
+	out := make([]string, 0, len(in))
+	seen := map[string]struct{}{}
+	for _, raw := range in {
+		capability := strings.ToLower(strings.TrimSpace(raw))
+		if capability == "" {
+			return nil, errors.New("session capability cannot be empty")
+		}
+		if _, ok := sessionCapabilities[capability]; !ok {
+			return nil, errors.New("unknown session capability: " + capability)
+		}
+		if _, ok := seen[capability]; ok {
+			continue
+		}
+		seen[capability] = struct{}{}
+		out = append(out, capability)
+	}
+	return out, nil
+}
+
+func HasSessionCapability(capabilities []string, capability string) bool {
+	capability = strings.ToLower(strings.TrimSpace(capability))
+	for _, item := range capabilities {
+		if strings.ToLower(strings.TrimSpace(item)) == capability {
+			return true
+		}
+	}
+	return false
 }
 
 func OwnerLabel(email string) string {
@@ -374,7 +433,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	// Build configmap volume mounts for both containers.
-	configMounts := buildConfigMounts(opts.SessionConfigMap)
+	spireLensMCPEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilitySpireLensMCP)
+	mcpConfigKey := "mcp.json"
+	if spireLensMCPEnabled {
+		mcpConfigKey = "mcp.spirelens.json"
+	}
+	configMounts := buildConfigMounts(opts.SessionConfigMap, mcpConfigKey)
 
 	// Environment variables for the claude container.
 	env := []any{
@@ -392,8 +456,35 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		map[string]any{"name": "FORCE_HYPERLINK", "value": "1"},
 		map[string]any{"name": "CLAUDE_CODE_NO_FLICKER", "value": "1"},
 	}
+	if spireLensMCPEnabled {
+		env = append(env,
+			map[string]any{"name": "SPIRELENS_MCP_ENABLED", "value": "true"},
+			map[string]any{"name": "SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", "value": opts.SpireLensTailscaleOIDCClientID},
+			map[string]any{"name": "SPIRELENS_TAILSCALE_TAILNET", "value": opts.SpireLensTailscaleTailnet},
+			map[string]any{"name": "SPIRELENS_TAILSCALE_AUTH_TAG", "value": opts.SpireLensTailscaleAuthTag},
+			map[string]any{"name": "SPIRELENS_TAILSCALE_SOCKET", "value": "/tmp/tailscaled.sock"},
+			map[string]any{"name": "SPIRELENS_TAILSCALE_STATE_DIR", "value": "/workspace/.tailscale-state"},
+			map[string]any{"name": "SPIRELENS_TAILSCALE_OUTBOUND_HTTP_PROXY_LISTEN", "value": "127.0.0.1:1055"},
+			map[string]any{"name": "AUTH_ROMAINE_TOKEN_PATH", "value": "/var/run/secrets/auth.romaine.life/token"},
+			map[string]any{
+				"name": "SPIRELENS_TAILSCALE_HOSTNAME",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{
+						"fieldPath": "metadata.name",
+					},
+				},
+			},
+		)
+	}
 
 	claudeVolumeMounts := append([]any{}, configMounts...)
+	if spireLensMCPEnabled {
+		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+			"name":      "auth-romaine-sa-token",
+			"mountPath": "/var/run/secrets/auth.romaine.life",
+			"readOnly":  true,
+		})
+	}
 	volumes := []any{
 		map[string]any{"name": "session-config", "configMap": map[string]any{"name": opts.SessionConfigMap}},
 		map[string]any{
@@ -627,6 +718,36 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"mountPath": "/var/run/secrets/auth.romaine.life",
 		"readOnly":  true,
 	})
+	mcpProxyEnv := []any{
+		map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
+		// Originating session id forwarded as
+		// X-Tank-Origin-Session-Id on outbound calls to
+		// mcp-tank-operator. mcp-tank-operator threads it
+		// onto handoff messages so the orchestrator stamps
+		// the persisted user_message.created event and the
+		// frontend renders the parent session's avatar on
+		// the user bubble in the target session. Sourced
+		// from the same downward-API path the runners use
+		// (metadata.labels['tank-operator/session-id']) so
+		// the sidecar agrees with the runner on which
+		// session it lives in. Absent SESSION_ID, the
+		// proxy omits the header and the orchestrator
+		// falls back to the human-Gravatar rendering.
+		map[string]any{
+			"name": "SESSION_ID",
+			"valueFrom": map[string]any{
+				"fieldRef": map[string]any{
+					"fieldPath": "metadata.labels['tank-operator/session-id']",
+				},
+			},
+		},
+	}
+	if spireLensMCPEnabled {
+		mcpProxyEnv = append(mcpProxyEnv,
+			map[string]any{"name": "SPIRELENS_MCP_UPSTREAM", "value": spireLensMCPUpstream(opts.SpireLensHost, opts.SpireLensMCPPort)},
+			map[string]any{"name": "TAILNET_HTTP_PROXY", "value": "http://127.0.0.1:1055"},
+		)
+	}
 
 	containers := []any{
 		map[string]any{
@@ -634,30 +755,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"image":           sessionImage,
 			"imagePullPolicy": "Always",
 			"command":         []any{"mcp-auth-proxy"},
-			"env": []any{
-				map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
-				// Originating session id forwarded as
-				// X-Tank-Origin-Session-Id on outbound calls to
-				// mcp-tank-operator. mcp-tank-operator threads it
-				// onto handoff messages so the orchestrator stamps
-				// the persisted user_message.created event and the
-				// frontend renders the parent session's avatar on
-				// the user bubble in the target session. Sourced
-				// from the same downward-API path the runners use
-				// (metadata.labels['tank-operator/session-id']) so
-				// the sidecar agrees with the runner on which
-				// session it lives in. Absent SESSION_ID, the
-				// proxy omits the header and the orchestrator
-				// falls back to the human-Gravatar rendering.
-				map[string]any{
-					"name": "SESSION_ID",
-					"valueFrom": map[string]any{
-						"fieldRef": map[string]any{
-							"fieldPath": "metadata.labels['tank-operator/session-id']",
-						},
-					},
-				},
-			},
+			"env":             mcpProxyEnv,
 			// The metrics port is exposed as a named container port so the
 			// k8s/templates/podmonitor-sessions.yaml PodMonitor can scrape
 			// it by name without hard-coding numbers. Listens on 0.0.0.0;
@@ -1026,6 +1124,10 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"tank-operator/session-id":       sessionID,
 		"argocd.argoproj.io/tracking-id": argoTrackingID,
 	}
+	if len(opts.Capabilities) > 0 {
+		raw, _ := json.Marshal(opts.Capabilities)
+		annotations["tank-operator/capabilities"] = string(raw)
+	}
 	if name := NormalizeName(opts.Name); name != nil {
 		annotations["tank-operator/display-name"] = *name
 	}
@@ -1054,14 +1156,21 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 }
 
 // buildConfigMounts returns the volumeMount entries for the session ConfigMap.
-func buildConfigMounts(configMapName string) []any {
+func buildConfigMounts(configMapName string, mcpConfigKey string) []any {
 	_ = configMapName // name is in the volume declaration, not the mount
+	if strings.TrimSpace(mcpConfigKey) == "" {
+		mcpConfigKey = "mcp.json"
+	}
 	mounts := make([]any, 0, len(sessionConfigMounts)+1)
 	for _, m := range sessionConfigMounts {
+		key := m.key
+		if m.mountPath == "/workspace/.mcp.json" {
+			key = mcpConfigKey
+		}
 		mounts = append(mounts, map[string]any{
 			"name":      "session-config",
 			"mountPath": m.mountPath,
-			"subPath":   m.key,
+			"subPath":   key,
 			"readOnly":  true,
 		})
 	}
@@ -1071,6 +1180,23 @@ func buildConfigMounts(configMapName string) []any {
 		"readOnly":  true,
 	})
 	return mounts
+}
+
+func spireLensMCPUpstream(host string, port int) string {
+	host = strings.TrimSpace(host)
+	if port <= 0 {
+		port = DefaultSpireLensMCPPort
+	}
+	if strings.HasPrefix(host, "http://") || strings.HasPrefix(host, "https://") {
+		return strings.TrimRight(host, "/")
+	}
+	return "http://" + host + ":" + itoa(port)
+}
+
+func SpireLensMCPConfigured(opts ManifestOptions) bool {
+	return strings.TrimSpace(opts.SpireLensTailscaleOIDCClientID) != "" &&
+		strings.TrimSpace(opts.SpireLensTailscaleTailnet) != "" &&
+		strings.TrimSpace(opts.SpireLensHost) != ""
 }
 
 // glimmungField extracts a string field from a compact JSON object string.
@@ -1123,6 +1249,12 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	}
 	if opts.NATSAuthSecret == "" {
 		opts.NATSAuthSecret = "tank-nats-auth"
+	}
+	if opts.SpireLensTailscaleAuthTag == "" {
+		opts.SpireLensTailscaleAuthTag = DefaultSpireLensTailscaleTag
+	}
+	if opts.SpireLensMCPPort == 0 {
+		opts.SpireLensMCPPort = DefaultSpireLensMCPPort
 	}
 	return opts
 }

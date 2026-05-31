@@ -273,8 +273,10 @@ const blocked = [
   // Tank-local JWT minting was retired after auth.romaine.life became the
   // only token issuer. The SPA stores/presents the upstream JWT directly,
   // GitHub install state is an opaque Postgres nonce, and service principals
-  // use auth.romaine.life's /api/auth/exchange/k8s endpoint directly.
-  { name: "removed Tank auth exchange route", pattern: /\/api\/auth\/exchange(?!\/k8s)\b/ },
+  // use auth.romaine.life's /api/auth/exchange/* endpoints directly.
+  // Keep blocking the retired bare Tank-owned route while allowing the
+  // IdP subroutes used by service JWTs, external federation, and SSH certs.
+  { name: "removed Tank auth exchange route", pattern: /\/api\/auth\/exchange(?!\/(?:k8s|federation|ssh-cert)\b)\b/ },
   { name: "removed Tank internal k8s auth route", pattern: /\/api\/internal\/auth\/k8s\b/ },
   { name: "removed Tank local auth storage key", pattern: /\btank-operator-jwt\b/ },
   { name: "removed Tank auth cookie", pattern: /\bauth_token\b/ },
@@ -371,6 +373,12 @@ const blocked = [
   { name: "removed unread-centered default transcript anchor", pattern: /\bfirst_unread\b/ },
   { name: "removed localStorage transcript position anchor", pattern: /\btank\.transcript\.position\b|\bSDK_TRANSCRIPT_POSITION\b|\breadSdkTranscriptPosition\b|\bwriteSdkTranscriptPosition\b|\bclearSdkTranscriptPosition\b/ },
   { name: "removed legacy forward transcript timeline read", pattern: /\blegacy_forward\b|\bsessionEventReadLegacyForward\b/ },
+  // Transcript-row projection-version catch-up is a per-request,
+  // per-session materialization concern. Serving pods must not run a
+  // fleet-wide backfill scan at startup, and test slots must not backfill
+  // prod/default just because their Postgres pool can read it.
+  { name: "retired startup transcript row backfill launcher", pattern: /\bstartTranscriptRowBackfills\b|\btranscriptBackfillScopes\b/ },
+  { name: "retired fleet transcript row backfill selector", pattern: /\bBackfillSessionIDs\b/ },
   // Stage 3 (PR #503): hand-rolled scroll-detect hysteresis. Replaced
   // by react-virtuoso's atBottomStateChange callback, which is the
   // durable boolean source for "is the user viewing the live tail." The

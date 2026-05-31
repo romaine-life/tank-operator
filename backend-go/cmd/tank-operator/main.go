@@ -357,29 +357,34 @@ func main() {
 
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, rowPublisher, sessions.ManagerOptions{
 		ManifestOpts: sessionmodel.ManifestOptions{
-			SessionsNamespace:       namespace,
-			SessionServiceAccount:   sessionServiceAccount,
-			SessionConfigMap:        envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
-			ArgoCDTrackingApp:       envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
-			SessionImage:            sessionImage,
-			CodexSessionImage:       codexSessionImage,
-			GeminiSessionImage:      geminiSessionImage,
-			SessionScope:            sessionScope,
-			TankOperatorInternalURL: tankOperatorInternalURL,
-			GitHubAppSecret:             envDefault("GITHUB_APP_SECRET", sessionmodel.DefaultGitHubAppSecret),
-			GeminiCredentialsTestSecret: envDefault("GEMINI_CREDENTIALS_TEST_SECRET", "gemini-credentials-test"),
-			NATSURL:                     envDefault("NATS_URL", ""),
-			NATSStream:                  envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
-			NATSAuthSecret:              envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
+			SessionsNamespace:              namespace,
+			SessionServiceAccount:          sessionServiceAccount,
+			SessionConfigMap:               envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
+			ArgoCDTrackingApp:              envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
+			SessionImage:                   sessionImage,
+			CodexSessionImage:              codexSessionImage,
+			GeminiSessionImage:             geminiSessionImage,
+			SessionScope:                   sessionScope,
+			TankOperatorInternalURL:        tankOperatorInternalURL,
+			GitHubAppSecret:                envDefault("GITHUB_APP_SECRET", sessionmodel.DefaultGitHubAppSecret),
+			GeminiCredentialsTestSecret:    envDefault("GEMINI_CREDENTIALS_TEST_SECRET", "gemini-credentials-test"),
+			NATSURL:                        envDefault("NATS_URL", ""),
+			NATSStream:                     envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+			NATSAuthSecret:                 envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
+			SpireLensTailscaleOIDCClientID: envDefault("SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", ""),
+			SpireLensTailscaleTailnet:      envDefault("SESSION_SPIRELENS_TAILSCALE_TAILNET", ""),
+			SpireLensTailscaleAuthTag:      envDefault("SESSION_SPIRELENS_TAILSCALE_AUTH_TAG", sessionmodel.DefaultSpireLensTailscaleTag),
+			SpireLensHost:                  envDefault("SESSION_SPIRELENS_HOST", ""),
+			SpireLensMCPPort:               envInt("SESSION_SPIRELENS_MCP_PORT", sessionmodel.DefaultSpireLensMCPPort),
 			// Test-slot agent-runner hot-swap. Off by default; the chart
 			// turns this on only when the chart runs in hot test-slot mode.
 			// See scripts/check-session-pod-hot-swap-migration.mjs and
 			// docs in sessionmodel.ManifestOptions.HotSwapAgentRunner.
 			HotSwapAgentRunner: envBool("SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED"),
 		},
-		OAuthGatewayHost:  os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
-		APIProxyHost:      os.Getenv("CLAUDE_API_PROXY_HOST"),
-		CodexAPIProxyHost: os.Getenv("CODEX_API_PROXY_HOST"),
+		OAuthGatewayHost:   os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
+		APIProxyHost:       os.Getenv("CLAUDE_API_PROXY_HOST"),
+		CodexAPIProxyHost:  os.Getenv("CODEX_API_PROXY_HOST"),
 		GeminiAPIProxyHost: os.Getenv("GEMINI_API_PROXY_HOST"),
 	})
 
@@ -388,6 +393,7 @@ func main() {
 	verifier := auth.NewVerifier(auth.NewRomaineLifeKeyResolver())
 	gitHubInstallStates := buildGitHubInstallStateStore(pgPool)
 	streamAuthTickets := buildStreamAuthTicketStore(pgPool)
+	messageLinkShares := buildMessageLinkShareStore(pgPool)
 
 	// 11. Start background workers under a process signal context so rolling
 	// updates can drain HTTP and Hermes turn streams cleanly.
@@ -569,6 +575,7 @@ func main() {
 		verifier:                 verifier,
 		gitHubInstallStates:      gitHubInstallStates,
 		streamAuthTickets:        streamAuthTickets,
+		messageLinkShares:        messageLinkShares,
 		streamRegistry:           sessionstream.NewRegistry(),
 		namespace:                namespace,
 		sessionScope:             sessionScope,
@@ -580,9 +587,6 @@ func main() {
 		providerHealth:           providerHealthManager,
 	}
 	srv.registerRoutes(mux)
-	if pgPool != nil {
-		startTranscriptRowBackfills(ctx, transcriptBackfillScopes(pgPool, sessionScope, transcriptMaterializer))
-	}
 
 	// 13.5. Start the conversation read-cursor stagnation sampler.
 	// It snapshots the open-SSE-stream registry every 60s, joins each
@@ -771,6 +775,14 @@ func buildStreamAuthTicketStore(pool *pgxpool.Pool) streamAuthTicketStore {
 		return nil
 	}
 	return pgstore.NewStreamAuthTicketStore(pool)
+}
+
+func buildMessageLinkShareStore(pool *pgxpool.Pool) messageLinkShareStore {
+	if pool == nil {
+		slog.Warn("message link share store disabled; POSTGRES_HOST is unset")
+		return nil
+	}
+	return pgstore.NewMessageLinkShareStore(pool)
 }
 
 func buildSessionRegistry(pool *pgxpool.Pool, scope string) sessions.SessionRegistry {

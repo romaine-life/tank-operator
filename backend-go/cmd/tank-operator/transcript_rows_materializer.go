@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -27,6 +29,7 @@ type transcriptRowsMaterializationTxStore interface {
 	ReplaceForTurnTx(context.Context, pgx.Tx, string, string, []map[string]any) error
 	ReplaceForSessionTx(context.Context, pgx.Tx, string, []map[string]any) error
 	UpsertRowsTx(context.Context, pgx.Tx, string, []map[string]any) error
+	NeedsBackfillTx(context.Context, pgx.Tx, string) (bool, error)
 }
 
 type transcriptEventsTxStore interface {
@@ -94,29 +97,65 @@ func (m transcriptRowsMaterializer) refreshEventTx(
 	return rows.ReplaceForTurnTx(ctx, tx, sessionID, turnID, projection.Entries)
 }
 
-func (m transcriptRowsMaterializer) Backfill(ctx context.Context) error {
+func (m transcriptRowsMaterializer) EnsureSession(ctx context.Context, sessionID string) error {
 	if m.events == nil || m.rows == nil {
 		return nil
 	}
-	sessionIDs, err := m.rows.BackfillSessionIDs(ctx)
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	started := time.Now()
+	needed, err := m.rows.NeedsBackfill(ctx, sessionID)
 	if err != nil {
+		recordTranscriptRowMaterialization("on_demand", transcriptRowMaterializationFailureResult(ctx, err), time.Since(started))
 		return err
 	}
-	for _, sessionID := range sessionIDs {
-		if err := m.BackfillSession(ctx, sessionID); err != nil {
-			return fmt.Errorf("backfill transcript rows for session %s: %w", sessionID, err)
-		}
+	if !needed {
+		recordTranscriptRowMaterialization("on_demand", "fresh", time.Since(started))
+		return nil
+	}
+	backfilled, err := m.BackfillSession(ctx, sessionID)
+	if err != nil {
+		recordTranscriptRowMaterialization("on_demand", transcriptRowMaterializationFailureResult(ctx, err), time.Since(started))
+		return fmt.Errorf("backfill transcript rows for session %s: %w", sessionID, err)
+	}
+	if backfilled {
+		recordTranscriptRowMaterialization("on_demand", "backfilled", time.Since(started))
+	} else {
+		recordTranscriptRowMaterialization("on_demand", "fresh", time.Since(started))
 	}
 	return nil
 }
 
-func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, sessionID string) error {
+func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, sessionID string) (bool, error) {
+	if m.events == nil || m.rows == nil {
+		return false, nil
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false, nil
+	}
 	if txRows, ok := m.rows.(transcriptRowsMaterializationTxStore); ok {
 		if txEvents, ok := m.events.(transcriptEventsTxStore); ok {
-			return txRows.WithTranscriptMaterializationTx(ctx, sessionID, func(ctx context.Context, tx pgx.Tx) error {
-				return m.backfillSessionTx(ctx, tx, txEvents, txRows, sessionID)
+			backfilled := false
+			err := txRows.WithTranscriptMaterializationTx(ctx, sessionID, func(ctx context.Context, tx pgx.Tx) error {
+				needed, err := txRows.NeedsBackfillTx(ctx, tx, sessionID)
+				if err != nil || !needed {
+					return err
+				}
+				if err := m.backfillSessionTx(ctx, tx, txEvents, txRows, sessionID); err != nil {
+					return err
+				}
+				backfilled = true
+				return nil
 			})
+			return backfilled, err
 		}
+	}
+	needed, err := m.rows.NeedsBackfill(ctx, sessionID)
+	if err != nil || !needed {
+		return false, err
 	}
 	var events []map[string]any
 	cursor := ""
@@ -125,7 +164,7 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 			AfterOrderKey: cursor,
 		}, 1000)
 		if err != nil {
-			return err
+			return false, err
 		}
 		events = append(events, page.Events...)
 		if page.FoundNewest || len(page.Events) == 0 || page.NextOrderKey == "" || page.NextOrderKey == cursor {
@@ -135,7 +174,10 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 	}
 	projection := projectTranscriptEvents(events)
 	recordTranscriptProjectionInvariantViolations(sessionID, "", events, projection.Entries)
-	return m.rows.ReplaceForSession(ctx, sessionID, projection.Entries)
+	if err := m.rows.ReplaceForSession(ctx, sessionID, projection.Entries); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 func (m transcriptRowsMaterializer) backfillSessionTx(
@@ -163,6 +205,13 @@ func (m transcriptRowsMaterializer) backfillSessionTx(
 	projection := projectTranscriptEvents(events)
 	recordTranscriptProjectionInvariantViolations(sessionID, "", events, projection.Entries)
 	return rowsStore.ReplaceForSessionTx(ctx, tx, sessionID, projection.Entries)
+}
+
+func transcriptRowMaterializationFailureResult(ctx context.Context, err error) string {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return "timeout"
+	}
+	return "failed"
 }
 
 func recordTranscriptProjectionInvariantViolations(sessionID, turnID string, events []map[string]any, entries []map[string]any) {
