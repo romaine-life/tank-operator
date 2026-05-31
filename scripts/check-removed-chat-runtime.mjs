@@ -273,8 +273,10 @@ const blocked = [
   // Tank-local JWT minting was retired after auth.romaine.life became the
   // only token issuer. The SPA stores/presents the upstream JWT directly,
   // GitHub install state is an opaque Postgres nonce, and service principals
-  // use auth.romaine.life's /api/auth/exchange/k8s endpoint directly.
-  { name: "removed Tank auth exchange route", pattern: /\/api\/auth\/exchange(?!\/k8s)\b/ },
+  // use auth.romaine.life's /api/auth/exchange/* endpoints directly.
+  // Keep blocking the retired bare Tank-owned route while allowing the
+  // IdP subroutes used by service JWTs, external federation, and SSH certs.
+  { name: "removed Tank auth exchange route", pattern: /\/api\/auth\/exchange(?!\/(?:k8s|federation|ssh-cert)\b)\b/ },
   { name: "removed Tank internal k8s auth route", pattern: /\/api\/internal\/auth\/k8s\b/ },
   { name: "removed Tank local auth storage key", pattern: /\btank-operator-jwt\b/ },
   { name: "removed Tank auth cookie", pattern: /\bauth_token\b/ },

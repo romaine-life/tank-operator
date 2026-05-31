@@ -88,6 +88,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			rollout_state,
 			COALESCE(repos, '{}'::text[]),
 			clone_state,
+			COALESCE(capabilities, '{}'::text[]),
 			COALESCE(agent_avatar_id, ''),
 			COALESCE(system_avatar_id, ''),
 			sidebar_position,
@@ -110,7 +111,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			name                                                        *string
 			visible                                                     bool
 			activitySummary, testState, rolloutState, cloneState        []byte
-			repos                                                       []string
+			repos, capabilities                                         []string
 			agentAvatarID, systemAvatarID                               string
 			sidebarPosition, rowVersion                                 int64
 		)
@@ -119,7 +120,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
-			&repos, &cloneState, &agentAvatarID, &systemAvatarID, &sidebarPosition,
+			&repos, &cloneState, &capabilities, &agentAvatarID, &systemAvatarID, &sidebarPosition,
 			&rowVersion,
 		); err != nil {
 			return nil, err
@@ -146,6 +147,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			RolloutState:    unmarshalJSONBField(rolloutState),
 			Repos:           repos,
 			CloneState:      unmarshalJSONBField(cloneState),
+			Capabilities:    capabilities,
 			AgentAvatarID:   agentAvatarID,
 			SystemAvatarID:  systemAvatarID,
 			SidebarPosition: sidebarPosition,

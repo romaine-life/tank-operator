@@ -303,6 +303,60 @@ func TestMarshalRowUpdateRepos(t *testing.T) {
 	}
 }
 
+func TestMarshalRowUpdateCapabilities(t *testing.T) {
+	cases := []struct {
+		name       string
+		in         []string
+		wantOnWire []string
+	}{
+		{
+			name:       "nil round-trips as empty array",
+			in:         nil,
+			wantOnWire: []string{},
+		},
+		{
+			name:       "empty round-trips as empty array",
+			in:         []string{},
+			wantOnWire: []string{},
+		},
+		{
+			name:       "non-empty preserves order",
+			in:         []string{sessionmodel.SessionCapabilitySpireLensMCP},
+			wantOnWire: []string{sessionmodel.SessionCapabilitySpireLensMCP},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload, err := sessioncontroller.MarshalRowUpdate(sessionmodel.SessionRecord{
+				ID:           "55",
+				Email:        "u@example.com",
+				Scope:        "default",
+				Visible:      true,
+				Status:       "Active",
+				RowVersion:   1,
+				Capabilities: tc.in,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var probe struct {
+				Row struct {
+					Capabilities []string `json:"capabilities"`
+				} `json:"row"`
+			}
+			if err := json.Unmarshal(payload, &probe); err != nil {
+				t.Fatal(err)
+			}
+			if probe.Row.Capabilities == nil {
+				t.Fatalf("row.capabilities was nil on the wire; want explicit array")
+			}
+			if !stringSliceEqual(probe.Row.Capabilities, tc.wantOnWire) {
+				t.Fatalf("row.capabilities = %v, want %v", probe.Row.Capabilities, tc.wantOnWire)
+			}
+		})
+	}
+}
+
 // --- helpers ---
 
 func newTestAppServer(t *testing.T) *appServer {

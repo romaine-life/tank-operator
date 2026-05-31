@@ -75,6 +75,7 @@ export interface SessionRow {
   // until the cloner writes back; null/missing means
   // "no clone state yet" rather than "clone succeeded."
   clone_state?: Record<string, unknown>;
+  capabilities: string[];
   model?: string;
   effort?: string;
   runtime_model?: string;
@@ -499,6 +500,11 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       clone_state: isRecord(rowRaw.clone_state)
         ? (rowRaw.clone_state as Record<string, unknown>)
         : undefined,
+      capabilities: Array.isArray(rowRaw.capabilities)
+        ? (rowRaw.capabilities as unknown[]).filter(
+            (entry): entry is string => typeof entry === "string",
+          )
+        : [],
       model: stringField(rowRaw, "model") ?? undefined,
       effort: stringField(rowRaw, "effort") ?? undefined,
       runtime_model: stringField(rowRaw, "runtime_model") ?? undefined,

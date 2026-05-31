@@ -140,6 +140,7 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		GlimmungContext map[string]any `json:"glimmung_context"`
 		Name            string         `json:"name"`
 		Repos           []string       `json:"repos"`
+		Capabilities    []string       `json:"capabilities"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
@@ -153,6 +154,11 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	}
 	if len(repos) > 0 && !sessionModeSupportsRepos(mode) {
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
+		return
+	}
+	capabilities, status, detail := validateCreateSessionCapabilities(mode, body.Capabilities)
+	if status != 0 {
+		writeError(w, status, detail)
 		return
 	}
 	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
@@ -173,6 +179,7 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		GlimmungContext: body.GlimmungContext,
 		RequestedAt:     body.Name,
 		Repos:           repos,
+		Capabilities:    capabilities,
 		Model:           runConfig.Model,
 		Effort:          runConfig.Effort,
 	})
