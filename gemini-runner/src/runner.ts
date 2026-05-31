@@ -212,6 +212,14 @@ export class Runner {
       });
     }
 
+    const exitCodePromise = new Promise<number>((resolve) => {
+      proc.on("close", (code) => resolve(code ?? 0));
+      proc.on("error", (err) => {
+        console.error("Failed to start gemini process:", err);
+        resolve(-1);
+      });
+    });
+
     const onAbort = () => {
       console.log(`Abort signal received. Terminating process PID ${proc.pid}`);
       proc.kill("SIGINT");
@@ -290,9 +298,7 @@ export class Runner {
         }
       }
 
-      const exitCode = await new Promise<number>((resolve) => {
-        proc.on("close", (code) => resolve(code ?? 0));
-      });
+      const exitCode = await exitCodePromise;
 
       // Symmetric fallback logic
       if (exitCode !== 0) {
