@@ -33,6 +33,7 @@ jobs:
   secrets:
     name: Fetch github-pat from Key Vault
     runs-on: ubuntu-latest
+    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
     outputs:
       github_pat: ${{ steps.kv.outputs.github_pat }}
     steps:
