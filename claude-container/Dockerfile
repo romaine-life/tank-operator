@@ -135,9 +135,8 @@ RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/
 RUN case "${TANK_AGENT}" in \
         claude) npm install -g @anthropic-ai/claude-code "vite@${VITE_VERSION}" "typescript@${TYPESCRIPT_VERSION}" ;; \
         codex) npm install -g @openai/codex "vite@${VITE_VERSION}" "typescript@${TYPESCRIPT_VERSION}" ;; \
-        pi) npm install -g @mariozechner/pi-coding-agent "vite@${VITE_VERSION}" "typescript@${TYPESCRIPT_VERSION}" ;; \
         gemini) npm install -g @google/gemini-cli "vite@${VITE_VERSION}" "typescript@${TYPESCRIPT_VERSION}" ;; \
-        *) echo "unsupported TANK_AGENT=${TANK_AGENT}; expected claude, codex, pi, or gemini" >&2; exit 1 ;; \
+        *) echo "unsupported TANK_AGENT=${TANK_AGENT}; expected claude, codex, or gemini" >&2; exit 1 ;; \
     esac
 
 # Ghostty-backed in-browser process terminal support. The frontend talks to
@@ -253,22 +252,14 @@ RUN mkdir -p /workspace \
         /opt/tank \
         /home/node/.claude/skills \
         /home/node/.codex/skills \
-        /home/node/.gemini \
-        /home/node/.pi/agent
-
-# Pi keeps MCP support in installable packages rather than core. Install the
-# adapter into the baked Pi image so session startup can stay offline and Pi
-# can consume the same /workspace/.mcp.json that Claude and Codex use.
-RUN if [ "${TANK_AGENT}" = "pi" ]; then \
-      HOME=/home/node pi install npm:pi-mcp-adapter; \
-    fi
+        /home/node/.gemini
 
 # Run the agent as a non-root user so claude's safety check accepts
 # bypassPermissions mode (it refuses to enable bypass when uid 0). Also
 # defense-in-depth: a tool-use exploit can't escape to a privileged shell.
 # node:20-alpine already ships a `node` user at uid/gid 1000 with
 # /home/node, so reuse it (creating another user with gid 1000 collides).
-RUN chown -R node:node /workspace /home/node/.claude /home/node/.codex /home/node/.gemini /home/node/.pi
+RUN chown -R node:node /workspace /home/node/.claude /home/node/.codex /home/node/.gemini
 
 WORKDIR /workspace
 USER node

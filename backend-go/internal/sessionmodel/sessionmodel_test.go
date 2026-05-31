@@ -86,7 +86,6 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
 		SessionImage:      "claude-image",
 		CodexSessionImage: "codex-image",
-		PiSessionImage:    "pi-image",
 	})
 
 	metadata := manifest["metadata"].(map[string]any)
@@ -165,7 +164,6 @@ func TestPodManifestDisplayNameAnnotation(t *testing.T) {
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
 		SessionImage:      "claude-image",
 		CodexSessionImage: "codex-image",
-		PiSessionImage:    "pi-image",
 		Name:              &name,
 	})
 	metadata := manifest["metadata"].(map[string]any)
@@ -178,7 +176,6 @@ func TestPodManifestDisplayNameAnnotation(t *testing.T) {
 	manifest = PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
 		SessionImage:      "claude-image",
 		CodexSessionImage: "codex-image",
-		PiSessionImage:    "pi-image",
 		Name:              &blank,
 	})
 	metadata = manifest["metadata"].(map[string]any)
@@ -192,7 +189,6 @@ func TestPodManifestMaterializesTankDocsBeforeSandboxAgent(t *testing.T) {
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
 		SessionImage:      "claude-image",
 		CodexSessionImage: "codex-image",
-		PiSessionImage:    "pi-image",
 	})
 
 	spec := manifest["spec"].(map[string]any)
@@ -439,7 +435,7 @@ func TestManifestFixture(t *testing.T) {
 	input := core["input"].(map[string]any)
 	// Inject the same image strings the fixture asserts on. The
 	// orchestrator's runtime path gets these from the chart's
-	// SESSION_IMAGE / CODEX_SESSION_IMAGE / PI_SESSION_IMAGE env vars
+	// SESSION_IMAGE / CODEX_SESSION_IMAGE env vars
 	// (see cmd/tank-operator/main.go); the test stands in for that
 	// wiring with literals so the manifest contract is exercised
 	// without dragging Helm into the test.
@@ -450,7 +446,6 @@ func TestManifestFixture(t *testing.T) {
 		ManifestOptions{
 			SessionImage:      "romainecr.azurecr.io/claude-container:latest",
 			CodexSessionImage: "romainecr.azurecr.io/codex-container:latest",
-			PiSessionImage:    "romainecr.azurecr.io/pi-container:latest",
 		},
 	)
 	spec := manifest["spec"].(map[string]any)
@@ -474,7 +469,6 @@ func TestHermesGUIModeRemainsNoPod(t *testing.T) {
 	manifest := PodManifest("hermes", "user@example.com", HermesGUIMode, ManifestOptions{
 		SessionImage:      "session-image",
 		CodexSessionImage: "codex-image",
-		PiSessionImage:    "pi-image",
 	})
 	spec := manifest["spec"].(map[string]any)
 	containers := spec["containers"].([]any)
@@ -556,7 +550,6 @@ func TestPodManifestSlotModeAttachesAgentRunnerHotSwap(t *testing.T) {
 	manifest := PodManifest("63", "user@example.com", ClaudeGUIMode, ManifestOptions{
 		SessionImage:       "claude-image",
 		CodexSessionImage:  "codex-image",
-		PiSessionImage:     "pi-image",
 		HotSwapAgentRunner: true,
 	})
 
@@ -605,7 +598,6 @@ func TestPodManifestSlotModeAttachesCodexRunnerHotSwap(t *testing.T) {
 	manifest := PodManifest("63", "user@example.com", CodexGUIMode, ManifestOptions{
 		SessionImage:       "claude-image",
 		CodexSessionImage:  "codex-image",
-		PiSessionImage:     "pi-image",
 		HotSwapAgentRunner: true,
 	})
 
@@ -655,7 +647,6 @@ func TestPodManifestProdLeavesAgentRunnerUnchanged(t *testing.T) {
 	manifest := PodManifest("63", "user@example.com", ClaudeGUIMode, ManifestOptions{
 		SessionImage:      "claude-image",
 		CodexSessionImage: "codex-image",
-		PiSessionImage:    "pi-image",
 		// HotSwapAgentRunner intentionally left false.
 	})
 
@@ -683,7 +674,6 @@ func TestPodManifestProdLeavesCodexRunnerUnchanged(t *testing.T) {
 	manifest := PodManifest("63", "user@example.com", CodexGUIMode, ManifestOptions{
 		SessionImage:      "claude-image",
 		CodexSessionImage: "codex-image",
-		PiSessionImage:    "pi-image",
 	})
 
 	spec := manifest["spec"].(map[string]any)

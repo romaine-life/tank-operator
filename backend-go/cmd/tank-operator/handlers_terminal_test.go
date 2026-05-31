@@ -32,7 +32,6 @@ func TestCliProcessLaunchForMode_ConfigWizards(t *testing.T) {
 	}{
 		{sessionmodel.CodexConfigMode, []string{"-lc", "codex login --device-auth; exec bash"}},
 		{sessionmodel.ConfigMode, []string{"-lc", "claude /login; exec bash"}},
-		{sessionmodel.PiConfigMode, []string{"-lc", `printf "Run /login in Pi to authenticate.\n\n"; pi; exec bash`}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.mode, func(t *testing.T) {

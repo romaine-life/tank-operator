@@ -50,11 +50,6 @@ func cliProcessLaunchForMode(mode string) sandboxProcessCreate {
 		// gemini login runs the Google OAuth flow; credentials land
 		// at $HOME/.gemini/settings.json for the save-credentials button.
 		base.Args = []string{"-lc", "gemini login; exec bash"}
-	case sessionmodel.PiConfigMode:
-		// Pi's /login is a slash command inside the interactive `pi`
-		// REPL, not a CLI subcommand. Drop into pi, let the user
-		// /login, then back to bash on exit.
-		base.Args = []string{"-lc", `printf "Run /login in Pi to authenticate.\n\n"; pi; exec bash`}
 	default:
 		base.Args = []string{"-l"}
 	}

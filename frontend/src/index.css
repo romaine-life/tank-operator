@@ -130,10 +130,6 @@
   --mode-codex-gui-fg: #8bd7c5;
   --mode-codex-config-bg: rgba(180, 200, 120, 0.10);
   --mode-codex-config-fg: #c9d68b;
-  --mode-pi-cli-bg: rgba(99, 179, 237, 0.12);
-  --mode-pi-cli-fg: #9ccff2;
-  --mode-pi-config-bg: rgba(99, 179, 237, 0.09);
-  --mode-pi-config-fg: #b8d8ee;
 
   /* Radii */
   --radius-sm: 0.375rem;
@@ -2051,8 +2047,6 @@ button:disabled {
 .mode-codex_exec_gui,
 .mode-codex_app_server { background: var(--mode-codex-gui-bg); color: var(--mode-codex-gui-fg); }
 .mode-codex_config        { background: var(--mode-codex-config-bg); color: var(--mode-codex-config-fg); }
-.mode-pi_cli     { background: var(--mode-pi-cli-bg); color: var(--mode-pi-cli-fg); }
-.mode-pi_config           { background: var(--mode-pi-config-bg); color: var(--mode-pi-config-fg); }
 
 /* Cluster health ------------------------------------------------------------ */
 

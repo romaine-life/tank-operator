@@ -352,8 +352,6 @@ var chatScrollSessionModeLabels = map[string]struct{}{
 	"codex_config":     {},
 	"debug":            {},
 	"hermes_gui":       {},
-	"pi_cli":           {},
-	"pi_config":        {},
 }
 
 func chatScrollSessionModeLabel(raw string) string {

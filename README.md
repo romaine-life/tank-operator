@@ -4,14 +4,13 @@ Web frontend over a thin K8s orchestrator that spawns ephemeral agent pods on
 demand. The launcher creates GUI chat and terminal agent sessions backed by
 Kubernetes pods.
 
-The Claude, Codex, and Pi session images are built from `claude-container/`
+The Claude and Codex session images are built from `claude-container/`
 in this repo (`Dockerfile`, plus bundled `mcp-auth-proxy`).
 Session-facing MCP config, AGENTS/CLAUDE primers, the
 bootstrap shell script, and bundled skill docs live in `k8s/session-config/` and are mounted
 through the chart's `tank-session-config` ConfigMap. [claude-container-build.yml](.github/workflows/claude-container-build.yml)
 pushes SHA-pinned `romainecr.azurecr.io/claude-container:<sha>` and
-`romainecr.azurecr.io/codex-container:<sha>` /
-`romainecr.azurecr.io/pi-container:<sha>` images, then rewrites the Helm chart
+`romainecr.azurecr.io/codex-container:<sha>` images, then rewrites the Helm chart
 to point each session mode at the right image.
 
 The HTTP MCP servers it talks to live in standalone repos:

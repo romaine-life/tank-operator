@@ -161,8 +161,6 @@ through the credential-refresh wizard modes:
 - `codex_config` — opens a session pod with the codex CLI, terminal boots
   already running `codex login --device-auth`.
 - `config` — same shape for claude, runs `claude /login`.
-- `pi_config` — same shape for Pi, opens the Pi REPL and the user types
-  `/login` inside.
 
 The per-mode launch is wired in `handleCLIProcess`
 ([handlers_terminal.go](../backend-go/cmd/tank-operator/handlers_terminal.go))
