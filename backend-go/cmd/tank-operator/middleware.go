@@ -94,6 +94,8 @@ func validateEffort(provider string, v string) string {
 	allowed := allowedClaudeEfforts
 	if provider == "codex" {
 		allowed = allowedCodexEfforts
+	} else if provider == "gemini" {
+		allowed = map[string]struct{}{}
 	}
 	if _, ok := allowed[v]; ok {
 		return v

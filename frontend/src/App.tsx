@@ -228,6 +228,8 @@ type SessionMode =
   | "codex_exec_gui"
   | "codex_app_server"
   | "codex_config"
+  | "gemini_gui"
+  | "gemini_config"
   | "hermes_gui"
   | "pi_cli"
   | "pi_config";
@@ -238,10 +240,11 @@ type DefaultSessionMode = Extract<
   | "codex_cli"
   | "codex_gui"
   | "codex_exec_gui"
+  | "gemini_gui"
   | "hermes_gui"
   | "pi_cli"
 >;
-type Provider = "anthropic" | "codex" | "hermes" | "pi";
+type Provider = "anthropic" | "codex" | "gemini" | "hermes" | "pi";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 type AskUserQuestionAnswer = {
@@ -598,6 +601,8 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "Codex Legacy",
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
+  gemini_gui: "Gemini GUI",
+  gemini_config: "Gemini config",
   hermes_gui: "Hermes",
   pi_cli: "Pi CLI",
   pi_config: "Pi config",
@@ -615,6 +620,8 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
+  gemini_gui: "gemini-gui",
+  gemini_config: "gemini-cfg",
   hermes_gui: "hermes",
   pi_cli: "pi-cli",
   pi_config: "pi-cfg",
@@ -627,6 +634,7 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
+  gemini_gui: "gemini",
   hermes_gui: "hermes",
   pi_cli: "pi",
 };
@@ -641,6 +649,8 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   codex_exec_gui: "codex",
   codex_app_server: "codex",
   codex_config: "codex",
+  gemini_gui: "gemini",
+  gemini_config: "gemini",
   hermes_gui: "hermes",
   pi_cli: "pi",
   pi_config: "pi",
@@ -652,6 +662,7 @@ const PROVIDER_INTERACTION_MODES: Record<
 > = {
   anthropic: { gui: "claude_gui", cli: "claude_cli" },
   codex: { gui: "codex_gui", cli: "codex_cli" },
+  gemini: { gui: "gemini_gui", cli: null },
   hermes: { gui: "hermes_gui", cli: null },
   pi: { gui: null, cli: "pi_cli" },
 };
@@ -666,12 +677,14 @@ const INTERACTION_OPTIONS: SessionInteraction[] = ["gui", "cli"];
 const PROVIDER_CONFIG_MODES: Partial<Record<Provider, SessionMode>> = {
   anthropic: "config",
   codex: "codex_config",
+  gemini: "gemini_config",
   pi: "pi_config",
 };
 
 const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
   codex: "Codex",
+  gemini: "Gemini",
   hermes: "Hermes",
   pi: "Pi",
 };
@@ -686,6 +699,8 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_exec_gui: "Fallback GUI for legacy codex exec transport",
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
+  gemini_gui: "GUI chat pane for Gemini transport",
+  gemini_config: "gemini login · seeds KV for Gemini",
   hermes_gui: "Shared Hermes memory + MCP tools",
   pi_cli: "Uses Tank Claude/Codex subscriptions",
   pi_config: "Pi /login sandbox",
@@ -732,6 +747,19 @@ const DEMO_BASE_SESSIONS: Session[] = [
     name: "Codex",
     repos: [],
     agent_avatar_id: demoAgentAvatarID(2),
+  },
+  {
+    id: "gemini-gui",
+    pod_name: "tank-demo-gemini-gui",
+    owner: "preview",
+    status: "Active",
+    mode: "gemini_gui",
+    requested_at: new Date(Date.now() - 25 * 60 * 1000 - 5 * 1000).toISOString(),
+    created_at: new Date(Date.now() - 25 * 60 * 1000).toISOString(),
+    ready_at: new Date(Date.now() - 24 * 60 * 1000).toISOString(),
+    name: "Gemini",
+    repos: [],
+    agent_avatar_id: demoAgentAvatarID(4),
   },
   {
     id: "pi-agent",
@@ -801,6 +829,22 @@ const DEMO_CODEX_LINES = [
   "\x1b[2m  gpt-5.5 default · /workspace\x1b[0m",
 ];
 
+const DEMO_GEMINI_LINES = [
+  "\x1b[34m ▐\x1b[40m▛███▜\x1b[49m▌\x1b[39m   \x1b[1mGemini CLI\x1b[22m \x1b[37mv0.44.1\x1b[39m",
+  "\x1b[34m▝▜\x1b[40m█████\x1b[49m▛▘\x1b[39m  \x1b[37mgemini-3.5-flash · Gemini Advanced\x1b[39m",
+  "\x1b[34m  ▘▘ ▝▝  \x1b[39m  \x1b[37m/workspace\x1b[39m",
+  "",
+  "  \x1b[1m\x1b[94mWelcome to Gemini 3.5 Flash!\x1b[22m\x1b[37m · Google GenAI coding agent\x1b[39m",
+  "",
+  "",
+  "",
+  "                                                                                  \x1b[37m◉ 3.5-flash\x1b[39m",
+  "\x1b[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────\x1b[39m",
+  "❯\u00a0\x1b[7m \x1b[27m",
+  "\x1b[38;5;244m────────────────────────────────────────────────────────────────────────────────────────────────────\x1b[39m",
+  "  \x1b[95m⏵⏵ bypass permissions on\x1b[37m (shift+tab to cycle)\x1b[39m",
+];
+
 const DEMO_PI_LINES = [
   "Pi Coding Agent",
   "",
@@ -834,12 +878,14 @@ function demoTerminalLines(session: Session, promptText?: string): string[] {
       ? DEMO_HERMES_LINES
     : session.mode === "pi_cli"
       ? DEMO_PI_LINES
+    : session.mode === "gemini_gui"
+      ? DEMO_GEMINI_LINES
       : DEMO_CLAUDE_LINES;
   const lines = [...template];
   if (promptText) {
     if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
-    } else if (session.mode === "pi_cli" || session.mode === "hermes_gui") {
+    } else if (session.mode === "pi_cli" || session.mode === "hermes_gui" || session.mode === "gemini_gui") {
       lines[lines.length - 1] = `> ${promptText}`;
     } else {
       const promptIndex = lines.findIndex((line) => line.startsWith("❯"));
@@ -1116,9 +1162,9 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // Modes whose pods carry harvestable credentials — the "save" button
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
-const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
-const SDK_CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
+const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config", "gemini_config"]);
+const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui", "gemini_gui"]);
+const SDK_CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "gemini_gui"]);
 const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>([...SDK_CHAT_MODES, "hermes_gui"]);
 const SDK_TIMELINE_TAIL_ROWS = 24;
 const SDK_TIMELINE_OLDER_ROWS = 8;
@@ -1126,7 +1172,7 @@ const SDK_TIMELINE_DEEPLINK_ROWS_BEFORE = 12;
 const SDK_TIMELINE_DEEPLINK_ROWS_AFTER = 12;
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui", "gemini_gui"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
@@ -2218,6 +2264,7 @@ function DemoLanding() {
   const [demoClaudeEffortId, setDemoClaudeEffortId] = useState(DEFAULT_CLAUDE_EFFORT_ID);
   const [demoCodexModelId, setDemoCodexModelId] = useState(DEFAULT_CODEX_MODEL_ID);
   const [demoCodexEffortId, setDemoCodexEffortId] = useState(DEFAULT_CODEX_EFFORT_ID);
+  const [demoGeminiModelId, setDemoGeminiModelId] = useState(DEFAULT_GEMINI_MODEL_ID);
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
   const [demoComposerMode, setDemoComposerMode] = useState<RunComposerMode>("default");
@@ -2231,14 +2278,18 @@ function DemoLanding() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : [];
+        : selectedProvider === "gemini"
+          ? GEMINI_MODELS
+          : [];
   const demoModelApplies = demoInteraction === "gui" && demoModelOptions.length > 0;
   const selectedDemoModelId =
     selectedProvider === "anthropic"
       ? demoClaudeModelId
       : selectedProvider === "codex"
         ? demoCodexModelId
-        : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+        : selectedProvider === "gemini"
+          ? demoGeminiModelId
+          : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -2527,6 +2578,7 @@ function DemoLanding() {
                               onClick={() => {
                                 if (selectedProvider === "anthropic") setDemoClaudeModelId(model.id);
                                 if (selectedProvider === "codex") setDemoCodexModelId(model.id);
+                                if (selectedProvider === "gemini") setDemoGeminiModelId(model.id);
                               }}
                               aria-pressed={modelSelected}
                             >
@@ -2891,6 +2943,10 @@ function isClaudeRunMode(mode: SessionMode): boolean {
 
 function isCodexRunMode(mode: SessionMode): boolean {
   return mode === "codex_gui" || mode === "codex_app_server";
+}
+
+function isGeminiRunMode(mode: SessionMode): boolean {
+  return mode === "gemini_gui";
 }
 
 // (formerly: getRunToolGroupSummary — replaced by RunToolGroup's inline
@@ -3298,6 +3354,10 @@ const CODEX_MODELS: ModelOption[] = [
   { id: "gpt-5.3-codex-spark", label: "Codex · GPT-5.3 Codex Spark" },
   { id: CODEX_ACCOUNT_DEFAULT_MODEL_ID, label: "Codex · Account default" },
 ];
+const GEMINI_MODELS: ModelOption[] = [
+  { id: "gemini-3.5-flash", label: "Gemini · 3.5 Flash" },
+  { id: "gemini-3.1-pro", label: "Gemini · 3.1 Pro" },
+];
 
 // Extended-thinking effort levels exposed by the Claude Agent SDK
 // (EffortLevel union). The ids are the wire values; the labels carry
@@ -3328,12 +3388,14 @@ const CODEX_EFFORTS: EffortOption[] = [
 ];
 const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 const DEFAULT_CODEX_EFFORT_ID = "xhigh";
+const DEFAULT_GEMINI_MODEL_ID = "gemini-3.5-flash";
 
 function modelOptionsForMode(mode: SessionMode): ModelOption[] {
   if (mode === "claude_gui") return CLAUDE_MODELS;
   if (mode === "codex_gui" || mode === "codex_exec_gui" || mode === "codex_app_server") {
     return CODEX_MODELS;
   }
+  if (mode === "gemini_gui") return GEMINI_MODELS;
   return [];
 }
 
@@ -3394,6 +3456,7 @@ interface RunPrefs {
   claudeEffort: string;
   codexModelId: string;
   codexEffort: string;
+  geminiModelId: string;
   initialMessageMode: InitialMessageMode;
 }
 
@@ -3412,6 +3475,7 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
   codexModelId: DEFAULT_CODEX_MODEL_ID,
   codexEffort: DEFAULT_CODEX_EFFORT_ID,
+  geminiModelId: DEFAULT_GEMINI_MODEL_ID,
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
@@ -3513,6 +3577,8 @@ function loadRunPrefs(): RunPrefs {
         out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
       } else if (key === "codexEffort") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
+      } else if (key === "geminiModelId") {
+        out[key] = pickAllowedPrefId(raw, GEMINI_MODELS, DEFAULT_GEMINI_MODEL_ID);
       } else if (key === "initialMessageMode") {
         out[key] = pickInitialMessageMode(raw, DEFAULT_INITIAL_MESSAGE_MODE);
       } else if (raw === "true" || raw === "false") {
@@ -3555,6 +3621,10 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
     } else if (key === "codexEffort") {
       if (typeof raw === "string") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, prev.codexEffort);
+      }
+    } else if (key === "geminiModelId") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, GEMINI_MODELS, prev.geminiModelId);
       }
     } else if (key === "initialMessageMode") {
       if (typeof raw === "string") {
@@ -8618,6 +8688,7 @@ function ChatPane({
   const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
+  const isGemini = isGeminiRunMode(session.mode);
   const ready = session.mode === "hermes_gui"
     ? session.status === "Active"
     : sessionContainerAvailable(session);
@@ -8643,7 +8714,9 @@ function ChatPane({
     ? runPrefs.claudeModelId
     : isCodex
       ? runPrefs.codexModelId
-      : "";
+      : isGemini
+        ? runPrefs.geminiModelId
+        : "";
   const preferredEffortId = isClaude
     ? runPrefs.claudeEffort
     : isCodex
@@ -14806,14 +14879,18 @@ export function App() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : [];
+        : selectedProvider === "gemini"
+          ? GEMINI_MODELS
+          : [];
   const homeModelApplies = defaultInteraction === "gui" && homeModelOptions.length > 0;
   const selectedHomeModelId =
     selectedProvider === "anthropic"
       ? runPrefs.claudeModelId
       : selectedProvider === "codex"
         ? runPrefs.codexModelId
-        : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+        : selectedProvider === "gemini"
+          ? runPrefs.geminiModelId
+          : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
   const selectedHomeEffortId =
     selectedProvider === "anthropic"
       ? runPrefs.claudeEffort
@@ -15314,6 +15391,8 @@ export function App() {
                                   setRunPref("claudeModelId", model.id);
                                 } else if (selectedProvider === "codex") {
                                   setRunPref("codexModelId", model.id);
+                                } else if (selectedProvider === "gemini") {
+                                  setRunPref("geminiModelId", model.id);
                                 }
                               }}
                               aria-pressed={selected}

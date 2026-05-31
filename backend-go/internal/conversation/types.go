@@ -56,6 +56,7 @@ const (
 	// /v1/runs/:id/events SSE and translates to this schema. See
 	// nelsong6/tank-operator#540.
 	SourceHermes Source = "hermes"
+	SourceGemini Source = "gemini"
 )
 
 type Visibility string
@@ -625,7 +626,7 @@ func validActor(actor Actor) bool {
 
 func validSource(source Source) bool {
 	switch source {
-	case SourceTank, SourceClaude, SourceCodex, SourceHermes:
+	case SourceTank, SourceClaude, SourceCodex, SourceHermes, SourceGemini:
 		return true
 	default:
 		return false
