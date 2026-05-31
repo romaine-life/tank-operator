@@ -393,6 +393,7 @@ func main() {
 	verifier := auth.NewVerifier(auth.NewRomaineLifeKeyResolver())
 	gitHubInstallStates := buildGitHubInstallStateStore(pgPool)
 	streamAuthTickets := buildStreamAuthTicketStore(pgPool)
+	messageLinkShares := buildMessageLinkShareStore(pgPool)
 
 	// 11. Start background workers under a process signal context so rolling
 	// updates can drain HTTP and Hermes turn streams cleanly.
@@ -574,6 +575,7 @@ func main() {
 		verifier:                 verifier,
 		gitHubInstallStates:      gitHubInstallStates,
 		streamAuthTickets:        streamAuthTickets,
+		messageLinkShares:        messageLinkShares,
 		streamRegistry:           sessionstream.NewRegistry(),
 		namespace:                namespace,
 		sessionScope:             sessionScope,
@@ -773,6 +775,14 @@ func buildStreamAuthTicketStore(pool *pgxpool.Pool) streamAuthTicketStore {
 		return nil
 	}
 	return pgstore.NewStreamAuthTicketStore(pool)
+}
+
+func buildMessageLinkShareStore(pool *pgxpool.Pool) messageLinkShareStore {
+	if pool == nil {
+		slog.Warn("message link share store disabled; POSTGRES_HOST is unset")
+		return nil
+	}
+	return pgstore.NewMessageLinkShareStore(pool)
 }
 
 func buildSessionRegistry(pool *pgxpool.Pool, scope string) sessions.SessionRegistry {

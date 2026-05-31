@@ -959,6 +959,14 @@ button:disabled {
   grid-template-columns: var(--sidebar-collapsed-width) 1fr;
 }
 
+.shell.public-share-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.public-share-shell .workspace {
+  grid-column: 1;
+}
+
 .sidebar {
   display: flex;
   flex-direction: column;

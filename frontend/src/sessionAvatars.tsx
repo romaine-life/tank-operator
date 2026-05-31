@@ -78,9 +78,14 @@ function isCatalogEntry(value: unknown): value is AvatarCatalogEntry {
   );
 }
 
-async function loadAvatarImage(entry: AvatarCatalogEntry): Promise<AgentAvatar | null> {
+type AvatarCatalogFetch = (input: RequestInfo, init?: RequestInit) => Promise<Response>;
+
+async function loadAvatarImage(
+  entry: AvatarCatalogEntry,
+  fetcher: AvatarCatalogFetch,
+): Promise<AgentAvatar | null> {
   try {
-    const res = await authedFetch(entry.avatar_url);
+    const res = await fetcher(entry.avatar_url);
     if (!res.ok) return null;
     const src = URL.createObjectURL(await res.blob());
     runtimeObjectURLs.push(src);
@@ -97,21 +102,35 @@ async function loadAvatarImage(entry: AvatarCatalogEntry): Promise<AgentAvatar |
   }
 }
 
-export async function loadRuntimeAvatarCatalog(): Promise<number> {
+async function loadRuntimeAvatarCatalogFrom(
+  catalogURL: string,
+  fetcher: AvatarCatalogFetch,
+): Promise<number> {
   if (typeof URL === "undefined") return 0;
-  const res = await authedFetch("/api/avatars");
+  const res = await fetcher(catalogURL);
   if (!res.ok) throw new Error(`avatar catalog fetch failed: ${res.status}`);
   const body = (await res.json()) as { entries?: unknown };
   const entries = Array.isArray(body.entries)
     ? body.entries.filter(isCatalogEntry)
     : [];
   revokeRuntimeObjectURLs();
-  const avatars = (await Promise.all(entries.map(loadAvatarImage))).filter(
+  const avatars = (await Promise.all(entries.map((entry) => loadAvatarImage(entry, fetcher)))).filter(
     (avatar): avatar is AgentAvatar => avatar !== null,
   );
   runtimeAgentAvatars = avatars.filter((avatar) => avatar.kind === "agent");
   runtimeSystemAvatars = avatars.filter((avatar) => avatar.kind === "system");
   return avatars.length;
+}
+
+export async function loadRuntimeAvatarCatalog(): Promise<number> {
+  return loadRuntimeAvatarCatalogFrom("/api/avatars", authedFetch);
+}
+
+export async function loadPublicRuntimeAvatarCatalog(shareToken: string): Promise<number> {
+  return loadRuntimeAvatarCatalogFrom(
+    `/api/public/message-links/${encodeURIComponent(shareToken)}/avatars`,
+    fetch,
+  );
 }
 
 export function setRuntimeAvatarsForTest(avatars: AgentAvatar[]) {

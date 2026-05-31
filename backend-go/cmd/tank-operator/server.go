@@ -50,6 +50,7 @@ type appServer struct {
 	verifier            *auth.Verifier
 	gitHubInstallStates gitHubInstallStateStore
 	streamAuthTickets   streamAuthTicketStore
+	messageLinkShares   messageLinkShareStore
 	// streamRegistry tracks every open /api/sessions/{id}/events SSE
 	// handler so the /api/debug/session-event-streams admin endpoint
 	// can surface per-stream wake/page/emit state for diagnosis.
@@ -112,6 +113,11 @@ type sessionCommandBus interface {
 type streamAuthTicketStore interface {
 	Create(context.Context, pgstore.StreamAuthTicket) error
 	Validate(ctx context.Context, token, streamKind, sessionScope, sessionID string) (pgstore.StreamAuthTicket, error)
+}
+
+type messageLinkShareStore interface {
+	Create(context.Context, pgstore.MessageLinkShare) error
+	Get(context.Context, string) (pgstore.MessageLinkShare, error)
 }
 
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
@@ -222,6 +228,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/save-credentials", s.handleSaveCredentials)
 	mux.HandleFunc("POST /api/sessions/{session_id}/paste-image", s.handlePasteImage)
 	mux.HandleFunc("POST /api/sessions/{session_id}/messages", s.handleSendMessage)
+	mux.HandleFunc("POST /api/sessions/{session_id}/message-links", s.handleCreateMessageLinkShare)
 	mux.HandleFunc("POST /api/sessions/with-context", s.handleCreateSessionWithContext)
 
 	// File endpoints.
@@ -244,6 +251,16 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/read-state", s.handleUpdateSessionReadState)
+
+	// Public read-only transcript shares. These are intentionally not
+	// general unauthenticated session routes: every read validates an
+	// opaque token minted by the authenticated copy-message-link action.
+	mux.HandleFunc("GET /api/public/message-links/{share_token}", s.handleGetPublicMessageLink)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars", s.handlePublicMessageLinkAvatars)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars/{avatar_id}/image", s.handlePublicMessageLinkAvatarImage)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/avatars/{avatar_id}/backing", s.handlePublicMessageLinkAvatarBacking)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/timeline", s.handlePublicMessageLinkTimeline)
+	mux.HandleFunc("GET /api/public/message-links/{share_token}/turns/{turn_id}/activity", s.handlePublicMessageLinkTurnActivity)
 
 	// CLI / sandbox agent.
 	mux.HandleFunc("POST /api/sessions/{session_id}/cli-process", s.handleCLIProcess)

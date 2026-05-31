@@ -4,6 +4,41 @@ This ledger names user-facing behavior under the Transcript feature area. It is
 not a backlog; entries exist when behavior needs a stable handle for planning,
 review, tests, incident follow-up, or retirement.
 
+## Public Message Links
+
+Status: active
+
+Intent:
+Copying a transcript message link mints a durable opaque bearer share token so
+the URL can open for unauthenticated viewers without exposing transcripts by
+guessable `session` and `message` query parameters alone. The public view is a
+read-only transcript surface: no session sidebar, no composer, no Files,
+Settings, Background, or mutable controls. The Turns detail view remains
+available because it is part of understanding the transcript.
+
+Affected contracts:
+- Transcript
+- Transcript Navigation
+- Auth And Streams
+- App Chrome
+
+Contract impact:
+- Public reads are explicitly bearer-token gated through
+  `/api/public/message-links/{token}` and
+  `/api/public/message-links/{token}/timeline`; unauthenticated access to the
+  authenticated session API remains unsupported.
+- The copied link still targets durable transcript-row identities and can page
+  the same server-owned transcript row model as authenticated timeline reads.
+- The public SPA route renders a distinct full-screen workspace without the
+  authenticated app sidebar or composer, preserving App Chrome's ownership of
+  signed-in navigation.
+
+Evidence:
+- Backend: `backend-go/cmd/tank-operator/handlers_message_link_share_test.go`
+  covers share creation and unauthenticated public timeline reads.
+- Frontend: `frontend/src/migrationPolicy.test.ts` pins the public message-link
+  shell and public API path wiring.
+
 ## Compact Agent Activity
 
 Status: active
