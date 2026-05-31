@@ -33,6 +33,7 @@ import {
   SelectValue,
 } from "./components/ui/select";
 import { AdminAvatarManager } from "./AdminAvatarManager";
+import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
@@ -103,6 +104,10 @@ import {
   transitionNavigationMode,
 } from "./navigationMode";
 import { isTranscriptRefreshShortcut } from "./transcriptRefreshShortcut";
+import {
+  isTranscriptToTurnsShortcut,
+  isTurnsToTranscriptShortcut,
+} from "./transcriptViewShortcuts";
 import {
   REFRESH_FLASH_DURATION_MS,
   refreshFlashLabel,
@@ -1359,6 +1364,11 @@ function routeHasMessageTarget(): boolean {
 function replaceSessionRoute(id: string, tab: "chat" | "turns" = "chat", turnId?: string | null): void {
   if (routeHasMessageTarget()) return;
   const next = sessionRouteUrl(id, tab, turnId);
+  if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+function replaceSessionTranscriptRoute(id: string): void {
+  const next = sessionRouteUrl(id, "chat");
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -8389,6 +8399,7 @@ function RunSettingsPanel({
             <AdminAvatarManager onCatalogChanged={adminControls.onAvatarCatalogChanged} />
           </>
         ) : (
+          <>
           <section className="run-settings-section">
             <h2 className="run-settings-title">Admin Controls</h2>
             <button
@@ -8450,6 +8461,26 @@ function RunSettingsPanel({
               <SessionListDebugCaptureControls source="SettingsAdmin" />
             </div>
           </section>
+          <section className="run-settings-section">
+            <h2 className="run-settings-title">Useful files</h2>
+            {ADMIN_REFERENCE_LINKS.map((link) => (
+              <a
+                key={link.id}
+                className="run-settings-link"
+                href={link.href}
+                target="_blank"
+                rel="noreferrer"
+                title={link.description}
+              >
+                <span className="run-settings-link-label">
+                  <FileTextIcon className="run-settings-link-icon" aria-hidden="true" />
+                  <span>{link.label}</span>
+                </span>
+                <span className="run-settings-scope-value">Open</span>
+              </a>
+            ))}
+          </section>
+          </>
         )
       ) : (
         <>
@@ -8684,6 +8715,7 @@ function ChatPane({
   readOnly = false,
   sessionScope,
   avatarCatalogVersion,
+  sidebarTranscriptOpenRequest = 0,
 }: {
   session: Session;
   visible: boolean;
@@ -8725,6 +8757,7 @@ function ChatPane({
   readOnly?: boolean;
   sessionScope: string;
   avatarCatalogVersion: number;
+  sidebarTranscriptOpenRequest?: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [activityEntriesByTurn, setActivityEntriesByTurn] =
@@ -9610,6 +9643,17 @@ function ChatPane({
     window.addEventListener("popstate", applyCurrentSessionRoute);
     return () => window.removeEventListener("popstate", applyCurrentSessionRoute);
   }, [applyCurrentSessionRoute, visible]);
+  useEffect(() => {
+    if (!visible || sidebarTranscriptOpenRequest === 0) return;
+    setActiveTab("chat");
+    setPendingRouteTurnId(null);
+    setPendingTurnViewRouteAnchor(null);
+    slashManualOpenRef.current = false;
+    setSlashOpen(false);
+    setMentionOpen(false);
+    setMcpOpen(false);
+    replaceSessionTranscriptRoute(session.id);
+  }, [session.id, sidebarTranscriptOpenRequest, visible]);
 
   // History replay and live tail both hit the server-owned transcript-row read
   // model. Raw Tank item events stay behind the Turn activity detail endpoint
@@ -10735,6 +10779,7 @@ function ChatPane({
     if (!visible || !running) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !slashOpen && !mentionOpen && !mcpOpen) {
+        if (activeTab === "turns") return;
         if (e.target instanceof Element && e.target.closest(".run-header-name-input")) return;
         e.preventDefault();
         cancelRun();
@@ -10742,7 +10787,7 @@ function ChatPane({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [mcpOpen, mentionOpen, running, slashOpen, visible]);
+  }, [activeTab, mcpOpen, mentionOpen, running, slashOpen, visible]);
 
   // Slash- + mention-palette typing detection + composer-text mirror.
   // Listens at the composer wrap; reads the textarea's value + cursor on
@@ -11778,6 +11823,58 @@ function ChatPane({
     }
     setActiveTab("turns");
   }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
+
+  // T opens the turn-detail view from the focused transcript; Escape returns
+  // from Turns to the transcript. The T side uses the same "highlighted
+  // transcript" focus gate as transcript R/Home/End shortcuts: the shared
+  // <main> must be the event target.
+  useEffect(() => {
+    if (!visible || !transcriptScrollEl) return;
+    if (activeTab !== "chat" && activeTab !== "turns") return;
+    const onKey = (e: KeyboardEvent) => {
+      const ctx = {
+        key: e.key,
+        repeat: e.repeat,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
+        targetIsTranscript: e.target === transcriptScrollEl,
+        targetIsTextEntry: isTextEntryShortcutTarget(e.target),
+        activeTab,
+        turnsAvailable,
+        palettesOpen: slashOpen || mentionOpen || mcpOpen,
+      };
+      if (isTranscriptToTurnsShortcut(ctx)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        openTurnPage(undefined, { anchor: "bottom" });
+        return;
+      }
+      if (!isTurnsToTranscriptShortcut(ctx)) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      setPendingRouteTurnId(null);
+      setPendingTurnViewRouteAnchor(null);
+      setActiveTab("chat");
+      requestAnimationFrame(() => {
+        focusTranscriptSection();
+      });
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    focusTranscriptSection,
+    mcpOpen,
+    mentionOpen,
+    openTurnPage,
+    slashOpen,
+    transcriptScrollEl,
+    turnsAvailable,
+    visible,
+  ]);
 
   // R refreshes the transcript: a keyboard-driven force-pull of the durable
   // tail for the focused transcript region. Users reported that a live SSE gap
@@ -13395,6 +13492,8 @@ export function App() {
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
+  const [sessionTranscriptOpenRequests, setSessionTranscriptOpenRequests] =
+    useState<Record<string, number>>({});
   const [sessionActivities, setSessionActivities] = useState<Record<string, SessionActivitySummary>>({});
   // Refs mirror the latest sessions + activities state so the SSE event
   // reducer (which closes over the user-keyed useEffect) can read the
@@ -14300,6 +14399,16 @@ export function App() {
       });
       return changed ? next : prev;
     });
+    setSessionTranscriptOpenRequests((prev) => {
+      const existing = new Set(sessions.map((s) => s.id));
+      let changed = false;
+      const next: Record<string, number> = {};
+      for (const [id, signal] of Object.entries(prev)) {
+        if (existing.has(id) && !closingIds.has(id)) next[id] = signal;
+        else changed = true;
+      }
+      return changed ? next : prev;
+    });
     setSessionActivities((prev) => {
       const existing = new Set(sessions.map((s) => s.id));
       let changed = false;
@@ -14480,6 +14589,13 @@ export function App() {
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
+  function requestSessionTranscriptOpen(id: string) {
+    setSessionTranscriptOpenRequests((prev) => ({
+      ...prev,
+      [id]: (prev[id] ?? 0) + 1,
+    }));
+  }
+
   function goHome() {
     const url = new URL(window.location.href);
     url.pathname = "/";
@@ -14495,6 +14611,8 @@ export function App() {
       window.open(sessionUrl(id), "_blank", "noopener,noreferrer");
       return;
     }
+    requestSessionTranscriptOpen(id);
+    replaceSessionTranscriptRoute(id);
     activate(id);
   }
 
@@ -16048,6 +16166,7 @@ export function App() {
                       readOnly={readOnlySessionView}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
+                      sidebarTranscriptOpenRequest={sessionTranscriptOpenRequests[s.id] ?? 0}
                     />
                   </div>
                 ) : (
