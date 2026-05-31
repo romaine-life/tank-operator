@@ -339,6 +339,10 @@ externalSecret:
     # /etc/gemini-credentials/oauth_creds.json.
     secretKey: oauth_creds.json
     kvKey: gemini-credentials
+    # Test slots still create slot-local Secret names so leases clean up
+    # independently, but they all read from the shared no-proxy test OAuth
+    # credential in KV.
+    testKvKey: gemini-credentials-test
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

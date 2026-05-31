@@ -258,6 +258,20 @@ const CHECKS = [
     pattern: /"gemini_runner"[\s\S]{0,1200}?"pod_selector"\s*:\s*"tank-operator\/session-id,tank-operator\/mode in \(gemini_gui,gemini_test\)"/,
   },
   {
+    id: "helm-testenv-gemini-test-secret-global-kv",
+    from: "Checkbox 1: hot-swap works",
+    description: "test-env Gemini test Secret keeps a slot-local name but reads the shared gemini-credentials-test KV key",
+    kind: "helm-render-match",
+    release: "tank-operator-slot-2",
+    args: [
+      "--namespace", "tank-operator-slot-2",
+      "--set", "renderMode=warm",
+      "--set", "testEnv.slotName=tank-operator-slot-2",
+    ],
+    pattern: /name:\s*tank-operator-slot-2-gemini-credentials-test[\s\S]{0,500}?remoteRef:[\s\S]{0,120}?key:\s*gemini-credentials-test/,
+    absent: /key:\s*tank-operator-slot-2-gemini-credentials-test/,
+  },
+  {
     id: "sessionmodel-test-slot-mode-attaches-volume",
     from: "Checkbox 1: hot-swap works",
     file: "backend-go/internal/sessionmodel/sessionmodel_test.go",
@@ -463,6 +477,7 @@ async function dispatch(check) {
     case "git-diff-empty":        return gitDiffEmpty(check);
     case "yaml-block-unchanged":  return yamlBlockUnchanged(check);
     case "json-block-unchanged":  return await jsonBlockUnchanged(check);
+    case "helm-render-match":     return helmRenderMatch(check);
     case "exec":                  return execCheck(check);
     default: return { pass: false, evidence: `unknown kind: ${check.kind}` };
   }
@@ -601,6 +616,28 @@ function execCheck({ command, cwd }) {
     return { pass: false, evidence: `exit ${result.status}: ${tail}` };
   }
   return { pass: true, evidence: `exit 0` };
+}
+
+function helmRenderMatch({ release, args = [], pattern, absent }) {
+  const command = ["template", release, "k8s", ...args];
+  const result = spawnSync("helm", command, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  if (result.error) return { pass: false, evidence: `spawn error: ${result.error.message}` };
+  if (result.status !== 0) {
+    const stream = (result.stderr && result.stderr.trim()) || (result.stdout && result.stdout.trim()) || "";
+    const tail = stream.split("\n").slice(-3).join(" ¶ ").slice(0, 240);
+    return { pass: false, evidence: `helm template exit ${result.status}: ${tail}` };
+  }
+  if (!pattern.test(result.stdout)) {
+    return { pass: false, evidence: `rendered manifest did not match ${pattern}` };
+  }
+  if (absent && absent.test(result.stdout)) {
+    return { pass: false, evidence: `rendered manifest still contains forbidden ${absent}` };
+  }
+  return { pass: true, evidence: `helm ${command.join(" ")}` };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

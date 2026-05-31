@@ -127,7 +127,7 @@ claude-code-credentials
 {{- end -}}
 
 {{- define "tank-operator.geminiCredentialsTestKvKey" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-gemini-credentials-test" (include "tank-operator.slotName" .) }}{{- else -}}gemini-credentials-test{{- end -}}
+{{- default "gemini-credentials-test" .Values.externalSecret.geminiCredentials.testKvKey -}}
 {{- end -}}
 
 
