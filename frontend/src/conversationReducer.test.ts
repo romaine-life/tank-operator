@@ -117,11 +117,12 @@ test("Normal turn reaches ready with one user message and assistant item", () =>
 });
 
 test("turn.usage records latest usage without closing the active turn", () => {
-  const usage = { input_tokens: 100, output_tokens: 25, total_tokens: 125 };
+  const firstUsage = { input_tokens: 100, output_tokens: 25, total_tokens: 125 };
+  const latestUsage = { input_tokens: 120, output_tokens: 30, total_tokens: 150 };
   const usageObservation = {
     usage_source: "thread.tokenUsage.updated",
     provider_turn_id: "provider-turn-1",
-    update_count: 1,
+    update_count: 2,
   };
   const state = reduceConversationEvents([
     ev("1", "turn.submitted", { source: "codex" }),
@@ -129,7 +130,18 @@ test("turn.usage records latest usage without closing the active turn", () => {
     ev("3", "turn.usage", {
       source: "codex",
       payload: {
-        usage,
+        usage: firstUsage,
+        usage_observation: {
+          usage_source: "thread.tokenUsage.updated",
+          provider_turn_id: "provider-turn-1",
+          update_count: 1,
+        },
+      },
+    }),
+    ev("4", "turn.usage", {
+      source: "codex",
+      payload: {
+        usage: latestUsage,
         usage_observation: usageObservation,
       },
     }),
@@ -137,8 +149,10 @@ test("turn.usage records latest usage without closing the active turn", () => {
 
   assert.equal(state.runStatus, "streaming");
   assert.equal(state.activeTurnId, "turn-1");
-  assert.deepEqual(state.lastUsage, usage);
-  assert.deepEqual(state.turnUsages["turn-1"]?.usage, usage);
+  assert.deepEqual(state.lastUsage, latestUsage);
+  assert.equal(state.turnUsages["turn-1"]?.orderKey, "0003");
+  assert.equal(state.turnUsages["turn-1"]?.endOrderKey, "0004");
+  assert.deepEqual(state.turnUsages["turn-1"]?.usage, latestUsage);
   assert.deepEqual(state.turnUsages["turn-1"]?.usageObservation, usageObservation);
 });
 

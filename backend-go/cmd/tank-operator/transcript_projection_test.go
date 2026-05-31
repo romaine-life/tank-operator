@@ -194,15 +194,20 @@ func TestProjectTranscriptEventsCollapsesActiveTurnBeforeFinalAnswer(t *testing.
 }
 
 func TestProjectTranscriptEventsCarriesMidTurnUsageOnActiveActivity(t *testing.T) {
-	usage := map[string]any{
+	firstUsage := map[string]any{
 		"input_tokens":  float64(100),
 		"output_tokens": float64(25),
 		"total_tokens":  float64(125),
 	}
+	latestUsage := map[string]any{
+		"input_tokens":  float64(120),
+		"output_tokens": float64(30),
+		"total_tokens":  float64(150),
+	}
 	usageObservation := map[string]any{
 		"usage_source":     "thread.tokenUsage.updated",
 		"provider_turn_id": "provider-turn-1",
-		"update_count":     float64(1),
+		"update_count":     float64(2),
 	}
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
@@ -211,8 +216,20 @@ func TestProjectTranscriptEventsCarriesMidTurnUsageOnActiveActivity(t *testing.T
 		}),
 		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
 		projectionTestEvent("started", "003", "turn.started", "runner", "codex", "turn-1", "", nil),
-		projectionTestEvent("usage", "004", "turn.usage", "runner", "codex", "turn-1", "", map[string]any{
-			"usage":             usage,
+		projectionTestEvent("usage-1", "004", "turn.usage", "runner", "codex", "turn-1", "", map[string]any{
+			"usage": firstUsage,
+			"usage_observation": map[string]any{
+				"usage_source":     "thread.tokenUsage.updated",
+				"provider_turn_id": "provider-turn-1",
+				"update_count":     float64(1),
+			},
+		}),
+		projectionTestEvent("tool", "005", "item.started", "tool", "codex", "turn-1", "turn-1:item:tool", map[string]any{
+			"kind":    "command_execution",
+			"command": "go test ./...",
+		}),
+		projectionTestEvent("usage-2", "006", "turn.usage", "runner", "codex", "turn-1", "", map[string]any{
+			"usage":             latestUsage,
 			"usage_observation": usageObservation,
 		}),
 	}
@@ -225,22 +242,37 @@ func TestProjectTranscriptEventsCarriesMidTurnUsageOnActiveActivity(t *testing.T
 	if got, want := shell["kind"], "turn_activity"; got != want {
 		t.Fatalf("usage entry should project as active turn_activity, got %#v", shell)
 	}
-	if got := transcriptAnyMap(shell["turnUsage"]); got["input_tokens"] != float64(100) {
+	if got := transcriptAnyMap(shell["turnUsage"]); got["input_tokens"] != float64(120) {
 		t.Fatalf("shell turnUsage = %#v, want usage payload", shell["turnUsage"])
 	}
 	if got := transcriptAnyMap(shell["usageObservation"]); got["usage_source"] != "thread.tokenUsage.updated" {
 		t.Fatalf("shell usageObservation = %#v, want observation payload", shell["usageObservation"])
 	}
 	activity := transcriptAnyMap(shell["activity"])
-	if got := transcriptAnyMap(activity["turnUsage"]); got["total_tokens"] != float64(125) {
+	if got := transcriptAnyMap(activity["turnUsage"]); got["total_tokens"] != float64(150) {
 		t.Fatalf("activity turnUsage = %#v, want usage payload", activity["turnUsage"])
 	}
+	if got := activity["endOrderKey"]; got != "006" {
+		t.Fatalf("activity endOrderKey = %#v, want latest usage order key", got)
+	}
 	body := projection.ActivityBodies["turn-1"]
-	if got, want := body.CompactedEntryIDs, []string{"turn-usage:turn-1"}; len(got) != len(want) || got[0] != want[0] {
+	if got, want := body.CompactedEntryIDs, []string{"turn-usage:turn-1", "turn-1:item:tool"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("compacted ids = %#v, want %#v", got, want)
 	}
 	if got := body.Entries[0]["metaKind"]; got != "turn_usage" {
 		t.Fatalf("activity body metaKind = %#v, want turn_usage", got)
+	}
+	if got := body.Entries[0]["orderKey"]; got != "004" {
+		t.Fatalf("usage row orderKey = %#v, want first usage order key", got)
+	}
+	if got := body.Entries[0]["activityEndOrderKey"]; got != "006" {
+		t.Fatalf("usage row activityEndOrderKey = %#v, want latest usage order key", got)
+	}
+	if got := transcriptAnyMap(body.Entries[0]["turnUsage"]); got["total_tokens"] != float64(150) {
+		t.Fatalf("usage row turnUsage = %#v, want latest usage payload", body.Entries[0]["turnUsage"])
+	}
+	if got := body.Entries[1]["id"]; got != "turn-1:item:tool" {
+		t.Fatalf("second activity entry id = %#v, want tool after anchored usage row", got)
 	}
 }
 

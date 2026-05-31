@@ -173,11 +173,12 @@ test("turn.completed produces no meta entry — success speaks through the bubbl
 });
 
 test("turn.usage projects a stable usage meta entry while the turn is active", () => {
-  const usage = { input_tokens: 100, output_tokens: 25, total_tokens: 125 };
+  const firstUsage = { input_tokens: 100, output_tokens: 25, total_tokens: 125 };
+  const latestUsage = { input_tokens: 120, output_tokens: 30, total_tokens: 150 };
   const usageObservation = {
     usage_source: "thread.tokenUsage.updated",
     provider_turn_id: "provider-turn-1",
-    update_count: 1,
+    update_count: 2,
   };
   const projection = projectConversationState(
     reduceConversationEvents([
@@ -191,7 +192,27 @@ test("turn.usage projects a stable usage meta entry while the turn is active", (
       ev("4", "turn.usage", {
         source: "codex",
         payload: {
-          usage,
+          usage: firstUsage,
+          usage_observation: {
+            usage_source: "thread.tokenUsage.updated",
+            provider_turn_id: "provider-turn-1",
+            update_count: 1,
+          },
+        },
+      }),
+      ev("5", "item.started", {
+        actor: "tool",
+        source: "codex",
+        timeline_id: "turn-1:item:tool",
+        payload: {
+          kind: "command_execution",
+          command: "go test ./...",
+        },
+      }),
+      ev("6", "turn.usage", {
+        source: "codex",
+        payload: {
+          usage: latestUsage,
           usage_observation: usageObservation,
         },
       }),
@@ -203,12 +224,17 @@ test("turn.usage projects a stable usage meta entry while the turn is active", (
   if (meta?.kind === "meta") {
     assert.equal(meta.id, "turn-usage:turn-1");
     assert.equal(meta.metaKind, "turn_usage");
-    assert.deepEqual(meta.turnUsage, usage);
+    assert.equal(meta.orderKey, "0004");
+    assert.equal(meta.activityEndOrderKey, "0006");
+    assert.deepEqual(meta.turnUsage, latestUsage);
     assert.deepEqual(meta.usageObservation, usageObservation);
   }
+  const metaIndex = projection.entries.findIndex((entry) => entry.kind === "meta" && entry.metaKind === "turn_usage");
+  const toolIndex = projection.entries.findIndex((entry) => entry.kind === "tool");
+  assert.ok(metaIndex >= 0 && toolIndex >= 0 && metaIndex < toolIndex, "usage row should keep its first transcript position");
 });
 
-test("turn.usage meta row is suppressed once terminal usage can annotate transcript rows", () => {
+test("turn.usage meta row remains anchored once terminal usage annotates transcript rows", () => {
   const midUsage = { input_tokens: 100, output_tokens: 25, total_tokens: 125 };
   const terminalUsage = { input_tokens: 120, output_tokens: 30, total_tokens: 150 };
   const projection = projectConversationState(
@@ -230,10 +256,9 @@ test("turn.usage meta row is suppressed once terminal usage can annotate transcr
     ]),
   );
 
-  assert.equal(
-    projection.entries.some((entry) => entry.kind === "meta" && entry.metaKind === "turn_usage"),
-    false,
-  );
+  const meta = projection.entries.find((entry) => entry.kind === "meta" && entry.metaKind === "turn_usage");
+  assert.ok(meta, "turn.usage should remain as a durable turn activity row");
+  assert.equal(meta?.orderKey, "0003");
   const user = projection.entries.find((entry) => entry.kind === "message" && entry.role === "user");
   assert.deepEqual(user?.turnUsage, terminalUsage);
 });
