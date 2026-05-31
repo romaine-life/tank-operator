@@ -291,6 +291,7 @@ func TestPodManifestCodexUsesAPIProxyWithoutCredentialSecret(t *testing.T) {
 func TestPodManifestGeminiUsesAPIProxy(t *testing.T) {
 	manifest := PodManifest("12", "nelson@romaine.life", GeminiGUIMode, ManifestOptions{
 		SessionImage:            "claude-image",
+		GeminiSessionImage:      "gemini-image",
 		GeminiAPIProxyIP:        "10.0.0.60",
 		OAuthGatewayCAConfigMap: "claude-oauth-ca",
 	})
@@ -300,11 +301,18 @@ func TestPodManifestGeminiUsesAPIProxy(t *testing.T) {
 	assertVolume(t, spec["volumes"].([]any), "oauth-gateway-ca")
 
 	containers := spec["containers"].([]any)
-	claudeEnv := containerEnv(findContainer(t, containers, "claude"))
+	claude := findContainer(t, containers, "claude")
+	if got, want := claude["image"], "gemini-image"; got != want {
+		t.Fatalf("claude image = %v, want %q", got, want)
+	}
+	claudeEnv := containerEnv(claude)
 	if got, want := claudeEnv["NODE_EXTRA_CA_CERTS"], "/etc/oauth-gateway-ca/ca.crt"; got != want {
 		t.Fatalf("claude NODE_EXTRA_CA_CERTS = %v, want %q", got, want)
 	}
 	geminiRunner := findContainer(t, containers, "gemini-runner")
+	if got, want := geminiRunner["image"], "gemini-image"; got != want {
+		t.Fatalf("runner image = %v, want %q", got, want)
+	}
 	runnerEnv := containerEnv(geminiRunner)
 	if got, want := runnerEnv["NODE_EXTRA_CA_CERTS"], "/etc/oauth-gateway-ca/ca.crt"; got != want {
 		t.Fatalf("runner NODE_EXTRA_CA_CERTS = %v, want %q", got, want)

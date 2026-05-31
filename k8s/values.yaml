@@ -57,6 +57,7 @@ session:
   image: romainecr.azurecr.io/claude-container:claude-00852e69fa32ac12440c6f26d380d87a9b5deb2e226aca1d024d37e7d28d5494
   codexImage: romainecr.azurecr.io/codex-container:codex-7a864f2026d1ec18d9add476a9a369f60acb7161b76fb82d70c7a0790c1af31a
   piImage: romainecr.azurecr.io/pi-container:pi-a76eb5dddac512608b6ad28acdb6c21758cdba95b169cce16763e109e4a50ae3
+  geminiImage: romainecr.azurecr.io/gemini-container:gemini-placeholder
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
