@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 )
 
@@ -83,6 +84,21 @@ func TestSessionReportShareSnapshotRoundTripsStaticJSON(t *testing.T) {
 	rangeBody, ok := decoded["range"].(map[string]any)
 	if !ok || rangeBody["label"] != "Last 1 day" || rangeBody["starts_at"] != "2026-05-31T12:00:00Z" {
 		t.Fatalf("decoded range = %#v", decoded["range"])
+	}
+}
+
+func TestSessionReportUserBodyUsesOwnerGravatar(t *testing.T) {
+	body := sessionReportUserBody(auth.User{
+		Email:      "pod-460@service.tank.romaine.life",
+		Role:       auth.RoleService,
+		Name:       "service pod",
+		ActorEmail: "User@Example.COM",
+	})
+	if body["email"] != "user@example.com" || body["name"] != "user@example.com" {
+		t.Fatalf("body = %#v", body)
+	}
+	if body["avatar_url"] != "https://www.gravatar.com/avatar/b58996c504c5638798eb6b511e6f49af?s=64&d=mp" {
+		t.Fatalf("avatar_url = %q", body["avatar_url"])
 	}
 }
 

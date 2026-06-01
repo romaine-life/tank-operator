@@ -34,6 +34,11 @@ type SessionSummary = {
 
 type SessionReport = {
   scope: string;
+  user?: {
+    email?: string;
+    name?: string;
+    avatar_url?: string;
+  };
   days?: number;
   range?: {
     mode: "last_days" | "custom";
@@ -323,6 +328,8 @@ export function SessionRepoReport({
         </div>
       </section>
 
+      {report?.user && <ReportUserIdentity user={report.user} />}
+
       {error && <div className="session-repo-report-error">{error}</div>}
       {shareStatus && <div className="session-repo-report-success">{shareStatus}</div>}
 
@@ -406,6 +413,34 @@ export function SessionRepoReport({
   );
 }
 
+function ReportUserIdentity({
+  user,
+}: {
+  user: { email?: string; name?: string; avatar_url?: string };
+}) {
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const label = user.name || user.email || "Unknown user";
+  const detail = user.email && user.email !== label ? user.email : "";
+  return (
+    <section className="session-repo-report-user" aria-label="Report user">
+      {user.avatar_url && !avatarFailed ? (
+        <span className="session-repo-report-user-avatar">
+          <img src={user.avatar_url} alt="" onError={() => setAvatarFailed(true)} />
+        </span>
+      ) : (
+        <span className="session-repo-report-user-avatar session-repo-report-user-avatar-fallback">
+          {userInitials(label)}
+        </span>
+      )}
+      <span className="session-repo-report-user-text">
+        <span className="session-repo-report-user-label">Report for</span>
+        <strong>{label}</strong>
+        {detail && <span>{detail}</span>}
+      </span>
+    </section>
+  );
+}
+
 function ReportMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="session-repo-report-metric">
@@ -413,6 +448,14 @@ function ReportMetric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function userInitials(value: string): string {
+  const source = value.trim() || "?";
+  const parts = source.split(/[\s@._-]+/).filter(Boolean);
+  const first = parts[0]?.[0] ?? source[0];
+  const second = parts[1]?.[0] ?? "";
+  return (first + second).toUpperCase().slice(0, 2);
 }
 
 function formatCount(value: number | undefined): string {

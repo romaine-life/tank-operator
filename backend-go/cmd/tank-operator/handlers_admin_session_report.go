@@ -85,6 +85,22 @@ type sessionReportSharePayload struct {
 	Report  json.RawMessage `json:"report"`
 }
 
+func sessionReportUserBody(user auth.User) map[string]any {
+	email := strings.ToLower(strings.TrimSpace(user.OwnerEmail()))
+	name := strings.TrimSpace(user.Name)
+	if !strings.EqualFold(user.Email, email) {
+		name = ""
+	}
+	if name == "" {
+		name = email
+	}
+	return map[string]any{
+		"email":      email,
+		"name":       name,
+		"avatar_url": auth.GravatarURL(email, 64),
+	}
+}
+
 func (s *appServer) handleAdminSessionReport(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
@@ -113,7 +129,7 @@ func (s *appServer) handleAdminSessionReport(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	s.writeSessionReport(w, r, scope, window, limit, nil)
+	s.writeSessionReport(w, r, scope, window, limit, sessionReportUserBody(user), nil)
 }
 
 func (s *appServer) handleCreateSessionReportShare(w http.ResponseWriter, r *http.Request) {
@@ -153,7 +169,7 @@ func (s *appServer) handleCreateSessionReportShare(w http.ResponseWriter, r *htt
 	createdAt := time.Now().UTC()
 	for attempt := 0; attempt < 3; attempt++ {
 		token = auth.RandomHex(messageLinkShareTokenBytes)
-		snapshot, snapshotErr := s.buildSessionReportBody(r.Context(), scope, window, limit, map[string]any{
+		snapshot, snapshotErr := s.buildSessionReportBody(r.Context(), scope, window, limit, sessionReportUserBody(user), map[string]any{
 			"token":      token,
 			"created_at": createdAt.Format(time.RFC3339Nano),
 			"snapshot":   true,
@@ -227,8 +243,8 @@ func (s *appServer) handleGetPublicSessionReportShare(w http.ResponseWriter, r *
 	_, _ = w.Write(snapshot)
 }
 
-func (s *appServer) writeSessionReport(w http.ResponseWriter, r *http.Request, scope string, window sessionReportWindow, limit int, share map[string]any) {
-	body, err := s.buildSessionReportBody(r.Context(), scope, window, limit, share, time.Now().UTC())
+func (s *appServer) writeSessionReport(w http.ResponseWriter, r *http.Request, scope string, window sessionReportWindow, limit int, reportUser map[string]any, share map[string]any) {
+	body, err := s.buildSessionReportBody(r.Context(), scope, window, limit, reportUser, share, time.Now().UTC())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -236,7 +252,7 @@ func (s *appServer) writeSessionReport(w http.ResponseWriter, r *http.Request, s
 	writeJSON(w, http.StatusOK, body)
 }
 
-func (s *appServer) buildSessionReportBody(ctx context.Context, scope string, window sessionReportWindow, limit int, share map[string]any, fetchedAt time.Time) (map[string]any, error) {
+func (s *appServer) buildSessionReportBody(ctx context.Context, scope string, window sessionReportWindow, limit int, reportUser map[string]any, share map[string]any, fetchedAt time.Time) (map[string]any, error) {
 	sessions, err := fetchSessionReportRows(ctx, s, scope, window, limit)
 	if err != nil {
 		return nil, fmt.Errorf("session report: %w", err)
@@ -249,6 +265,7 @@ func (s *appServer) buildSessionReportBody(ctx context.Context, scope string, wi
 	return map[string]any{
 		"description": "Cheap draft report over recent sessions. Repo attribution uses create-time sessions.repos only.",
 		"scope":       scope,
+		"user":        reportUser,
 		"days":        window.Days,
 		"range":       sessionReportWindowBody(window),
 		"limit":       limit,
