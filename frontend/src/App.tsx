@@ -16156,6 +16156,24 @@ function AuthenticatedApp() {
     (activeWorkspaceSession != null && CHAT_MODES.has(activeWorkspaceSession.mode));
   const workspaceTitleChrome = showWorkspaceTitleChrome ? (
     <div className="workspace-title-overlay">
+      {(useHomeTitleChrome
+        ? selectedProvider
+        : activeWorkspaceSession != null
+          ? MODE_MENU_ICONS[activeWorkspaceSession.mode]
+          : null) && (
+        <div className="workspace-title-provider-icon">
+          <ProviderIcon
+            provider={
+              useHomeTitleChrome
+                ? selectedProvider
+                : activeWorkspaceSession != null
+                  ? MODE_MENU_ICONS[activeWorkspaceSession.mode]
+                  : "anthropic" /* unreachable fallback */
+            }
+            className="run-header-provider-icon"
+          />
+        </div>
+      )}
       {useHomeTitleChrome ? (
         homeEditingTitle ? (
           <input
