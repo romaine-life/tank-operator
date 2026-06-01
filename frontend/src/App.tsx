@@ -24,7 +24,7 @@ import {
 import { cachedTurnActivityRefreshRequests } from "./turnActivityCache";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
-import { ChatComposer, type RunComposerMode } from "./ChatComposer";
+import { ChatComposer } from "./ChatComposer";
 import {
   Select,
   SelectContent,
@@ -440,7 +440,6 @@ type ForkSessionRequest = {
   // so legacy forks created before this field existed keep working without
   // a migration.
   effort: string;
-  permissionMode: string;
 };
 
 type AppPublicConfig = {
@@ -2322,7 +2321,6 @@ function DemoLanding() {
   const [demoGeminiModelId, setDemoGeminiModelId] = useState(DEFAULT_GEMINI_MODEL_ID);
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
   const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
-  const [demoComposerMode, setDemoComposerMode] = useState<RunComposerMode>("default");
   const demoBodyRef = useRef<HTMLElement | null>(null);
   const demoComposerWrapRef = useRef<HTMLDivElement | null>(null);
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? null;
@@ -2706,8 +2704,6 @@ function DemoLanding() {
                   onSubmit={() => {
                     startLogin();
                   }}
-                  permissionMode={demoComposerMode}
-                  onPermissionModeChange={setDemoComposerMode}
                   sendByCtrlEnter={false}
                   hideHint
                   toolButtons={
@@ -3245,10 +3241,6 @@ function isImagePath(path: string): boolean {
   const ext = path.toLowerCase().split(".").pop() ?? "";
   return IMAGE_EXTS.has(ext);
 }
-// RunComposerMode + PERMISSION_MODE_INFO have moved to ./ChatComposer.tsx
-// alongside the shared composer component. They are re-imported above so
-// existing call sites in this file continue to compile unchanged.
-
 // Verbs cycled by the streaming status pill. Matches cloudcli's
 // ClaudeStatus rotation so the user sees motion even when the model
 // hasn't sent any text deltas yet.
@@ -8865,7 +8857,6 @@ function ChatPane({
   const [selectedBackgroundId, setSelectedBackgroundId] = useState<string | null>(null);
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
   const [rolloutState, setRolloutState] = useState<RolloutState | null>(session.rollout_state ?? null);
-  const [composerMode, setComposerMode] = useState<RunComposerMode>("default");
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
   const isGemini = isGeminiRunMode(session.mode);
@@ -9164,7 +9155,6 @@ function ChatPane({
     // first run object — but every run object carries it for telemetry
     // parity with model.
     effort: string;
-    permissionMode: string;
     turnStart: number;
     submitAccepted: boolean;
   } | null>(null);
@@ -11522,7 +11512,6 @@ function ChatPane({
         // request logs; the omit-when-empty keeps the wire shape
         // clean for non-Claude sessions.
         ...(run.effort ? { effort: run.effort } : {}),
-        permission_mode: run.permissionMode,
         skill_name: run.skillName,
         follow_up: run.followUp,
       }),
@@ -11625,7 +11614,6 @@ function ChatPane({
       followUp,
       model: isClaude || isCodex ? selectedModelId : "",
       effort: isClaude || isCodex ? selectedEffortId : "",
-      permissionMode: composerMode,
       turnStart,
       submitAccepted: false,
     };
@@ -13097,7 +13085,6 @@ function ChatPane({
                         // forked pod boots with the same reasoning depth the
                         // user had been working at.
                         effort: isClaude || isCodex ? selectedEffortId : "",
-                        permissionMode: composerMode,
                       })
               }
               onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
@@ -13385,8 +13372,6 @@ function ChatPane({
             if (readOnly) return;
             handleSubmit({ text: args.text, files: [] });
           }}
-          permissionMode={composerMode}
-          onPermissionModeChange={setComposerMode}
           sendByCtrlEnter={runPrefs.sendByCtrlEnter}
           hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
           hideHint={!readOnly}
@@ -13397,7 +13382,6 @@ function ChatPane({
           }
           disabled={readOnly}
           canSubmit={!readOnly && ready}
-          controlsDisabled={readOnly || !ready}
           submitStatus={submitStatus}
           onStop={cancelRun}
           isStopping={runStatus === "stopping"}
@@ -13934,12 +13918,6 @@ function AuthenticatedApp() {
   const [sessionViewScopeOverride, setSessionViewScopeOverride] = useState(
     readInitialSessionViewScopeOverride,
   );
-  // The home composer's permission-mode pick. Carries into the first turn
-  // when the user types a prompt and presses Enter from the home screen,
-  // so the choice they made on the launch surface persists into the live
-  // session's run pane (which uses its own per-session composerMode state).
-  const [homeComposerMode, setHomeComposerMode] =
-    useState<RunComposerMode>("default");
   const [homeComposerText, setHomeComposerText] = useState("");
   const [homeSessionName, setHomeSessionName] = useState("");
   const [homeEditingTitle, setHomeEditingTitle] = useState(false);
@@ -15130,7 +15108,6 @@ function AuthenticatedApp() {
   async function createSession(
     mode: SessionMode = defaultSessionMode,
     initialPrompt?: string,
-    initialPermissionMode: RunComposerMode = "default",
     initialSkillName?: SkillStateName,
     initialMessageMode: InitialMessageMode = DEFAULT_INITIAL_MESSAGE_MODE,
   ) {
@@ -15190,7 +15167,6 @@ function AuthenticatedApp() {
             ? { display_attachments: attachmentPayloadsForApi(launchDisplayAttachments) }
             : {}),
           ...(seedTurnDeferredAtCreate ? { deferred: true } : {}),
-          permission_mode: initialPermissionMode,
           ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
         }
       : undefined;
@@ -15344,7 +15320,6 @@ function AuthenticatedApp() {
             body: JSON.stringify({
               client_nonce: seedClientNonce,
               prompt: turnPrompt,
-              permission_mode: initialPermissionMode,
               ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
               ...(seedTurnDeferredAtCreate ? { existing_user_message: true } : {}),
               follow_up: false,
@@ -15431,7 +15406,6 @@ function AuthenticatedApp() {
         body: JSON.stringify({
           client_nonce: newForkTurnId(),
           prompt,
-          permission_mode: request.permissionMode,
           follow_up: false,
           origin_session_id: request.sourceSession.id,
         }),
@@ -16419,7 +16393,7 @@ function AuthenticatedApp() {
               <ChatComposer
                 className="run-composer-home run-composer-interactive"
                 placeholder={RUN_COMPOSER_PLACEHOLDER}
-                onSubmit={({ text, permissionMode }) => {
+                onSubmit={({ text }) => {
                   const trimmed = text.trim();
                   const initialMode = runPrefs.initialMessageMode;
                   const mode =
@@ -16429,13 +16403,10 @@ function AuthenticatedApp() {
                   void createSession(
                     mode,
                     trimmed || undefined,
-                    permissionMode,
                     undefined,
                     initialMode,
                   );
                 }}
-                permissionMode={homeComposerMode}
-                onPermissionModeChange={setHomeComposerMode}
                 sendByCtrlEnter={runPrefs.sendByCtrlEnter}
                 hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
                 hideHint
@@ -16487,7 +16458,6 @@ function AuthenticatedApp() {
                         void createSession(
                           defaultSessionMode,
                           homeComposerText.trim() || undefined,
-                          homeComposerMode,
                           "test",
                         );
                       }}

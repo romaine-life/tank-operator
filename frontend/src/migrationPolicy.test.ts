@@ -587,7 +587,7 @@ test("home splash test action seeds the first turn as a skill invocation", () =>
   assert.equal(appSource.includes("composeSkillPrompt"), true);
   assert.match(appSource, /initialSkillName\?: SkillStateName/);
   assert.match(appSource, /\.\.\.\(requestedInitialSkillName \? \{ skill_name: requestedInitialSkillName \} : \{\}\)/);
-  assert.match(appSource, /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*homeComposerMode,[\s\S]*"test"/);
+  assert.match(appSource, /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*"test"/);
   assert.equal(appSource.includes("Available once your session starts"), false);
 });
 
