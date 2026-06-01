@@ -122,7 +122,10 @@ function ComposerTextPreview({ text }: { text: string }) {
   if (!slashMatch) return null;
   const command = slashMatch[1] ?? "";
   return (
-    <span className="run-composer-slash-token">{command}</span>
+    <>
+      <span className="run-composer-slash-token">{command}</span>
+      {text.slice(command.length)}
+    </>
   );
 }
 
@@ -274,7 +277,10 @@ export function ChatComposer({
             </div>
           )}
           <PromptInputTextarea
-            className="run-composer-textarea"
+            className={[
+              "run-composer-textarea",
+              text.match(/^\/[^\s/]+/) ? "run-composer-textarea-tokenized" : "",
+            ].filter(Boolean).join(" ")}
             placeholder={placeholder}
             disabled={disabled}
           />
