@@ -511,6 +511,11 @@ button:disabled {
   overflow: hidden;
 }
 
+.admin-avatar-file[data-drag-active="true"] {
+  border-color: rgba(125, 211, 252, 0.86);
+  background: rgba(14, 116, 144, 0.18);
+}
+
 .admin-avatar-file input {
   position: absolute;
   inset: 0;
