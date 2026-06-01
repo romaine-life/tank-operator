@@ -114,6 +114,7 @@ func TestSummarizeSessionReportCreditsSelectedRepos(t *testing.T) {
 				TotalTokens:  100,
 				InputTokens:  80,
 				OutputTokens: 20,
+				TurnCount:    2,
 				UsageEvents:  2,
 			},
 		},
@@ -124,13 +125,14 @@ func TestSummarizeSessionReportCreditsSelectedRepos(t *testing.T) {
 				TotalTokens:  40,
 				InputTokens:  30,
 				OutputTokens: 10,
+				TurnCount:    1,
 				UsageEvents:  1,
 			},
 		},
 	}
 
 	repos, totals := summarizeSessionReport(sessions)
-	if totals.SessionCount != 2 || totals.RepoCount != 3 || totals.TotalTokens != 140 || totals.UsageEvents != 3 {
+	if totals.SessionCount != 2 || totals.RepoCount != 3 || totals.TurnCount != 3 || totals.TotalTokens != 140 || totals.UsageEvents != 3 {
 		t.Fatalf("totals = %+v", totals)
 	}
 	want := map[string]int64{
@@ -141,6 +143,9 @@ func TestSummarizeSessionReportCreditsSelectedRepos(t *testing.T) {
 	for _, repo := range repos {
 		if got, ok := want[repo.Repo]; !ok || repo.TotalTokens != got {
 			t.Fatalf("repo summary %+v not in want %v", repo, want)
+		}
+		if repo.TurnCount == 0 {
+			t.Fatalf("repo summary missing turns: %+v", repo)
 		}
 		delete(want, repo.Repo)
 	}

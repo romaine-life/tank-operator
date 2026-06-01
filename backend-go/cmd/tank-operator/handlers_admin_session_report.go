@@ -44,6 +44,7 @@ type sessionReportRow struct {
 type sessionReportRepo struct {
 	Repo         string     `json:"repo"`
 	SessionCount int        `json:"session_count"`
+	TurnCount    int        `json:"turn_count"`
 	TotalTokens  int64      `json:"total_tokens"`
 	InputTokens  int64      `json:"input_tokens"`
 	OutputTokens int64      `json:"output_tokens"`
@@ -53,6 +54,7 @@ type sessionReportRepo struct {
 type sessionReportTotals struct {
 	SessionCount int   `json:"session_count"`
 	RepoCount    int   `json:"repo_count"`
+	TurnCount    int   `json:"turn_count"`
 	TotalTokens  int64 `json:"total_tokens"`
 	InputTokens  int64 `json:"input_tokens"`
 	OutputTokens int64 `json:"output_tokens"`
@@ -63,6 +65,7 @@ type tokenUsage struct {
 	TotalTokens  int64 `json:"total_tokens"`
 	InputTokens  int64 `json:"input_tokens"`
 	OutputTokens int64 `json:"output_tokens"`
+	TurnCount    int   `json:"turn_count"`
 	UsageEvents  int   `json:"usage_events"`
 }
 
@@ -488,6 +491,7 @@ func attachSessionReportUsage(ctx context.Context, s *appServer, scope string, s
 	for storageKey, acc := range accs {
 		i := indexByKey[storageKey]
 		var usage tokenUsage
+		usage.TurnCount = len(acc.byTurn)
 		usage.UsageEvents = acc.usageEvents
 		for _, turnUsage := range acc.byTurn {
 			usage.TotalTokens += turnUsage.TotalTokens
@@ -557,6 +561,7 @@ func summarizeSessionReport(sessions []sessionReportRow) ([]sessionReportRepo, s
 		totals.TotalTokens += session.Usage.TotalTokens
 		totals.InputTokens += session.Usage.InputTokens
 		totals.OutputTokens += session.Usage.OutputTokens
+		totals.TurnCount += session.Usage.TurnCount
 		totals.UsageEvents += session.Usage.UsageEvents
 
 		repos := session.Repos
@@ -574,6 +579,7 @@ func summarizeSessionReport(sessions []sessionReportRow) ([]sessionReportRepo, s
 				byRepo[repo] = summary
 			}
 			summary.SessionCount++
+			summary.TurnCount += session.Usage.TurnCount
 			summary.TotalTokens += session.Usage.TotalTokens
 			summary.InputTokens += session.Usage.InputTokens
 			summary.OutputTokens += session.Usage.OutputTokens

@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { CalendarIcon, ChevronDownIcon, GitBranchIcon, LinkIcon, RefreshCwIcon } from "lucide-react";
+import { CalendarIcon, ChevronDownIcon, ExternalLinkIcon, GitBranchIcon, LinkIcon, RefreshCwIcon } from "lucide-react";
 import { authedFetch } from "./auth";
 
 type TokenUsage = {
   total_tokens: number;
   input_tokens: number;
   output_tokens: number;
+  turn_count?: number;
   usage_events: number;
 };
 
 type RepoSummary = {
   repo: string;
   session_count: number;
+  turn_count?: number;
   total_tokens: number;
   input_tokens: number;
   output_tokens: number;
@@ -153,21 +155,45 @@ export function SessionRepoReport({
     setShareStatus("");
   };
 
-  const createShare = async () => {
-    if (!reportURL || publicView) return;
+  const createShareURL = async (): Promise<string> => {
+    if (!reportURL || publicView) throw new Error("report cannot be shared from this view");
+    const shareURL = reportURL.replace("/api/admin/session-report?", "/api/admin/session-report-shares?");
+    const res = await authedFetch(shareURL, { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    const body = (await res.json()) as { browser_url?: unknown };
+    const browserURL = typeof body.browser_url === "string" ? body.browser_url : "";
+    if (!browserURL) throw new Error("share response did not include a browser_url");
+    return browserURL;
+  };
+
+  const copyShare = async () => {
     setLoading(true);
     setError("");
     setShareStatus("");
     try {
-      const shareURL = reportURL.replace("/api/admin/session-report?", "/api/admin/session-report-shares?");
-      const res = await authedFetch(shareURL, { method: "POST" });
-      if (!res.ok) throw new Error(await res.text());
-      const body = (await res.json()) as { browser_url?: unknown };
-      const browserURL = typeof body.browser_url === "string" ? body.browser_url : "";
-      if (!browserURL) throw new Error("share response did not include a browser_url");
+      const browserURL = await createShareURL();
       await navigator.clipboard.writeText(browserURL);
       setShareStatus("Copied shared report link");
     } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const openShare = async () => {
+    const popup = window.open("", "_blank");
+    setLoading(true);
+    setError("");
+    setShareStatus("");
+    try {
+      const browserURL = await createShareURL();
+      if (!popup) throw new Error("browser blocked the new tab");
+      popup.opener = null;
+      popup.location.href = browserURL;
+      setShareStatus("Opened shared report");
+    } catch (err) {
+      popup?.close();
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
@@ -263,25 +289,37 @@ export function SessionRepoReport({
               <button
                 type="button"
                 className="session-repo-report-refresh"
-                onClick={() => void createShare()}
+                onClick={() => void copyShare()}
                 disabled={loading || !reportURL}
                 aria-label="Copy shared report link"
                 title="Copy shared report link"
               >
                 <LinkIcon aria-hidden="true" />
               </button>
+              <button
+                type="button"
+                className="session-repo-report-refresh"
+                onClick={() => void openShare()}
+                disabled={loading || !reportURL}
+                aria-label="Open shared report"
+                title="Open shared report"
+              >
+                <ExternalLinkIcon aria-hidden="true" />
+              </button>
             </>
           )}
-          <button
-            type="button"
-            className="session-repo-report-refresh"
-            onClick={() => void loadReport()}
-            disabled={loading || !reportURL}
-            aria-label="Refresh report"
-            title="Refresh report"
-          >
-            <RefreshCwIcon aria-hidden="true" />
-          </button>
+          {!publicView && (
+            <button
+              type="button"
+              className="session-repo-report-refresh"
+              onClick={() => void loadReport()}
+              disabled={loading || !reportURL}
+              aria-label="Refresh report"
+              title="Refresh report"
+            >
+              <RefreshCwIcon aria-hidden="true" />
+            </button>
+          )}
         </div>
       </section>
 
@@ -291,6 +329,7 @@ export function SessionRepoReport({
       <section className="session-repo-report-metrics" aria-label="Session report totals">
         <ReportMetric label="Sessions" value={formatCount(report?.totals.session_count)} />
         <ReportMetric label="Repos" value={formatCount(report?.totals.repo_count)} />
+        <ReportMetric label="Turns" value={formatCount(report?.totals.turn_count)} />
         <ReportMetric label="Tokens" value={formatTokenCount(report?.totals.total_tokens)} />
         <ReportMetric label="Usage rows" value={formatCount(report?.totals.usage_events)} />
       </section>
@@ -303,6 +342,7 @@ export function SessionRepoReport({
               <tr>
                 <th>Repo</th>
                 <th>Sessions</th>
+                <th>Turns</th>
                 <th>Tokens</th>
               </tr>
             </thead>
@@ -311,12 +351,13 @@ export function SessionRepoReport({
                 <tr key={repo.repo}>
                   <td>{repo.repo}</td>
                   <td>{repo.session_count}</td>
+                  <td>{formatCount(repo.turn_count)}</td>
                   <td>{formatTokenCount(repo.total_tokens)}</td>
                 </tr>
               ))}
               {report && report.repos.length === 0 && (
                 <tr>
-                  <td colSpan={3}>No sessions in this window.</td>
+                  <td colSpan={4}>No sessions in this window.</td>
                 </tr>
               )}
             </tbody>
@@ -330,6 +371,7 @@ export function SessionRepoReport({
               <tr>
                 <th>Session</th>
                 <th>Repos</th>
+                <th>Turns</th>
                 <th>Tokens</th>
               </tr>
             </thead>
@@ -343,12 +385,13 @@ export function SessionRepoReport({
                     <span className="session-repo-report-muted">{session.mode}</span>
                   </td>
                   <td>{session.repos.length > 0 ? session.repos.join(", ") : "Unassigned"}</td>
+                  <td>{formatCount(session.usage.turn_count)}</td>
                   <td>{formatTokenCount(session.usage.total_tokens)}</td>
                 </tr>
               ))}
               {report && topSessions.length === 0 && (
                 <tr>
-                  <td colSpan={3}>No sessions in this window.</td>
+                  <td colSpan={4}>No sessions in this window.</td>
                 </tr>
               )}
             </tbody>
