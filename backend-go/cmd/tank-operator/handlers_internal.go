@@ -403,6 +403,49 @@ def sse_json(body):
     except json.JSONDecodeError:
         return {}
 
+def mcp_post(url, payload, session_id=None):
+    headers = {
+        "Content-Type": "application/json",
+        "Accept": "application/json, text/event-stream",
+    }
+    if session_id:
+        headers["Mcp-Session-Id"] = session_id
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=4) as resp:
+        return sse_json(resp.read()), resp.headers.get("Mcp-Session-Id")
+
+def mcp_list_tools(url):
+    init_msg, session_id = mcp_post(url, {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-03-26",
+            "capabilities": {},
+            "clientInfo": {"name": "tank-operator-capability-probe", "version": "1.0"},
+        },
+    })
+    if init_msg.get("error"):
+        raise RuntimeError(json.dumps(init_msg["error"]))
+    if session_id:
+        mcp_post(url, {
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized",
+            "params": {},
+        }, session_id)
+    tools_msg, _ = mcp_post(url, {
+        "jsonrpc": "2.0",
+        "id": 2,
+        "method": "tools/list",
+        "params": {},
+    }, session_id)
+    return tools_msg
+
 skills = []
 seen_skills = set()
 config_dir = "/opt/tank/session-config"
@@ -454,24 +497,8 @@ for server, raw in sorted((mcp_config.get("mcpServers") or {}).items()):
     url = str(raw.get("url") or "").strip()
     if not url:
         continue
-    payload = json.dumps({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/list",
-        "params": {},
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json, text/event-stream",
-        },
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            msg = sse_json(resp.read())
+        msg = mcp_list_tools(url)
     except Exception as exc:
         mcp_tool_errors.append({"server": server, "error": str(exc)})
         continue

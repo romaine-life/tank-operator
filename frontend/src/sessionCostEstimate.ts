@@ -6,6 +6,7 @@ type UsageRow = {
 
 export type SessionCostEstimate = {
   amountUsd: number;
+  tokens: number;
 };
 
 type ModelRates = {
@@ -79,17 +80,22 @@ export function estimateTurnCost(
 
 export function estimateTranscriptCost(rows: UsageRow[], modelId: string): SessionCostEstimate | null {
   let total = 0;
+  let tokens = 0;
   let reportedTurns = 0;
   const turns = transcriptTurns(rows);
 
   for (const turn of turns.values()) {
     let reportedCost: number | null = null;
-    for (const usage of turn.usage) {
+    let reportedTokens = 0;
+    for (let index = turn.usage.length - 1; index >= 0; index -= 1) {
+      const usage = turn.usage[index];
       reportedCost = estimateUsageCostUSD(usage, modelId);
-      if (reportedCost !== null) break;
+      reportedTokens = usageTokenCount(usage);
+      if (reportedCost !== null || reportedTokens > 0) break;
     }
     if (reportedCost !== null) {
       total += reportedCost;
+      tokens += reportedTokens;
       reportedTurns += 1;
       continue;
     }
@@ -98,6 +104,7 @@ export function estimateTranscriptCost(rows: UsageRow[], modelId: string): Sessi
   if (reportedTurns === 0) return null;
   return {
     amountUsd: total,
+    tokens,
   };
 }
 
@@ -109,6 +116,38 @@ export function formatTurnCostUsd(value: number): string {
   return formatCostUsdAtCents(value);
 }
 
+export function formatCompactTokens(value: number): string {
+  const safeValue = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
+  if (safeValue < 1_000) return String(safeValue);
+  if (safeValue < 1_000_000) return `${Math.floor(safeValue / 1_000)}k`;
+  return `${Math.floor(safeValue / 1_000_000)}m`;
+}
+
+export function contextWindowTokenCount(usage: unknown, contextWindow: number): number {
+  if (!isRecord(usage)) return 0;
+  const safeContextWindow = Number.isFinite(contextWindow)
+    ? Math.max(1, Math.floor(contextWindow))
+    : 1;
+  const inputTokens = numberField(usage, "input_tokens") ?? numberField(usage, "prompt_tokens") ?? 0;
+  if (inputTokens <= 0) return 0;
+
+  const cachedInputTokens =
+    numberField(usage, "cached_input_tokens") ??
+    openAiCachedInputTokens(usage) ??
+    numberField(usage, "cache_read_input_tokens") ??
+    0;
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+
+  // Codex thread.tokenUsage.updated reports cumulative thread input and
+  // cached-input totals. Those totals can climb far beyond the model context
+  // window, while the uncached delta is the current active context pressure.
+  // Providers that report an in-window prompt count keep the raw input total.
+  if (inputTokens > safeContextWindow && uncachedInputTokens > 0) {
+    return Math.floor(uncachedInputTokens);
+  }
+  return Math.floor(inputTokens);
+}
+
 function formatCostUsdAtCents(value: number): string {
   const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
   if (safeValue === 0) return "$0.00";
@@ -118,6 +157,30 @@ function formatCostUsdAtCents(value: number): string {
 
 function costFromTokens(tokens: number, ratePerMillion: number): number {
   return (Math.max(0, tokens) / PER_MILLION) * ratePerMillion;
+}
+
+function usageTokenCount(usage: unknown): number {
+  if (!isRecord(usage)) return 0;
+  const totalTokens = numberField(usage, "total_tokens");
+  if (totalTokens !== null) return Math.max(0, Math.floor(totalTokens));
+
+  const outputTokens =
+    numberField(usage, "output_tokens") ??
+    numberField(usage, "completion_tokens") ??
+    0;
+  const reasoningOutputTokens = numberField(usage, "reasoning_output_tokens") ?? 0;
+  const inputTokens = numberField(usage, "input_tokens") ?? numberField(usage, "prompt_tokens") ?? 0;
+  const cacheWriteTokens = numberField(usage, "cache_creation_input_tokens") ?? 0;
+  const cacheReadTokens =
+    numberField(usage, "cache_read_input_tokens") ??
+    openAiCachedInputTokens(usage);
+  return Math.max(0, Math.floor(
+    inputTokens +
+    cacheWriteTokens +
+    cacheReadTokens +
+    outputTokens +
+    reasoningOutputTokens,
+  ));
 }
 
 function transcriptTurns(rows: UsageRow[]): Map<string, { usage: unknown[] }> {

@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  contextWindowTokenCount,
   estimateTranscriptCost,
   estimateTurnCost,
   estimateUsageCostUSD,
+  formatCompactTokens,
   formatComposerCostUsd,
   formatTurnCostUsd,
 } from "./sessionCostEstimate";
@@ -53,6 +55,7 @@ test("deduplicates transcript usage rows by turn", () => {
   ], "gpt-5.4-mini");
 
   assertNearlyEqual(estimate?.amountUsd ?? null, 0.01575);
+  assert.equal(estimate?.tokens, 6_000);
 });
 
 test("ignores transcript rows when provider usage is missing", () => {
@@ -75,6 +78,7 @@ test("uses provider usage when available", () => {
   ], "gpt-5.4-mini");
 
   assertNearlyEqual(estimate?.amountUsd ?? null, 0.00525);
+  assert.equal(estimate?.tokens, 2_000);
 });
 
 test("estimates one selected turn from mixed transcript rows", () => {
@@ -85,6 +89,33 @@ test("estimates one selected turn from mixed transcript rows", () => {
   ], "gpt-5.4-mini", "turn-2");
 
   assertNearlyEqual(estimate?.amountUsd ?? null, 0.0105);
+  assert.equal(estimate?.tokens, 4_000);
+});
+
+test("formats compact token counts", () => {
+  assert.equal(formatCompactTokens(0), "0");
+  assert.equal(formatCompactTokens(999), "999");
+  assert.equal(formatCompactTokens(1_000), "1k");
+  assert.equal(formatCompactTokens(999_999), "999k");
+  assert.equal(formatCompactTokens(1_000_000), "1m");
+  assert.equal(formatCompactTokens(12_900_000), "12m");
+});
+
+test("context window token count uses active uncached Codex delta for cumulative thread usage", () => {
+  assert.equal(contextWindowTokenCount({
+    cached_input_tokens: 24_488_064,
+    input_tokens: 25_131_214,
+    output_tokens: 29_896,
+    reasoning_output_tokens: 4_449,
+    total_tokens: 25_161_110,
+  }, 1_050_000), 643_150);
+});
+
+test("context window token count keeps in-window cached prompts intact", () => {
+  assert.equal(contextWindowTokenCount({
+    input_tokens: 180_000,
+    cached_input_tokens: 120_000,
+  }, 200_000), 180_000);
 });
 
 test("formats compact composer costs", () => {
