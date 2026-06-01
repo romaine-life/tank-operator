@@ -49,6 +49,12 @@ test("DEFAULT_CODEX_MODEL_ID and DEFAULT_CODEX_EFFORT_ID pin the strongest Codex
   assert.match(appSource, /const DEFAULT_CODEX_EFFORT_ID = "xhigh";/);
 });
 
+test("Codex model options require a concrete model instead of account default", () => {
+  assert.doesNotMatch(appSource, /codex-account-default/);
+  assert.doesNotMatch(appSource, /Codex (?:· )?Account default/i);
+  assert.doesNotMatch(appSource, /Codex account default/i);
+});
+
 test("RunPrefs persists provider model and effort across page reloads", () => {
   assert.match(appSource, /claudeModelId:\s*string;/);
   assert.match(appSource, /claudeEffort:\s*string;/);

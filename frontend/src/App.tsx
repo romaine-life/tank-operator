@@ -2341,7 +2341,7 @@ function DemoLanding() {
         ? demoCodexModelId
         : selectedProvider === "gemini" || selectedProvider === "gemini_test"
           ? demoGeminiModelId
-          : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+          : "";
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -3369,8 +3369,6 @@ interface ModelOption {
   label: string; // display name in dropdown + provider card
 }
 
-const CODEX_ACCOUNT_DEFAULT_MODEL_ID = "codex-account-default";
-
 // CLAUDE_MODELS is ordered with the agent-runner's DEFAULT_MODEL first
 // (claude-opus-4-8) so a fresh session lands on the strongest model by
 // default. Opus 4.7 stays listed as a secondary option for the first
@@ -3392,7 +3390,6 @@ const CODEX_MODELS: ModelOption[] = [
   { id: "gpt-5.4-mini", label: "Codex · GPT-5.4 Mini" },
   { id: "gpt-5.3-codex", label: "Codex · GPT-5.3 Codex" },
   { id: "gpt-5.3-codex-spark", label: "Codex · GPT-5.3 Codex Spark" },
-  { id: CODEX_ACCOUNT_DEFAULT_MODEL_ID, label: "Codex · Account default" },
 ];
 const GEMINI_MODELS: ModelOption[] = [
   { id: "gemini-3.5-flash", label: "Gemini · 3.5 Flash" },
@@ -3449,9 +3446,6 @@ function effortOptionsForMode(mode: SessionMode): EffortOption[] {
 
 function modelDisplayLabel(mode: SessionMode, modelId: string): string {
   const trimmed = modelId.trim();
-  if (!trimmed && (mode === "codex_gui" || mode === "codex_exec_gui" || mode === "codex_app_server")) {
-    return "Codex account default";
-  }
   if (!trimmed) return "";
   return modelOptionsForMode(mode).find((option) => option.id === trimmed)?.label ?? trimmed;
 }
@@ -8929,7 +8923,7 @@ function ChatPane({
       ? DEFAULT_CODEX_EFFORT_ID
       : "";
   const initialModelId = hasConfiguredSessionRunConfig
-    ? (configuredModelId || (isCodex ? CODEX_ACCOUNT_DEFAULT_MODEL_ID : fallbackModelId))
+    ? (configuredModelId || fallbackModelId)
     : (modelOptions.some((opt) => opt.id === preferredModelId) ? preferredModelId : fallbackModelId);
   const initialEffortId = hasConfiguredSessionRunConfig
     ? (configuredEffortId || fallbackEffortId)
@@ -11617,9 +11611,7 @@ function ChatPane({
       displayAttachments,
       skillName,
       followUp,
-      model: isClaude || isCodex
-        ? (selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId)
-        : "",
+      model: isClaude || isCodex ? selectedModelId : "",
       effort: isClaude || isCodex ? selectedEffortId : "",
       permissionMode: composerMode,
       turnStart,
@@ -11939,9 +11931,7 @@ function ChatPane({
     [activeBackgroundEntries, detachedShellEntries],
   );
   const appliedModelId = (session.runtime_model ?? "").trim();
-  const modelForContext = selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
-    ? DEFAULT_CODEX_MODEL_ID
-    : selectedModelId;
+  const modelForContext = selectedModelId;
   const modelForCostEstimate = appliedModelId || modelForContext;
   const turnViewItems = useMemo(
     () => buildTurnViewItems(
@@ -12281,19 +12271,19 @@ function ChatPane({
   const rolloutActionActive = currentSkillState === "rollout";
   const appliedEffortId = (session.runtime_effort ?? "").trim();
   const hasAppliedRuntimeConfig = Boolean(session.runtime_configured_at);
-  const configuredDisplayModelId =
-    selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedModelId;
   const configuredModelLabel =
-    modelDisplayLabel(session.mode, configuredDisplayModelId) || "default model";
+    modelDisplayLabel(session.mode, selectedModelId) || "model not selected";
   const configuredEffortLabel = effortDisplayLabel(session.mode, selectedEffortId);
   const modelChipLabel = hasAppliedRuntimeConfig
-    ? (modelDisplayLabel(session.mode, appliedModelId) || "Default model")
+    ? (modelDisplayLabel(session.mode, appliedModelId) || configuredModelLabel)
     : "Model pending";
   const effortChipLabel = hasAppliedRuntimeConfig
     ? effortDisplayLabel(session.mode, appliedEffortId)
     : "";
   const modelChipTitle = hasAppliedRuntimeConfig
-    ? `Runtime applied: ${modelChipLabel}${effortChipLabel ? ` / ${effortChipLabel}` : ""}`
+    ? (appliedModelId
+      ? `Runtime applied: ${modelChipLabel}${effortChipLabel ? ` / ${effortChipLabel}` : ""}`
+      : `Runtime did not report a model. Selected: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`)
     : `Waiting for runner report. Intended: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`;
   const contextWindow = getContextWindow(modelForContext);
   const sessionCostEstimate = useMemo(
@@ -13089,11 +13079,7 @@ function ChatPane({
                         sourceSession: session,
                         forkedEntry,
                         model:
-                          isClaude || isCodex
-                            ? (selectedModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID
-                                ? ""
-                                : selectedModelId)
-                            : "",
+                          isClaude || isCodex ? selectedModelId : "",
                         // Fork inherits the source pane's effort pick so the
                         // forked pod boots with the same reasoning depth the
                         // user had been working at.
@@ -15152,7 +15138,7 @@ function AuthenticatedApp() {
     const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
     const seedModel =
       selectedProvider === "anthropic" || selectedProvider === "codex"
-        ? (selectedHomeModelId === CODEX_ACCOUNT_DEFAULT_MODEL_ID ? "" : selectedHomeModelId)
+        ? selectedHomeModelId
         : "";
     const seedEffort =
       selectedProvider === "anthropic" || selectedProvider === "codex"
@@ -15702,7 +15688,7 @@ function AuthenticatedApp() {
         ? runPrefs.codexModelId
         : selectedProvider === "gemini" || selectedProvider === "gemini_test"
           ? runPrefs.geminiModelId
-          : CODEX_ACCOUNT_DEFAULT_MODEL_ID;
+          : "";
   const selectedHomeEffortId =
     selectedProvider === "anthropic"
       ? runPrefs.claudeEffort
