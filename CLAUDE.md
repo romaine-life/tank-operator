@@ -155,10 +155,10 @@ rationale and stage shape.
 
 Glimmung workflow runtime is database-backed. The live workflow shape is the
 Workflow row registered in Glimmung's Cosmos database, not a GitHub Actions
-workflow and not a file read from this repo at dispatch time. Tank does not
-keep a `.glimmung/workflows/default.yaml` manifest; update the live
-registration through Glimmung's admin API/MCP surface when the workflow shape
-changes.
+workflow and not a file read from this repo at dispatch time. The authored
+desired-state file is `.glimmung/workflows/default.yaml`; update that file,
+merge it, then sync `tank-operator.default` through Glimmung's admin API/MCP
+surface when the workflow shape changes.
 
 A single LLM doing code + tests + screenshots in one run carries each
 phase's noise into the next decision. The split is the load-bearing

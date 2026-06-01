@@ -1,0 +1,417 @@
+phases:
+  - name: prepare
+    kind: k8s_job
+    run_on: success
+    purpose: work
+    workflow_filename: ""
+    workflow_ref: main
+    inputs: {}
+    outputs:
+      - validation_url
+    requirements: {}
+    verify: false
+    recycle_policy: null
+    evidence_verification_gate: false
+    depends_on: []
+    jobs:
+      - id: prepare
+        name: Prepare live validation target
+        image: ""
+        command: []
+        args: []
+        env: {}
+        steps:
+          - slug: run-prepare
+            title: Run prepare
+            type: run
+            run: /bin/bash /workspace/tank-operator/scripts/glimmung-native/prepare.sh
+        timeout_seconds: 300
+        managed: true
+        checkout:
+          repo: nelsong6/tank-operator
+          ref: main
+          path: /workspace/tank-operator
+        working_directory: /workspace
+  - name: implement
+    kind: k8s_job
+    run_on: success
+    purpose: work
+    workflow_filename: ""
+    workflow_ref: main
+    inputs:
+      validation_url: ${{ phases.prepare.outputs.validation_url }}
+    outputs:
+      - branch_name
+      - implementation
+    requirements: {}
+    verify: false
+    recycle_policy: null
+    evidence_verification_gate: false
+    depends_on:
+      - prepare
+    jobs:
+      - id: issue-agent
+        name: Managed issue agent
+        image: ""
+        command: []
+        args: []
+        env: {}
+        steps:
+          - slug: prepare-repo
+            title: Prepare repository
+            type: run
+            run: |
+              set -Eeuo pipefail
+              git config user.name "tank-operator-agent[bot]"
+              git config user.email "tank-operator-agent@romaine.life"
+              branch="glimmung/${GLIMMUNG_RUN_ID}"
+              printf "%s" "$branch" >/workspace/.branch-name
+              git checkout -B "$branch"
+              {
+                printf "# Glimmung Native Run\n\n"
+                printf "Project: %s\n" "${GLIMMUNG_PROJECT}"
+                printf "Workflow: %s\n" "${GLIMMUNG_WORKFLOW}"
+                printf "Run: %s\n" "${GLIMMUNG_RUN_ID}"
+                printf "Issue number: %s\n\n" "${GLIMMUNG_ISSUE_NUMBER:-}"
+                printf "Validation URL: %s\n\n" "${GLIMMUNG_INPUT_VALIDATION_URL:-}"
+                printf "## Title\n%s\n\n" "${GLIMMUNG_ISSUE_TITLE:-}"
+                printf "## Body\n%s\n" "${GLIMMUNG_ISSUE_BODY:-}"
+              } >/workspace/GLIMMUNG_CONTEXT.md
+          - slug: run-agent
+            title: Run managed agent
+            type: agent
+            agent:
+              slot: implementation
+              prompt_file: .github/agent/prompt.md
+              prompt: The repository is checked out at /workspace/repo on the run branch. Read /workspace/GLIMMUNG_CONTEXT.md plus the project prompt. Use GLIMMUNG_INPUT_VALIDATION_URL when the issue needs a live app URL. Do not commit, push, open a PR, or edit runner-local configuration; the workflow publishes the branch after this managed agent step.
+          - slug: publish-branch
+            title: Publish implementation branch
+            type: run
+            run: |
+              set -Eeuo pipefail
+              branch="$(cat /workspace/.branch-name)"
+              base_ref="${GLIMMUNG_WORK_CONTEXT_BASE_REF:-main}"
+              git add -A
+              if git diff --cached --quiet; then
+                ahead="$(git rev-list --count "HEAD" "^origin/${base_ref}" 2>/dev/null || printf "0")"
+                if [ "${ahead}" = "0" ]; then
+                  echo "managed agent produced no changes" >&2
+                  exit 1
+                fi
+              else
+                git commit -m "agent: address issue ${GLIMMUNG_ISSUE_NUMBER:-${GLIMMUNG_RUN_ID}}" -m "${GLIMMUNG_ISSUE_TITLE:-Glimmung issue}" -m "Glimmung run ${GLIMMUNG_RUN_ID}."
+              fi
+              git fetch origin "$base_ref"
+              git rebase "origin/${base_ref}"
+              git push -u origin "HEAD:${branch}"
+              implementation="$(jq -nc --arg branch_name "$branch" '{status:"pushed", branch_name:$branch_name}')"
+              jq -nc --arg branch_name "$branch" --argjson implementation "$implementation" '{branch_name:$branch_name, implementation:($implementation|tostring)}' >>"$GLIMMUNG_OUTPUT_FILE"
+              jq -nc --arg branch_name "$branch" --argjson implementation "$implementation" '{implementation:$implementation, branch_name:$branch_name}' >"$GLIMMUNG_COMPLETION_FILE"
+        timeout_seconds: 2400
+        managed: true
+        checkout:
+          repo: nelsong6/tank-operator
+          ref: main
+          path: /workspace/repo
+        working_directory: /workspace/repo
+  - name: verify
+    kind: k8s_job
+    run_on: success
+    purpose: verification
+    workflow_filename: ""
+    workflow_ref: main
+    inputs:
+      branch_name: ${{ phases.implement.outputs.branch_name }}
+      implementation: ${{ phases.implement.outputs.implementation }}
+      validation_url: ${{ phases.prepare.outputs.validation_url }}
+    outputs:
+      - verification
+    requirements: {}
+    verify: true
+    recycle_policy: null
+    evidence_verification_gate: false
+    depends_on:
+      - implement
+    jobs:
+      - id: verify
+        name: Verify live app floor
+        image: ""
+        command: []
+        args: []
+        env: {}
+        steps:
+          - slug: run-verify
+            title: Run verification
+            type: run
+            run: /bin/bash /workspace/tank-operator/scripts/glimmung-native/verify.sh
+        timeout_seconds: 300
+        managed: true
+        checkout:
+          repo: nelsong6/tank-operator
+          ref: main
+          path: /workspace/tank-operator
+        working_directory: /workspace
+  - name: evidence-gate
+    kind: k8s_job
+    run_on: success
+    purpose: evidence_gate
+    workflow_filename: ""
+    workflow_ref: main
+    inputs:
+      verification: ${{ phases.verify.outputs.verification }}
+    outputs: []
+    requirements: {}
+    verify: false
+    recycle_policy:
+      max_attempts: 3
+      "on":
+        - verify_fail
+        - verify_malformed
+      lands_at: implement
+    evidence_verification_gate: true
+    depends_on:
+      - verify
+    jobs:
+      - id: evidence-verification-gate
+        name: Evidence verification gate
+        image: ""
+        command: []
+        args: []
+        env: {}
+        steps:
+          - slug: evaluate-verdict
+            title: Evaluate verification verdict
+            type: run
+            run: |-
+              set -Eeuo pipefail
+              raw="${GLIMMUNG_INPUT_VERIFICATION:-}"
+              if [ -z "${raw}" ]; then
+                echo "verification input is empty" >&2
+                exit 2
+              fi
+              status="$(printf '%s' "${raw}" | jq -er '.status // empty')" || {
+                echo "verification input is not valid JSON or missing status" >&2
+                exit 2
+              }
+              printf "verification.status = '%s'\n" "${status}"
+              printf '%s' "${raw}" | jq -r '.reasons[]? | "reason: \(.)"'
+              if [ "${status}" = "pass" ]; then
+                exit 0
+              fi
+              exit 1
+              	
+            shell: bash
+        timeout_seconds: 60
+        managed: true
+  - name: cleanup_early
+    kind: k8s_job
+    run_on: always
+    purpose: teardown
+    workflow_filename: ""
+    workflow_ref: main
+    inputs: {}
+    outputs: []
+    requirements: {}
+    verify: false
+    recycle_policy: null
+    evidence_verification_gate: false
+    depends_on:
+      - evidence-gate
+    jobs:
+      - id: cleanup
+        name: Clean native runner leftovers
+        image: ""
+        command: []
+        args: []
+        env: {}
+        steps:
+          - slug: run-cleanup
+            title: Run cleanup
+            type: run
+            run: /bin/bash /workspace/tank-operator/scripts/glimmung-native/cleanup.sh
+        timeout_seconds: 300
+        managed: true
+        checkout:
+          repo: nelsong6/tank-operator
+          ref: main
+          path: /workspace/tank-operator
+        working_directory: /workspace
+    skip_when_preserve_test_env: true
+  - name: touchpoint
+    kind: k8s_job
+    run_on: success
+    purpose: review_touchpoint
+    workflow_filename: ""
+    workflow_ref: main
+    inputs: {}
+    outputs: []
+    requirements: {}
+    verify: false
+    recycle_policy: null
+    evidence_verification_gate: false
+    depends_on:
+      - cleanup_early
+    jobs:
+      - id: pr-touchpoint
+        name: PR touchpoint
+        primitive: pr_touchpoint
+        image: ""
+        command: []
+        args: []
+        env: {}
+        steps:
+          - slug: ensure-pr-touchpoint
+            title: Ensure PR touchpoint
+            type: run
+            run: |
+              set -Eeuo pipefail
+              if [ -z "${GLIMMUNG_PR_TOUCHPOINT_URL:-}" ]; then
+                echo "GLIMMUNG_PR_TOUCHPOINT_URL is not configured" >&2
+                exit 2
+              fi
+              echo "Ensuring PR touchpoint for ${GLIMMUNG_RUN_REF:-unknown run}"
+              response="$(mktemp)"
+              status="$(curl -sS -o "${response}" -w '%{http_code}' -X POST "${GLIMMUNG_PR_TOUCHPOINT_URL}")" || {
+                code="$?"
+                echo "PR touchpoint request failed with curl exit ${code}" >&2
+                exit "${code}"
+              }
+              cat "${response}" | jq .
+              if [ "${status}" -lt 200 ] || [ "${status}" -ge 300 ]; then
+                echo "PR touchpoint request returned HTTP ${status}" >&2
+                exit 1
+              fi
+              result_status="$(jq -r '.status // empty' "${response}")"
+              if [ "${result_status}" = "skipped" ]; then
+                echo "PR touchpoint skipped: $(jq -r '.reason // "no reason"' "${response}")"
+                exit 0
+              fi
+              if [ "${result_status}" != "ensured" ]; then
+                echo "PR touchpoint returned unexpected status '${result_status}'" >&2
+                exit 2
+              fi
+              pr_number="$(jq -r '.pr_number // empty' "${response}")"
+              touchpoint_ref="$(jq -r '.touchpoint_ref // empty' "${response}")"
+              html_url="$(jq -r '.html_url // empty' "${response}")"
+              {
+                if [ -n "${pr_number}" ]; then printf 'pr_number=%s\n' "${pr_number}"; fi
+                if [ -n "${touchpoint_ref}" ]; then printf 'touchpoint_ref=%s\n' "${touchpoint_ref}"; fi
+                if [ -n "${html_url}" ]; then printf 'pr_url=%s\n' "${html_url}"; fi
+              } >>"${GLIMMUNG_OUTPUT_FILE}"
+              echo "PR touchpoint ensured: ${touchpoint_ref:-unknown}"
+              if [ -n "${html_url}" ]; then
+                echo "PR URL: ${html_url}"
+              fi
+            shell: bash
+        timeout_seconds: 120
+        managed: true
+  - name: touchpoint_gate
+    kind: k8s_job
+    run_on: success
+    purpose: review_gate
+    workflow_filename: k8s_job:touchpoint_gate
+    workflow_ref: main
+    inputs: {}
+    outputs: []
+    requirements: {}
+    verify: false
+    recycle_policy: null
+    evidence_verification_gate: false
+    depends_on:
+      - touchpoint
+    jobs:
+      - id: pr-merge
+        name: PR merge
+        primitive: pr_merge
+        image: ""
+        command: []
+        args: []
+        env: {}
+        steps:
+          - slug: merge-pull-request
+            title: Idempotently merge the touchpoint PR
+            type: run
+            run: |
+              set -Eeuo pipefail
+              if [ -z "${GLIMMUNG_PR_MERGE_URL:-}" ]; then
+                echo "GLIMMUNG_PR_MERGE_URL is not configured" >&2
+                exit 2
+              fi
+              echo "Merging PR for ${GLIMMUNG_RUN_REF:-unknown run}"
+              response="$(mktemp)"
+              status="$(curl -sS -o "${response}" -w '%{http_code}' -X POST "${GLIMMUNG_PR_MERGE_URL}")" || {
+                code="$?"
+                echo "PR merge request failed with curl exit ${code}" >&2
+                exit "${code}"
+              }
+              cat "${response}" | jq .
+              if [ "${status}" -lt 200 ] || [ "${status}" -ge 300 ]; then
+                echo "PR merge request returned HTTP ${status}" >&2
+                exit 1
+              fi
+              result_status="$(jq -r '.status // empty' "${response}")"
+              case "${result_status}" in
+                merged)
+                  echo "PR merged: $(jq -r '.merge_commit_sha // ""' "${response}")"
+                  ;;
+                already_merged)
+                  echo "PR was already merged (idempotent success)"
+                  ;;
+                *)
+                  echo "PR merge returned unexpected status '${result_status}'" >&2
+                  exit 2
+                  ;;
+              esac
+              pr_number="$(jq -r '.pr_number // empty' "${response}")"
+              merge_commit="$(jq -r '.merge_commit_sha // empty' "${response}")"
+              {
+                if [ -n "${pr_number}" ]; then printf 'pr_number=%s\n' "${pr_number}"; fi
+                if [ -n "${merge_commit}" ]; then printf 'merge_commit_sha=%s\n' "${merge_commit}"; fi
+                printf 'merge_status=%s\n' "${result_status}"
+              } >>"${GLIMMUNG_OUTPUT_FILE}"
+            shell: bash
+        timeout_seconds: 120
+        managed: true
+  - name: cleanup_final
+    kind: k8s_job
+    run_on: always
+    purpose: teardown
+    workflow_filename: ""
+    workflow_ref: main
+    inputs: {}
+    outputs: []
+    requirements: {}
+    verify: false
+    recycle_policy: null
+    evidence_verification_gate: false
+    depends_on:
+      - touchpoint_gate
+    jobs:
+      - id: cleanup-final
+        name: Final cleanup
+        image: ""
+        command: []
+        args: []
+        env: {}
+        steps:
+          - slug: run-cleanup
+            title: Run cleanup
+            type: run
+            run: /bin/bash /workspace/tank-operator/scripts/glimmung-native/cleanup.sh
+        timeout_seconds: 300
+        managed: true
+        checkout:
+          repo: nelsong6/tank-operator
+          ref: main
+          path: /workspace/tank-operator
+        working_directory: /workspace
+pr:
+  recycle_policy:
+    max_attempts: 3
+    "on":
+      - pr_review_changes_requested
+    lands_at: implement
+budget:
+  total: 25
+default_requirements: {}
+metadata: {}
