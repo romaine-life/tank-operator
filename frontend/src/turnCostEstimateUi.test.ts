@@ -20,9 +20,9 @@ test("turn cost UI does not expose transcript cost fallback copy", () => {
 });
 
 test("composer token count uses current context, not cumulative session usage", () => {
-  assert.match(appSource, /tokens=\{tokensUsed\}/);
-  assert.match(appSource, /tokenScopeLabel="current context tokens"/);
+  assert.match(appSource, /cost=\{\{[\s\S]*?tokens: tokensUsed,[\s\S]*?tokenScopeLabel: "current context tokens"/);
   assert.doesNotMatch(appSource, /tokens=\{sessionCostEstimate\?\.tokens\s*\?\?\s*null\}/);
+  assert.doesNotMatch(appSource, /tokens:\s*sessionCostEstimate\?\.tokens\s*\?\?\s*null/);
 });
 
 test("turn token count uses current context pressure", () => {

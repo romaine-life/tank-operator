@@ -1653,6 +1653,166 @@ function ComposerCostEstimate({
   );
 }
 
+interface ComposerToolButtonsProps {
+  attach: {
+    disabled?: boolean;
+    title: string;
+    onClick?: () => void;
+  };
+  usage: ComponentProps<typeof ComposerUsageRing>;
+  cost: ComponentProps<typeof ComposerCostEstimate>;
+  rollout?: {
+    visible?: boolean;
+    active?: boolean;
+    disabled?: boolean;
+    title: string;
+    onClick?: () => void;
+  };
+  test: {
+    active?: boolean;
+    disabled?: boolean;
+    readyUrl?: string;
+    title: string;
+    onClick?: () => void;
+    onReadyClick?: () => void;
+  };
+  pullRequest: {
+    url?: string;
+  };
+  slash: {
+    disabled?: boolean;
+    title: string;
+    count?: number;
+    onMouseDown?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  };
+  mcp: {
+    disabled?: boolean;
+    title: string;
+    count?: number;
+    onMouseDown?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
+  };
+  modelChip?: ReactNode;
+}
+
+function ComposerToolButtons({
+  attach,
+  usage,
+  cost,
+  rollout,
+  test,
+  pullRequest,
+  slash,
+  mcp,
+  modelChip,
+}: ComposerToolButtonsProps) {
+  const pullRequestURL = pullRequest.url?.trim() || "";
+  const testReadyURL = test.readyUrl?.trim() || "";
+
+  return (
+    <>
+      <button
+        type="button"
+        className="run-composer-icon-btn"
+        aria-label="Attach files"
+        title={attach.title}
+        onClick={attach.onClick}
+        disabled={attach.disabled}
+      >
+        <ImageIcon className="run-composer-icon" aria-hidden="true" />
+      </button>
+      <ComposerUsageRing {...usage} />
+      <ComposerCostEstimate {...cost} />
+      {rollout?.visible && (
+        <button
+          type="button"
+          className={`run-composer-icon-btn run-composer-action-btn run-rollout-action-btn${rollout.active ? " is-active" : ""}`}
+          onClick={rollout.onClick}
+          disabled={rollout.disabled}
+          aria-label="Start rollout"
+          title={rollout.title}
+        >
+          <TankIcon className="run-composer-icon" />
+        </button>
+      )}
+      {testReadyURL ? (
+        <a
+          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready${test.active ? " is-active" : ""}`}
+          href={testReadyURL}
+          target="_blank"
+          rel="noreferrer"
+          onClick={test.onReadyClick}
+          aria-label="Open test environment in new tab"
+          title="Open test environment in new tab"
+        >
+          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+          <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
+        </a>
+      ) : (
+        <button
+          type="button"
+          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${test.active ? " is-active" : ""}`}
+          onClick={test.onClick}
+          disabled={test.disabled}
+          aria-label="Start test skill"
+          title={test.title}
+        >
+          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+        </button>
+      )}
+      {pullRequestURL ? (
+        <a
+          className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn is-ready"
+          href={pullRequestURL}
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Open pull request in new tab"
+          title="Open pull request in new tab"
+        >
+          <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+          <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
+        </a>
+      ) : (
+        <button
+          type="button"
+          className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn"
+          disabled
+          aria-label="Pull request link unavailable"
+          title="No pull request linked yet"
+        >
+          <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+        </button>
+      )}
+      <button
+        type="button"
+        className="run-composer-icon-btn run-command-menu-btn"
+        aria-label="Show slash commands"
+        title={slash.title}
+        onMouseDown={slash.onMouseDown}
+        disabled={slash.disabled}
+      >
+        <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
+        {slash.count != null && slash.count > 0 && (
+          <span className="run-command-menu-count">{slash.count}</span>
+        )}
+      </button>
+      <button
+        type="button"
+        className="run-composer-icon-btn run-command-menu-btn"
+        aria-label="Show MCP servers"
+        title={mcp.title}
+        onMouseDown={mcp.onMouseDown}
+        disabled={mcp.disabled}
+      >
+        <McpIcon className="run-composer-icon" aria-hidden="true" />
+        {mcp.count != null && mcp.count > 0 && (
+          <span className="run-command-menu-count">{mcp.count}</span>
+        )}
+      </button>
+      {modelChip}
+    </>
+  );
+}
+
 function sessionSkillStateClass(session: Session): string {
   const currentSkill = currentSessionSkillState(session.test_state, session.rollout_state);
   if (currentSkill === "test") return " is-skill-test";
@@ -2711,67 +2871,39 @@ function DemoLanding() {
                   sendByCtrlEnter={false}
                   hideHint
                   toolButtons={
-                    <>
-                      <button
-                        type="button"
-                        className="run-composer-icon-btn"
-                        disabled
-                        aria-label="Attach files"
-                        title="Sign in to attach files"
-                      >
-                        <ImageIcon className="run-composer-icon" aria-hidden="true" />
-                      </button>
-                      <ComposerUsageRing
-                        tokensUsed={0}
-                        contextWindow={getContextWindow(selectedDemoModelId)}
-                        placeholder
-                        ariaLabel="Context usage preview"
-                        title="Context usage appears after sign in"
-                      />
-                      <ComposerCostEstimate
-                        amountUsd={null}
-                        placeholder
-                        title="Cost estimate appears after sign in"
-                      />
-                      {GUI_ROLLOUT_MODES.has(selectedMode) && (
-                        <button
-                          type="button"
-                          className="run-composer-icon-btn run-composer-action-btn run-rollout-action-btn"
-                          disabled
-                          aria-label="Start rollout"
-                          title="Sign in to use /rollout"
-                        >
-                          <TankIcon className="run-composer-icon" aria-hidden="true" />
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
-                        disabled
-                        aria-label="Start test skill"
-                        title="Sign in to start a session"
-                      >
-                        <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="run-composer-icon-btn run-command-menu-btn"
-                        disabled
-                        aria-label="Show slash commands"
-                        title="Sign in to use slash commands"
-                      >
-                        <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
-                      </button>
-                      <button
-                        type="button"
-                        className="run-composer-icon-btn run-command-menu-btn"
-                        disabled
-                        aria-label="Show MCP servers"
-                        title="Sign in to use MCP servers"
-                      >
-                        <McpIcon className="run-composer-icon" aria-hidden="true" />
-                      </button>
-                    </>
+                    <ComposerToolButtons
+                      attach={{ disabled: true, title: "Sign in to attach files" }}
+                      usage={{
+                        tokensUsed: 0,
+                        contextWindow: getContextWindow(selectedDemoModelId),
+                        placeholder: true,
+                        ariaLabel: "Context usage preview",
+                        title: "Context usage appears after sign in",
+                      }}
+                      cost={{
+                        amountUsd: null,
+                        placeholder: true,
+                        title: "Cost estimate appears after sign in",
+                      }}
+                      rollout={{
+                        visible: GUI_ROLLOUT_MODES.has(selectedMode),
+                        disabled: true,
+                        title: "Sign in to use /rollout",
+                      }}
+                      test={{
+                        disabled: true,
+                        title: "Sign in to start a session",
+                      }}
+                      pullRequest={{}}
+                      slash={{
+                        disabled: true,
+                        title: "Sign in to use slash commands",
+                      }}
+                      mcp={{
+                        disabled: true,
+                        title: "Sign in to use MCP servers",
+                      }}
+                    />
                   }
                 />
               </div>
@@ -12275,6 +12407,7 @@ function ChatPane({
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
+  const pullRequestURL = testState?.pull_request_url?.trim() || "";
   const appliedEffortId = (session.runtime_effort ?? "").trim();
   const hasAppliedRuntimeConfig = Boolean(session.runtime_configured_at);
   const configuredModelLabel =
@@ -13391,121 +13524,60 @@ function ChatPane({
           isStopping={runStatus === "stopping"}
           onTextChange={setComposerText}
           toolButtons={
-            <>
-              {/* Image-attach — opens the hidden file input. Drag-and-drop
-                    and clipboard paste are wired on the composer wrap. */}
-              <button
-                type="button"
-                className="run-composer-icon-btn"
-                aria-label="Attach files"
-                title={
-                  supportsFileAttachments
-                    ? "Attach files"
-                    : "File attachments require a session workspace"
-                }
-                onClick={() => fileInputRef.current?.click()}
-                disabled={!supportsFileAttachments}
-              >
-                <ImageIcon className="run-composer-icon" aria-hidden="true" />
-              </button>
-              <ComposerUsageRing
-                tokensUsed={tokensUsed}
-                contextWindow={contextWindow}
-              />
-              <ComposerCostEstimate
-                amountUsd={sessionCostEstimate?.amountUsd ?? null}
-                tokens={tokensUsed}
-                tokenScopeLabel="current context tokens"
-              />
-              {GUI_ROLLOUT_MODES.has(session.mode) && (
-                <button
-                  type="button"
-                  className={`run-composer-icon-btn run-composer-action-btn run-rollout-action-btn${rolloutActionActive ? " is-active" : ""}`}
-                  onClick={startGuiRollout}
-                  disabled={!ready}
-                  aria-label="Start rollout"
-                  title={isClaude ? "Use /rollout in this run" : "Use $rollout in this run"}
-                >
-                  <TankIcon className="run-composer-icon" />
-                </button>
-              )}
-              {testState?.active && testState.url ? (
-                <a
-                  className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready${testActionActive ? " is-active" : ""}`}
-                  href={testState.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  onClick={() => {
-                    void markTestState({ ...testState, active: true });
-                  }}
-                  aria-label="Open test environment in new tab"
-                  title="Open test environment in new tab"
-                >
-                  <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                  <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
-                </a>
-              ) : (
-                <button
-                  type="button"
-                  className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${testActionActive ? " is-active" : ""}`}
-                  onClick={startTestSkill}
-                  disabled={!ready}
-                  aria-label="Start test skill"
-                  title={testState?.active ? "Test skill is active" : "Use the test skill"}
-                >
-                  <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                </button>
-              )}
-              {testState?.active && testState.pull_request_url && (
-                <a
-                  className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn is-ready"
-                  href={testState.pull_request_url}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label="Open pull request in new tab"
-                  title="Open pull request in new tab"
-                >
-                  <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
-                  <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
-                </a>
-              )}
-              <button
-                type="button"
-                className="run-composer-icon-btn run-command-menu-btn"
-                aria-label="Show slash commands"
-                title="Show slash commands"
-                onMouseDown={(e) => {
+            <ComposerToolButtons
+              attach={{
+                title: supportsFileAttachments
+                  ? "Attach files"
+                  : "File attachments require a session workspace",
+                onClick: () => fileInputRef.current?.click(),
+                disabled: !supportsFileAttachments,
+              }}
+              usage={{
+                tokensUsed,
+                contextWindow,
+              }}
+              cost={{
+                amountUsd: sessionCostEstimate?.amountUsd ?? null,
+                tokens: tokensUsed,
+                tokenScopeLabel: "current context tokens",
+              }}
+              rollout={{
+                visible: GUI_ROLLOUT_MODES.has(session.mode),
+                active: rolloutActionActive,
+                onClick: startGuiRollout,
+                disabled: !ready,
+                title: isClaude ? "Use /rollout in this run" : "Use $rollout in this run",
+              }}
+              test={{
+                active: testActionActive,
+                readyUrl: testState?.active ? testState.url?.trim() : "",
+                onReadyClick: () => {
+                  if (testState) void markTestState({ ...testState, active: true });
+                },
+                onClick: startTestSkill,
+                disabled: !ready,
+                title: testState?.active ? "Test skill is active" : "Use the test skill",
+              }}
+              pullRequest={{ url: pullRequestURL }}
+              slash={{
+                title: "Show slash commands",
+                count: slashCommands.length,
+                onMouseDown: (e) => {
                   e.preventDefault();
                   openSlashCommandMenu();
-                }}
-              >
-                <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
-                {slashCommands.length > 0 && (
-                  <span className="run-command-menu-count">
-                    {slashCommands.length}
-                  </span>
-                )}
-              </button>
-              <button
-                type="button"
-                className="run-composer-icon-btn run-command-menu-btn"
-                aria-label="Show MCP servers"
-                title="Show MCP servers"
-                onMouseDown={(e) => {
+                },
+              }}
+              mcp={{
+                title: "Show MCP servers",
+                count: mcpServers?.length ?? 0,
+                onMouseDown: (e) => {
                   e.preventDefault();
                   setSlashOpen(false);
                   setMentionOpen(false);
                   setMcpOpen((open) => !open);
-                }}
-              >
-                <McpIcon className="run-composer-icon" aria-hidden="true" />
-                {mcpServers && mcpServers.length > 0 && (
-                  <span className="run-command-menu-count">
-                    {mcpServers.length}
-                  </span>
-                )}
-              </button>
-              {(isClaude || isCodex) && (
+                },
+              }}
+              modelChip={(isClaude || isCodex) ? (
                 <span
                   className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
                   title={modelChipTitle}
@@ -13517,8 +13589,8 @@ function ChatPane({
                     <span className="run-model-chip-effort">{effortChipLabel}</span>
                   )}
                 </span>
-              )}
-            </>
+              ) : null}
+            />
           }
         />
       )}
@@ -16446,79 +16518,52 @@ function AuthenticatedApp() {
                 disabled={busy}
                 onTextChange={setHomeComposerText}
                 toolButtons={
-                  <>
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn"
-                      aria-label="Attach files"
-                      title={
-                        sessionModeSupportsWorkspaceFiles(defaultSessionMode)
-                          ? "Attach files for the first turn"
-                          : "File attachments require a session workspace"
-                      }
-                      onClick={() => homeFileInputRef.current?.click()}
-                      disabled={busy || !sessionModeSupportsWorkspaceFiles(defaultSessionMode)}
-                    >
-                      <ImageIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                    <ComposerUsageRing
-                      tokensUsed={0}
-                      contextWindow={getContextWindow(selectedHomeModelId)}
-                      placeholder
-                      ariaLabel="Context usage preview"
-                      title="Context usage appears after the session starts"
-                    />
-                    <ComposerCostEstimate
-                      amountUsd={null}
-                      placeholder
-                      title="Cost estimate appears after the session starts"
-                    />
-                    {GUI_ROLLOUT_MODES.has(defaultSessionMode) && (
-                      <button
-                        type="button"
-                        className="run-composer-icon-btn run-composer-action-btn run-rollout-action-btn"
-                        disabled
-                        aria-label="Start rollout"
-                        title="Use /rollout once your session starts"
-                      >
-                        <TankIcon className="run-composer-icon" />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn run-composer-action-btn run-test-action-btn"
-                      onClick={() => {
+                  <ComposerToolButtons
+                    attach={{
+                      title: sessionModeSupportsWorkspaceFiles(defaultSessionMode)
+                        ? "Attach files for the first turn"
+                        : "File attachments require a session workspace",
+                      onClick: () => homeFileInputRef.current?.click(),
+                      disabled: busy || !sessionModeSupportsWorkspaceFiles(defaultSessionMode),
+                    }}
+                    usage={{
+                      tokensUsed: 0,
+                      contextWindow: getContextWindow(selectedHomeModelId),
+                      placeholder: true,
+                      ariaLabel: "Context usage preview",
+                      title: "Context usage appears after the session starts",
+                    }}
+                    cost={{
+                      amountUsd: null,
+                      placeholder: true,
+                      title: "Cost estimate appears after the session starts",
+                    }}
+                    rollout={{
+                      visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),
+                      disabled: true,
+                      title: "Use /rollout once your session starts",
+                    }}
+                    test={{
+                      onClick: () => {
                         void createSession(
                           defaultSessionMode,
                           homeComposerText.trim() || undefined,
                           "test",
                         );
-                      }}
-                      disabled
-                      aria-label="Start test skill"
-                      title="Available in an active chat session"
-                    >
-                      <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn run-command-menu-btn"
-                      disabled
-                      aria-label="Show slash commands"
-                      title="Slash commands appear once your session has skills"
-                    >
-                      <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="run-composer-icon-btn run-command-menu-btn"
-                      disabled
-                      aria-label="Show MCP servers"
-                      title="MCP servers appear once your session is connected"
-                    >
-                      <McpIcon className="run-composer-icon" aria-hidden="true" />
-                    </button>
-                  </>
+                      },
+                      disabled: true,
+                      title: "Available in an active chat session",
+                    }}
+                    pullRequest={{}}
+                    slash={{
+                      disabled: true,
+                      title: "Slash commands appear once your session has skills",
+                    }}
+                    mcp={{
+                      disabled: true,
+                      title: "MCP servers appear once your session is connected",
+                    }}
+                  />
                 }
               />
             )}
