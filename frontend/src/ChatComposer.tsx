@@ -18,14 +18,13 @@ import {
   CheckIcon,
   ChevronDownIcon,
   SendHorizontalIcon,
-  XIcon,
 } from "lucide-react";
 import type { ChatStatus } from "ai";
 
 // The composer is the single source of truth for the chat-style prompt box.
 // One component is rendered on the home screen, on the unauthenticated demo
 // landing, and inside an active session's run pane. The visual shell —
-// PromptInput shell, permission-mode dropdown, hint, clear-X, submit button —
+// PromptInput shell, permission-mode dropdown, hint, submit button —
 // is identical across all three callers; only the session-bound tool buttons
 // (image attach, usage ring, rollout/test, slash and MCP menus) plug in via
 // the `toolButtons` slot from inside the run pane. Keeping these surfaces in
@@ -131,7 +130,7 @@ function ComposerTextPreview({ text }: { text: string }) {
 /**
  * Shared chat composer used by the run pane, the home screen, and the demo
  * landing. Owns the universal shell (PromptInput + textarea + permission-mode
- * dropdown + hint + clear-X + submit) and exposes a `toolButtons` slot for
+ * dropdown + hint + submit) and exposes a `toolButtons` slot for
  * session-bound add-ons.
  */
 export function ChatComposer({
@@ -154,8 +153,8 @@ export function ChatComposer({
   initialText,
   onTextChange,
 }: ChatComposerProps) {
-  // Internal mirror of the textarea's value so the hint can fade and the
-  // clear-X can show/hide without making the textarea itself controlled
+  // Internal mirror of the textarea's value so the hint can fade without
+  // making the textarea itself controlled
   // (PromptInput owns submission lifecycle, and turning the textarea into a
   // controlled input would fight its uncontrolled clear-on-submit reset).
   const [text, setText] = useState(initialText ?? "");
@@ -206,7 +205,7 @@ export function ChatComposer({
       if (!canSubmit) return;
       onSubmit({ text: message.text, permissionMode });
       // PromptInput auto-clears after a sync onSubmit; reflect that in our
-      // mirror so the hint un-fades and the clear-X disappears.
+      // mirror so the hint un-fades.
       setText("");
       onTextChange?.("");
     },
@@ -224,26 +223,6 @@ export function ChatComposer({
     },
     [canSubmit],
   );
-
-  const handleClear = useCallback(() => {
-    const ta = composerRef.current?.querySelector("textarea") as
-      | HTMLTextAreaElement
-      | null;
-    if (!ta) return;
-    // Native setter + synthetic input event so React's internal change
-    // tracking sees the new value and re-renders any consumers that
-    // subscribe to the textarea (e.g. the run pane's slash/mention
-    // detection).
-    const setter = Object.getOwnPropertyDescriptor(
-      window.HTMLTextAreaElement.prototype,
-      "value",
-    )?.set;
-    setter?.call(ta, "");
-    ta.dispatchEvent(new Event("input", { bubbles: true }));
-    setText("");
-    onTextChange?.("");
-    ta.focus();
-  }, [onTextChange]);
 
   const hintText = hintOverride
     ?? (sendByCtrlEnter
@@ -358,21 +337,6 @@ export function ChatComposer({
             >
               {hintText}
             </span>
-          )}
-          {text.length > 0 && (
-            <button
-              type="button"
-              className="run-composer-clear"
-              aria-label="Clear input"
-              onMouseDown={(e) => {
-                // mousedown not click so blur doesn't fire before the click
-                // reaches us (the run-pane palettes close on blur).
-                e.preventDefault();
-                handleClear();
-              }}
-            >
-              <XIcon size={14} strokeWidth={2.2} aria-hidden="true" />
-            </button>
           )}
           <PromptInputSubmit
             className="run-submit-btn"
