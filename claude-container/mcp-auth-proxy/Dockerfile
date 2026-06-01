@@ -6,8 +6,8 @@
 #
 # This image exists for *other* in-cluster pods that want the same
 # fresh-SA-token-injecting reverse proxy as a sidecar without pulling a
-# ~1GB session container. Today's first consumer is nelsong6/hermes; the
-# RBAC + auth.romaine.life SA-exchange contract is identical.
+# ~1GB session container. The RBAC + auth.romaine.life SA-exchange
+# contract is identical.
 #
 # Source of truth for the package is claude-container/mcp-auth-proxy/src/ —
 # the same files Tank session pods install. Any behavior change ships to

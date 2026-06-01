@@ -43,9 +43,6 @@ func validateCreateSessionCapabilities(mode string, raw []string) ([]string, int
 	if err != nil {
 		return nil, http.StatusBadRequest, err.Error()
 	}
-	if len(capabilities) > 0 && sessionmodel.IsNoPodMode(mode) {
-		return nil, http.StatusBadRequest, "session capabilities require a session workspace"
-	}
 	return capabilities, 0, ""
 }
 
@@ -67,9 +64,6 @@ func validateCreateSessionInitialTurn(mode string, turn *createSessionInitialTur
 	runtime, ok := turnRuntimeForSessionMode(mode)
 	if !ok {
 		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn is only supported for durable chat sessions"
-	}
-	if turn.Deferred && sessionmodel.IsNoPodMode(mode) {
-		return createSessionInitialTurnRequest{}, http.StatusBadRequest, "initial_turn.deferred requires a session workspace"
 	}
 	clientNonce := strings.TrimSpace(turn.ClientNonce)
 	if clientNonce == "" || !turnIDPattern.MatchString(clientNonce) {
@@ -113,14 +107,6 @@ func validateCreateSessionInitialTurn(mode string, turn *createSessionInitialTur
 }
 
 func turnRuntimeForSessionMode(mode string) (string, bool) {
-	if sessionmodel.IsNoPodMode(mode) {
-		switch sessionmodel.NormalizeSessionMode(mode) {
-		case sessionmodel.HermesGUIMode:
-			return "hermes", true
-		default:
-			return "", false
-		}
-	}
 	return sdkProviderForMode(mode)
 }
 
@@ -181,7 +167,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusServiceUnavailable, "initial_turn submit path unavailable")
 		return
 	}
-	if body.InitialTurn != nil && !initialTurn.Deferred && !sessionmodel.IsNoPodMode(mode) && s.sessionBus == nil {
+	if body.InitialTurn != nil && !initialTurn.Deferred && s.sessionBus == nil {
 		writeError(w, http.StatusServiceUnavailable, "initial_turn submit path unavailable")
 		return
 	}

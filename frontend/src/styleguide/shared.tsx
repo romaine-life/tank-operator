@@ -14,7 +14,6 @@ export const MODES = [
   "codex_exec_gui",
   "codex_app_server",
   "codex_config",
-  "hermes_gui",
 ] as const;
 export const MODE_LABELS: Record<(typeof MODES)[number], string> = {
   claude_cli: "claude-cli",
@@ -26,7 +25,6 @@ export const MODE_LABELS: Record<(typeof MODES)[number], string> = {
   codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
-  hermes_gui: "hermes",
 };
 export const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
   claude_cli: "Claude CLI",
@@ -38,16 +36,14 @@ export const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
   codex_exec_gui: "Codex Legacy",
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
-  hermes_gui: "Hermes",
 };
-export const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "codex" | "hermes">> = {
+export const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "codex">> = {
   claude_cli: "anthropic",
   claude_gui: "anthropic",
   codex_cli: "codex",
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
-  hermes_gui: "hermes",
 };
 export const MODE_INTERACTIONS: Partial<Record<(typeof MODES)[number], "gui" | "cli">> = {
   claude_cli: "cli",
@@ -56,7 +52,6 @@ export const MODE_INTERACTIONS: Partial<Record<(typeof MODES)[number], "gui" | "
   codex_gui: "gui",
   codex_exec_gui: "gui",
   codex_app_server: "gui",
-  hermes_gui: "gui",
 };
 export const STATUSES = [
   ["active", "Active"],

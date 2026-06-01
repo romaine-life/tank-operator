@@ -19,27 +19,18 @@ import (
 var jsonUnmarshal = json.Unmarshal
 
 const (
-	APIKeyMode         = "api_key"
-	ClaudeCLIMode      = "claude_cli"
-	ClaudeGUIMode      = "claude_gui"
-	ConfigMode         = "config"
-	CodexConfigMode    = "codex_config"
-	CodexCLIMode       = "codex_cli"
-	CodexGUIMode       = "codex_gui"
-	CodexExecGUIMode   = "codex_exec_gui"
-	CodexAppServerMode = "codex_app_server"
-	GeminiGUIMode      = "gemini_gui"
-	GeminiConfigMode   = "gemini_config"
-	GeminiTestMode     = "gemini_test"
-	// HermesGUIMode routes chat turns to Hermes Agent's OpenAI-compatible
-	// API server (cluster-internal at hermes-api.hermes.svc.cluster.local)
-	// via POST /v1/runs, instead of spawning a session pod. The "pod is
-	// the product" model from CLAUDE.md does NOT apply here: Hermes is a
-	// singleton StatefulSet whose value lives in its persistent SQLite
-	// memory + skills directory; a per-Tank-session pod would discard
-	// that state on every session create. Tradeoffs and the full
-	// integration design live in nelsong6/tank-operator#540.
-	HermesGUIMode           = "hermes_gui"
+	APIKeyMode              = "api_key"
+	ClaudeCLIMode           = "claude_cli"
+	ClaudeGUIMode           = "claude_gui"
+	ConfigMode              = "config"
+	CodexConfigMode         = "codex_config"
+	CodexCLIMode            = "codex_cli"
+	CodexGUIMode            = "codex_gui"
+	CodexExecGUIMode        = "codex_exec_gui"
+	CodexAppServerMode      = "codex_app_server"
+	GeminiGUIMode           = "gemini_gui"
+	GeminiConfigMode        = "gemini_config"
+	GeminiTestMode          = "gemini_test"
 	DefaultSessionMode      = ClaudeGUIMode
 	GeminiRunnerMetricsPort = 9097
 	MaxNameLength           = 80
@@ -92,32 +83,12 @@ var (
 		GeminiGUIMode:      {},
 		GeminiConfigMode:   {},
 		GeminiTestMode:     {},
-		HermesGUIMode:      {},
-	}
-
-	// noPodModes are session modes that do NOT spawn a K8s session pod.
-	// The orchestrator routes their turns through an external backend
-	// instead. Today's only entry is hermes_gui, which posts to Hermes
-	// Agent's /v1/runs API. The manager.Create branch on this map keeps
-	// the rest of the pipeline (registry, snapshot, SSE) blissfully
-	// unaware of where the model actually runs.
-	noPodModes = map[string]struct{}{
-		HermesGUIMode: {},
 	}
 
 	sessionCapabilities = map[string]struct{}{
 		SessionCapabilitySpireLensMCP: {},
 	}
 )
-
-// IsNoPodMode reports whether the given mode runs without a session pod.
-// Callers that spawn / delete / inspect pods (manager, session-controller,
-// reaper, handlers_session_pod_*) MUST check this before assuming a pod
-// exists. See nelsong6/tank-operator#540 → "no-pod branch."
-func IsNoPodMode(mode string) bool {
-	_, ok := noPodModes[NormalizeSessionMode(mode)]
-	return ok
-}
 
 type SessionRecord struct {
 	ID          string
@@ -189,25 +160,6 @@ type SessionRecord struct {
 	// without changing the sidebar order.
 	SidebarPosition int64
 	RowVersion      int64
-}
-
-// HermesActiveRun is the durable pointer from a hermes_gui Tank turn to the
-// upstream Hermes /v1/runs row currently driving it. It lives on the sessions
-// row, not in bridge memory, so an orchestrator restart can reattach to the
-// run stream or reconcile a terminal status without leaving the UI stranded.
-type HermesActiveRun struct {
-	Owner       string `json:"owner,omitempty"`
-	SessionID   string `json:"session_id"`
-	TurnID      string `json:"turn_id"`
-	ClientNonce string `json:"client_nonce"`
-	RunID       string `json:"run_id"`
-	StartedAt   string `json:"started_at,omitempty"`
-}
-
-func (r HermesActiveRun) Valid() bool {
-	return strings.TrimSpace(r.SessionID) != "" &&
-		strings.TrimSpace(r.TurnID) != "" &&
-		strings.TrimSpace(r.RunID) != ""
 }
 
 type SessionAvatarAssignment struct {

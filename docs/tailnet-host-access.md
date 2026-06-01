@@ -119,9 +119,7 @@ The orchestrator behavior is:
 
 - `POST /api/sessions` and the internal create paths accept
   `capabilities: ["spirelens_mcp"]`.
-- handlers normalize and reject unknown capability names; no-pod modes such as
-  `hermes_gui` reject all session capabilities because there is no workspace pod
-  to join the tailnet.
+- handlers normalize and reject unknown capability names.
 - `Manager.Create` refuses `spirelens_mcp` unless
   `SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID`, `SESSION_SPIRELENS_TAILSCALE_TAILNET`,
   and `SESSION_SPIRELENS_HOST` are configured.

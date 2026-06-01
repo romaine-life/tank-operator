@@ -809,17 +809,19 @@ const blocked = [
     // (with an extra dot before .events) does not match this pattern.
     pattern: /tank\.session\.[A-Za-z0-9_\-]+\.events\b/,
   },
-  // tank-operator#540 — hermes_gui is a no-pod mode driven by the
-  // orchestrator's Hermes bridge. It must never be wired into the SDK
-  // runner sidecars, repo-cloner init container, workspace emptyDir, or
-  // per-session PodManifest path by extending the runner booleans.
+  // Hermes retirement: block reintroduction of the session mode, bridge,
+  // deployment environment, and metrics.
   {
-    name: "hermes_gui wired into agent-runner pod path",
-    pattern: /wantAgentRunner\s*:=.*HermesGUIMode/,
+    name: "retired Hermes session mode",
+    pattern: /\bhermes_gui\b/,
   },
   {
-    name: "hermes_gui wired into codex-runner pod path",
-    pattern: /wantCodexRunner\s*:=.*HermesGUIMode/,
+    name: "retired Hermes API environment",
+    pattern: /\bHERMES_[A-Z0-9_]+\b/,
+  },
+  {
+    name: "retired Hermes bridge metrics",
+    pattern: /\btank_hermes_[a-z0-9_]+\b/,
   },
   // Pi agent retirement: block reintroduction of the Pi runtime modes,
   // image tags, and build settings.
@@ -859,12 +861,6 @@ for await (const filePath of walk(repoRoot)) {
     const { line, column } = lineAndColumn(text, match.index);
     failures.push(`${relativePath}:${line}:${column} ${rule.name}: ${JSON.stringify(match[0])}`);
   }
-}
-
-const sessionmodelPath = "backend-go/internal/sessionmodel/sessionmodel.go";
-const sessionmodelText = await fs.readFile(path.join(repoRoot, sessionmodelPath), "utf8");
-if (!/noPodModes\s*=\s*map\[string\]struct\{}\s*{[^}]*HermesGUIMode\s*:/s.test(sessionmodelText)) {
-  failures.push(`${sessionmodelPath}:1:1 hermes_gui no-pod guard: HermesGUIMode must remain in noPodModes`);
 }
 
 if (failures.length > 0) {

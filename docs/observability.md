@@ -548,11 +548,6 @@ the middleware extracts).
 declares one rule group per subsystem:
 
 - **HTTP**: 5xx rate, Postgres p99 latency, unmapped operations.
-- **Hermes bridge**: startup capability probe failures, `/v1/runs`
-  create failures, and translator schema drift. The bridge also emits
-  `tank_hermes_run_event_total{event_type}` and
-  `tank_hermes_run_duration_seconds{terminal}` with bounded labels; the
-  durable recovery pointer is `sessions.hermes_active_run`.
 - **Avatar uploads**: sustained parse/read/validate failures and any
   storage/metadata failures. The runbook starts from
   `GET /api/debug/avatar-upload-attempts?attempt_id=...`, using the
@@ -630,8 +625,7 @@ HTTP request rate, 5xx rate by route, HTTP latency p50/p95/p99,
 Postgres rate/latency, session-event persister failures, NATS
 connection events, api-proxy refresh outcomes + 401 rate,
 mcp-auth-proxy request rate + SA token failures + GitHub attestation,
-runner turn duration + commands consumed, Hermes run volume/event mix,
-and Hermes run duration.
+and runner turn duration + commands consumed.
 
 The "Session spawn" row at the bottom of the dashboard is the
 diagnostic surface for "why did my session take N seconds to start."

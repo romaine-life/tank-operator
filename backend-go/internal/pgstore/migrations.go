@@ -339,10 +339,9 @@ var schemaMigrations = []migration{
 	{ID: "0041", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_configured_at timestamptz`},
 
-	// Hermes/no-pod active run pointer. The bridge writes this before
-	// streaming /v1/runs/:id/events and clears it only after a durable
-	// terminal event lands, giving replica restarts a bounded recovery
-	// surface for hermes_gui turns.
+	// Retired external-backend active run pointer. Keep this migration
+	// immutable for production ledger compatibility; migration 0084 removes
+	// the unused column.
 	{ID: "0042", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS hermes_active_run jsonb`},
 
@@ -996,6 +995,20 @@ var schemaMigrations = []migration{
 	// remove the unused column with a forward migration.
 	{ID: "0083", SQL: `ALTER TABLE sessions
 		DROP COLUMN IF EXISTS discovered_repos`},
+
+	// Hermes was removed as a Tank session backend. Keep migration 0042
+	// immutable for production ledger compatibility, then remove its durable
+	// active-run pointer with a forward migration.
+	{ID: "0084", SQL: `ALTER TABLE sessions
+		DROP COLUMN IF EXISTS hermes_active_run`},
+
+	// Hide any existing rows for the retired external-backend mode so the SPA
+	// does not render sessions it can no longer drive.
+	{ID: "0085", SQL: `UPDATE sessions
+		SET visible     = false,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE mode = concat('hermes', '_gui') AND visible = true`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

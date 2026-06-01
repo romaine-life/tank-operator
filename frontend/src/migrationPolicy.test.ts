@@ -665,7 +665,7 @@ test("styleguide catalog tracks current home and sidebar surfaces", () => {
   assert.equal(indexCssSource.includes('.run-main[aria-label="New session setup"]:focus::before'), false);
   assert.equal(styleguideSessionRowSource.includes("session-activity-chip"), false);
   assert.equal(styleguideSessionRowSource.includes("mode-interaction-chip"), true);
-  assert.equal(styleguideSharedSource.includes("hermes_gui"), true);
+  assert.equal(styleguideSharedSource.includes("codex_app_server"), true);
   assert.equal(styleguideSharedSource.includes("agent-needs-input"), true);
 });
 

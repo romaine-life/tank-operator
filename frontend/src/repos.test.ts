@@ -65,7 +65,6 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "codex_config",
     "gemini_config",
     "api_key",
-    "hermes_gui",
   ]) {
     assert.ok(!REPO_SUPPORTED_MODES.has(mode), `${mode} should NOT support repos`);
   }

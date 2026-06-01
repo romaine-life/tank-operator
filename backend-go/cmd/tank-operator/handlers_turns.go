@@ -12,7 +12,6 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
-	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionactivity"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
@@ -249,24 +248,6 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 	info, err := s.mgr.GetByOwner(r.Context(), owner, sessionID)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "session not found")
-		return
-	}
-
-	// hermes_gui interrupts go through the bridge's StopRun → emits a
-	// turn.interrupt_requested marker; the durable terminal event lands
-	// on the bridge's SSE-tailing goroutine when Hermes acks the stop.
-	// Same "Stop is only complete when the durable terminal arrives"
-	// contract Tank's pod-side runners follow per #532.
-	if sessionmodel.IsNoPodMode(info.Mode) {
-		if s.hermesBridge == nil {
-			writeError(w, http.StatusServiceUnavailable, "hermes bridge not configured")
-			return
-		}
-		if err := s.hermesBridge.StopTurn(r.Context(), sessionID, owner, targetTurnID, targetTurnID); err != nil {
-			writeError(w, http.StatusBadGateway, "hermes stop: "+err.Error())
-			return
-		}
-		writeJSON(w, http.StatusAccepted, map[string]string{"status": "stopping"})
 		return
 	}
 
@@ -763,33 +744,6 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		podName = info.PodName
 	} else {
 		sessionMode = sessionmodel.NormalizeSessionMode(sessionMode)
-	}
-
-	// hermes_gui short-circuits the NATS / pod path entirely. The bridge
-	// owns the durable boundary events, the /v1/runs POST, and the
-	// SSE-tailing goroutine that writes translated events into
-	// session_events. See nelsong6/tank-operator#540.
-	if sessionmodel.IsNoPodMode(sessionMode) {
-		if s.hermesBridge == nil {
-			return nil, http.StatusServiceUnavailable, "hermes bridge not configured (HERMES_API_URL / HERMES_API_BEARER missing on the orchestrator)"
-		}
-		result, err := s.hermesBridge.SubmitTurn(ctx, hermes.SubmitArgs{
-			SessionID:       sessionID,
-			Email:           email,
-			ClientNonce:     clientNonce,
-			Text:            prompt,
-			DisplayText:     displayText,
-			Attachments:     displayAttachments,
-			SkillName:       validateSkillName(req.SkillName),
-			OmitUserMessage: req.OmitUserMessage,
-			AuthorKind:      strings.TrimSpace(req.AuthorKind),
-			Now:             createdAt,
-			OrderBase:       req.OrderBase,
-		})
-		if err != nil {
-			return nil, http.StatusBadGateway, "hermes submit: " + err.Error()
-		}
-		return map[string]string{"turn_id": result.TurnID, "run_id": result.RunID}, 0, ""
 	}
 
 	provider, ok := sdkProviderForMode(sessionMode)

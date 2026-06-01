@@ -70,51 +70,6 @@ func TestManagerFindPodReturnsNotFoundWhenAbsent(t *testing.T) {
 	}
 }
 
-func TestManagerGetByOwnerReadsNoPodSessionsFromRegistry(t *testing.T) {
-	const readyAt = "2026-05-20T01:00:00Z"
-	registry := &managerTestRegistry{
-		records: []sessionmodel.SessionRecord{
-			{
-				ID:        "108",
-				Email:     "nelson@romaine.life",
-				Mode:      sessionmodel.HermesGUIMode,
-				Visible:   true,
-				Status:    "Active",
-				ReadyAt:   readyAt,
-				CreatedAt: "2026-05-20T00:59:59Z",
-			},
-			{
-				ID:      "109",
-				Email:   "nelson@romaine.life",
-				Mode:    sessionmodel.CodexGUIMode,
-				Visible: true,
-				Status:  "Active",
-			},
-		},
-	}
-	mgr := &Manager{
-		client:    fake.NewSimpleClientset(),
-		namespace: sessionmodel.SessionsNamespace,
-		registry:  registry,
-	}
-
-	got, err := mgr.GetByOwner(context.Background(), "nelson@romaine.life", "108")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Mode != sessionmodel.HermesGUIMode || got.Status != "Active" || got.PodName != nil {
-		t.Fatalf("no-pod session = %#v, want active hermes_gui without pod", got)
-	}
-	if got.ReadyAt == nil || *got.ReadyAt != readyAt {
-		t.Fatalf("ready_at = %#v, want %q", got.ReadyAt, readyAt)
-	}
-
-	_, err = mgr.GetByOwner(context.Background(), "nelson@romaine.life", "109")
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("pod-backed registry-only GetByOwner err = %v, want ErrNotFound", err)
-	}
-}
-
 func TestManagerActiveSkillStateClearsOppositeAnnotation(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -338,26 +293,6 @@ func TestManagerCreateRejectsSpireLensCapabilityWhenUnconfigured(t *testing.T) {
 	}
 	if len(pods.Items) != 0 {
 		t.Fatalf("created pods = %d, want none", len(pods.Items))
-	}
-}
-
-func TestManagerCreateRejectsSpireLensCapabilityForNoPodMode(t *testing.T) {
-	client := fake.NewSimpleClientset()
-	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, nil, nil, ManagerOptions{
-		ManifestOpts: sessionmodel.ManifestOptions{
-			SpireLensTailscaleOIDCClientID: "oidc-client",
-			SpireLensTailscaleTailnet:      "-",
-			SpireLensHost:                  "nelsonlaptop",
-		},
-	})
-
-	_, err := mgr.Create(context.Background(), CreateOptions{
-		Owner:        "nelson@romaine.life",
-		Mode:         sessionmodel.HermesGUIMode,
-		Capabilities: []string{sessionmodel.SessionCapabilitySpireLensMCP},
-	})
-	if err == nil || !strings.Contains(err.Error(), "requires a session pod") {
-		t.Fatalf("Create error = %v, want requires pod", err)
 	}
 }
 

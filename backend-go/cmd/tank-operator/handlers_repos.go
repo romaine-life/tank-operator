@@ -65,7 +65,7 @@ var repoSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z
 // /workspace volume the repo-cloner init container can clone into.
 // Today only the SDK-runner modes provision a workspace emptyDir — see
 // sessionmodel.PodManifest: `wantSDKRunner`. CLI / config / api_key
-// / hermes_gui modes do not, so accepting a repo selection for them
+// modes do not, so accepting a repo selection for them
 // would persist data with no runtime path to use it.
 //
 // Per docs/quality-timeframes.md "settled contracts": we reject at
