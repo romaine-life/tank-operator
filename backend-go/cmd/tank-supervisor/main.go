@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -24,6 +25,17 @@ type config struct {
 	stopTimeout    time.Duration
 }
 
+type childProcess struct {
+	cmd        *exec.Cmd
+	generation int
+	exited     chan childExit
+}
+
+type childExit struct {
+	generation int
+	err        error
+}
+
 func main() {
 	os.Exit(run(loadConfig()))
 }
@@ -38,7 +50,7 @@ func loadConfig() config {
 }
 
 func run(cfg config) int {
-	child, err := startChild(cfg)
+	child, err := startSupervisedChild(cfg, 1)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "start child: %v\n", err)
 		return 1
@@ -46,10 +58,6 @@ func run(cfg config) int {
 
 	signals := make(chan os.Signal, 8)
 	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT, syscall.SIGHUP)
-	exited := make(chan error, 1)
-	go func() {
-		exited <- child.Wait()
-	}()
 
 	for {
 		select {
@@ -60,31 +68,46 @@ func run(cfg config) int {
 					continue
 				}
 				if err := stopChild(child, cfg.stopTimeout); err != nil {
-					fmt.Fprintf(os.Stderr, "stop child for restart: %v\n", err)
+					if !isChildExitStatus(err) {
+						fmt.Fprintf(os.Stderr, "stop child for restart: %v\n", err)
+					}
 				}
-				select {
-				case <-exited:
-				default:
-				}
-				child, err = startChild(cfg)
+				child, err = startSupervisedChild(cfg, child.generation+1)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "restart child: %v\n", err)
 					return 1
 				}
-				exited = make(chan error, 1)
-				go func() {
-					exited <- child.Wait()
-				}()
 			case syscall.SIGTERM, syscall.SIGINT:
 				if err := stopChild(child, cfg.stopTimeout); err != nil {
 					fmt.Fprintf(os.Stderr, "stop child: %v\n", err)
+					return exitCode(err)
 				}
-				return exitCode(<-exited)
+				return 0
 			}
-		case err := <-exited:
-			return exitCode(err)
+		case result := <-child.exited:
+			if result.generation != child.generation {
+				fmt.Fprintf(os.Stderr, "ignoring stale child exit generation=%d current=%d err=%v\n", result.generation, child.generation, result.err)
+				continue
+			}
+			return exitCode(result.err)
 		}
 	}
+}
+
+func startSupervisedChild(cfg config, generation int) (*childProcess, error) {
+	cmd, err := startChild(cfg)
+	if err != nil {
+		return nil, err
+	}
+	child := &childProcess{
+		cmd:        cmd,
+		generation: generation,
+		exited:     make(chan childExit, 1),
+	}
+	go func(cmd *exec.Cmd, generation int, exited chan<- childExit) {
+		exited <- childExit{generation: generation, err: cmd.Wait()}
+	}(cmd, generation, child.exited)
+	return child, nil
 }
 
 func startChild(cfg config) (*exec.Cmd, error) {
@@ -106,32 +129,33 @@ func startChild(cfg config) (*exec.Cmd, error) {
 	return cmd, nil
 }
 
-func stopChild(cmd *exec.Cmd, timeout time.Duration) error {
-	if cmd == nil || cmd.Process == nil {
+func stopChild(child *childProcess, timeout time.Duration) error {
+	if child == nil || child.cmd == nil || child.cmd.Process == nil {
 		return nil
 	}
-	if err := signalChildTree(cmd, syscall.SIGTERM); err != nil {
+	if err := signalChildTree(child.cmd, syscall.SIGTERM); err != nil {
+		select {
+		case result := <-child.exited:
+			return result.err
+		default:
+		}
 		return err
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	done := make(chan struct{})
-	go func() {
-		for {
-			if err := cmd.Process.Signal(syscall.Signal(0)); err != nil {
-				close(done)
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-	}()
 	select {
-	case <-done:
-		return nil
+	case result := <-child.exited:
+		return result.err
 	case <-ctx.Done():
-		_ = signalChildTree(cmd, syscall.SIGKILL)
+		_ = signalChildTree(child.cmd, syscall.SIGKILL)
+		<-child.exited
 		return ctx.Err()
 	}
+}
+
+func isChildExitStatus(err error) bool {
+	var exitErr *exec.ExitError
+	return errors.As(err, &exitErr)
 }
 
 func exitCode(err error) int {

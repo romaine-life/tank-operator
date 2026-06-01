@@ -138,9 +138,13 @@ export class Runner {
       }
     } finally {
       signal.removeEventListener("abort", onAbort);
-      stopConsumer();
-      stopControl();
       this.userQueue.close();
+      const consumersStopped = Promise.allSettled([stopConsumer(), stopControl()]);
+      await Promise.allSettled([
+        this.commandBus.close(),
+        this.sink.close(),
+      ]);
+      await withTimeout(consumersStopped, 2_000);
     }
   }
 
@@ -329,9 +333,9 @@ export class Runner {
     }
   }
 
-  private startCommandConsumer(signal: AbortSignal): () => void {
+  private startCommandConsumer(signal: AbortSignal): () => Promise<void> {
     let stopConsumer: (() => Promise<void>) | null = null;
-    void this.commandBus
+    const started = this.commandBus
       .startCommandConsumer(async (record) => {
         commandsConsumedTotal.labels("submit_turn", "accepted").inc();
         const clientNonce = commandClientNonce(record);
@@ -350,16 +354,21 @@ export class Runner {
       .then((stop) => {
         stopConsumer = stop;
       })
-      .catch((err) => console.error("Gemini command consumer crashed:", err));
+      .catch((err) => {
+        if (!signal.aborted) {
+          console.error("Gemini command consumer crashed:", err);
+        }
+      });
 
-    return () => {
-      void stopConsumer?.();
+    return async () => {
+      await withTimeout(started, 1_000);
+      await withTimeout(stopConsumer?.() ?? Promise.resolve(), 1_000);
     };
   }
 
-  private startControlConsumer(signal: AbortSignal): () => void {
+  private startControlConsumer(signal: AbortSignal): () => Promise<void> {
     let stopControl: (() => Promise<void>) | null = null;
-    void this.commandBus
+    const started = this.commandBus
       .startControlConsumer(async (record) => {
         if (record.command === "interrupt_turn") {
           commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
@@ -371,10 +380,15 @@ export class Runner {
       .then((stop) => {
         stopControl = stop;
       })
-      .catch((err) => console.error("Gemini control consumer crashed:", err));
+      .catch((err) => {
+        if (!signal.aborted) {
+          console.error("Gemini control consumer crashed:", err);
+        }
+      });
 
-    return () => {
-      void stopControl?.();
+    return async () => {
+      await withTimeout(started, 1_000);
+      await withTimeout(stopControl?.() ?? Promise.resolve(), 1_000);
     };
   }
   private async dispatch(message: TankConversationEvent): Promise<boolean> {
@@ -407,5 +421,21 @@ export class Runner {
       return false;
     }
     return true;
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | undefined> {
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<undefined>((resolve) => {
+        timeout = setTimeout(() => resolve(undefined), ms);
+      }),
+    ]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
   }
 }
