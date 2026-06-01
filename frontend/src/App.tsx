@@ -95,6 +95,19 @@ import {
 } from "lucide-react";
 import { authedEventSource, authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
 import {
+  readSessionRouteFromPath,
+  readHomeRouteFromPath,
+  sessionRouteUrl,
+  homeRouteUrl,
+  routeHasMessageTarget,
+  readInitialPublicMessageLinkRoute,
+  type RunTab,
+  type HomeTab,
+  type AdminView,
+  type SettingsTab,
+  type PublicMessageLinkRoute,
+} from "./routing";
+import {
   createSilenceWatchdog,
   logSessionEventStreamEvent,
   type SilenceWatchdog,
@@ -431,7 +444,6 @@ type ScrollToLatestRequest = {
 };
 type SkillStateName = "test" | "rollout";
 type InitialMessageMode = "direct" | "diagnose" | "bug_report" | "quality_gaps" | "go_long" | "test";
-type HomeTab = "chat" | "settings" | "help";
 
 type ForkSessionRequest = {
   sourceSession: Session;
@@ -1420,69 +1432,22 @@ async function completeGitHubInstall(state: string): Promise<SessionUser> {
   return body.user;
 }
 
-type SessionRoute = {
-  sessionId: string;
-  tab: "chat" | "turns";
-  turnId: string | null;
-};
-
-type PublicMessageLinkRoute = {
-  token: string;
-  sessionId: string | null;
-  messageId: string | null;
-};
-
-function decodeRouteSegment(segment: string): string {
-  try {
-    return decodeURIComponent(segment);
-  } catch {
-    return "";
-  }
-}
-
-function readSessionRouteFromPath(pathname = window.location.pathname): SessionRoute | null {
-  const parts = pathname.split("/").filter(Boolean).map(decodeRouteSegment);
-  if (parts[0] !== "sessions" || !parts[1]) return null;
-  if (parts.length === 2) return { sessionId: parts[1], tab: "chat", turnId: null };
-  if (parts[2] !== "turns") return { sessionId: parts[1], tab: "chat", turnId: null };
-  return {
-    sessionId: parts[1],
-    tab: "turns",
-    turnId: parts[3]?.trim() || null,
-  };
-}
-
-function sessionRouteUrl(id: string, tab: "chat" | "turns" = "chat", turnId?: string | null): string {
-  const url = new URL(window.location.href);
-  url.pathname = `/sessions/${encodeURIComponent(id)}${
-    tab === "turns"
-      ? `/turns${turnId ? `/${encodeURIComponent(turnId)}` : ""}`
-      : ""
-  }`;
-  url.search = "";
-  url.hash = "";
-  return url.toString();
-}
-
-function routeHasMessageTarget(): boolean {
-  const params = new URLSearchParams(window.location.search);
-  return params.has("message") || params.has("timeline_id");
-}
-
-function readInitialPublicMessageLinkRoute(): PublicMessageLinkRoute | null {
-  const params = new URLSearchParams(window.location.search);
-  const token = (params.get("share") ?? "").trim();
-  if (!token) return null;
-  return {
-    token,
-    sessionId: params.get("session"),
-    messageId: params.get("message") ?? params.get("timeline_id"),
-  };
-}
-
-function replaceSessionRoute(id: string, tab: "chat" | "turns" = "chat", turnId?: string | null): void {
+function replaceSessionRoute(
+  id: string,
+  tab: RunTab = "chat",
+  options: {
+    turnId?: string | null;
+    settingsTab?: SettingsTab;
+    adminView?: AdminView;
+  } = {},
+): void {
   if (routeHasMessageTarget()) return;
-  const next = sessionRouteUrl(id, tab, turnId);
+  const next = sessionRouteUrl(id, tab, options);
+  if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+function replaceHomeRoute(tab: HomeTab): void {
+  const next = homeRouteUrl(tab);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -3344,7 +3309,6 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
 type BackgroundView = "shells" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
 
@@ -8696,6 +8660,10 @@ function RunSettingsPanel({
   paneFontScalePct,
   setPaneFontScale,
   adminControls,
+  settingsTab,
+  setSettingsTab,
+  adminView,
+  setAdminView,
 }: {
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
@@ -8707,21 +8675,22 @@ function RunSettingsPanel({
   paneFontScalePct: number;
   setPaneFontScale: (value: number) => void;
   adminControls?: AdminSettingsControls;
+  settingsTab: SettingsTab;
+  setSettingsTab: (tab: SettingsTab) => void;
+  adminView: AdminView;
+  setAdminView: (view: AdminView) => void;
 }) {
-  const [settingsTab, setSettingsTab] = useState<"preferences" | "admin">("preferences");
-  const [adminView, setAdminView] =
-    useState<"controls" | "avatars" | "report" | "observability">("controls");
   const showAdminTab = adminControls?.visible === true;
   useEffect(() => {
     if (!showAdminTab && settingsTab === "admin") {
       setSettingsTab("preferences");
     }
-  }, [settingsTab, showAdminTab]);
+  }, [settingsTab, showAdminTab, setSettingsTab]);
   useEffect(() => {
     if (!showAdminTab || settingsTab !== "admin") {
-      setAdminView("controls");
+      if (adminView !== "controls") setAdminView("controls");
     }
-  }, [settingsTab, showAdminTab]);
+  }, [settingsTab, showAdminTab, adminView, setAdminView]);
   const settingsScreenClassName =
     settingsTab === "admin" &&
     showAdminTab &&
@@ -9235,6 +9204,12 @@ function ChatPane({
   const initialRunRoute =
     initialSessionRoute?.sessionId === session.id ? initialSessionRoute : null;
   const [activeTab, setActiveTab] = useState<RunTab>(initialRunRoute?.tab ?? "chat");
+  const [settingsTab, setSettingsTab] = useState<SettingsTab>(
+    initialRunRoute?.settingsTab ?? "preferences",
+  );
+  const [adminView, setAdminView] = useState<AdminView>(
+    initialRunRoute?.adminView ?? "controls",
+  );
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(
     initialRunRoute?.tab === "turns" ? initialRunRoute.turnId : null,
   );
@@ -12411,12 +12386,21 @@ function ChatPane({
   useEffect(() => {
     if (publicView) return;
     if (!visible || pendingScrollMessageId) return;
-    if (activeTab === "turns") {
-      replaceSessionRoute(session.id, "turns", routedSelectedTurnId);
-    } else {
-      replaceSessionRoute(session.id, "chat");
-    }
-  }, [activeTab, pendingScrollMessageId, publicView, routedSelectedTurnId, session.id, visible]);
+    replaceSessionRoute(session.id, activeTab, {
+      turnId: activeTab === "turns" ? routedSelectedTurnId : null,
+      settingsTab: activeTab === "settings" ? settingsTab : undefined,
+      adminView: activeTab === "settings" && settingsTab === "admin" ? adminView : undefined,
+    });
+  }, [
+    activeTab,
+    pendingScrollMessageId,
+    publicView,
+    routedSelectedTurnId,
+    session.id,
+    visible,
+    settingsTab,
+    adminView,
+  ]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -13396,6 +13380,10 @@ function ChatPane({
             paneFontScalePct={paneFontScalePct}
             setPaneFontScale={setPaneFontScale}
             adminControls={adminControls}
+            settingsTab={settingsTab}
+            setSettingsTab={setSettingsTab}
+            adminView={adminView}
+            setAdminView={setAdminView}
           />
         ) : activeTab === "help" ? (
           <RunHelpScreen />
@@ -14255,7 +14243,15 @@ function AuthenticatedApp() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
-  const [homeActiveTab, setHomeActiveTab] = useState<HomeTab>("chat");
+  const initialHomeRoute = useMemo(() => readHomeRouteFromPath(), []);
+  const [homeActiveTab, setHomeActiveTab] = useState<HomeTab>(initialHomeRoute?.tab ?? "chat");
+  const [homeSettingsTab, setHomeSettingsTab] = useState<SettingsTab>("preferences");
+  const [homeAdminView, setHomeAdminView] = useState<AdminView>("controls");
+  useEffect(() => {
+    if (!active) {
+      replaceHomeRoute(homeActiveTab);
+    }
+  }, [homeActiveTab, active]);
   const [sessionViewScopeOverride, setSessionViewScopeOverride] = useState(
     readInitialSessionViewScopeOverride,
   );
@@ -16512,6 +16508,10 @@ function AuthenticatedApp() {
                   paneFontScalePct={paneFontScalePct}
                   setPaneFontScale={setPaneFontScale}
                   adminControls={adminSettingsControls}
+                  settingsTab={homeSettingsTab}
+                  setSettingsTab={setHomeSettingsTab}
+                  adminView={homeAdminView}
+                  setAdminView={setHomeAdminView}
                 />
               ) : homeActiveTab === "help" ? (
                 <RunHelpScreen />

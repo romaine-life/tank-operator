@@ -19,6 +19,7 @@ const sessionListDebugCaptureControlsSource = readSource("./SessionListDebugCapt
 const turnActivityStateSource = readSource("./turnActivityState.ts");
 const sessionAvatarsSource = readSource("./sessionAvatars.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
+const routingSource = readSource("./routing.ts");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
 const styleguideIndexSource = readSource("./styleguide/index.tsx");
@@ -330,13 +331,14 @@ test("active turn thinking row is placed by durable order key, not a turnId-stru
 });
 
 test("turn internals move out of the transcript into a turn view", () => {
-  assert.equal(appSource.includes('type RunTab = "chat" | "turns"'), true);
+  assert.equal(routingSource.includes('export type RunTab = "chat" | "turns"'), true);
   assert.equal(appSource.includes("buildTurnViewItems"), true);
   assert.equal(appSource.includes("const turnsAvailable = turnViewItems.length > 0"), true);
-  assert.equal(appSource.includes("function readSessionRouteFromPath"), true);
-  assert.equal(appSource.includes('url.pathname = `/sessions/${encodeURIComponent(id)}${'), true);
+  assert.equal(routingSource.includes("export function readSessionRouteFromPath"), true);
+  assert.equal(routingSource.includes('path += `/turns${options.turnId ? `/'), true);
   assert.equal(appSource.includes('setActiveTab("turns")'), true);
-  assert.equal(appSource.includes("replaceSessionRoute(session.id, \"turns\", routedSelectedTurnId)"), true);
+  assert.equal(appSource.includes("replaceSessionRoute(session.id, activeTab,"), true);
+  assert.equal(appSource.includes("turnId: activeTab === \"turns\" ? routedSelectedTurnId : null"), true);
   assert.equal(appSource.includes("window.addEventListener(\"popstate\", applyCurrentSessionRoute)"), true);
   assert.equal(appSource.includes("RunTurnActivityScreen"), true);
   assert.equal(appSource.includes("RunTurnThinkingBubble"), true);
