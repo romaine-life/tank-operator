@@ -673,15 +673,33 @@ type sessionRunConfig struct {
 	Effort string
 }
 
+func isDefaultModelAlias(v string) bool {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "default", "codex-account-default":
+		return true
+	default:
+		return false
+	}
+}
+
 func validateCreateRunConfig(mode, rawModel, rawEffort string) (sessionRunConfig, int, string) {
 	modelInput := strings.TrimSpace(rawModel)
 	effortInput := strings.TrimSpace(rawEffort)
 	if modelInput == "" && effortInput == "" {
+		if provider, ok := sdkProviderForMode(mode); ok && provider == "codex" {
+			return sessionRunConfig{}, http.StatusBadRequest, "model is required for Codex sessions"
+		}
 		return sessionRunConfig{}, 0, ""
 	}
 	provider, ok := sdkProviderForMode(mode)
 	if !ok {
 		return sessionRunConfig{}, http.StatusBadRequest, "model and effort are only supported for SDK chat sessions"
+	}
+	if isDefaultModelAlias(modelInput) {
+		return sessionRunConfig{}, http.StatusBadRequest, "model must be explicit; default is not accepted"
+	}
+	if provider == "codex" && modelInput == "" {
+		return sessionRunConfig{}, http.StatusBadRequest, "model is required for Codex sessions"
 	}
 	model := validateTurnArg(modelInput)
 	if modelInput != "" && model == "" {
@@ -788,20 +806,35 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	// Effort allowlist enforcement is loud on purpose: silent drop would
 	// hide a frontend regression that ships a stale effort string. The
 	// runner trusts whatever lands on the wire and has no rejection path
-	// of its own, so the choke point is here. Empty is allowed and means
-	// "use the runner's baked-in default" — that mapping is preserved.
-	model := validateTurnArg(req.Model)
+	// of its own, so the choke point is here. Empty effort is still
+	// allowed; Codex model must be explicit so the UI can always show
+	// which model was selected.
+	modelInput := strings.TrimSpace(req.Model)
+	if isDefaultModelAlias(modelInput) {
+		return nil, http.StatusBadRequest, "model must be explicit; default is not accepted"
+	}
+	model := validateTurnArg(modelInput)
+	if modelInput != "" && model == "" {
+		return nil, http.StatusBadRequest, "model is invalid"
+	}
 	effort := validateEffort(provider, strings.TrimSpace(req.Effort))
 	registered, regErr := s.mgr.GetRegisteredByOwner(ctx, email, sessionID)
 	hasSessionRunConfig := regErr == nil && (registered.Model != "" || registered.Effort != "")
 	if hasSessionRunConfig {
-		model = registered.Model
-		effort = registered.Effort
+		if registered.Model != "" {
+			model = registered.Model
+		}
+		if registered.Effort != "" {
+			effort = registered.Effort
+		}
 	} else if strings.TrimSpace(req.Effort) != "" && effort == "" {
 		if provider == "codex" {
 			return nil, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh"
 		}
 		return nil, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max"
+	}
+	if provider == "codex" && model == "" {
+		return nil, http.StatusBadRequest, "model is required for Codex turns"
 	}
 	if !req.AllowBeforeReady {
 		if podName == nil {

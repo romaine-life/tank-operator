@@ -355,6 +355,49 @@ func TestCreateSessionInitialTurnPersistsBeforeStartupStatus(t *testing.T) {
 	}
 }
 
+func TestCreateSessionRejectsCodexWithoutExplicitModel(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"codex_gui",
+		"effort":"xhigh"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "model is required for Codex sessions") {
+		t.Fatalf("body = %s, want explicit Codex model error", resp.Body.String())
+	}
+}
+
+func TestCreateSessionRejectsCodexDefaultModelAlias(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"codex_gui",
+		"model":"codex-account-default",
+		"effort":"xhigh"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "default is not accepted") {
+		t.Fatalf("body = %s, want default rejection", resp.Body.String())
+	}
+}
+
 func TestCreateSessionInitialTurnDeferredReusesUserMessage(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus)
@@ -766,6 +809,44 @@ func TestEnqueueSessionTurnForwardsCodexModelAndEffort(t *testing.T) {
 	}
 }
 
+func TestEnqueueSessionTurnRejectsCodexWithoutExplicitModel(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
+	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex-no-model","prompt":"hello","effort":"xhigh"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "model is required for Codex turns") {
+		t.Fatalf("body = %s, want explicit Codex model error", resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	}
+}
+
+func TestEnqueueSessionTurnRejectsCodexDefaultModelAlias(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
+	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex-default-model","prompt":"hello","model":"default"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "default is not accepted") {
+		t.Fatalf("body = %s, want default rejection", resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	}
+}
+
 func TestEnqueueSessionTurnRejectsCodexMaxEffort(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
@@ -823,7 +904,7 @@ func TestEnqueueSessionTurnRejectsSkillPromptMismatch(t *testing.T) {
 func TestEnqueueSessionTurnAcceptsCodexSkillTrigger(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
-	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex-skill","prompt":"$test","skill_name":"test"}`)
+	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex-skill","prompt":"$test","model":"gpt-5.5","skill_name":"test"}`)
 	resp := httptest.NewRecorder()
 
 	app.handleEnqueueSessionTurn(resp, req)
@@ -839,7 +920,7 @@ func TestEnqueueSessionTurnAcceptsCodexSkillTrigger(t *testing.T) {
 func TestEnqueueSessionTurnRoutesCodexProvider(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
-	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex","prompt":"hello"}`)
+	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex","prompt":"hello","model":"gpt-5.5"}`)
 	resp := httptest.NewRecorder()
 
 	app.handleEnqueueSessionTurn(resp, req)
