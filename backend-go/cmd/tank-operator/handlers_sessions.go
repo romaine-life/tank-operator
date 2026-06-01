@@ -707,16 +707,17 @@ func (s *appServer) handleSetTestState(w http.ResponseWriter, r *http.Request) {
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
 	var body struct {
-		Active    bool    `json:"active"`
-		SlotIndex *int    `json:"slot_index"`
-		URL       *string `json:"url"`
+		Active         bool    `json:"active"`
+		SlotIndex      *int    `json:"slot_index"`
+		URL            *string `json:"url"`
+		PullRequestURL *string `json:"pull_request_url"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
 	owner := user.OwnerEmail()
-	info, err := s.mgr.SetTestState(r.Context(), owner, sessionID, body.Active, body.SlotIndex, body.URL)
+	info, err := s.mgr.SetTestState(r.Context(), owner, sessionID, body.Active, body.SlotIndex, body.URL, body.PullRequestURL)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
