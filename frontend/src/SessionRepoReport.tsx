@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { GitBranchIcon, RefreshCwIcon } from "lucide-react";
+import { GitBranchIcon, LinkIcon, RefreshCwIcon } from "lucide-react";
 import { authedFetch } from "./auth";
 
 type TokenUsage = {
@@ -32,7 +32,14 @@ type SessionSummary = {
 
 type SessionReport = {
   scope: string;
-  days: number;
+  days?: number;
+  range?: {
+    mode: "last_days" | "custom";
+    days?: number;
+    starts_at: string;
+    ends_at: string;
+    label: string;
+  };
   attribution: string;
   totals: TokenUsage & {
     session_count: number;
@@ -43,25 +50,49 @@ type SessionReport = {
   fetched_at: string;
 };
 
-export function SessionRepoReport({ sessionScope }: { sessionScope: string }) {
+type SessionRepoReportProps = {
+  sessionScope?: string;
+  publicShareToken?: string;
+  publicView?: boolean;
+};
+
+export function SessionRepoReport({
+  sessionScope = "",
+  publicShareToken,
+  publicView = false,
+}: SessionRepoReportProps) {
+  const [rangeMode, setRangeMode] = useState<"days" | "custom">("days");
   const [days, setDays] = useState(30);
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
   const [report, setReport] = useState<SessionReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [shareStatus, setShareStatus] = useState("");
 
   const reportURL = useMemo(() => {
+    if (publicShareToken) {
+      return `/api/public/session-report-shares/${encodeURIComponent(publicShareToken)}`;
+    }
     const params = new URLSearchParams({
-      days: String(days),
       session_scope: sessionScope,
     });
+    if (rangeMode === "custom") {
+      if (!customFrom || !customTo) return "";
+      params.set("from", customFrom);
+      params.set("to", customTo);
+    } else {
+      params.set("days", String(days));
+    }
     return `/api/admin/session-report?${params.toString()}`;
-  }, [days, sessionScope]);
+  }, [customFrom, customTo, days, publicShareToken, rangeMode, sessionScope]);
 
   const loadReport = async () => {
+    if (!reportURL) return;
     setLoading(true);
     setError("");
     try {
-      const res = await authedFetch(reportURL);
+      const res = publicShareToken ? await fetch(reportURL) : await authedFetch(reportURL);
       if (!res.ok) {
         throw new Error(await res.text());
       }
@@ -78,30 +109,97 @@ export function SessionRepoReport({ sessionScope }: { sessionScope: string }) {
   }, [reportURL]);
 
   const topSessions = report?.sessions.slice(0, 12) ?? [];
+  const rangeLabel = report?.range?.label ?? (rangeMode === "custom" ? "Custom range" : `Last ${days} days`);
+
+  const selectDays = (value: number) => {
+    setRangeMode("days");
+    setDays(value);
+    setShareStatus("");
+  };
+
+  const createShare = async () => {
+    if (!reportURL || publicView) return;
+    setLoading(true);
+    setError("");
+    setShareStatus("");
+    try {
+      const shareURL = reportURL.replace("/api/admin/session-report?", "/api/admin/session-report-shares?");
+      const res = await authedFetch(shareURL, { method: "POST" });
+      if (!res.ok) throw new Error(await res.text());
+      const body = (await res.json()) as { browser_url?: unknown };
+      const browserURL = typeof body.browser_url === "string" ? body.browser_url : "";
+      if (!browserURL) throw new Error("share response did not include a browser_url");
+      await navigator.clipboard.writeText(browserURL);
+      setShareStatus("Copied shared report link");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <div className="session-repo-report">
+    <div className={`session-repo-report${publicView ? " is-public" : ""}`}>
       <section className="session-repo-report-toolbar" aria-label="Session report controls">
         <div className="session-repo-report-title">
           <GitBranchIcon aria-hidden="true" />
-          <span>Session repo report</span>
+          <span>{publicView ? "Shared session repo report" : "Session repo report"}</span>
+          <span className="session-repo-report-range-label">{rangeLabel}</span>
         </div>
         <div className="session-repo-report-actions">
-          {[7, 30, 90].map((value) => (
-            <button
-              key={value}
-              type="button"
-              className={`session-repo-report-range${days === value ? " is-active" : ""}`}
-              onClick={() => setDays(value)}
-            >
-              {value}d
-            </button>
-          ))}
+          {!publicView && (
+            <>
+              {[1, 7, 30, 90].map((value) => (
+                <button
+                  key={value}
+                  type="button"
+                  className={`session-repo-report-range${rangeMode === "days" && days === value ? " is-active" : ""}`}
+                  onClick={() => selectDays(value)}
+                >
+                  {value}d
+                </button>
+              ))}
+              <label className="session-repo-report-date">
+                <span>From</span>
+                <input
+                  type="date"
+                  value={customFrom}
+                  onChange={(event) => {
+                    setRangeMode("custom");
+                    setCustomFrom(event.target.value);
+                    setShareStatus("");
+                  }}
+                />
+              </label>
+              <label className="session-repo-report-date">
+                <span>To</span>
+                <input
+                  type="date"
+                  value={customTo}
+                  onChange={(event) => {
+                    setRangeMode("custom");
+                    setCustomTo(event.target.value);
+                    setShareStatus("");
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="session-repo-report-refresh"
+                onClick={() => void createShare()}
+                disabled={loading || !reportURL}
+                aria-label="Copy shared report link"
+                title="Copy shared report link"
+              >
+                <LinkIcon aria-hidden="true" />
+              </button>
+            </>
+          )}
           <button
             type="button"
             className="session-repo-report-refresh"
             onClick={() => void loadReport()}
-            disabled={loading}
+            disabled={loading || !reportURL}
             aria-label="Refresh report"
             title="Refresh report"
           >
@@ -111,6 +209,7 @@ export function SessionRepoReport({ sessionScope }: { sessionScope: string }) {
       </section>
 
       {error && <div className="session-repo-report-error">{error}</div>}
+      {shareStatus && <div className="session-repo-report-success">{shareStatus}</div>}
 
       <section className="session-repo-report-metrics" aria-label="Session report totals">
         <ReportMetric label="Sessions" value={formatCount(report?.totals.session_count)} />

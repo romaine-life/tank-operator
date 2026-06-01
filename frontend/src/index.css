@@ -4389,6 +4389,7 @@ button:disabled {
 .session-repo-report-title {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
   color: var(--text-primary);
   font-size: var(--text-sm);
@@ -4401,14 +4402,22 @@ button:disabled {
   color: var(--text-muted);
 }
 
+.session-repo-report-range-label {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
 .session-repo-report-actions {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
+  flex-wrap: wrap;
 }
 
 .session-repo-report-range,
-.session-repo-report-refresh {
+.session-repo-report-refresh,
+.session-repo-report-date {
   min-height: 2rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-md, 0.5rem);
@@ -4429,13 +4438,37 @@ button:disabled {
   place-items: center;
 }
 
+.session-repo-report-date {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.5rem;
+  cursor: default;
+}
+
+.session-repo-report-date span {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.session-repo-report-date input {
+  width: 7.6rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--text-xs);
+  color-scheme: dark;
+}
+
 .session-repo-report-refresh svg {
   width: 0.95rem;
   height: 0.95rem;
 }
 
 .session-repo-report-range:hover,
-.session-repo-report-refresh:hover:not(:disabled) {
+.session-repo-report-refresh:hover:not(:disabled),
+.session-repo-report-date:focus-within {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.14);
@@ -4457,6 +4490,15 @@ button:disabled {
   border-radius: var(--radius-md, 0.5rem);
   background: rgba(127, 29, 29, 0.18);
   color: rgb(254, 202, 202);
+  font-size: var(--text-xs);
+}
+
+.session-repo-report-success {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(6, 78, 59, 0.18);
+  color: rgb(167, 243, 208);
   font-size: var(--text-xs);
 }
 
@@ -4556,6 +4598,23 @@ button:disabled {
   line-height: 1.45;
 }
 
+.public-report-shell {
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 14rem),
+    var(--bg-primary);
+}
+
+.public-report-workspace {
+  width: min(1120px, calc(100vw - 2rem));
+  margin: 0 auto;
+  padding: clamp(1rem, 4vw, 3rem) 0;
+}
+
+.session-repo-report.is-public {
+  align-content: start;
+}
+
 @media (max-width: 640px) {
   .run-settings-sound-row {
     align-items: stretch;
@@ -4572,8 +4631,13 @@ button:disabled {
   }
 
   .session-repo-report-range,
-  .session-repo-report-refresh {
+  .session-repo-report-refresh,
+  .session-repo-report-date {
     flex: 1 1 0;
+  }
+
+  .session-repo-report-date input {
+    width: min(100%, 8rem);
   }
 
   .session-repo-report-metrics,
