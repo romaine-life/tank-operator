@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { CalendarIcon, ChevronDownIcon, GitBranchIcon, LinkIcon, RefreshCwIcon } from "lucide-react";
 import { authedFetch } from "./auth";
 
@@ -74,6 +74,7 @@ export function SessionRepoReport({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [shareStatus, setShareStatus] = useState("");
+  const loadRequestIDRef = useRef(0);
 
   const reportURL = useMemo(() => {
     if (publicShareToken) {
@@ -91,29 +92,38 @@ export function SessionRepoReport({
     return `/api/admin/session-report?${params.toString()}`;
   }, [publicShareToken, range, sessionScope]);
 
-  const loadReport = async () => {
-    if (!reportURL) return;
+  const loadReport = useCallback(async (targetURL = reportURL) => {
+    if (!targetURL) return;
+    const requestID = loadRequestIDRef.current + 1;
+    loadRequestIDRef.current = requestID;
     setLoading(true);
     setError("");
     try {
-      const res = publicShareToken ? await fetch(reportURL) : await authedFetch(reportURL);
+      const res = publicShareToken ? await fetch(targetURL) : await authedFetch(targetURL);
       if (!res.ok) {
         throw new Error(await res.text());
       }
-      setReport(await res.json() as SessionReport);
+      const nextReport = await res.json() as SessionReport;
+      if (requestID === loadRequestIDRef.current) {
+        setReport(nextReport);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      if (requestID === loadRequestIDRef.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
     } finally {
-      setLoading(false);
+      if (requestID === loadRequestIDRef.current) {
+        setLoading(false);
+      }
     }
-  };
+  }, [publicShareToken, reportURL]);
 
   useEffect(() => {
-    void loadReport();
-  }, [reportURL]);
+    void loadReport(reportURL);
+  }, [loadReport, reportURL]);
 
   const topSessions = report?.sessions.slice(0, 12) ?? [];
-  const rangeLabel = report?.range?.label ?? rangeSelectionLabel(range);
+  const rangeLabel = publicView ? report?.range?.label ?? rangeSelectionLabel(range) : rangeSelectionLabel(range);
   const customDraftValid = Boolean(draftFrom && draftTo && draftTo >= draftFrom);
 
   const selectDays = (value: number) => {
