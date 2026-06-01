@@ -989,6 +989,13 @@ var schemaMigrations = []migration{
 	// caller's durable cross-device shortcut list.
 	{ID: "0082", SQL: `ALTER TABLE profiles
 		ADD COLUMN IF NOT EXISTS pinned_repos text[] NOT NULL DEFAULT '{}'`},
+
+	// Runtime repo discovery was retired after the polling-based reporter
+	// proved misaligned with the product's durable/event-driven quality bar.
+	// Keep migration 0078 immutable for production ledger compatibility, then
+	// remove the unused column with a forward migration.
+	{ID: "0083", SQL: `ALTER TABLE sessions
+		DROP COLUMN IF EXISTS discovered_repos`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

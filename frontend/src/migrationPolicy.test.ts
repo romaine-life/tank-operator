@@ -1119,13 +1119,14 @@ test("chat scroll diagnostics are prometheus backed", () => {
   assert.equal(chatScrollMetricsHandlerSource.includes('"page_search"'), true);
 });
 
-test("repo attribution stays queryable without sidebar UI", () => {
+test("repo selection stays queryable without sidebar filter UI", () => {
   assert.equal(appSource.includes("sessionFilter"), false);
   assert.equal(appSource.includes("sessionMatchesFilter"), false);
   assert.equal(appSource.includes("repoShortName"), false);
   assert.equal(appSource.includes("filter by repo"), false);
   assert.equal(indexCssSource.includes(".sidebar-filter"), false);
-  assert.equal(sessionBarCapabilitiesSource.includes("no visible surface"), true);
+  assert.equal(sessionBarCapabilitiesSource.includes("sessions.repos text[]"), true);
+  assert.equal(sessionBarCapabilitiesSource.includes("workspace scans"), true);
   assert.equal(sessionBarCapabilitiesSource.includes("filter input"), false);
 });
 
