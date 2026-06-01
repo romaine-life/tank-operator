@@ -230,6 +230,7 @@ import {
   contextWindowTokenCount,
   estimateTranscriptCost,
   estimateTurnCost,
+  estimateTurnContextTokens,
   formatCompactTokens,
   formatComposerCostUsd,
   formatTurnCostUsd,
@@ -3276,7 +3277,13 @@ function getContextWindow(modelId: string): number {
 
 function latestContextTokens(entries: TranscriptEntry[], contextWindow: number): number {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const total = contextWindowTokenCount(entries[i].turnUsage, contextWindow);
+    const entry = entries[i];
+    if (!entry) continue;
+    const total = contextWindowTokenCount(
+      entry.turnUsage,
+      contextWindow,
+      entry.usageObservation,
+    );
     if (total > 0) return total;
   }
   return 0;
@@ -6907,6 +6914,7 @@ type TurnViewItem = {
   active: boolean;
   loaded: boolean;
   costEstimate: SessionCostEstimate | null;
+  contextTokens: number | null;
   startedAt?: string;
   completedAt?: string;
   lastActivityAt?: string;
@@ -6956,6 +6964,7 @@ function buildTurnViewItems(
   activeTurnId: string | null,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
   modelId: string,
+  contextWindow: number,
 ): TurnViewItem[] {
   const order = new Map<string, number>();
   const shells = new Map<string, TranscriptEntry>();
@@ -7019,6 +7028,7 @@ function buildTurnViewItems(
         active: turnId === active,
         loaded: Boolean(loadedEntries),
         costEstimate: estimateTurnCost(costRows, modelId, turnId),
+        contextTokens: estimateTurnContextTokens(costRows, contextWindow, turnId),
         startedAt,
         completedAt,
         lastActivityAt,
@@ -7736,8 +7746,8 @@ function RunTurnActivityScreen({
             {selected.costEstimate && (
               <ComposerCostEstimate
                 amountUsd={selected.costEstimate.amountUsd}
-                tokens={selected.costEstimate.tokens}
-                tokenScopeLabel="processed tokens in this turn"
+                tokens={selected.contextTokens}
+                tokenScopeLabel="current context tokens"
                 scopeLabel="turn"
               />
             )}
@@ -11935,14 +11945,16 @@ function ChatPane({
   const appliedModelId = (session.runtime_model ?? "").trim();
   const modelForContext = selectedModelId;
   const modelForCostEstimate = appliedModelId || modelForContext;
+  const contextWindow = getContextWindow(modelForContext);
   const turnViewItems = useMemo(
     () => buildTurnViewItems(
       renderedEntries,
       renderedActiveTurnId,
       activityEntriesByTurn,
       modelForCostEstimate,
+      contextWindow,
     ),
-    [activityEntriesByTurn, modelForCostEstimate, renderedActiveTurnId, renderedEntries],
+    [activityEntriesByTurn, contextWindow, modelForCostEstimate, renderedActiveTurnId, renderedEntries],
   );
   const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
@@ -12287,7 +12299,6 @@ function ChatPane({
       ? `Runtime applied: ${modelChipLabel}${effortChipLabel ? ` / ${effortChipLabel}` : ""}`
       : `Runtime did not report a model. Selected: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`)
     : `Waiting for runner report. Intended: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`;
-  const contextWindow = getContextWindow(modelForContext);
   const sessionCostEstimate = useMemo(
     () => estimateTranscriptCost(entries, modelForCostEstimate),
     [entries, modelForCostEstimate],

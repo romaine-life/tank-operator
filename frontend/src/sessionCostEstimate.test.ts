@@ -5,6 +5,7 @@ import {
   contextWindowTokenCount,
   estimateTranscriptCost,
   estimateTurnCost,
+  estimateTurnContextTokens,
   estimateUsageCostUSD,
   formatCompactTokens,
   formatComposerCostUsd,
@@ -108,7 +109,21 @@ test("context window token count uses active uncached Codex delta for cumulative
     output_tokens: 29_896,
     reasoning_output_tokens: 4_449,
     total_tokens: 25_161_110,
-  }, 1_050_000), 643_150);
+  }, 1_050_000, {
+    usage_source: "thread.tokenUsage.updated",
+  }), 643_150);
+});
+
+test("context window token count uses Codex uncached delta even below the model window", () => {
+  assert.equal(contextWindowTokenCount({
+    cached_input_tokens: 525_440,
+    input_tokens: 608_743,
+    output_tokens: 4_238,
+    reasoning_output_tokens: 1_291,
+    total_tokens: 612_981,
+  }, 1_050_000, {
+    usage_source: "thread.tokenUsage.updated",
+  }), 83_303);
 });
 
 test("context window token count keeps in-window cached prompts intact", () => {
@@ -116,6 +131,33 @@ test("context window token count keeps in-window cached prompts intact", () => {
     input_tokens: 180_000,
     cached_input_tokens: 120_000,
   }, 200_000), 180_000);
+});
+
+test("estimates one selected turn context tokens from latest usage row", () => {
+  const rows = [
+    {
+      id: "a",
+      turnId: "turn-1",
+      turnUsage: {
+        input_tokens: 500_000,
+        cached_input_tokens: 450_000,
+        output_tokens: 1_000,
+      },
+      usageObservation: { usage_source: "thread.tokenUsage.updated" },
+    },
+    {
+      id: "b",
+      turnId: "turn-1",
+      turnUsage: {
+        input_tokens: 608_743,
+        cached_input_tokens: 525_440,
+        output_tokens: 4_238,
+      },
+      usageObservation: { usage_source: "thread.tokenUsage.updated" },
+    },
+  ];
+
+  assert.equal(estimateTurnContextTokens(rows, 1_050_000, "turn-1"), 83_303);
 });
 
 test("formats compact composer costs", () => {
