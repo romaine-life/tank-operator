@@ -983,6 +983,12 @@ var schemaMigrations = []migration{
 	{ID: "0081", SQL: `CREATE INDEX IF NOT EXISTS message_link_shares_session
 		ON message_link_shares (owner_email, session_scope, session_id)
 		WHERE revoked_at IS NULL`},
+
+	// Per-user repository pins for the splash repo picker. Unlike
+	// sessions.repos (create-time intent for one session), this is the
+	// caller's durable cross-device shortcut list.
+	{ID: "0082", SQL: `ALTER TABLE profiles
+		ADD COLUMN IF NOT EXISTS pinned_repos text[] NOT NULL DEFAULT '{}'`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

@@ -14,6 +14,7 @@
 // load-bearing on both sides.
 
 export const MAX_REPOS_PER_SESSION = 5;
+export const MAX_PINNED_REPOS = 64;
 export const RECENT_REPO_PREVIEW_LIMIT = 4;
 
 export const REPO_SLUG_PATTERN =
@@ -110,7 +111,7 @@ export function recentRepoShortcutSlugs(
 }
 
 export function pinnedRepoSlugs(pinned: readonly string[]): string[] {
-  return normalizeRepoSlugs(pinned, Number.MAX_SAFE_INTEGER);
+  return normalizeRepoSlugs(pinned, MAX_PINNED_REPOS);
 }
 
 export function repoShortcutSlugs(

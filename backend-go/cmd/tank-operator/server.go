@@ -171,6 +171,8 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// repo slugs to the splash-page picker. It reads sessions.repos
 	// directly with no mcp-github hop. See handlers_repos.go for the SQL.
 	mux.HandleFunc("GET /api/github/recent-repos", s.handleGitHubRecentRepos)
+	mux.HandleFunc("GET /api/github/pinned-repos", s.handleGitHubPinnedRepos)
+	mux.HandleFunc("PUT /api/github/pinned-repos", s.handleGitHubPinnedRepos)
 	// /api/github/repos enumerates the caller's GitHub App installation
 	// repos via mcp-github. Pairs with the auth.romaine.life on-behalf-of
 	// exchange so the orchestrator can mint a service JWT acting for the

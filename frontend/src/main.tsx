@@ -51,7 +51,6 @@ const TANK_KEY_ALLOWLIST = [
   "tank.defaultSessionMode",
   "tank.defaultInteraction",
   "tank.homeSelectedRepos",
-  "tank.homePinnedRepos",
   "tank.sessionInteraction:",
 ];
 function isAllowedTankKey(key: string): boolean {

@@ -52,6 +52,7 @@ test("bootstrapAuth stores and presents the upstream auth.romaine.life JWT direc
         avatar_url: "https://example.test/avatar",
         github_login: null,
         installation_id: null,
+        pinned_repos: [],
         run_prefs: null,
       });
     }
