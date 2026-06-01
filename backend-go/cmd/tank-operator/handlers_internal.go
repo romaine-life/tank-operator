@@ -669,62 +669,6 @@ func (s *appServer) handleInternalSetCloneState(w http.ResponseWriter, r *http.R
 	writeJSON(w, http.StatusOK, info)
 }
 
-// handleInternalSetDiscoveredRepos folds the "owner/name" slugs a session
-// pod observed checked out under /workspace into the durable
-// sessions.discovered_repos set, so the API/database can answer which repos
-// the session worked on — not just the ones picked at create time. The caller
-// is the pod-side workspace-repo-reporter, a service-principal token whose
-// actor_email owns the target session (the same auth path the
-// repo-cloner uses for clone-state).
-//
-// Best-effort by design: malformed slugs are dropped (not 400'd) so a
-// single weird remote can't wedge the reporter's loop, and an empty/
-// already-known report returns 200 with the current row. The endpoint is
-// idempotent — re-reporting the same set is a registry no-op (no
-// row_version bump, no SSE fan-out), which is what lets the reporter poll
-// cheaply.
-func (s *appServer) handleInternalSetDiscoveredRepos(w http.ResponseWriter, r *http.Request) {
-	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/discovered-repos")
-	if user == nil {
-		return
-	}
-	sessionID := r.PathValue("session_id")
-	var body struct {
-		Repos []string `json:"repos"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid body")
-		return
-	}
-	slugs, dropped := normalizeDiscoveredRepoSlugs(body.Repos)
-	for i := 0; i < dropped; i++ {
-		sessionDiscoveredReposDroppedTotal.Inc()
-	}
-	if len(slugs) == 0 {
-		recordDiscoveredReposReport("empty")
-		info, err := s.mgr.GetByOwner(r.Context(), user.ActorEmail, sessionID)
-		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
-			return
-		}
-		writeJSON(w, http.StatusOK, info)
-		return
-	}
-	before, _ := s.mgr.GetByOwner(r.Context(), user.ActorEmail, sessionID)
-	info, err := s.mgr.MergeDiscoveredRepos(r.Context(), user.ActorEmail, sessionID, slugs)
-	if err != nil {
-		recordDiscoveredReposReport("error")
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	if len(info.DiscoveredRepos) > len(before.DiscoveredRepos) {
-		recordDiscoveredReposReport("merged")
-	} else {
-		recordDiscoveredReposReport("noop")
-	}
-	writeJSON(w, http.StatusOK, info)
-}
-
 // handleInternalSendMessage enqueues a follow-up turn to a chat-capable session.
 //
 // Origin attribution: when the caller is itself a tank-operator session pod

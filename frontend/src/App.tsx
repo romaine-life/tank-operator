@@ -35,6 +35,7 @@ import {
 import { AdminAvatarManager } from "./AdminAvatarManager";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
+import { SessionRepoReport } from "./SessionRepoReport";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
   initialTimelineBootstrapState,
@@ -600,13 +601,6 @@ interface Session {
   // clone_state is the per-repo repo-cloner init-container outcome.
   // Optional until the cloner writes back.
   clone_state?: Record<string, unknown> | null;
-  // discovered_repos is the durable set of owner/name slugs the pod's
-  // workspace-repo-reporter observed checked out under /workspace at
-  // runtime. Always an array on the wire (empty when nothing observed
-  // yet). Distinct from repos (the write-once create-time selection):
-  // this also captures repos the agent cloned on demand mid-session.
-  // Not rendered in the sidebar; it remains queryable via the API/database.
-  discovered_repos: string[];
   capabilities: string[];
   model?: string;
   effort?: string;
@@ -767,7 +761,6 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
     repos: [],
-    discovered_repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(1),
   },
@@ -782,7 +775,6 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
     repos: [],
-    discovered_repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(2),
   },
@@ -797,7 +789,6 @@ const DEMO_BASE_SESSIONS: Session[] = [
     ready_at: new Date(Date.now() - 24 * 60 * 1000).toISOString(),
     name: "Gemini",
     repos: [],
-    discovered_repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(4),
   },
@@ -1023,7 +1014,6 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     ready_at: null,
     name: `${label} ${index}`,
     repos: [],
-    discovered_repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(index),
   };
@@ -1138,9 +1128,6 @@ function normalizeSession(session: Session): Session {
   // array so downstream renderers can `.map` without a guard.
   next.repos = Array.isArray(session.repos) ? session.repos : [];
   next.clone_state = session.clone_state ?? null;
-  next.discovered_repos = Array.isArray(session.discovered_repos)
-    ? session.discovered_repos
-    : [];
   next.capabilities = Array.isArray(session.capabilities)
     ? session.capabilities.filter((entry): entry is string => typeof entry === "string")
     : [];
@@ -8525,12 +8512,13 @@ function RunSettingsPanel({
     viewingProdSessions: boolean;
     currentScope: string;
     prodScope: string;
+    reportScope: string;
     onAvatarCatalogChanged: () => Promise<void>;
     onViewingProdSessionsChange: (value: boolean) => void;
   };
 }) {
   const [settingsTab, setSettingsTab] = useState<"preferences" | "admin">("preferences");
-  const [adminView, setAdminView] = useState<"controls" | "avatars">("controls");
+  const [adminView, setAdminView] = useState<"controls" | "avatars" | "report">("controls");
   const showAdminTab = adminControls?.visible === true;
   useEffect(() => {
     if (!showAdminTab && settingsTab === "admin") {
@@ -8543,7 +8531,7 @@ function RunSettingsPanel({
     }
   }, [settingsTab, showAdminTab]);
   const settingsScreenClassName =
-    settingsTab === "admin" && showAdminTab && adminView === "avatars"
+    settingsTab === "admin" && showAdminTab && (adminView === "avatars" || adminView === "report")
       ? "run-settings-screen run-settings-screen-wide"
       : "run-settings-screen";
 
@@ -8589,10 +8577,40 @@ function RunSettingsPanel({
             </section>
             <AdminAvatarManager onCatalogChanged={adminControls.onAvatarCatalogChanged} />
           </>
+        ) : adminView === "report" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setAdminView("controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Session report</h2>
+              </div>
+            </section>
+            <SessionRepoReport sessionScope={adminControls.reportScope} />
+          </>
         ) : (
           <>
           <section className="run-settings-section">
             <h2 className="run-settings-title">Admin Controls</h2>
+            <button
+              type="button"
+              className="run-settings-link"
+              onClick={() => setAdminView("report")}
+            >
+              <span className="run-settings-link-label">
+                <GitBranchIcon className="run-settings-link-icon" aria-hidden="true" />
+                <span>Session repo report</span>
+              </span>
+              <span className="run-settings-scope-value">
+                Draft
+              </span>
+            </button>
             <button
               type="button"
               className="run-settings-link"
@@ -8944,6 +8962,7 @@ function ChatPane({
     viewingProdSessions: boolean;
     currentScope: string;
     prodScope: string;
+    reportScope: string;
     onAvatarCatalogChanged: () => Promise<void>;
     onViewingProdSessionsChange: (value: boolean) => void;
   };
@@ -14177,6 +14196,7 @@ function AuthenticatedApp() {
           viewingProdSessions,
           currentScope: currentSessionScope,
           prodScope: PROD_SESSION_SCOPE,
+          reportScope: effectiveSessionScope,
           onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
           onViewingProdSessionsChange: (value: boolean) => {
             const next = value ? PROD_SESSION_SCOPE : "";
@@ -14471,7 +14491,6 @@ function AuthenticatedApp() {
       activity: undefined, // activities live in the parallel sessionActivities map
       repos: Array.isArray(row.repos) ? row.repos : [],
       clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
-      discovered_repos: Array.isArray(row.discovered_repos) ? row.discovered_repos : [],
       capabilities: Array.isArray(row.capabilities) ? row.capabilities : [],
       model: row.model ?? "",
       effort: row.effort ?? "",
@@ -14511,7 +14530,6 @@ function AuthenticatedApp() {
       rollout_state: raw.rollout_state ?? undefined,
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
-      discovered_repos: Array.isArray(raw.discovered_repos) ? raw.discovered_repos.map(String) : [],
       capabilities: Array.isArray(raw.capabilities) ? raw.capabilities.map(String) : [],
       model: typeof raw.model === "string" ? raw.model : undefined,
       effort: typeof raw.effort === "string" ? raw.effort : undefined,

@@ -153,6 +153,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/admin/avatars/{avatar_id}", s.handleUpdateAvatar)
 	mux.HandleFunc("PATCH /api/admin/avatars/{avatar_id}/kind", s.handleUpdateAvatarKind)
 	mux.HandleFunc("DELETE /api/admin/avatars/{avatar_id}", s.handleDeleteAvatar)
+	mux.HandleFunc("GET /api/admin/session-report", s.handleAdminSessionReport)
 	// Admin-only durable support surface for avatar upload failures. The
 	// form error returns attempt_id; this endpoint turns that reference into
 	// a curl-able diagnosis without browser devtools.
@@ -280,7 +281,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/clone-state", s.handleInternalSetCloneState)
-	mux.HandleFunc("POST /api/internal/sessions/{session_id}/discovered-repos", s.handleInternalSetDiscoveredRepos)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/messages", s.handleInternalSendMessage)
 
 	// Static files.

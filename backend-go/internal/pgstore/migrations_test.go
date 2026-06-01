@@ -101,6 +101,21 @@ func TestAppliedMigration0078ChecksumIsStable(t *testing.T) {
 	t.Fatalf("migration %s not found", id)
 }
 
+func TestRuntimeRepoDiscoveryColumnIsDroppedAfterApplied0078(t *testing.T) {
+	migrations := joinedMigrationSQL()
+	addIndex := strings.Index(migrations, "ADD COLUMN IF NOT EXISTS discovered_repos")
+	dropIndex := strings.Index(migrations, "DROP COLUMN IF EXISTS discovered_repos")
+	if addIndex < 0 {
+		t.Fatal("migration 0078 must remain in the ledger with the historical discovered_repos add")
+	}
+	if dropIndex < 0 {
+		t.Fatal("a forward migration must drop retired discovered_repos")
+	}
+	if dropIndex < addIndex {
+		t.Fatal("discovered_repos drop must occur after the historical 0078 add")
+	}
+}
+
 // joinedMigrationSQL concatenates every migration's SQL in declaration order.
 // The string-content tests below assert on the SQL bodies and their relative
 // order, which is preserved by the []migration slice.

@@ -75,11 +75,6 @@ export interface SessionRow {
   // until the cloner writes back; null/missing means
   // "no clone state yet" rather than "clone succeeded."
   clone_state?: Record<string, unknown>;
-  // discovered_repos is the durable set of owner/name slugs the pod's
-  // workspace-repo-reporter observed under /workspace at runtime. Always
-  // present on the wire (empty array when nothing observed yet). Distinct
-  // from repos (the create-time selection): captures on-demand clones too.
-  discovered_repos: string[];
   capabilities: string[];
   model?: string;
   effort?: string;
@@ -505,11 +500,6 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       clone_state: isRecord(rowRaw.clone_state)
         ? (rowRaw.clone_state as Record<string, unknown>)
         : undefined,
-      discovered_repos: Array.isArray(rowRaw.discovered_repos)
-        ? (rowRaw.discovered_repos as unknown[]).filter(
-            (entry): entry is string => typeof entry === "string",
-          )
-        : [],
       capabilities: Array.isArray(rowRaw.capabilities)
         ? (rowRaw.capabilities as unknown[]).filter(
             (entry): entry is string => typeof entry === "string",

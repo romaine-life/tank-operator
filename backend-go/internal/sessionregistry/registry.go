@@ -59,7 +59,6 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			rollout_state,
 			COALESCE(repos, '{}'::text[]),
 			clone_state,
-			COALESCE(discovered_repos, '{}'::text[]),
 			COALESCE(capabilities, '{}'::text[]),
 			model,
 			effort,
@@ -88,7 +87,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			name                                                        *string
 			visible                                                     bool
 			activitySummary, testState, rolloutState, cloneState        []byte
-			repos, discoveredRepos, capabilities                        []string
+			repos, capabilities                                         []string
 			model, effort, runtimeModel, runtimeEffort, runtimeAt       string
 			agentAvatarID, systemAvatarID                               string
 			sidebarPosition, rowVersion                                 int64
@@ -98,7 +97,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
-			&repos, &cloneState, &discoveredRepos, &capabilities, &model, &effort,
+			&repos, &cloneState, &capabilities, &model, &effort,
 			&runtimeModel, &runtimeEffort, &runtimeAt,
 			&agentAvatarID, &systemAvatarID,
 			&sidebarPosition,
@@ -128,7 +127,6 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			RolloutState:        unmarshalJSONB(rolloutState),
 			Repos:               repos,
 			CloneState:          unmarshalJSONB(cloneState),
-			DiscoveredRepos:     discoveredRepos,
 			Capabilities:        capabilities,
 			Model:               model,
 			Effort:              effort,

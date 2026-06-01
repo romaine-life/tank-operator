@@ -945,9 +945,6 @@ func (r *stubSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ 
 func (r *stubSessionRegistry) SetCloneState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }
-func (r *stubSessionRegistry) MergeDiscoveredRepos(_ context.Context, _, _ string, _ []string) error {
-	return nil
-}
 func (r *stubSessionRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
 	return orderedIDs, nil
 }
