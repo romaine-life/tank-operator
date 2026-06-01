@@ -33,13 +33,14 @@ test("chat composer slash command highlight is drawn behind textarea text", () =
 
   assert.match(indexCssSource, /\.run-composer-text-preview\s*\{[\s\S]*pointer-events:\s*none;/);
   assert.match(indexCssSource, /\.run-composer-text-preview\s*\{[\s\S]*color:\s*var\(--text-primary\);/);
+  assert.match(indexCssSource, /\.run-composer-text-preview\s*\{[\s\S]*font-weight:\s*700;/);
   assert.match(cssRule(".run-composer-textarea-tokenized"), /color:\s*transparent\s*!important;/);
   assert.match(cssRule(".run-composer-textarea-tokenized"), /caret-color:\s*var\(--text-primary\);/);
+  assert.match(cssRule(".run-composer-textarea-tokenized"), /font-weight:\s*700;/);
 
   const tokenRule = cssRule(".run-composer-slash-token");
   assert.match(tokenRule, /border-radius:\s*0\.32rem;/);
   assert.match(tokenRule, /background:\s*rgba\(148,\s*163,\s*184,\s*0\.16\);/);
-  assert.match(tokenRule, /font-weight:\s*700;/);
   assert.match(tokenRule, /line-height:\s*1\.22;/);
 });
 
