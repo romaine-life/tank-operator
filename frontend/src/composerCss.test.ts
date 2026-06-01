@@ -24,6 +24,12 @@ test("chat composer slash command highlight is drawn behind textarea text", () =
   const wrapRule = cssRule(".run-composer-textarea-wrap");
   assert.match(wrapRule, /position:\s*relative;/);
   assert.match(wrapRule, /display:\s*grid;/);
+  assert.match(wrapRule, /width:\s*100%;/);
+  assert.match(wrapRule, /flex:\s*1\s+1\s+auto;/);
+
+  const textareaRule = cssRule(".run-composer-textarea");
+  assert.match(textareaRule, /text-align:\s*left;/);
+  assert.match(textareaRule, /width:\s*100%;/);
 
   assert.match(indexCssSource, /\.run-composer-text-preview\s*\{[\s\S]*pointer-events:\s*none;/);
   assert.match(indexCssSource, /\.run-composer-text-preview\s*\{[\s\S]*color:\s*transparent;/);

@@ -5477,6 +5477,9 @@ button:disabled {
 .run-composer-textarea-wrap {
   position: relative;
   display: grid;
+  width: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
 }
 
 .run-composer-textarea-wrap > .run-composer-textarea,
@@ -5495,7 +5498,9 @@ button:disabled {
   background: transparent !important;
   border: none !important;
   line-height: 1.5;
+  text-align: left;
   overflow-y: auto;
+  width: 100%;
 }
 
 .run-composer-text-preview {
