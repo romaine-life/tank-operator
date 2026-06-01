@@ -125,7 +125,7 @@ func TestManagerActiveSkillStateClearsOppositeAnnotation(t *testing.T) {
 		{
 			name: "test active clears rollout",
 			apply: func(ctx context.Context, mgr *Manager) (Info, error) {
-				return mgr.SetTestState(ctx, "nelson@romaine.life", "8", true, nil, nil)
+				return mgr.SetTestState(ctx, "nelson@romaine.life", "8", true, nil, nil, nil)
 			},
 			wantTest:    true,
 			wantRollout: false,
@@ -160,6 +160,44 @@ func TestManagerActiveSkillStateClearsOppositeAnnotation(t *testing.T) {
 			assertSkillStateActive(t, "pod test annotation", annotationObject(updated.Annotations, testStateAnnotation), tc.wantTest)
 			assertSkillStateActive(t, "pod rollout annotation", annotationObject(updated.Annotations, rolloutStateAnnotation), tc.wantRollout)
 		})
+	}
+}
+
+func TestManagerSetTestPullRequestURLPreservesTestEnvironment(t *testing.T) {
+	pod := sessionPod("8", "nelson@romaine.life", corev1.PodRunning, true)
+	pod.Annotations[testStateAnnotation] = `{"active":true,"slot_index":2,"url":"https://slot-2"}`
+	client := fake.NewSimpleClientset(pod)
+	registry := &managerTestRegistry{records: []sessionmodel.SessionRecord{{
+		ID:        "8",
+		Email:     "nelson@romaine.life",
+		Scope:     "default",
+		Mode:      sessionmodel.CodexGUIMode,
+		Status:    "Active",
+		Visible:   true,
+		TestState: map[string]any{"active": true, "slot_index": float64(2), "url": "https://slot-2"},
+	}}}
+	mgr := &Manager{client: client, namespace: sessionmodel.SessionsNamespace, registry: registry}
+
+	info, err := mgr.SetTestPullRequestURL(context.Background(), "nelson@romaine.life", "8", stringPtr("https://github.com/nelsong6/tank-operator/pull/123"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.TestState["url"]; got != "https://slot-2" {
+		t.Fatalf("info test_state url = %#v, want slot URL preserved", got)
+	}
+	if got := info.TestState["pull_request_url"]; got != "https://github.com/nelsong6/tank-operator/pull/123" {
+		t.Fatalf("info test_state pull_request_url = %#v", got)
+	}
+	updated, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	annotation := annotationObject(updated.Annotations, testStateAnnotation)
+	if got := annotation["url"]; got != "https://slot-2" {
+		t.Fatalf("pod test annotation url = %#v, want slot URL preserved", got)
+	}
+	if got := annotation["pull_request_url"]; got != "https://github.com/nelsong6/tank-operator/pull/123" {
+		t.Fatalf("pod test annotation pull_request_url = %#v", got)
 	}
 }
 

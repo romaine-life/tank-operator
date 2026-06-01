@@ -64,6 +64,7 @@ import {
   ExternalLinkIcon,
   GavelIcon,
   GitBranchIcon,
+  GitPullRequestIcon,
   GlobeIcon,
   ImageIcon,
   InfoIcon,
@@ -623,6 +624,7 @@ interface TestState {
   active?: boolean;
   slot_index?: number | null;
   url?: string | null;
+  pull_request_url?: string | null;
 }
 
 interface RolloutState {
@@ -13454,6 +13456,19 @@ function ChatPane({
                 >
                   <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
                 </button>
+              )}
+              {testState?.active && testState.pull_request_url && (
+                <a
+                  className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn is-ready"
+                  href={testState.pull_request_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  aria-label="Open pull request in new tab"
+                  title="Open pull request in new tab"
+                >
+                  <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+                  <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
+                </a>
               )}
               <button
                 type="button"

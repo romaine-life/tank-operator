@@ -5695,6 +5695,19 @@ button:disabled {
   color: white;
 }
 
+.run-pr-action-btn.is-ready {
+  color: #93c5fd;
+}
+
+.run-pr-action-btn.is-ready:hover {
+  color: #dbeafe;
+  background: rgba(59, 130, 246, 0.16);
+}
+
+.run-pr-action-btn.is-ready:hover .run-test-ready-icon {
+  color: white;
+}
+
 .run-command-menu-count {
   position: absolute;
   top: -0.15rem;

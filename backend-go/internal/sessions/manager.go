@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -661,7 +662,7 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 // the projected downward-API volume). Both writes are load-bearing
 // in steady state: the column is the snapshot-facing replica; the
 // annotation is what the agent code path consults.
-func (m *Manager) SetTestState(ctx context.Context, owner, sessionID string, active bool, slotIndex *int, url *string) (Info, error) {
+func (m *Manager) SetTestState(ctx context.Context, owner, sessionID string, active bool, slotIndex *int, url *string, pullRequestURL *string) (Info, error) {
 	state := map[string]any{"active": active}
 	if slotIndex != nil {
 		state["slot_index"] = *slotIndex
@@ -669,11 +670,50 @@ func (m *Manager) SetTestState(ctx context.Context, owner, sessionID string, act
 	if url != nil && *url != "" {
 		state["url"] = *url
 	}
+	if pullRequestURL != nil && strings.TrimSpace(*pullRequestURL) != "" {
+		state["pull_request_url"] = strings.TrimSpace(*pullRequestURL)
+	}
 	raw, _ := json.Marshal(state)
 	annotations := map[string]string{testStateAnnotation: string(raw)}
 	if active {
 		annotations[rolloutStateAnnotation] = `{"active":false}`
 	}
+	return m.patchStateAnnotations(ctx, owner, sessionID,
+		annotations,
+		func(c context.Context) error {
+			if m.registry == nil {
+				return nil
+			}
+			return m.registry.SetTestState(c, owner, sessionID, state)
+		})
+}
+
+// SetTestPullRequestURL updates only the PR link carried by the test workflow
+// state. It preserves any existing test slot URL/index so an agent can post
+// the draft PR after opening it without reconstructing the whole test pill.
+func (m *Manager) SetTestPullRequestURL(ctx context.Context, owner, sessionID string, url *string) (Info, error) {
+	state := map[string]any{"active": true}
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil && registered.TestState != nil {
+		for key, value := range registered.TestState {
+			state[key] = value
+		}
+	} else if current, err := m.GetByOwner(ctx, owner, sessionID); err == nil && current.TestState != nil {
+		for key, value := range current.TestState {
+			state[key] = value
+		}
+	}
+	normalized := ""
+	if url != nil {
+		normalized = strings.TrimSpace(*url)
+	}
+	if normalized == "" {
+		delete(state, "pull_request_url")
+	} else {
+		state["active"] = true
+		state["pull_request_url"] = normalized
+	}
+	raw, _ := json.Marshal(state)
+	annotations := map[string]string{testStateAnnotation: string(raw)}
 	return m.patchStateAnnotations(ctx, owner, sessionID,
 		annotations,
 		func(c context.Context) error {
