@@ -122,10 +122,7 @@ function ComposerTextPreview({ text }: { text: string }) {
   if (!slashMatch) return null;
   const command = slashMatch[1] ?? "";
   return (
-    <>
-      <span className="run-composer-slash-token">{command}</span>
-      {text.slice(command.length)}
-    </>
+    <span className="run-composer-slash-token">{command}</span>
   );
 }
 
