@@ -7,6 +7,7 @@ import {
   useState,
 } from "react";
 import type { PointerEvent as ReactPointerEvent } from "react";
+import type { DragEvent as ReactDragEvent } from "react";
 import {
   ArrowLeftRightIcon,
   ImagePlusIcon,
@@ -115,23 +116,23 @@ function extensionForImageType(type: string): string {
   }
 }
 
-function namedClipboardImage(file: File): File {
+function namedImageFile(file: File, basename: string): File {
   if (file.name) return file;
   const extension = extensionForImageType(file.type);
-  return new File([file], `pasted-avatar.${extension}`, {
+  return new File([file], `${basename}.${extension}`, {
     type: file.type || "image/png",
     lastModified: Date.now(),
   });
 }
 
-function imageFileFromClipboard(data: DataTransfer): File | null {
+export function imageFileFromTransfer(data: DataTransfer, basename = "avatar-image"): File | null {
   for (const item of Array.from(data.items)) {
     if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
     const file = item.getAsFile();
-    if (file) return namedClipboardImage(file);
+    if (file) return namedImageFile(file, basename);
   }
   for (const file of Array.from(data.files)) {
-    if (file.type.startsWith("image/")) return namedClipboardImage(file);
+    if (file.type.startsWith("image/")) return namedImageFile(file, basename);
   }
   return null;
 }
@@ -290,6 +291,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
   const [editingAvatarID, setEditingAvatarID] = useState<string | null>(null);
   const [loadingEditID, setLoadingEditID] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [fileDragActive, setFileDragActive] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -566,7 +568,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
     const onPaste = (event: ClipboardEvent) => {
       const data = event.clipboardData;
       if (!data) return;
-      const file = imageFileFromClipboard(data);
+      const file = imageFileFromTransfer(data, "pasted-avatar");
       if (!file) return;
       event.preventDefault();
       selectPhoto(file);
@@ -574,6 +576,32 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
     window.addEventListener("paste", onPaste);
     return () => window.removeEventListener("paste", onPaste);
   }, [selectPhoto]);
+
+  const handlePhotoDragOver = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    if (isEditingAvatar) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    setFileDragActive(true);
+  }, [isEditingAvatar]);
+
+  const handlePhotoDragLeave = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    const nextTarget = event.relatedTarget;
+    if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+      setFileDragActive(false);
+    }
+  }, []);
+
+  const handlePhotoDrop = useCallback((event: ReactDragEvent<HTMLElement>) => {
+    if (isEditingAvatar) return;
+    event.preventDefault();
+    setFileDragActive(false);
+    const file = imageFileFromTransfer(event.dataTransfer, "dropped-avatar");
+    if (!file) {
+      setFormError("Drop an image file.");
+      return;
+    }
+    selectPhoto(file);
+  }, [isEditingAvatar, selectPhoto]);
 
   async function buildAvatarBlob(): Promise<Blob> {
     const image = imageRef.current;
@@ -728,6 +756,12 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
             <input
               value={name}
               onChange={(event) => setName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+                event.preventDefault();
+                if (saving || loadingEditID !== null) return;
+                void saveAvatar();
+              }}
               placeholder={kind === "agent" ? "Agent display name" : "System display name"}
               maxLength={80}
             />
@@ -738,9 +772,16 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
               <span>{photoFile ? photoFile.name : "Saved source image"}</span>
             </div>
           ) : (
-            <label className="admin-avatar-file">
+            <label
+              className="admin-avatar-file"
+              data-drag-active={fileDragActive ? "true" : undefined}
+              onDragOver={handlePhotoDragOver}
+              onDragEnter={handlePhotoDragOver}
+              onDragLeave={handlePhotoDragLeave}
+              onDrop={handlePhotoDrop}
+            >
               <UploadIcon size={16} aria-hidden="true" />
-              <span>{photoFile ? photoFile.name : "Choose or paste photo"}</span>
+              <span>{photoFile ? photoFile.name : "Choose, paste, or drop photo"}</span>
               <input
                 type="file"
                 accept="image/png,image/jpeg,image/webp,image/gif,image/avif,image/bmp"

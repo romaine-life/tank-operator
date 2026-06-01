@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   avatarSaveErrorMessage,
   fetchAvatarViews,
+  imageFileFromTransfer,
   requestAvatarKindChange,
   requestAvatarUpdate,
 } from "./AdminAvatarManager";
@@ -20,6 +21,50 @@ test("avatar save errors include server attempt references", () => {
     avatarSaveErrorMessage(500, {}),
     "save failed: 500",
   );
+});
+
+test("avatar admin accepts image files from drag transfer data", () => {
+  const file = new File(["png"], "portrait.png", { type: "image/png" });
+  const transfer = {
+    items: [],
+    files: [file],
+  } as unknown as DataTransfer;
+
+  assert.equal(imageFileFromTransfer(transfer), file);
+});
+
+test("avatar admin names dropped image data that has no filename", () => {
+  const file = new File(["webp"], "", { type: "image/webp" });
+  const transfer = {
+    items: [
+      {
+        kind: "file",
+        type: "image/webp",
+        getAsFile: () => file,
+      },
+    ],
+    files: [],
+  } as unknown as DataTransfer;
+
+  const image = imageFileFromTransfer(transfer, "dropped-avatar");
+
+  assert.equal(image?.name, "dropped-avatar.webp");
+  assert.equal(image?.type, "image/webp");
+});
+
+test("avatar admin ignores non-image drag transfer data", () => {
+  const transfer = {
+    items: [
+      {
+        kind: "file",
+        type: "text/plain",
+        getAsFile: () => new File(["text"], "notes.txt", { type: "text/plain" }),
+      },
+    ],
+    files: [new File(["text"], "notes.txt", { type: "text/plain" })],
+  } as unknown as DataTransfer;
+
+  assert.equal(imageFileFromTransfer(transfer), null);
 });
 
 test("avatar admin keeps usable entries when another avatar image is missing", async () => {
