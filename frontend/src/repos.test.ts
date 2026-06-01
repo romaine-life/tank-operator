@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  MAX_PINNED_REPOS,
   MAX_REPOS_PER_SESSION,
   REPO_SLUG_PATTERN,
   REPO_SUPPORTED_MODES,
@@ -224,6 +225,14 @@ test("pinnedRepoSlugs normalizes pins without the session repo cap", () => {
     ]),
     ["nelsong6/tank-operator", "a/1", "b/2", "c/3", "d/4", "e/5"],
   );
+});
+
+test("pinnedRepoSlugs caps profile metadata", () => {
+  const raw = Array.from({ length: MAX_PINNED_REPOS + 3 }, (_, i) => `owner/repo${i}`);
+  const pinned = pinnedRepoSlugs(raw);
+  assert.equal(pinned.length, MAX_PINNED_REPOS);
+  assert.equal(pinned[0], "owner/repo0");
+  assert.equal(pinned[MAX_PINNED_REPOS - 1], `owner/repo${MAX_PINNED_REPOS - 1}`);
 });
 
 test("repoShortcutSlugs orders pinned repos before recent repos", () => {

@@ -21,22 +21,24 @@ func (s *PostgresStore) UpdateInstallation(ctx context.Context, email string, in
 		SET installation_id = EXCLUDED.installation_id,
 			github_login    = COALESCE(EXCLUDED.github_login, profiles.github_login),
 			updated_at      = now()
-		RETURNING email, github_login, installation_id, run_prefs
+		RETURNING email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[])
 	`
 	var (
 		gotEmail string
 		login    *string
 		instID   *int64
 		prefsRaw []byte
+		pins     []string
 	)
 	if err := s.pool.QueryRow(ctx, q, normalized, githubLogin, installationID).
-		Scan(&gotEmail, &login, &instID, &prefsRaw); err != nil {
+		Scan(&gotEmail, &login, &instID, &prefsRaw, &pins); err != nil {
 		return Profile{}, err
 	}
 	p := Profile{
 		Email:          gotEmail,
 		GitHubLogin:    login,
 		InstallationID: instID,
+		PinnedRepos:    pins,
 	}
 	if len(prefsRaw) > 0 {
 		var prefs map[string]any
@@ -68,22 +70,68 @@ func (s *PostgresStore) UpdatePrefs(ctx context.Context, email string, prefs map
 		ON CONFLICT (email) DO UPDATE
 		SET run_prefs  = EXCLUDED.run_prefs,
 			updated_at = now()
-		RETURNING email, github_login, installation_id, run_prefs
+		RETURNING email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[])
 	`
 	var (
 		gotEmail   string
 		login      *string
 		instID     *int64
 		gotPrefsJS []byte
+		pins       []string
 	)
 	if err := s.pool.QueryRow(ctx, q, normalized, prefsJSON).
-		Scan(&gotEmail, &login, &instID, &gotPrefsJS); err != nil {
+		Scan(&gotEmail, &login, &instID, &gotPrefsJS, &pins); err != nil {
 		return Profile{}, err
 	}
 	p := Profile{
 		Email:          gotEmail,
 		GitHubLogin:    login,
 		InstallationID: instID,
+		PinnedRepos:    pins,
+	}
+	if len(gotPrefsJS) > 0 {
+		var gotPrefs map[string]any
+		if err := json.Unmarshal(gotPrefsJS, &gotPrefs); err != nil {
+			return Profile{}, err
+		}
+		p.RunPrefs = gotPrefs
+	}
+	return p, nil
+}
+
+// UpdatePinnedRepos replaces the caller's durable splash-picker pins.
+func (s *PostgresStore) UpdatePinnedRepos(ctx context.Context, email string, repos []string) (Profile, error) {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	if normalized == "" {
+		return Profile{}, nil
+	}
+	if repos == nil {
+		repos = []string{}
+	}
+	const q = `
+		INSERT INTO profiles (email, pinned_repos, updated_at)
+		VALUES ($1, $2, now())
+		ON CONFLICT (email) DO UPDATE
+		SET pinned_repos = EXCLUDED.pinned_repos,
+			updated_at   = now()
+		RETURNING email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[])
+	`
+	var (
+		gotEmail   string
+		login      *string
+		instID     *int64
+		gotPrefsJS []byte
+		pins       []string
+	)
+	if err := s.pool.QueryRow(ctx, q, normalized, repos).
+		Scan(&gotEmail, &login, &instID, &gotPrefsJS, &pins); err != nil {
+		return Profile{}, err
+	}
+	p := Profile{
+		Email:          gotEmail,
+		GitHubLogin:    login,
+		InstallationID: instID,
+		PinnedRepos:    pins,
 	}
 	if len(gotPrefsJS) > 0 {
 		var gotPrefs map[string]any
@@ -101,6 +149,7 @@ func (StubStore) UpdateInstallation(_ context.Context, email string, installatio
 		Email:          strings.ToLower(strings.TrimSpace(email)),
 		GitHubLogin:    githubLogin,
 		InstallationID: &installationID,
+		PinnedRepos:    []string{},
 	}, nil
 }
 
@@ -108,7 +157,21 @@ func (StubStore) UpdateInstallation(_ context.Context, email string, installatio
 // when the orchestrator runs without Postgres configured.
 func (StubStore) UpdatePrefs(_ context.Context, email string, prefs map[string]any) (Profile, error) {
 	return Profile{
-		Email:    strings.ToLower(strings.TrimSpace(email)),
-		RunPrefs: prefs,
+		Email:       strings.ToLower(strings.TrimSpace(email)),
+		RunPrefs:    prefs,
+		PinnedRepos: []string{},
+	}, nil
+}
+
+// UpdatePinnedRepos echoes the request for StubStore. Production persists this
+// on the Postgres profiles row; the stub exists only for no-Postgres local
+// startup.
+func (StubStore) UpdatePinnedRepos(_ context.Context, email string, repos []string) (Profile, error) {
+	if repos == nil {
+		repos = []string{}
+	}
+	return Profile{
+		Email:       strings.ToLower(strings.TrimSpace(email)),
+		PinnedRepos: repos,
 	}, nil
 }

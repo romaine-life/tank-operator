@@ -14,6 +14,10 @@ type Profile struct {
 	Email          string  `json:"email"`
 	GitHubLogin    *string `json:"github_login"`
 	InstallationID *int64  `json:"installation_id"`
+	// PinnedRepos is the durable per-user shortcut list for the splash repo
+	// picker. Empty slice means no pins; it should serialize as [] rather
+	// than null so the SPA has a single source shape.
+	PinnedRepos []string `json:"pinned_repos"`
 	// RunPrefs is opaque on the wire — the SPA owns the schema (chat font
 	// scale, sound volume, etc., see frontend/src/App.tsx → RunPrefs).
 	// Storing as a free-form map lets us evolve UI prefs without coupling
@@ -42,7 +46,7 @@ func (s *PostgresStore) GetOrCreate(ctx context.Context, email string) (Profile,
 		return Profile{}, nil
 	}
 	const q = `
-		SELECT email, github_login, installation_id, run_prefs
+		SELECT email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[])
 		FROM profiles
 		WHERE email = $1
 	`
@@ -51,10 +55,11 @@ func (s *PostgresStore) GetOrCreate(ctx context.Context, email string) (Profile,
 		login    *string
 		instID   *int64
 		prefsRaw []byte
+		pins     []string
 	)
-	err := s.pool.QueryRow(ctx, q, normalized).Scan(&gotEmail, &login, &instID, &prefsRaw)
+	err := s.pool.QueryRow(ctx, q, normalized).Scan(&gotEmail, &login, &instID, &prefsRaw, &pins)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return Profile{Email: normalized}, nil
+		return Profile{Email: normalized, PinnedRepos: []string{}}, nil
 	}
 	if err != nil {
 		return Profile{}, err
@@ -63,6 +68,7 @@ func (s *PostgresStore) GetOrCreate(ctx context.Context, email string) (Profile,
 		Email:          gotEmail,
 		GitHubLogin:    login,
 		InstallationID: instID,
+		PinnedRepos:    pins,
 	}
 	if len(prefsRaw) > 0 {
 		var prefs map[string]any
@@ -80,7 +86,7 @@ func (s *PostgresStore) GetOrCreate(ctx context.Context, email string) (Profile,
 type StubStore struct{}
 
 func (StubStore) GetOrCreate(_ context.Context, email string) (Profile, error) {
-	return Profile{Email: strings.ToLower(strings.TrimSpace(email))}, nil
+	return Profile{Email: strings.ToLower(strings.TrimSpace(email)), PinnedRepos: []string{}}, nil
 }
 
 // profileFromMap rehydrates a Profile from an untyped map. Used by the
@@ -107,6 +113,18 @@ func profileFromMap(doc map[string]any) Profile {
 	}
 	if v, ok := doc["run_prefs"].(map[string]any); ok {
 		p.RunPrefs = v
+	}
+	if v, ok := doc["pinned_repos"].([]string); ok {
+		p.PinnedRepos = v
+	} else if v, ok := doc["pinned_repos"].([]any); ok {
+		for _, entry := range v {
+			if slug, ok := entry.(string); ok {
+				p.PinnedRepos = append(p.PinnedRepos, slug)
+			}
+		}
+	}
+	if p.PinnedRepos == nil {
+		p.PinnedRepos = []string{}
 	}
 	return p
 }

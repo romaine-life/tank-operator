@@ -15,6 +15,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -38,6 +39,12 @@ import (
 // the handler so a malicious or buggy SPA can't push a 1000-repo list
 // through and stall every new session.
 const maxReposPerSession = 5
+
+// maxPinnedReposPerUser bounds the per-user shortcut list stored on
+// profiles.pinned_repos. It is intentionally larger than the per-session
+// clone cap because pins are cheap metadata, but still finite so a bad client
+// cannot turn the profile row into unbounded storage.
+const maxPinnedReposPerUser = 64
 
 // repoSlugPattern matches a permissive "owner/name" shape. Bounds:
 //   - Owner: starts alphanumeric, then alphanumeric / hyphen, up to
@@ -114,6 +121,36 @@ func validateRepoSlugs(raw []string) ([]string, error) {
 			// Dedup silently — picker can produce a dup if the
 			// user clicks twice; treating it as an error would
 			// be annoying.
+			continue
+		}
+		seen[key] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out, nil
+}
+
+// validatePinnedRepoSlugs normalizes the durable per-user pin list. It uses
+// the same slug contract as session repo selection but a separate cap because
+// pins are shortcuts, not a clone workload.
+func validatePinnedRepoSlugs(raw []string) ([]string, error) {
+	if len(raw) == 0 {
+		return []string{}, nil
+	}
+	if len(raw) > maxPinnedReposPerUser {
+		return nil, fmt.Errorf("too many pinned repos: %d > %d", len(raw), maxPinnedReposPerUser)
+	}
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for i, slug := range raw {
+		trimmed := strings.TrimSpace(slug)
+		if trimmed == "" {
+			return nil, fmt.Errorf("repos[%d]: empty slug", i)
+		}
+		if !repoSlugPattern.MatchString(trimmed) {
+			return nil, fmt.Errorf("repos[%d]: %q is not a valid owner/name slug", i, trimmed)
+		}
+		key := strings.ToLower(trimmed)
+		if _, dup := seen[key]; dup {
 			continue
 		}
 		seen[key] = struct{}{}
@@ -227,6 +264,65 @@ func (s *appServer) handleGitHubRecentRepos(w http.ResponseWriter, r *http.Reque
 		slugs = []string{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"repos": slugs})
+}
+
+// handleGitHubPinnedRepos returns or replaces the caller's durable
+// splash-picker pins. The profile row is the source of truth; the SPA does
+// not keep a localStorage shadow for this list.
+func (s *appServer) handleGitHubPinnedRepos(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		profile, err := s.profiles.GetOrCreate(r.Context(), user.Email)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, "pinned repos: "+err.Error())
+			return
+		}
+		repos := profile.PinnedRepos
+		if repos == nil {
+			repos = []string{}
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"repos": repos})
+	case http.MethodPut:
+		pinsStore, ok := s.profiles.(profilesPinnedReposStore)
+		if !ok {
+			recordPinnedReposUpdate("unavailable")
+			writeError(w, http.StatusServiceUnavailable, "profile store does not support pinned repo writes")
+			return
+		}
+		var body struct {
+			Repos []string `json:"repos"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			recordPinnedReposUpdate("invalid")
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		repos, err := validatePinnedRepoSlugs(body.Repos)
+		if err != nil {
+			recordPinnedReposUpdate("invalid")
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		profile, err := pinsStore.UpdatePinnedRepos(r.Context(), user.Email, repos)
+		if err != nil {
+			recordPinnedReposUpdate("error")
+			writeError(w, http.StatusInternalServerError, "pinned repos: "+err.Error())
+			return
+		}
+		next := profile.PinnedRepos
+		if next == nil {
+			next = []string{}
+		}
+		recordPinnedReposUpdate("ok")
+		writeJSON(w, http.StatusOK, map[string]any{"repos": next})
+	default:
+		w.Header().Set("Allow", "GET, PUT")
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+	}
 }
 
 // fetchRecentRepoSlugs reads the caller's recent repo selections,

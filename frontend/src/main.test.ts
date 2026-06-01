@@ -6,7 +6,10 @@ const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
 
 test("main.tsx allowlist keeps the splash repo defaults localStorage key alive", () => {
   assert.match(mainSource, /"tank\.homeSelectedRepos"/);
-  assert.match(mainSource, /"tank\.homePinnedRepos"/);
+});
+
+test("main.tsx does not allowlist retired local repo pins", () => {
+  assert.doesNotMatch(mainSource, /"tank\.homePinnedRepos"/);
 });
 
 test("main.tsx no longer allowlists retired local tank auth token", () => {

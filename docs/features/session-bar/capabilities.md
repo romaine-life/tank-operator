@@ -64,3 +64,39 @@ Named behaviors in the session-bar surface. See
   - End-to-end clone→report→query validated on a Glimmung test slot (real
     Postgres exercises the `MergeDiscoveredRepos` SQL, which the pure-function
     registry unit tests do not cover).
+
+## profile-backed-repo-pins
+
+- **Status:** shipped
+- **Intent:** Make the splash repo picker's explicit pinned-repository list a
+  durable per-user preference instead of browser-local state. Pins are
+  shortcuts across sessions and devices; create-time repo selection remains
+  `sessions.repos`.
+
+- **Affected contracts:** Session Bar. The picker is part of the session
+  creation surface and must not show a pin state that only exists in one
+  browser's `localStorage`.
+
+- **Mechanism:**
+  - Column: `profiles.pinned_repos text[] NOT NULL DEFAULT '{}'`.
+  - Read path: `/api/auth/me` includes `pinned_repos`; `GET
+    /api/github/pinned-repos` returns the same durable list.
+  - Write path: `PUT /api/github/pinned-repos` validates the shared
+    `owner/name` slug contract, dedups case-insensitively, caps the metadata
+    list at 64 entries, and replaces the profile row value.
+  - UI: the picker initializes from the authenticated profile and updates the
+    visible pin state only from the server response. The retired
+    `tank.homePinnedRepos` localStorage key is not allowlisted on boot.
+
+- **Observability:**
+  - `tank_github_pinned_repos_update_total{result=ok|invalid|unavailable|error}`
+    distinguishes contract drift, profile-store availability, and database
+    write failures.
+
+- **Evidence:**
+  - `cmd/tank-operator` `TestValidatePinnedRepoSlugs` covers validation,
+    deduping, the distinct pin cap, and rejection of malformed slugs.
+  - `main.tsx does not allowlist retired local repo pins` prevents the
+    browser-local key from being treated as live state again.
+  - `repos.ts` `pinnedRepoSlugs caps profile metadata` keeps the SPA cap in
+    lockstep with the backend metadata boundary.

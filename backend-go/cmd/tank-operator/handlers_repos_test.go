@@ -116,6 +116,72 @@ func TestValidateRepoSlugs(t *testing.T) {
 	}
 }
 
+// TestValidatePinnedRepoSlugs locks the durable profile-backed pin contract.
+// Pins share the GitHub slug validator with create-time repo selection, but
+// they have their own metadata cap instead of the per-session clone cap.
+func TestValidatePinnedRepoSlugs(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      []string
+		wantOut []string
+		wantErr string
+	}{
+		{
+			name:    "empty stays empty",
+			in:      nil,
+			wantOut: []string{},
+		},
+		{
+			name:    "dedups and preserves first casing",
+			in:      []string{"  NelsonG6/Tank-Operator  ", "nelsong6/tank-operator", "nelsong6/glimmung"},
+			wantOut: []string{"NelsonG6/Tank-Operator", "nelsong6/glimmung"},
+		},
+		{
+			name:    "bad slug rejected",
+			in:      []string{"https://github.com/nelsong6/tank-operator"},
+			wantErr: "not a valid owner/name slug",
+		},
+		{
+			name: "session clone cap does not apply",
+			in: []string{
+				"a/1", "b/2", "c/3", "d/4", "e/5", "f/6",
+			},
+			wantOut: []string{"a/1", "b/2", "c/3", "d/4", "e/5", "f/6"},
+		},
+		{
+			name: "profile metadata cap applies",
+			in: func() []string {
+				in := make([]string, 0, maxPinnedReposPerUser+1)
+				for i := 0; i < maxPinnedReposPerUser+1; i++ {
+					in = append(in, "owner/repo"+strconv.Itoa(i))
+				}
+				return in
+			}(),
+			wantErr: "too many pinned repos",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			out, err := validatePinnedRepoSlugs(tc.in)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				if !stringSliceEqual(out, tc.wantOut) {
+					t.Fatalf("out = %v, want %v", out, tc.wantOut)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("want error containing %q, got nil", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want substring %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 // TestNormalizeDiscoveredRepoSlugs locks the runtime-report boundary. Unlike
 // validateRepoSlugs (create-time, reject-the-request semantics), this drops
 // bad entries and keeps the good ones so a single weird remote can't wedge

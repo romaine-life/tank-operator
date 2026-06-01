@@ -20,6 +20,7 @@ interface SessionUser {
   avatar_url: string;
   github_login: string | null;
   installation_id: number | null;
+  pinned_repos: string[];
   run_prefs: Record<string, unknown> | null;
 }
 

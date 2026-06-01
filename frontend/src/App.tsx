@@ -125,14 +125,13 @@ import {
   isValidRepoSlug,
   isRepoPinned,
   pinRepoSlug,
+  pinnedRepoSlugs,
   repoShortcutSlugs,
   removeRepoSlug,
   unpinRepoSlug,
 } from "./repos";
 import {
-  readHomePinnedRepos,
   readHomeSelectedRepos,
-  writeHomePinnedRepos,
   writeHomeSelectedRepos,
 } from "./homeRepos";
 import {
@@ -1118,6 +1117,10 @@ interface RecentReposResponse {
   repos: string[];
 }
 
+interface PinnedReposResponse {
+  repos: string[];
+}
+
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
   // The backend includes an activity block on GET /api/sessions
@@ -1260,6 +1263,7 @@ interface SessionUser {
   // wall — null means show the install CTA, non-null means full app.
   github_login: string | null;
   installation_id: number | null;
+  pinned_repos: string[];
   // Phase E: cross-device run-pane prefs. Null when the user has never
   // saved prefs; SPA falls back to localStorage + defaults.
   run_prefs: Record<string, unknown> | null;
@@ -13541,6 +13545,7 @@ const PUBLIC_MESSAGE_LINK_USER: SessionUser = {
   avatar_url: "",
   github_login: null,
   installation_id: null,
+  pinned_repos: [],
   run_prefs: null,
 };
 
@@ -14012,8 +14017,9 @@ function AuthenticatedApp() {
   // "All repos" is sourced from /api/github/repos; the manual text
   // input remains the escape hatch when enumeration fails or lags.
   const [selectedRepos, setSelectedRepos] = useState<string[]>(readHomeSelectedRepos);
-  const [pinnedRepos, setPinnedRepos] = useState<string[]>(readHomePinnedRepos);
+  const [pinnedRepos, setPinnedRepos] = useState<string[]>([]);
   const [recentRepos, setRecentRepos] = useState<string[]>([]);
+  const [pinnedReposSaving, setPinnedReposSaving] = useState(false);
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -14242,6 +14248,10 @@ function AuthenticatedApp() {
     void refreshRecentRepos();
   }, [user, refreshRecentRepos]);
 
+  useEffect(() => {
+    setPinnedRepos(pinnedRepoSlugs(user?.pinned_repos ?? []));
+  }, [user]);
+
   // Close the picker when the user switches default mode to one
   // that doesn't support repos. The staged repos stay intact so the
   // splash can restore the last-picked set if the user switches back
@@ -14263,15 +14273,38 @@ function AuthenticatedApp() {
     writeHomeSelectedRepos(selectedRepos);
   }, [selectedRepos]);
 
-  useEffect(() => {
-    writeHomePinnedRepos(pinnedRepos);
-  }, [pinnedRepos]);
-
   const togglePinnedRepo = useCallback((slug: string) => {
-    setPinnedRepos((prev) =>
-      isRepoPinned(prev, slug) ? unpinRepoSlug(prev, slug) : pinRepoSlug(prev, slug),
-    );
-  }, []);
+    if (pinnedReposSaving) return;
+    const current = pinnedRepoSlugs(pinnedRepos);
+    const next = isRepoPinned(current, slug)
+      ? unpinRepoSlug(current, slug)
+      : pinRepoSlug(current, slug);
+    setPinnedReposSaving(true);
+    setRepoError(null);
+    void authedFetch("/api/github/pinned-repos", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ repos: next }),
+    })
+      .then(async (res) => {
+        const body = (await res.json().catch(() => ({}))) as Partial<PinnedReposResponse> & {
+          detail?: string;
+        };
+        if (!res.ok) {
+          throw new Error(typeof body.detail === "string" ? body.detail : `pin update failed: ${res.status}`);
+        }
+        const serverPins = pinnedRepoSlugs(Array.isArray(body.repos) ? body.repos.map(String) : []);
+        setPinnedRepos(serverPins);
+        setUser((prev) => (prev ? { ...prev, pinned_repos: serverPins } : prev));
+      })
+      .catch((e) => {
+        setRepoError(errorMessage(e));
+        setRepoPickerOpen(true);
+      })
+      .finally(() => {
+        setPinnedReposSaving(false);
+      });
+  }, [pinnedRepos, pinnedReposSaving]);
 
   const selectExclusiveRepo = useCallback((rawSlug: string) => {
     const result = addRepoSlug([], rawSlug);
@@ -16285,7 +16318,7 @@ function AuthenticatedApp() {
                       open={repoPickerOpen}
                       input={repoInput}
                       error={repoError}
-                      busy={busy}
+                      busy={busy || pinnedReposSaving}
                       onToggleOpen={() => {
                         setRepoPickerOpen((prev) => !prev);
                         setRepoError(null);

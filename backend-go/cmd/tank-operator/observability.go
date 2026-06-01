@@ -448,13 +448,30 @@ var sessionReposSelectedTotal = promauto.NewCounterVec(
 	[]string{"count_bucket"},
 )
 
+// pinnedReposUpdateTotal counts authenticated writes to the durable per-user
+// repo pin list. The bounded result label makes user-trust failures visible:
+// invalid means the SPA/server slug contract drifted, unavailable means a
+// non-Postgres profile store reached a write route, and error means the DB
+// update failed.
+var pinnedReposUpdateTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_github_pinned_repos_update_total",
+		Help: "Writes to the durable per-user pinned repo list, labeled by bounded result.",
+	},
+	[]string{"result"},
+)
+
+func recordPinnedReposUpdate(result string) {
+	pinnedReposUpdateTotal.WithLabelValues(result).Inc()
+}
+
 // sessionDiscoveredReposReportedTotal counts pod-side workspace-repo-reporter
 // POSTs to the discovered-repos endpoint, labeled by bounded outcome:
 //
 //   - merged   — at least one new slug folded into discovered_repos
 //   - noop      — all reported slugs were already recorded (the common
-//                 steady-state: the reporter polls but the workspace
-//                 hasn't changed)
+//     steady-state: the reporter polls but the workspace
+//     hasn't changed)
 //   - empty     — the report carried no valid slugs after normalization
 //   - error     — the registry write failed
 //

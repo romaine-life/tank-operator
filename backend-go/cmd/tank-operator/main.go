@@ -901,6 +901,12 @@ type profilesPrefsStore interface {
 	UpdatePrefs(ctx context.Context, email string, prefs map[string]any) (profiles.Profile, error)
 }
 
+// profilesPinnedReposStore persists the splash repo picker's per-user pin list.
+type profilesPinnedReposStore interface {
+	profilesStore
+	UpdatePinnedRepos(ctx context.Context, email string, repos []string) (profiles.Profile, error)
+}
+
 // sessionRegistryAdapter wraps the Postgres-backed sessionregistry.Store so it
 // satisfies sessions.SessionRegistry. The interface methods live on the embedded
 // store; this adapter exists so swapping in a different backing impl (e.g. the

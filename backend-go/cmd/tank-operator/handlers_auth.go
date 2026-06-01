@@ -41,6 +41,10 @@ type gitHubInstallStateStore interface {
 // service principals keep role=service but get the same Tank admin access as
 // their actor.
 func userResponseBody(sub, email, name, role string, isAdmin bool, profile profiles.Profile) map[string]any {
+	pinnedRepos := profile.PinnedRepos
+	if pinnedRepos == nil {
+		pinnedRepos = []string{}
+	}
 	return map[string]any{
 		"sub":             sub,
 		"email":           email,
@@ -50,6 +54,7 @@ func userResponseBody(sub, email, name, role string, isAdmin bool, profile profi
 		"avatar_url":      auth.GravatarURL(email, 64),
 		"github_login":    profile.GitHubLogin,
 		"installation_id": profile.InstallationID,
+		"pinned_repos":    pinnedRepos,
 		"run_prefs":       profile.RunPrefs,
 	}
 }
