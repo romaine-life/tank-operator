@@ -32,6 +32,17 @@ test("recognized skill tokens use a mirrored visual layer without replacing the 
 
   const baseTextareaRule = cssRule(".run-composer-textarea");
   assert.match(baseTextareaRule, /line-height:\s*1\.5\s*!important;/);
+
+  const tokenRule = cssRule(".run-composer-skill-token");
+  assert.match(tokenRule, /--run-composer-skill-token-bg:\s*rgba\(14,\s*165,\s*233,\s*0\.32\);/);
+  assert.match(tokenRule, /--run-composer-skill-token-border:\s*rgba\(125,\s*211,\s*252,\s*0\.78\);/);
+  assert.match(tokenRule, /font-weight:\s*750;/);
+  assert.match(tokenRule, /0 0 0 3px var\(--run-composer-skill-token-glow\)/);
+
+  const tokenIconRule = cssRule(".run-composer-skill-token-icon");
+  assert.match(tokenIconRule, /border-radius:\s*999px;/);
+  assert.match(tokenIconRule, /background:\s*var\(--run-composer-skill-token-icon-bg\);/);
+  assert.match(tokenIconRule, /inset 0 0 0 1px var\(--run-composer-skill-token-icon-border\)/);
 });
 
 test("chat composer cost estimate keeps a fixed-width footprint", () => {

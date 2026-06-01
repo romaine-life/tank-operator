@@ -231,6 +231,25 @@ export function ChatComposer({
     [canSubmit],
   );
 
+  const syncSkillMirrorScroll = useCallback((textarea: HTMLTextAreaElement) => {
+    if (!skillMirrorRef.current) return;
+    skillMirrorRef.current.scrollTop = textarea.scrollTop;
+    skillMirrorRef.current.scrollLeft = textarea.scrollLeft;
+  }, []);
+
+  const syncComposerTextFromTextarea = useCallback(
+    (textarea: HTMLTextAreaElement) => {
+      syncSkillMirrorScroll(textarea);
+      const value = textarea.value;
+      setText((prev) => {
+        if (prev === value) return prev;
+        onTextChange?.(value);
+        return value;
+      });
+    },
+    [onTextChange, syncSkillMirrorScroll],
+  );
+
   const handleClear = useCallback(() => {
     const ta = composerRef.current?.querySelector("textarea") as
       | HTMLTextAreaElement
@@ -251,12 +270,6 @@ export function ChatComposer({
     ta.focus();
   }, [onTextChange]);
 
-  const syncSkillMirrorScroll = useCallback((textarea: HTMLTextAreaElement) => {
-    if (!skillMirrorRef.current) return;
-    skillMirrorRef.current.scrollTop = textarea.scrollTop;
-    skillMirrorRef.current.scrollLeft = textarea.scrollLeft;
-  }, []);
-
   const hintText = hintOverride
     ?? (sendByCtrlEnter
       ? `⌘/Ctrl+Enter to send · Enter for new line${hintSuffix ?? ""}`
@@ -269,13 +282,7 @@ export function ChatComposer({
       onInput={(e) => {
         const target = e.target as HTMLElement | null;
         if (target?.tagName !== "TEXTAREA") return;
-        syncSkillMirrorScroll(target as HTMLTextAreaElement);
-        const value = (target as HTMLTextAreaElement).value;
-        setText((prev) => {
-          if (prev === value) return prev;
-          onTextChange?.(value);
-          return value;
-        });
+        syncComposerTextFromTextarea(target as HTMLTextAreaElement);
       }}
     >
       <PromptInput
@@ -314,6 +321,9 @@ export function ChatComposer({
           className="run-composer-textarea"
           placeholder={placeholder}
           disabled={disabled}
+          onChange={(event) => {
+            syncComposerTextFromTextarea(event.currentTarget);
+          }}
           onScroll={(event) => {
             syncSkillMirrorScroll(event.currentTarget);
           }}
