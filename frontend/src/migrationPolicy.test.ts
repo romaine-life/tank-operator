@@ -592,11 +592,26 @@ test("home splash test action seeds the first turn as a skill invocation", () =>
 });
 
 test("home splash test action stays disabled on the splash page", () => {
-  assert.match(appSource, /disabled\s+aria-label="Start test skill"\s+title="Available in an active chat session"/);
+  assert.match(appSource, /test=\{\{[\s\S]*?disabled: true,[\s\S]*?title: "Available in an active chat session"/);
   assert.equal(
     appSource.includes("disabled={busy || !CHAT_MODES.has(defaultSessionMode)}"),
     false,
   );
+});
+
+test("pull request composer action persists before a PR URL exists", () => {
+  assert.match(appSource, /function ComposerToolButtons\(/);
+  assert.match(appSource, /const pullRequestURL = testState\?\.pull_request_url\?\.trim\(\) \|\| "";/);
+  assert.match(appSource, /pullRequestURL \? \([\s\S]*?href=\{pullRequestURL\}[\s\S]*?\) : \([\s\S]*?disabled[\s\S]*?aria-label="Pull request link unavailable"/);
+  assert.equal((appSource.match(/pullRequest=\{\{\}\}/g) ?? []).length, 2);
+  assert.equal(appSource.includes("testState?.active && testState.pull_request_url"), false);
+});
+
+test("splash and transcript composers share the same tool button component", () => {
+  assert.equal((appSource.match(/<ComposerToolButtons\b/g) ?? []).length, 3);
+  assert.equal(appSource.includes("toolButtons={\n                    <>"), false);
+  assert.equal(appSource.includes("toolButtons={\n                  <>"), false);
+  assert.equal(appSource.includes("toolButtons={\n            <>"), false);
 });
 
 test("avatar editor is embedded in Settings admin, not a standalone app route", () => {
