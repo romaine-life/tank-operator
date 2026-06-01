@@ -221,6 +221,7 @@ import {
 } from "./sessionWorkspace";
 import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrouping";
 import {
+  contextWindowTokenCount,
   estimateTranscriptCost,
   estimateTurnCost,
   formatCompactTokens,
@@ -3266,22 +3267,9 @@ function getContextWindow(modelId: string): number {
   return CONTEXT_WINDOW_BY_MODEL[modelId] ?? 200_000;
 }
 
-function contextTokensFromUsage(usage: unknown): number {
-  if (!isJsonObject(usage)) return 0;
-  const tokenField = (key: string): number => {
-    const value = usage[key];
-    return typeof value === "number" && Number.isFinite(value) ? value : 0;
-  };
-  return (
-    tokenField("input_tokens") +
-    tokenField("cache_creation_input_tokens") +
-    tokenField("cache_read_input_tokens")
-  );
-}
-
-function latestContextTokens(entries: TranscriptEntry[]): number {
+function latestContextTokens(entries: TranscriptEntry[], contextWindow: number): number {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
-    const total = contextTokensFromUsage(entries[i].turnUsage);
+    const total = contextWindowTokenCount(entries[i].turnUsage, contextWindow);
     if (total > 0) return total;
   }
   return 0;
@@ -9212,7 +9200,7 @@ function ChatPane({
     sdkServerEntriesRef.current = applySdkAssistantDurations(
       sdkServerProjectedEntriesRef.current,
     );
-    const latestUsageTokens = latestContextTokens(sdkServerEntriesRef.current);
+    const latestUsageTokens = latestContextTokens(sdkServerEntriesRef.current, contextWindow);
     if (latestUsageTokens > 0) setTokensUsed(latestUsageTokens);
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
       sdkServerEntriesRef.current,

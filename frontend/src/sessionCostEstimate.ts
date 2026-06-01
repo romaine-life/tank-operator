@@ -123,6 +123,31 @@ export function formatCompactTokens(value: number): string {
   return `${Math.floor(safeValue / 1_000_000)}m`;
 }
 
+export function contextWindowTokenCount(usage: unknown, contextWindow: number): number {
+  if (!isRecord(usage)) return 0;
+  const safeContextWindow = Number.isFinite(contextWindow)
+    ? Math.max(1, Math.floor(contextWindow))
+    : 1;
+  const inputTokens = numberField(usage, "input_tokens") ?? numberField(usage, "prompt_tokens") ?? 0;
+  if (inputTokens <= 0) return 0;
+
+  const cachedInputTokens =
+    numberField(usage, "cached_input_tokens") ??
+    openAiCachedInputTokens(usage) ??
+    numberField(usage, "cache_read_input_tokens") ??
+    0;
+  const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
+
+  // Codex thread.tokenUsage.updated reports cumulative thread input and
+  // cached-input totals. Those totals can climb far beyond the model context
+  // window, while the uncached delta is the current active context pressure.
+  // Providers that report an in-window prompt count keep the raw input total.
+  if (inputTokens > safeContextWindow && uncachedInputTokens > 0) {
+    return Math.floor(uncachedInputTokens);
+  }
+  return Math.floor(inputTokens);
+}
+
 function formatCostUsdAtCents(value: number): string {
   const safeValue = Number.isFinite(value) ? Math.max(0, value) : 0;
   if (safeValue === 0) return "$0.00";
