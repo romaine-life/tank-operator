@@ -122,11 +122,16 @@ import {
   REPO_SUPPORTED_MODES,
   addRepoSlug,
   isValidRepoSlug,
-  recentRepoShortcutSlugs,
+  isRepoPinned,
+  pinRepoSlug,
+  repoShortcutSlugs,
   removeRepoSlug,
+  unpinRepoSlug,
 } from "./repos";
 import {
+  readHomePinnedRepos,
   readHomeSelectedRepos,
+  writeHomePinnedRepos,
   writeHomeSelectedRepos,
 } from "./homeRepos";
 import {
@@ -14017,14 +14022,15 @@ function AuthenticatedApp() {
   // "All repos" is sourced from /api/github/repos; the manual text
   // input remains the escape hatch when enumeration fails or lags.
   const [selectedRepos, setSelectedRepos] = useState<string[]>(readHomeSelectedRepos);
+  const [pinnedRepos, setPinnedRepos] = useState<string[]>(readHomePinnedRepos);
   const [recentRepos, setRecentRepos] = useState<string[]>([]);
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
   const [homeSpireLensMcpEnabled, setHomeSpireLensMcpEnabled] = useState(false);
   const recentRepoShortcuts = useMemo(
-    () => recentRepoShortcutSlugs(recentRepos),
-    [recentRepos],
+    () => repoShortcutSlugs(pinnedRepos, recentRepos),
+    [pinnedRepos, recentRepos],
   );
   // All-repos lazy-load state. Sourced from /api/github/repos,
   // which proxies to mcp-github via an on-behalf-of token mint. The
@@ -14266,6 +14272,16 @@ function AuthenticatedApp() {
   useEffect(() => {
     writeHomeSelectedRepos(selectedRepos);
   }, [selectedRepos]);
+
+  useEffect(() => {
+    writeHomePinnedRepos(pinnedRepos);
+  }, [pinnedRepos]);
+
+  const togglePinnedRepo = useCallback((slug: string) => {
+    setPinnedRepos((prev) =>
+      isRepoPinned(prev, slug) ? unpinRepoSlug(prev, slug) : pinRepoSlug(prev, slug),
+    );
+  }, []);
 
   const selectExclusiveRepo = useCallback((rawSlug: string) => {
     const result = addRepoSlug([], rawSlug);
@@ -16276,6 +16292,7 @@ function AuthenticatedApp() {
                   {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
                     <RepoPicker
                       selected={selectedRepos}
+                      pinned={pinnedRepos}
                       recent={recentRepos}
                       allRepos={allRepos}
                       onLoadAllRepos={loadAllRepos}
@@ -16306,6 +16323,7 @@ function AuthenticatedApp() {
                         }
                       }}
                       onSelectExclusive={selectExclusiveRepo}
+                      onTogglePin={togglePinnedRepo}
                       onRemove={(slug) => {
                         setSelectedRepos((prev) => removeRepoSlug(prev, slug));
                         setRepoError(null);

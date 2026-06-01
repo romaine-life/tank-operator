@@ -109,6 +109,51 @@ export function recentRepoShortcutSlugs(
   return out;
 }
 
+export function pinnedRepoSlugs(pinned: readonly string[]): string[] {
+  return normalizeRepoSlugs(pinned, Number.MAX_SAFE_INTEGER);
+}
+
+export function repoShortcutSlugs(
+  pinned: readonly string[],
+  recent: readonly string[],
+  limit = RECENT_REPO_PREVIEW_LIMIT,
+): string[] {
+  if (limit <= 0) return [];
+
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const rawSlug of [...pinned, ...recent]) {
+    const slug = rawSlug.trim();
+    if (!isValidRepoSlug(slug)) continue;
+    const key = slug.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(slug);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+export function isRepoPinned(pinned: readonly string[], slug: string): boolean {
+  const key = slug.trim().toLowerCase();
+  return key !== "" && pinned.some((existing) => existing.toLowerCase() === key);
+}
+
+export function pinRepoSlug(pinned: readonly string[], rawSlug: string): string[] {
+  const slug = rawSlug.trim();
+  if (!isValidRepoSlug(slug) || isRepoPinned(pinned, slug)) {
+    return pinnedRepoSlugs(pinned);
+  }
+  return [...pinnedRepoSlugs(pinned), slug];
+}
+
+export function unpinRepoSlug(pinned: readonly string[], slug: string): string[] {
+  const key = slug.trim().toLowerCase();
+  return pinnedRepoSlugs(pinned).filter(
+    (existing) => existing.toLowerCase() !== key,
+  );
+}
+
 // addRepoSlug encapsulates the picker's add-to-staged logic in a pure
 // function. Returns either {ok: true, next: string[]} on a successful
 // add or {ok: false, error: string} with the user-facing reason.

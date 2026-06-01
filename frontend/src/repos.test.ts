@@ -7,12 +7,17 @@ import {
   REPO_SUPPORTED_MODES,
   RECENT_REPO_PREVIEW_LIMIT,
   addRepoSlug,
+  isRepoPinned,
   isValidRepoSlug,
   modeSupportsRepos,
   normalizeRepoSlugs,
+  pinRepoSlug,
+  pinnedRepoSlugs,
   recentRepoPreviewSlugs,
   recentRepoShortcutSlugs,
+  repoShortcutSlugs,
   removeRepoSlug,
+  unpinRepoSlug,
 } from "./repos";
 
 // These tests pin the SPA half of the repo-selection contract. The
@@ -203,4 +208,44 @@ test("recentRepoShortcutSlugs keeps stable numbered recent choices", () => {
       "openai/codex",
     ],
   );
+});
+
+test("pinnedRepoSlugs normalizes pins without the session repo cap", () => {
+  assert.deepEqual(
+    pinnedRepoSlugs([
+      "nelsong6/tank-operator",
+      "bad slug",
+      "NelsonG6/Tank-Operator",
+      "a/1",
+      "b/2",
+      "c/3",
+      "d/4",
+      "e/5",
+    ]),
+    ["nelsong6/tank-operator", "a/1", "b/2", "c/3", "d/4", "e/5"],
+  );
+});
+
+test("repoShortcutSlugs orders pinned repos before recent repos", () => {
+  assert.deepEqual(
+    repoShortcutSlugs(
+      ["nelsong6/glimmung", "NelsonG6/Tank-Operator"],
+      ["nelsong6/tank-operator", "nelsong6/infra-bootstrap", "openai/codex"],
+    ),
+    [
+      "nelsong6/glimmung",
+      "NelsonG6/Tank-Operator",
+      "nelsong6/infra-bootstrap",
+      "openai/codex",
+    ],
+  );
+});
+
+test("pin helpers toggle case-insensitive pins", () => {
+  const pinned = pinRepoSlug(["nelsong6/tank-operator"], "NelsonG6/Glimmung");
+  assert.deepEqual(pinned, ["nelsong6/tank-operator", "NelsonG6/Glimmung"]);
+  assert.equal(isRepoPinned(pinned, "nelsong6/glimmung"), true);
+  assert.deepEqual(unpinRepoSlug(pinned, "NELSONG6/GLIMMUNG"), [
+    "nelsong6/tank-operator",
+  ]);
 });

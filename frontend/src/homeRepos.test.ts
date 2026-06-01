@@ -2,7 +2,9 @@ import { afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  readHomePinnedRepos,
   readHomeSelectedRepos,
+  writeHomePinnedRepos,
   writeHomeSelectedRepos,
 } from "./homeRepos";
 
@@ -59,4 +61,30 @@ test("home repo defaults round-trip through localStorage", () => {
 test("home repo defaults ignore malformed storage", () => {
   fakeStorage["tank.homeSelectedRepos"] = "not-json";
   assert.deepEqual(readHomeSelectedRepos(), []);
+});
+
+test("home repo pins round-trip through localStorage without session cap", () => {
+  writeHomePinnedRepos([
+    "  nelsong6/tank-operator  ",
+    "NelsonG6/Tank-Operator",
+    "nelsong6/infra-bootstrap",
+    "nelsong6/mcp-tank-operator",
+    "openai/codex",
+    "example/fifth",
+    "example/sixth",
+  ]);
+
+  assert.deepEqual(readHomePinnedRepos(), [
+    "nelsong6/tank-operator",
+    "nelsong6/infra-bootstrap",
+    "nelsong6/mcp-tank-operator",
+    "openai/codex",
+    "example/fifth",
+    "example/sixth",
+  ]);
+});
+
+test("home repo pins ignore malformed storage", () => {
+  fakeStorage["tank.homePinnedRepos"] = "not-json";
+  assert.deepEqual(readHomePinnedRepos(), []);
 });

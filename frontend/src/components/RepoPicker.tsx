@@ -25,8 +25,9 @@
 // what the vitest in RepoPicker.test.tsx asserts.
 
 import { useCallback, useEffect, useMemo, useRef } from "react";
+import { PinIcon } from "lucide-react";
 
-import { isValidRepoSlug, recentRepoShortcutSlugs } from "../repos";
+import { isValidRepoSlug, isRepoPinned, repoShortcutSlugs } from "../repos";
 
 /** allRepos surfaces the user's full GitHub App installation, sourced
  *  from /api/github/repos. The picker filters this list by
@@ -47,6 +48,8 @@ export interface AllReposState {
 export interface RepoPickerProps {
   /** Currently-staged repo slugs (chips). */
   selected: string[];
+  /** Locally-pinned repo slugs shown ahead of recent suggestions. */
+  pinned: string[];
   /** Recently-used slugs surfaced as one-click suggestions. */
   recent: string[];
   /** Optional full-installation enumeration. */
@@ -69,6 +72,7 @@ export interface RepoPickerProps {
   onInputChange: (value: string) => void;
   onAdd: (slug: string) => void;
   onSelectExclusive: (slug: string) => void;
+  onTogglePin: (slug: string) => void;
   onRemove: (slug: string) => void;
 }
 
@@ -77,6 +81,7 @@ const REPO_PICKER_MENU = "repo-picker";
 export function RepoPicker(props: RepoPickerProps): JSX.Element {
   const {
     selected,
+    pinned,
     recent,
     allRepos,
     onLoadAllRepos,
@@ -89,6 +94,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
     onInputChange,
     onAdd,
     onSelectExclusive,
+    onTogglePin,
     onRemove,
   } = props;
 
@@ -114,7 +120,10 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
   const selectedLower = useRef<Set<string>>(new Set());
   selectedLower.current = new Set(selected.map((s) => s.toLowerCase()));
 
-  const recentPreview = useMemo(() => recentRepoShortcutSlugs(recent), [recent]);
+  const shortcutPreview = useMemo(
+    () => repoShortcutSlugs(pinned, recent),
+    [pinned, recent],
+  );
 
   // Close on Escape or outside-click — matches the profile menu shape
   // used elsewhere in App.tsx (data-menu attribute on the root).
@@ -158,6 +167,12 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
           {selected.map((slug) => (
             <li key={slug} className="home-repos-chip">
               <span className="home-repos-chip-slug">{slug}</span>
+              <PinToggleButton
+                slug={slug}
+                pinned={isRepoPinned(pinned, slug)}
+                busy={busy}
+                onTogglePin={onTogglePin}
+              />
               <button
                 type="button"
                 className="home-repos-chip-remove"
@@ -172,12 +187,15 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
           ))}
         </ul>
       )}
-      {recentPreview.length > 0 && (
-        <div className="home-repos-preview" aria-label="Recent repositories">
-          <div className="home-repos-recent-label">Recent</div>
+      {shortcutPreview.length > 0 && (
+        <div className="home-repos-preview" aria-label="Pinned and recent repositories">
+          <div className="home-repos-recent-label">
+            {pinned.length > 0 ? "Pinned / Recent" : "Recent"}
+          </div>
           <ul className="home-repos-recent-list" role="list">
-            {recentPreview.map((slug, index) => {
+            {shortcutPreview.map((slug, index) => {
               const selectedRecent = selectedLower.current.has(slug.toLowerCase());
+              const pinnedRepo = isRepoPinned(pinned, slug);
               return (
                 <li key={`preview:${slug}`} className="home-repos-recent-item">
                   <button
@@ -198,6 +216,12 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
                     </span>
                     <span>{slug}</span>
                   </button>
+                  <PinToggleButton
+                    slug={slug}
+                    pinned={pinnedRepo}
+                    busy={busy}
+                    onTogglePin={onTogglePin}
+                  />
                 </li>
               );
             })}
@@ -238,11 +262,13 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
           {error && <div className="home-repos-error" role="alert">{error}</div>}
           <RepoPickerSuggestions
             input={input}
+            pinned={pinned}
             recent={recent}
             allRepos={allRepos}
             selectedLower={selectedLower.current}
             busy={busy}
             onAdd={onAdd}
+            onTogglePin={onTogglePin}
           />
           <div className="home-repos-help">
             Selected repos clone into <code>/workspace</code> at session start.
@@ -270,15 +296,17 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
 // click Add for an exact slug.
 interface RepoPickerSuggestionsProps {
   input: string;
+  pinned: string[];
   recent: string[];
   allRepos?: AllReposState;
   selectedLower: ReadonlySet<string>;
   busy: boolean;
   onAdd: (slug: string) => void;
+  onTogglePin: (slug: string) => void;
 }
 
 function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
-  const { input, recent, allRepos, selectedLower, busy, onAdd } = props;
+  const { input, pinned, recent, allRepos, selectedLower, busy, onAdd, onTogglePin } = props;
   const trimmed = input.trim();
   const looksLikeSlug = trimmed !== "" && isValidRepoSlug(trimmed);
 
@@ -286,16 +314,28 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
   const matches = (slug: string) =>
     needle === "" || slug.toLowerCase().includes(needle);
 
+  const filteredPinned = useMemo(() => pinned.filter(matches), [pinned, trimmed]);
+  const pinnedLower = useMemo(
+    () => new Set(pinned.map((s) => s.toLowerCase())),
+    [pinned],
+  );
+
   // Live-filter Recent by the trimmed input text. The match is
   // intentionally permissive (substring, case-insensitive) so a user
   // who has typed "nelsong6/" still sees their nelsong6 repos.
-  const filteredRecent = useMemo(() => recent.filter(matches), [recent, trimmed]);
+  const filteredRecent = useMemo(
+    () =>
+      recent.filter(
+        (slug) => matches(slug) && !pinnedLower.has(slug.toLowerCase()),
+      ),
+    [recent, trimmed, pinnedLower],
+  );
 
   // Filter All repos. When the user hasn't typed anything we show
   // the unfiltered list (capped visually by the CSS — overflow
   // scrolls). When they've typed, we narrow to substring matches.
-  // Both lists exclude already-Recent slugs so the panel doesn't
-  // render the same chip twice in different sections.
+  // The All list excludes already-pinned and already-recent slugs so
+  // the panel doesn't render the same chip twice in different sections.
   const recentLower = useMemo(
     () => new Set(recent.map((s) => s.toLowerCase())),
     [recent],
@@ -303,11 +343,14 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
   const filteredAll = useMemo(() => {
     if (!allRepos || allRepos.status !== "ready") return [];
     return allRepos.repos.filter(
-      (slug) => matches(slug) && !recentLower.has(slug.toLowerCase()),
+      (slug) =>
+        matches(slug) &&
+        !pinnedLower.has(slug.toLowerCase()) &&
+        !recentLower.has(slug.toLowerCase()),
     );
-  }, [allRepos, trimmed, recentLower]);
+  }, [allRepos, trimmed, pinnedLower, recentLower]);
 
-  const totalShown = filteredRecent.length + filteredAll.length;
+  const totalShown = filteredPinned.length + filteredRecent.length + filteredAll.length;
   const showAllRepos = allRepos !== undefined;
 
   // Empty-state messaging: surface why no suggestions appear, so the
@@ -331,14 +374,28 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
 
   return (
     <div className="home-repos-sections">
+      {filteredPinned.length > 0 && (
+        <RepoSection
+          label="Pinned"
+          slugs={filteredPinned}
+          filtered={trimmed !== ""}
+          selectedLower={selectedLower}
+          pinnedLower={pinnedLower}
+          busy={busy}
+          onAdd={onAdd}
+          onTogglePin={onTogglePin}
+        />
+      )}
       {filteredRecent.length > 0 && (
         <RepoSection
           label="Recent"
           slugs={filteredRecent}
           filtered={trimmed !== ""}
           selectedLower={selectedLower}
+          pinnedLower={pinnedLower}
           busy={busy}
           onAdd={onAdd}
+          onTogglePin={onTogglePin}
         />
       )}
       {filteredAll.length > 0 && (
@@ -347,8 +404,10 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
           slugs={filteredAll}
           filtered={trimmed !== ""}
           selectedLower={selectedLower}
+          pinnedLower={pinnedLower}
           busy={busy}
           onAdd={onAdd}
+          onTogglePin={onTogglePin}
         />
       )}
     </div>
@@ -362,12 +421,14 @@ interface RepoSectionProps {
   slugs: string[];
   filtered: boolean;
   selectedLower: ReadonlySet<string>;
+  pinnedLower: ReadonlySet<string>;
   busy: boolean;
   onAdd: (slug: string) => void;
+  onTogglePin: (slug: string) => void;
 }
 
 function RepoSection(props: RepoSectionProps): JSX.Element {
-  const { label, slugs, filtered, selectedLower, busy, onAdd } = props;
+  const { label, slugs, filtered, selectedLower, pinnedLower, busy, onAdd, onTogglePin } = props;
   return (
     <div className="home-repos-recent">
       <div className="home-repos-recent-label">
@@ -381,6 +442,7 @@ function RepoSection(props: RepoSectionProps): JSX.Element {
       <ul className="home-repos-recent-list" role="list">
         {slugs.map((slug) => {
           const alreadyPicked = selectedLower.has(slug.toLowerCase());
+          const pinnedRepo = pinnedLower.has(slug.toLowerCase());
           return (
             <li key={`${label}:${slug}`} className="home-repos-recent-item">
               <button
@@ -394,10 +456,40 @@ function RepoSection(props: RepoSectionProps): JSX.Element {
               >
                 {slug}
               </button>
+              <PinToggleButton
+                slug={slug}
+                pinned={pinnedRepo}
+                busy={busy}
+                onTogglePin={onTogglePin}
+              />
             </li>
           );
         })}
       </ul>
     </div>
+  );
+}
+
+interface PinToggleButtonProps {
+  slug: string;
+  pinned: boolean;
+  busy: boolean;
+  onTogglePin: (slug: string) => void;
+}
+
+function PinToggleButton(props: PinToggleButtonProps): JSX.Element {
+  const { slug, pinned, busy, onTogglePin } = props;
+  return (
+    <button
+      type="button"
+      className={"home-repos-pin" + (pinned ? " is-pinned" : "")}
+      onClick={() => onTogglePin(slug)}
+      disabled={busy}
+      aria-pressed={pinned}
+      aria-label={`${pinned ? "Unpin" : "Pin"} ${slug}`}
+      title={`${pinned ? "Unpin" : "Pin"} ${slug}`}
+    >
+      <PinIcon aria-hidden="true" className="home-repos-pin-icon" />
+    </button>
   );
 }
