@@ -1,6 +1,8 @@
 import {
+  BugIcon,
   ClipboardListIcon,
   FlaskConicalIcon,
+  GavelIcon,
   MessageSquareTextIcon,
   MonitorIcon,
   SearchCheckIcon,
@@ -94,10 +96,24 @@ export function StyleguideNewSessionRow() {
                       </span>
                     </button>
                     <button className="home-model home-initial-option" type="button" aria-pressed="false">
+                      <BugIcon className="home-initial-icon" aria-hidden="true" />
+                      <span className="home-initial-main">
+                        <span className="home-model-title">Bug report</span>
+                        <span className="home-model-sub">Evidence, architectural miss, and fix plan.</span>
+                      </span>
+                    </button>
+                    <button className="home-model home-initial-option" type="button" aria-pressed="false">
                       <ClipboardListIcon className="home-initial-icon" aria-hidden="true" />
                       <span className="home-initial-main">
                         <span className="home-model-title">Quality gaps</span>
                         <span className="home-model-sub">Audit current policy docs before changing code.</span>
+                      </span>
+                    </button>
+                    <button className="home-model home-initial-option" type="button" aria-pressed="false">
+                      <GavelIcon className="home-initial-icon" aria-hidden="true" />
+                      <span className="home-initial-main">
+                        <span className="home-model-title">Go long</span>
+                        <span className="home-model-sub">Heavy solve with binding invariants.</span>
                       </span>
                     </button>
                     <button className="home-model home-initial-option" type="button" aria-pressed="false">
