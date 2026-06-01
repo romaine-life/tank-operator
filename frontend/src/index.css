@@ -5266,29 +5266,6 @@ button:disabled {
   opacity: 0.44;
 }
 
-/* Clear-input X — sits between the hint and the send button. */
-.run-composer-clear {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.6rem;
-  height: 1.6rem;
-  border-radius: 0.4rem;
-  border: none;
-  background: transparent;
-  color: var(--text-muted);
-  cursor: pointer;
-  flex: 0 0 auto;
-  transition:
-    background var(--motion-fast, 120ms) ease,
-    color var(--motion-fast, 120ms) ease;
-}
-
-.run-composer-clear:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-primary);
-}
-
 /* Transcript overflow cues — horizontal edge glows that preserve jump
    behavior without placing buttons in the avatar or message columns. */
 .run-transcript-edge-cue {
