@@ -25,7 +25,8 @@ test("composer token count uses current context, not cumulative session usage", 
   assert.doesNotMatch(appSource, /tokens=\{sessionCostEstimate\?\.tokens\s*\?\?\s*null\}/);
 });
 
-test("turn token count remains per-turn processed usage", () => {
-  assert.match(appSource, /tokens=\{selected\.costEstimate\.tokens\}/);
-  assert.match(appSource, /tokenScopeLabel="processed tokens in this turn"/);
+test("turn token count uses current context pressure", () => {
+  assert.match(appSource, /tokens=\{selected\.contextTokens\}/);
+  assert.match(appSource, /tokenScopeLabel="current context tokens"/);
+  assert.doesNotMatch(appSource, /tokenScopeLabel="processed tokens in this turn"/);
 });

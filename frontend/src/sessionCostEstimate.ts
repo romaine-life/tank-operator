@@ -2,6 +2,7 @@ type UsageRow = {
   id?: string;
   turnId?: string;
   turnUsage?: unknown;
+  usageObservation?: unknown;
 };
 
 export type SessionCostEstimate = {
@@ -78,6 +79,25 @@ export function estimateTurnCost(
   );
 }
 
+export function estimateTurnContextTokens(
+  rows: UsageRow[],
+  contextWindow: number,
+  turnId: string,
+): number | null {
+  const targetTurnId = turnId.trim();
+  if (!targetTurnId) return null;
+  const turns = transcriptTurns(rows.filter((row) => row.turnId === targetTurnId));
+  const turn = turns.get(targetTurnId);
+  if (!turn) return null;
+  for (let index = turn.usage.length - 1; index >= 0; index -= 1) {
+    const usage = turn.usage[index];
+    if (!usage) continue;
+    const tokens = contextWindowTokenCount(usage.usage, contextWindow, usage.usageObservation);
+    if (tokens > 0) return tokens;
+  }
+  return null;
+}
+
 export function estimateTranscriptCost(rows: UsageRow[], modelId: string): SessionCostEstimate | null {
   let total = 0;
   let tokens = 0;
@@ -88,7 +108,7 @@ export function estimateTranscriptCost(rows: UsageRow[], modelId: string): Sessi
     let reportedCost: number | null = null;
     let reportedTokens = 0;
     for (let index = turn.usage.length - 1; index >= 0; index -= 1) {
-      const usage = turn.usage[index];
+      const usage = turn.usage[index]?.usage;
       reportedCost = estimateUsageCostUSD(usage, modelId);
       reportedTokens = usageTokenCount(usage);
       if (reportedCost !== null || reportedTokens > 0) break;
@@ -123,7 +143,11 @@ export function formatCompactTokens(value: number): string {
   return `${Math.floor(safeValue / 1_000_000)}m`;
 }
 
-export function contextWindowTokenCount(usage: unknown, contextWindow: number): number {
+export function contextWindowTokenCount(
+  usage: unknown,
+  contextWindow: number,
+  usageObservation?: unknown,
+): number {
   if (!isRecord(usage)) return 0;
   const safeContextWindow = Number.isFinite(contextWindow)
     ? Math.max(1, Math.floor(contextWindow))
@@ -142,7 +166,10 @@ export function contextWindowTokenCount(usage: unknown, contextWindow: number): 
   // cached-input totals. Those totals can climb far beyond the model context
   // window, while the uncached delta is the current active context pressure.
   // Providers that report an in-window prompt count keep the raw input total.
-  if (inputTokens > safeContextWindow && uncachedInputTokens > 0) {
+  if (
+    (isCodexCumulativeThreadUsage(usageObservation) || inputTokens > safeContextWindow) &&
+    uncachedInputTokens > 0
+  ) {
     return Math.floor(uncachedInputTokens);
   }
   return Math.floor(inputTokens);
@@ -183,8 +210,8 @@ function usageTokenCount(usage: unknown): number {
   ));
 }
 
-function transcriptTurns(rows: UsageRow[]): Map<string, { usage: unknown[] }> {
-  const turns = new Map<string, { usage: unknown[] }>();
+function transcriptTurns(rows: UsageRow[]): Map<string, { usage: Array<{ usage: unknown; usageObservation?: unknown }> }> {
+  const turns = new Map<string, { usage: Array<{ usage: unknown; usageObservation?: unknown }> }>();
   let anonymousUsageIndex = 0;
 
   for (const row of rows) {
@@ -200,7 +227,10 @@ function transcriptTurns(rows: UsageRow[]): Map<string, { usage: unknown[] }> {
       turns.set(turnId, turn);
     }
     if (row.turnUsage !== undefined && row.turnUsage !== null) {
-      turn.usage.push(row.turnUsage);
+      turn.usage.push({
+        usage: row.turnUsage,
+        usageObservation: row.usageObservation,
+      });
     }
   }
 
@@ -216,6 +246,11 @@ function openAiCachedInputTokens(usage: Record<string, unknown>): number {
 
   const inputDetails = recordField(usage, "input_tokens_details") ?? recordField(usage, "prompt_tokens_details");
   return inputDetails ? numberField(inputDetails, "cached_tokens") ?? 0 : 0;
+}
+
+function isCodexCumulativeThreadUsage(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  return value.usage_source === "thread.tokenUsage.updated";
 }
 
 function numberField(record: Record<string, unknown>, key: string): number | null {
