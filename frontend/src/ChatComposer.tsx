@@ -92,6 +92,8 @@ export interface ChatComposerProps {
   hintSuffix?: string;
   /** Replaces the default send/newline hint when the composer is informational. */
   hintOverride?: string;
+  /** Hides the send/newline hint row when footer space is reserved for controls. */
+  hideHint?: boolean;
   /** Disables the textarea and submit (and stop) interactions. */
   disabled?: boolean;
   /**
@@ -132,6 +134,7 @@ export function ChatComposer({
   sendByCtrlEnter,
   hintSuffix,
   hintOverride,
+  hideHint,
   disabled,
   canSubmit = true,
   controlsDisabled,
@@ -330,11 +333,13 @@ export function ChatComposer({
             </DropdownMenu>
             {toolButtons}
           </PromptInputTools>
-          <span
-            className={`run-composer-hint${text.length > 0 ? " run-composer-hint-faded" : ""}`}
-          >
-            {hintText}
-          </span>
+          {!hideHint && (
+            <span
+              className={`run-composer-hint${text.length > 0 ? " run-composer-hint-faded" : ""}`}
+            >
+              {hintText}
+            </span>
+          )}
           {text.length > 0 && (
             <button
               type="button"

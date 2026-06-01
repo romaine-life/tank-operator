@@ -223,6 +223,7 @@ import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrou
 import {
   estimateTranscriptCost,
   estimateTurnCost,
+  formatCompactTokens,
   formatComposerCostUsd,
   formatTurnCostUsd,
   type SessionCostEstimate,
@@ -1591,6 +1592,8 @@ function ComposerUsageRing({
 
 interface ComposerCostEstimateProps {
   amountUsd: number | null;
+  tokens?: number | null;
+  tokenScopeLabel?: string;
   placeholder?: boolean;
   scopeLabel?: string;
   title?: string;
@@ -1598,11 +1601,16 @@ interface ComposerCostEstimateProps {
 
 function ComposerCostEstimate({
   amountUsd,
+  tokens,
+  tokenScopeLabel,
   placeholder = false,
   scopeLabel = "session",
   title,
 }: ComposerCostEstimateProps) {
   const unavailable = placeholder || amountUsd === null;
+  const safeTokens = !unavailable && typeof tokens === "number" && Number.isFinite(tokens)
+    ? Math.max(0, Math.floor(tokens))
+    : null;
   const normalizedScope = scopeLabel.trim() || "session";
   const formattedAmount = unavailable
     ? "$--"
@@ -1610,22 +1618,25 @@ function ComposerCostEstimate({
       ? formatTurnCostUsd(amountUsd)
       : formatComposerCostUsd(amountUsd);
   const label = formattedAmount;
+  const tokenLabel = safeTokens === null ? "--" : formatCompactTokens(safeTokens);
   const sentenceScope = `${normalizedScope.charAt(0).toUpperCase()}${normalizedScope.slice(1)}`;
+  const normalizedTokenScope = tokenScopeLabel?.trim() || `${normalizedScope} tokens`;
   const defaultTitle = unavailable
     ? "Cost estimate appears after token usage is available"
-    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label}`;
+    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`;
   return (
     <span
       className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
       aria-label={
         unavailable
           ? `${sentenceScope} cost estimate unavailable`
-          : `Estimated ${normalizedScope} cost ${label}`
+          : `Estimated ${normalizedScope} cost ${label}, ${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`
       }
       aria-disabled={unavailable || undefined}
       title={title ?? defaultTitle}
     >
-      {label}
+      <span className="run-cost-estimate-token-count">{tokenLabel}</span>
+      <span className="run-cost-estimate-amount">{label}</span>
     </span>
   );
 }
@@ -2689,6 +2700,7 @@ function DemoLanding() {
                   permissionMode={demoComposerMode}
                   onPermissionModeChange={setDemoComposerMode}
                   sendByCtrlEnter={false}
+                  hideHint
                   toolButtons={
                     <>
                       <button
@@ -7735,6 +7747,8 @@ function RunTurnActivityScreen({
             {selected.costEstimate && (
               <ComposerCostEstimate
                 amountUsd={selected.costEstimate.amountUsd}
+                tokens={selected.costEstimate.tokens}
+                tokenScopeLabel="processed tokens in this turn"
                 scopeLabel="turn"
               />
             )}
@@ -13380,6 +13394,7 @@ function ChatPane({
           onPermissionModeChange={setComposerMode}
           sendByCtrlEnter={runPrefs.sendByCtrlEnter}
           hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
+          hideHint={!readOnly}
           hintOverride={
             readOnly
               ? "Read-only production view. Switch back to this slot's sessions in Settings to send messages."
@@ -13416,6 +13431,8 @@ function ChatPane({
               />
               <ComposerCostEstimate
                 amountUsd={sessionCostEstimate?.amountUsd ?? null}
+                tokens={tokensUsed}
+                tokenScopeLabel="current context tokens"
               />
               {GUI_ROLLOUT_MODES.has(session.mode) && (
                 <button
@@ -16400,6 +16417,7 @@ function AuthenticatedApp() {
                 onPermissionModeChange={setHomeComposerMode}
                 sendByCtrlEnter={runPrefs.sendByCtrlEnter}
                 hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
+                hideHint
                 disabled={busy}
                 onTextChange={setHomeComposerText}
                 toolButtons={
