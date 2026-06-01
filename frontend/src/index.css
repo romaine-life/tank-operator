@@ -5900,6 +5900,15 @@ button:disabled {
   color: var(--text-primary);
 }
 
+.run-files-crumb-current {
+  color: var(--text-primary);
+  cursor: default;
+}
+
+.run-files-crumb-current:hover {
+  background: transparent;
+}
+
 .run-files-crumb-wrap {
   display: inline-flex;
   align-items: center;
