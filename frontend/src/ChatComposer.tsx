@@ -8,74 +8,21 @@ import {
   PromptInputTools,
   type PromptInputMessage,
 } from "@/components/ai-elements/prompt-input";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import {
-  CheckIcon,
-  ChevronDownIcon,
-  SendHorizontalIcon,
-} from "lucide-react";
+import { SendHorizontalIcon } from "lucide-react";
 import type { ChatStatus } from "ai";
 
 // The composer is the single source of truth for the chat-style prompt box.
 // One component is rendered on the home screen, on the unauthenticated demo
 // landing, and inside an active session's run pane. The visual shell —
-// PromptInput shell, permission-mode dropdown, hint, submit button —
-// is identical across all three callers; only the session-bound tool buttons
+// PromptInput shell, hint, submit button — is identical across all three
+// callers; only the session-bound tool buttons
 // (image attach, usage ring, rollout/test, slash and MCP menus) plug in via
 // the `toolButtons` slot from inside the run pane. Keeping these surfaces in
 // one component is what makes "type on the home screen and the same composer
 // keeps going in the chat" true at the code level, not only visually.
 
-export type RunComposerMode =
-  | "default"
-  | "acceptEdits"
-  | "auto"
-  | "bypassPermissions"
-  | "plan";
-
-export interface PermissionModeInfo {
-  label: string;
-  desc: string;
-  /** Color of the dot rendered next to the pill label. */
-  dotColor: string;
-}
-
-export const PERMISSION_MODE_INFO: Record<RunComposerMode, PermissionModeInfo> = {
-  default: {
-    label: "Default Mode",
-    desc: "Ask before edits, agree to commands",
-    dotColor: "#34d399",
-  },
-  acceptEdits: {
-    label: "Accept Edits",
-    desc: "Auto-approve file changes",
-    dotColor: "#fbbf24",
-  },
-  auto: {
-    label: "Auto",
-    desc: "Auto-approve safe operations",
-    dotColor: "#60a5fa",
-  },
-  bypassPermissions: {
-    label: "Bypass Permissions",
-    desc: "Run without permission prompts",
-    dotColor: "#f87171",
-  },
-  plan: {
-    label: "Plan Mode",
-    desc: "Plan before execution",
-    dotColor: "#a78bfa",
-  },
-};
-
 export interface ChatComposerSubmitArgs {
   text: string;
-  permissionMode: RunComposerMode;
 }
 
 export interface ChatComposerProps {
@@ -83,8 +30,6 @@ export interface ChatComposerProps {
   className?: string;
   placeholder: string;
   onSubmit: (args: ChatComposerSubmitArgs) => void;
-  permissionMode: RunComposerMode;
-  onPermissionModeChange: (mode: RunComposerMode) => void;
   /** When true, plain Enter inserts a newline and only Ctrl/⌘+Enter submits. */
   sendByCtrlEnter: boolean;
   /** Appended after the Enter/Shift hint, e.g. " · / for slash commands". */
@@ -100,16 +45,14 @@ export interface ChatComposerProps {
    * Used while a session is warming up so the text box still invites input.
    */
   canSubmit?: boolean;
-  /** Disables the permission-mode dropdown and any other internal controls. */
-  controlsDisabled?: boolean;
   /** PromptInputSubmit status — drives spinner/stop icon swaps while a turn streams. */
   submitStatus?: ChatStatus;
   onStop?: () => void;
   isStopping?: boolean;
   /**
-   * Tool buttons rendered inside `PromptInputTools` after the permission-mode
-   * pill. The run pane plugs in image-attach, usage ring, rollout/test, slash
-   * menu, and MCP menu here. Home + demo leave this empty.
+   * Tool buttons rendered inside `PromptInputTools`. The run pane plugs in
+   * image-attach, usage ring, rollout/test, slash menu, and MCP menu here.
+   * Home + demo leave this empty.
    */
   toolButtons?: ReactNode;
   /** Seeds the uncontrolled textarea for static portfolio/demo specimens. */
@@ -129,23 +72,19 @@ function ComposerTextPreview({ text }: { text: string }) {
 
 /**
  * Shared chat composer used by the run pane, the home screen, and the demo
- * landing. Owns the universal shell (PromptInput + textarea + permission-mode
- * dropdown + hint + submit) and exposes a `toolButtons` slot for
- * session-bound add-ons.
+ * landing. Owns the universal shell (PromptInput + textarea + hint + submit)
+ * and exposes a `toolButtons` slot for session-bound add-ons.
  */
 export function ChatComposer({
   className,
   placeholder,
   onSubmit,
-  permissionMode,
-  onPermissionModeChange,
   sendByCtrlEnter,
   hintSuffix,
   hintOverride,
   hideHint,
   disabled,
   canSubmit = true,
-  controlsDisabled,
   submitStatus,
   onStop,
   isStopping,
@@ -203,13 +142,13 @@ export function ChatComposer({
   const handleSubmit = useCallback(
     (message: PromptInputMessage) => {
       if (!canSubmit) return;
-      onSubmit({ text: message.text, permissionMode });
+      onSubmit({ text: message.text });
       // PromptInput auto-clears after a sync onSubmit; reflect that in our
       // mirror so the hint un-fades.
       setText("");
       onTextChange?.("");
     },
-    [canSubmit, onSubmit, onTextChange, permissionMode],
+    [canSubmit, onSubmit, onTextChange],
   );
 
   const handleSubmitCapture = useCallback<FormEventHandler<HTMLFormElement>>(
@@ -266,69 +205,6 @@ export function ChatComposer({
         </div>
         <PromptInputFooter className="run-composer-footer">
           <PromptInputTools className="run-composer-tools">
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  className="run-mode-pill run-mode-pill-button"
-                  disabled={disabled || controlsDisabled}
-                  aria-label="Permission mode"
-                >
-                  <span
-                    className="run-mode-dot"
-                    aria-hidden="true"
-                    style={{
-                      background:
-                        PERMISSION_MODE_INFO[permissionMode].dotColor,
-                    }}
-                  />
-                  {PERMISSION_MODE_INFO[permissionMode].label}
-                  <ChevronDownIcon
-                    className="run-mode-chevron"
-                    aria-hidden="true"
-                  />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent
-                side="top"
-                align="start"
-                className="run-mode-menu"
-              >
-                {(Object.keys(PERMISSION_MODE_INFO) as RunComposerMode[]).map(
-                  (modeKey) => {
-                    const info = PERMISSION_MODE_INFO[modeKey];
-                    return (
-                      <DropdownMenuItem
-                        key={modeKey}
-                        onSelect={() => onPermissionModeChange(modeKey)}
-                      >
-                        <span className="run-mode-menu-row">
-                          <span className="run-mode-menu-meta">
-                            <span
-                              className="run-mode-menu-dot"
-                              aria-hidden="true"
-                              style={{ background: info.dotColor }}
-                            />
-                            <span className="run-mode-menu-label">
-                              {info.label}
-                            </span>
-                            <span className="run-mode-menu-desc">
-                              {info.desc}
-                            </span>
-                          </span>
-                          {permissionMode === modeKey && (
-                            <CheckIcon
-                              className="run-mode-menu-check"
-                              aria-hidden="true"
-                            />
-                          )}
-                        </span>
-                      </DropdownMenuItem>
-                    );
-                  },
-                )}
-              </DropdownMenuContent>
-            </DropdownMenu>
             {toolButtons}
           </PromptInputTools>
           {!hideHint && (

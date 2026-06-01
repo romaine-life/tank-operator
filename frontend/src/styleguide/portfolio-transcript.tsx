@@ -13,7 +13,7 @@ import {
   TimerIcon,
   XIcon,
 } from "lucide-react";
-import { ChatComposer, type RunComposerMode } from "../ChatComposer";
+import { ChatComposer } from "../ChatComposer";
 import { McpIcon } from "../McpIcon";
 import { WorkspaceShell } from "../WorkspaceShell";
 import {
@@ -356,7 +356,6 @@ function ComposerSpecimen({
   state: ComposerSpecimenState;
   active: boolean;
 }) {
-  const [permissionMode, setPermissionMode] = useState<RunComposerMode>("default");
   const readonly = state === "readonly";
   return (
     <ChatComposer
@@ -374,13 +373,10 @@ function ComposerSpecimen({
           : "Tune the highlighted transcript bubble and keep the active turn easy to scan."
       }
       onSubmit={() => {}}
-      permissionMode={permissionMode}
-      onPermissionModeChange={setPermissionMode}
       sendByCtrlEnter={false}
       hintSuffix=" / slash commands"
       disabled={readonly}
       canSubmit={!readonly}
-      controlsDisabled={readonly}
       submitStatus={state === "streaming" ? "streaming" : undefined}
       onStop={() => {}}
       toolButtons={<ComposerToolButtons />}

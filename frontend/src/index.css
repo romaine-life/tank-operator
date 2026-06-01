@@ -5235,29 +5235,6 @@ button:disabled {
   color: var(--text-muted) !important;
 }
 
-.run-mode-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0.35rem 0.85rem;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.04);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  font-size: var(--text-xs);
-  color: var(--text-body);
-  font-family: var(--font-primary);
-  font-weight: 500;
-  letter-spacing: 0.01em;
-}
-
-.run-mode-dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 999px;
-  background: #34d399;
-  box-shadow: 0 0 6px rgba(52, 211, 153, 0.55);
-}
-
 .run-composer-hint {
   flex: 1 1 auto;
   text-align: right;
@@ -5885,79 +5862,6 @@ button:disabled {
 .run-submit-icon {
   width: 1rem;
   height: 1rem;
-}
-
-/* Mode pill rendered as a dropdown trigger — keep the pill look; add
-   the chevron + button affordances. */
-.run-mode-pill-button {
-  cursor: pointer;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  font-family: var(--font-primary);
-  transition:
-    background var(--motion-fast, 120ms) ease,
-    border-color var(--motion-fast, 120ms) ease;
-}
-
-.run-mode-pill-button:hover {
-  background: rgba(255, 255, 255, 0.07);
-  border-color: rgba(255, 255, 255, 0.16);
-}
-
-.run-mode-chevron {
-  width: 0.85rem;
-  height: 0.85rem;
-  margin-left: 0.15rem;
-  color: var(--text-muted);
-}
-
-/* Permission-mode menu — wider to fit description text under the label. */
-.run-mode-menu {
-  min-width: 18rem;
-}
-
-.run-mode-menu-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  width: 100%;
-  gap: 0.5rem;
-}
-
-.run-mode-menu-meta {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  gap: 0.1rem 0.55rem;
-  align-items: center;
-}
-
-.run-mode-menu-dot {
-  width: 0.45rem;
-  height: 0.45rem;
-  border-radius: 999px;
-  grid-column: 1;
-  grid-row: 1;
-  align-self: center;
-}
-
-.run-mode-menu-label {
-  font-family: var(--font-primary);
-  grid-column: 2;
-  grid-row: 1;
-}
-
-.run-mode-menu-desc {
-  font-size: 0.72rem;
-  color: var(--text-muted);
-  grid-column: 2;
-  grid-row: 2;
-}
-
-.run-mode-menu-check {
-  width: 1rem;
-  height: 1rem;
-  color: var(--accent, #2563eb);
-  align-self: center;
 }
 
 /* Files tab — split view: entry list on the left, file preview on right. */

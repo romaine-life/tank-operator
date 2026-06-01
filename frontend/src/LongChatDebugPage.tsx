@@ -5,7 +5,7 @@ import {
   ArrowUpIcon,
   Loader2Icon,
 } from "lucide-react";
-import { ChatComposer, type RunComposerMode } from "./ChatComposer";
+import { ChatComposer } from "./ChatComposer";
 import { WorkspaceShell } from "./WorkspaceShell";
 import { getSessionAvatarByID } from "./sessionAvatars";
 import {
@@ -36,7 +36,6 @@ export function LongChatDebugPage() {
   const [entries, setEntries] = useState<TranscriptEntry[]>(() =>
     makeMockTranscript(0, INITIAL_TURN_COUNT),
   );
-  const [permissionMode, setPermissionMode] = useState<RunComposerMode>("default");
   const [scrollParent, setScrollParent] = useState<HTMLElement | null>(null);
   const [atBottom, setAtBottom] = useState(true);
   const [bottomDistance, setBottomDistance] = useState(0);
@@ -328,8 +327,6 @@ export function LongChatDebugPage() {
           <ChatComposer
             placeholder="Send a mock message"
             onSubmit={submitMockMessage}
-            permissionMode={permissionMode}
-            onPermissionModeChange={setPermissionMode}
             sendByCtrlEnter={false}
             submitStatus={running ? "streaming" : undefined}
             onStop={stopMockReply}

@@ -483,7 +483,6 @@ Body:
     "client_nonce": "turn_abc123",
     "prompt": "Implement the change",
     "model": "claude-sonnet-4-6",
-    "permission_mode": "bypassPermissions",
     "skill_name": "test"
   }
 }
@@ -546,7 +545,6 @@ Body:
     }
   ],
   "model": "claude-sonnet-4-6",
-  "permission_mode": "bypassPermissions",
   "skill_name": "test",
   "existing_user_message": false,
   "follow_up": true
