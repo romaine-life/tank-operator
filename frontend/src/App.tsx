@@ -1432,6 +1432,10 @@ type PublicMessageLinkRoute = {
   messageId: string | null;
 };
 
+type PublicSessionReportRoute = {
+  token: string;
+};
+
 function decodeRouteSegment(segment: string): string {
   try {
     return decodeURIComponent(segment);
@@ -1470,6 +1474,7 @@ function routeHasMessageTarget(): boolean {
 }
 
 function readInitialPublicMessageLinkRoute(): PublicMessageLinkRoute | null {
+  if (window.location.pathname === "/reports/session-repo") return null;
   const params = new URLSearchParams(window.location.search);
   const token = (params.get("share") ?? "").trim();
   if (!token) return null;
@@ -1478,6 +1483,14 @@ function readInitialPublicMessageLinkRoute(): PublicMessageLinkRoute | null {
     sessionId: params.get("session"),
     messageId: params.get("message") ?? params.get("timeline_id"),
   };
+}
+
+function readInitialPublicSessionReportRoute(): PublicSessionReportRoute | null {
+  if (window.location.pathname !== "/reports/session-repo") return null;
+  const params = new URLSearchParams(window.location.search);
+  const token = (params.get("share") ?? "").trim();
+  if (!token) return null;
+  return { token };
 }
 
 function replaceSessionRoute(id: string, tab: "chat" | "turns" = "chat", turnId?: string | null): void {
@@ -14026,6 +14039,16 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
   );
 }
 
+function PublicSessionReportApp({ route }: { route: PublicSessionReportRoute }) {
+  return (
+    <div className="shell public-report-shell">
+      <main className="public-report-workspace">
+        <SessionRepoReport publicShareToken={route.token} publicView />
+      </main>
+    </div>
+  );
+}
+
 function CliSession({ session, visible }: { session: Session; visible: boolean }) {
   // The sidebar already shows the session title, mode badge, and status —
   // a duplicate header inside the pane is wasted vertical space and made
@@ -14052,6 +14075,10 @@ function CliSession({ session, visible }: { session: Session; visible: boolean }
 }
 
 export function App() {
+  const publicReportRoute = readInitialPublicSessionReportRoute();
+  if (publicReportRoute) {
+    return <PublicSessionReportApp route={publicReportRoute} />;
+  }
   const publicRoute = readInitialPublicMessageLinkRoute();
   if (publicRoute) {
     return <PublicMessageLinkApp route={publicRoute} />;

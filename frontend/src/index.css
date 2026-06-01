@@ -4560,18 +4560,25 @@ button:disabled {
 .session-repo-report {
   display: grid;
   gap: var(--space-4);
+  isolation: isolate;
+  overflow: visible;
+  padding-inline: clamp(0.75rem, 2vw, 1.25rem);
 }
 
 .session-repo-report-toolbar {
+  position: relative;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
+  overflow: visible;
 }
 
 .session-repo-report-title {
   display: inline-flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: var(--space-2);
   color: var(--text-primary);
   font-size: var(--text-sm);
@@ -4584,13 +4591,22 @@ button:disabled {
   color: var(--text-muted);
 }
 
+.session-repo-report-range-label {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  font-weight: 500;
+}
+
 .session-repo-report-actions {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
+  flex-wrap: wrap;
+  overflow: visible;
 }
 
-.session-repo-report-range,
+.session-repo-report-range-trigger,
 .session-repo-report-refresh {
   min-height: 2rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -4602,8 +4618,135 @@ button:disabled {
   cursor: pointer;
 }
 
-.session-repo-report-range {
+.session-repo-report-range-menu {
+  position: relative;
+  z-index: 30;
+}
+
+.session-repo-report-range-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: min(18rem, 56vw);
   padding: 0 0.65rem;
+}
+
+.session-repo-report-range-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-repo-report-range-trigger svg,
+.session-repo-report-refresh svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: 0 0 auto;
+}
+
+.session-repo-report-range-popover {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  display: grid;
+  gap: 0.2rem;
+  width: min(18rem, calc(100vw - 2rem));
+  padding: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md, 0.5rem);
+  background: var(--popover, rgb(32, 32, 32));
+  box-shadow: 0 1rem 2rem rgba(0, 0, 0, 0.32);
+}
+
+.session-repo-report-range-option {
+  width: 100%;
+  min-height: 2rem;
+  padding: 0 0.55rem;
+  border: 0;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-repo-report-range-option:hover,
+.session-repo-report-range-option:focus-visible,
+.session-repo-report-range-option.is-active {
+  outline: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.session-repo-report-custom-range {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+  padding: 0.55rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.session-repo-report-custom-range label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.session-repo-report-custom-range input {
+  min-height: 2rem;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-primary);
+  color-scheme: dark;
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 0 0.45rem;
+}
+
+.session-repo-report-custom-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.session-repo-report-custom-cancel,
+.session-repo-report-custom-apply {
+  min-height: 1.85rem;
+  padding: 0 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.session-repo-report-custom-apply {
+  border-color: rgba(96, 165, 250, 0.24);
+  background: rgba(96, 165, 250, 0.14);
+  color: var(--text-primary);
+}
+
+.session-repo-report-custom-cancel:hover,
+.session-repo-report-custom-apply:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+}
+
+.session-repo-report-custom-apply:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .session-repo-report-refresh {
@@ -4612,21 +4755,11 @@ button:disabled {
   place-items: center;
 }
 
-.session-repo-report-refresh svg {
-  width: 0.95rem;
-  height: 0.95rem;
-}
-
-.session-repo-report-range:hover,
+.session-repo-report-range-trigger:hover,
 .session-repo-report-refresh:hover:not(:disabled) {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.14);
-}
-
-.session-repo-report-range.is-active {
-  color: var(--text-primary);
-  background: rgba(96, 165, 250, 0.16);
 }
 
 .session-repo-report-refresh:disabled {
@@ -4643,9 +4776,72 @@ button:disabled {
   font-size: var(--text-xs);
 }
 
+.session-repo-report-success {
+  padding: 0.65rem 0.75rem;
+  border: 1px solid rgba(52, 211, 153, 0.28);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(6, 78, 59, 0.18);
+  color: rgb(167, 243, 208);
+  font-size: var(--text-xs);
+}
+
+.session-repo-report-user {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.session-repo-report-user-avatar {
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 2rem;
+  overflow: hidden;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  box-shadow: var(--shadow-avatar-inset);
+}
+
+.session-repo-report-user-avatar img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.session-repo-report-user-avatar-fallback {
+  display: inline-grid;
+  place-items: center;
+  color: var(--text-primary);
+  font-size: 0.7rem;
+  font-weight: 650;
+}
+
+.session-repo-report-user-text {
+  display: inline-flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  min-width: 0;
+}
+
+.session-repo-report-user-label {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.session-repo-report-user-text strong {
+  color: var(--text-primary);
+  font-weight: 650;
+}
+
 .session-repo-report-metrics {
+  position: relative;
+  z-index: 0;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(8.5rem, 1fr));
   gap: var(--space-3);
 }
 
@@ -4673,6 +4869,8 @@ button:disabled {
 }
 
 .session-repo-report-grid {
+  position: relative;
+  z-index: 0;
   display: grid;
   grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
   gap: var(--space-4);
@@ -4733,10 +4931,29 @@ button:disabled {
 }
 
 .session-repo-report-note {
+  position: relative;
+  z-index: 0;
   margin: 0;
   color: var(--text-muted);
   font-size: var(--text-xs);
   line-height: 1.45;
+}
+
+.public-report-shell {
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), transparent 14rem),
+    var(--bg-primary);
+}
+
+.public-report-workspace {
+  width: min(1120px, calc(100vw - 2rem));
+  margin: 0 auto;
+  padding: clamp(1rem, 4vw, 3rem) 0;
+}
+
+.session-repo-report.is-public {
+  align-content: start;
 }
 
 @media (max-width: 640px) {
@@ -4754,9 +4971,19 @@ button:disabled {
     width: 100%;
   }
 
-  .session-repo-report-range,
-  .session-repo-report-refresh {
+  .session-repo-report-range-menu,
+  .session-repo-report-range-trigger {
     flex: 1 1 0;
+  }
+
+  .session-repo-report-refresh {
+    flex: 0 0 2rem;
+  }
+
+  .session-repo-report-range-popover {
+    left: 0;
+    right: auto;
+    width: min(100%, calc(100vw - 2rem));
   }
 
   .session-repo-report-metrics,

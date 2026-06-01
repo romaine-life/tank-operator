@@ -1,17 +1,19 @@
-import { useEffect, useMemo, useState } from "react";
-import { GitBranchIcon, RefreshCwIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CalendarIcon, ChevronDownIcon, ExternalLinkIcon, GitBranchIcon, LinkIcon, RefreshCwIcon } from "lucide-react";
 import { authedFetch } from "./auth";
 
 type TokenUsage = {
   total_tokens: number;
   input_tokens: number;
   output_tokens: number;
+  turn_count?: number;
   usage_events: number;
 };
 
 type RepoSummary = {
   repo: string;
   session_count: number;
+  turn_count?: number;
   total_tokens: number;
   input_tokens: number;
   output_tokens: number;
@@ -32,7 +34,19 @@ type SessionSummary = {
 
 type SessionReport = {
   scope: string;
-  days: number;
+  user?: {
+    email?: string;
+    name?: string;
+    avatar_url?: string;
+  };
+  days?: number;
+  range?: {
+    mode: "last_days" | "custom";
+    days?: number;
+    starts_at: string;
+    ends_at: string;
+    label: string;
+  };
   attribution: string;
   totals: TokenUsage & {
     session_count: number;
@@ -43,29 +57,128 @@ type SessionReport = {
   fetched_at: string;
 };
 
-export function SessionRepoReport({ sessionScope }: { sessionScope: string }) {
-  const [days, setDays] = useState(30);
+type SessionRepoReportProps = {
+  sessionScope?: string;
+  publicShareToken?: string;
+  publicView?: boolean;
+};
+
+type ReportRangeSelection =
+  | { kind: "days"; days: number }
+  | { kind: "custom"; from: string; to: string };
+
+export function SessionRepoReport({
+  sessionScope = "",
+  publicShareToken,
+  publicView = false,
+}: SessionRepoReportProps) {
+  const [range, setRange] = useState<ReportRangeSelection>({ kind: "days", days: 30 });
+  const [rangeMenuOpen, setRangeMenuOpen] = useState(false);
+  const [customDraftOpen, setCustomDraftOpen] = useState(false);
+  const [draftFrom, setDraftFrom] = useState(todayDateInputValue);
+  const [draftTo, setDraftTo] = useState(todayDateInputValue);
   const [report, setReport] = useState<SessionReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [shareStatus, setShareStatus] = useState("");
+  const loadRequestIDRef = useRef(0);
 
   const reportURL = useMemo(() => {
+    if (publicShareToken) {
+      return `/api/public/session-report-shares/${encodeURIComponent(publicShareToken)}`;
+    }
     const params = new URLSearchParams({
-      days: String(days),
       session_scope: sessionScope,
     });
+    if (range.kind === "custom") {
+      params.set("from", range.from);
+      params.set("to", range.to);
+    } else {
+      params.set("days", String(range.days));
+    }
     return `/api/admin/session-report?${params.toString()}`;
-  }, [days, sessionScope]);
+  }, [publicShareToken, range, sessionScope]);
 
-  const loadReport = async () => {
+  const loadReport = useCallback(async (targetURL = reportURL) => {
+    if (!targetURL) return;
+    const requestID = loadRequestIDRef.current + 1;
+    loadRequestIDRef.current = requestID;
     setLoading(true);
     setError("");
     try {
-      const res = await authedFetch(reportURL);
+      const res = publicShareToken ? await fetch(targetURL) : await authedFetch(targetURL);
       if (!res.ok) {
         throw new Error(await res.text());
       }
-      setReport(await res.json() as SessionReport);
+      const nextReport = await res.json() as SessionReport;
+      if (requestID === loadRequestIDRef.current) {
+        setReport(nextReport);
+      }
+    } catch (err) {
+      if (requestID === loadRequestIDRef.current) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    } finally {
+      if (requestID === loadRequestIDRef.current) {
+        setLoading(false);
+      }
+    }
+  }, [publicShareToken, reportURL]);
+
+  useEffect(() => {
+    void loadReport(reportURL);
+  }, [loadReport, reportURL]);
+
+  const topSessions = report?.sessions.slice(0, 12) ?? [];
+  const rangeLabel = publicView ? report?.range?.label ?? rangeSelectionLabel(range) : rangeSelectionLabel(range);
+  const customDraftValid = Boolean(draftFrom && draftTo && draftTo >= draftFrom);
+
+  const selectDays = (value: number) => {
+    setRange({ kind: "days", days: value });
+    setRangeMenuOpen(false);
+    setCustomDraftOpen(false);
+    setShareStatus("");
+  };
+
+  const openCustomDraft = () => {
+    if (range.kind === "custom") {
+      setDraftFrom(range.from);
+      setDraftTo(range.to);
+    } else {
+      const today = todayDateInputValue();
+      setDraftFrom(today);
+      setDraftTo(today);
+    }
+    setCustomDraftOpen(true);
+  };
+
+  const applyCustomDraft = () => {
+    if (!customDraftValid) return;
+    setRange({ kind: "custom", from: draftFrom, to: draftTo });
+    setRangeMenuOpen(false);
+    setCustomDraftOpen(false);
+    setShareStatus("");
+  };
+
+  const createShareURL = async (): Promise<string> => {
+    if (!reportURL || publicView) throw new Error("report cannot be shared from this view");
+    const shareURL = reportURL.replace("/api/admin/session-report?", "/api/admin/session-report-shares?");
+    const res = await authedFetch(shareURL, { method: "POST" });
+    if (!res.ok) throw new Error(await res.text());
+    const body = (await res.json()) as { browser_url?: unknown };
+    const browserURL = typeof body.browser_url === "string" ? body.browser_url : "";
+    if (!browserURL) throw new Error("share response did not include a browser_url");
+    return browserURL;
+  };
+
+  const copyShare = async () => {
+    setLoading(true);
+    setError("");
+    setShareStatus("");
+    try {
+      const browserURL = await createShareURL();
+      await navigator.clipboard.writeText(browserURL);
+      setShareStatus("Copied shared report link");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -73,48 +186,157 @@ export function SessionRepoReport({ sessionScope }: { sessionScope: string }) {
     }
   };
 
-  useEffect(() => {
-    void loadReport();
-  }, [reportURL]);
-
-  const topSessions = report?.sessions.slice(0, 12) ?? [];
+  const openShare = async () => {
+    const popup = window.open("", "_blank");
+    setLoading(true);
+    setError("");
+    setShareStatus("");
+    try {
+      const browserURL = await createShareURL();
+      if (!popup) throw new Error("browser blocked the new tab");
+      popup.opener = null;
+      popup.location.href = browserURL;
+      setShareStatus("Opened shared report");
+    } catch (err) {
+      popup?.close();
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
+    }
+  };
 
   return (
-    <div className="session-repo-report">
+    <div className={`session-repo-report${publicView ? " is-public" : ""}`}>
       <section className="session-repo-report-toolbar" aria-label="Session report controls">
         <div className="session-repo-report-title">
           <GitBranchIcon aria-hidden="true" />
-          <span>Session repo report</span>
+          <span>{publicView ? "Shared session repo report" : "Session repo report"}</span>
+          <span className="session-repo-report-range-label">{rangeLabel}</span>
         </div>
         <div className="session-repo-report-actions">
-          {[7, 30, 90].map((value) => (
+          {!publicView && (
+            <>
+              <div className="session-repo-report-range-menu">
+                <button
+                  type="button"
+                  className="session-repo-report-range-trigger"
+                  onClick={() => setRangeMenuOpen((open) => !open)}
+                  aria-haspopup="menu"
+                  aria-expanded={rangeMenuOpen}
+                >
+                  <CalendarIcon aria-hidden="true" />
+                  <span>{rangeLabel}</span>
+                  <ChevronDownIcon aria-hidden="true" />
+                </button>
+                {rangeMenuOpen && (
+                  <div className="session-repo-report-range-popover" role="menu">
+                    {[1, 7, 30, 90].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        role="menuitem"
+                        className={`session-repo-report-range-option${range.kind === "days" && range.days === value ? " is-active" : ""}`}
+                        onClick={() => selectDays(value)}
+                      >
+                        {rangeSelectionLabel({ kind: "days", days: value })}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={`session-repo-report-range-option${range.kind === "custom" ? " is-active" : ""}`}
+                      onClick={openCustomDraft}
+                    >
+                      Custom range...
+                    </button>
+                    {customDraftOpen && (
+                      <div className="session-repo-report-custom-range">
+                        <label>
+                          <span>From</span>
+                          <input
+                            type="date"
+                            value={draftFrom}
+                            max={draftTo || undefined}
+                            onChange={(event) => setDraftFrom(event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          <span>To</span>
+                          <input
+                            type="date"
+                            value={draftTo}
+                            min={draftFrom || undefined}
+                            onChange={(event) => setDraftTo(event.target.value)}
+                          />
+                        </label>
+                        <div className="session-repo-report-custom-actions">
+                          <button
+                            type="button"
+                            className="session-repo-report-custom-cancel"
+                            onClick={() => setCustomDraftOpen(false)}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="session-repo-report-custom-apply"
+                            onClick={applyCustomDraft}
+                            disabled={!customDraftValid}
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                className="session-repo-report-refresh"
+                onClick={() => void copyShare()}
+                disabled={loading || !reportURL}
+                aria-label="Copy shared report link"
+                title="Copy shared report link"
+              >
+                <LinkIcon aria-hidden="true" />
+              </button>
+              <button
+                type="button"
+                className="session-repo-report-refresh"
+                onClick={() => void openShare()}
+                disabled={loading || !reportURL}
+                aria-label="Open shared report"
+                title="Open shared report"
+              >
+                <ExternalLinkIcon aria-hidden="true" />
+              </button>
+            </>
+          )}
+          {!publicView && (
             <button
-              key={value}
               type="button"
-              className={`session-repo-report-range${days === value ? " is-active" : ""}`}
-              onClick={() => setDays(value)}
+              className="session-repo-report-refresh"
+              onClick={() => void loadReport()}
+              disabled={loading || !reportURL}
+              aria-label="Refresh report"
+              title="Refresh report"
             >
-              {value}d
+              <RefreshCwIcon aria-hidden="true" />
             </button>
-          ))}
-          <button
-            type="button"
-            className="session-repo-report-refresh"
-            onClick={() => void loadReport()}
-            disabled={loading}
-            aria-label="Refresh report"
-            title="Refresh report"
-          >
-            <RefreshCwIcon aria-hidden="true" />
-          </button>
+          )}
         </div>
       </section>
 
+      {report?.user && <ReportUserIdentity user={report.user} />}
+
       {error && <div className="session-repo-report-error">{error}</div>}
+      {shareStatus && <div className="session-repo-report-success">{shareStatus}</div>}
 
       <section className="session-repo-report-metrics" aria-label="Session report totals">
         <ReportMetric label="Sessions" value={formatCount(report?.totals.session_count)} />
         <ReportMetric label="Repos" value={formatCount(report?.totals.repo_count)} />
+        <ReportMetric label="Turns" value={formatCount(report?.totals.turn_count)} />
         <ReportMetric label="Tokens" value={formatTokenCount(report?.totals.total_tokens)} />
         <ReportMetric label="Usage rows" value={formatCount(report?.totals.usage_events)} />
       </section>
@@ -127,6 +349,7 @@ export function SessionRepoReport({ sessionScope }: { sessionScope: string }) {
               <tr>
                 <th>Repo</th>
                 <th>Sessions</th>
+                <th>Turns</th>
                 <th>Tokens</th>
               </tr>
             </thead>
@@ -135,12 +358,13 @@ export function SessionRepoReport({ sessionScope }: { sessionScope: string }) {
                 <tr key={repo.repo}>
                   <td>{repo.repo}</td>
                   <td>{repo.session_count}</td>
+                  <td>{formatCount(repo.turn_count)}</td>
                   <td>{formatTokenCount(repo.total_tokens)}</td>
                 </tr>
               ))}
               {report && report.repos.length === 0 && (
                 <tr>
-                  <td colSpan={3}>No sessions in this window.</td>
+                  <td colSpan={4}>No sessions in this window.</td>
                 </tr>
               )}
             </tbody>
@@ -154,6 +378,7 @@ export function SessionRepoReport({ sessionScope }: { sessionScope: string }) {
               <tr>
                 <th>Session</th>
                 <th>Repos</th>
+                <th>Turns</th>
                 <th>Tokens</th>
               </tr>
             </thead>
@@ -167,12 +392,13 @@ export function SessionRepoReport({ sessionScope }: { sessionScope: string }) {
                     <span className="session-repo-report-muted">{session.mode}</span>
                   </td>
                   <td>{session.repos.length > 0 ? session.repos.join(", ") : "Unassigned"}</td>
+                  <td>{formatCount(session.usage.turn_count)}</td>
                   <td>{formatTokenCount(session.usage.total_tokens)}</td>
                 </tr>
               ))}
               {report && topSessions.length === 0 && (
                 <tr>
-                  <td colSpan={3}>No sessions in this window.</td>
+                  <td colSpan={4}>No sessions in this window.</td>
                 </tr>
               )}
             </tbody>
@@ -187,6 +413,34 @@ export function SessionRepoReport({ sessionScope }: { sessionScope: string }) {
   );
 }
 
+function ReportUserIdentity({
+  user,
+}: {
+  user: { email?: string; name?: string; avatar_url?: string };
+}) {
+  const [avatarFailed, setAvatarFailed] = useState(false);
+  const label = user.name || user.email || "Unknown user";
+  const detail = user.email && user.email !== label ? user.email : "";
+  return (
+    <section className="session-repo-report-user" aria-label="Report user">
+      {user.avatar_url && !avatarFailed ? (
+        <span className="session-repo-report-user-avatar">
+          <img src={user.avatar_url} alt="" onError={() => setAvatarFailed(true)} />
+        </span>
+      ) : (
+        <span className="session-repo-report-user-avatar session-repo-report-user-avatar-fallback">
+          {userInitials(label)}
+        </span>
+      )}
+      <span className="session-repo-report-user-text">
+        <span className="session-repo-report-user-label">Report for</span>
+        <strong>{label}</strong>
+        {detail && <span>{detail}</span>}
+      </span>
+    </section>
+  );
+}
+
 function ReportMetric({ label, value }: { label: string; value: string }) {
   return (
     <div className="session-repo-report-metric">
@@ -194,6 +448,14 @@ function ReportMetric({ label, value }: { label: string; value: string }) {
       <strong>{value}</strong>
     </div>
   );
+}
+
+function userInitials(value: string): string {
+  const source = value.trim() || "?";
+  const parts = source.split(/[\s@._-]+/).filter(Boolean);
+  const first = parts[0]?.[0] ?? source[0];
+  const second = parts[1]?.[0] ?? "";
+  return (first + second).toUpperCase().slice(0, 2);
 }
 
 function formatCount(value: number | undefined): string {
@@ -205,4 +467,26 @@ function formatTokenCount(value: number | undefined): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
   return new Intl.NumberFormat().format(value);
+}
+
+function rangeSelectionLabel(range: ReportRangeSelection): string {
+  if (range.kind === "custom") {
+    if (range.from === range.to) return formatDateInputLabel(range.from);
+    return `${formatDateInputLabel(range.from)} to ${formatDateInputLabel(range.to)}`;
+  }
+  return range.days === 1 ? "Last 1 day" : `Last ${range.days} days`;
+}
+
+function todayDateInputValue(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatDateInputLabel(value: string): string {
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+  if (!year || !month || !day) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(Date.UTC(year, month - 1, day)));
 }
