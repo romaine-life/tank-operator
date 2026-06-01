@@ -1725,6 +1725,7 @@ function ComposerCostEstimate({
       title={title ?? defaultTitle}
     >
       <span className="run-cost-estimate-token-count">{tokenLabel}</span>
+      <span className="run-cost-estimate-separator" aria-hidden="true">&middot;</span>
       <span className="run-cost-estimate-amount">{label}</span>
     </span>
   );
