@@ -333,6 +333,26 @@ local participant. A healthy three-replica stream should therefore show healthy
 delivery, not a misleading `2/3` warning just because the leader or local
 replica is represented outside the array.
 
+## Admin Observability Summary
+
+`GET /api/debug/observability-summary` (admin-only) returns the Settings ->
+Admin observability inbox. It reads the in-cluster Prometheus API
+(`PROMETHEUS_URL`, defaulting to the kube-prometheus-stack service) and
+summarizes:
+
+- firing Tank alerts, counted by severity, with the alert runbook text when
+  present;
+- recent orchestrator 5xx routes from
+  `increase(tank_http_requests_total{status_class="5xx"}[30m])`;
+- links to the scoped `/api/debug/*` endpoints that own per-entity detail.
+
+The endpoint is intentionally not a log store. Alertmanager/Prometheus own the
+aggregate "needs attention" state; structured logs remain the exact-event
+detail layer after an operator has a route, alert, session id, or reference id.
+The Settings tab indicator is driven from this endpoint: critical Tank alerts
+render critical, Tank warnings or recent 5xxs render warning, and info-only
+alerts do not mark the tab as degraded.
+
 ## Avatar Upload Debug Surface
 
 `GET /api/debug/avatar-upload-attempts` (admin-only) returns durable

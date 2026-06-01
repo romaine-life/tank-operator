@@ -3485,6 +3485,22 @@ button:disabled {
   height: 1rem;
 }
 
+.run-tab-alert,
+.run-settings-tab-alert {
+  width: 0.48rem;
+  height: 0.48rem;
+  flex: 0 0 auto;
+  border-radius: 999px;
+  background: var(--status-agent-working);
+  box-shadow: 0 0 0 2px rgba(251, 191, 36, 0.14);
+}
+
+.run-tab-alert.is-critical,
+.run-settings-tab-alert.is-critical {
+  background: var(--status-error-fg);
+  box-shadow: 0 0 0 2px var(--status-error-bg);
+}
+
 .run-shell-tasks-trigger {
   position: relative;
 }
@@ -4206,6 +4222,9 @@ button:disabled {
 
 .run-settings-tab {
   min-height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
   padding: 0 0.75rem;
   border: 0;
   border-radius: calc(var(--radius-md, 0.5rem) - 0.15rem);
@@ -4299,6 +4318,170 @@ button:disabled {
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-md, 0.5rem);
   background: rgba(255, 255, 255, 0.025);
+}
+
+.run-settings-observability {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.run-settings-observability.is-warning {
+  border-color: rgba(251, 191, 36, 0.26);
+}
+
+.run-settings-observability.is-critical {
+  border-color: rgba(248, 113, 113, 0.34);
+}
+
+.run-settings-observability-head,
+.run-settings-observability-summary,
+.run-settings-observability-row,
+.run-settings-observability-links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.run-settings-observability-head {
+  justify-content: space-between;
+}
+
+.run-settings-icon-btn {
+  width: 1.85rem;
+  height: 1.85rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.run-settings-icon-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.14);
+}
+
+.run-settings-icon-btn:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.run-settings-icon-btn svg {
+  width: 0.95rem;
+  height: 0.95rem;
+}
+
+.run-settings-observability-summary {
+  flex-wrap: wrap;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.run-settings-observability-status,
+.run-settings-observability-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.25rem;
+  padding: 0 0.42rem;
+  border-radius: var(--radius-sm, 0.35rem);
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 0.67rem;
+  line-height: 1;
+}
+
+.run-settings-observability-status.is-healthy {
+  color: var(--status-online);
+  background: var(--status-online-bg);
+}
+
+.run-settings-observability-status.is-warning,
+.run-settings-observability-chip.is-warning {
+  color: var(--status-agent-working);
+  background: rgba(251, 191, 36, 0.12);
+}
+
+.run-settings-observability-status.is-critical,
+.run-settings-observability-chip.is-critical {
+  color: var(--status-error-fg);
+  background: var(--status-error-bg);
+}
+
+.run-settings-observability-note {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.run-settings-observability-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+
+.run-settings-observability-list {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 0.38rem;
+}
+
+.run-settings-observability-kicker {
+  color: var(--text-faint);
+  font-size: 0.66rem;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.run-settings-observability-row {
+  min-height: 1.4rem;
+}
+
+.run-settings-observability-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-body);
+  font-size: var(--text-xs);
+}
+
+.run-settings-observability-empty {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.run-settings-observability-links {
+  flex-wrap: wrap;
+  padding-top: var(--space-1);
+}
+
+.run-settings-observability-links a {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-decoration: none;
+}
+
+.run-settings-observability-links a:hover {
+  color: var(--text-primary);
+  text-decoration: underline;
+}
+
+@media (max-width: 680px) {
+  .run-settings-observability-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 .run-settings-diagnostics-head {

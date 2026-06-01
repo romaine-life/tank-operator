@@ -1234,6 +1234,71 @@ function userIsAdmin(user: SessionUser | null | undefined): boolean {
   return user?.is_admin === true;
 }
 
+type AdminObservabilityStatus = "healthy" | "warning" | "critical" | "unknown";
+
+interface AdminObservabilitySummary {
+  description: string;
+  status: AdminObservabilityStatus;
+  checked_at: string;
+  alerts: {
+    status: AdminObservabilityStatus;
+    firing_total: number;
+    tank_firing_total: number;
+    tank_critical: number;
+    tank_warning: number;
+    tank_info: number;
+    platform_firing: number;
+    items: AdminObservabilityAlert[];
+  };
+  http_5xx: {
+    status: AdminObservabilityStatus;
+    window: string;
+    total: number;
+    routes: Array<{ route: string; count: number }>;
+  };
+  debug_links: Array<{ label: string; href: string; description: string }>;
+  errors?: Array<{ surface: string; detail: string }>;
+}
+
+interface AdminObservabilityAlert {
+  name: string;
+  severity: string;
+  state: string;
+  namespace?: string;
+  route?: string;
+  runbook?: string;
+  description?: string;
+  active_at?: string;
+}
+
+interface AdminSettingsControls {
+  visible: boolean;
+  canViewProdSessions: boolean;
+  viewingProdSessions: boolean;
+  currentScope: string;
+  prodScope: string;
+  reportScope: string;
+  observability: {
+    summary: AdminObservabilitySummary | null;
+    loading: boolean;
+    error: string | null;
+  };
+  onRefreshObservability: () => void;
+  onAvatarCatalogChanged: () => Promise<void>;
+  onViewingProdSessionsChange: (value: boolean) => void;
+}
+
+function observabilityAttentionStatus(
+  summary: AdminObservabilitySummary | null,
+  error?: string | null,
+): "critical" | "warning" | null {
+  if (error) return "warning";
+  if (!summary) return null;
+  if (summary.status === "critical") return "critical";
+  if (summary.status === "warning" || summary.status === "unknown") return "warning";
+  return null;
+}
+
 interface SessionUser {
   sub: string;
   email: string;
@@ -8485,6 +8550,108 @@ export function RunMessages({
   );
 }
 
+function AdminObservabilityPanel({
+  state,
+  onRefresh,
+}: {
+  state: AdminSettingsControls["observability"];
+  onRefresh: () => void;
+}) {
+  const summary = state.summary;
+  const status = state.error ? "unknown" : summary?.status ?? "unknown";
+  const tankAlerts =
+    summary?.alerts.items.filter((alert) => alert.name.startsWith("Tank")).slice(0, 5) ?? [];
+  const httpRoutes = summary?.http_5xx.routes.slice(0, 5) ?? [];
+  const links = summary?.debug_links ?? [];
+
+  return (
+    <div className={`run-settings-observability is-${status}`}>
+      <div className="run-settings-observability-head">
+        <span className="run-settings-link-label">
+          <ActivityIcon className="run-settings-link-icon" aria-hidden="true" />
+          <span>Observability</span>
+        </span>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={onRefresh}
+          disabled={state.loading}
+          aria-label="Refresh observability"
+          title="Refresh"
+        >
+          <RotateCcwIcon className={state.loading ? "cluster-health-spin" : undefined} aria-hidden="true" />
+        </button>
+      </div>
+      <div className="run-settings-observability-summary">
+        <span className={`run-settings-observability-status is-${status}`}>{status}</span>
+        <span>{summary ? `${summary.alerts.tank_firing_total} Tank alerts` : "alerts unavailable"}</span>
+        <span>{summary ? `${formatMetricCount(summary.http_5xx.total)} 5xx / ${summary.http_5xx.window}` : "5xx unavailable"}</span>
+      </div>
+      {state.error ? (
+        <div className="run-settings-observability-note" role="status">
+          {state.error}
+        </div>
+      ) : summary?.errors?.length ? (
+        <div className="run-settings-observability-note" role="status">
+          {summary.errors.map((err) => `${err.surface}: ${err.detail}`).join("; ")}
+        </div>
+      ) : null}
+      <div className="run-settings-observability-grid">
+        <div className="run-settings-observability-list">
+          <span className="run-settings-observability-kicker">Firing Tank alerts</span>
+          {tankAlerts.length > 0 ? (
+            tankAlerts.map((alert) => (
+              <div key={`${alert.name}-${alert.namespace ?? ""}-${alert.route ?? ""}`} className="run-settings-observability-row">
+                <span className={`run-settings-observability-chip is-${alert.severity}`}>{alert.severity}</span>
+                <span className="run-settings-observability-text" title={alert.runbook || alert.description || alert.name}>
+                  {alert.name}
+                </span>
+              </div>
+            ))
+          ) : (
+            <span className="run-settings-observability-empty">None</span>
+          )}
+        </div>
+        <div className="run-settings-observability-list">
+          <span className="run-settings-observability-kicker">Recent 5xx routes</span>
+          {httpRoutes.length > 0 ? (
+            httpRoutes.map((route) => (
+              <div key={route.route} className="run-settings-observability-row">
+                <span className="run-settings-observability-chip">{formatMetricCount(route.count)}</span>
+                <span className="run-settings-observability-text" title={route.route}>{route.route}</span>
+              </div>
+            ))
+          ) : (
+            <span className="run-settings-observability-empty">None</span>
+          )}
+        </div>
+      </div>
+      {links.length > 0 && (
+        <div className="run-settings-observability-links">
+          {links.slice(0, 5).map((link) => (
+            <a
+              key={link.href}
+              href={link.href}
+              target="_blank"
+              rel="noreferrer"
+              title={link.description}
+            >
+              {link.label}
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function formatMetricCount(value: number): string {
+  if (!Number.isFinite(value)) return "0";
+  if (value >= 10) return Math.round(value).toString();
+  if (value === 0) return "0";
+  return value.toFixed(value < 1 ? 2 : 1).replace(/\.0$/, "");
+}
+
 function RunSettingsPanel({
   runPrefs,
   setRunPref,
@@ -8506,19 +8673,11 @@ function RunSettingsPanel({
   paneFontScale: number;
   paneFontScalePct: number;
   setPaneFontScale: (value: number) => void;
-  adminControls?: {
-    visible: boolean;
-    canViewProdSessions: boolean;
-    viewingProdSessions: boolean;
-    currentScope: string;
-    prodScope: string;
-    reportScope: string;
-    onAvatarCatalogChanged: () => Promise<void>;
-    onViewingProdSessionsChange: (value: boolean) => void;
-  };
+  adminControls?: AdminSettingsControls;
 }) {
   const [settingsTab, setSettingsTab] = useState<"preferences" | "admin">("preferences");
-  const [adminView, setAdminView] = useState<"controls" | "avatars" | "report">("controls");
+  const [adminView, setAdminView] =
+    useState<"controls" | "avatars" | "report" | "observability">("controls");
   const showAdminTab = adminControls?.visible === true;
   useEffect(() => {
     if (!showAdminTab && settingsTab === "admin") {
@@ -8531,9 +8690,15 @@ function RunSettingsPanel({
     }
   }, [settingsTab, showAdminTab]);
   const settingsScreenClassName =
-    settingsTab === "admin" && showAdminTab && (adminView === "avatars" || adminView === "report")
+    settingsTab === "admin" &&
+    showAdminTab &&
+    (adminView === "avatars" || adminView === "report" || adminView === "observability")
       ? "run-settings-screen run-settings-screen-wide"
       : "run-settings-screen";
+  const adminObservabilityAttention = observabilityAttentionStatus(
+    adminControls?.observability.summary ?? null,
+    adminControls?.observability.error ?? null,
+  );
 
   return (
     <div className={settingsScreenClassName}>
@@ -8556,6 +8721,12 @@ function RunSettingsPanel({
             onClick={() => setSettingsTab("admin")}
           >
             Admin
+            {adminObservabilityAttention ? (
+              <span
+                className={`run-settings-tab-alert is-${adminObservabilityAttention}`}
+                aria-hidden="true"
+              />
+            ) : null}
           </button>
         </div>
       )}
@@ -8594,10 +8765,50 @@ function RunSettingsPanel({
             </section>
             <SessionRepoReport sessionScope={adminControls.reportScope} />
           </>
+        ) : adminView === "observability" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setAdminView("controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Observability</h2>
+              </div>
+            </section>
+            <AdminObservabilityPanel
+              state={adminControls.observability}
+              onRefresh={adminControls.onRefreshObservability}
+            />
+          </>
         ) : (
           <>
           <section className="run-settings-section">
             <h2 className="run-settings-title">Admin Controls</h2>
+            <button
+              type="button"
+              className="run-settings-link"
+              onClick={() => setAdminView("observability")}
+            >
+              <span className="run-settings-link-label">
+                <ActivityIcon className="run-settings-link-icon" aria-hidden="true" />
+                <span>Observability</span>
+                {adminObservabilityAttention ? (
+                  <span
+                    className={`run-settings-tab-alert is-${adminObservabilityAttention}`}
+                    aria-hidden="true"
+                  />
+                ) : null}
+              </span>
+              <span className="run-settings-scope-value">
+                {adminControls.observability.summary?.status ??
+                  (adminControls.observability.error ? "error" : "Open")}
+              </span>
+            </button>
             <button
               type="button"
               className="run-settings-link"
@@ -8956,16 +9167,7 @@ function ChatPane({
   // sound off chat events — see App.tsx commentary at the audio refs.
   primeTurnCompleteSound: () => void;
   playTurnCompleteSound: () => void;
-  adminControls?: {
-    visible: boolean;
-    canViewProdSessions: boolean;
-    viewingProdSessions: boolean;
-    currentScope: string;
-    prodScope: string;
-    reportScope: string;
-    onAvatarCatalogChanged: () => Promise<void>;
-    onViewingProdSessionsChange: (value: boolean) => void;
-  };
+  adminControls?: AdminSettingsControls;
   readOnly?: boolean;
   publicView?: boolean;
   publicShareToken?: string | null;
@@ -9047,6 +9249,10 @@ function ChatPane({
   const supportsFileAttachments = !readOnly && !publicView && sessionModeSupportsWorkspaceFiles(session.mode);
   const filesAvailable = !readOnly && !publicView && sessionFilesAvailable(session);
   const filesTabTitle = sessionFilesTabTitle(session);
+  const adminObservabilityAttention = observabilityAttentionStatus(
+    adminControls?.observability.summary ?? null,
+    adminControls?.observability.error ?? null,
+  );
   // Seed model + effort from RunPrefs (browser-persisted). State is local
   // because the runners seal model + effort from the first submit_turn —
   // the splash screen is where the user adjusts the defaults before a
@@ -12798,6 +13004,12 @@ function ChatPane({
               >
                 <SettingsIcon className="run-tab-icon" aria-hidden="true" />
                 <span>Settings</span>
+                {adminObservabilityAttention && (
+                  <span
+                    className={`run-tab-alert is-${adminObservabilityAttention}`}
+                    aria-hidden="true"
+                  />
+                )}
               </button>
               <button
                 type="button"
@@ -14175,6 +14387,40 @@ function AuthenticatedApp() {
   const currentSessionScope = normalizeSessionScopeValue(appConfig.session_scope);
   const spireLensMcpAvailable = appConfig.spirelens_mcp_available === "true";
   const hasAdminAccess = userIsAdmin(user);
+  const [adminObservabilitySummary, setAdminObservabilitySummary] =
+    useState<AdminObservabilitySummary | null>(null);
+  const [adminObservabilityLoading, setAdminObservabilityLoading] = useState(false);
+  const [adminObservabilityError, setAdminObservabilityError] = useState<string | null>(null);
+  const refreshAdminObservability = useCallback(async () => {
+    if (!hasAdminAccess) return;
+    setAdminObservabilityLoading(true);
+    try {
+      const res = await authedFetch("/api/debug/observability-summary");
+      if (!res.ok) {
+        throw new Error(`observability summary returned ${res.status}`);
+      }
+      const body = await res.json() as AdminObservabilitySummary;
+      setAdminObservabilitySummary(body);
+      setAdminObservabilityError(null);
+    } catch (err) {
+      setAdminObservabilityError(errorMessage(err));
+    } finally {
+      setAdminObservabilityLoading(false);
+    }
+  }, [hasAdminAccess]);
+  useEffect(() => {
+    if (!hasAdminAccess) {
+      setAdminObservabilitySummary(null);
+      setAdminObservabilityError(null);
+      setAdminObservabilityLoading(false);
+      return;
+    }
+    void refreshAdminObservability();
+    const id = window.setInterval(() => {
+      void refreshAdminObservability();
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, [hasAdminAccess, refreshAdminObservability]);
   const canViewProdSessions =
     hasAdminAccess && currentSessionScope !== PROD_SESSION_SCOPE;
   const effectiveSessionScope =
@@ -14197,6 +14443,12 @@ function AuthenticatedApp() {
           currentScope: currentSessionScope,
           prodScope: PROD_SESSION_SCOPE,
           reportScope: effectiveSessionScope,
+          observability: {
+            summary: adminObservabilitySummary,
+            loading: adminObservabilityLoading,
+            error: adminObservabilityError,
+          },
+          onRefreshObservability: refreshAdminObservability,
           onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
           onViewingProdSessionsChange: (value: boolean) => {
             const next = value ? PROD_SESSION_SCOPE : "";
@@ -14205,6 +14457,10 @@ function AuthenticatedApp() {
           },
         }
       : undefined;
+  const adminObservabilityAttention = observabilityAttentionStatus(
+    adminSettingsControls?.observability.summary ?? null,
+    adminSettingsControls?.observability.error ?? null,
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -16159,6 +16415,12 @@ function AuthenticatedApp() {
               >
                 <SettingsIcon className="run-tab-icon" aria-hidden="true" />
                 <span>Settings</span>
+                {adminObservabilityAttention && (
+                  <span
+                    className={`run-tab-alert is-${adminObservabilityAttention}`}
+                    aria-hidden="true"
+                  />
+                )}
               </button>
               <button
                 type="button"
