@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { GitBranchIcon, LinkIcon, RefreshCwIcon } from "lucide-react";
+import { CalendarIcon, ChevronDownIcon, GitBranchIcon, LinkIcon, RefreshCwIcon } from "lucide-react";
 import { authedFetch } from "./auth";
 
 type TokenUsage = {
@@ -56,15 +56,20 @@ type SessionRepoReportProps = {
   publicView?: boolean;
 };
 
+type ReportRangeSelection =
+  | { kind: "days"; days: number }
+  | { kind: "custom"; from: string; to: string };
+
 export function SessionRepoReport({
   sessionScope = "",
   publicShareToken,
   publicView = false,
 }: SessionRepoReportProps) {
-  const [rangeMode, setRangeMode] = useState<"days" | "custom">("days");
-  const [days, setDays] = useState(30);
-  const [customFrom, setCustomFrom] = useState("");
-  const [customTo, setCustomTo] = useState("");
+  const [range, setRange] = useState<ReportRangeSelection>({ kind: "days", days: 30 });
+  const [rangeMenuOpen, setRangeMenuOpen] = useState(false);
+  const [customDraftOpen, setCustomDraftOpen] = useState(false);
+  const [draftFrom, setDraftFrom] = useState(todayDateInputValue);
+  const [draftTo, setDraftTo] = useState(todayDateInputValue);
   const [report, setReport] = useState<SessionReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -77,15 +82,14 @@ export function SessionRepoReport({
     const params = new URLSearchParams({
       session_scope: sessionScope,
     });
-    if (rangeMode === "custom") {
-      if (!customFrom || !customTo) return "";
-      params.set("from", customFrom);
-      params.set("to", customTo);
+    if (range.kind === "custom") {
+      params.set("from", range.from);
+      params.set("to", range.to);
     } else {
-      params.set("days", String(days));
+      params.set("days", String(range.days));
     }
     return `/api/admin/session-report?${params.toString()}`;
-  }, [customFrom, customTo, days, publicShareToken, rangeMode, sessionScope]);
+  }, [publicShareToken, range, sessionScope]);
 
   const loadReport = async () => {
     if (!reportURL) return;
@@ -109,11 +113,33 @@ export function SessionRepoReport({
   }, [reportURL]);
 
   const topSessions = report?.sessions.slice(0, 12) ?? [];
-  const rangeLabel = report?.range?.label ?? (rangeMode === "custom" ? "Custom range" : `Last ${days} days`);
+  const rangeLabel = report?.range?.label ?? rangeSelectionLabel(range);
+  const customDraftValid = Boolean(draftFrom && draftTo && draftTo >= draftFrom);
 
   const selectDays = (value: number) => {
-    setRangeMode("days");
-    setDays(value);
+    setRange({ kind: "days", days: value });
+    setRangeMenuOpen(false);
+    setCustomDraftOpen(false);
+    setShareStatus("");
+  };
+
+  const openCustomDraft = () => {
+    if (range.kind === "custom") {
+      setDraftFrom(range.from);
+      setDraftTo(range.to);
+    } else {
+      const today = todayDateInputValue();
+      setDraftFrom(today);
+      setDraftTo(today);
+    }
+    setCustomDraftOpen(true);
+  };
+
+  const applyCustomDraft = () => {
+    if (!customDraftValid) return;
+    setRange({ kind: "custom", from: draftFrom, to: draftTo });
+    setRangeMenuOpen(false);
+    setCustomDraftOpen(false);
     setShareStatus("");
   };
 
@@ -149,40 +175,81 @@ export function SessionRepoReport({
         <div className="session-repo-report-actions">
           {!publicView && (
             <>
-              {[1, 7, 30, 90].map((value) => (
+              <div className="session-repo-report-range-menu">
                 <button
-                  key={value}
                   type="button"
-                  className={`session-repo-report-range${rangeMode === "days" && days === value ? " is-active" : ""}`}
-                  onClick={() => selectDays(value)}
+                  className="session-repo-report-range-trigger"
+                  onClick={() => setRangeMenuOpen((open) => !open)}
+                  aria-haspopup="menu"
+                  aria-expanded={rangeMenuOpen}
                 >
-                  {value}d
+                  <CalendarIcon aria-hidden="true" />
+                  <span>{rangeLabel}</span>
+                  <ChevronDownIcon aria-hidden="true" />
                 </button>
-              ))}
-              <label className="session-repo-report-date">
-                <span>From</span>
-                <input
-                  type="date"
-                  value={customFrom}
-                  onChange={(event) => {
-                    setRangeMode("custom");
-                    setCustomFrom(event.target.value);
-                    setShareStatus("");
-                  }}
-                />
-              </label>
-              <label className="session-repo-report-date">
-                <span>To</span>
-                <input
-                  type="date"
-                  value={customTo}
-                  onChange={(event) => {
-                    setRangeMode("custom");
-                    setCustomTo(event.target.value);
-                    setShareStatus("");
-                  }}
-                />
-              </label>
+                {rangeMenuOpen && (
+                  <div className="session-repo-report-range-popover" role="menu">
+                    {[1, 7, 30, 90].map((value) => (
+                      <button
+                        key={value}
+                        type="button"
+                        role="menuitem"
+                        className={`session-repo-report-range-option${range.kind === "days" && range.days === value ? " is-active" : ""}`}
+                        onClick={() => selectDays(value)}
+                      >
+                        {rangeSelectionLabel({ kind: "days", days: value })}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      role="menuitem"
+                      className={`session-repo-report-range-option${range.kind === "custom" ? " is-active" : ""}`}
+                      onClick={openCustomDraft}
+                    >
+                      Custom range...
+                    </button>
+                    {customDraftOpen && (
+                      <div className="session-repo-report-custom-range">
+                        <label>
+                          <span>From</span>
+                          <input
+                            type="date"
+                            value={draftFrom}
+                            max={draftTo || undefined}
+                            onChange={(event) => setDraftFrom(event.target.value)}
+                          />
+                        </label>
+                        <label>
+                          <span>To</span>
+                          <input
+                            type="date"
+                            value={draftTo}
+                            min={draftFrom || undefined}
+                            onChange={(event) => setDraftTo(event.target.value)}
+                          />
+                        </label>
+                        <div className="session-repo-report-custom-actions">
+                          <button
+                            type="button"
+                            className="session-repo-report-custom-cancel"
+                            onClick={() => setCustomDraftOpen(false)}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="session-repo-report-custom-apply"
+                            onClick={applyCustomDraft}
+                            disabled={!customDraftValid}
+                          >
+                            Apply
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
               <button
                 type="button"
                 className="session-repo-report-refresh"
@@ -304,4 +371,26 @@ function formatTokenCount(value: number | undefined): string {
   if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
   if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
   return new Intl.NumberFormat().format(value);
+}
+
+function rangeSelectionLabel(range: ReportRangeSelection): string {
+  if (range.kind === "custom") {
+    if (range.from === range.to) return formatDateInputLabel(range.from);
+    return `${formatDateInputLabel(range.from)} to ${formatDateInputLabel(range.to)}`;
+  }
+  return range.days === 1 ? "Last 1 day" : `Last ${range.days} days`;
+}
+
+function todayDateInputValue(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function formatDateInputLabel(value: string): string {
+  const [year, month, day] = value.split("-").map((part) => Number.parseInt(part, 10));
+  if (!year || !month || !day) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(Date.UTC(year, month - 1, day)));
 }

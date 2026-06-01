@@ -4415,9 +4415,8 @@ button:disabled {
   flex-wrap: wrap;
 }
 
-.session-repo-report-range,
-.session-repo-report-refresh,
-.session-repo-report-date {
+.session-repo-report-range-trigger,
+.session-repo-report-refresh {
   min-height: 2rem;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: var(--radius-md, 0.5rem);
@@ -4428,8 +4427,134 @@ button:disabled {
   cursor: pointer;
 }
 
-.session-repo-report-range {
+.session-repo-report-range-menu {
+  position: relative;
+}
+
+.session-repo-report-range-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  max-width: min(18rem, 56vw);
   padding: 0 0.65rem;
+}
+
+.session-repo-report-range-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-repo-report-range-trigger svg,
+.session-repo-report-refresh svg {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex: 0 0 auto;
+}
+
+.session-repo-report-range-popover {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  display: grid;
+  gap: 0.2rem;
+  width: min(18rem, calc(100vw - 2rem));
+  padding: 0.35rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-md, 0.5rem);
+  background: color-mix(in srgb, var(--bg-primary) 92%, black);
+  box-shadow: 0 1rem 2rem rgba(0, 0, 0, 0.32);
+}
+
+.session-repo-report-range-option {
+  width: 100%;
+  min-height: 2rem;
+  padding: 0 0.55rem;
+  border: 0;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+.session-repo-report-range-option:hover,
+.session-repo-report-range-option:focus-visible,
+.session-repo-report-range-option.is-active {
+  outline: none;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+}
+
+.session-repo-report-custom-range {
+  display: grid;
+  gap: 0.5rem;
+  margin-top: 0.25rem;
+  padding: 0.55rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.session-repo-report-custom-range label {
+  display: grid;
+  gap: 0.25rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+}
+
+.session-repo-report-custom-range input {
+  min-height: 2rem;
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-primary);
+  color-scheme: dark;
+  font: inherit;
+  font-size: var(--text-xs);
+  padding: 0 0.45rem;
+}
+
+.session-repo-report-custom-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.35rem;
+}
+
+.session-repo-report-custom-cancel,
+.session-repo-report-custom-apply {
+  min-height: 1.85rem;
+  padding: 0 0.6rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0.35rem;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.session-repo-report-custom-apply {
+  border-color: rgba(96, 165, 250, 0.24);
+  background: rgba(96, 165, 250, 0.14);
+  color: var(--text-primary);
+}
+
+.session-repo-report-custom-cancel:hover,
+.session-repo-report-custom-apply:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+}
+
+.session-repo-report-custom-apply:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .session-repo-report-refresh {
@@ -4438,45 +4563,11 @@ button:disabled {
   place-items: center;
 }
 
-.session-repo-report-date {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
-  padding: 0 0.5rem;
-  cursor: default;
-}
-
-.session-repo-report-date span {
-  font-size: 0.68rem;
-  text-transform: uppercase;
-}
-
-.session-repo-report-date input {
-  width: 7.6rem;
-  border: 0;
-  background: transparent;
-  color: var(--text-primary);
-  font: inherit;
-  font-size: var(--text-xs);
-  color-scheme: dark;
-}
-
-.session-repo-report-refresh svg {
-  width: 0.95rem;
-  height: 0.95rem;
-}
-
-.session-repo-report-range:hover,
-.session-repo-report-refresh:hover:not(:disabled),
-.session-repo-report-date:focus-within {
+.session-repo-report-range-trigger:hover,
+.session-repo-report-refresh:hover:not(:disabled) {
   color: var(--text-primary);
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.14);
-}
-
-.session-repo-report-range.is-active {
-  color: var(--text-primary);
-  background: rgba(96, 165, 250, 0.16);
 }
 
 .session-repo-report-refresh:disabled {
@@ -4630,14 +4721,19 @@ button:disabled {
     width: 100%;
   }
 
-  .session-repo-report-range,
-  .session-repo-report-refresh,
-  .session-repo-report-date {
+  .session-repo-report-range-menu,
+  .session-repo-report-range-trigger {
     flex: 1 1 0;
   }
 
-  .session-repo-report-date input {
-    width: min(100%, 8rem);
+  .session-repo-report-refresh {
+    flex: 0 0 2rem;
+  }
+
+  .session-repo-report-range-popover {
+    left: 0;
+    right: auto;
+    width: min(100%, calc(100vw - 2rem));
   }
 
   .session-repo-report-metrics,
