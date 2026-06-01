@@ -206,6 +206,10 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// reducer-drop without browser devtools. Per
 	// memory/feedback_no_devtools_build_surfaces_instead.md.
 	mux.HandleFunc("GET /api/debug/session-event-streams", s.handleDebugSessionEventStreams)
+	// Admin-only operator inbox backed by Prometheus/Alertmanager:
+	// firing Tank alerts, recent orchestrator 5xx routes, and links
+	// into the scoped /api/debug/* surfaces for detail.
+	mux.HandleFunc("GET /api/debug/observability-summary", s.handleDebugObservabilitySummary)
 	// Admin-only audit surface for the durable session_events ledger.
 	// The projected transcript/message-link paths are the normal
 	// owner-readable pickup flow, including visible=false sidebar
