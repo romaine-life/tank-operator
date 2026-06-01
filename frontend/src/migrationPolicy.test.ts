@@ -52,6 +52,7 @@ const appConfigMapSource = readSource("../../k8s/templates/app-configmap.yaml");
 const appDeploymentSource = readSource("../../k8s/templates/deployment.yaml");
 const tankServerGoSource = readSource("../../backend-go/cmd/tank-operator/server.go");
 const initialModeDiagnoseSource = readSource("../../k8s/app-config/initial-mode-diagnose.md");
+const initialModeBugReportSource = readSource("../../k8s/app-config/initial-mode-bug-report.md");
 const initialModeQualityGapsSource = readSource("../../k8s/app-config/initial-mode-quality-gaps.md");
 const initialModeGoLongSource = readSource("../../k8s/app-config/initial-mode-go-long.md");
 const initialModeTestSource = readSource("../../k8s/app-config/initial-mode-test.md");
@@ -761,7 +762,10 @@ test("web search transcript tools use the web glyph", () => {
 });
 
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
-  assert.match(appSource, /type InitialMessageMode = "direct" \| "diagnose" \| "quality_gaps" \| "go_long" \| "test"/);
+  assert.match(
+    appSource,
+    /type InitialMessageMode = "direct" \| "diagnose" \| "bug_report" \| "quality_gaps" \| "go_long" \| "test"/,
+  );
   assert.equal(appSource.includes("composeInitialMessageModePrompt"), true);
   assert.match(appSource, /initialMessageModeSkillName\(mode: InitialMessageMode\): SkillStateName \| undefined/);
   assert.match(appSource, /initialMode !== "direct"[\s\S]*chatModeForHomePrompt\(defaultSessionMode\)/);
@@ -772,7 +776,7 @@ test("initial-message directives are sourced from the app-config ConfigMap, not 
   // so it is editable against main without a frontend rebuild: markdown file ->
   // app-config ConfigMap (.Files.Get) -> /api/config (readOptionalFile) -> SPA
   // fetch with an offline const fallback. This mirrors fork_session_prompt_template.
-  // The migration is complete when the four directive files exist, are wired
+  // The migration is complete when the directive files exist, are wired
   // through the ConfigMap + deployment env + server.go, and the SPA resolves
   // them async from config instead of returning inline literals.
 
@@ -784,6 +788,7 @@ test("initial-message directives are sourced from the app-config ConfigMap, not 
   assert.match(appSource, /await fetchAppPublicConfig\(\)/);
   for (const key of [
     "initial_mode_diagnose_directive",
+    "initial_mode_bug_report_directive",
     "initial_mode_quality_gaps_directive",
     "initial_mode_go_long_directive",
     "initial_mode_test_directive",
@@ -804,6 +809,11 @@ test("initial-message directives are sourced from the app-config ConfigMap, not 
   assert.equal(initialModeDiagnoseSource.includes("this first turn only"), true);
 
   // Other modes relocated to markdown with their invariants intact.
+  assert.equal(initialModeBugReportSource.includes("Initial message type: bug report"), true);
+  assert.equal(initialModeBugReportSource.includes("docs/diagnostic-discipline*.md"), true);
+  assert.equal(initialModeBugReportSource.includes("Identify the architectural miss"), true);
+  assert.equal(initialModeBugReportSource.includes("Propose the code-change shape"), true);
+  assert.equal(initialModeBugReportSource.includes("Stop and wait for permission"), true);
   assert.equal(initialModeQualityGapsSource.includes("/workspace/.tank/docs/quality-timeframes.md"), true);
   assert.equal(initialModeQualityGapsSource.includes("/workspace/.tank/docs/migration-policy.md"), true);
   assert.equal(initialModeGoLongSource.includes("Initial message type: go long."), true);
@@ -811,9 +821,10 @@ test("initial-message directives are sourced from the app-config ConfigMap, not 
   assert.equal(initialModeGoLongSource.includes("Settled decisions stay settled"), true);
   assert.equal(initialModeTestSource.includes("run the test skill"), true);
 
-  // ConfigMap renders all four files via .Files.Get.
+  // ConfigMap renders every initial-mode file via .Files.Get.
   for (const file of [
     "initial-mode-diagnose.md",
+    "initial-mode-bug-report.md",
     "initial-mode-quality-gaps.md",
     "initial-mode-go-long.md",
     "initial-mode-test.md",
@@ -828,6 +839,7 @@ test("initial-message directives are sourced from the app-config ConfigMap, not 
   // Deployment points each directive env var at the mounted ConfigMap file.
   for (const [envVar, file] of [
     ["TANK_INITIAL_MODE_DIAGNOSE_FILE", "initial-mode-diagnose.md"],
+    ["TANK_INITIAL_MODE_BUG_REPORT_FILE", "initial-mode-bug-report.md"],
     ["TANK_INITIAL_MODE_QUALITY_GAPS_FILE", "initial-mode-quality-gaps.md"],
     ["TANK_INITIAL_MODE_GO_LONG_FILE", "initial-mode-go-long.md"],
     ["TANK_INITIAL_MODE_TEST_FILE", "initial-mode-test.md"],

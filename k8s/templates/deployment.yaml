@@ -90,6 +90,8 @@ spec:
               value: /etc/tank-operator/app-config/fork-session.md
             - name: TANK_INITIAL_MODE_DIAGNOSE_FILE
               value: /etc/tank-operator/app-config/initial-mode-diagnose.md
+            - name: TANK_INITIAL_MODE_BUG_REPORT_FILE
+              value: /etc/tank-operator/app-config/initial-mode-bug-report.md
             - name: TANK_INITIAL_MODE_QUALITY_GAPS_FILE
               value: /etc/tank-operator/app-config/initial-mode-quality-gaps.md
             - name: TANK_INITIAL_MODE_GO_LONG_FILE

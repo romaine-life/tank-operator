@@ -70,6 +70,7 @@ func TestConfig(t *testing.T) {
 	// ConfigMap file is mounted, so /api/config is never empty pre-mount.
 	for _, key := range []string{
 		"initial_mode_diagnose_directive",
+		"initial_mode_bug_report_directive",
 		"initial_mode_quality_gaps_directive",
 		"initial_mode_go_long_directive",
 		"initial_mode_test_directive",
@@ -85,6 +86,7 @@ func TestConfigReadsInitialModeDirectiveFiles(t *testing.T) {
 	// live edit on main flows through without a frontend rebuild.
 	cases := []struct{ env, key string }{
 		{"TANK_INITIAL_MODE_DIAGNOSE_FILE", "initial_mode_diagnose_directive"},
+		{"TANK_INITIAL_MODE_BUG_REPORT_FILE", "initial_mode_bug_report_directive"},
 		{"TANK_INITIAL_MODE_QUALITY_GAPS_FILE", "initial_mode_quality_gaps_directive"},
 		{"TANK_INITIAL_MODE_GO_LONG_FILE", "initial_mode_go_long_directive"},
 		{"TANK_INITIAL_MODE_TEST_FILE", "initial_mode_test_directive"},
