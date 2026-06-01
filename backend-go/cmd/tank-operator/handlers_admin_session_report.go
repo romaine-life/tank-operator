@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"net/http"
 	"net/url"
@@ -25,7 +26,7 @@ const (
 	sessionReportUnassigned   = "Unassigned"
 	sessionReportDateLayout   = "2006-01-02"
 	sessionReportShareSession = "__session_report__"
-	sessionReportSharePrefix  = "session-report:v1:"
+	sessionReportSharePrefix  = "session-report:v2:"
 )
 
 type sessionReportRow struct {
@@ -77,11 +78,8 @@ type sessionReportWindow struct {
 }
 
 type sessionReportSharePayload struct {
-	Scope    string `json:"scope"`
-	Days     int    `json:"days,omitempty"`
-	StartsAt string `json:"starts_at,omitempty"`
-	EndsAt   string `json:"ends_at,omitempty"`
-	Limit    int    `json:"limit"`
+	Version int             `json:"version"`
+	Report  json.RawMessage `json:"report"`
 }
 
 func (s *appServer) handleAdminSessionReport(w http.ResponseWriter, r *http.Request) {
@@ -149,13 +147,23 @@ func (s *appServer) handleCreateSessionReportShare(w http.ResponseWriter, r *htt
 
 	var token string
 	var err error
-	payload, err := encodeSessionReportSharePayload(scope, window, limit)
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
+	createdAt := time.Now().UTC()
 	for attempt := 0; attempt < 3; attempt++ {
 		token = auth.RandomHex(messageLinkShareTokenBytes)
+		snapshot, snapshotErr := s.buildSessionReportBody(r.Context(), scope, window, limit, map[string]any{
+			"token":      token,
+			"created_at": createdAt.Format(time.RFC3339Nano),
+			"snapshot":   true,
+		}, createdAt)
+		if snapshotErr != nil {
+			writeError(w, http.StatusInternalServerError, snapshotErr.Error())
+			return
+		}
+		payload, payloadErr := encodeSessionReportShareSnapshot(snapshot)
+		if payloadErr != nil {
+			writeError(w, http.StatusInternalServerError, payloadErr.Error())
+			return
+		}
 		err = s.messageLinkShares.Create(r.Context(), pgstore.MessageLinkShare{
 			Token:        token,
 			CreatedBy:    user.OwnerEmail(),
@@ -179,7 +187,7 @@ func (s *appServer) handleCreateSessionReportShare(w http.ResponseWriter, r *htt
 	browserURL := sessionReportShareBrowserURL(r, token)
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"kind":        "tank.session_report_share",
-		"version":     1,
+		"version":     2,
 		"token":       token,
 		"browser_url": browserURL,
 		"public_url": absoluteURL(requestOrigin(r), &url.URL{
@@ -197,10 +205,6 @@ func (s *appServer) handleGetPublicSessionReportShare(w http.ResponseWriter, r *
 		writeError(w, http.StatusServiceUnavailable, "public share store not configured")
 		return
 	}
-	if s.pgPool == nil {
-		writeError(w, http.StatusServiceUnavailable, "postgres is not configured")
-		return
-	}
 	share, err := s.messageLinkShares.Get(r.Context(), r.PathValue("share_token"))
 	if err != nil {
 		if errors.Is(err, pgstore.ErrMessageLinkShareInvalid) {
@@ -210,30 +214,36 @@ func (s *appServer) handleGetPublicSessionReportShare(w http.ResponseWriter, r *
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	scope, window, limit, err := decodeSessionReportShare(share, time.Now().UTC())
+	snapshot, err := decodeSessionReportShareSnapshot(share)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "session report share not found")
 		return
 	}
-	s.writeSessionReport(w, r, scope, window, limit, map[string]any{
-		"token":      share.Token,
-		"created_at": share.CreatedAt.UTC().Format(time.RFC3339Nano),
-	})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(snapshot)
 }
 
 func (s *appServer) writeSessionReport(w http.ResponseWriter, r *http.Request, scope string, window sessionReportWindow, limit int, share map[string]any) {
-	sessions, err := fetchSessionReportRows(r.Context(), s, scope, window, limit)
+	body, err := s.buildSessionReportBody(r.Context(), scope, window, limit, share, time.Now().UTC())
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "session report: "+err.Error())
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if err := attachSessionReportUsage(r.Context(), s, scope, sessions); err != nil {
-		writeError(w, http.StatusInternalServerError, "session report usage: "+err.Error())
-		return
+	writeJSON(w, http.StatusOK, body)
+}
+
+func (s *appServer) buildSessionReportBody(ctx context.Context, scope string, window sessionReportWindow, limit int, share map[string]any, fetchedAt time.Time) (map[string]any, error) {
+	sessions, err := fetchSessionReportRows(ctx, s, scope, window, limit)
+	if err != nil {
+		return nil, fmt.Errorf("session report: %w", err)
+	}
+	if err := attachSessionReportUsage(ctx, s, scope, sessions); err != nil {
+		return nil, fmt.Errorf("session report usage: %w", err)
 	}
 
 	repos, totals := summarizeSessionReport(sessions)
-	writeJSON(w, http.StatusOK, map[string]any{
+	return map[string]any{
 		"description": "Cheap draft report over recent sessions. Repo attribution uses create-time sessions.repos only.",
 		"scope":       scope,
 		"days":        window.Days,
@@ -244,8 +254,8 @@ func (s *appServer) writeSessionReport(w http.ResponseWriter, r *http.Request, s
 		"repos":       repos,
 		"sessions":    sessions,
 		"share":       share,
-		"fetched_at":  time.Now().UTC().Format(time.RFC3339Nano),
-	})
+		"fetched_at":  fetchedAt.UTC().Format(time.RFC3339Nano),
+	}, nil
 }
 
 func boundedPositiveIntQuery(w http.ResponseWriter, r *http.Request, name string, def, max int) (int, bool) {
@@ -358,64 +368,38 @@ func sessionReportShareBrowserURL(r *http.Request, token string) string {
 	})
 }
 
-func encodeSessionReportSharePayload(scope string, window sessionReportWindow, limit int) (string, error) {
-	payload := sessionReportSharePayload{
-		Scope: normalizeSessionScope(scope),
-		Days:  window.Days,
-		Limit: limit,
+func encodeSessionReportShareSnapshot(report map[string]any) (string, error) {
+	reportBody, err := json.Marshal(report)
+	if err != nil {
+		return "", err
 	}
-	if window.Days <= 0 {
-		payload.StartsAt = window.StartsAt.UTC().Format(time.RFC3339Nano)
-		payload.EndsAt = window.EndsAt.UTC().Format(time.RFC3339Nano)
-	}
-	body, err := json.Marshal(payload)
+	body, err := json.Marshal(sessionReportSharePayload{
+		Version: 2,
+		Report:  reportBody,
+	})
 	if err != nil {
 		return "", err
 	}
 	return sessionReportSharePrefix + base64.RawURLEncoding.EncodeToString(body), nil
 }
 
-func decodeSessionReportShare(share pgstore.MessageLinkShare, now time.Time) (string, sessionReportWindow, int, error) {
+func decodeSessionReportShareSnapshot(share pgstore.MessageLinkShare) (json.RawMessage, error) {
 	if share.SessionID != sessionReportShareSession || !strings.HasPrefix(share.TimelineID, sessionReportSharePrefix) {
-		return "", sessionReportWindow{}, 0, errors.New("not a session report share")
+		return nil, errors.New("not a session report share")
 	}
 	encoded := strings.TrimPrefix(share.TimelineID, sessionReportSharePrefix)
 	body, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
-		return "", sessionReportWindow{}, 0, err
+		return nil, err
 	}
 	var payload sessionReportSharePayload
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return "", sessionReportWindow{}, 0, err
+		return nil, err
 	}
-	scope := normalizeSessionScope(payload.Scope)
-	limit := payload.Limit
-	if limit <= 0 || limit > sessionReportMaxLimit {
-		return "", sessionReportWindow{}, 0, errors.New("invalid session report share limit")
+	if payload.Version != 2 || len(payload.Report) == 0 || !json.Valid(payload.Report) {
+		return nil, errors.New("invalid session report share snapshot")
 	}
-	if payload.Days > 0 {
-		if payload.Days > sessionReportMaxDays {
-			return "", sessionReportWindow{}, 0, errors.New("invalid session report share days")
-		}
-		now = now.UTC()
-		return scope, sessionReportWindow{
-			Days:     payload.Days,
-			StartsAt: now.AddDate(0, 0, -payload.Days),
-			EndsAt:   now,
-		}, limit, nil
-	}
-	startsAt, err := time.Parse(time.RFC3339Nano, payload.StartsAt)
-	if err != nil {
-		return "", sessionReportWindow{}, 0, err
-	}
-	endsAt, err := time.Parse(time.RFC3339Nano, payload.EndsAt)
-	if err != nil {
-		return "", sessionReportWindow{}, 0, err
-	}
-	if !endsAt.After(startsAt) || endsAt.Sub(startsAt) > sessionReportMaxDays*24*time.Hour {
-		return "", sessionReportWindow{}, 0, errors.New("invalid session report share window")
-	}
-	return scope, sessionReportWindow{StartsAt: startsAt.UTC(), EndsAt: endsAt.UTC()}, limit, nil
+	return payload.Report, nil
 }
 
 func fetchSessionReportRows(ctx context.Context, s *appServer, scope string, window sessionReportWindow, limit int) ([]sessionReportRow, error) {

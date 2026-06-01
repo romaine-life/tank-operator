@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -44,44 +45,44 @@ func TestSessionReportWindowFromRequestSupportsCustomDateRange(t *testing.T) {
 	}
 }
 
-func TestSessionReportSharePayloadRoundTripsWindow(t *testing.T) {
-	window := sessionReportWindow{
-		StartsAt: time.Date(2026, 5, 30, 0, 0, 0, 0, time.UTC),
-		EndsAt:   time.Date(2026, 6, 2, 0, 0, 0, 0, time.UTC),
+func TestSessionReportShareSnapshotRoundTripsStaticJSON(t *testing.T) {
+	report := map[string]any{
+		"scope": "tank-operator-slot-1",
+		"range": map[string]any{
+			"mode":      "last_days",
+			"days":      1,
+			"starts_at": "2026-05-31T12:00:00Z",
+			"ends_at":   "2026-06-01T12:00:00Z",
+			"label":     "Last 1 day",
+		},
+		"totals": map[string]any{
+			"session_count": 2,
+			"repo_count":    1,
+		},
+		"fetched_at": "2026-06-01T12:00:00Z",
 	}
-	payload, err := encodeSessionReportSharePayload("tank-operator-slot-1", window, 250)
+	payload, err := encodeSessionReportShareSnapshot(report)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	scope, got, limit, err := decodeSessionReportShare(pgstore.MessageLinkShare{
+	got, err := decodeSessionReportShareSnapshot(pgstore.MessageLinkShare{
 		SessionID:  sessionReportShareSession,
 		TimelineID: payload,
-	}, time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC))
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scope != "tank-operator-slot-1" || limit != 250 || got.Days != 0 || !got.StartsAt.Equal(window.StartsAt) || !got.EndsAt.Equal(window.EndsAt) {
-		t.Fatalf("decoded = scope:%q window:%+v limit:%d", scope, got, limit)
-	}
-}
-
-func TestSessionReportSharePayloadRoundTripsRelativeDays(t *testing.T) {
-	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
-	payload, err := encodeSessionReportSharePayload("default", sessionReportWindow{Days: 1}, 100)
-	if err != nil {
+	var decoded map[string]any
+	if err := json.Unmarshal(got, &decoded); err != nil {
 		t.Fatal(err)
 	}
-
-	scope, got, limit, err := decodeSessionReportShare(pgstore.MessageLinkShare{
-		SessionID:  sessionReportShareSession,
-		TimelineID: payload,
-	}, now)
-	if err != nil {
-		t.Fatal(err)
+	if decoded["scope"] != "tank-operator-slot-1" || decoded["fetched_at"] != "2026-06-01T12:00:00Z" {
+		t.Fatalf("decoded snapshot = %#v", decoded)
 	}
-	if scope != "default" || limit != 100 || got.Days != 1 || !got.StartsAt.Equal(now.AddDate(0, 0, -1)) || !got.EndsAt.Equal(now) {
-		t.Fatalf("decoded = scope:%q window:%+v limit:%d", scope, got, limit)
+	rangeBody, ok := decoded["range"].(map[string]any)
+	if !ok || rangeBody["label"] != "Last 1 day" || rangeBody["starts_at"] != "2026-05-31T12:00:00Z" {
+		t.Fatalf("decoded range = %#v", decoded["range"])
 	}
 }
 
