@@ -26,4 +26,8 @@ export class SessionEventSink {
   async findTurnTerminal(turnID: string): Promise<TankConversationEvent | null> {
     return (await this.bus.findTurnTerminal(turnID)) as TankConversationEvent | null;
   }
+
+  async close(): Promise<void> {
+    await this.bus.close();
+  }
 }

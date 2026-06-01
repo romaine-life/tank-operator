@@ -22,10 +22,18 @@ async function main(): Promise<void> {
   console.log(JSON.stringify({ msg: "metrics listening", port: metricsPort }));
 
   const ctrl = new AbortController();
+  let shutdownTimer: NodeJS.Timeout | null = null;
   const shutdown = (sig: NodeJS.Signals) => {
     console.log(JSON.stringify({ msg: "shutdown", signal: sig }));
     ctrl.abort();
     metricsServer.close();
+    if (!shutdownTimer) {
+      shutdownTimer = setTimeout(() => {
+        console.error(JSON.stringify({ msg: "shutdown timeout elapsed, exiting", signal: sig }));
+        process.exit(0);
+      }, 5_000);
+      shutdownTimer.unref();
+    }
   };
   process.on("SIGTERM", shutdown);
   process.on("SIGINT", shutdown);

@@ -220,7 +220,7 @@ export class SharedSessionBus {
         return deliveryCount(record) > SESSION_COMMAND_MAX_DELIVER;
     }
     async close() {
-        await this.nc?.drain();
+        await this.nc?.close();
         this.nc = null;
         this.js = null;
         this.jsm = null;
