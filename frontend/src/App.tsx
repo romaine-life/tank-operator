@@ -3185,6 +3185,20 @@ function skillEntryInvocationName(skill: SkillEntry): string {
   return skill.name.replace(/^[$/]/, "").trim();
 }
 
+function invocationNameFromToken(tokenText: string): string {
+  return tokenText.replace(/^[$/]/, "").trim();
+}
+
+function isSkillInvocationToken(tokenText: string): boolean {
+  return /^[$/][A-Za-z0-9_-]{1,64}$/.test(tokenText);
+}
+
+function skillInvocationIcon(name: string): ReactNode {
+  if (name === "test") return <FlaskConicalIcon aria-hidden="true" />;
+  if (name === "rollout") return <TankIcon />;
+  return <ListChecksIcon aria-hidden="true" />;
+}
+
 interface QueuedMessage {
   id: string;
   text: string;
@@ -9738,20 +9752,27 @@ function ChatPane({
   const composerSkillVisuals = useMemo<ChatComposerSkillVisual[]>(() => {
     const visuals: ChatComposerSkillVisual[] = [];
     const seen = new Set<string>();
+    const addToken = (
+      tokenText: string,
+      name = invocationNameFromToken(tokenText),
+    ) => {
+      if (!name || !isSkillInvocationToken(tokenText) || seen.has(tokenText)) return;
+      seen.add(tokenText);
+      visuals.push({
+        name,
+        tokenText,
+        icon: skillInvocationIcon(name),
+      });
+    };
+    for (const command of slashCommands) addToken(command.name);
     for (const skill of composerSkills) {
       const name = skillEntryInvocationName(skill);
-      if (!name || seen.has(name)) continue;
-      seen.add(name);
-      const icon =
-        name === "test"
-          ? <FlaskConicalIcon aria-hidden="true" />
-          : name === "rollout"
-            ? <TankIcon />
-            : <ListChecksIcon aria-hidden="true" />;
-      visuals.push({ name, icon });
+      if (!name) continue;
+      addToken(`/${name}`, name);
+      if (!isClaude) addToken(`$${name}`, name);
     }
     return visuals;
-  }, [composerSkills]);
+  }, [composerSkills, isClaude, slashCommands]);
   const mentionFiltered =
     mentionOpen && mentionPaths
       ? filterMentionPaths(mentionPaths, mentionQuery)
@@ -13422,7 +13443,6 @@ function ChatPane({
           onStop={cancelRun}
           isStopping={runStatus === "stopping"}
           onTextChange={setComposerText}
-          skillTriggerPrefix={isClaude ? "/" : "$"}
           skillVisuals={composerSkillVisuals}
           toolButtons={
             <>

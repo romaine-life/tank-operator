@@ -142,7 +142,9 @@ export function WorkspaceShell({
           onDrop={onComposerWrapDrop}
           onPaste={onComposerWrapPaste}
         >
-          {composerAbove}
+          <div className="run-composer-above-slot">
+            {composerAbove}
+          </div>
           {composer}
         </footer>
       )}

@@ -8,6 +8,7 @@ import {
   FlaskConicalIcon,
   ImageIcon,
   LinkIcon,
+  ListChecksIcon,
   MessageSquareIcon,
   SquareTerminalIcon,
   TimerIcon,
@@ -49,7 +50,16 @@ const COMPOSER_STATES: { id: ComposerSpecimenState; label: string }[] = [
 ];
 
 const COMPOSER_SKILL_VISUALS: ChatComposerSkillVisual[] = [
-  { name: "test", icon: <FlaskConicalIcon aria-hidden="true" /> },
+  {
+    name: "clear",
+    tokenText: "/clear",
+    icon: <ListChecksIcon aria-hidden="true" />,
+  },
+  {
+    name: "test",
+    tokenText: "$test",
+    icon: <FlaskConicalIcon aria-hidden="true" />,
+  },
 ];
 
 const ACTIVE_SURFACES: { id: ActiveSurface; label: string }[] = [
@@ -375,7 +385,7 @@ function ComposerSpecimen({
       initialText={
         readonly
           ? "This session is read only, but the composer remains in place for visual parity."
-          : "$test Tune the highlighted transcript bubble and keep the active turn easy to scan."
+          : "/clear Tune the highlighted transcript bubble and keep the active turn easy to scan."
       }
       onSubmit={() => {}}
       permissionMode={permissionMode}
@@ -387,7 +397,6 @@ function ComposerSpecimen({
       controlsDisabled={readonly}
       submitStatus={state === "streaming" ? "streaming" : undefined}
       onStop={() => {}}
-      skillTriggerPrefix="$"
       skillVisuals={COMPOSER_SKILL_VISUALS}
       toolButtons={<ComposerToolButtons />}
     />

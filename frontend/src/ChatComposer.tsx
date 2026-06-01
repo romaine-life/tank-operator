@@ -82,6 +82,7 @@ export interface ChatComposerSubmitArgs {
 
 export interface ChatComposerSkillVisual {
   name: string;
+  tokenText: string;
   icon?: ReactNode;
 }
 
@@ -121,9 +122,7 @@ export interface ChatComposerProps {
   initialText?: string;
   /** Fires whenever the textarea's content changes — including programmatic clears. */
   onTextChange?: (text: string) => void;
-  /** Provider-specific explicit skill trigger used for composer-only visual recognition. */
-  skillTriggerPrefix?: "$" | "/";
-  /** Installed skills that should receive distinct typed-token styling. */
+  /** Skill and command invocation tokens that should receive distinct typed-token styling. */
   skillVisuals?: ChatComposerSkillVisual[];
 }
 
@@ -151,7 +150,6 @@ export function ChatComposer({
   toolButtons,
   initialText,
   onTextChange,
-  skillTriggerPrefix,
   skillVisuals = [],
 }: ChatComposerProps) {
   // Internal mirror of the textarea's value so the hint can fade and the
@@ -163,11 +161,11 @@ export function ChatComposer({
   const skillMirrorRef = useRef<HTMLDivElement | null>(null);
   const seededInitialTextRef = useRef(false);
   const recognizedSkillToken =
-    skillTriggerPrefix && skillVisuals.length > 0
-      ? recognizeLeadingSkillToken(text, skillVisuals, skillTriggerPrefix)
+    skillVisuals.length > 0
+      ? recognizeLeadingSkillToken(text, skillVisuals)
       : null;
   const recognizedSkillVisual = recognizedSkillToken
-    ? skillVisuals.find((skill) => skill.name === recognizedSkillToken.skillName)
+    ? skillVisuals.find((skill) => skill.tokenText === recognizedSkillToken.tokenText)
     : undefined;
 
   useEffect(() => {
@@ -289,27 +287,29 @@ export function ChatComposer({
           className,
         ].filter(Boolean).join(" ")}
       >
-        {recognizedSkillToken && (
-          <div
-            ref={skillMirrorRef}
-            className="run-composer-skill-mirror"
-            aria-hidden="true"
-          >
-            {recognizedSkillToken.leadingText}
-            <span
-              className="run-composer-skill-token"
-              data-skill={recognizedSkillToken.skillName}
-            >
-              {recognizedSkillVisual?.icon && (
-                <span className="run-composer-skill-token-icon">
-                  {recognizedSkillVisual.icon}
-                </span>
-              )}
-              {recognizedSkillToken.tokenText}
-            </span>
-            {recognizedSkillToken.trailingText}
-          </div>
-        )}
+        <div
+          ref={skillMirrorRef}
+          className="run-composer-skill-mirror"
+          aria-hidden="true"
+        >
+          {recognizedSkillToken && (
+            <>
+              {recognizedSkillToken.leadingText}
+              <span
+                className="run-composer-skill-token"
+                data-skill={recognizedSkillToken.skillName}
+              >
+                {recognizedSkillVisual?.icon && (
+                  <span className="run-composer-skill-token-icon">
+                    {recognizedSkillVisual.icon}
+                  </span>
+                )}
+                {recognizedSkillToken.tokenText}
+              </span>
+              {recognizedSkillToken.trailingText}
+            </>
+          )}
+        </div>
         <PromptInputTextarea
           className="run-composer-textarea"
           placeholder={placeholder}
