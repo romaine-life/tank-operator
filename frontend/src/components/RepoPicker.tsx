@@ -8,7 +8,7 @@
 //
 // UX shape:
 //   - The selected repos render as removable chips above the trigger.
-//   - A short row of recent repos stays visible on the splash page so
+//   - Short Pinned and Recent groups stay visible on the splash page so
 //     common choices are one click without opening the dialog.
 //   - "+ Add repo" opens a small dropdown panel below the chip row.
 //   - The panel has a text input ("owner/name") with an explicit Add
@@ -121,9 +121,16 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
   selectedLower.current = new Set(selected.map((s) => s.toLowerCase()));
 
   const shortcutPreview = useMemo(
-    () => repoShortcutSlugs(pinned, recent),
+    () =>
+      repoShortcutSlugs(pinned, recent).map((slug, index) => ({
+        slug,
+        shortcut: index + 1,
+        pinned: isRepoPinned(pinned, slug),
+      })),
     [pinned, recent],
   );
+  const pinnedPreview = shortcutPreview.filter((item) => item.pinned);
+  const recentPreview = shortcutPreview.filter((item) => !item.pinned);
 
   // Close on Escape or outside-click — matches the profile menu shape
   // used elsewhere in App.tsx (data-menu attribute on the root).
@@ -189,43 +196,26 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
       )}
       {shortcutPreview.length > 0 && (
         <div className="home-repos-preview" aria-label="Pinned and recent repositories">
-          <div className="home-repos-recent-label">
-            {pinned.length > 0 ? "Pinned / Recent" : "Recent"}
-          </div>
-          <ul className="home-repos-recent-list" role="list">
-            {shortcutPreview.map((slug, index) => {
-              const selectedRecent = selectedLower.current.has(slug.toLowerCase());
-              const pinnedRepo = isRepoPinned(pinned, slug);
-              return (
-                <li key={`preview:${slug}`} className="home-repos-recent-item">
-                  <button
-                    type="button"
-                    className={
-                      "home-repos-recent-chip home-repos-recent-shortcut" +
-                      (selectedRecent ? " is-selected" : "")
-                    }
-                    onClick={() => onSelectExclusive(slug)}
-                    disabled={busy}
-                    title={slug}
-                    aria-pressed={selectedRecent}
-                    aria-keyshortcuts={String(index + 1)}
-                    aria-label={`Select recent repository ${index + 1}: ${slug}`}
-                  >
-                    <span className="home-repos-recent-key" aria-hidden="true">
-                      {index + 1}
-                    </span>
-                    <span>{slug}</span>
-                  </button>
-                  <PinToggleButton
-                    slug={slug}
-                    pinned={pinnedRepo}
-                    busy={busy}
-                    onTogglePin={onTogglePin}
-                  />
-                </li>
-              );
-            })}
-          </ul>
+          {pinnedPreview.length > 0 && (
+            <RepoPreviewSection
+              label="Pinned"
+              items={pinnedPreview}
+              selectedLower={selectedLower.current}
+              busy={busy}
+              onSelectExclusive={onSelectExclusive}
+              onTogglePin={onTogglePin}
+            />
+          )}
+          {recentPreview.length > 0 && (
+            <RepoPreviewSection
+              label="Recent"
+              items={recentPreview}
+              selectedLower={selectedLower.current}
+              busy={busy}
+              onSelectExclusive={onSelectExclusive}
+              onTogglePin={onTogglePin}
+            />
+          )}
         </div>
       )}
       <button
@@ -276,6 +266,63 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
         </div>
       )}
     </section>
+  );
+}
+
+interface RepoPreviewItem {
+  slug: string;
+  shortcut: number;
+  pinned: boolean;
+}
+
+interface RepoPreviewSectionProps {
+  label: string;
+  items: RepoPreviewItem[];
+  selectedLower: ReadonlySet<string>;
+  busy: boolean;
+  onSelectExclusive: (slug: string) => void;
+  onTogglePin: (slug: string) => void;
+}
+
+function RepoPreviewSection(props: RepoPreviewSectionProps): JSX.Element {
+  const { label, items, selectedLower, busy, onSelectExclusive, onTogglePin } = props;
+  return (
+    <div className="home-repos-preview-group">
+      <div className="home-repos-recent-label">{label}</div>
+      <ul className="home-repos-recent-list" role="list">
+        {items.map((item) => {
+          const selectedRecent = selectedLower.has(item.slug.toLowerCase());
+          return (
+            <li key={`preview:${item.slug}`} className="home-repos-recent-item">
+              <button
+                type="button"
+                className={
+                  "home-repos-recent-chip home-repos-recent-shortcut" +
+                  (selectedRecent ? " is-selected" : "")
+                }
+                onClick={() => onSelectExclusive(item.slug)}
+                disabled={busy}
+                title={item.slug}
+                aria-pressed={selectedRecent}
+                aria-keyshortcuts={String(item.shortcut)}
+                aria-label={`Select ${label.toLowerCase()} repository ${item.shortcut}: ${item.slug}`}
+              >
+                <span className="home-repos-recent-key" aria-hidden="true">
+                  {item.shortcut}
+                </span>
+                <span>{item.slug}</span>
+              </button>
+              <PinToggleButton
+                slug={item.slug}
+                pinned={item.pinned}
+                busy={busy}
+                onTogglePin={onTogglePin}
+              />
+            </li>
+          );
+        })}
+      </ul>
+    </div>
   );
 }
 
