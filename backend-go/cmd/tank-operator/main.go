@@ -25,7 +25,6 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
 	"github.com/nelsong6/tank-operator/backend-go/internal/avataruploads"
 	"github.com/nelsong6/tank-operator/backend-go/internal/conversationreadstate"
-	"github.com/nelsong6/tank-operator/backend-go/internal/hermes"
 	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstats"
 	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
@@ -40,109 +39,14 @@ import (
 	"github.com/nelsong6/tank-operator/backend-go/internal/store"
 )
 
-// buildHermesBridge constructs the hermes bridge from env config. Returns
-// nil when HERMES_API_URL is unset OR the audience-pinned projected SA
-// token volume is not mounted (which would mean the orchestrator can't
-// mint a role=service JWT to call Hermes); handlers branch on nil and
-// return 503 so a missing-config surfaces as a visible error rather
-// than a silent NPE. See nelsong6/tank-operator#540 + nelsong6/auth#42.
-//
-// Token shape: a fresh role=service JWT minted per cache-miss by
-// exchanging the projected SA token at auth.romaine.life/api/auth/exchange/k8s.
-// The orchestrator is admitted as a pod-stable consumer in nelsong6/auth#42
-// (slug=tank-operator, stableId=orchestrator). Cache TTL = (token exp -
-// 30s) so a steady-state load issues ~one exchange call per 15min.
-//
-// The bridge probes Hermes capabilities at startup so a partial upstream
-// deployment fails visibly instead of accepting turns it cannot stream,
-// stop, or reconcile.
-func buildHermesBridge(ctx context.Context, eventStore store.SessionEventStore, sessionReg sessions.SessionRegistry, rows hermes.RowPublisher, scope string) *hermes.Bridge {
-	baseURL := strings.TrimSpace(os.Getenv("HERMES_API_URL"))
-	if baseURL == "" {
-		slog.Warn("hermes bridge disabled (missing HERMES_API_URL); hermes_gui sessions will return 503")
-		return nil
-	}
-	recorder := promHermesRecorder{}
-	tokenSource := hermes.NewAuthRomaineServiceProvider(hermes.AuthRomaineOptions{
-		ExchangeURL: os.Getenv("HERMES_AUTH_ROMAINE_EXCHANGE_URL"),
-		SATokenPath: os.Getenv("HERMES_AUTH_ROMAINE_SA_TOKEN_PATH"),
-	})
-	if tokenSource == nil {
-		slog.Warn("hermes bridge disabled (auth-romaine projected SA token volume not mounted); hermes_gui sessions will return 503")
-		return nil
-	}
-	client := hermes.NewClient(hermes.Options{BaseURL: baseURL, Tokens: tokenSource})
-	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-	caps, err := client.Capabilities(probeCtx)
-	cancel()
-	if err != nil {
-		recorder.CapabilityCheck("error")
-		slog.Error("hermes bridge disabled (capabilities probe failed); hermes_gui sessions will return 503",
-			"base_url", baseURL, "error", err)
-		return nil
-	}
-	if err := hermes.ValidateCapabilities(caps); err != nil {
-		recorder.CapabilityCheck("missing_required")
-		slog.Error("hermes bridge disabled (required capabilities missing); hermes_gui sessions will return 503",
-			"base_url", baseURL, "error", err)
-		return nil
-	}
-	recorder.CapabilityCheck("ok")
-	var activeRuns hermes.ActiveRunStore
-	if store, ok := sessionReg.(hermes.ActiveRunStore); ok {
-		activeRuns = store
-	} else {
-		slog.Warn("hermes bridge active-run recovery disabled (session registry lacks ActiveRunStore)")
-	}
-	return hermes.NewBridge(hermes.BridgeOptions{
-		Client:     client,
-		Store:      eventStore,
-		ActiveRuns: activeRuns,
-		Rows:       rows,
-		Scope:      scope,
-		Recorder:   recorder,
-	})
-}
-
-// promHermesRecorder bridges the hermes.Recorder interface to the
-// tank_hermes_* prometheus counters defined in observability.go.
-type promHermesRecorder struct{}
-
-func (promHermesRecorder) RunCreated() {
-	hermesRunTotal.WithLabelValues("created").Inc()
-}
-func (promHermesRecorder) RunCreateFailed() {
-	hermesRunTotal.WithLabelValues("failed_to_create").Inc()
-}
-func (promHermesRecorder) RunTerminal(terminal string) {
-	hermesRunTerminalTotal.WithLabelValues(hermesTerminalLabel(terminal)).Inc()
-}
-func (promHermesRecorder) RunDuration(terminal string, seconds float64) {
-	hermesRunDurationSeconds.WithLabelValues(hermesTerminalLabel(terminal)).Observe(seconds)
-}
-func (promHermesRecorder) RunEvent(eventType string) {
-	hermesRunEventTotal.WithLabelValues(hermesRunEventTypeLabel(eventType)).Inc()
-}
-func (promHermesRecorder) CapabilityCheck(result string) {
-	hermesCapabilityCheckTotal.WithLabelValues(hermesCapabilityResultLabel(result)).Inc()
-}
-func (promHermesRecorder) TranslatorError(reason string) {
-	hermesTranslatorErrorTotal.WithLabelValues(hermesTranslatorErrorLabel(reason)).Inc()
-}
-
 // buildMCPGitHubClient wires up the mcpgithub client when the
 // orchestrator pod has the auth.romaine.life-audience projected SA
-// token mounted. The same token Hermes already uses today â€” stage 2
-// reuses the path rather than minting a parallel projected volume.
-// Returns nil (and logs) when the token isn't mounted; the
-// /api/github/repos handler then 503s loudly rather than failing
-// open. Endpoint overrides (MCP_GITHUB_URL,
-// MCP_GITHUB_EXCHANGE_URL) let tests + local dev point at fakes.
+// token mounted. Returns nil (and logs) when the token isn't mounted;
+// the /api/github/repos handler then 503s loudly rather than failing
+// open. Endpoint overrides (MCP_GITHUB_URL, MCP_GITHUB_EXCHANGE_URL)
+// let tests + local dev point at fakes.
 func buildMCPGitHubClient() *mcpgithub.Client {
 	saPath := strings.TrimSpace(os.Getenv("MCP_GITHUB_SA_TOKEN_PATH"))
-	if saPath == "" {
-		saPath = strings.TrimSpace(os.Getenv("HERMES_AUTH_ROMAINE_SA_TOKEN_PATH"))
-	}
 	if saPath == "" {
 		saPath = mcpgithub.DefaultSATokenPath
 	}
@@ -152,7 +56,7 @@ func buildMCPGitHubClient() *mcpgithub.Client {
 		return nil
 	}
 	return mcpgithub.NewClient(mcpgithub.Options{
-		ExchangeURL:  envDefault("MCP_GITHUB_EXCHANGE_URL", os.Getenv("HERMES_AUTH_ROMAINE_EXCHANGE_URL")),
+		ExchangeURL:  envDefault("MCP_GITHUB_EXCHANGE_URL", mcpgithub.DefaultExchangeURL),
 		MCPGitHubURL: envDefault("MCP_GITHUB_URL", mcpgithub.DefaultMCPGitHubURL),
 		SATokenPath:  saPath,
 	})
@@ -396,7 +300,7 @@ func main() {
 	messageLinkShares := buildMessageLinkShareStore(pgPool)
 
 	// 11. Start background workers under a process signal context so rolling
-	// updates can drain HTTP and Hermes turn streams cleanly.
+	// updates can drain HTTP cleanly.
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 	mgr.StartReaper(ctx)
@@ -538,20 +442,6 @@ func main() {
 	// 12. Register all routes. Internal session handlers authenticate via
 	// the auth.romaine.life service-principal JWT path (#486 Stage 4); the
 	// pre-migration (ns, sa) allowlist env was retired with that change.
-	hermesEventStore := store.SessionEventStore(sessionEventsStore)
-	if transcriptRowsStore != nil {
-		hermesEventStore = transcriptMaterializingEventStore{
-			SessionEventStore: sessionEventsStore,
-			materializer:      transcriptMaterializer,
-		}
-	}
-	hermesBridge := buildHermesBridge(ctx, hermesEventStore, sessionReg, rowPublisher, sessionScope)
-	if hermesBridge != nil {
-		if err := hermesBridge.RecoverActiveRuns(ctx); err != nil {
-			slog.Warn("hermes bridge active-run recovery completed with errors", "error", err)
-		}
-	}
-
 	mux := http.NewServeMux()
 	srv := &appServer{
 		k8s:            k8sClient,
@@ -582,7 +472,6 @@ func main() {
 		sessionServiceAccount:    sessionServiceAccount,
 		designSelectionNamespace: designSelectionNamespace,
 		spawnQuota:               NewSpawnQuotaTracker(),
-		hermesBridge:             hermesBridge,
 		mcpGitHub:                buildMCPGitHubClient(),
 		providerHealth:           providerHealthManager,
 	}
@@ -641,13 +530,6 @@ func main() {
 			slog.Error("server shutdown failed", "error", err)
 		}
 		cancel()
-		if srv.hermesBridge != nil {
-			drainCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			if err := srv.hermesBridge.WaitForActiveTurnsToSettle(drainCtx); err != nil {
-				slog.Warn("hermes bridge drain timed out", "error", err)
-			}
-			cancel()
-		}
 		if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server failed during shutdown", "error", err)
 			os.Exit(1)

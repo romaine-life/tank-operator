@@ -34,9 +34,9 @@ export function StyleguideModeDropdown() {
                 <ProviderIcon provider="codex" className="home-choice-icon" />
                 <span>Codex</span>
               </button>
-              <button className="home-choice" type="button" aria-pressed="false" title="Hermes">
-                <ProviderIcon provider="hermes" className="home-choice-icon" />
-                <span>Hermes</span>
+              <button className="home-choice" type="button" aria-pressed="false" title="Gemini">
+                <ProviderIcon provider="gemini" className="home-choice-icon" />
+                <span>Gemini</span>
               </button>
             </div>
             <div className="home-panel-head home-panel-subhead">
@@ -55,12 +55,12 @@ export function StyleguideModeDropdown() {
             </div>
             <div className="home-panel-head home-panel-subhead">
               <h3>Unavailable state</h3>
-              <span className="home-panel-meta">Hermes CLI</span>
+              <span className="home-panel-meta">Gemini CLI</span>
             </div>
             <div className="home-choice-grid" role="group" aria-label="unavailable interaction">
               <button className="home-choice is-selected" type="button" aria-pressed="true">
-                <ProviderIcon provider="hermes" className="home-choice-icon" />
-                <span>Hermes</span>
+                <ProviderIcon provider="gemini" className="home-choice-icon" />
+                <span>Gemini</span>
               </button>
               <button className="home-choice is-selected" type="button" aria-pressed="true">
                 <MonitorIcon className="home-choice-icon" aria-hidden="true" />

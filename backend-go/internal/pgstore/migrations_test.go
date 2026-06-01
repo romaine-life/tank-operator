@@ -258,10 +258,11 @@ func TestMigrationsPersistSessionListDebugCaptures(t *testing.T) {
 	}
 }
 
-func TestMigrationsPersistHermesActiveRunPointer(t *testing.T) {
+func TestMigrationsDropHermesActiveRunPointer(t *testing.T) {
 	migrations := joinedMigrationSQL()
 	for _, want := range []string{
 		"ADD COLUMN IF NOT EXISTS hermes_active_run jsonb",
+		"DROP COLUMN IF EXISTS hermes_active_run",
 		"session_events_turn_terminal_all",
 		"'turn.command_failed'",
 	} {
@@ -271,6 +272,9 @@ func TestMigrationsPersistHermesActiveRunPointer(t *testing.T) {
 	}
 	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS sessions") > strings.Index(migrations, "ADD COLUMN IF NOT EXISTS hermes_active_run jsonb") {
 		t.Fatal("sessions table must exist before hermes active-run column")
+	}
+	if strings.Index(migrations, "ADD COLUMN IF NOT EXISTS hermes_active_run jsonb") > strings.Index(migrations, "DROP COLUMN IF EXISTS hermes_active_run") {
+		t.Fatal("hermes active-run column must be created before the teardown migration drops it")
 	}
 	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS session_events") > strings.Index(migrations, "session_events_turn_terminal_all") {
 		t.Fatal("session_events table must exist before hermes terminal index")

@@ -261,8 +261,7 @@ type SessionMode =
   | "codex_config"
   | "gemini_gui"
   | "gemini_test"
-  | "gemini_config"
-  | "hermes_gui";
+  | "gemini_config";
 type DefaultSessionMode = Extract<
   SessionMode,
   | "claude_cli"
@@ -272,9 +271,8 @@ type DefaultSessionMode = Extract<
   | "codex_exec_gui"
   | "gemini_gui"
   | "gemini_test"
-  | "hermes_gui"
 >;
-type Provider = "anthropic" | "codex" | "gemini" | "gemini_test" | "hermes";
+type Provider = "anthropic" | "codex" | "gemini" | "gemini_test";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 type AskUserQuestionAnswer = {
@@ -662,7 +660,6 @@ const MODE_LABELS: Record<SessionMode, string> = {
   gemini_gui: "Gemini GUI",
   gemini_test: "Gemini Test",
   gemini_config: "Gemini config",
-  hermes_gui: "Hermes",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -680,7 +677,6 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   gemini_gui: "gemini-gui",
   gemini_test: "gemini-test",
   gemini_config: "gemini-cfg",
-  hermes_gui: "hermes",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -692,7 +688,6 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_app_server: "codex",
   gemini_gui: "gemini",
   gemini_test: "gemini_test",
-  hermes_gui: "hermes",
 };
 
 const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
@@ -708,7 +703,6 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   gemini_gui: "gemini",
   gemini_test: "gemini_test",
   gemini_config: "gemini",
-  hermes_gui: "hermes",
 };
 
 const PROVIDER_INTERACTION_MODES: Record<
@@ -719,7 +713,6 @@ const PROVIDER_INTERACTION_MODES: Record<
   codex: { gui: "codex_gui", cli: "codex_cli" },
   gemini: { gui: "gemini_gui", cli: null },
   gemini_test: { gui: "gemini_test", cli: null },
-  hermes: { gui: "hermes_gui", cli: null },
 };
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
@@ -740,7 +733,6 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   codex: "Codex",
   gemini: "Gemini",
   gemini_test: "Gemini Test",
-  hermes: "Hermes",
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -756,7 +748,6 @@ const MODE_HINTS: Record<SessionMode, string> = {
   gemini_gui: "GUI chat pane for Gemini transport",
   gemini_test: "Unproxied Gemini test mode",
   gemini_config: "gemini login · seeds KV for Gemini",
-  hermes_gui: "Shared Hermes memory + MCP tools",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -888,25 +879,11 @@ const DEMO_GEMINI_LINES = [
   "  \x1b[95m⏵⏵ bypass permissions on\x1b[37m (shift+tab to cycle)\x1b[39m",
 ];
 
-const DEMO_HERMES_LINES = [
-  "Hermes",
-  "",
-  "  shared memory: enabled",
-  "  transport: app-server bridge",
-  "  tools: MCP, shell",
-  "",
-  "Ask Hermes to inspect cluster state, tools, or project context.",
-  "",
-  "> Summarize the current task.",
-];
-
 const DEMO_LOGIN_MESSAGE = "You aren't logged in. Click the log in button on the bottom left.";
 
 function demoTerminalLines(session: Session, promptText?: string): string[] {
   const template = session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server"
     ? DEMO_CODEX_LINES
-    : session.mode === "hermes_gui"
-      ? DEMO_HERMES_LINES
     : session.mode === "gemini_gui" || session.mode === "gemini_test"
       ? DEMO_GEMINI_LINES
       : DEMO_CLAUDE_LINES;
@@ -914,7 +891,7 @@ function demoTerminalLines(session: Session, promptText?: string): string[] {
   if (promptText) {
     if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server") {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
-    } else if (session.mode === "hermes_gui" || session.mode === "gemini_gui" || session.mode === "gemini_test") {
+    } else if (session.mode === "gemini_gui" || session.mode === "gemini_test") {
       lines[lines.length - 1] = `> ${promptText}`;
     } else {
       const promptIndex = lines.findIndex((line) => line.startsWith("❯"));
@@ -1025,8 +1002,6 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
   const label = mode === "codex_cli" || mode === "codex_gui" || mode === "codex_exec_gui"
     ? "Codex"
-    : mode === "hermes_gui"
-      ? "Hermes"
       : "Claude Code";
   return {
     id: `${provider}-preview-${index}`,
@@ -1048,7 +1023,7 @@ const DEMO_LANDING_LINES = [
   "$ tank-operator preview",
   "Welcome. This is the real app shell with demo sessions.",
   "",
-  "Click the provider icon to switch between Claude, Codex, and Hermes.",
+  "Click the provider icon to switch between Claude, Codex, and Gemini.",
   "Click + to add a local preview session.",
   "The key and wrench buttons are present but disabled in preview mode.",
   "",
@@ -1069,8 +1044,7 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
     value === "claude_gui" ||
     value === "codex_cli" ||
     value === "codex_gui" ||
-    value === "codex_exec_gui" ||
-    value === "hermes_gui"
+    value === "codex_exec_gui"
   );
 }
 
@@ -1197,21 +1171,21 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config", "gemini_config"]);
-const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui", "gemini_gui", "gemini_test"]);
+const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "gemini_gui", "gemini_test"]);
 const SDK_CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "gemini_gui", "gemini_test"]);
-const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>([...SDK_CHAT_MODES, "hermes_gui"]);
+const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>(SDK_CHAT_MODES);
 const SDK_TIMELINE_TAIL_ROWS = 24;
 const SDK_TIMELINE_OLDER_ROWS = 8;
 const SDK_TIMELINE_DEEPLINK_ROWS_BEFORE = 12;
 const SDK_TIMELINE_DEEPLINK_ROWS_AFTER = 12;
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "hermes_gui", "gemini_gui", "gemini_test"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server", "gemini_gui", "gemini_test"]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
-const PROVIDERS: Provider[] = ["anthropic", "codex", "gemini", "gemini_test", "hermes"];
+const PROVIDERS: Provider[] = ["anthropic", "codex", "gemini", "gemini_test"];
 
 
 function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
@@ -9264,9 +9238,7 @@ function ChatPane({
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
   const isGemini = isGeminiRunMode(session.mode);
-  const ready = session.mode === "hermes_gui"
-    ? session.status === "Active"
-    : sessionContainerAvailable(session);
+  const ready = sessionContainerAvailable(session);
   const scopedSessionPathForPane = useCallback(
     (path: string) => appendQueryParam(path, "session_scope", sessionScope),
     [sessionScope],
@@ -14673,7 +14645,7 @@ function AuthenticatedApp() {
   }, [defaultSessionMode, repoPickerOpen, repoError]);
 
   useEffect(() => {
-    if (!spireLensMcpAvailable || defaultSessionMode === "hermes_gui") {
+    if (!spireLensMcpAvailable) {
       setHomeSpireLensMcpEnabled(false);
     }
   }, [defaultSessionMode, spireLensMcpAvailable]);
@@ -15564,10 +15536,7 @@ function AuthenticatedApp() {
     // mode-override createSession() call could otherwise send repos for a
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
-    const capabilities =
-      spireLensMcpAvailable && homeSpireLensMcpEnabled && mode !== "hermes_gui"
-        ? ["spirelens_mcp"]
-        : [];
+    const capabilities = spireLensMcpAvailable && homeSpireLensMcpEnabled ? ["spirelens_mcp"] : [];
     const requestedName = normalizedHomeTitleNameFrom(
       homeSessionNameRef.current,
       homeEditingDefaultTitleRef.current,
@@ -16780,7 +16749,7 @@ function AuthenticatedApp() {
                       }}
                     />
                   )}
-                  {spireLensMcpAvailable && defaultSessionMode !== "hermes_gui" && (
+                  {spireLensMcpAvailable && (
                     <button
                       type="button"
                       className={`home-quick-action home-capability-action${homeSpireLensMcpEnabled ? " is-selected" : ""}`}

@@ -51,9 +51,9 @@ import (
 // struct for tests + local dev.
 const DefaultMCPGitHubURL = "http://mcp-github.mcp-github.svc:80"
 
-// Default exchange URL. Same one Hermes already uses today; the
-// orchestrator deployment already mounts the audience-pinned
-// projected SA token at /var/run/secrets/auth.romaine.life/token.
+// Default exchange URL. The orchestrator deployment mounts the
+// audience-pinned projected SA token at
+// /var/run/secrets/auth.romaine.life/token.
 const DefaultExchangeURL = "https://auth.romaine.life/api/auth/exchange/k8s"
 
 // Default path to the projected SA token mounted on the orchestrator

@@ -571,28 +571,6 @@ func TestManifestFixture(t *testing.T) {
 	}, core)
 }
 
-func TestHermesGUIModeRemainsNoPod(t *testing.T) {
-	if !IsNoPodMode(HermesGUIMode) {
-		t.Fatal("hermes_gui must remain a no-pod mode")
-	}
-	manifest := PodManifest("hermes", "user@example.com", HermesGUIMode, ManifestOptions{
-		SessionImage:      "session-image",
-		CodexSessionImage: "codex-image",
-	})
-	spec := manifest["spec"].(map[string]any)
-	containers := spec["containers"].([]any)
-	for _, raw := range containers {
-		container := raw.(map[string]any)
-		switch container["name"] {
-		case "agent-runner", "codex-runner":
-			t.Fatalf("hermes_gui manifest unexpectedly includes %s", container["name"])
-		}
-	}
-	if _, ok := spec["initContainers"]; ok {
-		t.Fatal("hermes_gui manifest unexpectedly includes init containers")
-	}
-}
-
 func loadFixture(t *testing.T) map[string]any {
 	t.Helper()
 	data, err := os.ReadFile("testdata/manifest_fixture.json")

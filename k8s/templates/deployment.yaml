@@ -209,27 +209,12 @@ spec:
             # internal session API responses (mcp-tank-operator uses these).
             - name: TANK_UI_HOST
               value: {{ .Values.internalApi.tankUiHost | quote }}
-            # Hermes Agent's OpenAI-compatible API server (cluster-internal).
-            # Tank's backend posts to /v1/runs for `hermes_gui` session
-            # turns (no pod), tails the SSE stream, and translates events
-            # into Tank's conversation schema. Inbound auth on Hermes'
-            # end is a service-JWT verified at its auth-proxy sidecar
-            # (nelsong6/hermes#13); the orchestrator mints a fresh JWT
-            # by exchanging the audience-pinned projected SA token
-            # mounted at /var/run/secrets/auth.romaine.life/token. See
-            # nelsong6/tank-operator#540 + nelsong6/auth#42.
-            #
-            # The same projected SA token is reused by stage 2 of the
-            # session-repo-selection feature for /api/github/repos:
-            # mcpgithub.Client exchanges it on-behalf-of the SPA caller
-            # at auth.romaine.life (PR #43 added the actor_email
-            # override surface), then calls mcp-github. No additional
-            # mount needed - one volume, two consumers, one audience.
-            - name: HERMES_API_URL
-              value: {{ .Values.hermes.apiURL | quote }}
-            - name: HERMES_AUTH_ROMAINE_EXCHANGE_URL
-              value: {{ .Values.hermes.authRomaineExchangeURL | quote }}
-            - name: HERMES_AUTH_ROMAINE_SA_TOKEN_PATH
+            # Projected SA token used by /api/github/repos. The backend
+            # exchanges it on-behalf-of the SPA caller at auth.romaine.life,
+            # then calls mcp-github over the cluster network.
+            - name: MCP_GITHUB_EXCHANGE_URL
+              value: "https://auth.romaine.life/api/auth/exchange/k8s"
+            - name: MCP_GITHUB_SA_TOKEN_PATH
               value: "/var/run/secrets/auth.romaine.life/token"
             # Provider-credential health poller — reads the codex-api-proxy
             # /health/codex endpoint to drive the transcript-surfaced
@@ -256,15 +241,12 @@ spec:
             - name: app-config
               mountPath: /etc/tank-operator/app-config
               readOnly: true
-            # Audience-pinned projected SA token used by the hermes
-            # bridge to exchange at auth.romaine.life/api/auth/exchange/k8s
-            # for a role=service JWT. Distinct file path (and distinct
-            # audience) from the default cluster-API SA token at
+            # Audience-pinned projected SA token used to exchange at
+            # auth.romaine.life/api/auth/exchange/k8s for a role=service
+            # JWT. Distinct file path (and distinct audience) from the
+            # default cluster-API SA token at
             # /var/run/secrets/kubernetes.io/serviceaccount/token so a
-            # stolen token cannot be replayed across services. Same
-            # shape Tank session pods use for their mcp-auth-proxy
-            # sidecar (see backend-go/internal/sessionmodel/sessionmodel.go).
-            # See nelsong6/tank-operator#540 + nelsong6/auth#42.
+            # stolen token cannot be replayed across services.
             - name: auth-romaine-sa-token
               mountPath: /var/run/secrets/auth.romaine.life
               readOnly: true
@@ -331,9 +313,8 @@ spec:
         # its K8S_SERVICE_AUDIENCE config and exchanges this token for
         # a role=service JWT (per nelsong6/auth#42 the orchestrator
         # is admitted as a `pod-stable` consumer with slug
-        # `tank-operator`). The hermes bridge in
-        # backend-go/internal/hermes/ reads this file fresh per
-        # exchange and caches the resulting JWT until ~30s before exp.
+        # `tank-operator`). The backend reads this file fresh per
+        # exchange.
         - name: auth-romaine-sa-token
           projected:
             sources:

@@ -13,7 +13,7 @@ test("workspace file support is limited to pod-backed GUI modes", () => {
   assert.equal(sessionModeSupportsWorkspaceFiles("codex_gui"), true);
   assert.equal(sessionModeSupportsWorkspaceFiles("codex_exec_gui"), true);
   assert.equal(sessionModeSupportsWorkspaceFiles("codex_app_server"), true);
-  assert.equal(sessionModeSupportsWorkspaceFiles("hermes_gui"), false);
+  assert.equal(sessionModeSupportsWorkspaceFiles("gemini_gui"), true);
   assert.equal(sessionModeSupportsWorkspaceFiles("claude_cli"), false);
 });
 
@@ -66,13 +66,13 @@ test("session files wait for the durable ready pod state", () => {
   );
 });
 
-test("session files stay unavailable for no-pod modes", () => {
+test("session files stay unavailable without a pod", () => {
   assert.equal(
-    sessionFilesAvailable({ mode: "hermes_gui", status: "Active", pod_name: null }),
+    sessionFilesAvailable({ mode: "codex_gui", status: "Active", pod_name: null }),
     false,
   );
   assert.equal(
-    sessionFilesTabTitle({ mode: "hermes_gui", status: "Active", pod_name: null }),
-    "This session does not have workspace files",
+    sessionFilesTabTitle({ mode: "codex_gui", status: "Active", pod_name: null }),
+    "Files are available once the session container starts",
   );
 });

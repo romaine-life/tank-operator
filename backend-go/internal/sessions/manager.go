@@ -257,8 +257,8 @@ func (m *Manager) Touch(sessionID string) {
 type CreateOptions struct {
 	// Owner is the human email that owns the new session. Required.
 	Owner string
-	// Mode is the session shape (claude_gui, codex_cli, hermes_gui,
-	// …). Empty defaults to DefaultSessionMode via NormalizeSessionMode.
+	// Mode is the session shape (claude_gui, codex_cli, etc.). Empty
+	// defaults to DefaultSessionMode via NormalizeSessionMode.
 	Mode string
 	// GlimmungContext is the optional opaque map serialized into the
 	// pod's TANK_GLIMMUNG_CONTEXT_JSON env var. nil for the standard
@@ -313,9 +313,6 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		capabilities = []string{}
 	}
 	if sessionmodel.HasSessionCapability(capabilities, sessionmodel.SessionCapabilitySpireLensMCP) {
-		if sessionmodel.IsNoPodMode(mode) {
-			return Info{}, fmt.Errorf("%s capability requires a session pod", sessionmodel.SessionCapabilitySpireLensMCP)
-		}
 		if !sessionmodel.SpireLensMCPConfigured(m.manifestOpts) {
 			return Info{}, fmt.Errorf("%s capability is not configured for this deployment", sessionmodel.SessionCapabilitySpireLensMCP)
 		}
@@ -323,24 +320,6 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	model := opts.Model
 	effort := opts.Effort
 	name := sessionmodel.NormalizeName(opts.Name)
-
-	// hermes_gui (and any future no-pod mode) short-circuits the K8s
-	// pod-create path. The session exists as a Postgres registry row +
-	// an entry in the SSE stream; turns are routed to an external
-	// backend by handleSubmitTurn. The rest of the orchestrator
-	// (snapshot, SSE, conversation_read_state, …) treats it like any
-	// other session because nothing else assumes a pod object exists
-	// except the explicitly pod-aware helpers (findPodBySessionID,
-	// resolveSessionPod) — which short-circuit on the same predicate.
-	// See nelsong6/tank-operator#540.
-	if sessionmodel.IsNoPodMode(mode) {
-		// No-pod modes don't have a /workspace to clone into;
-		// the handler boundary rejects repos when the mode is
-		// no-pod. The repos arg is threaded for forward-compat with
-		// any future no-pod mode that wants repo metadata visible in
-		// the SPA without pod-side cloning.
-		return m.createNoPodSession(ctx, owner, mode, requestedAt, repos, name, model, effort)
-	}
 
 	// Lazy re-resolution for first-install ordering.
 	if m.oauthGatewayIP == "" {
@@ -508,12 +487,8 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 }
 
 // Delete deletes a session pod (if any) and marks it deleted in the registry.
-// For no-pod modes (hermes_gui) there is no pod object; the registry mark
-// and reaper bookkeeping happen identically.
 func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
-	// Pod lookup is best-effort and only meaningful for pod-backed modes.
-	// For no-pod sessions, findPodBySessionID returns ErrNotFound, which we
-	// pass through to the registry mark below.
+	// Pod lookup is best-effort; ErrNotFound still allows the registry mark below.
 	pod, err := m.findPodBySessionID(ctx, owner, sessionID)
 	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
@@ -537,83 +512,6 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 	}
 	m.publishRow(ctx, owner, sessionID)
 	return nil
-}
-
-// createNoPodSession allocates a session_registry row for a no-pod mode
-// (today: hermes_gui) and marks it Ready immediately. There is no pod to
-// reach Ready against, so the snapshot status is whatever steady-state
-// makes sense for the external backend — here, "Active" once the row is
-// written. Reaper does not touch no-pod sessions because reaper lists
-// pods, not registry rows.
-func (m *Manager) createNoPodSession(ctx context.Context, owner, mode, requestedAt string, repos []string, name *string, model, effort string) (Info, error) {
-	sessionID, err := m.nextSessionID(ctx)
-	if err != nil {
-		return Info{}, err
-	}
-
-	// PodName empty is the signal to downstream pod-aware code paths that
-	// this is a no-pod session. findPodBySessionID returns ErrNotFound,
-	// resolveSessionPod returns 4xx, handleSubmitTurn checks the mode and
-	// routes to the external backend bridge instead of NATS.
-	now := nowISO()
-	assignment, reserved, err := m.reserveSessionAvatars(ctx, owner, sessionID)
-	if err != nil {
-		return Info{}, err
-	}
-	if reserved && assignment.AgentAvatarID == "" {
-		return Info{}, fmt.Errorf("reserve no-pod session avatars: no agent avatars available")
-	}
-	rec := sessionmodel.SessionRecord{
-		ID:             sessionID,
-		Email:          owner,
-		Mode:           mode,
-		Scope:          m.manifestOpts.SessionScope,
-		PodName:        "",
-		Visible:        true,
-		Name:           name,
-		RequestedAt:    requestedAt,
-		CreatedAt:      now,
-		UpdatedAt:      now,
-		Status:         "Active",
-		ReadyAt:        now,
-		Repos:          repos,
-		Model:          model,
-		Effort:         effort,
-		AgentAvatarID:  assignment.AgentAvatarID,
-		SystemAvatarID: assignment.SystemAvatarID,
-	}
-	if m.registry != nil {
-		if regErr := m.registry.Upsert(ctx, rec); regErr != nil {
-			return Info{}, fmt.Errorf("no-pod session registry upsert: %w", regErr)
-		}
-	}
-	if !reserved && (assignment.AgentAvatarID == "" || assignment.SystemAvatarID == "") {
-		assignment = m.assignSessionAvatars(ctx, owner, sessionID)
-	}
-
-	m.mu.Lock()
-	m.lastActivity[sessionID] = time.Now()
-	m.wsCount[sessionID] = 0
-	m.mu.Unlock()
-
-	info := Info{
-		ID:             sessionID,
-		PodName:        nil,
-		Owner:          owner,
-		Status:         "Active",
-		Mode:           mode,
-		RequestedAt:    &requestedAt,
-		CreatedAt:      &now,
-		ReadyAt:        &now,
-		Name:           name,
-		Repos:          repos,
-		Model:          model,
-		Effort:         effort,
-		AgentAvatarID:  assignment.AgentAvatarID,
-		SystemAvatarID: assignment.SystemAvatarID,
-	}
-	m.publishRow(ctx, owner, sessionID)
-	return info, nil
 }
 
 // SetName updates the display name annotation on the pod and registry.
@@ -862,18 +760,6 @@ func (m *Manager) patchStateAnnotations(
 // GetByOwner retrieves a session and validates ownership.
 func (m *Manager) GetByOwner(ctx context.Context, owner, sessionID string) (Info, error) {
 	info, err := m.reader().Get(ctx, owner, sessionID)
-	if errors.Is(err, ErrNotFound) {
-		registered, regErr := m.GetRegisteredByOwner(ctx, owner, sessionID)
-		if regErr == nil {
-			if sessionmodel.IsNoPodMode(registered.Mode) {
-				return registered, nil
-			}
-			return Info{}, err
-		}
-		if !errors.Is(regErr, ErrNotFound) {
-			return Info{}, regErr
-		}
-	}
 	return info, err
 }
 

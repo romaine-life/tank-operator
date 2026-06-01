@@ -499,19 +499,6 @@ the only path for a no-attachment first prompt from the splash composer, so the
 first visible transcript row is the user's launch message, followed by durable
 startup status and then runner output.
 
-Hermes/no-pod chat sessions use the same `initial_turn` create boundary, but
-the bridge writes the boundary events and starts the Hermes run directly rather
-than publishing a JetStream command. After POST `/v1/runs` succeeds, the
-bridge stores `{owner, session_id, turn_id, client_nonce, run_id, started_at}`
-on `sessions.hermes_active_run` before it tails `/v1/runs/{run_id}/events`.
-The pointer is cleared only after a durable terminal lands in
-`session_events`. On orchestrator restart, startup recovery lists those
-pointers, skips turns that already have a durable terminal, translates terminal
-Hermes `/v1/runs/{run_id}` status into Tank events, or reattaches the SSE
-tailer for non-terminal runs. A failed recovery writes
-`turn.command_failed{reason:"hermes_reconcile_failed"}` so accepted turns do
-not remain indefinitely submitted.
-
 Attachment-backed SDK launches set `initial_turn.deferred=true`. The create
 request still writes `user_message.created` before startup status, using the
 user's text as the durable display text and `payload.attachments` as structured
@@ -666,15 +653,6 @@ record. If step 1 succeeds and step 2 fails, the existing
 `turn.interrupt_requested` row. The reducer resolves the chain to `error`;
 the `turn.interrupt_requested` chip stays on the transcript as honest
 evidence that the user did press Stop.
-
-Hermes/no-pod stops do not publish JetStream control commands. The bridge
-looks up the active `run_id` from memory or `sessions.hermes_active_run`, calls
-Hermes `/v1/runs/{run_id}/stop`, then writes the same
-`turn.interrupt_requested` event. If the active run pointer is missing and no
-terminal is present, the bridge writes
-`turn.command_failed{reason:"hermes_active_run_missing"}`. If Hermes rejects or
-cannot receive the stop, the bridge writes
-`turn.command_failed{reason:"hermes_stop_failed"}` before returning the 502.
 
 **Four-outcome contract on the runner side (post-#532).** Once an
 `interrupt_turn` command lands on the runner's control-plane consumer,

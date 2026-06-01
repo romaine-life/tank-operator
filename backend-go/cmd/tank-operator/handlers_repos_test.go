@@ -183,7 +183,7 @@ func TestValidatePinnedRepoSlugs(t *testing.T) {
 }
 
 // TestSessionModeSupportsRepos pins the SDK-runner-modes-only contract.
-// Non-SDK-runner modes (cli, config, api_key, hermes_gui) have no
+// Non-SDK-runner modes (cli, config, api_key) have no
 // /workspace volume, so accepting repos for them would persist data
 // with no runtime path to use it. The handler boundary rejects
 // instead of silently dropping.
@@ -201,7 +201,6 @@ func TestSessionModeSupportsRepos(t *testing.T) {
 		sessionmodel.GeminiConfigMode:   false,
 		sessionmodel.APIKeyMode:         false,
 		sessionmodel.ConfigMode:         false,
-		sessionmodel.HermesGUIMode:      false,
 		"":                              true, // normalizes to ClaudeGUIMode (DefaultSessionMode)
 	}
 	for mode, want := range cases {
