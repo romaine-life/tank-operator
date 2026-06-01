@@ -12673,18 +12673,21 @@ function ChatPane({
               >
                 /workspace
               </button>
-              {filesPath
+              {(selectedFile?.path ?? filesPath)
                 .split("/")
                 .filter(Boolean)
                 .map((seg, i, arr) => {
                   const target = arr.slice(0, i + 1).join("/");
+                  const selectedFileCrumb = selectedFile?.path === target;
                   return (
                     <span key={target} className="run-files-crumb-wrap">
                       <span className="run-files-crumb-sep">/</span>
                       <button
                         type="button"
-                        className="run-files-crumb"
+                        className={`run-files-crumb${selectedFileCrumb ? " run-files-crumb-current" : ""}`}
+                        aria-current={selectedFileCrumb ? "page" : undefined}
                         onClick={() => {
+                          if (selectedFileCrumb) return;
                           setFilesPath(target);
                           setSelectedFile(null);
                           setSelectedFileLine(null);
