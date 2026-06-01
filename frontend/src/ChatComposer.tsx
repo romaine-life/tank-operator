@@ -119,6 +119,15 @@ export interface ChatComposerProps {
   onTextChange?: (text: string) => void;
 }
 
+function ComposerTextPreview({ text }: { text: string }) {
+  const slashMatch = text.match(/^(\/[^\s/]+)/);
+  if (!slashMatch) return null;
+  const command = slashMatch[1] ?? "";
+  return (
+    <span className="run-composer-slash-token">{command}</span>
+  );
+}
+
 /**
  * Shared chat composer used by the run pane, the home screen, and the demo
  * landing. Owns the universal shell (PromptInput + textarea + permission-mode
@@ -261,11 +270,21 @@ export function ChatComposer({
         onSubmitCapture={handleSubmitCapture}
         className={["run-composer", className].filter(Boolean).join(" ")}
       >
-        <PromptInputTextarea
-          className="run-composer-textarea"
-          placeholder={placeholder}
-          disabled={disabled}
-        />
+        <div className="run-composer-textarea-wrap">
+          {text.match(/^\/[^\s/]+/) && (
+            <div className="run-composer-text-preview" aria-hidden="true">
+              <ComposerTextPreview text={text} />
+            </div>
+          )}
+          <PromptInputTextarea
+            className={[
+              "run-composer-textarea",
+              text.match(/^\/[^\s/]+/) ? "run-composer-textarea-tokenized" : "",
+            ].filter(Boolean).join(" ")}
+            placeholder={placeholder}
+            disabled={disabled}
+          />
+        </div>
         <PromptInputFooter className="run-composer-footer">
           <PromptInputTools className="run-composer-tools">
             <DropdownMenu>

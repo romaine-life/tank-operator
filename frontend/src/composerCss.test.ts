@@ -20,6 +20,29 @@ test("chat composer textarea does not expose a native resize handle", () => {
   assert.doesNotMatch(cssRule(".run-composer textarea"), /resize:\s*vertical;/);
 });
 
+test("chat composer slash command highlight is drawn behind textarea text", () => {
+  const wrapRule = cssRule(".run-composer-textarea-wrap");
+  assert.match(wrapRule, /position:\s*relative;/);
+  assert.match(wrapRule, /display:\s*grid;/);
+  assert.match(wrapRule, /width:\s*100%;/);
+  assert.match(wrapRule, /flex:\s*1\s+1\s+auto;/);
+
+  const textareaRule = cssRule(".run-composer-textarea");
+  assert.match(textareaRule, /text-align:\s*left;/);
+  assert.match(textareaRule, /width:\s*100%;/);
+
+  assert.match(indexCssSource, /\.run-composer-text-preview\s*\{[\s\S]*pointer-events:\s*none;/);
+  assert.match(indexCssSource, /\.run-composer-text-preview\s*\{[\s\S]*color:\s*transparent;/);
+  assert.match(cssRule(".run-composer-textarea-tokenized"), /font-weight:\s*700;/);
+
+  const tokenRule = cssRule(".run-composer-slash-token");
+  assert.match(tokenRule, /border-radius:\s*0\.32rem;/);
+  assert.match(tokenRule, /background:\s*rgba\(148,\s*163,\s*184,\s*0\.16\);/);
+  assert.match(tokenRule, /color:\s*transparent;/);
+  assert.match(tokenRule, /font-weight:\s*700;/);
+  assert.match(tokenRule, /line-height:\s*1\.22;/);
+});
+
 test("chat composer cost estimate keeps a fixed-width footprint", () => {
   const composerRule = cssRule(".run-cost-estimate");
   assert.match(composerRule, /width:\s*5\.9rem;/);
