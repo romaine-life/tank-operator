@@ -8881,6 +8881,12 @@ textarea.run-files-viewer-editor:focus {
   max-width: 100%;
 }
 
+.run-markdown,
+.run-markdown > div {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .run-plain-message-text {
   display: block;
   min-width: 0;

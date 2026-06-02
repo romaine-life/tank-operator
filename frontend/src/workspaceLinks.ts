@@ -1,5 +1,6 @@
 const WORKSPACE_PATH_RE = /(?:\/workspace|workspace)\/[^\s<>"'`]+/g;
-const TRAILING_PATH_PUNCTUATION_RE = /[.,;:!?]+$/;
+const URL_RE = /https?:\/\/[^\s<>"'`]+/g;
+const TRAILING_LINK_PUNCTUATION_RE = /[.,;:!?]+$/;
 const INTERNAL_ABSOLUTE_HREF_PREFIXES = [
   "/api/",
   "/assets/",
@@ -16,10 +17,15 @@ export type WorkspaceTextSegment =
   | { kind: "text"; text: string }
   | { kind: "workspace_path"; text: string; href: string };
 
-function splitTrailingPathPunctuation(path: string): { href: string; trailing: string } {
-  let href = path;
+export type LinkableTextSegment =
+  | { kind: "text"; text: string }
+  | { kind: "workspace_path"; text: string; href: string }
+  | { kind: "url"; text: string; href: string };
+
+function splitTrailingLinkPunctuation(value: string): { href: string; trailing: string } {
+  let href = value;
   let trailing = "";
-  const punctuation = href.match(TRAILING_PATH_PUNCTUATION_RE)?.[0] ?? "";
+  const punctuation = href.match(TRAILING_LINK_PUNCTUATION_RE)?.[0] ?? "";
   if (punctuation) {
     href = href.slice(0, -punctuation.length);
     trailing = punctuation;
@@ -41,6 +47,15 @@ function escapeMarkdownLinkText(text: string): string {
 
 function markdownLinkDestination(href: string): string {
   return `<${encodeURI(href).replace(/>/g, "%3E")}>`;
+}
+
+function isHttpUrl(href: string): boolean {
+  try {
+    const url = new URL(href);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 function splitLineSuffix(path: string): { path: string; line: number | null } {
@@ -122,23 +137,86 @@ export function workspacePathFromHref(href: string | undefined): WorkspacePathTa
   return null;
 }
 
-function canLinkWorkspacePath(chunk: string, index: number): boolean {
+function canLinkTextTarget(chunk: string, index: number): boolean {
   if (index === 0) return true;
   const previous = chunk[index - 1];
-  return /\s/.test(previous);
+  if (/\s/.test(previous)) return true;
+  if (previous === "(") return chunk[index - 2] !== "]";
+  return previous === "[" || previous === "{";
 }
 
-function linkWorkspacePathsInTextChunk(chunk: string): string {
+interface LinkCandidate {
+  start: number;
+  end: number;
+  href: string;
+  trailing: string;
+  kind: "workspace_path" | "url";
+}
+
+function collectLinkCandidates(text: string): LinkCandidate[] {
+  const candidates: LinkCandidate[] = [];
+
+  URL_RE.lastIndex = 0;
+  for (const match of text.matchAll(URL_RE)) {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    if (!canLinkTextTarget(text, start)) continue;
+    const { href, trailing } = splitTrailingLinkPunctuation(raw);
+    if (!isHttpUrl(href)) continue;
+    candidates.push({
+      start,
+      end: start + raw.length,
+      href,
+      trailing,
+      kind: "url",
+    });
+  }
+
   WORKSPACE_PATH_RE.lastIndex = 0;
-  return chunk.replace(WORKSPACE_PATH_RE, (rawPath, index: number) => {
-    if (!canLinkWorkspacePath(chunk, index)) return rawPath;
-    const { href, trailing } = splitTrailingPathPunctuation(rawPath);
-    if (!href || href === "/workspace" || href === "workspace") return rawPath;
-    return `[${escapeMarkdownLinkText(href)}](${markdownLinkDestination(href)})${trailing}`;
-  });
+  for (const match of text.matchAll(WORKSPACE_PATH_RE)) {
+    const raw = match[0];
+    const start = match.index ?? 0;
+    if (!canLinkTextTarget(text, start)) continue;
+    const { href, trailing } = splitTrailingLinkPunctuation(raw);
+    if (!href || href === "/workspace" || href === "workspace") continue;
+    if (!normalizeWorkspacePathTarget(href)) continue;
+    candidates.push({
+      start,
+      end: start + raw.length,
+      href,
+      trailing,
+      kind: "workspace_path",
+    });
+  }
+
+  candidates.sort((a, b) => a.start - b.start || b.end - a.end);
+  const accepted: LinkCandidate[] = [];
+  let coveredUntil = 0;
+  for (const candidate of candidates) {
+    if (candidate.start < coveredUntil) continue;
+    accepted.push(candidate);
+    coveredUntil = candidate.end;
+  }
+  return accepted;
 }
 
-function linkWorkspacePathsOutsideInlineCode(line: string): string {
+function linkTargetsInTextChunk(chunk: string): string {
+  const candidates = collectLinkCandidates(chunk);
+  if (candidates.length === 0) return chunk;
+
+  let out = "";
+  let cursor = 0;
+  for (const candidate of candidates) {
+    out += chunk.slice(cursor, candidate.start);
+    out += `[${escapeMarkdownLinkText(candidate.href)}](${markdownLinkDestination(candidate.href)})`;
+    out += candidate.trailing;
+    cursor = candidate.end;
+  }
+  out += chunk.slice(cursor);
+  return out;
+}
+
+function linkTargetsOutsideInlineCode(line: string): string {
   let out = "";
   let chunkStart = 0;
   let i = 0;
@@ -158,20 +236,19 @@ function linkWorkspacePathsOutsideInlineCode(line: string): string {
       continue;
     }
 
-    out += linkWorkspacePathsInTextChunk(line.slice(chunkStart, i));
+    out += linkTargetsInTextChunk(line.slice(chunkStart, i));
     out += line.slice(i, closing + tickRun.length);
     i = closing + tickRun.length;
     chunkStart = i;
   }
 
-  out += linkWorkspacePathsInTextChunk(line.slice(chunkStart));
+  out += linkTargetsInTextChunk(line.slice(chunkStart));
   return out;
 }
 
-export function splitWorkspacePathsInText(text: string): WorkspaceTextSegment[] {
-  const segments: WorkspaceTextSegment[] = [];
+export function splitLinksInText(text: string): LinkableTextSegment[] {
+  const segments: LinkableTextSegment[] = [];
   let cursor = 0;
-  WORKSPACE_PATH_RE.lastIndex = 0;
 
   const pushText = (value: string) => {
     if (!value) return;
@@ -183,23 +260,15 @@ export function splitWorkspacePathsInText(text: string): WorkspaceTextSegment[] 
     segments.push({ kind: "text", text: value });
   };
 
-  for (let match = WORKSPACE_PATH_RE.exec(text); match; match = WORKSPACE_PATH_RE.exec(text)) {
-    const rawPath = match[0];
-    const index = match.index;
-    if (!canLinkWorkspacePath(text, index)) continue;
-
-    const { href, trailing } = splitTrailingPathPunctuation(rawPath);
-    if (!href || href === "/workspace" || href === "workspace") continue;
-    if (!normalizeWorkspacePathTarget(href)) continue;
-
-    if (index > cursor) {
-      pushText(text.slice(cursor, index));
+  for (const candidate of collectLinkCandidates(text)) {
+    if (candidate.start > cursor) {
+      pushText(text.slice(cursor, candidate.start));
     }
-    segments.push({ kind: "workspace_path", text: href, href });
-    if (trailing) {
-      pushText(trailing);
+    segments.push({ kind: candidate.kind, text: candidate.href, href: candidate.href });
+    if (candidate.trailing) {
+      pushText(candidate.trailing);
     }
-    cursor = index + rawPath.length;
+    cursor = candidate.end;
   }
 
   if (cursor < text.length) {
@@ -208,7 +277,14 @@ export function splitWorkspacePathsInText(text: string): WorkspaceTextSegment[] 
   return segments.length > 0 ? segments : [{ kind: "text", text }];
 }
 
-export function linkWorkspacePathsInMarkdown(markdown: string): string {
+export function splitWorkspacePathsInText(text: string): WorkspaceTextSegment[] {
+  return splitLinksInText(text).map((segment): WorkspaceTextSegment => {
+    if (segment.kind === "url") return { kind: "text", text: segment.text };
+    return segment;
+  });
+}
+
+export function linkTextTargetsInMarkdown(markdown: string): string {
   const lines = markdown.split(/(\n)/);
   let fence: { marker: "`" | "~"; length: number } | null = null;
 
@@ -235,6 +311,10 @@ export function linkWorkspacePathsInMarkdown(markdown: string): string {
       return line;
     }
 
-    return linkWorkspacePathsOutsideInlineCode(line);
+    return linkTargetsOutsideInlineCode(line);
   }).join("");
+}
+
+export function linkWorkspacePathsInMarkdown(markdown: string): string {
+  return linkTextTargetsInMarkdown(markdown);
 }

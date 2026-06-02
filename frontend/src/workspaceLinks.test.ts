@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  linkTextTargetsInMarkdown,
   linkWorkspacePathsInMarkdown,
+  splitLinksInText,
   splitWorkspacePathsInText,
   workspacePathFromHref,
 } from "./workspaceLinks.ts";
@@ -33,10 +35,48 @@ test("keeps sentence punctuation outside workspace path links", () => {
   );
 });
 
+test("links bare urls in markdown prose", () => {
+  assert.equal(
+    linkTextTargetsInMarkdown("Try https://google.com"),
+    "Try [https://google.com](<https://google.com>)",
+  );
+});
+
+test("keeps sentence punctuation outside url links", () => {
+  assert.equal(
+    linkTextTargetsInMarkdown("Open https://example.test/docs?x=1."),
+    "Open [https://example.test/docs?x=1](<https://example.test/docs?x=1>).",
+  );
+});
+
+test("links urls after opening punctuation but not existing markdown hrefs", () => {
+  assert.equal(
+    linkTextTargetsInMarkdown("See (https://example.test/a)."),
+    "See ([https://example.test/a](<https://example.test/a>)).",
+  );
+  assert.equal(
+    linkTextTargetsInMarkdown("[existing](https://example.test/a)"),
+    "[existing](https://example.test/a)",
+  );
+});
+
 test("keeps line numbers inside workspace path links", () => {
   assert.equal(
     linkWorkspacePathsInMarkdown("Open /workspace/src/App.tsx:42."),
     "Open [/workspace/src/App.tsx:42](</workspace/src/App.tsx:42>).",
+  );
+});
+
+test("splits plain text urls and workspace paths without dropping newlines", () => {
+  assert.deepEqual(
+    splitLinksInText("a)\nOpen /workspace/src/App.tsx:42 and https://example.test.\nb)"),
+    [
+      { kind: "text", text: "a)\nOpen " },
+      { kind: "workspace_path", text: "/workspace/src/App.tsx:42", href: "/workspace/src/App.tsx:42" },
+      { kind: "text", text: " and " },
+      { kind: "url", text: "https://example.test", href: "https://example.test" },
+      { kind: "text", text: ".\nb)" },
+    ],
   );
 });
 
@@ -73,23 +113,23 @@ test("does not treat arbitrary absolute paths as workspace hrefs", () => {
   assert.equal(workspacePathFromHref("file:///home/node/.codex/skills/test/SKILL.md"), null);
 });
 
-test("does not rewrite inline or fenced code paths", () => {
+test("does not rewrite inline or fenced code while preprocessing markdown", () => {
   const markdown = [
-    "Use `/workspace/screenshots/1.png` literally.",
+    "Use `/workspace/screenshots/1.png https://example.test` literally.",
     "",
     "```",
-    "- /workspace/screenshots/2.png",
+    "- /workspace/screenshots/2.png https://example.test",
     "```",
   ].join("\n");
 
-  assert.equal(linkWorkspacePathsInMarkdown(markdown), markdown);
+  assert.equal(linkTextTargetsInMarkdown(markdown), markdown);
 });
 
-test("does not rewrite existing links or urls containing workspace paths", () => {
+test("does not rewrite existing markdown links", () => {
   const markdown = [
     "[existing](/workspace/screenshots/1.png)",
-    "https://example.test/workspace/screenshots/1.png",
+    "[url](https://example.test/workspace/screenshots/1.png)",
   ].join("\n");
 
-  assert.equal(linkWorkspacePathsInMarkdown(markdown), markdown);
+  assert.equal(linkTextTargetsInMarkdown(markdown), markdown);
 });
