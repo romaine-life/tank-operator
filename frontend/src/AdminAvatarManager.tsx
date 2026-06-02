@@ -9,10 +9,16 @@ import {
 import type { PointerEvent as ReactPointerEvent } from "react";
 import type { DragEvent as ReactDragEvent } from "react";
 import {
+  ArrowDownIcon,
+  ArrowLeftIcon,
   ArrowLeftRightIcon,
+  ArrowRightIcon,
+  ArrowUpIcon,
   ImagePlusIcon,
   Loader2Icon,
+  MinusIcon,
   PencilIcon,
+  PlusIcon,
   Trash2Icon,
   UploadIcon,
   XIcon,
@@ -21,11 +27,14 @@ import { authedFetch } from "./auth";
 import {
   type AvatarCrop,
   type AvatarCropDragOffset,
+  avatarCropControlStep,
   avatarCropContainsPoint,
   avatarCropDragOffset,
   avatarCropFromImagePoint,
   clampAvatarCrop,
   cropToSourceRect,
+  nudgeAvatarCrop,
+  resizeAvatarCrop,
 } from "./adminAvatarCrop";
 import { openAvatarPreview } from "./avatarPreview";
 
@@ -419,6 +428,14 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
       ),
     );
   }, [imagePointFromPointer, imageRect]);
+
+  const adjustCropSize = useCallback((deltaSize: number) => {
+    setCrop((current) => resizeAvatarCrop(current, deltaSize, imageRect?.width, imageRect?.height));
+  }, [imageRect]);
+
+  const nudgeCrop = useCallback((deltaX: number, deltaY: number) => {
+    setCrop((current) => nudgeAvatarCrop(current, deltaX, deltaY, imageRect?.width, imageRect?.height));
+  }, [imageRect]);
 
   const startCropMove = useCallback((event: ReactPointerEvent<HTMLDivElement>, point: { x: number; y: number }) => {
     if (!imageRect) return;
@@ -816,9 +833,32 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                 />
                 {cropStyle && <span className="admin-avatar-crop-ring" style={cropStyle} />}
               </div>
-              <label className="admin-avatar-slider">
-                <span>Crop size</span>
+              <div className="admin-avatar-slider">
+                <div className="admin-avatar-control-head">
+                  <label htmlFor="admin-avatar-crop-size">Crop size</label>
+                  <div className="admin-avatar-stepper" role="group" aria-label="Crop size microcontrols">
+                    <button
+                      type="button"
+                      aria-label="Decrease crop size"
+                      title="Decrease crop size"
+                      disabled={!imageRect}
+                      onClick={() => adjustCropSize(-avatarCropControlStep)}
+                    >
+                      <MinusIcon size={15} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label="Increase crop size"
+                      title="Increase crop size"
+                      disabled={!imageRect}
+                      onClick={() => adjustCropSize(avatarCropControlStep)}
+                    >
+                      <PlusIcon size={15} aria-hidden="true" />
+                    </button>
+                  </div>
+                </div>
                 <input
+                  id="admin-avatar-crop-size"
                   type="range"
                   min="0.12"
                   max="1"
@@ -837,7 +877,52 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                     )
                   }
                 />
-              </label>
+              </div>
+              <div className="admin-avatar-position-control">
+                <span>Crop position</span>
+                <div className="admin-avatar-nudge-grid" role="group" aria-label="Crop position microcontrols">
+                  <button
+                    type="button"
+                    className="admin-avatar-nudge-up"
+                    aria-label="Move crop up"
+                    title="Move crop up"
+                    disabled={!imageRect}
+                    onClick={() => nudgeCrop(0, -avatarCropControlStep)}
+                  >
+                    <ArrowUpIcon size={15} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-avatar-nudge-left"
+                    aria-label="Move crop left"
+                    title="Move crop left"
+                    disabled={!imageRect}
+                    onClick={() => nudgeCrop(-avatarCropControlStep, 0)}
+                  >
+                    <ArrowLeftIcon size={15} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-avatar-nudge-right"
+                    aria-label="Move crop right"
+                    title="Move crop right"
+                    disabled={!imageRect}
+                    onClick={() => nudgeCrop(avatarCropControlStep, 0)}
+                  >
+                    <ArrowRightIcon size={15} aria-hidden="true" />
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-avatar-nudge-down"
+                    aria-label="Move crop down"
+                    title="Move crop down"
+                    disabled={!imageRect}
+                    onClick={() => nudgeCrop(0, avatarCropControlStep)}
+                  >
+                    <ArrowDownIcon size={15} aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
             </>
           )}
 

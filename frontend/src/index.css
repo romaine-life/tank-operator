@@ -478,7 +478,8 @@ button:disabled {
 }
 
 .admin-avatar-field,
-.admin-avatar-slider {
+.admin-avatar-slider,
+.admin-avatar-position-control {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
@@ -588,6 +589,77 @@ button:disabled {
 .admin-avatar-slider input {
   width: 100%;
   accent-color: #e5e7eb;
+}
+
+.admin-avatar-control-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+
+.admin-avatar-stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.admin-avatar-stepper button,
+.admin-avatar-nudge-grid button {
+  width: 2rem;
+  height: 2rem;
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.82);
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  cursor: pointer;
+}
+
+.admin-avatar-stepper button:hover:not(:disabled),
+.admin-avatar-stepper button:focus-visible:not(:disabled),
+.admin-avatar-nudge-grid button:hover:not(:disabled),
+.admin-avatar-nudge-grid button:focus-visible:not(:disabled) {
+  border-color: rgba(226, 232, 240, 0.72);
+  background: rgba(30, 41, 59, 0.92);
+}
+
+.admin-avatar-stepper button:disabled,
+.admin-avatar-nudge-grid button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.admin-avatar-nudge-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 2rem);
+  grid-template-rows: repeat(3, 2rem);
+  gap: var(--space-1);
+  justify-content: center;
+  align-items: center;
+}
+
+.admin-avatar-nudge-up {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.admin-avatar-nudge-left {
+  grid-column: 1;
+  grid-row: 2;
+}
+
+.admin-avatar-nudge-right {
+  grid-column: 3;
+  grid-row: 2;
+}
+
+.admin-avatar-nudge-down {
+  grid-column: 2;
+  grid-row: 3;
 }
 
 .admin-avatar-error {

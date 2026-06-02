@@ -17,8 +17,14 @@ export type AvatarCropDragOffset = {
   y: number;
 };
 
+export const avatarCropControlStep = 0.01;
+
 function finiteOr(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function steppedCropValue(value: number): number {
+  return Number(value.toFixed(4));
 }
 
 function usableDimensions(width?: number, height?: number): { width: number; height: number } | null {
@@ -133,4 +139,30 @@ export function avatarCropFromImagePoint(
     center_x: (pointerX - dragOffset.x) / imageWidth,
     center_y: (pointerY - dragOffset.y) / imageHeight,
   }, imageWidth, imageHeight);
+}
+
+export function resizeAvatarCrop(
+  crop: AvatarCrop,
+  deltaSize: number,
+  sourceWidth?: number,
+  sourceHeight?: number,
+): AvatarCrop {
+  return clampAvatarCrop({
+    ...crop,
+    size: steppedCropValue(finiteOr(crop.size, 0.5) + deltaSize),
+  }, sourceWidth, sourceHeight);
+}
+
+export function nudgeAvatarCrop(
+  crop: AvatarCrop,
+  deltaX: number,
+  deltaY: number,
+  sourceWidth?: number,
+  sourceHeight?: number,
+): AvatarCrop {
+  return clampAvatarCrop({
+    ...crop,
+    center_x: steppedCropValue(finiteOr(crop.center_x, 0.5) + deltaX),
+    center_y: steppedCropValue(finiteOr(crop.center_y, 0.5) + deltaY),
+  }, sourceWidth, sourceHeight);
 }

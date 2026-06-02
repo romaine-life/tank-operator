@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  avatarCropControlStep,
   avatarCropDragOffset,
   avatarCropContainsPoint,
   avatarCropFromImagePoint,
   clampAvatarCrop,
   cropToSourceRect,
+  nudgeAvatarCrop,
+  resizeAvatarCrop,
 } from "./adminAvatarCrop";
 
 test("clampAvatarCrop keeps the circular selection inside the image", () => {
@@ -86,5 +89,31 @@ test("avatar crop drag recenters when starting outside the circle", () => {
   assert.deepEqual(
     avatarCropFromImagePoint(crop, 400, 800, 200, 50, offset),
     { center_x: 0.5, center_y: 0.125, size: 0.5 },
+  );
+});
+
+test("resizeAvatarCrop adjusts by one crop control step", () => {
+  const crop = { center_x: 0.5, center_y: 0.5, size: 0.42 };
+
+  assert.deepEqual(
+    resizeAvatarCrop(crop, avatarCropControlStep, 400, 400),
+    { center_x: 0.5, center_y: 0.5, size: 0.43 },
+  );
+  assert.deepEqual(
+    resizeAvatarCrop({ ...crop, size: 0.12 }, -avatarCropControlStep, 400, 400),
+    { center_x: 0.5, center_y: 0.5, size: 0.12 },
+  );
+});
+
+test("nudgeAvatarCrop moves the crop center by one crop control step", () => {
+  const crop = { center_x: 0.5, center_y: 0.5, size: 0.2 };
+
+  assert.deepEqual(
+    nudgeAvatarCrop(crop, avatarCropControlStep, -avatarCropControlStep, 400, 400),
+    { center_x: 0.51, center_y: 0.49, size: 0.2 },
+  );
+  assert.deepEqual(
+    nudgeAvatarCrop({ ...crop, center_x: 0.1 }, -avatarCropControlStep, 0, 400, 400),
+    { center_x: 0.1, center_y: 0.5, size: 0.2 },
   );
 });
