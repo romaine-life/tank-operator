@@ -24,9 +24,11 @@ import (
 )
 
 type recordingSessionBus struct {
-	commands []sessionbus.Command
-	wakes    []string
-	err      error
+	commands            []sessionbus.Command
+	wakes               []string
+	pinnedPublishEmails []string
+	pinnedUpdateCh      <-chan struct{}
+	err                 error
 }
 
 // recordingSessionEventStore captures every backend-owned Upsert so tests
@@ -142,6 +144,21 @@ func (*recordingSessionBus) PublishSessionRowUpdate(context.Context, string, str
 
 func (*recordingSessionBus) SubscribeSessionRowUpdates(context.Context, string, string) (<-chan []byte, func(), error) {
 	return make(chan []byte), func() {}, nil
+}
+
+func (b *recordingSessionBus) PublishPinnedReposUpdate(_ context.Context, email string) error {
+	if b.err != nil {
+		return b.err
+	}
+	b.pinnedPublishEmails = append(b.pinnedPublishEmails, email)
+	return nil
+}
+
+func (b *recordingSessionBus) SubscribePinnedReposUpdates(context.Context, string) (<-chan struct{}, func(), error) {
+	if b.pinnedUpdateCh != nil {
+		return b.pinnedUpdateCh, func() {}, nil
+	}
+	return make(chan struct{}), func() {}, nil
 }
 
 func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {

@@ -502,6 +502,16 @@ test("browser EventSource streams use opaque stream tickets, not bearer query st
   assert.equal(authSource.includes("access_token"), false);
   assert.match(appSource, /authedEventSource\([\s\S]{0,400}stream: "session-events"/);
   assert.match(appSource, /authedEventSource\([\s\S]{0,400}stream: "session-list"/);
+  assert.match(appSource, /authedEventSource\([\s\S]{0,400}stream: "pinned-repos"/);
+});
+
+test("pinned repo shortcuts converge from the durable profile endpoint", () => {
+  assert.match(appSource, /authedFetch\("\/api\/github\/pinned-repos"\)/);
+  assert.match(appSource, /document\.addEventListener\("visibilitychange", refreshWhenVisible\)/);
+  assert.match(appSource, /window\.addEventListener\("focus", refreshOnFocus\)/);
+  assert.match(appSource, /addEventListener\("pinned-repos"/);
+  assert.match(appSource, /pinnedReposSnapshotVersionRef/);
+  assert.match(appSource, /updatedAt < currentVersion/);
 });
 
 test("browser-native protected resources are not loaded with raw API URLs", () => {

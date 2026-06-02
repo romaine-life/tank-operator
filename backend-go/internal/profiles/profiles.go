@@ -14,6 +14,7 @@ type Profile struct {
 	Email          string  `json:"email"`
 	GitHubLogin    *string `json:"github_login"`
 	InstallationID *int64  `json:"installation_id"`
+	UpdatedAt      string  `json:"updated_at,omitempty"`
 	// PinnedRepos is the durable per-user shortcut list for the splash repo
 	// picker. Empty slice means no pins; it should serialize as [] rather
 	// than null so the SPA has a single source shape.
@@ -46,7 +47,8 @@ func (s *PostgresStore) GetOrCreate(ctx context.Context, email string) (Profile,
 		return Profile{}, nil
 	}
 	const q = `
-		SELECT email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[])
+		SELECT email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[]),
+		       to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
 		FROM profiles
 		WHERE email = $1
 	`
@@ -56,8 +58,9 @@ func (s *PostgresStore) GetOrCreate(ctx context.Context, email string) (Profile,
 		instID   *int64
 		prefsRaw []byte
 		pins     []string
+		updated  string
 	)
-	err := s.pool.QueryRow(ctx, q, normalized).Scan(&gotEmail, &login, &instID, &prefsRaw, &pins)
+	err := s.pool.QueryRow(ctx, q, normalized).Scan(&gotEmail, &login, &instID, &prefsRaw, &pins, &updated)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Profile{Email: normalized, PinnedRepos: []string{}}, nil
 	}
@@ -68,6 +71,7 @@ func (s *PostgresStore) GetOrCreate(ctx context.Context, email string) (Profile,
 		Email:          gotEmail,
 		GitHubLogin:    login,
 		InstallationID: instID,
+		UpdatedAt:      updated,
 		PinnedRepos:    pins,
 	}
 	if len(prefsRaw) > 0 {
@@ -113,6 +117,9 @@ func profileFromMap(doc map[string]any) Profile {
 	}
 	if v, ok := doc["run_prefs"].(map[string]any); ok {
 		p.RunPrefs = v
+	}
+	if v, ok := doc["updated_at"].(string); ok {
+		p.UpdatedAt = v
 	}
 	if v, ok := doc["pinned_repos"].([]string); ok {
 		p.PinnedRepos = v

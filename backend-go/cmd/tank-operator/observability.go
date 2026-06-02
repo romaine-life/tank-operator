@@ -405,6 +405,81 @@ func recordPinnedReposUpdate(result string) {
 	pinnedReposUpdateTotal.WithLabelValues(result).Inc()
 }
 
+var pinnedReposPublishTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_github_pinned_repos_publish_total",
+		Help: "Low-latency pinned-repo update publish attempts after durable profile writes.",
+	},
+	[]string{"result"},
+)
+
+func recordPinnedReposPublish(result string) {
+	pinnedReposPublishTotal.WithLabelValues(pinnedReposResultLabel(result)).Inc()
+}
+
+var pinnedReposStreamOpenTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "tank_github_pinned_repos_stream_open_total",
+		Help: "Browser pinned-repo EventSource streams opened after the initial durable profile snapshot is emitted.",
+	},
+)
+
+var pinnedReposStreamEmitTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "tank_github_pinned_repos_stream_emit_total",
+		Help: "Pinned-repo profile snapshots emitted on the browser EventSource stream.",
+	},
+)
+
+var pinnedReposStreamHeartbeatTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "tank_github_pinned_repos_stream_heartbeat_total",
+		Help: "Keepalive heartbeats emitted on the pinned-repo browser EventSource stream.",
+	},
+)
+
+var pinnedReposStreamErrorTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_github_pinned_repos_stream_error_total",
+		Help: "Pinned-repo browser EventSource stream failures, labeled by bounded reason.",
+	},
+	[]string{"reason"},
+)
+
+func recordPinnedReposStreamOpen() {
+	pinnedReposStreamOpenTotal.Inc()
+}
+
+func recordPinnedReposStreamEmit() {
+	pinnedReposStreamEmitTotal.Inc()
+}
+
+func recordPinnedReposStreamHeartbeat() {
+	pinnedReposStreamHeartbeatTotal.Inc()
+}
+
+func recordPinnedReposStreamError(reason string) {
+	pinnedReposStreamErrorTotal.WithLabelValues(pinnedReposStreamErrorLabel(reason)).Inc()
+}
+
+func pinnedReposResultLabel(result string) string {
+	switch result {
+	case "ok", "error":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func pinnedReposStreamErrorLabel(reason string) string {
+	switch reason {
+	case "bus_unavailable", "streaming_unavailable", "subscribe_failed", "snapshot_failed":
+		return reason
+	default:
+		return "other"
+	}
+}
+
 var sessionRuntimeConfigUpdateTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_session_runtime_config_update_total",
@@ -582,7 +657,7 @@ func streamAuthTicketOperationLabel(operation string) string {
 
 func streamAuthTicketStreamLabel(stream string) string {
 	switch stream {
-	case streamKindSessionList, streamKindSessionEvents:
+	case streamKindSessionList, streamKindSessionEvents, streamKindPinnedRepos:
 		return stream
 	default:
 		return "unknown"

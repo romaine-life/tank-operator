@@ -117,6 +117,15 @@ All metric names are prefixed `tank_`. The full namespace:
   reads of `GET /api/debug/session-list-captures`, the durable capture
   store for client-side session-list diagnostics. Captures are retained
   at the latest 200 records per owner/scope.
+- `tank_github_pinned_repos_update_total{result}`,
+  `tank_github_pinned_repos_publish_total{result}`, and
+  `tank_github_pinned_repos_stream_*` — the profile-backed repo-pins
+  convergence surface. Writes are durable on `profiles.pinned_repos`;
+  publish counters show whether the post-write NATS wake path is working;
+  stream open/emit/heartbeat/error counters show whether browser tabs are
+  receiving owner-profile snapshots. Labels are bounded (`result` and
+  stream `reason` collapse unknown values to `other`) and never include
+  owner email or repo slugs.
 - `tank_session_event_wake_published_total` /
   `tank_session_event_wake_received_total` /
   `tank_session_event_persist_to_wake_seconds` — the per-session SSE

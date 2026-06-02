@@ -149,6 +149,19 @@ func SessionRowUpdateSubject(email, scope string) string {
 	)
 }
 
+// PinnedReposUpdateSubject names the per-owner low-latency wake subject for
+// profiles.pinned_repos. The payload is intentionally empty: subscribers read
+// the current profile row after each wake so Postgres remains the durable
+// source of truth and a missed wake is repaired by the next snapshot refresh.
+func PinnedReposUpdateSubject(email string) string {
+	normalizedEmail := strings.TrimSpace(strings.ToLower(email))
+	return fmt.Sprintf(
+		"%s.profiles.%s.pinned_repos",
+		liveRoot,
+		base64.RawURLEncoding.EncodeToString([]byte(normalizedEmail)),
+	)
+}
+
 func sanitizeSubjectToken(value string) string {
 	value = strings.TrimSpace(strings.ToLower(value))
 	if value == "" {

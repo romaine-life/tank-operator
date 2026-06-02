@@ -481,6 +481,49 @@ func (b *Bus) SubscribeSessionRowUpdates(ctx context.Context, email, scope strin
 	return ch, unsubscribe, nil
 }
 
+func (b *Bus) PublishPinnedReposUpdate(_ context.Context, email string) error {
+	if b == nil {
+		return fmt.Errorf("session bus unavailable")
+	}
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil
+	}
+	if err := b.nc.Publish(PinnedReposUpdateSubject(email), nil); err != nil {
+		slog.Warn("pinned repos update publish failed", "email", email, "error", err)
+		return err
+	}
+	return nil
+}
+
+func (b *Bus) SubscribePinnedReposUpdates(ctx context.Context, email string) (<-chan struct{}, func(), error) {
+	if b == nil {
+		return nil, func() {}, fmt.Errorf("session bus unavailable")
+	}
+	email = strings.TrimSpace(email)
+	if email == "" {
+		return nil, func() {}, fmt.Errorf("email is required")
+	}
+	ch := make(chan struct{}, 1)
+	sub, err := b.nc.Subscribe(PinnedReposUpdateSubject(email), func(_ *nats.Msg) {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	})
+	if err != nil {
+		return nil, func() {}, err
+	}
+	unsubscribe := func() {
+		_ = sub.Unsubscribe()
+	}
+	go func() {
+		<-ctx.Done()
+		unsubscribe()
+	}()
+	return ch, unsubscribe, nil
+}
+
 func (b *Bus) SubscribeWakes(ctx context.Context, sessionID string) (<-chan struct{}, func(), error) {
 	return b.SubscribeWakesWithRecorder(ctx, sessionID, nil)
 }

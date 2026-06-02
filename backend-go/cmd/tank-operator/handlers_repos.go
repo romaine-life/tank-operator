@@ -28,6 +28,7 @@ import (
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
 	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
+	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -45,6 +46,8 @@ const maxReposPerSession = 5
 // clone cap because pins are cheap metadata, but still finite so a bad client
 // cannot turn the profile row into unbounded storage.
 const maxPinnedReposPerUser = 64
+
+const pinnedReposStreamHeartbeat = 30 * time.Second
 
 // repoSlugPattern matches a permissive "owner/name" shape. Bounds:
 //   - Owner: starts alphanumeric, then alphanumeric / hyphen, up to
@@ -234,7 +237,7 @@ func (s *appServer) handleGitHubPinnedRepos(w http.ResponseWriter, r *http.Reque
 		if repos == nil {
 			repos = []string{}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"repos": repos})
+		writeJSON(w, http.StatusOK, pinnedReposResponse(profile))
 	case http.MethodPut:
 		pinsStore, ok := s.profiles.(profilesPinnedReposStore)
 		if !ok {
@@ -267,11 +270,120 @@ func (s *appServer) handleGitHubPinnedRepos(w http.ResponseWriter, r *http.Reque
 			next = []string{}
 		}
 		recordPinnedReposUpdate("ok")
-		writeJSON(w, http.StatusOK, map[string]any{"repos": next})
+		s.publishPinnedReposUpdate(r.Context(), repoLookupOwnerEmail(user))
+		writeJSON(w, http.StatusOK, pinnedReposResponse(profile))
 	default:
 		w.Header().Set("Allow", "GET, PUT")
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+func (s *appServer) handleGitHubPinnedReposEvents(w http.ResponseWriter, r *http.Request) {
+	user, _, ok := s.requireBrowserStreamAuth(w, r, streamKindPinnedRepos, "")
+	if !ok {
+		return
+	}
+	if s.sessionBus == nil {
+		recordPinnedReposStreamError("bus_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "session bus unavailable")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		recordPinnedReposStreamError("streaming_unavailable")
+		writeError(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	owner := repoLookupOwnerEmail(user)
+	notify, unsubscribe, err := s.sessionBus.SubscribePinnedReposUpdates(r.Context(), owner)
+	if err != nil {
+		recordPinnedReposStreamError("subscribe_failed")
+		slog.Warn("pinned repos subscribe failed", "caller", user.Email, "owner", owner, "error", err)
+		writeError(w, http.StatusInternalServerError, "pinned repos stream: "+err.Error())
+		return
+	}
+	defer unsubscribe()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	writeSSEJSONEvent(w, "ready", "", map[string]any{"stream": streamKindPinnedRepos})
+	if err := s.writePinnedReposSnapshotEvent(r.Context(), w, owner); err != nil {
+		recordPinnedReposStreamError("snapshot_failed")
+		writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+			"reason": "snapshot_failed",
+			"detail": err.Error(),
+		})
+		flusher.Flush()
+		return
+	}
+	recordPinnedReposStreamOpen()
+	flusher.Flush()
+
+	keepalive := time.NewTicker(pinnedReposStreamHeartbeat)
+	defer keepalive.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case _, ok := <-notify:
+			if !ok {
+				return
+			}
+			if err := s.writePinnedReposSnapshotEvent(r.Context(), w, owner); err != nil {
+				recordPinnedReposStreamError("snapshot_failed")
+				writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+					"reason": "snapshot_failed",
+					"detail": err.Error(),
+				})
+				flusher.Flush()
+				return
+			}
+			flusher.Flush()
+		case <-keepalive.C:
+			recordPinnedReposStreamHeartbeat()
+			fmt.Fprint(w, ": keep-alive\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
+func (s *appServer) writePinnedReposSnapshotEvent(ctx context.Context, w http.ResponseWriter, owner string) error {
+	profile, err := s.profiles.GetOrCreate(ctx, owner)
+	if err != nil {
+		return err
+	}
+	repos := profile.PinnedRepos
+	if repos == nil {
+		repos = []string{}
+	}
+	writeSSEJSONEvent(w, streamKindPinnedRepos, "", pinnedReposResponse(profile))
+	recordPinnedReposStreamEmit()
+	return nil
+}
+
+func pinnedReposResponse(profile profiles.Profile) map[string]any {
+	repos := profile.PinnedRepos
+	if repos == nil {
+		repos = []string{}
+	}
+	return map[string]any{
+		"repos":      repos,
+		"updated_at": profile.UpdatedAt,
+	}
+}
+
+func (s *appServer) publishPinnedReposUpdate(ctx context.Context, owner string) {
+	if s.sessionBus == nil {
+		return
+	}
+	if err := s.sessionBus.PublishPinnedReposUpdate(ctx, owner); err != nil {
+		recordPinnedReposPublish("error")
+		return
+	}
+	recordPinnedReposPublish("ok")
 }
 
 // fetchRecentRepoSlugs reads the caller's recent repo selections,
