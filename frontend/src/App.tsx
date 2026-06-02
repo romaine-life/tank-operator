@@ -38,11 +38,15 @@ import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureContro
 import { SessionRepoReport } from "./SessionRepoReport";
 import { WorkspaceShell } from "./WorkspaceShell";
 import {
+  buildAppRouteUrl,
   buildHomeRouteUrl,
   buildSessionRouteUrl,
+  readAppRouteFromPathname,
   readHomeRouteFromPathname,
   readSessionRouteFromPathname,
   type AdminView,
+  type AppRoute,
+  type AppRouteTab,
   type HomeRoute,
   type HomeRouteTab,
   type SessionRoute,
@@ -441,7 +445,7 @@ type ScrollToLatestRequest = {
 };
 type SkillStateName = "test" | "rollout";
 type InitialMessageMode = "direct" | "diagnose" | "bug_report" | "quality_gaps" | "go_long" | "test";
-type HomeTab = HomeRouteTab;
+type HomeTab = HomeRouteTab | AppRouteTab;
 
 type ForkSessionRequest = {
   sourceSession: Session;
@@ -1424,22 +1428,24 @@ function readHomeRouteFromPath(pathname = window.location.pathname): HomeRoute |
   return readHomeRouteFromPathname(pathname);
 }
 
-function sessionRouteUrl(
-  id: string,
-  tab: SessionRouteTab = "chat",
-  turnId?: string | null,
-  settingsTab: SettingsTab = "preferences",
-  adminView: AdminView = "controls",
-): string {
-  return buildSessionRouteUrl(window.location.href, id, tab, turnId, settingsTab, adminView);
+function readAppRouteFromPath(pathname = window.location.pathname): AppRoute | null {
+  return readAppRouteFromPathname(pathname);
 }
 
-function homeRouteUrl(
-  tab: HomeRouteTab = "chat",
+function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnId?: string | null): string {
+  return buildSessionRouteUrl(window.location.href, id, tab, turnId);
+}
+
+function homeRouteUrl(tab: HomeRouteTab = "chat"): string {
+  return buildHomeRouteUrl(window.location.href, tab);
+}
+
+function appRouteUrl(
+  tab: AppRouteTab,
   settingsTab: SettingsTab = "preferences",
   adminView: AdminView = "controls",
 ): string {
-  return buildHomeRouteUrl(window.location.href, tab, settingsTab, adminView);
+  return buildAppRouteUrl(window.location.href, tab, settingsTab, adminView);
 }
 
 function routeHasMessageTarget(): boolean {
@@ -1467,15 +1473,9 @@ function readInitialPublicSessionReportRoute(): PublicSessionReportRoute | null 
   return { token };
 }
 
-function replaceSessionRoute(
-  id: string,
-  tab: SessionRouteTab = "chat",
-  turnId?: string | null,
-  settingsTab: SettingsTab = "preferences",
-  adminView: AdminView = "controls",
-): void {
+function replaceSessionRoute(id: string, tab: SessionRouteTab = "chat", turnId?: string | null): void {
   if (routeHasMessageTarget()) return;
-  const next = sessionRouteUrl(id, tab, turnId, settingsTab, adminView);
+  const next = sessionRouteUrl(id, tab, turnId);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -1484,13 +1484,19 @@ function replaceSessionTranscriptRoute(id: string): void {
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
-function replaceHomeRoute(
-  tab: HomeRouteTab = "chat",
+function replaceHomeRoute(tab: HomeRouteTab = "chat"): void {
+  if (routeHasMessageTarget()) return;
+  const next = homeRouteUrl(tab);
+  if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+function replaceAppRoute(
+  tab: AppRouteTab,
   settingsTab: SettingsTab = "preferences",
   adminView: AdminView = "controls",
 ): void {
   if (routeHasMessageTarget()) return;
-  const next = homeRouteUrl(tab, settingsTab, adminView);
+  const next = appRouteUrl(tab, settingsTab, adminView);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -8706,8 +8712,8 @@ function RunSettingsPanel({
   paneFontScalePct,
   setPaneFontScale,
   adminControls,
-  settingsTab,
-  adminView,
+  settingsTab: routedSettingsTab,
+  adminView: routedAdminView,
   onSettingsRouteChange,
 }: {
   runPrefs: RunPrefs;
@@ -8720,21 +8726,39 @@ function RunSettingsPanel({
   paneFontScalePct: number;
   setPaneFontScale: (value: number) => void;
   adminControls?: AdminSettingsControls;
-  settingsTab: SettingsTab;
-  adminView: AdminView;
-  onSettingsRouteChange: (settingsTab: SettingsTab, adminView: AdminView) => void;
+  settingsTab?: SettingsTab;
+  adminView?: AdminView;
+  onSettingsRouteChange?: (settingsTab: SettingsTab, adminView: AdminView) => void;
 }) {
+  const [settingsTab, setLocalSettingsTab] = useState<SettingsTab>(routedSettingsTab ?? "preferences");
+  const [adminView, setLocalAdminView] = useState<AdminView>(routedAdminView ?? "controls");
+  useEffect(() => {
+    if (!routedSettingsTab) return;
+    setLocalSettingsTab(routedSettingsTab);
+  }, [routedSettingsTab]);
+  useEffect(() => {
+    if (!routedAdminView) return;
+    setLocalAdminView(routedAdminView);
+  }, [routedAdminView]);
+  const setSettingsRoute = useCallback(
+    (nextSettingsTab: SettingsTab, nextAdminView: AdminView) => {
+      setLocalSettingsTab(nextSettingsTab);
+      setLocalAdminView(nextAdminView);
+      onSettingsRouteChange?.(nextSettingsTab, nextAdminView);
+    },
+    [onSettingsRouteChange],
+  );
   const showAdminTab = adminControls?.visible === true;
   useEffect(() => {
     if (!showAdminTab && settingsTab === "admin") {
-      onSettingsRouteChange("preferences", "controls");
+      setSettingsRoute("preferences", "controls");
     }
-  }, [onSettingsRouteChange, settingsTab, showAdminTab]);
+  }, [settingsTab, setSettingsRoute, showAdminTab]);
   useEffect(() => {
-    if (settingsTab !== "admin" && adminView !== "controls") {
-      onSettingsRouteChange(settingsTab, "controls");
+    if (!showAdminTab || settingsTab !== "admin") {
+      setSettingsRoute(settingsTab, "controls");
     }
-  }, [adminView, onSettingsRouteChange, settingsTab]);
+  }, [settingsTab, setSettingsRoute, showAdminTab]);
   const settingsScreenClassName =
     settingsTab === "admin" &&
     showAdminTab &&
@@ -8755,7 +8779,7 @@ function RunSettingsPanel({
             className={`run-settings-tab${settingsTab === "preferences" ? " is-active" : ""}`}
             role="tab"
             aria-selected={settingsTab === "preferences"}
-            onClick={() => onSettingsRouteChange("preferences", "controls")}
+            onClick={() => setSettingsRoute("preferences", "controls")}
           >
             Preferences
           </button>
@@ -8764,7 +8788,7 @@ function RunSettingsPanel({
             className={`run-settings-tab${settingsTab === "admin" ? " is-active" : ""}`}
             role="tab"
             aria-selected={settingsTab === "admin"}
-            onClick={() => onSettingsRouteChange("admin", "controls")}
+            onClick={() => setSettingsRoute("admin", "controls")}
           >
             Admin
             {adminObservabilityAttention ? (
@@ -8784,7 +8808,7 @@ function RunSettingsPanel({
                 <button
                   type="button"
                   className="run-settings-back-btn"
-                  onClick={() => onSettingsRouteChange("admin", "controls")}
+                  onClick={() => setSettingsRoute("admin", "controls")}
                 >
                   <ArrowLeftIcon aria-hidden="true" />
                   <span>Admin</span>
@@ -8801,7 +8825,7 @@ function RunSettingsPanel({
                 <button
                   type="button"
                   className="run-settings-back-btn"
-                  onClick={() => onSettingsRouteChange("admin", "controls")}
+                  onClick={() => setSettingsRoute("admin", "controls")}
                 >
                   <ArrowLeftIcon aria-hidden="true" />
                   <span>Admin</span>
@@ -8818,7 +8842,7 @@ function RunSettingsPanel({
                 <button
                   type="button"
                   className="run-settings-back-btn"
-                  onClick={() => onSettingsRouteChange("admin", "controls")}
+                  onClick={() => setSettingsRoute("admin", "controls")}
                 >
                   <ArrowLeftIcon aria-hidden="true" />
                   <span>Admin</span>
@@ -8838,7 +8862,7 @@ function RunSettingsPanel({
             <button
               type="button"
               className="run-settings-link"
-              onClick={() => onSettingsRouteChange("admin", "observability")}
+              onClick={() => setSettingsRoute("admin", "observability")}
             >
               <span className="run-settings-link-label">
                 <ActivityIcon className="run-settings-link-icon" aria-hidden="true" />
@@ -8858,7 +8882,7 @@ function RunSettingsPanel({
             <button
               type="button"
               className="run-settings-link"
-              onClick={() => onSettingsRouteChange("admin", "report")}
+              onClick={() => setSettingsRoute("admin", "report")}
             >
               <span className="run-settings-link-label">
                 <GitBranchIcon className="run-settings-link-icon" aria-hidden="true" />
@@ -8871,7 +8895,7 @@ function RunSettingsPanel({
             <button
               type="button"
               className="run-settings-link"
-              onClick={() => onSettingsRouteChange("admin", "avatars")}
+              onClick={() => setSettingsRoute("admin", "avatars")}
             >
               <span className="run-settings-link-label">
                 <ImageIcon className="run-settings-link-icon" aria-hidden="true" />
@@ -9245,14 +9269,15 @@ function ChatPane({
   const activeToolUseIdRef = useRef<string | null>(null);
   const scheduledWakeupRef = useRef(false);
   const initialSessionRoute = useMemo(() => readSessionRouteFromPath(), []);
+  const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
   const initialRunRoute =
     initialSessionRoute?.sessionId === session.id ? initialSessionRoute : null;
-  const [activeTab, setActiveTab] = useState<RunTab>(initialRunRoute?.tab ?? "chat");
+  const [activeTab, setActiveTab] = useState<RunTab>(initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat");
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
-    initialRunRoute?.tab === "settings" ? initialRunRoute.settingsTab : "preferences",
+    initialAppRoute?.tab === "settings" ? initialAppRoute.settingsTab : "preferences",
   );
   const [adminView, setAdminView] = useState<AdminView>(
-    initialRunRoute?.tab === "settings" ? initialRunRoute.adminView : "controls",
+    initialAppRoute?.tab === "settings" ? initialAppRoute.adminView : "controls",
   );
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(
     initialRunRoute?.tab === "turns" ? initialRunRoute.turnId : null,
@@ -10264,6 +10289,21 @@ function ChatPane({
   const applyCurrentSessionRoute = useCallback(() => {
     if (publicView) return;
     if (!visible) return;
+    const appRoute = readAppRouteFromPath();
+    if (appRoute?.tab === "settings") {
+      setActiveTab("settings");
+      setSettingsTab(appRoute.settingsTab);
+      setAdminView(appRoute.adminView);
+      setPendingRouteTurnId(null);
+      setPendingTurnViewRouteAnchor(null);
+      return;
+    }
+    if (appRoute?.tab === "help") {
+      setActiveTab("help");
+      setPendingRouteTurnId(null);
+      setPendingTurnViewRouteAnchor(null);
+      return;
+    }
     const route = readSessionRouteFromPath();
     if (route?.sessionId !== session.id) return;
     if (route.tab === "turns") {
@@ -10271,20 +10311,6 @@ function ChatPane({
       setPendingRouteTurnId(route.turnId);
       if (route.turnId) setSelectedTurnId(route.turnId);
       setPendingTurnViewRouteAnchor("bottom");
-      return;
-    }
-    if (route.tab === "settings") {
-      setActiveTab("settings");
-      setSettingsTab(route.settingsTab);
-      setAdminView(route.adminView);
-      setPendingRouteTurnId(null);
-      setPendingTurnViewRouteAnchor(null);
-      return;
-    }
-    if (route.tab === "help") {
-      setActiveTab("help");
-      setPendingRouteTurnId(null);
-      setPendingTurnViewRouteAnchor(null);
       return;
     }
     setActiveTab("chat");
@@ -12445,22 +12471,13 @@ function ChatPane({
     if (activeTab === "turns") {
       replaceSessionRoute(session.id, "turns", routedSelectedTurnId);
     } else if (activeTab === "settings") {
-      replaceSessionRoute(session.id, "settings", null, settingsTab, adminView);
+      replaceAppRoute("settings", settingsTab, adminView);
     } else if (activeTab === "help") {
-      replaceSessionRoute(session.id, "help");
+      replaceAppRoute("help");
     } else {
       replaceSessionRoute(session.id, "chat");
     }
-  }, [
-    activeTab,
-    adminView,
-    pendingScrollMessageId,
-    publicView,
-    routedSelectedTurnId,
-    session.id,
-    settingsTab,
-    visible,
-  ]);
+  }, [activeTab, adminView, pendingScrollMessageId, publicView, routedSelectedTurnId, session.id, settingsTab, visible]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -14242,6 +14259,7 @@ function AuthenticatedApp() {
   useEffect(() => {
     const url = new URL(window.location.href);
     if (active) {
+      if (readAppRouteFromPath()) return;
       const route = readSessionRouteFromPath();
       if (route?.sessionId === active && !routeHasMessageTarget()) {
         url.searchParams.delete("session");
@@ -14252,14 +14270,7 @@ function AuthenticatedApp() {
         url.searchParams.set("session", active);
       }
     } else {
-      if (
-        routeHasMessageTarget() ||
-        readPendingGitHubInstallState() ||
-        readInstallError() ||
-        readSessionRouteFromPath()
-      ) {
-        return;
-      }
+      if (readAppRouteFromPath() || readHomeRouteFromPath()) return;
       url.searchParams.delete("session");
     }
     window.history.replaceState({}, "", url.toString());
@@ -14329,15 +14340,16 @@ function AuthenticatedApp() {
   const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
+  const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
   const initialHomeRoute = useMemo(() => readHomeRouteFromPath(), []);
   const [homeActiveTab, setHomeActiveTab] = useState<HomeTab>(
-    initialHomeRoute?.tab ?? "chat",
+    initialAppRoute?.tab ?? initialHomeRoute?.tab ?? "chat",
   );
   const [homeSettingsTab, setHomeSettingsTab] = useState<SettingsTab>(
-    initialHomeRoute?.tab === "settings" ? initialHomeRoute.settingsTab : "preferences",
+    initialAppRoute?.tab === "settings" ? initialAppRoute.settingsTab : "preferences",
   );
   const [homeAdminView, setHomeAdminView] = useState<AdminView>(
-    initialHomeRoute?.tab === "settings" ? initialHomeRoute.adminView : "controls",
+    initialAppRoute?.tab === "settings" ? initialAppRoute.adminView : "controls",
   );
   const [sessionViewScopeOverride, setSessionViewScopeOverride] = useState(
     readInitialSessionViewScopeOverride,
@@ -14582,16 +14594,24 @@ function AuthenticatedApp() {
       setHomeSettingsTab(nextSettingsTab);
       setHomeAdminView(nextAdminView);
       setHomeActiveTab("settings");
+      replaceAppRoute("settings", nextSettingsTab, nextAdminView);
     },
     [],
   );
   const applyCurrentHomeRoute = useCallback(() => {
     if (active !== null) return;
+    const appRoute = readAppRouteFromPath();
+    if (appRoute) {
+      setHomeActiveTab(appRoute.tab);
+      setHomeSettingsTab(appRoute.settingsTab);
+      setHomeAdminView(appRoute.adminView);
+      return;
+    }
     const route = readHomeRouteFromPath();
     if (!route) return;
     setHomeActiveTab(route.tab);
-    setHomeSettingsTab(route.settingsTab);
-    setHomeAdminView(route.adminView);
+    setHomeSettingsTab("preferences");
+    setHomeAdminView("controls");
   }, [active]);
   useEffect(() => {
     applyCurrentHomeRoute();
@@ -14611,7 +14631,15 @@ function AuthenticatedApp() {
     ) {
       return;
     }
-    replaceHomeRoute(homeActiveTab, homeSettingsTab, homeAdminView);
+    if (homeActiveTab === "settings") {
+      replaceAppRoute("settings", homeSettingsTab, homeAdminView);
+      return;
+    }
+    if (homeActiveTab === "help") {
+      replaceAppRoute("help");
+      return;
+    }
+    replaceHomeRoute("chat");
   }, [active, homeActiveTab, homeAdminView, homeSettingsTab]);
 
   useEffect(() => {
@@ -16544,6 +16572,31 @@ function AuthenticatedApp() {
                   <span>Back</span>
                 </button>
               )}
+              <TurnsTab
+                active={false}
+                disabled
+                onOpen={() => undefined}
+              />
+              <BackgroundLedger
+                entries={[]}
+                active={false}
+                onOpen={() => undefined}
+                disabled
+                title="Background activity is available once the session starts"
+              />
+              <button
+                type="button"
+                className="run-tab"
+                disabled
+                title="Files are available once the session starts"
+              >
+                <FolderIcon
+                  className="run-tab-icon"
+                  strokeWidth={1.8}
+                  aria-hidden="true"
+                />
+                <span>Files</span>
+              </button>
               <button
                 type="button"
                 className={`run-tab${homeActiveTab === "settings" ? " run-tab-active" : ""}`}

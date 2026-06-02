@@ -336,12 +336,15 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes("const turnsAvailable = turnViewItems.length > 0"), true);
   assert.equal(appSource.includes("function readSessionRouteFromPath"), true);
   assert.equal(appRoutesSource.includes('url.pathname = `/sessions/${encodedId}${'), true);
-  assert.equal(appRoutesSource.includes('tab === "settings"'), true);
-  assert.equal(appRoutesSource.includes('tab === "help"'), true);
-  assert.equal(appRoutesSource.includes('url.pathname = `/new${'), true);
-  assert.equal(appSource.includes('replaceSessionRoute(session.id, "settings", null, settingsTab, adminView)'), true);
-  assert.equal(appSource.includes('replaceSessionRoute(session.id, "help")'), true);
-  assert.equal(appSource.includes("replaceHomeRoute(homeActiveTab, homeSettingsTab, homeAdminView)"), true);
+  assert.equal(appRoutesSource.includes('export type SessionRouteTab = "chat" | "turns";'), true);
+  assert.equal(appRoutesSource.includes('export type AppRouteTab = "settings" | "help";'), true);
+  assert.equal(appRoutesSource.includes("readAppRouteFromPathname"), true);
+  assert.equal(appRoutesSource.includes("buildAppRouteUrl"), true);
+  assert.equal(appRoutesSource.includes('url.pathname = "/new";'), true);
+  assert.equal(appSource.includes('replaceSessionRoute(session.id, "settings"'), false);
+  assert.equal(appSource.includes('replaceSessionRoute(session.id, "help"'), false);
+  assert.equal(appSource.includes('replaceAppRoute("settings", homeSettingsTab, homeAdminView)'), true);
+  assert.equal(appSource.includes('replaceAppRoute("help")'), true);
   assert.equal(appSource.includes('setActiveTab("turns")'), true);
   assert.equal(appSource.includes("replaceSessionRoute(session.id, \"turns\", routedSelectedTurnId)"), true);
   assert.equal(appSource.includes("window.addEventListener(\"popstate\", applyCurrentSessionRoute)"), true);
@@ -356,7 +359,10 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes("function TurnsTab"), true);
   assert.equal(appSource.includes("openTurnPage"), true);
   assert.match(appSource, /<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{!turnsAvailable\}/);
-  assert.equal(appSource.includes('active={false}\n                disabled'), false);
+  assert.match(
+    appSource,
+    /<TurnsTab\n\s+active=\{false\}\n\s+disabled\n\s+onOpen=\{\(\) => undefined\}/,
+  );
   assert.match(appSource, /if \(activeTab !== "turns" \|\| turnsAvailable\) return;/);
   assert.equal(indexCssSource.includes(".run-turn-view"), true);
   assert.equal(indexCssSource.includes('.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"]'), true);
@@ -701,7 +707,7 @@ test("background page uses stacked full-width sections instead of a side pane", 
   assert.equal(indexCssSource.includes("border-right: 1px solid var(--border-subtle);"), false);
 });
 
-test("background tab stays discoverable before active-session background entries exist", () => {
+test("background tab stays discoverable before background entries exist", () => {
   const backgroundLedgerMatch = appSource.match(
     /function BackgroundLedger\([\s\S]*?\n}\n\nfunction BackgroundMeta/,
   );
@@ -709,11 +715,10 @@ test("background tab stays discoverable before active-session background entries
   assert.equal(backgroundLedgerMatch[0]!.includes("entries.length === 0"), false);
   assert.match(appSource, /<span>Background<\/span>/);
   assert.match(appSource, /disabled\?: boolean;/);
-  assert.equal(
-    appSource.includes('title="Background activity is available once the session starts"'),
-    false,
+  assert.match(
+    appSource,
+    /<BackgroundLedger\n\s+entries=\{\[\]\}\n\s+active=\{false\}\n\s+onOpen=\{\(\) => undefined\}\n\s+disabled\n\s+title="Background activity is available once the session starts"/,
   );
-  assert.equal(appSource.includes('title="Files are available once the session starts"'), false);
 });
 
 test("background page includes active shell invocations alongside managed tasks", () => {

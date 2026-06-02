@@ -1,7 +1,8 @@
 export type SettingsTab = "preferences" | "admin";
 export type AdminView = "controls" | "avatars" | "report" | "observability";
-export type SessionRouteTab = "chat" | "turns" | "settings" | "help";
-export type HomeRouteTab = "chat" | "settings" | "help";
+export type SessionRouteTab = "chat" | "turns";
+export type HomeRouteTab = "chat";
+export type AppRouteTab = "settings" | "help";
 
 export type SettingsRoute = {
   settingsTab: SettingsTab;
@@ -16,6 +17,10 @@ export type SessionRoute = SettingsRoute & {
 
 export type HomeRoute = SettingsRoute & {
   tab: HomeRouteTab;
+};
+
+export type AppRoute = SettingsRoute & {
+  tab: AppRouteTab;
 };
 
 const defaultSettingsRoute: SettingsRoute = {
@@ -75,31 +80,25 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       ...defaultSettingsRoute,
     };
   }
-  if (parts[2] === "settings") {
-    return {
-      sessionId: parts[1],
-      tab: "settings",
-      turnId: null,
-      ...readSettingsRoute(parts.slice(3)),
-    };
-  }
-  if (parts[2] === "help") {
-    return { sessionId: parts[1], tab: "help", turnId: null, ...defaultSettingsRoute };
-  }
-  return { sessionId: parts[1], tab: "chat", turnId: null, ...defaultSettingsRoute };
+  return null;
 }
 
 export function readHomeRouteFromPathname(pathname: string): HomeRoute | null {
   const parts = routeParts(pathname);
   if (parts[0] !== "new") return null;
   if (parts.length === 1) return { tab: "chat", ...defaultSettingsRoute };
-  if (parts[1] === "settings") {
+  return null;
+}
+
+export function readAppRouteFromPathname(pathname: string): AppRoute | null {
+  const parts = routeParts(pathname);
+  if (parts[0] === "settings") {
     return {
       tab: "settings",
-      ...readSettingsRoute(parts.slice(2)),
+      ...readSettingsRoute(parts.slice(1)),
     };
   }
-  if (parts[1] === "help") return { tab: "help", ...defaultSettingsRoute };
+  if (parts[0] === "help") return { tab: "help", ...defaultSettingsRoute };
   return null;
 }
 
@@ -113,19 +112,13 @@ export function buildSessionRouteUrl(
   id: string,
   tab: SessionRouteTab = "chat",
   turnId?: string | null,
-  settingsTab: SettingsTab = "preferences",
-  adminView: AdminView = "controls",
 ): string {
   const url = new URL(currentHref);
   const encodedId = encodeURIComponent(id);
   url.pathname = `/sessions/${encodedId}${
     tab === "turns"
       ? `/turns${turnId ? `/${encodeURIComponent(turnId)}` : ""}`
-      : tab === "settings"
-        ? settingsPath(settingsTab, adminView)
-        : tab === "help"
-          ? "/help"
-          : ""
+      : ""
   }`;
   url.search = "";
   url.hash = "";
@@ -134,17 +127,28 @@ export function buildSessionRouteUrl(
 
 export function buildHomeRouteUrl(
   currentHref: string,
-  tab: HomeRouteTab = "chat",
+  _tab: HomeRouteTab = "chat",
+): string {
+  const url = new URL(currentHref);
+  url.pathname = "/new";
+  url.search = "";
+  url.hash = "";
+  return url.toString();
+}
+
+export function buildAppRouteUrl(
+  currentHref: string,
+  tab: AppRouteTab,
   settingsTab: SettingsTab = "preferences",
   adminView: AdminView = "controls",
 ): string {
   const url = new URL(currentHref);
-  url.pathname = `/new${
+  url.pathname = `${
     tab === "settings"
       ? settingsPath(settingsTab, adminView)
       : tab === "help"
         ? "/help"
-        : ""
+        : "/settings"
   }`;
   url.search = "";
   url.hash = "";
