@@ -139,7 +139,14 @@ export function formatCompactTokens(value: number): string {
   const safeValue = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
   if (safeValue < 1_000) return String(safeValue);
   if (safeValue < 1_000_000) return `${Math.floor(safeValue / 1_000)}k`;
-  return `${Math.floor(safeValue / 1_000_000)}m`;
+  return formatCompactMillionTokens(safeValue);
+}
+
+function formatCompactMillionTokens(value: number): string {
+  const wholeMillions = Math.floor(value / 1_000_000);
+  const millionHundredths = Math.floor((value % 1_000_000) / 10_000);
+  if (millionHundredths === 0) return `${wholeMillions}m`;
+  return `${wholeMillions}.${String(millionHundredths).padStart(2, "0").replace(/0+$/, "")}m`;
 }
 
 export function currentContextTokenCount(

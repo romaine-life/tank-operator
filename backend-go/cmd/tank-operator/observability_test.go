@@ -27,6 +27,7 @@ func TestMetricsEndpointServesPrometheus(t *testing.T) {
 	body, _ := io.ReadAll(rr.Body)
 	for _, want := range [][]byte{
 		[]byte("tank_session_event_stream_open_total"),
+		[]byte("tank_session_event_stream_heartbeat_catchup_total"),
 	} {
 		if !bytes.Contains(body, want) {
 			t.Fatalf("/metrics body missing %s, got first 400 bytes: %q", want, string(body[:min(len(body), 400)]))

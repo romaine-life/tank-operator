@@ -129,14 +129,23 @@ All metric names are prefixed `tank_`. The full namespace:
 - `tank_session_event_wake_published_total` /
   `tank_session_event_wake_received_total` /
   `tank_session_event_persist_to_wake_seconds` — the per-session SSE
-  wake fabric stethoscope. Published vs received delta over the same
-  window is the candidate-A wake-key-mismatch signature (the persister
-  is publishing to a subject the SSE subscriber is not listening for).
+  wake fabric throughput surface. Published and received are not a
+  delivery-loss ratio: published increments once per durable event wake,
+  while received increments once per delivery to an open subscriber.
   All unlabeled aggregates per the cardinality rules below; per-stream
   resolution lives in `GET /api/debug/session-event-streams`
   (admin-only) and in the persister's `slog.Info("session event
   persister wake published", subject=..., storage_key=...,
   event_type=..., order_key=..., tank_session_id=...)` line.
+- `tank_session_event_stream_heartbeat_catchup_total` — an open
+  `/api/sessions/{id}/events` stream emitted durable transcript rows
+  immediately after heartbeat polling, rather than after a NATS wake.
+  Each increment proves a connected stream was behind the durable
+  `session_transcript_rows` projection until the heartbeat path caught
+  it up. The matching `slog.Warn("session event stream caught up from
+  heartbeat", session_id=..., stream_id=..., storage_key=...,
+  cursor_before=..., cursor_after=...)` line is the per-stream
+  investigation entry point.
 - `tank_session_event_stream_emitted_by_type_total{event_type}` —
   per-emitted browser stream counter paired with
   `tank_session_event_client_received_total{event_type, session_mode}`.
@@ -601,9 +610,8 @@ declares one rule group per subsystem:
   failures (any non-success result).
 - **mcp-auth-proxy**: SA token read failures, MCP upstream 5xx rate.
 - **Runners**: provider error rate, pending wakeup queue depth.
-- **Session spawn**: median spawn time across the trailing 24h (image
-  distribution health), and any single-spawn outlier above 60s in the
-  trailing hour. Backed by recording rules
+- **Session spawn**: any single-spawn outlier above 60s in the trailing
+  hour. Backed by recording rules
   `tank:session_pod_spawn_seconds:p50_24h`,
   `tank:session_pod_spawn_seconds:p95_24h`, and
   `tank:session_pod_spawn_seconds:max_1h`, derived from
@@ -614,12 +622,9 @@ declares one rule group per subsystem:
   per-pod series to single scalars so the forbidden-labels rule above
   is respected for stored series; the per-pod dashboard panel renders
   the same primitive on-demand, labeled by `namespace/pod` so slot vs
-  production pods are distinguishable. The two failure modes worth
-  separating: image distribution (cold pulls cluster around 27-33s)
-  and cluster CPU/memory request packing (FailedScheduling, pods sit
-  Pending for minutes). The latter typically only shows up in the
-  outlier alert (`max_1h > 60s`) since one stuck pod doesn't move the
-  median.
+  production pods are distinguishable. The p50/p95 recording rules are
+  dashboard context only; the alertable failure mode is a concrete recent
+  outlier (`max_1h > 60s`) where an operator can inspect the affected pod.
 
 Severity is `info` for "diagnostic-only, page nobody", `warning` for
 "a user feature is degraded", `critical` for "user-trust is on the line"

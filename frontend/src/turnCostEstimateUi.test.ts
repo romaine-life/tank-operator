@@ -40,8 +40,27 @@ test("composer context percentage uses provider-observed session window", () => 
   assert.match(appSource, /runtimeContextWindowTokens > 0/);
   assert.match(appSource, /contextWindow: runtimeContextWindowTokens/);
   assert.match(cssSource, /run-usage-ring/);
+  assert.doesNotMatch(appSource, /run-usage-ring-svg/);
+  assert.doesNotMatch(appSource, /data-level="mid"/);
   assert.doesNotMatch(appSource, /CONTEXT_WINDOW_BY_MODEL/);
   assert.doesNotMatch(appSource, /getContextWindow/);
+});
+
+test("composer cost estimate reserves dashes for explicit loading placeholders", () => {
+  assert.match(appSource, /const unavailable = placeholder;/);
+  assert.doesNotMatch(appSource, /placeholder\s*\|\|\s*amountUsd === null/);
+  assert.match(appSource, /typeof amountUsd === "number"[\s\S]*?: 0;/);
+  assert.match(appSource, /typeof tokens === "number"[\s\S]*?: 0;/);
+});
+
+test("home composer starts cost and context values at zero", () => {
+  assert.match(appSource, /cost=\{\{[\s\S]*?amountUsd: 0,[\s\S]*?tokens: 0,[\s\S]*?title: "Cost estimate appears after usage is available"/);
+  assert.doesNotMatch(appSource, /cost=\{\{[\s\S]*?amountUsd: null,[\s\S]*?placeholder: true,[\s\S]*?Cost estimate appears after the session starts/);
+});
+
+test("active session composer keeps dashes while transcript usage is loading", () => {
+  assert.match(appSource, /const sessionUsageLoading =[\s\S]*timelineBootstrap\.status === "idle"[\s\S]*timelineBootstrap\.status === "loading"/);
+  assert.match(appSource, /cost=\{\{[\s\S]*?amountUsd: sessionCostEstimate\?\.amountUsd \?\? null,[\s\S]*?tokens: tokensUsed,[\s\S]*?placeholder: sessionUsageLoading/);
 });
 
 test("turn token count uses current context pressure", () => {

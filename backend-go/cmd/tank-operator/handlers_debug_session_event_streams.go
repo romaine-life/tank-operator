@@ -66,11 +66,16 @@ func (s *appServer) handleDebugSessionEventStreams(w http.ResponseWriter, r *htt
 // otherwise have to guess about."
 const debugSessionEventStreamsDescription = `Per-open-SSE-handler diagnostic surface for /api/sessions/{id}/events.
 
-How to read the candidate-A wake-key-mismatch signature: wakes_received
-stays at 0 even while the durable ledger gains new rows for this session
-(check tank_session_event_wake_published_total at /metrics). The
-last_wake_subject field shows what subject NATS is delivering on (if
-anything); the storage_key field shows what the handler subscribed for.
+How to read the heartbeat-catchup signature: Prometheus
+tank_session_event_stream_heartbeat_catchup_total increments and the
+server logs "session event stream caught up from heartbeat" with
+session_id, stream_id, storage_key, cursor_before, and cursor_after.
+On this endpoint, inspect the matching stream's wakes_received,
+last_wake_subject, last_emit_at, and cursor_after_order_key. If the
+cursor advanced while wakes_received stayed flat, inspect the wake
+subject wiring. If wakes_received advanced but heartbeat catch-up still
+fired, inspect the handler notify loop and NATS callback on that
+replica.
 
 How to read the candidate-B zombie-SSE signature: last_emit_at is
 seconds-fresh, then stops advancing while heartbeats_sent keeps

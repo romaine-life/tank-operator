@@ -268,47 +268,47 @@ spec:
             summary: "tank-operator wake/event publishes to NATS are failing"
             runbook: "SSE clients will lag behind durable state until the next heartbeat or cursor-resume reconnect. Check NATS health in the nats namespace."
 
-        # ----- Per-session SSE wake-fabric stethoscope -----
+        # ----- Per-session SSE live-delivery stethoscope -----
         #
         # The three alerts below correspond to the candidate-A / B / C
         # failure shapes catalogued in docs/observability.md →
         # "Per-stream debug surface" and the persister's slog.Info
         # "session event persister wake published" line.
         #
-        # Candidate A — wake-key mismatch. The persister fires wakes on
-        # a subject the SSE handler is not subscribed for. Symptom:
-        # wakes_published climbs, wakes_received does not. Threshold:
-        # 5% sustained divergence over 10m, severity warning (user-
-        # visible only when an actual wake is lost; SSE clients catch
-        # up on next heartbeat or reconnect).
-        - alert: TankSessionEventWakeDeliveryGap
+        # Candidate A — an already-open SSE stream had durable transcript
+        # rows waiting, but did not emit them until the heartbeat poll
+        # read Postgres. This is an observed stream-local failure, not a
+        # published-vs-received aggregate: wake publishes are one per
+        # durable event, wake receives are one per subscriber delivery,
+        # and those totals are not a loss ratio.
+        - alert: TankSessionEventHeartbeatCatchup
           expr: |
-            (
-              sum(rate(tank_session_event_wake_published_total[10m]))
-                - sum(rate(tank_session_event_wake_received_total[10m]))
-            )
-              / clamp_min(sum(rate(tank_session_event_wake_published_total[10m])), 0.001)
-              > 0.05
-          for: 10m
+            sum(increase(tank_session_event_stream_heartbeat_catchup_total[10m])) > 0
+          for: 5m
           labels:
             severity: warning
           annotations:
-            summary: "session-event wakes are being published faster than they are received"
+            summary: "an open session-event stream caught up from heartbeat polling"
             runbook: |
-              The persister (or a direct-writer call site) is publishing
-              to a per-session wake subject that no SSE handler is
-              subscribed for. The most common cause is a storage_key
-              shape drift between producer and subscriber in a
-              non-default scope. Resolve per-session via
-              GET /api/debug/session-event-streams (admin only): if a
-              specific stream shows wakes_received=0 while
-              tank_session_event_wake_published_total is climbing for
-              the same window, last_wake_subject will be empty and
-              storage_key will show what the handler expected to
-              receive on. Check
-              backend-go/internal/sessionmodel.SessionStorageKey and
-              the runner's TANK_SESSION_STORAGE_KEY env vs.
-              cmd/tank-operator's sessionScope.
+              At least one already-open /api/sessions/{id}/events SSE
+              stream emitted durable transcript rows immediately after
+              the heartbeat poll, not after a NATS wake. That proves the
+              user waited until heartbeat catch-up for rows that already
+              existed in session_transcript_rows.
+
+              Inspect the matching slog.Warn line:
+              "session event stream caught up from heartbeat" includes
+              session_id, stream_id, storage_key, cursor_before, and
+              cursor_after. Then query GET
+              /api/debug/session-event-streams (admin only) on the pod
+              serving that stream. If WakesReceived stayed flat while
+              cursor_after advanced, inspect wake subject wiring:
+              backend-go/internal/sessionmodel.SessionStorageKey,
+              backend-go/internal/sessionbus.WakeSubject, and the
+              runner's TANK_SESSION_STORAGE_KEY. If WakesReceived
+              advanced but the heartbeat catch-up still fired, inspect
+              the SSE handler notify loop and NATS subscription callback
+              on that replica.
 
         # Candidate B — zombie SSE. The browser's silence watchdog
         # observes long idle intervals while a turn is in flight.
@@ -333,10 +333,11 @@ spec:
               tank events for >30s while a turn is in flight.
               Canonical zombie-connection signature: proxy / LB has
               dropped the data path without sending FIN. Compare with
-              TankSessionEventWakeDeliveryGap — if wake_published vs
-              wake_received are healthy, the failure is between the
-              orchestrator and the browser, not in the wake fabric.
-              Likely surface: ingress / load balancer idle timeout.
+              TankSessionEventHeartbeatCatchup and the server-side
+              stream debug endpoint: if the server has fresh wakes and
+              emits, the failure is between the orchestrator and the
+              browser, not in the wake fabric. Inspect ingress / load
+              balancer idle timeout.
 
         - alert: TankBrowserQueuedFollowupBlockedAfterTerminal
           expr: |
@@ -1286,25 +1287,6 @@ spec:
                 - on(pod, namespace) kube_pod_created{namespace=~"tank-operator(-slot-[0-9]+)?-sessions"})
               and on(pod, namespace) (time() - kube_pod_created{namespace=~"tank-operator(-slot-[0-9]+)?-sessions"} < 3600)
             )
-
-        - alert: TankSessionSpawnSlowMedian
-          expr: tank:session_pod_spawn_seconds:p50_24h > 5
-          for: 1h
-          labels:
-            severity: warning
-          annotations:
-            summary: "Median session-pod spawn time over the last 24h exceeded 5s"
-            runbook: |
-              Every spawn appears to be paying the full image-pull cost, which means
-              session-image distribution is failing at the cluster level. Likely
-              causes in order of probability: (1) the session pool has just
-              autoscaled up and new nodes are pulling cold, (2) kubelet image GC
-              has evicted the cached image cluster-wide (check disk pressure on the
-              session pool), (3) a new image SHA was pushed and no pre-pull
-              mechanism is keeping the cache warm. Confirm via the "Big-image pull
-              rate by node" panel — if every node is pulling, distribution is the
-              problem; if only one node is, that node is the problem. Baseline at
-              introduction (2026-05): warm spawns 2-3s, cold pulls 27-33s, median 3s.
 
         - alert: TankSessionSpawnSlowOutlier
           expr: tank:session_pod_spawn_seconds:max_1h > 60

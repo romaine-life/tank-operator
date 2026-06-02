@@ -45,9 +45,23 @@ test("chat composer slash command highlight is drawn behind textarea text", () =
 
 test("chat composer cost estimate keeps a fixed-width footprint", () => {
   const composerRule = cssRule(".run-cost-estimate");
-  assert.match(composerRule, /width:\s*8\.4rem;/);
-  assert.match(composerRule, /flex:\s*0\s+0\s+8\.4rem;/);
+  assert.match(composerRule, /width:\s*8\.8rem;/);
+  assert.match(composerRule, /flex:\s*0\s+0\s+8\.8rem;/);
   assert.match(composerRule, /white-space:\s*nowrap;/);
+
+  const usageRule = cssRule(".run-usage-ring");
+  assert.match(usageRule, /flex:\s*0\s+0\s+2rem;/);
+
+  const iconRule = cssRule(".run-composer-icon-btn");
+  assert.match(iconRule, /flex:\s*0\s+0\s+2rem;/);
+
+  const modelRule = cssRule(".run-model-chip");
+  assert.match(modelRule, /flex:\s*0\s+0\s+auto;/);
+  assert.match(modelRule, /min-width:\s*0;/);
+
+  const modelLabelRule = cssRule(".run-model-chip-label");
+  assert.match(modelLabelRule, /flex:\s*1\s+1\s+auto;/);
+  assert.match(modelLabelRule, /text-overflow:\s*ellipsis;/);
 
   const metricRule = cssRule(".run-cost-estimate-metric");
   assert.match(metricRule, /flex:\s*1\s+1\s+0;/);
@@ -107,12 +121,13 @@ test("composer footer reflows controls instead of clipping them under zoom", () 
   assert.match(footerRule, /overflow-y:\s*auto;/);
 
   const toolsRule = cssRule(".run-composer-tools");
-  assert.match(toolsRule, /flex-wrap:\s*wrap;/);
+  assert.match(toolsRule, /flex-wrap:\s*nowrap;/);
   assert.match(toolsRule, /flex:\s*1\s+1\s+14rem;/);
   assert.match(toolsRule, /min-width:\s*0;/);
   assert.match(toolsRule, /max-width:\s*100%;/);
 
-  assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate\s*\{[\s\S]*?flex-basis:\s*6\.2rem;/);
+  assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-composer-tools\s*\{[\s\S]*?flex-wrap:\s*wrap;/);
+  assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate\s*\{[\s\S]*?flex-basis:\s*6\.6rem;/);
   assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate-label\s*\{[\s\S]*?display:\s*none;/);
   assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-model-chip\s*\{[\s\S]*?max-width:\s*min\(11rem,\s*100%\);/);
 

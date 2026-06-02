@@ -235,7 +235,7 @@ data:
         {
           "id": 14,
           "title": "Session pod spawn p50 / p95 (24h trailing)",
-          "description": "Time from pod creation to ContainersReady across session pods (production + every test slot) created in the trailing 24h. Backed by recording rules tank:session_pod_spawn_seconds:p50_24h and :p95_24h. The alert TankSessionSpawnSlowMedian fires when p50 > 5s for 1h — typical causes are cold-pull image distribution OR cluster CPU/memory request packing forcing FailedScheduling.",
+          "description": "Time from pod creation to ContainersReady across session pods (production + every test slot) created in the trailing 24h. Backed by recording rules tank:session_pod_spawn_seconds:p50_24h and :p95_24h. Use this as dashboard context; the alertable spawn signal is the recent outlier rule.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 56 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
@@ -282,12 +282,16 @@ data:
         },
         {
           "id": 18,
-          "title": "SSE wake fabric: published vs received (5m rate)",
-          "description": "Candidate-A wake-key-mismatch stethoscope. Published (persister + direct writers) should track received (orchestrator-side NATS subscribers) closely. A sustained gap means wakes are firing on subjects nobody is subscribed to — typically the storage_key shape drifted between producer and SSE handler in a non-default scope. Aggregate-only; per-stream resolution lives at GET /api/debug/session-event-streams (admin only).",
+          "title": "SSE live delivery: heartbeat catchups and wake throughput",
+          "description": "Heartbeat catchups are the correctness signal: an open /api/sessions/{id}/events stream emitted durable transcript rows after heartbeat polling instead of after a NATS wake. Wake published and received are throughput context only: published is one per durable event wake, received is one per subscriber delivery, so their delta is not a loss ratio. Per-stream resolution lives at GET /api/debug/session-event-streams (admin only) and the \"session event stream caught up from heartbeat\" slog line.",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 72 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
           "targets": [
+            {
+              "expr": "sum(rate(tank_session_event_stream_heartbeat_catchup_total[5m]))",
+              "legendFormat": "heartbeat_catchup"
+            },
             {
               "expr": "sum(rate(tank_session_event_wake_published_total[5m]))",
               "legendFormat": "published"
@@ -346,7 +350,7 @@ data:
         {
           "id": 21,
           "title": "Browser SSE silent-while-running (p95 over 30m)",
-          "description": "Candidate-B zombie-SSE stethoscope. The browser's silence watchdog observes the idle interval whenever a connected stream has gone >30s without a tank-event while a turn is in flight. p95 climbing into the minute-range is the canonical signature: TCP socket is alive (browser thinks connected), no events flowing, no error fires. Pair with id 18 — if wake_received is healthy but this histogram climbs, the failure is between the orchestrator and the browser (proxy / LB idle timeout), not inside the wake fabric.",
+          "description": "Candidate-B zombie-SSE stethoscope. The browser's silence watchdog observes the idle interval whenever a connected stream has gone >30s without a tank-event while a turn is in flight. p95 climbing into the minute-range is the canonical signature: TCP socket is alive (browser thinks connected), no events flowing, no error fires. Pair with id 18 and /api/debug/session-event-streams: if the server has fresh wakes and emits but the browser reports silence, inspect the path between orchestrator and browser (proxy / LB idle timeout).",
           "type": "timeseries",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 80 },
           "datasource": { "type": "prometheus", "uid": "prometheus" },
