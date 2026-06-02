@@ -16544,31 +16544,6 @@ function AuthenticatedApp() {
                   <span>Back</span>
                 </button>
               )}
-              <TurnsTab
-                active={false}
-                disabled
-                onOpen={() => undefined}
-              />
-              <BackgroundLedger
-                entries={[]}
-                active={false}
-                onOpen={() => undefined}
-                disabled
-                title="Background activity is available once the session starts"
-              />
-              <button
-                type="button"
-                className="run-tab"
-                disabled
-                title="Files are available once the session starts"
-              >
-                <FolderIcon
-                  className="run-tab-icon"
-                  strokeWidth={1.8}
-                  aria-hidden="true"
-                />
-                <span>Files</span>
-              </button>
               <button
                 type="button"
                 className={`run-tab${homeActiveTab === "settings" ? " run-tab-active" : ""}`}
