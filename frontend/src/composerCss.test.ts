@@ -71,16 +71,24 @@ test("chat composer cost estimate keeps a fixed-width footprint", () => {
   assert.match(turnRule, /flex:\s*0\s+0\s+auto;/);
 });
 
-test("workspace can scroll the full composer into view at high browser zoom", () => {
+test("run pane keeps the composer inside the viewport at high browser zoom", () => {
   const workspaceRule = cssRule(".workspace");
-  assert.match(workspaceRule, /overflow-x:\s*hidden;/);
-  assert.match(workspaceRule, /overflow-y:\s*auto;/);
+  assert.match(workspaceRule, /overflow:\s*hidden;/);
+  assert.doesNotMatch(workspaceRule, /overflow-x:\s*hidden;/);
+  assert.doesNotMatch(workspaceRule, /overflow-y:\s*auto;/);
 
   const runPanelRule = cssRule(".run-panel");
-  assert.match(runPanelRule, /min-height:\s*100%;/);
-  assert.doesNotMatch(runPanelRule, /^\s*height:\s*100%;/m);
+  assert.match(runPanelRule, /^\s*height:\s*100%;/m);
+  assert.match(runPanelRule, /min-height:\s*0;/);
+  assert.doesNotMatch(runPanelRule, /min-height:\s*100%;/);
+
+  const runMainFrameRule = cssRule(".run-main-frame");
+  assert.match(runMainFrameRule, /flex:\s*1\s+1\s+0;/);
+  assert.match(runMainFrameRule, /min-height:\s*0;/);
 
   const composerWrapRule = cssRule(".run-composer-wrap");
+  assert.match(composerWrapRule, /flex:\s*0\s+1\s+auto;/);
+  assert.match(composerWrapRule, /min-height:\s*0;/);
   assert.match(
     composerWrapRule,
     /padding:\s*var\(--space-3\)\s+var\(--space-5\)\s+max\(var\(--space-5\),\s*env\(safe-area-inset-bottom\)\);/,
@@ -88,11 +96,25 @@ test("workspace can scroll the full composer into view at high browser zoom", ()
 });
 
 test("composer footer reflows controls instead of clipping them under zoom", () => {
-  assert.match(cssRule(".run-composer-footer"), /flex-wrap:\s*wrap;/);
+  const composerRule = cssRule(".run-composer");
+  assert.match(composerRule, /container-type:\s*inline-size;/);
+  assert.match(composerRule, /min-width:\s*0;/);
+
+  const footerRule = cssRule(".run-composer-footer");
+  assert.match(footerRule, /flex-wrap:\s*wrap;/);
+  assert.match(footerRule, /min-width:\s*0;/);
+  assert.match(footerRule, /max-height:\s*min\(10rem,\s*34dvh\);/);
+  assert.match(footerRule, /overflow-y:\s*auto;/);
 
   const toolsRule = cssRule(".run-composer-tools");
   assert.match(toolsRule, /flex-wrap:\s*wrap;/);
+  assert.match(toolsRule, /flex:\s*1\s+1\s+14rem;/);
   assert.match(toolsRule, /min-width:\s*0;/);
+  assert.match(toolsRule, /max-width:\s*100%;/);
+
+  assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate\s*\{[\s\S]*?flex-basis:\s*6\.2rem;/);
+  assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate-label\s*\{[\s\S]*?display:\s*none;/);
+  assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-model-chip\s*\{[\s\S]*?max-width:\s*min\(11rem,\s*100%\);/);
 
   assert.match(indexCssSource, /@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-composer-hint\s*\{[\s\S]*?flex-basis:\s*100%;/);
   assert.match(indexCssSource, /@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-submit-btn\s*\{[\s\S]*?margin-left:\s*auto;/);

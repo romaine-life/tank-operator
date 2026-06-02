@@ -557,6 +557,38 @@ export function StyleguidePortfolioTranscript() {
             </div>
           </div>
         </section>
+
+        <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
+          <h2 style={{ margin: 0, color: "var(--text-primary)", fontSize: "var(--text-lg)" }}>
+            composer zoom pressure
+          </h2>
+          <div
+            className="styleguide-composer-zoom-specimen"
+            style={{
+              width: "min(100%, 360px)",
+              height: 360,
+              border: "1px solid var(--border-soft)",
+              borderRadius: "var(--radius-md)",
+              background: "var(--bg-base)",
+              overflow: "hidden",
+            }}
+          >
+            <WorkspaceShell
+              className="styleguide-transcript-focus-shell"
+              title={
+                <div className="run-header-title-row">
+                  <button className="run-header-name-btn" type="button">
+                    zoom-check
+                  </button>
+                </div>
+              }
+              body={<TranscriptSpecimen highlightTarget="user" />}
+              bodyClassName="styleguide-surface-active styleguide-transcript-surface-active"
+              bodyAriaLabel="Transcript"
+              composer={<ComposerSpecimen state={composerState} active />}
+            />
+          </div>
+        </section>
       </div>
     </div>
   );

@@ -64,6 +64,11 @@ Layout:
 - Collapsed sidebar width is 56px.
 - Fixed-format controls should have stable dimensions.
 - Text must not overlap or resize its parent unexpectedly.
+- The chat composer is part of the bounded run-pane chrome, not page content
+  that disappears below the viewport. At high browser zoom or narrow effective
+  widths, the transcript body must yield space, secondary composer controls
+  must wrap or compact inside the composer, and the textarea must remain
+  reachable without requiring the user to zoom out.
 
 Motion:
 
