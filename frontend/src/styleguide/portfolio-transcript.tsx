@@ -258,7 +258,17 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
         <span>1 shell / 1 edit candidate / 2 progress notes</span>
         <span>19:04:14</span>
         <span>19:10:26</span>
-        <span className="run-cost-estimate" aria-label="Estimated turn cost">$0.12</span>
+        <span className="run-cost-estimate" aria-label="Estimated turn cost $0.12, 83,303 current context tokens">
+          <span className="run-cost-estimate-metric run-cost-estimate-metric-tokens">
+            <span className="run-cost-estimate-value run-cost-estimate-token-count">83k</span>
+            <span className="run-cost-estimate-label">ctx</span>
+          </span>
+          <span className="run-cost-estimate-divider" aria-hidden="true" />
+          <span className="run-cost-estimate-metric run-cost-estimate-metric-cost">
+            <span className="run-cost-estimate-value run-cost-estimate-amount">$0.12</span>
+            <span className="run-cost-estimate-label">usd</span>
+          </span>
+        </span>
       </div>
       <div className="run-turn-view-body run-transcript run-transcript-claude">
         <RunningTool highlighted={highlighted} />
@@ -329,8 +339,16 @@ function ComposerToolButtons() {
         </svg>
         <span className="run-usage-ring-text">64</span>
       </span>
-      <span className="run-cost-estimate" aria-label="Estimated session cost" title="Estimated API-equivalent session token cost">
-        $0.1842
+      <span className="run-cost-estimate" aria-label="Estimated session cost $0.18, 83,303 current context tokens" title="Estimated API-equivalent session token cost">
+        <span className="run-cost-estimate-metric run-cost-estimate-metric-tokens">
+          <span className="run-cost-estimate-value run-cost-estimate-token-count">83k</span>
+          <span className="run-cost-estimate-label">ctx</span>
+        </span>
+        <span className="run-cost-estimate-divider" aria-hidden="true" />
+        <span className="run-cost-estimate-metric run-cost-estimate-metric-cost">
+          <span className="run-cost-estimate-value run-cost-estimate-amount">$0.18</span>
+          <span className="run-cost-estimate-label">usd</span>
+        </span>
       </span>
       <button
         className="run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready"
@@ -537,6 +555,38 @@ export function StyleguidePortfolioTranscript() {
                 composer={<ComposerSpecimen state={composerState} active={composerActive} />}
               />
             </div>
+          </div>
+        </section>
+
+        <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
+          <h2 style={{ margin: 0, color: "var(--text-primary)", fontSize: "var(--text-lg)" }}>
+            composer zoom pressure
+          </h2>
+          <div
+            className="styleguide-composer-zoom-specimen"
+            style={{
+              width: "min(100%, 360px)",
+              height: 360,
+              border: "1px solid var(--border-soft)",
+              borderRadius: "var(--radius-md)",
+              background: "var(--bg-base)",
+              overflow: "hidden",
+            }}
+          >
+            <WorkspaceShell
+              className="styleguide-transcript-focus-shell"
+              title={
+                <div className="run-header-title-row">
+                  <button className="run-header-name-btn" type="button">
+                    zoom-check
+                  </button>
+                </div>
+              }
+              body={<TranscriptSpecimen highlightTarget="user" />}
+              bodyClassName="styleguide-surface-active styleguide-transcript-surface-active"
+              bodyAriaLabel="Transcript"
+              composer={<ComposerSpecimen state={composerState} active />}
+            />
           </div>
         </section>
       </div>
