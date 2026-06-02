@@ -530,6 +530,54 @@ func TestWriteSessionEventStreamPageEmitsProjectedTranscriptRows(t *testing.T) {
 	}
 }
 
+func TestSessionEventStreamHeartbeatCatchupOnlyCountsHeartbeatEmits(t *testing.T) {
+	tests := []struct {
+		name       string
+		wakeReason sessionEventStreamWakeReason
+		emitCount  int
+		want       bool
+	}{
+		{
+			name:       "heartbeat emitted rows",
+			wakeReason: sessionEventStreamWakeHeartbeat,
+			emitCount:  1,
+			want:       true,
+		},
+		{
+			name:       "heartbeat empty read",
+			wakeReason: sessionEventStreamWakeHeartbeat,
+			emitCount:  0,
+			want:       false,
+		},
+		{
+			name:       "initial replay emitted rows",
+			wakeReason: sessionEventStreamWakeInitial,
+			emitCount:  1,
+			want:       false,
+		},
+		{
+			name:       "nats wake emitted rows",
+			wakeReason: sessionEventStreamWakeNotify,
+			emitCount:  1,
+			want:       false,
+		},
+		{
+			name:       "page drain emitted rows",
+			wakeReason: sessionEventStreamWakeDrain,
+			emitCount:  1,
+			want:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isSessionEventStreamHeartbeatCatchup(tt.wakeReason, tt.emitCount); got != tt.want {
+				t.Fatalf("isSessionEventStreamHeartbeatCatchup(%q, %d) = %v, want %v", tt.wakeReason, tt.emitCount, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWriteSSEJSONEventUsesOrderKeyAsEventID(t *testing.T) {
 	rec := httptest.NewRecorder()
 	writeSSEJSONEvent(rec, "tank-event", "001\nignored", map[string]any{

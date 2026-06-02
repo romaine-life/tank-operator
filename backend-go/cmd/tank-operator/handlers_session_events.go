@@ -22,6 +22,15 @@ const (
 	transcriptMaterializationOnDemandTimeout = 60 * time.Second
 )
 
+type sessionEventStreamWakeReason string
+
+const (
+	sessionEventStreamWakeInitial   sessionEventStreamWakeReason = "initial"
+	sessionEventStreamWakeDrain     sessionEventStreamWakeReason = "drain"
+	sessionEventStreamWakeNotify    sessionEventStreamWakeReason = "notify"
+	sessionEventStreamWakeHeartbeat sessionEventStreamWakeReason = "heartbeat"
+)
+
 // handleListSessionEvents returns the projected transcript-row read model.
 // The durable session_events ledger remains the write source for projection
 // and Turn activity detail, but main transcript navigation pages
@@ -291,6 +300,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 	heartbeat := time.NewTicker(sessionEventStreamHeartbeat)
 	defer heartbeat.Stop()
 
+	wakeReason := sessionEventStreamWakeInitial
 	for {
 		cursorBefore := cursor.AfterOrderKey
 		hasMore, count, err := s.writeSessionEventStreamPage(r.Context(), w, rowStore, sessionID, &cursor, state)
@@ -313,6 +323,18 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		flusher.Flush()
 		state.RecordPageRead(time.Now(), count)
 		if count > 0 {
+			if isSessionEventStreamHeartbeatCatchup(wakeReason, count) {
+				recordSessionEventStreamHeartbeatCatchup()
+				slog.Warn("session event stream caught up from heartbeat",
+					"session_id", sessionID,
+					"email", user.Email,
+					"stream_id", streamID,
+					"storage_key", storageKey,
+					"count", count,
+					"cursor_before", cursorBefore,
+					"cursor_after", cursor.AfterOrderKey,
+				)
+			}
 			slog.Info("session event stream emitted transcript rows",
 				"session_id", sessionID,
 				"stream_id", streamID,
@@ -323,6 +345,7 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 			)
 		}
 		if hasMore {
+			wakeReason = sessionEventStreamWakeDrain
 			continue
 		}
 
@@ -330,13 +353,19 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		case <-r.Context().Done():
 			return
 		case <-notify:
+			wakeReason = sessionEventStreamWakeNotify
 		case <-heartbeat.C:
 			sessionEventStreamHeartbeatTotal.Add(1)
 			state.RecordHeartbeat(time.Now())
 			fmt.Fprint(w, ": keep-alive\n\n")
 			flusher.Flush()
+			wakeReason = sessionEventStreamWakeHeartbeat
 		}
 	}
+}
+
+func isSessionEventStreamHeartbeatCatchup(wakeReason sessionEventStreamWakeReason, emitCount int) bool {
+	return wakeReason == sessionEventStreamWakeHeartbeat && emitCount > 0
 }
 
 func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.ResponseWriter, rowStore store.SessionTranscriptRowStore, sessionID string, cursor *store.SessionEventCursor, state *sessionstream.StreamState) (bool, int, error) {
