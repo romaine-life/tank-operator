@@ -207,9 +207,11 @@ func main() {
 	// 6. Init session events store for the SDK runners' canonical stream.
 	sessionEventsStore := buildSessionEventStore(pgPool, sessionScope)
 	transcriptRowsStore := buildSessionTranscriptRowStore(pgPool, sessionScope)
+	turnsStore := buildSessionTurnStore(pgPool, sessionScope)
 	transcriptMaterializer := transcriptRowsMaterializer{
 		events: sessionEventsStore,
 		rows:   transcriptRowsStore,
+		turns:  turnsStore,
 	}
 
 	// 7. Init NATS JetStream session bus for SDK commands/events.
@@ -463,6 +465,7 @@ func main() {
 		profiles:                     profileStore,
 		sessionEvents:                sessionEventsStore,
 		transcriptRows:               transcriptRowsStore,
+		turns:                        turnsStore,
 		avatars:                      avatarStore,
 		avatarImages:                 avatarImageStore,
 		avatarUploads:                avatarUploadAttemptStore,
@@ -706,6 +709,13 @@ func buildSessionTranscriptRowStore(pool *pgxpool.Pool, scope string) store.Sess
 		return store.StubSessionTranscriptRowStore{}
 	}
 	return store.NewPostgresSessionTranscriptRowStore(pool, scope)
+}
+
+func buildSessionTurnStore(pool *pgxpool.Pool, scope string) store.SessionTurnStore {
+	if pool == nil {
+		return store.StubSessionTurnStore{}
+	}
+	return store.NewPostgresSessionTurnStore(pool, scope)
 }
 
 // rowFetcherFor adapts the SessionRegistry interface to the narrower

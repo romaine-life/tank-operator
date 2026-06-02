@@ -87,6 +87,7 @@ func (s *appServer) refreshTranscriptRowsForEvent(ctx context.Context, event map
 	return (transcriptRowsMaterializer{
 		events: s.sessionEvents,
 		rows:   s.transcriptRows,
+		turns:  s.turns,
 	}).RefreshEvent(ctx, event)
 }
 

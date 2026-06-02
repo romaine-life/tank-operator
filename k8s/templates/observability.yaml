@@ -413,6 +413,33 @@ spec:
               the locked projection input. This is a backend
               materializer regression, not a browser queueing bug.
 
+        - alert: TankTurnNumberMissing
+          expr: |
+            sum by (phase) (
+              increase(tank_turn_number_missing_total[15m])
+            ) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "turn-activity shells materialized without a durable session_turns number (phase={{`{{ $labels.phase }}`}})"
+            runbook: |
+              A turn_activity shell was projected for a turn that has no
+              row in session_turns while durable numbering is active. The
+              public route /sessions/{id}/turns/{n} cannot resolve such a
+              turn and the UI cannot label it. Expectation is zero: the
+              tank_session_events_allocate_turn_number trigger numbers
+              every turn on its first session_events insert, and the
+              0086-0093 backfill numbered all pre-existing turns.
+
+              A nonzero rate means the allocation trigger regressed or an
+              event carrying a turn_id reached session_events without
+              firing it. Confirm the trigger is attached
+              (SELECT tgname FROM pg_trigger WHERE tgrelid =
+              'session_events'::regclass) and check session_turns for the
+              turn_id named in the matching slog.Warn line
+              "durable turn number missing for materialized shell".
+
         - alert: TankTranscriptRowMaterializationFailing
           expr: |
             sum by (result) (

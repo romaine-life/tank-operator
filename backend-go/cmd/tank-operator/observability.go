@@ -157,6 +157,14 @@ var (
 		Help:    "Duration of transcript row materialization checks and backfills.",
 		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60},
 	}, []string{"trigger"})
+	turnNumberResolveTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_turn_number_resolve_total",
+		Help: "Resolutions of a public per-session turn number to its durable turn_id, labeled by bounded result (ok / not_found / invalid).",
+	}, []string{"result"})
+	turnNumberMissingTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_turn_number_missing_total",
+		Help: "Turn-activity shells materialized without a durable session_turns number while numbering is active; nonzero means the allocation trigger regressed or an event bypassed it.",
+	}, []string{"phase"})
 
 	// Provider-credential health: the durable Layer 1 surface for
 	// "Codex / Claude sign-in expired" banners. Replaces the SPA pill
@@ -1652,6 +1660,32 @@ func transcriptMaterializationTerminalStatusLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
 	case "completed", "failed", "interrupted":
 		return strings.TrimSpace(raw)
+	default:
+		return "unknown"
+	}
+}
+
+func recordTurnNumberResolve(result string) {
+	turnNumberResolveTotal.WithLabelValues(turnNumberResolveResultLabel(result)).Inc()
+}
+
+func turnNumberResolveResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "not_found", "invalid":
+		return strings.TrimSpace(raw)
+	default:
+		return "unknown"
+	}
+}
+
+func recordTurnNumberMissing(phase string) {
+	turnNumberMissingTotal.WithLabelValues(turnNumberMissingPhaseLabel(phase)).Inc()
+}
+
+func turnNumberMissingPhaseLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "materialize":
+		return "materialize"
 	default:
 		return "unknown"
 	}
