@@ -45,9 +45,26 @@ test("chat composer slash command highlight is drawn behind textarea text", () =
 
 test("chat composer cost estimate keeps a fixed-width footprint", () => {
   const composerRule = cssRule(".run-cost-estimate");
-  assert.match(composerRule, /width:\s*7\.2rem;/);
-  assert.match(composerRule, /flex:\s*0\s+0\s+7\.2rem;/);
+  assert.match(composerRule, /width:\s*8\.4rem;/);
+  assert.match(composerRule, /flex:\s*0\s+0\s+8\.4rem;/);
   assert.match(composerRule, /white-space:\s*nowrap;/);
+
+  const metricRule = cssRule(".run-cost-estimate-metric");
+  assert.match(metricRule, /flex:\s*1\s+1\s+0;/);
+  assert.match(metricRule, /min-width:\s*0;/);
+  assert.match(metricRule, /flex-direction:\s*column;/);
+
+  const valueRule = cssRule(".run-cost-estimate-value");
+  assert.match(valueRule, /overflow:\s*hidden;/);
+  assert.match(valueRule, /text-overflow:\s*ellipsis;/);
+
+  const labelRule = cssRule(".run-cost-estimate-label");
+  assert.match(labelRule, /letter-spacing:\s*0;/);
+  assert.match(labelRule, /text-transform:\s*uppercase;/);
+
+  const dividerRule = cssRule(".run-cost-estimate-divider");
+  assert.match(dividerRule, /width:\s*1px;/);
+  assert.match(dividerRule, /flex:\s*0\s+0\s+1px;/);
 
   const turnRule = cssRule(".run-turn-view-summary .run-cost-estimate");
   assert.match(turnRule, /width:\s*auto;/);
