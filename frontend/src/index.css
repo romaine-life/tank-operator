@@ -2380,9 +2380,7 @@ button:disabled {
   position: relative;
   min-width: 0;
   min-height: 0;
-  overflow-x: hidden;
-  overflow-y: auto;
-  overscroll-behavior: contain;
+  overflow: hidden;
   background: var(--bg-app);
 }
 
@@ -3333,10 +3331,11 @@ button:disabled {
 }
 
 .run-panel {
-  min-height: 100%;
+  height: 100%;
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
   background: var(--bg-base, #0a0a0a);
   font-family: var(--font-primary);
   position: relative;
@@ -5096,7 +5095,7 @@ button:disabled {
 
 /* Main content area — empty state or transcript. */
 .run-main-frame {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   min-height: 0;
   min-width: 0;
   position: relative;
@@ -5324,7 +5323,9 @@ button:disabled {
 
 /* Composer footer at the bottom of the chat pane. */
 .run-composer-wrap {
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-height: 0;
+  min-width: 0;
   padding: var(--space-3) var(--space-5) max(var(--space-5), env(safe-area-inset-bottom));
   position: relative;
 }
@@ -5726,10 +5727,13 @@ button:disabled {
 }
 
 .run-composer {
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
   align-items: stretch;
+  min-width: 0;
+  min-height: 0;
   border-radius: var(--radius-lg, 0.75rem);
   border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
   background: rgba(255, 255, 255, 0.02);
@@ -6181,9 +6185,15 @@ button:disabled {
 .run-composer-footer {
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-end;
   gap: 0.5rem;
+  min-width: 0;
+  max-height: min(10rem, 34dvh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
   padding: 0.4rem 0.5rem 0.4rem 0.75rem;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(180, 180, 180, 0.34) transparent;
 }
 
 .run-composer-tools {
@@ -6191,8 +6201,9 @@ button:disabled {
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
-  flex: 0 0 auto;
+  flex: 1 1 14rem;
   min-width: 0;
+  max-width: 100%;
 }
 
 .run-composer-icon-btn {
@@ -6473,6 +6484,42 @@ button:disabled {
 .run-cost-estimate.is-placeholder {
   color: var(--text-muted);
   opacity: 0.72;
+}
+
+@container (max-width: 460px) {
+  .run-composer-footer {
+    gap: 0.38rem;
+    padding-inline: 0.55rem;
+  }
+
+  .run-composer-tools {
+    gap: 0.38rem;
+    flex-basis: 10rem;
+  }
+
+  .run-composer-icon-btn {
+    width: 1.85rem;
+    height: 1.85rem;
+  }
+
+  .run-cost-estimate {
+    width: 6.2rem;
+    flex-basis: 6.2rem;
+    gap: 0.28rem;
+    padding-inline: 0.42rem;
+  }
+
+  .run-cost-estimate-label {
+    display: none;
+  }
+
+  .run-cost-estimate-divider {
+    height: 1rem;
+  }
+
+  .run-model-chip {
+    max-width: min(11rem, 100%);
+  }
 }
 
 /* Comment badge — placeholder slot for thread/notes count. */
