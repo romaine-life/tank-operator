@@ -17,6 +17,7 @@ import {
 } from "streamdown";
 import type { UserMessageDisplay } from "../../runner-shared/conversation.js";
 import {
+  mergeProjectedTranscriptRowUpdates,
   mergeSdkTranscript,
   pruneLocalRealtimeEchoes,
   pruneRealtimeEntries,
@@ -4078,59 +4079,6 @@ function mergeProjectedTranscriptWindows(
     out.push(entry);
   }
   return out;
-}
-
-function projectedTranscriptEntryOrderKey(entry: TranscriptEntry): string {
-  if (entry.kind === "turn_activity") {
-    return entry.activity?.startOrderKey ?? entry.orderKey ?? "";
-  }
-  return entry.orderKey ?? "";
-}
-
-function mergeProjectedTranscriptRowUpdates(
-  current: TranscriptEntry[],
-  updates: TranscriptEntry[],
-): TranscriptEntry[] {
-  if (updates.length === 0) return current;
-  const terminalTurns = new Set<string>();
-  const activityTurns = new Set<string>();
-  const compactedRowIds = new Set<string>();
-  for (const entry of updates) {
-    const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
-    if (!turnId) continue;
-    if (entry.kind === "turn_activity") {
-      activityTurns.add(turnId);
-      for (const id of entry.activityIds ?? entry.activity?.compactedEntryIds ?? []) {
-        compactedRowIds.add(id);
-      }
-    }
-    if (transcriptEntryTerminalResult(entry)) terminalTurns.add(turnId);
-  }
-  const byId = new Map<string, TranscriptEntry>();
-  for (const entry of current) {
-    const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
-    if (compactedRowIds.has(entry.id)) {
-      continue;
-    }
-    if (
-      entry.kind === "turn_activity" &&
-      turnId &&
-      terminalTurns.has(turnId) &&
-      !activityTurns.has(turnId)
-    ) {
-      continue;
-    }
-    byId.set(entry.id, entry);
-  }
-  for (const entry of updates) byId.set(entry.id, entry);
-  return Array.from(byId.values()).sort((a, b) => {
-    const aKey = projectedTranscriptEntryOrderKey(a);
-    const bKey = projectedTranscriptEntryOrderKey(b);
-    if (aKey && bKey && aKey !== bKey) return aKey < bKey ? -1 : 1;
-    if (aKey && !bKey) return -1;
-    if (!aKey && bKey) return 1;
-    return a.id.localeCompare(b.id);
-  });
 }
 
 // ---------------------------------------------------------------------------
@@ -10143,13 +10091,19 @@ function ChatPane({
       if (added > 0) setSdkPendingTailCount((count) => count + added);
     }
 
-    if (sdkFoundNewestRef.current) {
-      sdkServerProjectedEntriesRef.current = mergeProjectedTranscriptRowUpdates(
-        sdkServerProjectedEntriesRef.current,
-        rows,
-      );
-      syncSdkRenderedEntries();
-    }
+    // Live SSE rows are always durable tail updates. found_newest describes
+    // the bootstrapped history window, not whether post-cursor live rows may
+    // render. Gating this merge on found_newest makes the app receive and
+    // advance past transcript rows while leaving the visible transcript stale.
+    sdkServerProjectedEntriesRef.current = mergeProjectedTranscriptRowUpdates(
+      sdkServerProjectedEntriesRef.current,
+      rows,
+    );
+    syncSdkRenderedEntries();
+    logSessionEventStreamEvent("transcript_rows_applied", {
+      sessionMode: session.mode,
+      eventType: "transcript_rows",
+    });
     scheduleCachedTurnActivityRefreshes(rows);
     applySdkTurnActivityRowsToUi(rows);
 

@@ -989,6 +989,20 @@ test("navigation mode owns live-tail vs historical-anchor explicitly", () => {
     appSource,
     /if \(navigationModeRef\.current === "historical-anchor"\) \{[\s\S]{0,400}if \(row\.kind !== "message"\) continue;/,
   );
+  const applySdkTranscriptRowsMatch = appSource.match(
+    /function applySdkTranscriptRows\(rows: TranscriptEntry\[], orderKey: string\): void \{[\s\S]*?\n  \}/,
+  );
+  assert.ok(applySdkTranscriptRowsMatch, "applySdkTranscriptRows should be present");
+  assert.equal(
+    applySdkTranscriptRowsMatch[0]!.includes("mergeProjectedTranscriptRowUpdates"),
+    true,
+    "post-cursor SSE rows must merge into the rendered projection",
+  );
+  assert.equal(
+    applySdkTranscriptRowsMatch[0]!.includes("if (sdkFoundNewestRef.current)"),
+    false,
+    "found_newest must not gate rendering of post-cursor live rows",
+  );
   assert.match(
     appSource,
     /function handleSdkAtBottomChange\(atBottom: boolean\): void \{[\s\S]{0,300}if \(atBottom\) \{[\s\S]{0,80}dispatchNavigationMode\("virtuoso-at-bottom-true"\)/,
@@ -1111,6 +1125,7 @@ test("session-event SSE stream emits browser-side observability", () => {
   assert.equal(sessionEventStreamTelemetrySource.includes("stale_running_blocked_submit"), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("opened"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("transcript_rows_received"'), true);
+  assert.equal(appSource.includes('logSessionEventStreamEvent("transcript_rows_applied"'), true);
   assert.equal(appSource.includes("terminal_matched_by_turn_id"), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("queued_followup_blocked_after_terminal"'), true);
   assert.equal(appSource.includes('logSessionEventStreamEvent("stale_running_blocked_submit"'), true);
@@ -1129,6 +1144,10 @@ test("session-event SSE stream emits browser-side observability", () => {
   assert.match(
     appSource,
     /logSessionEventStreamEvent\("transcript_rows_received"[\s\S]{0,250}applySdkTranscriptRows/,
+  );
+  assert.match(
+    appSource,
+    /mergeProjectedTranscriptRowUpdates[\s\S]{0,250}syncSdkRenderedEntries\(\);[\s\S]{0,250}logSessionEventStreamEvent\("transcript_rows_applied"/,
   );
 });
 

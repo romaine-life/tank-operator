@@ -23,6 +23,7 @@ export type SessionEventStreamMetricName =
   | "opened"
   | "ready"
   | "transcript_rows_received"
+  | "transcript_rows_applied"
   | "stream_silent_while_running"
   | "terminal_matched_by_turn_id"
   | "terminal_local_run_mismatch"
