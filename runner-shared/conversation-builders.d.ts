@@ -79,6 +79,17 @@ export interface ShellTaskEventArgs {
 
 export function shellTaskEvent(args: ShellTaskEventArgs): TankConversationEvent;
 
+export interface ContextCompactedEventArgs {
+  sessionID: string;
+  turnID: string;
+  source: "claude" | "codex";
+  trigger: "auto" | "manual";
+  preTokens?: number;
+  providerEventID?: string;
+}
+
+export function contextCompactedEvent(args: ContextCompactedEventArgs): TankConversationEvent;
+
 export function stampTankEvent(event: TankConversationEvent): TankConversationEvent & {
   uuid: string;
   order_key: string;

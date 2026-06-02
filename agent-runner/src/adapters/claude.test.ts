@@ -46,6 +46,45 @@ function cfg(): Config {
   };
 }
 
+test("adapter maps Claude compact_boundary to a context.compacted notice", () => {
+  const events = canonicalEventsForClaudeMessage(
+    cfg(),
+    turn(),
+    {
+      type: "system",
+      subtype: "compact_boundary",
+      uuid: "claude-compact-1",
+      compact_metadata: { trigger: "auto", pre_tokens: 154321 },
+    },
+    new Set<string>(),
+  );
+
+  assert.deepEqual(events.map((event) => event.type), ["context.compacted"]);
+  const event = events[0];
+  assert.ok(event);
+  assert.equal(event.actor, "runner");
+  assert.equal(event.source, "claude");
+  assert.equal(event.turn_id, "turn-run-123");
+  assert.equal(event.payload?.trigger, "auto");
+  assert.equal(event.payload?.pre_tokens, 154321);
+  assertTankEventFixture(event);
+});
+
+test("adapter defaults a malformed compact_boundary to an auto notice without tokens", () => {
+  const events = canonicalEventsForClaudeMessage(
+    cfg(),
+    turn(),
+    { type: "system", subtype: "compact_boundary", uuid: "claude-compact-2" },
+    new Set<string>(),
+  );
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, "context.compacted");
+  assert.equal(events[0]?.payload?.trigger, "auto");
+  assert.equal(events[0]?.payload?.pre_tokens, undefined);
+  for (const event of events) assertTankEventFixture(event);
+});
+
 test("adapter maps Claude assistant text and tool_use blocks to Tank items", () => {
   const events = canonicalEventsForClaudeMessage(
     cfg(),

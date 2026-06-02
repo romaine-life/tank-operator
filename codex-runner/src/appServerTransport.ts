@@ -4,7 +4,7 @@ import { createInterface } from "node:readline";
 import type { ThreadOptions } from "@openai/codex-sdk";
 
 import type { CodexEvent } from "./sessionEvents.js";
-import { providerControlTotal, providerErrorTotal } from "./metrics.js";
+import { providerControlTotal, providerErrorTotal, unmappedProviderEventTotal } from "./metrics.js";
 
 type JsonRecord = Record<string, unknown>;
 const require = createRequire(import.meta.url);
@@ -384,6 +384,23 @@ export class CodexAppServerTransport {
       }
       const queue = this.activeQueue;
       if (queue) queue.push({ kind: "event", event: { type: "turn.started", id: turnID } });
+      return;
+    }
+    // Count any notification handleNotification recognizes no branch for —
+    // the codex-side silent-drop seam (the class that hid Claude context
+    // compaction). Checked before the queue guard so an unhandled
+    // notification (e.g. a future app-server compaction signal) surfaces in
+    // metrics regardless of active-turn state, instead of vanishing.
+    const KNOWN_NOTIFICATION =
+      method === "turn/completed" ||
+      method === "thread/tokenUsage/updated" ||
+      method === "item/started" ||
+      method === "item/completed" ||
+      method === "item/updated" ||
+      method === "item/commandExecution/outputDelta" ||
+      method === "error";
+    if (!KNOWN_NOTIFICATION) {
+      unmappedProviderEventTotal.labels(method, "none").inc();
       return;
     }
     const queue = this.activeQueue;

@@ -52,6 +52,23 @@ export const itemOutcomeTotal = new Counter({
   registers: [registry],
 });
 
+// unmappedProviderEventTotal — sibling of the agent-runner counter. On the
+// codex runner the unit is an app-server JSONRPC notification method that
+// handleNotification recognized no branch for (type=method, subtype="none").
+// Same name + labels as the claude runner (the `mode` default label
+// distinguishes them) so one alert sums "provider events silently dropped"
+// across both runners. Steady state is zero; a nonzero rate names the
+// app-server notification to map or explicitly ignore. This is the discovery
+// path for a Codex context-compaction signal: the app server exposes none
+// discretely today, so when one appears it shows up here instead of vanishing.
+// See docs/tank-conversation-protocol.md → "Context Compaction Notice".
+export const unmappedProviderEventTotal = new Counter({
+  name: "tank_runner_unmapped_provider_event_total",
+  help: "Provider notifications/messages dropped at the adapter/transport with no Tank mapping and not explicitly ignored. Nonzero means a provider event is silently missing from the durable ledger; labels name the type/subtype to investigate.",
+  labelNames: ["type", "subtype"],
+  registers: [registry],
+});
+
 // interruptOutcomeTotal records the disposition of every `interrupt_turn`
 // command this runner accepts. Sibling of the agent-runner counter
 // shipped with #535 (PR 1 of #532); same labels and same four-outcome

@@ -101,6 +101,23 @@ export const turnUsageEmittedTotal = new Counter({
   registers: [registry],
 });
 
+// unmappedProviderEventTotal counts provider SDK messages that reached the
+// adapter fall-through with no Tank-event mapping AND are not on the
+// explicit-ignore list (assistant / user / result / Claude task-lifecycle /
+// stream_event / system:init / system:compact_boundary). Steady state is
+// zero. A nonzero rate is the architectural alarm for the silent-drop class
+// that hid context compaction: a semantically-significant provider event is
+// vanishing from the durable ledger instead of being mapped or explicitly
+// ignored with a test, which the Tank conversation protocol requires. The
+// labels are the bounded SDK message type and subtype so a spike names the
+// event to investigate (e.g. a new system subtype a provider upgrade added).
+export const unmappedProviderEventTotal = new Counter({
+  name: "tank_runner_unmapped_provider_event_total",
+  help: "Provider SDK messages dropped at the adapter with no Tank mapping and not on the explicit-ignore list. Nonzero means a provider event is silently missing from the durable ledger; labels name the SDK type/subtype to investigate.",
+  labelNames: ["type", "subtype"],
+  registers: [registry],
+});
+
 // interruptOutcomeTotal records the disposition of every `interrupt_turn`
 // command this runner accepts. The four-outcome contract (see
 // docs/tank-conversation-protocol.md → "Durable turn interruption" and
