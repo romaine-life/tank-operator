@@ -7,6 +7,7 @@ function readSource(path: string): string {
 }
 
 const appSource = readSource("./App.tsx");
+const appRoutesSource = readSource("./appRoutes.ts");
 const authSource = readSource("./auth.ts");
 const conversationReducerSource = readSource("./conversationReducer.ts");
 const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
@@ -334,7 +335,13 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes("buildTurnViewItems"), true);
   assert.equal(appSource.includes("const turnsAvailable = turnViewItems.length > 0"), true);
   assert.equal(appSource.includes("function readSessionRouteFromPath"), true);
-  assert.equal(appSource.includes('url.pathname = `/sessions/${encodeURIComponent(id)}${'), true);
+  assert.equal(appRoutesSource.includes('url.pathname = `/sessions/${encodedId}${'), true);
+  assert.equal(appRoutesSource.includes('tab === "settings"'), true);
+  assert.equal(appRoutesSource.includes('tab === "help"'), true);
+  assert.equal(appRoutesSource.includes('url.pathname = `/new${'), true);
+  assert.equal(appSource.includes('replaceSessionRoute(session.id, "settings", null, settingsTab, adminView)'), true);
+  assert.equal(appSource.includes('replaceSessionRoute(session.id, "help")'), true);
+  assert.equal(appSource.includes("replaceHomeRoute(homeActiveTab, homeSettingsTab, homeAdminView)"), true);
   assert.equal(appSource.includes('setActiveTab("turns")'), true);
   assert.equal(appSource.includes("replaceSessionRoute(session.id, \"turns\", routedSelectedTurnId)"), true);
   assert.equal(appSource.includes("window.addEventListener(\"popstate\", applyCurrentSessionRoute)"), true);
