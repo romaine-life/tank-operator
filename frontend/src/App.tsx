@@ -1727,9 +1727,15 @@ function ComposerCostEstimate({
       aria-disabled={unavailable || undefined}
       title={title ?? defaultTitle}
     >
-      <span className="run-cost-estimate-token-count">{tokenLabel}</span>
-      <span className="run-cost-estimate-separator" aria-hidden="true">&middot;</span>
-      <span className="run-cost-estimate-amount">{label}</span>
+      <span className="run-cost-estimate-metric run-cost-estimate-metric-tokens">
+        <span className="run-cost-estimate-value run-cost-estimate-token-count">{tokenLabel}</span>
+        <span className="run-cost-estimate-label">ctx</span>
+      </span>
+      <span className="run-cost-estimate-divider" aria-hidden="true" />
+      <span className="run-cost-estimate-metric run-cost-estimate-metric-cost">
+        <span className="run-cost-estimate-value run-cost-estimate-amount">{label}</span>
+        <span className="run-cost-estimate-label">usd</span>
+      </span>
     </span>
   );
 }

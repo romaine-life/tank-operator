@@ -25,6 +25,15 @@ test("composer token count uses current context, not cumulative session usage", 
   assert.doesNotMatch(appSource, /tokens:\s*sessionCostEstimate\?\.tokens\s*\?\?\s*null/);
 });
 
+test("composer cost estimate separates context tokens from dollars", () => {
+  assert.match(appSource, /className="run-cost-estimate-metric run-cost-estimate-metric-tokens"/);
+  assert.match(appSource, /className="run-cost-estimate-divider"/);
+  assert.match(appSource, /className="run-cost-estimate-metric run-cost-estimate-metric-cost"/);
+  assert.match(appSource, /className="run-cost-estimate-label">ctx</);
+  assert.match(appSource, /className="run-cost-estimate-label">usd</);
+  assert.doesNotMatch(appSource, /run-cost-estimate-separator/);
+});
+
 test("turn token count uses current context pressure", () => {
   assert.match(appSource, /tokens=\{selected\.contextTokens\}/);
   assert.match(appSource, /tokenScopeLabel="current context tokens"/);
