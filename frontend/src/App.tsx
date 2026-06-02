@@ -1683,7 +1683,10 @@ function ComposerUsageRing({
     rawPercent > 0 && rawPercent < 1
       ? "<1%"
       : `${Math.min(999, Math.round(rawPercent))}%`;
-  const defaultTitle = `${safeTokens.toLocaleString()} / ${safeWindow.toLocaleString()} context tokens`;
+  const defaultTitle =
+    safeWindow > 0
+      ? `${safeTokens.toLocaleString()} / ${safeWindow.toLocaleString()} context tokens`
+      : "Context window not reported yet";
   return (
     <span
       className="run-usage-ring"
@@ -2915,6 +2918,7 @@ function DemoLanding() {
                         tokens: 0,
                         title: "Cost estimate appears after usage is available",
                       }}
+                      usage={{ tokensUsed: 0, contextWindow: 0 }}
                       rollout={{
                         visible: GUI_ROLLOUT_MODES.has(selectedMode),
                         disabled: true,
@@ -13866,14 +13870,10 @@ function ChatPane({
                 tokenScopeLabel: "current context tokens",
                 placeholder: sessionUsageLoading,
               }}
-              usage={
-                runtimeContextWindowTokens > 0
-                  ? {
-                      tokensUsed,
-                      contextWindow: runtimeContextWindowTokens,
-                    }
-                  : null
-              }
+              usage={{
+                tokensUsed,
+                contextWindow: runtimeContextWindowTokens,
+              }}
               rollout={{
                 visible: GUI_ROLLOUT_MODES.has(session.mode),
                 active: rolloutActionActive,
@@ -17141,6 +17141,7 @@ function AuthenticatedApp() {
                       tokens: 0,
                       title: "Cost estimate appears after usage is available",
                     }}
+                    usage={{ tokensUsed: 0, contextWindow: 0 }}
                     rollout={{
                       visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),
                       disabled: true,

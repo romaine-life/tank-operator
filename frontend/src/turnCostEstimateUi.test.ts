@@ -35,10 +35,11 @@ test("composer cost estimate separates context tokens from dollars", () => {
   assert.doesNotMatch(appSource, /run-cost-estimate-separator/);
 });
 
-test("composer context percentage uses provider-observed session window", () => {
+test("composer context percentage is always visible and uses provider-observed session window", () => {
   assert.match(appSource, /runtime_context_window_tokens/);
-  assert.match(appSource, /runtimeContextWindowTokens > 0/);
   assert.match(appSource, /contextWindow: runtimeContextWindowTokens/);
+  assert.match(appSource, /usage=\{\{ tokensUsed: 0, contextWindow: 0 \}\}/);
+  assert.doesNotMatch(appSource, /usage=\{[\s\S]*runtimeContextWindowTokens > 0/);
   assert.match(cssSource, /run-usage-ring/);
   assert.doesNotMatch(appSource, /run-usage-ring-svg/);
   assert.doesNotMatch(appSource, /data-level="mid"/);
