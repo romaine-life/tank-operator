@@ -213,9 +213,9 @@ import {
 } from "./sessionAvatars";
 import { openAvatarPreview } from "./avatarPreview";
 import {
-  linkWorkspacePathsInMarkdown,
+  linkTextTargetsInMarkdown,
   normalizeWorkspacePathTarget,
-  splitWorkspacePathsInText,
+  splitLinksInText,
   workspacePathFromHref,
   type WorkspacePathTarget,
 } from "./workspaceLinks";
@@ -4901,63 +4901,28 @@ function QuoteButton({
   );
 }
 
-const URL_IN_TEXT_RE = /https?:\/\/[^\s<>"'`]+/g;
-const TRAILING_URL_PUNCTUATION_RE = /[.,;:!?]+$/;
-
-function splitTrailingUrlPunctuation(url: string): { href: string; trailing: string } {
-  let href = url;
-  let trailing = "";
-  const punctuation = href.match(TRAILING_URL_PUNCTUATION_RE)?.[0] ?? "";
-  if (punctuation) {
-    href = href.slice(0, -punctuation.length);
-    trailing = punctuation;
-  }
-  while (href.endsWith(")") && (href.match(/\(/g)?.length ?? 0) < (href.match(/\)/g)?.length ?? 0)) {
-    href = href.slice(0, -1);
-    trailing = `)${trailing}`;
-  }
-  while (href.endsWith("]") && (href.match(/\[/g)?.length ?? 0) < (href.match(/\]/g)?.length ?? 0)) {
-    href = href.slice(0, -1);
-    trailing = `]${trailing}`;
-  }
-  return { href, trailing };
-}
-
-function linkifyUrls(text: string): ReactNode[] {
-  const parts: ReactNode[] = [];
-  let lastIndex = 0;
-  URL_IN_TEXT_RE.lastIndex = 0;
-  for (const match of text.matchAll(URL_IN_TEXT_RE)) {
-    const rawUrl = match[0];
-    const start = match.index ?? 0;
-    if (start > lastIndex) parts.push(text.slice(lastIndex, start));
-    const { href, trailing } = splitTrailingUrlPunctuation(rawUrl);
-    parts.push(
+function linkedTextNodes(text: string, className?: string): ReactNode[] {
+  return splitLinksInText(text).map((segment, index) => {
+    if (segment.kind === "text") return segment.text;
+    return (
       <RunMarkdownLink
-        key={`${start}-${href}`}
-        className="run-markdown-code-link"
-        href={href}
+        key={`${index}-${segment.href}`}
+        className={className}
+        href={segment.href}
       >
-        {href}
-      </RunMarkdownLink>,
+        {segment.text}
+      </RunMarkdownLink>
     );
-    if (trailing) parts.push(trailing);
-    lastIndex = start + rawUrl.length;
-  }
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return parts.length ? parts : [text];
+  });
 }
 
-function hasUrl(text: string): boolean {
-  URL_IN_TEXT_RE.lastIndex = 0;
-  const found = URL_IN_TEXT_RE.test(text);
-  URL_IN_TEXT_RE.lastIndex = 0;
-  return found;
+function hasLinkTargets(text: string): boolean {
+  return splitLinksInText(text).some((segment) => segment.kind !== "text");
 }
 
 function PreWithLinks({ children, className }: { children: string; className?: string }) {
-  if (!hasUrl(children)) return <pre className={className}>{children}</pre>;
-  return <pre className={className}>{linkifyUrls(children)}</pre>;
+  if (!hasLinkTargets(children)) return <pre className={className}>{children}</pre>;
+  return <pre className={className}>{linkedTextNodes(children, "run-markdown-code-link")}</pre>;
 }
 
 function textFromCodeChildren(children: ReactNode): string {
@@ -4974,7 +4939,7 @@ function RunMarkdownInlineCode({ children, className, node: _node, ...props }: R
   const code = textFromCodeChildren(children);
   return (
     <code className={`run-markdown-inline-code${className ? ` ${className}` : ""}`} {...props}>
-      {hasUrl(code) ? linkifyUrls(code) : children}
+      {hasLinkTargets(code) ? linkedTextNodes(code, "run-markdown-code-link") : children}
     </code>
   );
 }
@@ -5006,25 +4971,168 @@ const RUN_MARKDOWN_COMPONENTS: StreamdownComponents = {
 
 const STREAMDOWN_DARK_THEME: [string, string] = ["github-dark", "github-dark"];
 
+function domAnchorForLinkSegment(
+  doc: Document,
+  segment: Exclude<ReturnType<typeof splitLinksInText>[number], { kind: "text" }>,
+  text = segment.text,
+): HTMLAnchorElement {
+  const anchor = doc.createElement("a");
+  anchor.className = "run-markdown-code-link";
+  anchor.href = segment.href;
+  anchor.textContent = text;
+  if (segment.kind === "workspace_path") {
+    anchor.dataset.runWorkspaceLink = "true";
+  } else {
+    anchor.target = "_blank";
+    anchor.rel = "noreferrer";
+  }
+  return anchor;
+}
+
+function codeTextNodes(code: HTMLElement): Text[] {
+  const doc = code.ownerDocument;
+  const view = doc.defaultView;
+  if (!view) return [];
+  const textNodes: Text[] = [];
+  const walker = doc.createTreeWalker(
+    code,
+    view.NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        const parent = node.parentElement;
+        if (!parent || !node.nodeValue) return view.NodeFilter.FILTER_REJECT;
+        if (parent.closest("a, button")) return view.NodeFilter.FILTER_REJECT;
+        return view.NodeFilter.FILTER_ACCEPT;
+      },
+    },
+  );
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    textNodes.push(node as Text);
+  }
+  return textNodes;
+}
+
+function wrapTextNodeRange(
+  node: Text,
+  start: number,
+  end: number,
+  segment: Exclude<ReturnType<typeof splitLinksInText>[number], { kind: "text" }>,
+) {
+  if (!node.parentNode || start < 0 || end > node.length || start >= end) return;
+  let target = node;
+  if (end < target.length) target.splitText(end);
+  if (start > 0) target = target.splitText(start);
+  target.replaceWith(domAnchorForLinkSegment(target.ownerDocument, segment, target.nodeValue ?? ""));
+}
+
+function linkifyCodeElement(code: HTMLElement) {
+  const nodes = codeTextNodes(code);
+  if (nodes.length === 0) return;
+  const pieces: Array<{ node: Text; nodeIndex: number; start: number; end: number }> = [];
+  let fullText = "";
+  for (const [nodeIndex, node] of nodes.entries()) {
+    const start = fullText.length;
+    fullText += node.nodeValue ?? "";
+    pieces.push({ node, nodeIndex, start, end: fullText.length });
+  }
+
+  const operations: Array<{
+    node: Text;
+    nodeIndex: number;
+    start: number;
+    end: number;
+    segment: Exclude<ReturnType<typeof splitLinksInText>[number], { kind: "text" }>;
+  }> = [];
+  let cursor = 0;
+  for (const segment of splitLinksInText(fullText)) {
+    const start = cursor;
+    const end = start + segment.text.length;
+    cursor = end;
+    if (segment.kind === "text") continue;
+    for (const piece of pieces) {
+      const overlapStart = Math.max(start, piece.start);
+      const overlapEnd = Math.min(end, piece.end);
+      if (overlapStart >= overlapEnd) continue;
+      operations.push({
+        node: piece.node,
+        nodeIndex: piece.nodeIndex,
+        start: overlapStart - piece.start,
+        end: overlapEnd - piece.start,
+        segment,
+      });
+    }
+  }
+
+  operations
+    .sort((a, b) => b.nodeIndex - a.nodeIndex || b.start - a.start)
+    .forEach((operation) => {
+      wrapTextNodeRange(operation.node, operation.start, operation.end, operation.segment);
+    });
+}
+
+function linkifyRenderedCodeBlockText(root: HTMLElement) {
+  const codeElements = root.querySelectorAll<HTMLElement>('[data-streamdown="code-block-body"] code');
+  for (const code of codeElements) {
+    if (hasLinkTargets(code.textContent ?? "")) linkifyCodeElement(code);
+  }
+}
+
 function RunMarkdown({ children }: { children: string }) {
-  const linkedChildren = useMemo(() => linkWorkspacePathsInMarkdown(children), [children]);
+  const { openWorkspacePath } = useContext(RunContext);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const linkedChildren = useMemo(() => linkTextTargetsInMarkdown(children), [children]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root || typeof MutationObserver === "undefined") return;
+    let applying = false;
+    const apply = () => {
+      if (applying) return;
+      applying = true;
+      try {
+        linkifyRenderedCodeBlockText(root);
+      } finally {
+        applying = false;
+      }
+    };
+    apply();
+    const observer = new MutationObserver(apply);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, [linkedChildren]);
+
   return (
-    <Streamdown
-      components={RUN_MARKDOWN_COMPONENTS}
-      linkSafety={{ enabled: false }}
-      shikiTheme={STREAMDOWN_DARK_THEME}
+    <div
+      ref={rootRef}
+      className="run-markdown"
+      onClick={(event) => {
+        const target = event.target instanceof Element
+          ? event.target.closest<HTMLAnchorElement>('a[data-run-workspace-link="true"]')
+          : null;
+        if (!target) return;
+        const workspaceTarget = workspacePathFromHref(target.getAttribute("href") ?? "");
+        if (!workspaceTarget) return;
+        event.preventDefault();
+        openWorkspacePath(workspaceTarget);
+      }}
     >
-      {linkedChildren}
-    </Streamdown>
+      <Streamdown
+        components={RUN_MARKDOWN_COMPONENTS}
+        linkSafety={{ enabled: false }}
+        shikiTheme={STREAMDOWN_DARK_THEME}
+      >
+        {linkedChildren}
+      </Streamdown>
+    </div>
   );
 }
 
 function RunPlainText({ children }: { children: string }) {
-  const segments = useMemo(() => splitWorkspacePathsInText(children), [children]);
+  const segments = useMemo(() => splitLinksInText(children), [children]);
   return (
     <span className="run-plain-message-text">
       {segments.map((segment, index) => {
-        if (segment.kind === "workspace_path") {
+        if (segment.kind !== "text") {
           return (
             <RunMarkdownLink key={index} href={segment.href}>
               {segment.text}
