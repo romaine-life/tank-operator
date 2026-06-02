@@ -257,6 +257,20 @@ func main() {
 		Scope:     sessionScope,
 	}
 
+	// Test-slot session-image override (docs/testing.md): when the test-env
+	// gate is on, the orchestrator can repoint NEW sessions in its scope at a
+	// branch-built session image. The resolver is left nil in production, so
+	// prod always stamps the chart-pinned SESSION_IMAGE / CODEX_SESSION_IMAGE.
+	var imageOverrideStore *pgstore.SessionImageOverrideStore
+	if pgPool != nil {
+		imageOverrideStore = pgstore.NewSessionImageOverrideStore(pgPool)
+	}
+	sessionImageOverridesEnabled := envBool("SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED")
+	var imageOverrideResolver sessions.SessionImageOverrides
+	if sessionImageOverridesEnabled && imageOverrideStore != nil {
+		imageOverrideResolver = imageOverrideAdapter{store: imageOverrideStore}
+	}
+
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, rowPublisher, sessions.ManagerOptions{
 		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionsNamespace:              namespace,
@@ -285,6 +299,10 @@ func main() {
 		OAuthGatewayHost:  os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
 		APIProxyHost:      os.Getenv("CLAUDE_API_PROXY_HOST"),
 		CodexAPIProxyHost: os.Getenv("CODEX_API_PROXY_HOST"),
+		ImageOverrides:    imageOverrideResolver,
+		OnImageOverrideApplied: func(scope, mode, kind string) {
+			recordSessionImageOverrideApplied(scope, kind)
+		},
 	})
 
 	// 10. Init auth. Tank verifies the upstream auth.romaine.life JWT
@@ -439,18 +457,19 @@ func main() {
 	// pre-migration (ns, sa) allowlist env was retired with that change.
 	mux := http.NewServeMux()
 	srv := &appServer{
-		k8s:            k8sClient,
-		restCfg:        restCfg,
-		mgr:            mgr,
-		profiles:       profileStore,
-		sessionEvents:  sessionEventsStore,
-		transcriptRows: transcriptRowsStore,
-		avatars:        avatarStore,
-		avatarImages:   avatarImageStore,
-		avatarUploads:  avatarUploadAttemptStore,
-		pgPool:         pgPool,
-		sessionBus:     sessionBus,
-		readStates:     readStateStore,
+		k8s:                          k8sClient,
+		restCfg:                      restCfg,
+		mgr:                          mgr,
+		profiles:                     profileStore,
+		sessionEvents:                sessionEventsStore,
+		transcriptRows:               transcriptRowsStore,
+		avatars:                      avatarStore,
+		avatarImages:                 avatarImageStore,
+		avatarUploads:                avatarUploadAttemptStore,
+		pgPool:                       pgPool,
+		sessionImageOverridesEnabled: sessionImageOverridesEnabled,
+		sessionBus:                   sessionBus,
+		readStates:                   readStateStore,
 		activityRefresher: &scopedSessionActivityRefresher{
 			pool:       pgPool,
 			publisher:  sessionBus,
@@ -469,6 +488,12 @@ func main() {
 		spawnQuota:               NewSpawnQuotaTracker(),
 		mcpGitHub:                buildMCPGitHubClient(),
 		providerHealth:           providerHealthManager,
+	}
+	// Assign the override store only when non-nil so the appServer field stays
+	// a true nil interface in stub mode (avoids the typed-nil-pointer trap that
+	// would make `s.imageOverrides == nil` false and panic on first use).
+	if imageOverrideStore != nil {
+		srv.imageOverrides = imageOverrideStore
 	}
 	srv.registerRoutes(mux)
 

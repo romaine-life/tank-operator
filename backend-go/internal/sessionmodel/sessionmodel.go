@@ -251,6 +251,19 @@ func IsSessionMode(mode string) bool {
 	return ok
 }
 
+// IsCodexMode reports whether a session mode runs the Codex agent, and so is
+// stamped with CodexSessionImage rather than SessionImage. This is the single
+// source of truth for the codex-vs-claude image split (used by PodManifest and
+// by the session-image override resolver in internal/sessions).
+func IsCodexMode(mode string) bool {
+	switch NormalizeSessionMode(mode) {
+	case CodexConfigMode, CodexCLIMode, CodexGUIMode, CodexExecGUIMode, CodexAppServerMode:
+		return true
+	default:
+		return false
+	}
+}
+
 func NormalizeSessionCapabilities(in []string) ([]string, error) {
 	if len(in) == 0 {
 		return []string{}, nil
@@ -353,7 +366,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	argoTrackingID := opts.ArgoCDTrackingApp + ":/Pod:" + opts.SessionsNamespace + "/" + podName
 
 	sessionImage := opts.SessionImage
-	if mode == CodexConfigMode || mode == CodexCLIMode || mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode {
+	if IsCodexMode(mode) {
 		sessionImage = opts.CodexSessionImage
 	}
 

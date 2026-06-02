@@ -28,6 +28,24 @@ const (
 	podReadyTimeout       = 90 * time.Second
 )
 
+// defaultSessionScope is the production session scope. Session-image overrides
+// are never applied to it (the write path refuses it too); only test slots,
+// whose scope is the slot name, are repointable.
+const defaultSessionScope = "default"
+
+// SessionImageOverrides resolves a durable, scope-keyed override of the
+// container images the orchestrator stamps onto NEW session pods. Implemented
+// by the pgstore override table (adapted in cmd/tank-operator). A nil resolver
+// disables the feature, which is the production default — prod orchestrators
+// never wire one.
+type SessionImageOverrides interface {
+	// Get returns the override images for a scope. ok=false means "no override
+	// set" (the caller falls back to the configured image). A non-nil error
+	// means the lookup failed; the caller also falls back rather than failing
+	// session creation.
+	Get(ctx context.Context, scope string) (claudeImage, codexImage string, ok bool, err error)
+}
+
 // SessionRegistry is a write-capable registry interface.
 type SessionRegistry interface {
 	List(ctx context.Context, owner string) ([]sessionmodel.SessionRecord, error)
@@ -70,6 +88,11 @@ type Manager struct {
 
 	manifestOpts sessionmodel.ManifestOptions
 
+	// imageOverrides repoints NEW session pods at a branch-built session image
+	// for this orchestrator's (test-slot) scope. nil in production.
+	imageOverrides         SessionImageOverrides
+	onImageOverrideApplied func(scope, mode, kind string)
+
 	// In-memory activity tracking for reaper (single replica only).
 	mu           sync.Mutex
 	wsCount      map[string]int
@@ -95,6 +118,12 @@ type ManagerOptions struct {
 	OAuthGatewayHost  string
 	APIProxyHost      string
 	CodexAPIProxyHost string
+	// ImageOverrides, when non-nil, lets the orchestrator repoint NEW session
+	// pods at a branch-built session image for its (test-slot) scope. Left nil
+	// in production. OnImageOverrideApplied is an optional metrics/log hook
+	// invoked when an override is actually stamped onto a pod.
+	ImageOverrides         SessionImageOverrides
+	OnImageOverrideApplied func(scope, mode, kind string)
 }
 
 func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, emitter RowEmitter, opts ManagerOptions) *Manager {
@@ -118,17 +147,19 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 		opts.ManifestOpts.SessionScope = "default"
 	}
 	m := &Manager{
-		client:         client,
-		restCfg:        restCfg,
-		namespace:      namespace,
-		registry:       registry,
-		emitter:        emitter,
-		scope:          opts.ManifestOpts.SessionScope,
-		manifestOpts:   opts.ManifestOpts,
-		wsCount:        map[string]int{},
-		lastActivity:   map[string]time.Time{},
-		idleTimeout:    opts.IdleTimeout,
-		reaperInterval: opts.ReaperInterval,
+		client:                 client,
+		restCfg:                restCfg,
+		namespace:              namespace,
+		registry:               registry,
+		emitter:                emitter,
+		scope:                  opts.ManifestOpts.SessionScope,
+		manifestOpts:           opts.ManifestOpts,
+		imageOverrides:         opts.ImageOverrides,
+		onImageOverrideApplied: opts.OnImageOverrideApplied,
+		wsCount:                map[string]int{},
+		lastActivity:           map[string]time.Time{},
+		idleTimeout:            opts.IdleTimeout,
+		reaperInterval:         opts.ReaperInterval,
 	}
 	if opts.OAuthGatewayHost != "" {
 		m.oauthGatewayIP = resolveIP(opts.OAuthGatewayHost)
@@ -149,6 +180,49 @@ func resolveIP(host string) string {
 		return ""
 	}
 	return addrs[0]
+}
+
+// applyImageOverride repoints a NEW session pod at a durable, scope-keyed
+// session-image override when one is set for this orchestrator's scope. This is
+// the test-slot "point the slot at a branch session image" mechanism
+// (docs/testing.md): newly-created sessions boot the override image the same way
+// production boots its chart-pinned image — no runtime overlay, no fidelity gap.
+//
+// It is a deliberate no-op when no resolver is wired (production never wires
+// one) or for the production scope, so prod always stamps the configured
+// SESSION_IMAGE / CODEX_SESSION_IMAGE. A lookup error falls back to the pinned
+// image rather than failing session creation.
+func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.ManifestOptions, mode string) {
+	if m.imageOverrides == nil || m.scope == "" || m.scope == defaultSessionScope {
+		return
+	}
+	claudeImage, codexImage, ok, err := m.imageOverrides.Get(ctx, m.scope)
+	if err != nil {
+		slog.Warn("session image override lookup failed; using pinned image",
+			"scope", m.scope, "mode", mode, "error", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	kind := ""
+	if sessionmodel.IsCodexMode(mode) {
+		if codexImage != "" {
+			opts.CodexSessionImage = codexImage
+			kind = "codex"
+		}
+	} else if claudeImage != "" {
+		opts.SessionImage = claudeImage
+		kind = "claude"
+	}
+	if kind == "" {
+		return
+	}
+	slog.Info("session image override applied",
+		"scope", m.scope, "mode", mode, "image_kind", kind)
+	if m.onImageOverrideApplied != nil {
+		m.onImageOverrideApplied(m.scope, mode, kind)
+	}
 }
 
 // StartReaper launches the idle session reaper in a background goroutine.
@@ -346,6 +420,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.Repos = repos
 	manifestOpts.Name = name
 	manifestOpts.Capabilities = capabilities
+	m.applyImageOverride(ctx, &manifestOpts, mode)
 
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)

@@ -1009,6 +1009,24 @@ var schemaMigrations = []migration{
 			updated_at  = now(),
 			row_version = nextval('sessions_row_version_seq')
 		WHERE mode = concat('hermes', '_gui') AND visible = true`},
+
+	// session_image_overrides — durable, per-session-scope override of the
+	// container images the orchestrator stamps onto NEW session pods. It backs
+	// the test-slot "point this slot at a branch-built session image" flow
+	// (docs/testing.md): a slot's orchestrator reads the row for its own scope
+	// and stamps the override instead of the chart-pinned SESSION_IMAGE /
+	// CODEX_SESSION_IMAGE, so newly-created sessions boot the branch runner
+	// code the same way prod boots its pinned image. Keyed by session_scope so
+	// the shared Postgres can never let a slot override bleed into another slot
+	// or prod; the write path additionally refuses the production scope.
+	{ID: "0086", SQL: `CREATE TABLE IF NOT EXISTS session_image_overrides (
+		session_scope text PRIMARY KEY,
+		claude_image  text,
+		codex_image   text,
+		git_ref       text,
+		set_by        text,
+		set_at        timestamptz NOT NULL DEFAULT now()
+	)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
