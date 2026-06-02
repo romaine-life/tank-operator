@@ -1667,34 +1667,56 @@ function ComposerCostEstimate({
 interface ComposerUsageRingProps {
   tokensUsed: number;
   contextWindow: number;
+  placeholder?: boolean;
+  ariaLabel?: string;
   title?: string;
 }
 
 function ComposerUsageRing({
   tokensUsed,
   contextWindow,
+  placeholder = false,
+  ariaLabel = "Context usage",
   title,
 }: ComposerUsageRingProps) {
   const safeTokens = Number.isFinite(tokensUsed) ? Math.max(0, Math.floor(tokensUsed)) : 0;
   const safeWindow = Number.isFinite(contextWindow) ? Math.max(0, Math.floor(contextWindow)) : 0;
-  const rawPercent = safeWindow > 0 ? (safeTokens / safeWindow) * 100 : 0;
-  const clampedPercent = Math.max(0, Math.min(100, rawPercent));
-  const percentLabel =
-    rawPercent > 0 && rawPercent < 1
-      ? "<1%"
-      : `${Math.min(999, Math.round(rawPercent))}%`;
+  const usagePct = safeWindow > 0 ? Math.max(0, Math.min(100, (safeTokens / safeWindow) * 100)) : 0;
+  const displayPct = usagePct === 0 ? "0" : usagePct.toFixed(usagePct < 10 ? 1 : 0);
   const defaultTitle =
     safeWindow > 0
       ? `${safeTokens.toLocaleString()} / ${safeWindow.toLocaleString()} context tokens`
       : "Context window not reported yet";
   return (
     <span
-      className="run-usage-ring"
-      aria-label={`${percentLabel} of context window used`}
+      className={`run-usage-ring${placeholder ? " is-placeholder" : ""}`}
+      aria-label={ariaLabel}
+      aria-disabled={placeholder || undefined}
       title={title ?? defaultTitle}
-      style={{ "--usage-progress": `${clampedPercent}%` } as CSSProperties}
     >
-      <span className="run-usage-ring-core">{percentLabel}</span>
+      <svg className="run-usage-ring-svg" viewBox="0 0 32 32" aria-hidden="true">
+        <circle
+          cx="16"
+          cy="16"
+          r="13"
+          fill="none"
+          stroke="currentColor"
+          strokeOpacity="0.18"
+          strokeWidth="2.5"
+        />
+        <circle
+          cx="16"
+          cy="16"
+          r="13"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeDasharray={`${(usagePct / 100) * (2 * Math.PI * 13)} ${2 * Math.PI * 13}`}
+          transform="rotate(-90 16 16)"
+        />
+      </svg>
+      <span className="run-usage-ring-text">{displayPct}%</span>
     </span>
   );
 }
@@ -1705,8 +1727,8 @@ interface ComposerToolButtonsProps {
     title: string;
     onClick?: () => void;
   };
+  usage: ComponentProps<typeof ComposerUsageRing>;
   cost: ComponentProps<typeof ComposerCostEstimate>;
-  usage?: ComponentProps<typeof ComposerUsageRing> | null;
   rollout?: {
     visible?: boolean;
     active?: boolean;
@@ -1766,8 +1788,8 @@ function ComposerToolButtons({
       >
         <ImageIcon className="run-composer-icon" aria-hidden="true" />
       </button>
+      <ComposerUsageRing {...usage} />
       <ComposerCostEstimate {...cost} />
-      {usage ? <ComposerUsageRing {...usage} /> : null}
       {rollout?.visible && (
         <button
           type="button"
@@ -2918,7 +2940,13 @@ function DemoLanding() {
                         tokens: 0,
                         title: "Cost estimate appears after usage is available",
                       }}
-                      usage={{ tokensUsed: 0, contextWindow: 0 }}
+                      usage={{
+                        tokensUsed: 0,
+                        contextWindow: 0,
+                        placeholder: true,
+                        ariaLabel: "Context usage preview",
+                        title: "Context usage appears after sign in",
+                      }}
                       rollout={{
                         visible: GUI_ROLLOUT_MODES.has(selectedMode),
                         disabled: true,
@@ -17141,7 +17169,13 @@ function AuthenticatedApp() {
                       tokens: 0,
                       title: "Cost estimate appears after usage is available",
                     }}
-                    usage={{ tokensUsed: 0, contextWindow: 0 }}
+                    usage={{
+                      tokensUsed: 0,
+                      contextWindow: 0,
+                      placeholder: true,
+                      ariaLabel: "Context usage preview",
+                      title: "Context usage appears after the session starts",
+                    }}
                     rollout={{
                       visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),
                       disabled: true,
