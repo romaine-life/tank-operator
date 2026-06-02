@@ -472,12 +472,13 @@ export function StyleguidePortfolioTranscript() {
               border: "1px solid var(--border-soft)",
               borderRadius: "var(--radius-md)",
               background: "var(--bg-base)",
-              height: 720,
+              height: "min(720px, 78vh)",
+              minHeight: 360,
               overflowX: "auto",
-              overflowY: "hidden",
+              overflowY: "auto",
             }}
           >
-            <div style={{ height: "100%", minWidth: 760 }}>
+            <div style={{ minHeight: "100%", minWidth: 760 }}>
               <WorkspaceShell
                 className="styleguide-transcript-focus-shell"
                 title={

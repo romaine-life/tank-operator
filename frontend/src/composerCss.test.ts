@@ -54,6 +54,33 @@ test("chat composer cost estimate keeps a fixed-width footprint", () => {
   assert.match(turnRule, /flex:\s*0\s+0\s+auto;/);
 });
 
+test("workspace can scroll the full composer into view at high browser zoom", () => {
+  const workspaceRule = cssRule(".workspace");
+  assert.match(workspaceRule, /overflow-x:\s*hidden;/);
+  assert.match(workspaceRule, /overflow-y:\s*auto;/);
+
+  const runPanelRule = cssRule(".run-panel");
+  assert.match(runPanelRule, /min-height:\s*100%;/);
+  assert.doesNotMatch(runPanelRule, /^\s*height:\s*100%;/m);
+
+  const composerWrapRule = cssRule(".run-composer-wrap");
+  assert.match(
+    composerWrapRule,
+    /padding:\s*var\(--space-3\)\s+var\(--space-5\)\s+max\(var\(--space-5\),\s*env\(safe-area-inset-bottom\)\);/,
+  );
+});
+
+test("composer footer reflows controls instead of clipping them under zoom", () => {
+  assert.match(cssRule(".run-composer-footer"), /flex-wrap:\s*wrap;/);
+
+  const toolsRule = cssRule(".run-composer-tools");
+  assert.match(toolsRule, /flex-wrap:\s*wrap;/);
+  assert.match(toolsRule, /min-width:\s*0;/);
+
+  assert.match(indexCssSource, /@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-composer-hint\s*\{[\s\S]*?flex-basis:\s*100%;/);
+  assert.match(indexCssSource, /@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-submit-btn\s*\{[\s\S]*?margin-left:\s*auto;/);
+});
+
 test("turn view transcript rows share the same avatar gutter", () => {
   const turnViewRowRule = cssRule(".run-turn-view-body .run-transcript-message");
   assert.match(turnViewRowRule, /width:\s*100%;/);

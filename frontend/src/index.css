@@ -2380,7 +2380,9 @@ button:disabled {
   position: relative;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   background: var(--bg-app);
 }
 
@@ -3331,11 +3333,10 @@ button:disabled {
 }
 
 .run-panel {
-  height: 100%;
+  min-height: 100%;
   display: flex;
   flex-direction: column;
   min-width: 0;
-  min-height: 0;
   background: var(--bg-base, #0a0a0a);
   font-family: var(--font-primary);
   position: relative;
@@ -5324,7 +5325,7 @@ button:disabled {
 /* Composer footer at the bottom of the chat pane. */
 .run-composer-wrap {
   flex: 0 0 auto;
-  padding: var(--space-3) var(--space-5) var(--space-5);
+  padding: var(--space-3) var(--space-5) max(var(--space-5), env(safe-area-inset-bottom));
   position: relative;
 }
 
@@ -6179,7 +6180,7 @@ button:disabled {
    hint, send button. Match cloudcli's flex layout left-to-right. */
 .run-composer-footer {
   display: flex;
-  flex-wrap: nowrap;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   padding: 0.4rem 0.5rem 0.4rem 0.75rem;
@@ -6187,9 +6188,11 @@ button:disabled {
 
 .run-composer-tools {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   flex: 0 0 auto;
+  min-width: 0;
 }
 
 .run-composer-icon-btn {
@@ -6265,6 +6268,28 @@ button:disabled {
 
 .run-composer-action-btn {
   text-decoration: none;
+}
+
+@media (max-width: 760px) {
+  .run-composer-wrap {
+    padding-inline: var(--space-3);
+  }
+
+  .run-composer-drop-overlay {
+    inset: var(--space-3) var(--space-3) max(var(--space-5), env(safe-area-inset-bottom));
+  }
+
+  .run-composer-hint {
+    order: 3;
+    flex-basis: 100%;
+    min-width: 0;
+    padding-inline: 0.25rem;
+    text-align: left;
+  }
+
+  .run-submit-btn {
+    margin-left: auto;
+  }
 }
 
 .run-rollout-action-btn {
