@@ -258,9 +258,9 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
         <span>1 shell / 1 edit candidate / 2 progress notes</span>
         <span>19:04:14</span>
         <span>19:10:26</span>
-        <span className="run-cost-estimate" aria-label="Estimated turn cost $0.12, 83,303 current context tokens">
+        <span className="run-cost-estimate" aria-label="Estimated turn cost $0.12, 1,230,000 current context tokens">
           <span className="run-cost-estimate-metric run-cost-estimate-metric-tokens">
-            <span className="run-cost-estimate-value run-cost-estimate-token-count">83k</span>
+            <span className="run-cost-estimate-value run-cost-estimate-token-count">1.23m</span>
             <span className="run-cost-estimate-label">ctx</span>
           </span>
           <span className="run-cost-estimate-divider" aria-hidden="true" />
@@ -339,9 +339,9 @@ function ComposerToolButtons() {
         </svg>
         <span className="run-usage-ring-text">64</span>
       </span>
-      <span className="run-cost-estimate" aria-label="Estimated session cost $0.18, 83,303 current context tokens" title="Estimated API-equivalent session token cost">
+      <span className="run-cost-estimate" aria-label="Estimated session cost $0.18, 1,230,000 current context tokens" title="Estimated API-equivalent session token cost">
         <span className="run-cost-estimate-metric run-cost-estimate-metric-tokens">
-          <span className="run-cost-estimate-value run-cost-estimate-token-count">83k</span>
+          <span className="run-cost-estimate-value run-cost-estimate-token-count">1.23m</span>
           <span className="run-cost-estimate-label">ctx</span>
         </span>
         <span className="run-cost-estimate-divider" aria-hidden="true" />

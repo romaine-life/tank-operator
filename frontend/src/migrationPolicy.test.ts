@@ -699,11 +699,11 @@ test("read-only cross-scope sessions keep an explicit composer affordance", () =
   assert.match(appSource, /composerVisible=\{activeTab === "chat" && !publicView\}/);
   assert.equal(
     appSource.includes("Production sessions are read-only in this test slot"),
-    true,
+    false,
   );
   assert.equal(
     appSource.includes("Read-only production view. Switch back to this slot's sessions in Settings to send messages."),
-    true,
+    false,
   );
   assert.equal(indexCssSource.includes(".run-composer.run-composer-readonly"), true);
 });

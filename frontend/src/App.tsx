@@ -13873,23 +13873,14 @@ function ChatPane({
       composer={(
         <ChatComposer
           className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
-          placeholder={
-            readOnly
-              ? "Production sessions are read-only in this test slot"
-              : RUN_COMPOSER_PLACEHOLDER
-          }
+          placeholder={RUN_COMPOSER_PLACEHOLDER}
           onSubmit={(args) => {
             if (readOnly) return;
             handleSubmit({ text: args.text, files: [] });
           }}
           sendByCtrlEnter={runPrefs.sendByCtrlEnter}
           hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
-          hideHint={!readOnly}
-          hintOverride={
-            readOnly
-              ? "Read-only production view. Switch back to this slot's sessions in Settings to send messages."
-              : undefined
-          }
+          hideHint
           disabled={readOnly}
           canSubmit={!readOnly && ready}
           submitStatus={submitStatus}

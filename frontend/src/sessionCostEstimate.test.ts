@@ -97,9 +97,13 @@ test("formats compact token counts", () => {
   assert.equal(formatCompactTokens(0), "0");
   assert.equal(formatCompactTokens(999), "999");
   assert.equal(formatCompactTokens(1_000), "1k");
+  assert.equal(formatCompactTokens(423_999), "423k");
   assert.equal(formatCompactTokens(999_999), "999k");
   assert.equal(formatCompactTokens(1_000_000), "1m");
-  assert.equal(formatCompactTokens(12_900_000), "12m");
+  assert.equal(formatCompactTokens(1_230_000), "1.23m");
+  assert.equal(formatCompactTokens(1_239_999), "1.23m");
+  assert.equal(formatCompactTokens(1_200_000), "1.2m");
+  assert.equal(formatCompactTokens(12_900_000), "12.9m");
 });
 
 test("context window token count uses active uncached Codex delta for cumulative thread usage", () => {

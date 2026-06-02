@@ -45,8 +45,8 @@ test("chat composer slash command highlight is drawn behind textarea text", () =
 
 test("chat composer cost estimate keeps a fixed-width footprint", () => {
   const composerRule = cssRule(".run-cost-estimate");
-  assert.match(composerRule, /width:\s*8\.4rem;/);
-  assert.match(composerRule, /flex:\s*0\s+0\s+8\.4rem;/);
+  assert.match(composerRule, /width:\s*8\.8rem;/);
+  assert.match(composerRule, /flex:\s*0\s+0\s+8\.8rem;/);
   assert.match(composerRule, /white-space:\s*nowrap;/);
 
   const usageRule = cssRule(".run-usage-ring");
@@ -127,7 +127,7 @@ test("composer footer reflows controls instead of clipping them under zoom", () 
   assert.match(toolsRule, /max-width:\s*100%;/);
 
   assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-composer-tools\s*\{[\s\S]*?flex-wrap:\s*wrap;/);
-  assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate\s*\{[\s\S]*?flex-basis:\s*6\.2rem;/);
+  assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate\s*\{[\s\S]*?flex-basis:\s*6\.6rem;/);
   assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate-label\s*\{[\s\S]*?display:\s*none;/);
   assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-model-chip\s*\{[\s\S]*?max-width:\s*min\(11rem,\s*100%\);/);
 
