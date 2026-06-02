@@ -57,7 +57,7 @@ jobs:
     # mcp.tf forget the moved mcp_azure_personal resources without
     # destroying them in Azure on apply.
     needs: secrets
-    uses: nelsong6/pipeline-templates/.github/workflows/tofu-plan-apply-template.yml@main
+    uses: romaine-life/pipeline-templates/.github/workflows/tofu-plan-apply-template.yml@main
     with:
       working_directory: infra
       backend_resource_group: infra
