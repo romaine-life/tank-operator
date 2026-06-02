@@ -21,7 +21,8 @@ func (s *PostgresStore) UpdateInstallation(ctx context.Context, email string, in
 		SET installation_id = EXCLUDED.installation_id,
 			github_login    = COALESCE(EXCLUDED.github_login, profiles.github_login),
 			updated_at      = now()
-		RETURNING email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[])
+		RETURNING email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[]),
+		          to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
 	`
 	var (
 		gotEmail string
@@ -29,15 +30,17 @@ func (s *PostgresStore) UpdateInstallation(ctx context.Context, email string, in
 		instID   *int64
 		prefsRaw []byte
 		pins     []string
+		updated  string
 	)
 	if err := s.pool.QueryRow(ctx, q, normalized, githubLogin, installationID).
-		Scan(&gotEmail, &login, &instID, &prefsRaw, &pins); err != nil {
+		Scan(&gotEmail, &login, &instID, &prefsRaw, &pins, &updated); err != nil {
 		return Profile{}, err
 	}
 	p := Profile{
 		Email:          gotEmail,
 		GitHubLogin:    login,
 		InstallationID: instID,
+		UpdatedAt:      updated,
 		PinnedRepos:    pins,
 	}
 	if len(prefsRaw) > 0 {
@@ -70,7 +73,8 @@ func (s *PostgresStore) UpdatePrefs(ctx context.Context, email string, prefs map
 		ON CONFLICT (email) DO UPDATE
 		SET run_prefs  = EXCLUDED.run_prefs,
 			updated_at = now()
-		RETURNING email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[])
+		RETURNING email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[]),
+		          to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
 	`
 	var (
 		gotEmail   string
@@ -78,15 +82,17 @@ func (s *PostgresStore) UpdatePrefs(ctx context.Context, email string, prefs map
 		instID     *int64
 		gotPrefsJS []byte
 		pins       []string
+		updated    string
 	)
 	if err := s.pool.QueryRow(ctx, q, normalized, prefsJSON).
-		Scan(&gotEmail, &login, &instID, &gotPrefsJS, &pins); err != nil {
+		Scan(&gotEmail, &login, &instID, &gotPrefsJS, &pins, &updated); err != nil {
 		return Profile{}, err
 	}
 	p := Profile{
 		Email:          gotEmail,
 		GitHubLogin:    login,
 		InstallationID: instID,
+		UpdatedAt:      updated,
 		PinnedRepos:    pins,
 	}
 	if len(gotPrefsJS) > 0 {
@@ -114,7 +120,8 @@ func (s *PostgresStore) UpdatePinnedRepos(ctx context.Context, email string, rep
 		ON CONFLICT (email) DO UPDATE
 		SET pinned_repos = EXCLUDED.pinned_repos,
 			updated_at   = now()
-		RETURNING email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[])
+		RETURNING email, github_login, installation_id, run_prefs, COALESCE(pinned_repos, '{}'::text[]),
+		          to_char(updated_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')
 	`
 	var (
 		gotEmail   string
@@ -122,15 +129,17 @@ func (s *PostgresStore) UpdatePinnedRepos(ctx context.Context, email string, rep
 		instID     *int64
 		gotPrefsJS []byte
 		pins       []string
+		updated    string
 	)
 	if err := s.pool.QueryRow(ctx, q, normalized, repos).
-		Scan(&gotEmail, &login, &instID, &gotPrefsJS, &pins); err != nil {
+		Scan(&gotEmail, &login, &instID, &gotPrefsJS, &pins, &updated); err != nil {
 		return Profile{}, err
 	}
 	p := Profile{
 		Email:          gotEmail,
 		GitHubLogin:    login,
 		InstallationID: instID,
+		UpdatedAt:      updated,
 		PinnedRepos:    pins,
 	}
 	if len(gotPrefsJS) > 0 {

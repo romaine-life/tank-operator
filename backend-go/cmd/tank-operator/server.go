@@ -99,6 +99,8 @@ type sessionCommandBus interface {
 	SubscribeWakesForStorageKey(ctx context.Context, sessionStorageKey string, recorder sessionbus.WakeRecorder) (<-chan struct{}, func(), error)
 	PublishSessionRowUpdate(ctx context.Context, email, scope string, payload []byte) error
 	SubscribeSessionRowUpdates(ctx context.Context, email, scope string) (<-chan []byte, func(), error)
+	PublishPinnedReposUpdate(ctx context.Context, email string) error
+	SubscribePinnedReposUpdates(ctx context.Context, email string) (<-chan struct{}, func(), error)
 }
 
 type streamAuthTicketStore interface {
@@ -166,6 +168,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/github/recent-repos", s.handleGitHubRecentRepos)
 	mux.HandleFunc("GET /api/github/pinned-repos", s.handleGitHubPinnedRepos)
 	mux.HandleFunc("PUT /api/github/pinned-repos", s.handleGitHubPinnedRepos)
+	mux.HandleFunc("GET /api/github/pinned-repos/events", s.handleGitHubPinnedReposEvents)
 	// /api/github/repos enumerates the caller's GitHub App installation
 	// repos via mcp-github. Pairs with the auth.romaine.life on-behalf-of
 	// exchange so the orchestrator can mint a service JWT acting for the

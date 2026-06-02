@@ -42,19 +42,40 @@ Named behaviors in the session-bar surface. See
     session-owned state.
   - Write path: `PUT /api/github/pinned-repos` validates the shared
     `owner/name` slug contract, dedups case-insensitively, caps the metadata
-    list at 64 entries, and replaces the caller owner's profile row value.
-  - UI: the picker initializes from the authenticated profile and updates the
-    visible pin state only from the server response. The retired
+    list at 64 entries, replaces the caller owner's profile row value, and
+    publishes a per-owner low-latency wake after the durable write succeeds.
+  - Live path: `GET /api/github/pinned-repos/events` is a browser-native SSE
+    stream authenticated through the same short-lived `stream_ticket` boundary
+    as session streams. The stream subscribes first, then emits a durable
+    `profiles.pinned_repos` snapshot; each NATS wake causes another profile
+    snapshot read. The wake payload carries no state.
+  - UI: the picker initializes from the authenticated profile, refreshes from
+    `GET /api/github/pinned-repos` at authenticated boot, picker open, window
+    focus, and visible-tab return, and applies both PUT responses and SSE
+    snapshots through the same normalization path. The retired
     `tank.homePinnedRepos` localStorage key is not allowlisted on boot.
 
 - **Observability:**
   - `tank_github_pinned_repos_update_total{result=ok|invalid|unavailable|error}`
     distinguishes contract drift, profile-store availability, and database
     write failures.
+  - `tank_github_pinned_repos_publish_total{result=ok|error}` surfaces NATS
+    publish failures after successful durable writes.
+  - `tank_github_pinned_repos_stream_open_total`,
+    `tank_github_pinned_repos_stream_emit_total`,
+    `tank_github_pinned_repos_stream_heartbeat_total`, and
+    `tank_github_pinned_repos_stream_error_total{reason}` cover the browser
+    stream's open/snapshot/keepalive/error behavior with bounded labels.
 
 - **Evidence:**
   - `cmd/tank-operator` `TestValidatePinnedRepoSlugs` covers validation,
     deduping, the distinct pin cap, and rejection of malformed slugs.
+  - `cmd/tank-operator` pinned-repos handler tests cover owner-profile wake
+    publish and the stream's initial durable owner snapshot.
+  - `auth.ts` stream-ticket tests cover the `pinned-repos` stream kind without
+    a session id.
+  - `migrationPolicy.test.ts` guards the EventSource stream and focus/visible
+    durable refresh paths.
   - `main.tsx does not allowlist retired local repo pins` prevents the
     browser-local key from being treated as live state again.
   - `repos.ts` `pinnedRepoSlugs caps profile metadata` keeps the SPA cap in

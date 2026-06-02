@@ -172,6 +172,48 @@ test("authedEventSourceURL mints a short-lived stream ticket", async () => {
   }
 });
 
+test("authedEventSourceURL mints pinned-repos stream tickets without a session id", async () => {
+  const originalLocalStorage = (globalThis as { localStorage?: Storage }).localStorage;
+  const originalFetch = globalThis.fetch;
+  const storage = new Map<string, string>([
+    ["auth-romaine-jwt", "jwt"],
+  ]);
+
+  (globalThis as { localStorage?: Storage }).localStorage = {
+    getItem: (key: string) => storage.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      storage.set(key, value);
+    },
+    removeItem: (key: string) => {
+      storage.delete(key);
+    },
+    clear: () => storage.clear(),
+    key: (index: number) => Array.from(storage.keys())[index] ?? null,
+    get length() {
+      return storage.size;
+    },
+  } as Storage;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    assert.equal(String(input), "/api/auth/stream-ticket");
+    assert.deepEqual(JSON.parse(String(init?.body)), {
+      stream: "pinned-repos",
+    });
+    return jsonResponse({ ticket: "pins-ticket" });
+  }) as typeof fetch;
+
+  try {
+    assert.equal(
+      await authedEventSourceURL("/api/github/pinned-repos/events", {
+        stream: "pinned-repos",
+      }),
+      "/api/github/pinned-repos/events?stream_ticket=pins-ticket",
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
+  }
+});
+
 function jsonResponse(body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status: 200,

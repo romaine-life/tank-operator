@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
 	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
@@ -287,20 +288,24 @@ func TestHandleGitHubPinnedReposServiceActorReadsOwnerProfile(t *testing.T) {
 	if store.getEmail != "owner@example.com" {
 		t.Fatalf("profile email = %q, want owner@example.com", store.getEmail)
 	}
-	var body map[string][]string
+	var body struct {
+		Repos []string `json:"repos"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if !stringSliceEqual(body["repos"], []string{"owner/repo"}) {
-		t.Fatalf("repos = %#v", body["repos"])
+	if !stringSliceEqual(body.Repos, []string{"owner/repo"}) {
+		t.Fatalf("repos = %#v", body.Repos)
 	}
 }
 
 func TestHandleGitHubPinnedReposServiceActorWritesOwnerProfile(t *testing.T) {
 	store := &pinnedReposProfileStore{}
+	bus := &recordingSessionBus{}
 	server := &appServer{
-		verifier: authVerifierForTests(t),
-		profiles: store,
+		verifier:   authVerifierForTests(t),
+		profiles:   store,
+		sessionBus: bus,
 	}
 	req := httptest.NewRequest(http.MethodPut, "/api/github/pinned-repos", strings.NewReader(`{"repos":["owner/repo"]}`))
 	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-485@service.tank.romaine.life", "owner@example.com"))
@@ -314,12 +319,62 @@ func TestHandleGitHubPinnedReposServiceActorWritesOwnerProfile(t *testing.T) {
 	if store.updateEmail != "owner@example.com" {
 		t.Fatalf("profile email = %q, want owner@example.com", store.updateEmail)
 	}
-	var body map[string][]string
+	var body struct {
+		Repos []string `json:"repos"`
+	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	if !stringSliceEqual(body["repos"], []string{"owner/repo"}) {
-		t.Fatalf("repos = %#v", body["repos"])
+	if !stringSliceEqual(body.Repos, []string{"owner/repo"}) {
+		t.Fatalf("repos = %#v", body.Repos)
+	}
+	if !stringSliceEqual(bus.pinnedPublishEmails, []string{"owner@example.com"}) {
+		t.Fatalf("pinned wake emails = %#v, want owner@example.com", bus.pinnedPublishEmails)
+	}
+}
+
+func TestHandleGitHubPinnedReposEventsEmitsInitialOwnerSnapshot(t *testing.T) {
+	closed := make(chan struct{})
+	close(closed)
+	store := &pinnedReposProfileStore{repos: []string{"owner/repo"}}
+	bus := &recordingSessionBus{pinnedUpdateCh: closed}
+	tickets := &fakeStreamAuthTicketStore{
+		validateResponse: pgstore.StreamAuthTicket{
+			Sub:          "sub-pod",
+			Email:        "pod-485@service.tank.romaine.life",
+			Name:         "pod-485",
+			Role:         auth.RoleService,
+			ActorEmail:   "owner@example.com",
+			StreamKind:   streamKindPinnedRepos,
+			SessionScope: "default",
+		},
+	}
+	server := &appServer{
+		profiles:          store,
+		streamAuthTickets: tickets,
+		sessionBus:        bus,
+		sessionScope:      "default",
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/github/pinned-repos/events?stream_ticket=ticket-123", nil)
+	rec := httptest.NewRecorder()
+
+	server.handleGitHubPinnedReposEvents(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if tickets.validateKind != streamKindPinnedRepos || tickets.validateSession != "" {
+		t.Fatalf("validate args kind=%q session=%q", tickets.validateKind, tickets.validateSession)
+	}
+	if store.getEmail != "owner@example.com" {
+		t.Fatalf("profile email = %q, want owner@example.com", store.getEmail)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "event: ready") {
+		t.Fatalf("body missing ready event: %s", body)
+	}
+	if !strings.Contains(body, "event: pinned-repos") || !strings.Contains(body, `"repos":["owner/repo"]`) {
+		t.Fatalf("body missing pinned repos snapshot: %s", body)
 	}
 }
 

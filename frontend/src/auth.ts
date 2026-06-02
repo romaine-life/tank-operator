@@ -20,6 +20,7 @@ interface SessionUser {
   avatar_url: string;
   github_login: string | null;
   installation_id: number | null;
+  profile_updated_at?: string;
   pinned_repos: string[];
   run_prefs: Record<string, unknown> | null;
 }
@@ -127,7 +128,8 @@ async function refreshStoredToken(): Promise<string | null> {
 
 export type StreamTicketRequest =
   | { stream: "session-list"; sessionScope?: string }
-  | { stream: "session-events"; sessionId: string; sessionScope?: string };
+  | { stream: "session-events"; sessionId: string; sessionScope?: string }
+  | { stream: "pinned-repos"; sessionScope?: string };
 
 export async function authedEventSourceURL(
   path: string,

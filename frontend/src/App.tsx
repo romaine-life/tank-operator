@@ -1050,6 +1050,15 @@ interface RecentReposResponse {
 
 interface PinnedReposResponse {
   repos: string[];
+  updated_at?: string;
+}
+
+function stringArraysEqual(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
 }
 
 function normalizeSession(session: Session): Session {
@@ -1256,6 +1265,7 @@ interface SessionUser {
   // wall — null means show the install CTA, non-null means full app.
   github_login: string | null;
   installation_id: number | null;
+  profile_updated_at?: string;
   pinned_repos: string[];
   // Phase E: cross-device run-pane prefs. Null when the user has never
   // saved prefs; SPA falls back to localStorage + defaults.
@@ -14384,6 +14394,9 @@ function AuthenticatedApp() {
   const [pinnedRepos, setPinnedRepos] = useState<string[]>([]);
   const [recentRepos, setRecentRepos] = useState<string[]>([]);
   const [pinnedReposSaving, setPinnedReposSaving] = useState(false);
+  const pinnedReposRefreshInFlightRef = useRef(false);
+  const pinnedReposSnapshotVersionRef = useRef("");
+  const pinnedReposSnapshotOwnerRef = useRef("");
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
@@ -14608,6 +14621,42 @@ function AuthenticatedApp() {
     }
   }, []);
 
+  const applyPinnedReposSnapshot = useCallback((rawRepos: unknown, rawUpdatedAt?: unknown) => {
+    if (!Array.isArray(rawRepos)) return;
+    const updatedAt = typeof rawUpdatedAt === "string" ? rawUpdatedAt : "";
+    const currentVersion = pinnedReposSnapshotVersionRef.current;
+    if (updatedAt) {
+      if (currentVersion && updatedAt < currentVersion) return;
+      pinnedReposSnapshotVersionRef.current = updatedAt;
+    } else if (currentVersion) {
+      return;
+    }
+    const serverPins = pinnedRepoSlugs(rawRepos.map(String));
+    setPinnedRepos((prev) => (stringArraysEqual(prev, serverPins) ? prev : serverPins));
+    setUser((prev) => {
+      if (!prev) return prev;
+      const current = pinnedRepoSlugs(prev.pinned_repos ?? []);
+      if (stringArraysEqual(current, serverPins)) return prev;
+      return { ...prev, pinned_repos: serverPins };
+    });
+  }, []);
+
+  const refreshPinnedRepos = useCallback(async () => {
+    if (pinnedReposRefreshInFlightRef.current) return;
+    pinnedReposRefreshInFlightRef.current = true;
+    try {
+      const res = await authedFetch("/api/github/pinned-repos");
+      if (!res.ok) return;
+      const body = (await res.json()) as Partial<PinnedReposResponse>;
+      applyPinnedReposSnapshot(body.repos, body.updated_at);
+    } catch {
+      // The stream and the next picker/focus refresh will converge from
+      // the durable profile row; keep the current shortcuts visible.
+    } finally {
+      pinnedReposRefreshInFlightRef.current = false;
+    }
+  }, [applyPinnedReposSnapshot]);
+
   // Fetch the full installation repo list. Lazy-loaded on first picker
   // open and refreshed after a successful session create so just-installed
   // repos appear in the list next time.
@@ -14658,8 +14707,97 @@ function AuthenticatedApp() {
   }, [user, refreshRecentRepos]);
 
   useEffect(() => {
-    setPinnedRepos(pinnedRepoSlugs(user?.pinned_repos ?? []));
-  }, [user]);
+    if (!user) {
+      setPinnedRepos([]);
+      pinnedReposSnapshotOwnerRef.current = "";
+      pinnedReposSnapshotVersionRef.current = "";
+      return;
+    }
+    if (pinnedReposSnapshotOwnerRef.current !== user.sub) {
+      pinnedReposSnapshotOwnerRef.current = user.sub;
+      pinnedReposSnapshotVersionRef.current = "";
+    }
+    applyPinnedReposSnapshot(user.pinned_repos ?? [], user.profile_updated_at);
+    void refreshPinnedRepos();
+  }, [user?.sub, applyPinnedReposSnapshot, refreshPinnedRepos]);
+
+  useEffect(() => {
+    if (!user || !repoPickerOpen) return;
+    void refreshPinnedRepos();
+  }, [user?.sub, repoPickerOpen, refreshPinnedRepos]);
+
+  useEffect(() => {
+    if (!user) return;
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshPinnedRepos();
+    };
+    const refreshOnFocus = () => {
+      void refreshPinnedRepos();
+    };
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    window.addEventListener("focus", refreshOnFocus);
+    return () => {
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+      window.removeEventListener("focus", refreshOnFocus);
+    };
+  }, [user?.sub, refreshPinnedRepos]);
+
+  useEffect(() => {
+    if (!user) return;
+    let source: EventSource | null = null;
+    let cancelled = false;
+    let reopenTimer: number | null = null;
+
+    const open = async () => {
+      if (cancelled) return;
+      let nextSource: EventSource;
+      try {
+        nextSource = await authedEventSource("/api/github/pinned-repos/events", {
+          stream: "pinned-repos",
+        });
+      } catch {
+        if (cancelled) return;
+        reopenTimer = window.setTimeout(() => void open(), 1000);
+        return;
+      }
+      if (cancelled) {
+        nextSource.close();
+        return;
+      }
+      source = nextSource;
+      nextSource.addEventListener("pinned-repos", (event) => {
+        const message = event as MessageEvent;
+        let parsed: Partial<PinnedReposResponse> | null = null;
+        try {
+          parsed = JSON.parse(String(message.data)) as Partial<PinnedReposResponse>;
+        } catch {
+          return;
+        }
+        applyPinnedReposSnapshot(parsed?.repos, parsed?.updated_at);
+      });
+      nextSource.addEventListener("stream-error", () => {
+        nextSource.close();
+        if (source === nextSource) source = null;
+        if (cancelled) return;
+        void refreshPinnedRepos();
+        reopenTimer = window.setTimeout(() => void open(), 1000);
+      });
+      nextSource.onerror = () => {
+        nextSource.close();
+        if (source === nextSource) source = null;
+        if (cancelled) return;
+        void refreshPinnedRepos();
+        reopenTimer = window.setTimeout(() => void open(), 1000);
+      };
+    };
+
+    void open();
+    return () => {
+      cancelled = true;
+      if (reopenTimer != null) window.clearTimeout(reopenTimer);
+      source?.close();
+    };
+  }, [user?.sub, applyPinnedReposSnapshot, refreshPinnedRepos]);
 
   // Close the picker when the user switches default mode to one
   // that doesn't support repos. The staged repos stay intact so the
@@ -14702,9 +14840,7 @@ function AuthenticatedApp() {
         if (!res.ok) {
           throw new Error(typeof body.detail === "string" ? body.detail : `pin update failed: ${res.status}`);
         }
-        const serverPins = pinnedRepoSlugs(Array.isArray(body.repos) ? body.repos.map(String) : []);
-        setPinnedRepos(serverPins);
-        setUser((prev) => (prev ? { ...prev, pinned_repos: serverPins } : prev));
+        applyPinnedReposSnapshot(body.repos, body.updated_at);
       })
       .catch((e) => {
         setRepoError(errorMessage(e));
@@ -14713,7 +14849,7 @@ function AuthenticatedApp() {
       .finally(() => {
         setPinnedReposSaving(false);
       });
-  }, [pinnedRepos, pinnedReposSaving]);
+  }, [pinnedRepos, pinnedReposSaving, applyPinnedReposSnapshot]);
 
   const selectExclusiveRepo = useCallback((rawSlug: string) => {
     const result = addRepoSlug([], rawSlug);

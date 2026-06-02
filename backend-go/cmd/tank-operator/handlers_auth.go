@@ -22,6 +22,7 @@ const (
 
 	streamKindSessionList   = "session-list"
 	streamKindSessionEvents = "session-events"
+	streamKindPinnedRepos   = "pinned-repos"
 )
 
 type gitHubInstallStateStore interface {
@@ -46,16 +47,17 @@ func userResponseBody(sub, email, name, role string, isAdmin bool, profile profi
 		pinnedRepos = []string{}
 	}
 	return map[string]any{
-		"sub":             sub,
-		"email":           email,
-		"name":            name,
-		"role":            role,
-		"is_admin":        isAdmin,
-		"avatar_url":      auth.GravatarURL(email, 64),
-		"github_login":    profile.GitHubLogin,
-		"installation_id": profile.InstallationID,
-		"pinned_repos":    pinnedRepos,
-		"run_prefs":       profile.RunPrefs,
+		"sub":                sub,
+		"email":              email,
+		"name":               name,
+		"role":               role,
+		"is_admin":           isAdmin,
+		"avatar_url":         auth.GravatarURL(email, 64),
+		"github_login":       profile.GitHubLogin,
+		"installation_id":    profile.InstallationID,
+		"profile_updated_at": profile.UpdatedAt,
+		"pinned_repos":       pinnedRepos,
+		"run_prefs":          profile.RunPrefs,
 	}
 }
 
@@ -138,6 +140,8 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 	}
 	switch streamKind {
 	case streamKindSessionList:
+		sessionID = ""
+	case streamKindPinnedRepos:
 		sessionID = ""
 	case streamKindSessionEvents:
 		if sessionID == "" {
