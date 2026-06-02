@@ -149,6 +149,67 @@ export function dedupeAdjacentAssistantEchoes(entries: TranscriptEntry[]): Trans
   return out;
 }
 
+function projectedTranscriptEntryOrderKey(entry: TranscriptEntry): string {
+  if (entry.kind === "turn_activity") {
+    return entry.activity?.startOrderKey ?? entry.orderKey ?? "";
+  }
+  return entry.orderKey ?? "";
+}
+
+function transcriptEntryIsTerminalResult(entry: TranscriptEntry): boolean {
+  return (
+    entry.turnTerminalStatus === "completed" ||
+    entry.turnTerminalStatus === "interrupted" ||
+    entry.turnTerminalStatus === "failed"
+  );
+}
+
+export function mergeProjectedTranscriptRowUpdates(
+  current: TranscriptEntry[],
+  updates: TranscriptEntry[],
+): TranscriptEntry[] {
+  if (updates.length === 0) return current;
+  const terminalTurns = new Set<string>();
+  const activityTurns = new Set<string>();
+  const compactedRowIds = new Set<string>();
+  for (const entry of updates) {
+    const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
+    if (!turnId) continue;
+    if (entry.kind === "turn_activity") {
+      activityTurns.add(turnId);
+      for (const id of entry.activityIds ?? entry.activity?.compactedEntryIds ?? []) {
+        compactedRowIds.add(id);
+      }
+    }
+    if (transcriptEntryIsTerminalResult(entry)) terminalTurns.add(turnId);
+  }
+  const byId = new Map<string, TranscriptEntry>();
+  for (const entry of current) {
+    const turnId = entry.turnId ?? entry.activity?.turnId ?? "";
+    if (compactedRowIds.has(entry.id)) {
+      continue;
+    }
+    if (
+      entry.kind === "turn_activity" &&
+      turnId &&
+      terminalTurns.has(turnId) &&
+      !activityTurns.has(turnId)
+    ) {
+      continue;
+    }
+    byId.set(entry.id, entry);
+  }
+  for (const entry of updates) byId.set(entry.id, entry);
+  return Array.from(byId.values()).sort((a, b) => {
+    const aKey = projectedTranscriptEntryOrderKey(a);
+    const bKey = projectedTranscriptEntryOrderKey(b);
+    if (aKey && bKey && aKey !== bKey) return aKey < bKey ? -1 : 1;
+    if (aKey && !bKey) return -1;
+    if (!aKey && bKey) return 1;
+    return a.id.localeCompare(b.id);
+  });
+}
+
 export function mergeSdkTranscript(
   server: TranscriptEntry[],
   realtime: TranscriptEntry[],

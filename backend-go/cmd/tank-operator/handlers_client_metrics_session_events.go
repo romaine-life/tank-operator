@@ -1,6 +1,7 @@
 // Client-side telemetry ingestion for the per-session SSE event
 // stream consumer. Pairs with frontend/src/sessionEventStreamTelemetry.ts.
 // The browser emits semantic events (opened, transcript_rows_received,
+// transcript_rows_applied,
 // stream_silent_while_running, resync_required, stream_error,
 // closed, plus terminal/local-run correlation regressions); the
 // orchestrator buckets them into bounded Prometheus
@@ -99,6 +100,7 @@ func validSessionEventStreamMetricNumbers(event sessionEventStreamMetricEvent) b
 var sessionEventStreamClientEventLabels = map[string]struct{}{
 	"opened":                                 {},
 	"transcript_rows_received":               {},
+	"transcript_rows_applied":                {},
 	"ready":                                  {},
 	"stream_silent_while_running":            {},
 	"terminal_matched_by_turn_id":            {},

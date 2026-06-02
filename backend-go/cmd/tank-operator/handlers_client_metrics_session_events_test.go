@@ -15,6 +15,7 @@ func TestSessionEventStreamMetricsAcceptsValidBatch(t *testing.T) {
 	body := bytes.NewBufferString(`{"events":[
 			{"event":"opened","sessionMode":"claude_gui"},
 			{"event":"transcript_rows_received","eventType":"transcript_rows","sessionMode":"claude_gui"},
+			{"event":"transcript_rows_applied","eventType":"transcript_rows","sessionMode":"claude_gui"},
 			{"event":"stream_silent_while_running","sessionMode":"claude_gui","idleSeconds":42.5,"whileRunning":true},
 			{"event":"terminal_matched_by_turn_id","eventType":"turn.completed","sessionMode":"codex_gui"},
 			{"event":"queued_followup_blocked_after_terminal","sessionMode":"codex_gui"},
@@ -79,6 +80,9 @@ func TestSessionEventStreamClientEventLabelClamp(t *testing.T) {
 	}
 	if got := sessionEventStreamClientEventLabel("terminal_local_run_mismatch"); got != "terminal_local_run_mismatch" {
 		t.Fatalf("terminal mismatch label = %q", got)
+	}
+	if got := sessionEventStreamClientEventLabel("transcript_rows_applied"); got != "transcript_rows_applied" {
+		t.Fatalf("applied label = %q", got)
 	}
 	if got := sessionEventStreamClientEventLabel("stale_running_blocked_submit"); got != "stale_running_blocked_submit" {
 		t.Fatalf("stale submit label = %q", got)

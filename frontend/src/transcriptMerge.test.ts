@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   entryMessageFingerprint,
+  mergeProjectedTranscriptRowUpdates,
   mergeSdkTranscript,
   pruneRealtimeEntries,
 } from "./transcriptMerge.ts";
@@ -108,4 +109,117 @@ test("plain user message dedup is unchanged", () => {
     } as TranscriptEntry,
   ];
   assert.equal(pruneRealtimeEntries(server, realtime).length, 0);
+});
+
+test("projected transcript live updates append after a non-tail window", () => {
+  const historicalWindow: TranscriptEntry[] = [
+    {
+      id: "turn-1:user",
+      kind: "message",
+      role: "user",
+      text: "older question",
+      orderKey: "0001:user",
+      time: "2026-06-02T18:00:00.000Z",
+      transcriptSource: "server",
+    } as TranscriptEntry,
+  ];
+  const liveRows: TranscriptEntry[] = [
+    {
+      id: "turn-9:assistant",
+      kind: "message",
+      role: "assistant",
+      text: "live answer",
+      orderKey: "0009:assistant",
+      time: "2026-06-02T18:10:00.000Z",
+      transcriptSource: "server",
+    } as TranscriptEntry,
+  ];
+
+  const merged = mergeProjectedTranscriptRowUpdates(historicalWindow, liveRows);
+
+  assert.deepEqual(
+    merged.map((entry) => entry.id),
+    ["turn-1:user", "turn-9:assistant"],
+    "post-cursor SSE rows must render even when the bootstrapped window was not found_newest",
+  );
+});
+
+test("projected transcript compaction shell replaces compacted rows", () => {
+  const current: TranscriptEntry[] = [
+    {
+      id: "turn-7:tool:1",
+      kind: "meta",
+      orderKey: "0007:tool:1",
+      turnId: "turn-7",
+      meta: { title: "Tool call", detail: "first tick" },
+      time: "2026-06-02T18:20:00.000Z",
+      transcriptSource: "server",
+    } as TranscriptEntry,
+    {
+      id: "turn-7:tool:2",
+      kind: "meta",
+      orderKey: "0007:tool:2",
+      turnId: "turn-7",
+      meta: { title: "Tool call", detail: "second tick" },
+      time: "2026-06-02T18:20:01.000Z",
+      transcriptSource: "server",
+    } as TranscriptEntry,
+  ];
+  const updates: TranscriptEntry[] = [
+    {
+      id: "turn-7:activity",
+      kind: "turn_activity",
+      orderKey: "0007:activity",
+      turnId: "turn-7",
+      activityIds: ["turn-7:tool:1", "turn-7:tool:2"],
+      activity: {
+        turnId: "turn-7",
+        status: "active",
+        active: true,
+        startOrderKey: "0007:start",
+        compactedEntryIds: ["turn-7:tool:1", "turn-7:tool:2"],
+      },
+      time: "2026-06-02T18:20:02.000Z",
+      transcriptSource: "server",
+    } as TranscriptEntry,
+  ];
+
+  const merged = mergeProjectedTranscriptRowUpdates(current, updates);
+
+  assert.deepEqual(merged.map((entry) => entry.id), ["turn-7:activity"]);
+});
+
+test("projected transcript terminal rows remove stale active shells", () => {
+  const current: TranscriptEntry[] = [
+    {
+      id: "turn-8:activity",
+      kind: "turn_activity",
+      orderKey: "0008:activity",
+      turnId: "turn-8",
+      activity: {
+        turnId: "turn-8",
+        status: "active",
+        active: true,
+        startOrderKey: "0008:start",
+      },
+      time: "2026-06-02T18:25:00.000Z",
+      transcriptSource: "server",
+    } as TranscriptEntry,
+  ];
+  const updates: TranscriptEntry[] = [
+    {
+      id: "turn-8:completed",
+      kind: "meta",
+      orderKey: "0008:completed",
+      turnId: "turn-8",
+      turnTerminalStatus: "completed",
+      meta: { title: "Turn completed" },
+      time: "2026-06-02T18:26:00.000Z",
+      transcriptSource: "server",
+    } as TranscriptEntry,
+  ];
+
+  const merged = mergeProjectedTranscriptRowUpdates(current, updates);
+
+  assert.deepEqual(merged.map((entry) => entry.id), ["turn-8:completed"]);
 });

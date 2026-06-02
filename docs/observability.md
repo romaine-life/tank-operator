@@ -157,6 +157,7 @@ All metric names are prefixed `tank_`. The full namespace:
   stream diagnostics ingested through
   `POST /api/client-metrics/session-events-stream`. Bounded labels:
   `event` (opened, ready, transcript_rows_received,
+  transcript_rows_applied,
   stream_silent_while_running, terminal_matched_by_turn_id,
   terminal_local_run_mismatch, queued_followup_blocked_after_terminal,
   stale_running_blocked_submit, turn_activity_refresh_failed,
@@ -326,7 +327,11 @@ climbs but `emits_total` stays flat, the page read returned nothing
 (candidate B for read-replica visibility lag, or the cursor jumped
 past pending rows); if `emits_total` climbs on the server but the
 matching browser's `tank_session_event_client_received_total` stays
-flat, the SPA reducer is dropping (candidate C).
+flat, the browser did not receive/process the stream event; if
+`transcript_rows_received` climbs but `transcript_rows_applied` in
+`tank_session_event_client_events_total` does not, the SPA live-row
+application path received durable rows but did not merge them into the
+rendered projection.
 
 ## Cluster Health Sidebar Surface
 

@@ -272,8 +272,10 @@ var (
 	// the server's emit-by-type vs the client's receive-by-type
 	// (tank_session_event_client_received_total, ingested through
 	// POST /api/client-metrics/session-events-stream) diverge for a
-	// specific event_type, the SPA reducer is dropping events
-	// silently. Event types are a closed enum at
+	// specific event_type, the browser did not receive/process the SSE
+	// event. If the client reports transcript_rows_received but not
+	// transcript_rows_applied, the SPA received the durable rows but did
+	// not merge them into the rendered projection. Event types are a closed enum at
 	// internal/conversation/types.go — bounded cardinality.
 	sessionEventStreamEmittedByTypeTotal = promauto.NewCounterVec(
 		prometheus.CounterOpts{
