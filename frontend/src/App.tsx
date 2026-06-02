@@ -1657,16 +1657,21 @@ function ComposerCostEstimate({
   scopeLabel = "session",
   title,
 }: ComposerCostEstimateProps) {
-  const unavailable = placeholder || amountUsd === null;
-  const safeTokens = !unavailable && typeof tokens === "number" && Number.isFinite(tokens)
-    ? Math.max(0, Math.floor(tokens))
-    : null;
+  const unavailable = placeholder;
+  const safeAmountUsd = !unavailable && typeof amountUsd === "number" && Number.isFinite(amountUsd)
+    ? Math.max(0, amountUsd)
+    : 0;
+  const safeTokens = unavailable
+    ? null
+    : typeof tokens === "number" && Number.isFinite(tokens)
+      ? Math.max(0, Math.floor(tokens))
+      : 0;
   const normalizedScope = scopeLabel.trim() || "session";
   const formattedAmount = unavailable
     ? "$--"
     : normalizedScope === "turn"
-      ? formatTurnCostUsd(amountUsd)
-      : formatComposerCostUsd(amountUsd);
+      ? formatTurnCostUsd(safeAmountUsd)
+      : formatComposerCostUsd(safeAmountUsd);
   const label = formattedAmount;
   const tokenLabel = safeTokens === null ? "--" : formatCompactTokens(safeTokens);
   const sentenceScope = `${normalizedScope.charAt(0).toUpperCase()}${normalizedScope.slice(1)}`;
@@ -2920,9 +2925,9 @@ function DemoLanding() {
                         title: "Context usage appears after sign in",
                       }}
                       cost={{
-                        amountUsd: null,
-                        placeholder: true,
-                        title: "Cost estimate appears after sign in",
+                        amountUsd: 0,
+                        tokens: 0,
+                        title: "Cost estimate appears after usage is available",
                       }}
                       rollout={{
                         visible: GUI_ROLLOUT_MODES.has(selectedMode),
@@ -12779,6 +12784,9 @@ function ChatPane({
     () => estimateTranscriptCost(entries, modelForCostEstimate),
     [entries, modelForCostEstimate],
   );
+  const sessionUsageLoading =
+    CHAT_MODES.has(session.mode) &&
+    (timelineBootstrap.status === "idle" || timelineBootstrap.status === "loading");
 
   useEffect(() => {
     if (publicView) return;
@@ -13905,6 +13913,7 @@ function ChatPane({
                 amountUsd: sessionCostEstimate?.amountUsd ?? null,
                 tokens: tokensUsed,
                 tokenScopeLabel: "current context tokens",
+                placeholder: sessionUsageLoading,
               }}
               rollout={{
                 visible: GUI_ROLLOUT_MODES.has(session.mode),
@@ -17160,9 +17169,9 @@ function AuthenticatedApp() {
                       title: "Context usage appears after the session starts",
                     }}
                     cost={{
-                      amountUsd: null,
-                      placeholder: true,
-                      title: "Cost estimate appears after the session starts",
+                      amountUsd: 0,
+                      tokens: 0,
+                      title: "Cost estimate appears after usage is available",
                     }}
                     rollout={{
                       visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),
