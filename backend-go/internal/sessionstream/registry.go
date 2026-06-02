@@ -14,11 +14,14 @@
 //
 // What the registry answers, paired with the new Prometheus counters
 // in observability.go:
-//   - "Is the wake plumbing live for this session?" — compare
-//     LastWakeAt against the persister's
-//     tank_session_event_wake_published_total rate for the same window.
+//   - "Is this open stream receiving wakes?" — inspect LastWakeAt,
+//     LastWakeSubject, and WakesReceived for the stream whose storage_key
+//     matches the persister's slog line.
 //   - "Did the SSE handler emit events post-wake?" — compare LastEmitAt
 //     and EmitsTotal against the durable ledger's row count.
+//   - "Did durable rows only arrive through heartbeat polling?" — check
+//     tank_session_event_stream_heartbeat_catchup_total and the matching
+//     "session event stream caught up from heartbeat" slog line.
 //   - "Is the connection zombie?" — LastWakeAt fresh, LastEmitAt fresh,
 //     but the browser claims no events arrived. That points the diagnosis
 //     at the client / proxy layer instead of the backend wake fabric.
@@ -77,9 +80,8 @@ func NewStreamState(streamID, sessionID, storageKey, email string, openedAt time
 
 // RecordWake is called from the NATS subscribe callback whenever a
 // wake fires for this stream's storage key. The subject is recorded
-// alongside the timestamp so the admin endpoint can distinguish wakes
-// arriving on a scope-prefixed key vs a bare-session-id key — the
-// candidate-A signature for wake key mismatch in non-default scopes.
+// alongside the timestamp so the admin endpoint can show exactly what
+// subject reached this open stream.
 func (s *StreamState) RecordWake(now time.Time, subject string) {
 	if s == nil {
 		return

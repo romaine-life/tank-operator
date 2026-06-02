@@ -96,6 +96,10 @@ var (
 		Name: "tank_session_event_stream_heartbeat_total",
 		Help: "Heartbeat frames written on idle SSE streams.",
 	})
+	sessionEventStreamHeartbeatCatchupTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_stream_heartbeat_catchup_total",
+		Help: "Open SSE streams that emitted durable transcript rows after heartbeat polling rather than after a NATS wake.",
+	})
 	sessionEventWakeSubscribeFailures = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_session_event_wake_subscribe_failure_total",
 		Help: "Failures setting up the per-session NATS wake subscription that drives SSE streams.",
@@ -214,13 +218,12 @@ var (
 		Name: "tank_session_bus_command_publish_failure_total",
 		Help: "Session-bus JetStream command publishes (submit_turn/interrupt_turn/input_reply/stop_background_task) that failed, labeled by kind and classified reason.",
 	}, []string{"kind", "reason"})
-	// Wake success counters + persist→wake latency. The published vs
-	// received delta is the candidate-A stethoscope (see
-	// docs/quality-timeframes.md observability requirement and the
-	// /api/debug/session-event-streams admin endpoint for per-session
-	// resolution). Unlabeled aggregates per docs/observability.md
-	// cardinality rules; per-storage-key resolution lives in the slog
-	// line and the admin endpoint's stream snapshot, not in labels.
+	// Wake success counters + persist→wake latency. These are throughput
+	// counters, not a loss-ratio pair: publishes are one-per-durable event
+	// and receives are one-per-open subscriber delivery. Unlabeled aggregates
+	// respect docs/observability.md cardinality rules; per-storage-key
+	// resolution lives in the slog line and the admin endpoint's stream
+	// snapshot, not in labels.
 	sessionEventWakePublishedTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Name: "tank_session_event_wake_published_total",
 		Help: "Per-session SSE wakes successfully published to NATS by the persister or direct-writer call sites.",
@@ -1665,9 +1668,10 @@ func (promProviderHealthMetrics) RecordFanout(provider, scope string, sessions i
 
 // promWakeMetrics satisfies sessionbus.WakeMetrics so the bus can increment
 // wake/event-publish failure counters without importing prometheus directly.
-// The published/received pair powers the candidate-A wake-key-mismatch
-// stethoscope; the persist→wake duration histogram catches a slow-publish
-// tail the simple failure counter cannot.
+// Wake published/received are throughput counters rather than a delivery-loss
+// ratio because one published wake fans out to every open stream subscribed to
+// the subject. The persist→wake duration histogram catches a slow-publish tail
+// the simple failure counter cannot.
 type promWakeMetrics struct{}
 
 func (promWakeMetrics) RecordSessionEventWakePublishFailed() {
@@ -1721,6 +1725,10 @@ func (promSweepMetrics) RecordSweepPass(result sessionbus.SweepResult) {
 
 func recordSessionBusOrphanSweepResult(result string) {
 	sessionBusOrphanSweepPassesTotal.WithLabelValues(result).Inc()
+}
+
+func recordSessionEventStreamHeartbeatCatchup() {
+	sessionEventStreamHeartbeatCatchupTotal.Inc()
 }
 
 // sessionBusCommandKindLabel is the prom-side validator for the kind

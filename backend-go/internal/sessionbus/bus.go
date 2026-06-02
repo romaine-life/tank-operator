@@ -132,14 +132,11 @@ func (noopPersisterMetrics) RecordTurnTerminalMissingClientNonce(string, string)
 // fire-and-forget) still get visibility into "NATS is down". Wired to
 // prometheus in cmd/tank-operator/observability.go.
 //
-// The published/received split is the stethoscope for the candidate-A
-// wake-key-mismatch failure mode (per the diagnosis in
-// memory/feedback_no_devtools_build_surfaces_instead.md context): when
-// published >> received over the same window for the same SSE stream's
-// lifetime, the persister is firing wakes on a subject the subscriber
-// is not listening for. Both counters are unlabeled aggregates — the
-// per-session subject lives in the slog line and the admin endpoint's
-// stream snapshot, not in metric labels.
+// Published and received are separate throughput counters, not a delivery-loss
+// ratio: one published wake can have zero open subscribers or can fan out to
+// multiple open streams. Both counters are unlabeled aggregates — the
+// per-session subject lives in the slog line and the admin endpoint's stream
+// snapshot, not in metric labels.
 type WakeMetrics interface {
 	RecordSessionEventWakePublishFailed()
 	RecordSessionListEventPublishFailed()
@@ -533,9 +530,9 @@ func (b *Bus) SubscribeWakes(ctx context.Context, sessionID string) (<-chan stru
 // message callback so the per-session SSE stream's last_wake_at /
 // last_wake_subject / wakes_received state stays accurate even when
 // the buffered notify channel is already full. The metrics counter
-// fires once per NATS delivery (not once per noticed wake) so the
-// published-vs-received delta in observability stays correct under
-// burst.
+// fires once per NATS delivery (not once per noticed wake). That makes the
+// received counter a subscriber-delivery throughput metric, not a direct
+// counterpart to the one-per-event published counter.
 //
 // SubscribeWakes (no recorder) is preserved for tests and any
 // caller that doesn't need per-stream attribution.
@@ -737,13 +734,11 @@ func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, metrics Per
 		if err := b.nc.Publish(subject, nil); err != nil {
 			return err
 		}
-		// Success path: record both the published counter and the
-		// persist→wake latency. The published vs received delta in
-		// observability is the candidate-A stethoscope; the latency
-		// histogram catches the "we publish but something between
-		// Upsert and Publish is slow" tail (cancelled context, slow
-		// NATS flush) that would otherwise be invisible to the
-		// existing failure counter.
+		// Success path: record both the one-per-event published counter and
+		// the persist→wake latency. The latency histogram catches the "we
+		// publish but something between Upsert and Publish is slow" tail
+		// (cancelled context, slow NATS flush) that would otherwise be
+		// invisible to the existing failure counter.
 		b.wakeMetrics.RecordSessionEventWakePublished()
 		b.wakeMetrics.RecordSessionEventPersistToWakeDuration(time.Since(upsertedAt).Seconds())
 		slog.Info("session event persister wake published",
