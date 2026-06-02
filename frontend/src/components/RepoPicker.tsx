@@ -575,12 +575,20 @@ function DraggablePinnedSection(props: DraggablePinnedSectionProps): JSX.Element
     setOverSlug(null);
   }, []);
 
+  // Keep keyboard focus on the row the user is moving. After an arrow-key
+  // reorder the list re-renders in the new order and the grip is briefly
+  // disabled while the durable write is in flight; depend on `busy` and only
+  // clear the pending focus once the (now-enabled) handle actually takes focus,
+  // so a keyboard user can chain ArrowUp/ArrowDown moves without losing place.
   useEffect(() => {
     const slug = pendingFocusSlug.current;
     if (!slug) return;
-    pendingFocusSlug.current = null;
-    handleRefs.current.get(slug.toLowerCase())?.focus();
-  }, [slugs]);
+    const handle = handleRefs.current.get(slug.toLowerCase());
+    if (handle && !handle.disabled) {
+      pendingFocusSlug.current = null;
+      handle.focus();
+    }
+  }, [slugs, busy]);
 
   const moveByKeyboard = useCallback(
     (slug: string, direction: -1 | 1) => {
