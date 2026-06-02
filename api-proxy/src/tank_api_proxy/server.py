@@ -117,11 +117,6 @@ ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token"
 
-# Gemini OAuth constants
-GEMINI_CLIENT_ID = ""
-GEMINI_CLIENT_SECRET = ""
-GEMINI_TOKEN_URL = "https://oauth2.googleapis.com/token"
-
 # The session launchers write this placeholder into
 # ~/.claude/.credentials.json's accessToken (and matching refreshToken).
 # Used as the discriminator for "this is a request that wants OAuth-
@@ -156,17 +151,6 @@ def _config_from_env() -> ProxyConfig:
             account_header="ChatGPT-Account-ID",
             fedramp_header="X-OpenAI-Fedramp",
             patch_last_refresh=True,
-        )
-    if provider == "gemini":
-        return ProxyConfig(
-            provider="gemini",
-            credentials_file=os.environ.get(
-                "GEMINI_CREDENTIALS_FILE", "/etc/gemini-credentials/settings.json"
-            ),
-            token_url=os.environ.get("GEMINI_TOKEN_URL", GEMINI_TOKEN_URL),
-            client_id=os.environ.get("GEMINI_CLIENT_ID", GEMINI_CLIENT_ID),
-            client_secret=os.environ.get("GEMINI_CLIENT_SECRET", GEMINI_CLIENT_SECRET),
-            kv_secret_name=os.environ.get("GEMINI_CREDENTIALS_KV_KEY", "gemini-credentials"),
         )
     if provider not in ("", "claude"):
         log.warning("unknown PROXY_PROVIDER=%r; falling back to claude", provider)

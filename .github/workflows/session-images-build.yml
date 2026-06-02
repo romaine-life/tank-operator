@@ -7,7 +7,6 @@ on:
       - 'claude-container/**'
       - 'agent-runner/**'
       - 'codex-runner/**'
-      - 'gemini-runner/**'
       - 'runner-shared/**'
       - 'scripts/image-fingerprint.sh'
       - '.github/workflows/session-images-build.yml'
@@ -39,9 +38,6 @@ jobs:
             image: claude-container
           - agent: codex
             image: codex-container
-
-          - agent: gemini
-            image: gemini-container
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -99,7 +95,7 @@ jobs:
             --image ${{ matrix.agent }} \
             --dockerfile claude-container/Dockerfile \
             --context . \
-            --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner gemini-runner runner-shared' \
+            --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared' \
             | awk -F= '$1 == "fingerprint" { print $2 }')"
           echo "ALIAS_TAG=${{ matrix.agent }}-${fingerprint}" >> "$GITHUB_ENV"
 
@@ -180,13 +176,11 @@ jobs:
           set -euo pipefail
           claude_tag="$(cat session-image-tags/claude.tag)"
           codex_tag="$(cat session-image-tags/codex.tag)"
-          gemini_tag="$(cat session-image-tags/gemini.tag)"
-          # session.image / session.codexImage / session.geminiImage are
+          # session.image / session.codexImage are
           # repo:tag strings; rewrite them to the fingerprint tags the
           # matrix above either found or pushed.
           sed -i -E "s|^(  image: romainecr.azurecr.io/claude-container:).*$|\1${claude_tag}|" k8s/values.yaml
           sed -i -E "s|^(  codexImage: ).*$|\1romainecr.azurecr.io/codex-container:${codex_tag}|" k8s/values.yaml
-          sed -i -E "s|^(  geminiImage: ).*$|\1romainecr.azurecr.io/gemini-container:${gemini_tag}|" k8s/values.yaml
 
           if git diff --quiet k8s/values.yaml; then
             echo "no session image tag change"

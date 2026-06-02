@@ -53,8 +53,6 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "codex_gui",
     "codex_exec_gui",
     "codex_app_server",
-    "gemini_gui",
-    "gemini_test",
   ]) {
     assert.ok(REPO_SUPPORTED_MODES.has(mode), `${mode} should support repos`);
   }
@@ -63,6 +61,8 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "codex_cli",
     "config",
     "codex_config",
+    "gemini_gui",
+    "gemini_test",
     "gemini_config",
     "api_key",
   ]) {

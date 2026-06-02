@@ -46,10 +46,6 @@ func cliProcessLaunchForMode(mode string) sandboxProcessCreate {
 		// at $HOME/.claude/.credentials.json for the save-credentials
 		// button.
 		base.Args = []string{"-lc", "claude /login; exec bash"}
-	case sessionmodel.GeminiConfigMode:
-		// gemini login runs the Google OAuth flow; credentials land
-		// at $HOME/.gemini/settings.json for the save-credentials button.
-		base.Args = []string{"-lc", "gemini login; exec bash"}
 	default:
 		base.Args = []string{"-l"}
 	}

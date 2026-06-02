@@ -14,7 +14,7 @@ function ModePair({
   interaction,
   label,
 }: {
-  provider: "anthropic" | "codex" | "gemini";
+  provider: "anthropic" | "codex";
   interaction: "gui" | "cli";
   label: string;
 }) {

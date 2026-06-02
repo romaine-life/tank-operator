@@ -77,9 +77,7 @@ func sessionModeSupportsRepos(mode string) bool {
 	case sessionmodel.ClaudeGUIMode,
 		sessionmodel.CodexGUIMode,
 		sessionmodel.CodexExecGUIMode,
-		sessionmodel.CodexAppServerMode,
-		sessionmodel.GeminiGUIMode,
-		sessionmodel.GeminiTestMode:
+		sessionmodel.CodexAppServerMode:
 		return true
 	default:
 		return false
