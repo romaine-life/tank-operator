@@ -49,6 +49,20 @@ test("chat composer cost estimate keeps a fixed-width footprint", () => {
   assert.match(composerRule, /flex:\s*0\s+0\s+8\.8rem;/);
   assert.match(composerRule, /white-space:\s*nowrap;/);
 
+  const usageRule = cssRule(".run-usage-ring");
+  assert.match(usageRule, /flex:\s*0\s+0\s+2rem;/);
+
+  const iconRule = cssRule(".run-composer-icon-btn");
+  assert.match(iconRule, /flex:\s*0\s+0\s+2rem;/);
+
+  const modelRule = cssRule(".run-model-chip");
+  assert.match(modelRule, /flex:\s*0\s+0\s+auto;/);
+  assert.match(modelRule, /min-width:\s*0;/);
+
+  const modelLabelRule = cssRule(".run-model-chip-label");
+  assert.match(modelLabelRule, /flex:\s*1\s+1\s+auto;/);
+  assert.match(modelLabelRule, /text-overflow:\s*ellipsis;/);
+
   const metricRule = cssRule(".run-cost-estimate-metric");
   assert.match(metricRule, /flex:\s*1\s+1\s+0;/);
   assert.match(metricRule, /min-width:\s*0;/);

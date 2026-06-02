@@ -6279,6 +6279,7 @@ button:disabled {
   position: relative;
   width: 2rem;
   height: 2rem;
+  flex: 0 0 2rem;
   border-radius: 0.5rem;
   border: none;
   background: transparent;
@@ -6306,6 +6307,7 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 0.38rem;
+  flex: 0 0 auto;
   min-width: 0;
   max-width: min(17rem, 34vw);
   height: 2rem;
@@ -6333,6 +6335,7 @@ button:disabled {
 }
 
 .run-model-chip-label {
+  flex: 1 1 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -6456,6 +6459,7 @@ button:disabled {
   justify-content: center;
   width: 2rem;
   height: 2rem;
+  flex: 0 0 2rem;
   color: #60a5fa;
 }
 
@@ -6561,6 +6565,7 @@ button:disabled {
   .run-composer-tools {
     flex-wrap: wrap;
     gap: 0.38rem;
+    flex-wrap: wrap;
     flex-basis: 10rem;
   }
 
