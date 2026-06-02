@@ -36,10 +36,13 @@ Named behaviors in the session-bar surface. See
 - **Mechanism:**
   - Column: `profiles.pinned_repos text[] NOT NULL DEFAULT '{}'`.
   - Read path: `/api/auth/me` includes `pinned_repos`; `GET
-    /api/github/pinned-repos` returns the same durable list.
+    /api/github/pinned-repos` returns the same durable list. Browser callers
+    read their own profile row; service-principal callers read the
+    `actor_email` owner row through the same `OwnerEmail()` boundary used by
+    session-owned state.
   - Write path: `PUT /api/github/pinned-repos` validates the shared
     `owner/name` slug contract, dedups case-insensitively, caps the metadata
-    list at 64 entries, and replaces the profile row value.
+    list at 64 entries, and replaces the caller owner's profile row value.
   - UI: the picker initializes from the authenticated profile and updates the
     visible pin state only from the server response. The retired
     `tank.homePinnedRepos` localStorage key is not allowlisted on boot.

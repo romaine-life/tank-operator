@@ -227,7 +227,7 @@ func (s *appServer) handleGitHubPinnedRepos(w http.ResponseWriter, r *http.Reque
 	}
 	switch r.Method {
 	case http.MethodGet:
-		profile, err := s.profiles.GetOrCreate(r.Context(), user.Email)
+		profile, err := s.profiles.GetOrCreate(r.Context(), repoLookupOwnerEmail(user))
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, "pinned repos: "+err.Error())
 			return
@@ -258,7 +258,7 @@ func (s *appServer) handleGitHubPinnedRepos(w http.ResponseWriter, r *http.Reque
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
-		profile, err := pinsStore.UpdatePinnedRepos(r.Context(), user.Email, repos)
+		profile, err := pinsStore.UpdatePinnedRepos(r.Context(), repoLookupOwnerEmail(user), repos)
 		if err != nil {
 			recordPinnedReposUpdate("error")
 			writeError(w, http.StatusInternalServerError, "pinned repos: "+err.Error())

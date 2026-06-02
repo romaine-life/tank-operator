@@ -66,6 +66,31 @@ func (s *installUpdatingProfiles) UpdateInstallation(_ context.Context, email st
 	}, nil
 }
 
+type profilePrefsRecorder struct {
+	profile          profiles.Profile
+	getEmail         string
+	updatePrefsEmail string
+	updatePrefs      map[string]any
+}
+
+func (s *profilePrefsRecorder) GetOrCreate(_ context.Context, email string) (profiles.Profile, error) {
+	s.getEmail = email
+	if s.profile.Email == "" {
+		s.profile.Email = email
+	}
+	return s.profile, nil
+}
+
+func (s *profilePrefsRecorder) UpdatePrefs(_ context.Context, email string, prefs map[string]any) (profiles.Profile, error) {
+	s.updatePrefsEmail = email
+	s.updatePrefs = prefs
+	return profiles.Profile{
+		Email:       email,
+		RunPrefs:    prefs,
+		PinnedRepos: []string{},
+	}, nil
+}
+
 func TestGitHubInstallURLCreatesOpaqueState(t *testing.T) {
 	states := &fakeGitHubInstallStateStore{}
 	server := &appServer{
@@ -146,6 +171,65 @@ func TestGitHubInstallCompleteConsumesStateAndUpdatesProfile(t *testing.T) {
 	}
 	if got := body["user"]["installation_id"]; got != float64(4242) {
 		t.Fatalf("installation_id = %#v", got)
+	}
+}
+
+func TestHandleMeServiceActorReadsOwnerProfile(t *testing.T) {
+	profileStore := &profilePrefsRecorder{
+		profile: profiles.Profile{
+			Email:       "owner@example.com",
+			PinnedRepos: []string{"owner/repo"},
+		},
+	}
+	server := &appServer{
+		verifier: authVerifierForTests(t),
+		profiles: profileStore,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-485@service.tank.romaine.life", "owner@example.com"))
+	rec := httptest.NewRecorder()
+
+	server.handleMe(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if profileStore.getEmail != "owner@example.com" {
+		t.Fatalf("profile email = %q, want owner@example.com", profileStore.getEmail)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["email"] != "pod-485@service.tank.romaine.life" || body["role"] != auth.RoleService {
+		t.Fatalf("caller identity = %#v/%#v", body["email"], body["role"])
+	}
+	pins, ok := body["pinned_repos"].([]any)
+	if !ok || len(pins) != 1 || pins[0] != "owner/repo" {
+		t.Fatalf("pinned_repos = %#v", body["pinned_repos"])
+	}
+}
+
+func TestHandleUpdatePrefsServiceActorWritesOwnerProfile(t *testing.T) {
+	profileStore := &profilePrefsRecorder{}
+	server := &appServer{
+		verifier: authVerifierForTests(t),
+		profiles: profileStore,
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/auth/prefs", strings.NewReader(`{"run_prefs":{"chatFontScale":1.25}}`))
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-485@service.tank.romaine.life", "owner@example.com"))
+	rec := httptest.NewRecorder()
+
+	server.handleUpdatePrefs(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if profileStore.updatePrefsEmail != "owner@example.com" {
+		t.Fatalf("prefs email = %q, want owner@example.com", profileStore.updatePrefsEmail)
+	}
+	if profileStore.updatePrefs["chatFontScale"] != 1.25 {
+		t.Fatalf("prefs = %#v", profileStore.updatePrefs)
 	}
 }
 

@@ -66,7 +66,7 @@ func (s *appServer) handleMe(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	profile, err := s.profiles.GetOrCreate(r.Context(), user.Email)
+	profile, err := s.profiles.GetOrCreate(r.Context(), user.OwnerEmail())
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -97,7 +97,7 @@ func (s *appServer) handleUpdatePrefs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	profile, err := prefsStore.UpdatePrefs(r.Context(), user.Email, body.RunPrefs)
+	profile, err := prefsStore.UpdatePrefs(r.Context(), user.OwnerEmail(), body.RunPrefs)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
