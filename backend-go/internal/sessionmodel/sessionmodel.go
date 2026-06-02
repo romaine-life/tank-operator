@@ -135,9 +135,12 @@ type SessionRecord struct {
 	// RuntimeModel/RuntimeEffort are written by the runner after it
 	// hands options to the provider executable/SDK. This is the applied
 	// configuration surface the UI renders in the composer footer.
-	RuntimeModel        string
-	RuntimeEffort       string
-	RuntimeConfiguredAt string
+	RuntimeModel                   string
+	RuntimeEffort                  string
+	RuntimeConfiguredAt            string
+	RuntimeContextWindowTokens     int64
+	RuntimeContextWindowSource     string
+	RuntimeContextWindowObservedAt string
 
 	// Avatar IDs are assigned by the backend from a durable shuffled deck.
 	// Visible production rows must have an agent avatar id before publication.

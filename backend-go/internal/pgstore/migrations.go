@@ -1009,6 +1009,17 @@ var schemaMigrations = []migration{
 			updated_at  = now(),
 			row_version = nextval('sessions_row_version_seq')
 		WHERE mode = concat('hermes', '_gui') AND visible = true`},
+
+	// Provider-observed runtime context window. The session's requested model is
+	// immutable after create; this records the first concrete window reported by
+	// the provider runtime so UI context percentages hydrate from durable row
+	// metadata instead of frontend model tables.
+	{ID: "0086", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_tokens bigint NOT NULL DEFAULT 0`},
+	{ID: "0087", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_source text NOT NULL DEFAULT ''`},
+	{ID: "0088", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_observed_at timestamptz`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

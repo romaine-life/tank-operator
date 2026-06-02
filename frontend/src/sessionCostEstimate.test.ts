@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
-  contextWindowTokenCount,
+  currentContextTokenCount,
   estimateTranscriptCost,
   estimateTurnCost,
   estimateTurnContextTokens,
@@ -102,35 +102,42 @@ test("formats compact token counts", () => {
   assert.equal(formatCompactTokens(12_900_000), "12m");
 });
 
-test("context window token count uses active uncached Codex delta for cumulative thread usage", () => {
-  assert.equal(contextWindowTokenCount({
+test("current context token count uses active uncached Codex delta for cumulative thread usage", () => {
+  assert.equal(currentContextTokenCount({
     cached_input_tokens: 24_488_064,
     input_tokens: 25_131_214,
     output_tokens: 29_896,
     reasoning_output_tokens: 4_449,
     total_tokens: 25_161_110,
-  }, 1_050_000, {
+  }, {
     usage_source: "thread.tokenUsage.updated",
   }), 643_150);
 });
 
-test("context window token count uses Codex uncached delta even below the model window", () => {
-  assert.equal(contextWindowTokenCount({
+test("current context token count uses Codex uncached delta even below a model window", () => {
+  assert.equal(currentContextTokenCount({
     cached_input_tokens: 525_440,
     input_tokens: 608_743,
     output_tokens: 4_238,
     reasoning_output_tokens: 1_291,
     total_tokens: 612_981,
-  }, 1_050_000, {
+  }, {
     usage_source: "thread.tokenUsage.updated",
   }), 83_303);
 });
 
-test("context window token count keeps in-window cached prompts intact", () => {
-  assert.equal(contextWindowTokenCount({
+test("current context token count keeps non-cumulative cached prompts intact", () => {
+  assert.equal(currentContextTokenCount({
     input_tokens: 180_000,
     cached_input_tokens: 120_000,
-  }, 200_000), 180_000);
+  }), 180_000);
+});
+
+test("context token count does not infer cumulative usage from token magnitude", () => {
+  assert.equal(currentContextTokenCount({
+    input_tokens: 1_250_000,
+    cached_input_tokens: 900_000,
+  }), 1_250_000);
 });
 
 test("estimates one selected turn context tokens from latest usage row", () => {
@@ -157,7 +164,7 @@ test("estimates one selected turn context tokens from latest usage row", () => {
     },
   ];
 
-  assert.equal(estimateTurnContextTokens(rows, 1_050_000, "turn-1"), 83_303);
+  assert.equal(estimateTurnContextTokens(rows, "turn-1"), 83_303);
 });
 
 test("formats compact composer costs", () => {

@@ -183,28 +183,34 @@ func TestMarshalRowUpdateIncludesSidebarPosition(t *testing.T) {
 
 func TestMarshalRowUpdateIncludesSessionRunConfig(t *testing.T) {
 	payload, err := sessioncontroller.MarshalRowUpdate(sessionmodel.SessionRecord{
-		ID:                  "8",
-		Email:               "u@example.com",
-		Scope:               "default",
-		Visible:             true,
-		Status:              "Active",
-		Model:               "gpt-5.5",
-		Effort:              "xhigh",
-		RuntimeModel:        "gpt-5.5",
-		RuntimeEffort:       "xhigh",
-		RuntimeConfiguredAt: "2026-05-21T00:00:00Z",
-		RowVersion:          99,
+		ID:                             "8",
+		Email:                          "u@example.com",
+		Scope:                          "default",
+		Visible:                        true,
+		Status:                         "Active",
+		Model:                          "gpt-5.5",
+		Effort:                         "xhigh",
+		RuntimeModel:                   "gpt-5.5",
+		RuntimeEffort:                  "xhigh",
+		RuntimeConfiguredAt:            "2026-05-21T00:00:00Z",
+		RuntimeContextWindowTokens:     258400,
+		RuntimeContextWindowSource:     "codex_app_server_token_usage",
+		RuntimeContextWindowObservedAt: "2026-05-21T00:00:01Z",
+		RowVersion:                     99,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	var probe struct {
 		Row struct {
-			Model               string `json:"model"`
-			Effort              string `json:"effort"`
-			RuntimeModel        string `json:"runtime_model"`
-			RuntimeEffort       string `json:"runtime_effort"`
-			RuntimeConfiguredAt string `json:"runtime_configured_at"`
+			Model                          string `json:"model"`
+			Effort                         string `json:"effort"`
+			RuntimeModel                   string `json:"runtime_model"`
+			RuntimeEffort                  string `json:"runtime_effort"`
+			RuntimeConfiguredAt            string `json:"runtime_configured_at"`
+			RuntimeContextWindowTokens     int64  `json:"runtime_context_window_tokens"`
+			RuntimeContextWindowSource     string `json:"runtime_context_window_source"`
+			RuntimeContextWindowObservedAt string `json:"runtime_context_window_observed_at"`
 		} `json:"row"`
 	}
 	if err := json.Unmarshal(payload, &probe); err != nil {
@@ -212,6 +218,9 @@ func TestMarshalRowUpdateIncludesSessionRunConfig(t *testing.T) {
 	}
 	if probe.Row.Model != "gpt-5.5" || probe.Row.Effort != "xhigh" || probe.Row.RuntimeModel != "gpt-5.5" || probe.Row.RuntimeEffort != "xhigh" || probe.Row.RuntimeConfiguredAt == "" {
 		t.Fatalf("run config row = %#v", probe.Row)
+	}
+	if probe.Row.RuntimeContextWindowTokens != 258400 || probe.Row.RuntimeContextWindowSource != "codex_app_server_token_usage" || probe.Row.RuntimeContextWindowObservedAt == "" {
+		t.Fatalf("runtime context window row = %#v", probe.Row)
 	}
 }
 

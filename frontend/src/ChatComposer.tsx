@@ -16,7 +16,7 @@ import type { ChatStatus } from "ai";
 // landing, and inside an active session's run pane. The visual shell —
 // PromptInput shell, hint, submit button — is identical across all three
 // callers; only the session-bound tool buttons
-// (image attach, usage ring, rollout/test, slash and MCP menus) plug in via
+// (image attach, context/cost estimate, rollout/test, slash and MCP menus) plug in via
 // the `toolButtons` slot from inside the run pane. Keeping these surfaces in
 // one component is what makes "type on the home screen and the same composer
 // keeps going in the chat" true at the code level, not only visually.
@@ -51,7 +51,7 @@ export interface ChatComposerProps {
   isStopping?: boolean;
   /**
    * Tool buttons rendered inside `PromptInputTools`. The run pane plugs in
-   * image-attach, usage ring, rollout/test, slash menu, and MCP menu here.
+   * image-attach, context/cost estimate, rollout/test, slash menu, and MCP menu here.
    * Home + demo leave this empty.
    */
   toolButtons?: ReactNode;

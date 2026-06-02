@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const cssSource = readFileSync(new URL("./index.css", import.meta.url), "utf8");
 
 test("turn cost estimate is not suppressed while a turn is running", () => {
   assert.match(appSource, /costEstimate:\s*estimateTurnCost\(costRows,\s*modelId,\s*turnId\)/);
@@ -32,6 +33,15 @@ test("composer cost estimate separates context tokens from dollars", () => {
   assert.match(appSource, /className="run-cost-estimate-label">ctx</);
   assert.match(appSource, /className="run-cost-estimate-label">usd</);
   assert.doesNotMatch(appSource, /run-cost-estimate-separator/);
+});
+
+test("composer context percentage uses provider-observed session window", () => {
+  assert.match(appSource, /runtime_context_window_tokens/);
+  assert.match(appSource, /runtimeContextWindowTokens > 0/);
+  assert.match(appSource, /contextWindow: runtimeContextWindowTokens/);
+  assert.match(cssSource, /run-usage-ring/);
+  assert.doesNotMatch(appSource, /CONTEXT_WINDOW_BY_MODEL/);
+  assert.doesNotMatch(appSource, /getContextWindow/);
 });
 
 test("turn token count uses current context pressure", () => {

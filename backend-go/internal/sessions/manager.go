@@ -649,6 +649,10 @@ type runtimeConfigRegistry interface {
 	SetRuntimeConfig(ctx context.Context, email, sessionID, model, effort string) error
 }
 
+type runtimeContextWindowRegistry interface {
+	SetRuntimeContextWindow(ctx context.Context, email, sessionID string, tokens int64, source string) error
+}
+
 type sessionAvatarReserver interface {
 	ReserveSessionAvatars(ctx context.Context, owner, sessionID string) (sessionmodel.SessionAvatarAssignment, error)
 }
@@ -693,6 +697,21 @@ func (m *Manager) SetRuntimeConfig(ctx context.Context, owner, sessionID, model,
 		return Info{}, ErrNotFound
 	}
 	if err := registry.SetRuntimeConfig(ctx, owner, sessionID, model, effort); err != nil {
+		return Info{}, err
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetRegisteredByOwner(ctx, owner, sessionID)
+}
+
+// SetRuntimeContextWindow records the first provider-observed model context
+// window for the immutable session runtime. Repeated reports of the same
+// provider fact are no-ops in the store; callers still receive the current row.
+func (m *Manager) SetRuntimeContextWindow(ctx context.Context, owner, sessionID string, tokens int64, source string) (Info, error) {
+	registry, ok := m.registry.(runtimeContextWindowRegistry)
+	if !ok {
+		return Info{}, ErrNotFound
+	}
+	if err := registry.SetRuntimeContextWindow(ctx, owner, sessionID, tokens, source); err != nil {
 		return Info{}, err
 	}
 	m.publishRow(ctx, owner, sessionID)

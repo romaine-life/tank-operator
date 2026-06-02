@@ -76,8 +76,10 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 	}
 
 	var body struct {
-		Model  string `json:"model"`
-		Effort string `json:"effort"`
+		Model               string `json:"model"`
+		Effort              string `json:"effort"`
+		ContextWindowTokens int64  `json:"context_window_tokens"`
+		ContextWindowSource string `json:"context_window_source"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		recordSessionRuntimeConfigUpdate("unknown", "bad_request")
@@ -120,16 +122,40 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 		return
 	}
 
-	updated, err := s.mgr.SetRuntimeConfig(r.Context(), caller.Email, sessionID, model, effort)
-	if err != nil {
-		if errors.Is(err, sessions.ErrNotFound) {
-			recordSessionRuntimeConfigUpdate(provider, "not_found")
-			writeError(w, http.StatusNotFound, "session not found")
+	var updated sessions.Info
+	if model != "" || effort != "" {
+		updated, err = s.mgr.SetRuntimeConfig(r.Context(), caller.Email, sessionID, model, effort)
+		if err != nil {
+			if errors.Is(err, sessions.ErrNotFound) {
+				recordSessionRuntimeConfigUpdate(provider, "not_found")
+				writeError(w, http.StatusNotFound, "session not found")
+				return
+			}
+			recordSessionRuntimeConfigUpdate(provider, "update_failed")
+			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
-		recordSessionRuntimeConfigUpdate(provider, "update_failed")
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
+	} else {
+		updated = info
+	}
+	if body.ContextWindowTokens > 0 {
+		updated, err = s.mgr.SetRuntimeContextWindow(
+			r.Context(),
+			caller.Email,
+			sessionID,
+			body.ContextWindowTokens,
+			body.ContextWindowSource,
+		)
+		if err != nil {
+			if errors.Is(err, sessions.ErrNotFound) {
+				recordSessionRuntimeConfigUpdate(provider, "not_found")
+				writeError(w, http.StatusNotFound, "session not found")
+				return
+			}
+			recordSessionRuntimeConfigUpdate(provider, "update_failed")
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 	}
 	recordSessionRuntimeConfigUpdate(provider, "ok")
 	writeJSON(w, http.StatusOK, updated)

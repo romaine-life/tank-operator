@@ -472,6 +472,38 @@ func TestManagerSetRuntimeConfigPersistsAndPublishes(t *testing.T) {
 	}
 }
 
+func TestManagerSetRuntimeContextWindowPersistsAndPublishes(t *testing.T) {
+	registry := &managerTestRegistry{
+		records: []sessionmodel.SessionRecord{
+			{
+				ID:      "8",
+				Email:   "nelson@romaine.life",
+				Mode:    sessionmodel.CodexGUIMode,
+				Visible: true,
+				Status:  "Active",
+			},
+		},
+	}
+	emitter := &recordingRowEmitter{}
+	mgr := &Manager{
+		client:    fake.NewSimpleClientset(),
+		namespace: sessionmodel.SessionsNamespace,
+		registry:  registry,
+		emitter:   emitter,
+	}
+
+	info, err := mgr.SetRuntimeContextWindow(context.Background(), "nelson@romaine.life", "8", 258400, "codex_app_server_token_usage")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RuntimeContextWindowTokens != 258400 || info.RuntimeContextWindowSource != "codex_app_server_token_usage" || info.RuntimeContextWindowObservedAt == nil || *info.RuntimeContextWindowObservedAt == "" {
+		t.Fatalf("runtime context window info = %#v", info)
+	}
+	if strings.Join(emitter.ids, ",") != "8" {
+		t.Fatalf("published ids = %v, want [8]", emitter.ids)
+	}
+}
+
 func assertSkillStateActive(t *testing.T, label string, state map[string]any, want bool) {
 	t.Helper()
 	if got := state["active"]; got != want {
@@ -574,6 +606,20 @@ func (r *managerTestRegistry) SetRuntimeConfig(_ context.Context, email, session
 			r.records[i].RuntimeModel = model
 			r.records[i].RuntimeEffort = effort
 			r.records[i].RuntimeConfiguredAt = "2026-05-21T00:00:00Z"
+			return nil
+		}
+	}
+	return nil
+}
+
+func (r *managerTestRegistry) SetRuntimeContextWindow(_ context.Context, email, sessionID string, tokens int64, source string) error {
+	for i, record := range r.records {
+		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
+			if r.records[i].RuntimeContextWindowTokens == 0 {
+				r.records[i].RuntimeContextWindowTokens = tokens
+				r.records[i].RuntimeContextWindowSource = source
+				r.records[i].RuntimeContextWindowObservedAt = "2026-05-21T00:00:00Z"
+			}
 			return nil
 		}
 	}

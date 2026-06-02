@@ -6180,8 +6180,8 @@ button:disabled {
   box-shadow: none !important;
 }
 
-/* Composer footer row — image attach, mode pill, usage circle, comments,
-   hint, send button. Match cloudcli's flex layout left-to-right. */
+/* Composer footer row — image attach, mode pill, context/cost estimate,
+   comments, hint, send button. Match cloudcli's flex layout left-to-right. */
 .run-composer-footer {
   display: flex;
   flex-wrap: wrap;
@@ -6380,47 +6380,6 @@ button:disabled {
   line-height: 1;
 }
 
-/* Context usage ring — driven by stream-json `usage` events. SVG arc
-   tracks live percentage; color tier shifts at 50%/75% to mirror
-   cloudcli's tokenUsagePie. */
-.run-usage-ring {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  color: #60a5fa;
-}
-
-.run-usage-ring[data-level="mid"]  { color: #fbbf24; }
-.run-usage-ring[data-level="high"] { color: #f87171; }
-
-.run-usage-ring.is-placeholder {
-  color: var(--text-muted);
-  opacity: 0.72;
-}
-
-.run-usage-ring-svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.run-usage-ring-text {
-  position: relative;
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  color: var(--text-body);
-  letter-spacing: 0.02em;
-  z-index: 1;
-}
-
-.run-usage-ring.is-placeholder .run-usage-ring-text {
-  color: var(--text-muted);
-}
-
 .run-cost-estimate {
   display: inline-flex;
   align-items: center;
@@ -6437,6 +6396,37 @@ button:disabled {
   color: var(--text-body);
   background: rgba(255, 255, 255, 0.04);
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.055);
+}
+
+.run-usage-ring {
+  --usage-progress: 0%;
+  position: relative;
+  display: inline-flex;
+  width: 2rem;
+  height: 2rem;
+  flex: 0 0 2rem;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background:
+    radial-gradient(circle at center, var(--surface-raised, #111827) 0 58%, transparent 59%),
+    conic-gradient(var(--accent, #2563eb) var(--usage-progress), rgba(148, 163, 184, 0.2) 0);
+  color: var(--text-body);
+  font-family: var(--font-mono);
+  font-size: 0.52rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.run-usage-ring-core {
+  display: inline-flex;
+  max-width: 1.35rem;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .run-cost-estimate-metric {
@@ -6500,6 +6490,13 @@ button:disabled {
   .run-composer-icon-btn {
     width: 1.85rem;
     height: 1.85rem;
+  }
+
+  .run-usage-ring {
+    width: 1.85rem;
+    height: 1.85rem;
+    flex-basis: 1.85rem;
+    font-size: 0.48rem;
   }
 
   .run-cost-estimate {

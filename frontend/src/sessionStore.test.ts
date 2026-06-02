@@ -297,6 +297,9 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
       runtime_model: "gpt-5.5",
       runtime_effort: "xhigh",
       runtime_configured_at: "2026-05-21T00:00:00Z",
+      runtime_context_window_tokens: 258400,
+      runtime_context_window_source: "codex_app_server_token_usage",
+      runtime_context_window_observed_at: "2026-05-21T00:00:01Z",
       agent_avatar_id: "jp1-malcolm",
       system_avatar_id: "system-logo",
       sidebar_position: 7,
@@ -310,6 +313,9 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
   assert.equal(good!.row.runtime_model, "gpt-5.5");
   assert.equal(good!.row.runtime_effort, "xhigh");
   assert.equal(good!.row.runtime_configured_at, "2026-05-21T00:00:00Z");
+  assert.equal(good!.row.runtime_context_window_tokens, 258400);
+  assert.equal(good!.row.runtime_context_window_source, "codex_app_server_token_usage");
+  assert.equal(good!.row.runtime_context_window_observed_at, "2026-05-21T00:00:01Z");
   assert.equal(good!.row.agent_avatar_id, "jp1-malcolm");
   assert.equal(good!.row.system_avatar_id, "system-logo");
   assert.equal(good!.row.sidebar_position, 7);

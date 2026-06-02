@@ -21,6 +21,10 @@ export async function reportRuntimeConfig(cfg, payload) {
         body: JSON.stringify({
             model: String(payload?.model ?? "").trim(),
             effort: String(payload?.effort ?? "").trim(),
+            context_window_tokens: Number.isFinite(payload?.contextWindowTokens)
+                ? Math.max(0, Math.floor(payload.contextWindowTokens))
+                : 0,
+            context_window_source: String(payload?.contextWindowSource ?? "").trim(),
         }),
     });
     if (!response.ok) {

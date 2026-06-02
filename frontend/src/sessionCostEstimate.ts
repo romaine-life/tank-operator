@@ -81,7 +81,6 @@ export function estimateTurnCost(
 
 export function estimateTurnContextTokens(
   rows: UsageRow[],
-  contextWindow: number,
   turnId: string,
 ): number | null {
   const targetTurnId = turnId.trim();
@@ -92,7 +91,7 @@ export function estimateTurnContextTokens(
   for (let index = turn.usage.length - 1; index >= 0; index -= 1) {
     const usage = turn.usage[index];
     if (!usage) continue;
-    const tokens = contextWindowTokenCount(usage.usage, contextWindow, usage.usageObservation);
+    const tokens = currentContextTokenCount(usage.usage, usage.usageObservation);
     if (tokens > 0) return tokens;
   }
   return null;
@@ -143,15 +142,11 @@ export function formatCompactTokens(value: number): string {
   return `${Math.floor(safeValue / 1_000_000)}m`;
 }
 
-export function contextWindowTokenCount(
+export function currentContextTokenCount(
   usage: unknown,
-  contextWindow: number,
   usageObservation?: unknown,
 ): number {
   if (!isRecord(usage)) return 0;
-  const safeContextWindow = Number.isFinite(contextWindow)
-    ? Math.max(1, Math.floor(contextWindow))
-    : 1;
   const inputTokens = numberField(usage, "input_tokens") ?? numberField(usage, "prompt_tokens") ?? 0;
   if (inputTokens <= 0) return 0;
 
@@ -164,12 +159,10 @@ export function contextWindowTokenCount(
 
   // Codex thread.tokenUsage.updated reports cumulative thread input and
   // cached-input totals. Those totals can climb far beyond the model context
-  // window, while the uncached delta is the current active context pressure.
-  // Providers that report an in-window prompt count keep the raw input total.
-  if (
-    (isCodexCumulativeThreadUsage(usageObservation) || inputTokens > safeContextWindow) &&
-    uncachedInputTokens > 0
-  ) {
+  // window, while the uncached delta is the current active context pressure. Do
+  // not infer this from a frontend model-window table; the usage source is the
+  // protocol fact that tells us the payload shape.
+  if (isCodexCumulativeThreadUsage(usageObservation) && uncachedInputTokens > 0) {
     return Math.floor(uncachedInputTokens);
   }
   return Math.floor(inputTokens);

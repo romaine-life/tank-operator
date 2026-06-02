@@ -62,11 +62,14 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			COALESCE(capabilities, '{}'::text[]),
 			model,
 			effort,
-			runtime_model,
-			runtime_effort,
-			COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
-			COALESCE(agent_avatar_id, ''),
-			COALESCE(system_avatar_id, ''),
+				runtime_model,
+				runtime_effort,
+				COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
+				runtime_context_window_tokens,
+				runtime_context_window_source,
+				COALESCE(to_char(runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+				COALESCE(agent_avatar_id, ''),
+				COALESCE(system_avatar_id, ''),
 			sidebar_position,
 			row_version
 		FROM sessions
@@ -89,8 +92,9 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			activitySummary, testState, rolloutState, cloneState        []byte
 			repos, capabilities                                         []string
 			model, effort, runtimeModel, runtimeEffort, runtimeAt       string
+			runtimeContextWindowSource, runtimeContextWindowObservedAt  string
 			agentAvatarID, systemAvatarID                               string
-			sidebarPosition, rowVersion                                 int64
+			runtimeContextWindowTokens, sidebarPosition, rowVersion     int64
 		)
 		if err := rows.Scan(
 			&sessionID, &mode, &podName, &name, &visible,
@@ -99,6 +103,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&activitySummary, &testState, &rolloutState,
 			&repos, &cloneState, &capabilities, &model, &effort,
 			&runtimeModel, &runtimeEffort, &runtimeAt,
+			&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowObservedAt,
 			&agentAvatarID, &systemAvatarID,
 			&sidebarPosition,
 			&rowVersion,
@@ -109,34 +114,37 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			mode = sessionmodel.DefaultSessionMode
 		}
 		records = append(records, sessionmodel.SessionRecord{
-			ID:                  sessionID,
-			Email:               normalized,
-			Mode:                mode,
-			Scope:               s.scope,
-			PodName:             podName,
-			Name:                name,
-			Visible:             visible,
-			RequestedAt:         requestedAt,
-			CreatedAt:           createdAt,
-			UpdatedAt:           updatedAt,
-			Status:              status,
-			ReadyAt:             readyAt,
-			TerminatingAt:       terminatingAt,
-			ActivitySummary:     activitySummary,
-			TestState:           unmarshalJSONB(testState),
-			RolloutState:        unmarshalJSONB(rolloutState),
-			Repos:               repos,
-			CloneState:          unmarshalJSONB(cloneState),
-			Capabilities:        capabilities,
-			Model:               model,
-			Effort:              effort,
-			RuntimeModel:        runtimeModel,
-			RuntimeEffort:       runtimeEffort,
-			RuntimeConfiguredAt: runtimeAt,
-			AgentAvatarID:       agentAvatarID,
-			SystemAvatarID:      systemAvatarID,
-			SidebarPosition:     sidebarPosition,
-			RowVersion:          rowVersion,
+			ID:                             sessionID,
+			Email:                          normalized,
+			Mode:                           mode,
+			Scope:                          s.scope,
+			PodName:                        podName,
+			Name:                           name,
+			Visible:                        visible,
+			RequestedAt:                    requestedAt,
+			CreatedAt:                      createdAt,
+			UpdatedAt:                      updatedAt,
+			Status:                         status,
+			ReadyAt:                        readyAt,
+			TerminatingAt:                  terminatingAt,
+			ActivitySummary:                activitySummary,
+			TestState:                      unmarshalJSONB(testState),
+			RolloutState:                   unmarshalJSONB(rolloutState),
+			Repos:                          repos,
+			CloneState:                     unmarshalJSONB(cloneState),
+			Capabilities:                   capabilities,
+			Model:                          model,
+			Effort:                         effort,
+			RuntimeModel:                   runtimeModel,
+			RuntimeEffort:                  runtimeEffort,
+			RuntimeConfiguredAt:            runtimeAt,
+			RuntimeContextWindowTokens:     runtimeContextWindowTokens,
+			RuntimeContextWindowSource:     runtimeContextWindowSource,
+			RuntimeContextWindowObservedAt: runtimeContextWindowObservedAt,
+			AgentAvatarID:                  agentAvatarID,
+			SystemAvatarID:                 systemAvatarID,
+			SidebarPosition:                sidebarPosition,
+			RowVersion:                     rowVersion,
 		})
 	}
 	return records, rows.Err()
