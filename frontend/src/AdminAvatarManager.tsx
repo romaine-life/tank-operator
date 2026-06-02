@@ -834,49 +834,49 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                 {cropStyle && <span className="admin-avatar-crop-ring" style={cropStyle} />}
               </div>
               <div className="admin-avatar-slider">
-                <div className="admin-avatar-control-head">
-                  <label htmlFor="admin-avatar-crop-size">Crop size</label>
-                  <div className="admin-avatar-stepper" role="group" aria-label="Crop size microcontrols">
-                    <button
-                      type="button"
-                      aria-label="Decrease crop size"
-                      title="Decrease crop size"
-                      disabled={!imageRect}
-                      onClick={() => adjustCropSize(-avatarCropControlStep)}
-                    >
-                      <MinusIcon size={15} aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      aria-label="Increase crop size"
-                      title="Increase crop size"
-                      disabled={!imageRect}
-                      onClick={() => adjustCropSize(avatarCropControlStep)}
-                    >
-                      <PlusIcon size={15} aria-hidden="true" />
-                    </button>
-                  </div>
+                <label htmlFor="admin-avatar-crop-size">Crop size</label>
+                <div className="admin-avatar-slider-row" role="group" aria-label="Crop size controls">
+                  <button
+                    className="admin-avatar-size-step"
+                    type="button"
+                    aria-label="Decrease crop size"
+                    title="Decrease crop size"
+                    disabled={!imageRect}
+                    onClick={() => adjustCropSize(-avatarCropControlStep)}
+                  >
+                    <MinusIcon size={15} aria-hidden="true" />
+                  </button>
+                  <input
+                    id="admin-avatar-crop-size"
+                    type="range"
+                    min="0.12"
+                    max="1"
+                    step="0.01"
+                    value={crop.size}
+                    onChange={(event) =>
+                      setCrop((current) =>
+                        clampAvatarCrop(
+                          {
+                            ...current,
+                            size: Number(event.target.value),
+                          },
+                          imageRect?.width,
+                          imageRect?.height,
+                        ),
+                      )
+                    }
+                  />
+                  <button
+                    className="admin-avatar-size-step"
+                    type="button"
+                    aria-label="Increase crop size"
+                    title="Increase crop size"
+                    disabled={!imageRect}
+                    onClick={() => adjustCropSize(avatarCropControlStep)}
+                  >
+                    <PlusIcon size={15} aria-hidden="true" />
+                  </button>
                 </div>
-                <input
-                  id="admin-avatar-crop-size"
-                  type="range"
-                  min="0.12"
-                  max="1"
-                  step="0.01"
-                  value={crop.size}
-                  onChange={(event) =>
-                    setCrop((current) =>
-                      clampAvatarCrop(
-                        {
-                          ...current,
-                          size: Number(event.target.value),
-                        },
-                        imageRect?.width,
-                        imageRect?.height,
-                      ),
-                    )
-                  }
-                />
               </div>
               <div className="admin-avatar-position-control">
                 <span>Crop position</span>

@@ -586,25 +586,19 @@ button:disabled {
   cursor: grabbing;
 }
 
-.admin-avatar-slider input {
-  width: 100%;
+.admin-avatar-slider-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.admin-avatar-slider-row input {
+  flex: 1;
+  min-width: 0;
   accent-color: #e5e7eb;
 }
 
-.admin-avatar-control-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
-.admin-avatar-stepper {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-1);
-}
-
-.admin-avatar-stepper button,
+.admin-avatar-size-step,
 .admin-avatar-nudge-grid button {
   width: 2rem;
   height: 2rem;
@@ -619,15 +613,15 @@ button:disabled {
   cursor: pointer;
 }
 
-.admin-avatar-stepper button:hover:not(:disabled),
-.admin-avatar-stepper button:focus-visible:not(:disabled),
+.admin-avatar-size-step:hover:not(:disabled),
+.admin-avatar-size-step:focus-visible:not(:disabled),
 .admin-avatar-nudge-grid button:hover:not(:disabled),
 .admin-avatar-nudge-grid button:focus-visible:not(:disabled) {
   border-color: rgba(226, 232, 240, 0.72);
   background: rgba(30, 41, 59, 0.92);
 }
 
-.admin-avatar-stepper button:disabled,
+.admin-avatar-size-step:disabled,
 .admin-avatar-nudge-grid button:disabled {
   cursor: default;
   opacity: 0.45;
