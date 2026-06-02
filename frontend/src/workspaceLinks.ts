@@ -100,7 +100,14 @@ export function normalizeWorkspacePath(rawPath: string): string | null {
   return normalizeWorkspacePathTarget(rawPath)?.path ?? null;
 }
 
-export function workspacePathFromHref(href: string | undefined): WorkspacePathTarget | null {
+function currentBrowserOrigin(): string | null {
+  return typeof window === "undefined" ? null : window.location.origin;
+}
+
+export function workspacePathFromHref(
+  href: string | undefined,
+  currentOrigin: string | null = currentBrowserOrigin(),
+): WorkspacePathTarget | null {
   if (!href) return null;
   const trimmed = href.trim();
   if (!trimmed || trimmed.startsWith("#")) return null;
@@ -108,6 +115,18 @@ export function workspacePathFromHref(href: string | undefined): WorkspacePathTa
   if (trimmed.startsWith("file://")) {
     try {
       const url = new URL(trimmed);
+      return isWorkspaceHrefPath(url.pathname)
+        ? normalizeWorkspacePathTarget(url.pathname)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+
+  if (/^https?:/i.test(trimmed)) {
+    try {
+      const url = new URL(trimmed);
+      if (!currentOrigin || url.origin !== currentOrigin) return null;
       return isWorkspaceHrefPath(url.pathname)
         ? normalizeWorkspacePathTarget(url.pathname)
         : null;

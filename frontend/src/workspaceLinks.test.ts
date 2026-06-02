@@ -107,6 +107,24 @@ test("parses workspace markdown hrefs with line numbers", () => {
   assert.equal(workspacePathFromHref("https://example.test/workspace/src/App.tsx:42"), null);
 });
 
+test("parses same-origin absolute workspace hrefs from browser-normalized anchors", () => {
+  const origin = "https://tank-operator-slot-3.tank.dev.romaine.life";
+
+  assert.deepEqual(
+    workspacePathFromHref(`${origin}/workspace/src/App.tsx:42`, origin),
+    { path: "src/App.tsx", line: 42 },
+  );
+  assert.deepEqual(
+    workspacePathFromHref(`${origin}/workspace/screenshots/one%20two.png`, origin),
+    { path: "screenshots/one two.png", line: null },
+  );
+  assert.equal(workspacePathFromHref(`${origin}/api/sessions/479`, origin), null);
+  assert.equal(
+    workspacePathFromHref("https://example.test/workspace/src/App.tsx:42", origin),
+    null,
+  );
+});
+
 test("does not treat arbitrary absolute paths as workspace hrefs", () => {
   assert.equal(workspacePathFromHref("/home/node/.codex/skills/test/SKILL.md"), null);
   assert.equal(workspacePathFromHref("/src/App.tsx"), null);
