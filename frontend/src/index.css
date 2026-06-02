@@ -3055,6 +3055,76 @@ button:disabled {
   height: 0.82rem;
 }
 
+/* Drag-and-drop / keyboard reordering of the unfiltered Pinned list. The grip
+   handle is both the drag origin and the accessible reorder control. */
+.home-repos-pinned-reorder {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.home-repos-pinned-reorder-item {
+  position: relative;
+  padding: 0.1rem 0.2rem;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  transition: opacity 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.home-repos-pinned-reorder-item.is-dragging {
+  opacity: 0.45;
+}
+
+.home-repos-pinned-reorder-item.is-drop-target {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.home-repos-drag-handle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: grab;
+  touch-action: none;
+}
+
+.home-repos-drag-handle:hover:not(:disabled) {
+  background: var(--bg-hover-soft);
+  color: var(--text-primary);
+}
+
+.home-repos-drag-handle:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  color: var(--text-primary);
+}
+
+.home-repos-drag-handle:active:not(:disabled) {
+  cursor: grabbing;
+}
+
+.home-repos-drag-handle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.home-repos-drag-handle-icon {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-repos-pinned-reorder-item {
+    transition: none;
+  }
+}
+
 .home-repos-chip-remove {
   background: transparent;
   border: 0;

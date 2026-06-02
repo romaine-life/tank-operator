@@ -143,6 +143,16 @@ func TestValidatePinnedRepoSlugs(t *testing.T) {
 			wantOut: []string{"NelsonG6/Tank-Operator", "nelsong6/glimmung"},
 		},
 		{
+			// The splash picker's drag-and-drop pin reordering relies on the
+			// durable write preserving the exact array order it PUTs — there
+			// is no separate "order" field, the text[] order IS the pin order.
+			// This case guards that contract: a deliberately non-sorted input
+			// survives validation in the same order.
+			name:    "reorder is preserved through validation",
+			in:      []string{"c/3", "a/1", "b/2"},
+			wantOut: []string{"c/3", "a/1", "b/2"},
+		},
+		{
 			name:    "bad slug rejected",
 			in:      []string{"https://github.com/nelsong6/tank-operator"},
 			wantErr: "not a valid owner/name slug",

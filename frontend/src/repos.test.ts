@@ -16,6 +16,7 @@ import {
   pinnedRepoSlugs,
   recentRepoPreviewSlugs,
   recentRepoShortcutSlugs,
+  reorderPinnedRepoSlugs,
   repoShortcutSlugs,
   removeRepoSlug,
   unpinRepoSlug,
@@ -256,4 +257,82 @@ test("pin helpers toggle case-insensitive pins", () => {
   assert.deepEqual(unpinRepoSlug(pinned, "NELSONG6/GLIMMUNG"), [
     "nelsong6/tank-operator",
   ]);
+});
+
+// reorderPinnedRepoSlugs is the pure core of the splash picker's drag-and-drop
+// (and keyboard) pin reordering. The durable pinned_repos text[] order is the
+// pin order, so these cases double as the SPA-side contract that the order a
+// user drags into is exactly the order PUT to the server.
+test("reorderPinnedRepoSlugs moves a pin downward to land after the target", () => {
+  // Dragging the first pin onto the third lands it just after the third.
+  assert.deepEqual(
+    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3", "d/4"], "a/1", "c/3"),
+    ["b/2", "c/3", "a/1", "d/4"],
+  );
+});
+
+test("reorderPinnedRepoSlugs moves a pin upward to land before the target", () => {
+  assert.deepEqual(
+    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3", "d/4"], "d/4", "b/2"),
+    ["a/1", "d/4", "b/2", "c/3"],
+  );
+});
+
+test("reorderPinnedRepoSlugs reaches both ends via the drop target", () => {
+  // Drop on the last item while dragging down -> moves to the very end.
+  assert.deepEqual(
+    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "a/1", "c/3"),
+    ["b/2", "c/3", "a/1"],
+  );
+  // Drop on the first item while dragging up -> moves to the very front.
+  assert.deepEqual(
+    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "c/3", "a/1"),
+    ["c/3", "a/1", "b/2"],
+  );
+});
+
+test("reorderPinnedRepoSlugs supports adjacent (keyboard) single-step moves", () => {
+  // ArrowDown on b/2: target is its next neighbour c/3.
+  assert.deepEqual(
+    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "b/2", "c/3"),
+    ["a/1", "c/3", "b/2"],
+  );
+  // ArrowUp on b/2: target is its previous neighbour a/1.
+  assert.deepEqual(
+    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "b/2", "a/1"),
+    ["b/2", "a/1", "c/3"],
+  );
+});
+
+test("reorderPinnedRepoSlugs matches slugs case-insensitively", () => {
+  assert.deepEqual(
+    reorderPinnedRepoSlugs(
+      ["NelsonG6/Tank-Operator", "nelsong6/glimmung", "openai/codex"],
+      "OPENAI/CODEX",
+      "nelsong6/tank-operator",
+    ),
+    ["openai/codex", "NelsonG6/Tank-Operator", "nelsong6/glimmung"],
+  );
+});
+
+test("reorderPinnedRepoSlugs is a normalized no-op for same/unknown/empty slugs", () => {
+  const list = ["a/1", "b/2", "c/3"];
+  assert.deepEqual(reorderPinnedRepoSlugs(list, "a/1", "a/1"), list);
+  assert.deepEqual(reorderPinnedRepoSlugs(list, "a/1", "z/9"), list);
+  assert.deepEqual(reorderPinnedRepoSlugs(list, "z/9", "a/1"), list);
+  assert.deepEqual(reorderPinnedRepoSlugs(list, "", "a/1"), list);
+  assert.deepEqual(reorderPinnedRepoSlugs(list, "a/1", ""), list);
+});
+
+test("reorderPinnedRepoSlugs normalizes the list (dedup, drop invalid, cap)", () => {
+  // A malformed entry and a case-dup are stripped before the move, so the
+  // output always satisfies the same contract as pinnedRepoSlugs.
+  assert.deepEqual(
+    reorderPinnedRepoSlugs(
+      ["a/1", "bad slug", "A/1", "b/2", "c/3"],
+      "c/3",
+      "a/1",
+    ),
+    ["c/3", "a/1", "b/2"],
+  );
 });

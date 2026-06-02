@@ -27,7 +27,9 @@ Named behaviors in the session-bar surface. See
 - **Intent:** Make the splash repo picker's explicit pinned-repository list a
   durable per-user preference instead of browser-local state. Pins are
   shortcuts across sessions and devices; create-time repo selection remains
-  `sessions.repos`.
+  `sessions.repos`. Pin *order* is user-controlled: the `pinned_repos text[]`
+  order is the canonical pin order and the splash numbered-shortcut order, so
+  rearranging pins is a durable preference, not a view-local sort.
 
 - **Affected contracts:** Session Bar. The picker is part of the session
   creation surface and must not show a pin state that only exists in one
@@ -54,6 +56,16 @@ Named behaviors in the session-bar surface. See
     focus, and visible-tab return, and applies both PUT responses and SSE
     snapshots through the same normalization path. The retired
     `tank.homePinnedRepos` localStorage key is not allowlisted on boot.
+  - Reorder: the unfiltered "Pinned" section in the picker panel is
+    drag-and-drop and keyboard (per-row grip handle, ArrowUp/ArrowDown)
+    reorderable. A reorder issues the same `PUT /api/github/pinned-repos` write
+    as pin/unpin with the reordered list — there is no separate order field and
+    no order-only endpoint. The SPA applies the new order optimistically for
+    drag responsiveness, reconciles against the authoritative PUT response, and
+    reverts to the pre-drag order if the durable write fails, so local order
+    never persistently contradicts the profile row. Correctness depends on the
+    durable write preserving array order through `validatePinnedRepoSlugs` and
+    `UpdatePinnedRepos`, which is guarded by a backend test.
 
 - **Observability:**
   - `tank_github_pinned_repos_update_total{result=ok|invalid|unavailable|error}`
@@ -80,3 +92,12 @@ Named behaviors in the session-bar surface. See
     browser-local key from being treated as live state again.
   - `repos.ts` `pinnedRepoSlugs caps profile metadata` keeps the SPA cap in
     lockstep with the backend metadata boundary.
+  - `repos.ts` `reorderPinnedRepoSlugs` tests pin the drag/keyboard reorder
+    semantics (direction-aware insert, both ends reachable, adjacent keyboard
+    steps, case-insensitive match, normalized no-op for unknown/equal slugs).
+  - `cmd/tank-operator` `TestValidatePinnedRepoSlugs` "reorder is preserved
+    through validation" guards the array-order preservation the SPA reorder
+    relies on end-to-end.
+  - `migrationPolicy.test.ts` "pin reorder writes through the durable
+    pinned-repos endpoint" pins the reorder to the durable PUT path and forbids
+    a browser-local order shadow.
