@@ -46,9 +46,8 @@ MCP/CLI paths. For the **frontend**, manual `kubectl` is the default workflow
 ## Frontend (static) hot-swap
 
 This is the most common hot-swap and the one the MCP tools do **not** cover:
-`apply_test_slot_hot_swap` handles `backend`, `agent_runner`, `codex_runner`,
-and `gemini_runner`. Static assets are served live from an override dir, so
-the verified
+`apply_test_slot_hot_swap` handles `backend`, `agent_runner`, and
+`codex_runner`. Static assets are served live from an override dir, so the verified
 workflow is a raw `kubectl` copy into every app replica -- no image build, no
 restart.
 
@@ -117,7 +116,7 @@ hardcode the ephemeral slot/pod names.
 Backend (`/var/run/tank-operator-hot/tank-operator-go`, `SIGHUP` PID 1 in the
 `tank-operator` container) and the runners DO have supported paths -- use
 `apply_test_slot_hot_swap` (`artifact_kind` = `backend` | `agent_runner` |
-`codex_runner` | `gemini_runner`) rather than hand-rolled kubectl for those.
+`codex_runner`) rather than hand-rolled kubectl for those.
 
 Gap worth closing: `static` is not a supported `apply_test_slot_hot_swap`
 `artifact_kind`, which is why the frontend stays manual. If that path is added

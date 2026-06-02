@@ -60,10 +60,6 @@ export function StyleguideNewSessionRow() {
                       <ProviderIcon provider="codex" className="home-choice-icon" />
                       <span>Codex</span>
                     </button>
-                    <button className="home-choice" type="button" aria-pressed="false" title="Gemini">
-                      <ProviderIcon provider="gemini" className="home-choice-icon" />
-                      <span>Gemini</span>
-                    </button>
                   </div>
                   <div className="home-choice-grid" role="group" aria-label="interaction">
                     <button className="home-choice is-selected" type="button" aria-pressed="true">

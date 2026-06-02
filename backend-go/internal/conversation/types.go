@@ -50,7 +50,6 @@ const (
 	SourceTank   Source = "tank"
 	SourceClaude Source = "claude"
 	SourceCodex  Source = "codex"
-	SourceGemini Source = "gemini"
 )
 
 type Visibility string
@@ -620,7 +619,7 @@ func validActor(actor Actor) bool {
 
 func validSource(source Source) bool {
 	switch source {
-	case SourceTank, SourceClaude, SourceCodex, SourceGemini:
+	case SourceTank, SourceClaude, SourceCodex:
 		return true
 	default:
 		return false

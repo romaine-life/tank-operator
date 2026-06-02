@@ -1709,7 +1709,7 @@ func sessionEventTypeLabel(raw string) string {
 
 func sessionEventSourceLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
-	case "tank", "claude", "codex", "gemini":
+	case "tank", "claude", "codex":
 		return raw
 	default:
 		return "unknown"

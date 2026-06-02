@@ -105,11 +105,6 @@ claude-code-credentials
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "codex-api-proxy.%s.svc.cluster.local" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.codexApiProxy.serviceHost }}{{- end -}}
 {{- end -}}
 
-{{- define "tank-operator.geminiApiProxyHost" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "gemini-api-proxy.%s.svc.cluster.local" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.geminiApiProxy.serviceHost }}{{- end -}}
-{{- end -}}
-
-
 {{- define "tank-operator.githubAppSecret" -}}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-github-app-creds" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.githubApp.secretName }}{{- end -}}
 {{- end -}}
@@ -117,19 +112,6 @@ claude-code-credentials
 {{- define "tank-operator.codexCredentialsSecret" -}}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-codex-credentials" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.codexCredentials.secretName }}{{- end -}}
 {{- end -}}
-
-{{- define "tank-operator.geminiCredentialsSecret" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-gemini-credentials" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.geminiCredentials.secretName }}{{- end -}}
-{{- end -}}
-
-{{- define "tank-operator.geminiCredentialsTestSecret" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-gemini-credentials-test" (include "tank-operator.slotName" .) }}{{- else -}}gemini-credentials-test{{- end -}}
-{{- end -}}
-
-{{- define "tank-operator.geminiCredentialsTestKvKey" -}}
-{{- default "gemini-credentials-test" .Values.externalSecret.geminiCredentials.testKvKey -}}
-{{- end -}}
-
 
 {{- define "tank-operator.claudeCredentialsSecret" -}}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-claude-code-credentials" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.claudeCredentials.secretName }}{{- end -}}

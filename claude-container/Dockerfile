@@ -42,19 +42,6 @@ COPY runner-shared /src/runner-shared
 RUN npx tsc
 RUN npm prune --omit=dev
 
-# Stage 1c: build the gemini-runner from gemini-runner/. Sibling of
-# agent-runner — drives @google/genai for gemini_gui sessions instead
-# of @anthropic-ai/claude-agent-sdk. Baked into all session images.
-FROM node:20-alpine AS gemini-runner-build
-WORKDIR /src/gemini-runner
-COPY gemini-runner/package.json gemini-runner/package-lock.json* ./
-RUN npm ci --no-audit --no-fund
-COPY gemini-runner/tsconfig.json ./
-COPY gemini-runner/src ./src
-COPY runner-shared /src/runner-shared
-RUN npx tsc
-RUN npm prune --omit=dev
-
 # Stage 2: runtime image. azure-mcp + github-mcp + k8s-mcp run as in-cluster
 # HTTP MCP servers. The container reaches them via the mcp-auth-proxy sidecar
 # on 127.0.0.1, which injects fresh bearer auth per request; GitHub receives a
@@ -151,8 +138,7 @@ RUN curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}
 RUN case "${TANK_AGENT}" in \
         claude) npm install -g @anthropic-ai/claude-code "vite@${VITE_VERSION}" "typescript@${TYPESCRIPT_VERSION}" ;; \
         codex) npm install -g @openai/codex "vite@${VITE_VERSION}" "typescript@${TYPESCRIPT_VERSION}" ;; \
-        gemini) npm install -g @google/gemini-cli "vite@${VITE_VERSION}" "typescript@${TYPESCRIPT_VERSION}" ;; \
-        *) echo "unsupported TANK_AGENT=${TANK_AGENT}; expected claude, codex, or gemini" >&2; exit 1 ;; \
+        *) echo "unsupported TANK_AGENT=${TANK_AGENT}; expected claude or codex" >&2; exit 1 ;; \
     esac
 
 # Ghostty-backed in-browser process terminal support. The frontend talks to
@@ -243,22 +229,6 @@ fi
 exec node /opt/codex-runner/dist/index.js
 EOF
 
-# Gemini-runner sibling: same pattern, @google/genai underneath.
-# Baked into all session images; only the gemini pod spec invokes it.
-COPY --from=gemini-runner-build /src/gemini-runner/dist /opt/gemini-runner/dist
-COPY --from=gemini-runner-build /src/gemini-runner/node_modules /opt/gemini-runner/node_modules
-COPY --from=gemini-runner-build /src/gemini-runner/package.json /opt/gemini-runner/package.json
-RUN cat > /app/gemini-runner-launch-binary.sh <<'EOF' && chmod 0755 /app/gemini-runner-launch-binary.sh
-#!/bin/sh
-if [ ! -e /var/run/gemini-runner-hot/node_modules ]; then
-  ln -sfn /opt/gemini-runner/node_modules /var/run/gemini-runner-hot/node_modules
-fi
-if [ -f /var/run/gemini-runner-hot/dist/index.js ]; then
-  exec node /var/run/gemini-runner-hot/dist/index.js
-fi
-exec node /opt/gemini-runner/dist/index.js
-EOF
-
 # Session-facing MCP wiring, AGENTS/CLAUDE primers, bundled skill docs, and
 # launcher scripts are mounted from the chart-managed tank-session-config
 # ConfigMap. Keep the parent directories in the image so the orchestrator can
@@ -267,15 +237,14 @@ EOF
 RUN mkdir -p /workspace \
         /opt/tank \
         /home/node/.claude/skills \
-        /home/node/.codex/skills \
-        /home/node/.gemini
+        /home/node/.codex/skills
 
 # Run the agent as a non-root user so claude's safety check accepts
 # bypassPermissions mode (it refuses to enable bypass when uid 0). Also
 # defense-in-depth: a tool-use exploit can't escape to a privileged shell.
 # node:20-alpine already ships a `node` user at uid/gid 1000 with
 # /home/node, so reuse it (creating another user with gid 1000 collides).
-RUN chown -R node:node /workspace /home/node/.claude /home/node/.codex /home/node/.gemini
+RUN chown -R node:node /workspace /home/node/.claude /home/node/.codex
 
 WORKDIR /workspace
 USER node

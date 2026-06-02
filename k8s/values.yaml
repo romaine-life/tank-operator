@@ -56,7 +56,6 @@ session:
   # every push to main via a `[skip ci]` follow-up commit.
   image: romainecr.azurecr.io/claude-container:claude-2976d8a06525d500b247ceeb2f1ce5201fc4e1194e205cb0859fc65764b972c2
   codexImage: romainecr.azurecr.io/codex-container:codex-9b8c5d14edc26ece96c2504fb0ad6a1b8461b5084a040f393626be4c9c837047
-  geminiImage: romainecr.azurecr.io/gemini-container:gemini-ee56588eaa4eb59e002b4b308ba2c3a1094d7ce471eaec6416fc2d00ef9832ad
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -150,12 +149,6 @@ apiProxy:
 # real ChatGPT OAuth refresh chain for Codex sessions.
 codexApiProxy:
   serviceHost: codex-api-proxy.tank-operator.svc.cluster.local
-
-# Gemini API proxy: a third Envoy + ext_proc deployment using the same image
-# and UAMI as apiProxy. It fronts generativelanguage.googleapis.com and owns the
-# real Google OAuth refresh chain for Gemini sessions.
-geminiApiProxy:
-  serviceHost: gemini-api-proxy.tank-operator.svc.cluster.local
 
 # Anthropic credential rotation: lives in the api-proxy's ext_proc sidecar
 # (api-proxy/src/tank_api_proxy/server.py). The sidecar caches the access
@@ -312,21 +305,6 @@ externalSecret:
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
     kvKey: codex-credentials
-  # Google Gemini subscription credentials. The primary Secret lives in the
-  # ORCHESTRATOR namespace and is mounted by gemini-api-proxy. Gemini CLI/GUI
-  # session launchers write a placeholder settings.json and route
-  # generativelanguage.googleapis.com through the proxy, which injects/rotates
-  # the real tokens and writes back to KV.
-  geminiCredentials:
-    secretName: gemini-credentials
-    # Key inside the K8s Secret. The proxy mounts this as
-    # /etc/gemini-credentials/oauth_creds.json.
-    secretKey: oauth_creds.json
-    kvKey: gemini-credentials
-    # Test slots still create slot-local Secret names so leases clean up
-    # independently, but they all read from the shared no-proxy test OAuth
-    # credential in KV.
-    testKvKey: gemini-credentials-test
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

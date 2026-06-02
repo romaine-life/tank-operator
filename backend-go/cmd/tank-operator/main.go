@@ -236,12 +236,10 @@ func main() {
 	// every claude_gui session crashlooped).
 	sessionImage := os.Getenv("SESSION_IMAGE")
 	codexSessionImage := os.Getenv("CODEX_SESSION_IMAGE")
-	geminiSessionImage := os.Getenv("GEMINI_SESSION_IMAGE")
-	if sessionImage == "" || codexSessionImage == "" || geminiSessionImage == "" {
-		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE / GEMINI_SESSION_IMAGE to fingerprinted tags",
+	if sessionImage == "" || codexSessionImage == "" {
+		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE to fingerprinted tags",
 			"SESSION_IMAGE", sessionImage,
 			"CODEX_SESSION_IMAGE", codexSessionImage,
-			"GEMINI_SESSION_IMAGE", geminiSessionImage,
 		)
 		os.Exit(1)
 	}
@@ -267,11 +265,9 @@ func main() {
 			ArgoCDTrackingApp:              envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
 			SessionImage:                   sessionImage,
 			CodexSessionImage:              codexSessionImage,
-			GeminiSessionImage:             geminiSessionImage,
 			SessionScope:                   sessionScope,
 			TankOperatorInternalURL:        tankOperatorInternalURL,
 			GitHubAppSecret:                envDefault("GITHUB_APP_SECRET", sessionmodel.DefaultGitHubAppSecret),
-			GeminiCredentialsTestSecret:    envDefault("GEMINI_CREDENTIALS_TEST_SECRET", "gemini-credentials-test"),
 			NATSURL:                        envDefault("NATS_URL", ""),
 			NATSStream:                     envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
 			NATSAuthSecret:                 envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
@@ -286,10 +282,9 @@ func main() {
 			// docs in sessionmodel.ManifestOptions.HotSwapAgentRunner.
 			HotSwapAgentRunner: envBool("SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED"),
 		},
-		OAuthGatewayHost:   os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
-		APIProxyHost:       os.Getenv("CLAUDE_API_PROXY_HOST"),
-		CodexAPIProxyHost:  os.Getenv("CODEX_API_PROXY_HOST"),
-		GeminiAPIProxyHost: os.Getenv("GEMINI_API_PROXY_HOST"),
+		OAuthGatewayHost:  os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
+		APIProxyHost:      os.Getenv("CLAUDE_API_PROXY_HOST"),
+		CodexAPIProxyHost: os.Getenv("CODEX_API_PROXY_HOST"),
 	})
 
 	// 10. Init auth. Tank verifies the upstream auth.romaine.life JWT

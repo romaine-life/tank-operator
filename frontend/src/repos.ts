@@ -34,8 +34,6 @@ export const REPO_SUPPORTED_MODES: ReadonlySet<string> = new Set<string>([
   "codex_gui",
   "codex_exec_gui",
   "codex_app_server",
-  "gemini_gui",
-  "gemini_test",
 ]);
 
 export function isValidRepoSlug(value: string): boolean {

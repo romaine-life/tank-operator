@@ -224,7 +224,7 @@ class HealthSnapshotTests(unittest.TestCase):
         snapshot = injector.health_snapshot()
         self.assertEqual(snapshot["result"], "http_error")
         self.assertEqual(snapshot["reason"], "refresh_token_reused")
-        self.assertIn("Re-authenticate", snapshot["text"])
+        self.assertIn("re-authenticate", snapshot["text"].lower())
         # last_succeeded_at must remain None — a later failure does not
         # invalidate a never-observed success.
         self.assertIsNone(snapshot["last_succeeded_at"])

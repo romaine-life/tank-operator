@@ -1,7 +1,7 @@
 #!/bin/bash
 # Session-pod bootstrap. Runs once at pod boot, before sandbox-agent's HTTP
 # listener comes up, so any state the in-browser CLI shell (or a later
-# `codex` / `claude` / `gemini` invocation) depends on is on disk before the
+# `codex` / `claude` invocation) depends on is on disk before the
 # user can issue commands.
 #
 # Required env: TANK_SESSION_MODE (set on the claude container by the
@@ -139,23 +139,6 @@ notifications = true
 notification_condition = "always"
 notification_method = "bel"
 TOML
-    ;;
-  gemini_gui | gemini_config | gemini_test)
-    mkdir -p "$HOME/.gemini"
-    cat > "$HOME/.gemini/settings.json" <<'JSON'
-{
-  "security": {
-    "auth": {
-      "selectedType": "oauth-personal"
-    }
-  }
-}
-JSON
-    chmod 600 "$HOME/.gemini/settings.json"
-    if [ -f /etc/gemini-credentials/oauth_creds.json ]; then
-      cp /etc/gemini-credentials/oauth_creds.json "$HOME/.gemini/oauth_creds.json"
-      chmod 600 "$HOME/.gemini/oauth_creds.json"
-    fi
     ;;
   config)
     # Minimal seeds for the claude credentials-refresh wizard. The

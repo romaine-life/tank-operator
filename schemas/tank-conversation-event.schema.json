@@ -98,7 +98,7 @@
     },
     "source": {
       "type": "string",
-      "enum": ["tank", "claude", "codex", "gemini"]
+      "enum": ["tank", "claude", "codex"]
     },
     "type": {
       "type": "string",
@@ -135,7 +135,7 @@
     "runtime": {
       "description": "Session-events storage runtime stamp.",
       "type": "string",
-      "enum": ["claude", "codex", "gemini"]
+      "enum": ["claude", "codex"]
     },
     "producer": {
       "type": "object",

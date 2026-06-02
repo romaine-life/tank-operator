@@ -416,7 +416,7 @@ func TestPersistMessageRecordsTerminalMissingClientNonce(t *testing.T) {
 				"event_id":   "evt-" + tc.eventType,
 				"session_id": "63",
 				"actor":      "runner",
-				"source":     "gemini",
+				"source":     "codex",
 				"type":       tc.eventType,
 				"created_at": "2026-05-12T00:00:00.000Z",
 				"order_key":  "order-" + tc.eventType,
@@ -432,8 +432,8 @@ func TestPersistMessageRecordsTerminalMissingClientNonce(t *testing.T) {
 			}
 			if tc.wantCount == 1 {
 				record := metrics.missingTerminalNonce[0]
-				if record.source != "gemini" || record.eventType != tc.eventType {
-					t.Fatalf("missing terminal nonce record = %#v, want source=gemini eventType=%s", record, tc.eventType)
+				if record.source != "codex" || record.eventType != tc.eventType {
+					t.Fatalf("missing terminal nonce record = %#v, want source=codex eventType=%s", record, tc.eventType)
 				}
 			}
 		})
@@ -448,7 +448,7 @@ func TestPersistMessageDoesNotRecordTerminalMissingClientNonceWhenPresent(t *tes
 		"event_id":     "evt-completed",
 		"session_id":   "63",
 		"actor":        "runner",
-		"source":       "gemini",
+		"source":       "codex",
 		"type":         "turn.completed",
 		"created_at":   "2026-05-12T00:00:00.000Z",
 		"order_key":    "order-completed",
