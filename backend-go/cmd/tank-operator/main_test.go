@@ -19,11 +19,15 @@ import (
 )
 
 type fakeProfileStore struct {
-	profile profiles.Profile
-	err     error
+	profile        profiles.Profile
+	err            error
+	requestedEmail *string
 }
 
-func (s fakeProfileStore) GetOrCreate(_ context.Context, _ string) (profiles.Profile, error) {
+func (s fakeProfileStore) GetOrCreate(_ context.Context, email string) (profiles.Profile, error) {
+	if s.requestedEmail != nil {
+		*s.requestedEmail = email
+	}
 	return s.profile, s.err
 }
 
@@ -318,6 +322,40 @@ func TestMeReturnsAdminPowerForSuperAdminServiceActor(t *testing.T) {
 	}
 	if body["role"] != auth.RoleService || body["is_admin"] != true {
 		t.Fatalf("role/is_admin = %#v/%#v, want service/true", body["role"], body["is_admin"])
+	}
+}
+
+func TestMeServiceActorReadsOwnerProfile(t *testing.T) {
+	var requestedEmail string
+	handler := me(auth.NewVerifier(testJWT(t)), fakeProfileStore{
+		requestedEmail: &requestedEmail,
+		profile: profiles.Profile{
+			Email:       "owner@example.com",
+			PinnedRepos: []string{"owner/repo"},
+		},
+	})
+	request := httptest.NewRequest(http.MethodGet, "/api/auth/me", nil)
+	request.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-200@service.tank.romaine.life", "owner@example.com"))
+	response := httptest.NewRecorder()
+
+	handler(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	if requestedEmail != "owner@example.com" {
+		t.Fatalf("profile email = %q, want owner@example.com", requestedEmail)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["email"] != "pod-200@service.tank.romaine.life" || body["role"] != auth.RoleService {
+		t.Fatalf("caller identity = %#v/%#v, want service principal", body["email"], body["role"])
+	}
+	pins, ok := body["pinned_repos"].([]any)
+	if !ok || len(pins) != 1 || pins[0] != "owner/repo" {
+		t.Fatalf("pinned_repos = %#v", body["pinned_repos"])
 	}
 }
 

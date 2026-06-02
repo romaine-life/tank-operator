@@ -1,11 +1,16 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
 	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -244,6 +249,77 @@ func TestRepoLookupOwnerEmail_ServiceUsesActorEmail(t *testing.T) {
 	}
 	if got := repoLookupOwnerEmail(user); got != "owner@example.com" {
 		t.Fatalf("repoLookupOwnerEmail() = %q, want actor email", got)
+	}
+}
+
+type pinnedReposProfileStore struct {
+	repos       []string
+	getEmail    string
+	updateEmail string
+}
+
+func (s *pinnedReposProfileStore) GetOrCreate(_ context.Context, email string) (profiles.Profile, error) {
+	s.getEmail = email
+	return profiles.Profile{Email: email, PinnedRepos: s.repos}, nil
+}
+
+func (s *pinnedReposProfileStore) UpdatePinnedRepos(_ context.Context, email string, repos []string) (profiles.Profile, error) {
+	s.updateEmail = email
+	s.repos = repos
+	return profiles.Profile{Email: email, PinnedRepos: repos}, nil
+}
+
+func TestHandleGitHubPinnedReposServiceActorReadsOwnerProfile(t *testing.T) {
+	store := &pinnedReposProfileStore{repos: []string{"owner/repo"}}
+	server := &appServer{
+		verifier: authVerifierForTests(t),
+		profiles: store,
+	}
+	req := httptest.NewRequest(http.MethodGet, "/api/github/pinned-repos", nil)
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-485@service.tank.romaine.life", "owner@example.com"))
+	rec := httptest.NewRecorder()
+
+	server.handleGitHubPinnedRepos(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if store.getEmail != "owner@example.com" {
+		t.Fatalf("profile email = %q, want owner@example.com", store.getEmail)
+	}
+	var body map[string][]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !stringSliceEqual(body["repos"], []string{"owner/repo"}) {
+		t.Fatalf("repos = %#v", body["repos"])
+	}
+}
+
+func TestHandleGitHubPinnedReposServiceActorWritesOwnerProfile(t *testing.T) {
+	store := &pinnedReposProfileStore{}
+	server := &appServer{
+		verifier: authVerifierForTests(t),
+		profiles: store,
+	}
+	req := httptest.NewRequest(http.MethodPut, "/api/github/pinned-repos", strings.NewReader(`{"repos":["owner/repo"]}`))
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-485@service.tank.romaine.life", "owner@example.com"))
+	rec := httptest.NewRecorder()
+
+	server.handleGitHubPinnedRepos(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if store.updateEmail != "owner@example.com" {
+		t.Fatalf("profile email = %q, want owner@example.com", store.updateEmail)
+	}
+	var body map[string][]string
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if !stringSliceEqual(body["repos"], []string{"owner/repo"}) {
+		t.Fatalf("repos = %#v", body["repos"])
 	}
 }
 

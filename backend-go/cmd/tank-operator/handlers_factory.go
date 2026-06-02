@@ -78,7 +78,7 @@ func me(verifier *auth.Verifier, store profileGetter) http.HandlerFunc {
 			writeError(w, auth.ErrorStatus(err), err.Error())
 			return
 		}
-		profile, err := store.GetOrCreate(r.Context(), user.Email)
+		profile, err := store.GetOrCreate(r.Context(), user.OwnerEmail())
 		if err != nil {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
