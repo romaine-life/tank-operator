@@ -401,6 +401,8 @@ export class Runner {
               this.requestAppServerUserInput(request, requestSignal),
             onRuntimeConfigApplied: (threadOptions) =>
               this.reportAppliedRuntimeConfig(threadOptions),
+            onRuntimeContextWindowObserved: (tokens) =>
+              this.reportRuntimeContextWindow(tokens),
           })
         : null;
     this.codexAdapter = new CodexTankEventAdapter(cfg);
@@ -411,6 +413,15 @@ export class Runner {
     const effort = String(threadOptions.modelReasoningEffort ?? "").trim();
     void reportRuntimeConfig(this.cfg, { model, effort }).catch((err) => {
       console.warn("runtime config report failed:", err);
+    });
+  }
+
+  private reportRuntimeContextWindow(tokens: number): void {
+    void reportRuntimeConfig(this.cfg, {
+      contextWindowTokens: tokens,
+      contextWindowSource: "codex_app_server_token_usage",
+    }).catch((err) => {
+      console.warn("runtime context window report failed:", err);
     });
   }
 

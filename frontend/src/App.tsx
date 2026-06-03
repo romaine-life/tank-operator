@@ -643,6 +643,11 @@ interface Session {
   runtime_model?: string;
   runtime_effort?: string;
   runtime_configured_at?: string | null;
+  // Provider-observed live context window for this session's model. Source of
+  // truth for the composer's used/window fraction denominator.
+  runtime_context_window_tokens?: number;
+  runtime_context_window_source?: string;
+  runtime_context_window_observed_at?: string | null;
   agent_avatar_id?: string | null;
   system_avatar_id?: string | null;
   sidebar_position?: number;
@@ -1105,6 +1110,19 @@ function normalizeSession(session: Session): Session {
   next.runtime_effort = typeof session.runtime_effort === "string" ? session.runtime_effort : "";
   next.runtime_configured_at =
     typeof session.runtime_configured_at === "string" ? session.runtime_configured_at : null;
+  next.runtime_context_window_tokens =
+    typeof session.runtime_context_window_tokens === "number" &&
+    Number.isFinite(session.runtime_context_window_tokens)
+      ? Math.max(0, Math.floor(session.runtime_context_window_tokens))
+      : 0;
+  next.runtime_context_window_source =
+    typeof session.runtime_context_window_source === "string"
+      ? session.runtime_context_window_source
+      : "";
+  next.runtime_context_window_observed_at =
+    typeof session.runtime_context_window_observed_at === "string"
+      ? session.runtime_context_window_observed_at
+      : null;
   next.agent_avatar_id =
     typeof session.agent_avatar_id === "string" ? session.agent_avatar_id : null;
   next.system_avatar_id =
@@ -1587,64 +1605,14 @@ function currentSessionSkillState(
   return null;
 }
 
-interface ComposerUsageRingProps {
-  tokensUsed: number;
-  contextWindow: number;
-  placeholder?: boolean;
-  ariaLabel?: string;
-  title?: string;
-}
-
-function ComposerUsageRing({
-  tokensUsed,
-  contextWindow,
-  placeholder = false,
-  ariaLabel = "Context usage",
-  title,
-}: ComposerUsageRingProps) {
-  const safeContextWindow = Math.max(contextWindow, 1);
-  const usagePct = Math.min(100, (tokensUsed / safeContextWindow) * 100);
-  const usageLevel = usagePct >= 75 ? "high" : usagePct >= 50 ? "mid" : "low";
-  const displayPct = usagePct.toFixed(usagePct < 10 ? 1 : 0);
-
-  return (
-    <span
-      className={`run-usage-ring${placeholder ? " is-placeholder" : ""}`}
-      aria-label={ariaLabel}
-      aria-disabled={placeholder || undefined}
-      title={title ?? `${tokensUsed.toLocaleString()} / ${contextWindow.toLocaleString()} tokens`}
-      data-level={placeholder ? undefined : usageLevel}
-    >
-      <svg className="run-usage-ring-svg" viewBox="0 0 32 32" aria-hidden="true">
-        <circle
-          cx="16"
-          cy="16"
-          r="13"
-          fill="none"
-          stroke="currentColor"
-          strokeOpacity="0.18"
-          strokeWidth="2.5"
-        />
-        <circle
-          cx="16"
-          cy="16"
-          r="13"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeDasharray={`${(usagePct / 100) * (2 * Math.PI * 13)} ${2 * Math.PI * 13}`}
-          transform="rotate(-90 16 16)"
-        />
-      </svg>
-      <span className="run-usage-ring-text">{displayPct}%</span>
-    </span>
-  );
-}
-
 interface ComposerCostEstimateProps {
   amountUsd: number | null;
   tokens?: number | null;
+  // Provider-observed live context window for the session's model. When > 0,
+  // the ctx metric renders as a used/window fraction; otherwise it falls back
+  // to the bare used count (or the "--" placeholder). Never a model-assumed
+  // default.
+  contextWindow?: number;
   tokenScopeLabel?: string;
   placeholder?: boolean;
   scopeLabel?: string;
@@ -1654,6 +1622,7 @@ interface ComposerCostEstimateProps {
 function ComposerCostEstimate({
   amountUsd,
   tokens,
+  contextWindow,
   tokenScopeLabel,
   placeholder = false,
   scopeLabel = "session",
@@ -1668,6 +1637,10 @@ function ComposerCostEstimate({
     : typeof tokens === "number" && Number.isFinite(tokens)
       ? Math.max(0, Math.floor(tokens))
       : 0;
+  const safeWindow =
+    typeof contextWindow === "number" && Number.isFinite(contextWindow)
+      ? Math.max(0, Math.floor(contextWindow))
+      : 0;
   const normalizedScope = scopeLabel.trim() || "session";
   const formattedAmount = unavailable
     ? "$--"
@@ -1675,19 +1648,28 @@ function ComposerCostEstimate({
       ? formatTurnCostUsd(safeAmountUsd)
       : formatComposerCostUsd(safeAmountUsd);
   const label = formattedAmount;
-  const tokenLabel = safeTokens === null ? "--" : formatCompactTokens(safeTokens);
+  const tokenLabel =
+    safeTokens === null
+      ? "--"
+      : safeWindow > 0
+        ? `${formatCompactTokens(safeTokens)}/${formatCompactTokens(safeWindow)}`
+        : formatCompactTokens(safeTokens);
   const sentenceScope = `${normalizedScope.charAt(0).toUpperCase()}${normalizedScope.slice(1)}`;
   const normalizedTokenScope = tokenScopeLabel?.trim() || `${normalizedScope} tokens`;
+  const tokenSentence =
+    safeWindow > 0
+      ? `${safeTokens?.toLocaleString() ?? 0} of ${safeWindow.toLocaleString()} context tokens`
+      : `${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`;
   const defaultTitle = unavailable
     ? "Cost estimate appears after token usage is available"
-    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`;
+    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${tokenSentence}`;
   return (
     <span
       className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
       aria-label={
         unavailable
           ? `${sentenceScope} cost estimate unavailable`
-          : `Estimated ${normalizedScope} cost ${label}, ${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`
+          : `Estimated ${normalizedScope} cost ${label}, ${tokenSentence}`
       }
       aria-disabled={unavailable || undefined}
       title={title ?? defaultTitle}
@@ -1711,7 +1693,6 @@ interface ComposerToolButtonsProps {
     title: string;
     onClick?: () => void;
   };
-  usage: ComponentProps<typeof ComposerUsageRing>;
   cost: ComponentProps<typeof ComposerCostEstimate>;
   rollout?: {
     visible?: boolean;
@@ -1748,7 +1729,6 @@ interface ComposerToolButtonsProps {
 
 function ComposerToolButtons({
   attach,
-  usage,
   cost,
   rollout,
   test,
@@ -1772,7 +1752,6 @@ function ComposerToolButtons({
       >
         <ImageIcon className="run-composer-icon" aria-hidden="true" />
       </button>
-      <ComposerUsageRing {...usage} />
       <ComposerCostEstimate {...cost} />
       {rollout?.visible && (
         <button
@@ -2919,13 +2898,6 @@ function DemoLanding() {
                   toolButtons={
                     <ComposerToolButtons
                       attach={{ disabled: true, title: "Sign in to attach files" }}
-                      usage={{
-                        tokensUsed: 0,
-                        contextWindow: getContextWindow(selectedDemoModelId),
-                        placeholder: true,
-                        ariaLabel: "Context usage preview",
-                        title: "Context usage appears after sign in",
-                      }}
                       cost={{
                         amountUsd: 0,
                         tokens: 0,
@@ -3430,23 +3402,6 @@ function isImagePath(path: string): boolean {
 // entry. Opus 4.7 keeps its split between the standard 200k id and the
 // dedicated claude-opus-4-7-1m id because that is how Anthropic shipped
 // it; for everything else, 200k is the shipping default.
-const CONTEXT_WINDOW_BY_MODEL: Record<string, number> = {
-  "claude-opus-4-8": 1_000_000,
-  "claude-opus-4-7-1m": 1_000_000,
-  "claude-opus-4-7": 200_000,
-  "claude-sonnet-4-6": 200_000,
-  "claude-haiku-4-5": 200_000,
-  "gpt-5.5": 1_050_000,
-  "gpt-5.4": 1_050_000,
-  "gpt-5.4-mini": 400_000,
-  "gpt-5.3-codex": 400_000,
-  "gpt-5": 128_000,
-};
-
-function getContextWindow(modelId: string): number {
-  return CONTEXT_WINDOW_BY_MODEL[modelId] ?? 200_000;
-}
-
 function latestContextTokens(entries: TranscriptEntry[], contextWindow: number): number {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
@@ -9262,6 +9217,17 @@ function ChatPane({
   const [selectedEffortId] = useState<string>(initialEffortId);
   // Context tokens used in the most recent assistant turn.
   const [tokensUsed, setTokensUsed] = useState(0);
+  // Provider-observed live context window for this session's model, plumbed
+  // through the row from agent-runner. The composer fraction's denominator and
+  // the contextWindowTokenCount cumulative-vs-raw discriminator. 0 when the
+  // provider has not reported a window yet (the ctx metric then shows the bare
+  // used count, never a frontend-assumed default).
+  const runtimeContextWindowTokens =
+    typeof session.runtime_context_window_tokens === "number" &&
+    Number.isFinite(session.runtime_context_window_tokens) &&
+    session.runtime_context_window_tokens > 0
+      ? Math.floor(session.runtime_context_window_tokens)
+      : 0;
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
   // and `slashIndex` drive filtering and keyboard selection.
@@ -9528,7 +9494,7 @@ function ChatPane({
     sdkServerEntriesRef.current = applySdkAssistantDurations(
       sdkServerProjectedEntriesRef.current,
     );
-    const latestUsageTokens = latestContextTokens(sdkServerEntriesRef.current, contextWindow);
+    const latestUsageTokens = latestContextTokens(sdkServerEntriesRef.current, runtimeContextWindowTokens);
     if (latestUsageTokens > 0) setTokensUsed(latestUsageTokens);
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
       sdkServerEntriesRef.current,
@@ -12323,9 +12289,10 @@ function ChatPane({
     [activeBackgroundEntries, detachedShellEntries, scheduledWakeupEntries],
   );
   const appliedModelId = (session.runtime_model ?? "").trim();
-  const modelForContext = selectedModelId;
-  const modelForCostEstimate = appliedModelId || modelForContext;
-  const contextWindow = getContextWindow(modelForContext);
+  const modelForCostEstimate = appliedModelId || selectedModelId;
+  // Provider-observed window from the session row drives the turn-level context
+  // numerator's cumulative-vs-raw discriminator. No model-assumed default.
+  const contextWindow = runtimeContextWindowTokens;
   const turnViewItems = useMemo(
     () => buildTurnViewItems(
       renderedEntries,
@@ -13877,13 +13844,10 @@ function ChatPane({
                 onClick: () => fileInputRef.current?.click(),
                 disabled: !supportsFileAttachments,
               }}
-              usage={{
-                tokensUsed,
-                contextWindow,
-              }}
               cost={{
                 amountUsd: sessionCostEstimate?.amountUsd ?? null,
                 tokens: tokensUsed,
+                contextWindow: runtimeContextWindowTokens,
                 tokenScopeLabel: "current context tokens",
                 placeholder: sessionUsageLoading,
               }}
@@ -15119,6 +15083,9 @@ function AuthenticatedApp() {
       runtime_model: row.runtime_model ?? "",
       runtime_effort: row.runtime_effort ?? "",
       runtime_configured_at: row.runtime_configured_at ?? null,
+      runtime_context_window_tokens: row.runtime_context_window_tokens ?? 0,
+      runtime_context_window_source: row.runtime_context_window_source ?? "",
+      runtime_context_window_observed_at: row.runtime_context_window_observed_at ?? null,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
       row_version: row.row_version,
@@ -15159,6 +15126,19 @@ function AuthenticatedApp() {
       runtime_effort: typeof raw.runtime_effort === "string" ? raw.runtime_effort : undefined,
       runtime_configured_at:
         typeof raw.runtime_configured_at === "string" ? raw.runtime_configured_at : undefined,
+      runtime_context_window_tokens:
+        typeof raw.runtime_context_window_tokens === "number" &&
+        Number.isFinite(raw.runtime_context_window_tokens)
+          ? Math.max(0, Math.floor(raw.runtime_context_window_tokens))
+          : undefined,
+      runtime_context_window_source:
+        typeof raw.runtime_context_window_source === "string"
+          ? raw.runtime_context_window_source
+          : undefined,
+      runtime_context_window_observed_at:
+        typeof raw.runtime_context_window_observed_at === "string"
+          ? raw.runtime_context_window_observed_at
+          : undefined,
       agent_avatar_id:
         typeof raw.agent_avatar_id === "string" ? raw.agent_avatar_id : undefined,
       system_avatar_id:
@@ -17180,13 +17160,6 @@ function AuthenticatedApp() {
                         : "File attachments require a session workspace",
                       onClick: () => homeFileInputRef.current?.click(),
                       disabled: busy || !sessionModeSupportsWorkspaceFiles(defaultSessionMode),
-                    }}
-                    usage={{
-                      tokensUsed: 0,
-                      contextWindow: getContextWindow(selectedHomeModelId),
-                      placeholder: true,
-                      ariaLabel: "Context usage preview",
-                      title: "Context usage appears after the session starts",
                     }}
                     cost={{
                       amountUsd: 0,

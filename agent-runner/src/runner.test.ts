@@ -8,6 +8,7 @@ import {
   classifyProviderFailure,
   dispatch,
   logUnhandledSdkMessage,
+  pickContextWindowFromModelUsage,
   Runner,
 } from "./runner.js";
 import {
@@ -51,6 +52,66 @@ test("classifyProviderFailure maps the other known provider failure shapes", () 
   assert.equal(
     classifyProviderFailure("ECONNRESET socket hang up"),
     "other",
+  );
+});
+
+test("pickContextWindowFromModelUsage reads contextWindow from a populated entry", () => {
+  // Shape of SDKResultMessage.modelUsage: Record<string, ModelUsage>, where
+  // each ModelUsage carries `contextWindow`. Single entry → its window.
+  assert.equal(
+    pickContextWindowFromModelUsage({
+      "claude-opus-4-8": {
+        contextWindow: 200000,
+      } as { contextWindow?: number },
+    }),
+    200000,
+  );
+});
+
+test("pickContextWindowFromModelUsage returns the max across multiple entries", () => {
+  // A turn can touch more than one model (e.g. a subagent on Haiku); take the
+  // largest positive window so the composer fraction reflects the main model.
+  assert.equal(
+    pickContextWindowFromModelUsage({
+      "claude-haiku": { contextWindow: 100000 },
+      "claude-opus-4-8": { contextWindow: 200000 },
+      "claude-sonnet": { contextWindow: 150000 },
+    }),
+    200000,
+  );
+});
+
+test("pickContextWindowFromModelUsage floors a fractional window", () => {
+  assert.equal(
+    pickContextWindowFromModelUsage({ "claude-opus-4-8": { contextWindow: 199999.9 } }),
+    199999,
+  );
+});
+
+test("pickContextWindowFromModelUsage returns null for missing/empty/non-positive windows", () => {
+  // null (not 0) is the contract so the caller skips the report rather than
+  // reporting a zero window. The runner must not even reach the report when
+  // every entry's window is missing/zero/negative/non-finite.
+  assert.equal(pickContextWindowFromModelUsage(undefined), null);
+  assert.equal(pickContextWindowFromModelUsage({}), null);
+  assert.equal(pickContextWindowFromModelUsage({ "m": {} }), null);
+  assert.equal(pickContextWindowFromModelUsage({ "m": { contextWindow: 0 } }), null);
+  assert.equal(pickContextWindowFromModelUsage({ "m": { contextWindow: -5 } }), null);
+  assert.equal(
+    pickContextWindowFromModelUsage({ "m": { contextWindow: Number.NaN } }),
+    null,
+  );
+  assert.equal(
+    pickContextWindowFromModelUsage({ "m": { contextWindow: Infinity } }),
+    null,
+  );
+  // A mix where only some entries are unusable still yields the best positive.
+  assert.equal(
+    pickContextWindowFromModelUsage({
+      "bad": { contextWindow: 0 },
+      "good": { contextWindow: 200000 },
+    }),
+    200000,
   );
 });
 

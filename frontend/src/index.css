@@ -6549,55 +6549,16 @@ button:disabled {
   line-height: 1;
 }
 
-/* Context usage ring — driven by stream-json `usage` events. SVG arc
-   tracks live percentage; color tier shifts at 50%/75% to mirror
-   cloudcli's tokenUsagePie. */
-.run-usage-ring {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  flex: 0 0 2rem;
-  color: #60a5fa;
-}
-
-.run-usage-ring[data-level="mid"]  { color: #fbbf24; }
-.run-usage-ring[data-level="high"] { color: #f87171; }
-
-.run-usage-ring.is-placeholder {
-  color: var(--text-muted);
-  opacity: 0.72;
-}
-
-.run-usage-ring-svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.run-usage-ring-text {
-  position: relative;
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  color: var(--text-body);
-  letter-spacing: 0.02em;
-  z-index: 1;
-}
-
-.run-usage-ring.is-placeholder .run-usage-ring-text {
-  color: var(--text-muted);
-}
-
+/* Composer context + cost chip. The ctx metric renders a provider-observed
+   used/window fraction (e.g. 12k/258k); the percent ring it replaced is gone.
+   Width is sized to fit the widest fraction without reflow. */
 .run-cost-estimate {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
-  width: 8.8rem;
-  flex: 0 0 8.8rem;
+  width: 11rem;
+  flex: 0 0 11rem;
   height: 2rem;
   padding: 0 0.58rem;
   border-radius: 0.5rem;

@@ -1201,6 +1201,18 @@ var schemaMigrations = []migration{
 	{ID: "0098", SQL: `CREATE INDEX IF NOT EXISTS session_scheduled_wakeups_due
 		ON session_scheduled_wakeups (session_scope, status, due_at, created_at)
 		WHERE status IN ('scheduled', 'claiming')`},
+
+	// Provider-observed runtime context window. The session's requested model is
+	// immutable after create; this records the first concrete window reported by
+	// the provider runtime (codex app-server token usage; Claude Agent SDK
+	// per-turn modelUsage.contextWindow) so the composer context fraction
+	// hydrates from durable row metadata instead of a frontend model table.
+	{ID: "0099", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_tokens bigint NOT NULL DEFAULT 0`},
+	{ID: "0100", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_source text NOT NULL DEFAULT ''`},
+	{ID: "0101", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_observed_at timestamptz`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

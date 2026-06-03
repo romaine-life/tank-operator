@@ -169,6 +169,33 @@ func (s *Store) SetRuntimeConfig(ctx context.Context, email, sessionID, model, e
 	return err
 }
 
+// SetRuntimeContextWindow records the first provider-observed model context
+// window for a session. The requested session model is immutable after create,
+// so later differing values are treated as provider/runtime anomalies and do
+// not silently change the durable UI denominator.
+func (s *Store) SetRuntimeContextWindow(ctx context.Context, email, sessionID string, tokens int64, source string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	sessionID = strings.TrimSpace(sessionID)
+	source = strings.TrimSpace(source)
+	if normalized == "" || sessionID == "" || tokens <= 0 {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET runtime_context_window_tokens      = $4,
+			runtime_context_window_source      = $5,
+			runtime_context_window_observed_at = COALESCE(runtime_context_window_observed_at, now()),
+			updated_at                         = now(),
+			row_version                        = nextval('sessions_row_version_seq')
+		WHERE email = $1
+			AND session_scope = $2
+			AND session_id = $3
+			AND runtime_context_window_tokens = 0
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, tokens, source)
+	return err
+}
+
 // SetName updates the display name. Missing-session is a no-op
 // (matches the previous Cosmos impl, which swallowed not-found there).
 // Bumps row_version so the per-row update cursor advances.
@@ -281,26 +308,30 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			COALESCE(capabilities, '{}'::text[]),
 			model,
 			effort,
-			runtime_model,
-			runtime_effort,
-			COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
-			COALESCE(agent_avatar_id, ''),
-			COALESCE(system_avatar_id, ''),
+				runtime_model,
+				runtime_effort,
+				COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
+				runtime_context_window_tokens,
+				runtime_context_window_source,
+				COALESCE(to_char(runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+				COALESCE(agent_avatar_id, ''),
+				COALESCE(system_avatar_id, ''),
 			sidebar_position,
 			row_version
 		FROM sessions
 		WHERE email = $1 AND session_scope = $2 AND session_id = $3
 	`
 	var (
-		mode, podName, requestedAt, createdAt, updatedAt      string
-		status, readyAt, terminatingAt                        string
-		name                                                  *string
-		visible                                               bool
-		activitySummary, testState, rolloutState, cloneState  []byte
-		repos, capabilities                                   []string
-		model, effort, runtimeModel, runtimeEffort, runtimeAt string
-		agentAvatarID, systemAvatarID                         string
-		sidebarPosition, rowVersion                           int64
+		mode, podName, requestedAt, createdAt, updatedAt        string
+		status, readyAt, terminatingAt                          string
+		name                                                    *string
+		visible                                                 bool
+		activitySummary, testState, rolloutState, cloneState    []byte
+		repos, capabilities                                     []string
+		model, effort, runtimeModel, runtimeEffort, runtimeAt   string
+		runtimeContextWindowSource, runtimeContextWindowAt      string
+		agentAvatarID, systemAvatarID                           string
+		runtimeContextWindowTokens, sidebarPosition, rowVersion int64
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
 		&mode, &podName, &name, &visible,
@@ -309,6 +340,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&activitySummary, &testState, &rolloutState,
 		&repos, &cloneState, &capabilities, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
+		&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
 		&agentAvatarID, &systemAvatarID,
 		&sidebarPosition,
 		&rowVersion,
@@ -323,34 +355,37 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		mode = sessionmodel.DefaultSessionMode
 	}
 	record := sessionmodel.SessionRecord{
-		ID:                  sessionID,
-		Email:               normalized,
-		Mode:                mode,
-		Scope:               s.scope,
-		PodName:             podName,
-		Name:                name,
-		Visible:             visible,
-		RequestedAt:         requestedAt,
-		CreatedAt:           createdAt,
-		UpdatedAt:           updatedAt,
-		Status:              status,
-		ReadyAt:             readyAt,
-		TerminatingAt:       terminatingAt,
-		ActivitySummary:     activitySummary,
-		TestState:           unmarshalJSONB(testState),
-		RolloutState:        unmarshalJSONB(rolloutState),
-		Repos:               repos,
-		CloneState:          unmarshalJSONB(cloneState),
-		Capabilities:        capabilities,
-		Model:               model,
-		Effort:              effort,
-		RuntimeModel:        runtimeModel,
-		RuntimeEffort:       runtimeEffort,
-		RuntimeConfiguredAt: runtimeAt,
-		AgentAvatarID:       agentAvatarID,
-		SystemAvatarID:      systemAvatarID,
-		SidebarPosition:     sidebarPosition,
-		RowVersion:          rowVersion,
+		ID:                             sessionID,
+		Email:                          normalized,
+		Mode:                           mode,
+		Scope:                          s.scope,
+		PodName:                        podName,
+		Name:                           name,
+		Visible:                        visible,
+		RequestedAt:                    requestedAt,
+		CreatedAt:                      createdAt,
+		UpdatedAt:                      updatedAt,
+		Status:                         status,
+		ReadyAt:                        readyAt,
+		TerminatingAt:                  terminatingAt,
+		ActivitySummary:                activitySummary,
+		TestState:                      unmarshalJSONB(testState),
+		RolloutState:                   unmarshalJSONB(rolloutState),
+		Repos:                          repos,
+		CloneState:                     unmarshalJSONB(cloneState),
+		Capabilities:                   capabilities,
+		Model:                          model,
+		Effort:                         effort,
+		RuntimeModel:                   runtimeModel,
+		RuntimeEffort:                  runtimeEffort,
+		RuntimeConfiguredAt:            runtimeAt,
+		RuntimeContextWindowTokens:     runtimeContextWindowTokens,
+		RuntimeContextWindowSource:     runtimeContextWindowSource,
+		RuntimeContextWindowObservedAt: runtimeContextWindowAt,
+		AgentAvatarID:                  agentAvatarID,
+		SystemAvatarID:                 systemAvatarID,
+		SidebarPosition:                sidebarPosition,
+		RowVersion:                     rowVersion,
 	}
 	return record, true, nil
 }

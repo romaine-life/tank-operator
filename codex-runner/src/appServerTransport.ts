@@ -38,6 +38,7 @@ type AppServerTransportOptions = {
     signal?: AbortSignal,
   ) => Promise<AppServerUserInputResponse>;
   onRuntimeConfigApplied?: (threadOptions: ThreadOptions) => void;
+  onRuntimeContextWindowObserved?: (tokens: number) => void;
 };
 
 type PendingRequest = {
@@ -157,6 +158,7 @@ export class CodexAppServerTransport {
   } | null = null;
   private readonly itemsByID = new Map<string, JsonRecord>();
   private readonly latestUsageByProviderTurnID = new Map<string, ObservedCodexUsage>();
+  private reportedContextWindowTokens: number | null = null;
   private readonly compactedProviderTurnIDs = new Set<string>();
 
   constructor(private readonly opts: AppServerTransportOptions) {}
@@ -473,6 +475,7 @@ export class CodexAppServerTransport {
     }
     if (method === "thread/tokenUsage/updated") {
       const providerTurnID = typeof params?.turnId === "string" ? params.turnId : "";
+      this.maybeReportContextWindow(params?.tokenUsage);
       const usage = appServerUsageFromValue(params?.tokenUsage);
       if (providerTurnID && usage) {
         const nowMs = Date.now();
@@ -611,6 +614,27 @@ export class CodexAppServerTransport {
     if (this.activeTurnControl === control) {
       this.activeTurnControl = null;
       this.activeProviderTurnID = null;
+    }
+  }
+
+  private maybeReportContextWindow(tokenUsage: unknown): void {
+    if (!tokenUsage || typeof tokenUsage !== "object") return;
+    const tokens = finiteNumber((tokenUsage as JsonRecord).modelContextWindow);
+    if (tokens === undefined || tokens <= 0) return;
+    const normalized = Math.floor(tokens);
+    if (this.reportedContextWindowTokens === null) {
+      this.reportedContextWindowTokens = normalized;
+      this.opts.onRuntimeContextWindowObserved?.(normalized);
+      return;
+    }
+    if (this.reportedContextWindowTokens !== normalized) {
+      console.warn(
+        "codex app-server reported a different model context window; keeping first observed value:",
+        JSON.stringify({
+          first_context_window_tokens: this.reportedContextWindowTokens,
+          later_context_window_tokens: normalized,
+        }),
+      );
     }
   }
 

@@ -57,6 +57,8 @@ jobs:
       - name: Check removed runtime surfaces
         run: node scripts/check-removed-chat-runtime.mjs
 
+      - name: Check context-window-table migration
+        run: node scripts/check-context-window-table-migration.mjs
       # The retired in-turn AskUserQuestion model (the reply command, the
       # tool-approval events, the canUseTool answer injection, the needs-input
       # announcement row) is a removed chat-runtime surface: the answer is now
