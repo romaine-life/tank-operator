@@ -3,7 +3,7 @@
 // independently. Keep behavior + markup identical to what was inline
 // before; this is a pure structural move.
 
-import { ActivityIcon, ArrowLeftIcon, FolderIcon, InfoIcon, SettingsIcon } from "lucide-react";
+import { ActivityIcon, ArrowLeftIcon, FolderIcon, MoreHorizontalIcon } from "lucide-react";
 import {
   BackLink,
   captionStyle,
@@ -81,6 +81,31 @@ function TurnsTab({
   );
 }
 
+function MoreTab({
+  active = false,
+  attention = false,
+}: {
+  active?: boolean;
+  attention?: boolean;
+}) {
+  return (
+    <button
+      className={`run-tab run-tab-more${active ? " run-tab-active" : ""}`}
+      type="button"
+      aria-pressed={active}
+      title="More"
+      data-design-component="RunHeaderTab"
+      data-design-state={active ? "more-active" : attention ? "more-attention" : "more-rest"}
+      data-design-source="frontend/src/App.tsx"
+    >
+      <MoreHorizontalIcon className="run-tab-icon" aria-hidden="true" />
+      {attention && (
+        <span className="run-tab-alert is-warning" aria-hidden="true" />
+      )}
+    </button>
+  );
+}
+
 export function StyleguideRunHeaderTabs() {
   return (
     <div style={styleguideShellStyle}>
@@ -117,22 +142,7 @@ export function StyleguideRunHeaderTabs() {
                       <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
                       <span>Files</span>
                     </button>
-                    <button
-                      className="run-tab run-tab-active"
-                      type="button"
-                      aria-pressed={true}
-                      data-testid="styleguide-run-tab-settings-active"
-                      data-design-component="RunHeaderTab"
-                      data-design-state="active"
-                      data-design-source="frontend/src/App.tsx"
-                    >
-                      <SettingsIcon className="run-tab-icon" aria-hidden="true" />
-                      <span>Settings</span>
-                    </button>
-                    <button className="run-tab" type="button" aria-pressed={false}>
-                      <InfoIcon className="run-tab-icon" aria-hidden="true" />
-                      <span>Help</span>
-                    </button>
+                    <MoreTab active attention />
                   </nav>
                 </header>
               </section>
@@ -171,14 +181,7 @@ export function StyleguideRunHeaderTabs() {
                       <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
                       <span>Files</span>
                     </button>
-                    <button className="run-tab" type="button" aria-pressed={false}>
-                      <SettingsIcon className="run-tab-icon" aria-hidden="true" />
-                      <span>Settings</span>
-                    </button>
-                    <button className="run-tab" type="button" aria-pressed={false}>
-                      <InfoIcon className="run-tab-icon" aria-hidden="true" />
-                      <span>Help</span>
-                    </button>
+                    <MoreTab />
                   </nav>
                 </header>
               </section>
@@ -217,14 +220,7 @@ export function StyleguideRunHeaderTabs() {
                       <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
                       <span>Files</span>
                     </button>
-                    <button className="run-tab" type="button" aria-pressed={false}>
-                      <SettingsIcon className="run-tab-icon" aria-hidden="true" />
-                      <span>Settings</span>
-                    </button>
-                    <button className="run-tab" type="button" aria-pressed={false}>
-                      <InfoIcon className="run-tab-icon" aria-hidden="true" />
-                      <span>Help</span>
-                    </button>
+                    <MoreTab />
                   </nav>
                 </header>
               </section>
