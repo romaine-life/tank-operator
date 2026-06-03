@@ -22,7 +22,7 @@ Affected contracts:
 
 Contract impact:
 - `turn_id` stays the provider-neutral protocol identity that events, timelines,
-  idempotency, and the activity/interrupt/input-reply APIs key on. `turn_number`
+  idempotency, and the activity/interrupt/answer APIs key on. `turn_number`
   is a durable public handle over it (`session_turns`), assigned exactly once by
   the `tank_session_events_allocate_turn_number` trigger on a turn's first
   durable `session_events` insert and resolved server-side via

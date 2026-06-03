@@ -40,9 +40,13 @@ func UserSubmissionEventMaps(args UserSubmissionArgs) (string, []map[string]any,
 		"name":    "tank-operator",
 		"runtime": runtime,
 	}
-	display, err := userMessageDisplay(args.SkillName, text)
-	if err != nil {
-		return "", nil, err
+	display := args.Display
+	if display == nil {
+		var err error
+		display, err = userMessageDisplay(args.SkillName, text)
+		if err != nil {
+			return "", nil, err
+		}
 	}
 	message := args.Message
 	if message == nil {
@@ -133,6 +137,12 @@ type UserSubmissionArgs struct {
 	Attachments       []UserMessageAttachment
 	Runtime           string
 	SkillName         string
+	// Display, when non-nil, is used verbatim as the user_message.created
+	// payload.display instead of being derived from SkillName/text. The
+	// AskUserQuestion answer path passes an ask_user_answer display that
+	// links the answer turn back to the question item it answers. Display
+	// takes precedence over SkillName when both are set.
+	Display map[string]any
 	// OriginSessionID identifies the sibling tank-operator session that
 	// authored this turn via an MCP handoff (send_prompt /
 	// spawn_run_session). Empty for human-typed browser turns. Only
@@ -202,7 +212,7 @@ func firstNonEmpty(values ...string) string {
 
 // TurnCommandFailedArgs describes the durable event emitted when the
 // orchestrator fails to publish a session command (submit_turn,
-// interrupt_turn, input_reply) to the session bus. The runner never
+// interrupt_turn, stop_background_task) to the session bus. The runner never
 // gets the command, so the runner-emitted turn.* terminal events never
 // arrive. Without this event, a client refreshing /timeline sees the
 // user_message.created stranded and the turn perpetually "submitted."
@@ -392,4 +402,34 @@ func userMessageDisplay(skillName, text string) (map[string]any, error) {
 		"skill_name":        skillName,
 		"supplemental_text": strings.TrimSpace(trigger.ReplaceAllString(strings.TrimSpace(text), "")),
 	}, nil
+}
+
+// AskUserAnswerDisplay builds the user_message.created payload.display for a
+// turn that answers a prior AskUserQuestion handoff (turn.awaiting_input).
+// question_timeline_id links the answer turn back to the AskUserQuestion item
+// so the transcript projection can mark the handoff answered from durable
+// state. answers/annotations carry the structured selections for rendering.
+func AskUserAnswerDisplay(questionTimelineID, askingTurnID string, answers map[string][]string, annotations map[string]any) map[string]any {
+	display := map[string]any{
+		"kind":                 "ask_user_answer",
+		"question_timeline_id": strings.TrimSpace(questionTimelineID),
+	}
+	if askingTurnID = strings.TrimSpace(askingTurnID); askingTurnID != "" {
+		display["asking_turn_id"] = askingTurnID
+	}
+	if len(answers) > 0 {
+		answerMap := make(map[string]any, len(answers))
+		for question, labels := range answers {
+			arr := make([]any, 0, len(labels))
+			for _, label := range labels {
+				arr = append(arr, label)
+			}
+			answerMap[question] = arr
+		}
+		display["answers"] = answerMap
+	}
+	if len(annotations) > 0 {
+		display["annotations"] = annotations
+	}
+	return display
 }

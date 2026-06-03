@@ -34,12 +34,24 @@ export interface TurnEventArgs {
   turnID: string;
   clientNonce?: string;
   source: "claude" | "codex";
-  type: "turn.started" | "turn.usage" | "turn.completed" | "turn.failed" | "turn.interrupted";
+  type:
+    | "turn.started"
+    | "turn.usage"
+    | "turn.completed"
+    | "turn.failed"
+    | "turn.interrupted"
+    | "turn.awaiting_input";
   reason?: string;
   usage?: unknown;
   usageObservation?: unknown;
   error?: unknown;
   finalAnswer?: TankFinalAnswer;
+  // turn.awaiting_input handoff payload: the Tank-canonical questions the
+  // agent asked, plus the AskUserQuestion item ids the /answer endpoint
+  // targets.
+  questions?: unknown;
+  awaitingProviderItemID?: string;
+  awaitingTimelineID?: string;
   providerEventID?: string;
 }
 
@@ -49,12 +61,7 @@ export interface ItemEventArgs {
   sessionID: string;
   turnID: string;
   source: "claude" | "codex";
-  type:
-    | "item.started"
-    | "item.completed"
-    | "item.failed"
-    | "tool.approval_requested"
-    | "tool.approval_resolved";
+  type: "item.started" | "item.completed" | "item.failed";
   providerItemID: string;
   parentID?: string;
   actor: TankActor;

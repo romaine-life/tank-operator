@@ -91,7 +91,6 @@ import {
   ListChecksIcon,
   Loader2Icon,
   MessageSquareIcon,
-  MessageSquareOffIcon,
   MinusIcon,
   MonitorIcon,
   NotebookPenIcon,
@@ -169,7 +168,6 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
-import { needsInputAnnouncementState } from "./needsInputAnnouncement";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -294,11 +292,6 @@ type DefaultSessionMode = Extract<
 type Provider = "anthropic" | "codex";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
-type AskUserQuestionAnswer = {
-  labels: string[];
-  notes?: string;
-  preview?: string;
-};
 type TurnActivitySummary = {
   turnId?: string;
   turnNumber?: number;
@@ -357,30 +350,21 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // session's system identity for these instead of the human owner's
   // Gravatar. originSessionId takes precedence when both are present.
   authorKind?: string;
-  // Durable AskUserQuestion answers + annotations, sourced from the
-  // `tool.approval_resolved` event payload via conversationProjection.
-  // ToolAskUserBody reads this for the answered state so the UI matches
-  // the durable ledger and not local React optimism.
-  askUserAnswers?: Record<string, AskUserQuestionAnswer>;
   // metaKind specializes a meta-kind row into a distinguishable transcript
   // surface without growing the shared `kind` enum (which comes from the
   // sandbox-agent SDK). renderItem branches on metaKind before falling
-  // through to the generic RunMetaBlock. Server projection sets metaKind
-  // on rows it wants surfaced specially in chat — see
-  // backend-go/cmd/tank-operator/transcript_projection.go →
-  // projectNeedsInputAnnouncement.
-  metaKind?: "needs_input_announcement" | "turn_usage" | "context_compacted";
-  // For `needs_input_announcement` rows: the AskUserQuestion item's
-  // provider id and the turn it lives on, so RunNeedsInputAnnouncement's
-  // click handler can navigate the user to the Turns tab scrolled to the
-  // right question. The handoff stays anchored to the durable item —
-  // local React state never becomes the source of truth for "is the
-  // agent still waiting on me."
-  announcement?: {
-    targetTurnId: string;
-    targetProviderItemId: string;
-    targetTimelineId?: string;
-    questionSummary: string;
+  // through to the generic RunMetaBlock. Server projection sets metaKind on
+  // rows it surfaces specially in chat — see transcript_projection.go.
+  metaKind?: "awaiting_input" | "turn_usage" | "context_compacted";
+  // For `awaiting_input` rows (the AskUserQuestion handoff promoted from a
+  // turn.awaiting_input terminal): the Tank-canonical questions plus the
+  // target ids RunAwaitingInputCard posts to /answer. `answered` is durable
+  // — set once a later ask_user_answer turn references the question.
+  awaitingInput?: {
+    askingTurnId: string;
+    providerItemId: string;
+    timelineId: string;
+    questions: unknown[];
     questionCount: number;
     answered: boolean;
   };
@@ -3951,7 +3935,7 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
         kind: entry.kind,
         meta: entry.meta,
         metaKind: entry.metaKind,
-        announcement: entry.announcement,
+        awaitingInput: entry.awaitingInput,
         turnTerminalStatus: entry.turnTerminalStatus,
         turnTerminalAt: entry.turnTerminalAt,
         turnTerminalOrderKey: entry.turnTerminalOrderKey,
@@ -5282,19 +5266,21 @@ function RunMessageAttachments({
   );
 }
 
-interface InputReplyPayload {
+interface AnswerPayload {
+  providerItemId: string;
+  timelineId: string;
   answers: Record<string, string[]>;
   annotations?: Record<string, { preview?: string; notes?: string }>;
 }
 
 const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
-  sendInputReply: (entry: TranscriptEntry, payload: InputReplyPayload) => Promise<void>;
+  submitAnswer: (askingTurnId: string, payload: AnswerPayload) => Promise<void>;
   createMessageLink: (sessionId: string, entryId: string) => Promise<string>;
   user: SessionUser | null;
 }>({
   openWorkspacePath: () => {},
-  sendInputReply: async () => {},
+  submitAnswer: async () => {},
   createMessageLink: async (sessionId, entryId) => messageUrl(sessionId, entryId),
   user: null,
 });
@@ -5625,140 +5611,10 @@ function RunReasoningBlock({
   );
 }
 
-// RunNeedsInputAnnouncement renders the AskUserQuestion handoff row in
-// the main transcript stream. The question card itself stays inside Turn
-// activity (where every other tool entry lives); this row is the
-// conversational handoff back to the user — "Claude is waiting on you"
-// — so it has to surface where the user is reading.
-//
-// The click target switches to the Turns tab scrolled to the right turn
-// so the user reaches the question card with no extra navigation. The
-// announcement state (`Claude is waiting on you` vs `Answered`) is read
-// off the durable projection's `announcement.answered` flag, not a local
-// React flag, so a fresh tab opened after the answer arrived shows the
-// resolved state.
-function RunNeedsInputAnnouncement({
-  entry,
-  systemAvatar,
-  onOpenTurn,
-  showTimestamps,
-}: {
-  entry: TranscriptEntry;
-  systemAvatar: AgentAvatar | null;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
-  showTimestamps: boolean;
-}) {
-  const announcement = entry.announcement;
-  const answered = announcement?.answered ?? false;
-  const summary = announcement?.questionSummary ?? entry.meta?.detail ?? "";
-  // The handoff row has three states (see needsInputAnnouncement.ts). Only
-  // "waiting" — unanswered and the turn still live — is genuinely awaiting
-  // the user. Once the turn reaches a terminal status without an answer (the
-  // user stopped it, or it failed), the row is "settled": nothing is being
-  // waited on, so it must drop the attention-grabbing active styling.
-  const state = needsInputAnnouncementState({
-    answered,
-    turnTerminalStatus: entry.turnTerminalStatus,
-  });
-  // For "settled" we override the projection's "Claude is waiting on you"
-  // default — that title was chosen at projection time, before the terminal
-  // event landed and could not know the turn would end unanswered. The live
-  // "waiting"/"answered" states keep honoring any server-provided title.
-  const title =
-    state === "settled"
-      ? "No longer waiting"
-      : entry.meta?.title ?? (state === "answered" ? "Answered" : "Claude is waiting on you");
-  const targetTurnId = announcement?.targetTurnId ?? entry.turnId ?? "";
-  const handleOpen = (): void => {
-    if (!targetTurnId) return;
-    onOpenTurn?.(targetTurnId, { anchor: "bottom" });
-  };
-  const navigable = Boolean(targetTurnId && onOpenTurn);
-  // Only the live "waiting" state earns the high-emphasis primary CTA. The
-  // two settled states (answered / no-longer-waiting) keep the same
-  // navigation affordance but render it muted (secondary) so the row stops
-  // competing for attention once there is nothing to act on. The function is
-  // unchanged — the user can still open the question in Turns.
-  const showPrimaryCta = state === "waiting" && navigable;
-  const showSecondaryCta = state !== "waiting" && navigable;
-  return (
-    <div
-      className="run-transcript-message"
-      data-slot="message"
-      data-variant="system"
-      data-role="system"
-      data-kind="needs-input-announcement"
-      data-message-id={entry.id}
-    >
-      <span className="run-msg-system-avatar" aria-hidden={systemAvatar ? undefined : "true"}>
-        {systemAvatar ? (
-          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
-        ) : (
-          <BotIcon size={16} strokeWidth={2.1} />
-        )}
-      </span>
-      <div className="run-needs-input-announcement-body">
-        <div
-          className={`run-needs-input-announcement${
-            state === "answered" ? " run-needs-input-announcement-answered" : ""
-          }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
-          data-slot="message-content"
-          data-state={state}
-          data-answered={answered ? "true" : "false"}
-          role="group"
-          aria-label={title}
-        >
-          <span className="run-needs-input-announcement-icon" aria-hidden="true">
-            {state === "answered" ? (
-              <CheckIcon size={14} aria-hidden="true" />
-            ) : state === "settled" ? (
-              <MessageSquareOffIcon size={14} aria-hidden="true" />
-            ) : (
-              <MessageSquareIcon size={14} aria-hidden="true" />
-            )}
-          </span>
-          <div className="run-needs-input-announcement-copy" data-slot="message-text">
-            <div className="run-needs-input-announcement-title">{title}</div>
-            {summary && (
-              <p className="run-needs-input-announcement-detail">{summary}</p>
-            )}
-          </div>
-          {showPrimaryCta && (
-            <button
-              type="button"
-              className="run-needs-input-announcement-cta"
-              onClick={handleOpen}
-              aria-label="Open the question in Turns"
-            >
-              Open in Turns
-            </button>
-          )}
-          {showSecondaryCta && (
-            <button
-              type="button"
-              className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
-              onClick={handleOpen}
-              aria-label={
-                state === "answered"
-                  ? "View answered question in Turns"
-                  : "View the question in Turns"
-              }
-            >
-              View in Turns
-            </button>
-          )}
-        </div>
-        {showTimestamps && entry.time && (
-          <div className="run-msg-footer" data-always-visible="">
-            <div className="run-msg-timings">
-              <span className="run-msg-timing-row">{formatMessageTime(entry.time)}</span>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
+// (The AskUserQuestion handoff is now the interactive RunAwaitingInputCard
+// rendered from the `turn.awaiting_input` projection row; there is no longer a
+// separate "waiting on you" pointer to Turn activity because the card itself
+// lives in the main transcript.)
 
 // RunMetaBlock renders the transcript's "headless" status lines — the
 // per-turn terminal notices ("Stopped" / "Turn stopped by user.", "Turn
@@ -6398,9 +6254,6 @@ function ToolBody({ entry }: { entry: TranscriptEntry }) {
   if (name === "Read") {
     return <ToolReadBody input={input} />;
   }
-  if (name === "AskUserQuestion") {
-    return <ToolAskUserBody entry={entry} input={input} />;
-  }
   return <ToolDefaultBody entry={entry} input={input} />;
 }
 
@@ -6442,14 +6295,12 @@ function parseAskUserQuestions(input: Record<string, unknown> | null): AskUserQu
   });
 }
 
-function ToolAskUserBody({
-  entry,
-  input,
-}: {
-  entry: TranscriptEntry;
-  input: Record<string, unknown> | null;
-}) {
-  const { sendInputReply } = useContext(RunContext);
+function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
+  const { submitAnswer } = useContext(RunContext);
+  // The card is driven by the durable turn.awaiting_input handoff promoted
+  // into the main transcript (entry.awaitingInput) — there is no in-turn tool
+  // item. Submitting opens the answer turn via POST /answer.
+  const aw = entry.awaitingInput;
   // Per-question selections (multi-select carries an array; single-select
   // is a single-element array or empty). Submission converts to the wire
   // shape `Record<questionText, string[]>` so single + multi share a
@@ -6458,45 +6309,21 @@ function ToolAskUserBody({
   const [notes, setNotes] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
-  // optimisticSubmit snapshots the answer the user *just submitted* so the
-  // UI can lock the card the moment the click lands — before the runner's
-  // tool.approval_resolved makes the round trip back through SSE. Without
-  // this, three regressions surface in the live slot:
-  //   (a) the submit button re-enables as soon as the HTTP POST resolves,
-  //       so the user can keep clicking
-  //   (b) the free-form textarea stays open because `answered` is still
-  //       false until the durable resolve arrives
-  //   (c) the selected option dot "vanishes" when the parent re-renders
-  //       with a stale activity-cache entry whose toolStatus is still
-  //       "started" — the durable cache for the Turns tab doesn't refresh
-  //       on its own (one-shot fetch in loadActivityForTurn).
-  // The optimistic snapshot is a *fallback*: durable state still wins when
-  // it eventually arrives, so a fresh tab opened later renders the same
-  // answer from the projection.
-  const [optimisticSubmit, setOptimisticSubmit] = useState<{
+  // submittedSnapshot locks the card the moment the user clicks and keeps
+  // their picked options/notes visible until the durable answer turn lands
+  // (awaitingInput.answered flips). The answer itself also appears as the
+  // next user-message turn in the transcript; durable state is the truth.
+  const [submittedSnapshot, setSubmittedSnapshot] = useState<{
     answers: Record<string, string[]>;
     annotations: Record<string, { preview?: string; notes?: string }>;
   } | null>(null);
 
-  const questions = parseAskUserQuestions(input);
+  const questions = parseAskUserQuestions(aw ? { questions: aw.questions } : null);
 
-  // durableAnswers is the canonical source of truth for the answered
-  // state — it comes from the `tool.approval_resolved` event's payload
-  // via projection, so a fresh tab opened after the user answered (in
-  // this or any other tab) still renders the selections. Local
-  // `selections` state only powers the pre-submit click-to-pick UX.
-  const durableAnswers = entry.askUserAnswers;
-  const hasDurableAnswers =
-    !!durableAnswers && Object.keys(durableAnswers).length > 0;
-  // `answered` flips to true the instant the user submits, not just when
-  // the durable event lands. Otherwise the post-submit window leaves the
-  // card behaving as if the user hasn't answered: button re-clickable,
-  // textbox open, options re-selectable. The optimisticSubmit snapshot
-  // is what makes that lock honest about the user's pick.
-  const answered =
-    hasDurableAnswers ||
-    entry.toolStatus === "completed" ||
-    optimisticSubmit !== null;
+  // answered is durable: the server sets awaitingInput.answered=true once a
+  // later ask_user_answer turn references this question, so a fresh tab
+  // renders the resolved card. submittedSnapshot covers the post-click window.
+  const answered = (aw?.answered ?? false) || submittedSnapshot !== null;
 
   // After answering, the per-question UI stays rendered so the user
   // can scroll back in chat history and see exactly what was offered
@@ -6505,23 +6332,14 @@ function ToolAskUserBody({
   // local in-flight selection. This keeps the historical record honest
   // for both the live submit window AND the activity-cache stale window.
   function selectedLabelsFor(q: AskUserQuestion): string[] {
-    if (durableAnswers && durableAnswers[q.question]) {
-      return durableAnswers[q.question].labels;
-    }
-    if (optimisticSubmit && optimisticSubmit.answers[q.question]) {
-      return optimisticSubmit.answers[q.question];
+    if (submittedSnapshot && submittedSnapshot.answers[q.question]) {
+      return submittedSnapshot.answers[q.question];
     }
     return selections[q.question] ?? [];
   }
 
   function answeredNoteFor(question: string): string | undefined {
-    if (durableAnswers && durableAnswers[question]) {
-      return durableAnswers[question].notes;
-    }
-    if (optimisticSubmit && optimisticSubmit.annotations[question]?.notes) {
-      return optimisticSubmit.annotations[question].notes;
-    }
-    return undefined;
+    return submittedSnapshot?.annotations[question]?.notes;
   }
 
   // A question is answerable when the user has picked at least one
@@ -6571,13 +6389,10 @@ function ToolAskUserBody({
       const notesText = q.allowFreeForm ? notes[q.question]?.trim() ?? "" : "";
       // The wire shape requires `answers[question]` to be a non-empty
       // string array. When the user only typed free-form text, we
-      // synthesize a single "Other" label so the answers map stays
-      // valid; the actual free-form text rides in
-      // `annotations[question].notes`, which is the Claude Agent SDK's
-      // blessed channel for caller-supplied context on a tool answer.
-      // The runner's canUseTool allow path returns both halves to the
-      // SDK, and `tool.approval_resolved` mirrors them back into the
-      // durable ledger.
+      // synthesize a single "Other" label so the answers map stays valid;
+      // the actual free-form text rides in `annotations[question].notes`.
+      // Both halves post to /answer and are re-grounded into the new answer
+      // turn's durable user message.
       if (labels.length > 0) {
         answers[q.question] = labels;
       } else if (notesText) {
@@ -6591,36 +6406,32 @@ function ToolAskUserBody({
       if (notesText) ann.notes = notesText;
       if (ann.preview || ann.notes) annotations[q.question] = ann;
     }
-    // Lock the card BEFORE the await: the optimistic snapshot is the
-    // user-visible truth until the durable resolve arrives. We do not
-    // clear it on success — durable answers will take precedence in
-    // selectedLabelsFor as soon as the projection delivers them; on
-    // failure we clear it so the user can retry.
+    // Lock the card before the await; the snapshot is the user-visible
+    // truth until the durable answer turn lands (awaitingInput.answered).
     setSubmitting(true);
     setReplyError(null);
-    setOptimisticSubmit({ answers, annotations });
+    setSubmittedSnapshot({ answers, annotations });
     try {
-      await sendInputReply(entry, { answers, annotations });
+      if (!aw) throw new Error("awaiting-input target is not available");
+      await submitAnswer(aw.askingTurnId, {
+        providerItemId: aw.providerItemId,
+        timelineId: aw.timelineId,
+        answers,
+        annotations,
+      });
     } catch (err) {
       setReplyError(err instanceof Error ? err.message : String(err));
-      setOptimisticSubmit(null);
+      setSubmittedSnapshot(null);
     } finally {
       setSubmitting(false);
     }
   }
 
-  // Edge case: tool completed without a durable answer payload (legacy
-  // events, or a non-input_reply completion path). The question UI is
-  // still useful for context, but we tag the body so the styles can
-  // make the unanswered options look inert.
-  const completedWithoutAnswers =
-    entry.toolStatus === "completed" && !hasDurableAnswers && !optimisticSubmit;
-  // `confirmingSubmit` distinguishes "you just submitted, durable resolve
-  // pending" from "durable answer landed." Drives the status row copy so
-  // the user gets a clear "Submitted, waiting for Claude..." → "Your
-  // answer" progression instead of an instant green check that lies
-  // about durability.
-  const confirmingSubmit = optimisticSubmit !== null && !hasDurableAnswers;
+  // confirmingSubmit = "just submitted, the durable answer turn hasn't landed
+  // yet" vs answered (awaitingInput.answered is true). Drives the status copy.
+  const confirmingSubmit = submittedSnapshot !== null && !(aw?.answered ?? false);
+
+  if (!aw || questions.length === 0) return null;
 
   return (
     <div
@@ -6641,11 +6452,7 @@ function ToolAskUserBody({
             )}
           </span>
           <span className="run-tool-ask-status-label">
-            {confirmingSubmit
-              ? "Submitted — waiting for Claude…"
-              : completedWithoutAnswers
-                ? "Answered"
-                : "Your answer"}
+            {confirmingSubmit ? "Submitted — answering…" : "Answered"}
           </span>
         </div>
       )}
@@ -8486,15 +8293,8 @@ export function RunMessages({
         return <RunReasoningBlock entry={g.entry} showThinking={showThinking} />;
       }
       if (g.kind === "meta") {
-        if (g.entry.metaKind === "needs_input_announcement") {
-          return (
-            <RunNeedsInputAnnouncement
-              entry={g.entry}
-              systemAvatar={systemAvatar}
-              onOpenTurn={onOpenTurn}
-              showTimestamps={showTimestamps}
-            />
-          );
+        if (g.entry.metaKind === "awaiting_input") {
+          return <RunAwaitingInputCard entry={g.entry} />;
         }
         if (g.entry.metaKind === "turn_usage") {
           return null;
@@ -13095,28 +12895,29 @@ function ChatPane({
     return () => onRefreshFlashChange(session.id, null);
   }, [onRefreshFlashChange, session.id, visibleRefreshFlash]);
 
-  async function sendInputReply(
-    entry: TranscriptEntry,
-    payload: InputReplyPayload,
+  async function submitAnswer(
+    askingTurnId: string,
+    payload: AnswerPayload,
   ): Promise<void> {
-    const turnID = entry.turnId?.trim();
-    const providerItemID = entry.providerItemId?.trim();
-    if (!turnID || !providerItemID) {
-      throw new Error("input reply target is not available");
+    const turnID = askingTurnId.trim();
+    const providerItemID = payload.providerItemId.trim();
+    const timelineID = payload.timelineId.trim();
+    if (!turnID || !providerItemID || !timelineID) {
+      throw new Error("answer target is not available");
     }
     if (!payload.answers || Object.keys(payload.answers).length === 0) {
-      throw new Error("input reply requires at least one answer");
+      throw new Error("answer requires at least one selection");
     }
     const body: Record<string, unknown> = {
       provider_item_id: providerItemID,
-      timeline_id: entry.id,
+      timeline_id: timelineID,
       answers: payload.answers,
     };
     if (payload.annotations && Object.keys(payload.annotations).length > 0) {
       body.annotations = payload.annotations;
     }
     const res = await authedFetch(
-      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnID)}/input-reply`,
+      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnID)}/answer`,
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -13124,7 +12925,7 @@ function ChatPane({
       },
     );
     if (!res.ok) {
-      let detail = `input reply failed: ${res.status}`;
+      let detail = `answer failed: ${res.status}`;
       try {
         const data = await res.json();
         if (typeof data?.detail === "string") detail = data.detail;
@@ -13133,45 +12934,9 @@ function ChatPane({
       }
       throw new Error(detail);
     }
-    // Patch the Turns-tab activity cache with the answer the user just
-    // submitted. The Turns view's activityEntriesByTurn is a one-shot
-    // fetch (loadActivityForTurn), so without this update the cached
-    // AskUserQuestion entry stays at toolStatus="started" with no
-    // askUserAnswers — the durable tool.approval_resolved that the
-    // backend persists never makes it into the Turns render. Chat tab
-    // is fine because it consumes the SSE stream and keeps refreshing
-    // sdkServerProjectedEntriesRef; Turns is the regression surface.
-    // We mirror the shape projectionAskUserAnswers emits, so when the
-    // durable update eventually lands the entry is byte-identical.
-    const projected: Record<string, AskUserQuestionAnswer> = {};
-    for (const [question, labels] of Object.entries(payload.answers)) {
-      if (!Array.isArray(labels) || labels.length === 0) continue;
-      const ann = payload.annotations?.[question];
-      const answer: AskUserQuestionAnswer = { labels };
-      if (typeof ann?.preview === "string" && ann.preview) answer.preview = ann.preview;
-      if (typeof ann?.notes === "string" && ann.notes) answer.notes = ann.notes;
-      projected[question] = answer;
-    }
-    if (Object.keys(projected).length > 0) {
-      setActivityEntriesByTurn((prev) => {
-        const cached = prev[turnID];
-        if (!cached) return prev;
-        let mutated = false;
-        const next = cached.map((cachedEntry) => {
-          if (cachedEntry.id !== entry.id) return cachedEntry;
-          mutated = true;
-          return {
-            ...cachedEntry,
-            toolStatus: "completed",
-            askUserAnswers: projected,
-          } as TranscriptEntry;
-        });
-        if (!mutated) return prev;
-        const updated = { ...prev, [turnID]: next };
-        activityEntriesByTurnRef.current = updated;
-        return updated;
-      });
-    }
+    // The answer lands durably as the next user-message turn via SSE; no
+    // local activity-cache patch (that was the in-turn model's regression
+    // surface, gone now that the answer is its own durable turn).
   }
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
@@ -13223,11 +12988,11 @@ function ChatPane({
     <RunContext.Provider
       value={{
         openWorkspacePath,
-        sendInputReply: readOnly
+        submitAnswer: readOnly
           ? async () => {
               throw new Error("session is read-only");
             }
-          : sendInputReply,
+          : submitAnswer,
         createMessageLink,
         user,
       }}

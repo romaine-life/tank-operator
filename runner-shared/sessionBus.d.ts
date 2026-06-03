@@ -33,7 +33,7 @@ export interface InputReplyAnnotation {
 export interface SessionCommand {
   id: string;
   command_id: string;
-  type: "submit_turn" | "interrupt_turn" | "input_reply" | "stop_background_task" | string;
+  type: "submit_turn" | "interrupt_turn" | "stop_background_task" | string;
   session_id: string;
   session_storage_key?: string;
   email: string;
@@ -139,7 +139,6 @@ export function commandSubject(sessionStorageKey: string, provider: string): str
 export function controlSubject(sessionStorageKey: string, provider: string): string;
 export function eventSubject(sessionStorageKey: string): string;
 export function eventSubjectFilter(scope: string): string;
-export function isInputReplyCommand(record: SessionCommand | null | undefined): boolean;
 export function isStopBackgroundTaskCommand(record: SessionCommand | null | undefined): boolean;
 export function commandClientNonce(record: SessionCommand): string;
 export function turnIDForClientNonce(clientNonce: string): string;

@@ -836,7 +836,7 @@ spec:
         # Per-command publish-failure observability. The wake/event-list
         # publish counters above cover the raw nc.Publish path; this
         # alert covers the js.Publish command path the orchestrator uses
-        # for submit_turn / interrupt_turn / input_reply /
+        # for submit_turn / interrupt_turn /
         # stop_background_task. The 2026-05-25 NATS quorum incident
         # produced sustained reason="no_response_from_stream" on
         # kind="submit_turn" — every chat submission failed silently,

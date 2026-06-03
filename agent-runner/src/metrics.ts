@@ -238,26 +238,6 @@ export const optionsOverrideIgnoredTotal = new Counter({
   registers: [registry],
 });
 
-// AskUserQuestion observability. The pending gauge gates the
-// "TankAskUserQuestionStuck" alert (gauge > 0 for > 24h means a
-// session is parked waiting on a human, which may indicate a UX bug
-// — e.g., the SPA never rendered the question). The wait-time
-// histogram backs Grafana panels for p50/p99 answer latency. Buckets
-// span from "user clicked while reading" (1s) up to "abandoned
-// overnight" (24h) because real answer latencies span both ends.
-export const askUserQuestionPendingGauge = new Gauge({
-  name: "tank_runner_askuser_question_pending",
-  help: "Currently-pending AskUserQuestion tool calls awaiting a durable input_reply.",
-  registers: [registry],
-});
-
-export const askUserQuestionWaitSeconds = new Histogram({
-  name: "tank_runner_askuser_question_wait_seconds",
-  help: "Wall-clock seconds from AskUserQuestion canUseTool request to durable input_reply resolution.",
-  buckets: [1, 5, 30, 60, 300, 1800, 3600, 86400],
-  registers: [registry],
-});
-
 // turnStartTimes tracks turn.started timestamps so we can observe a
 // duration when the terminal turn event arrives. The map is per-runner-
 // process and unbounded only if turns leak (no terminal event ever
@@ -272,7 +252,7 @@ export function recordTurnStart(turnID: string): void {
 
 export function recordTurnTerminal(
   turnID: string,
-  outcome: "completed" | "failed" | "interrupted",
+  outcome: "completed" | "failed" | "interrupted" | "awaiting_input",
 ): void {
   if (!turnID) return;
   const start = turnStartTimes.get(turnID);

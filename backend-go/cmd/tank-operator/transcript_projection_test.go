@@ -520,198 +520,130 @@ func TestProjectTranscriptEventsKeepsFailedTurnActivityOutOfMainTranscript(t *te
 	}
 }
 
-// TestProjectTranscriptEventsPromotesAskUserQuestionHandoff verifies the
-// projection synthesizes a meta-kind `needs_input_announcement` row in the
-// main transcript stream whenever an AskUserQuestion tool item is present,
-// and that the announcement is kept OUT of the Turn-activity compact so the
+// TestProjectTranscriptEventsPromotesAwaitingInputCard verifies the projection
+// promotes a turn.awaiting_input handoff into the settled main transcript as the
+// interactive question card (metaKind "awaiting_input"), anchored at the asking
+// turn's tail, and unanswered until a later ask_user_answer arrives. The card is
+// kept OUT of the Turn-activity compact (same opt-out as a user message) so the
 // handoff stays visible whether the activity group is open or closed.
-//
-// Coverage:
-//   - announcement row's metaKind, title, and detail map from the question text
-//   - announcement.targetTurnId / targetProviderItemId / answered fields exist
-//   - announcement orderKey sorts immediately after the underlying tool item
-//   - the original tool item is still emitted (the question card lives in
-//     Turn activity; the announcement is a separate promotion row)
-//   - the announcement is excluded from terminalProjectedActivities and
-//     activeProjectedActivities — same opt-out shape as a user message
-func TestProjectTranscriptEventsPromotesAskUserQuestionHandoff(t *testing.T) {
+func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
 			"text":    "which?",
 			"display": map[string]any{"kind": "plain"},
 		}),
-		projectionTestEvent("ask-start", "002", "item.started", "tool", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
-			"kind":  "tool",
-			"name":  "AskUserQuestion",
-			"title": "AskUserQuestion",
-			"input": map[string]any{
-				"questions": []any{
-					map[string]any{
-						"question":      "Which auth method?",
-						"header":        "Auth",
-						"multiSelect":   false,
-						"allowFreeForm": true,
-						"secret":        false,
-						"options": []any{
-							map[string]any{"label": "OAuth", "description": "Use OAuth"},
-							map[string]any{"label": "API key", "description": "Use API key"},
-						},
-					},
-				},
-			},
-		}),
-		projectionTestEvent("ask-approval", "003", "tool.approval_requested", "tool", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
-			"kind": "needs_input",
-			"name": "AskUserQuestion",
-			"input": map[string]any{
-				"questions": []any{
-					map[string]any{
-						"question":      "Which auth method?",
-						"header":        "Auth",
-						"multiSelect":   false,
-						"allowFreeForm": true,
-						"secret":        false,
+		// The asking turn ENDS here: turn.awaiting_input is the terminal that
+		// carries the Tank-canonical questions and the AUQ item's ids.
+		projectionTestEvent("await", "002", "turn.awaiting_input", "runner", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
+			"provider_item_id": "toolu_ask",
+			"timeline_id":      "turn-1:item:tool-ask",
+			"questions": []any{
+				map[string]any{
+					"question":      "Which auth method?",
+					"header":        "Auth",
+					"multiSelect":   false,
+					"allowFreeForm": true,
+					"options": []any{
+						map[string]any{"label": "OAuth", "description": "Use OAuth"},
+						map[string]any{"label": "API key", "description": "Use API key"},
 					},
 				},
 			},
 		}),
 	}
 	projection := projectTranscriptEvents(events)
-	var ann map[string]any
+	var card map[string]any
 	for _, entry := range projection.Entries {
-		if entry["metaKind"] == "needs_input_announcement" {
-			ann = entry
+		if entry["metaKind"] == "awaiting_input" {
+			card = entry
 			break
 		}
 	}
-	if ann == nil {
-		t.Fatalf("expected needs_input_announcement entry, got entries: %#v", projection.Entries)
+	if card == nil {
+		t.Fatalf("expected awaiting_input card, got entries: %#v", projection.Entries)
 	}
-	meta, _ := ann["meta"].(map[string]any)
+	meta, _ := card["meta"].(map[string]any)
 	if meta["title"] != "Claude is waiting on you" {
-		t.Errorf("announcement title = %q, want Claude is waiting on you", meta["title"])
+		t.Errorf("card title = %q, want Claude is waiting on you", meta["title"])
 	}
 	if got := meta["detail"]; got != "Which auth method?" {
-		t.Errorf("announcement detail = %q, want question text", got)
+		t.Errorf("card detail = %q, want question text", got)
 	}
-	announcement, _ := ann["announcement"].(map[string]any)
-	if announcement["targetTurnId"] != "turn-1" {
-		t.Errorf("targetTurnId = %v, want turn-1", announcement["targetTurnId"])
+	if card["turnId"] != "turn-1" {
+		t.Errorf("turnId = %v, want turn-1 (the asking turn)", card["turnId"])
 	}
-	if announcement["answered"] != false {
-		t.Errorf("answered = %v, want false for unresolved announcement", announcement["answered"])
+	awaiting, _ := card["awaitingInput"].(map[string]any)
+	if awaiting["askingTurnId"] != "turn-1" {
+		t.Errorf("askingTurnId = %v, want turn-1", awaiting["askingTurnId"])
 	}
-	if announcement["questionCount"] != 1 {
-		t.Errorf("questionCount = %v, want 1", announcement["questionCount"])
+	if awaiting["providerItemId"] != "toolu_ask" {
+		t.Errorf("providerItemId = %v, want toolu_ask", awaiting["providerItemId"])
 	}
-	// Announcement orderKey must sort immediately after the tool item's
-	// orderKey so historical replay and live streaming agree on placement.
-	if !strings.HasSuffix(ann["orderKey"].(string), "~needs_input_announcement") {
-		t.Errorf("announcement orderKey = %q, want suffix ~needs_input_announcement", ann["orderKey"])
+	if awaiting["timelineId"] != "turn-1:item:tool-ask" {
+		t.Errorf("timelineId = %v, want turn-1:item:tool-ask", awaiting["timelineId"])
+	}
+	if awaiting["answered"] != false {
+		t.Errorf("answered = %v, want false for an unanswered card", awaiting["answered"])
+	}
+	if awaiting["questionCount"] != 1 {
+		t.Errorf("questionCount = %v, want 1", awaiting["questionCount"])
+	}
+	// Card orderKey must sort immediately after the asking turn's tail so
+	// historical replay and live streaming agree on placement.
+	if !strings.HasSuffix(card["orderKey"].(string), "~awaiting_input") {
+		t.Errorf("card orderKey = %q, want suffix ~awaiting_input", card["orderKey"])
 	}
 }
 
-// TestProjectTranscriptEventsAnnouncementAnsweredAfterResolution mirrors the
-// behavior the SPA depends on for historical context: after the user
-// answers, the announcement row keeps rendering with the "Answered" title
-// so a scroll-back through chat history shows where Claude paused and
-// that the user responded. The answered flag must come from durable
-// projection state (item.status == "completed" after the resolved event),
-// not from any in-flight React flag.
-func TestProjectTranscriptEventsAnnouncementAnsweredAfterResolution(t *testing.T) {
+// TestProjectTranscriptEventsAwaitingInputAnsweredByLaterTurn proves the card's
+// "answered" state is derived from durable state — a later ask_user_answer user
+// message whose question_timeline_id matches the handoff — not a browser-local
+// flag. A fresh tab opened after the user answered renders the resolved card.
+//
+// In the new model there is no "interrupted while waiting" case: turn.awaiting_input
+// IS the terminal, so the asking turn has already ended; the card is either
+// unanswered (still waiting) or answered by a later turn.
+func TestProjectTranscriptEventsAwaitingInputAnsweredByLaterTurn(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
 			"text":    "decide",
 			"display": map[string]any{"kind": "plain"},
 		}),
-		projectionTestEvent("ask-approval", "002", "tool.approval_requested", "tool", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
-			"kind": "needs_input",
-			"name": "AskUserQuestion",
-			"input": map[string]any{
-				"questions": []any{
-					map[string]any{
-						"question":      "Pick one",
-						"allowFreeForm": true,
-					},
-				},
+		projectionTestEvent("await", "002", "turn.awaiting_input", "runner", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
+			"provider_item_id": "toolu_ask",
+			"timeline_id":      "turn-1:item:tool-ask",
+			"questions": []any{
+				map[string]any{"question": "Pick one", "allowFreeForm": true},
 			},
 		}),
-		projectionTestEvent("ask-resolved", "003", "tool.approval_resolved", "tool", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
-			"kind":     "needs_input",
-			"resolved": true,
-			"answers":  map[string]any{"Pick one": []any{"A"}},
+		// The user's answer is a brand-new turn carrying an ask_user_answer
+		// display that links back to the handoff's timeline id.
+		projectionTestEvent("ans", "003", "user_message.created", "user", "tank", "turn-2", "turn-2:user", map[string]any{
+			"text": "A",
+			"display": map[string]any{
+				"kind":                 "ask_user_answer",
+				"question_timeline_id": "turn-1:item:tool-ask",
+				"asking_turn_id":       "turn-1",
+				"answers":              map[string]any{"Pick one": []any{"A"}},
+			},
 		}),
 	}
 	projection := projectTranscriptEvents(events)
 	for _, entry := range projection.Entries {
-		if entry["metaKind"] == "needs_input_announcement" {
-			meta := entry["meta"].(map[string]any)
-			if meta["title"] != "Answered" {
-				t.Errorf("answered announcement title = %q, want Answered", meta["title"])
-			}
-			ann := entry["announcement"].(map[string]any)
-			if ann["answered"] != true {
-				t.Errorf("answered = %v, want true after tool.approval_resolved", ann["answered"])
-			}
-			return
-		}
-	}
-	t.Fatalf("missing needs_input_announcement entry after resolution: %#v", projection.Entries)
-}
-
-// TestProjectTranscriptEventsAnnouncementInterruptedCarriesTerminalStatus
-// locks the server-projection half of the "settled handoff" contract the
-// SPA renderer depends on. When the user declines to answer and stops the
-// turn, no tool.approval_resolved ever arrives, so the announcement stays
-// unanswered — but turn.interrupted lands on the same turn and must annotate
-// the announcement row with turnTerminalStatus. A fresh tab loading from the
-// server projection therefore has exactly the fact RunNeedsInputAnnouncement
-// needs to drop the "Claude is waiting on you" active state instead of
-// rendering a stuck, attention-grabbing card with nothing to act on.
-func TestProjectTranscriptEventsAnnouncementInterruptedCarriesTerminalStatus(t *testing.T) {
-	events := []map[string]any{
-		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
-			"text":    "where should this live?",
-			"display": map[string]any{"kind": "plain"},
-		}),
-		projectionTestEvent("ask-approval", "002", "tool.approval_requested", "tool", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
-			"kind": "needs_input",
-			"name": "AskUserQuestion",
-			"input": map[string]any{
-				"questions": []any{
-					map[string]any{
-						"question": "Where should this \"useful files\" links section live?",
-						"header":   "Placement",
-					},
-				},
-			},
-		}),
-		// User stopped the turn instead of answering.
-		projectionTestEvent("interrupt", "003", "turn.interrupted", "system", "tank", "turn-1", "", map[string]any{
-			"reason": "client_interrupt",
-		}),
-	}
-	projection := projectTranscriptEvents(events)
-	for _, entry := range projection.Entries {
-		if entry["metaKind"] != "needs_input_announcement" {
+		if entry["metaKind"] != "awaiting_input" {
 			continue
 		}
-		ann := entry["announcement"].(map[string]any)
-		if ann["answered"] != false {
-			t.Errorf("answered = %v, want false (the user never answered)", ann["answered"])
-		}
-		if got := entry["turnTerminalStatus"]; got != "interrupted" {
-			t.Errorf("turnTerminalStatus = %v, want interrupted", got)
-		}
-		// The projection still emits the pre-terminal default title; the SPA
-		// renderer overrides it to "No longer waiting" for the settled state.
 		meta := entry["meta"].(map[string]any)
-		if meta["title"] != "Claude is waiting on you" {
-			t.Errorf("announcement title = %q, want the pre-terminal default", meta["title"])
+		if meta["title"] != "Answered" {
+			t.Errorf("answered card title = %q, want Answered", meta["title"])
+		}
+		awaiting := entry["awaitingInput"].(map[string]any)
+		if awaiting["answered"] != true {
+			t.Errorf("answered = %v, want true after a later ask_user_answer turn", awaiting["answered"])
 		}
 		return
 	}
-	t.Fatalf("missing needs_input_announcement entry: %#v", projection.Entries)
+	t.Fatalf("missing awaiting_input card: %#v", projection.Entries)
 }
 
 func TestProjectTranscriptEventsPopulatesActivityBodiesForTurnsWithoutCompactedEntries(t *testing.T) {

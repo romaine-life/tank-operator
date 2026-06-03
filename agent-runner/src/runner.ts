@@ -27,6 +27,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   canonicalEventsForClaudeMessage,
+  claudeQuestionsToTankShape,
   claudeTaskIdentifiers,
   isClaudeTaskLifecycleMessage,
   startsClaudeTurn,
@@ -41,13 +42,13 @@ import {
   type TankConversationEvent,
 } from "../../runner-shared/conversation.js";
 import {
+  itemTimelineID,
   stampTankEvent,
   turnEvent,
   turnIDForClientNonce,
 } from "../../runner-shared/conversation-builders.js";
 import {
   SessionCommandBus,
-  isInputReplyCommand,
   isInterruptCommand,
   isStopBackgroundTaskCommand,
   commandClientNonce,
@@ -56,8 +57,6 @@ import {
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
-  askUserQuestionPendingGauge,
-  askUserQuestionWaitSeconds,
   commandsConsumedTotal,
   eventTruncatedTotal,
   interruptOutcomeTotal,
@@ -302,119 +301,7 @@ interface BufferedInterrupt {
   orphanTimer: ReturnType<typeof setTimeout>;
 }
 
-// PendingInputReply tracks a single in-flight AskUserQuestion call. Either
-// side of the round-trip can arrive first:
-//
-//   1. SDK fires `canUseTool` for AskUserQuestion → we create the entry
-//      with `resolve`, `reject`, and `input` (the original tool_use input
-//      that carries the questions[] schema). The SDK awaits the returned
-//      Promise.
-//   2. Durable JetStream `input_reply` command arrives → we look up the
-//      entry, resolve canUseTool with `{behavior:"allow", updatedInput}`
-//      that carries the user's selections, and attach the JetStream
-//      record + heartbeat for ack on `tool.approval_resolved`.
-//
-// On `tool.approval_resolved` emission (markInputReplyCompleted) we ack
-// the durable command and remove the entry. On turn abort or runner
-// shutdown we reject any still-pending canUseTool resolvers so the SDK
-// surfaces a denied tool_result instead of hanging the turn forever.
-interface PendingInputReply {
-  resolve?: (result: PermissionResult) => void;
-  reject?: (err: unknown) => void;
-  // Original AskUserQuestion tool input (the `{questions: [...]}` shape).
-  // Needed when resolving canUseTool because the SDK's
-  // mapToolResultToToolResultBlockParam reads `questions` + `answers` +
-  // `annotations` off updatedInput to format the canonical tool_result.
-  input?: Record<string, unknown>;
-  record?: SessionCommandRecord;
-  stopCommandHeartbeat?: () => void;
-  // Time the canUseTool callback fired, used to observe wait-time when
-  // the input_reply arrives.
-  requestedAtMs?: number;
-  // Tracks which turn the AskUserQuestion belongs to so we can fail-fast
-  // pending replies on turn interrupt without scanning every record.
-  turnID?: string;
-  clientNonce?: string;
-}
-
 type InterruptOutcome = "interrupted" | "not_found" | "publish_failed";
-
-export function inputReplyTargetProviderItemID(record: SessionCommandRecord): string {
-  return String(record.target_provider_item_id ?? "").trim();
-}
-
-// inputReplyAnswers reads the durable command's per-question selections.
-// Single-select questions arrive as one-element arrays; multi-select as
-// arrays of the checked labels. Empty entries are dropped so the SDK
-// updatedInput.answers map only contains question→non-empty-string.
-export function inputReplyAnswers(record: SessionCommandRecord): Record<string, string[]> {
-  const raw = record.answers;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out: Record<string, string[]> = {};
-  for (const [question, value] of Object.entries(raw as Record<string, unknown>)) {
-    const trimmedQuestion = String(question).trim();
-    if (!trimmedQuestion) continue;
-    if (!Array.isArray(value)) continue;
-    const cleaned = value
-      .map((label) => String(label ?? "").trim())
-      .filter((label) => label.length > 0);
-    if (cleaned.length > 0) out[trimmedQuestion] = cleaned;
-  }
-  return out;
-}
-
-interface InputReplyAnnotation {
-  preview?: string;
-  notes?: string;
-}
-
-export function inputReplyAnnotations(
-  record: SessionCommandRecord,
-): Record<string, InputReplyAnnotation> {
-  const raw = record.annotations;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out: Record<string, InputReplyAnnotation> = {};
-  for (const [question, value] of Object.entries(raw as Record<string, unknown>)) {
-    const trimmedQuestion = String(question).trim();
-    if (!trimmedQuestion) continue;
-    if (!value || typeof value !== "object") continue;
-    const ann = value as { preview?: unknown; notes?: unknown };
-    const cleaned: InputReplyAnnotation = {};
-    if (typeof ann.preview === "string" && ann.preview.trim()) {
-      cleaned.preview = ann.preview.trim();
-    }
-    if (typeof ann.notes === "string" && ann.notes.trim()) {
-      cleaned.notes = ann.notes.trim();
-    }
-    if (cleaned.preview || cleaned.notes) out[trimmedQuestion] = cleaned;
-  }
-  return out;
-}
-
-// joinAnswersForSDK converts the durable shape (question → labels[]) into
-// the shape the Claude Agent SDK's AskUserQuestion tool expects on
-// `updatedInput.answers` (question → comma-joined string). The SDK's own
-// zod preprocess does the same join for arrays:
-//   `Array.isArray(H) && H.every($=>typeof $==="string") ? H.join(", ") : H`
-// — so we match that contract directly.
-function answerTextForProvider(labels: string[], notes?: string): string {
-  const answer = labels.join(", ");
-  const trimmedNotes = notes?.trim() ?? "";
-  if (!trimmedNotes) return answer;
-  if (labels.length === 1 && labels[0] === "Other") return trimmedNotes;
-  return `${answer}\n\nAdditional context: ${trimmedNotes}`;
-}
-
-export function joinAnswersForSDK(
-  answers: Record<string, string[]>,
-  annotations: Record<string, InputReplyAnnotation> = {},
-): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const [question, labels] of Object.entries(answers)) {
-    out[question] = answerTextForProvider(labels, annotations[question]?.notes);
-  }
-  return out;
-}
 
 // Defaults for the model + extended-thinking effort pinned into SDK
 // Options when the first submit_turn arrives. The frontend's run-pane
@@ -521,8 +408,6 @@ export class Runner {
   // BufferedInterrupt docstring for the race this buffer fixes.
   // Linear-scan; expected depth is 0–1 in steady state.
   private readonly pendingInterrupts: BufferedInterrupt[] = [];
-  private readonly needsInputProviderItemIDs = new Set<string>();
-  private readonly pendingInputReplies = new Map<string, PendingInputReply>();
   // Claude background shell tasks report their lifecycle through system
   // task_* frames. The start frame is turn-scoped, but progress and final
   // notification can arrive after the foreground turn has already completed.
@@ -530,18 +415,6 @@ export class Runner {
   // late frames still land on the durable session transcript.
   private readonly backgroundTaskTurns = new Map<string, ClaudeTurnContext>();
   private readonly backgroundToolUseTurns = new Map<string, ClaudeTurnContext>();
-  // resolvedInputReplies carries the answers/annotations that resolved
-  // each AskUserQuestion call. The adapter reads + drains this map when
-  // it builds the matching `tool.approval_resolved` event so the durable
-  // payload mirrors what the user actually selected. Process-local state
-  // is acceptable here because the canUseTool resolver is also
-  // process-local — both vanish together on runner restart, and the
-  // SDK's `continue: true` replays the unanswered tool_use so a fresh
-  // canUseTool fires.
-  private readonly resolvedInputReplies = new Map<
-    string,
-    { answers: Record<string, string[]>; annotations: Record<string, InputReplyAnnotation> }
-  >();
   private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
   // Model + effort are pinned at pod boot from the first submit_turn
@@ -574,9 +447,9 @@ export class Runner {
   // Run forever (or until externally aborted). Drives the SDK against
   // the user queue and fans events out to both sinks.
   async run(signal: AbortSignal): Promise<void> {
-    // Two independent JetStream consumers: data plane (submit_turn,
-    // input_reply — serial, ack-after-terminal) and control plane
-    // (interrupt_turn — low-latency, never blocked by an in-flight turn).
+    // Two independent JetStream consumers: data plane (submit_turn —
+    // serial, ack-after-terminal) and control plane (interrupt_turn,
+    // stop_background_task — low-latency, never blocked by an in-flight turn).
     // See runner-shared/sessionBus.js for the consumer config split and
     // docs/tank-conversation-protocol.md → "Durable turn interruption"
     // for the contract. Don't fold these back into one consumer; that's
@@ -589,7 +462,6 @@ export class Runner {
       // before query() is touched.
       this.resolveSdkReady();
       this.userQueue.close();
-      this.failAllPendingInputReplies(new Error("runner_shutdown"));
       this.sdkQuery?.interrupt();
     };
     signal.addEventListener("abort", onAbort, { once: true });
@@ -682,9 +554,11 @@ export class Runner {
       // AskUserQuestion, so non-AskUserQuestion tools retain the same
       // zero-friction shape as before.
       permissionMode: "default",
-      // canUseTool gates AskUserQuestion on a durable input_reply
-      // command. All other tools pass through unconditionally — see the
-      // callback for the policy.
+      // canUseTool ends the asking turn when AskUserQuestion is invoked:
+      // it publishes a durable turn.awaiting_input terminal, then resolves
+      // deny+interrupt. The user's answer arrives as a brand-new turn, not
+      // an in-turn reply. All other tools pass through unconditionally —
+      // see the callback for the policy.
       canUseTool: this.canUseTool,
       // Resume an on-disk JSONL if one exists from a prior process
       // life (e.g., agent-runner restart within the same pod).
@@ -752,8 +626,6 @@ export class Runner {
       this.cfg,
       adapterTurn,
       providerEvent,
-      this.needsInputProviderItemIDs,
-      this.resolvedInputReplies,
     );
     if (canonicalEvents.length === 0) {
       logUnhandledSdkMessage(message);
@@ -769,9 +641,6 @@ export class Runner {
             await this.markCommandTerminal(activeTurn, event.type);
           }
         }
-      }
-      if (dispatched && event.type === "tool.approval_resolved" && event.provider_item_id) {
-        await this.markInputReplyCompleted(event.provider_item_id as string);
       }
     }
     if (providerEvent.type === "result" && this.activeTurn === activeTurn) {
@@ -880,7 +749,7 @@ export class Runner {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
       .startCommandConsumer(async (record) => {
-        // Interrupts and input_reply MUST arrive via startControlConsumer
+        // Interrupts and stop_background_task MUST arrive via startControlConsumer
         // (separate JetStream consumer on the control subject). The
         // data-plane consumer has max_ack_pending=1 by design; any control
         // command delivered here would block behind the in-flight
@@ -904,24 +773,20 @@ export class Runner {
   }
 
   // startControlConsumer drives the control-plane JetStream consumer.
-  // Today: interrupt_turn + input_reply. Future low-latency control
-  // signals (resume, cancel-with-reason, etc.) should land here as
-  // additional branches, not on the data-plane consumer. input_reply
-  // is control-plane because it resolves a canUseTool gate inside an
-  // already-running submit_turn that is, by construction, holding the
-  // data plane's single max_ack_pending slot — see
-  // backend-go/internal/sessionbus/subjects.go → SubjectForCommand for
-  // the publish-side reasoning that pairs with this consumer branch.
+  // Today: interrupt_turn + stop_background_task. Future low-latency
+  // control signals (resume, cancel-with-reason, etc.) should land here as
+  // additional branches, not on the data-plane consumer. These are
+  // control-plane because they must preempt an already-running submit_turn
+  // that is, by construction, holding the data plane's single
+  // max_ack_pending slot — see backend-go/internal/sessionbus/subjects.go
+  // → SubjectForCommand for the publish-side reasoning that pairs with
+  // this consumer branch.
   private startControlConsumer(signal: AbortSignal): () => void {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
       .startControlConsumer(async (record) => {
         if (isInterruptCommand(record)) {
           await this.acceptInterrupt(record);
-          return;
-        }
-        if (isInputReplyCommand(record)) {
-          await this.acceptInputReply(record);
           return;
         }
         if (isStopBackgroundTaskCommand(record)) {
@@ -1332,153 +1197,83 @@ export class Runner {
     return false;
   }
 
-  // canUseTool is the SDK-blessed answer-injection point. The SDK calls
-  // this for every tool the model wants to invoke. Non-AskUserQuestion
-  // tools auto-allow (preserving the prior `bypassPermissions` posture).
-  // AskUserQuestion calls block until the durable `input_reply` command
-  // arrives, then resolve with `{behavior:"allow", updatedInput}` where
-  // `updatedInput.answers` carries the user's selections. The SDK then
-  // calls the tool's own `call()` to produce the canonical tool_result —
-  // we never synthesize one ourselves.
-  private readonly canUseTool: CanUseTool = (toolName, input, { toolUseID, signal }) => {
+  // canUseTool ends the asking turn when the agent invokes AskUserQuestion.
+  // Non-AskUserQuestion tools auto-allow (preserving the prior
+  // `bypassPermissions` posture). For AskUserQuestion we publish the durable
+  // `turn.awaiting_input` handoff carrying the Tank-canonical questions, then
+  // resolve `{deny, interrupt:true}` so the SDK closes the tool call and the
+  // turn terminates. The user's answer arrives later as a brand-new turn via
+  // POST /turns/{id}/answer — there is no in-turn tool result. See
+  // docs/tank-conversation-protocol.md → "AskUserQuestion".
+  private readonly canUseTool: CanUseTool = (toolName, input, { toolUseID }) => {
     if (toolName !== "AskUserQuestion") {
       return Promise.resolve({ behavior: "allow", updatedInput: input } satisfies PermissionResult);
     }
-    if (!toolUseID) {
+    const turn = this.activeTurn;
+    if (!toolUseID || !turn) {
       return Promise.resolve({
         behavior: "deny",
-        message: "AskUserQuestion missing tool_use_id; cannot route input_reply",
+        message: "AskUserQuestion cannot end the turn (missing tool_use_id or active turn)",
       } satisfies PermissionResult);
     }
-
-    // The adapter also tracks this set independently (it consumes raw
-    // tool_use events). We populate it here too so durable command
-    // delivery can detect "AskUserQuestion is waiting" without racing
-    // the assistant message stream.
-    this.needsInputProviderItemIDs.add(toolUseID);
-
-    return new Promise<PermissionResult>((resolve, reject) => {
-      const existing = this.pendingInputReplies.get(toolUseID);
-      if (existing?.record) {
-        // The durable command arrived before canUseTool fired (rare —
-        // implies the SDK delayed firing canUseTool past command
-        // delivery). Resolve immediately using the queued record.
-        const answers = inputReplyAnswers(existing.record);
-        const annotations = inputReplyAnnotations(existing.record);
-        this.resolvedInputReplies.set(toolUseID, { answers, annotations });
-        this.observeInputReplyResolution(Date.now());
-        resolve({
-          behavior: "allow",
-          updatedInput: {
-            ...input,
-            answers: joinAnswersForSDK(answers, annotations),
-            ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
-          },
-        });
-        return;
-      }
-      const entry: PendingInputReply = {
-        ...(existing ?? {}),
-        resolve,
-        reject,
-        input,
-        requestedAtMs: Date.now(),
-        turnID: this.activeTurn?.turnID,
-        clientNonce: this.activeTurn?.clientNonce,
-      };
-      this.pendingInputReplies.set(toolUseID, entry);
-      askUserQuestionPendingGauge.inc();
-
-      // If the SDK aborts the operation (turn interrupt, runner
-      // shutdown), reject with deny so the SDK records a denied
-      // tool_result and the turn unwinds cleanly.
-      const onAbort = () => {
-        const stillPending = this.pendingInputReplies.get(toolUseID);
-        if (!stillPending || stillPending.resolve !== resolve) return;
-        this.pendingInputReplies.delete(toolUseID);
-        this.needsInputProviderItemIDs.delete(toolUseID);
-        askUserQuestionPendingGauge.dec();
-        if (stillPending.record) {
-          void this.commandBus.markFailed(stillPending.record, new Error("turn interrupted"));
-        }
-        resolve({ behavior: "deny", message: "session interrupted", interrupt: true });
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
+    const questions = claudeQuestionsToTankShape(input);
+    return this.endTurnAwaitingInput(turn, questions, toolUseID).then(
+      () =>
+        ({
+          behavior: "deny",
+          message: "Awaiting your answer in a new turn.",
+          interrupt: true,
+        }) satisfies PermissionResult,
+    );
   };
 
-  private async acceptInputReply(record: SessionCommandRecord): Promise<void> {
-    commandsConsumedTotal.labels("input_reply", "accepted").inc();
-    const targetProviderItemID = inputReplyTargetProviderItemID(record);
-    const answers = inputReplyAnswers(record);
-    if (!targetProviderItemID || Object.keys(answers).length === 0) {
-      commandsConsumedTotal.labels("input_reply", "invalid").inc();
-      await this.commandBus.markFailed(
-        record,
-        new Error("input reply missing target or answers"),
-      );
-      return;
-    }
-    if (
-      !this.activeTurn ||
-      !this.turnMatchesTarget(this.activeTurn, record.target_turn_id || record.client_nonce)
-    ) {
-      commandsConsumedTotal.labels("input_reply", "no_active_turn").inc();
-      await this.commandBus.markFailed(record, new Error("input reply target turn is not active"));
-      return;
-    }
-    const pending = this.pendingInputReplies.get(targetProviderItemID);
-    if (!pending || !pending.resolve) {
-      // canUseTool hasn't fired yet (or the AskUserQuestion call already
-      // resolved). Stash the record so a late canUseTool can consume it,
-      // but only if the adapter has confirmed the item is awaiting
-      // input. Otherwise this is a stale reply for an already-resolved
-      // tool call.
-      if (!this.needsInputProviderItemIDs.has(targetProviderItemID)) {
-        commandsConsumedTotal.labels("input_reply", "not_waiting_for_input").inc();
-        await this.commandBus.markFailed(
-          record,
-          new Error("input reply target is not waiting for input"),
-        );
-        return;
+  // endTurnAwaitingInput publishes the durable turn.awaiting_input terminal
+  // for an AskUserQuestion handoff and acks the asking turn's submit_turn.
+  // Mirrors applyInterruptToTurn's durable-first posture: publish with retry,
+  // and fall back to turn.failed if the handoff publish ultimately fails so
+  // the turn never strands without a terminal.
+  private async endTurnAwaitingInput(
+    turn: PendingTurn,
+    questions: unknown,
+    providerItemID: string,
+  ): Promise<void> {
+    if (turn.terminalEmitted) return;
+    const timelineID = itemTimelineID(turn.turnID, providerItemID);
+    const published = await this.publishTerminalWithRetry(
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.awaiting_input",
+        questions,
+        awaitingProviderItemID: providerItemID,
+        awaitingTimelineID: timelineID,
+      }),
+    );
+    if (published) {
+      turn.terminalEmitted = true;
+      if (turn.commandRecord) {
+        await this.markCommandTerminal(turn, "turn.awaiting_input");
       }
-      const entry: PendingInputReply = {
-        ...(pending ?? {}),
-        record,
-        stopCommandHeartbeat: this.commandBus.startCommandHeartbeat(record),
-      };
-      this.pendingInputReplies.set(targetProviderItemID, entry);
       return;
     }
-    if (pending.record) {
-      commandsConsumedTotal.labels("input_reply", "duplicate").inc();
-      await this.commandBus.markFailed(record, new Error("input reply already pending for target"));
-      return;
+    const fallback = await this.publishTerminalWithRetry(
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.failed",
+        reason: "publish_awaiting_input_failed",
+      }),
+    );
+    if (fallback) {
+      turn.terminalEmitted = true;
+      if (turn.commandRecord) {
+        await this.markCommandTerminal(turn, "turn.failed");
+      }
     }
-
-    const annotations = inputReplyAnnotations(record);
-    pending.record = record;
-    pending.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(record);
-    this.resolvedInputReplies.set(targetProviderItemID, { answers, annotations });
-    this.observeInputReplyResolution(pending.requestedAtMs);
-
-    const resolve = pending.resolve;
-    pending.resolve = undefined;
-    pending.reject = undefined;
-    askUserQuestionPendingGauge.dec();
-    resolve({
-      behavior: "allow",
-      updatedInput: {
-        ...(pending.input ?? {}),
-        answers: joinAnswersForSDK(answers, annotations),
-        ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
-      },
-    });
-  }
-
-  private observeInputReplyResolution(requestedAtMs?: number): void {
-    if (!requestedAtMs) return;
-    askUserQuestionWaitSeconds.observe(Math.max(0, Date.now() - requestedAtMs) / 1000);
   }
 
   // acceptTurn normalizes the client nonce and assembles the in-memory
@@ -1577,11 +1372,17 @@ export class Runner {
 
   private async markCommandTerminal(
     turn: PendingTurn,
-    type: "turn.completed" | "turn.failed" | "turn.interrupted",
+    type: "turn.completed" | "turn.failed" | "turn.interrupted" | "turn.awaiting_input",
   ): Promise<void> {
-    const outcome = type === "turn.completed" ? "completed" : type === "turn.failed" ? "failed" : "interrupted";
+    const outcome =
+      type === "turn.completed"
+        ? "completed"
+        : type === "turn.failed"
+          ? "failed"
+          : type === "turn.awaiting_input"
+            ? "awaiting_input"
+            : "interrupted";
     recordTurnTerminal(turn.turnID, outcome);
-    await this.failPendingInputRepliesForTurn(turn, new Error(type));
     if (!turn.commandRecord) return;
     const record = turn.commandRecord;
     turn.stopCommandHeartbeat?.();
@@ -1591,85 +1392,6 @@ export class Runner {
       await this.commandBus.markCompleted(record);
     } catch (err) {
       console.error("session command terminal mark failed:", err);
-    }
-  }
-
-  private async markInputReplyCompleted(providerItemID: string): Promise<void> {
-    const pending = this.pendingInputReplies.get(providerItemID);
-    if (!pending) return;
-    this.pendingInputReplies.delete(providerItemID);
-    this.needsInputProviderItemIDs.delete(providerItemID);
-    pending.stopCommandHeartbeat?.();
-    if (pending.resolve) {
-      // Defensive: tool.approval_resolved fired before canUseTool was
-      // resolved (e.g., model produced a tool_result without taking the
-      // permission path). Resolve the dangling promise with deny so the
-      // SDK doesn't leak it.
-      askUserQuestionPendingGauge.dec();
-      pending.resolve({ behavior: "deny", message: "tool resolved without input reply" });
-    }
-    if (!pending.record) return;
-    try {
-      await this.commandBus.markCompleted(pending.record);
-    } catch (err) {
-      console.error("input reply terminal mark failed:", err);
-    }
-  }
-
-  private async failPendingInputRepliesForTurn(
-    turn: Pick<PendingTurn, "turnID" | "clientNonce">,
-    err: unknown,
-  ): Promise<void> {
-    for (const [providerItemID, pending] of [...this.pendingInputReplies.entries()]) {
-      const turnMatchesPending = pending.turnID
-        ? this.turnMatchesTarget(turn, pending.turnID)
-        : pending.record
-        ? this.turnMatchesTarget(turn, pending.record.target_turn_id || pending.record.client_nonce)
-        : true;
-      if (!turnMatchesPending) continue;
-      this.pendingInputReplies.delete(providerItemID);
-      this.needsInputProviderItemIDs.delete(providerItemID);
-      pending.stopCommandHeartbeat?.();
-      if (pending.resolve) {
-        askUserQuestionPendingGauge.dec();
-        pending.resolve({
-          behavior: "deny",
-          message: err instanceof Error ? err.message : String(err),
-          interrupt: true,
-        });
-      }
-      if (pending.record) {
-        try {
-          await this.commandBus.markFailed(pending.record, err);
-        } catch (markErr) {
-          console.error("input reply failure mark failed:", markErr);
-        }
-      }
-    }
-  }
-
-  // failAllPendingInputReplies is called on runner shutdown. Unlike the
-  // per-turn variant it does not call into the async session bus
-  // (`markFailed` is fire-and-forget) because shutdown is synchronous
-  // and we must release SDK Promises before query.interrupt() returns.
-  private failAllPendingInputReplies(err: unknown): void {
-    for (const [providerItemID, pending] of [...this.pendingInputReplies.entries()]) {
-      this.pendingInputReplies.delete(providerItemID);
-      this.needsInputProviderItemIDs.delete(providerItemID);
-      pending.stopCommandHeartbeat?.();
-      if (pending.resolve) {
-        askUserQuestionPendingGauge.dec();
-        pending.resolve({
-          behavior: "deny",
-          message: err instanceof Error ? err.message : String(err),
-          interrupt: true,
-        });
-      }
-      if (pending.record) {
-        void this.commandBus.markFailed(pending.record, err).catch((markErr) => {
-          console.error("input reply shutdown mark failed:", markErr);
-        });
-      }
     }
   }
 

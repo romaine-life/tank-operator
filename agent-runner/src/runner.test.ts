@@ -7,10 +7,6 @@ import path from "node:path";
 import {
   classifyProviderFailure,
   dispatch,
-  inputReplyAnnotations,
-  inputReplyAnswers,
-  inputReplyTargetProviderItemID,
-  joinAnswersForSDK,
   logUnhandledSdkMessage,
   Runner,
 } from "./runner.js";
@@ -181,40 +177,6 @@ test("userSubmissionEvents produces Tank-shape boundary events", () => {
   }
 });
 
-test("inputReplyAnswers parses durable command answers map and drops empties", () => {
-  const record = {
-    target_provider_item_id: " toolu_ask ",
-    answers: {
-      "  Which auth method?  ": ["  OAuth  ", ""],
-      "  ": ["ignored"],
-      "Drop me": [],
-    },
-  };
-
-  assert.equal(inputReplyTargetProviderItemID(record as never), "toolu_ask");
-  assert.deepEqual(inputReplyAnswers(record as never), { "Which auth method?": ["OAuth"] });
-});
-
-test("inputReplyAnswers tolerates a missing or malformed answers field", () => {
-  assert.deepEqual(inputReplyAnswers({} as never), {});
-  assert.deepEqual(inputReplyAnswers({ answers: null } as never), {});
-  assert.deepEqual(inputReplyAnswers({ answers: "not-a-map" } as never), {});
-  assert.deepEqual(inputReplyAnswers({ answers: [] } as never), {});
-});
-
-test("inputReplyAnnotations trims preview and notes, drops empty entries", () => {
-  const record = {
-    annotations: {
-      "Q1": { preview: "  <div/>  ", notes: "  hi  " },
-      "Q2": { notes: "" },
-      "  ": { preview: "x" },
-    },
-  };
-  assert.deepEqual(inputReplyAnnotations(record as never), {
-    Q1: { preview: "<div/>", notes: "hi" },
-  });
-});
-
 // logUnhandledSdkMessage is the diagnostic surface for "what is the SDK
 // telling us that the adapter throws away?" Background task lifecycle
 // messages used to land here, but they are now first-class shell_task.*
@@ -285,38 +247,6 @@ test("logUnhandledSdkMessage logs unknown types even with no identifying fields"
   assert.equal(parsed.type, "future_unknown_kind");
 });
 
-test("joinAnswersForSDK joins multi-select arrays with the SDK preprocess separator", () => {
-  assert.deepEqual(
-    joinAnswersForSDK({
-      "Single": ["OAuth"],
-      "Multi": ["A", "B", "C"],
-    }),
-    {
-      Single: "OAuth",
-      Multi: "A, B, C",
-    },
-  );
-});
-
-test("joinAnswersForSDK includes free-form notes in provider-visible answer text", () => {
-  assert.deepEqual(
-    joinAnswersForSDK(
-      {
-        "Question type": ["Personality (Recommended)"],
-        "Pure free-form": ["Other"],
-      },
-      {
-        "Question type": { notes: "ask about chat box behavior" },
-        "Pure free-form": { notes: "use this as the answer" },
-      },
-    ),
-    {
-      "Question type": "Personality (Recommended)\n\nAdditional context: ask about chat box behavior",
-      "Pure free-form": "use this as the answer",
-    },
-  );
-});
-
 // Regression test for the "Stop doesn't interrupt deep tool-use loops"
 // failure mode that PR #481's durable-stop migration left open. Before
 // the data/control plane split, both submit_turn and interrupt_turn rode
@@ -345,7 +275,6 @@ test("dispatchInterruptIndependentlyOfSubmit: control handler dispatches interru
     startControlConsumer: (signal: AbortSignal) => () => void;
     acceptInterrupt: (record: unknown) => Promise<void>;
     acceptCommandTurn: (record: unknown) => Promise<void>;
-    acceptInputReply: (record: unknown) => Promise<void>;
   };
 
   type RecordHandler = (record: unknown) => Promise<void>;
@@ -373,9 +302,6 @@ test("dispatchInterruptIndependentlyOfSubmit: control handler dispatches interru
   };
   runner.acceptCommandTurn = async () => {
     calls.push("acceptCommandTurn");
-  };
-  runner.acceptInputReply = async () => {
-    calls.push("acceptInputReply");
   };
 
   const ctl = new AbortController();
@@ -414,86 +340,72 @@ test("dispatchInterruptIndependentlyOfSubmit: control handler dispatches interru
   ctl.abort();
 });
 
-// dispatchInputReplyIndependentlyOfSubmit pins the exact same architectural
-// guarantee for input_reply that the previous test pins for interrupts. The
-// failure mode is also identical: an input_reply only ever exists *while*
-// a submit_turn is parked in canUseTool (the AskUserQuestion gate) — and
-// that exact submit_turn is the message holding the data-plane consumer's
-// single max_ack_pending=1 slot. If input_reply were routed to the data
-// plane, JetStream would queue it behind the parked submit_turn and never
-// deliver it; the runner would wait forever for an input_reply that's
-// stuck behind the submit_turn that's waiting for the input_reply. A
-// classic dispatch deadlock. The fix runs input_reply on the control
-// consumer the same way interrupt_turn does. This test pins that:
-// input_reply on the control handler triggers acceptInputReply with
-// acceptCommandTurn never running.
-test("dispatchInputReplyIndependentlyOfSubmit: control handler dispatches input_reply without waiting for the data plane", async () => {
+// canUseTool is the AskUserQuestion handoff seam. When the agent invokes
+// AskUserQuestion the asking turn ENDS: the runner publishes a durable
+// turn.awaiting_input terminal and resolves deny+interrupt so the SDK turn
+// unwinds at the question. The answer arrives as a brand-new turn
+// (POST /answer), never an in-turn tool result — there is no input_reply
+// command anymore.
+test("canUseTool ends the asking turn with turn.awaiting_input for AskUserQuestion", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    commandBus: {
-      startCommandConsumer: (h: (r: unknown) => Promise<void>, s?: AbortSignal) => Promise<() => Promise<void>>;
-      startControlConsumer: (h: (r: unknown) => Promise<void>, s?: AbortSignal) => Promise<() => Promise<void>>;
-      markCompleted: () => Promise<void>;
-    };
-    startCommandConsumer: (signal: AbortSignal) => () => void;
-    startControlConsumer: (signal: AbortSignal) => () => void;
-    acceptInterrupt: (record: unknown) => Promise<void>;
-    acceptCommandTurn: (record: unknown) => Promise<void>;
-    acceptInputReply: (record: unknown) => Promise<void>;
+    canUseTool: (
+      toolName: string,
+      input: unknown,
+      ctx: { toolUseID?: string },
+    ) => Promise<{ behavior: string; interrupt?: boolean }>;
+    activeTurn: unknown;
+    publishTerminalWithRetry: (event: TankConversationEvent) => Promise<boolean>;
+    markCommandTerminal: (turn: unknown, outcome: string) => Promise<void>;
   };
 
-  type RecordHandler = (record: unknown) => Promise<void>;
-  const handlers: { data: RecordHandler | null; control: RecordHandler | null } = {
-    data: null,
-    control: null,
+  const published: TankConversationEvent[] = [];
+  const outcomes: string[] = [];
+  runner.publishTerminalWithRetry = async (event) => {
+    published.push(event);
+    return true;
   };
-  const calls: string[] = [];
-
-  runner.commandBus = {
-    async startCommandConsumer(h: RecordHandler) {
-      handlers.data = h;
-      return async () => {};
-    },
-    async startControlConsumer(h: RecordHandler) {
-      handlers.control = h;
-      return async () => {};
-    },
-    async markCompleted() {
-      calls.push("ack");
-    },
+  runner.markCommandTerminal = async (_turn, outcome) => {
+    outcomes.push(outcome);
   };
-  runner.acceptInterrupt = async () => {
-    calls.push("acceptInterrupt");
-  };
-  runner.acceptCommandTurn = async () => {
-    calls.push("acceptCommandTurn");
-  };
-  runner.acceptInputReply = async () => {
-    calls.push("acceptInputReply");
+  runner.activeTurn = {
+    turnID: "turn-active",
+    clientNonce: "turn-active",
+    terminalEmitted: false,
+    commandRecord: {},
   };
 
-  const ctl = new AbortController();
-  runner.startCommandConsumer(ctl.signal);
-  runner.startControlConsumer(ctl.signal);
-  await new Promise((resolve) => setImmediate(resolve));
-
-  const dataFn = handlers.data;
-  const controlFn = handlers.control;
-  if (!dataFn) throw new Error("startCommandConsumer should register a data handler");
-  if (!controlFn) throw new Error("startControlConsumer should register a separate control handler");
-
-  await controlFn({
-    type: "input_reply",
-    id: "control-input-1",
-    target_turn_id: "turn-active",
-    answers: { Q: ["A"] },
-  });
-
-  assert.deepEqual(
-    calls,
-    ["acceptInputReply"],
-    "input_reply must reach acceptInputReply on the control consumer; routing it to the data plane is the deadlock the split prevents",
+  const result = await runner.canUseTool(
+    "AskUserQuestion",
+    { questions: [{ question: "Which auth method?", options: [{ label: "OAuth" }] }] },
+    { toolUseID: "toolu_ask" },
   );
-  ctl.abort();
+
+  // deny + interrupt unwinds the SDK turn so it ends at the question.
+  assert.equal(result.behavior, "deny");
+  assert.equal(result.interrupt, true);
+  // A durable turn.awaiting_input terminal carries the question forward.
+  const awaiting = published.find(
+    (e) => (e as { type?: string }).type === "turn.awaiting_input",
+  );
+  assert.ok(awaiting, "expected a turn.awaiting_input terminal to be published");
+  assert.equal((awaiting as { turn_id?: string }).turn_id, "turn-active");
+  // The asking turn's submit_turn is acked with the awaiting_input outcome —
+  // disjoint from the interrupt four-outcome path (no stop-counter movement).
+  assert.deepEqual(outcomes, ["turn.awaiting_input"]);
+});
+
+test("canUseTool auto-allows non-AskUserQuestion tools unchanged", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    canUseTool: (
+      toolName: string,
+      input: unknown,
+      ctx: { toolUseID?: string },
+    ) => Promise<{ behavior: string; updatedInput?: unknown }>;
+  };
+  const input = { command: "ls -la" };
+  const result = await runner.canUseTool("Bash", input, { toolUseID: "toolu_bash" });
+  assert.equal(result.behavior, "allow");
+  assert.equal(result.updatedInput, input);
 });
 
 // ensureSdkQuery is the load-bearing pinning point for model + effort.

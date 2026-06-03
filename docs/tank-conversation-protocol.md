@@ -209,10 +209,10 @@ Background shell task lifecycle:
 - `shell_task.updated`
 - `shell_task.exited`
 
-Tool and approval lifecycle:
+AskUserQuestion handoff (a turn terminal — see "AskUserQuestion ends the
+asking turn" below):
 
-- `tool.approval_requested`
-- `tool.approval_resolved`
+- `turn.awaiting_input`
 
 Session activity is computed server-side by the lifecycle emitter as
 sessions evolve and published as `session.activity_changed` rows in the
@@ -231,8 +231,9 @@ A conversation projection has these UI states:
 - `ready`: no active turn needs attention.
 - `submitted`: user input is durable and waiting for runner execution.
 - `streaming`: a runner is executing a turn or emitting items.
-- `needs_input`: the runner is paused for approval or other explicit client
-  input.
+- `needs_input`: the agent asked the user a question (AskUserQuestion); the
+  asking turn has ended (`turn.awaiting_input`) and the session is waiting for
+  the user's answer, which arrives as a new turn.
 - `stopping`: a user-initiated stop has landed on the durable ledger; the
   runner has not yet emitted a terminal event.
 - `stopped`: the active turn ended by user interrupt or runner shutdown, not by
@@ -250,8 +251,9 @@ Turn transitions:
 1. `user_message.created` records the user's input and `client_nonce`.
 2. `turn.submitted` moves the composer to `submitted`.
 3. `turn.started` moves the composer and sidebar to `streaming`.
-4. `tool.approval_requested` moves the projection to `needs_input` until
-   `tool.approval_resolved`.
+4. `turn.awaiting_input` (the AskUserQuestion handoff terminal) ends the
+   asking turn and moves the projection to `needs_input` with no active turn,
+   until the user answers in a new turn.
 5. `turn.interrupt_requested` moves the projection from `submitted`,
    `streaming`, or `needs_input` to `stopping`; `activeTurnId` is preserved
    because the turn is still mid-flight. A late-arriving request after a
@@ -658,7 +660,7 @@ The backend validates ownership, then performs two writes in this order:
 2. **Publish a durable JetStream `interrupt_turn` command** on the
    per-session/per-provider **control-plane subject**
    (`tank.session.<scope-token>.<session-token>.control.<provider>`), not the command subject
-   used for `submit_turn` / `input_reply`. Runners consume the command
+   used for `submit_turn`. Runners consume the command
    from a dedicated control-plane JetStream consumer (separate
    `durable_name`, separate `filter_subject`, higher `max_ack_pending`)
    and abort the matching active turn from inside the session pod.
@@ -805,9 +807,47 @@ Provider mapping for the new event: there is no provider mapping.
 boundary, regardless of provider. `actor=system`, `source=tank`. Runners
 remain the sole producers of `turn.interrupted`.
 
-Durable AskUserQuestion answer (`input_reply` command):
+AskUserQuestion ends the asking turn (`turn.awaiting_input`):
 
-`POST /api/sessions/{session_id}/turns/{turn_id}/input-reply`
+When the in-pod agent invokes the AskUserQuestion tool, the asking turn
+**ends** — it is not resolved in-turn. The runner captures the Tank-canonical
+questions and publishes a durable `turn.awaiting_input` terminal:
+
+```json
+{
+  "type": "turn.awaiting_input",
+  "actor": "runner",
+  "source": "claude",
+  "turn_id": "<asking turn>",
+  "payload": {
+    "questions": [ { "question": "Which auth method should we use?", "...": "Tank-canonical shape" } ],
+    "provider_item_id": "toolu_...",
+    "timeline_id": "item_..."
+  }
+}
+```
+
+`turn.awaiting_input` is a turn terminal (`conversation.IsTurnTerminalEvent`):
+the asking turn's `submit_turn` is acked, the run-state settles to
+`needs_input` with no active turn, and the transcript projection promotes a
+question **card** into the main transcript (`metaKind: "awaiting_input"`,
+carrying the questions + target ids) anchored at the asking turn's tail.
+
+- **Claude**: the runner's `canUseTool` callback, on AskUserQuestion, publishes
+  `turn.awaiting_input` then resolves `{behavior:"deny", interrupt:true}`. The
+  SDK/CLI closes the tool call with a denied `tool_result` (so the conversation
+  history stays valid) and the turn terminates.
+- **Codex** (`codex_gui` / `codex_app_server`): on the App Server's
+  `item/tool/requestUserInput`, the runner publishes `turn.awaiting_input`,
+  responds to the JSONRPC request (empty) to release it, and aborts the codex
+  turn.
+- `codex_exec_gui` never produces `turn.awaiting_input` — the `codex exec`
+  transport rejects `request_user_input`, so it has no AskUserQuestion path.
+
+The user's answer is a **brand-new turn**, not an in-turn reply:
+
+`POST /api/sessions/{session_id}/turns/{turn_id}/answer` — `{turn_id}` is the
+asking (awaiting-input) turn.
 
 Body:
 
@@ -815,59 +855,37 @@ Body:
 {
   "provider_item_id": "toolu_...",
   "timeline_id": "item_...",
-  "answers": {
-    "Which auth method should we use?": ["OAuth"]
-  },
-  "annotations": {
-    "Which auth method should we use?": { "notes": "matches the existing IdP" }
-  }
+  "answers": { "Which auth method should we use?": ["OAuth"] },
+  "annotations": { "Which auth method should we use?": { "notes": "matches the existing IdP" } }
 }
 ```
 
-`answers` is `Record<questionText, answerLabel[]>` — always an array so
-multi-select questions and single-select questions share one shape.
-`annotations` is optional `Record<questionText, { preview?, notes? }>` from
-the Claude Agent SDK's AskUserQuestion schema and carries free-text notes
-the user attached to a selected option.
+The handler validates ownership/mode/target ids, then requires the asking
+turn's durable terminal to be `turn.awaiting_input` (rejecting answers to a
+completed/failed turn or a non-AskUserQuestion turn). It builds a
+**self-describing re-grounding prompt** (`You asked: "…"` / `The user
+answered: …`) plus an `ask_user_answer` user-message display, and enqueues an
+ordinary `submit_turn` with a **deterministic `client_nonce`** so a
+double-submit dedupes at the `(tank_session_id, event_id)` unique constraint —
+the question is answered exactly once. The agent re-reads its own question and
+the answer from that durable user message under `continue:true`; there is no
+in-turn tool result, no `input_reply` command, and no `tool.approval_*`
+events.
 
-The backend validates ownership, that the session mode supports durable
-AskUserQuestion replies, target ids, that the answers map is non-empty, and
-total payload size, then publishes a durable JetStream `input_reply` command
-with `target_turn_id=<turn_id>`,
-`target_provider_item_id=<provider_item_id>`,
-`target_timeline_id=<timeline_id>`, `answers`, and (optionally)
-`annotations`.
-
-The Claude runner accepts the command only when the target turn is active
-and the matching AskUserQuestion tool call is waiting on a `canUseTool`
-permission decision. The runner does not synthesize a `tool_result` user
-message: AskUserQuestion answer delivery rides on the SDK's
-`canUseTool({behavior:"allow", updatedInput:{questions, answers,
-annotations}})` contract, and the SDK's own tool definition formats the
-canonical `tool_result` content from `updatedInput`. The runner acks the
-durable command only after publishing `tool.approval_resolved` whose payload
-mirrors the answers (and annotations, if any) that resolved the call.
-
-Codex GUI uses the Codex App Server transport as its primary path. In
-`codex_gui` and the backwards-compatible `codex_app_server` mode, Codex App
-Server emits an `item/tool/requestUserInput` server request; the codex-runner
-publishes the same durable `tool.approval_requested` event as Claude and
-resolves the provider request after receiving this durable `input_reply`
-control command.
-
-The explicit `codex_exec_gui` fallback preserves the old SDK / `codex exec`
-transport. That fallback does not support durable AskUserQuestion replies:
-`codex exec` rejects `request_user_input` at the provider layer, and
-codex-runner rejects `input_reply` commands when it is not running the
-app-server transport. Browser tabs must not send AskUserQuestion answers
-through a runner socket or any other non-durable control channel.
+`answers` is `Record<questionText, answerLabel[]>` — always an array so single-
+and multi-select share one shape. `annotations` is optional
+`Record<questionText, { preview?, notes? }>` carrying free-text the user
+attached. The card's answered state is derived durably — the projection marks
+it answered by finding a later `ask_user_answer` user message whose
+`display.question_timeline_id` matches the question — never from browser-local
+optimism.
 
 Tank-canonical AskUserQuestion question shape:
 
 Both runner adapters normalize the provider's question payload into a single
-Tank-canonical shape before publishing `tool.approval_requested`. The frontend
-renders the Tank shape only — provider-specific fields never reach the
-renderer directly. Per
+Tank-canonical shape before publishing it in the `turn.awaiting_input`
+terminal's `questions` payload. The frontend renders the Tank shape only —
+provider-specific fields never reach the renderer directly. Per
 [docs/product-inspirations.md](product-inspirations.md): "Provider-specific
 event streams are adapter inputs. The frontend renders the Tank conversation
 protocol, not raw provider wire formats."
@@ -905,16 +923,17 @@ infers free-form support from the absence of those fields. A future
 backfill projects the existing durable rows into the canonical shape; the
 runtime read path stays Tank-shape-only.
 
-AskUserQuestion handoff is promoted to the main transcript:
+AskUserQuestion question card is promoted to the main transcript:
 
 The transcript projection in `backend-go/cmd/tank-operator/transcript_projection.go`
-emits a companion meta-kind row per AskUserQuestion item (`metaKind:
-needs_input_announcement`, anchored to the item's `orderKey` with a
-`~needs_input_announcement` suffix). The row carries an `announcement`
-payload — `targetTurnId`, `targetProviderItemId`, `questionSummary`,
-`questionCount`, `answered` — sourced entirely from durable state. The
-SPA renders the row as `RunNeedsInputAnnouncement` in the chat stream
-with a click target that switches to the Turns tab.
+emits one `metaKind: "awaiting_input"` meta row per `turn.awaiting_input`
+terminal, anchored at the asking turn's tail (`orderKey` + `~awaiting_input`
+suffix). The row carries an `awaitingInput` payload — `askingTurnId`,
+`providerItemId`, `timelineId`, `questions`, `questionCount`, `answered` —
+sourced entirely from durable state (`answered` is true once a later
+`ask_user_answer` user message references the question). The SPA renders the
+row as the interactive question card in the chat stream; submitting it posts
+`/answer`, which opens the answer turn.
 
 The announcement is excluded from the Turn-activity compact via
 `isProjectionNeedsInputAnnouncement` (same predicate seam as

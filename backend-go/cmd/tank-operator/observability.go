@@ -212,19 +212,19 @@ var (
 	})
 	// sessionBusCommandPublishFailureTotal covers the JetStream Publish
 	// path for runner commands (submit_turn / interrupt_turn /
-	// input_reply / stop_background_task). The two counters above
+	// stop_background_task). The two counters above
 	// cover the raw nc.Publish wake fabric; this counter covers the
 	// js.Publish command fabric. Both are needed: the 2026-05-25
 	// incident produced a sustained js.Publish failure (JetStream
 	// quorum loss → `nats: no response from stream`) while the wake
 	// counters above stayed quiet, because raw nc.Publish does not
 	// wait for a stream ack. Labels: kind from the closed Command.Type
-	// set (4 series), reason from classifyPublishError (5 series) =
-	// 20 series total. The TankSessionBusPublishFailing alert in
+	// set (3 series), reason from classifyPublishError (5 series) =
+	// 15 series total. The TankSessionBusPublishFailing alert in
 	// k8s/templates/observability.yaml pages on any non-zero rate.
 	sessionBusCommandPublishFailureTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tank_session_bus_command_publish_failure_total",
-		Help: "Session-bus JetStream command publishes (submit_turn/interrupt_turn/input_reply/stop_background_task) that failed, labeled by kind and classified reason.",
+		Help: "Session-bus JetStream command publishes (submit_turn/interrupt_turn/stop_background_task) that failed, labeled by kind and classified reason.",
 	}, []string{"kind", "reason"})
 	// Wake success counters + persist→wake latency. These are throughput
 	// counters, not a loss-ratio pair: publishes are one-per-durable event
@@ -1866,7 +1866,7 @@ func recordSessionEventStreamHeartbeatCatchup() {
 // without a matching bucket update, so cardinality stays bounded.
 func sessionBusCommandKindLabel(kind string) string {
 	switch kind {
-	case "submit_turn", "interrupt_turn", "input_reply", "stop_background_task", "other":
+	case "submit_turn", "interrupt_turn", "stop_background_task", "other":
 		return kind
 	default:
 		return "other"
@@ -1906,12 +1906,11 @@ func sessionEventTypeLabel(raw string) string {
 		"turn.command_failed",
 		"turn.interrupt_requested",
 		"turn.interrupted",
+		"turn.awaiting_input",
 		"session.status",
 		"item.started",
 		"item.completed",
 		"item.failed",
-		"tool.approval_requested",
-		"tool.approval_resolved",
 		"transcript_rows":
 		return raw
 	default:

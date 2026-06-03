@@ -64,7 +64,7 @@ export class SharedSessionBus {
                 if (stopped || signal?.aborted) break;
                 const command = this.commandFromMessage(msg);
                 const record = new SessionCommandRecord(command, msg);
-                // Cutover hygiene: interrupts and input_reply are
+                // Cutover hygiene: interrupts and stop_background_task are
                 // control-plane and MUST arrive on the control consumer
                 // (see startControlConsumer). A stray control command on
                 // the data-plane subject is either a pre-cutover straggler
@@ -75,7 +75,7 @@ export class SharedSessionBus {
                 // logs. This is NOT a fallback path — the data-plane
                 // handler is never invoked for these; the control plane
                 // is the only place they can take effect.
-                if (isInterruptCommand(command) || isInputReplyCommand(command) || isStopBackgroundTaskCommand(command)) {
+                if (isInterruptCommand(command) || isStopBackgroundTaskCommand(command)) {
                     record.ack();
                     console.warn("session bus: dropped stray control command on data plane (control plane is the supported path)", {
                         type: command.type,
@@ -344,10 +344,6 @@ export class SessionCommandRecord {
 
 export function isInterruptCommand(record) {
     return record?.type === "interrupt_turn" || record?.source === "interrupt";
-}
-
-export function isInputReplyCommand(record) {
-    return record?.type === "input_reply" || record?.source === "input-reply";
 }
 
 export function isStopBackgroundTaskCommand(record) {

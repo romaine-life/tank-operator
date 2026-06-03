@@ -39,6 +39,8 @@ type projectionState struct {
 	contextNotices    []projectedEntryItem
 	turnUsages        map[string]turnUsageProjection
 	turnTerminals     map[string]turnTerminalProjection
+	awaitingInputs    []projectionAwaitingInput
+	answeredQuestions map[string]bool
 	runStatus         string
 	activeTurnID      string
 	activeItemID      string
@@ -111,6 +113,20 @@ type turnUsageProjection struct {
 	SourceEventID    string
 	Usage            any
 	UsageObservation any
+}
+
+// projectionAwaitingInput captures a turn.awaiting_input handoff: the agent
+// asked the user a question and ended its turn. The promoted main-transcript
+// card renders from this (questions + ids), and "answered" is derived from a
+// later ask_user_answer user message.
+type projectionAwaitingInput struct {
+	AskingTurnID   string
+	ProviderItemID string
+	TimelineID     string
+	Questions      []any
+	OrderKey       string
+	Time           string
+	SourceEventID  string
 }
 
 func projectTranscriptEvents(events []map[string]any) transcriptProjection {
@@ -219,22 +235,17 @@ func (s *projectionState) apply(event map[string]any) {
 			status = "completed"
 		}
 		s.upsertBackgroundTask(event, status)
-	case "tool.approval_requested":
+	case "turn.awaiting_input":
+		// The agent asked the user a question; the asking turn ends here.
+		// Record the terminal (so compaction treats the turn as settled)
+		// and the durable question card, then settle to needs_input with
+		// no active turn — the answer arrives as a brand-new turn.
+		s.applyTurnTerminal(event, "awaiting_input")
+		s.applyAwaitingInput(event)
 		s.runStatus = "needs_input"
 		s.needsInput = true
-		s.activeTurnID = transcriptString(event, "turn_id")
-		s.upsertItem(event, "started")
-	case "tool.approval_resolved":
-		s.upsertItem(event, completedProjectionItemStatus(event))
-		if s.activeItemID == transcriptString(event, "timeline_id") {
-			s.activeItemID = ""
-		}
-		s.needsInput = false
-		if s.activeTurnID != "" {
-			s.runStatus = "streaming"
-		} else {
-			s.runStatus = "ready"
-		}
+		s.activeTurnID = ""
+		s.activeItemID = ""
 	}
 }
 
@@ -259,6 +270,17 @@ func (s *projectionState) applyUserMessage(event map[string]any) {
 	}
 	if display := transcriptPayloadMap(event, "display"); display != nil {
 		entry["display"] = display
+		// An ask_user_answer user message answers a prior AskUserQuestion
+		// handoff. Record it so the awaiting-input card derives "answered"
+		// from durable state, not a browser-local flag.
+		if transcriptMapString(display, "kind") == "ask_user_answer" {
+			if qid := transcriptMapString(display, "question_timeline_id"); qid != "" {
+				if s.answeredQuestions == nil {
+					s.answeredQuestions = map[string]bool{}
+				}
+				s.answeredQuestions[qid] = true
+			}
+		}
 	}
 	if attachments := transcriptPayloadAttachments(event); len(attachments) > 0 {
 		entry["attachments"] = attachments
@@ -325,6 +347,32 @@ func (s *projectionState) applyTurnTerminal(event map[string]any, status string)
 		UsageObservation: transcriptPayloadValue(event, "usage_observation"),
 		FinalAnswerIDs:   projectionFinalAnswerIDs(event),
 	}
+}
+
+func (s *projectionState) applyAwaitingInput(event map[string]any) {
+	turnID := transcriptString(event, "turn_id")
+	if turnID == "" {
+		return
+	}
+	questions := projectionAwaitingInputQuestions(event)
+	if len(questions) == 0 {
+		return
+	}
+	s.awaitingInputs = append(s.awaitingInputs, projectionAwaitingInput{
+		AskingTurnID:   turnID,
+		ProviderItemID: transcriptPayloadString(event, "provider_item_id"),
+		TimelineID:     transcriptPayloadString(event, "timeline_id"),
+		Questions:      questions,
+		OrderKey:       transcriptString(event, "order_key"),
+		Time:           transcriptString(event, "created_at"),
+		SourceEventID:  transcriptString(event, "event_id"),
+	})
+}
+
+func projectionAwaitingInputQuestions(event map[string]any) []any {
+	raw := transcriptPayloadValue(event, "questions")
+	questions, _ := raw.([]any)
+	return questions
 }
 
 func (s *projectionState) applyTurnUsage(event map[string]any) {
@@ -598,28 +646,6 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 				index:    baseIndex + idx,
 			})
 		}
-		// Per the transcript contract, AskUserQuestion is a handoff back
-		// to the user — the agent stops until the user answers. Emit a
-		// companion meta-kind entry so the main transcript surface
-		// carries the "Claude is waiting on you" signal alongside the
-		// durable tool item that owns the full question UI in Turn
-		// activity. Without this, the question lives only inside the
-		// collapsible activity group, and the only chat-level attention
-		// signal is the session-row status dot.
-		//
-		// The announcement sorts immediately after the tool item via a
-		// derived orderKey suffix so historical replay and live streaming
-		// agree on placement. It is excluded from the Turn-activity
-		// compact (see isProjectionNeedsInputAnnouncement) so it stays
-		// in the main transcript stream regardless of whether the
-		// activity group is open or closed.
-		if announcement := projectNeedsInputAnnouncement(item); announcement != nil {
-			items = append(items, projectedEntryItem{
-				entry:    announcement,
-				orderKey: transcriptMapString(announcement, "orderKey"),
-				index:    baseIndex + idx,
-			})
-		}
 	}
 	baseIndex += len(s.items)
 	for idx, task := range s.backgroundTasks {
@@ -654,7 +680,10 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 	baseIndex += len(s.turnUsages)
 	offset = 0
 	for _, terminal := range s.turnTerminals {
-		if terminal.Status == "completed" {
+		// turn.awaiting_input is a terminal that settles to needs_input; its
+		// promoted question card (below) is the main-transcript row, so it
+		// must not also emit a "Stopped"/"failed" terminal meta row.
+		if terminal.Status == "completed" || terminal.Status == "awaiting_input" {
 			continue
 		}
 		isFailed := terminal.Status == "failed"
@@ -686,6 +715,15 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 			index:    baseIndex + offset,
 		})
 		offset += 1
+	}
+	baseIndex += len(s.turnTerminals)
+	for idx, awaiting := range s.awaitingInputs {
+		card := projectAwaitingInputCard(awaiting, s.answeredQuestions[awaiting.TimelineID])
+		items = append(items, projectedEntryItem{
+			entry:    card,
+			orderKey: transcriptMapString(card, "orderKey"),
+			index:    baseIndex + idx,
+		})
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].orderKey != "" && items[j].orderKey != "" && items[i].orderKey != items[j].orderKey {
@@ -978,7 +1016,7 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 		for _, idx := range indexes {
 			entry := entries[idx]
 			if isProjectedUserMessage(entry) || isProjectionTerminalMetaEntry(entry, terminal) ||
-				isProjectionNeedsInputAnnouncement(entry) || isProjectionContextCompacted(entry) {
+				isProjectionAwaitingInputCard(entry) || isProjectionContextCompacted(entry) {
 				continue
 			}
 			activityEntries = append(activityEntries, entry)
@@ -1003,7 +1041,7 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string) []
 		if transcriptMapString(entry, "turnId") == activeTurnID &&
 			transcriptMapString(entry, "turnTerminalStatus") == "" &&
 			!isProjectedUserMessage(entry) &&
-			!isProjectionNeedsInputAnnouncement(entry) &&
+			!isProjectionAwaitingInputCard(entry) &&
 			!isProjectionContextCompacted(entry) {
 			activityEntries = append(activityEntries, entry)
 		}
@@ -1175,16 +1213,16 @@ func isProjectedUserMessage(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "message" && transcriptMapString(entry, "role") == "user"
 }
 
-// isProjectionNeedsInputAnnouncement is the activity-compact opt-out for
-// the AskUserQuestion handoff row projected by projectNeedsInputAnnouncement.
-// The announcement is a transcript-level handoff, not Turn-activity noise,
-// so terminalProjectedActivities and activeProjectedActivities must not
-// fold it into the activity compact. Same shape as the existing
-// isProjectedUserMessage opt-out — user messages and handoff
-// announcements both anchor the main transcript surface.
-func isProjectionNeedsInputAnnouncement(entry map[string]any) bool {
+// isProjectionAwaitingInputCard is the activity-compact opt-out for the
+// AskUserQuestion question card projected from a turn.awaiting_input handoff.
+// The card is a transcript-level handoff (the user must answer it), not
+// Turn-activity noise, so terminalProjectedActivities and
+// activeProjectedActivities must not fold it into the activity compact. Same
+// shape as the isProjectedUserMessage opt-out — both anchor the main
+// transcript surface.
+func isProjectionAwaitingInputCard(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "meta" &&
-		transcriptMapString(entry, "metaKind") == "needs_input_announcement"
+		transcriptMapString(entry, "metaKind") == "awaiting_input"
 }
 
 // isProjectionContextCompacted is the activity-compact opt-out for the
@@ -1197,113 +1235,62 @@ func isProjectionContextCompacted(entry map[string]any) bool {
 		transcriptMapString(entry, "metaKind") == "context_compacted"
 }
 
-// projectNeedsInputAnnouncement returns a meta-kind row that promotes an
-// AskUserQuestion item into the settled main transcript as a handoff
-// announcement, or nil if the item is not an AskUserQuestion tool call.
-//
-// Anchoring on the underlying item's orderKey (with a `~ann` suffix) keeps
-// historical replay and live streaming aligned on the same insertion point
-// — the announcement always renders immediately after the tool item it
-// references. `answered` is sourced from the durable item status, not from
-// any local "I submitted" flag, so a fresh tab opened after the user
-// answered shows the resolved announcement.
-func projectNeedsInputAnnouncement(item *projectionItem) map[string]any {
-	if !isProjectionAskUserQuestion(item) {
-		return nil
-	}
-	questions := projectionAskUserQuestionList(item)
-	if len(questions) == 0 {
-		return nil
-	}
-	summary := projectionAskUserQuestionSummary(questions)
-	answered := item.Status == "completed"
+// projectAwaitingInputCard promotes a turn.awaiting_input handoff into the
+// settled main transcript as the interactive question card. It is anchored at
+// the asking turn's tail (orderKey + "~awaiting_input") so historical replay
+// and live streaming agree on placement. `answered` is derived from a later
+// ask_user_answer user message, not a browser-local flag, so a fresh tab
+// opened after the user answered renders the resolved card.
+func projectAwaitingInputCard(awaiting projectionAwaitingInput, answered bool) map[string]any {
+	summary := awaitingInputSummary(awaiting.Questions)
 	title := "Claude is waiting on you"
 	if answered {
 		title = "Answered"
 	}
-	orderKey := item.OrderKey
+	orderKey := awaiting.OrderKey
 	if orderKey != "" {
-		orderKey = orderKey + "~needs_input_announcement"
+		orderKey = orderKey + "~awaiting_input"
 	}
-	entry := map[string]any{
-		"id":             item.ID + ":needs_input_announcement",
+	anchor := awaiting.TimelineID
+	if anchor == "" {
+		anchor = awaiting.AskingTurnID
+	}
+	return map[string]any{
+		"id":             anchor + ":awaiting_input",
 		"kind":           "meta",
-		"metaKind":       "needs_input_announcement",
-		"turnId":         item.TurnID,
-		"providerItemId": item.ProviderItemID,
-		"time":           projectionFirstNonEmpty(item.StartedAt, item.CreatedAt),
+		"metaKind":       "awaiting_input",
+		"turnId":         awaiting.AskingTurnID,
+		"providerItemId": awaiting.ProviderItemID,
+		"time":           awaiting.Time,
 		"orderKey":       orderKey,
-		"sourceEventId":  item.SourceEventID,
+		"sourceEventId":  awaiting.SourceEventID,
 		"meta": map[string]any{
 			"title":    title,
 			"detail":   summary,
 			"severity": "info",
 		},
-		"announcement": map[string]any{
-			"targetTurnId":         item.TurnID,
-			"targetProviderItemId": item.ProviderItemID,
-			"targetTimelineId":     item.ID,
-			"questionSummary":      summary,
-			"questionCount":        len(questions),
-			"answered":             answered,
+		"awaitingInput": map[string]any{
+			"askingTurnId":   awaiting.AskingTurnID,
+			"providerItemId": awaiting.ProviderItemID,
+			"timelineId":     awaiting.TimelineID,
+			"questionCount":  len(awaiting.Questions),
+			"questions":      awaiting.Questions,
+			"answered":       answered,
 		},
 	}
-	return entry
 }
 
-func isProjectionAskUserQuestion(item *projectionItem) bool {
-	if item == nil {
-		return false
-	}
-	if transcriptMapString(item.Payload, "name") == "AskUserQuestion" {
-		return true
-	}
-	if item.Title == "AskUserQuestion" {
-		return true
-	}
-	// Some adapter paths set payload.kind = needs_input without a name;
-	// fall back to detecting the questions[] payload that only
-	// AskUserQuestion produces.
-	if input := transcriptAnyMap(item.Payload["input"]); input != nil {
-		if questions, ok := input["questions"].([]any); ok && len(questions) > 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func projectionAskUserQuestionList(item *projectionItem) []map[string]any {
-	if item == nil {
-		return nil
-	}
-	input := transcriptAnyMap(item.Payload["input"])
-	if input == nil {
-		return nil
-	}
-	raw, ok := input["questions"].([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]map[string]any, 0, len(raw))
-	for _, q := range raw {
-		if record, ok := q.(map[string]any); ok {
-			out = append(out, record)
-		}
-	}
-	return out
-}
-
-func projectionAskUserQuestionSummary(questions []map[string]any) string {
+func awaitingInputSummary(questions []any) string {
 	if len(questions) == 0 {
-		return "Open the Turns tab to answer."
+		return "Answer to continue."
 	}
-	first := questions[0]
+	first, _ := questions[0].(map[string]any)
 	text := transcriptMapString(first, "question")
 	if text == "" {
 		text = transcriptMapString(first, "header")
 	}
 	if text == "" {
-		text = "Open the Turns tab to answer."
+		text = "Answer to continue."
 	}
 	if len([]rune(text)) > 140 {
 		runes := []rune(text)

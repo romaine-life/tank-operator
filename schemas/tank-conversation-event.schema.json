@@ -120,8 +120,7 @@
         "shell_task.started",
         "shell_task.updated",
         "shell_task.exited",
-        "tool.approval_requested",
-        "tool.approval_resolved"
+        "turn.awaiting_input"
       ]
     },
     "created_at": {
@@ -198,7 +197,8 @@
         "display": {
           "oneOf": [
             { "$ref": "#/$defs/plainUserDisplay" },
-            { "$ref": "#/$defs/skillInvocationDisplay" }
+            { "$ref": "#/$defs/skillInvocationDisplay" },
+            { "$ref": "#/$defs/askUserAnswerDisplay" }
           ]
         },
         "attachments": {
@@ -240,6 +240,68 @@
           "pattern": "^[A-Za-z0-9_-]{1,64}$"
         },
         "supplemental_text": { "type": "string" }
+      }
+    },
+    "askUserAnswerDisplay": {
+      "description": "A user message that answers a prior AskUserQuestion handoff turn. The question/answer exchange is two durable turns: the agent's turn ends with turn.awaiting_input, and this user message opens the answer turn. question_timeline_id links back to the AskUserQuestion item so the projection can mark the handoff answered.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "question_timeline_id"],
+      "properties": {
+        "kind": { "const": "ask_user_answer" },
+        "question_timeline_id": { "$ref": "#/$defs/nonEmptyString" },
+        "asking_turn_id": { "type": "string", "minLength": 1 },
+        "answers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "annotations": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    },
+    "askUserQuestion": {
+      "description": "Tank-canonical AskUserQuestion question shape. Both runner adapters normalize the provider question into this shape before publishing turn.awaiting_input; the frontend renders this shape only.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["question"],
+      "properties": {
+        "question": { "$ref": "#/$defs/nonEmptyString" },
+        "header": { "type": "string" },
+        "multiSelect": { "type": "boolean" },
+        "allowFreeForm": { "type": "boolean" },
+        "secret": { "type": "boolean" },
+        "options": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "label": { "type": "string" },
+              "description": { "type": "string" },
+              "preview": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "awaitingInputPayload": {
+      "description": "Payload for the turn.awaiting_input terminal: the questions the agent asked, plus the AskUserQuestion item ids the answer endpoint targets.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["questions"],
+      "properties": {
+        "questions": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/askUserQuestion" }
+        },
+        "provider_item_id": { "type": "string", "minLength": 1 },
+        "timeline_id": { "type": "string", "minLength": 1 }
       }
     },
     "statusPayload": {
@@ -396,7 +458,7 @@
       "if": {
         "properties": {
           "type": {
-            "enum": ["turn.started", "turn.usage", "turn.completed", "turn.failed", "turn.interrupted"]
+            "enum": ["turn.started", "turn.usage", "turn.completed", "turn.failed", "turn.interrupted", "turn.awaiting_input"]
           }
         },
         "required": ["type"]
@@ -525,19 +587,11 @@
       }
     },
     {
-      "if": {
-        "properties": {
-          "type": {
-            "enum": ["tool.approval_requested", "tool.approval_resolved"]
-          }
-        },
-        "required": ["type"]
-      },
+      "if": { "properties": { "type": { "const": "turn.awaiting_input" } }, "required": ["type"] },
       "then": {
-        "required": ["turn_id", "timeline_id", "payload"],
+        "required": ["payload"],
         "properties": {
-          "actor": { "const": "tool" },
-          "payload": { "$ref": "#/$defs/itemPayload" }
+          "payload": { "$ref": "#/$defs/awaitingInputPayload" }
         }
       }
     }
