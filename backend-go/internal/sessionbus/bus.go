@@ -12,8 +12,8 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 type Config struct {
@@ -102,7 +102,7 @@ type PersisterMetrics interface {
 	// counted bug class"). The TankTurnSilentStranding alert in
 	// k8s/templates/observability.yaml fires when submitted outruns
 	// terminal for a window long enough to rule out a single long Codex
-	// turn. ea70777 (nelsong6/tank-operator#652) was the prototypical
+	// turn. ea70777 (romaine-life/tank-operator#652) was the prototypical
 	// silent-stranding incident; this counter would have caught it within
 	// minutes of deploy instead of a user bug report. Non-lifecycle event
 	// types are dropped at the implementation; the label set is bounded.

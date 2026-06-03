@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
+	"github.com/romaine-life/tank-operator/backend-go/internal/avatarassets"
 )
 
 func TestSeedDefaultAvatarAssets(t *testing.T) {

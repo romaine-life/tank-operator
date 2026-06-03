@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncontroller"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessioncontroller"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // TestEmitSessionRowPayloadAdvancesCursor confirms the live-stream
@@ -267,8 +267,8 @@ func TestMarshalRowUpdateRepos(t *testing.T) {
 		},
 		{
 			name:       "non-empty preserves order",
-			in:         []string{"nelsong6/tank-operator", "nelsong6/mcp-github"},
-			wantOnWire: []string{"nelsong6/tank-operator", "nelsong6/mcp-github"},
+			in:         []string{"romaine-life/tank-operator", "romaine-life/mcp-github"},
+			wantOnWire: []string{"romaine-life/tank-operator", "romaine-life/mcp-github"},
 		},
 	}
 	for _, tc := range cases {

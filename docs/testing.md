@@ -48,7 +48,7 @@ slot URLs.
 
 ## Authenticated browser automation via inspect_browser_url
 
-`inspect_browser_url` (in [`mcp-glimmung`](https://github.com/nelsong6/mcp-glimmung))
+`inspect_browser_url` (in [`mcp-glimmung`](https://github.com/romaine-life/mcp-glimmung))
 drives the slot's `slot-playwright` pod against a URL. The Playwright pod
 itself holds no credentials, so anything signed-in has to come from the
 caller. The tool exposes injection knobs that map directly to Playwright's

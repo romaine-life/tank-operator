@@ -188,7 +188,7 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	mcpProxy := containers[0].(map[string]any)
 	// SA token audience-pinned to auth.romaine.life — used by the
 	// sidecar to exchange for a role=service JWT against
-	// /api/auth/exchange/k8s. See nelsong6/tank-operator#486.
+	// /api/auth/exchange/k8s. See romaine-life/tank-operator#486.
 	assertVolumeMount(t, mcpProxy, "auth-romaine-sa-token")
 	claude := containers[1].(map[string]any)
 	if got, want := claude["name"], "claude"; got != want {
@@ -219,7 +219,7 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	// auth.romaine.life attestation token + workspace emptyDir. Codex
 	// auth is proxy-owned, so the real codex-credentials Secret is not
 	// mounted. The auth.romaine.life token is the inbound to
-	// /api/auth/exchange/k8s — see nelsong6/tank-operator#486.
+	// /api/auth/exchange/k8s — see romaine-life/tank-operator#486.
 	if got, want := len(volumes), 4; got != want {
 		t.Fatalf("volume count = %d, want %d", got, want)
 	}
@@ -278,7 +278,7 @@ func TestPodManifestSelectedReposAddsRepoClonerInitContainer(t *testing.T) {
 		SessionImage:            "claude-image",
 		CodexSessionImage:       "codex-image",
 		TankOperatorInternalURL: "http://tank-operator.test",
-		Repos:                   []string{"nelsong6/tank-operator"},
+		Repos:                   []string{"romaine-life/tank-operator"},
 	})
 
 	spec := manifest["spec"].(map[string]any)
@@ -298,7 +298,7 @@ func TestPodManifestSelectedReposAddsRepoClonerInitContainer(t *testing.T) {
 		t.Fatalf("repo-cloner command = %v, want [bash /opt/tank/repo-cloner.sh]", cmd)
 	}
 	env := containerEnv(cloner)
-	if got, want := env["TANK_REPOS_JSON"], "[\"nelsong6/tank-operator\"]"; got != want {
+	if got, want := env["TANK_REPOS_JSON"], "[\"romaine-life/tank-operator\"]"; got != want {
 		t.Fatalf("TANK_REPOS_JSON = %v, want %q", got, want)
 	}
 	if got, want := env["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.test"; got != want {

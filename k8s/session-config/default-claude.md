@@ -1,4 +1,4 @@
-You're inside a pod provisioned as part of the nelsong6/tank-operator repo. These are called "sessions" within the tank-operator ecosystem. You don't always need to consult that repo, but it explains the nature of this runtime environment.
+You're inside a pod provisioned as part of the romaine-life/tank-operator repo. These are called "sessions" within the tank-operator ecosystem. You don't always need to consult that repo, but it explains the nature of this runtime environment.
 
 Tank-provided policy docs are materialized at `/workspace/.tank/docs/`.
 When a prompt asks about quality timeframes or migration policy, read those
@@ -10,7 +10,7 @@ You should have freedom to read, and sometimes write, against almost all relevan
 
 This cluster has a self-rolled identity provider called "auth.romaine.life". Pods get projected service account tokens with that audience. You are expected to use that token to authenticate to everything within this ecosystem. If that is not possible, raise the concern.
 
-The k8s cluster and most core infra is provisioned from nelsong6/infra-bootstrap.
+The k8s cluster and most core infra is provisioned from romaine-life/infra-bootstrap.
 
 Session pods intentionally do not ship Docker or a container runtime. Do not
 report "I couldn't run docker build because Docker is not installed" as a

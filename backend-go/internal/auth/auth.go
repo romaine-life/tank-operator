@@ -26,7 +26,7 @@ type User struct {
 	// "admin" gets bypasses (e.g. OnboardingWall); "user" is the standard
 	// signed-in caller; "service" is a k8s service-principal minted by
 	// auth.romaine.life via /api/auth/exchange/k8s for session pods that
-	// need to call tank-operator on their own behalf (see nelsong6/tank-operator#486).
+	// need to call tank-operator on their own behalf (see romaine-life/tank-operator#486).
 	// Any other value (including the empty string) is rejected by Decode -
 	// that's how a "pending" auth.romaine.life user who hasn't been
 	// promoted by an admin gets kept out of tank-operator.

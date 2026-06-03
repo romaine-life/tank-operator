@@ -175,14 +175,14 @@ export function StyleguideNewSessionRow() {
                     </div>
                     <ul className="home-repos-chips">
                       <li className="home-repos-chip">
-                        <span className="home-repos-chip-slug">nelsong6/tank-operator</span>
-                        <button className="home-repos-chip-remove" type="button" aria-label="Remove nelsong6/tank-operator">
+                        <span className="home-repos-chip-slug">romaine-life/tank-operator</span>
+                        <button className="home-repos-chip-remove" type="button" aria-label="Remove romaine-life/tank-operator">
                           x
                         </button>
                       </li>
                       <li className="home-repos-chip">
-                        <span className="home-repos-chip-slug">nelsong6/glimmung</span>
-                        <button className="home-repos-chip-remove" type="button" aria-label="Remove nelsong6/glimmung">
+                        <span className="home-repos-chip-slug">romaine-life/glimmung</span>
+                        <button className="home-repos-chip-remove" type="button" aria-label="Remove romaine-life/glimmung">
                           x
                         </button>
                       </li>

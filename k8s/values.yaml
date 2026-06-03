@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-80c9530b32bac2b943b0d2732461438ee19cdbbc8f77c024460a0e022a9ffb6f"
+  tag: "app-f9808a4d4dd19d9b123ddcdc2df9713e4c24e6ad04aa0d518a08eaafc42eafc9"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -54,8 +54,8 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-af43dbc316b99d49aa066116020ed6e018389063f03d9a43c98b996243b98f6d
-  codexImage: romainecr.azurecr.io/codex-container:codex-c238ade1d55f65e54124122ee6ce217dedf777b864559a6ea14f2fa4b14864d7
+  image: romainecr.azurecr.io/claude-container:claude-c69468d100f945bb84c26dc45e20e3b6017fe512f22b543cf645a1c34328401e
+  codexImage: romainecr.azurecr.io/codex-container:codex-d63916c2d80d1ff3c02f1c2036a014c648265c07cea8e3f5c30df69a7f118b4e
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default

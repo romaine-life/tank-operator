@@ -18,7 +18,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionstream"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionstream"
 )
 
 func (s *appServer) handleDebugSessionEventStreams(w http.ResponseWriter, r *http.Request) {

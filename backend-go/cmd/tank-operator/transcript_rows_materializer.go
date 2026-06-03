@@ -10,8 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
-	"github.com/nelsong6/tank-operator/backend-go/internal/store"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
+	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
 
 type transcriptRowsMaterializer struct {

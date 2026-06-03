@@ -51,7 +51,7 @@ sa_token_read_total = Counter(
 # the sidecar; this metric tracks the local exchange path so operators
 # can tell "spawn_service_session is broken because exchange mint
 # failed" apart from "...because tank-operator rejected the JWT". See
-# nelsong6/tank-operator#486.
+# romaine-life/tank-operator#486.
 auth_romaine_exchange_total = Counter(
     "tank_mcp_auth_proxy_auth_romaine_exchange_total",
     "Calls to auth.romaine.life's /api/auth/exchange/k8s endpoint.",

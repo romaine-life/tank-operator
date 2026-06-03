@@ -7,10 +7,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/pgstats"
-	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncontroller"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstats"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessioncontroller"
 )
 
 // Observability is a real Prometheus surface scraped by the
@@ -298,7 +298,7 @@ var (
 	// Agent Runners contract (docs/features/agent-runners/contract.md
 	// → Observability: "Silent strandings, where a requested action has
 	// no terminal event, are a counted bug class"). ea70777
-	// (nelsong6/tank-operator#652) — orchestrator deploy left every
+	// (romaine-life/tank-operator#652) — orchestrator deploy left every
 	// pre-existing runner subscribed to the OLD wire format, every
 	// submit_turn published to the new format was dropped, no terminal
 	// event ever fired — would have triggered this alert within minutes
@@ -359,7 +359,7 @@ var (
 // results are a closed string set defined alongside the handler
 // (denied_token | denied_role | denied_actor_missing |
 // error_verifier_unconfigured | error_create_failed | ok). See
-// nelsong6/tank-operator#486 stage 5.
+// romaine-life/tank-operator#486 stage 5.
 var serviceRoleRequestsTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_service_role_requests_total",

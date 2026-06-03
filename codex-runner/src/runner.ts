@@ -78,7 +78,7 @@ import {
 // runner gives up and emits turn.failed{interrupt_orphaned}. Mirrors
 // agent-runner's constant of the same name; documented in
 // docs/tank-conversation-protocol.md → "Four-outcome contract on the
-// runner side" and nelsong6/tank-operator#532.
+// runner side" and romaine-life/tank-operator#532.
 const INTERRUPT_BUFFER_MS = parsePositiveEnvInt(
   process.env.SESSION_INTERRUPT_BUFFER_MS,
   30_000,
@@ -154,7 +154,7 @@ export async function dispatch(
     // Live-only or otherwise non-durable Tank events are not persisted.
     return true;
   }
-  // Stage 3 of nelsong6/tank-operator#532: see agent-runner's dispatch
+  // Stage 3 of romaine-life/tank-operator#532: see agent-runner's dispatch
   // for the contract. Codex tool outputs can easily exceed NATS's 1 MiB
   // max_payload (large stdout, generated patches, etc.). Truncate before
   // publish so a single oversized event doesn't fail the publish and
@@ -207,7 +207,7 @@ export type AcceptedTurn = CodexAdapterTurn & {
   // pre-fired and the codex thread's runStreamed rejects without
   // emitting any turn events. Distinguishes the terminated_pre_sdk
   // counter bucket from terminated_via_sdk (interrupt arrived during
-  // an in-flight thread). See nelsong6/tank-operator#532.
+  // an in-flight thread). See romaine-life/tank-operator#532.
   interruptOnStart?: boolean;
 };
 
@@ -235,7 +235,7 @@ export function threadOptionsForCommand(
 // the runner saw the matching submit_turn. The race resolution and
 // terminal-outcome contract are documented in
 // docs/tank-conversation-protocol.md → "Four-outcome contract on the
-// runner side" and nelsong6/tank-operator#532. Sibling of agent-
+// runner side" and romaine-life/tank-operator#532. Sibling of agent-
 // runner's BufferedInterrupt.
 interface OrphanInterrupt {
   record: SessionCommandRecord;
@@ -946,7 +946,7 @@ export class Runner {
   }
 
   // acceptInterrupt is the control-plane entry point. Per the
-  // four-outcome contract (nelsong6/tank-operator#532), every accepted
+  // four-outcome contract (romaine-life/tank-operator#532), every accepted
   // interrupt MUST resolve to exactly one terminal-outcome increment on
   // interruptOutcomeTotal within bounded time. Pre-#532 the
   // `await this.commandBus.markCompleted(record)` else-branch silently

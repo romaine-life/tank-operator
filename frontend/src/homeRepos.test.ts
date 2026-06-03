@@ -38,19 +38,19 @@ afterEach(() => {
 
 test("home repo defaults round-trip through localStorage", () => {
   writeHomeSelectedRepos([
-    "  nelsong6/tank-operator  ",
+    "  romaine-life/tank-operator  ",
     "NelsonG6/Tank-Operator",
-    "nelsong6/infra-bootstrap",
-    "nelsong6/mcp-tank-operator",
+    "romaine-life/infra-bootstrap",
+    "romaine-life/mcp-tank-operator",
     "openai/codex",
     "example/fifth",
     "example/sixth",
   ]);
 
   assert.deepEqual(readHomeSelectedRepos(), [
-    "nelsong6/tank-operator",
-    "nelsong6/infra-bootstrap",
-    "nelsong6/mcp-tank-operator",
+    "romaine-life/tank-operator",
+    "romaine-life/infra-bootstrap",
+    "romaine-life/mcp-tank-operator",
     "openai/codex",
     "example/fifth",
   ]);

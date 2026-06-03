@@ -69,7 +69,7 @@ func defaultMCPResponse() string {
 	// MCP SDK default codec wraps tool results in
 	// {result: {structuredContent: {repositories: [...]}}}. Mirror that
 	// shape so the client's parser exercises the production path.
-	return `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repositories":[{"full_name":"nelsong6/tank-operator","private":false,"default_branch":"main"},{"full_name":"nelsong6/mcp-github","private":true,"default_branch":"main"}],"count":2,"total_count":2,"truncated":false,"has_more":false,"limit":null}}}`
+	return `{"jsonrpc":"2.0","id":1,"result":{"structuredContent":{"repositories":[{"full_name":"romaine-life/tank-operator","private":false,"default_branch":"main"},{"full_name":"romaine-life/mcp-github","private":true,"default_branch":"main"}],"count":2,"total_count":2,"truncated":false,"has_more":false,"limit":null}}}`
 }
 
 func TestListRepos_HappyPath(t *testing.T) {
@@ -89,8 +89,8 @@ func TestListRepos_HappyPath(t *testing.T) {
 	if len(repos) != 2 {
 		t.Fatalf("got %d repos, want 2", len(repos))
 	}
-	if repos[0].FullName != "nelsong6/tank-operator" {
-		t.Errorf("repo[0].FullName = %q, want nelsong6/tank-operator", repos[0].FullName)
+	if repos[0].FullName != "romaine-life/tank-operator" {
+		t.Errorf("repo[0].FullName = %q, want romaine-life/tank-operator", repos[0].FullName)
 	}
 	if !repos[1].Private {
 		t.Errorf("repo[1].Private = false, want true")

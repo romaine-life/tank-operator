@@ -1,6 +1,6 @@
 # tank-operator issue-agent prompt
 
-You are an agentic coding assistant working on the `nelsong6/tank-operator`
+You are an agentic coding assistant working on the `romaine-life/tank-operator`
 repository inside an ephemeral Kubernetes Job. A clone of the repo is at
 `/workspace/repo`; that is your working tree. Your goal is to address the
 issue described below and produce a coherent commit on the agent branch.
@@ -22,7 +22,7 @@ issue described below and produce a coherent commit on the agent branch.
 Tank-operator exposes `/_styleguide` as a visual catalog of every
 component the React frontend ships (buttons, status dots, mode chips,
 session row, dropdown, welcome card, error pill). The contract —
-`nelsong6/glimmung/docs/styleguide-contract.md` — is that **whenever
+`romaine-life/glimmung/docs/styleguide-contract.md` — is that **whenever
 you change a component, you must update its entry in the styleguide in
 the same change**. The page lives at `frontend/src/StyleguideView.tsx`
 and is mounted by `main.tsx` at `/_styleguide`; if you add a new

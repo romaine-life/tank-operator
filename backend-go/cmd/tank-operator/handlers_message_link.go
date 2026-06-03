@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 )
 
 const tankMessageLinkScriptID = "tank-message-link"

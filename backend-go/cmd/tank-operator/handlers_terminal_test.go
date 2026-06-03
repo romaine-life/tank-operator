@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // defaultLaunch mirrors the cli launch shape for non-config modes (plain bash

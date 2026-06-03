@@ -162,7 +162,7 @@ const UNHANDLED_LOG_FIELDS = [
 // interleaved-thinking turn replayed on resume with a mutated
 // thinking/redacted_thinking block, rejected by the API). It must stay at
 // zero after the @anthropic-ai/claude-agent-sdk ^0.3.158 bump
-// (nelsong6/tank-operator#743); a later non-zero rate is a regression.
+// (romaine-life/tank-operator#743); a later non-zero rate is a regression.
 export type ProviderFailureClass =
   | "thinking_block_modified"
   | "overloaded"
@@ -239,7 +239,7 @@ export interface PendingTurn {
   // against the freshly-built PendingTurn at submit time and parks the
   // record(s) here; the SDK is never fed the prompt, and the dispatch
   // path emits `turn.interrupted{reason:"client_interrupt_before_start"}`
-  // synthetically. See nelsong6/tank-operator#532 for the race the
+  // synthetically. See romaine-life/tank-operator#532 for the race the
   // pre-#532 silent `return "not_found"` exposed.
   interruptOnStart?: SessionCommandRecord[];
 }
@@ -915,7 +915,7 @@ export class Runner {
     // #511's design). Pre-#532 the runner returned "not_found"
     // silently and the stop click was lost; post-#532 the buffered
     // record drains here and is applied as a pre-SDK interrupt below.
-    // See nelsong6/tank-operator#532 and BufferedInterrupt's docstring.
+    // See romaine-life/tank-operator#532 and BufferedInterrupt's docstring.
     const bufferedInterrupts = this.drainPendingInterruptsFor(pendingTurn);
     if (bufferedInterrupts.length > 0) {
       pendingTurn.interruptOnStart = bufferedInterrupts;
@@ -962,7 +962,7 @@ export class Runner {
 
   // acceptInterrupt is the single entry point from the control-plane
   // consumer for interrupt_turn commands. Its contract — pinned by
-  // nelsong6/tank-operator#532 — is that EVERY accepted interrupt
+  // romaine-life/tank-operator#532 — is that EVERY accepted interrupt
   // resolves to exactly one terminal-outcome increment on
   // interruptOutcomeTotal within bounded time. No silent returns, no
   // markCompleted-without-emitting-a-terminal paths. The pre-#532 shape
