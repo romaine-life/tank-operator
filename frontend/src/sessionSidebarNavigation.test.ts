@@ -17,7 +17,7 @@ test("sidebar session clicks reopen the main transcript", () => {
   );
   assert.match(
     appSource,
-    /if \(!visible \|\| sidebarTranscriptOpenRequest === 0\) return;[\s\S]*?setActiveTab\("chat"\);[\s\S]*?setPendingRouteTurnId\(null\);[\s\S]*?setPendingTurnViewRouteAnchor\(null\);[\s\S]*?setSlashOpen\(false\);[\s\S]*?setMentionOpen\(false\);[\s\S]*?setMcpOpen\(false\);[\s\S]*?replaceSessionTranscriptRoute\(session\.id\);/,
+    /if \(!visible \|\| sidebarTranscriptOpenRequest === 0\) return;[\s\S]*?setActiveTab\("chat"\);[\s\S]*?setPendingRouteTurnNumber\(null\);[\s\S]*?setPendingTurnViewRouteAnchor\(null\);[\s\S]*?setSlashOpen\(false\);[\s\S]*?setMentionOpen\(false\);[\s\S]*?setMcpOpen\(false\);[\s\S]*?replaceSessionTranscriptRoute\(session\.id\);/,
     "the visible ChatPane should leave side tabs and palettes for the main transcript route",
   );
 });

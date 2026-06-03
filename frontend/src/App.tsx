@@ -13486,6 +13486,28 @@ function ChatPane({
             </div>
           </div>
         ) : activeTab === "turns" ? (
+          routeTurnUnavailable ? (
+            <div className="run-turn-view" aria-label="Turn view">
+              <div className="run-turn-view-body run-transcript run-transcript-claude">
+                <div className="run-turn-view-alert" role="alert">
+                  <span>This turn isn’t available in this session.</span>
+                  <button
+                    type="button"
+                    className="btn-secondary run-turn-view-alert-action"
+                    onClick={() => {
+                      setRouteTurnUnavailable(false);
+                      if (latestTurnId) {
+                        setSelectedTurnId(latestTurnId);
+                        ensureTurnActivityLoaded(latestTurnId);
+                      }
+                    }}
+                  >
+                    Go to the latest turn
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
           <RunTurnActivityScreen
             turns={turnViewItems}
             selectedTurnId={effectiveSelectedTurnId}
@@ -13511,6 +13533,7 @@ function ChatPane({
             scrollRequest={turnViewScrollRequest}
             onScrollRequestConsumed={clearTurnViewScrollRequest}
           />
+          )
         ) : activeTab === "background" ? (
           <BackgroundScreen
             shellEntries={activeBackgroundEntries}

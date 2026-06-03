@@ -156,6 +156,13 @@ const blocked = [
   { name: "retired turnQueue identifier", pattern: /\bturnQueue\b/ },
   { name: "retired turn queue env var", pattern: /\bCOSMOS_TURN_QUEUE_CONTAINER\b/ },
   { name: "retired turn queue env prefix", pattern: /\bTURN_QUEUE_/ },
+  // Durable per-session turn numbers replaced the browser-render "Turn N"
+  // ordinal and the raw turn_<uuid> public route. The label must come from the
+  // durable session_turns number, never the array index; the public route must
+  // carry the number, never the turn_id (the turn_id-keyed /api/.../turns/${turnId}/...
+  // builders use `turns/` + slash and are intentionally not matched).
+  { name: "retired array-position turn label", pattern: /`Turn \$\{[^}]*\bindex\b[^}]*\}`/ },
+  { name: "retired turn_<uuid> public route segment", pattern: /\/turns\$\{turnId/ },
   { name: "retired runner Cosmos event module", pattern: /\b(?:agent|codex)-runner\/src\/cosmos\.ts\b/ },
   { name: "retired runner Cosmos tests", pattern: /\bcosmos\.test\.ts\b/ },
   { name: "retired session Azure config secret", pattern: /\bSESSION_AZURE_CONFIG_SECRET\b/ },
