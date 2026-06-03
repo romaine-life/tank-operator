@@ -212,12 +212,14 @@ All metric names are prefixed `tank_`. The full namespace:
   already-open browser tab cannot correlate the terminal to its local
   run latch and may keep follow-up input queued until refresh.
 - `tank_turn_interrupt_request_total` — counter of stop requests posted
-  to `/interrupt`. Single label `outcome` with three bounded values:
-  `persisted`, `persist_failed`, `publish_failed`. Steady-state
-  expectation: `persisted` dominates; the two failure outcomes are
-  alerted on `> 0` rate. Owned by the durable `turn.interrupt_requested`
-  migration — see `docs/tank-conversation-protocol.md` for the boundary
-  contract. Paired with the pod-side
+  to `/interrupt`. Single label `outcome` with bounded values:
+  `persisted`, `already_terminal`, `terminal_lookup_failed`,
+  `persist_failed`, `publish_failed`. Steady-state expectation:
+  `persisted` dominates; `already_terminal` is a legitimate late-click
+  race; the failure outcomes are alerted on `> 0` rate. Owned by the
+  durable `turn.interrupt_requested` migration — see
+  `docs/tank-conversation-protocol.md` for the boundary contract. Paired
+  with the pod-side
   `tank_runner_commands_consumed_total{kind="interrupt_turn"}` and
   `tank_runner_turn_duration_seconds_count{outcome="interrupted"}`
   series to drive the `TankStopNotDelivered` / `TankStopNotTerminated`
@@ -235,6 +237,10 @@ All metric names are prefixed `tank_`. The full namespace:
   `execution_failed`. `tank_runner_provider_control_total{action,outcome}`
   counts bounded provider control calls, including Claude foreground-task
   backgrounding before interrupt and the interrupt signal itself.
+  `tank_runner_provider_rate_limit_event_total` counts Claude SDK
+  `rate_limit_event` frames; each increment should pair with a durable
+  `turn.failed{reason:"provider_rate_limit"}` so the submitted-turn queue
+  does not remain blocked behind an invisible provider wait.
   `tank_runner_turn_usage_emitted_total{kind}` counts durable usage events by
   the closed set `kind` ∈ {`snapshot`,`terminal`}: `snapshot` is the
   per-assistant-message `turn.usage` that carries context-window occupancy
@@ -607,16 +613,18 @@ declares one rule group per subsystem:
   per-session debug endpoint
   (`GET /api/debug/conversation-read-state`), structured SPA logs,
   and the per-stream registry.
-- **Stop chain self-telling**: `TankStopNotDelivered` fires if the
-  backend persists Stop requests faster than runners' control-plane
-  consumer claims `interrupt_turn` commands (the data/control plane
-  split has regressed — interrupts are queueing somewhere). 
-  `TankStopNotTerminated` fires if runners claim interrupts faster than
-  they emit terminal `turn.interrupted` events (the SDK / codex Thread
-  is ignoring the abort, or the terminal-event publish is failing).
-  Both are `critical` — Stop is a user-trust control surface and a
-  silent regression here is exactly the failure mode that necessitated
-  the control-plane split. See
+- **Stop chain self-telling**: `TankStopBackendFailed` fires if the
+  backend cannot resolve terminal state, persist `turn.interrupt_requested`,
+  or publish the control-plane command after receiving a Stop request.
+  `TankStopNotDelivered` fires if the backend persists Stop requests
+  faster than runners' control-plane consumer claims `interrupt_turn`
+  commands (the data/control plane split has regressed — interrupts are
+  queueing somewhere). `TankStopNotTerminated` fires if runners claim
+  interrupts faster than they emit terminal `turn.interrupted` events
+  (the SDK / codex Thread is ignoring the abort, or the terminal-event
+  publish is failing). These are `critical` — Stop is a user-trust
+  control surface and a silent regression here is exactly the failure
+  mode that necessitated the control-plane split. See
   `docs/tank-conversation-protocol.md` → "Durable turn interruption"
   for the architecture they protect.
 - **NATS**: disconnect storm (>6/min for 5m).

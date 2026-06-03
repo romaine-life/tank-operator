@@ -11798,6 +11798,27 @@ function ChatPane({
       }
       throw new Error(detail);
     }
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    if (
+      body &&
+      typeof body === "object" &&
+      !Array.isArray(body) &&
+      (body as { status?: unknown }).status === "already_terminal"
+    ) {
+      const terminalType = (body as { target_terminal_type?: unknown }).target_terminal_type;
+      currentRunRef.current = null;
+      activeInterruptTargetRef.current = null;
+      setRenderedActiveTurnId(null);
+      setActiveTool(null);
+      setRunning(false);
+      setRunStatus(terminalType === "turn.failed" || terminalType === "turn.command_failed" ? "error" : "done");
+      void refreshSdkRunHistory(true, "terminal-refresh");
+    }
   }
 
   async function stopBackgroundTask(entry: TranscriptEntry): Promise<void> {

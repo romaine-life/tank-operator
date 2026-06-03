@@ -211,6 +211,15 @@ func (e *ChatActivityEmitter) RefreshSessionActivity(ctx context.Context, owner,
 	for _, status := range foldStats.LateInterruptIgnoredStatuses {
 		metrics.RecordActivityLateInterruptIgnored(status)
 	}
+	resolvedLateInterrupt := false
+	next, resolvedLateInterrupt, err = e.resolveStoppingActivityFromTerminal(ctx, publicID, next)
+	if err != nil {
+		metrics.RecordActivityFailure()
+		return err
+	}
+	if resolvedLateInterrupt {
+		metrics.RecordActivityLateInterruptIgnored(next.Status)
+	}
 	if prior != nil && sessionactivity.ActivitySummariesEqual(*prior, next) {
 		metrics.RecordActivityDelta(false)
 		return nil
@@ -261,4 +270,38 @@ func (e *ChatActivityEmitter) RefreshSessionActivity(ctx context.Context, owner,
 		)
 	}
 	return nil
+}
+
+func (e *ChatActivityEmitter) resolveStoppingActivityFromTerminal(
+	ctx context.Context,
+	publicID string,
+	summary sessionactivity.ActivitySummary,
+) (sessionactivity.ActivitySummary, bool, error) {
+	if summary.Status != "stopping" || summary.ActiveTurnID == nil || strings.TrimSpace(*summary.ActiveTurnID) == "" {
+		return summary, false, nil
+	}
+	terminal, err := e.ChatEvents.FindTurnTerminal(ctx, publicID, strings.TrimSpace(*summary.ActiveTurnID))
+	if err != nil {
+		return summary, false, fmt.Errorf("chat-activity emitter: terminal lookup for stopping turn %q in session %q: %w",
+			strings.TrimSpace(*summary.ActiveTurnID), publicID, err)
+	}
+	if terminal == nil {
+		return summary, false, nil
+	}
+	switch strings.TrimSpace(fmt.Sprint(terminal["type"])) {
+	case "turn.completed":
+		summary.Status = "ready"
+		summary.Failed = false
+	case "turn.failed", "turn.command_failed":
+		summary.Status = "error"
+		summary.Failed = true
+	case "turn.interrupted":
+		summary.Status = "stopped"
+		summary.Failed = false
+	default:
+		return summary, false, nil
+	}
+	summary.ActiveTurnID = nil
+	summary.NeedsInput = false
+	return summary, true, nil
 }

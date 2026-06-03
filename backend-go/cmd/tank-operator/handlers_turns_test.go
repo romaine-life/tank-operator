@@ -36,8 +36,9 @@ type recordingSessionBus struct {
 // makes. Wraps the no-op stub for the other SessionEventStore methods.
 type recordingSessionEventStore struct {
 	store.StubSessionEventStore
-	upserts []map[string]any
-	err     error
+	upserts       []map[string]any
+	terminalTurns map[string]map[string]any
+	err           error
 }
 
 func (r *recordingSessionEventStore) Upsert(_ context.Context, event map[string]any) error {
@@ -56,6 +57,13 @@ func (r *recordingSessionEventStore) OrderKeyForTimelineID(_ context.Context, _,
 		}
 	}
 	return "", nil
+}
+
+func (r *recordingSessionEventStore) FindTurnTerminal(_ context.Context, _ string, turnID string) (map[string]any, error) {
+	if r.terminalTurns == nil {
+		return nil, nil
+	}
+	return r.terminalTurns[turnID], nil
 }
 
 func TestPersistBackendEventRefreshesActivityForLifecycleEvent(t *testing.T) {
@@ -987,6 +995,44 @@ func TestInterruptPersistsRequestedEventBeforeCommand(t *testing.T) {
 	}
 	if bus.commands[0].Type != sessionbus.CommandInterrupt {
 		t.Fatalf("command type = %q, want %q", bus.commands[0].Type, sessionbus.CommandInterrupt)
+	}
+}
+
+func TestInterruptAlreadyTerminalRefreshesActivityWithoutStopRequest(t *testing.T) {
+	bus := &recordingSessionBus{}
+	refresher := &recordingActivityRefresher{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-70", "70", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
+	app.activityRefresher = refresher
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	es.terminalTurns = map[string]map[string]any{
+		"turn-done_123": {
+			"type":    "turn.completed",
+			"turn_id": "turn-done_123",
+		},
+	}
+	req := authedInterruptRequest(t, "70", "turn-done_123")
+	resp := httptest.NewRecorder()
+
+	app.handleInterruptSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	var body map[string]string
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["status"] != "already_terminal" || body["target_terminal_type"] != "turn.completed" {
+		t.Fatalf("response = %#v, want already_terminal turn.completed", body)
+	}
+	if len(es.upserts) != 0 {
+		t.Fatalf("session-event upserts = %d, want 0 (late stop must not create turn.interrupt_requested)", len(es.upserts))
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0 (no runner work for already-terminal turn)", len(bus.commands))
+	}
+	if len(refresher.calls) != 1 {
+		t.Fatalf("activity refresh calls = %d, want 1", len(refresher.calls))
 	}
 }
 
