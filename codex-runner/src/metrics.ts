@@ -58,9 +58,7 @@ export const itemOutcomeTotal = new Counter({
 // Same name + labels as the claude runner (the `mode` default label
 // distinguishes them) so one alert sums "provider events silently dropped"
 // across both runners. Steady state is zero; a nonzero rate names the
-// app-server notification to map or explicitly ignore. This is the discovery
-// path for a Codex context-compaction signal: the app server exposes none
-// discretely today, so when one appears it shows up here instead of vanishing.
+// app-server notification to map or explicitly ignore.
 // See docs/tank-conversation-protocol.md → "Context Compaction Notice".
 export const unmappedProviderEventTotal = new Counter({
   name: "tank_runner_unmapped_provider_event_total",

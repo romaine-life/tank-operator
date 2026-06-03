@@ -372,13 +372,16 @@ that folds a turn's activity rows into a collapsed shell for display; this
 records that the agent's working memory of earlier turns was condensed.
 
 `context.compacted` is `actor=runner`, `source` is the provider that compacted
-(`claude` today), and the payload carries `trigger` (`auto` when the context
-filled, `manual` for an explicit `/compact`) plus optional `pre_tokens` (the
-token count before compaction). The server projection promotes it into the main
-transcript as a `meta` row (`metaKind: context_compacted`), excluded from the
-Turn-activity compact via `isProjectionContextCompacted` — the same
-promotion-only treatment as the AskUserQuestion handoff row, because a memory
-change is settled-conversation context the user reads, not turn-activity noise.
+(`claude` or `codex`), and the payload carries `trigger` (`auto` when the
+context filled, `manual` for an explicit `/compact`) plus optional `pre_tokens`
+(the token count before compaction). When a provider does not expose trigger or
+token metadata, the runner still emits the durable notice and defaults
+`trigger` to `auto` rather than inventing unsupported metadata. The server
+projection promotes it into the main transcript as a `meta` row
+(`metaKind: context_compacted`), excluded from the Turn-activity compact via
+`isProjectionContextCompacted` — the same promotion-only treatment as the
+AskUserQuestion handoff row, because a memory change is settled-conversation
+context the user reads, not turn-activity noise.
 
 A provider event the runner adapter neither maps to a Tank event nor explicitly
 ignores increments `tank_runner_unmapped_provider_event_total{type,subtype}`
@@ -417,7 +420,7 @@ Codex SDK adapter:
 | `turn.started` | `turn.started` | Preserve provider turn id when available. |
 | `item.started` | `item.started` | Tool-like items drive active item state. |
 | `item.updated` | ignored (no Tank event) | Adapter still observes ordinary frames so `item.completed` can fall back to the last running text; no Tank event reaches the bus. Codex unified-exec background terminal updates are the exception and map to `shell_task.updated`. |
-| context compaction | not yet mapped (discovery instrumented) | The Codex App Server exposes no discrete compaction notification today (only cumulative `thread/tokenUsage/updated`). Codex auto-compacts frequently in long threads, so this is a real visibility gap. The transport now counts every unrecognized notification method via `tank_runner_unmapped_provider_event_total` (`appServerTransport.ts` → `handleNotification`); when a compaction signal appears it surfaces there instead of vanishing, and the remaining work is mapping that method to `context.compacted`. |
+| `thread/compacted` or `contextCompaction` item | `context.compacted` | `actor=runner`, `source=codex`. `thread/compacted` is the Codex App Server notification shape generated from `@openai/codex@0.130.0`; it carries `threadId` and provider `turnId`. The generated protocol marks it deprecated in favor of a `contextCompaction` thread item, so the transport maps both surfaces and dedupes by provider turn id. Codex does not expose trigger or pre-token metadata here, so the payload defaults to `trigger="auto"`. |
 | `userMessage` item echo | ignored (no Tank event) | Tank owns submitted user input through the backend-published `user_message.created` event. Provider echoes of that input must not enter the durable item stream or render as tool calls. |
 | `item.completed` message/reasoning/tool | `item.completed` or `item.failed` | Map command, file change, MCP, and web search to tool item payloads. Nonzero exit codes and provider status `failed` with no execution error map to `payload.outcome.kind="result_failed"`. A non-null provider item error maps to `item.failed` with `outcome.kind="execution_failed"`. |
 | `commandExecution` with `source=unifiedExecStartup` or `source=unifiedExecInteraction` | `shell_task.started`, `shell_task.updated`, `shell_task.exited` | Codex App Server background terminals are session-owned processes. `processId` is the preferred `task_id`; `thread/backgroundTerminals/clean` is the explicit action that stops them. |

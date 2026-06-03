@@ -157,6 +157,7 @@ export class CodexAppServerTransport {
   } | null = null;
   private readonly itemsByID = new Map<string, JsonRecord>();
   private readonly latestUsageByProviderTurnID = new Map<string, ObservedCodexUsage>();
+  private readonly compactedProviderTurnIDs = new Set<string>();
 
   constructor(private readonly opts: AppServerTransportOptions) {}
 
@@ -298,6 +299,7 @@ export class CodexAppServerTransport {
       }
       this.itemsByID.clear();
       this.latestUsageByProviderTurnID.clear();
+      this.compactedProviderTurnIDs.clear();
       queue.close();
     }
   }
@@ -386,14 +388,13 @@ export class CodexAppServerTransport {
       if (queue) queue.push({ kind: "event", event: { type: "turn.started", id: turnID } });
       return;
     }
-    // Count any notification handleNotification recognizes no branch for —
-    // the codex-side silent-drop seam (the class that hid Claude context
-    // compaction). Checked before the queue guard so an unhandled
-    // notification (e.g. a future app-server compaction signal) surfaces in
-    // metrics regardless of active-turn state, instead of vanishing.
+    // Count any notification handleNotification recognizes no branch for.
+    // Checked before the queue guard so unhandled provider notifications
+    // surface in metrics regardless of active-turn state.
     const KNOWN_NOTIFICATION =
       method === "turn/completed" ||
       method === "thread/tokenUsage/updated" ||
+      method === "thread/compacted" ||
       method === "item/started" ||
       method === "item/completed" ||
       method === "item/updated" ||
@@ -403,8 +404,30 @@ export class CodexAppServerTransport {
       unmappedProviderEventTotal.labels(method, "none").inc();
       return;
     }
+    if (method === "thread/compacted") {
+      const event = codexContextCompactedEvent(params);
+      if (!event) {
+        unmappedProviderEventTotal.labels(method, "invalid_payload").inc();
+        return;
+      }
+      const queue = this.activeQueue;
+      if (!queue) {
+        unmappedProviderEventTotal.labels(method, "no_active_turn").inc();
+        return;
+      }
+      if (this.rememberContextCompaction(event)) queue.push({ kind: "event", event });
+      return;
+    }
     const queue = this.activeQueue;
-    if (!queue) return;
+    if (!queue) {
+      if (
+        (method === "item/started" || method === "item/completed" || method === "item/updated") &&
+        isCodexContextCompactionItem(params?.item)
+      ) {
+        unmappedProviderEventTotal.labels(method, "context_compaction_no_active_turn").inc();
+      }
+      return;
+    }
     if (method === "turn/completed") {
       const turn = params?.turn;
       const providerTurnID =
@@ -477,6 +500,15 @@ export class CodexAppServerTransport {
     if (method === "item/started" || method === "item/completed" || method === "item/updated") {
       const item = params?.item;
       if (!item || typeof item !== "object") return;
+      if (isCodexContextCompactionItem(item)) {
+        const event = codexContextCompactedEvent(params, item as JsonRecord);
+        if (!event) {
+          unmappedProviderEventTotal.labels(method, "context_compaction_invalid_payload").inc();
+          return;
+        }
+        if (this.rememberContextCompaction(event)) queue.push({ kind: "event", event });
+        return;
+      }
       const codexItem = appServerItemToCodexItem(item as JsonRecord);
       const itemID = typeof codexItem.id === "string" ? codexItem.id : "";
       if (itemID) this.itemsByID.set(itemID, codexItem);
@@ -581,6 +613,14 @@ export class CodexAppServerTransport {
       this.activeProviderTurnID = null;
     }
   }
+
+  private rememberContextCompaction(event: CodexEvent): boolean {
+    const providerTurnID = typeof event.turn_id === "string" ? event.turn_id : "";
+    if (!providerTurnID) return true;
+    if (this.compactedProviderTurnIDs.has(providerTurnID)) return false;
+    this.compactedProviderTurnIDs.add(providerTurnID);
+    return true;
+  }
 }
 
 function turnIDFromTurnStartResponse(result: unknown): string {
@@ -670,6 +710,34 @@ function usageObservationForUpdate(
 
 function finiteNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function isCodexContextCompactionItem(item: unknown): boolean {
+  if (!item || typeof item !== "object") return false;
+  const type = (item as JsonRecord).type;
+  return type === "contextCompaction" || type === "context_compaction";
+}
+
+function codexContextCompactedEvent(params?: JsonRecord, item?: JsonRecord): CodexEvent | undefined {
+  const providerTurnID = nonEmptyString(params?.turnId);
+  if (!providerTurnID) return undefined;
+  const threadID = nonEmptyString(params?.threadId);
+  const providerItemID = nonEmptyString(item?.id);
+  const id = providerItemID
+    ? `${providerTurnID}:${providerItemID}`
+    : `thread/compacted:${providerTurnID}`;
+  return {
+    type: "context.compacted",
+    id,
+    ...(threadID ? { thread_id: threadID } : {}),
+    turn_id: providerTurnID,
+    ...(providerItemID ? { item_id: providerItemID } : {}),
+    trigger: "auto",
+  };
 }
 
 export function appServerItemToCodexItem(item: JsonRecord): JsonRecord {

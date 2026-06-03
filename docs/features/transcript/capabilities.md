@@ -114,23 +114,25 @@ Evidence:
 - Producer: `agent-runner/src/adapters/claude.ts` maps
   `system/compact_boundary`; `agent-runner/src/adapters/claude.test.ts` pins
   the mapping and the malformed-metadata default.
+- Producer: `codex-runner/src/appServerTransport.ts` maps the Codex App Server
+  `thread/compacted` notification and generated `contextCompaction` item
+  lifecycle to the runner's `context.compacted` event, deduped by provider turn
+  id. `codex-runner/src/adapters/codex.ts` emits the durable Tank envelope with
+  `source=codex`.
 - Projection: `backend-go/cmd/tank-operator/transcript_projection.go`
   (`applyContextCompacted`, `isProjectionContextCompacted`);
   `transcript_projection_test.go` proves promotion plus compact exclusion.
 - Observability: `agent-runner/src/metrics.ts` →
   `tank_runner_unmapped_provider_event_total`.
 
-Required before this is complete for Codex:
-- The Codex App Server exposes no discrete compaction notification today, so
-  Codex sessions (which auto-compact frequently — cumulative thread usage runs
-  into tens of millions of tokens) still emit no `context.compacted` row. The
-  discovery instrumentation is in place: `codex-runner/src/appServerTransport.ts`
-  → `handleNotification` now counts every unrecognized notification method via
-  `tank_runner_unmapped_provider_event_total`, so a compaction signal (or any
-  newly-added app-server notification) surfaces in metrics instead of being
-  silently dropped. The remaining work is to map that method to
-  `context.compacted` once it is identified. Until then the rendered notice is
-  Claude-only and that gap is named here, not silently shipped.
+Codex-specific notes:
+- The installed Codex App Server protocol (`@openai/codex@0.130.0`,
+  generated via `codex app-server generate-ts`) exposes
+  `thread/compacted { threadId, turnId }`, marked deprecated in favor of a
+  `contextCompaction` item type. Tank maps both surfaces to the same durable
+  notice and records one row per provider turn. Codex does not expose reliable
+  manual/auto trigger or pre-token metadata on these surfaces, so the runner
+  defaults `payload.trigger` to `auto`.
 
 ## Transcript Refresh Shortcut (R)
 
