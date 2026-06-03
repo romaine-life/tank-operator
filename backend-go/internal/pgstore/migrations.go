@@ -1254,6 +1254,17 @@ var schemaMigrations = []migration{
 	{ID: "0105", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_target_created
 		ON control_action_events (source_service, target_kind, target_ref, created_at DESC)`},
 
+	// Repair guard for the runtime-context migrations after a branch image wrote
+	// a production ledger checksum under the same IDs before the final main
+	// migration text landed. These statements are idempotent and intentionally
+	// use new IDs so the desired schema exists without editing the applied rows.
+	{ID: "0106", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_tokens bigint NOT NULL DEFAULT 0`},
+	{ID: "0107", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_source text NOT NULL DEFAULT ''`},
+	{ID: "0108", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_observed_at timestamptz`},
+
 	// Durable attachment launches (issue #865). A deferred attachment launch is
 	// no longer a browser-owned, fire-and-forget phase two: the orchestrator
 	// records the pending launch and its staged attachment bytes durably, then a
@@ -1263,7 +1274,7 @@ var schemaMigrations = []migration{
 	// staged) -> claiming -> dispatched, or -> failed. base_prompt/skill/model/
 	// effort are the dispatch parameters the reconciler composes the runnable
 	// turn from; the final workspace paths are stamped in at materialization.
-	{ID: "0106", SQL: `CREATE TABLE IF NOT EXISTS session_pending_launch_turns (
+	{ID: "0109", SQL: `CREATE TABLE IF NOT EXISTS session_pending_launch_turns (
 		tank_session_id   text        NOT NULL,
 		turn_id           text        NOT NULL,
 		session_scope     text        NOT NULL,
@@ -1290,14 +1301,14 @@ var schemaMigrations = []migration{
 	// Claim index: the reconciler scans for dispatchable launches by scope +
 	// status, oldest first. Partial so it stays a tight working-set index that
 	// never folds dispatched/failed rows.
-	{ID: "0107", SQL: `CREATE INDEX IF NOT EXISTS session_pending_launch_turns_claim
+	{ID: "0110", SQL: `CREATE INDEX IF NOT EXISTS session_pending_launch_turns_claim
 		ON session_pending_launch_turns (session_scope, status, created_at)
 		WHERE status IN ('awaiting_bytes', 'ready', 'claiming')`},
 	// Staged attachment bytes for a pending launch. bytea is correct here: the
 	// payloads are small (<= maxRawBytes, 8 MiB) and transient — deleted once
 	// the reconciler has written them into the live pod workspace. Durable blob
 	// artifacts that survive pod death are a separate feature (see #865).
-	{ID: "0108", SQL: `CREATE TABLE IF NOT EXISTS session_launch_attachment_blobs (
+	{ID: "0111", SQL: `CREATE TABLE IF NOT EXISTS session_launch_attachment_blobs (
 		tank_session_id text        NOT NULL,
 		turn_id         text        NOT NULL,
 		ordinal         integer     NOT NULL,
@@ -1358,6 +1369,28 @@ func migrationChecksum(sql string) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// acceptedAppliedMigrationChecksums is a narrow production repair map for
+// migrations that were already recorded with a checksum from a branch image
+// before final main migration text landed. Do not add entries here for routine
+// edits; append a new migration instead.
+var acceptedAppliedMigrationChecksums = map[string]map[string]struct{}{
+	"0100": {
+		"306071cc8a62f897ea596b722c484115b537126eb0c570282f1b0df6049a994c": {},
+	},
+}
+
+func migrationChecksumAccepted(id, recorded, current string) bool {
+	if recorded == current {
+		return true
+	}
+	acceptedForID, ok := acceptedAppliedMigrationChecksums[id]
+	if !ok {
+		return false
+	}
+	_, ok = acceptedForID[recorded]
+	return ok
+}
+
 // RunMigrations applies the un-applied entries in schemaMigrations under a
 // session-scoped advisory lock, recording each in the durable schema_migrations
 // ledger so it never runs twice. Safe to invoke at backend startup.
@@ -1405,7 +1438,7 @@ func RunMigrationsWithMetrics(ctx context.Context, pool *pgxpool.Pool, metrics M
 	for _, m := range schemaMigrations {
 		sum := migrationChecksum(m.SQL)
 		if recorded, ok := applied[m.ID]; ok {
-			if recorded != sum {
+			if !migrationChecksumAccepted(m.ID, recorded, sum) {
 				return fmt.Errorf(
 					"pgstore: migration %s checksum mismatch (ledger=%s code=%s): applied migrations are immutable; add a new migration instead of editing this one",
 					m.ID, recorded, sum,
