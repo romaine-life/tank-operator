@@ -1,7 +1,7 @@
 name: Build mcp-auth-proxy image
 
 # Standalone publish path for the mcp-auth-proxy sidecar image consumed
-# by sibling repos (nelsong6/hermes today). Tank session pods continue
+# by sibling repos (romaine-life/hermes today). Tank session pods continue
 # baking the package inline via claude-container/Dockerfile — that build
 # is governed by .github/workflows/claude-container-build.yml and is
 # unaffected. This workflow only publishes the standalone image; it does
@@ -131,7 +131,7 @@ jobs:
             fi
             echo
             echo "Consumed by:"
-            echo "- nelsong6/hermes (sidecar in the Hermes StatefulSet)"
+            echo "- romaine-life/hermes (sidecar in the Hermes StatefulSet)"
             echo "- Tank session pods bake the package inline via claude-container/Dockerfile;"
             echo "  this image is **not** a build dependency of session pods."
           } >> $GITHUB_STEP_SUMMARY
