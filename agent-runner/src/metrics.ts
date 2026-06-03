@@ -181,6 +181,13 @@ export const scheduledWakeupRegisterTotal = new Counter({
   registers: [registry],
 });
 
+export const backgroundTaskWakeTotal = new Counter({
+  name: "tank_runner_background_task_wake_total",
+  help: "Background-task-completion wake registrations the runner attempted against the orchestrator durable API (result: registered|disabled|failed).",
+  labelNames: ["result"],
+  registers: [registry],
+});
+
 export const natsPublishFailureTotal = new Counter({
   name: "tank_runner_nats_publish_failure_total",
   help: "Publish attempts to the JetStream session bus that returned an error.",

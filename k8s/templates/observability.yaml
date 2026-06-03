@@ -709,6 +709,35 @@ spec:
               The submitted line outpacing the terminal lines is the
               direct signature.
 
+        # Background-task wake fire failures. A Claude run_in_background task
+        # that finishes while the session is idle registers a durable wake in
+        # session_background_task_wakes; the orchestrator fire loop turns it
+        # into a system turn. If that fire errors (enqueue/store), the agent
+        # that backgrounded the task and ended its turn never resumes — a
+        # silent stranding the Agent Runners contract counts. result=
+        # "session_not_active" is excluded: a pod that died before its wake
+        # fired is expected best-effort, not a bug.
+        - alert: TankBackgroundTaskWakeFireFailing
+          expr: sum(rate(tank_background_task_wake_fire_total{result=~"enqueue_failed|store_error"}[15m])) > 0
+          for: 20m
+          labels:
+            severity: warning
+          annotations:
+            summary: "background-task wakes are registered but failing to fire"
+            runbook: |
+              A Claude background task finished and registered a durable wake
+              row in session_background_task_wakes, but the orchestrator fire
+              loop is erroring on enqueue/store, so the agent that backgrounded
+              the task and ended its turn will not resume.
+
+              Inspect "background task wake fire failed" slog lines and the
+              tank_background_task_wakes_due gauge — a persistent backlog
+              confirms the loop is stuck rather than hitting a transient error.
+              The registration half (runner → backend) shows as
+              tank_runner_background_task_wake_total{result="failed"}; a
+              task-lifecycle terminal logged as sdk_task_lifecycle_unbound while
+              registrations stay flat is the detection-regressed signature.
+
     - name: tank-operator.session-list
       rules:
         # K8s-watch producer is leader-elected. The lease should be

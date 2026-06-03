@@ -1026,6 +1026,8 @@ func sdkTurnSource(source string) string {
 	switch strings.TrimSpace(source) {
 	case "schedule-wakeup":
 		return "schedule-wakeup"
+	case "background-task":
+		return "background-task"
 	default:
 		return "sdk"
 	}

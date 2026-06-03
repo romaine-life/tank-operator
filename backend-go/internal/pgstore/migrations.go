@@ -1344,6 +1344,48 @@ var schemaMigrations = []migration{
 		created_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (tank_session_id, turn_id, ordinal)
 	)`},
+
+	// session_background_task_wakes — durable backend-owned "a background task
+	// finished while the session was idle" wakes. The base Claude Bash tool
+	// promises "run_in_background … re-invokes you when it exits", but a
+	// task-lifecycle SDK message never starts a turn, so a task finishing while
+	// the session is idle is a silent stranding. The runner registers the
+	// natural terminal here and the orchestrator claims due rows, persists
+	// normal user_message.created + turn.submitted boundary events, then
+	// publishes the submit_turn command with source=background-task — the same
+	// backend-owned turn boundary as a user turn and as ScheduleWakeup. The
+	// (tank_session_id, task_id) uniqueness is the idempotency key for SDK frame
+	// repeats and runner restart: one background task produces at most one wake
+	// row per session.
+	{ID: "0115", SQL: `CREATE TABLE IF NOT EXISTS session_background_task_wakes (
+		wake_id           text PRIMARY KEY,
+		session_scope     text NOT NULL,
+		session_id        text NOT NULL,
+		tank_session_id   text NOT NULL,
+		owner_email       text NOT NULL,
+		provider          text NOT NULL,
+		task_id           text NOT NULL,
+		task_status       text NOT NULL DEFAULT '',
+		prompt            text NOT NULL,
+		client_nonce      text NOT NULL,
+		registered_at     timestamptz NOT NULL,
+		due_at            timestamptz NOT NULL,
+		status            text NOT NULL CHECK (status IN ('scheduled', 'claiming', 'fired', 'failed')),
+		attempt_count     integer NOT NULL DEFAULT 0,
+		locked_at         timestamptz,
+		fired_at          timestamptz,
+		fired_turn_id     text NOT NULL DEFAULT '',
+		last_error        text NOT NULL DEFAULT '',
+		created_at        timestamptz NOT NULL DEFAULT now(),
+		updated_at        timestamptz NOT NULL DEFAULT now()
+	)`},
+	{ID: "0116", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_background_task_wakes_task
+		ON session_background_task_wakes (tank_session_id, task_id)`},
+	{ID: "0117", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_background_task_wakes_client_nonce
+		ON session_background_task_wakes (tank_session_id, client_nonce)`},
+	{ID: "0118", SQL: `CREATE INDEX IF NOT EXISTS session_background_task_wakes_due
+		ON session_background_task_wakes (session_scope, status, due_at, created_at)
+		WHERE status IN ('scheduled', 'claiming')`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

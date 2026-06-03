@@ -220,10 +220,12 @@ func main() {
 	// 8. Init per-user SDK conversation read-state store.
 	readStateStore := buildConversationReadStateStore(pgPool, sessionScope)
 	var scheduledWakeupStore *pgstore.ScheduledWakeupStore
+	var backgroundTaskWakeStore *pgstore.BackgroundTaskWakeStore
 	var controlActionStore *pgstore.ControlActionStore
 	var pendingLaunchStore *pgstore.PendingLaunchStore
 	if pgPool != nil {
 		scheduledWakeupStore = pgstore.NewScheduledWakeupStore(pgPool, sessionScope)
+		backgroundTaskWakeStore = pgstore.NewBackgroundTaskWakeStore(pgPool, sessionScope)
 		controlActionStore = pgstore.NewControlActionStore(pgPool, sessionScope)
 		pendingLaunchStore = pgstore.NewPendingLaunchStore(pgPool, sessionScope)
 	}
@@ -500,6 +502,7 @@ func main() {
 		mcpGitHub:                buildMCPGitHubClient(),
 		providerHealth:           providerHealthManager,
 		scheduledWakeups:         scheduledWakeupStore,
+		backgroundTaskWakes:      backgroundTaskWakeStore,
 		controlActions:           controlActionStore,
 	}
 	// Assign the override store only when non-nil so the appServer field stays
@@ -517,6 +520,16 @@ func main() {
 		go func() {
 			if err := runScheduledWakeupLoop(ctx, srv, scheduledWakeupDefaultInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("scheduled wakeup loop stopped", "error", err)
+			}
+		}()
+	}
+	// Durable "a background task finished while the session was idle" wakes.
+	// Same backend-owned turn boundary as scheduled wakeups; the runner only
+	// registers the natural terminal. Postgres-only — the stub store is nil.
+	if backgroundTaskWakeStore != nil && sessionBus != nil {
+		go func() {
+			if err := runBackgroundTaskWakeLoop(ctx, srv, backgroundTaskWakeDefaultInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("background task wake loop stopped", "error", err)
 			}
 		}()
 	}
