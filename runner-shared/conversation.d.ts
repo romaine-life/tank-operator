@@ -25,8 +25,7 @@ export const TANK_EVENT_TYPES: readonly [
   "shell_task.started",
   "shell_task.updated",
   "shell_task.exited",
-  "tool.approval_requested",
-  "tool.approval_resolved",
+  "turn.awaiting_input",
 ];
 export type TankEventType = (typeof TANK_EVENT_TYPES)[number];
 
@@ -39,7 +38,14 @@ export interface TankProducerMetadata {
 
 export type UserMessageDisplay =
   | { kind: "plain" }
-  | { kind: "skill_invocation"; skill_name: string; supplemental_text?: string };
+  | { kind: "skill_invocation"; skill_name: string; supplemental_text?: string }
+  | {
+      kind: "ask_user_answer";
+      question_timeline_id: string;
+      asking_turn_id?: string;
+      answers?: Record<string, string[]>;
+      annotations?: Record<string, { preview?: string; notes?: string }>;
+    };
 
 export interface UserMessageAttachmentDisplay {
   label: string;

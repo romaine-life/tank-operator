@@ -127,19 +127,15 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 			out.ActiveTurnID = nil
 			out.NeedsInput = false
 			out.Failed = false
-		case "tool.approval_requested":
+		case "turn.awaiting_input":
+			// The agent asked the user a question; the asking turn ended.
+			// There is no active turn — the session waits for the user's
+			// answer, which arrives as a brand-new turn. The next
+			// turn.submitted / turn.started clears needs_input.
 			out.Status = "needs_input"
-			if id := optionalStringField(event, "turn_id"); id != nil {
-				out.ActiveTurnID = id
-			}
+			out.ActiveTurnID = nil
 			out.NeedsInput = true
-		case "tool.approval_resolved":
-			out.NeedsInput = false
-			if out.ActiveTurnID != nil {
-				out.Status = "streaming"
-			} else {
-				out.Status = "ready"
-			}
+			out.Failed = false
 		}
 	}
 	out.UnreadCount = unreadCount
@@ -201,8 +197,7 @@ var LifecycleChatEventTypes = []string{
 	"turn.command_failed",
 	"turn.interrupt_requested",
 	"turn.interrupted",
-	"tool.approval_requested",
-	"tool.approval_resolved",
+	"turn.awaiting_input",
 }
 
 // IsLifecycleChatEventType is a sugar wrapper used by the persister's

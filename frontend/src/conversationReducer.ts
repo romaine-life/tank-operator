@@ -11,7 +11,7 @@ export type ConversationRunStatus =
   | "error";
 
 export type ConversationItemStatus = "started" | "completed" | "failed";
-export type ConversationTurnTerminalStatus = "completed" | "failed" | "interrupted";
+export type ConversationTurnTerminalStatus = "completed" | "failed" | "interrupted" | "awaiting_input";
 export type ConversationBackgroundTaskStatus =
   | "running"
   | "completed"
@@ -257,6 +257,19 @@ export function conversationReducer(
       // the live reducer only records the event as seen (handled above) so it
       // is not a parallel transcript path.
       return next;
+    case "turn.awaiting_input":
+      // The agent asked the user a question; the asking turn ended. There is
+      // no active turn — the session waits for the answer, which arrives as a
+      // brand-new turn. Settles to needs_input, not ready.
+      return {
+        ...applyTurnTerminal(next, event, "awaiting_input"),
+        runStatus: "needs_input",
+        activeTurnId: null,
+        activeItemId: null,
+        needsInput: true,
+        failed: false,
+        lastError: null,
+      };
     case "session.status":
       return applySessionStatusMessage(next, event);
     case "item.started":
@@ -291,28 +304,6 @@ export function conversationReducer(
       return upsertBackgroundTask(next, event, backgroundTaskStatus(event));
     case "shell_task.exited":
       return upsertBackgroundTask(next, event, backgroundTaskTerminalStatus(event));
-    case "tool.approval_requested":
-      return upsertItem(
-        {
-          ...next,
-          runStatus: "needs_input",
-          needsInput: true,
-          activeTurnId: event.turn_id ?? next.activeTurnId,
-        },
-        event,
-        "started",
-      );
-    case "tool.approval_resolved":
-      return upsertItem(
-        {
-          ...next,
-          runStatus: next.activeTurnId ? "streaming" : "ready",
-          activeItemId: matchingActiveItem(next, event) ? null : next.activeItemId,
-          needsInput: false,
-        },
-        event,
-        completedItemStatus(event),
-      );
   }
 }
 

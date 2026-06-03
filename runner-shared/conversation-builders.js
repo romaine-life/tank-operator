@@ -98,6 +98,12 @@ export function turnEvent(args) {
   if (args.usageObservation !== undefined) payload.usage_observation = args.usageObservation;
   if (args.error !== undefined) payload.error = args.error;
   if (args.finalAnswer !== undefined) payload.final_answer = normalizeFinalAnswer(args.finalAnswer);
+  // turn.awaiting_input carries the Tank-canonical questions the agent asked
+  // (the handoff that ends the asking turn) plus the AskUserQuestion item ids
+  // the /answer endpoint targets. See docs/tank-conversation-protocol.md.
+  if (args.questions !== undefined) payload.questions = args.questions;
+  if (args.awaitingProviderItemID) payload.provider_item_id = args.awaitingProviderItemID;
+  if (args.awaitingTimelineID) payload.timeline_id = args.awaitingTimelineID;
   const event = {
     event_id: `${args.turnID}:${args.type}:${args.reason ?? args.providerEventID ?? "runner"}`,
     conversation_id: args.sessionID,
