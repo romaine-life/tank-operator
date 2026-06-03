@@ -39,7 +39,7 @@ afterEach(() => {
 test("home repo defaults round-trip through localStorage", () => {
   writeHomeSelectedRepos([
     "  romaine-life/tank-operator  ",
-    "NelsonG6/Tank-Operator",
+    "Romaine-Life/Tank-Operator",
     "romaine-life/infra-bootstrap",
     "romaine-life/mcp-tank-operator",
     "openai/codex",

@@ -87,7 +87,7 @@ test("normalizeRepoSlugs trims, dedupes, and caps staged repo defaults", () => {
   assert.deepEqual(
     normalizeRepoSlugs([
       "  romaine-life/tank-operator  ",
-      "NelsonG6/Tank-Operator",
+      "Romaine-Life/Tank-Operator",
       "bad slug",
       "romaine-life/infra-bootstrap",
       "romaine-life/mcp-tank-operator",
@@ -121,7 +121,7 @@ test("addRepoSlug rejects malformed slugs", () => {
 });
 
 test("addRepoSlug rejects case-insensitive duplicates", () => {
-  const result = addRepoSlug(["NelsonG6/Tank-Operator"], "romaine-life/tank-operator");
+  const result = addRepoSlug(["Romaine-Life/Tank-Operator"], "romaine-life/tank-operator");
   assert.equal(result.ok, false);
   assert.ok(result.ok === false && /already added/.test(result.error));
 });
@@ -169,7 +169,7 @@ test("recentRepoPreviewSlugs caps and filters recent repos", () => {
   const recent = [
     "romaine-life/tank-operator",
     "  bad slug  ",
-    "NelsonG6/Tank-Operator",
+    "Romaine-Life/Tank-Operator",
     "romaine-life/infra-bootstrap",
     "romaine-life/mcp-tank-operator",
     "openai/codex",
@@ -196,7 +196,7 @@ test("recentRepoShortcutSlugs keeps stable numbered recent choices", () => {
     recentRepoShortcutSlugs([
       "romaine-life/tank-operator",
       "  bad slug  ",
-      "NelsonG6/Tank-Operator",
+      "Romaine-Life/Tank-Operator",
       "romaine-life/infra-bootstrap",
       "romaine-life/mcp-tank-operator",
       "openai/codex",
@@ -216,7 +216,7 @@ test("pinnedRepoSlugs normalizes pins without the session repo cap", () => {
     pinnedRepoSlugs([
       "romaine-life/tank-operator",
       "bad slug",
-      "NelsonG6/Tank-Operator",
+      "Romaine-Life/Tank-Operator",
       "a/1",
       "b/2",
       "c/3",
@@ -238,12 +238,12 @@ test("pinnedRepoSlugs caps profile metadata", () => {
 test("repoShortcutSlugs orders pinned repos before recent repos", () => {
   assert.deepEqual(
     repoShortcutSlugs(
-      ["romaine-life/glimmung", "NelsonG6/Tank-Operator"],
+      ["romaine-life/glimmung", "Romaine-Life/Tank-Operator"],
       ["romaine-life/tank-operator", "romaine-life/infra-bootstrap", "openai/codex"],
     ),
     [
       "romaine-life/glimmung",
-      "NelsonG6/Tank-Operator",
+      "Romaine-Life/Tank-Operator",
       "romaine-life/infra-bootstrap",
       "openai/codex",
     ],
@@ -251,10 +251,10 @@ test("repoShortcutSlugs orders pinned repos before recent repos", () => {
 });
 
 test("pin helpers toggle case-insensitive pins", () => {
-  const pinned = pinRepoSlug(["romaine-life/tank-operator"], "NelsonG6/Glimmung");
-  assert.deepEqual(pinned, ["romaine-life/tank-operator", "NelsonG6/Glimmung"]);
+  const pinned = pinRepoSlug(["romaine-life/tank-operator"], "Romaine-Life/Glimmung");
+  assert.deepEqual(pinned, ["romaine-life/tank-operator", "Romaine-Life/Glimmung"]);
   assert.equal(isRepoPinned(pinned, "romaine-life/glimmung"), true);
-  assert.deepEqual(unpinRepoSlug(pinned, "NELSONG6/GLIMMUNG"), [
+  assert.deepEqual(unpinRepoSlug(pinned, "ROMAINE-LIFE/GLIMMUNG"), [
     "romaine-life/tank-operator",
   ]);
 });
@@ -307,11 +307,11 @@ test("reorderPinnedRepoSlugs supports adjacent (keyboard) single-step moves", ()
 test("reorderPinnedRepoSlugs matches slugs case-insensitively", () => {
   assert.deepEqual(
     reorderPinnedRepoSlugs(
-      ["NelsonG6/Tank-Operator", "nelsong6/glimmung", "openai/codex"],
+      ["Romaine-Life/Tank-Operator", "romaine-life/glimmung", "openai/codex"],
       "OPENAI/CODEX",
-      "nelsong6/tank-operator",
+      "romaine-life/tank-operator",
     ),
-    ["openai/codex", "NelsonG6/Tank-Operator", "nelsong6/glimmung"],
+    ["openai/codex", "Romaine-Life/Tank-Operator", "romaine-life/glimmung"],
   );
 });
 
