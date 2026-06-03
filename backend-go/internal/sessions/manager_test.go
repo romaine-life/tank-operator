@@ -227,6 +227,46 @@ func TestManagerCreateThreadsSelectedReposIntoPodManifest(t *testing.T) {
 	}
 }
 
+func TestManagerCreateAttachesBugLabel(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	registry := &managerTestRegistry{
+		avatarAssignment: sessionmodel.SessionAvatarAssignment{
+			AgentAvatarID:  "agent-1",
+			SystemAvatarID: "system-1",
+		},
+	}
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, registry, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			SessionImage:      "claude-image",
+			CodexSessionImage: "codex-image",
+		},
+	})
+
+	label := &sessionmodel.SessionBugLabel{
+		Name:        "Slow checkout",
+		Slug:        "slow-checkout",
+		DisplayName: "bug: Slow checkout",
+	}
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner:    "nelson@romaine.life",
+		Mode:     sessionmodel.ClaudeGUIMode,
+		BugLabel: label,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.BugLabel == nil || info.BugLabel.DisplayName != "bug: Slow checkout" {
+		t.Fatalf("created bug label = %#v, want %q", info.BugLabel, "bug: Slow checkout")
+	}
+	record, ok, err := registry.Get(context.Background(), "nelson@romaine.life", info.ID)
+	if err != nil || !ok {
+		t.Fatalf("registry get ok=%v err=%v", ok, err)
+	}
+	if record.BugLabel == nil || record.BugLabel.Slug != "slow-checkout" {
+		t.Fatalf("registry bug label = %#v, want slow-checkout", record.BugLabel)
+	}
+}
+
 func TestManagerCreateThreadsSpireLensCapabilityIntoPodManifest(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, nil, nil, ManagerOptions{
@@ -573,6 +613,9 @@ func (r *managerTestRegistry) Upsert(_ context.Context, record sessionmodel.Sess
 	r.upserts = append(r.upserts, record)
 	for i, existing := range r.records {
 		if strings.EqualFold(existing.Email, record.Email) && existing.ID == record.ID {
+			if record.BugLabel == nil {
+				record.BugLabel = existing.BugLabel
+			}
 			r.records[i] = record
 			return nil
 		}
@@ -587,6 +630,15 @@ func (r *managerTestRegistry) ReserveSessionAvatars(_ context.Context, _ string,
 }
 
 func (r *managerTestRegistry) SetName(context.Context, string, string, *string) error { return nil }
+func (r *managerTestRegistry) SetBugLabel(_ context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error {
+	for i, record := range r.records {
+		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
+			r.records[i].BugLabel = label
+			return nil
+		}
+	}
+	return nil
+}
 
 func (r *managerTestRegistry) SetTestState(context.Context, string, string, map[string]any) error {
 	return nil

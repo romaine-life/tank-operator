@@ -103,3 +103,23 @@ Named behaviors in the session-bar surface. See
   - `migrationPolicy.test.ts` "pin reorder writes through the durable
     pinned-repos endpoint" pins the reorder to the durable PUT path and forbids
     a browser-local order shadow.
+
+## session-bug-labels
+
+- **Status:** introduced
+- **Intent:** Let a user attach one loose Tank-native `bug: …` label to a
+  session without creating or managing a GitHub issue. Labels are for repeated
+  follow-up work on the same defect across several sessions/PRs.
+- **Durable source:** `bug_labels` stores normalized per-owner/per-scope label
+  names and slugs; `session_bug_labels` stores the one optional attachment for
+  each `(owner_email, session_scope, session_id)`.
+- **Runtime behavior:** the splash composer tool strip stages the label before
+  `POST /api/sessions`. Opening it lists existing owner/scope labels and
+  accepts a new typed value. Create-time saves are included in the
+  session-create request. Active-session editing is not exposed in the chat
+  composer.
+- **Reporting:** session repo reports include `bug_label` on each session row,
+  a `bug_labels` summary, and `totals.bug_label_count`. Repo attribution remains
+  unchanged; bug labels are a separate grouping.
+- **Non-goal:** labels are not task state, ownership queues, or GitHub issue
+  mirrors. They intentionally do not imply open/closed ordering semantics.

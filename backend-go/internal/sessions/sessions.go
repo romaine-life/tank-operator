@@ -58,6 +58,8 @@ type Info struct {
 	// Capabilities is the durable per-session capability list selected at
 	// create time. Empty means the default pod surface.
 	Capabilities []string `json:"capabilities"`
+	// BugLabel is the optional Tank-native bug bucket attached by the user.
+	BugLabel *sessionmodel.SessionBugLabel `json:"bug_label,omitempty"`
 	// RowVersion is the per-(owner, scope) monotonic cursor each
 	// sessions row carries (docs/session-list-redesign.md Phase 1).
 	// The SPA's SessionStore reads this to seed its EventSource
@@ -264,6 +266,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		Repos:                          repos,
 		CloneState:                     record.CloneState,
 		Capabilities:                   capabilities,
+		BugLabel:                       record.BugLabel,
 		RowVersion:                     record.RowVersion,
 		SidebarPosition:                record.SidebarPosition,
 		Model:                          record.Model,

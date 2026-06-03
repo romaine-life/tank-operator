@@ -1264,6 +1264,31 @@ var schemaMigrations = []migration{
 		ADD COLUMN IF NOT EXISTS runtime_context_window_source text NOT NULL DEFAULT ''`},
 	{ID: "0108", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_context_window_observed_at timestamptz`},
+
+	{ID: "0109", SQL: `CREATE TABLE IF NOT EXISTS bug_labels (
+		id            bigserial PRIMARY KEY,
+		owner_email   text NOT NULL,
+		session_scope text NOT NULL,
+		name          text NOT NULL,
+		slug          text NOT NULL,
+		created_at    timestamptz NOT NULL DEFAULT now(),
+		updated_at    timestamptz NOT NULL DEFAULT now(),
+		archived_at   timestamptz,
+		UNIQUE (owner_email, session_scope, slug)
+	)`},
+	{ID: "0110", SQL: `CREATE TABLE IF NOT EXISTS session_bug_labels (
+		owner_email   text NOT NULL,
+		session_scope text NOT NULL,
+		session_id    text NOT NULL,
+		bug_label_id  bigint NOT NULL REFERENCES bug_labels(id),
+		attached_at   timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (owner_email, session_scope, session_id),
+		FOREIGN KEY (owner_email, session_scope, session_id)
+			REFERENCES sessions(email, session_scope, session_id)
+			ON DELETE CASCADE
+	)`},
+	{ID: "0111", SQL: `CREATE INDEX IF NOT EXISTS session_bug_labels_label
+		ON session_bug_labels (bug_label_id, attached_at DESC)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
