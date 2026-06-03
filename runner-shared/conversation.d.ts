@@ -17,6 +17,7 @@ export const TANK_EVENT_TYPES: readonly [
   "turn.command_failed",
   "turn.interrupt_requested",
   "turn.interrupted",
+  "context.compacted",
   "session.status",
   "item.started",
   "item.completed",

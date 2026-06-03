@@ -42,6 +42,24 @@ function ev(
   };
 }
 
+test("context.compacted is a valid Tank envelope", () => {
+  const event = ev("c", "context.compacted", { source: "claude", payload: { trigger: "manual" } });
+  assert.equal(isTankConversationEvent(event), true);
+});
+
+test("context.compacted is an informational no-op for run state", () => {
+  const state = reduceConversationEvents([
+    ev("1", "turn.submitted"),
+    ev("2", "turn.started"),
+    ev("3", "context.compacted", { source: "claude", payload: { trigger: "auto", pre_tokens: 158000 } }),
+  ]);
+  assert.equal(state.runStatus, "streaming");
+  assert.equal(state.activeTurnId, "turn-1");
+  assert.equal(state.needsInput, false);
+  assert.equal(state.failed, false);
+  assert.equal(state.seenEventIds.includes("3"), true);
+});
+
 test("Codex interrupt is stopped state, not provider error", () => {
   const state = reduceConversationEvents([
     ev("1", "user_message.created", {

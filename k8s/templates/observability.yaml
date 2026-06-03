@@ -1106,6 +1106,29 @@ spec:
         # fixes it. The two alerts below tell on a regression of either
         # stage of the chain so a future change can't silently re-break it.
         #
+        # Stage 0 — backend accepted a Stop POST but could not resolve the
+        # targeted turn against durable state, persist turn.interrupt_requested,
+        # or publish the interrupt command. Symptoms: the button click reaches
+        # the backend but the product never gets a durable stopping or terminal
+        # state. Root cause universe: session-events database read/write
+        # failure, terminal lookup regression, or session-bus publish failure.
+        - alert: TankStopBackendFailed
+          expr: increase(tank_turn_interrupt_request_total{outcome=~"terminal_lookup_failed|persist_failed|publish_failed"}[10m]) > 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Backend failed to durably resolve a Stop request"
+            runbook: |
+              The orchestrator received a Stop request but could not complete
+              the durable boundary: it either failed the terminal-state lookup,
+              failed to persist turn.interrupt_requested, or failed to publish
+              the interrupt_turn command. The UI must not be left to infer
+              progress from a click alone. Check the tank-operator logs for
+              the matching interrupt request outcome, then inspect the
+              session-events store and session-bus health for the affected
+              session.
+
         # Stage 1 — backend persisted a request, runner control consumer
         # never claimed an interrupt_turn command. Symptoms: the user
         # presses Stop, the chip renders, nothing else happens. Root cause

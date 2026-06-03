@@ -36,6 +36,7 @@ type projectionState struct {
 	backgroundTasks   []*projectionBackgroundTask
 	backgroundIndex   map[string]int
 	interruptRequests []projectedEntryItem
+	contextNotices    []projectedEntryItem
 	turnUsages        map[string]turnUsageProjection
 	turnTerminals     map[string]turnTerminalProjection
 	runStatus         string
@@ -192,6 +193,8 @@ func (s *projectionState) apply(event map[string]any) {
 		s.activeTurnID = ""
 		s.activeItemID = ""
 		s.needsInput = false
+	case "context.compacted":
+		s.applyContextCompacted(event)
 	case "session.status":
 		s.applySessionStatus(event)
 	case "item.started":
@@ -391,6 +394,57 @@ func (s *projectionState) applyInterruptRequested(event map[string]any) {
 	}
 }
 
+// applyContextCompacted promotes a durable context.compacted event into the
+// main transcript as a system notice (meta row), mirroring the AskUserQuestion
+// handoff: a mid-turn, promotion-only row that stays visible in the settled
+// conversation surface rather than being folded into the Turn-activity
+// compact (see isProjectionContextCompacted). Compaction changes what the
+// agent remembers, so the user is entitled to see it in the surface they read.
+func (s *projectionState) applyContextCompacted(event map[string]any) {
+	turnID := transcriptString(event, "turn_id")
+	if turnID == "" {
+		return
+	}
+	detail := "Earlier context was automatically summarized to reclaim space."
+	if transcriptPayloadString(event, "trigger") == "manual" {
+		detail = "Earlier context was summarized on request to reclaim space."
+	}
+	if pre, ok := transcriptPayloadValue(event, "pre_tokens").(float64); ok && pre > 0 {
+		detail += " (~" + compactTokenLabel(pre) + " tokens before compaction)"
+	}
+	entry := map[string]any{
+		"id":       transcriptString(event, "event_id"),
+		"kind":     "meta",
+		"metaKind": "context_compacted",
+		"turnId":   turnID,
+		"meta": map[string]any{
+			"title":    "Context compacted",
+			"detail":   detail,
+			"severity": "info",
+		},
+		"clientNonce":   transcriptString(event, "client_nonce"),
+		"time":          transcriptString(event, "created_at"),
+		"sourceEventId": transcriptString(event, "event_id"),
+		"orderKey":      transcriptString(event, "order_key"),
+	}
+	s.contextNotices = append(s.contextNotices, projectedEntryItem{
+		entry:    entry,
+		orderKey: transcriptString(event, "order_key"),
+		index:    len(s.contextNotices),
+	})
+}
+
+func compactTokenLabel(n float64) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fm", n/1_000_000)
+	case n >= 1_000:
+		return strconv.Itoa(int(n/1_000)) + "k"
+	default:
+		return strconv.Itoa(int(n))
+	}
+}
+
 func (s *projectionState) upsertItem(event map[string]any, status string) {
 	if projectionIsCodexUserMessageEcho(event) {
 		return
@@ -529,7 +583,7 @@ func (s *projectionState) upsertBackgroundTask(event map[string]any, status stri
 }
 
 func (s *projectionState) projectFlatEntries() []map[string]any {
-	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.turnUsages)+len(s.turnTerminals))
+	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextNotices)+len(s.turnUsages)+len(s.turnTerminals))
 	items = append(items, s.messages...)
 	baseIndex := len(items)
 	backgroundProviderIDs := s.backgroundProviderItemIDs()
@@ -582,6 +636,11 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 		items = append(items, request)
 	}
 	baseIndex += len(s.interruptRequests)
+	for idx, notice := range s.contextNotices {
+		notice.index = baseIndex + idx
+		items = append(items, notice)
+	}
+	baseIndex += len(s.contextNotices)
 	offset := 0
 	for _, usage := range s.turnUsages {
 		entry := projectTurnUsage(usage)
@@ -919,7 +978,7 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 		for _, idx := range indexes {
 			entry := entries[idx]
 			if isProjectedUserMessage(entry) || isProjectionTerminalMetaEntry(entry, terminal) ||
-				isProjectionNeedsInputAnnouncement(entry) {
+				isProjectionNeedsInputAnnouncement(entry) || isProjectionContextCompacted(entry) {
 				continue
 			}
 			activityEntries = append(activityEntries, entry)
@@ -944,7 +1003,8 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string) []
 		if transcriptMapString(entry, "turnId") == activeTurnID &&
 			transcriptMapString(entry, "turnTerminalStatus") == "" &&
 			!isProjectedUserMessage(entry) &&
-			!isProjectionNeedsInputAnnouncement(entry) {
+			!isProjectionNeedsInputAnnouncement(entry) &&
+			!isProjectionContextCompacted(entry) {
 			activityEntries = append(activityEntries, entry)
 		}
 	}
@@ -1125,6 +1185,16 @@ func isProjectedUserMessage(entry map[string]any) bool {
 func isProjectionNeedsInputAnnouncement(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "meta" &&
 		transcriptMapString(entry, "metaKind") == "needs_input_announcement"
+}
+
+// isProjectionContextCompacted is the activity-compact opt-out for the
+// context.compacted notice projected by applyContextCompacted. Like the
+// AskUserQuestion handoff, the notice is a transcript-level system notice,
+// not Turn-activity noise, so terminalProjectedActivities and
+// activeProjectedActivities must not fold it into the collapsed shell.
+func isProjectionContextCompacted(entry map[string]any) bool {
+	return transcriptMapString(entry, "kind") == "meta" &&
+		transcriptMapString(entry, "metaKind") == "context_compacted"
 }
 
 // projectNeedsInputAnnouncement returns a meta-kind row that promotes an

@@ -73,6 +73,67 @@ Evidence:
   completed turn can retain a Turn activity log copy of assistant prose while
   exposing only one settled transcript message for counts and message actions.
 
+## Context Compaction Notice
+
+Status: active (Claude); Codex blocked on provider signal
+
+Intent:
+Surface provider context compaction — the agent summarizing earlier
+conversation to reclaim context-window space — as a durable, visible transcript
+row, so a user returning to a long session can see that the agent's memory of
+earlier turns was condensed, and whether it was automatic or a manual
+`/compact`. Previously this was invisible: the Claude SDK's
+`system/compact_boundary` fell through the runner adapter to a silent `return
+[]`, so neither the durable ledger nor the UI recorded it. Two sessions that
+compacted left no transcript trace, which is what surfaced this gap.
+
+Affected contracts:
+- Transcript
+- Tank Conversation Protocol
+
+Contract impact:
+- `context.compacted` is a first-class Tank event type (schema + runner-shared
+  + Go contract, kept in lockstep by the contract checks). The runner is its
+  sole producer; the durable `session_events` ledger records every compaction,
+  queryable independently of the UI.
+- The server projection promotes it into the main transcript as a `meta` row
+  (`metaKind: context_compacted`), excluded from the Turn-activity compact —
+  promotion-only, like the AskUserQuestion handoff row. The frontend renders it
+  through the existing `RunMetaBlock` primitive.
+- The silent-drop class that hid it is now observable:
+  `tank_runner_unmapped_provider_event_total{type,subtype}` counts any provider
+  event the adapter neither maps nor explicitly ignores. Steady state zero.
+
+Evidence:
+- Schema/contract: `schemas/tank-conversation-event.schema.json`,
+  `runner-shared/conversation.{js,d.ts}`,
+  `backend-go/internal/conversation/types.go`;
+  `schemas/tank-conversation-event.fixtures.json` carries the canonical fixture
+  validated by `scripts/check-tank-conversation-contract.mjs` and the Go
+  contract test.
+- Producer: `agent-runner/src/adapters/claude.ts` maps
+  `system/compact_boundary`; `agent-runner/src/adapters/claude.test.ts` pins
+  the mapping and the malformed-metadata default.
+- Producer: `codex-runner/src/appServerTransport.ts` maps the Codex App Server
+  `thread/compacted` notification and generated `contextCompaction` item
+  lifecycle to the runner's `context.compacted` event, deduped by provider turn
+  id. `codex-runner/src/adapters/codex.ts` emits the durable Tank envelope with
+  `source=codex`.
+- Projection: `backend-go/cmd/tank-operator/transcript_projection.go`
+  (`applyContextCompacted`, `isProjectionContextCompacted`);
+  `transcript_projection_test.go` proves promotion plus compact exclusion.
+- Observability: `agent-runner/src/metrics.ts` →
+  `tank_runner_unmapped_provider_event_total`.
+
+Codex-specific notes:
+- The installed Codex App Server protocol (`@openai/codex@0.130.0`,
+  generated via `codex app-server generate-ts`) exposes
+  `thread/compacted { threadId, turnId }`, marked deprecated in favor of a
+  `contextCompaction` item type. Tank maps both surfaces to the same durable
+  notice and records one row per provider turn. Codex does not expose reliable
+  manual/auto trigger or pre-token metadata on these surfaces, so the runner
+  defaults `payload.trigger` to `auto`.
+
 ## Transcript Refresh Shortcut (R)
 
 Status: active

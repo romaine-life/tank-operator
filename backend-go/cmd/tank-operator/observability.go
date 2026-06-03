@@ -342,8 +342,9 @@ var (
 
 	// turnInterruptRequestTotal counts stop requests posted to /interrupt,
 	// labeled by outcome at each exit point. Steady-state expectation:
-	// persisted dominates; persist_failed and publish_failed near zero.
-	// Cardinality bounded at 3, respects docs/observability.md budget.
+	// persisted dominates; already_terminal is a legitimate race; failures
+	// remain near zero. Cardinality is a fixed small set, respecting
+	// docs/observability.md budget.
 	// The "stopping" durable-state migration is observable through this
 	// counter — a regression that lets requests slip silently shows up as
 	// a divergence between persisted and the durable session_events ledger

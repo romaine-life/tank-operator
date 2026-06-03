@@ -18,14 +18,22 @@
 //   - Already-selected suggestions are visually dimmed and a no-op
 //     to click — clearer than removing them from the list, which
 //     would reorder things every time the user clicks a chip.
+//   - Pin order is user-controlled by drag-and-drop on two surfaces:
+//     the always-visible numbered "Pinned" shortcuts (drag a chip) and
+//     the full "Pinned" list inside the panel (drag a grip handle, or
+//     use ArrowUp/ArrowDown for keyboard reorder). Both share one drag
+//     implementation (usePinDragReorder). The durable pinned_repos[]
+//     order IS the pin order and the shortcut order, so every reorder
+//     is the same PUT the pin toggle uses — the parent owns the
+//     optimistic-then-reconciled write.
 //
 // The parent (App.tsx) owns all state — selected[], recent[], the
 // open flag, the input value, and the inline validation error. This
 // keeps the picker a pure render of the parent's state, which is
 // what the vitest in RepoPicker.test.tsx asserts.
 
-import { useCallback, useEffect, useMemo, useRef } from "react";
-import { PinIcon } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { GripVertical, PinIcon } from "lucide-react";
 
 import { isValidRepoSlug, isRepoPinned, repoShortcutSlugs } from "../repos";
 
@@ -73,6 +81,10 @@ export interface RepoPickerProps {
   onAdd: (slug: string) => void;
   onSelectExclusive: (slug: string) => void;
   onTogglePin: (slug: string) => void;
+  /** Reorder the durable pin list by moving `sourceSlug` relative to
+   *  `targetSlug`. Wired to the same PUT /api/github/pinned-repos write
+   *  as pin/unpin — the pinned_repos[] order is the pin order. */
+  onReorderPin: (sourceSlug: string, targetSlug: string) => void;
   onRemove: (slug: string) => void;
 }
 
@@ -95,6 +107,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
     onAdd,
     onSelectExclusive,
     onTogglePin,
+    onReorderPin,
     onRemove,
   } = props;
 
@@ -204,6 +217,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
               busy={busy}
               onSelectExclusive={onSelectExclusive}
               onTogglePin={onTogglePin}
+              onReorderPin={onReorderPin}
             />
           )}
           {recentPreview.length > 0 && (
@@ -259,6 +273,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
             busy={busy}
             onAdd={onAdd}
             onTogglePin={onTogglePin}
+            onReorderPin={onReorderPin}
           />
           <div className="home-repos-help">
             Selected repos clone into <code>/workspace</code> at session start.
@@ -267,6 +282,69 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
       )}
     </section>
   );
+}
+
+// NOOP_REORDER is a stable no-op so usePinDragReorder can be called
+// unconditionally (rules of hooks) from a section that isn't reorderable.
+const NOOP_REORDER = (): void => {};
+
+// usePinDragReorder is the shared HTML5 drag-and-drop reorder behavior for the
+// pinned-repo surfaces: the always-visible shortcut preview and the picker
+// panel's full Pinned list. Both reorder the same durable list, so they share
+// one drag implementation — `dragHandlers(slug)` spreads onto a list item and
+// `itemState(slug)` drives the dragging/drop-target styling. The actual reorder
+// is slug-based (`onReorderPin(source, target)`), so dragging works the same
+// whether the surface shows the full list or just the first few pins.
+function usePinDragReorder(
+  busy: boolean,
+  onReorderPin: (sourceSlug: string, targetSlug: string) => void,
+) {
+  const [draggingSlug, setDraggingSlug] = useState<string | null>(null);
+  const [overSlug, setOverSlug] = useState<string | null>(null);
+
+  const clearDrag = useCallback(() => {
+    setDraggingSlug(null);
+    setOverSlug(null);
+  }, []);
+
+  const itemState = (slug: string) => {
+    const key = slug.toLowerCase();
+    const isDragging = draggingSlug?.toLowerCase() === key;
+    const isDropTarget =
+      !!draggingSlug && !isDragging && overSlug?.toLowerCase() === key;
+    return { isDragging, isDropTarget };
+  };
+
+  const dragHandlers = (slug: string) => ({
+    draggable: !busy,
+    onDragStart: (e: React.DragEvent) => {
+      if (busy) return;
+      setDraggingSlug(slug);
+      setOverSlug(slug);
+      e.dataTransfer.effectAllowed = "move";
+      // Firefox requires data to be set for a drag to start.
+      e.dataTransfer.setData("text/plain", slug);
+    },
+    onDragEnter: () => {
+      if (draggingSlug) setOverSlug(slug);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!draggingSlug) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (overSlug?.toLowerCase() !== slug.toLowerCase()) setOverSlug(slug);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      if (draggingSlug && draggingSlug.toLowerCase() !== slug.toLowerCase()) {
+        onReorderPin(draggingSlug, slug);
+      }
+      clearDrag();
+    },
+    onDragEnd: clearDrag,
+  });
+
+  return { itemState, dragHandlers };
 }
 
 interface RepoPreviewItem {
@@ -282,18 +360,42 @@ interface RepoPreviewSectionProps {
   busy: boolean;
   onSelectExclusive: (slug: string) => void;
   onTogglePin: (slug: string) => void;
+  /** When provided, the section's chips become drag-to-reorder — used for the
+   *  always-visible Pinned shortcuts so users can rearrange pin order without
+   *  opening the picker. Reorder runs through the same durable PUT as the panel
+   *  Pinned list; Recent chips never receive this (recency is not user-ordered). */
+  onReorderPin?: (sourceSlug: string, targetSlug: string) => void;
 }
 
 function RepoPreviewSection(props: RepoPreviewSectionProps): JSX.Element {
-  const { label, items, selectedLower, busy, onSelectExclusive, onTogglePin } = props;
+  const { label, items, selectedLower, busy, onSelectExclusive, onTogglePin, onReorderPin } =
+    props;
+  // Called unconditionally (rules of hooks); a section is reorderable only when
+  // a reorder callback is supplied and there is more than one chip to order.
+  const { itemState, dragHandlers } = usePinDragReorder(busy, onReorderPin ?? NOOP_REORDER);
+  const reorderable = !!onReorderPin && items.length > 1;
   return (
     <div className="home-repos-preview-group">
-      <div className="home-repos-recent-label">{label}</div>
+      <div className="home-repos-recent-label">
+        {label}
+        {reorderable && (
+          <span className="home-repos-recent-count"> (drag to reorder)</span>
+        )}
+      </div>
       <ul className="home-repos-recent-list" role="list">
         {items.map((item) => {
           const selectedRecent = selectedLower.has(item.slug.toLowerCase());
+          const { isDragging, isDropTarget } = reorderable
+            ? itemState(item.slug)
+            : { isDragging: false, isDropTarget: false };
+          const dnd = reorderable ? dragHandlers(item.slug) : {};
+          const itemClass =
+            "home-repos-recent-item" +
+            (reorderable ? " home-repos-reorderable-chip" : "") +
+            (isDragging ? " is-dragging" : "") +
+            (isDropTarget ? " is-drop-target" : "");
           return (
-            <li key={`preview:${item.slug}`} className="home-repos-recent-item">
+            <li key={`preview:${item.slug}`} className={itemClass} {...dnd}>
               <button
                 type="button"
                 className={
@@ -302,7 +404,7 @@ function RepoPreviewSection(props: RepoPreviewSectionProps): JSX.Element {
                 }
                 onClick={() => onSelectExclusive(item.slug)}
                 disabled={busy}
-                title={item.slug}
+                title={reorderable ? `${item.slug} — drag to reorder` : item.slug}
                 aria-pressed={selectedRecent}
                 aria-keyshortcuts={String(item.shortcut)}
                 aria-label={`Select ${label.toLowerCase()} repository ${item.shortcut}: ${item.slug}`}
@@ -350,10 +452,11 @@ interface RepoPickerSuggestionsProps {
   busy: boolean;
   onAdd: (slug: string) => void;
   onTogglePin: (slug: string) => void;
+  onReorderPin: (sourceSlug: string, targetSlug: string) => void;
 }
 
 function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
-  const { input, pinned, recent, allRepos, selectedLower, busy, onAdd, onTogglePin } = props;
+  const { input, pinned, recent, allRepos, selectedLower, busy, onAdd, onTogglePin, onReorderPin } = props;
   const trimmed = input.trim();
   const looksLikeSlug = trimmed !== "" && isValidRepoSlug(trimmed);
 
@@ -421,18 +524,33 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
 
   return (
     <div className="home-repos-sections">
-      {filteredPinned.length > 0 && (
-        <RepoSection
-          label="Pinned"
-          slugs={filteredPinned}
-          filtered={trimmed !== ""}
-          selectedLower={selectedLower}
-          pinnedLower={pinnedLower}
-          busy={busy}
-          onAdd={onAdd}
-          onTogglePin={onTogglePin}
-        />
-      )}
+      {filteredPinned.length > 0 &&
+        (trimmed === "" ? (
+          // Unfiltered: the Pinned section lists the full pin set in its
+          // durable order, so it is the canonical reorder surface — drag a
+          // grip handle (or use the arrow keys) to rearrange. A search filter
+          // shows only a subset, where "reorder" has no well-defined meaning,
+          // so the filtered branch falls back to the static RepoSection.
+          <DraggablePinnedSection
+            slugs={filteredPinned}
+            selectedLower={selectedLower}
+            busy={busy}
+            onAdd={onAdd}
+            onTogglePin={onTogglePin}
+            onReorderPin={onReorderPin}
+          />
+        ) : (
+          <RepoSection
+            label="Pinned"
+            slugs={filteredPinned}
+            filtered
+            selectedLower={selectedLower}
+            pinnedLower={pinnedLower}
+            busy={busy}
+            onAdd={onAdd}
+            onTogglePin={onTogglePin}
+          />
+        ))}
       {filteredRecent.length > 0 && (
         <RepoSection
           label="Recent"
@@ -506,6 +624,124 @@ function RepoSection(props: RepoSectionProps): JSX.Element {
               <PinToggleButton
                 slug={slug}
                 pinned={pinnedRepo}
+                busy={busy}
+                onTogglePin={onTogglePin}
+              />
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+// DraggablePinnedSection renders the unfiltered "Pinned" list as a
+// drag-and-drop / keyboard reorderable list. It is the canonical surface for
+// rearranging pins: the durable pinned_repos[] order is the pin order (and the
+// splash shortcut order), so dropping or arrow-key-moving a row issues a
+// reorder through the same PUT the pin toggle uses. The grip handle is the
+// drag origin and an accessible reorder control (ArrowUp/ArrowDown), so pointer
+// and keyboard users get the same capability. Filtered/partial pin lists fall
+// back to the static RepoSection — reordering a subset has no clear meaning.
+interface DraggablePinnedSectionProps {
+  slugs: string[];
+  selectedLower: ReadonlySet<string>;
+  busy: boolean;
+  onAdd: (slug: string) => void;
+  onTogglePin: (slug: string) => void;
+  onReorderPin: (sourceSlug: string, targetSlug: string) => void;
+}
+
+function DraggablePinnedSection(props: DraggablePinnedSectionProps): JSX.Element {
+  const { slugs, selectedLower, busy, onAdd, onTogglePin, onReorderPin } = props;
+  const { itemState, dragHandlers } = usePinDragReorder(busy, onReorderPin);
+  // After a keyboard move the list re-renders in a new order; keep focus on the
+  // row the user is moving so repeated ArrowUp/ArrowDown presses keep working.
+  const handleRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map());
+  const pendingFocusSlug = useRef<string | null>(null);
+
+  // Keep keyboard focus on the row the user is moving. After an arrow-key
+  // reorder the list re-renders in the new order and the grip is briefly
+  // disabled while the durable write is in flight; depend on `busy` and only
+  // clear the pending focus once the (now-enabled) handle actually takes focus,
+  // so a keyboard user can chain ArrowUp/ArrowDown moves without losing place.
+  useEffect(() => {
+    const slug = pendingFocusSlug.current;
+    if (!slug) return;
+    const handle = handleRefs.current.get(slug.toLowerCase());
+    if (handle && !handle.disabled) {
+      pendingFocusSlug.current = null;
+      handle.focus();
+    }
+  }, [slugs, busy]);
+
+  const moveByKeyboard = useCallback(
+    (slug: string, direction: -1 | 1) => {
+      if (busy) return;
+      const index = slugs.findIndex((s) => s.toLowerCase() === slug.toLowerCase());
+      const targetIndex = index + direction;
+      if (index === -1 || targetIndex < 0 || targetIndex >= slugs.length) return;
+      pendingFocusSlug.current = slug;
+      onReorderPin(slug, slugs[targetIndex]!);
+    },
+    [slugs, busy, onReorderPin],
+  );
+
+  return (
+    <div className="home-repos-recent">
+      <div className="home-repos-recent-label">
+        Pinned
+        {slugs.length > 1 && (
+          <span className="home-repos-recent-count"> (drag or use arrow keys to reorder)</span>
+        )}
+      </div>
+      <ul className="home-repos-recent-list home-repos-pinned-reorder" role="list">
+        {slugs.map((slug, index) => {
+          const alreadyPicked = selectedLower.has(slug.toLowerCase());
+          const { isDragging, isDropTarget } = itemState(slug);
+          const itemClass =
+            "home-repos-recent-item home-repos-pinned-reorder-item" +
+            (isDragging ? " is-dragging" : "") +
+            (isDropTarget ? " is-drop-target" : "");
+          return (
+            <li
+              key={`Pinned:${slug}`}
+              className={itemClass}
+              aria-label={`Pinned repository ${slug}, position ${index + 1} of ${slugs.length}`}
+              {...dragHandlers(slug)}
+            >
+              <button
+                type="button"
+                className="home-repos-drag-handle"
+                ref={(el) => handleRefs.current.set(slug.toLowerCase(), el)}
+                disabled={busy}
+                aria-label={`Reorder ${slug}. Use arrow up and arrow down keys, or drag.`}
+                aria-keyshortcuts="ArrowUp ArrowDown"
+                title="Drag to reorder, or focus and use arrow keys"
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowUp") {
+                    e.preventDefault();
+                    moveByKeyboard(slug, -1);
+                  } else if (e.key === "ArrowDown") {
+                    e.preventDefault();
+                    moveByKeyboard(slug, 1);
+                  }
+                }}
+              >
+                <GripVertical aria-hidden="true" className="home-repos-drag-handle-icon" />
+              </button>
+              <button
+                type="button"
+                className={"home-repos-recent-chip" + (alreadyPicked ? " is-disabled" : "")}
+                onClick={() => !alreadyPicked && onAdd(slug)}
+                disabled={busy || alreadyPicked}
+                title={alreadyPicked ? `${slug} (already added)` : slug}
+              >
+                {slug}
+              </button>
+              <PinToggleButton
+                slug={slug}
+                pinned
                 busy={busy}
                 onTogglePin={onTogglePin}
               />

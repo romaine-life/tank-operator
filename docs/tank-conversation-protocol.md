@@ -193,6 +193,10 @@ Turn lifecycle:
 - `turn.interrupt_requested`
 - `turn.interrupted`
 
+Context lifecycle:
+
+- `context.compacted`
+
 Item lifecycle:
 
 - `item.started`
@@ -359,6 +363,34 @@ Items are snapshotted via `item.started` → `item.completed`; if a future
 live channel for partial tokens lands, restore both the event type and
 the visibility together.
 
+### Context Compaction Notice
+
+Context compaction — the provider summarizing earlier conversation to reclaim
+context-window space — is a durable `context.compacted` event, not a silent
+provider-internal action. This is distinct from *Transcript Compaction* above:
+that folds a turn's activity rows into a collapsed shell for display; this
+records that the agent's working memory of earlier turns was condensed.
+
+`context.compacted` is `actor=runner`, `source` is the provider that compacted
+(`claude` or `codex`), and the payload carries `trigger` (`auto` when the
+context filled, `manual` for an explicit `/compact`) plus optional `pre_tokens`
+(the token count before compaction). When a provider does not expose trigger or
+token metadata, the runner still emits the durable notice and defaults
+`trigger` to `auto` rather than inventing unsupported metadata. The server
+projection promotes it into the main transcript as a `meta` row
+(`metaKind: context_compacted`), excluded from the Turn-activity compact via
+`isProjectionContextCompacted` — the same promotion-only treatment as the
+AskUserQuestion handoff row, because a memory change is settled-conversation
+context the user reads, not turn-activity noise.
+
+A provider event the runner adapter neither maps to a Tank event nor explicitly
+ignores increments `tank_runner_unmapped_provider_event_total{type,subtype}`
+(`agent-runner/src/runner.ts` → `logUnhandledSdkMessage`). This counter is the
+backstop for the silent-drop class that hid compaction in the first place:
+`compact_boundary` used to fall through to `return []` with no durable event and
+no metric. Steady state is zero; a spike names the next provider event to map or
+explicitly ignore — the discipline this protocol's migration guardrails require.
+
 ## Provider Mappings
 
 Claude SDK adapter:
@@ -376,6 +408,8 @@ Claude SDK adapter:
 | `result` success | `turn.completed` | Include usage when present. Include `payload.final_answer` when the turn emitted a final assistant text item. |
 | `result` error | `turn.failed` | Provider error, not user interrupt. |
 | SDK interrupt acknowledgement | `turn.interrupted` | Must not render as provider error. |
+| `system/compact_boundary` | `context.compacted` | `actor=runner`, `source=claude`. Carries `payload.trigger` (`auto`/`manual`) and optional `pre_tokens` from the SDK's `compact_metadata`. Promoted to the main transcript as a system notice. |
+| `system/init` | ignored | Session-init metadata, not a transcript event. Any OTHER unmapped `system/*` subtype increments `tank_runner_unmapped_provider_event_total` rather than vanishing silently. |
 | `stream_event`, status, hooks, plugin changes | ignored | Per-token deltas are not on the Tank surface; restoring requires re-adding `item.delta` + `live-only` together. |
 
 Codex SDK adapter:
@@ -386,6 +420,7 @@ Codex SDK adapter:
 | `turn.started` | `turn.started` | Preserve provider turn id when available. |
 | `item.started` | `item.started` | Tool-like items drive active item state. |
 | `item.updated` | ignored (no Tank event) | Adapter still observes ordinary frames so `item.completed` can fall back to the last running text; no Tank event reaches the bus. Codex unified-exec background terminal updates are the exception and map to `shell_task.updated`. |
+| `thread/compacted` or `contextCompaction` item | `context.compacted` | `actor=runner`, `source=codex`. `thread/compacted` is the Codex App Server notification shape generated from `@openai/codex@0.130.0`; it carries `threadId` and provider `turnId`. The generated protocol marks it deprecated in favor of a `contextCompaction` thread item, so the transport maps both surfaces and dedupes by provider turn id. Codex does not expose trigger or pre-token metadata here, so the payload defaults to `trigger="auto"`. |
 | `userMessage` item echo | ignored (no Tank event) | Tank owns submitted user input through the backend-published `user_message.created` event. Provider echoes of that input must not enter the durable item stream or render as tool calls. |
 | `item.completed` message/reasoning/tool | `item.completed` or `item.failed` | Map command, file change, MCP, and web search to tool item payloads. Nonzero exit codes and provider status `failed` with no execution error map to `payload.outcome.kind="result_failed"`. A non-null provider item error maps to `item.failed` with `outcome.kind="execution_failed"`. |
 | `commandExecution` with `source=unifiedExecStartup` or `source=unifiedExecInteraction` | `shell_task.started`, `shell_task.updated`, `shell_task.exited` | Codex App Server background terminals are session-owned processes. `processId` is the preferred `task_id`; `thread/backgroundTerminals/clean` is the explicit action that stops them. |

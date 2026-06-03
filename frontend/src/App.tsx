@@ -151,6 +151,7 @@ import {
   isRepoPinned,
   pinRepoSlug,
   pinnedRepoSlugs,
+  reorderPinnedRepoSlugs,
   repoShortcutSlugs,
   removeRepoSlug,
   unpinRepoSlug,
@@ -368,7 +369,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // on rows it wants surfaced specially in chat — see
   // backend-go/cmd/tank-operator/transcript_projection.go →
   // projectNeedsInputAnnouncement.
-  metaKind?: "needs_input_announcement" | "turn_usage";
+  metaKind?: "needs_input_announcement" | "turn_usage" | "context_compacted";
   // For `needs_input_announcement` rows: the AskUserQuestion item's
   // provider id and the turn it lives on, so RunNeedsInputAnnouncement's
   // click handler can navigate the user to the Turns tab scrolled to the
@@ -11883,6 +11884,27 @@ function ChatPane({
       }
       throw new Error(detail);
     }
+    let body: unknown = null;
+    try {
+      body = await res.json();
+    } catch {
+      body = null;
+    }
+    if (
+      body &&
+      typeof body === "object" &&
+      !Array.isArray(body) &&
+      (body as { status?: unknown }).status === "already_terminal"
+    ) {
+      const terminalType = (body as { target_terminal_type?: unknown }).target_terminal_type;
+      currentRunRef.current = null;
+      activeInterruptTargetRef.current = null;
+      setRenderedActiveTurnId(null);
+      setActiveTool(null);
+      setRunning(false);
+      setRunStatus(terminalType === "turn.failed" || terminalType === "turn.command_failed" ? "error" : "done");
+      void refreshSdkRunHistory(true, "terminal-refresh");
+    }
   }
 
   async function stopBackgroundTask(entry: TranscriptEntry): Promise<void> {
@@ -12605,6 +12627,22 @@ function ChatPane({
     },
     [ensureTurnActivityLoaded, fetchPaneResource, publicView, scopedSessionPathForPane, session.id],
   );
+  // Observe the unavailable-target render once per transition into it, on the
+  // bounded session-event client-events channel (per the transcript-navigation
+  // contract). Covers both the cold-load bad/non-numeric segment and a
+  // resolver miss; the ref de-dupes so a re-render doesn't re-emit.
+  const unavailableTargetLoggedRef = useRef(false);
+  useEffect(() => {
+    if (!routeTurnUnavailable) {
+      unavailableTargetLoggedRef.current = false;
+      return;
+    }
+    if (unavailableTargetLoggedRef.current) return;
+    unavailableTargetLoggedRef.current = true;
+    logSessionEventStreamEvent("turn_number_unavailable_target", {
+      sessionMode: session.mode,
+    });
+  }, [routeTurnUnavailable, session.mode]);
   useEffect(() => {
     if (turnViewItems.length === 0) {
       if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);
@@ -12645,7 +12683,14 @@ function ChatPane({
     if (publicView) return;
     if (!visible || pendingScrollMessageId) return;
     if (activeTab === "turns") {
-      replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber);
+      // While showing the unavailable-target state, leave the URL at the
+      // requested (unresolvable) turn segment instead of rewriting it to the
+      // latest turn. That keeps the unavailable state reload-stable — a refresh
+      // re-shows the explicit "this turn isn't available" view rather than
+      // silently landing on the latest turn.
+      if (!routeTurnUnavailable) {
+        replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber);
+      }
     } else if (activeTab === "settings") {
       replaceAppRoute("settings", settingsTab, adminView);
     } else if (activeTab === "help") {
@@ -12653,7 +12698,7 @@ function ChatPane({
     } else {
       replaceSessionRoute(session.id, "chat");
     }
-  }, [activeTab, adminView, pendingScrollMessageId, publicView, routedSelectedTurnNumber, session.id, settingsTab, visible]);
+  }, [activeTab, adminView, pendingScrollMessageId, publicView, routeTurnUnavailable, routedSelectedTurnNumber, session.id, settingsTab, visible]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -15163,6 +15208,53 @@ function AuthenticatedApp() {
       });
   }, [pinnedRepos, pinnedReposSaving, applyPinnedReposSnapshot]);
 
+  // Drag-and-drop / keyboard reorder of the durable pin list. The pinned_repos
+  // text[] order IS the pin order (and the splash shortcut order), so a reorder
+  // is the same PUT /api/github/pinned-repos write as a pin/unpin — just with a
+  // reordered list. We optimistically apply the new order for an immediate drag
+  // feel, reconcile against the authoritative PUT response, and revert to the
+  // pre-drag order if the durable write fails so local state never persistently
+  // contradicts the profile row.
+  const reorderPinnedRepo = useCallback(
+    (sourceSlug: string, targetSlug: string) => {
+      if (pinnedReposSaving) return;
+      const current = pinnedRepoSlugs(pinnedRepos);
+      const next = reorderPinnedRepoSlugs(current, sourceSlug, targetSlug);
+      if (stringArraysEqual(current, next)) return;
+      const previous = pinnedRepos;
+      setPinnedRepos(next);
+      setPinnedReposSaving(true);
+      setRepoError(null);
+      void authedFetch("/api/github/pinned-repos", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repos: next }),
+      })
+        .then(async (res) => {
+          const body = (await res.json().catch(() => ({}))) as Partial<PinnedReposResponse> & {
+            detail?: string;
+          };
+          if (!res.ok) {
+            throw new Error(
+              typeof body.detail === "string"
+                ? body.detail
+                : `pin reorder failed: ${res.status}`,
+            );
+          }
+          applyPinnedReposSnapshot(body.repos, body.updated_at);
+        })
+        .catch((e) => {
+          setPinnedRepos(previous);
+          setRepoError(errorMessage(e));
+          setRepoPickerOpen(true);
+        })
+        .finally(() => {
+          setPinnedReposSaving(false);
+        });
+    },
+    [pinnedRepos, pinnedReposSaving, applyPinnedReposSnapshot],
+  );
+
   const selectExclusiveRepo = useCallback((rawSlug: string) => {
     const result = addRepoSlug([], rawSlug);
     if (result.ok) {
@@ -17212,6 +17304,7 @@ function AuthenticatedApp() {
                       }}
                       onSelectExclusive={selectExclusiveRepo}
                       onTogglePin={togglePinnedRepo}
+                      onReorderPin={reorderPinnedRepo}
                       onRemove={(slug) => {
                         setSelectedRepos((prev) => removeRepoSlug(prev, slug));
                         setRepoError(null);

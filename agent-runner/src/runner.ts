@@ -67,9 +67,11 @@ import {
   providerControlTotal,
   providerErrorTotal,
   providerFailureClassTotal,
+  providerRateLimitEventTotal,
   recordTurnStart,
   recordTurnTerminal,
   scheduledWakeupRegisterTotal,
+  unmappedProviderEventTotal,
 } from "./metrics.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js";
@@ -202,15 +204,25 @@ export function classifyProviderFailure(message: string): ProviderFailureClass {
 export function logUnhandledSdkMessage(message: SDKMessage): void {
   const m = message as Record<string, unknown> & { type?: unknown };
   const type = typeof m.type === "string" ? m.type : "";
+  const subtype = typeof m.subtype === "string" ? m.subtype : "";
   if (
     type === "assistant" ||
     type === "user" ||
     type === "result" ||
     isClaudeTaskLifecycleMessage(m as ClaudeProviderEvent) ||
-    type === "stream_event"
+    type === "stream_event" ||
+    // system/init is session-setup metadata; system/compact_boundary is now
+    // mapped by the Claude adapter to context.compacted. Both are explicitly
+    // ignored here so they don't inflate the unmapped-drop counter.
+    (type === "system" && (subtype === "init" || subtype === "compact_boundary"))
   ) {
     return;
   }
+  // Anything still here is a provider event the adapter neither mapped nor
+  // explicitly ignored — the silent-drop class that hid context compaction.
+  // Count it (bounded type/subtype labels) so the next semantically-significant
+  // provider event surfaces in metrics instead of vanishing from the ledger.
+  unmappedProviderEventTotal.labels(type || "unknown", subtype || "none").inc();
   const fields: Record<string, unknown> = {
     msg: "sdk_message_unhandled",
     type,
@@ -220,6 +232,23 @@ export function logUnhandledSdkMessage(message: SDKMessage): void {
     if (v !== undefined) fields[key] = v;
   }
   console.log(JSON.stringify(fields));
+}
+
+function isClaudeRateLimitEvent(message: ClaudeProviderEvent): boolean {
+  return message.type === "rate_limit_event";
+}
+
+function claudeRateLimitError(message: ClaudeProviderEvent): string {
+  const parts = ["Claude provider emitted rate_limit_event"];
+  for (const key of ["message", "error", "summary", "description", "retry_after_ms", "retry_after_seconds"]) {
+    const value = message[key];
+    if (typeof value === "string" && value.trim()) {
+      parts.push(`${key}=${value.trim()}`);
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      parts.push(`${key}=${value}`);
+    }
+  }
+  return parts.join("; ");
 }
 
 export interface PendingTurn {
@@ -698,6 +727,15 @@ export class Runner {
       }
       return;
     }
+    if (isClaudeRateLimitEvent(providerEvent)) {
+      if (activeTurn) {
+        await this.failTurnForProviderRateLimit(activeTurn, providerEvent);
+        return;
+      }
+      providerRateLimitEventTotal.inc();
+      logUnhandledSdkMessage(message);
+      return;
+    }
     const adapterTurn = this.turnContextForProviderEvent(providerEvent, activeTurn);
     if (isClaudeTaskLifecycleMessage(providerEvent) && !adapterTurn) {
       const { taskID, toolUseID } = claudeTaskIdentifiers(providerEvent);
@@ -743,6 +781,38 @@ export class Runner {
     const wakeup = extractWakeup(message);
     if (wakeup) {
       await this.registerWakeup(wakeup, activeTurn?.turnID ?? "");
+    }
+  }
+
+  private async failTurnForProviderRateLimit(
+    turn: PendingTurn,
+    message: ClaudeProviderEvent,
+  ): Promise<void> {
+    providerRateLimitEventTotal.inc();
+    if (turn.terminalEmitted) return;
+    const error = claudeRateLimitError(message);
+    providerFailureClassTotal.labels("rate_limit").inc();
+    const dispatched = await dispatch(
+      this.sink,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.failed",
+        reason: "provider_rate_limit",
+        error,
+        providerEventID: message.uuid,
+      }),
+    );
+    if (!dispatched) return;
+    turn.terminalEmitted = true;
+    this.signalStopToSdk();
+    await this.markCommandTerminal(turn, "turn.failed").catch((markErr) =>
+      console.error("session command rate-limit terminal mark failed:", markErr),
+    );
+    if (this.activeTurn === turn) {
+      this.activeTurn = null;
     }
   }
 

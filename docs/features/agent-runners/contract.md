@@ -37,6 +37,10 @@ the rest of the product reconstruct what happened.
   and exactly one terminal turn outcome.
 - Stop/interrupt remains pending until a durable interrupted, completed,
   failed, or already-terminal event resolves it.
+- Stop/interrupt against a turn that is already terminal must not create a new
+  `turn.interrupt_requested` row or move activity back to `stopping`; the
+  existing durable terminal is the resolution and activity is refreshed from
+  the ledger.
 - Tool approval replies are routed to the intended provider item and resolved
   durably.
 - Runner events must wake transcript and session-list followers after
@@ -69,6 +73,10 @@ the rest of the product reconstruct what happened.
   provider item IDs.
 - Provider failures must become durable failure events instead of silent
   strandings.
+- Provider rate-limit stream frames are provider failures for Tank's user
+  contract: they must produce durable user-visible state, and absent a
+  provider-owned bounded retry contract they resolve the active turn with
+  `turn.failed{reason:"provider_rate_limit"}`.
 
 ## Observability
 
