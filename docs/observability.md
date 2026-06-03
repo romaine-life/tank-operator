@@ -239,8 +239,8 @@ All metric names are prefixed `tank_`. The full namespace:
   backgrounding before interrupt and the interrupt signal itself.
   `tank_runner_provider_rate_limit_event_total` counts Claude SDK
   `rate_limit_event` frames; each increment should pair with a durable
-  `turn.failed{reason:"provider_rate_limit"}` so the submitted-turn queue
-  does not remain blocked behind an invisible provider wait.
+  `turn.failed{reason:"provider_rate_limit"}` so later submitted work does
+  not remain blocked behind an invisible provider wait.
   `tank_runner_turn_usage_emitted_total{kind}` counts durable usage events by
   the closed set `kind` ∈ {`snapshot`,`terminal`}: `snapshot` is the
   per-assistant-message `turn.usage` that carries context-window occupancy
