@@ -14,17 +14,43 @@ test("session routes parse only session-scoped chat and turns pages", () => {
   assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1"), {
     sessionId: "s-1",
     tab: "chat",
-    turnId: null,
+    turnNumber: null,
+    turnSegmentPresent: false,
     settingsTab: "preferences",
     adminView: "controls",
   });
-  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/turns/turn%201"), {
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/turns/3"), {
     sessionId: "s-1",
     tab: "turns",
-    turnId: "turn 1",
+    turnNumber: 3,
+    turnSegmentPresent: true,
     settingsTab: "preferences",
     adminView: "controls",
   });
+  // A bare /turns with no number selects the latest turn (segment absent).
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/turns"), {
+    sessionId: "s-1",
+    tab: "turns",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  // A non-numeric segment (e.g. a bookmarked legacy turn_<uuid>) is a
+  // present-but-unresolvable target: turnNumber null, turnSegmentPresent true,
+  // so the SPA shows the unavailable-target state instead of silently
+  // defaulting. This is the migration guard against the retired route shape.
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/turns/turn_abc"), {
+    sessionId: "s-1",
+    tab: "turns",
+    turnNumber: null,
+    turnSegmentPresent: true,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  // Leading-zero / signed / decimal segments are not valid turn numbers.
+  assert.equal(readSessionRouteFromPathname("/sessions/s-1/turns/01")?.turnNumber, null);
+  assert.equal(readSessionRouteFromPathname("/sessions/s-1/turns/-1")?.turnNumber, null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/settings"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/settings/admin/observability"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/help"), null);
@@ -37,8 +63,13 @@ test("session route urls broadcast only session-owned pages", () => {
     "https://tank.example.test/sessions/s%201",
   );
   assert.equal(
-    buildSessionRouteUrl(current, "s 1", "turns", "turn 2"),
-    "https://tank.example.test/sessions/s%201/turns/turn%202",
+    buildSessionRouteUrl(current, "s 1", "turns", 2),
+    "https://tank.example.test/sessions/s%201/turns/2",
+  );
+  // turns tab with no selected number stays on the bare /turns page.
+  assert.equal(
+    buildSessionRouteUrl(current, "s 1", "turns"),
+    "https://tank.example.test/sessions/s%201/turns",
   );
 });
 

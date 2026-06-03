@@ -12,7 +12,14 @@ export type SettingsRoute = {
 export type SessionRoute = SettingsRoute & {
   sessionId: string;
   tab: SessionRouteTab;
-  turnId: string | null;
+  // The durable per-session turn number (session_turns.turn_number). null when
+  // there is no turn segment, or when the segment is not a positive integer
+  // (e.g. a bookmarked legacy turn_<uuid>). turnSegmentPresent distinguishes
+  // "no turn requested" from "a turn was requested but isn't a valid number" so
+  // the SPA can show an explicit unavailable-target state instead of silently
+  // defaulting to the latest turn.
+  turnNumber: number | null;
+  turnSegmentPresent: boolean;
 };
 
 export type HomeRoute = SettingsRoute & {
@@ -66,17 +73,35 @@ function parseAdminView(value: string | undefined): AdminView {
   }
 }
 
+// parseTurnNumber accepts only a bare positive integer (no sign, no leading
+// zero, no decimal). Anything else — including a legacy turn_<uuid> someone has
+// bookmarked — yields null so the caller can route it to the unavailable-target
+// state rather than guessing.
+export function parseTurnNumber(segment: string): number | null {
+  if (!/^[1-9][0-9]*$/.test(segment)) return null;
+  const value = Number(segment);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
 export function readSessionRouteFromPathname(pathname: string): SessionRoute | null {
   const parts = routeParts(pathname);
   if (parts[0] !== "sessions" || !parts[1]) return null;
   if (parts.length === 2) {
-    return { sessionId: parts[1], tab: "chat", turnId: null, ...defaultSettingsRoute };
+    return {
+      sessionId: parts[1],
+      tab: "chat",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      ...defaultSettingsRoute,
+    };
   }
   if (parts[2] === "turns") {
+    const segment = parts[3]?.trim() ?? "";
     return {
       sessionId: parts[1],
       tab: "turns",
-      turnId: parts[3]?.trim() || null,
+      turnNumber: parseTurnNumber(segment),
+      turnSegmentPresent: segment !== "",
       ...defaultSettingsRoute,
     };
   }
@@ -111,13 +136,13 @@ export function buildSessionRouteUrl(
   currentHref: string,
   id: string,
   tab: SessionRouteTab = "chat",
-  turnId?: string | null,
+  turnNumber?: number | null,
 ): string {
   const url = new URL(currentHref);
   const encodedId = encodeURIComponent(id);
   url.pathname = `/sessions/${encodedId}${
     tab === "turns"
-      ? `/turns${turnId ? `/${encodeURIComponent(turnId)}` : ""}`
+      ? `/turns${turnNumber != null ? `/${turnNumber}` : ""}`
       : ""
   }`;
   url.search = "";
