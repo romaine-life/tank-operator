@@ -13,7 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // cliProcessLaunchForMode picks the sandbox-agent process shape for the

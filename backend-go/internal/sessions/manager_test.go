@@ -10,7 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // Earlier orchestrators created session pods named "session-<hash>" rather
@@ -133,14 +133,14 @@ func TestManagerSetTestPullRequestURLPreservesTestEnvironment(t *testing.T) {
 	}}}
 	mgr := &Manager{client: client, namespace: sessionmodel.SessionsNamespace, registry: registry}
 
-	info, err := mgr.SetTestPullRequestURL(context.Background(), "nelson@romaine.life", "8", stringPtr("https://github.com/nelsong6/tank-operator/pull/123"))
+	info, err := mgr.SetTestPullRequestURL(context.Background(), "nelson@romaine.life", "8", stringPtr("https://github.com/romaine-life/tank-operator/pull/123"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := info.TestState["url"]; got != "https://slot-2" {
 		t.Fatalf("info test_state url = %#v, want slot URL preserved", got)
 	}
-	if got := info.TestState["pull_request_url"]; got != "https://github.com/nelsong6/tank-operator/pull/123" {
+	if got := info.TestState["pull_request_url"]; got != "https://github.com/romaine-life/tank-operator/pull/123" {
 		t.Fatalf("info test_state pull_request_url = %#v", got)
 	}
 	updated, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), pod.Name, metav1.GetOptions{})
@@ -151,7 +151,7 @@ func TestManagerSetTestPullRequestURLPreservesTestEnvironment(t *testing.T) {
 	if got := annotation["url"]; got != "https://slot-2" {
 		t.Fatalf("pod test annotation url = %#v, want slot URL preserved", got)
 	}
-	if got := annotation["pull_request_url"]; got != "https://github.com/nelsong6/tank-operator/pull/123" {
+	if got := annotation["pull_request_url"]; got != "https://github.com/romaine-life/tank-operator/pull/123" {
 		t.Fatalf("pod test annotation pull_request_url = %#v", got)
 	}
 }
@@ -201,7 +201,7 @@ func TestManagerCreateThreadsSelectedReposIntoPodManifest(t *testing.T) {
 	info, err := mgr.Create(context.Background(), CreateOptions{
 		Owner: "nelson@romaine.life",
 		Mode:  sessionmodel.CodexGUIMode,
-		Repos: []string{"nelsong6/tank-operator"},
+		Repos: []string{"romaine-life/tank-operator"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -222,7 +222,7 @@ func TestManagerCreateThreadsSelectedReposIntoPodManifest(t *testing.T) {
 	for _, item := range cloner.Env {
 		env[item.Name] = item.Value
 	}
-	if got, want := env["TANK_REPOS_JSON"], "[\"nelsong6/tank-operator\"]"; got != want {
+	if got, want := env["TANK_REPOS_JSON"], "[\"romaine-life/tank-operator\"]"; got != want {
 		t.Fatalf("TANK_REPOS_JSON = %q, want %q", got, want)
 	}
 }

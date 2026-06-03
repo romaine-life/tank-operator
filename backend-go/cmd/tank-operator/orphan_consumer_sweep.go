@@ -5,8 +5,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionregistry"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionregistry"
 )
 
 // Orphan-consumer sweep cadence. The 5-minute initial delay lets

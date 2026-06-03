@@ -48,7 +48,7 @@ export const providerErrorTotal = new Counter({
 // and Anthropic rejects it with a 400 ("thinking blocks ... cannot be
 // modified"). The SDK owns the message array and the replay, so this is
 // an engine-version signal: it should fall to zero on the
-// @anthropic-ai/claude-agent-sdk ^0.3.158 bump (nelsong6/tank-operator
+// @anthropic-ai/claude-agent-sdk ^0.3.158 bump (romaine-life/tank-operator
 // #743) and any later non-zero rate is a regression worth paging on.
 // The other classes (`overloaded`, `rate_limit`, `context_length`,
 // `auth`, `other`) keep the counter useful for the general "why did a
@@ -57,7 +57,7 @@ export const providerErrorTotal = new Counter({
 // message-signature table (see classifyProviderFailure in runner.ts).
 export const providerFailureClassTotal = new Counter({
   name: "tank_runner_provider_failure_class_total",
-  help: "turn.failed{reason:provider_failure} terminals classified by upstream Anthropic error signature. `thinking_block_modified` is the extended-thinking resume bug (session 340); it must stay at zero after the SDK ^0.3.158 bump (nelsong6/tank-operator#743) — any increment is a regression.",
+  help: "turn.failed{reason:provider_failure} terminals classified by upstream Anthropic error signature. `thinking_block_modified` is the extended-thinking resume bug (session 340); it must stay at zero after the SDK ^0.3.158 bump (romaine-life/tank-operator#743) — any increment is a regression.",
   labelNames: ["class"],
   registers: [registry],
 });
@@ -79,7 +79,7 @@ export const itemOutcomeTotal = new Counter({
 // interruptOutcomeTotal records the disposition of every `interrupt_turn`
 // command this runner accepts. The four-outcome contract (see
 // docs/tank-conversation-protocol.md → "Durable turn interruption" and
-// nelsong6/tank-operator#532) is the invariant this counter pins:
+// romaine-life/tank-operator#532) is the invariant this counter pins:
 //
 //   - `terminated_via_sdk` — interrupt arrived during an in-flight turn;
 //     sdkQuery.interrupt() was awaited and turn.interrupted published.
@@ -113,7 +113,7 @@ export const itemOutcomeTotal = new Counter({
 // not terminals; subtract it when alerting.
 export const interruptOutcomeTotal = new Counter({
   name: "tank_runner_interrupt_outcome_total",
-  help: "Disposition of every interrupt_turn command accepted by the runner. See docs/tank-conversation-protocol.md and nelsong6/tank-operator#532 for the four-outcome contract.",
+  help: "Disposition of every interrupt_turn command accepted by the runner. See docs/tank-conversation-protocol.md and romaine-life/tank-operator#532 for the four-outcome contract.",
   labelNames: ["outcome"],
   registers: [registry],
 });
@@ -150,10 +150,10 @@ export const natsPublishFailureTotal = new Counter({
 // because of payload size; sustained `payload-dropped` traffic
 // indicates a producer (typically a tool_result.output) that needs to
 // chunk or stream rather than emit one giant event. See
-// nelsong6/tank-operator#532 Stage 3 for context.
+// romaine-life/tank-operator#532 Stage 3 for context.
 export const eventTruncatedTotal = new Counter({
   name: "tank_runner_event_truncated_total",
-  help: "Tank conversation events that exceeded the transport budget and were truncated before publish. Severity 'strings-truncated' preserves envelope; 'payload-dropped' loses body. See nelsong6/tank-operator#532 Stage 3.",
+  help: "Tank conversation events that exceeded the transport budget and were truncated before publish. Severity 'strings-truncated' preserves envelope; 'payload-dropped' loses body. See romaine-life/tank-operator#532 Stage 3.",
   labelNames: ["event_type", "severity"],
   registers: [registry],
 });

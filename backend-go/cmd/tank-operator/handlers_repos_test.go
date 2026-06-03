@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
-	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/profiles"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // TestValidateRepoSlugs locks in the handler-boundary contract for
@@ -39,8 +39,8 @@ func TestValidateRepoSlugs(t *testing.T) {
 		},
 		{
 			name:    "single slug passes",
-			in:      []string{"nelsong6/tank-operator"},
-			wantOut: []string{"nelsong6/tank-operator"},
+			in:      []string{"romaine-life/tank-operator"},
+			wantOut: []string{"romaine-life/tank-operator"},
 		},
 		{
 			name:    "multiple slugs preserve order",
@@ -54,12 +54,12 @@ func TestValidateRepoSlugs(t *testing.T) {
 		},
 		{
 			name:    "whitespace trimmed",
-			in:      []string{"  nelsong6/tank-operator  "},
-			wantOut: []string{"nelsong6/tank-operator"},
+			in:      []string{"  romaine-life/tank-operator  "},
+			wantOut: []string{"romaine-life/tank-operator"},
 		},
 		{
 			name:    "case-insensitive dedup, first-seen wins",
-			in:      []string{"NelsonG6/Tank-Operator", "nelsong6/tank-operator"},
+			in:      []string{"NelsonG6/Tank-Operator", "romaine-life/tank-operator"},
 			wantOut: []string{"NelsonG6/Tank-Operator"},
 		},
 		{
@@ -69,7 +69,7 @@ func TestValidateRepoSlugs(t *testing.T) {
 		},
 		{
 			name:    "scheme-injection rejected",
-			in:      []string{"https://github.com/nelsong6/tank-operator"},
+			in:      []string{"https://github.com/romaine-life/tank-operator"},
 			wantErr: "not a valid owner/name slug",
 		},
 		{
@@ -79,7 +79,7 @@ func TestValidateRepoSlugs(t *testing.T) {
 		},
 		{
 			name:    "shell metacharacters rejected",
-			in:      []string{"nelsong6/tank-operator;rm -rf /"},
+			in:      []string{"romaine-life/tank-operator;rm -rf /"},
 			wantErr: "not a valid owner/name slug",
 		},
 		{
@@ -139,8 +139,8 @@ func TestValidatePinnedRepoSlugs(t *testing.T) {
 		},
 		{
 			name:    "dedups and preserves first casing",
-			in:      []string{"  NelsonG6/Tank-Operator  ", "nelsong6/tank-operator", "nelsong6/glimmung"},
-			wantOut: []string{"NelsonG6/Tank-Operator", "nelsong6/glimmung"},
+			in:      []string{"  NelsonG6/Tank-Operator  ", "romaine-life/tank-operator", "romaine-life/glimmung"},
+			wantOut: []string{"NelsonG6/Tank-Operator", "romaine-life/glimmung"},
 		},
 		{
 			// The splash picker's drag-and-drop pin reordering relies on the
@@ -154,7 +154,7 @@ func TestValidatePinnedRepoSlugs(t *testing.T) {
 		},
 		{
 			name:    "bad slug rejected",
-			in:      []string{"https://github.com/nelsong6/tank-operator"},
+			in:      []string{"https://github.com/romaine-life/tank-operator"},
 			wantErr: "not a valid owner/name slug",
 		},
 		{

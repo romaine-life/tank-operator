@@ -33,8 +33,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionstream"
-	"github.com/nelsong6/tank-operator/backend-go/internal/store"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionstream"
+	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
 
 // SessionInfo is the projection of a sessions row the sampler needs

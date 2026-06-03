@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/avataruploads"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/avataruploads"
 )
 
 const avatarUploadRoute = "POST /api/admin/avatars"

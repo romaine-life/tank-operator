@@ -11,9 +11,9 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
-	"github.com/nelsong6/tank-operator/backend-go/internal/avataruploads"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/avatarassets"
+	"github.com/romaine-life/tank-operator/backend-go/internal/avataruploads"
 )
 
 const (

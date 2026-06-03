@@ -26,10 +26,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/mcpgithub"
-	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
+	"github.com/romaine-life/tank-operator/backend-go/internal/profiles"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // maxReposPerSession caps how many repos a session can auto-clone.
@@ -419,7 +419,7 @@ func repoLookupOwnerEmail(user auth.User) string {
 // handleGitHubRepos returns the full set of repos visible to the
 // caller's GitHub App installation, by way of mcp-github.
 //
-// The all-repos endpoint pairs with the nelsong6/auth on-behalf-of
+// The all-repos endpoint pairs with the romaine-life/auth on-behalf-of
 // exchange (PR #43) so the orchestrator can present a service JWT
 // carrying the SPA caller's email as `actor_email`, which mcp-github
 // routes back to that user's installation_id via tank-operator's

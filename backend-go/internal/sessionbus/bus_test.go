@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 )
 
 type recordingStore struct {

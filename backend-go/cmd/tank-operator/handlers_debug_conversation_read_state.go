@@ -35,7 +35,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 func (s *appServer) handleDebugConversationReadState(w http.ResponseWriter, r *http.Request) {

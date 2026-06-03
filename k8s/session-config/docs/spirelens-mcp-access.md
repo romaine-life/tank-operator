@@ -3,7 +3,7 @@
 This file is bundled into Tank sessions at
 `/workspace/.tank/docs/spirelens-mcp-access.md`. It exists so an agent in a
 warm session can rediscover the SpireLens host-control path without cloning
-`nelsong6/tank-operator` or guessing from Glimmung-only environment variables.
+`romaine-life/tank-operator` or guessing from Glimmung-only environment variables.
 
 ## Tank Session Capability
 

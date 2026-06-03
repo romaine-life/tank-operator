@@ -8,7 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
+	"github.com/romaine-life/tank-operator/backend-go/internal/avatarassets"
 )
 
 type AvatarAssetStore struct {

@@ -18,7 +18,7 @@ import (
 // spawn_service_session.
 //
 // A per-`actor_email` concurrent-active-session cap was previously
-// enforced here (nelsong6/tank-operator#486 stage 6) but was removed:
+// enforced here (romaine-life/tank-operator#486 stage 6) but was removed:
 // it tripped on normal multi-session usage by a single human (UI-driven
 // session creation is uncapped, so service-principal spawns from inside
 // a session bumped against an unrelated count). When we add a

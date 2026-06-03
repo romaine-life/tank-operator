@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
-	"github.com/nelsong6/tank-operator/backend-go/internal/store"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
 
 func TestTankStaticFilePrefersOverride(t *testing.T) {

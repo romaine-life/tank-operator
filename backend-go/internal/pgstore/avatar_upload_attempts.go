@@ -9,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/avataruploads"
+	"github.com/romaine-life/tank-operator/backend-go/internal/avataruploads"
 )
 
 type AvatarUploadAttemptStore struct {

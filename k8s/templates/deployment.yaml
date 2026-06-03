@@ -305,7 +305,7 @@ spec:
         # https://auth.romaine.life. auth.romaine.life's
         # /api/auth/exchange/k8s validates the audience claim against
         # its K8S_SERVICE_AUDIENCE config and exchanges this token for
-        # a role=service JWT (per nelsong6/auth#42 the orchestrator
+        # a role=service JWT (per romaine-life/auth#42 the orchestrator
         # is admitted as a `pod-stable` consumer with slug
         # `tank-operator`). The backend reads this file fresh per
         # exchange.

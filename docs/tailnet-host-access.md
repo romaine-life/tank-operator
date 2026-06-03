@@ -33,7 +33,7 @@ audience-pinned to `https://auth.romaine.life`, by
 - mount path: `/var/run/secrets/auth.romaine.life/token`
 - audience: `https://auth.romaine.life`, `expirationSeconds: 3600` (kubelet rotates in place)
 
-This is the pod's identity. `auth.romaine.life` (the `nelsong6/auth` IdP) exposes
+This is the pod's identity. `auth.romaine.life` (the `romaine-life/auth` IdP) exposes
 two exchanges that consume it:
 
 - `POST /api/auth/exchange/k8s` → a `role=service` JWT (RS256, `iss
@@ -263,7 +263,7 @@ this launcher (e.g. `spire-lens-mcp/host/`) instead of only living on the laptop
 
 ## What is console-managed (outside any repo)
 
-These live in the Tailscale admin console / `nelsong6/auth`, not in this repo,
+These live in the Tailscale admin console / `romaine-life/auth`, not in this repo,
 and must be set/confirmed out of band:
 
 - **The OIDC IdP trust** in Tailscale (trusting `auth.romaine.life`, the OIDC

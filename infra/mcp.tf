@@ -25,7 +25,7 @@ resource "azurerm_key_vault_secret" "mcp_tenant_id" {
 # Per-server: azure-personal
 # ----------------------------------------------------------------------------
 # Migrated out: this server's UAMI + role assignments + Cosmos data-plane
-# grant now live in nelsong6/mcp-azure-personal/infra/. The `removed` blocks
+# grant now live in romaine-life/mcp-azure-personal/infra/. The `removed` blocks
 # at the bottom of this file forget the resources from this state without
 # deleting them in Azure (lifecycle.destroy = false), after which the import
 # on the MCP repo's side adopts them. See that repo's infra/README.md for
@@ -78,13 +78,13 @@ module "mcp_auth" {
 }
 
 # ============================================================================
-# Migration: mcp_azure_personal moved to nelsong6/mcp-azure-personal/infra/
+# Migration: mcp_azure_personal moved to romaine-life/mcp-azure-personal/infra/
 # ============================================================================
 # Deleting the resources from config rather than using
 # `removed { destroy = false }` — the FIC subject on the existing Azure
 # resources is stale (built when `aks_namespace = "mcp-azure"`, never
 # updated after the chart-side namespace rename in
-# nelsong6/mcp-azure-personal#12), so workload identity is broken anyway.
+# romaine-life/mcp-azure-personal#12), so workload identity is broken anyway.
 # A clean destroy-recreate via the companion mcp-azure-personal PR
 # lets the new state start fresh with the correct
 # `aks_namespace = "mcp-azure-personal"` and the correct FIC subject.
@@ -93,6 +93,6 @@ module "mcp_auth" {
 #   1. Merge this PR. CI applies; tofu destroys the UAMI, FIC, role
 #      assignments, KV secret, and Cosmos data-plane role assignment in
 #      Azure. MCP server stops authenticating (already broken — no impact).
-#   2. Merge nelsong6/mcp-azure-personal#10. Its CI applies; tofu creates
+#   2. Merge romaine-life/mcp-azure-personal#10. Its CI applies; tofu creates
 #      the same resources fresh with the correct namespace, restoring
 #      the MCP server.

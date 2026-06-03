@@ -8,9 +8,9 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
-	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/avatarassets"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
 func newUploadedAvatarBlobKey(id, variant, mime string) string {

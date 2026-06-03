@@ -381,7 +381,7 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
 
   // Live-filter Recent by the trimmed input text. The match is
   // intentionally permissive (substring, case-insensitive) so a user
-  // who has typed "nelsong6/" still sees their nelsong6 repos.
+  // who has typed "romaine-life/" still sees their nelsong6 repos.
   const filteredRecent = useMemo(
     () =>
       recent.filter(

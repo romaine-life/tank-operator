@@ -6,11 +6,11 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessioncontroller"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/kubeexec"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessioncontroller"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
 type menuCommandEntry struct {

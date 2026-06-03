@@ -12,10 +12,10 @@ import (
 
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
-	"github.com/nelsong6/tank-operator/backend-go/internal/store"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
+	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
 
 func TestHandleUpdateSessionReadStatePersistsMonotonicCursor(t *testing.T) {

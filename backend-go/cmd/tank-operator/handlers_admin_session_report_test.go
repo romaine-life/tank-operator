@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
 func TestSessionReportWindowFromRequestSupportsOneDay(t *testing.T) {
@@ -124,7 +124,7 @@ func TestSummarizeSessionReportCreditsSelectedRepos(t *testing.T) {
 	sessions := []sessionReportRow{
 		{
 			SessionID: "1",
-			Repos:     []string{"nelsong6/tank-operator", "nelsong6/glimmung"},
+			Repos:     []string{"romaine-life/tank-operator", "romaine-life/glimmung"},
 			UpdatedAt: now,
 			Usage: tokenUsage{
 				TotalTokens:  100,
@@ -152,8 +152,8 @@ func TestSummarizeSessionReportCreditsSelectedRepos(t *testing.T) {
 		t.Fatalf("totals = %+v", totals)
 	}
 	want := map[string]int64{
-		"nelsong6/tank-operator": 100,
-		"nelsong6/glimmung":      100,
+		"romaine-life/tank-operator": 100,
+		"romaine-life/glimmung":      100,
 		sessionReportUnassigned:  40,
 	}
 	for _, repo := range repos {

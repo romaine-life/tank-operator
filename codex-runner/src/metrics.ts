@@ -85,7 +85,7 @@ export const itemOutcomeTotal = new Counter({
 //     client_nonce. Backend bug; should be zero.
 export const interruptOutcomeTotal = new Counter({
   name: "tank_runner_interrupt_outcome_total",
-  help: "Disposition of every interrupt_turn command accepted by the runner. See docs/tank-conversation-protocol.md and nelsong6/tank-operator#532 for the four-outcome contract.",
+  help: "Disposition of every interrupt_turn command accepted by the runner. See docs/tank-conversation-protocol.md and romaine-life/tank-operator#532 for the four-outcome contract.",
   labelNames: ["outcome"],
   registers: [registry],
 });
@@ -109,7 +109,7 @@ export const natsPublishFailureTotal = new Counter({
 // Stage 3.
 export const eventTruncatedTotal = new Counter({
   name: "tank_runner_event_truncated_total",
-  help: "Tank conversation events that exceeded the transport budget and were truncated before publish. Severity 'strings-truncated' preserves envelope; 'payload-dropped' loses body. See nelsong6/tank-operator#532 Stage 3.",
+  help: "Tank conversation events that exceeded the transport budget and were truncated before publish. Severity 'strings-truncated' preserves envelope; 'payload-dropped' loses body. See romaine-life/tank-operator#532 Stage 3.",
   labelNames: ["event_type", "severity"],
   registers: [registry],
 });

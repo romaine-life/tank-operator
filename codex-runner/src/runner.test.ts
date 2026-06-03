@@ -237,7 +237,7 @@ test("terminal Codex interrupts ack submit and interrupt commands after publish"
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// nelsong6/tank-operator#532 — four-outcome contract for accepted interrupts
+// romaine-life/tank-operator#532 — four-outcome contract for accepted interrupts
 // on the codex-runner. Sibling of agent-runner's contract tests; same shape
 // but exercising the codex-runner's acceptInterrupt → orphanInterrupts /
 // pendingInterrupts paths.

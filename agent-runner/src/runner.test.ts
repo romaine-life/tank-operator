@@ -635,7 +635,7 @@ test("terminal turn failures ack the durable submit command", async () => {
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// nelsong6/tank-operator#532 — four-outcome contract for accepted interrupts.
+// romaine-life/tank-operator#532 — four-outcome contract for accepted interrupts.
 //
 // Every interrupt_turn command the runner accepts MUST resolve to exactly
 // one terminal-outcome increment on tank_runner_interrupt_outcome_total
@@ -921,7 +921,7 @@ test("acceptInterrupt with missing target: fails command explicitly instead of s
 });
 
 // ───────────────────────────────────────────────────────────────────────────
-// nelsong6/tank-operator#532 Stage 3 — oversized-event truncation contract.
+// romaine-life/tank-operator#532 Stage 3 — oversized-event truncation contract.
 // truncateEventIfOversized must keep Tank conversation events under the
 // transport budget so NATS's `payload max_payload size exceeded`
 // throw doesn't silently hole the durable ledger (the seven publish

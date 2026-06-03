@@ -81,7 +81,7 @@ func TestVerifierAcceptsAdminRole(t *testing.T) {
 
 func TestVerifierAcceptsServiceRoleWithActorEmail(t *testing.T) {
 	// Service principals carry the human owner's email as `actor_email`.
-	// See nelsong6/tank-operator#486.
+	// See romaine-life/tank-operator#486.
 	jwtKey := newTestJWT(t)
 	verifier := NewVerifier(jwtKey)
 	user, err := verifier.Decode(signedTestToken(t, jwtKey,

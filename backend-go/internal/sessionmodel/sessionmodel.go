@@ -432,7 +432,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		// role=service that tank-operator's /api/internal/sessions/*
 		// handlers accept. Distinct audience (and distinct file path) from
 		// the tank-operator token above so a stolen token cannot be
-		// replayed across services. See nelsong6/tank-operator#486.
+		// replayed across services. See romaine-life/tank-operator#486.
 		map[string]any{
 			"name": "auth-romaine-sa-token",
 			"projected": map[string]any{
@@ -904,7 +904,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	// auth.romaine.life's /api/auth/exchange/k8s reads per-session lineage
-	// from pod annotations (see nelsong6/auth → src/k8s-pod.ts). The
+	// from pod annotations (see romaine-life/auth → src/k8s-pod.ts). The
 	// `tank-operator/owner-email` annotation was already here, but
 	// `tank-operator/session-id` was only emitted as a label, which made
 	// the auth handler reject every service-token exchange with

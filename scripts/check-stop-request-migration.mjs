@@ -774,7 +774,7 @@ const CHECKS = [
   // exactly one terminal-outcome increment on
   // tank_runner_interrupt_outcome_total. The checks below pin the load-
   // bearing pieces of that contract so a future refactor can't reintroduce
-  // the silent-return shapes. See nelsong6/tank-operator#532 and
+  // the silent-return shapes. See romaine-life/tank-operator#532 and
   // docs/tank-conversation-protocol.md → "Four-outcome contract on the
   // runner side" for the prose contract.
   {

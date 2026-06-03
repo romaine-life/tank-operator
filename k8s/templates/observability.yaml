@@ -625,7 +625,7 @@ spec:
         # tank_turn_lifecycle_total at the same durable Upsert boundary, so
         # the counter is path-independent.
         #
-        # ea70777 (nelsong6/tank-operator#652) is the prototypical
+        # ea70777 (romaine-life/tank-operator#652) is the prototypical
         # incident: the orchestrator deploy bumped the JetStream subject
         # shape, every pre-existing runner kept subscribing on the OLD
         # filter, every submit_turn published to the new subject was

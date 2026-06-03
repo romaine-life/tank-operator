@@ -17,11 +17,11 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	ktesting "k8s.io/client-go/testing"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
-	"github.com/nelsong6/tank-operator/backend-go/internal/store"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/profiles"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
+	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
 
 // Pre-#486 the /api/internal/sessions/* surface used a raw SA-TokenReview

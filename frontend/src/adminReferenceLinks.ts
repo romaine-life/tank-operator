@@ -10,7 +10,7 @@
 // justify it. If these ever need to be user-editable at runtime, that is the
 // point to promote them to server-owned storage.
 //
-// Links target the nelsong6/tank-operator default branch so they always track
+// Links target the romaine-life/tank-operator default branch so they always track
 // the live docs. Update this list when the session-config docs move.
 
 export interface AdminReferenceLink {
@@ -24,8 +24,8 @@ export interface AdminReferenceLink {
   href: string;
 }
 
-const BLOB = "https://github.com/nelsong6/tank-operator/blob/main";
-const TREE = "https://github.com/nelsong6/tank-operator/tree/main";
+const BLOB = "https://github.com/romaine-life/tank-operator/blob/main";
+const TREE = "https://github.com/romaine-life/tank-operator/tree/main";
 
 export const ADMIN_REFERENCE_LINKS: AdminReferenceLink[] = [
   {

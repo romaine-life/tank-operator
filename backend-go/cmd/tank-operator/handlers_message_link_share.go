@@ -9,10 +9,10 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
-	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/avatarassets"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
 const messageLinkShareTokenBytes = 32

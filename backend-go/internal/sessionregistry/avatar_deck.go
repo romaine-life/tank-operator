@@ -11,8 +11,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/avatarassets"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/avatarassets"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 type AvatarDeckSnapshot struct {

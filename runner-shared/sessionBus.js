@@ -150,7 +150,7 @@ export class SharedSessionBus {
         const doc = this.eventDoc(event);
         // Defensive: the runner-side dispatch wrapper truncates oversized
         // events before they reach here (see truncateEventIfOversized
-        // below and nelsong6/tank-operator#532 Stage 3 for the contract).
+        // below and romaine-life/tank-operator#532 Stage 3 for the contract).
         // This belt-and-braces check guarantees no wire publish exceeds
         // the transport budget even if a future code path bypasses the
         // dispatch wrapper. NATS's default max_payload is 1 MiB; the
@@ -497,7 +497,7 @@ function parsePositiveInt(value, fallback) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Oversized-event truncation (PR 3 of nelsong6/tank-operator#532)
+// Oversized-event truncation (PR 3 of romaine-life/tank-operator#532)
 //
 // NATS clients throw `InvalidArgumentError: 'payload' max_payload size
 // exceeded` synchronously when an encoded message exceeds the server's

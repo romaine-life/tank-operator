@@ -63,7 +63,7 @@ from .metrics import (
 # attempted until the session restarts. Mirrors the OAuth-discovery
 # JSON-404 fix that already lives at the top of this file — same
 # class of unrecoverable SDK state, different trigger. See
-# nelsong6/tank-operator#... (this PR).
+# romaine-life/tank-operator#... (this PR).
 #
 # Cap kept tight (3 attempts over ~1.3s total) so a genuinely dead
 # upstream surfaces fast, while a normal pod-rotation window (typically
@@ -125,7 +125,7 @@ SPIRELENS_MCP_UPSTREAM = (os.environ.get("SPIRELENS_MCP_UPSTREAM") or "").strip(
 TAILNET_HTTP_PROXY = (os.environ.get("TAILNET_HTTP_PROXY") or "").strip() or None
 
 # auth.romaine.life service-principal exchange (see
-# nelsong6/tank-operator#486). The session pod mounts a projected SA
+# romaine-life/tank-operator#486). The session pod mounts a projected SA
 # token with `audience: https://auth.romaine.life` at this path; this
 # sidecar POSTs it to AUTH_ROMAINE_EXCHANGE_URL and receives a JWT with
 # role=service that downstream tank-operator endpoints accept.
@@ -223,7 +223,7 @@ class AuthRomaineServiceProvider:
 
     Used to inject the X-Auth-Romaine-Token header on outbound calls to
     mcp-tank-operator (port 9996), enabling its spawn_service_session
-    tool. See nelsong6/tank-operator#486.
+    tool. See romaine-life/tank-operator#486.
     """
 
     def __init__(
@@ -357,7 +357,7 @@ def _make_handler(
     the request — the upstream still receives the normal Bearer-authed
     call, will reject any service-principal-gated route with 401, and
     the caller surfaces the error end-to-end. See
-    nelsong6/tank-operator#486.
+    romaine-life/tank-operator#486.
 
     `static_headers`, when supplied, is a mapping of header-name → value
     injected verbatim on every outbound request to this upstream.

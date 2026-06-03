@@ -15,16 +15,16 @@ to point each session mode at the right image.
 
 The HTTP MCP servers it talks to live in standalone repos:
 
-- [`mcp-azure-personal`](https://github.com/nelsong6/mcp-azure-personal) â€” first-party personal Azure MCP server and chart.
-- [`mcp-github`](https://github.com/nelsong6/mcp-github) â€” custom GitHub App-backed MCP server.
-- [`mcp-k8s`](https://github.com/nelsong6/mcp-k8s) â€” read-only kubectl/helm MCP server.
-- [`mcp-argocd`](https://github.com/nelsong6/mcp-argocd) â€” read-only ArgoCD MCP server.
+- [`mcp-azure-personal`](https://github.com/romaine-life/mcp-azure-personal) â€” first-party personal Azure MCP server and chart.
+- [`mcp-github`](https://github.com/romaine-life/mcp-github) â€” custom GitHub App-backed MCP server.
+- [`mcp-k8s`](https://github.com/romaine-life/mcp-k8s) â€” read-only kubectl/helm MCP server.
+- [`mcp-argocd`](https://github.com/romaine-life/mcp-argocd) â€” read-only ArgoCD MCP server.
 
 Runtime UAMIs (e.g. `mcp.tf`, `mcp-server/`) live under `infra/`. CI auth
 (image-push to ACR) for those standalone MCP repos is managed by
 infra-bootstrap. Shared cluster infrastructure (the AKS cluster itself, the
 ACR, the Key Vault) also lives in
-[infra-bootstrap](https://github.com/nelsong6/infra-bootstrap) and is
+[infra-bootstrap](https://github.com/romaine-life/infra-bootstrap) and is
 referenced here as data sources.
 
 ## Messaging durability scope
@@ -212,7 +212,7 @@ against auth.romaine.life/api/auth/jwks and gates on the `role` claim:
 roles, `service` is reserved for k8s service principals (session pods
 that exchange their projected SA token for an auth.romaine.life JWT via
 `/api/auth/exchange/k8s` â€” see
-[nelsong6/tank-operator#486](https://github.com/nelsong6/tank-operator/issues/486)).
+[romaine-life/tank-operator#486](https://github.com/romaine-life/tank-operator/issues/486)).
 `pending` (auth.romaine.life's default for fresh Microsoft sign-ups)
 gets a 403 until an admin promotes the user via auth.romaine.life's
 /admin console. No per-tank email allowlist.
