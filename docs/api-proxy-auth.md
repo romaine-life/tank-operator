@@ -2,8 +2,8 @@
 
 How the Claude and Codex subscription-token chains live, rotate, and recover.
 Written 2026-05-24 after the codex refresh-token incident that PRs
-[#637](https://github.com/nelsong6/tank-operator/pull/637) and
-[#639](https://github.com/nelsong6/tank-operator/pull/639) fixed.
+[#637](https://github.com/romaine-life/tank-operator/pull/637) and
+[#639](https://github.com/romaine-life/tank-operator/pull/639) fixed.
 
 ## Why this doc exists
 

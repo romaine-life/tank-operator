@@ -317,7 +317,7 @@ const blocked = [
   { name: "removed expvarWakeMetrics type", pattern: /\bexpvarWakeMetrics\b/ },
   // /api/internal/sessions/* identity was migrated from raw SA-TokenReview
   // + caller_pod_ip (IP-tail lookup against pod annotations) to the
-  // auth.romaine.life service-principal JWT path in nelsong6/tank-operator#486
+  // auth.romaine.life service-principal JWT path in romaine-life/tank-operator#486
   // Stage 4. Both the gate function and every adjacent helper were deleted
   // in the same migration; block reintroduction so a future refactor
   // can't quietly rebuild the parallel auth path. The legacy env var
@@ -784,7 +784,7 @@ const blocked = [
     // interrupt.
     pattern: /\.startCommandConsumer\(async\s*\(record\)[\s\S]{0,800}?isInterruptCommand\(record\)\s*\)\s*\{\s*(?:commandsConsumedTotal[\s\S]{0,200}?)?await\s+this\.acceptInterrupt/,
   },
-  // ea70777 (nelsong6/tank-operator#652) retired the 4-token chat
+  // ea70777 (romaine-life/tank-operator#652) retired the 4-token chat
   // command/control subject shape and the 3-token chat event subject
   // shape in favor of scope-partitioned 5-token / 4-token shapes that
   // partition cleanly across (scope, session_id). The cutover gap left

@@ -1,4 +1,4 @@
-You're inside a pod provisioned as part of the nelsong6/tank-operator repo. These are called "sessions" within the tank-operator ecosystem. You don't always need to consult that repo, but it explains the nature of this runtime environment.
+You're inside a pod provisioned as part of the romaine-life/tank-operator repo. These are called "sessions" within the tank-operator ecosystem. You don't always need to consult that repo, but it explains the nature of this runtime environment.
 
 Tank-provided policy docs are materialized at `/workspace/.tank/docs/`.
 When a prompt asks about quality timeframes or migration policy, read those

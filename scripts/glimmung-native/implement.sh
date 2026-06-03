@@ -9,7 +9,7 @@ source "${SCRIPT_DIR}/lib.sh"
 native_init
 native_require_env GLIMMUNG_ISSUE_NUMBER GLIMMUNG_ISSUE_TITLE
 
-REPO_SLUG="${TANK_REPO_SLUG:-nelsong6/tank-operator}"
+REPO_SLUG="${TANK_REPO_SLUG:-romaine-life/tank-operator}"
 REPO_DIR="${TANK_REPO_DIR:-/workspace/tank-operator}"
 RUNNER_NAMESPACE="${TANK_NATIVE_AGENT_NAMESPACE:-glimmung-runs}"
 CLAUDE_NAMESPACE="${CLAUDE_NAMESPACE:-tank-operator}"

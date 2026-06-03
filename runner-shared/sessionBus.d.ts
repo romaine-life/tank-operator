@@ -157,7 +157,7 @@ export function isStopBackgroundTaskCommand(record: SessionCommand | null | unde
 export function commandClientNonce(record: SessionCommand): string;
 export function turnIDForClientNonce(clientNonce: string): string;
 
-// PR 3 of nelsong6/tank-operator#532. See runner-shared/sessionBus.js
+// PR 3 of romaine-life/tank-operator#532. See runner-shared/sessionBus.js
 // for the contract docstring. Truncates oversized string fields in a
 // Tank conversation event so its JSON-encoded size fits under the
 // transport budget (NATS max_payload is 1 MiB by default; runner
