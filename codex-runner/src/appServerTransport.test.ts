@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ThreadOptions } from "@openai/codex-sdk";
 
 import { CodexAppServerTransport, appServerItemToCodexItem } from "./appServerTransport.js";
+import { registry } from "./metrics.js";
 
 test("appServerItemToCodexItem preserves unified exec process metadata", () => {
   const item = appServerItemToCodexItem({
@@ -30,6 +31,28 @@ test("appServerItemToCodexItem preserves unified exec process metadata", () => {
     status: "completed",
     duration_ms: 1234,
   });
+});
+
+test("unmapped app-server notifications increment the provider-event counter", async () => {
+  await registry.resetMetrics();
+  const transport = new CodexAppServerTransport({
+    cwd: "/workspace/app",
+    onRequestUserInput: async () => ({ answers: {} }),
+  });
+  const internals = transport as unknown as {
+    handleNotification: (method: string, params?: Record<string, unknown>) => void;
+  };
+
+  internals.handleNotification("thread/contextCompacted", {
+    threadId: "thread-1",
+    turnId: "turn-provider-1",
+  });
+
+  const metrics = await registry.metrics();
+  assert.match(
+    metrics,
+    /tank_runner_unmapped_provider_event_total\{(?=[^}]*type="thread\/contextCompacted")(?=[^}]*subtype="none")(?=[^}]*mode="codex")[^}]*\} 1/,
+  );
 });
 
 test("runTurn abort cuts ahead of queued events and interrupts once turn id is known", async () => {
