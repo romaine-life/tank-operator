@@ -154,6 +154,59 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, body)
 }
 
+// handleResolveSessionTurnNumber maps a public per-session turn number to its
+// durable turn_id and an anchor row cursor. This is the server-side resolution
+// the transcript-navigation contract requires for deep links: a cold load of
+// /sessions/{id}/turns/{n} resolves from session_turns regardless of what the
+// browser has paged in, and an unknown number returns 404 so the SPA can show
+// an explicit unavailable-target state instead of silently falling back.
+func (s *appServer) handleResolveSessionTurnNumber(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	number, err := strconv.ParseInt(strings.TrimSpace(r.PathValue("number")), 10, 64)
+	if err != nil || number < 1 {
+		recordTurnNumberResolve("invalid")
+		writeError(w, http.StatusBadRequest, "turn number must be a positive integer")
+		return
+	}
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if _, status, err := s.authorizeSessionTranscriptReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	// Materialize transcript rows so a turn outside the live-tail window still
+	// resolves to a usable anchor cursor. Resolution of the number itself is
+	// durable (session_turns) and does not depend on materialization.
+	if err := s.ensureSessionTranscriptRows(r.Context(), sessionID, sessionScope); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	resolution, found, err := s.sessionTurnStoreForScope(sessionScope).ResolveTurnNumber(r.Context(), sessionID, number)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if !found {
+		recordTurnNumberResolve("not_found")
+		writeError(w, http.StatusNotFound, "turn not found")
+		return
+	}
+	recordTurnNumberResolve("ok")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id":  sessionID,
+		"turn_id":     resolution.TurnID,
+		"turn_number": resolution.TurnNumber,
+		"row_cursor":  resolution.RowCursor,
+	})
+}
+
 func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
 	s.handleListSessionEvents(w, r)
 }
@@ -457,10 +510,22 @@ func (s *appServer) sessionTranscriptRowStoreForScope(scope string) store.Sessio
 	return store.StubSessionTranscriptRowStore{}
 }
 
+func (s *appServer) sessionTurnStoreForScope(scope string) store.SessionTurnStore {
+	scope = normalizeSessionScope(scope)
+	if scope == s.localSessionScope() && s.turns != nil {
+		return s.turns
+	}
+	if s.pgPool != nil {
+		return store.NewPostgresSessionTurnStore(s.pgPool, scope)
+	}
+	return store.StubSessionTurnStore{}
+}
+
 func (s *appServer) ensureSessionTranscriptRows(ctx context.Context, sessionID, scope string) error {
 	materializer := transcriptRowsMaterializer{
 		events: s.sessionEventStoreForScope(scope),
 		rows:   s.sessionTranscriptRowStoreForScope(scope),
+		turns:  s.sessionTurnStoreForScope(scope),
 	}
 	ctx, cancel := context.WithTimeout(ctx, transcriptMaterializationOnDemandTimeout)
 	defer cancel()

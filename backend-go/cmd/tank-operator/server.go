@@ -39,6 +39,7 @@ type appServer struct {
 	profiles            profilesStore
 	sessionEvents       store.SessionEventStore
 	transcriptRows      store.SessionTranscriptRowStore
+	turns               store.SessionTurnStore
 	avatars             avatarassets.Store
 	avatarImages        avatarassets.ImageStore
 	avatarUploads       avataruploads.Store
@@ -269,6 +270,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleSessionEventStream)
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
+	// Durable resolver for the public per-session turn number: the canonical
+	// route is /sessions/{id}/turns/{n}; this maps n -> turn_id + anchor cursor
+	// server-side so a cold deep link resolves from session_turns, not from the
+	// browser's loaded transcript window.
+	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{number}", s.handleResolveSessionTurnNumber)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/read-state", s.handleUpdateSessionReadState)
 
 	// Public read-only transcript shares. These are intentionally not

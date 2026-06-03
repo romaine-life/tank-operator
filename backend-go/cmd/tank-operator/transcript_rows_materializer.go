@@ -17,6 +17,7 @@ import (
 type transcriptRowsMaterializer struct {
 	events store.SessionEventStore
 	rows   store.SessionTranscriptRowStore
+	turns  store.SessionTurnStore
 }
 
 type transcriptMaterializingEventStore struct {
@@ -71,6 +72,9 @@ func (m transcriptRowsMaterializer) RefreshEvent(ctx context.Context, event map[
 	}
 	projection := projectTranscriptEvents(page.Events)
 	recordTranscriptProjectionInvariantViolations(sessionID, turnID, page.Events, projection.Entries)
+	if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
+		stampTurnNumbers(sessionID, numbers, projection.Entries)
+	}
 	return m.rows.ReplaceForTurn(ctx, sessionID, turnID, projection.Entries)
 }
 
@@ -94,6 +98,9 @@ func (m transcriptRowsMaterializer) refreshEventTx(
 	}
 	projection := projectTranscriptEvents(page.Events)
 	recordTranscriptProjectionInvariantViolations(sessionID, turnID, page.Events, projection.Entries)
+	if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
+		stampTurnNumbers(sessionID, numbers, projection.Entries)
+	}
 	return rows.ReplaceForTurnTx(ctx, tx, sessionID, turnID, projection.Entries)
 }
 
@@ -174,6 +181,9 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 	}
 	projection := projectTranscriptEvents(events)
 	recordTranscriptProjectionInvariantViolations(sessionID, "", events, projection.Entries)
+	if numbers, ok := m.turnNumbersForSession(ctx, sessionID); ok {
+		stampTurnNumbers(sessionID, numbers, projection.Entries)
+	}
 	if err := m.rows.ReplaceForSession(ctx, sessionID, projection.Entries); err != nil {
 		return false, err
 	}
@@ -204,6 +214,9 @@ func (m transcriptRowsMaterializer) backfillSessionTx(
 	}
 	projection := projectTranscriptEvents(events)
 	recordTranscriptProjectionInvariantViolations(sessionID, "", events, projection.Entries)
+	if numbers, ok := m.turnNumbersForSession(ctx, sessionID); ok {
+		stampTurnNumbers(sessionID, numbers, projection.Entries)
+	}
 	return rowsStore.ReplaceForSessionTx(ctx, tx, sessionID, projection.Entries)
 }
 
@@ -265,4 +278,77 @@ func transcriptMaterializerSessionID(event map[string]any) string {
 		return strings.TrimSpace(sessionID)
 	}
 	return ""
+}
+
+// turnNumberingActive reports whether durable per-session turn numbering is
+// available. In degraded/no-Postgres mode the store is the always-misses stub,
+// so stamping is skipped and the missing-number counter is not spammed.
+func turnNumberingActive(s store.SessionTurnStore) bool {
+	if s == nil {
+		return false
+	}
+	_, isStub := s.(store.StubSessionTurnStore)
+	return !isStub
+}
+
+// turnNumbersForTurn returns the {turn_id: number} map for a single turn. ok is
+// false when numbering is inactive or the read errored — in both cases the
+// caller skips stamping for this round (the shell is re-stamped on the turn's
+// next event) rather than recording a false miss. ok is true with an empty map
+// only when the turn genuinely has no number yet, which the stamping pass then
+// records as a missing-number invariant violation.
+func (m transcriptRowsMaterializer) turnNumbersForTurn(ctx context.Context, sessionID, turnID string) (map[string]int64, bool) {
+	if !turnNumberingActive(m.turns) || strings.TrimSpace(turnID) == "" {
+		return nil, false
+	}
+	number, ok, err := m.turns.TurnNumberForTurnID(ctx, sessionID, turnID)
+	if err != nil {
+		slog.Warn("read durable turn number", "session_id", sessionID, "turn_id", turnID, "error", err)
+		return nil, false
+	}
+	if !ok {
+		return map[string]int64{}, true
+	}
+	return map[string]int64{turnID: number}, true
+}
+
+// turnNumbersForSession returns the whole-session {turn_id: number} map for the
+// session/backfill projection paths. ok follows the same contract as
+// turnNumbersForTurn.
+func (m transcriptRowsMaterializer) turnNumbersForSession(ctx context.Context, sessionID string) (map[string]int64, bool) {
+	if !turnNumberingActive(m.turns) {
+		return nil, false
+	}
+	numbers, err := m.turns.TurnNumbersForSession(ctx, sessionID)
+	if err != nil {
+		slog.Warn("read durable turn numbers", "session_id", sessionID, "error", err)
+		return nil, false
+	}
+	return numbers, true
+}
+
+// stampTurnNumbers sets turnNumber on every turn_activity shell from the
+// durable session_turns map. A shell whose turn_id has no number is the
+// materialization-time analogue of the allocation invariant: it is recorded on
+// the missing-number counter rather than failing the projection, so the
+// durable transcript still renders while the regression is alerted on.
+func stampTurnNumbers(sessionID string, numbers map[string]int64, entries []map[string]any) {
+	for _, entry := range entries {
+		if transcriptMapString(entry, "kind") != "turn_activity" {
+			continue
+		}
+		turnID := transcriptMapString(entry, "turnId")
+		if turnID == "" {
+			continue
+		}
+		if number, ok := numbers[turnID]; ok {
+			entry["turnNumber"] = number
+			continue
+		}
+		recordTurnNumberMissing("materialize")
+		slog.Warn("durable turn number missing for materialized shell",
+			"session_id", sessionID,
+			"turn_id", turnID,
+		)
+	}
 }

@@ -33,6 +33,10 @@ answer; it must not visibly move a rendered row from one surface to the other.
 - `session.status` events own startup notices shown inside the transcript.
 - The Tank conversation protocol owns the projection rules for Turn activity
   versus settled transcript messages.
+- A `turn_activity` shell carries the durable `turnNumber` stamped from
+  `session_turns` during materialization. It is a read-only projection of the
+  number, not a second source of truth; the number's owner is the
+  [Transcript Navigation](../transcript-navigation/contract.md) contract.
 - `turn.completed.payload.final_answer.timeline_ids` is the only durable fact
   that promotes assistant prose from activity/log material into a settled
   main-transcript assistant response.
