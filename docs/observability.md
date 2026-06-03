@@ -235,6 +235,15 @@ All metric names are prefixed `tank_`. The full namespace:
   `execution_failed`. `tank_runner_provider_control_total{action,outcome}`
   counts bounded provider control calls, including Claude foreground-task
   backgrounding before interrupt and the interrupt signal itself.
+  `tank_runner_turn_usage_emitted_total{kind}` counts durable usage events by
+  the closed set `kind` ∈ {`snapshot`,`terminal`}: `snapshot` is the
+  per-assistant-message `turn.usage` that carries context-window occupancy
+  (Claude synthesizes it from each model call's own usage because
+  `result.usage` is cumulative and its `input_tokens` is the uncached sliver
+  under prompt caching), `terminal` is the cumulative usage on the turn
+  terminal. The regression signature for the context-gauge bug is a Claude
+  turn (`mode="claude"`) with assistant messages but zero `snapshot`
+  increments; compare against `tank_runner_turn_duration_seconds_count`.
 - `tank_session_runtime_config_update_total` - pod-side runner reports of
   the model/effort actually applied to the provider runtime. Labels:
   `provider` (`claude`, `codex`, `unknown`) and bounded `result`.

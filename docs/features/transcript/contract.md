@@ -99,6 +99,18 @@ answer; it must not visibly move a rendered row from one surface to the other.
   buffered status line. The projected usage row keeps the transcript position
   of the first `turn.usage` event for that turn while its payload and the
   activity shell's live-tail cursor advance with later usage updates.
+- Context-window occupancy is read from per-message usage snapshots
+  (`usage_observation.usage_source = "claude.message"` for Claude;
+  `thread.tokenUsage.updated` for Codex), never from a cumulative turn
+  terminal. The two provider shapes treat cached input oppositely: when cached
+  tokens are additive to `input_tokens` (Claude: `cache_read_input_tokens` +
+  `cache_creation_input_tokens`) occupancy is their sum; when the cached count
+  is a subset of `input_tokens` (Codex/OpenAI) occupancy is the uncached delta
+  or in-window prompt count. Reading a Claude blob with the subset rule yields
+  only the uncached `input_tokens` sliver — the regression this guards
+  against. The cumulative terminal usage (`claude.result`) drives cost, not
+  the gauge; terminal annotation must not overwrite the dedicated usage row's
+  snapshot with it.
 - Already-open Turn activity details are a cached view of the server projection,
   not a second browser-owned ledger. A live `transcript_rows` batch for a turn
   whose details are already loaded must invalidate that cache and re-read
