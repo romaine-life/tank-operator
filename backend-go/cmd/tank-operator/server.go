@@ -93,6 +93,11 @@ type appServer struct {
 	// turn boundary instead of holding process-local timers in a session pod.
 	scheduledWakeups scheduledWakeupStore
 
+	// controlActions is the durable audit ledger for privileged cross-system
+	// effects initiated by session pods through MCP servers. It backs the
+	// user-facing "what changed main, from which session?" trace.
+	controlActions controlActionStore
+
 	// imageOverrides backs the test-slot session-image repoint flow
 	// (docs/testing.md): the internal /session-scopes/{scope}/image-override
 	// endpoints read/write it, and the Manager resolves it at session-create.
@@ -137,6 +142,11 @@ type scheduledWakeupStore interface {
 	MarkFired(context.Context, string, string) error
 	MarkFailed(context.Context, string, string) error
 	ScheduledDueCount(context.Context, time.Time) (int, error)
+}
+
+type controlActionStore interface {
+	Append(context.Context, pgstore.ControlActionEvent) (pgstore.ControlActionEvent, error)
+	ListBySession(context.Context, string, string, string, int) ([]pgstore.ControlActionEvent, error)
 }
 
 // sessionImageOverrideStore is the durable per-scope session-image override
@@ -285,6 +295,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleSessionEventStream)
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
 	mux.HandleFunc("GET /api/sessions/{session_id}/scheduled-wakeups", s.handleListScheduledWakeups)
+	mux.HandleFunc("GET /api/sessions/{session_id}/control-actions", s.handleListControlActions)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
 	// Durable resolver for the public per-session turn number: the canonical
 	// route is /sessions/{id}/turns/{n}; this maps n -> turn_id + anchor cursor
@@ -323,6 +334,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)

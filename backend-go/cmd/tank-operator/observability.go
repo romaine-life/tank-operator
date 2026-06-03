@@ -583,6 +583,14 @@ var messageLinkShareTotal = promauto.NewCounterVec(
 	[]string{"operation", "result"},
 )
 
+var controlActionEventTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_control_action_events_total",
+		Help: "Privileged cross-system control-action audit events accepted or rejected by Tank, with bounded labels.",
+	},
+	[]string{"source_service", "source_tool", "action", "status", "result"},
+)
+
 func recordSessionRuntimeConfigUpdate(provider, result string) {
 	sessionRuntimeConfigUpdateTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),
@@ -635,6 +643,16 @@ func recordMessageLinkShare(operation, result string) {
 	messageLinkShareTotal.WithLabelValues(
 		messageLinkShareOperationLabel(operation),
 		messageLinkShareResultLabel(result),
+	).Inc()
+}
+
+func recordControlActionEvent(sourceService, sourceTool, action, status, result string) {
+	controlActionEventTotal.WithLabelValues(
+		controlActionSourceServiceLabel(sourceService),
+		controlActionSourceToolLabel(sourceTool),
+		controlActionActionLabel(action),
+		controlActionStatusLabel(status),
+		controlActionResultLabel(result),
 	).Inc()
 }
 
@@ -786,6 +804,51 @@ func messageLinkShareOperationLabel(operation string) string {
 }
 
 func messageLinkShareResultLabel(result string) string {
+	switch result {
+	case "ok", "bad_request", "denied", "not_found", "store_unavailable", "store_error":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func controlActionSourceServiceLabel(sourceService string) string {
+	switch sourceService {
+	case "mcp-github", "mcp-tank-operator":
+		return sourceService
+	default:
+		return "unknown"
+	}
+}
+
+func controlActionSourceToolLabel(sourceTool string) string {
+	switch sourceTool {
+	case "merge_pull_request", "mark_pull_request_ready_for_review":
+		return sourceTool
+	default:
+		return "other"
+	}
+}
+
+func controlActionActionLabel(action string) string {
+	switch action {
+	case "github.pull_request.merge", "github.pull_request.ready_for_review":
+		return action
+	default:
+		return "other"
+	}
+}
+
+func controlActionStatusLabel(status string) string {
+	switch status {
+	case "started", "succeeded", "failed":
+		return status
+	default:
+		return "unknown"
+	}
+}
+
+func controlActionResultLabel(result string) string {
 	switch result {
 	case "ok", "bad_request", "denied", "not_found", "store_unavailable", "store_error":
 		return result

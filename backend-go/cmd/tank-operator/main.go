@@ -220,8 +220,10 @@ func main() {
 	// 8. Init per-user SDK conversation read-state store.
 	readStateStore := buildConversationReadStateStore(pgPool, sessionScope)
 	var scheduledWakeupStore *pgstore.ScheduledWakeupStore
+	var controlActionStore *pgstore.ControlActionStore
 	if pgPool != nil {
 		scheduledWakeupStore = pgstore.NewScheduledWakeupStore(pgPool, sessionScope)
+		controlActionStore = pgstore.NewControlActionStore(pgPool, sessionScope)
 	}
 
 	// 8. Init Manager. SessionListWaker wakes are routed through the
@@ -496,6 +498,7 @@ func main() {
 		mcpGitHub:                buildMCPGitHubClient(),
 		providerHealth:           providerHealthManager,
 		scheduledWakeups:         scheduledWakeupStore,
+		controlActions:           controlActionStore,
 	}
 	// Assign the override store only when non-nil so the appServer field stays
 	// a true nil interface in stub mode (avoids the typed-nil-pointer trap that
