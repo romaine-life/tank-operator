@@ -571,3 +571,74 @@ func mustDecodeBase64(raw string) []byte {
 	}
 	return b
 }
+
+func TestParseAvatarCropBounds(t *testing.T) {
+	t.Run("defaults to a centered full-size crop when empty", func(t *testing.T) {
+		crop, err := parseAvatarCrop("")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if crop.CenterX != 0.5 || crop.CenterY != 0.5 || crop.Size != 1 {
+			t.Fatalf("default crop = %#v", crop)
+		}
+	})
+
+	accepted := []string{
+		`{"center_x":0.5,"center_y":0.5,"size":0.5}`,
+		`{"center_x":0,"center_y":1,"size":1}`,
+		// Selections that overhang the image are allowed up to the ceiling; the
+		// off-image area is stored as transparency by the client-side render.
+		`{"center_x":0.5,"center_y":0.5,"size":2.5}`,
+		`{"center_x":0.5,"center_y":0.5,"size":3}`,
+	}
+	for _, raw := range accepted {
+		t.Run("accepts "+raw, func(t *testing.T) {
+			if _, err := parseAvatarCrop(raw); err != nil {
+				t.Fatalf("parseAvatarCrop(%s) error = %v, want nil", raw, err)
+			}
+		})
+	}
+
+	rejected := []struct {
+		name string
+		raw  string
+	}{
+		{"size zero", `{"center_x":0.5,"center_y":0.5,"size":0}`},
+		{"size above ceiling", `{"center_x":0.5,"center_y":0.5,"size":3.01}`},
+		{"center below zero", `{"center_x":-0.1,"center_y":0.5,"size":1}`},
+		{"center above one", `{"center_x":0.5,"center_y":1.2,"size":1}`},
+	}
+	for _, tc := range rejected {
+		t.Run("rejects "+tc.name, func(t *testing.T) {
+			if _, err := parseAvatarCrop(tc.raw); err == nil {
+				t.Fatalf("parseAvatarCrop(%s) error = nil, want error", tc.raw)
+			}
+		})
+	}
+}
+
+func TestAvatarCreateAcceptsOverhangingSelection(t *testing.T) {
+	app := newAvatarTestServer(t)
+	createReq := avatarCreateRequest(t, map[string]string{
+		"kind": "agent",
+		"name": "Wide Banner",
+		// size > 1 with the center pinned to the left edge: the circle overhangs
+		// the image and the off-image area becomes transparency in the avatar.
+		"crop": `{"center_x":0,"center_y":0.5,"size":2,"source_width":1600,"source_height":400}`,
+	})
+	createReq.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	createResp := httptest.NewRecorder()
+
+	app.handleCreateAvatar(createResp, createReq)
+
+	if createResp.Code != http.StatusCreated {
+		t.Fatalf("create status = %d body = %s", createResp.Code, createResp.Body.String())
+	}
+	var created avatarAssetResponse
+	if err := json.Unmarshal(createResp.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if created.Crop.Size != 2 || created.Crop.CenterX != 0 {
+		t.Fatalf("stored crop = %#v", created.Crop)
+	}
+}
