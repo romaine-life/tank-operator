@@ -13,12 +13,3 @@ provider "azuread" {
 }
 
 provider "random" {}
-
-# Repo-scoped Actions variables require admin perms that the default
-# GITHUB_TOKEN doesn't have. Use the same `github-pat` PAT in KV that
-# infra-bootstrap uses; the tofu workflow fetches it in a preliminary
-# job, masks it, and passes it through `tofu_vars` as -var=github_pat=…
-provider "github" {
-  owner = "nelsong6"
-  token = var.github_pat
-}
