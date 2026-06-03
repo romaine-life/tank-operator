@@ -166,9 +166,10 @@ export const interruptOutcomeTotal = new Counter({
   registers: [registry],
 });
 
-export const pendingWakeupsGauge = new Gauge({
-  name: "tank_runner_pending_wakeups",
-  help: "Currently-pending ScheduleWakeup timers held in this runner process.",
+export const scheduledWakeupRegisterTotal = new Counter({
+  name: "tank_runner_scheduled_wakeup_register_total",
+  help: "ScheduleWakeup registrations attempted against the orchestrator durable wakeup API.",
+  labelNames: ["result"],
   registers: [registry],
 });
 

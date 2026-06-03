@@ -641,6 +641,7 @@ type sdkTurnRequest struct {
 	PermissionMode     string
 	SkillName          string
 	FollowUp           bool
+	Source             string
 	AllowBeforeReady   bool
 	OmitUserMessage    bool
 	SessionMode        string
@@ -867,7 +868,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		SessionStorageKey: storageKey,
 		Email:             email,
 		Provider:          provider,
-		Source:            "sdk",
+		Source:            sdkTurnSource(req.Source),
 		TurnID:            turnID,
 		ClientNonce:       clientNonce,
 		Prompt:            prompt,
@@ -919,6 +920,15 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		"client_nonce": clientNonce,
 		"provider":     provider,
 	}, 0, ""
+}
+
+func sdkTurnSource(source string) string {
+	switch strings.TrimSpace(source) {
+	case "schedule-wakeup":
+		return "schedule-wakeup"
+	default:
+		return "sdk"
+	}
 }
 
 func (s *appServer) requireExistingUserMessage(ctx context.Context, sessionID, turnID string) (int, string) {

@@ -631,7 +631,11 @@ declares one rule group per subsystem:
 - **api-proxy**: upstream 401 rate (refresh-storm signature), refresh
   failures (any non-success result).
 - **mcp-auth-proxy**: SA token read failures, MCP upstream 5xx rate.
-- **Runners**: provider error rate, pending wakeup queue depth.
+- **Runners**: provider error rate, durable scheduled wakeup registration
+  outcomes, and backend due-wakeup backlog. Pending, fired, and failed
+  scheduled wakeups are also user-visible from Background -> Scheduled via
+  the backend scheduled-wakeup read model, so confirmation does not depend on
+  runner logs.
 - **Session spawn**: any single-spawn outlier above 60s in the trailing
   hour. Backed by recording rules
   `tank:session_pod_spawn_seconds:p50_24h`,

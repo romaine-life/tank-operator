@@ -589,12 +589,17 @@ When `existing_user_message=true`, the user row must already have been written
 by the launch-time create boundary, so this endpoint writes `turn.submitted`
 only.
 Command ack happens only after the corresponding durable terminal event is
-published. Claude `ScheduleWakeup` is handled pod-side: the agent-runner extracts
-the tool_use, holds a `setTimeout` for `delaySeconds`, and at fire time publishes
-a normal `submit_turn` command (`source=schedule-wakeup`) to the command subject.
-The scheduler is in-process state inside the runner; it does not survive runner-
-process death and does not need to, per the durability boundary in
-docs/product-inspirations.md (the pod owns runtime scheduler state, not Cosmos).
+published. Claude `ScheduleWakeup` is backend-owned durable state: the
+agent-runner extracts the tool_use and registers it through
+`POST /api/internal/sessions/{session_id}/scheduled-wakeups` with the provider
+item id as the idempotency key. The orchestrator claims due rows from
+`session_scheduled_wakeups`, writes the normal `user_message.created` and
+`turn.submitted` boundary events, then publishes a normal `submit_turn` command
+with `source=schedule-wakeup`. The browser-facing read model is
+`GET /api/sessions/{session_id}/scheduled-wakeups`; the SPA maps those durable
+rows into Background -> Scheduled entries so a scheduled continuation is
+visually confirmable even when its original tool row has scrolled out of the
+loaded transcript window.
 
 The UI consumes durable transcript delivery from
 `GET /api/sessions/{session_id}/events`. The stream emits `transcript-rows`

@@ -787,8 +787,8 @@ func (b *Bus) ensureStream(ctx context.Context) error {
 	// jetstream.fileStore.enabled=false config. The chart caps each
 	// replica's JetStream RAM at 256Mi; the stream-level MaxBytes here
 	// caps the stream within that budget so a runaway producer can't
-	// fill memory and OOM the NATS pod. AllowMsgSchedules is no longer
-	// needed since ScheduleWakeup is now a pod-local setTimeout.
+	// fill memory and OOM the NATS pod. ScheduleWakeup is backend-owned
+	// durable Postgres state, so JetStream message scheduling stays off.
 	_, err := b.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
 		Name:        b.stream,
 		Description: "Tank session command and event delivery bus",

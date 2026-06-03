@@ -1084,14 +1084,14 @@ spec:
             summary: "pod-side runner ({{`{{ $labels.mode }}`}}) provider errors > 0.1/s for 5m"
             runbook: "Inspect the affected session pod's agent-runner / codex-runner logs."
 
-        - alert: TankRunnerPendingWakeupsGrowth
-          expr: max_over_time(tank_runner_pending_wakeups[1h]) > 50
-          for: 1h
+        - alert: TankScheduledWakeupsOverdue
+          expr: max_over_time(tank_scheduled_wakeups_due[15m]) > 0
+          for: 15m
           labels:
-            severity: info
+            severity: warning
           annotations:
-            summary: "ScheduleWakeup queue depth exceeded 50 in the last hour"
-            runbook: "Pod-local setTimeout scheduler is accumulating timers. May indicate a runaway agent loop or a stuck turn."
+            summary: "Durable ScheduleWakeup rows are due but not terminal"
+            runbook: "Inspect session_scheduled_wakeups rows and tank_scheduled_wakeup_fire_total for failed backend submission attempts."
 
         # ----- "Stop is not stopping" self-telling alerts -----
         #

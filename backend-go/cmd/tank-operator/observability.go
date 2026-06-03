@@ -534,6 +534,27 @@ var sessionRuntimeConfigUpdateTotal = promauto.NewCounterVec(
 	[]string{"provider", "result"},
 )
 
+var scheduledWakeupRegisterTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_scheduled_wakeup_register_total",
+		Help: "Claude ScheduleWakeup registrations accepted by the orchestrator, labeled by provider and bounded result.",
+	},
+	[]string{"provider", "result"},
+)
+
+var scheduledWakeupFireTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_scheduled_wakeup_fire_total",
+		Help: "Durable scheduled wakeup fire attempts, labeled by provider and bounded result.",
+	},
+	[]string{"provider", "result"},
+)
+
+var scheduledWakeupsDue = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "tank_scheduled_wakeups_due",
+	Help: "Durable scheduled wakeup rows in this scope that are due and not terminal.",
+})
+
 var messageLinkShareTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_message_link_share_total",
@@ -547,6 +568,27 @@ func recordSessionRuntimeConfigUpdate(provider, result string) {
 		sessionRuntimeConfigProviderLabel(provider),
 		sessionRuntimeConfigResultLabel(result),
 	).Inc()
+}
+
+func recordScheduledWakeupRegister(provider, result string) {
+	scheduledWakeupRegisterTotal.WithLabelValues(
+		sessionRuntimeConfigProviderLabel(provider),
+		scheduledWakeupRegisterResultLabel(result),
+	).Inc()
+}
+
+func recordScheduledWakeupFire(provider, result string) {
+	scheduledWakeupFireTotal.WithLabelValues(
+		sessionRuntimeConfigProviderLabel(provider),
+		scheduledWakeupFireResultLabel(result),
+	).Inc()
+}
+
+func setScheduledWakeupsDue(count int) {
+	if count < 0 {
+		count = 0
+	}
+	scheduledWakeupsDue.Set(float64(count))
 }
 
 func recordMessageLinkShare(operation, result string) {
@@ -644,6 +686,24 @@ func sessionRuntimeConfigProviderLabel(provider string) string {
 func sessionRuntimeConfigResultLabel(result string) string {
 	switch result {
 	case "ok", "bad_request", "forbidden", "not_found", "manager_unavailable", "update_failed":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func scheduledWakeupRegisterResultLabel(result string) string {
+	switch result {
+	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "manager_unavailable", "store_error":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func scheduledWakeupFireResultLabel(result string) string {
+	switch result {
+	case "ok", "session_not_found", "session_not_active", "enqueue_failed", "store_error", "failed":
 		return result
 	default:
 		return "other"
