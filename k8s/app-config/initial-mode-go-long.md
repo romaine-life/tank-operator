@@ -11,3 +11,7 @@ Heavy is the default: do not present a minimal fix as the option and do not ask 
 Settled decisions stay settled: do not reintroduce a route, flag, type, test, doc, or UI path that a prior change deliberately removed. Treat legacy, compatibility, fallback, and temporary as deletion targets, not design options.
 
 Definition of done is quality-timeframes.md — check the work against it before calling it complete, and name any remaining hardening as unfinished scope rather than optional.
+
+This is the end of othe intro message. Below is the user's message/request.
+
+---
