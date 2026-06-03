@@ -82,3 +82,48 @@ This is the production-correct path. Do not work around an old "stub
 is live, `is_admin` carries Tank's local admin-power decision, and the
 inspector now plumbs localStorage through, so the real auth path is always
 available.
+
+## Making new slot sessions inherit a change (session-image repoint)
+
+`apply_test_slot_hot_swap` patches the runner code in **already-running**
+session pods. A **newly-created** session boots the image its orchestrator
+stamps, so to make new sessions inherit a branch change you point the slot's
+session image at the branch build — the same lever production uses
+(`CODEX_SESSION_IMAGE` / `SESSION_IMAGE`), not a runtime overlay. New sessions
+then boot the branch code natively, exactly like prod boots its pinned image.
+
+Two steps:
+
+1. **Build the branch session image.** Session images are fingerprint-tagged
+   from their build inputs by `.github/workflows/session-images-build.yml`.
+   Compute the tag and, if it isn't already in ACR, dispatch the build at your
+   branch (the workflow pushes the fingerprint tag on `workflow_dispatch`):
+
+   ```sh
+   # the codex-container tag your branch will produce
+   scripts/image-fingerprint.sh --image codex --dockerfile claude-container/Dockerfile \
+     --context . --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared'
+   # build it for the branch (no-op/cache hit if the fingerprint already exists)
+   gh workflow run session-images-build.yml -f git_ref=<branch>
+   ```
+
+2. **Point the slot at it.** Set the durable per-scope override on the slot's
+   orchestrator (the scope is the slot name, e.g. `tank-operator-slot-1`). New
+   sessions in that slot then stamp the override image:
+
+   ```sh
+   curl -X PUT \
+     https://tank-operator-slot-1.tank.dev.romaine.life/api/internal/session-scopes/tank-operator-slot-1/image-override \
+     -H "Authorization: Bearer $AUTH_JWT" -H 'Content-Type: application/json' \
+     -d '{"codex_image":"romainecr.azurecr.io/codex-container:codex-<fp>","git_ref":"<branch>"}'
+   ```
+
+   `GET` the same path to see what new sessions will inherit; `DELETE` it to
+   revert to the chart-pinned image. The override is durable (survives the slot
+   orchestrator restarting), refuses the production scope, and is honored only by
+   test-env orchestrators — production sessions are never repointed.
+
+The existing `apply_test_slot_hot_swap` remains the fast inner loop for the
+session you are already in; the repoint is what makes *new* sessions match. A
+future `mcp-tank-operator` tool will wrap both steps ("build, wait, point") into
+one call.

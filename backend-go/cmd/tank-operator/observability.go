@@ -372,6 +372,38 @@ func recordServiceRoleRequest(route, result string) {
 	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
 }
 
+// sessionImageOverrideAppliedTotal counts NEW session pods stamped with a
+// test-slot session-image override instead of the chart-pinned image, by scope
+// and runner family. This is the user-trust signal for the "did new sessions
+// actually inherit my branch image?" question that prompted the feature: a
+// repoint that never fires shows zero here. Scope cardinality is bounded by the
+// number of live test slots; image_kind is {claude,codex}.
+var sessionImageOverrideAppliedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_image_override_applied_total",
+		Help: "New session pods stamped with a test-slot session-image override, by scope and image kind.",
+	},
+	[]string{"scope", "image_kind"},
+)
+
+func recordSessionImageOverrideApplied(scope, kind string) {
+	sessionImageOverrideAppliedTotal.WithLabelValues(scope, kind).Inc()
+}
+
+// sessionImageOverrideWriteTotal counts writes to the durable per-scope
+// session-image override via the internal endpoint, by action (set|delete).
+var sessionImageOverrideWriteTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_image_override_write_total",
+		Help: "Writes to the durable per-scope session-image override, by action.",
+	},
+	[]string{"action"},
+)
+
+func recordSessionImageOverrideWrite(action string) {
+	sessionImageOverrideWriteTotal.WithLabelValues(action).Inc()
+}
+
 // sessionReposSelectedTotal counts every session-create call by the
 // coarse repo-count bucket (none | one | many). Bounded cardinality
 // (3 series) keeps Prometheus happy while still surfacing the
