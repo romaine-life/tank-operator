@@ -359,6 +359,23 @@ func (r *testSessionRegistry) SetRuntimeConfig(_ context.Context, email, session
 	records[sessionID] = record
 	return nil
 }
+func (r *testSessionRegistry) SetRuntimeContextWindow(_ context.Context, email, sessionID string, tokens int64, source string) error {
+	records := r.records[email]
+	if records == nil {
+		return nil
+	}
+	record, ok := records[sessionID]
+	if !ok {
+		return nil
+	}
+	if record.RuntimeContextWindowTokens == 0 {
+		record.RuntimeContextWindowTokens = tokens
+		record.RuntimeContextWindowSource = source
+		record.RuntimeContextWindowObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+		records[sessionID] = record
+	}
+	return nil
+}
 func (r *testSessionRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
 	return orderedIDs, nil
 }

@@ -93,9 +93,11 @@ test("runTurn abort cuts ahead of queued events and interrupts once turn id is k
 });
 
 test("runTurn attaches latest app-server token usage to terminal events", async () => {
+  const contextWindowReports: number[] = [];
   const transport = new CodexAppServerTransport({
     cwd: "/workspace/app",
     onRequestUserInput: async () => ({ answers: {} }),
+    onRuntimeContextWindowObserved: (tokens) => contextWindowReports.push(tokens),
   });
   const internals = transport as unknown as {
     start: () => Promise<void>;
@@ -131,6 +133,12 @@ test("runTurn attaches latest app-server token usage to terminal events", async 
       modelContextWindow: 200_000,
     },
   });
+  internals.handleNotification("thread/tokenUsage/updated", {
+    threadId: "thread-1",
+    tokenUsage: {
+      modelContextWindow: 200_000,
+    },
+  });
   internals.handleNotification("turn/completed", {
     threadId: "thread-1",
     turn: { id: "turn-provider-1", status: "completed" },
@@ -147,6 +155,7 @@ test("runTurn attaches latest app-server token usage to terminal events", async 
     reasoning_output_tokens: 5,
     total_tokens: 125,
   });
+  assert.deepEqual(contextWindowReports, [200_000]);
   assert.deepEqual(pickUsageObservationFields(usageResult.value.usage_observation), {
     provider_turn_id: "turn-provider-1",
     usage_source: "thread.tokenUsage.updated",

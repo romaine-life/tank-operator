@@ -91,6 +91,14 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			COALESCE(capabilities, '{}'::text[]),
 			COALESCE(agent_avatar_id, ''),
 			COALESCE(system_avatar_id, ''),
+			model,
+			effort,
+			runtime_model,
+			runtime_effort,
+			COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
+			runtime_context_window_tokens,
+			runtime_context_window_source,
+			COALESCE(to_char(runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
 			sidebar_position,
 			row_version
 		FROM sessions
@@ -113,6 +121,10 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			activitySummary, testState, rolloutState, cloneState        []byte
 			repos, capabilities                                         []string
 			agentAvatarID, systemAvatarID                               string
+			model, effort                                               string
+			runtimeModel, runtimeEffort, runtimeAt                      string
+			runtimeContextWindowTokens                                  int64
+			runtimeContextWindowSource, runtimeContextWindowAt          string
 			sidebarPosition, rowVersion                                 int64
 		)
 		if err := rows.Scan(
@@ -120,7 +132,10 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
-			&repos, &cloneState, &capabilities, &agentAvatarID, &systemAvatarID, &sidebarPosition,
+			&repos, &cloneState, &capabilities, &agentAvatarID, &systemAvatarID,
+			&model, &effort, &runtimeModel, &runtimeEffort, &runtimeAt,
+			&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
+			&sidebarPosition,
 			&rowVersion,
 		); err != nil {
 			return nil, err
@@ -129,29 +144,37 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			mode = sessionmodel.DefaultSessionMode
 		}
 		out = append(out, sessionmodel.SessionRecord{
-			ID:              sessionID,
-			Email:           strings.ToLower(strings.TrimSpace(owner)),
-			Mode:            mode,
-			Scope:           scope,
-			PodName:         podName,
-			Name:            name,
-			Visible:         visible,
-			RequestedAt:     requestedAt,
-			CreatedAt:       createdAt,
-			UpdatedAt:       updatedAt,
-			Status:          status,
-			ReadyAt:         readyAt,
-			TerminatingAt:   terminatingAt,
-			ActivitySummary: activitySummary,
-			TestState:       unmarshalJSONBField(testState),
-			RolloutState:    unmarshalJSONBField(rolloutState),
-			Repos:           repos,
-			CloneState:      unmarshalJSONBField(cloneState),
-			Capabilities:    capabilities,
-			AgentAvatarID:   agentAvatarID,
-			SystemAvatarID:  systemAvatarID,
-			SidebarPosition: sidebarPosition,
-			RowVersion:      rowVersion,
+			ID:                             sessionID,
+			Email:                          strings.ToLower(strings.TrimSpace(owner)),
+			Mode:                           mode,
+			Scope:                          scope,
+			PodName:                        podName,
+			Name:                           name,
+			Visible:                        visible,
+			RequestedAt:                    requestedAt,
+			CreatedAt:                      createdAt,
+			UpdatedAt:                      updatedAt,
+			Status:                         status,
+			ReadyAt:                        readyAt,
+			TerminatingAt:                  terminatingAt,
+			ActivitySummary:                activitySummary,
+			TestState:                      unmarshalJSONBField(testState),
+			RolloutState:                   unmarshalJSONBField(rolloutState),
+			Repos:                          repos,
+			CloneState:                     unmarshalJSONBField(cloneState),
+			Capabilities:                   capabilities,
+			AgentAvatarID:                  agentAvatarID,
+			SystemAvatarID:                 systemAvatarID,
+			Model:                          model,
+			Effort:                         effort,
+			RuntimeModel:                   runtimeModel,
+			RuntimeEffort:                  runtimeEffort,
+			RuntimeConfiguredAt:            runtimeAt,
+			RuntimeContextWindowTokens:     runtimeContextWindowTokens,
+			RuntimeContextWindowSource:     runtimeContextWindowSource,
+			RuntimeContextWindowObservedAt: runtimeContextWindowAt,
+			SidebarPosition:                sidebarPosition,
+			RowVersion:                     rowVersion,
 		})
 	}
 	return out, rows.Err()
