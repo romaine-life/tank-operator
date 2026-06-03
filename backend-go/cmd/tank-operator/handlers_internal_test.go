@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	authv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -301,6 +302,63 @@ func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
 		Effort:  "xhigh",
 	})
 	server.mgr = sessions.NewManager(server.k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+	beforeOK := testutil.ToFloat64(sessionContextWindowReportTotal.WithLabelValues("codex", "codex_app_server_token_usage", "ok"))
+	req := httptest.NewRequest(http.MethodPut, "/api/internal/sessions/12/runtime-config", strings.NewReader(`{
+		"model":"gpt-5.5",
+		"effort":"xhigh",
+		"context_window_tokens":258400,
+		"context_window_source":"codex_app_server_token_usage"
+	}`))
+	req.SetPathValue("session_id", "12")
+	req.Header.Set("Authorization", "Bearer session-token")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalSessionRuntimeConfig(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if after := testutil.ToFloat64(sessionContextWindowReportTotal.WithLabelValues("codex", "codex_app_server_token_usage", "ok")); after != beforeOK+1 {
+		t.Fatalf("context window report ok counter = %v, want %v", after, beforeOK+1)
+	}
+	var body sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.RuntimeModel != "gpt-5.5" || body.RuntimeEffort != "xhigh" || body.RuntimeConfiguredAt == nil || *body.RuntimeConfiguredAt == "" {
+		t.Fatalf("runtime config response = %#v", body)
+	}
+	if body.RuntimeContextWindowTokens != 258400 || body.RuntimeContextWindowSource != "codex_app_server_token_usage" || body.RuntimeContextWindowObservedAt == nil || *body.RuntimeContextWindowObservedAt == "" {
+		t.Fatalf("runtime context window response = %#v", body)
+	}
+	record, ok, err := registry.Get(context.Background(), "owner@example.test", "12")
+	if err != nil || !ok {
+		t.Fatalf("registry Get ok=%v err=%v", ok, err)
+	}
+	if record.RuntimeModel != "gpt-5.5" || record.RuntimeEffort != "xhigh" || record.RuntimeConfiguredAt == "" {
+		t.Fatalf("registry runtime config = %#v", record)
+	}
+	if record.RuntimeContextWindowTokens != 258400 || record.RuntimeContextWindowSource != "codex_app_server_token_usage" || record.RuntimeContextWindowObservedAt == "" {
+		t.Fatalf("registry runtime context window = %#v", record)
+	}
+}
+
+func TestHandleInternalSessionRuntimeConfigCountsIgnoredWindow(t *testing.T) {
+	server := internalSessionRuntimeServer(t, "12")
+	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
+		ID:      "12",
+		Email:   "owner@example.test",
+		Mode:    sessionmodel.CodexGUIMode,
+		Visible: true,
+		Status:  "Active",
+		Model:   "gpt-5.5",
+		Effort:  "xhigh",
+	})
+	server.mgr = sessions.NewManager(server.k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+	beforeIgnored := testutil.ToFloat64(sessionContextWindowReportTotal.WithLabelValues("codex", "other", "ignored"))
+	// A runtime-config report that carries model/effort but no positive
+	// context window must persist config and count the window report as
+	// "ignored" without touching the durable context-window columns.
 	req := httptest.NewRequest(http.MethodPut, "/api/internal/sessions/12/runtime-config", strings.NewReader(`{
 		"model":"gpt-5.5",
 		"effort":"xhigh"
@@ -314,19 +372,15 @@ func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	var body sessions.Info
-	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatal(err)
-	}
-	if body.RuntimeModel != "gpt-5.5" || body.RuntimeEffort != "xhigh" || body.RuntimeConfiguredAt == nil || *body.RuntimeConfiguredAt == "" {
-		t.Fatalf("runtime config response = %#v", body)
+	if after := testutil.ToFloat64(sessionContextWindowReportTotal.WithLabelValues("codex", "other", "ignored")); after != beforeIgnored+1 {
+		t.Fatalf("context window report ignored counter = %v, want %v", after, beforeIgnored+1)
 	}
 	record, ok, err := registry.Get(context.Background(), "owner@example.test", "12")
 	if err != nil || !ok {
 		t.Fatalf("registry Get ok=%v err=%v", ok, err)
 	}
-	if record.RuntimeModel != "gpt-5.5" || record.RuntimeEffort != "xhigh" || record.RuntimeConfiguredAt == "" {
-		t.Fatalf("registry runtime config = %#v", record)
+	if record.RuntimeContextWindowTokens != 0 || record.RuntimeContextWindowSource != "" || record.RuntimeContextWindowObservedAt != "" {
+		t.Fatalf("ignored window should not persist columns: %#v", record)
 	}
 }
 

@@ -1030,7 +1030,7 @@ var schemaMigrations = []migration{
 
 	// session_turns — durable per-session turn numbers. `turn_id`
 	// (turn_<nonce>) stays the provider-neutral timeline identity that events,
-	// timelines, idempotency, and the activity/interrupt/input-reply APIs key
+	// timelines, idempotency, and the activity/interrupt/answer APIs key
 	// on; turn_number is the human-facing, submission-ordered handle the public
 	// route /sessions/{id}/turns/{n} resolves into, mirroring how
 	// session_counters mints the session's own number. A turn was previously an
@@ -1201,13 +1201,25 @@ var schemaMigrations = []migration{
 	{ID: "0098", SQL: `CREATE INDEX IF NOT EXISTS session_scheduled_wakeups_due
 		ON session_scheduled_wakeups (session_scope, status, due_at, created_at)
 		WHERE status IN ('scheduled', 'claiming')`},
+
+	// Provider-observed runtime context window. The session's requested model is
+	// immutable after create; this records the first concrete window reported by
+	// the provider runtime (codex app-server token usage; Claude Agent SDK
+	// per-turn modelUsage.contextWindow) so the composer context fraction
+	// hydrates from durable row metadata instead of a frontend model table.
+	{ID: "0099", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_tokens bigint NOT NULL DEFAULT 0`},
+	{ID: "0100", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_source text NOT NULL DEFAULT ''`},
+	{ID: "0101", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_context_window_observed_at timestamptz`},
 	// Partial index backing the stranded-launch sweep
 	// (store.FindStrandedLaunchTurns / cmd/tank-operator/stranded_launch_sweep.go).
 	// That sweep scans for user_message.created rows in a created_at window;
 	// the broad session_events_created_at index would force a scan across every
 	// event type in the window, so this restricts the index to launch rows and
 	// makes the periodic backstop a bounded range scan over launches alone.
-	{ID: "0099", SQL: `CREATE INDEX IF NOT EXISTS session_events_user_message_created_at
+	{ID: "0102", SQL: `CREATE INDEX IF NOT EXISTS session_events_user_message_created_at
 		ON session_events (created_at)
 		WHERE event_type = 'user_message.created'`},
 }

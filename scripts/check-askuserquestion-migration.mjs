@@ -1,46 +1,25 @@
 #!/usr/bin/env node
 
-// Migration guard for the AskUserQuestion durable-resolution cutover.
+// Migration guard for the AskUserQuestion "the answer is a new durable turn"
+// cutover.
 //
-// Background: AskUserQuestion was previously broken end-to-end because the
-// agent-runner ran the Claude Agent SDK with `permissionMode: "bypassPermissions"`
-// and no `canUseTool` callback. The SDK's built-in tool definition calls
-// `checkPermissions` returning `{behavior:"ask", message:"Answer questions?"}`,
-// which — with no host UI to answer — surfaces back as an is_error tool_result
-// containing the literal string "Answer questions?". The frontend then rendered
-// that as the "answered" state and the user never saw the option buttons.
+// OLD model (deleted): AskUserQuestion was resolved IN-TURN. The runner parked
+// the Claude SDK `canUseTool` decision (or the codex app-server
+// `requestUserInput` request), the browser POSTed `/input-reply`, the backend
+// published a durable `input_reply` command, and the runner resolved the tool
+// with `{behavior:"allow", updatedInput:{answers}}`. The exchange produced
+// `tool.approval_requested` / `tool.approval_resolved` events and a
+// `needs_input_announcement` transcript row.
 //
-// The cutover replaces that path entirely:
+// NEW model: invoking AskUserQuestion ENDS the asking turn with a durable
+// `turn.awaiting_input` terminal carrying the Tank-canonical questions. The
+// user's answer is a BRAND-NEW turn (POST `/turns/{turn_id}/answer`). There is
+// no `input_reply` command, no in-turn tool result, and no `tool.approval_*`
+// events; the transcript promotes an interactive `awaiting_input` card.
 //
-//   1. Runner switches off `bypassPermissions`, registers a `canUseTool`
-//      callback that allow-passthroughs all non-AskUserQuestion tools and
-//      gates AskUserQuestion on a durable input_reply by storing a resolver
-//      in `pendingInputReplies` keyed by toolUseID.
-//   2. `acceptInputReply` resolves the stored canUseTool promise with
-//      `{behavior:"allow", updatedInput:{answers, annotations}}`. The SDK
-//      then calls the tool's own `call()` and produces a canonical
-//      tool_result. The hand-rolled `buildInputReplyMessage` synthetic
-//      tool_result user message is deleted — it was the wrong shape.
-//   3. The Tank `input_reply` command grows `Answers` (and optional
-//      `Annotations`) fields, replacing the singular `InputReply` string.
-//   4. The `tool.approval_resolved` event payload grows `answers` /
-//      `annotations`, sourced from the canUseTool updatedInput we sent.
-//      The frontend renders the answered state from the durable event,
-//      not from local React state alone.
-//   5. The frontend renders `q.question`, `q.header`, `q.options[]` with
-//      `label` / `description` / `preview`, plus `q.multiSelect` semantics.
-//
-// This script enforces the cutover is complete and prevents regression:
-//
-//   * Forbidden patterns must NOT appear anywhere in the repo (modulo
-//     well-known excluded paths — this script, tests that assert the
-//     migration, and the SDK's own d.ts).
-//   * Required patterns MUST appear in their named anchor files. Missing
-//     anchors means the cutover regressed (e.g., someone removed the
-//     `canUseTool` registration).
-//
-// Run from CI alongside the other migration guards. Fail-on-match is the
-// guard contract — there are no warnings.
+// This guard forbids the deleted in-turn surfaces and requires the new
+// turn-boundary surfaces so neither model can drift back. Fail-on-match is the
+// contract — there are no warnings. Run from CI alongside the other guards.
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -64,397 +43,172 @@ const ignoredDirs = new Set([
   "venv",
 ]);
 
-const ignoredFiles = new Set([
-  "package-lock.json",
-  "pnpm-lock.yaml",
-  "yarn.lock",
-  "go.sum",
-]);
+const ignoredFiles = new Set(["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum"]);
 
-// Files that legitimately reference the forbidden patterns: this script
-// itself (it must list them to enforce them), and tests that assert the
-// migration's guards stay in place. Keep this list minimal — every entry
-// is a hole in the guard.
+// Files allowed to reference the forbidden names: this guard (it must list
+// them), sibling guards, and the migration-policy test. Docs that narrate the
+// retired model by name are also allowed — they explain WHY it was removed, not
+// that it is supported. Keep this list minimal; every entry is a hole.
 const ignoredRelativePaths = new Set([
   "scripts/check-askuserquestion-migration.mjs",
+  "scripts/check-removed-chat-runtime.mjs",
+  "scripts/check-stop-request-migration.mjs",
   "frontend/src/migrationPolicy.test.ts",
-  // codex-runner provider boundary: the JSONRPC parser MUST read
-  // codex's native `isOther`/`isSecret` flags to map them into the Tank
-  // shape. Reads here are the adapter contract, not a regression.
-  "codex-runner/src/appServerTransport.ts",
-  // codex-runner inline adapter for AskUserQuestion question shape.
-  // Houses codexQuestionsToTankShape, the only Tank-side site that maps
-  // codex's `isOther` → `allowFreeForm` and `isSecret` → `secret`.
-  "codex-runner/src/runner.ts",
+  "docs/tank-conversation-protocol.md",
+  "docs/session-list-redesign.md",
 ]);
 
-// Forbidden: must NOT appear in any non-excluded file. Each entry is the
-// retired/regressive surface plus a one-line explanation of why it's a
-// deletion target. Adding an entry without a comment is a review smell —
-// future maintainers need to understand WHY the pattern is forbidden, not
-// just THAT it is.
+// Forbidden: must NOT appear in any non-excluded file. Each retired surface
+// carries a one-line reason — the deletion target, not just THAT it is one.
 const forbidden = [
-  // --- Deleted synthetic tool_result path -----------------------------------
-  //
-  // Before the cutover, the runner manufactured a `{type:"tool_result", ...}`
-  // user message via `buildInputReplyMessage` and pushed it onto the SDK's
-  // user prompt queue when an input_reply arrived. The SDK had already
-  // auto-failed AskUserQuestion via `checkPermissions:"ask"` by then, so the
-  // synthetic message arrived after the tool was closed and either had no
-  // effect or duplicated the result. The new path uses canUseTool's
-  // `updatedInput.answers`, which is the SDK-blessed answer-injection
-  // surface. The synthetic helper must not come back.
-  {
-    name: "removed buildInputReplyMessage synthetic tool_result helper",
-    pattern: /\bbuildInputReplyMessage\b/,
-  },
-  {
-    name: "removed inputReplyText singular-field extractor",
-    pattern: /\binputReplyText\b/,
-  },
-  {
-    name: "removed synthetic tool_result user message push (userQueue.push of an input_reply payload)",
-    pattern: /userQueue\.push\([^)]*[Ii]nputReply/,
-  },
+  // --- input_reply command path (the answer is now a normal new turn) --------
+  { name: "removed input_reply command constant CommandInputReply", pattern: /\bCommandInputReply\b/ },
+  { name: "removed input_reply command type string", pattern: /["']input_reply["']/ },
+  { name: "removed /input-reply HTTP route", pattern: /\/input-reply\b/ },
+  { name: "removed handleInputReplySessionTurn backend handler", pattern: /\bhandleInputReplySessionTurn\b/ },
+  { name: "removed acceptInputReply runner handler", pattern: /\bacceptInputReply\b/ },
+  { name: "removed frontend sendInputReply", pattern: /\bsendInputReply\b/ },
+  { name: "removed pendingInputReplies resolver map", pattern: /\bpendingInputReplies\b/ },
+  { name: "removed resolvedInputReplies map", pattern: /\bresolvedInputReplies\b/ },
+  { name: "removed markInputReplyCompleted", pattern: /\bmarkInputReplyCompleted\b/ },
+  { name: "removed joinAnswersForSDK in-turn answer injection", pattern: /\bjoinAnswersForSDK\b/ },
+  { name: "removed answersForCodexAppServer in-turn answer injection", pattern: /\banswersForCodexAppServer\b/ },
+  { name: "removed buildInputReplyMessage synthetic tool_result helper", pattern: /\bbuildInputReplyMessage\b/ },
 
-  // --- Old singular `input_reply` payload field -----------------------------
-  //
-  // The Tank `input_reply` command type is unchanged (still keyed
-  // `CommandInputReply = "input_reply"`). What changed is the payload shape:
-  // the singular `input_reply: string` field is replaced by
-  // `answers: map[string]string[]` plus optional `annotations`. The Go
-  // struct field, the JSON wire field, and the runner's reader all need to
-  // be gone. Match narrowly so the command type constant survives.
-  {
-    name: "removed singular InputReply struct field on SessionCommand",
-    // Matches `InputReply string` and friends, but not method names that
-    // contain InputReply (acceptInputReply, inputReplyTargetProviderItemID,
-    // pendingInputReplies) — those stay.
-    pattern: /\bInputReply\s+(?:string|json:|\*|\[\])/,
-  },
-  {
-    name: "removed singular input_reply JSON payload field",
-    // Matches `"input_reply": "<scalar>"` (the singular payload field on
-    // the JSON wire). Does not match `Command = "input_reply"` (the command
-    // type constant, which is a different positional shape).
-    pattern: /["']input_reply["']\s*:\s*["'][^"']*["']/,
-  },
-  {
-    name: "removed record.input_reply runner reader",
-    pattern: /\brecord\.input_reply\b|\brecord\[\s*["']input_reply["']\s*\]/,
-  },
+  // --- tool.approval_* events (were EXCLUSIVELY AskUserQuestion; deleted) -----
+  { name: "removed tool.approval_requested event type", pattern: /tool\.approval_requested/ },
+  { name: "removed tool.approval_resolved event type", pattern: /tool\.approval_resolved/ },
+  { name: "removed EventApprovalRequested/Resolved Go consts", pattern: /\bEventApproval(Requested|Resolved)\b/ },
 
-  // --- Removed input_reply branch on the data-plane command consumer --------
-  //
-  // input_reply now arrives on the control consumer (see the required
-  // patterns block, `control consumer dispatches input_reply`). A branch
-  // for input_reply inside startCommandConsumer is the half-revert state
-  // that re-introduces the dispatch deadlock — the runner pulls
-  // input_reply from a consumer whose single ack slot is held by the
-  // submit_turn that's waiting for that exact input_reply. Pin that the
-  // data-plane handler does NOT dispatch input_reply anymore.
-  {
-    name: "no input_reply branch on the data-plane startCommandConsumer (control plane is the only place input_reply dispatches)",
-    pattern:
-      /startCommandConsumer\([\s\S]{0,1500}isInputReplyCommand[\s\S]{0,200}this\.acceptInputReply\(/,
-  },
+  // --- in-turn permission gating for AskUserQuestion -------------------------
+  { name: "removed updatedInput.answers in-turn answer injection", pattern: /updatedInput[^;\n]*\banswers\b/ },
+  { name: "removed permissionMode bypassPermissions", pattern: /permissionMode\s*:\s*["']bypassPermissions["']/ },
 
-  // --- Removed bypassPermissions for AskUserQuestion's gating path ----------
-  //
-  // The runner's SDK options used to set `permissionMode: "bypassPermissions"`
-  // with no canUseTool. That mode skips canUseTool entirely, so there was no
-  // way to suspend AskUserQuestion. The cutover switches to a mode that
-  // routes through canUseTool. Narrow the match to the agent-runner so other
-  // surfaces (tests pointing at the SDK's own type definitions, docs that
-  // mention the mode by name) aren't broken.
-  //
-  // The companion `allowDangerouslySkipPermissions` flag is only meaningful
-  // under bypassPermissions — without it, the flag is dead config.
-  {
-    name: "removed permissionMode: 'bypassPermissions' in agent-runner",
-    pattern: /permissionMode\s*:\s*["']bypassPermissions["']/,
-  },
-  {
-    name: "removed allowDangerouslySkipPermissions flag in agent-runner",
-    pattern: /\ballowDangerouslySkipPermissions\b/,
-  },
+  // --- the needs_input_announcement promotion (replaced by awaiting_input) ----
+  { name: "removed needs_input_announcement metaKind/row", pattern: /needs_input_announcement/ },
+  { name: "removed RunNeedsInputAnnouncement component", pattern: /\bRunNeedsInputAnnouncement\b/ },
+  { name: "removed projectNeedsInputAnnouncement projection", pattern: /\bprojectNeedsInputAnnouncement\b/ },
+  { name: "removed isProjectionNeedsInputAnnouncement predicate", pattern: /\bisProjectionNeedsInputAnnouncement\b/ },
+  { name: "removed needsInputAnnouncement module", pattern: /needsInputAnnouncementState|needsInputAnnouncement"|\.\/needsInputAnnouncement/ },
+  { name: "removed frontend optimisticSubmit (in-turn answer optimism)", pattern: /\boptimisticSubmit\b/ },
 
-  // --- Retired showPreNotesField gate ---------------------------------------
-  //
-  // The notes textarea used to render only when a selected option had a
-  // `preview` field (`showPreNotesField` in ToolAskUserBody). That gate
-  // made the free-form path unreachable for the wild codex case
-  // (options=null + isOther=true → no preview, no selection → no
-  // textarea), and for any Claude question whose option set had no
-  // previews. The replacement is a Tank-canonical `allowFreeForm` flag
-  // surfaced as an always-on textarea when set. Pin the retired symbol
-  // so a future PR can't quietly reintroduce the conditional gate.
+  // --- retired in-turn AskUserQuestion metric --------------------------------
   {
-    name: "removed showPreNotesField gate on the notes textarea",
-    pattern: /\bshowPreNotesField\b/,
-  },
-  // The legacy submit gate required every question to have ≥1 selected
-  // option, which made codex's `isOther + options=null` questions
-  // unanswerable. Replacement is `questionHasResponse(q)` which accepts
-  // either an option pick or free-form text. The old shape was a single
-  // `.every((q) => (selections[q.question]?.length ?? 0) > 0)`
-  // expression; pin against it directly.
-  {
-    name: "removed selections-only readiness gate (every question must have one selected option)",
-    pattern: /questions\.every\(\(\s*q\s*\)\s*=>\s*\(selections\[q\.question\]\?\.length\s*\?\?\s*0\)\s*>\s*0\)/,
-  },
-
-  // --- Raw codex question fields outside the adapter boundary --------------
-  //
-  // codex-runner/src/appServerTransport.ts is the provider-shape boundary
-  // (it's where the codex JSONRPC `item/tool/requestUserInput` is parsed),
-  // and codex-runner/src/runner.ts hosts the codex → Tank mapping. Any
-  // other read of `isOther`/`isSecret` means the codex-shaped fields have
-  // leaked past the adapter — exactly the violation
-  // docs/product-inspirations.md → "Provider-specific event streams are
-  // adapter inputs. The frontend renders the Tank conversation protocol,
-  // not raw provider wire formats" forbids.
-  // Match actual property-access or property-key usage of the codex
-  // field names — `q.isOther`, `record.isOther`, `isOther:` as an
-  // object-key. Doc comments referring to "codex's isOther flag" are
-  // fine; only code reads/writes outside the allowlisted adapter files
-  // are forbidden. Without this narrowing, the rule overreaches into
-  // comments documenting WHY the codex mapping exists.
-  {
-    name: "no isOther property access outside codex provider boundary",
-    pattern: /\.isOther\b|\bisOther\s*:/,
-  },
-  {
-    name: "no isSecret property access outside codex provider boundary",
-    pattern: /\.isSecret\b|\bisSecret\s*:/,
-  },
-
-  // --- "Answer questions?" placeholder string -------------------------------
-  //
-  // This literal is the Claude Agent SDK's own `checkPermissions` message
-  // for AskUserQuestion. It lives in the SDK's precompiled `claude` binary
-  // (under node_modules, which we don't walk). If it shows up in OUR source
-  // tree, it means either (a) someone copy-pasted the SDK's behavior into
-  // our adapter as a fallback (regressing the cutover) or (b) someone
-  // hard-coded the placeholder into a test fixture / renderer instead of
-  // reading the real answer from the durable event. Both are deletion
-  // targets per migration-policy.md.
-  {
-    name: "placeholder 'Answer questions?' string (SDK fallback leaked into our code)",
-    pattern: /Answer questions\?/,
+    name: "removed askUserQuestion pending gauge / wait histogram",
+    pattern: /askUserQuestionPendingGauge|tank_runner_askuser_question_(pending|wait_seconds)/,
   },
 ];
 
-// Required: each entry names an anchor file (relative repo path) and a
-// pattern that MUST appear in it. Missing an anchor is a regression —
-// e.g., someone deleted the canUseTool registration. The anchor file
-// itself can move (rename the path here when it does), but the surface
-// it represents has to live somewhere reachable.
-//
-// Anchor files exist; an anchor pattern missing from an existing file is
-// the regression signal. If the anchor file itself disappears (e.g., the
-// agent-runner is rewritten in Go), update this script in the same PR.
+// Required: each entry names an anchor file and a pattern that MUST appear in
+// it. A missing anchor means the cutover regressed.
 const required = [
-  // --- Runner: canUseTool is registered and gates AskUserQuestion -----------
+  // --- contract -------------------------------------------------------------
   {
-    file: "agent-runner/src/runner.ts",
-    name: "canUseTool option is passed into the SDK query()",
-    pattern: /\bcanUseTool\s*:/,
+    file: "schemas/tank-conversation-event.schema.json",
+    name: "turn.awaiting_input event type",
+    pattern: /"turn\.awaiting_input"/,
   },
   {
-    file: "agent-runner/src/runner.ts",
-    name: "pendingInputReplies resolver map exists",
-    pattern: /\bpendingInputReplies\b/,
+    file: "schemas/tank-conversation-event.schema.json",
+    name: "ask_user_answer user-message display kind",
+    pattern: /ask_user_answer/,
   },
   {
-    file: "agent-runner/src/runner.ts",
-    name: "AskUserQuestion is named in the canUseTool gating logic",
-    pattern: /["']AskUserQuestion["']/,
+    file: "runner-shared/conversation.js",
+    name: "turn.awaiting_input in TANK_EVENT_TYPES",
+    pattern: /"turn\.awaiting_input"/,
   },
   {
-    file: "agent-runner/src/runner.ts",
-    name: "updatedInput.answers shape is constructed for the SDK permission allow path",
-    pattern: /updatedInput[^;]*answers/,
+    file: "backend-go/internal/conversation/types.go",
+    name: "EventTurnAwaitingInput const",
+    pattern: /EventTurnAwaitingInput\s+EventType\s*=\s*"turn\.awaiting_input"/,
+  },
+  {
+    file: "backend-go/internal/conversation/types.go",
+    name: "turn.awaiting_input registered as a turn terminal",
+    pattern: /func IsTurnTerminalEvent[\s\S]{0,400}EventTurnAwaitingInput/,
   },
 
-  // --- Adapter: emits answers on tool.approval_resolved ---------------------
+  // --- backend answer endpoint ----------------------------------------------
+  {
+    file: "backend-go/cmd/tank-operator/handlers_turns.go",
+    name: "handleAnswerSessionTurn handler",
+    pattern: /func \(s \*appServer\) handleAnswerSessionTurn\(/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/handlers_turns.go",
+    name: "answer endpoint requires the asking turn's turn.awaiting_input terminal",
+    pattern: /EventTurnAwaitingInput/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/server.go",
+    name: "POST /turns/{turn_id}/answer route",
+    pattern: /\/turns\/\{turn_id\}\/answer/,
+  },
+
+  // --- Claude runner --------------------------------------------------------
+  {
+    file: "agent-runner/src/runner.ts",
+    name: "endTurnAwaitingInput handoff",
+    pattern: /\bendTurnAwaitingInput\b/,
+  },
+  {
+    file: "agent-runner/src/runner.ts",
+    name: "AskUserQuestion canUseTool ends the turn via deny+interrupt",
+    pattern: /AskUserQuestion[\s\S]{0,700}interrupt:\s*true/,
+  },
   {
     file: "agent-runner/src/adapters/claude.ts",
-    name: "claude adapter emits answers on tool.approval_resolved",
-    pattern: /tool\.approval_resolved[\s\S]{0,400}\banswers\b/,
-  },
-
-  // --- Backend command: Answers field on the input_reply command ------------
-  {
-    file: "backend-go/internal/sessionbus/commands.go",
-    name: "input_reply command carries an Answers field",
-    pattern: /\bAnswers\s+map\[string\]\[\]string\b/,
-  },
-
-  // --- input_reply routes through the control plane -------------------------
-  //
-  // An input_reply only exists *while* a submit_turn is parked in canUseTool,
-  // and that exact submit_turn is the JetStream message holding the data-
-  // plane consumer's single max_ack_pending slot. If input_reply ever
-  // publishes to the data-plane subject the dispatch deadlocks: the runner
-  // waits forever for an input_reply queued behind the parked submit_turn,
-  // and the submit_turn won't release the slot until the input_reply
-  // arrives. Same architectural shape as the original interrupt_turn
-  // deadlock, same cutover (control plane). These two pins keep the
-  // publish-side (SubjectForCommand) and the consume-side (control
-  // consumer branch) in lockstep so a future PR can't quietly half-revert
-  // one half of the split.
-  {
-    file: "backend-go/internal/sessionbus/subjects.go",
-    name: "SubjectForCommand routes input_reply through ControlSubject",
-    // Allow either ordering of the alternation and either spacing style
-    // so trivial reformats don't trip the guard, but require both tokens
-    // to live inside a `SubjectForCommand` body that calls ControlSubject.
-    pattern:
-      /func\s+SubjectForCommand[\s\S]{0,500}CommandInputReply[\s\S]{0,300}ControlSubject\(|func\s+SubjectForCommand[\s\S]{0,500}CommandInterrupt[\s\S]{0,100}\|\|\s*[\s\S]{0,200}CommandInputReply[\s\S]{0,200}ControlSubject\(/,
-  },
-  {
-    file: "agent-runner/src/runner.ts",
-    name: "control consumer dispatches input_reply (the runner's half of the cutover)",
-    // The control consumer branch must call acceptInputReply. The
-    // exact textual shape is `isInputReplyCommand(record))\s*{...acceptInputReply`
-    // inside startControlConsumer. We match conservatively on the
-    // call-site to acceptInputReply living inside startControlConsumer.
-    pattern:
-      /startControlConsumer\([\s\S]{0,2000}isInputReplyCommand[\s\S]{0,200}this\.acceptInputReply\(/,
-  },
-
-  // --- Frontend: renders the question / options / new fields ----------------
-  {
-    file: "frontend/src/App.tsx",
-    name: "ToolAskUserBody renders q.question",
-    pattern: /q\.question\b/,
-  },
-  {
-    file: "frontend/src/App.tsx",
-    name: "ToolAskUserBody renders q.header chip",
-    pattern: /q\.header\b/,
-  },
-  {
-    file: "frontend/src/App.tsx",
-    name: "ToolAskUserBody handles q.multiSelect",
-    pattern: /q\.multiSelect\b/,
-  },
-  {
-    file: "frontend/src/App.tsx",
-    name: "ToolAskUserBody renders option.preview content",
-    pattern: /opt\.preview\b|option\.preview\b/,
-  },
-  // Tank-canonical question shape: allowFreeForm gates the always-on
-  // free-form textarea ("say something else") and the submit gate
-  // accepts free-form text in lieu of an option pick. Without this
-  // anchor, the renderer reverts to the option-list-only failure mode
-  // codex's wild `isOther + options=null` traffic exposed.
-  {
-    file: "frontend/src/App.tsx",
-    name: "ToolAskUserBody surfaces the allowFreeForm-driven free-form textarea",
-    pattern: /\bshowFreeForm\b/,
-  },
-  {
-    file: "frontend/src/App.tsx",
-    name: "parseAskUserQuestions reads q.allowFreeForm from the Tank-canonical shape",
-    pattern: /allowFreeForm:\s*q\.allowFreeForm\s*===\s*true/,
-  },
-  {
-    file: "frontend/src/App.tsx",
-    name: "ToolAskUserBody reads answers from the durable event payload (not only local React state)",
-    // Either `entry.toolOutput`-as-answers-projection or a typed
-    // `payload.answers` read counts. The point is the answered render
-    // must consult durable state, not only `selectedAnswer`.
-    pattern: /entry\.(?:payload|projectedAnswers|answers)\b|payload\.answers\b/,
-  },
-
-  // --- Protocol docs and fixtures -------------------------------------------
-  {
-    file: "docs/tank-conversation-protocol.md",
-    name: "protocol doc describes canUseTool-gated AskUserQuestion resolution",
-    pattern: /canUseTool/,
-  },
-  {
-    file: "docs/tank-conversation-protocol.md",
-    name: "protocol doc describes the answers payload on tool.approval_resolved",
-    pattern: /tool\.approval_resolved[\s\S]{0,800}\banswers\b/,
-  },
-  {
-    file: "schemas/tank-conversation-event.fixtures.json",
-    name: "approval_resolved fixture carries an answers field",
-    pattern: /tool\.approval_resolved[\s\S]{0,800}"answers"/,
-  },
-
-  // --- Adapter normalization to Tank-canonical question shape --------------
-  //
-  // Both runners must normalize their provider's question shape into
-  // the same Tank shape before publishing the durable
-  // `tool.approval_requested` event. The frontend renders the Tank
-  // shape only — codex's `isOther`/`isSecret`/`options=null` and
-  // Claude's own SDK quirks must NOT reach the renderer.
-  {
-    file: "agent-runner/src/adapters/claude.ts",
-    name: "Claude adapter normalizes AskUserQuestion input via claudeQuestionsToTankShape",
+    name: "Claude adapter normalizes questions via claudeQuestionsToTankShape",
     pattern: /\bclaudeQuestionsToTankShape\b/,
   },
+
+  // --- Codex runner ---------------------------------------------------------
   {
-    file: "agent-runner/src/adapters/claude.ts",
-    name: "Claude adapter sets allowFreeForm=true on every Tank-shape question",
-    pattern: /allowFreeForm:\s*true/,
+    file: "codex-runner/src/runner.ts",
+    name: "codex requestAppServerUserInput ends the turn awaiting input",
+    pattern: /requestAppServerUserInput[\s\S]{0,1200}endTurnAwaitingInput/,
   },
   {
     file: "codex-runner/src/runner.ts",
-    name: "Codex runner normalizes AskUserQuestion input via codexQuestionsToTankShape",
+    name: "codex publishes turn.awaiting_input",
+    pattern: /turn\.awaiting_input/,
+  },
+  {
+    file: "codex-runner/src/runner.ts",
+    name: "codex normalizes questions via codexQuestionsToTankShape",
     pattern: /\bcodexQuestionsToTankShape\b/,
   },
+
+  // --- backend read path: the promoted question card ------------------------
   {
-    file: "codex-runner/src/runner.ts",
-    name: "Codex adapter maps isOther → allowFreeForm",
-    pattern: /allowFreeForm:\s*q\.isOther\s*===\s*true/,
+    file: "backend-go/cmd/tank-operator/transcript_projection.go",
+    name: "projection emits the awaiting_input card",
+    pattern: /projectAwaitingInputCard|"awaiting_input"/,
   },
 
-  // --- Backend transcript projection emits the handoff announcement --------
+  // --- frontend interactive card --------------------------------------------
   {
-    file: "backend-go/cmd/tank-operator/transcript_projection.go",
-    name: "projection emits needs_input_announcement meta row per AskUserQuestion",
-    pattern: /projectNeedsInputAnnouncement\b/,
-  },
-  {
-    file: "backend-go/cmd/tank-operator/transcript_projection.go",
-    name: "announcement opt-out skips Turn-activity compact via isProjectionNeedsInputAnnouncement",
-    pattern: /isProjectionNeedsInputAnnouncement\b/,
+    file: "frontend/src/App.tsx",
+    name: "RunAwaitingInputCard renders the question card",
+    pattern: /\bRunAwaitingInputCard\b/,
   },
   {
     file: "frontend/src/App.tsx",
-    name: "frontend renders RunNeedsInputAnnouncement for the handoff meta row",
-    pattern: /RunNeedsInputAnnouncement\b/,
+    name: "submitAnswer posts the answer to /answer",
+    pattern: /\/answer`/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "card surfaces the allowFreeForm-driven free-form textarea",
+    pattern: /\bshowFreeForm\b/,
   },
 
-  // --- Codex app-server parity is intentional, legacy exec fallback is not --
-  //
-  // Codex app-server now has a host-call path for request_user_input. The
-  // legacy SDK/codex exec transport still does not: it rejects
-  // request_user_input below the runner. The protocol doc must state both
-  // halves so a future change cannot silently regress codex_gui back to
-  // text-only "I asked" behavior or pretend the legacy fallback supports
-  // input_reply.
-  {
-    file: "codex-runner/src/appServerTransport.ts",
-    name: "codex app-server transport handles requestUserInput server requests",
-    pattern: /item\/tool\/requestUserInput/,
-  },
+  // --- protocol doc ---------------------------------------------------------
   {
     file: "docs/tank-conversation-protocol.md",
-    name: "protocol doc states codex_gui uses app-server input_reply support",
-    pattern:
-      /Codex GUI uses[\s\S]{0,160}App Server[\s\S]{0,250}codex_gui[\s\S]{0,800}(?:input_reply|requestUserInput)/i,
-  },
-  {
-    file: "docs/tank-conversation-protocol.md",
-    name: "protocol doc states codex_exec_gui fallback does not support input_reply / AskUserQuestion",
-    pattern:
-      /codex_exec_gui[\s\S]{0,800}(?:input_reply|AskUserQuestion|request_user_input)[\s\S]{0,500}(?:reject|does not support|unsupported|not implement)/i,
+    name: "protocol documents the turn.awaiting_input handoff",
+    pattern: /turn\.awaiting_input/,
   },
 ];
 
@@ -483,9 +237,7 @@ for (const rule of required) {
     text = await fs.readFile(absolutePath, "utf8");
   } catch (err) {
     if (err && err.code === "ENOENT") {
-      failures.push(
-        `REQUIRED   ${rule.file}: anchor file missing (cannot verify "${rule.name}")`,
-      );
+      failures.push(`REQUIRED   ${rule.file}: anchor file missing (cannot verify "${rule.name}")`);
       continue;
     }
     throw err;
@@ -500,12 +252,15 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`- ${failure}`);
   console.error("");
   console.error(
-    "Each FORBIDDEN entry above is a retired surface that came back; each REQUIRED entry",
+    "Each FORBIDDEN entry is a retired in-turn surface that came back; each REQUIRED",
   );
   console.error(
-    "is a piece of the cutover that's missing. See scripts/check-askuserquestion-migration.mjs",
+    "entry is a piece of the turn.awaiting_input cutover that's missing. See",
   );
-  console.error("for the rationale per rule, and docs/migration-policy.md for the policy.");
+  console.error(
+    "scripts/check-askuserquestion-migration.mjs for the rationale, and",
+  );
+  console.error("docs/migration-policy.md for the policy.");
   process.exit(1);
 }
 
@@ -532,8 +287,5 @@ function toRepoPath(filePath) {
 function lineAndColumn(text, index) {
   const before = text.slice(0, index);
   const lines = before.split(/\r\n|\r|\n/);
-  return {
-    line: lines.length,
-    column: lines[lines.length - 1].length + 1,
-  };
+  return { line: lines.length, column: lines[lines.length - 1].length + 1 };
 }

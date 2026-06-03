@@ -40,7 +40,8 @@ type SessionEventStore interface {
 	EventsForTurn(ctx context.Context, tankSessionID, turnID string, limit int) (SessionEventPage, error)
 	FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error)
 	// LatestLifecycleEvents returns the most recent N lifecycle events
-	// (turn.*, tool.approval_*) for a session in ascending order_key.
+	// (the turn.* lifecycle set, including turn.awaiting_input) for a
+	// session in ascending order_key.
 	// Bounded read used by the lifecycle emitter (chat→sidebar activity-
 	// delta bridge) instead of folding the full ledger. item.failed is
 	// intentionally excluded — see sessionactivity.LifecycleChatEventTypes.
@@ -98,8 +99,7 @@ var LifecycleEventTypes = []string{
 	"turn.command_failed",
 	"turn.interrupt_requested",
 	"turn.interrupted",
-	"tool.approval_requested",
-	"tool.approval_resolved",
+	"turn.awaiting_input",
 }
 
 // UnreadOutputItemTypes are event types whose timeline_id contributes to
@@ -113,16 +113,16 @@ var UnreadOutputItemTypes = []string{
 	"shell_task.started",
 	"shell_task.updated",
 	"shell_task.exited",
-	"tool.approval_requested",
-	"tool.approval_resolved",
 }
 
 // UnreadOutputTurnTypes are turn-level terminal events that count as
-// unread output via their turn_id (no timeline_id on these).
+// unread output via their turn_id (no timeline_id on these). turn.awaiting_input
+// is unread output: a pending question is work the user must act on.
 var UnreadOutputTurnTypes = []string{
 	"turn.failed",
 	"turn.command_failed",
 	"turn.interrupted",
+	"turn.awaiting_input",
 }
 
 // SessionEventCursor describes a half-open range of session events. Callers
@@ -523,7 +523,7 @@ func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context,
 }
 
 // LatestLifecycleEvents returns up to `limit` recent lifecycle events
-// (turn.*, item.failed, tool.approval_*) for one session, ascending by
+// (the turn.* lifecycle set, including turn.awaiting_input) for one session, ascending by
 // order_key. Postgres returns the slice DESC LIMIT N and we reverse in Go;
 // indexed on (tank_session_id, order_key) so this is a bounded backwards
 // scan, not a full ledger fold.

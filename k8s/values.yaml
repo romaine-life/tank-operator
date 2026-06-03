@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-3611cafa3c9c3bc865631e5ba87851a05ad11864fcc932aa0c4b0f2b49187990"
+  tag: "app-05ed7008d3038bc2a891c0fe332ee2eb4433f26a2a8afaa01dbad18de48a287f"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -54,8 +54,8 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-1ced6ed311cde5d996e9d514057806b6413af0d36bed58b47e6cfddbce454660
-  codexImage: romainecr.azurecr.io/codex-container:codex-8dbab8330d585ec2c933080c87a9ff1d9963e98cda5c324ebf937cad910eb1eb
+  image: romainecr.azurecr.io/claude-container:claude-a60d5b04055b471f4461af6ee056c8f2fdadd497f5e2bd4cccdfdbf8d23c98f5
+  codexImage: romainecr.azurecr.io/codex-container:codex-fbadda24c4f8b31e3080b9ae03b53ac7c7b0a28e494d9708623133236ceb3399
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -222,10 +222,10 @@ sessionBus:
 # GitHub App slug used for the install URL the orchestrator redirects users
 # to (#57 stage 2). The App's Setup URL must be configured to point at
 # https://<hostname>/api/github/install/callback in the GitHub UI for
-# the onboarding flow to complete. The `tank-operator` slug was taken on
-# github.com so we registered as `tank-operator-romaine-life`.
+# the onboarding flow to complete. The user-facing App must stay org-owned
+# and public so standard users can install it on their own accounts.
 github:
-  appSlug: tank-operator-romaine-life
+  appSlug: romaine-life-tank-operator
 
 # Tank session owner treated as the host by GitHub MCP attestations. Must match
 # the tank-operator/owner-email annotation that session pods carry.

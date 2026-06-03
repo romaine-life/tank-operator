@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+const cssSource = readFileSync(new URL("./index.css", import.meta.url), "utf8");
 
 test("turn cost estimate is not suppressed while a turn is running", () => {
   assert.match(appSource, /costEstimate:\s*estimateTurnCost\(costRows,\s*modelId,\s*turnId\)/);
@@ -32,6 +33,26 @@ test("composer cost estimate separates context tokens from dollars", () => {
   assert.match(appSource, /className="run-cost-estimate-label">ctx</);
   assert.match(appSource, /className="run-cost-estimate-label">usd</);
   assert.doesNotMatch(appSource, /run-cost-estimate-separator/);
+});
+
+test("composer context usage shows a used/window fraction from the provider-observed session window", () => {
+  assert.match(appSource, /runtime_context_window_tokens/);
+  assert.match(appSource, /contextWindow: runtimeContextWindowTokens/);
+  // Context renders as a used/window fraction in the cost chip, not a percent ring.
+  assert.match(
+    appSource,
+    /\$\{formatCompactTokens\(safeTokens\)\}\/\$\{formatCompactTokens\(safeWindow\)\}/,
+  );
+  // The percent ring / SVG circle is fully removed.
+  assert.doesNotMatch(appSource, /ComposerUsageRing/);
+  assert.doesNotMatch(appSource, /run-usage-ring/);
+  assert.doesNotMatch(cssSource, /run-usage-ring/);
+  assert.doesNotMatch(appSource, /run-usage-ring-svg/);
+  // No assumed model tables or per-level coloring; only provider-observed data drives the denominator.
+  assert.doesNotMatch(appSource, /usageLevel/);
+  assert.doesNotMatch(appSource, /data-level/);
+  assert.doesNotMatch(appSource, /CONTEXT_WINDOW_BY_MODEL/);
+  assert.doesNotMatch(appSource, /getContextWindow/);
 });
 
 test("composer cost estimate reserves dashes for explicit loading placeholders", () => {

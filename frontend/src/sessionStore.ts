@@ -81,6 +81,12 @@ export interface SessionRow {
   runtime_model?: string;
   runtime_effort?: string;
   runtime_configured_at?: string;
+  // Provider-observed live context window for this session's model, plumbed
+  // through the row from agent-runner. The composer fraction's denominator —
+  // never a frontend-assumed model table.
+  runtime_context_window_tokens?: number;
+  runtime_context_window_source?: string;
+  runtime_context_window_observed_at?: string;
   agent_avatar_id?: string;
   system_avatar_id?: string;
   // Durable user-facing order for the sidebar. Larger values render
@@ -510,6 +516,14 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       runtime_model: stringField(rowRaw, "runtime_model") ?? undefined,
       runtime_effort: stringField(rowRaw, "runtime_effort") ?? undefined,
       runtime_configured_at: stringField(rowRaw, "runtime_configured_at") ?? undefined,
+      runtime_context_window_tokens: nonNegativeNumberField(
+        rowRaw,
+        "runtime_context_window_tokens",
+      ) ?? undefined,
+      runtime_context_window_source:
+        stringField(rowRaw, "runtime_context_window_source") ?? undefined,
+      runtime_context_window_observed_at:
+        stringField(rowRaw, "runtime_context_window_observed_at") ?? undefined,
       agent_avatar_id: stringField(rowRaw, "agent_avatar_id") ?? undefined,
       system_avatar_id: stringField(rowRaw, "system_avatar_id") ?? undefined,
       sidebar_position: sidebarPosition,
@@ -543,6 +557,11 @@ function numberField(value: Record<string, unknown>, key: string): number | null
     if (Number.isFinite(n)) return n;
   }
   return null;
+}
+
+function nonNegativeNumberField(value: Record<string, unknown>, key: string): number | null {
+  const n = numberField(value, key);
+  return n === null ? null : Math.max(0, Math.floor(n));
 }
 
 function rowCursorNumber(cursor: string | null): number | null {

@@ -309,8 +309,8 @@ func TestPersistMessageDoesNotRecordTurnFailureForSuccess(t *testing.T) {
 }
 
 // TestPersistMessageRecordsTurnLifecycleCounter pins the silent-stranding
-// observability contract: each of the five lifecycle event types
-// (turn.submitted + the four terminal types) MUST bump
+// observability contract: each of the six lifecycle event types
+// (turn.submitted + the five terminal types) MUST bump
 // tank_turn_lifecycle_total{event_type=<type>} when the persister
 // commits a durable row, and non-lifecycle types MUST NOT contribute
 // (so the alert's expr stays comparing the right cardinalities). The
@@ -324,6 +324,7 @@ func TestPersistMessageRecordsTurnLifecycleCounter(t *testing.T) {
 		"turn.failed",
 		"turn.command_failed",
 		"turn.interrupted",
+		"turn.awaiting_input",
 	}
 	for _, eventType := range lifecycleTypes {
 		t.Run(eventType, func(t *testing.T) {
@@ -353,8 +354,8 @@ func TestPersistMessageRecordsTurnLifecycleCounter(t *testing.T) {
 }
 
 // TestPersistMessageOmitsNonLifecycleFromLifecycleCounter pins the bound
-// on tank_turn_lifecycle_total's label set: only the five lifecycle
-// types contribute. turn.started, item.*, tool.*, and session.* are
+// on tank_turn_lifecycle_total's label set: only the six lifecycle
+// types contribute. turn.started, item.*, and session.* are
 // either intermediate or non-turn signals and must not skew the
 // submitted-vs-terminal divergence the silent-stranding alert reads.
 func TestPersistMessageOmitsNonLifecycleFromLifecycleCounter(t *testing.T) {
@@ -362,7 +363,7 @@ func TestPersistMessageOmitsNonLifecycleFromLifecycleCounter(t *testing.T) {
 		"turn.started",
 		"turn.interrupt_requested",
 		"item.completed",
-		"tool.approval_requested",
+		"item.started",
 		"session.status",
 		"user_message.created",
 	}
@@ -508,33 +509,6 @@ func TestSubjectForCommandRoutesDataPlane(t *testing.T) {
 		if got != want {
 			t.Fatalf("%s subject = %q, want %q (data plane)", ty, got, want)
 		}
-	}
-}
-
-// TestSubjectForCommandRoutesInputReplyToControlPlane pins the routing
-// decision for input_reply commands. They MUST publish to the control
-// subject — not the data-plane command subject — because an input_reply
-// only ever resolves an AskUserQuestion gate inside an already-running
-// submit_turn that is, by construction, holding the data-plane consumer's
-// single max_ack_pending slot. Routing input_reply to the data plane would
-// deadlock: the runner is parked in canUseTool waiting for the input_reply,
-// but the input_reply can't be delivered because the parked submit_turn
-// hasn't acked. Same architectural shape as the original interrupt fix.
-func TestSubjectForCommandRoutesInputReplyToControlPlane(t *testing.T) {
-	storage := "session-storage-key"
-	provider := "claude"
-	reply := Command{
-		Type:              CommandInputReply,
-		SessionStorageKey: storage,
-		Provider:          provider,
-	}
-	got := SubjectForCommand(reply)
-	want := ControlSubject(storage, provider)
-	if got != want {
-		t.Fatalf("input_reply subject = %q, want %q (control-plane)", got, want)
-	}
-	if got == CommandSubject(storage, provider) {
-		t.Fatalf("input_reply MUST NOT publish to the command subject %q", got)
 	}
 }
 

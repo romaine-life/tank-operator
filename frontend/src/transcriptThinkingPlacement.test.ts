@@ -26,13 +26,13 @@ test("placeholder sorts below untagged session.status notices on a new session's
   assert.equal(index, 3);
 });
 
-// #732 invariant preserved: an answered AskUserQuestion handoff stays in the
-// main transcript anchored to a later order key (the tool's key plus a
-// `~needs_input_announcement` suffix). The placeholder must not overtake it.
-test("placeholder sorts below a later answered AskUserQuestion handoff for the same turn", () => {
+// #732 invariant preserved: an AskUserQuestion handoff card stays in the
+// main transcript anchored to a later order key (the asking turn's key plus a
+// `~awaiting_input` suffix). The placeholder must not overtake it.
+test("placeholder sorts below a later AskUserQuestion handoff card for the same turn", () => {
   const groups = [
     group("001", true), // user message (turn T)
-    group("005~needs_input_announcement", true), // answered handoff (turn T)
+    group("005~awaiting_input", true), // awaiting-input card (turn T)
   ];
   // Shell's compacted tail is the tool's raw key 005; the standalone handoff
   // sorts after it via the suffix, so the placeholder must land after both.

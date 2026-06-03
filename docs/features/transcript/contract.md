@@ -115,6 +115,19 @@ answer; it must not visibly move a rendered row from one surface to the other.
   against. The cumulative terminal usage (`claude.result`) drives cost, not
   the gauge; terminal annotation must not overwrite the dedicated usage row's
   snapshot with it.
+- The composer context indicator is a `used/window` fraction. The window
+  (denominator) is the provider-observed context window persisted on the
+  session row as `runtime_context_window_tokens`, reported by the runners
+  through `PUT /api/internal/sessions/{id}/runtime-config` (Codex app-server
+  token usage; the Claude Agent SDK per-turn `modelUsage.contextWindow`). There is no
+  frontend model-window table and no percent ring: the denominator is never
+  a frontend-assumed default keyed off a model id. Before the provider has
+  reported a window — pre-session previews on the splash composer, or any
+  session whose row still carries `runtime_context_window_tokens = 0` — the
+  indicator shows a placeholder (the bare used count, no fraction), never a
+  guessed window. The row value is durable and first-observed-wins: the first
+  positive window the runner reports is persisted and not overwritten by later
+  reports, so the fraction is stable across reloads and matches a fresh tab.
 - Already-open Turn activity details are a cached view of the server projection,
   not a second browser-owned ledger. A live `transcript_rows` batch for a turn
   whose details are already loaded must invalidate that cache and re-read
@@ -147,6 +160,13 @@ answer; it must not visibly move a rendered row from one surface to the other.
   then live stream telemetry.
 - A durable terminal event that exists but is not visible in an open transcript
   must leave enough telemetry to localize the miss.
+- Provider context-window reports on the runtime-config PUT must be counted by
+  bounded labels so "the composer never got a window" is diagnosable without
+  reading runner logs. `tank_session_context_window_report_total{provider,
+  source,result}` records one outcome per call around `SetRuntimeContextWindow`
+  (`ok` / `not_found` / `update_failed`, and `ignored` when the call carried no
+  positive window); `source` is bounded to the known observation tags plus an
+  `other` bucket.
 - A live Turn activity detail refresh that cannot re-read the server projection
   must be counted by bounded client telemetry and leave a visible, retryable
   state in the Turns detail instead of silently leaving stale activity on
@@ -185,3 +205,10 @@ answer; it must not visibly move a rendered row from one surface to the other.
 - Failed or interrupted turns keep their non-user rows in Turn activity and show
   only the user message plus terminal context in the main transcript unless a
   later successful `turn.completed` with explicit final-answer ids wins the race.
+- A session whose row carries no provider-observed window
+  (`runtime_context_window_tokens = 0`) shows the composer placeholder, not a
+  fraction against a guessed default; once the runner reports a positive window
+  the indicator renders `used/window` and stays stable (first-observed-wins)
+  across reload. `scripts/check-context-window-table-migration.mjs` proves no
+  `CONTEXT_WINDOW_BY_MODEL` / `getContextWindow` model table remains under
+  `frontend/src` and that the composer reads `runtime_context_window_tokens`.

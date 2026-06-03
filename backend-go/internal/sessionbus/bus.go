@@ -145,7 +145,7 @@ type WakeMetrics interface {
 	RecordSessionEventPersistToWakeDuration(seconds float64)
 	// RecordCommandPublishFailed increments when js.Publish on a
 	// session-bus command subject returns an error — submit_turn,
-	// interrupt_turn, or input_reply commands that the orchestrator
+	// interrupt_turn, or stop_background_task commands that the orchestrator
 	// could not hand to the runner because JetStream itself failed.
 	// Steady-state expectation is zero. The 2026-05-25 NATS quorum
 	// incident produced sustained `reason="no_response_from_stream"`
@@ -366,7 +366,6 @@ func commandKindLabel(commandType string) string {
 	switch commandType {
 	case CommandSubmitTurn,
 		CommandInterrupt,
-		CommandInputReply,
 		CommandStopBackgroundTask:
 		return commandType
 	default:

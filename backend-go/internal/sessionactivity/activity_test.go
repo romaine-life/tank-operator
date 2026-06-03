@@ -25,9 +25,12 @@ func TestDeriveActivitySummaryFoldsTurnLifecycle(t *testing.T) {
 	events := []map[string]any{
 		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
 		{"type": "turn.started", "turn_id": "turn-1", "order_key": "2"},
-		{"type": "tool.approval_requested", "turn_id": "turn-1", "order_key": "3"},
-		{"type": "tool.approval_resolved", "turn_id": "turn-1", "order_key": "4"},
-		{"type": "turn.completed", "turn_id": "turn-1", "order_key": "5"},
+		// AskUserQuestion ends the asking turn awaiting input.
+		{"type": "turn.awaiting_input", "turn_id": "turn-1", "order_key": "3"},
+		// The answer is a brand-new turn; submitting + completing it clears
+		// the sticky needs_input.
+		{"type": "turn.submitted", "turn_id": "turn-2", "order_key": "4"},
+		{"type": "turn.completed", "turn_id": "turn-2", "order_key": "5"},
 	}
 	got := DeriveActivitySummary(nil, events, 0, false)
 	if got.Status != "ready" {
@@ -37,7 +40,27 @@ func TestDeriveActivitySummaryFoldsTurnLifecycle(t *testing.T) {
 		t.Fatalf("active turn id after completion = %v, want nil", *got.ActiveTurnID)
 	}
 	if got.NeedsInput {
-		t.Fatalf("needs_input stayed sticky after resolved approval")
+		t.Fatalf("needs_input stayed sticky after the answer turn completed")
+	}
+}
+
+// TestDeriveActivitySummaryAwaitingInputSetsNeedsInput pins the new
+// AskUserQuestion fold: turn.awaiting_input ends the asking turn (no active
+// turn) and raises the needs_input indicator until the user answers.
+func TestDeriveActivitySummaryAwaitingInputSetsNeedsInput(t *testing.T) {
+	got := DeriveActivitySummary(nil, []map[string]any{
+		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
+		{"type": "turn.started", "turn_id": "turn-1", "order_key": "2"},
+		{"type": "turn.awaiting_input", "turn_id": "turn-1", "order_key": "3"},
+	}, 0, false)
+	if got.Status != "needs_input" {
+		t.Fatalf("status = %q, want needs_input", got.Status)
+	}
+	if !got.NeedsInput {
+		t.Fatalf("NeedsInput = false, want true after turn.awaiting_input")
+	}
+	if got.ActiveTurnID != nil {
+		t.Fatalf("active turn id = %v, want nil (the asking turn ended)", *got.ActiveTurnID)
 	}
 }
 

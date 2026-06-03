@@ -38,6 +38,7 @@ type recordingSessionEventStore struct {
 	store.StubSessionEventStore
 	upserts       []map[string]any
 	terminalTurns map[string]map[string]any
+	terminal      map[string]any
 	err           error
 }
 
@@ -59,11 +60,20 @@ func (r *recordingSessionEventStore) OrderKeyForTimelineID(_ context.Context, _,
 	return "", nil
 }
 
+// FindTurnTerminal returns a seeded turn terminal. terminalTurns models a
+// per-turn lookup (keyed by turnID, used by the lifecycle/interrupt tests);
+// terminal models a single seeded asking-turn terminal so
+// handleAnswerSessionTurn can validate that an answer targets a turn that
+// actually ended awaiting input. A nil terminal models "no terminal / turn
+// not awaiting input"; err models a store read failure.
 func (r *recordingSessionEventStore) FindTurnTerminal(_ context.Context, _ string, turnID string) (map[string]any, error) {
-	if r.terminalTurns == nil {
-		return nil, nil
+	if r.terminalTurns != nil {
+		return r.terminalTurns[turnID], nil
 	}
-	return r.terminalTurns[turnID], nil
+	if r.err != nil {
+		return nil, r.err
+	}
+	return r.terminal, nil
 }
 
 func TestPersistBackendEventRefreshesActivityForLifecycleEvent(t *testing.T) {
@@ -802,23 +812,108 @@ func TestInterruptSessionTurnRejectsBadTurnID(t *testing.T) {
 	}
 }
 
-func TestInputReplySessionTurnPublishesControlCommand(t *testing.T) {
+// awaitingInputTerminal builds the durable turn.awaiting_input terminal that
+// handleAnswerSessionTurn reads to confirm an answer targets a turn that
+// actually ended awaiting input. Only `type` and `payload.questions` are
+// load-bearing for the handler (questions feed the re-grounding prompt).
+func awaitingInputTerminal(turnID string, questions ...string) map[string]any {
+	qs := make([]any, 0, len(questions))
+	for _, q := range questions {
+		qs = append(qs, map[string]any{"question": q})
+	}
+	return map[string]any{
+		"type":        string(conversation.EventTurnAwaitingInput),
+		"turn_id":     turnID,
+		"timeline_id": turnID + ":item:toolu_123",
+		"payload":     map[string]any{"questions": qs},
+	}
+}
+
+// TestAnswerSessionTurnOpensNewTurn pins the core of the cutover: answering an
+// AskUserQuestion is a BRAND-NEW turn, not an in-turn reply. The asking turn
+// already ended at turn.awaiting_input, so the answer rides the normal
+// submit_turn path (user_message.created{ask_user_answer} + turn.submitted)
+// with a self-describing re-grounding prompt.
+func TestAnswerSessionTurnOpensNewTurn(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app.sessionEvents = &recordingSessionEventStore{
+		terminal: awaitingInputTerminal("turn-active_123", "Which auth method should we use?"),
+	}
 	body := `{
 		"provider_item_id": "toolu_123",
 		"timeline_id": "turn-active_123:item:toolu_123",
-		"answers": {
-			"Which auth method should we use?": ["  OAuth  "]
-		},
-		"annotations": {
-			"Which auth method should we use?": {"notes": "matches existing IdP"}
-		}
+		"answers": {"Which auth method should we use?": ["  OAuth  "]},
+		"annotations": {"Which auth method should we use?": {"notes": "matches existing IdP"}}
 	}`
-	req := authedInputReplyRequest(t, "63", "turn-active_123", body)
+	req := authedAnswerRequest(t, "63", "turn-active_123", body)
 	resp := httptest.NewRecorder()
 
-	app.handleInputReplySessionTurn(resp, req)
+	app.handleAnswerSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1 (submit_turn)", len(bus.commands))
+	}
+	got := bus.commands[0]
+	if got.Type != sessionbus.CommandSubmitTurn || got.Provider != "claude" || got.Source != "sdk" || !got.FollowUp {
+		t.Fatalf("answer-turn routing fields = %#v", got)
+	}
+	// Deterministic client_nonce so a double-submit dedupes at the
+	// session_events UNIQUE constraint (see the dedup test below).
+	if !strings.HasPrefix(got.ClientNonce, "answer-") {
+		t.Fatalf("client_nonce = %q, want answer-<hash> prefix", got.ClientNonce)
+	}
+	// Self-describing re-grounding prompt: the asking turn left no tool
+	// result, so the agent re-reads its question + the user's pick here.
+	if !strings.Contains(got.Prompt, `You asked: "Which auth method should we use?"`) ||
+		!strings.Contains(got.Prompt, "The user answered: OAuth") {
+		t.Fatalf("answer prompt missing re-grounding: %q", got.Prompt)
+	}
+	// Two durable boundary events, persisted before the 202.
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 2 {
+		t.Fatalf("session-event upserts = %d, want 2 (user_message.created + turn.submitted)", len(es.upserts))
+	}
+	if gotType, _ := es.upserts[0]["type"].(string); gotType != "user_message.created" {
+		t.Fatalf("upsert[0].type = %q, want user_message.created", gotType)
+	}
+	payload, _ := es.upserts[0]["payload"].(map[string]any)
+	display, _ := payload["display"].(map[string]any)
+	if gotKind, _ := display["kind"].(string); gotKind != "ask_user_answer" {
+		t.Fatalf("display.kind = %q, want ask_user_answer; display = %#v", gotKind, display)
+	}
+	if gotTL, _ := display["question_timeline_id"].(string); gotTL != "turn-active_123:item:toolu_123" {
+		t.Fatalf("display.question_timeline_id = %q", gotTL)
+	}
+	if gotAsking, _ := display["asking_turn_id"].(string); gotAsking != "turn-active_123" {
+		t.Fatalf("display.asking_turn_id = %q, want turn-active_123 (links answer to the question)", gotAsking)
+	}
+	if gotType, _ := es.upserts[1]["type"].(string); gotType != "turn.submitted" {
+		t.Fatalf("upsert[1].type = %q, want turn.submitted", gotType)
+	}
+}
+
+func TestAnswerSessionTurnPublishesCodexCommand(t *testing.T) {
+	bus := &recordingSessionBus{}
+	// Codex answer turns route through enqueueSDKTurn like any other turn,
+	// so the session-owned model is required and inherited.
+	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
+		ID:      "64",
+		Email:   "user@example.com",
+		Mode:    sessionmodel.CodexGUIMode,
+		Visible: true,
+		Model:   "gpt-5-codex",
+	})
+	app := testTurnsAppWithRegistry(t, bus, registry, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
+	app.sessionEvents = &recordingSessionEventStore{terminal: awaitingInputTerminal("turn-active_123", "Pick one")}
+	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
+	req := authedAnswerRequest(t, "64", "turn-active_123", body)
+	resp := httptest.NewRecorder()
+
+	app.handleAnswerSessionTurn(resp, req)
 
 	if resp.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
@@ -827,52 +922,86 @@ func TestInputReplySessionTurnPublishesControlCommand(t *testing.T) {
 		t.Fatalf("published commands = %d, want 1", len(bus.commands))
 	}
 	got := bus.commands[0]
-	if got.Type != sessionbus.CommandInputReply || got.Source != "input-reply" || got.Provider != "claude" || got.TargetTurnID != "turn-active_123" || got.ClientNonce != "turn-active_123" {
-		t.Fatalf("input reply routing fields = %#v", got)
+	if got.Type != sessionbus.CommandSubmitTurn || got.Provider != "codex" || got.Model != "gpt-5-codex" || !got.FollowUp {
+		t.Fatalf("codex answer command = %#v", got)
 	}
-	if got.TargetProviderItemID != "toolu_123" || got.TargetTimelineID != "turn-active_123:item:toolu_123" {
-		t.Fatalf("input reply target fields = %#v", got)
-	}
-	if len(got.Answers) != 1 || len(got.Answers["Which auth method should we use?"]) != 1 || got.Answers["Which auth method should we use?"][0] != "OAuth" {
-		t.Fatalf("input reply answers = %#v, want {<question>: [\"OAuth\"]}", got.Answers)
-	}
-	if got.Annotations["Which auth method should we use?"].Notes != "matches existing IdP" {
-		t.Fatalf("input reply annotations = %#v", got.Annotations)
+	if !strings.HasPrefix(got.ClientNonce, "answer-") {
+		t.Fatalf("client_nonce = %q, want answer-<hash> prefix", got.ClientNonce)
 	}
 }
 
-func TestInputReplySessionTurnPublishesCodexControlCommand(t *testing.T) {
-	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
-	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"q":["OAuth"]}}`
-	req := authedInputReplyRequest(t, "64", "turn-active_123", body)
-	resp := httptest.NewRecorder()
+// TestAnswerSessionTurnRejectsTurnNotAwaitingInput rejects an answer whose
+// asking turn did not end at turn.awaiting_input — it completed, failed, or
+// was never an AskUserQuestion handoff (e.g. codex_exec_gui, which never
+// produces turn.awaiting_input). Reading the durable terminal is the gate;
+// no new turn is opened.
+func TestAnswerSessionTurnRejectsTurnNotAwaitingInput(t *testing.T) {
+	cases := []struct {
+		name     string
+		terminal map[string]any
+	}{
+		{"completed turn", map[string]any{"type": string(conversation.EventTurnCompleted), "turn_id": "turn-active_123"}},
+		{"no terminal", nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			bus := &recordingSessionBus{}
+			app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+			app.sessionEvents = &recordingSessionEventStore{terminal: tc.terminal}
+			body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
+			req := authedAnswerRequest(t, "63", "turn-active_123", body)
+			resp := httptest.NewRecorder()
 
-	app.handleInputReplySessionTurn(resp, req)
+			app.handleAnswerSessionTurn(resp, req)
 
-	if resp.Code != http.StatusAccepted {
-		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
-	}
-	if len(bus.commands) != 1 {
-		t.Fatalf("published commands = %d, want 1", len(bus.commands))
-	}
-	got := bus.commands[0]
-	if got.Type != sessionbus.CommandInputReply || got.Provider != "codex" || got.TargetTurnID != "turn-active_123" || got.ClientNonce != "turn-active_123" {
-		t.Fatalf("input reply routing fields = %#v", got)
-	}
-	if got.TargetProviderItemID != "toolu_123" || got.TargetTimelineID != "turn-active_123:item:toolu_123" {
-		t.Fatalf("input reply target fields = %#v", got)
+			if resp.Code != http.StatusConflict {
+				t.Fatalf("status = %d body = %s, want 409", resp.Code, resp.Body.String())
+			}
+			if len(bus.commands) != 0 {
+				t.Fatalf("published commands = %d, want 0", len(bus.commands))
+			}
+		})
 	}
 }
 
-func TestInputReplySessionTurnRejectsCodexExecFallback(t *testing.T) {
+// TestAnswerSessionTurnDoubleSubmitSharesDeterministicNonce proves the answered
+// card cannot open two answer turns: two identical answers to the same asking
+// turn derive the SAME client_nonce (hence the same turn_id / event_id), so the
+// second write dedupes at the session_events UNIQUE constraint.
+func TestAnswerSessionTurnDoubleSubmitSharesDeterministicNonce(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexExecGUIMode, "codex-runner"))
-	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"q":["OAuth"]}}`
-	req := authedInputReplyRequest(t, "64", "turn-active_123", body)
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app.sessionEvents = &recordingSessionEventStore{terminal: awaitingInputTerminal("turn-active_123", "Pick one")}
+	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
+
+	for i := 0; i < 2; i++ {
+		req := authedAnswerRequest(t, "63", "turn-active_123", body)
+		resp := httptest.NewRecorder()
+		app.handleAnswerSessionTurn(resp, req)
+		if resp.Code != http.StatusAccepted {
+			t.Fatalf("submit %d: status = %d body = %s", i, resp.Code, resp.Body.String())
+		}
+	}
+	if len(bus.commands) != 2 {
+		t.Fatalf("published commands = %d, want 2", len(bus.commands))
+	}
+	if bus.commands[0].ClientNonce != bus.commands[1].ClientNonce {
+		t.Fatalf("answer nonces differ: %q vs %q (must be deterministic for dedup)", bus.commands[0].ClientNonce, bus.commands[1].ClientNonce)
+	}
+	if bus.commands[0].TurnID != bus.commands[1].TurnID {
+		t.Fatalf("answer turn IDs differ: %q vs %q (dedup key must be stable)", bus.commands[0].TurnID, bus.commands[1].TurnID)
+	}
+}
+
+func TestAnswerSessionTurnRejectsMissingTarget(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app.sessionEvents = &recordingSessionEventStore{terminal: awaitingInputTerminal("turn-active_123", "Pick one")}
+	body := `{"provider_item_id":"","timeline_id":"turn-active_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
+	req := authedAnswerRequest(t, "63", "turn-active_123", body)
 	resp := httptest.NewRecorder()
 
-	app.handleInputReplySessionTurn(resp, req)
+	app.handleAnswerSessionTurn(resp, req)
 
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
@@ -882,31 +1011,15 @@ func TestInputReplySessionTurnRejectsCodexExecFallback(t *testing.T) {
 	}
 }
 
-func TestInputReplySessionTurnRejectsMissingTarget(t *testing.T) {
+func TestAnswerSessionTurnRejectsEmptyAnswers(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
-	body := `{"provider_item_id":"","timeline_id":"turn-active_123:item:toolu_123","answers":{"q":["OAuth"]}}`
-	req := authedInputReplyRequest(t, "63", "turn-active_123", body)
-	resp := httptest.NewRecorder()
-
-	app.handleInputReplySessionTurn(resp, req)
-
-	if resp.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
-	}
-	if len(bus.commands) != 0 {
-		t.Fatalf("published commands = %d, want 0", len(bus.commands))
-	}
-}
-
-func TestInputReplySessionTurnRejectsEmptyAnswers(t *testing.T) {
-	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app.sessionEvents = &recordingSessionEventStore{terminal: awaitingInputTerminal("turn-active_123", "Pick one")}
 	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{}}`
-	req := authedInputReplyRequest(t, "63", "turn-active_123", body)
+	req := authedAnswerRequest(t, "63", "turn-active_123", body)
 	resp := httptest.NewRecorder()
 
-	app.handleInputReplySessionTurn(resp, req)
+	app.handleAnswerSessionTurn(resp, req)
 
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
@@ -1234,9 +1347,9 @@ func authedBackgroundStopRequest(t *testing.T, sessionID, taskID, body string) *
 	return req
 }
 
-func authedInputReplyRequest(t *testing.T, sessionID, turnID, body string) *http.Request {
+func authedAnswerRequest(t *testing.T, sessionID, turnID, body string) *http.Request {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+sessionID+"/turns/"+turnID+"/input-reply", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/"+sessionID+"/turns/"+turnID+"/answer", strings.NewReader(body))
 	req.SetPathValue("session_id", sessionID)
 	req.SetPathValue("turn_id", turnID)
 	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
