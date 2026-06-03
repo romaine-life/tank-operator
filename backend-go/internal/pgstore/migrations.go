@@ -1265,6 +1265,31 @@ var schemaMigrations = []migration{
 	{ID: "0108", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_context_window_observed_at timestamptz`},
 
+	{ID: "0109", SQL: `CREATE TABLE IF NOT EXISTS bug_labels (
+		id            bigserial PRIMARY KEY,
+		owner_email   text NOT NULL,
+		session_scope text NOT NULL,
+		name          text NOT NULL,
+		slug          text NOT NULL,
+		created_at    timestamptz NOT NULL DEFAULT now(),
+		updated_at    timestamptz NOT NULL DEFAULT now(),
+		archived_at   timestamptz,
+		UNIQUE (owner_email, session_scope, slug)
+	)`},
+	{ID: "0110", SQL: `CREATE TABLE IF NOT EXISTS session_bug_labels (
+		owner_email   text NOT NULL,
+		session_scope text NOT NULL,
+		session_id    text NOT NULL,
+		bug_label_id  bigint NOT NULL REFERENCES bug_labels(id),
+		attached_at   timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (owner_email, session_scope, session_id),
+		FOREIGN KEY (owner_email, session_scope, session_id)
+			REFERENCES sessions(email, session_scope, session_id)
+			ON DELETE CASCADE
+	)`},
+	{ID: "0111", SQL: `CREATE INDEX IF NOT EXISTS session_bug_labels_label
+		ON session_bug_labels (bug_label_id, attached_at DESC)`},
+
 	// Durable attachment launches (issue #865). A deferred attachment launch is
 	// no longer a browser-owned, fire-and-forget phase two: the orchestrator
 	// records the pending launch and its staged attachment bytes durably, then a
@@ -1274,7 +1299,7 @@ var schemaMigrations = []migration{
 	// staged) -> claiming -> dispatched, or -> failed. base_prompt/skill/model/
 	// effort are the dispatch parameters the reconciler composes the runnable
 	// turn from; the final workspace paths are stamped in at materialization.
-	{ID: "0109", SQL: `CREATE TABLE IF NOT EXISTS session_pending_launch_turns (
+	{ID: "0112", SQL: `CREATE TABLE IF NOT EXISTS session_pending_launch_turns (
 		tank_session_id   text        NOT NULL,
 		turn_id           text        NOT NULL,
 		session_scope     text        NOT NULL,
@@ -1301,14 +1326,14 @@ var schemaMigrations = []migration{
 	// Claim index: the reconciler scans for dispatchable launches by scope +
 	// status, oldest first. Partial so it stays a tight working-set index that
 	// never folds dispatched/failed rows.
-	{ID: "0110", SQL: `CREATE INDEX IF NOT EXISTS session_pending_launch_turns_claim
+	{ID: "0113", SQL: `CREATE INDEX IF NOT EXISTS session_pending_launch_turns_claim
 		ON session_pending_launch_turns (session_scope, status, created_at)
 		WHERE status IN ('awaiting_bytes', 'ready', 'claiming')`},
 	// Staged attachment bytes for a pending launch. bytea is correct here: the
 	// payloads are small (<= maxRawBytes, 8 MiB) and transient — deleted once
 	// the reconciler has written them into the live pod workspace. Durable blob
 	// artifacts that survive pod death are a separate feature (see #865).
-	{ID: "0111", SQL: `CREATE TABLE IF NOT EXISTS session_launch_attachment_blobs (
+	{ID: "0114", SQL: `CREATE TABLE IF NOT EXISTS session_launch_attachment_blobs (
 		tank_session_id text        NOT NULL,
 		turn_id         text        NOT NULL,
 		ordinal         integer     NOT NULL,
@@ -1376,6 +1401,12 @@ func migrationChecksum(sql string) string {
 var acceptedAppliedMigrationChecksums = map[string]map[string]struct{}{
 	"0100": {
 		"306071cc8a62f897ea596b722c484115b537126eb0c570282f1b0df6049a994c": {},
+	},
+	"0101": {
+		"a3f7260f8d564113d6114c253079a239d11c17c3d1159829253db05fe6e09791": {},
+	},
+	"0102": {
+		"3698dba005984cc9317a14fc9b9561ad228d55d5a8950110dc1c9e3fc2ed0bbf": {},
 	},
 }
 

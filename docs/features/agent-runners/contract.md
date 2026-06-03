@@ -33,8 +33,10 @@ the rest of the product reconstruct what happened.
 
 ## Live Behavior
 
-- A submitted user turn produces a durable `turn.submitted`, runner progress,
-  and exactly one terminal turn outcome.
+- A submitted user turn produces a durable `turn.submitted`, visible
+  pre-provider progress (`turn.submitted` projection and runner-owned
+  `turn.claimed` when the runner accepts the command), runner progress, and
+  exactly one terminal turn outcome.
 - Stop/interrupt remains pending until a durable interrupted, completed,
   failed, or already-terminal event resolves it.
 - Stop/interrupt against a turn that is already terminal must not create a new
@@ -82,6 +84,9 @@ the rest of the product reconstruct what happened.
 
 - Metrics must distinguish command published, consumed, acked, redelivered,
   failed, and terminal-event-emitted outcomes.
+- Metrics must expose command-created to claimed and claimed to started
+  latency, so provider stalls and runner queueing are visible before the
+  terminal event arrives.
 - Runner metrics and backend metrics must be comparable so a bug can be
   localized between command delivery, runner execution, persistence, and live
   client delivery.

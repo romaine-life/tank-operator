@@ -220,6 +220,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// exchange so the orchestrator can mint a service JWT acting for the
 	// SPA user.
 	mux.HandleFunc("GET /api/github/repos", s.handleGitHubRepos)
+	mux.HandleFunc("GET /api/bug-labels", s.handleListBugLabels)
 
 	// Sessions CRUD.
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
@@ -268,6 +269,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{session_id}/touch", s.handleTouchSession)
 	mux.HandleFunc("PATCH /api/sessions/{session_id}", s.handlePatchSession)
+	mux.HandleFunc("PUT /api/sessions/{session_id}/bug-label", s.handleSetSessionBugLabel)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-state", s.handleSetTestState)
 	mux.HandleFunc("POST /api/sessions/{session_id}/rollout-state", s.handleSetRolloutState)
 	mux.HandleFunc("POST /api/sessions/{session_id}/save-credentials", s.handleSaveCredentials)

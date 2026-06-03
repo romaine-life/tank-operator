@@ -20,12 +20,32 @@ type RepoSummary = {
   last_touched?: string;
 };
 
+type BugLabel = {
+  id?: number;
+  name: string;
+  slug: string;
+  display_name: string;
+};
+
+type BugLabelSummary = {
+  label: string;
+  name: string;
+  slug: string;
+  session_count: number;
+  turn_count?: number;
+  total_tokens: number;
+  input_tokens: number;
+  output_tokens: number;
+  last_touched?: string;
+};
+
 type SessionSummary = {
   owner: string;
   session_id: string;
   name: string;
   mode: string;
   repos: string[];
+  bug_label?: BugLabel | null;
   visible: boolean;
   created_at: string;
   updated_at: string;
@@ -51,8 +71,10 @@ type SessionReport = {
   totals: TokenUsage & {
     session_count: number;
     repo_count: number;
+    bug_label_count: number;
   };
   repos: RepoSummary[];
+  bug_labels?: BugLabelSummary[];
   sessions: SessionSummary[];
   fetched_at: string;
 };
@@ -336,6 +358,7 @@ export function SessionRepoReport({
       <section className="session-repo-report-metrics" aria-label="Session report totals">
         <ReportMetric label="Sessions" value={formatCount(report?.totals.session_count)} />
         <ReportMetric label="Repos" value={formatCount(report?.totals.repo_count)} />
+        <ReportMetric label="Bug labels" value={formatCount(report?.totals.bug_label_count)} />
         <ReportMetric label="Turns" value={formatCount(report?.totals.turn_count)} />
         <ReportMetric label="Tokens" value={formatTokenCount(report?.totals.total_tokens)} />
         <ReportMetric label="Usage rows" value={formatCount(report?.totals.usage_events)} />
@@ -372,12 +395,42 @@ export function SessionRepoReport({
         </div>
 
         <div className="session-repo-report-table-wrap">
+          <h3 className="session-repo-report-heading">Bug labels</h3>
+          <table className="session-repo-report-table">
+            <thead>
+              <tr>
+                <th>Label</th>
+                <th>Sessions</th>
+                <th>Turns</th>
+                <th>Tokens</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(report?.bug_labels ?? []).map((label) => (
+                <tr key={label.slug}>
+                  <td>{label.label || `bug: ${label.name}`}</td>
+                  <td>{label.session_count}</td>
+                  <td>{formatCount(label.turn_count)}</td>
+                  <td>{formatTokenCount(label.total_tokens)}</td>
+                </tr>
+              ))}
+              {report && (report.bug_labels ?? []).length === 0 && (
+                <tr>
+                  <td colSpan={4}>No bug labels in this window.</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="session-repo-report-table-wrap">
           <h3 className="session-repo-report-heading">Recent sessions</h3>
           <table className="session-repo-report-table">
             <thead>
               <tr>
                 <th>Session</th>
                 <th>Repos</th>
+                <th>Bug</th>
                 <th>Turns</th>
                 <th>Tokens</th>
               </tr>
@@ -392,13 +445,14 @@ export function SessionRepoReport({
                     <span className="session-repo-report-muted">{session.mode}</span>
                   </td>
                   <td>{session.repos.length > 0 ? session.repos.join(", ") : "Unassigned"}</td>
+                  <td>{session.bug_label?.display_name ?? "-"}</td>
                   <td>{formatCount(session.usage.turn_count)}</td>
                   <td>{formatTokenCount(session.usage.total_tokens)}</td>
                 </tr>
               ))}
               {report && topSessions.length === 0 && (
                 <tr>
-                  <td colSpan={4}>No sessions in this window.</td>
+                  <td colSpan={5}>No sessions in this window.</td>
                 </tr>
               )}
             </tbody>

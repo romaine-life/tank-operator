@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"unicode"
 )
 
 var jsonUnmarshal = json.Unmarshal
@@ -125,6 +126,10 @@ type SessionRecord struct {
 	// the default pod surface. Values are normalized through
 	// NormalizeSessionCapabilities before Manager.Create writes the row.
 	Capabilities []string
+	// BugLabel is the optional Tank-native bug bucket attached by the user.
+	// It is independent of GitHub issues: one loose label per session for
+	// reports and quick cross-PR lookup.
+	BugLabel *SessionBugLabel
 
 	// Model/Effort are the session-owned run configuration accepted at
 	// create time. Runners consume these values through submit_turn
@@ -156,6 +161,13 @@ type SessionRecord struct {
 	// without changing the sidebar order.
 	SidebarPosition int64
 	RowVersion      int64
+}
+
+type SessionBugLabel struct {
+	ID          int64  `json:"id,omitempty"`
+	Name        string `json:"name"`
+	Slug        string `json:"slug"`
+	DisplayName string `json:"display_name"`
 }
 
 type SessionAvatarAssignment struct {
@@ -317,6 +329,55 @@ func NormalizeName(name *string) *string {
 		trimmed = trimmed[:MaxNameLength]
 	}
 	return &trimmed
+}
+
+func NormalizeBugLabelName(raw *string) (*SessionBugLabel, error) {
+	if raw == nil {
+		return nil, nil
+	}
+	name := strings.TrimSpace(*raw)
+	if name == "" {
+		return nil, nil
+	}
+	if len(name) >= 4 && strings.EqualFold(strings.TrimSpace(name[:4]), "bug:") {
+		name = strings.TrimSpace(name[4:])
+	}
+	fields := strings.Fields(name)
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	name = strings.Join(fields, " ")
+	const maxBugLabelRunes = 80
+	runes := []rune(name)
+	if len(runes) > maxBugLabelRunes {
+		name = strings.TrimSpace(string(runes[:maxBugLabelRunes]))
+	}
+	slug := bugLabelSlug(name)
+	if slug == "" {
+		return nil, errors.New("bug label must include a letter or number")
+	}
+	return &SessionBugLabel{
+		Name:        name,
+		Slug:        slug,
+		DisplayName: "bug: " + name,
+	}, nil
+}
+
+func bugLabelSlug(name string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(name) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func SessionStorageKey(scope, sessionID string) string {

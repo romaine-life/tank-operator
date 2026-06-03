@@ -10,6 +10,7 @@ export type TankVisibility = (typeof TANK_VISIBILITIES)[number];
 export const TANK_EVENT_TYPES: readonly [
   "user_message.created",
   "turn.submitted",
+  "turn.claimed",
   "turn.started",
   "turn.usage",
   "turn.completed",

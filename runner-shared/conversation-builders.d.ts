@@ -36,6 +36,7 @@ export interface TurnEventArgs {
   source: "claude" | "codex";
   type:
     | "turn.started"
+    | "turn.claimed"
     | "turn.usage"
     | "turn.completed"
     | "turn.failed"

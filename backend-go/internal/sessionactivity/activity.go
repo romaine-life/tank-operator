@@ -78,6 +78,7 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 	if prior != nil {
 		out = *prior
 	}
+	terminalTurns := map[string]bool{}
 	for _, event := range events {
 		orderKey := stringField(event, "order_key")
 		if orderKey != "" {
@@ -88,13 +89,29 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 		}
 		switch stringField(event, "type") {
 		case "turn.submitted":
+			if terminalTurns[stringField(event, "turn_id")] {
+				continue
+			}
 			out.Status = "submitted"
 			if id := optionalStringField(event, "turn_id"); id != nil {
 				out.ActiveTurnID = id
 			}
 			out.NeedsInput = false
 			out.Failed = false
+		case "turn.claimed":
+			if terminalTurns[stringField(event, "turn_id")] {
+				continue
+			}
+			out.Status = "claimed"
+			if id := optionalStringField(event, "turn_id"); id != nil {
+				out.ActiveTurnID = id
+			}
+			out.NeedsInput = false
+			out.Failed = false
 		case "turn.started":
+			if terminalTurns[stringField(event, "turn_id")] {
+				continue
+			}
 			out.Status = "streaming"
 			if id := optionalStringField(event, "turn_id"); id != nil {
 				out.ActiveTurnID = id
@@ -102,11 +119,13 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 			out.NeedsInput = false
 			out.Failed = false
 		case "turn.completed":
+			terminalTurns[stringField(event, "turn_id")] = true
 			out.Status = "ready"
 			out.ActiveTurnID = nil
 			out.NeedsInput = false
 			out.Failed = false
 		case "turn.failed", "turn.command_failed":
+			terminalTurns[stringField(event, "turn_id")] = true
 			out.Status = "error"
 			out.ActiveTurnID = nil
 			out.NeedsInput = false
@@ -124,11 +143,13 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 				stats.LateInterruptIgnoredStatuses = append(stats.LateInterruptIgnoredStatuses, out.Status)
 			}
 		case "turn.interrupted":
+			terminalTurns[stringField(event, "turn_id")] = true
 			out.Status = "stopped"
 			out.ActiveTurnID = nil
 			out.NeedsInput = false
 			out.Failed = false
 		case "turn.awaiting_input":
+			terminalTurns[stringField(event, "turn_id")] = true
 			// The agent asked the user a question; the asking turn ended.
 			// There is no active turn — the session waits for the user's
 			// answer, which arrives as a brand-new turn. The next
@@ -192,6 +213,7 @@ func ActivitySummariesEqual(a, b ActivitySummary) bool {
 // re-adding item.failed here will fail TestIsLifecycleChatEventType.
 var LifecycleChatEventTypes = []string{
 	"turn.submitted",
+	"turn.claimed",
 	"turn.started",
 	"turn.completed",
 	"turn.failed",
@@ -214,7 +236,7 @@ func IsLifecycleChatEventType(eventType string) bool {
 
 func canTransitionToStopping(status string) bool {
 	switch status {
-	case "submitted", "streaming", "needs_input", "stopping":
+	case "submitted", "claimed", "streaming", "needs_input", "stopping":
 		return true
 	default:
 		return false

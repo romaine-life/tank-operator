@@ -111,11 +111,11 @@ func turnRuntimeForSessionMode(mode string) (string, bool) {
 }
 
 // handleCreateSession creates a new session pod. Accepts the optional
-// `repos[]` selection from the splash picker; the slugs are validated
-// at this boundary (validateRepoSlugs / sessionModeSupportsRepos),
-// persisted on the registry row by manager.Create, and auto-cloned
-// into /workspace by the repo-cloner init
-// container at pod boot.
+// `repos[]` selection from the splash picker and optional `bug_label`
+// staged on the same new-session surface. Repos are persisted on the
+// registry row by manager.Create and auto-cloned into /workspace by the
+// repo-cloner init container at pod boot; bug labels are normalized at this
+// boundary and attached before the POST response is returned.
 func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
@@ -127,6 +127,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		Effort       string                           `json:"effort,omitempty"`
 		Name         *string                          `json:"name,omitempty"`
 		Repos        []string                         `json:"repos"`
+		BugLabel     *string                          `json:"bug_label,omitempty"`
 		Capabilities []string                         `json:"capabilities"`
 		InitialTurn  *createSessionInitialTurnRequest `json:"initial_turn,omitempty"`
 	}
@@ -136,6 +137,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		body.Effort = ""
 		body.Name = nil
 		body.Repos = nil
+		body.BugLabel = nil
 		body.InitialTurn = nil
 	}
 	mode := sessionmodel.NormalizeSessionMode(body.Mode)
@@ -146,6 +148,11 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	}
 	if len(repos) > 0 && !sessionModeSupportsRepos(mode) {
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
+		return
+	}
+	bugLabel, err := sessionmodel.NormalizeBugLabelName(body.BugLabel)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	capabilities, status, detail := validateCreateSessionCapabilities(mode, body.Capabilities)
@@ -183,6 +190,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		Mode:         mode,
 		Name:         body.Name,
 		Repos:        repos,
+		BugLabel:     bugLabel,
 		Capabilities: capabilities,
 		Model:        runConfig.Model,
 		Effort:       runConfig.Effort,
