@@ -28,6 +28,8 @@ import {
   type AvatarCrop,
   type AvatarCropDragOffset,
   avatarCropControlStep,
+  avatarCropMaxSize,
+  avatarCropMinSize,
   avatarCropContainsPoint,
   avatarCropDragOffset,
   avatarCropFromImagePoint,
@@ -107,6 +109,11 @@ const defaultCrop: AvatarCrop = {
 const avatarCanvasSize = 512;
 const cropDragHitSlopPx = 18;
 const cropPlacementMoveThresholdPx = 6;
+// Render the source image at a fraction of the stage so there is always a
+// transparent (checkerboard) margin around it. The selection circle can then be
+// dragged or grown past the image edges and stay visible against that margin,
+// which is exactly the region that becomes transparency in the saved avatar.
+const cropStageFillFactor = 0.8;
 
 function extensionForImageType(type: string): string {
   switch (type) {
@@ -268,7 +275,9 @@ function containedImageRect(
   if (stageWidth <= 0 || stageHeight <= 0 || naturalWidth <= 0 || naturalHeight <= 0) {
     return null;
   }
-  const scale = Math.min(stageWidth / naturalWidth, stageHeight / naturalHeight);
+  // Leave a margin around the image so an overhanging selection circle stays on
+  // screen against the stage's transparency checkerboard.
+  const scale = Math.min(stageWidth / naturalWidth, stageHeight / naturalHeight) * cropStageFillFactor;
   const width = naturalWidth * scale;
   const height = naturalHeight * scale;
   return {
@@ -388,7 +397,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
 
   const cropStyle = useMemo(() => {
     if (!imageRect) return null;
-    const clamped = clampAvatarCrop(crop, imageRect.width, imageRect.height);
+    const clamped = clampAvatarCrop(crop);
     const side = clamped.size * Math.min(imageRect.width, imageRect.height);
     return {
       width: `${side}px`,
@@ -397,6 +406,18 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
       top: `${imageRect.top + clamped.center_y * imageRect.height - side / 2}px`,
     };
   }, [crop, imageRect]);
+
+  // The image is positioned from the same rect that drives the crop ring and the
+  // pointer math, so the inset (transparent) margin stays consistent everywhere.
+  const imageStyle = useMemo(() => {
+    if (!imageRect) return undefined;
+    return {
+      left: `${imageRect.left}px`,
+      top: `${imageRect.top}px`,
+      width: `${imageRect.width}px`,
+      height: `${imageRect.height}px`,
+    };
+  }, [imageRect]);
 
   const visibleEntries = useMemo(
     () => entries.filter((entry) => entry.kind === kind),
@@ -430,12 +451,12 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
   }, [imagePointFromPointer, imageRect]);
 
   const adjustCropSize = useCallback((deltaSize: number) => {
-    setCrop((current) => resizeAvatarCrop(current, deltaSize, imageRect?.width, imageRect?.height));
-  }, [imageRect]);
+    setCrop((current) => resizeAvatarCrop(current, deltaSize));
+  }, []);
 
   const nudgeCrop = useCallback((deltaX: number, deltaY: number) => {
-    setCrop((current) => nudgeAvatarCrop(current, deltaX, deltaY, imageRect?.width, imageRect?.height));
-  }, [imageRect]);
+    setCrop((current) => nudgeAvatarCrop(current, deltaX, deltaY));
+  }, []);
 
   const startCropMove = useCallback((event: ReactPointerEvent<HTMLDivElement>, point: { x: number; y: number }) => {
     if (!imageRect) return;
@@ -671,7 +692,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
       const payload = new FormData();
       payload.set("name", trimmedName);
       payload.set("crop", JSON.stringify({
-        ...clampAvatarCrop(crop, imageRef.current?.naturalWidth, imageRef.current?.naturalHeight),
+        ...clampAvatarCrop(crop),
         source_width: imageRef.current?.naturalWidth ?? 0,
         source_height: imageRef.current?.naturalHeight ?? 0,
       }));
@@ -822,6 +843,7 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                   ref={imageRef}
                   src={photoURL}
                   alt=""
+                  style={imageStyle}
                   onLoad={(event) => {
                     setImageSize({
                       width: event.currentTarget.naturalWidth,
@@ -849,20 +871,16 @@ export function AdminAvatarManager({ onCatalogChanged }: AdminAvatarManagerProps
                   <input
                     id="admin-avatar-crop-size"
                     type="range"
-                    min="0.12"
-                    max="1"
-                    step="0.01"
+                    min={avatarCropMinSize}
+                    max={avatarCropMaxSize}
+                    step={avatarCropControlStep}
                     value={crop.size}
                     onChange={(event) =>
                       setCrop((current) =>
-                        clampAvatarCrop(
-                          {
-                            ...current,
-                            size: Number(event.target.value),
-                          },
-                          imageRect?.width,
-                          imageRect?.height,
-                        ),
+                        clampAvatarCrop({
+                          ...current,
+                          size: Number(event.target.value),
+                        }),
                       )
                     }
                   />

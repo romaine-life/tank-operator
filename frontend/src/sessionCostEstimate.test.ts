@@ -181,3 +181,82 @@ test("formats tiny turn costs without rounding nonzero usage to zero", () => {
   assert.equal(formatTurnCostUsd(0.0012), "<$0.01");
   assert.equal(formatTurnCostUsd(0.012), "$0.01");
 });
+
+test("context window token count sums additive Claude cache tokens for a per-message snapshot", () => {
+  // Claude reports cache_read/cache_creation as additive to input_tokens, so
+  // the live prompt size is the sum. Real durable blob shape (session 509).
+  assert.equal(contextWindowTokenCount({
+    input_tokens: 4,
+    cache_read_input_tokens: 157_652,
+    cache_creation_input_tokens: 161_334,
+    output_tokens: 5_016,
+  }, 1_000_000, { usage_source: "claude.message" }), 318_990);
+});
+
+test("context window token count ignores the cumulative Claude terminal for occupancy", () => {
+  // claude.result is cumulative across the turn's tool loop (cache reads
+  // summed over every model call), so it over-counts occupancy. Real durable
+  // blob shape (session 508): a naive sum would report 3.26M against a window.
+  assert.equal(contextWindowTokenCount({
+    input_tokens: 266,
+    cache_read_input_tokens: 3_219_249,
+    cache_creation_input_tokens: 21_332,
+    output_tokens: 19_380,
+  }, 1_000_000, { usage_source: "claude.result" }), 0);
+});
+
+test("context window token count does not fabricate occupancy from a bare Claude blob", () => {
+  // The shipped bug returned input_tokens (4) as "occupancy" for Claude. A
+  // pre-fix durable turn (cumulative terminal, no usage_observation) must
+  // resolve to no occupancy rather than the fabricated uncached sliver.
+  assert.equal(contextWindowTokenCount({
+    input_tokens: 4,
+    cache_read_input_tokens: 157_652,
+    cache_creation_input_tokens: 161_334,
+  }, 1_000_000), 0);
+});
+
+test("estimates Claude turn context tokens from the latest snapshot, not the cumulative terminal", () => {
+  const rows = [
+    {
+      id: "s1",
+      turnId: "turn-1",
+      turnUsage: { input_tokens: 2, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 500 },
+      usageObservation: { usage_source: "claude.message" },
+    },
+    {
+      id: "s2",
+      turnId: "turn-1",
+      turnUsage: { input_tokens: 2, cache_read_input_tokens: 540_000, cache_creation_input_tokens: 800 },
+      usageObservation: { usage_source: "claude.message" },
+    },
+    {
+      id: "term",
+      turnId: "turn-1",
+      turnUsage: { input_tokens: 266, cache_read_input_tokens: 3_219_249, cache_creation_input_tokens: 21_332 },
+      usageObservation: { usage_source: "claude.result" },
+    },
+  ];
+  // Latest snapshot s2: 2 + 540000 + 800 = 540802. The cumulative terminal is skipped.
+  assert.equal(estimateTurnContextTokens(rows, 1_000_000, "turn-1"), 540_802);
+});
+
+test("Claude turn cost uses the cumulative terminal, not per-message snapshots", () => {
+  const rows = [
+    {
+      id: "s1",
+      turnId: "turn-1",
+      turnUsage: { input_tokens: 2, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 500, output_tokens: 50 },
+      usageObservation: { usage_source: "claude.message" },
+    },
+    {
+      id: "term",
+      turnId: "turn-1",
+      turnUsage: { input_tokens: 266, cache_creation_input_tokens: 21_332, cache_read_input_tokens: 3_219_249, output_tokens: 19_380 },
+      usageObservation: { usage_source: "claude.result" },
+    },
+  ];
+  const estimate = estimateTurnCost(rows, "claude-opus-4-8", "turn-1");
+  const cumulativeOnly = estimateUsageCostUSD(rows[1]?.turnUsage, "claude-opus-4-8");
+  assertNearlyEqual(estimate?.amountUsd ?? null, cumulativeOnly ?? 0);
+});

@@ -76,6 +76,31 @@ export const itemOutcomeTotal = new Counter({
   registers: [registry],
 });
 
+// turnUsageEmittedTotal counts the durable usage events this runner
+// publishes, split by `kind`. It exists to make the Claude
+// context-window-occupancy fix observable and regression-proof:
+//
+//   - `snapshot` — a per-assistant-message `turn.usage` carrying that
+//     single model call's usage (input + cache_read + cache_creation =
+//     the live prompt size). Claude reports usage ONLY on the cumulative
+//     terminal (`result.usage`), whose `input_tokens` is the tiny
+//     uncached sliver once prompt caching folds the context into
+//     `cache_read_input_tokens`. Without these snapshots the context
+//     gauge has no per-call signal and renders ~0 tokens. This mirrors
+//     the codex-runner's `thread.tokenUsage.updated` stream.
+//   - `terminal` — the cumulative usage that rides
+//     turn.completed/failed/interrupted (used for cost, not occupancy).
+//
+// The regression signature of the bug this fixes: a Claude turn that
+// emits assistant messages but increments `snapshot` zero times. Labels
+// are a closed two-value set; `mode="claude"` is added by the registry.
+export const turnUsageEmittedTotal = new Counter({
+  name: "tank_runner_turn_usage_emitted_total",
+  help: "Durable usage events published by the runner. kind='snapshot' is the per-assistant-message context-occupancy turn.usage; kind='terminal' is the cumulative usage on the turn terminal. A Claude turn with assistant messages but zero snapshots is the context-gauge regression signature.",
+  labelNames: ["kind"],
+  registers: [registry],
+});
+
 // interruptOutcomeTotal records the disposition of every `interrupt_turn`
 // command this runner accepts. The four-outcome contract (see
 // docs/tank-conversation-protocol.md → "Durable turn interruption" and

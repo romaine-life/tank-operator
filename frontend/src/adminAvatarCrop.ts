@@ -19,8 +19,22 @@ export type AvatarCropDragOffset = {
 
 export const avatarCropControlStep = 0.01;
 
+// The circular selection may be shrunk to a thumbnail or grown well past the
+// edges of the source image. Whatever the circle covers outside the image is
+// rendered as transparency by the canvas crop, so the only real limits are a
+// small floor (keep the crop usable) and a generous ceiling (let an entire
+// off-square image sit inside the avatar with transparent padding). The ceiling
+// is mirrored by the backend `maxAvatarCropSize` sanity check in
+// handlers_avatars.go — keep the two in lockstep.
+export const avatarCropMinSize = 0.12;
+export const avatarCropMaxSize = 3;
+
 function finiteOr(value: number | undefined, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function steppedCropValue(value: number): number {
@@ -41,33 +55,14 @@ function usableDimensions(width?: number, height?: number): { width: number; hei
   return null;
 }
 
-function cropHalfExtents(size: number, width?: number, height?: number) {
-  const dimensions = usableDimensions(width, height);
-  if (!dimensions) {
-    const half = size / 2;
-    return { x: half, y: half };
-  }
-  const side = size * Math.min(dimensions.width, dimensions.height);
-  return {
-    x: Math.min(side / (2 * dimensions.width), 0.5),
-    y: Math.min(side / (2 * dimensions.height), 0.5),
-  };
-}
-
-export function clampAvatarCrop(
-  crop: AvatarCrop,
-  sourceWidth?: number,
-  sourceHeight?: number,
-): AvatarCrop {
-  const size = Math.min(Math.max(finiteOr(crop.size, 0.5), 0.12), 1);
-  const half = cropHalfExtents(size, sourceWidth, sourceHeight);
-  const centerX = finiteOr(crop.center_x, 0.5);
-  const centerY = finiteOr(crop.center_y, 0.5);
+export function clampAvatarCrop(crop: AvatarCrop): AvatarCrop {
   return {
     ...crop,
-    size,
-    center_x: Math.min(Math.max(centerX, half.x), 1 - half.x),
-    center_y: Math.min(Math.max(centerY, half.y), 1 - half.y),
+    size: clamp(finiteOr(crop.size, 0.5), avatarCropMinSize, avatarCropMaxSize),
+    // The center stays on the image so the selection always covers real pixels,
+    // but the circle itself is free to overhang any edge into transparency.
+    center_x: clamp(finiteOr(crop.center_x, 0.5), 0, 1),
+    center_y: clamp(finiteOr(crop.center_y, 0.5), 0, 1),
   };
 }
 
@@ -76,13 +71,17 @@ export function cropToSourceRect(
   naturalWidth: number,
   naturalHeight: number,
 ): SourceCropRect {
-  const normalized = clampAvatarCrop(crop, naturalWidth, naturalHeight);
+  const normalized = clampAvatarCrop(crop);
   const side = normalized.size * Math.min(naturalWidth, naturalHeight);
   const centerX = normalized.center_x * naturalWidth;
   const centerY = normalized.center_y * naturalHeight;
+  // Intentionally unclamped: a selection that runs past the image edges keeps
+  // its true (possibly negative origin / larger-than-image) source rect.
+  // drawImage paints only the pixels that overlap the image and leaves the rest
+  // of the avatar transparent.
   return {
-    sx: Math.min(Math.max(centerX - side / 2, 0), naturalWidth - side),
-    sy: Math.min(Math.max(centerY - side / 2, 0), naturalHeight - side),
+    sx: centerX - side / 2,
+    sy: centerY - side / 2,
     side,
   };
 }
@@ -96,7 +95,7 @@ export function avatarCropDragOffset(
   tolerancePx = 10,
 ): AvatarCropDragOffset {
   if (!usableDimensions(imageWidth, imageHeight)) return { x: 0, y: 0 };
-  const normalized = clampAvatarCrop(crop, imageWidth, imageHeight);
+  const normalized = clampAvatarCrop(crop);
   const centerX = normalized.center_x * imageWidth;
   const centerY = normalized.center_y * imageHeight;
   const x = pointerX - centerX;
@@ -116,7 +115,7 @@ export function avatarCropContainsPoint(
   tolerancePx = 0,
 ): boolean {
   if (!usableDimensions(imageWidth, imageHeight)) return false;
-  const normalized = clampAvatarCrop(crop, imageWidth, imageHeight);
+  const normalized = clampAvatarCrop(crop);
   const side = normalized.size * Math.min(imageWidth, imageHeight);
   const centerX = normalized.center_x * imageWidth;
   const centerY = normalized.center_y * imageHeight;
@@ -132,37 +131,26 @@ export function avatarCropFromImagePoint(
   dragOffset: AvatarCropDragOffset = { x: 0, y: 0 },
 ): AvatarCrop {
   if (!usableDimensions(imageWidth, imageHeight)) {
-    return clampAvatarCrop(crop, imageWidth, imageHeight);
+    return clampAvatarCrop(crop);
   }
   return clampAvatarCrop({
     ...crop,
     center_x: (pointerX - dragOffset.x) / imageWidth,
     center_y: (pointerY - dragOffset.y) / imageHeight,
-  }, imageWidth, imageHeight);
+  });
 }
 
-export function resizeAvatarCrop(
-  crop: AvatarCrop,
-  deltaSize: number,
-  sourceWidth?: number,
-  sourceHeight?: number,
-): AvatarCrop {
+export function resizeAvatarCrop(crop: AvatarCrop, deltaSize: number): AvatarCrop {
   return clampAvatarCrop({
     ...crop,
     size: steppedCropValue(finiteOr(crop.size, 0.5) + deltaSize),
-  }, sourceWidth, sourceHeight);
+  });
 }
 
-export function nudgeAvatarCrop(
-  crop: AvatarCrop,
-  deltaX: number,
-  deltaY: number,
-  sourceWidth?: number,
-  sourceHeight?: number,
-): AvatarCrop {
+export function nudgeAvatarCrop(crop: AvatarCrop, deltaX: number, deltaY: number): AvatarCrop {
   return clampAvatarCrop({
     ...crop,
     center_x: steppedCropValue(finiteOr(crop.center_x, 0.5) + deltaX),
     center_y: steppedCropValue(finiteOr(crop.center_y, 0.5) + deltaY),
-  }, sourceWidth, sourceHeight);
+  });
 }

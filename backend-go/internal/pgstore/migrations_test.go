@@ -183,6 +183,55 @@ func TestMigrationsPersistSessionStatusEvents(t *testing.T) {
 	}
 }
 
+// TestMigrationsAllocateDurableTurnNumbers pins the durable turn-number model:
+// the session_turns table, the per-session counter, the idempotent allocation
+// function, and the AFTER INSERT trigger that numbers every turn. The
+// load-bearing ordering is that the one-shot backfill and counter-prime run
+// BEFORE the trigger goes live, so the live allocator can never collide with a
+// backfilled row on the (tank_session_id, turn_number) unique constraint.
+func TestMigrationsAllocateDurableTurnNumbers(t *testing.T) {
+	migrations := joinedMigrationSQL()
+	for _, want := range []string{
+		"CREATE TABLE IF NOT EXISTS session_turns",
+		"UNIQUE (tank_session_id, turn_number)",
+		"CREATE TABLE IF NOT EXISTS session_turn_counters",
+		"CREATE OR REPLACE FUNCTION tank_allocate_session_turn_number",
+		"ON CONFLICT (tank_session_id, turn_id) DO NOTHING",
+		// numbering must never roll back the durable event write
+		"WHEN unique_violation THEN",
+		"CREATE OR REPLACE FUNCTION tank_session_events_allocate_turn_number()",
+		"row_number() OVER (",
+		"CREATE TRIGGER tank_session_events_allocate_turn_number",
+		"WHEN (NEW.turn_id IS NOT NULL AND NEW.turn_id <> '')",
+	} {
+		if !strings.Contains(migrations, want) {
+			t.Fatalf("schema migrations missing %q", want)
+		}
+	}
+
+	createTable := strings.Index(migrations, "CREATE TABLE IF NOT EXISTS session_turns")
+	allocFn := strings.Index(migrations, "CREATE OR REPLACE FUNCTION tank_allocate_session_turn_number")
+	backfill := strings.Index(migrations, "row_number() OVER (")
+	prime := strings.Index(migrations, "GREATEST(session_turn_counters.next_turn_number")
+	createTrigger := strings.Index(migrations, "CREATE TRIGGER tank_session_events_allocate_turn_number")
+
+	if createTable > allocFn {
+		t.Fatal("session_turns table must be declared before the allocation function references it")
+	}
+	if backfill < 0 || prime < 0 || createTrigger < 0 {
+		t.Fatal("expected backfill, counter-prime, and trigger creation to all be present")
+	}
+	if backfill > createTrigger {
+		t.Fatal("turn-number backfill must run before the trigger goes live, else it can collide on the (tank_session_id, turn_number) unique constraint")
+	}
+	if prime > createTrigger {
+		t.Fatal("counter-prime must run before the trigger goes live so the live allocator never reissues a backfilled number")
+	}
+	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS session_events") > createTrigger {
+		t.Fatal("session_events table must exist before the turn-number trigger is attached to it")
+	}
+}
+
 func TestMigrationsPrepareAvatarBlobStorage(t *testing.T) {
 	migrations := joinedMigrationSQL()
 	for _, want := range []string{

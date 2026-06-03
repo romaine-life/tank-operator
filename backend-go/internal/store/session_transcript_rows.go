@@ -15,7 +15,13 @@ import (
 )
 
 const transcriptRowCursorSeparator = "\x1f"
-const transcriptRowBackfillVersion = 3
+
+// Bumped 3 -> 4 so every session re-backfills its transcript rows once and picks
+// up the durable turnNumber the projection now stamps onto turn_activity shells
+// (session_turns, added in the turn-number backend PR). Without the bump, shells
+// materialized before that PR keep no turnNumber until a new event re-projects
+// their turn, so dormant sessions would render a number-less turn label.
+const transcriptRowBackfillVersion = 4
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error

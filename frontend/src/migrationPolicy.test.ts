@@ -346,7 +346,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes('replaceAppRoute("settings", homeSettingsTab, homeAdminView)'), true);
   assert.equal(appSource.includes('replaceAppRoute("help")'), true);
   assert.equal(appSource.includes('setActiveTab("turns")'), true);
-  assert.equal(appSource.includes("replaceSessionRoute(session.id, \"turns\", routedSelectedTurnId)"), true);
+  assert.equal(appSource.includes("replaceSessionRoute(session.id, \"turns\", routedSelectedTurnNumber)"), true);
   assert.equal(appSource.includes("window.addEventListener(\"popstate\", applyCurrentSessionRoute)"), true);
   assert.equal(appSource.includes("RunTurnActivityScreen"), true);
   assert.equal(appSource.includes("RunTurnThinkingBubble"), true);

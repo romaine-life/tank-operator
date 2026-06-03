@@ -22,6 +22,18 @@ yanking the viewport away from a user reading history.
 - `session_events.order_key` owns durable live-stream position.
 - `session_transcript_rows.row_cursor` owns `/timeline` historical transcript
   position.
+- `session_turns.turn_number` owns the durable, per-session, submission-ordered
+  turn number that the public route `/sessions/{id}/turns/{n}` resolves into.
+  `turn_id` (`turn_<nonce>`) remains the provider-neutral protocol identity that
+  events, timelines, idempotency, and the activity/interrupt/input-reply APIs
+  key on; the number is a stable public handle over it, not a replacement, and
+  the turn_id-keyed APIs are the identity layer the public route resolves into,
+  not a retained old route. A number is assigned exactly once, server-side, by
+  the `tank_session_events_allocate_turn_number` trigger on the turn's first
+  durable `session_events` insert, and is resolved server-side via
+  `GET /api/sessions/{id}/turns/{n}`. The browser never maps a number to a
+  turn_id from render state; the durable `session_turns` row, not the loaded
+  transcript window, is the resolver.
 - `session_transcript_row_backfills` owns whether a session's historical
   `session_events` ledger has been projected into transcript rows for the
   current projection version. Status rows alone do not satisfy backfill; stale
@@ -116,6 +128,13 @@ yanking the viewport away from a user reading history.
   (`userScrolledUp`, `transcriptVisuallyAtBottom`,
   `TRANSCRIPT_VISUAL_BOTTOM_THRESHOLD_PX`) are blocked from
   reintroduction by `scripts/check-removed-chat-runtime.mjs`.
+- Turn-number resolution is observable. `tank_turn_number_resolve_total{result}`
+  counts number→turn_id lookups as `ok` / `not_found` / `invalid`. The durable
+  allocation invariant — every materialized turn has a number — is enforced by
+  `tank_turn_number_missing_total{phase}` and the `TankTurnNumberMissing` alert,
+  which fire if a `turn_activity` shell is ever projected for a turn that has no
+  `session_turns` row while numbering is active (allocation trigger regressed or
+  an event bypassed it).
 
 ## Acceptance Checks
 
@@ -132,3 +151,11 @@ yanking the viewport away from a user reading history.
   live-tail mode or historical-anchor mode.
 - Legacy browser-local scroll restoration cannot reappear without failing a
   migration guard or contract test.
+- A turn deep link uses the durable per-session number
+  (`/sessions/{id}/turns/{n}`) and resolves server-side: an in-window turn
+  resolves from the loaded shells, an out-of-window turn resolves via
+  `GET /api/sessions/{id}/turns/{n}`, and an unknown or non-numeric segment
+  renders an explicit unavailable-target state instead of silently falling back
+  to the latest turn. The retired `turn_<uuid>` public route form and the
+  array-position "Turn N" label cannot reappear without failing
+  `scripts/check-removed-chat-runtime.mjs`.

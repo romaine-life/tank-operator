@@ -41,3 +41,46 @@ Evidence:
   SpireLens listener activation.
 - `helm template tank-operator ./k8s` covers chart rendering of the deployment
   env and derived `mcp.spirelens.json` ConfigMap entry.
+
+## Test-Slot Session Image Override
+
+Status: in progress
+
+Intent:
+Let a developer iterating in a Glimmung test slot make NEWLY-created sessions
+boot branch-built session-runner code, not just hot-swap the already-running
+pods. The slot's orchestrator stamps a per-scope override image onto new pods
+the same way production stamps its chart-pinned image — no runtime overlay, full
+fidelity. Production is never affected.
+
+Affected contracts:
+- Session Lifecycle
+- Observability
+
+Contract impact:
+- New session pods stamp the chart-pinned SESSION_IMAGE / CODEX_SESSION_IMAGE
+  UNLESS a durable override exists for the session's scope; the override is the
+  only thing that can change a new session's image.
+- The override is keyed by `session_scope`, is refused for the production scope
+  (`"default"`) at both the write endpoint and the create-time resolver, and the
+  resolver is wired only when the test-env gate
+  (`SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED`) is on. Production orchestrators never
+  read or apply it.
+- A lookup failure falls back to the pinned image rather than failing session
+  creation.
+- The override is durable (survives orchestrator rollout) and lives in shared
+  Postgres keyed by scope, so a slot override can never bleed into prod or
+  another slot.
+
+Evidence:
+- `backend-go/internal/sessions/manager_image_override_test.go` covers
+  apply/no-op for slot vs prod scope, gate-off, resolver-error fallback, and the
+  per-mode image family.
+- `backend-go/cmd/tank-operator/handlers_session_image_override_test.go` covers
+  the endpoint happy path, prod-scope refusal, gate-off 403, missing-image 400,
+  and human-role rejection.
+- `backend-go/internal/pgstore/migrations.go` migration 0086 +
+  `internal/pgstore/session_image_overrides.go` store.
+- Metrics `tank_session_image_override_applied_total{scope,image_kind}` and
+  `tank_session_image_override_write_total{action}`.
+- Operator flow: `docs/testing.md` → "Making new slot sessions inherit a change".

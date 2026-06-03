@@ -150,6 +150,43 @@ function formatCompactMillionTokens(value: number): string {
   return `${wholeMillions}.${String(millionHundredths).padStart(2, "0").replace(/0+$/, "")}m`;
 }
 
+// classifyUsageShape distinguishes the two provider usage architectures Tank
+// consumes. They treat cached input tokens OPPOSITELY:
+//
+//   - "claude": cache_read_input_tokens / cache_creation_input_tokens are
+//     ADDITIVE to input_tokens. With prompt caching always on, input_tokens
+//     is only the tiny uncached sliver; the live prompt size is
+//     input + cache_read + cache_creation.
+//   - "openai": input_tokens (or prompt_tokens) is the WHOLE prompt and the
+//     cached count is a SUBSET of it; the uncached delta is input - cached.
+//
+// Reading a Claude blob with OpenAI semantics treats cache_read as a subset
+// to subtract, leaving the uncached sliver (e.g. 4 tokens) as the reported
+// "context occupancy" — the bug this classifier exists to prevent.
+type UsageShape = "claude" | "openai" | "unknown";
+
+function classifyUsageShape(usage: Record<string, unknown>): UsageShape {
+  if ("cache_read_input_tokens" in usage || "cache_creation_input_tokens" in usage) {
+    return "claude";
+  }
+  if (
+    "cached_input_tokens" in usage ||
+    "input_cached_tokens" in usage ||
+    "total_tokens" in usage ||
+    "input_tokens_details" in usage ||
+    "prompt_tokens_details" in usage
+  ) {
+    return "openai";
+  }
+  return "unknown";
+}
+
+function usageSourceTag(usageObservation: unknown): string {
+  if (!isRecord(usageObservation)) return "";
+  const source = usageObservation.usage_source;
+  return typeof source === "string" ? source : "";
+}
+
 export function contextWindowTokenCount(
   usage: unknown,
   contextWindow: number,
@@ -159,13 +196,29 @@ export function contextWindowTokenCount(
   const safeContextWindow = Number.isFinite(contextWindow)
     ? Math.max(1, Math.floor(contextWindow))
     : 1;
+
+  if (classifyUsageShape(usage) === "claude") {
+    // For Claude, occupancy is derivable ONLY from a per-message snapshot
+    // (usage_source="claude.message"), where input + cache_read +
+    // cache_creation is that single model call's prompt size. The cumulative
+    // terminal (claude.result) sums cache reads across every tool-loop
+    // iteration, so it over-counts occupancy by multiples — it drives cost,
+    // not the context gauge. Anything not explicitly a snapshot (the
+    // terminal, or pre-fix rows with no observation) yields no occupancy, so
+    // the gauge reads "unavailable" rather than a fabricated number.
+    if (usageSourceTag(usageObservation) !== "claude.message") return 0;
+    const inputTokens = numberField(usage, "input_tokens") ?? 0;
+    const cacheReadTokens = numberField(usage, "cache_read_input_tokens") ?? 0;
+    const cacheCreationTokens = numberField(usage, "cache_creation_input_tokens") ?? 0;
+    return Math.max(0, Math.floor(inputTokens + cacheReadTokens + cacheCreationTokens));
+  }
+
   const inputTokens = numberField(usage, "input_tokens") ?? numberField(usage, "prompt_tokens") ?? 0;
   if (inputTokens <= 0) return 0;
 
   const cachedInputTokens =
     numberField(usage, "cached_input_tokens") ??
     openAiCachedInputTokens(usage) ??
-    numberField(usage, "cache_read_input_tokens") ??
     0;
   const uncachedInputTokens = Math.max(0, inputTokens - cachedInputTokens);
 

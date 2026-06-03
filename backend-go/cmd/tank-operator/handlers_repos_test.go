@@ -49,8 +49,8 @@ func TestValidateRepoSlugs(t *testing.T) {
 		},
 		{
 			name:    "dots and underscores allowed in name",
-			in:      []string{"nelsong6/some.repo_name-1"},
-			wantOut: []string{"nelsong6/some.repo_name-1"},
+			in:      []string{"romaine-life/some.repo_name-1"},
+			wantOut: []string{"romaine-life/some.repo_name-1"},
 		},
 		{
 			name:    "whitespace trimmed",
@@ -84,7 +84,7 @@ func TestValidateRepoSlugs(t *testing.T) {
 		},
 		{
 			name:    "missing slash rejected",
-			in:      []string{"nelsong6"},
+			in:      []string{"romaine-life"},
 			wantErr: "not a valid owner/name slug",
 		},
 		{

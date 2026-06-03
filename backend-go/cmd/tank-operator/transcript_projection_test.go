@@ -276,6 +276,100 @@ func TestProjectTranscriptEventsCarriesMidTurnUsageOnActiveActivity(t *testing.T
 	}
 }
 
+func TestProjectTranscriptEventsKeepsClaudeUsageSnapshotThroughTerminal(t *testing.T) {
+	// Claude per-message snapshots (usage_source=claude.message) are the
+	// context-occupancy signal; the terminal carries CUMULATIVE usage
+	// (claude.result), which sums cache reads across the turn's tool loop.
+	// The terminal annotation must NOT overwrite the dedicated turn_usage row
+	// with the cumulative usage — doing so collapses the context gauge to ~0
+	// once a turn completes and on every reload.
+	snapshotLatest := map[string]any{
+		"input_tokens":                float64(2),
+		"cache_read_input_tokens":     float64(540_000),
+		"cache_creation_input_tokens": float64(800),
+		"output_tokens":               float64(120),
+	}
+	cumulativeTerminal := map[string]any{
+		"input_tokens":                float64(266),
+		"cache_read_input_tokens":     float64(3_219_249),
+		"cache_creation_input_tokens": float64(21_332),
+		"output_tokens":               float64(19_380),
+	}
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "do the thing",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("usage-1", "003", "turn.usage", "runner", "claude", "turn-1", "", map[string]any{
+			"usage": map[string]any{
+				"input_tokens":                float64(2),
+				"cache_read_input_tokens":     float64(100_000),
+				"cache_creation_input_tokens": float64(500),
+			},
+			"usage_observation": map[string]any{"usage_source": "claude.message", "terminal_had_usage": false},
+		}),
+		projectionTestEvent("answer", "004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:answer", map[string]any{
+			"kind": "message",
+			"text": "all done",
+		}),
+		projectionTestEvent("usage-2", "005", "turn.usage", "runner", "claude", "turn-1", "", map[string]any{
+			"usage":             snapshotLatest,
+			"usage_observation": map[string]any{"usage_source": "claude.message", "terminal_had_usage": false},
+		}),
+		projectionTestEvent("terminal", "006", "turn.completed", "runner", "claude", "turn-1", "", map[string]any{
+			"usage":             cumulativeTerminal,
+			"usage_observation": map[string]any{"usage_source": "claude.result", "terminal_had_usage": true},
+			"final_answer":      map[string]any{"timeline_ids": []any{"turn-1:item:answer"}},
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatalf("expected turn-1 activity body, got %#v", projection.ActivityBodies)
+	}
+	var usageRow map[string]any
+	for _, entry := range body.Entries {
+		if entry["metaKind"] == "turn_usage" {
+			usageRow = entry
+			break
+		}
+	}
+	if usageRow == nil {
+		t.Fatalf("expected a turn_usage row in the activity body, got %#v", body.Entries)
+	}
+	// The snapshot survives the terminal annotation: latest per-message usage,
+	// not the cumulative terminal.
+	if got := transcriptAnyMap(usageRow["turnUsage"]); got["cache_read_input_tokens"] != float64(540_000) {
+		t.Fatalf("usage row turnUsage = %#v, want latest snapshot (cache_read 540000), not the cumulative terminal", usageRow["turnUsage"])
+	}
+	if got := transcriptAnyMap(usageRow["usageObservation"]); got["usage_source"] != "claude.message" {
+		t.Fatalf("usage row usageObservation = %#v, want claude.message, not clobbered to claude.result", usageRow["usageObservation"])
+	}
+
+	// The compacted activity shell is the row the session-level context gauge
+	// scans (the turn_usage row is folded into it). It must surface the
+	// snapshot occupancy, not the cumulative terminal, or a completed Claude
+	// turn reads ~0 occupancy.
+	var shell map[string]any
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "turn_activity" && entry["turnId"] == "turn-1" {
+			shell = entry
+			break
+		}
+	}
+	if shell == nil {
+		t.Fatalf("expected a turn_activity shell for turn-1, got %#v", projection.Entries)
+	}
+	if got := transcriptAnyMap(shell["turnUsage"]); got["cache_read_input_tokens"] != float64(540_000) {
+		t.Fatalf("shell turnUsage = %#v, want latest snapshot (cache_read 540000), not the cumulative terminal", shell["turnUsage"])
+	}
+	if got := transcriptAnyMap(shell["usageObservation"]); got["usage_source"] != "claude.message" {
+		t.Fatalf("shell usageObservation = %#v, want claude.message, not the cumulative terminal observation", shell["usageObservation"])
+	}
+}
+
 func TestProjectTranscriptEventsKeepsInterruptedTurnActivityOutOfMainTranscript(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

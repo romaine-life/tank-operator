@@ -39,6 +39,7 @@ type appServer struct {
 	profiles            profilesStore
 	sessionEvents       store.SessionEventStore
 	transcriptRows      store.SessionTranscriptRowStore
+	turns               store.SessionTurnStore
 	avatars             avatarassets.Store
 	avatarImages        avatarassets.ImageStore
 	avatarUploads       avataruploads.Store
@@ -85,6 +86,16 @@ type appServer struct {
 	// session whose mode's provider is currently in a failed state.
 	// nil when pgPool is unset (stub mode).
 	providerHealth *providerhealth.Manager
+
+	// imageOverrides backs the test-slot session-image repoint flow
+	// (docs/testing.md): the internal /session-scopes/{scope}/image-override
+	// endpoints read/write it, and the Manager resolves it at session-create.
+	// nil in stub mode / when pgPool is unset.
+	imageOverrides sessionImageOverrideStore
+	// sessionImageOverridesEnabled gates the override write path on the
+	// test-env signal (SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED). false in
+	// production, where the Manager resolver is also left nil.
+	sessionImageOverridesEnabled bool
 }
 
 type sessionCommandBus interface {
@@ -111,6 +122,16 @@ type streamAuthTicketStore interface {
 type messageLinkShareStore interface {
 	Create(context.Context, pgstore.MessageLinkShare) error
 	Get(context.Context, string) (pgstore.MessageLinkShare, error)
+}
+
+// sessionImageOverrideStore is the durable per-scope session-image override
+// surface backing the test-slot repoint flow. Satisfied by
+// *pgstore.SessionImageOverrideStore; an interface so handler tests can fake it
+// without Postgres.
+type sessionImageOverrideStore interface {
+	Get(ctx context.Context, scope string) (pgstore.SessionImageOverride, error)
+	Upsert(ctx context.Context, ov pgstore.SessionImageOverride) error
+	Delete(ctx context.Context, scope string) (bool, error)
 }
 
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
@@ -249,6 +270,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleSessionEventStream)
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
+	// Durable resolver for the public per-session turn number: the canonical
+	// route is /sessions/{id}/turns/{n}; this maps n -> turn_id + anchor cursor
+	// server-side so a cold deep link resolves from session_turns, not from the
+	// browser's loaded transcript window.
+	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{number}", s.handleResolveSessionTurnNumber)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/read-state", s.handleUpdateSessionReadState)
 
 	// Public read-only transcript shares. These are intentionally not
@@ -271,6 +297,9 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions", s.handleInternalListSessions)
 	mux.HandleFunc("POST /api/internal/sessions", s.handleInternalCreateSession)
 	mux.HandleFunc("POST /api/internal/session-scopes/{session_scope}/retire", s.handleInternalRetireSessionScope)
+	mux.HandleFunc("GET /api/internal/session-scopes/{session_scope}/image-override", s.handleInternalGetSessionImageOverride)
+	mux.HandleFunc("PUT /api/internal/session-scopes/{session_scope}/image-override", s.handleInternalSetSessionImageOverride)
+	mux.HandleFunc("DELETE /api/internal/session-scopes/{session_scope}/image-override", s.handleInternalDeleteSessionImageOverride)
 	mux.HandleFunc("DELETE /api/internal/sessions/{session_id}", s.handleInternalDeleteSession)
 	mux.HandleFunc("PATCH /api/internal/sessions/{session_id}", s.handleInternalPatchSession)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/capabilities", s.handleInternalSessionCapabilities)

@@ -1009,6 +1009,161 @@ var schemaMigrations = []migration{
 			updated_at  = now(),
 			row_version = nextval('sessions_row_version_seq')
 		WHERE mode = concat('hermes', '_gui') AND visible = true`},
+
+	// session_image_overrides — durable, per-session-scope override of the
+	// container images the orchestrator stamps onto NEW session pods. It backs
+	// the test-slot "point this slot at a branch-built session image" flow
+	// (docs/testing.md): a slot's orchestrator reads the row for its own scope
+	// and stamps the override instead of the chart-pinned SESSION_IMAGE /
+	// CODEX_SESSION_IMAGE, so newly-created sessions boot the branch runner
+	// code the same way prod boots its pinned image. Keyed by session_scope so
+	// the shared Postgres can never let a slot override bleed into another slot
+	// or prod; the write path additionally refuses the production scope.
+	{ID: "0086", SQL: `CREATE TABLE IF NOT EXISTS session_image_overrides (
+		session_scope text PRIMARY KEY,
+		claude_image  text,
+		codex_image   text,
+		git_ref       text,
+		set_by        text,
+		set_at        timestamptz NOT NULL DEFAULT now()
+	)`},
+
+	// session_turns — durable per-session turn numbers. `turn_id`
+	// (turn_<nonce>) stays the provider-neutral timeline identity that events,
+	// timelines, idempotency, and the activity/interrupt/input-reply APIs key
+	// on; turn_number is the human-facing, submission-ordered handle the public
+	// route /sessions/{id}/turns/{n} resolves into, mirroring how
+	// session_counters mints the session's own number. A turn was previously an
+	// emergent grouping of session_events rows sharing turn_id; this is the
+	// first table that makes a turn a first-class durable entity.
+	{ID: "0087", SQL: `CREATE TABLE IF NOT EXISTS session_turns (
+		tank_session_id text   NOT NULL,
+		turn_id         text   NOT NULL,
+		turn_number     bigint NOT NULL,
+		first_order_key text   NOT NULL,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (tank_session_id, turn_id),
+		UNIQUE (tank_session_id, turn_number)
+	)`},
+
+	// Per-SESSION monotonic turn-number allocator. session_counters is
+	// per-SCOPE; turn numbers restart at 1 within each session. The atomic
+	// INCREMENT-AND-RETURN is driven from tank_allocate_session_turn_number
+	// below (called by the session_events trigger), not from Go, so every
+	// persisted turn is numbered regardless of write origin.
+	{ID: "0088", SQL: `CREATE TABLE IF NOT EXISTS session_turn_counters (
+		tank_session_id  text   PRIMARY KEY,
+		next_turn_number bigint NOT NULL DEFAULT 1,
+		created_at       timestamptz NOT NULL DEFAULT now(),
+		updated_at       timestamptz NOT NULL DEFAULT now()
+	)`},
+
+	// tank_allocate_session_turn_number assigns a stable per-session number to a
+	// turn on first sight, idempotent on (tank_session_id, turn_id). A re-run
+	// for an already-numbered turn only lowers first_order_key if an
+	// earlier-ordered event arrives. The allocation block is wrapped in an
+	// EXCEPTION handler so a concurrent allocator racing the
+	// (tank_session_id, turn_number) unique constraint can never roll back the
+	// durable session_events write that fired the trigger: numbering is
+	// best-effort-correct, the event ledger is sacred. An unnumbered turn is
+	// surfaced by the projection's missing-number counter, not by a failed
+	// write, and self-heals when the turn's next event retries allocation.
+	{ID: "0089", SQL: `CREATE OR REPLACE FUNCTION tank_allocate_session_turn_number(
+		p_tank_session_id text,
+		p_turn_id text,
+		p_order_key text
+	) RETURNS void
+	LANGUAGE plpgsql
+	AS $$
+	DECLARE
+		v_next bigint;
+	BEGIN
+		IF trim(coalesce(p_tank_session_id, '')) = ''
+			OR trim(coalesce(p_turn_id, '')) = '' THEN
+			RETURN;
+		END IF;
+
+		PERFORM 1 FROM session_turns
+		WHERE tank_session_id = p_tank_session_id AND turn_id = p_turn_id;
+		IF FOUND THEN
+			UPDATE session_turns
+			SET first_order_key = p_order_key
+			WHERE tank_session_id = p_tank_session_id
+				AND turn_id = p_turn_id
+				AND coalesce(p_order_key, '') <> ''
+				AND (first_order_key = '' OR p_order_key < first_order_key);
+			RETURN;
+		END IF;
+
+		BEGIN
+			INSERT INTO session_turn_counters (tank_session_id, next_turn_number, updated_at)
+			VALUES (p_tank_session_id, 2, now())
+			ON CONFLICT (tank_session_id) DO UPDATE
+			SET next_turn_number = session_turn_counters.next_turn_number + 1,
+				updated_at = now()
+			RETURNING next_turn_number - 1 INTO v_next;
+
+			INSERT INTO session_turns (tank_session_id, turn_id, turn_number, first_order_key)
+			VALUES (p_tank_session_id, p_turn_id, v_next, coalesce(p_order_key, ''))
+			ON CONFLICT (tank_session_id, turn_id) DO NOTHING;
+		EXCEPTION
+			WHEN unique_violation THEN
+				NULL;
+		END;
+	END
+	$$`},
+
+	{ID: "0090", SQL: `CREATE OR REPLACE FUNCTION tank_session_events_allocate_turn_number()
+	RETURNS trigger
+	LANGUAGE plpgsql
+	AS $$
+	BEGIN
+		PERFORM tank_allocate_session_turn_number(NEW.tank_session_id, NEW.turn_id, NEW.order_key);
+		RETURN NULL;
+	END
+	$$`},
+
+	// Backfill BEFORE the trigger goes live (0093/0094): number every existing
+	// turn deterministically by submission order (MIN order_key). Running first
+	// guarantees the live trigger can never collide on
+	// (tank_session_id, turn_number) with a backfilled row. Idempotent — safe to
+	// re-run via ON CONFLICT DO NOTHING.
+	{ID: "0091", SQL: `WITH ranked AS (
+		SELECT tank_session_id,
+			turn_id,
+			MIN(order_key) AS first_order_key,
+			row_number() OVER (
+				PARTITION BY tank_session_id
+				ORDER BY MIN(order_key)
+			) AS turn_number
+		FROM session_events
+		WHERE turn_id IS NOT NULL AND turn_id <> '' AND order_key <> ''
+		GROUP BY tank_session_id, turn_id
+	)
+	INSERT INTO session_turns (tank_session_id, turn_id, turn_number, first_order_key)
+	SELECT tank_session_id, turn_id, turn_number, first_order_key
+	FROM ranked
+	ON CONFLICT (tank_session_id, turn_id) DO NOTHING`},
+
+	// Prime each session's counter to max(turn_number)+1 so the live trigger
+	// allocates the next number, never a backfilled one. GREATEST guards against
+	// an old pod's trigger-allocated row (if one raced in) already advancing the
+	// counter past the backfill max.
+	{ID: "0092", SQL: `INSERT INTO session_turn_counters (tank_session_id, next_turn_number, updated_at)
+	SELECT tank_session_id, MAX(turn_number) + 1, now()
+	FROM session_turns
+	GROUP BY tank_session_id
+	ON CONFLICT (tank_session_id) DO UPDATE
+	SET next_turn_number = GREATEST(session_turn_counters.next_turn_number, EXCLUDED.next_turn_number),
+		updated_at = now()`},
+
+	{ID: "0093", SQL: `DROP TRIGGER IF EXISTS tank_session_events_allocate_turn_number ON session_events`},
+
+	{ID: "0094", SQL: `CREATE TRIGGER tank_session_events_allocate_turn_number
+		AFTER INSERT ON session_events
+		FOR EACH ROW
+		WHEN (NEW.turn_id IS NOT NULL AND NEW.turn_id <> '')
+		EXECUTE FUNCTION tank_session_events_allocate_turn_number()`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

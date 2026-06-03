@@ -31,14 +31,14 @@ import {
 test("REPO_SLUG_PATTERN accepts canonical owner/name slugs", () => {
   assert.ok(REPO_SLUG_PATTERN.test("romaine-life/tank-operator"));
   assert.ok(REPO_SLUG_PATTERN.test("a/b"));
-  assert.ok(REPO_SLUG_PATTERN.test("nelsong6/mcp.azure-personal"));
+  assert.ok(REPO_SLUG_PATTERN.test("romaine-life/mcp.azure-personal"));
 });
 
 test("REPO_SLUG_PATTERN rejects shell/scheme/path injection", () => {
   assert.ok(!REPO_SLUG_PATTERN.test("https://github.com/romaine-life/tank-operator"));
   assert.ok(!REPO_SLUG_PATTERN.test("../etc/passwd"));
   assert.ok(!REPO_SLUG_PATTERN.test("romaine-life/tank-operator;rm -rf /"));
-  assert.ok(!REPO_SLUG_PATTERN.test("nelsong6"));
+  assert.ok(!REPO_SLUG_PATTERN.test("romaine-life"));
   assert.ok(!REPO_SLUG_PATTERN.test("-org/repo"));
   assert.ok(!REPO_SLUG_PATTERN.test(""));
 });

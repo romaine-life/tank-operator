@@ -157,6 +157,14 @@ var (
 		Help:    "Duration of transcript row materialization checks and backfills.",
 		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30, 60},
 	}, []string{"trigger"})
+	turnNumberResolveTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_turn_number_resolve_total",
+		Help: "Resolutions of a public per-session turn number to its durable turn_id, labeled by bounded result (ok / not_found / invalid).",
+	}, []string{"result"})
+	turnNumberMissingTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_turn_number_missing_total",
+		Help: "Turn-activity shells materialized without a durable session_turns number while numbering is active; nonzero means the allocation trigger regressed or an event bypassed it.",
+	}, []string{"phase"})
 
 	// Provider-credential health: the durable Layer 1 surface for
 	// "Codex / Claude sign-in expired" banners. Replaces the SPA pill
@@ -370,6 +378,38 @@ var serviceRoleRequestsTotal = promauto.NewCounterVec(
 
 func recordServiceRoleRequest(route, result string) {
 	serviceRoleRequestsTotal.WithLabelValues(route, result).Inc()
+}
+
+// sessionImageOverrideAppliedTotal counts NEW session pods stamped with a
+// test-slot session-image override instead of the chart-pinned image, by scope
+// and runner family. This is the user-trust signal for the "did new sessions
+// actually inherit my branch image?" question that prompted the feature: a
+// repoint that never fires shows zero here. Scope cardinality is bounded by the
+// number of live test slots; image_kind is {claude,codex}.
+var sessionImageOverrideAppliedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_image_override_applied_total",
+		Help: "New session pods stamped with a test-slot session-image override, by scope and image kind.",
+	},
+	[]string{"scope", "image_kind"},
+)
+
+func recordSessionImageOverrideApplied(scope, kind string) {
+	sessionImageOverrideAppliedTotal.WithLabelValues(scope, kind).Inc()
+}
+
+// sessionImageOverrideWriteTotal counts writes to the durable per-scope
+// session-image override via the internal endpoint, by action (set|delete).
+var sessionImageOverrideWriteTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_image_override_write_total",
+		Help: "Writes to the durable per-scope session-image override, by action.",
+	},
+	[]string{"action"},
+)
+
+func recordSessionImageOverrideWrite(action string) {
+	sessionImageOverrideWriteTotal.WithLabelValues(action).Inc()
 }
 
 // sessionReposSelectedTotal counts every session-create call by the
@@ -1620,6 +1660,32 @@ func transcriptMaterializationTerminalStatusLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
 	case "completed", "failed", "interrupted":
 		return strings.TrimSpace(raw)
+	default:
+		return "unknown"
+	}
+}
+
+func recordTurnNumberResolve(result string) {
+	turnNumberResolveTotal.WithLabelValues(turnNumberResolveResultLabel(result)).Inc()
+}
+
+func turnNumberResolveResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "not_found", "invalid":
+		return strings.TrimSpace(raw)
+	default:
+		return "unknown"
+	}
+}
+
+func recordTurnNumberMissing(phase string) {
+	turnNumberMissingTotal.WithLabelValues(turnNumberMissingPhaseLabel(phase)).Inc()
+}
+
+func turnNumberMissingPhaseLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "materialize":
+		return "materialize"
 	default:
 		return "unknown"
 	}
