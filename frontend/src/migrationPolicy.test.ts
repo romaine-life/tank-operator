@@ -632,7 +632,7 @@ test("home splash test action stays disabled on the splash page", () => {
 test("pull request composer action persists before a PR URL exists", () => {
   assert.match(appSource, /function ComposerToolButtons\(/);
   assert.match(appSource, /const pullRequestURL = testState\?\.pull_request_url\?\.trim\(\) \|\| "";/);
-  assert.match(appSource, /pullRequestURL \? \([\s\S]*?<DropdownMenuItem asChild className="run-composer-menu-item run-composer-menu-pr is-ready">[\s\S]*?href=\{pullRequestURL\}[\s\S]*?\) : \([\s\S]*?<DropdownMenuItem className="run-composer-menu-item run-composer-menu-pr" disabled>[\s\S]*?No pull request linked yet/);
+  assert.match(appSource, /pullRequestURL \? \([\s\S]*?href=\{pullRequestURL\}[\s\S]*?\) : \([\s\S]*?disabled[\s\S]*?aria-label="Pull request link unavailable"/);
   assert.equal((appSource.match(/pullRequest=\{\{\}\}/g) ?? []).length, 2);
   assert.equal(appSource.includes("testState?.active && testState.pull_request_url"), false);
 });

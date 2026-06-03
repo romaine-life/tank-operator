@@ -33,14 +33,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./components/ui/select";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "./components/ui/dropdown-menu";
 import { AdminAvatarManager } from "./AdminAvatarManager";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
@@ -101,7 +93,6 @@ import {
   MessageSquareIcon,
   MinusIcon,
   MonitorIcon,
-  MoreHorizontalIcon,
   NotebookPenIcon,
   PlayIcon,
   PlusIcon,
@@ -1738,13 +1729,13 @@ interface ComposerToolButtonsProps {
     disabled?: boolean;
     title: string;
     count?: number;
-    onActivate?: () => void;
+    onMouseDown?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   };
   mcp: {
     disabled?: boolean;
     title: string;
     count?: number;
-    onActivate?: () => void;
+    onMouseDown?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   };
   modelChip?: ReactNode;
 }
@@ -1761,9 +1752,6 @@ function ComposerToolButtons({
 }: ComposerToolButtonsProps) {
   const pullRequestURL = pullRequest.url?.trim() || "";
   const testReadyURL = test.readyUrl?.trim() || "";
-  const actionsActive = Boolean(
-    rollout?.active || test.active || testReadyURL || pullRequestURL,
-  );
 
   return (
     <>
@@ -1778,129 +1766,93 @@ function ComposerToolButtons({
         <ImageIcon className="run-composer-icon" aria-hidden="true" />
       </button>
       <ComposerCostEstimate {...cost} />
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            type="button"
-            className={`run-composer-icon-btn run-composer-more-btn${actionsActive ? " is-active" : ""}`}
-            aria-label="More composer actions"
-            title="More actions"
-          >
-            <MoreHorizontalIcon className="run-composer-icon" aria-hidden="true" />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent
-          align="end"
-          side="top"
-          sideOffset={8}
-          className="run-composer-actions-menu"
+      {rollout?.visible && (
+        <button
+          type="button"
+          className={`run-composer-icon-btn run-composer-action-btn run-rollout-action-btn${rollout.active ? " is-active" : ""}`}
+          onClick={rollout.onClick}
+          disabled={rollout.disabled}
+          aria-label="Start rollout"
+          title={rollout.title}
         >
-          <DropdownMenuLabel className="run-composer-menu-label">Actions</DropdownMenuLabel>
-          {rollout?.visible && (
-            <DropdownMenuItem
-              className={`run-composer-menu-item run-composer-menu-rollout${rollout.active ? " is-active" : ""}`}
-              disabled={rollout.disabled}
-              onSelect={() => rollout.onClick?.()}
-            >
-              <TankIcon className="run-composer-menu-icon" />
-              <span className="run-composer-menu-item-main">
-                <span className="run-composer-menu-item-label">Start rollout</span>
-                <span className="run-composer-menu-item-detail">{rollout.title}</span>
-              </span>
-              {rollout.active && <span className="run-composer-menu-status">Active</span>}
-            </DropdownMenuItem>
-          )}
-          {testReadyURL ? (
-            <DropdownMenuItem
-              asChild
-              className={`run-composer-menu-item run-composer-menu-test is-ready${test.active ? " is-active" : ""}`}
-            >
-              <a
-                href={testReadyURL}
-                target="_blank"
-                rel="noreferrer"
-                onClick={test.onReadyClick}
-              >
-                <FlaskConicalIcon className="run-composer-menu-icon" aria-hidden="true" />
-                <span className="run-composer-menu-item-main">
-                  <span className="run-composer-menu-item-label">Open test environment</span>
-                  <span className="run-composer-menu-item-detail">Opens in a new tab</span>
-                </span>
-                <ExternalLinkIcon className="run-composer-menu-link-icon" aria-hidden="true" />
-              </a>
-            </DropdownMenuItem>
-          ) : (
-            <DropdownMenuItem
-              className={`run-composer-menu-item run-composer-menu-test${test.active ? " is-active" : ""}`}
-              disabled={test.disabled}
-              onSelect={() => test.onClick?.()}
-            >
-              <FlaskConicalIcon className="run-composer-menu-icon" aria-hidden="true" />
-              <span className="run-composer-menu-item-main">
-                <span className="run-composer-menu-item-label">Start test skill</span>
-                <span className="run-composer-menu-item-detail">{test.title}</span>
-              </span>
-              {test.active && <span className="run-composer-menu-status">Active</span>}
-            </DropdownMenuItem>
-          )}
-          {pullRequestURL ? (
-            <DropdownMenuItem asChild className="run-composer-menu-item run-composer-menu-pr is-ready">
-              <a href={pullRequestURL} target="_blank" rel="noreferrer">
-                <GitPullRequestIcon className="run-composer-menu-icon" aria-hidden="true" />
-                <span className="run-composer-menu-item-main">
-                  <span className="run-composer-menu-item-label">Open pull request</span>
-                  <span className="run-composer-menu-item-detail">Opens in a new tab</span>
-                </span>
-                <ExternalLinkIcon className="run-composer-menu-link-icon" aria-hidden="true" />
-              </a>
-            </DropdownMenuItem>
-          ) : (
-            <DropdownMenuItem className="run-composer-menu-item run-composer-menu-pr" disabled>
-              <GitPullRequestIcon className="run-composer-menu-icon" aria-hidden="true" />
-              <span className="run-composer-menu-item-main">
-                <span className="run-composer-menu-item-label">Pull request</span>
-                <span className="run-composer-menu-item-detail">No pull request linked yet</span>
-              </span>
-            </DropdownMenuItem>
-          )}
-          <DropdownMenuSeparator className="run-composer-menu-separator" />
-          <DropdownMenuItem
-            className="run-composer-menu-item"
-            disabled={slash.disabled}
-            onSelect={() => slash.onActivate?.()}
-          >
-            <MessageSquareIcon className="run-composer-menu-icon" aria-hidden="true" />
-            <span className="run-composer-menu-item-main">
-              <span className="run-composer-menu-item-label">Slash commands</span>
-              <span className="run-composer-menu-item-detail">{slash.title}</span>
-            </span>
-            {slash.count != null && slash.count > 0 && (
-              <span className="run-composer-menu-count">{slash.count}</span>
-            )}
-          </DropdownMenuItem>
-          <DropdownMenuItem
-            className="run-composer-menu-item"
-            disabled={mcp.disabled}
-            onSelect={() => mcp.onActivate?.()}
-          >
-            <McpIcon className="run-composer-menu-icon" aria-hidden="true" />
-            <span className="run-composer-menu-item-main">
-              <span className="run-composer-menu-item-label">MCP servers</span>
-              <span className="run-composer-menu-item-detail">{mcp.title}</span>
-            </span>
-            {mcp.count != null && mcp.count > 0 && (
-              <span className="run-composer-menu-count">{mcp.count}</span>
-            )}
-          </DropdownMenuItem>
-          {modelChip && (
-            <>
-              <DropdownMenuSeparator className="run-composer-menu-separator" />
-              <DropdownMenuLabel className="run-composer-menu-label">Runtime</DropdownMenuLabel>
-              <div className="run-composer-menu-model">{modelChip}</div>
-            </>
-          )}
-        </DropdownMenuContent>
-      </DropdownMenu>
+          <TankIcon className="run-composer-icon" />
+        </button>
+      )}
+      {testReadyURL ? (
+        <a
+          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn is-ready${test.active ? " is-active" : ""}`}
+          href={testReadyURL}
+          target="_blank"
+          rel="noreferrer"
+          onClick={test.onReadyClick}
+          aria-label="Open test environment in new tab"
+          title="Open test environment in new tab"
+        >
+          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+          <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
+        </a>
+      ) : (
+        <button
+          type="button"
+          className={`run-composer-icon-btn run-composer-action-btn run-test-action-btn${test.active ? " is-active" : ""}`}
+          onClick={test.onClick}
+          disabled={test.disabled}
+          aria-label="Start test skill"
+          title={test.title}
+        >
+          <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
+        </button>
+      )}
+      {pullRequestURL ? (
+        <a
+          className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn is-ready"
+          href={pullRequestURL}
+          target="_blank"
+          rel="noreferrer"
+          aria-label="Open pull request in new tab"
+          title="Open pull request in new tab"
+        >
+          <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+          <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
+        </a>
+      ) : (
+        <button
+          type="button"
+          className="run-composer-icon-btn run-composer-action-btn run-pr-action-btn"
+          disabled
+          aria-label="Pull request link unavailable"
+          title="No pull request linked yet"
+        >
+          <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+        </button>
+      )}
+      <button
+        type="button"
+        className="run-composer-icon-btn run-command-menu-btn"
+        aria-label="Show slash commands"
+        title={slash.title}
+        onMouseDown={slash.onMouseDown}
+        disabled={slash.disabled}
+      >
+        <MessageSquareIcon className="run-composer-icon" aria-hidden="true" />
+        {slash.count != null && slash.count > 0 && (
+          <span className="run-command-menu-count">{slash.count}</span>
+        )}
+      </button>
+      <button
+        type="button"
+        className="run-composer-icon-btn run-command-menu-btn"
+        aria-label="Show MCP servers"
+        title={mcp.title}
+        onMouseDown={mcp.onMouseDown}
+        disabled={mcp.disabled}
+      >
+        <McpIcon className="run-composer-icon" aria-hidden="true" />
+        {mcp.count != null && mcp.count > 0 && (
+          <span className="run-command-menu-count">{mcp.count}</span>
+        )}
+      </button>
+      {modelChip}
     </>
   );
 }
@@ -14014,12 +13966,16 @@ function ChatPane({
               slash={{
                 title: "Show slash commands",
                 count: slashCommands.length,
-                onActivate: openSlashCommandMenu,
+                onMouseDown: (e) => {
+                  e.preventDefault();
+                  openSlashCommandMenu();
+                },
               }}
               mcp={{
                 title: "Show MCP servers",
                 count: mcpServers?.length ?? 0,
-                onActivate: () => {
+                onMouseDown: (e) => {
+                  e.preventDefault();
                   setSlashOpen(false);
                   setMentionOpen(false);
                   setMcpOpen((open) => !open);
