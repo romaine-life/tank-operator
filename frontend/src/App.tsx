@@ -12554,7 +12554,14 @@ function ChatPane({
     if (publicView) return;
     if (!visible || pendingScrollMessageId) return;
     if (activeTab === "turns") {
-      replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber);
+      // While showing the unavailable-target state, leave the URL at the
+      // requested (unresolvable) turn segment instead of rewriting it to the
+      // latest turn. That keeps the unavailable state reload-stable — a refresh
+      // re-shows the explicit "this turn isn't available" view rather than
+      // silently landing on the latest turn.
+      if (!routeTurnUnavailable) {
+        replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber);
+      }
     } else if (activeTab === "settings") {
       replaceAppRoute("settings", settingsTab, adminView);
     } else if (activeTab === "help") {
@@ -12562,7 +12569,7 @@ function ChatPane({
     } else {
       replaceSessionRoute(session.id, "chat");
     }
-  }, [activeTab, adminView, pendingScrollMessageId, publicView, routedSelectedTurnNumber, session.id, settingsTab, visible]);
+  }, [activeTab, adminView, pendingScrollMessageId, publicView, routeTurnUnavailable, routedSelectedTurnNumber, session.id, settingsTab, visible]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
