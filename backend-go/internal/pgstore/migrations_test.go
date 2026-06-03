@@ -101,29 +101,43 @@ func TestAppliedMigration0078ChecksumIsStable(t *testing.T) {
 	t.Fatalf("migration %s not found", id)
 }
 
-func TestAppliedMigration0100LegacyChecksumIsAccepted(t *testing.T) {
-	const (
-		id              = "0100"
-		legacyChecksum  = "306071cc8a62f897ea596b722c484115b537126eb0c570282f1b0df6049a994c"
-		currentChecksum = "389133b9806e223de866d2a336669db41bae3adfbd68612641bbd44e78d43619"
-	)
-
-	for _, m := range schemaMigrations {
-		if m.ID != id {
-			continue
-		}
-		if got := migrationChecksum(m.SQL); got != currentChecksum {
-			t.Fatalf("migration %s checksum = %s, want %s", id, got, currentChecksum)
-		}
-		if !migrationChecksumAccepted(id, legacyChecksum, currentChecksum) {
-			t.Fatalf("migration %s legacy checksum is not accepted", id)
-		}
-		if migrationChecksumAccepted(id, "not-a-real-checksum", currentChecksum) {
-			t.Fatalf("migration %s accepted an unknown checksum", id)
-		}
-		return
+func TestAppliedRuntimeContextLegacyChecksumsAreAccepted(t *testing.T) {
+	cases := []struct {
+		id              string
+		legacyChecksum  string
+		currentChecksum string
+	}{
+		{
+			id:              "0100",
+			legacyChecksum:  "306071cc8a62f897ea596b722c484115b537126eb0c570282f1b0df6049a994c",
+			currentChecksum: "389133b9806e223de866d2a336669db41bae3adfbd68612641bbd44e78d43619",
+		},
+		{
+			id:              "0101",
+			legacyChecksum:  "a3f7260f8d564113d6114c253079a239d11c17c3d1159829253db05fe6e09791",
+			currentChecksum: "3b1bc172b93b24490592e281984ea6b11d4cf6cfa2e5dcd16367506c10be6794",
+		},
 	}
-	t.Fatalf("migration %s not found", id)
+
+	byID := make(map[string]migration, len(schemaMigrations))
+	for _, m := range schemaMigrations {
+		byID[m.ID] = m
+	}
+	for _, tc := range cases {
+		m, ok := byID[tc.id]
+		if !ok {
+			t.Fatalf("migration %s not found", tc.id)
+		}
+		if got := migrationChecksum(m.SQL); got != tc.currentChecksum {
+			t.Fatalf("migration %s checksum = %s, want %s", tc.id, got, tc.currentChecksum)
+		}
+		if !migrationChecksumAccepted(tc.id, tc.legacyChecksum, tc.currentChecksum) {
+			t.Fatalf("migration %s legacy checksum is not accepted", tc.id)
+		}
+		if migrationChecksumAccepted(tc.id, "not-a-real-checksum", tc.currentChecksum) {
+			t.Fatalf("migration %s accepted an unknown checksum", tc.id)
+		}
+	}
 }
 
 func TestRuntimeContextWindowColumnsHaveForwardRepairMigrations(t *testing.T) {
