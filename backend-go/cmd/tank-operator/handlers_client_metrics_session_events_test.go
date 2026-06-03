@@ -90,6 +90,9 @@ func TestSessionEventStreamClientEventLabelClamp(t *testing.T) {
 	if got := sessionEventStreamClientEventLabel("turn_activity_refresh_gave_up"); got != "turn_activity_refresh_gave_up" {
 		t.Fatalf("turn activity refresh label = %q", got)
 	}
+	if got := sessionEventStreamClientEventLabel("turn_number_unavailable_target"); got != "turn_number_unavailable_target" {
+		t.Fatalf("turn number unavailable-target label = %q", got)
+	}
 	if got := sessionEventStreamClientEventLabel("malicious-event-name"); got != "other" {
 		t.Fatalf("unknown event should clamp to other, got %q", got)
 	}

@@ -12497,6 +12497,22 @@ function ChatPane({
     },
     [ensureTurnActivityLoaded, fetchPaneResource, publicView, scopedSessionPathForPane, session.id],
   );
+  // Observe the unavailable-target render once per transition into it, on the
+  // bounded session-event client-events channel (per the transcript-navigation
+  // contract). Covers both the cold-load bad/non-numeric segment and a
+  // resolver miss; the ref de-dupes so a re-render doesn't re-emit.
+  const unavailableTargetLoggedRef = useRef(false);
+  useEffect(() => {
+    if (!routeTurnUnavailable) {
+      unavailableTargetLoggedRef.current = false;
+      return;
+    }
+    if (unavailableTargetLoggedRef.current) return;
+    unavailableTargetLoggedRef.current = true;
+    logSessionEventStreamEvent("turn_number_unavailable_target", {
+      sessionMode: session.mode,
+    });
+  }, [routeTurnUnavailable, session.mode]);
   useEffect(() => {
     if (turnViewItems.length === 0) {
       if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);

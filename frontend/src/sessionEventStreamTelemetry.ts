@@ -32,6 +32,7 @@ export type SessionEventStreamMetricName =
   | "turn_activity_refresh_failed"
   | "turn_activity_refresh_gave_up"
   | "turn_activity_refresh_recovered"
+  | "turn_number_unavailable_target"
   | "resync_required"
   | "stream_error"
   | "closed_unmount"
