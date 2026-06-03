@@ -42,6 +42,14 @@ the rest of the product reconstruct what happened.
 - Runner events must wake transcript and session-list followers after
   persistence.
 - A runner must not require an open browser to continue work.
+- Token usage is durable. Each turn emits cumulative usage on its terminal
+  (for cost) and, where the provider exposes per-call usage, a `turn.usage`
+  snapshot per model call (for live context-window occupancy). Claude reports
+  usage only on the cumulative terminal — whose `input_tokens` is the uncached
+  sliver under always-on prompt caching — so the Claude runner synthesizes a
+  `turn.usage` snapshot from each assistant message's own usage, tagged
+  `usage_source = "claude.message"`, mirroring the Codex
+  `thread.tokenUsage.updated` stream. The terminal carries `claude.result`.
 
 ## Failure And Recovery
 
@@ -64,6 +72,9 @@ the rest of the product reconstruct what happened.
   client delivery.
 - Silent strandings, where a requested action has no terminal event, are a
   counted bug class.
+- A turn that emits assistant messages but no usage snapshot is a regression
+  signature for the context-window gauge; `tank_runner_turn_usage_emitted_total{kind}`
+  counts `snapshot` vs `terminal` usage emissions so the gap is visible.
 
 ## Acceptance Checks
 

@@ -363,3 +363,85 @@ test("adapter maps Claude background task lifecycle to shell task events", () =>
   assert.equal(exited[0]?.payload?.status, "failed");
   assert.equal(exited[0]?.payload?.error, "exit 1");
 });
+
+test("adapter emits a per-message context-occupancy snapshot tagged claude.message", () => {
+  // Claude reports usage only on the cumulative terminal, whose input_tokens
+  // is the tiny uncached sliver. Each assistant message's own usage is the
+  // size of that model call's prompt; the adapter forwards it as a durable
+  // turn.usage snapshot so the context gauge has a per-call signal.
+  const events = canonicalEventsForClaudeMessage(
+    cfg(),
+    turn(),
+    {
+      type: "assistant",
+      uuid: "claude-msg-usage",
+      message: {
+        content: [{ type: "text", text: "done." }],
+        usage: {
+          input_tokens: 4,
+          cache_read_input_tokens: 157_652,
+          cache_creation_input_tokens: 161_334,
+          output_tokens: 5_016,
+        },
+      },
+    },
+    new Set<string>(),
+  );
+
+  const usageEvents = events.filter((event) => event.type === "turn.usage");
+  assert.equal(usageEvents.length, 1);
+  const usageEvent = usageEvents[0]!;
+  assertTankEventFixture(usageEvent);
+  assert.equal(usageEvent.turn_id, "turn-run-123");
+  assert.equal(usageEvent.actor, "runner");
+  assert.equal((usageEvent.payload?.usage as Record<string, unknown>)?.cache_read_input_tokens, 157_652);
+  assert.deepEqual(usageEvent.payload?.usage_observation, {
+    usage_source: "claude.message",
+    terminal_had_usage: false,
+  });
+});
+
+test("adapter emits no usage snapshot when a Claude assistant message carries no usage", () => {
+  const events = canonicalEventsForClaudeMessage(
+    cfg(),
+    turn(),
+    {
+      type: "assistant",
+      uuid: "claude-msg-nousage",
+      message: { content: [{ type: "text", text: "hi" }] },
+    },
+    new Set<string>(),
+  );
+  assert.equal(events.some((event) => event.type === "turn.usage"), false);
+});
+
+test("adapter tags the cumulative Claude result terminal as claude.result", () => {
+  // result.usage is cumulative across the turn; it drives cost, not the
+  // context gauge. The claude.result tag tells the reader to ignore it for
+  // occupancy (so the cumulative cache-read sum is not mistaken for the
+  // live prompt size).
+  const result = canonicalEventsForClaudeMessage(
+    cfg(),
+    turn(),
+    {
+      type: "result",
+      subtype: "success",
+      uuid: "claude-result-usage",
+      usage: {
+        input_tokens: 266,
+        cache_read_input_tokens: 3_219_249,
+        cache_creation_input_tokens: 21_332,
+        output_tokens: 19_380,
+      },
+    },
+    new Set<string>(),
+  );
+  assert.equal(result.length, 1);
+  assertTankEventFixture(result[0]!);
+  assert.equal(result[0]?.type, "turn.completed");
+  assert.equal((result[0]?.payload?.usage as Record<string, unknown>)?.cache_read_input_tokens, 3_219_249);
+  assert.deepEqual(result[0]?.payload?.usage_observation, {
+    usage_source: "claude.result",
+    terminal_had_usage: true,
+  });
+});

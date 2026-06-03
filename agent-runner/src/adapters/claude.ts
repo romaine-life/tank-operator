@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { Config } from "../config.js";
 import type { TankConversationEvent, TankFinalAnswer } from "../../../runner-shared/conversation.js";
 import { itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
-import { itemOutcomeTotal } from "../metrics.js";
+import { itemOutcomeTotal, turnUsageEmittedTotal } from "../metrics.js";
 
 // ClaudeProviderEvent is the runner's view of the raw Claude SDK message
 // shape consumed by this adapter. Kept loose because the adapter has to
@@ -173,6 +173,32 @@ export function canonicalEventsForClaudeMessage(
         providerItemIDs: finalAnswerProviderItemIDs,
       };
     }
+    // Emit a per-message context-occupancy snapshot. Claude reports usage
+    // only on the cumulative terminal (result.usage), whose input_tokens is
+    // the tiny uncached sliver once prompt caching folds the prompt into
+    // cache_read/cache_creation. Each assistant message's own usage is the
+    // size of THAT model call's prompt (input + cache_read + cache_creation),
+    // i.e. the live context-window occupancy at that step. Forwarding it as a
+    // durable turn.usage — tagged claude.message so the reader distinguishes
+    // it from the cumulative claude.result terminal — mirrors the codex
+    // runner's thread.tokenUsage.updated stream and satisfies the transcript
+    // contract's "mid-turn token usage updates are durable turn activity".
+    const messageUsage = claudeMessageUsage(message);
+    if (messageUsage) {
+      events.push(
+        turnEvent({
+          sessionID: cfg.sessionId,
+          turnID: turn.turnID,
+          clientNonce: turn.clientNonce,
+          source: "claude",
+          type: "turn.usage",
+          usage: messageUsage,
+          usageObservation: { usage_source: "claude.message", terminal_had_usage: false },
+          providerEventID: providerID,
+        }),
+      );
+      turnUsageEmittedTotal.labels("snapshot").inc();
+    }
     return events;
   }
   if (message.type === "user") {
@@ -247,6 +273,13 @@ export function canonicalEventsForClaudeMessage(
     if (turn.interrupted && turn.terminalEmitted) return [];
     const failed = message.is_error === true || message.subtype === "error";
     const completed = !turn.interrupted && !failed;
+    // result.usage is CUMULATIVE across the whole turn (it sums cache reads
+    // over every tool-loop iteration), so it is the correct basis for cost
+    // and total-token accounting but NOT for context-window occupancy.
+    // Tag it claude.result so the reader uses it for cost and ignores it for
+    // occupancy (which comes from the per-message claude.message snapshots).
+    const hasUsage = message.usage !== undefined && message.usage !== null;
+    if (hasUsage) turnUsageEmittedTotal.labels("terminal").inc();
     return [
       turnEvent({
         sessionID: cfg.sessionId,
@@ -256,6 +289,9 @@ export function canonicalEventsForClaudeMessage(
         type: turn.interrupted ? "turn.interrupted" : failed ? "turn.failed" : "turn.completed",
         reason: turn.interrupted ? "client_interrupt" : failed ? "provider_failure" : undefined,
         usage: message.usage,
+        usageObservation: hasUsage
+          ? { usage_source: "claude.result", terminal_had_usage: true }
+          : undefined,
         error: failed ? message.result ?? message.error : undefined,
         finalAnswer: completed ? turn.finalAnswer : undefined,
         providerEventID: providerID,
@@ -435,6 +471,23 @@ function claudeMessageContent(message: ClaudeProviderEvent): unknown[] {
     return Array.isArray(content) ? content : [];
   }
   return [];
+}
+
+// claudeMessageUsage returns the per-call usage carried by a Claude
+// `assistant` SDK message (the Anthropic API message object's `usage`),
+// or null when absent/malformed. This is the single model call's usage —
+// distinct from the cumulative `result.usage` on the terminal — so its
+// input + cache_read + cache_creation is the prompt size of that call,
+// i.e. the context-window occupancy at that step.
+function claudeMessageUsage(message: ClaudeProviderEvent): Record<string, unknown> | null {
+  const body = message.message;
+  if (body && typeof body === "object" && "usage" in body) {
+    const usage = (body as { usage?: unknown }).usage;
+    if (usage && typeof usage === "object" && !Array.isArray(usage)) {
+      return usage as Record<string, unknown>;
+    }
+  }
+  return null;
 }
 
 function claudeBlockProviderItemID(args: {

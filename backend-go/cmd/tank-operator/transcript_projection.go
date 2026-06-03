@@ -809,11 +809,21 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 	out["turnTerminalAt"] = terminal.Time
 	out["turnTerminalEventId"] = terminal.SourceEventID
 	out["turnTerminalOrderKey"] = terminal.OrderKey
-	if terminal.Usage != nil {
-		out["turnUsage"] = terminal.Usage
-	}
-	if terminal.UsageObservation != nil {
-		out["usageObservation"] = terminal.UsageObservation
+	// The dedicated turn_usage row owns the live context-occupancy snapshot
+	// (the latest per-message usage). The terminal carries CUMULATIVE usage,
+	// which for Claude is a different quantity — it sums cache reads across
+	// every tool-loop iteration. Overwriting the snapshot with the terminal
+	// here would collapse the context gauge to ~0 once a turn completes and
+	// on every reload. Stamp the terminal markers but leave the snapshot
+	// row's usage payload intact. For Codex the two are the same cumulative
+	// thread usage, so this is a no-op there.
+	if transcriptMapString(entry, "metaKind") != "turn_usage" {
+		if terminal.Usage != nil {
+			out["turnUsage"] = terminal.Usage
+		}
+		if terminal.UsageObservation != nil {
+			out["usageObservation"] = terminal.UsageObservation
+		}
 	}
 	return out
 }
@@ -975,12 +985,22 @@ func turnActivitySummaryMap(activityEntries, compactedEntries []map[string]any, 
 		"errorCount":          0,
 		"active":              active,
 	}
+	var snapshotUsage any
+	var snapshotObservation any
 	for _, entry := range activityEntries {
 		if turnUsage := entry["turnUsage"]; turnUsage != nil {
 			out["turnUsage"] = turnUsage
 		}
 		if usageObservation := entry["usageObservation"]; usageObservation != nil {
 			out["usageObservation"] = usageObservation
+		}
+		if transcriptMapString(entry, "metaKind") == "turn_usage" {
+			if turnUsage := entry["turnUsage"]; turnUsage != nil {
+				snapshotUsage = turnUsage
+			}
+			if usageObservation := entry["usageObservation"]; usageObservation != nil {
+				snapshotObservation = usageObservation
+			}
 		}
 		switch transcriptMapString(entry, "kind") {
 		case "tool":
@@ -1005,6 +1025,22 @@ func turnActivitySummaryMap(activityEntries, compactedEntries []map[string]any, 
 				out["errorCount"] = out["errorCount"].(int) + 1
 			}
 		}
+	}
+	// The activity shell represents the (compacted) turn in the main
+	// transcript, and the composer's context gauge reads occupancy from these
+	// top-level rows. Surface the dedicated turn_usage snapshot (the latest
+	// per-message usage = current context-window occupancy) rather than the
+	// cumulative usage that terminal annotation stamped onto sibling entries:
+	// for Claude the cumulative sum is a different, much larger quantity, and
+	// letting it win here makes a completed turn read ~0 occupancy. For Codex
+	// the snapshot and the terminal are the same cumulative thread usage, so
+	// this is a no-op there. Cost still reads the cumulative usage from the
+	// non-compacted terminal/final-answer entries.
+	if snapshotUsage != nil {
+		out["turnUsage"] = snapshotUsage
+	}
+	if snapshotObservation != nil {
+		out["usageObservation"] = snapshotObservation
 	}
 	if len(activityEntries) > 0 {
 		first := activityEntries[0]
