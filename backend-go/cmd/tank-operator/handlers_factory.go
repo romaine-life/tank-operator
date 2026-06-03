@@ -8,9 +8,9 @@ import (
 	"errors"
 	"net/http"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/profiles"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
 // sessionReader is the minimal interface needed for list/get session handlers.

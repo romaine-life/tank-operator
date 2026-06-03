@@ -13,9 +13,9 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/profiles"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/profiles"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
 type fakeProfileStore struct {
@@ -418,7 +418,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 	login := "octocat"
 	installationID := int64(42)
 	prefs := map[string]any{"chatFontScale": 1.25}
-	pinnedRepos := []string{"nelsong6/tank-operator"}
+	pinnedRepos := []string{"romaine-life/tank-operator"}
 
 	body := userResponseBody("sub-1", "user@example.com", "User Name", "admin", true, profiles.Profile{
 		Email:          "user@example.com",
@@ -439,7 +439,7 @@ func TestUserResponseBodyCarriesProfileFields(t *testing.T) {
 	if got, _ := body["run_prefs"].(map[string]any); got == nil || got["chatFontScale"] != 1.25 {
 		t.Fatalf("run_prefs = %#v", body["run_prefs"])
 	}
-	if got, _ := body["pinned_repos"].([]string); len(got) != 1 || got[0] != "nelsong6/tank-operator" {
+	if got, _ := body["pinned_repos"].([]string); len(got) != 1 || got[0] != "romaine-life/tank-operator" {
 		t.Fatalf("pinned_repos = %#v", body["pinned_repos"])
 	}
 	if body["email"] != "user@example.com" || body["sub"] != "sub-1" || body["name"] != "User Name" || body["role"] != "admin" {

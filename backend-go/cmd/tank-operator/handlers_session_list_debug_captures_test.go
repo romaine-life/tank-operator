@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 )
 
 func TestSessionListDebugCaptureRejectsServicePrincipal(t *testing.T) {

@@ -12,8 +12,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionactivity"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionactivity"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 const (

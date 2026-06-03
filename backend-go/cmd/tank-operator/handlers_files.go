@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessions"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/kubeexec"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
 const (

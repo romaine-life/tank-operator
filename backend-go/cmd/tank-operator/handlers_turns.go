@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/conversation"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionactivity"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionbus"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionactivity"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 

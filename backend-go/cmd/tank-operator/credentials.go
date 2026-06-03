@@ -8,9 +8,9 @@ import (
 	"os"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
-	"github.com/nelsong6/tank-operator/backend-go/internal/keyvault"
-	"github.com/nelsong6/tank-operator/backend-go/internal/kubeexec"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/keyvault"
+	"github.com/romaine-life/tank-operator/backend-go/internal/kubeexec"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 // doSaveCredentials harvests credentials from the pod and stores them in Key Vault.

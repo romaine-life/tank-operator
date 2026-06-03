@@ -8,7 +8,7 @@ func TestProfileFromMapPreservesRunPrefs(t *testing.T) {
 		"installation_id": float64(7),
 		"github_login":    "ghuser",
 		"run_prefs":       map[string]any{"showThinking": false},
-		"pinned_repos":    []any{"nelsong6/tank-operator", "nelsong6/glimmung"},
+		"pinned_repos":    []any{"romaine-life/tank-operator", "romaine-life/glimmung"},
 	}
 	p := profileFromMap(doc)
 	if p.Email != "u@x" {
@@ -23,7 +23,7 @@ func TestProfileFromMapPreservesRunPrefs(t *testing.T) {
 	if p.RunPrefs == nil || p.RunPrefs["showThinking"] != false {
 		t.Fatalf("run_prefs = %#v", p.RunPrefs)
 	}
-	if len(p.PinnedRepos) != 2 || p.PinnedRepos[0] != "nelsong6/tank-operator" || p.PinnedRepos[1] != "nelsong6/glimmung" {
+	if len(p.PinnedRepos) != 2 || p.PinnedRepos[0] != "romaine-life/tank-operator" || p.PinnedRepos[1] != "romaine-life/glimmung" {
 		t.Fatalf("pinned_repos = %#v", p.PinnedRepos)
 	}
 }

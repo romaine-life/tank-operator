@@ -10,10 +10,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionmodel"
-	"github.com/nelsong6/tank-operator/backend-go/internal/sessionstream"
-	"github.com/nelsong6/tank-operator/backend-go/internal/store"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionstream"
+	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
 
 const (
