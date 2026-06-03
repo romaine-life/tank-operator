@@ -117,6 +117,11 @@ func TestAppliedRuntimeContextLegacyChecksumsAreAccepted(t *testing.T) {
 			legacyChecksum:  "a3f7260f8d564113d6114c253079a239d11c17c3d1159829253db05fe6e09791",
 			currentChecksum: "3b1bc172b93b24490592e281984ea6b11d4cf6cfa2e5dcd16367506c10be6794",
 		},
+		{
+			id:              "0102",
+			legacyChecksum:  "3698dba005984cc9317a14fc9b9561ad228d55d5a8950110dc1c9e3fc2ed0bbf",
+			currentChecksum: "e6b3d6ff71d8dbbb9072e0cfab61ed9be113c3a4934896b8a4544bd254ce4b21",
+		},
 	}
 
 	byID := make(map[string]migration, len(schemaMigrations))
