@@ -153,6 +153,48 @@ export function unpinRepoSlug(pinned: readonly string[], slug: string): string[]
   );
 }
 
+// reorderPinnedRepoSlugs moves `sourceSlug` to sit relative to `targetSlug`
+// within the durable pin list, returning the normalized reordered list. This
+// is the pure core of the splash picker's drag-and-drop (and keyboard)
+// reordering: the durable `profiles.pinned_repos text[]` order IS the pin
+// order, so a reorder is just a PUT of the reordered list — there is no
+// separate "order" field and no backend logic change beyond preserving array
+// order through validation (which it already does).
+//
+// The insert is direction-aware so both list ends stay reachable from a single
+// drop target: dragging a slug downward (toward a later index) lands it AFTER
+// the target; dragging upward lands it BEFORE the target. Without this, an
+// "always insert before target" rule could never move an item to the final
+// position by dropping on the last item.
+//
+// Slugs are matched case-insensitively (mirroring isRepoPinned) so the caller
+// can pass whatever casing the rendered chip used. Unknown slugs, equal
+// source/target, or an effective no-op all return the normalized list
+// unchanged, so a stray drag can never corrupt the list.
+export function reorderPinnedRepoSlugs(
+  pinned: readonly string[],
+  sourceSlug: string,
+  targetSlug: string,
+): string[] {
+  const normalized = pinnedRepoSlugs(pinned);
+  const source = sourceSlug.trim().toLowerCase();
+  const target = targetSlug.trim().toLowerCase();
+  if (source === "" || target === "" || source === target) {
+    return normalized;
+  }
+  const fromIndex = normalized.findIndex((s) => s.toLowerCase() === source);
+  const toIndex = normalized.findIndex((s) => s.toLowerCase() === target);
+  if (fromIndex === -1 || toIndex === -1) {
+    return normalized;
+  }
+  const next = [...normalized];
+  const [moved] = next.splice(fromIndex, 1);
+  const targetAfterRemoval = next.findIndex((s) => s.toLowerCase() === target);
+  const insertIndex = targetAfterRemoval + (fromIndex < toIndex ? 1 : 0);
+  next.splice(insertIndex, 0, moved);
+  return next;
+}
+
 // addRepoSlug encapsulates the picker's add-to-staged logic in a pure
 // function. Returns either {ok: true, next: string[]} on a successful
 // add or {ok: false, error: string} with the user-facing reason.

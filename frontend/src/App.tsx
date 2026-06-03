@@ -145,6 +145,7 @@ import {
   isRepoPinned,
   pinRepoSlug,
   pinnedRepoSlugs,
+  reorderPinnedRepoSlugs,
   repoShortcutSlugs,
   removeRepoSlug,
   unpinRepoSlug,
@@ -15063,6 +15064,53 @@ function AuthenticatedApp() {
       });
   }, [pinnedRepos, pinnedReposSaving, applyPinnedReposSnapshot]);
 
+  // Drag-and-drop / keyboard reorder of the durable pin list. The pinned_repos
+  // text[] order IS the pin order (and the splash shortcut order), so a reorder
+  // is the same PUT /api/github/pinned-repos write as a pin/unpin — just with a
+  // reordered list. We optimistically apply the new order for an immediate drag
+  // feel, reconcile against the authoritative PUT response, and revert to the
+  // pre-drag order if the durable write fails so local state never persistently
+  // contradicts the profile row.
+  const reorderPinnedRepo = useCallback(
+    (sourceSlug: string, targetSlug: string) => {
+      if (pinnedReposSaving) return;
+      const current = pinnedRepoSlugs(pinnedRepos);
+      const next = reorderPinnedRepoSlugs(current, sourceSlug, targetSlug);
+      if (stringArraysEqual(current, next)) return;
+      const previous = pinnedRepos;
+      setPinnedRepos(next);
+      setPinnedReposSaving(true);
+      setRepoError(null);
+      void authedFetch("/api/github/pinned-repos", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repos: next }),
+      })
+        .then(async (res) => {
+          const body = (await res.json().catch(() => ({}))) as Partial<PinnedReposResponse> & {
+            detail?: string;
+          };
+          if (!res.ok) {
+            throw new Error(
+              typeof body.detail === "string"
+                ? body.detail
+                : `pin reorder failed: ${res.status}`,
+            );
+          }
+          applyPinnedReposSnapshot(body.repos, body.updated_at);
+        })
+        .catch((e) => {
+          setPinnedRepos(previous);
+          setRepoError(errorMessage(e));
+          setRepoPickerOpen(true);
+        })
+        .finally(() => {
+          setPinnedReposSaving(false);
+        });
+    },
+    [pinnedRepos, pinnedReposSaving, applyPinnedReposSnapshot],
+  );
+
   const selectExclusiveRepo = useCallback((rawSlug: string) => {
     const result = addRepoSlug([], rawSlug);
     if (result.ok) {
@@ -17112,6 +17160,7 @@ function AuthenticatedApp() {
                       }}
                       onSelectExclusive={selectExclusiveRepo}
                       onTogglePin={togglePinnedRepo}
+                      onReorderPin={reorderPinnedRepo}
                       onRemove={(slug) => {
                         setSelectedRepos((prev) => removeRepoSlug(prev, slug));
                         setRepoError(null);

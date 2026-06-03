@@ -524,6 +524,25 @@ test("pinned repo shortcuts converge from the durable profile endpoint", () => {
   assert.match(appSource, /updatedAt < currentVersion/);
 });
 
+test("pin reorder writes through the durable pinned-repos endpoint, not browser-local order", () => {
+  // Drag/keyboard reordering of repo pins is a per-user preference shared
+  // across sessions and devices, so it must persist to profiles.pinned_repos
+  // via the same PUT the pin toggle uses — never a browser-local order key
+  // (the failure mode the retired tank.sessionOrder / tank.homePinnedRepos
+  // keys represented). The order a user drags into is exactly the array PUT.
+  assert.match(appSource, /const reorderPinnedRepo = useCallback\(/);
+  assert.match(appSource, /reorderPinnedRepoSlugs\(current, sourceSlug, targetSlug\)/);
+  assert.match(
+    appSource,
+    /reorderPinnedRepo[\s\S]{0,400}method: "PUT"[\s\S]{0,200}body: JSON\.stringify\(\{ repos: next \}\)/,
+  );
+  // Reorder is wired into the picker through onReorderPin.
+  assert.match(appSource, /onReorderPin=\{reorderPinnedRepo\}/);
+  // No browser-local pin-order shadow is introduced.
+  assert.equal(appSource.includes("tank.homePinnedReposOrder"), false);
+  assert.equal(appSource.includes("writePinnedReposOrder"), false);
+});
+
 test("browser-native protected resources are not loaded with raw API URLs", () => {
   assert.equal(appSource.includes('src={`/api/sessions/${session.id}/files/raw'), false);
   assert.equal(appSource.includes("URL.createObjectURL(blob)"), true);
