@@ -1045,6 +1045,90 @@ func TestEnqueueSessionTurnRejectsMissingSDKRunner(t *testing.T) {
 	}
 }
 
+func TestBackgroundTaskExitContinuationEnqueuesFollowUpForCompletedTurn(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	store := &recordingSessionEventStore{
+		terminalTurns: map[string]map[string]any{
+			"turn-wait_123": {"type": string(conversation.EventTurnCompleted), "turn_id": "turn-wait_123"},
+		},
+	}
+	app.sessionEvents = store
+
+	err := app.handleBackgroundTaskExitContinuation(context.Background(), map[string]any{
+		"event_id":        "turn-wait_123:shell_task:task-ci:exited",
+		"type":            string(conversation.EventShellTaskExited),
+		"source":          string(conversation.SourceClaude),
+		"email":           "user@example.com",
+		"session_id":      "63",
+		"tank_session_id": "default:63",
+		"turn_id":         "turn-wait_123",
+		"task_id":         "task-ci",
+		"payload": map[string]any{
+			"status":         "completed",
+			"summary":        "CI passed",
+			"last_tool_name": "Bash",
+		},
+	})
+	if err != nil {
+		t.Fatalf("handleBackgroundTaskExitContinuation returned error: %v", err)
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	cmd := bus.commands[0]
+	if cmd.Type != sessionbus.CommandSubmitTurn || cmd.Provider != "claude" || cmd.Source != "background-task" || !cmd.FollowUp {
+		t.Fatalf("published command = %#v, want claude background-task follow-up submit_turn", cmd)
+	}
+	if !strings.HasPrefix(cmd.ClientNonce, "background_task-") {
+		t.Fatalf("client_nonce = %q, want background_task- prefix", cmd.ClientNonce)
+	}
+	if !strings.Contains(cmd.Prompt, "task-ci") || !strings.Contains(cmd.Prompt, "CI passed") {
+		t.Fatalf("prompt = %q, want task id and summary", cmd.Prompt)
+	}
+	if len(store.upserts) != 2 {
+		t.Fatalf("session-event upserts = %d, want 2 boundary events", len(store.upserts))
+	}
+	if got, _ := store.upserts[0]["author_kind"].(string); got != string(conversation.AuthorKindSystem) {
+		t.Fatalf("author_kind = %q, want system", got)
+	}
+}
+
+func TestBackgroundTaskExitContinuationSkipsNonCompletedParentTurn(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		terminal map[string]any
+	}{
+		{"no terminal", nil},
+		{"interrupted", map[string]any{"type": string(conversation.EventTurnInterrupted), "turn_id": "turn-wait_123"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bus := &recordingSessionBus{}
+			app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+			app.sessionEvents = &recordingSessionEventStore{
+				terminalTurns: map[string]map[string]any{"turn-wait_123": tc.terminal},
+			}
+
+			err := app.handleBackgroundTaskExitContinuation(context.Background(), map[string]any{
+				"event_id":   "turn-wait_123:shell_task:task-ci:exited",
+				"type":       string(conversation.EventShellTaskExited),
+				"source":     string(conversation.SourceClaude),
+				"email":      "user@example.com",
+				"session_id": "63",
+				"turn_id":    "turn-wait_123",
+				"task_id":    "task-ci",
+				"payload":    map[string]any{"status": "completed"},
+			})
+			if err != nil {
+				t.Fatalf("handleBackgroundTaskExitContinuation returned error: %v", err)
+			}
+			if len(bus.commands) != 0 {
+				t.Fatalf("published commands = %d, want 0", len(bus.commands))
+			}
+		})
+	}
+}
+
 func TestEnqueueSessionTurnValidatesClientNonce(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-66", "66", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))

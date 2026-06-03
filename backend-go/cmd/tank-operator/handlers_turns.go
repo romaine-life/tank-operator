@@ -743,9 +743,9 @@ type sdkTurnRequest struct {
 	// payload.display. The AskUserQuestion answer path sets an
 	// ask_user_answer display; empty for normal turns (derived from
 	// SkillName/text).
-	Display map[string]any
-	CreatedAt          time.Time
-	OrderBase          time.Time
+	Display   map[string]any
+	CreatedAt time.Time
+	OrderBase time.Time
 	// OriginSessionID identifies the sibling tank-operator session that
 	// authored this turn via an MCP handoff, or the source session for a
 	// browser-created fork. Human-typed browser turns leave it empty.
@@ -1026,6 +1026,8 @@ func sdkTurnSource(source string) string {
 	switch strings.TrimSpace(source) {
 	case "schedule-wakeup":
 		return "schedule-wakeup"
+	case "background-task":
+		return "background-task"
 	default:
 		return "sdk"
 	}

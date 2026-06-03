@@ -362,16 +362,6 @@ func main() {
 			Scope:      sessionScope,
 		}
 		activityEmitter = emitter
-		sessionBus.SetLifecycleEmitter(emitter)
-		persisterStore := transcriptMaterializingEventStore{
-			SessionEventStore: sessionEventsStore,
-			materializer:      transcriptMaterializer,
-		}
-		go func() {
-			if err := sessionBus.RunEventPersister(ctx, persisterStore, promPersisterMetrics{}); err != nil {
-				slog.Error("session bus event persister stopped", "error", err)
-			}
-		}()
 	}
 	// Start the K8s watch producer (leader-elected; the follower keeps
 	// a warm k8s client + the SSE handlers stay up). Skipped when the
@@ -505,6 +495,21 @@ func main() {
 	// would make `s.imageOverrides == nil` false and panic on first use).
 	if imageOverrideStore != nil {
 		srv.imageOverrides = imageOverrideStore
+	}
+	if sessionBus != nil && activityEmitter != nil {
+		sessionBus.SetLifecycleEmitter(compositeLifecycleEmitter{emitters: []sessionbus.LifecycleEmitter{
+			activityEmitter,
+			backgroundTaskContinuationEmitter{server: srv},
+		}})
+		persisterStore := transcriptMaterializingEventStore{
+			SessionEventStore: sessionEventsStore,
+			materializer:      transcriptMaterializer,
+		}
+		go func() {
+			if err := sessionBus.RunEventPersister(ctx, persisterStore, promPersisterMetrics{}); err != nil {
+				slog.Error("session bus event persister stopped", "error", err)
+			}
+		}()
 	}
 	if scheduledWakeupStore != nil && sessionBus != nil {
 		go func() {
