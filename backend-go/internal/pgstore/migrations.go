@@ -1253,6 +1253,61 @@ var schemaMigrations = []migration{
 		ON control_action_events (owner_email, session_scope, session_id, created_at DESC)`},
 	{ID: "0105", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_target_created
 		ON control_action_events (source_service, target_kind, target_ref, created_at DESC)`},
+
+	// Durable attachment launches (issue #865). A deferred attachment launch is
+	// no longer a browser-owned, fire-and-forget phase two: the orchestrator
+	// records the pending launch and its staged attachment bytes durably, then a
+	// backend reconciler materializes the bytes into the pod and publishes
+	// submit_turn once the pod is ready. session_pending_launch_turns is the
+	// durable dispatch record; status moves awaiting_bytes -> ready (all bytes
+	// staged) -> claiming -> dispatched, or -> failed. base_prompt/skill/model/
+	// effort are the dispatch parameters the reconciler composes the runnable
+	// turn from; the final workspace paths are stamped in at materialization.
+	{ID: "0106", SQL: `CREATE TABLE IF NOT EXISTS session_pending_launch_turns (
+		tank_session_id   text        NOT NULL,
+		turn_id           text        NOT NULL,
+		session_scope     text        NOT NULL,
+		session_id        text        NOT NULL,
+		client_nonce      text        NOT NULL,
+		owner_email       text        NOT NULL,
+		runtime           text        NOT NULL,
+		skill_name        text        NOT NULL DEFAULT '',
+		base_prompt       text        NOT NULL,
+		display_text      text        NOT NULL DEFAULT '',
+		model             text        NOT NULL DEFAULT '',
+		effort            text        NOT NULL DEFAULT '',
+		attachment_count  integer     NOT NULL DEFAULT 0,
+		status            text        NOT NULL DEFAULT 'awaiting_bytes',
+		attempt_count     integer     NOT NULL DEFAULT 0,
+		last_error        text        NOT NULL DEFAULT '',
+		locked_at         timestamptz,
+		dispatched_turn_id text       NOT NULL DEFAULT '',
+		created_at        timestamptz NOT NULL DEFAULT now(),
+		updated_at        timestamptz NOT NULL DEFAULT now(),
+		dispatched_at     timestamptz,
+		PRIMARY KEY (tank_session_id, turn_id)
+	)`},
+	// Claim index: the reconciler scans for dispatchable launches by scope +
+	// status, oldest first. Partial so it stays a tight working-set index that
+	// never folds dispatched/failed rows.
+	{ID: "0107", SQL: `CREATE INDEX IF NOT EXISTS session_pending_launch_turns_claim
+		ON session_pending_launch_turns (session_scope, status, created_at)
+		WHERE status IN ('awaiting_bytes', 'ready', 'claiming')`},
+	// Staged attachment bytes for a pending launch. bytea is correct here: the
+	// payloads are small (<= maxRawBytes, 8 MiB) and transient — deleted once
+	// the reconciler has written them into the live pod workspace. Durable blob
+	// artifacts that survive pod death are a separate feature (see #865).
+	{ID: "0108", SQL: `CREATE TABLE IF NOT EXISTS session_launch_attachment_blobs (
+		tank_session_id text        NOT NULL,
+		turn_id         text        NOT NULL,
+		ordinal         integer     NOT NULL,
+		name            text        NOT NULL,
+		content_type    text        NOT NULL DEFAULT '',
+		size_bytes      bigint      NOT NULL DEFAULT 0,
+		bytes           bytea       NOT NULL,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (tank_session_id, turn_id, ordinal)
+	)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
