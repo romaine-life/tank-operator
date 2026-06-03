@@ -67,6 +67,7 @@ import {
   providerErrorTotal,
   providerFailureClassTotal,
   providerRateLimitEventTotal,
+  recordTurnPreStartLatency,
   recordTurnStart,
   recordTurnTerminal,
   scheduledWakeupRegisterTotal,
@@ -283,6 +284,8 @@ export interface PendingTurn {
   turnID: string;
   clientNonce: string;
   text: string;
+  commandCreatedAtMs?: number;
+  claimedAtMs?: number;
   started: boolean;
   interrupted: boolean;
   terminalEmitted: boolean;
@@ -939,6 +942,7 @@ export class Runner {
     this.ensureSdkQuery(record);
     pendingTurn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(record);
     this.pendingTurns.push(pendingTurn);
+    await this.publishTurnClaimed(pendingTurn);
     if (pendingTurn.interruptOnStart && pendingTurn.interruptOnStart.length > 0) {
       // The SDK is never fed this turn. Emit turn.interrupted
       // synthetically for each buffered interrupt record (typically
@@ -1365,6 +1369,7 @@ export class Runner {
       turnID: turnIDForClientNonce(clientNonce),
       clientNonce,
       text,
+      commandCreatedAtMs: parseOptionalTimestampMs(commandRecord?.created_at),
       started: false,
       interrupted: false,
       terminalEmitted: false,
@@ -1378,6 +1383,7 @@ export class Runner {
       if (this.activeTurn && !this.activeTurn.started) {
         this.activeTurn.started = true;
         recordTurnStart(this.activeTurn.turnID);
+        recordTurnPreStartLatency("claimed_to_started", this.activeTurn.claimedAtMs);
         await dispatch(
           this.sink,
           turnEvent({
@@ -1391,6 +1397,24 @@ export class Runner {
       }
     }
     return this.activeTurn;
+  }
+
+  private async publishTurnClaimed(turn: PendingTurn): Promise<void> {
+    if (turn.terminalEmitted) return;
+    const claimedAtMs = Date.now();
+    const dispatched = await dispatch(
+      this.sink,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.claimed",
+      }),
+    );
+    if (!dispatched) return;
+    turn.claimedAtMs = claimedAtMs;
+    recordTurnPreStartLatency("command_created_to_claimed", turn.commandCreatedAtMs, claimedAtMs);
   }
 
   // interruptActiveTurn is now only used by the runner-shutdown path
@@ -1545,4 +1569,10 @@ export class Runner {
       await this.markCommandTerminal(pendingTurn, "turn.failed");
     }
   }
+}
+
+function parseOptionalTimestampMs(value: unknown): number | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
 }

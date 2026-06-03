@@ -9778,6 +9778,7 @@ function ChatPane({
     if (!activity) return;
     const sdkActive =
       activity.status === "submitted" ||
+      activity.status === "claimed" ||
       activity.status === "streaming" ||
       activity.status === "needs_input" ||
       activity.status === "stopping";

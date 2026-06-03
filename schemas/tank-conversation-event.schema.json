@@ -105,6 +105,7 @@
       "enum": [
         "user_message.created",
         "turn.submitted",
+        "turn.claimed",
         "turn.started",
         "turn.usage",
         "turn.completed",
@@ -458,7 +459,7 @@
       "if": {
         "properties": {
           "type": {
-            "enum": ["turn.started", "turn.usage", "turn.completed", "turn.failed", "turn.interrupted", "turn.awaiting_input"]
+            "enum": ["turn.claimed", "turn.started", "turn.usage", "turn.completed", "turn.failed", "turn.interrupted", "turn.awaiting_input"]
           }
         },
         "required": ["type"]

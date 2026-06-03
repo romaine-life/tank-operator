@@ -186,6 +186,7 @@ User input:
 Turn lifecycle:
 
 - `turn.submitted`
+- `turn.claimed`
 - `turn.started`
 - `turn.completed`
 - `turn.failed`
@@ -249,20 +250,26 @@ A conversation projection has these UI states:
 Turn transitions:
 
 1. `user_message.created` records the user's input and `client_nonce`.
-2. `turn.submitted` moves the composer to `submitted`.
-3. `turn.started` moves the composer and sidebar to `streaming`.
-4. `turn.awaiting_input` (the AskUserQuestion handoff terminal) ends the
+2. `turn.submitted` moves the composer to `submitted` and must project a
+   visible active Turn activity shell even before provider output exists.
+3. `turn.claimed` means the runner accepted the `submit_turn` command and is
+   about to feed, or has just fed, the provider SDK. It keeps the UI in the
+   submitted/starting state and advances the active shell's durable cursor
+   without becoming a turn boundary.
+4. `turn.started` means provider output has begun; it moves the composer and
+   sidebar to `streaming`.
+5. `turn.awaiting_input` (the AskUserQuestion handoff terminal) ends the
    asking turn and moves the projection to `needs_input` with no active turn,
    until the user answers in a new turn.
-5. `turn.interrupt_requested` moves the projection from `submitted`,
+6. `turn.interrupt_requested` moves the projection from `submitted`,
    `streaming`, or `needs_input` to `stopping`; `activeTurnId` is preserved
    because the turn is still mid-flight. A late-arriving request after a
    terminal event records the chip but does not downgrade the terminal
    state.
-6. `turn.completed` returns to `ready` (also from `stopping` when the stop
+7. `turn.completed` returns to `ready` (also from `stopping` when the stop
    lost the race to a clean completion).
-7. `turn.interrupted` returns to `stopped`.
-8. `turn.failed` returns to `error`.
+8. `turn.interrupted` returns to `stopped`.
+9. `turn.failed` returns to `error`.
 
 `item.*` events update transcript units under a turn. The event type is
 the lifecycle/plumbing axis:
@@ -400,6 +407,7 @@ Claude SDK adapter:
 | Provider event | Tank event | Notes |
 | --- | --- | --- |
 | JetStream `submit_turn` command | `user_message.created`, `turn.submitted` | Backend publishes these events at the submit boundary; runner duplicate publishes are deduped by event id. `client_nonce` is required. |
+| Runner accepts `submit_turn` | `turn.claimed` | Runner-side progress marker. The backend `turn.submitted` row already owns the open boundary; `turn.claimed` exists so pre-provider stalls are visible and measurable. |
 | First SDK output for a turn | `turn.started` | Current Claude SDK stream does not always expose a clean turn marker; adapter may synthesize this after the durable user message. |
 | `assistant` text block | `item.completed` | `actor=assistant`, item kind `message`; tool-use blocks become tool items. |
 | `assistant` tool_use block | `item.started` | `actor=tool`; include tool name/input in payload. |

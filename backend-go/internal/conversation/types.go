@@ -63,6 +63,7 @@ type EventType string
 const (
 	EventUserMessageCreated     EventType = "user_message.created"
 	EventTurnSubmitted          EventType = "turn.submitted"
+	EventTurnClaimed            EventType = "turn.claimed"
 	EventTurnStarted            EventType = "turn.started"
 	EventTurnUsage              EventType = "turn.usage"
 	EventTurnCompleted          EventType = "turn.completed"
@@ -187,7 +188,7 @@ func validateEventMap(event map[string]any) error {
 			return fmt.Errorf("turn.submitted must be actor=runner source=tank")
 		}
 		return requirePayloadString(event, "status")
-	case EventTurnStarted, EventTurnFailed, EventTurnInterrupted:
+	case EventTurnClaimed, EventTurnStarted, EventTurnFailed, EventTurnInterrupted:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
 		}
@@ -715,10 +716,10 @@ func validVisibility(visibility Visibility) bool {
 // it is the open boundary (turn.submitted) or one of the four terminal
 // types. The silent-stranding alert
 // (k8s/templates/observability.yaml → TankTurnSilentStranding) compares
-// the counts of these types, so the set must stay tight: turn.started
-// is intermediate (not a boundary); turn.interrupt_requested is a stop
-// request, not a stop completion; item.* / tool.* / session.* are not
-// turn boundaries. Both the runner-side persister
+// the counts of these types, so the set must stay tight: turn.claimed and
+// turn.started are intermediate progress events (not boundaries);
+// turn.interrupt_requested is a stop request, not a stop completion; item.* /
+// tool.* / session.* are not turn boundaries. Both the runner-side persister
 // (sessionbus.persistOneEvent) and the backend-direct path
 // (cmd/tank-operator.persistBackendEvent) filter on this predicate
 // before incrementing tank_turn_lifecycle_total. See
@@ -750,6 +751,7 @@ func validEventType(eventType EventType) bool {
 	switch eventType {
 	case EventUserMessageCreated,
 		EventTurnSubmitted,
+		EventTurnClaimed,
 		EventTurnStarted,
 		EventTurnUsage,
 		EventTurnCompleted,

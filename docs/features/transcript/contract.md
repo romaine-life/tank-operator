@@ -83,9 +83,11 @@ answer; it must not visibly move a rendered row from one surface to the other.
   context surfaced by the Turn activity disclosure row and the terminal meta
   line, not by expanding child provider rows into the main transcript.
 - A server-projected active `turn_activity` shell owns the visible running
-  placeholder for that turn. The browser must not hide the `...` row while
-  waiting for a separately-delivered activity summary to set the same active
-  turn id.
+  placeholder for that turn. `turn.submitted` alone is enough to project that
+  shell, so the user sees immediate durable progress before provider output or
+  runner-owned `turn.claimed` arrives. The browser must not hide the `...` row
+  while waiting for a separately-delivered activity summary to set the same
+  active turn id.
 - The running placeholder's active state comes from that shell, but its chat
   placement is resolved from durable `order_key`, not from a structural
   "latest row carrying this turnId" rule. The placeholder sorts at the turn's
