@@ -1030,7 +1030,7 @@ var schemaMigrations = []migration{
 
 	// session_turns — durable per-session turn numbers. `turn_id`
 	// (turn_<nonce>) stays the provider-neutral timeline identity that events,
-	// timelines, idempotency, and the activity/interrupt/input-reply APIs key
+	// timelines, idempotency, and the activity/interrupt/answer APIs key
 	// on; turn_number is the human-facing, submission-ordered handle the public
 	// route /sessions/{id}/turns/{n} resolves into, mirroring how
 	// session_counters mints the session's own number. A turn was previously an

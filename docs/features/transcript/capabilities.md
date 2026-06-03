@@ -212,44 +212,47 @@ Evidence:
   loaded Turns detail re-reads `/turns/{id}/activity` after a live
   `transcript_rows` update without using a full page refresh.
 
-## AskUserQuestion Handoff Row
+## AskUserQuestion Card (turn.awaiting_input)
 
 Status: active
 
 Intent:
-Promote a pending AskUserQuestion into the settled main transcript as a
-"Claude is waiting on you" handoff row, so the user sees — in the conversation
-surface they actually read — that the agent paused for input, with a one-click
-path to the question card in Turn activity. The row reflects the durable state
-of the handoff, not local React optimism, so a fresh tab renders the same
-thing.
+When the in-pod agent invokes AskUserQuestion, the asking turn ENDS with a
+durable `turn.awaiting_input` terminal carrying the Tank-canonical questions.
+The transcript projection promotes an interactive question card
+(`metaKind: "awaiting_input"`) into the settled main transcript — the surface
+the user actually reads — and the user answers it in place. The card reflects
+durable state, not local React optimism, so a fresh tab renders the same thing.
 
-The row has three states:
-- waiting — unanswered and the owning turn is still live. The only state that
-  uses the attention-grabbing active accent and the high-emphasis "Open in
-  Turns" CTA.
-- answered — the user submitted an answer (durable `tool.approval_resolved`).
-  Muted "Answered" with a secondary "View in Turns".
-- settled — unanswered, but the owning turn reached a terminal state (the user
-  stopped it, or it failed). Nothing is being waited on, so the row renders
-  muted as "No longer waiting" with a secondary "View in Turns". The function
-  is unchanged — the user can still open the question in Turns; only the visual
-  demand drops.
+Answering is a brand-new turn:
+- The user's selection posts to `POST /turns/{askingTurnId}/answer`, which opens
+  a new durable turn (`user_message.created` with an `ask_user_answer` display
+  + `turn.submitted`). The agent re-reads its own question and the answer from
+  that durable user message under `continue:true`.
+- There is no in-turn tool result and no `input_reply` command; the asking turn
+  is already terminal, so nothing is parked on human-thinking time.
+
+The card has two states:
+- waiting — unanswered. The card surfaces the options (single/multi-select), the
+  always-on free-form textarea when `allowFreeForm` is set, and a Submit button.
+- answered — a later `ask_user_answer` user message references the question
+  (`awaitingInput.answered` is true), or the user just submitted (a local
+  snapshot locks the card for the round-trip). The card renders locked with the
+  user's picks; the answer also appears as the next user-message turn below.
 
 Affected contracts:
 - Transcript
 - Transcript Navigation
 
 Contract impact:
-- The row is a promotion-only projection of the durable AskUserQuestion item;
-  it is not a second ledger and does not relocate a rendered row between the
-  activity/log and settled surfaces.
-- answered/settled state is derived from durable facts (`announcement.answered`
-  from `tool.approval_resolved`, and the owning turn's terminal status), never
-  a local "I submitted / I abandoned" flag, so historical replay matches live.
-- The settled state must not keep the active needs-input accent: an interrupted
-  or failed turn clears the session-level needs-input signal, so the handoff
-  row must visually agree that nothing is pending.
+- The card is a promotion-only projection of the durable `turn.awaiting_input`
+  terminal; it is not a second ledger and does not relocate a rendered row
+  between the activity/log and settled surfaces.
+- `answered` is derived from a durable fact (a later `ask_user_answer` user
+  message whose `display.question_timeline_id` matches), never a local "I
+  submitted" flag, so historical replay matches live.
+- The answer is its own durable turn — copy links, unread counts, and
+  latest-message state target that user message, not the card.
 
 Evidence:
 - `frontend/src/needsInputAnnouncement.ts` is the single state machine shared
@@ -303,3 +306,7 @@ Evidence:
 - Frontend: the composer reads `session.runtime_context_window_tokens`
   (`frontend/src/App.tsx`) as the fraction denominator, with a placeholder when
   it is 0.
+- Required before status active: unit coverage that the projection emits the
+  `awaiting_input` card and marks it answered from a later `ask_user_answer`
+  turn, plus the live pre-deploy-pod gate (Claude AskUserQuestion -> answer ->
+  the answer turn reaches `turn.completed`, not `turn.failed`).

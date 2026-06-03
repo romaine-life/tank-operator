@@ -3,7 +3,6 @@ import { test } from "node:test";
 
 import { reduceConversationEvents } from "./conversationReducer.ts";
 import { projectConversationState } from "./conversationProjection.ts";
-import { needsInputAnnouncementState } from "./needsInputAnnouncement.ts";
 import type { TankConversationEvent } from "../../runner-shared/conversation.js";
 
 function ev(
@@ -772,182 +771,80 @@ test("projects durable skill invocation display metadata", () => {
   }
 });
 
-test("projects durable AskUserQuestion reply targets", () => {
+test("turn.awaiting_input surfaces the live needs-input signal", () => {
+  // The durable awaiting-input card is server-projected (App.tsx renders it
+  // from entry.awaitingInput); the live browser projection only carries the
+  // session-level needs-input signal — there is no tool item or in-turn
+  // approval row anymore.
   const projection = projectConversationState(
     reduceConversationEvents([
       ev("1", "turn.started", { source: "claude", turn_id: "turn-active" }),
-      ev("2", "tool.approval_requested", {
-        actor: "tool",
+      ev("2", "turn.awaiting_input", {
         source: "claude",
         turn_id: "turn-active",
-        timeline_id: "turn-active:item:toolu_ask",
-        provider_item_id: "toolu_ask",
         payload: {
-          kind: "needs_input",
-          name: "AskUserQuestion",
-          input: { question: "Proceed?" },
+          questions: [{ question: "Proceed?" }],
+          provider_item_id: "toolu_ask",
+          timeline_id: "turn-active:item:toolu_ask",
         },
       }),
     ]),
   );
 
-  assert.equal(projection.entries.length, 1);
-  assert.equal(projection.entries[0]?.kind, "tool");
-  if (projection.entries[0]?.kind === "tool") {
-    assert.equal(projection.entries[0].turnId, "turn-active");
-    assert.equal(projection.entries[0].providerItemId, "toolu_ask");
-    assert.equal(projection.entries[0].id, "turn-active:item:toolu_ask");
-  }
+  assert.equal(projection.needsInput, true);
+  assert.equal(projection.runStatus, "needs_input");
 });
 
-test("surfaces durable AskUserQuestion answers on the projected tool entry", () => {
+test("an ask_user_answer answer turn renders as a user message and clears needs-input", () => {
+  // The answer is a brand-new durable turn (POST /answer): a
+  // user_message.created carrying an ask_user_answer display, then
+  // turn.submitted. The live projection renders the answer as the next user
+  // message, and the new turn clears the session-level needs-input signal.
+  // (The durable card's answered-state is derived server-side from this same
+  // ask_user_answer turn.)
   const projection = projectConversationState(
     reduceConversationEvents([
-      ev("1", "turn.started", { source: "claude", turn_id: "turn-active" }),
-      ev("2", "tool.approval_requested", {
-        actor: "tool",
+      ev("1", "turn.awaiting_input", {
         source: "claude",
-        turn_id: "turn-active",
-        timeline_id: "turn-active:item:toolu_ask",
-        provider_item_id: "toolu_ask",
+        turn_id: "turn-1",
         payload: {
-          kind: "needs_input",
-          name: "AskUserQuestion",
-          input: {
-            questions: [
-              {
-                question: "Which features do you want to enable?",
-                header: "Features",
-                multiSelect: true,
-                options: [
-                  { label: "Search", description: "Full-text" },
-                  { label: "Tags", description: "Faceted nav" },
-                  { label: "Notes", description: "Inline notes" },
-                ],
-              },
-            ],
+          questions: [{ question: "Pick one" }],
+          provider_item_id: "toolu_ask",
+          timeline_id: "turn-1:item:toolu_ask",
+        },
+      }),
+      ev("2", "user_message.created", {
+        actor: "user",
+        source: "tank",
+        turn_id: "turn-2",
+        timeline_id: "turn-2:user",
+        client_nonce: "turn-2",
+        payload: {
+          text: "Search",
+          display: {
+            kind: "ask_user_answer",
+            question_timeline_id: "turn-1:item:toolu_ask",
+            asking_turn_id: "turn-1",
+            answers: { "Pick one": ["Search"] },
           },
         },
       }),
-      ev("3", "tool.approval_resolved", {
-        actor: "tool",
-        source: "claude",
-        turn_id: "turn-active",
-        timeline_id: "turn-active:item:toolu_ask",
-        provider_item_id: "toolu_ask",
-        payload: {
-          kind: "needs_input",
-          resolved: true,
-          is_error: false,
-          answers: {
-            "Which features do you want to enable?": ["Search", "Tags"],
-          },
-          annotations: {
-            "Which features do you want to enable?": {
-              notes: "Drop notes for now, we'll revisit",
-            },
-          },
-        },
-      }),
+      ev("3", "turn.submitted", { source: "claude", turn_id: "turn-2", client_nonce: "turn-2" }),
     ]),
   );
 
-  // The projection emits TWO entries per AskUserQuestion item: the
-  // original tool entry (carries the question card UI in Turn activity)
-  // and a meta-kind `needs_input_announcement` row promoted into the
-  // main transcript as a handoff signal. The announcement is companion
-  // to the tool entry, not a replacement; both are sourced from the
-  // same durable AskUserQuestion item and share the underlying answer
-  // state via `askUserAnswers`.
-  assert.equal(projection.entries.length, 2);
-  const toolEntry = projection.entries.find((entry) => entry.kind === "tool");
-  const announcement = projection.entries.find(
-    (entry) => entry.kind === "meta" && entry.metaKind === "needs_input_announcement",
-  );
-  assert.ok(toolEntry, "expected the AskUserQuestion tool entry to be projected");
-  assert.ok(announcement, "expected a needs_input_announcement meta entry to be projected");
-  if (toolEntry?.kind === "tool") {
-    assert.deepEqual(toolEntry.askUserAnswers, {
-      "Which features do you want to enable?": {
-        labels: ["Search", "Tags"],
-        notes: "Drop notes for now, we'll revisit",
-      },
-    });
-  }
-  if (announcement?.kind === "meta") {
-    // The announcement reflects the durable answered state — its title
-    // flips to "Answered" once the matching tool.approval_resolved
-    // lands. The targetTurnId is the only navigation hint the
-    // RunNeedsInputAnnouncement click handler depends on.
-    assert.equal(announcement.announcement?.answered, true);
-    assert.equal(announcement.announcement?.targetTurnId, "turn-active");
-    assert.equal(announcement.meta?.title, "Answered");
-  }
-});
-
-test("interrupted AskUserQuestion announcement carries terminal status so the row settles", () => {
-  // The reported bug: the user declined to answer and stopped the turn. The
-  // question never resolves, but turn.interrupted lands on the same turn.
-  // The announcement entry must therefore stay unanswered AND pick up the
-  // turn's terminal status via annotateTurnTerminals, which is exactly what
-  // the renderer needs to drop the "Claude is waiting on you" active state.
-  const projection = projectConversationState(
-    reduceConversationEvents([
-      ev("1", "turn.started", { source: "claude", turn_id: "turn-active" }),
-      ev("2", "tool.approval_requested", {
-        actor: "tool",
-        source: "claude",
-        turn_id: "turn-active",
-        timeline_id: "turn-active:item:toolu_ask",
-        provider_item_id: "toolu_ask",
-        payload: {
-          kind: "needs_input",
-          name: "AskUserQuestion",
-          input: {
-            questions: [
-              {
-                question: "Where should this \"useful files\" links section live?",
-                header: "Placement",
-                options: [
-                  { label: "Sidebar", description: "Always visible" },
-                  { label: "Footer", description: "Out of the way" },
-                ],
-              },
-            ],
-          },
-        },
-      }),
-      ev("3", "turn.interrupted", {
-        source: "claude",
-        turn_id: "turn-active",
-        payload: { reason: "client_interrupt" },
-      }),
-    ]),
-  );
-
-  // turn.interrupted clears the global needs-input signal — nothing is being
-  // waited on at the session level either.
   assert.equal(projection.needsInput, false);
-
-  const announcement = projection.entries.find(
-    (entry) => entry.kind === "meta" && entry.metaKind === "needs_input_announcement",
+  const answerMsg = projection.entries.find(
+    (entry) => entry.kind === "message" && entry.role === "user",
   );
-  assert.ok(announcement, "expected a needs_input_announcement meta entry to be projected");
-  if (announcement?.kind === "meta") {
-    // Still unanswered (no tool.approval_resolved ever arrived)...
-    assert.equal(announcement.announcement?.answered, false);
-    // ...but the entry now carries the owning turn's terminal status, the
-    // fact the renderer uses to settle the row.
-    assert.equal(announcement.turnTerminalStatus, "interrupted");
-    // The projection's title is still the pre-terminal default; the renderer
-    // overrides it to "No longer waiting" for the settled state.
-    assert.equal(announcement.meta?.title, "Claude is waiting on you");
-    assert.equal(
-      needsInputAnnouncementState({
-        answered: announcement.announcement?.answered ?? false,
-        turnTerminalStatus: announcement.turnTerminalStatus,
-      }),
-      "settled",
-    );
+  assert.ok(answerMsg, "the answer turn should render as a user message");
+  if (answerMsg?.kind === "message") {
+    assert.equal(answerMsg.text, "Search");
   }
 });
+
+// Note: there is no "interrupted while awaiting input" case in the new model —
+// turn.awaiting_input is itself the terminal, so the asking turn has already
+// ended. The durable card is either unanswered (waiting) or answered by a
+// later ask_user_answer turn; see the test above and the server projection
+// (backend transcript_projection_test.go) for the card's answered-state.

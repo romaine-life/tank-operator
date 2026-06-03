@@ -41,6 +41,7 @@ import {
   type TankConversationEvent,
 } from "../../runner-shared/conversation.js";
 import {
+  itemTimelineID,
   stampTankEvent,
   itemEvent,
   shellTaskEvent,
@@ -49,7 +50,6 @@ import {
 } from "../../runner-shared/conversation-builders.js";
 import {
   SessionCommandBus,
-  isInputReplyCommand,
   isInterruptCommand,
   isStopBackgroundTaskCommand,
   commandClientNonce,
@@ -209,6 +209,11 @@ export type AcceptedTurn = CodexAdapterTurn & {
   // counter bucket from terminated_via_sdk (interrupt arrived during
   // an in-flight thread). See romaine-life/tank-operator#532.
   interruptOnStart?: boolean;
+  // Set true when the agent invoked AskUserQuestion: the asking turn ends
+  // with a durable turn.awaiting_input handoff and the codex turn is aborted.
+  // The run-loop catch uses this to skip the interrupt terminal (already
+  // emitted) and the four-outcome counters.
+  awaitingInput?: boolean;
 };
 
 export function threadOptionsForCommand(
@@ -248,67 +253,6 @@ interface OrphanInterrupt {
   // ownership of the ack.
   stopCommandHeartbeat: () => void;
   orphanTimer: ReturnType<typeof setTimeout>;
-}
-
-type PendingUserInput = {
-  request: AppServerUserInputRequest;
-  turn: AcceptedTurn;
-  resolve: (response: AppServerUserInputResponse) => void;
-  reject: (err: Error) => void;
-};
-
-function inputReplyTargetProviderItemID(record: SessionCommandRecord): string {
-  return String(record.target_provider_item_id ?? "").trim();
-}
-
-function inputReplyAnswers(record: SessionCommandRecord): Record<string, string[]> {
-  const raw = record.answers;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out: Record<string, string[]> = {};
-  for (const [question, value] of Object.entries(raw as Record<string, unknown>)) {
-    const trimmedQuestion = String(question).trim();
-    if (!trimmedQuestion || !Array.isArray(value)) continue;
-    const cleaned = value.map((label) => String(label ?? "").trim()).filter(Boolean);
-    if (cleaned.length > 0) out[trimmedQuestion] = cleaned;
-  }
-  return out;
-}
-
-interface InputReplyAnnotation {
-  preview?: string;
-  notes?: string;
-}
-
-function inputReplyAnnotations(
-  record: SessionCommandRecord,
-): Record<string, InputReplyAnnotation> {
-  const raw = record.annotations;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out: Record<string, InputReplyAnnotation> = {};
-  for (const [question, value] of Object.entries(raw as Record<string, unknown>)) {
-    const trimmedQuestion = String(question).trim();
-    if (!trimmedQuestion || !value || typeof value !== "object") continue;
-    const ann = value as { preview?: unknown; notes?: unknown };
-    const cleaned: InputReplyAnnotation = {};
-    if (typeof ann.preview === "string" && ann.preview.trim()) {
-      cleaned.preview = ann.preview.trim();
-    }
-    if (typeof ann.notes === "string" && ann.notes.trim()) {
-      cleaned.notes = ann.notes.trim();
-    }
-    if (cleaned.preview || cleaned.notes) out[trimmedQuestion] = cleaned;
-  }
-  return out;
-}
-
-export function answersForCodexAppServer(
-  labels: string[],
-  annotation?: InputReplyAnnotation,
-): string[] {
-  const trimmedNotes = annotation?.notes?.trim() ?? "";
-  if (!trimmedNotes) return labels;
-  if (labels.length === 1 && labels[0] === "Other") return [trimmedNotes];
-  return [...labels, `Additional context: ${trimmedNotes}`];
 }
 
 // codexQuestionsToTankShape normalizes codex's app-server
@@ -438,7 +382,6 @@ export class Runner {
   // path picks it up.
   private readonly orphanInterrupts: OrphanInterrupt[] = [];
   private readonly pendingCommandTurnTargets = new Set<string>();
-  private readonly pendingUserInputs = new Map<string, PendingUserInput>();
   private turnSeq = 0;
 
   constructor(private readonly cfg: Config) {
@@ -611,6 +554,13 @@ export class Runner {
             }
           }
         } catch (err) {
+          if (turn.awaitingInput) {
+            // The turn already ended via turn.awaiting_input (AskUserQuestion
+            // handoff). The abort that lands here is our own; emit no second
+            // terminal and no interrupt counter.
+            console.info("codex turn ended awaiting input");
+            continue;
+          }
           const interrupted =
             this.currentAbort.signal.aborted && isAbortError(err);
           if (interrupted) {
@@ -714,14 +664,6 @@ export class Runner {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
       .startCommandConsumer(async (record) => {
-        if (isInputReplyCommand(record)) {
-          commandsConsumedTotal.labels("input_reply", "wrong_plane").inc();
-          await this.commandBus.markFailed(
-            record,
-            new Error("input replies must be delivered on the codex control plane"),
-          );
-          return;
-        }
         // Interrupts MUST arrive via startControlConsumer (separate
         // JetStream consumer on the control subject). The data-plane
         // consumer has max_ack_pending=1 by design, so an interrupt
@@ -755,113 +697,42 @@ export class Runner {
 
   private async requestAppServerUserInput(
     request: AppServerUserInputRequest,
-    signal?: AbortSignal,
+    _signal?: AbortSignal,
   ): Promise<AppServerUserInputResponse> {
     const turn = this.currentTurn;
     if (!turn) throw new Error("request_user_input arrived with no active Codex turn");
-    await dispatch(
-      this.sink,
-      itemEvent({
-        sessionID: this.cfg.sessionId,
-        turnID: turn.turnID,
-        source: "codex",
-        type: "tool.approval_requested",
-        providerItemID: request.providerItemID,
-        actor: "tool",
-        providerEventID: request.requestID,
-        payload: {
-          kind: "needs_input",
-          title: "Ask user question",
-          name: "AskUserQuestion",
-          // Provider-specific shape is adapter input; the frontend renders
-          // the Tank conversation protocol. codexQuestionsToTankShape
-          // normalizes codex's `isOther` → `allowFreeForm`, `isSecret` →
-          // `secret`, and a nullable `options` field to an empty array.
-          // Without this, codex's raw question shape (id/isOther/isSecret/
-          // options=null) leaks into the durable event and the frontend
-          // silently drops every flag it does not recognize.
-          input: { questions: codexQuestionsToTankShape(request.questions) },
-        },
-      }),
-    );
-    return new Promise<AppServerUserInputResponse>((resolve, reject) => {
-      const pending: PendingUserInput = { request, turn, resolve, reject };
-      this.pendingUserInputs.set(request.providerItemID, pending);
-      const onAbort = () => {
-        if (this.pendingUserInputs.get(request.providerItemID) !== pending) return;
-        this.pendingUserInputs.delete(request.providerItemID);
-        reject(new Error("turn interrupted"));
-      };
-      signal?.addEventListener("abort", onAbort, { once: true });
-    });
+    // The agent asked the user a question: end the asking turn with a durable
+    // turn.awaiting_input handoff carrying the Tank-canonical questions, then
+    // abort the codex turn. The user's answer arrives later as a brand-new
+    // turn via POST /turns/{id}/answer — there is no in-turn answer. We
+    // respond to the app-server request with empty answers only to release
+    // its JSONRPC promise; the abort is what stops the turn.
+    await this.endTurnAwaitingInput(turn, request);
+    this.currentAbort?.abort();
+    return { answers: {} };
   }
 
-  private async acceptInputReply(record: SessionCommandRecord): Promise<void> {
-    if (!this.appServerTransport) {
-      commandsConsumedTotal.labels("input_reply", "unsupported").inc();
-      await this.commandBus.markFailed(
-        record,
-        new Error("input replies are only supported by codex app-server transport"),
-      );
-      return;
-    }
-    commandsConsumedTotal.labels("input_reply", "accepted").inc();
-    const providerItemID = inputReplyTargetProviderItemID(record);
-    const answers = inputReplyAnswers(record);
-    if (!providerItemID || Object.keys(answers).length === 0) {
-      commandsConsumedTotal.labels("input_reply", "invalid").inc();
-      await this.commandBus.markFailed(record, new Error("input reply missing target or answers"));
-      return;
-    }
-    const pending = this.pendingUserInputs.get(providerItemID);
-    if (!pending) {
-      commandsConsumedTotal.labels("input_reply", "not_waiting_for_input").inc();
-      await this.commandBus.markFailed(record, new Error("input reply target is not waiting for input"));
-      return;
-    }
-    if (
-      !this.currentTurn ||
-      !interruptTargetMatchesTurn(record.target_turn_id || record.client_nonce || "", pending.turn)
-    ) {
-      commandsConsumedTotal.labels("input_reply", "no_active_turn").inc();
-      await this.commandBus.markFailed(record, new Error("input reply target turn is not active"));
-      return;
-    }
-    this.pendingUserInputs.delete(providerItemID);
-    const annotations = inputReplyAnnotations(record);
-    const answersByQuestionID: Record<string, { answers: string[] }> = {};
-    for (const question of pending.request.questions) {
-      const labels = answers[question.question] ?? answers[question.id];
-      if (labels && labels.length > 0) {
-        answersByQuestionID[question.id] = {
-          answers: answersForCodexAppServer(
-            labels,
-            annotations[question.question] ?? annotations[question.id],
-          ),
-        };
-      }
-    }
-    pending.resolve({ answers: answersByQuestionID });
-    const dispatched = await dispatch(
-      this.sink,
-      itemEvent({
+  private async endTurnAwaitingInput(
+    turn: AcceptedTurn,
+    request: AppServerUserInputRequest,
+  ): Promise<void> {
+    if (turn.awaitingInput) return;
+    turn.awaitingInput = true;
+    const timelineID = itemTimelineID(turn.turnID, request.providerItemID);
+    const published = await this.publishTerminalWithRetry(
+      turnEvent({
         sessionID: this.cfg.sessionId,
-        turnID: pending.turn.turnID,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
         source: "codex",
-        type: "tool.approval_resolved",
-        providerItemID,
-        actor: "tool",
-        providerEventID: pending.request.requestID,
-        payload: {
-          kind: "needs_input",
-          resolved: true,
-          answers,
-          ...(Object.keys(annotations).length > 0 ? { annotations } : {}),
-        },
+        type: "turn.awaiting_input",
+        questions: codexQuestionsToTankShape(request.questions),
+        awaitingProviderItemID: request.providerItemID,
+        awaitingTimelineID: timelineID,
       }),
     );
-    if (dispatched) {
-      await this.commandBus.markCompleted(record);
+    if (published) {
+      await this.markCommandTerminal(turn, "turn.awaiting_input");
     }
   }
 
@@ -923,16 +794,12 @@ export class Runner {
   }
 
   // startControlConsumer drives the control-plane JetStream consumer.
-  // Today: interrupt_turn, input_reply, and background task stop. Future
-  // control signals land here as added branches, never on the data-plane consumer.
+  // Today: interrupt_turn and background task stop. Future control signals
+  // land here as added branches, never on the data-plane consumer.
   private startControlConsumer(signal: AbortSignal): () => void {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
       .startControlConsumer(async (record) => {
-        if (isInputReplyCommand(record)) {
-          await this.acceptInputReply(record);
-          return;
-        }
         if (isInterruptCommand(record)) {
           commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
           await this.acceptInterrupt(record);
@@ -1172,9 +1039,16 @@ export class Runner {
 
   private async markCommandTerminal(
     turn: AcceptedTurn,
-    type: "turn.completed" | "turn.failed" | "turn.interrupted",
+    type: "turn.completed" | "turn.failed" | "turn.interrupted" | "turn.awaiting_input",
   ): Promise<void> {
-    const outcome = type === "turn.completed" ? "completed" : type === "turn.failed" ? "failed" : "interrupted";
+    const outcome =
+      type === "turn.completed"
+        ? "completed"
+        : type === "turn.failed"
+          ? "failed"
+          : type === "turn.awaiting_input"
+            ? "awaiting_input"
+            : "interrupted";
     recordTurnTerminal(turn.turnID, outcome);
     turn.stopCommandHeartbeat?.();
     turn.stopCommandHeartbeat = undefined;

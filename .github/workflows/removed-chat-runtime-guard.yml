@@ -59,3 +59,10 @@ jobs:
 
       - name: Check context-window-table migration
         run: node scripts/check-context-window-table-migration.mjs
+      # The retired in-turn AskUserQuestion model (the reply command, the
+      # tool-approval events, the canUseTool answer injection, the needs-input
+      # announcement row) is a removed chat-runtime surface: the answer is now
+      # a brand-new turn (turn.awaiting_input terminal + POST /turns/{id}/answer).
+      # This guard fails if any of it returns.
+      - name: Check AskUserQuestion in-turn surfaces stay removed
+        run: node scripts/check-askuserquestion-migration.mjs

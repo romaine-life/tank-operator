@@ -38,8 +38,7 @@ export const TANK_EVENT_TYPES = [
   "shell_task.started",
   "shell_task.updated",
   "shell_task.exited",
-  "tool.approval_requested",
-  "tool.approval_resolved",
+  "turn.awaiting_input",
 ];
 
 const TANK_EVENT_TYPE_SET = new Set(TANK_EVENT_TYPES);
@@ -136,12 +135,10 @@ function isValidEventByType(event) {
       return event.actor === "tool" &&
         hasStrings(event, ["turn_id", "timeline_id"]) &&
         isShellTaskPayload(event.payload);
-    case "tool.approval_requested":
-    case "tool.approval_resolved":
-      return event.actor === "tool" &&
-        hasStrings(event, ["turn_id", "timeline_id"]) &&
-        isStringPayload(event.payload, "kind") &&
-        isItemOutcome(event.payload.outcome);
+    case "turn.awaiting_input":
+      return event.actor === "runner" &&
+        hasStrings(event, ["turn_id"]) &&
+        isAwaitingInputPayload(event.payload);
     default:
       return false;
   }
@@ -165,6 +162,9 @@ function isUserMessagePayload(payload) {
 function isUserMessageDisplay(display) {
   if (!display || typeof display !== "object" || Array.isArray(display)) return false;
   if (display.kind === "plain") return true;
+  if (display.kind === "ask_user_answer") {
+    return typeof display.question_timeline_id === "string" && display.question_timeline_id.length > 0;
+  }
   return display.kind === "skill_invocation" &&
     isSkillName(display.skill_name) &&
     (display.supplemental_text === undefined || typeof display.supplemental_text === "string");
@@ -248,6 +248,17 @@ function isShellTaskPayload(payload) {
     payload.task_id.length > 0 &&
     typeof payload.status === "string" &&
     payload.status.length > 0;
+}
+
+function isAwaitingInputPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  return Array.isArray(payload.questions) &&
+    payload.questions.length > 0 &&
+    payload.questions.every(
+      (q) =>
+        q && typeof q === "object" && !Array.isArray(q) &&
+        typeof q.question === "string" && q.question.length > 0,
+    );
 }
 
 function isSkillName(value) {

@@ -49,22 +49,10 @@ export function startsClaudeTurn(event: ClaudeProviderEvent): boolean {
   return event.type === "assistant" || event.type === "user" || event.type === "result";
 }
 
-// ResolvedInputReply is the payload that resolved an AskUserQuestion via
-// the durable `input_reply` JetStream command. The runner stashes one
-// entry per resolved tool_use; this adapter drains and inlines them into
-// `tool.approval_resolved` payloads so durable replay carries the user's
-// selections. Empty maps are dropped from the emitted event.
-export interface ResolvedInputReply {
-  answers: Record<string, string[]>;
-  annotations: Record<string, { preview?: string; notes?: string }>;
-}
-
 export function canonicalEventsForClaudeMessage(
   cfg: Config,
   turn: ClaudeTurnContext | null,
   message: ClaudeProviderEvent,
-  needsInputProviderItemIDs: Set<string>,
-  resolvedInputReplies?: Map<string, ResolvedInputReply>,
 ): TankConversationEvent[] {
   if (!turn) return [];
   const providerID = providerEventID(message);
@@ -136,46 +124,27 @@ export function canonicalEventsForClaudeMessage(
                 block: item,
               });
         const name = typeof item.name === "string" ? item.name : "tool";
-        events.push(
-          itemEvent({
-            sessionID: cfg.sessionId,
-            turnID: turn.turnID,
-            source: "claude",
-            type: "item.started",
-            providerItemID,
-            actor: "tool",
-            providerEventID: providerID,
-            payload: {
-              kind: "tool",
-              title: name,
-              name,
-              input: item.input,
-            },
-          }),
-        );
-        if (name === "AskUserQuestion") {
-          needsInputProviderItemIDs.add(providerItemID);
+        // AskUserQuestion produces no item events. The runner's canUseTool
+        // ends the asking turn with a durable turn.awaiting_input handoff
+        // carrying the Tank-canonical questions (claudeQuestionsToTankShape);
+        // the transcript renders the question card from that terminal, so
+        // there is no dangling "started" tool item on a settled turn.
+        // (Previously this emitted item.started plus an in-turn approval-request event.)
+        if (name !== "AskUserQuestion") {
           events.push(
             itemEvent({
               sessionID: cfg.sessionId,
               turnID: turn.turnID,
               source: "claude",
-              type: "tool.approval_requested",
+              type: "item.started",
               providerItemID,
               actor: "tool",
               providerEventID: providerID,
               payload: {
-                kind: "needs_input",
-                title: "Ask user question",
+                kind: "tool",
+                title: name,
                 name,
-                // The provider's question shape is adapter input; the
-                // frontend renders the Tank conversation protocol shape.
-                // claudeQuestionsToTankShape sets allowFreeForm=true on
-                // every question — Claude Code's native host UI always
-                // offers an "Other / say something else" affordance, so
-                // the Tank shape mirrors that semantic regardless of
-                // whether the SDK input exposed an explicit flag.
-                input: { questions: claudeQuestionsToTankShape(item.input) },
+                input: item.input,
               },
             }),
           );
@@ -255,39 +224,14 @@ export function canonicalEventsForClaudeMessage(
           outcome,
         },
       });
-      if (!needsInputProviderItemIDs.has(providerItemID)) return [completed];
-      needsInputProviderItemIDs.delete(providerItemID);
-      const resolved = resolvedInputReplies?.get(providerItemID);
-      resolvedInputReplies?.delete(providerItemID);
-      const approvalPayload: Record<string, unknown> = {
-        kind: "needs_input",
-        resolved: true,
-        is_error: failed,
-        outcome,
-      };
-      if (resolved && Object.keys(resolved.answers).length > 0) {
-        approvalPayload.answers = resolved.answers;
-      }
-      if (resolved && Object.keys(resolved.annotations).length > 0) {
-        approvalPayload.annotations = resolved.annotations;
-      }
-      return [
-        completed,
-        itemEvent({
-          sessionID: cfg.sessionId,
-          turnID: turn.turnID,
-          source: "claude",
-          type: "tool.approval_resolved",
-          providerItemID,
-          actor: "tool",
-          providerEventID: providerID,
-          payload: approvalPayload,
-        }),
-      ];
+      return [completed];
     });
   }
   if (message.type === "result") {
-    if (turn.interrupted && turn.terminalEmitted) return [];
+    // If the runner already published a terminal for this turn — a Stop
+    // interrupt or an AskUserQuestion turn.awaiting_input handoff — swallow
+    // the SDK's (interrupted) result so we don't emit a second terminal.
+    if (turn.terminalEmitted) return [];
     const failed = message.is_error === true || message.subtype === "error";
     const completed = !turn.interrupted && !failed;
     // result.usage is CUMULATIVE across the whole turn (it sums cache reads

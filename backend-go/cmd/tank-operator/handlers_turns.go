@@ -2,11 +2,14 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -20,7 +23,7 @@ import (
 
 const (
 	maxSDKTurnPromptBytes = 256 * 1024
-	maxSDKInputReplyBytes = 64 * 1024
+	maxSDKAnswerBytes     = 64 * 1024
 )
 
 // persistBackendEvent writes a backend-owned Tank conversation event
@@ -55,7 +58,7 @@ func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, 
 	// five bounding types after the durable write commits. The
 	// backend-direct path writes user_message.created + turn.submitted
 	// here at submit time, and the various turn.command_failed events on
-	// the interrupt / input-reply / stop-background paths. Pairs with
+	// the interrupt / answer / stop-background paths. Pairs with
 	// the same call inside sessionbus.persistOneEvent so the signal
 	// works regardless of which path wrote the row. Filter on
 	// IsTurnLifecycleEvent at the call boundary so the helper just
@@ -349,19 +352,27 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 	})
 }
 
-// inputReplyRequest is the JSON body shape accepted by
-// `POST /api/sessions/{session_id}/turns/{turn_id}/input-reply`.
+// answerRequest is the JSON body shape accepted by
+// `POST /api/sessions/{session_id}/turns/{turn_id}/answer`, where {turn_id}
+// is the AskUserQuestion handoff turn that ended with turn.awaiting_input.
 //
 // `answers` is `{questionText: answerLabel[]}` — always a slice so
-// single-select and multi-select questions share one shape. The runner
-// joins multi-element slices with ", " at the SDK boundary to match the
-// Claude Agent SDK's AskUserQuestion zod preprocess. `annotations` is
-// optional `{questionText: {preview?, notes?}}` from the SDK schema.
-type inputReplyRequest struct {
-	ProviderItemID string                                     `json:"provider_item_id"`
-	TimelineID     string                                     `json:"timeline_id"`
-	Answers        map[string][]string                        `json:"answers"`
-	Annotations    map[string]sessionbus.InputReplyAnnotation `json:"annotations,omitempty"`
+// single-select and multi-select questions share one shape. `annotations`
+// is optional `{questionText: {preview?, notes?}}` carrying any free-form
+// the user attached. The handler turns these into a brand-new durable
+// answer turn, not an in-turn tool result.
+type answerRequest struct {
+	ProviderItemID string                      `json:"provider_item_id"`
+	TimelineID     string                      `json:"timeline_id"`
+	Answers        map[string][]string         `json:"answers"`
+	Annotations    map[string]answerAnnotation `json:"annotations,omitempty"`
+}
+
+// answerAnnotation carries optional preview/notes the user attached to a
+// selected option, keyed by question text in answerRequest.Annotations.
+type answerAnnotation struct {
+	Preview string `json:"preview,omitempty"`
+	Notes   string `json:"notes,omitempty"`
 }
 
 type stopBackgroundTaskRequest struct {
@@ -455,19 +466,25 @@ func (s *appServer) handleStopBackgroundTask(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.Request) {
+// handleAnswerSessionTurn answers an AskUserQuestion handoff. The agent's
+// question ended its turn with a durable turn.awaiting_input terminal; the
+// user's selection becomes a brand-new durable turn whose prompt re-grounds
+// the agent on the question and the chosen answer. There is no in-turn tool
+// result and no input_reply command — the answer rides the normal submit_turn
+// path. See docs/tank-conversation-protocol.md → "AskUserQuestion".
+func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	targetTurnID := strings.TrimSpace(r.PathValue("turn_id"))
-	if sessionID == "" || targetTurnID == "" || !turnIDPattern.MatchString(targetTurnID) {
+	askingTurnID := strings.TrimSpace(r.PathValue("turn_id"))
+	if sessionID == "" || askingTurnID == "" || !turnIDPattern.MatchString(askingTurnID) {
 		writeError(w, http.StatusBadRequest, "turn_id is required and must match turn id syntax")
 		return
 	}
 
-	var body inputReplyRequest
+	var body answerRequest
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
@@ -478,20 +495,14 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "provider_item_id and timeline_id are required")
 		return
 	}
-
-	// Validate the answers payload up front: at least one question with
-	// at least one non-empty label. This catches empty submits before
-	// they hit JetStream and matches the SDK's zod schema rejecting
-	// empty answer maps.
-	answers := normalizeInputReplyAnswers(body.Answers)
+	answers := normalizeAnswers(body.Answers)
 	if len(answers) == 0 {
 		writeError(w, http.StatusBadRequest, "answers must contain at least one non-empty selection")
 		return
 	}
-	annotations := normalizeInputReplyAnnotations(body.Annotations)
-
-	if size := inputReplyPayloadSize(answers, annotations); size > maxSDKInputReplyBytes {
-		writeError(w, http.StatusBadRequest, "input reply too large")
+	annotations := normalizeAnswerAnnotations(body.Annotations)
+	if answerPayloadSize(answers, annotations) > maxSDKAnswerBytes {
+		writeError(w, http.StatusBadRequest, "answer too large")
 		return
 	}
 
@@ -501,68 +512,61 @@ func (s *appServer) handleInputReplySessionTurn(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	normalizedMode := sessionmodel.NormalizeSessionMode(info.Mode)
-	if normalizedMode != sessionmodel.ClaudeGUIMode && normalizedMode != sessionmodel.CodexGUIMode && normalizedMode != sessionmodel.CodexAppServerMode {
-		writeError(w, http.StatusBadRequest, "input replies are only supported for Claude GUI and Codex app-server transport sessions")
+	if _, ok := sdkProviderForMode(info.Mode); !ok {
+		writeError(w, http.StatusBadRequest, "session mode does not support app chat turns")
 		return
 	}
-	provider := "claude"
-	if normalizedMode == sessionmodel.CodexGUIMode || normalizedMode == sessionmodel.CodexAppServerMode {
-		provider = "codex"
-	}
-	if s.sessionBus == nil {
-		writeError(w, http.StatusServiceUnavailable, "session bus unavailable")
+	if s.sessionEvents == nil {
+		writeError(w, http.StatusServiceUnavailable, "session event store unavailable")
 		return
 	}
 
 	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
-	inputReplyTurnID := "input_reply_" + auth.RandomHex(12)
-	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
-		CommandID:            "input-reply:" + targetTurnID + ":" + auth.RandomHex(12),
-		Type:                 sessionbus.CommandInputReply,
-		SessionID:            sessionID,
-		SessionStorageKey:    storageKey,
-		Email:                owner,
-		Provider:             provider,
-		Source:               "input-reply",
-		TurnID:               inputReplyTurnID,
-		ClientNonce:          targetTurnID,
-		TargetTurnID:         targetTurnID,
-		TargetTimelineID:     timelineID,
-		TargetProviderItemID: providerItemID,
-		Answers:              answers,
-		Annotations:          annotations,
-		CreatedAt:            time.Now().UTC().Format(time.RFC3339Nano),
-	}); err != nil {
-		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
-			SessionID:         sessionID,
-			SessionStorageKey: storageKey,
-			Email:             owner,
-			TurnID:            inputReplyTurnID,
-			ClientNonce:       targetTurnID,
-			Runtime:           provider,
-			Reason:            "publish_input_reply_failed: " + err.Error(),
-			Now:               time.Now().UTC(),
-		})
-		if writeErr := s.persistBackendEvent(r.Context(), storageKey, failedEvent); writeErr != nil {
-			slog.Warn("persist turn.command_failed for input reply",
-				"session_id", sessionID, "target_turn_id", targetTurnID, "error", writeErr)
-		}
-		writeError(w, http.StatusInternalServerError, "publish input reply: "+err.Error())
+
+	// The asking turn must have ended awaiting input. Reading the durable
+	// terminal rejects an answer to a turn that completed/failed or was never
+	// an AskUserQuestion handoff (e.g. codex_exec_gui, which never produces
+	// turn.awaiting_input). A double-submit of the same answer is deduped by
+	// the deterministic client_nonce below, so the answered card cannot
+	// open two answer turns.
+	terminal, err := s.sessionEvents.FindTurnTerminal(r.Context(), storageKey, askingTurnID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "lookup asking turn: "+err.Error())
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]string{
-		"status":                  "accepted",
-		"target_turn_id":          targetTurnID,
-		"target_timeline_id":      timelineID,
-		"target_provider_item_id": providerItemID,
+	if terminal == nil || stringMapField(terminal, "type") != string(conversation.EventTurnAwaitingInput) {
+		writeError(w, http.StatusConflict, "asking turn is not awaiting input")
+		return
+	}
+
+	prompt := buildAnswerPrompt(awaitingInputQuestionList(terminal), answers, annotations)
+	display := conversation.AskUserAnswerDisplay(timelineID, askingTurnID, answers, annotationsToDisplayMap(annotations))
+
+	// Deterministic client_nonce so a double-submit of the same answer
+	// dedupes at the session_events (tank_session_id, event_id) UNIQUE
+	// constraint — the asking turn is answered exactly once, first write wins.
+	sum := sha256.Sum256([]byte(askingTurnID + "\x00" + timelineID))
+	clientNonce := "answer-" + hex.EncodeToString(sum[:])[:24]
+
+	resp, status, detail := s.enqueueSDKTurn(r.Context(), owner, sessionID, sdkTurnRequest{
+		ClientNonce:  clientNonce,
+		RequireNonce: true,
+		Prompt:       prompt,
+		DisplayText:  answerSummary(answers),
+		Display:      display,
+		FollowUp:     true,
 	})
+	if detail != "" {
+		writeError(w, status, detail)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, resp)
 }
 
-// normalizeInputReplyAnswers trims each question/label pair and drops
-// empties. Returns nil for "no usable answers" so the caller's `len() == 0`
-// check handles the rejection in one place.
-func normalizeInputReplyAnswers(in map[string][]string) map[string][]string {
+// normalizeAnswers trims each question/label pair and drops empties. Returns
+// nil for "no usable answers" so the caller's `len() == 0` check handles the
+// rejection in one place.
+func normalizeAnswers(in map[string][]string) map[string][]string {
 	if len(in) == 0 {
 		return nil
 	}
@@ -574,8 +578,7 @@ func normalizeInputReplyAnswers(in map[string][]string) map[string][]string {
 		}
 		cleaned := make([]string, 0, len(labels))
 		for _, label := range labels {
-			trimmed := strings.TrimSpace(label)
-			if trimmed != "" {
+			if trimmed := strings.TrimSpace(label); trimmed != "" {
 				cleaned = append(cleaned, trimmed)
 			}
 		}
@@ -589,20 +592,17 @@ func normalizeInputReplyAnswers(in map[string][]string) map[string][]string {
 	return out
 }
 
-func normalizeInputReplyAnnotations(in map[string]sessionbus.InputReplyAnnotation) map[string]sessionbus.InputReplyAnnotation {
+func normalizeAnswerAnnotations(in map[string]answerAnnotation) map[string]answerAnnotation {
 	if len(in) == 0 {
 		return nil
 	}
-	out := make(map[string]sessionbus.InputReplyAnnotation, len(in))
+	out := make(map[string]answerAnnotation, len(in))
 	for question, ann := range in {
 		trimmedQuestion := strings.TrimSpace(question)
 		if trimmedQuestion == "" {
 			continue
 		}
-		cleaned := sessionbus.InputReplyAnnotation{
-			Preview: strings.TrimSpace(ann.Preview),
-			Notes:   strings.TrimSpace(ann.Notes),
-		}
+		cleaned := answerAnnotation{Preview: strings.TrimSpace(ann.Preview), Notes: strings.TrimSpace(ann.Notes)}
 		if cleaned.Preview != "" || cleaned.Notes != "" {
 			out[trimmedQuestion] = cleaned
 		}
@@ -613,10 +613,10 @@ func normalizeInputReplyAnnotations(in map[string]sessionbus.InputReplyAnnotatio
 	return out
 }
 
-// inputReplyPayloadSize sums the answers + annotations bytes against
-// maxSDKInputReplyBytes. The cap is intentionally generous (64 KiB)
-// because previews can carry HTML fragments per the SDK schema.
-func inputReplyPayloadSize(answers map[string][]string, annotations map[string]sessionbus.InputReplyAnnotation) int {
+// answerPayloadSize sums the answers + annotations bytes against
+// maxSDKAnswerBytes. The cap is intentionally generous (64 KiB) because
+// previews can carry HTML fragments per the SDK schema.
+func answerPayloadSize(answers map[string][]string, annotations map[string]answerAnnotation) int {
 	total := 0
 	for question, labels := range answers {
 		total += len(question)
@@ -628,6 +628,100 @@ func inputReplyPayloadSize(answers map[string][]string, annotations map[string]s
 		total += len(question) + len(ann.Preview) + len(ann.Notes)
 	}
 	return total
+}
+
+// buildAnswerPrompt is the model-facing re-grounding prompt for an
+// AskUserQuestion answer turn. The asking turn ended with no tool result, so
+// the agent re-reads its own question and the user's selection from this user
+// message — robust even with zero structured carryover. Questions come from
+// the durable turn.awaiting_input payload so the order matches what the agent
+// asked.
+func buildAnswerPrompt(questions []any, answers map[string][]string, annotations map[string]answerAnnotation) string {
+	var b strings.Builder
+	write := func(qText string, labels []string, note string) {
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "You asked: %q", qText)
+		if len(labels) > 0 {
+			fmt.Fprintf(&b, "\nThe user answered: %s", strings.Join(labels, ", "))
+		}
+		if note != "" {
+			fmt.Fprintf(&b, "\nThe user added: %s", note)
+		}
+	}
+	seen := make(map[string]bool, len(answers))
+	for _, raw := range questions {
+		q, _ := raw.(map[string]any)
+		qText := stringMapField(q, "question")
+		if qText == "" {
+			continue
+		}
+		seen[qText] = true
+		if labels, note := answers[qText], annotations[qText].Notes; len(labels) > 0 || note != "" {
+			write(qText, labels, note)
+		}
+	}
+	for qText, labels := range answers {
+		if !seen[qText] && len(labels) > 0 {
+			write(qText, labels, annotations[qText].Notes)
+		}
+	}
+	if b.Len() == 0 {
+		return "The user answered your question."
+	}
+	return b.String()
+}
+
+// awaitingInputQuestionList extracts the Tank-canonical questions from a
+// turn.awaiting_input terminal payload.
+func awaitingInputQuestionList(event map[string]any) []any {
+	payload, ok := event["payload"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	questions, _ := payload["questions"].([]any)
+	return questions
+}
+
+// annotationsToDisplayMap converts the answer annotations into the
+// ask_user_answer display's annotations shape ({question: {preview?, notes?}}).
+func annotationsToDisplayMap(in map[string]answerAnnotation) map[string]any {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]any, len(in))
+	for question, ann := range in {
+		entry := map[string]any{}
+		if ann.Preview != "" {
+			entry["preview"] = ann.Preview
+		}
+		if ann.Notes != "" {
+			entry["notes"] = ann.Notes
+		}
+		if len(entry) > 0 {
+			out[question] = entry
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// answerSummary is the concise user-bubble text fallback for an answer turn
+// (the structured selection lives in the ask_user_answer display). Sorted so
+// a deduped re-submit produces identical durable text.
+func answerSummary(answers map[string][]string) string {
+	labels := make([]string, 0, len(answers))
+	for _, picks := range answers {
+		labels = append(labels, picks...)
+	}
+	if len(labels) == 0 {
+		return "Answered"
+	}
+	sort.Strings(labels)
+	return strings.Join(labels, "; ")
 }
 
 type sdkTurnRequest struct {
@@ -645,6 +739,11 @@ type sdkTurnRequest struct {
 	AllowBeforeReady   bool
 	OmitUserMessage    bool
 	SessionMode        string
+	// Display, when non-nil, is used verbatim as the user_message.created
+	// payload.display. The AskUserQuestion answer path sets an
+	// ask_user_answer display; empty for normal turns (derived from
+	// SkillName/text).
+	Display map[string]any
 	CreatedAt          time.Time
 	OrderBase          time.Time
 	// OriginSessionID identifies the sibling tank-operator session that
@@ -845,6 +944,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		Attachments:       displayAttachments,
 		Runtime:           provider,
 		SkillName:         skillName,
+		Display:           req.Display,
 		OriginSessionID:   strings.TrimSpace(req.OriginSessionID),
 		AuthorKind:        strings.TrimSpace(req.AuthorKind),
 		Now:               createdAt,

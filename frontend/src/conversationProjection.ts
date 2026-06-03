@@ -44,15 +44,6 @@ export interface ConversationMessageEntry extends ConversationEntryBase {
   action?: { label: string; href: string };
 }
 
-export interface AskUserQuestionAnswer {
-  /** The list of option labels the user selected for this question. */
-  labels: string[];
-  /** Optional notes the user attached to the selected option(s). */
-  notes?: string;
-  /** Optional preview content for the selected option (HTML fragment). */
-  preview?: string;
-}
-
 export interface ConversationToolEntry extends ConversationEntryBase {
   kind: "tool";
   toolName: string;
@@ -64,14 +55,6 @@ export interface ConversationToolEntry extends ConversationEntryBase {
   toolStatus?: string;
   startedAt?: string;
   completedAt?: string;
-  /**
-   * For AskUserQuestion tools that completed via a durable input_reply
-   * command, the answers the user selected — keyed by question text.
-   * Sourced from the `tool.approval_resolved` event payload, not from
-   * local React state, so a fresh tab opened after the answer arrived
-   * still renders the user's selections.
-   */
-  askUserAnswers?: Record<string, AskUserQuestionAnswer>;
 }
 
 export interface ConversationBackgroundTaskEntry extends ConversationEntryBase {
@@ -108,31 +91,10 @@ export interface ConversationMetaEntry extends ConversationEntryBase {
     severity?: "info" | "error";
   };
   // metaKind specializes a meta entry into a distinguishable transcript
-  // surface without growing a top-level TranscriptEntry.kind value (which
-  // is shared with the sandbox-agent SDK). Renderers branch on metaKind
-  // before falling through to the generic RunMetaBlock — see App.tsx's
-  // renderItem dispatch for `needs_input_announcement`.
-  //
-  // The transcript contract permits this projection: AskUserQuestion is
-  // not provider tool output, reasoning, progress, failed work, or
-  // stopped work. It's a conversational handoff back to the user — the
-  // same protocol class as session.status and "Stop requested" entries
-  // that already land in the main transcript. See
-  // docs/features/transcript/contract.md → "promotion-only".
-  metaKind?: "needs_input_announcement" | "turn_usage";
-  // For needs_input_announcement entries: the AskUserQuestion item's
-  // provider id and the turn it lives on, so the renderer's click
-  // handler can navigate the user to the Turns tab scrolled to the
-  // right question. The handoff stays anchored to the durable item;
-  // local React state is not the source of truth.
-  announcement?: {
-    targetTurnId: string;
-    targetProviderItemId: string;
-    targetTimelineId?: string;
-    questionSummary: string;
-    questionCount: number;
-    answered: boolean;
-  };
+  // surface without growing a top-level kind value. The only client-side
+  // meta kind today is turn_usage; the AskUserQuestion card is a
+  // server-projected row (App.tsx RunAwaitingInputCard), not derived here.
+  metaKind?: "turn_usage";
 }
 
 interface ConversationEntryBase {
@@ -211,16 +173,6 @@ export function projectConversationState(
       const projected: Array<{ index: number; orderKey?: string; entry: ConversationViewEntry }> = [
         { index: baseIndex, orderKey: item.orderKey, entry },
       ];
-      // Per the transcript contract, AskUserQuestion is a handoff back to
-      // the user — it stops the agent until the user answers. Project a
-      // companion meta entry into the main transcript so chat (the
-      // settled-conversation surface) carries the "agent is waiting on
-      // you" signal alongside the durable tool entry that still owns the
-      // full question UI in Turn activity. Without this, the question
-      // lives only inside the collapsible activity group and the only
-      // attention signal in chat is the session-row dot.
-      const announcement = projectNeedsInputAnnouncement(item, baseIndex);
-      if (announcement) projected.push(announcement);
       return projected;
     }),
     ...state.backgroundTasks.map((task, index) => {
@@ -338,7 +290,6 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
       toolInput: toolInput(item),
       toolOutput: toolOutput(item),
       toolStatus: toolStatus(item),
-      askUserAnswers: askUserAnswers(item),
       turnId: item.turnId,
       providerItemId: item.providerItemId,
       time: item.startedAt ?? item.createdAt ?? "",
@@ -365,105 +316,6 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
     sourceEventId: item.sourceEventId,
     orderKey: item.orderKey,
   };
-}
-
-// projectNeedsInputAnnouncement returns a synthesized meta entry that
-// promotes an AskUserQuestion item from Turn activity into the settled
-// main transcript as a handoff row. Returns null when the item is not an
-// AskUserQuestion tool call, or when the underlying tool.approval_requested
-// event hasn't materialized into the item's payload yet.
-//
-// The announcement orderKey is derived from the underlying item's
-// orderKey with a `~ann` suffix so it sorts immediately after the tool
-// entry in the durable stream — historical replay and live streaming
-// agree on placement without depending on wall-clock time.
-//
-// `answered` is sourced from the durable `tool.approval_resolved`
-// projection (item.payload.answers / item.status === "completed"), not
-// from a local "I submitted" flag — a fresh tab opened after the user
-// answered renders the same resolved state.
-function projectNeedsInputAnnouncement(
-  item: ConversationItem,
-  baseIndex: number,
-): { index: number; orderKey?: string; entry: ConversationViewEntry } | null {
-  if (!isAskUserQuestionItem(item)) return null;
-  const questions = askUserQuestionList(item);
-  if (questions.length === 0) return null;
-  const summary = askUserQuestionSummary(questions);
-  const answered =
-    item.status === "completed" ||
-    (item.payload?.answers && typeof item.payload.answers === "object");
-  return {
-    index: baseIndex + 0.5,
-    orderKey: item.orderKey ? `${item.orderKey}~needs_input_announcement` : undefined,
-    entry: {
-      id: `${item.id}:needs_input_announcement`,
-      kind: "meta",
-      metaKind: "needs_input_announcement",
-      meta: {
-        title: answered ? "Answered" : "Claude is waiting on you",
-        detail: summary,
-        severity: "info",
-      },
-      announcement: {
-        targetTurnId: item.turnId ?? "",
-        targetProviderItemId: item.providerItemId ?? "",
-        // `item.id` IS the timeline_id on a ConversationItem (set from
-        // `event.timeline_id` in conversationReducer.applyToolItem); a
-        // separate `timelineId` field does not exist on the type.
-        ...(item.id ? { targetTimelineId: item.id } : {}),
-        questionSummary: summary,
-        questionCount: questions.length,
-        answered: Boolean(answered),
-      },
-      turnId: item.turnId,
-      providerItemId: item.providerItemId,
-      time: item.startedAt ?? item.createdAt ?? "",
-      sourceEventId: item.sourceEventId,
-      orderKey: item.orderKey,
-    },
-  };
-}
-
-function isAskUserQuestionItem(item: ConversationItem): boolean {
-  if (item.kind !== "needs_input" && item.kind !== "tool" && item.kind !== "approval") {
-    return false;
-  }
-  const payloadName = stringPayload(item, "name");
-  if (payloadName === "AskUserQuestion") return true;
-  if (item.title === "AskUserQuestion") return true;
-  // Some adapters mark the item with payload.kind = "needs_input" but
-  // payload.name unset; fall back to detecting the questions[] payload
-  // that only AskUserQuestion produces.
-  const input = item.payload?.input;
-  if (input && typeof input === "object" && !Array.isArray(input)) {
-    const questions = (input as { questions?: unknown }).questions;
-    if (Array.isArray(questions) && questions.length > 0) return true;
-  }
-  return false;
-}
-
-function askUserQuestionList(item: ConversationItem): Array<Record<string, unknown>> {
-  const input = item.payload?.input;
-  if (!input || typeof input !== "object" || Array.isArray(input)) return [];
-  const questions = (input as { questions?: unknown }).questions;
-  if (!Array.isArray(questions)) return [];
-  return questions.filter(
-    (q): q is Record<string, unknown> => Boolean(q && typeof q === "object" && !Array.isArray(q)),
-  );
-}
-
-function askUserQuestionSummary(questions: Array<Record<string, unknown>>): string {
-  const first = questions[0];
-  const text =
-    (typeof first?.question === "string" && first.question) ||
-    (typeof first?.header === "string" && first.header) ||
-    "Open the Turns tab to answer.";
-  const trimmed = text.length > 140 ? `${text.slice(0, 137)}…` : text;
-  if (questions.length > 1) {
-    return `${trimmed} (+${questions.length - 1} more)`;
-  }
-  return trimmed;
 }
 
 function projectBackgroundTask(task: ConversationBackgroundTask): ConversationBackgroundTaskEntry {
@@ -767,38 +619,6 @@ function toolOutput(item: ConversationItem): string | undefined {
 
 function toolStatus(item: ConversationItem): string {
   return item.status;
-}
-
-// askUserAnswers reads the durable answers/annotations off a
-// merged AskUserQuestion item payload. The reducer merges
-// `tool.approval_requested` (carrying `input.questions[]`) and
-// `tool.approval_resolved` (carrying `answers` / `annotations`) into the
-// same `ConversationItem` payload, so by the time the item reaches
-// projection both halves are present.
-function askUserAnswers(item: ConversationItem): Record<string, AskUserQuestionAnswer> | undefined {
-  const rawAnswers = item.payload?.answers;
-  if (!rawAnswers || typeof rawAnswers !== "object" || Array.isArray(rawAnswers)) {
-    return undefined;
-  }
-  const rawAnnotations = item.payload?.annotations;
-  const annotations =
-    rawAnnotations && typeof rawAnnotations === "object" && !Array.isArray(rawAnnotations)
-      ? (rawAnnotations as Record<string, { preview?: unknown; notes?: unknown }>)
-      : undefined;
-  const out: Record<string, AskUserQuestionAnswer> = {};
-  for (const [question, value] of Object.entries(rawAnswers as Record<string, unknown>)) {
-    if (!Array.isArray(value)) continue;
-    const labels = value
-      .map((entry) => (typeof entry === "string" ? entry : ""))
-      .filter((entry) => entry.length > 0);
-    if (labels.length === 0) continue;
-    const ann = annotations?.[question];
-    const entry: AskUserQuestionAnswer = { labels };
-    if (typeof ann?.preview === "string" && ann.preview) entry.preview = ann.preview;
-    if (typeof ann?.notes === "string" && ann.notes) entry.notes = ann.notes;
-    out[question] = entry;
-  }
-  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function stringPayload(item: ConversationItem, key: string): string | undefined {

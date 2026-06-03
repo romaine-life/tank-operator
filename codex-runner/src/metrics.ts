@@ -138,7 +138,7 @@ export function recordTurnStart(turnID: string): void {
 
 export function recordTurnTerminal(
   turnID: string,
-  outcome: "completed" | "failed" | "interrupted",
+  outcome: "completed" | "failed" | "interrupted" | "awaiting_input",
 ): void {
   if (!turnID) return;
   const start = turnStartTimes.get(turnID);
