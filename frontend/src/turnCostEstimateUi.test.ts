@@ -35,16 +35,22 @@ test("composer cost estimate separates context tokens from dollars", () => {
   assert.doesNotMatch(appSource, /run-cost-estimate-separator/);
 });
 
-test("composer context percentage is always visible and uses provider-observed session window", () => {
+test("composer context usage shows a used/window fraction from the provider-observed session window", () => {
   assert.match(appSource, /runtime_context_window_tokens/);
   assert.match(appSource, /contextWindow: runtimeContextWindowTokens/);
-  assert.match(appSource, /usage=\{\{[\s\S]*?tokensUsed: 0,[\s\S]*?contextWindow: 0,[\s\S]*?placeholder: true/);
-  assert.doesNotMatch(appSource, /usage=\{[\s\S]*runtimeContextWindowTokens > 0/);
-  assert.match(cssSource, /run-usage-ring/);
-  assert.match(appSource, /run-usage-ring-svg/);
+  // Context renders as a used/window fraction in the cost chip, not a percent ring.
+  assert.match(
+    appSource,
+    /\$\{formatCompactTokens\(safeTokens\)\}\/\$\{formatCompactTokens\(safeWindow\)\}/,
+  );
+  // The percent ring / SVG circle is fully removed.
+  assert.doesNotMatch(appSource, /ComposerUsageRing/);
+  assert.doesNotMatch(appSource, /run-usage-ring/);
+  assert.doesNotMatch(cssSource, /run-usage-ring/);
+  assert.doesNotMatch(appSource, /run-usage-ring-svg/);
+  // No assumed model tables or per-level coloring; only provider-observed data drives the denominator.
   assert.doesNotMatch(appSource, /usageLevel/);
   assert.doesNotMatch(appSource, /data-level/);
-  assert.doesNotMatch(cssSource, /run-usage-ring\[data-level=/);
   assert.doesNotMatch(appSource, /CONTEXT_WINDOW_BY_MODEL/);
   assert.doesNotMatch(appSource, /getContextWindow/);
 });

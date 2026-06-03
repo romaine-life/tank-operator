@@ -1604,6 +1604,7 @@ function currentSessionSkillState(
 interface ComposerCostEstimateProps {
   amountUsd: number | null;
   tokens?: number | null;
+  contextWindow?: number;
   tokenScopeLabel?: string;
   placeholder?: boolean;
   scopeLabel?: string;
@@ -1613,6 +1614,7 @@ interface ComposerCostEstimateProps {
 function ComposerCostEstimate({
   amountUsd,
   tokens,
+  contextWindow,
   tokenScopeLabel,
   placeholder = false,
   scopeLabel = "session",
@@ -1627,6 +1629,10 @@ function ComposerCostEstimate({
     : typeof tokens === "number" && Number.isFinite(tokens)
       ? Math.max(0, Math.floor(tokens))
       : 0;
+  const safeWindow =
+    typeof contextWindow === "number" && Number.isFinite(contextWindow)
+      ? Math.max(0, Math.floor(contextWindow))
+      : 0;
   const normalizedScope = scopeLabel.trim() || "session";
   const formattedAmount = unavailable
     ? "$--"
@@ -1634,19 +1640,28 @@ function ComposerCostEstimate({
       ? formatTurnCostUsd(safeAmountUsd)
       : formatComposerCostUsd(safeAmountUsd);
   const label = formattedAmount;
-  const tokenLabel = safeTokens === null ? "--" : formatCompactTokens(safeTokens);
+  const tokenLabel =
+    safeTokens === null
+      ? "--"
+      : safeWindow > 0
+        ? `${formatCompactTokens(safeTokens)}/${formatCompactTokens(safeWindow)}`
+        : formatCompactTokens(safeTokens);
   const sentenceScope = `${normalizedScope.charAt(0).toUpperCase()}${normalizedScope.slice(1)}`;
   const normalizedTokenScope = tokenScopeLabel?.trim() || `${normalizedScope} tokens`;
+  const tokenSentence =
+    safeWindow > 0
+      ? `${safeTokens?.toLocaleString() ?? 0} of ${safeWindow.toLocaleString()} context tokens`
+      : `${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`;
   const defaultTitle = unavailable
     ? "Cost estimate appears after token usage is available"
-    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`;
+    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${tokenSentence}`;
   return (
     <span
       className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
       aria-label={
         unavailable
           ? `${sentenceScope} cost estimate unavailable`
-          : `Estimated ${normalizedScope} cost ${label}, ${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`
+          : `Estimated ${normalizedScope} cost ${label}, ${tokenSentence}`
       }
       aria-disabled={unavailable || undefined}
       title={title ?? defaultTitle}
@@ -1664,70 +1679,12 @@ function ComposerCostEstimate({
   );
 }
 
-interface ComposerUsageRingProps {
-  tokensUsed: number;
-  contextWindow: number;
-  placeholder?: boolean;
-  ariaLabel?: string;
-  title?: string;
-}
-
-function ComposerUsageRing({
-  tokensUsed,
-  contextWindow,
-  placeholder = false,
-  ariaLabel = "Context usage",
-  title,
-}: ComposerUsageRingProps) {
-  const safeTokens = Number.isFinite(tokensUsed) ? Math.max(0, Math.floor(tokensUsed)) : 0;
-  const safeWindow = Number.isFinite(contextWindow) ? Math.max(0, Math.floor(contextWindow)) : 0;
-  const usagePct = safeWindow > 0 ? Math.max(0, Math.min(100, (safeTokens / safeWindow) * 100)) : 0;
-  const displayPct = usagePct === 0 ? "0" : usagePct.toFixed(usagePct < 10 ? 1 : 0);
-  const defaultTitle =
-    safeWindow > 0
-      ? `${safeTokens.toLocaleString()} / ${safeWindow.toLocaleString()} context tokens`
-      : "Context window not reported yet";
-  return (
-    <span
-      className={`run-usage-ring${placeholder ? " is-placeholder" : ""}`}
-      aria-label={ariaLabel}
-      aria-disabled={placeholder || undefined}
-      title={title ?? defaultTitle}
-    >
-      <svg className="run-usage-ring-svg" viewBox="0 0 32 32" aria-hidden="true">
-        <circle
-          cx="16"
-          cy="16"
-          r="13"
-          fill="none"
-          stroke="currentColor"
-          strokeOpacity="0.18"
-          strokeWidth="2.5"
-        />
-        <circle
-          cx="16"
-          cy="16"
-          r="13"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2.5"
-          strokeLinecap="round"
-          strokeDasharray={`${(usagePct / 100) * (2 * Math.PI * 13)} ${2 * Math.PI * 13}`}
-          transform="rotate(-90 16 16)"
-        />
-      </svg>
-      <span className="run-usage-ring-text">{displayPct}%</span>
-    </span>
-  );
-}
-
 interface ComposerToolButtonsProps {
   attach: {
     disabled?: boolean;
     title: string;
     onClick?: () => void;
   };
-  usage: ComponentProps<typeof ComposerUsageRing>;
   cost: ComponentProps<typeof ComposerCostEstimate>;
   rollout?: {
     visible?: boolean;
@@ -1765,7 +1722,6 @@ interface ComposerToolButtonsProps {
 function ComposerToolButtons({
   attach,
   cost,
-  usage,
   rollout,
   test,
   pullRequest,
@@ -1788,7 +1744,6 @@ function ComposerToolButtons({
       >
         <ImageIcon className="run-composer-icon" aria-hidden="true" />
       </button>
-      <ComposerUsageRing {...usage} />
       <ComposerCostEstimate {...cost} />
       {rollout?.visible && (
         <button
@@ -2939,13 +2894,6 @@ function DemoLanding() {
                         amountUsd: 0,
                         tokens: 0,
                         title: "Cost estimate appears after usage is available",
-                      }}
-                      usage={{
-                        tokensUsed: 0,
-                        contextWindow: 0,
-                        placeholder: true,
-                        ariaLabel: "Context usage preview",
-                        title: "Context usage appears after sign in",
                       }}
                       rollout={{
                         visible: GUI_ROLLOUT_MODES.has(selectedMode),
@@ -13895,12 +13843,9 @@ function ChatPane({
               cost={{
                 amountUsd: sessionCostEstimate?.amountUsd ?? null,
                 tokens: tokensUsed,
+                contextWindow: runtimeContextWindowTokens,
                 tokenScopeLabel: "current context tokens",
                 placeholder: sessionUsageLoading,
-              }}
-              usage={{
-                tokensUsed,
-                contextWindow: runtimeContextWindowTokens,
               }}
               rollout={{
                 visible: GUI_ROLLOUT_MODES.has(session.mode),
@@ -17168,13 +17113,6 @@ function AuthenticatedApp() {
                       amountUsd: 0,
                       tokens: 0,
                       title: "Cost estimate appears after usage is available",
-                    }}
-                    usage={{
-                      tokensUsed: 0,
-                      contextWindow: 0,
-                      placeholder: true,
-                      ariaLabel: "Context usage preview",
-                      title: "Context usage appears after the session starts",
                     }}
                     rollout={{
                       visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),

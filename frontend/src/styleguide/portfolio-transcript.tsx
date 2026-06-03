@@ -322,26 +322,9 @@ function ComposerToolButtons() {
       <button className="run-composer-icon-btn" type="button" aria-label="Attach image">
         <ImageIcon className="run-composer-icon" aria-hidden="true" />
       </button>
-      <span className="run-usage-ring" aria-label="64 percent context used">
-        <svg className="run-usage-ring-svg" viewBox="0 0 36 36" aria-hidden="true">
-          <circle cx="18" cy="18" r="15" fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="3" />
-          <circle
-            cx="18"
-            cy="18"
-            r="15"
-            fill="none"
-            stroke="currentColor"
-            strokeDasharray="60 94"
-            strokeLinecap="round"
-            strokeWidth="3"
-            transform="rotate(-90 18 18)"
-          />
-        </svg>
-        <span className="run-usage-ring-text">64</span>
-      </span>
-      <span className="run-cost-estimate" aria-label="Estimated session cost $0.18, 1,230,000 current context tokens" title="Estimated API-equivalent session token cost">
+      <span className="run-cost-estimate" aria-label="Estimated session cost $0.18, 1,230,000 of 2,000,000 context tokens" title="Estimated API-equivalent session token cost">
         <span className="run-cost-estimate-metric run-cost-estimate-metric-tokens">
-          <span className="run-cost-estimate-value run-cost-estimate-token-count">1.23m</span>
+          <span className="run-cost-estimate-value run-cost-estimate-token-count">1.23m/2m</span>
           <span className="run-cost-estimate-label">ctx</span>
         </span>
         <span className="run-cost-estimate-divider" aria-hidden="true" />

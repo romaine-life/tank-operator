@@ -6449,51 +6449,13 @@ button:disabled {
   line-height: 1;
 }
 
-/* Context usage ring. SVG arc tracks live percentage; color stays neutral
-   because context pressure is informational, not a good/bad state. */
-.run-usage-ring {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 2rem;
-  height: 2rem;
-  flex: 0 0 2rem;
-  color: #60a5fa;
-}
-
-.run-usage-ring.is-placeholder {
-  color: var(--text-muted);
-  opacity: 0.72;
-}
-
-.run-usage-ring-svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-}
-
-.run-usage-ring-text {
-  position: relative;
-  font-family: var(--font-mono);
-  font-size: 0.55rem;
-  color: var(--text-body);
-  letter-spacing: 0.02em;
-  z-index: 1;
-}
-
-.run-usage-ring.is-placeholder .run-usage-ring-text {
-  color: var(--text-muted);
-}
-
 .run-cost-estimate {
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 0.45rem;
-  width: 8.8rem;
-  flex: 0 0 8.8rem;
+  width: 11rem;
+  flex: 0 0 11rem;
   height: 2rem;
   padding: 0 0.58rem;
   border-radius: 0.5rem;
