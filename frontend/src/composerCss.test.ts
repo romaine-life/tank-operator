@@ -45,12 +45,9 @@ test("chat composer slash command highlight is drawn behind textarea text", () =
 
 test("chat composer cost estimate keeps a fixed-width footprint", () => {
   const composerRule = cssRule(".run-cost-estimate");
-  assert.match(composerRule, /width:\s*8\.8rem;/);
-  assert.match(composerRule, /flex:\s*0\s+0\s+8\.8rem;/);
+  assert.match(composerRule, /width:\s*11rem;/);
+  assert.match(composerRule, /flex:\s*0\s+0\s+11rem;/);
   assert.match(composerRule, /white-space:\s*nowrap;/);
-
-  const usageRule = cssRule(".run-usage-ring");
-  assert.match(usageRule, /flex:\s*0\s+0\s+2rem;/);
 
   const iconRule = cssRule(".run-composer-icon-btn");
   assert.match(iconRule, /flex:\s*0\s+0\s+2rem;/);

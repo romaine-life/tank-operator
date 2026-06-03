@@ -148,14 +148,19 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 		)
 		if err != nil {
 			if errors.Is(err, sessions.ErrNotFound) {
+				recordSessionContextWindowReport(provider, body.ContextWindowSource, "not_found")
 				recordSessionRuntimeConfigUpdate(provider, "not_found")
 				writeError(w, http.StatusNotFound, "session not found")
 				return
 			}
+			recordSessionContextWindowReport(provider, body.ContextWindowSource, "update_failed")
 			recordSessionRuntimeConfigUpdate(provider, "update_failed")
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		recordSessionContextWindowReport(provider, body.ContextWindowSource, "ok")
+	} else {
+		recordSessionContextWindowReport(provider, body.ContextWindowSource, "ignored")
 	}
 	recordSessionRuntimeConfigUpdate(provider, "ok")
 	writeJSON(w, http.StatusOK, updated)

@@ -533,6 +533,27 @@ var sessionRuntimeConfigUpdateTotal = promauto.NewCounterVec(
 	[]string{"provider", "result"},
 )
 
+// sessionContextWindowReportTotal counts provider-observed context-window
+// reports carried on the runtime-config PUT, the durable input to the
+// composer's used/window context fraction (the frontend model-window table
+// was deleted; the window is sourced only from the row's
+// runtime_context_window_tokens). The handler records exactly one outcome
+// per call around SetRuntimeContextWindow: ok on a successful persist,
+// not_found / update_failed on the matching write errors, and ignored when
+// the call carried no positive window (context_window_tokens <= 0). The
+// source label is the bounded provider-observation tag (codex app-server
+// token usage, the Anthropic Models API max_input_tokens read, the Claude
+// Agent SDK init handshake) with an "other" bucket so a future producer
+// tag can't bloat Prometheus' active series. Cardinality is bounded at
+// providers * 4 sources * 4 results.
+var sessionContextWindowReportTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_context_window_report_total",
+		Help: "Provider-observed context-window reports on the runtime-config PUT, labeled by provider, bounded observation source, and result (ok/not_found/update_failed/ignored).",
+	},
+	[]string{"provider", "source", "result"},
+)
+
 var messageLinkShareTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_message_link_share_total",
@@ -545,6 +566,14 @@ func recordSessionRuntimeConfigUpdate(provider, result string) {
 	sessionRuntimeConfigUpdateTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),
 		sessionRuntimeConfigResultLabel(result),
+	).Inc()
+}
+
+func recordSessionContextWindowReport(provider, source, result string) {
+	sessionContextWindowReportTotal.WithLabelValues(
+		sessionRuntimeConfigProviderLabel(provider),
+		sessionContextWindowSourceLabel(source),
+		sessionContextWindowResultLabel(result),
 	).Inc()
 }
 
@@ -643,6 +672,32 @@ func sessionRuntimeConfigProviderLabel(provider string) string {
 func sessionRuntimeConfigResultLabel(result string) string {
 	switch result {
 	case "ok", "bad_request", "forbidden", "not_found", "manager_unavailable", "update_failed":
+		return result
+	default:
+		return "other"
+	}
+}
+
+// sessionContextWindowSourceLabel bounds the context-window observation
+// source to the known provider tags. codex_app_server_token_usage is the
+// Codex app-server thread.tokenUsage observation; anthropic_models_api is
+// the Anthropic Models API max_input_tokens read; claude_agent_sdk_init is
+// the Claude Agent SDK init handshake. Anything else collapses to "other"
+// so a new producer tag cannot grow Prometheus' active series unbounded.
+func sessionContextWindowSourceLabel(source string) string {
+	switch source {
+	case "codex_app_server_token_usage", "anthropic_models_api", "claude_agent_sdk_init":
+		return source
+	default:
+		return "other"
+	}
+}
+
+// sessionContextWindowResultLabel bounds the per-call outcome to the four
+// handler exit shapes around SetRuntimeContextWindow.
+func sessionContextWindowResultLabel(result string) string {
+	switch result {
+	case "ok", "not_found", "update_failed", "ignored":
 		return result
 	default:
 		return "other"

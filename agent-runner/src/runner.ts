@@ -200,6 +200,29 @@ export function classifyProviderFailure(message: string): ProviderFailureClass {
   return "other";
 }
 
+// parseModelContextWindow extracts the model's input context window from an
+// Anthropic Models API response body (`GET /v1/models/{model}` → ModelInfo).
+// The window lives on `max_input_tokens` ("Maximum input context window size
+// in tokens for this model"). Returns a positive finite integer, or null when
+// the field is missing/malformed — callers must treat null as "don't report",
+// never as a zero window. Kept as a pure exported function so the extraction
+// is unit-testable without an HTTP round-trip (see runner.test.ts).
+//
+// Why the Models API and not the SDK init message: the Claude Agent SDK's
+// `system`/`init` message (SDKSystemMessage, subtype "init") carries model,
+// tools, mcp_servers, skills, etc. but NOT any context-window field, and the
+// SDK's ModelInfo type has no max_input_tokens either (checked against
+// @anthropic-ai/claude-agent-sdk 0.3.158). `contextWindow` only appears on
+// per-turn ModelUsage. So the provider-sourced window comes from the REST
+// Models API, reached through the in-cluster claude-api-proxy (no API key).
+export function parseModelContextWindow(json: unknown): number | null {
+  if (!json || typeof json !== "object") return null;
+  const raw = (json as Record<string, unknown>).max_input_tokens;
+  const n = typeof raw === "number" ? raw : Number.NaN;
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.floor(n);
+}
+
 export function logUnhandledSdkMessage(message: SDKMessage): void {
   const m = message as Record<string, unknown> & { type?: unknown };
   const type = typeof m.type === "string" ? m.type : "";
@@ -676,7 +699,53 @@ export class Runner {
     void reportRuntimeConfig(this.cfg, { model, effort }).catch((err) => {
       console.warn("runtime config report failed:", err);
     });
+    // Report the model's provider-sourced context window so the composer can
+    // render a used/window fraction (parity with the codex-runner, which
+    // reports the app-server's modelContextWindow). Fire-and-forget and
+    // best-effort: the helper swallows every failure internally, so this must
+    // never block the turn loop or throw out of pinning. Reported once —
+    // the backend is first-observed-wins.
+    void this.reportContextWindow(model);
     this.resolveSdkReady();
+  }
+
+  // reportContextWindow fetches the model's input context window from the
+  // Anthropic Models API and reports it to the orchestrator. The runner holds
+  // no API key: api.anthropic.com is routed through the in-cluster
+  // claude-api-proxy, which injects the subscription OAuth token + required
+  // headers, so a plain fetch is auth-injected automatically (do NOT add a
+  // key here). The window is non-critical UI sugar, so every failure path —
+  // network error, non-2xx, unparseable body, missing max_input_tokens — is
+  // caught, logged at warn, and skipped. We only ever report a positive
+  // finite integer. Mirrors the reportRuntimeConfig(...).catch(...) style.
+  private async reportContextWindow(model: string): Promise<void> {
+    const trimmed = String(model ?? "").trim();
+    if (!trimmed) return;
+    try {
+      const url = `https://api.anthropic.com/v1/models/${encodeURIComponent(trimmed)}`;
+      const response = await fetch(url);
+      if (!response.ok) {
+        console.warn(
+          "context window lookup failed: Models API returned non-2xx",
+          JSON.stringify({ model: trimmed, status: response.status }),
+        );
+        return;
+      }
+      const window = parseModelContextWindow(await response.json());
+      if (window === null) {
+        console.warn(
+          "context window lookup skipped: Models API response carried no usable max_input_tokens",
+          JSON.stringify({ model: trimmed }),
+        );
+        return;
+      }
+      await reportRuntimeConfig(this.cfg, {
+        contextWindowTokens: window,
+        contextWindowSource: "anthropic_models_api",
+      });
+    } catch (err) {
+      console.warn("context window report failed:", err);
+    }
   }
 
   // launchSdkQuery wraps the SDK's query() construction in a method so

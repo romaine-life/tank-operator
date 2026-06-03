@@ -199,3 +199,46 @@ Evidence:
   `backend-go/cmd/tank-operator/transcript_projection_test.go` both prove an
   interrupted, unanswered AskUserQuestion announcement carries
   `turnTerminalStatus`, the fact the renderer uses to settle the row.
+
+## Provider-Observed Context Window Fraction
+
+Status: active
+
+Intent:
+The composer context indicator is a `used/window` fraction whose window is the
+real, provider-observed context size for the running model — not a number the
+frontend guesses from a model id. The runners observe the window at runtime
+(Codex app-server token usage; the Anthropic Models API `max_input_tokens`) and
+report it on the runtime-config PUT; the orchestrator persists it on the session
+row and the composer renders the fraction against it. Pre-session previews and
+not-yet-reported sessions show a placeholder used count instead of a fraction.
+
+Affected contracts:
+- Transcript
+- Session Lifecycle (owns the runtime-config PUT and the session row)
+
+Contract impact:
+- The window denominator is sourced only from the durable session-row field
+  `runtime_context_window_tokens`. There is no frontend `CONTEXT_WINDOW_BY_MODEL`
+  model-window table and no `getContextWindow` lookup, and the indicator is a
+  fraction, not a percent ring.
+- The row value is first-observed-wins and durable, so the fraction is stable
+  across reload and identical in a fresh tab; a session with no reported window
+  renders the placeholder, never a frontend-assumed default.
+- Provider reports are observable through
+  `tank_session_context_window_report_total{provider,source,result}` with
+  bounded `source` and `result` labels.
+
+Evidence:
+- Backend: `backend-go/cmd/tank-operator/handlers_internal_test.go` covers the
+  runtime-config PUT persisting the window and the `ok` / `ignored` counter
+  outcomes;
+  `backend-go/internal/sessions/manager_test.go` covers first-observed-wins
+  persistence (`TestManagerSetRuntimeContextWindowPersistsAndPublishes`).
+- Migration guard: `scripts/check-context-window-table-migration.mjs` fails if
+  `CONTEXT_WINDOW_BY_MODEL` or `getContextWindow` reappear under `frontend/src`
+  and asserts the composer reads `runtime_context_window_tokens`; wired into CI
+  via `.github/workflows/removed-chat-runtime-guard.yml`.
+- Frontend: the composer reads `session.runtime_context_window_tokens`
+  (`frontend/src/App.tsx`) as the fraction denominator, with a placeholder when
+  it is 0.

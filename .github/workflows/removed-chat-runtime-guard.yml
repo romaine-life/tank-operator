@@ -56,3 +56,6 @@ jobs:
 
       - name: Check removed runtime surfaces
         run: node scripts/check-removed-chat-runtime.mjs
+
+      - name: Check context-window-table migration
+        run: node scripts/check-context-window-table-migration.mjs

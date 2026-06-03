@@ -12,6 +12,7 @@ import {
   inputReplyTargetProviderItemID,
   joinAnswersForSDK,
   logUnhandledSdkMessage,
+  parseModelContextWindow,
   Runner,
 } from "./runner.js";
 import {
@@ -56,6 +57,38 @@ test("classifyProviderFailure maps the other known provider failure shapes", () 
     classifyProviderFailure("ECONNRESET socket hang up"),
     "other",
   );
+});
+
+test("parseModelContextWindow extracts max_input_tokens from a ModelInfo body", () => {
+  // Shape of GET /v1/models/{model} → ModelInfo. max_input_tokens is the
+  // documented "Maximum input context window size in tokens for this model".
+  assert.equal(
+    parseModelContextWindow({
+      id: "claude-opus-4-8",
+      type: "model",
+      max_input_tokens: 200000,
+    }),
+    200000,
+  );
+});
+
+test("parseModelContextWindow floors fractional token counts", () => {
+  assert.equal(parseModelContextWindow({ max_input_tokens: 199999.9 }), 199999);
+});
+
+test("parseModelContextWindow returns null for missing/malformed windows", () => {
+  // null (not 0) is the contract so the caller skips the report rather than
+  // reporting a zero window. reportRuntimeConfig itself coerces 0 → no-op,
+  // but the runner must not even reach the report on a bad lookup.
+  assert.equal(parseModelContextWindow(null), null);
+  assert.equal(parseModelContextWindow(undefined), null);
+  assert.equal(parseModelContextWindow("nope"), null);
+  assert.equal(parseModelContextWindow({}), null);
+  assert.equal(parseModelContextWindow({ max_input_tokens: 0 }), null);
+  assert.equal(parseModelContextWindow({ max_input_tokens: -5 }), null);
+  assert.equal(parseModelContextWindow({ max_input_tokens: "200000" }), null);
+  assert.equal(parseModelContextWindow({ max_input_tokens: Number.NaN }), null);
+  assert.equal(parseModelContextWindow({ max_input_tokens: Infinity }), null);
 });
 
 type Order = string[];
