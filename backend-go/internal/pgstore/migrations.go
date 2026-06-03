@@ -1201,6 +1201,15 @@ var schemaMigrations = []migration{
 	{ID: "0098", SQL: `CREATE INDEX IF NOT EXISTS session_scheduled_wakeups_due
 		ON session_scheduled_wakeups (session_scope, status, due_at, created_at)
 		WHERE status IN ('scheduled', 'claiming')`},
+	// Partial index backing the stranded-launch sweep
+	// (store.FindStrandedLaunchTurns / cmd/tank-operator/stranded_launch_sweep.go).
+	// That sweep scans for user_message.created rows in a created_at window;
+	// the broad session_events_created_at index would force a scan across every
+	// event type in the window, so this restricts the index to launch rows and
+	// makes the periodic backstop a bounded range scan over launches alone.
+	{ID: "0099", SQL: `CREATE INDEX IF NOT EXISTS session_events_user_message_created_at
+		ON session_events (created_at)
+		WHERE event_type = 'user_message.created'`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

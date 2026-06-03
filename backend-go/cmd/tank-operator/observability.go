@@ -591,6 +591,18 @@ func setScheduledWakeupsDue(count int) {
 	scheduledWakeupsDue.Set(float64(count))
 }
 
+var strandedLaunchSweptTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_stranded_launch_swept_total",
+		Help: "Deferred launch turns the stranded-launch sweep observed, labeled by bounded result (failed, skipped_incomplete, persist_error).",
+	},
+	[]string{"result"},
+)
+
+func recordStrandedLaunchSwept(result string) {
+	strandedLaunchSweptTotal.WithLabelValues(result).Inc()
+}
+
 func recordMessageLinkShare(operation, result string) {
 	messageLinkShareTotal.WithLabelValues(
 		messageLinkShareOperationLabel(operation),

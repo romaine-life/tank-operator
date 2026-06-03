@@ -545,6 +545,20 @@ publishes the runnable command whose prompt contains the pod-local attachment
 paths. This preserves one user bubble and one turn id while keeping file bytes
 on the existing workspace upload path.
 
+This deferred second step is browser-driven, so a tab that goes away after
+create (close, reload, navigation, a dropped upload) can leave the turn durably
+recorded as `user_message.created` with no `turn.submitted` ever published — a
+silently stranded launch that the runner waits on forever. The orchestrator's
+stranded-launch sweep (`cmd/tank-operator/stranded_launch_sweep.go`, backed by
+`store.FindStrandedLaunchTurns`) is the durable backstop: it periodically finds
+launch turns whose `turn_id` carries only `user_message.created` and, once past
+a generous age floor, emits a durable `turn.command_failed` so the SPA renders
+the launch as failed instead of hanging. It does not re-dispatch — the file
+bytes only ever existed in the originating browser — so surfacing the failure
+is the terminal. `turn.command_failed` is itself terminal, so a late browser
+dispatch is dropped by the runner's already-terminal guard; the deterministic
+`event_id` collapses concurrent emits across replicas.
+
 Durable SDK turn submission:
 
 `POST /api/sessions/{session_id}/turns`
