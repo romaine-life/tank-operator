@@ -23,31 +23,6 @@ permissions:
   pull-requests: write
 
 jobs:
-  # The shared tofu template doesn't fetch any KV secrets, and infra/
-  # uses the `github` provider which needs a PAT. Fetch it in a separate
-  # job, mask it with ::add-mask::, and pass the value into the shared
-  # workflow as a tofu_vars -var (var.github_pat is declared
-  # sensitive=true in infra/variables.tf so it won't appear in plan
-  # output / PR plan comments). Job outputs honor add-mask propagation,
-  # which is what keeps the value out of CI logs.
-  secrets:
-    name: Fetch github-pat from Key Vault
-    runs-on: ubuntu-latest
-    environment: ${{ github.ref == 'refs/heads/main' && 'prod' || 'dev' }}
-    outputs:
-      github_pat: ${{ steps.kv.outputs.github_pat }}
-    steps:
-      - uses: azure/login@v2
-        with:
-          client-id: ${{ vars.ARM_CLIENT_ID }}
-          tenant-id: ${{ vars.ARM_TENANT_ID }}
-          subscription-id: ${{ vars.ARM_SUBSCRIPTION_ID }}
-      - id: kv
-        run: |
-          GITHUB_PAT=$(az keyvault secret show --vault-name romaine-kv --name github-pat --query value -o tsv)
-          echo "::add-mask::$GITHUB_PAT"
-          echo "github_pat=$GITHUB_PAT" >> "$GITHUB_OUTPUT"
-
   tofu:
     # Shared template handles checkout, OIDC login, shared-providers
     # overlay from infra-bootstrap, init/plan/apply, and the plan PR
@@ -56,7 +31,6 @@ jobs:
     # OpenTofu 1.10) works — that's what lets the `removed` blocks in
     # mcp.tf forget the moved mcp_azure_personal resources without
     # destroying them in Azure on apply.
-    needs: secrets
     uses: romaine-life/pipeline-templates/.github/workflows/tofu-plan-apply-template.yml@main
     with:
       working_directory: infra
@@ -65,9 +39,4 @@ jobs:
       backend_container: tfstate
       backend_key: tank-operator.tfstate
       tofu_version: '1.12.0'
-      # github_pat is the only tofu_var we plumb through — the github
-      # provider explicitly reads it. azurerm/azuread auto-detect
-      # subscription/tenant from the ARM_* env vars the shared template
-      # exports for OIDC.
-      tofu_vars: '-var=github_pat=${{ needs.secrets.outputs.github_pat }}'
     secrets: inherit
