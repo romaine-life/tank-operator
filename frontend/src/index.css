@@ -3681,6 +3681,61 @@ button:disabled {
   height: 1rem;
 }
 
+.run-tab-more {
+  position: relative;
+  padding-inline: 0.55rem;
+}
+
+.run-tab-more .run-tab-alert {
+  position: absolute;
+  top: 0.25rem;
+  right: 0.25rem;
+}
+
+.run-tab-more-menu {
+  width: 11rem;
+  min-width: 11rem;
+  padding: 0.35rem;
+  border-radius: 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: var(--popover, var(--bg-elevated));
+  color: var(--popover-foreground, var(--text-body));
+  box-shadow: var(--shadow-dropdown);
+}
+
+.run-tab-more-item {
+  min-height: 2.25rem;
+  padding: 0.42rem 0.5rem;
+  gap: 0.55rem;
+  border-radius: 0.45rem;
+  color: var(--text-body);
+  cursor: pointer;
+}
+
+.run-tab-more-item:hover,
+.run-tab-more-item:focus,
+.run-tab-more-item.is-active {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+}
+
+.run-tab-more-item-icon {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 1rem;
+  color: var(--text-muted);
+}
+
+.run-tab-more-item.is-active .run-tab-more-item-icon,
+.run-tab-more-item:hover .run-tab-more-item-icon,
+.run-tab-more-item:focus .run-tab-more-item-icon {
+  color: var(--text-primary);
+}
+
+.run-tab-more-item .run-tab-alert {
+  margin-left: auto;
+}
+
 .run-tab-alert,
 .run-settings-tab-alert {
   width: 0.48rem;

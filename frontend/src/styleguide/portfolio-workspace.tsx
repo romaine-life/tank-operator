@@ -6,9 +6,8 @@
 import {
   ActivityIcon,
   FolderIcon,
-  InfoIcon,
   MonitorIcon,
-  SettingsIcon,
+  MoreHorizontalIcon,
   XIcon,
 } from "lucide-react";
 import { ProviderIcon } from "../providerIcons";
@@ -149,13 +148,8 @@ function PortfolioWorkspaceScene() {
               <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
               <span>Files</span>
             </button>
-            <button className="run-tab run-tab-active" type="button" aria-pressed={true}>
-              <SettingsIcon className="run-tab-icon" aria-hidden="true" />
-              <span>Settings</span>
-            </button>
-            <button className="run-tab" type="button">
-              <InfoIcon className="run-tab-icon" aria-hidden="true" />
-              <span>Help</span>
+            <button className="run-tab run-tab-more run-tab-active" type="button" aria-pressed={true} title="More">
+              <MoreHorizontalIcon className="run-tab-icon" aria-hidden="true" />
             </button>
           </nav>
         </header>

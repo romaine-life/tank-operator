@@ -33,6 +33,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "./components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "./components/ui/dropdown-menu";
 import { AdminAvatarManager } from "./AdminAvatarManager";
 import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
@@ -93,6 +99,7 @@ import {
   MessageSquareIcon,
   MinusIcon,
   MonitorIcon,
+  MoreHorizontalIcon,
   NotebookPenIcon,
   PlayIcon,
   PlusIcon,
@@ -6168,6 +6175,71 @@ function TurnsTab({
         </span>
       )}
     </button>
+  );
+}
+
+function RunHeaderOverflowMenu({
+  settingsActive,
+  helpActive,
+  adminObservabilityAttention,
+  onSettings,
+  onHelp,
+}: {
+  settingsActive: boolean;
+  helpActive: boolean;
+  adminObservabilityAttention?: ClusterHealthStatus | null;
+  onSettings: () => void;
+  onHelp: () => void;
+}) {
+  const active = settingsActive || helpActive;
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className={`run-tab run-tab-more${active ? " run-tab-active" : ""}`}
+          aria-label="More session actions"
+          aria-pressed={active}
+          title="More"
+        >
+          <MoreHorizontalIcon className="run-tab-icon" aria-hidden="true" />
+          {adminObservabilityAttention && (
+            <span
+              className={`run-tab-alert is-${adminObservabilityAttention}`}
+              aria-hidden="true"
+            />
+          )}
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        side="bottom"
+        sideOffset={8}
+        className="run-tab-more-menu"
+      >
+        <DropdownMenuItem
+          className={`run-tab-more-item${settingsActive ? " is-active" : ""}`}
+          onSelect={onSettings}
+        >
+          <SettingsIcon className="run-tab-more-item-icon" aria-hidden="true" />
+          <span>Settings</span>
+          {adminObservabilityAttention && (
+            <span
+              className={`run-tab-alert is-${adminObservabilityAttention}`}
+              aria-hidden="true"
+            />
+          )}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={`run-tab-more-item${helpActive ? " is-active" : ""}`}
+          onSelect={onHelp}
+        >
+          <InfoIcon className="run-tab-more-item-icon" aria-hidden="true" />
+          <span>Help</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -13329,32 +13401,13 @@ function ChatPane({
                 />
                 <span>Files</span>
               </button>
-              <button
-                type="button"
-                className={`run-tab${activeTab === "settings" ? " run-tab-active" : ""}`}
-                onClick={() => toggleRunTab("settings")}
-                aria-pressed={activeTab === "settings"}
-                title="Settings"
-              >
-                <SettingsIcon className="run-tab-icon" aria-hidden="true" />
-                <span>Settings</span>
-                {adminObservabilityAttention && (
-                  <span
-                    className={`run-tab-alert is-${adminObservabilityAttention}`}
-                    aria-hidden="true"
-                  />
-                )}
-              </button>
-              <button
-                type="button"
-                className={`run-tab${activeTab === "help" ? " run-tab-active" : ""}`}
-                onClick={() => toggleRunTab("help")}
-                aria-pressed={activeTab === "help"}
-                title="Help"
-              >
-                <InfoIcon className="run-tab-icon" aria-hidden="true" />
-                <span>Help</span>
-              </button>
+              <RunHeaderOverflowMenu
+                settingsActive={activeTab === "settings"}
+                helpActive={activeTab === "help"}
+                adminObservabilityAttention={adminObservabilityAttention}
+                onSettings={() => toggleRunTab("settings")}
+                onHelp={() => toggleRunTab("help")}
+              />
             </>
           )}
       </>)}
@@ -17037,32 +17090,21 @@ function AuthenticatedApp() {
                 />
                 <span>Files</span>
               </button>
-              <button
-                type="button"
-                className={`run-tab${homeActiveTab === "settings" ? " run-tab-active" : ""}`}
-                onClick={() => setHomeActiveTab((current) => current === "settings" ? "chat" : "settings")}
-                aria-pressed={homeActiveTab === "settings"}
-                title="Settings"
-              >
-                <SettingsIcon className="run-tab-icon" aria-hidden="true" />
-                <span>Settings</span>
-                {adminObservabilityAttention && (
-                  <span
-                    className={`run-tab-alert is-${adminObservabilityAttention}`}
-                    aria-hidden="true"
-                  />
-                )}
-              </button>
-              <button
-                type="button"
-                className={`run-tab${homeActiveTab === "help" ? " run-tab-active" : ""}`}
-                onClick={() => setHomeActiveTab((current) => current === "help" ? "chat" : "help")}
-                aria-pressed={homeActiveTab === "help"}
-                title="Help"
-              >
-                <InfoIcon className="run-tab-icon" aria-hidden="true" />
-                <span>Help</span>
-              </button>
+              <RunHeaderOverflowMenu
+                settingsActive={homeActiveTab === "settings"}
+                helpActive={homeActiveTab === "help"}
+                adminObservabilityAttention={adminObservabilityAttention}
+                onSettings={() =>
+                  setHomeActiveTab((current) =>
+                    current === "settings" ? "chat" : "settings"
+                  )
+                }
+                onHelp={() =>
+                  setHomeActiveTab((current) =>
+                    current === "help" ? "chat" : "help"
+                  )
+                }
+              />
             </>)}
             composerVisible={homeActiveTab === "chat"}
             composerWrapRef={homeComposerWrapRef}
