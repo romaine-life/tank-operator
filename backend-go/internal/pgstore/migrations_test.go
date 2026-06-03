@@ -101,6 +101,56 @@ func TestAppliedMigration0078ChecksumIsStable(t *testing.T) {
 	t.Fatalf("migration %s not found", id)
 }
 
+func TestAppliedMigration0100LegacyChecksumIsAccepted(t *testing.T) {
+	const (
+		id              = "0100"
+		legacyChecksum  = "306071cc8a62f897ea596b722c484115b537126eb0c570282f1b0df6049a994c"
+		currentChecksum = "389133b9806e223de866d2a336669db41bae3adfbd68612641bbd44e78d43619"
+	)
+
+	for _, m := range schemaMigrations {
+		if m.ID != id {
+			continue
+		}
+		if got := migrationChecksum(m.SQL); got != currentChecksum {
+			t.Fatalf("migration %s checksum = %s, want %s", id, got, currentChecksum)
+		}
+		if !migrationChecksumAccepted(id, legacyChecksum, currentChecksum) {
+			t.Fatalf("migration %s legacy checksum is not accepted", id)
+		}
+		if migrationChecksumAccepted(id, "not-a-real-checksum", currentChecksum) {
+			t.Fatalf("migration %s accepted an unknown checksum", id)
+		}
+		return
+	}
+	t.Fatalf("migration %s not found", id)
+}
+
+func TestRuntimeContextWindowColumnsHaveForwardRepairMigrations(t *testing.T) {
+	migrations := joinedMigrationSQL()
+	for _, column := range []string{
+		"runtime_context_window_tokens bigint NOT NULL DEFAULT 0",
+		"runtime_context_window_source text NOT NULL DEFAULT ''",
+		"runtime_context_window_observed_at timestamptz",
+	} {
+		if count := strings.Count(migrations, "ADD COLUMN IF NOT EXISTS "+column); count < 2 {
+			t.Fatalf("runtime context column %q appears %d times, want original plus forward repair", column, count)
+		}
+	}
+	for _, id := range []string{"0106", "0107", "0108"} {
+		found := false
+		for _, m := range schemaMigrations {
+			if m.ID == id {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("forward repair migration %s not found", id)
+		}
+	}
+}
+
 func TestRuntimeRepoDiscoveryColumnIsDroppedAfterApplied0078(t *testing.T) {
 	migrations := joinedMigrationSQL()
 	addIndex := strings.Index(migrations, "ADD COLUMN IF NOT EXISTS discovered_repos")
