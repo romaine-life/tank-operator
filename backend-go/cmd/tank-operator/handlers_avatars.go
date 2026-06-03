@@ -20,6 +20,14 @@ const (
 	maxAvatarCropBytes      = 1048576
 	maxAvatarBackingBytes   = 8388608
 	maxAvatarMultipartBytes = maxAvatarCropBytes + maxAvatarBackingBytes + 1048576
+
+	// maxAvatarCropSize mirrors the frontend avatarCropMaxSize. The circular
+	// selection may extend past the source image — everything the circle covers
+	// outside the image is baked as transparency by the client-side canvas
+	// render — so crop size is allowed to exceed 1. This is only a sanity
+	// ceiling on the stored crop metadata; keep it in lockstep with the
+	// frontend constant in adminAvatarCrop.ts.
+	maxAvatarCropSize = 3.0
 )
 
 var allowedAvatarUploadMIMEs = map[string]struct{}{
@@ -547,8 +555,8 @@ func parseAvatarCrop(raw string) (avatarassets.Crop, error) {
 	if crop.CenterX < 0 || crop.CenterX > 1 || crop.CenterY < 0 || crop.CenterY > 1 {
 		return avatarassets.Crop{}, errors.New("crop center must be between 0 and 1")
 	}
-	if crop.Size <= 0 || crop.Size > 1 {
-		return avatarassets.Crop{}, errors.New("crop size must be between 0 and 1")
+	if crop.Size <= 0 || crop.Size > maxAvatarCropSize {
+		return avatarassets.Crop{}, errors.New("crop size must be greater than 0 and at most 3")
 	}
 	if crop.SourceWidth < 0 || crop.SourceHeight < 0 {
 		return avatarassets.Crop{}, errors.New("crop source dimensions must be positive")
