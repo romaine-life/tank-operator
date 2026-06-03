@@ -56,7 +56,6 @@ test("adapter maps Claude compact_boundary to a context.compacted notice", () =>
       uuid: "claude-compact-1",
       compact_metadata: { trigger: "auto", pre_tokens: 154321 },
     },
-    new Set<string>(),
   );
 
   assert.deepEqual(events.map((event) => event.type), ["context.compacted"]);
@@ -75,7 +74,6 @@ test("adapter defaults a malformed compact_boundary to an auto notice without to
     cfg(),
     turn(),
     { type: "system", subtype: "compact_boundary", uuid: "claude-compact-2" },
-    new Set<string>(),
   );
 
   assert.equal(events.length, 1);
@@ -389,7 +387,6 @@ test("adapter emits a per-message context-occupancy snapshot tagged claude.messa
         },
       },
     },
-    new Set<string>(),
   );
 
   const usageEvents = events.filter((event) => event.type === "turn.usage");
@@ -414,7 +411,6 @@ test("adapter emits no usage snapshot when a Claude assistant message carries no
       uuid: "claude-msg-nousage",
       message: { content: [{ type: "text", text: "hi" }] },
     },
-    new Set<string>(),
   );
   assert.equal(events.some((event) => event.type === "turn.usage"), false);
 });
@@ -438,7 +434,6 @@ test("adapter tags the cumulative Claude result terminal as claude.result", () =
         output_tokens: 19_380,
       },
     },
-    new Set<string>(),
   );
   assert.equal(result.length, 1);
   assertTankEventFixture(result[0]!);

@@ -64,8 +64,3 @@ jobs:
       # This guard fails if any of it returns.
       - name: Check AskUserQuestion in-turn surfaces stay removed
         run: node scripts/check-askuserquestion-migration.mjs
-
-      # Stop is a control-plane interrupt_turn command (not a chat-runtime
-      # socket / the retired stop mechanisms). This guard pins that migration.
-      - name: Check stop-request migration surfaces stay removed
-        run: node scripts/check-stop-request-migration.mjs

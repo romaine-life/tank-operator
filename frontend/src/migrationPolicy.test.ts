@@ -450,10 +450,9 @@ test("turn view entry points open at the turn bottom", () => {
     appSource.includes('onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}'),
     true,
   );
-  assert.equal(
-    appSource.includes('onOpenTurn?.(targetTurnId, { anchor: "bottom" })'),
-    true,
-  );
+  // The AskUserQuestion handoff is now the interactive RunAwaitingInputCard,
+  // answered inline in the transcript, so the retired RunNeedsInputAnnouncement
+  // "go to the question turn" navigation (onOpenTurn?.(targetTurnId, …)) is gone.
   assert.equal(
     appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })'),
     true,

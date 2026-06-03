@@ -25,7 +25,7 @@ yanking the viewport away from a user reading history.
 - `session_turns.turn_number` owns the durable, per-session, submission-ordered
   turn number that the public route `/sessions/{id}/turns/{n}` resolves into.
   `turn_id` (`turn_<nonce>`) remains the provider-neutral protocol identity that
-  events, timelines, idempotency, and the activity/interrupt/input-reply APIs
+  events, timelines, idempotency, and the activity/interrupt/answer APIs
   key on; the number is a stable public handle over it, not a replacement, and
   the turn_id-keyed APIs are the identity layer the public route resolves into,
   not a retained old route. A number is assigned exactly once, server-side, by
