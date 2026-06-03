@@ -9,8 +9,8 @@
 // Tank events on the session bus. Raw provider events never reach the
 // bus. Boundary events (user_message.created, turn.submitted) are owned
 // by the backend (handlers_turns.go) — the runner does not republish them.
-// ScheduleWakeup is a pod-local setTimeout that re-enqueues a submit_turn
-// command when the timer fires.
+// ScheduleWakeup tool_use calls are registered with the backend, which owns
+// durable timer state and submits the later turn through handlers_turns.go.
 //
 // On error: log and keep running. Single-turn failures shouldn't kill the
 // runner; persistent failures will surface via session-bus publish errors.
@@ -25,8 +25,6 @@ import {
   type SDKUserMessage,
   type Options,
 } from "@anthropic-ai/claude-agent-sdk";
-import { randomUUID } from "node:crypto";
-
 import {
   canonicalEventsForClaudeMessage,
   claudeTaskIdentifiers,
@@ -66,14 +64,15 @@ import {
   natsPublishFailureTotal,
   optionsOverrideIgnoredTotal,
   optionsPinnedTotal,
-  pendingWakeupsGauge,
   providerControlTotal,
   providerErrorTotal,
   providerFailureClassTotal,
   recordTurnStart,
   recordTurnTerminal,
+  scheduledWakeupRegisterTotal,
 } from "./metrics.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
+import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js";
 
 // Pull a single dispatch out as a free function so the session-bus publish
 // contract is testable without spinning up a Runner. The sink only accepts
@@ -743,7 +742,7 @@ export class Runner {
 
     const wakeup = extractWakeup(message);
     if (wakeup) {
-      this.scheduleWakeup(wakeup);
+      await this.registerWakeup(wakeup, activeTurn?.turnID ?? "");
     }
   }
 
@@ -1634,18 +1633,19 @@ export class Runner {
     );
   }
 
-  private scheduleWakeup(req: WakeupRequest): void {
-    const delayMs = Math.max(0, req.delayMs);
-    pendingWakeupsGauge.inc();
-    setTimeout(() => {
-      pendingWakeupsGauge.dec();
-      void this.commandBus
-        .enqueueWakeupSubmitTurn({
-          prompt: req.prompt,
-          clientNonce: `schedule_wakeup-${randomUUID()}`,
-        })
-        .catch((err) => console.error("schedule wakeup fire failed:", err));
-    }, delayMs);
+  private async registerWakeup(req: WakeupRequest, scheduledTurnID: string): Promise<void> {
+    try {
+      const registered = await registerScheduledWakeup(this.cfg, {
+        delayMs: req.delayMs,
+        prompt: req.prompt,
+        providerItemID: req.providerItemID,
+        scheduledTurnID,
+      });
+      scheduledWakeupRegisterTotal.labels(registered ? "ok" : "disabled").inc();
+    } catch (err) {
+      scheduledWakeupRegisterTotal.labels("failed").inc();
+      console.error("scheduled wakeup register failed:", err);
+    }
   }
 
   private async finalizeCommandIfAlreadyTerminal(

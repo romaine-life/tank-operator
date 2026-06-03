@@ -42,6 +42,12 @@ the rest of the product reconstruct what happened.
 - Runner events must wake transcript and session-list followers after
   persistence.
 - A runner must not require an open browser to continue work.
+- Claude `ScheduleWakeup` state is durable in Postgres. The runner registers
+  the provider tool_use item with the backend; the orchestrator later submits
+  the wakeup through the same backend-owned turn boundary as a user turn.
+  The browser reads `GET /api/sessions/{session_id}/scheduled-wakeups` and
+  renders those rows in Background -> Scheduled so users can confirm due,
+  firing, fired, and failed state without inspecting logs.
 - Token usage is durable. Each turn emits cumulative usage on its terminal
   (for cost) and, where the provider exposes per-call usage, a `turn.usage`
   snapshot per model call (for live context-window occupancy). Claude reports
@@ -56,8 +62,9 @@ the rest of the product reconstruct what happened.
 - Browser disconnect and orchestrator rollout must not cancel runner work while
   the session pod and runner remain alive.
 - Runner-process restart may lose in-process state that is explicitly outside
-  the durability boundary, such as current provider call state or pod-local
-  scheduled wakeups.
+  the durability boundary, such as current provider call state. Scheduled
+  wakeups are not in-process state and must remain visible from the backend
+  scheduled-wakeup table after a runner restart.
 - Command redelivery must be idempotent through command keys, turn IDs, or
   provider item IDs.
 - Provider failures must become durable failure events instead of silent

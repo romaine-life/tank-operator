@@ -1164,6 +1164,43 @@ var schemaMigrations = []migration{
 		FOR EACH ROW
 		WHEN (NEW.turn_id IS NOT NULL AND NEW.turn_id <> '')
 		EXECUTE FUNCTION tank_session_events_allocate_turn_number()`},
+
+	// session_scheduled_wakeups — durable backend-owned ScheduleWakeup state.
+	// Claude emits ScheduleWakeup as a provider tool_use item; the runner
+	// registers that item here and the orchestrator claims due rows, persists
+	// normal user_message.created + turn.submitted boundary events, then
+	// publishes the submit_turn command. The provider_item_id uniqueness is the
+	// idempotency key for SDK replay and runner restart: one Claude tool_use can
+	// produce at most one scheduled wakeup row.
+	{ID: "0095", SQL: `CREATE TABLE IF NOT EXISTS session_scheduled_wakeups (
+		wakeup_id         text PRIMARY KEY,
+		session_scope     text NOT NULL,
+		session_id        text NOT NULL,
+		tank_session_id   text NOT NULL,
+		owner_email       text NOT NULL,
+		provider          text NOT NULL,
+		prompt            text NOT NULL,
+		client_nonce      text NOT NULL,
+		scheduled_turn_id text NOT NULL DEFAULT '',
+		provider_item_id  text NOT NULL,
+		scheduled_at      timestamptz NOT NULL,
+		due_at            timestamptz NOT NULL,
+		status            text NOT NULL CHECK (status IN ('scheduled', 'claiming', 'fired', 'failed')),
+		attempt_count     integer NOT NULL DEFAULT 0,
+		locked_at         timestamptz,
+		fired_at          timestamptz,
+		fired_turn_id     text NOT NULL DEFAULT '',
+		last_error        text NOT NULL DEFAULT '',
+		created_at        timestamptz NOT NULL DEFAULT now(),
+		updated_at        timestamptz NOT NULL DEFAULT now()
+	)`},
+	{ID: "0096", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_scheduled_wakeups_provider_item
+		ON session_scheduled_wakeups (tank_session_id, provider, provider_item_id)`},
+	{ID: "0097", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_scheduled_wakeups_client_nonce
+		ON session_scheduled_wakeups (tank_session_id, client_nonce)`},
+	{ID: "0098", SQL: `CREATE INDEX IF NOT EXISTS session_scheduled_wakeups_due
+		ON session_scheduled_wakeups (session_scope, status, due_at, created_at)
+		WHERE status IN ('scheduled', 'claiming')`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

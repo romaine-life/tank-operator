@@ -162,21 +162,6 @@ export class SharedSessionBus {
         });
         return ack.duplicate ? "exists" : "created";
     }
-    async enqueueWakeupSubmitTurn(args) {
-        await this.ensureConnected();
-        const command = buildWakeupSubmitTurnCommand({
-            sessionID: this.cfg.sessionId,
-            sessionStorageKey: this.sessionStorageKey,
-            email: this.cfg.ownerEmail,
-            provider: this.provider,
-            prompt: args.prompt,
-            clientNonce: args.clientNonce,
-        });
-        await this.js.publish(commandSubject(this.sessionStorageKey, this.provider), encodeJSON(command), {
-            msgID: command.command_id,
-        });
-        return command;
-    }
     async findTurnTerminal(turnID) {
         const baseURL = trimTrailingSlashes(this.cfg.operatorInternalURL || "");
         const tokenPath = this.cfg.operatorTokenPath || "";
@@ -355,24 +340,6 @@ export class SessionCommandRecord {
     working() {
         this.message.working();
     }
-}
-
-export function buildWakeupSubmitTurnCommand(args) {
-    const now = new Date().toISOString();
-    return {
-        schema_version: 1,
-        command_id: `turn:${args.clientNonce}`,
-        type: "submit_turn",
-        session_id: args.sessionID,
-        session_storage_key: args.sessionStorageKey || args.sessionID,
-        email: args.email,
-        provider: args.provider,
-        source: "schedule-wakeup",
-        turn_id: turnIDForClientNonce(args.clientNonce),
-        client_nonce: args.clientNonce,
-        prompt: args.prompt,
-        created_at: now,
-    };
 }
 
 export function isInterruptCommand(record) {

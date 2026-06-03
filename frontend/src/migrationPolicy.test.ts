@@ -743,8 +743,24 @@ test("background page includes active shell invocations alongside managed tasks"
   assert.match(appSource, /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}/);
 });
 
+test("background page surfaces scheduled wakeups as first-class continuation state", () => {
+  assert.match(appSource, /type BackgroundView = "shells" \| "scheduled" \| "detached"/);
+  assert.match(
+    appSource,
+    /function isScheduledWakeupEntry\([\s\S]*?entry\.taskKind === "scheduled_wakeup"/,
+  );
+  assert.match(appSource, /<span>Scheduled<\/span>[\s\S]*?<span>\{scheduledEntries\.length\}<\/span>/);
+  assert.match(
+    appSource,
+    /scheduledWakeupRowsToEntries\(body\.scheduled_wakeups \?\? \[\]\)/,
+  );
+  assert.match(
+    appSource,
+    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+scheduledEntries=\{scheduledWakeupEntries\}/,
+  );
+});
+
 test("background page separates tracked shells from detached shell candidates", () => {
-  assert.match(appSource, /type BackgroundView = "shells" \| "detached"/);
   assert.match(
     appSource,
     /function isDetachedShellCandidateEntry\([\s\S]*?isShellToolEntry\(entry\)[\s\S]*?detachedShellLaunchReason\(entry\)/,
@@ -756,14 +772,14 @@ test("background page separates tracked shells from detached shell candidates", 
   );
   assert.match(
     appSource,
-    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+detachedEntries=\{detachedShellEntries\}/,
+    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+scheduledEntries=\{scheduledWakeupEntries\}\n\s+detachedEntries=\{detachedShellEntries\}/,
   );
 });
 
 test("background stop controls exclude untracked detached shells", () => {
   assert.match(
     appSource,
-    /function canStopBackgroundActivity\([\s\S]*?isDetachedShellCandidateEntry\(entry\)\) return false[\s\S]*?isRunningShellInvocationEntry\(entry\)[\s\S]*?isBackgroundTaskEntry\(entry\)[\s\S]*?codexBackgroundStopAvailable/,
+    /function canStopBackgroundActivity\([\s\S]*?isDetachedShellCandidateEntry\(entry\)\) return false[\s\S]*?isRunningShellInvocationEntry\(entry\)[\s\S]*?isScheduledWakeupEntry\(entry\)\) return false[\s\S]*?isBackgroundTaskEntry\(entry\)[\s\S]*?codexBackgroundStopAvailable/,
   );
   assert.match(appSource, /<BackgroundScreen[\s\S]*canStopEntry=\{canStopBackgroundEntry\}[\s\S]*onStop=\{stopBackgroundActivity\}/);
   assert.match(appSource, /className="run-shell-task-stop"/);
