@@ -187,6 +187,7 @@ import {
 import {
   SessionStore,
   normalizeSessionRowUpdate,
+  type SessionBugLabel,
   type SessionRow,
 } from "./sessionStore";
 import { decideFollowupSubmit } from "./submitLatch";
@@ -651,6 +652,7 @@ interface Session {
   // Optional until the cloner writes back.
   clone_state?: Record<string, unknown> | null;
   capabilities: string[];
+  bug_label?: SessionBugLabel | null;
   model?: string;
   effort?: string;
   runtime_model?: string;
@@ -1097,6 +1099,27 @@ function stringArraysEqual(a: readonly string[], b: readonly string[]): boolean 
   return true;
 }
 
+function normalizeBugLabel(value: unknown): SessionBugLabel | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const name = typeof record.name === "string" ? record.name : "";
+  const slug = typeof record.slug === "string" ? record.slug : "";
+  const displayName =
+    typeof record.display_name === "string" && record.display_name
+      ? record.display_name
+      : name
+        ? `bug: ${name}`
+        : "";
+  if (!name || !slug || !displayName) return null;
+  const id = typeof record.id === "number" && Number.isFinite(record.id) ? record.id : undefined;
+  return {
+    ...(id !== undefined ? { id } : {}),
+    name,
+    slug,
+    display_name: displayName,
+  };
+}
+
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
   // The backend includes an activity block on GET /api/sessions
@@ -1117,6 +1140,7 @@ function normalizeSession(session: Session): Session {
   next.capabilities = Array.isArray(session.capabilities)
     ? session.capabilities.filter((entry): entry is string => typeof entry === "string")
     : [];
+  next.bug_label = normalizeBugLabel(session.bug_label);
   next.model = typeof session.model === "string" ? session.model : "";
   next.effort = typeof session.effort === "string" ? session.effort : "";
   next.runtime_model = typeof session.runtime_model === "string" ? session.runtime_model : "";
@@ -1737,6 +1761,7 @@ interface ComposerToolButtonsProps {
     count?: number;
     onMouseDown?: (event: ReactMouseEvent<HTMLButtonElement>) => void;
   };
+  bugLabelControl?: ReactNode;
   modelChip?: ReactNode;
 }
 
@@ -1748,6 +1773,7 @@ function ComposerToolButtons({
   pullRequest,
   slash,
   mcp,
+  bugLabelControl,
   modelChip,
 }: ComposerToolButtonsProps) {
   const pullRequestURL = pullRequest.url?.trim() || "";
@@ -1826,6 +1852,7 @@ function ComposerToolButtons({
           <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
         </button>
       )}
+      {bugLabelControl}
       <button
         type="button"
         className="run-composer-icon-btn run-command-menu-btn"
@@ -1854,6 +1881,156 @@ function ComposerToolButtons({
       </button>
       {modelChip}
     </>
+  );
+}
+
+type BugLabelSuggestion = SessionBugLabel & {
+  session_count?: number;
+};
+
+function BugLabelPicker({
+  value,
+  activeSlug,
+  disabled,
+  requestPath,
+  onSave,
+  allowClear = true,
+}: {
+  value: string;
+  activeSlug?: string | null;
+  disabled?: boolean;
+  requestPath: (path: string) => string;
+  onSave: (name: string | null) => Promise<void> | void;
+  allowClear?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const [labels, setLabels] = useState<BugLabelSuggestion[]>([]);
+  const [draft, setDraft] = useState(value);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!open) return;
+    setDraft(value);
+    setError("");
+    let cancelled = false;
+    setLoading(true);
+    authedFetch(requestPath("/api/bug-labels"))
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`labels failed: ${res.status}`);
+        return res.json();
+      })
+      .then((body) => {
+        if (cancelled) return;
+        const rawLabels: unknown[] = Array.isArray(body.labels) ? body.labels : [];
+        const next = rawLabels
+          .map((raw): BugLabelSuggestion | null => {
+            const label = normalizeBugLabel(raw);
+            if (!label || !raw || typeof raw !== "object" || Array.isArray(raw)) return label;
+            const count = (raw as Record<string, unknown>).session_count;
+            return {
+              ...label,
+              ...(typeof count === "number" && Number.isFinite(count)
+                ? { session_count: count }
+                : {}),
+            };
+          })
+          .filter((label): label is BugLabelSuggestion => Boolean(label));
+        setLabels(next);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, requestPath, value]);
+
+  const currentLabel = value;
+  const title = currentLabel ? `Bug label: ${currentLabel}` : "Set bug label";
+  const normalizedDraft = draft.trim();
+  const save = async (name: string | null) => {
+    setSaving(true);
+    setError("");
+    try {
+      await onSave(name);
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <span className="run-bug-label-picker">
+      <button
+        type="button"
+        className={`run-composer-icon-btn run-bug-label-trigger${currentLabel ? " is-active" : ""}`}
+        aria-label={title}
+        title={title}
+        disabled={disabled}
+        onClick={() => setOpen((value) => !value)}
+      >
+        <BugIcon className="run-composer-icon" aria-hidden="true" />
+      </button>
+      {open && (
+        <div className="run-bug-label-popover">
+          <form
+            className="run-bug-label-form"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void save(normalizedDraft || null);
+            }}
+          >
+            <input
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder="bug: label"
+              autoFocus
+              maxLength={90}
+            />
+            <button type="submit" disabled={saving || normalizedDraft === currentLabel}>
+              Save
+            </button>
+          </form>
+          {error && <div className="run-bug-label-error">{error}</div>}
+          <div className="run-bug-label-list">
+            {loading && <div className="run-bug-label-empty">Loading...</div>}
+            {!loading && labels.map((label) => (
+              <button
+                key={label.slug}
+                type="button"
+                className={`run-bug-label-option${label.slug === activeSlug ? " is-active" : ""}`}
+                onClick={() => void save(label.display_name)}
+              >
+                <span>{label.display_name}</span>
+                {typeof label.session_count === "number" && (
+                  <span>{label.session_count}</span>
+                )}
+              </button>
+            ))}
+            {!loading && labels.length === 0 && (
+              <div className="run-bug-label-empty">No labels</div>
+            )}
+          </div>
+          {allowClear && currentLabel && (
+            <button
+              type="button"
+              className="run-bug-label-clear"
+              onClick={() => void save(null)}
+              disabled={saving}
+            >
+              Clear
+            </button>
+          )}
+        </div>
+      )}
+    </span>
   );
 }
 
@@ -14528,6 +14705,7 @@ function AuthenticatedApp() {
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
+  const [homeBugLabel, setHomeBugLabel] = useState("");
   const [homeSpireLensMcpEnabled, setHomeSpireLensMcpEnabled] = useState(false);
   const recentRepoShortcuts = useMemo(
     () => repoShortcutSlugs(pinnedRepos, recentRepos),
@@ -14636,6 +14814,7 @@ function AuthenticatedApp() {
     (path: string) => appendQueryParam(path, "session_scope", effectiveSessionScope),
     [effectiveSessionScope],
   );
+  const localSessionPath = useCallback((path: string) => path, []);
   const adminSettingsControls =
     hasAdminAccess
       ? {
@@ -15172,6 +15351,7 @@ function AuthenticatedApp() {
       repos: Array.isArray(row.repos) ? row.repos : [],
       clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
       capabilities: Array.isArray(row.capabilities) ? row.capabilities : [],
+      bug_label: row.bug_label ?? null,
       model: row.model ?? "",
       effort: row.effort ?? "",
       runtime_model: row.runtime_model ?? "",
@@ -15214,6 +15394,7 @@ function AuthenticatedApp() {
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
       capabilities: Array.isArray(raw.capabilities) ? raw.capabilities.map(String) : [],
+      bug_label: normalizeBugLabel(raw.bug_label),
       model: typeof raw.model === "string" ? raw.model : undefined,
       effort: typeof raw.effort === "string" ? raw.effort : undefined,
       runtime_model: typeof raw.runtime_model === "string" ? raw.runtime_model : undefined,
@@ -15939,6 +16120,7 @@ function AuthenticatedApp() {
     // mode-override createSession() call could otherwise send repos for a
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
+    const bugLabel = homeBugLabel.trim();
     const capabilities = spireLensMcpAvailable && homeSpireLensMcpEnabled ? ["spirelens_mcp"] : [];
     const requestedName = normalizedHomeTitleNameFrom(
       homeSessionNameRef.current,
@@ -15989,6 +16171,7 @@ function AuthenticatedApp() {
         body: JSON.stringify({
           mode,
           repos,
+          ...(bugLabel ? { bug_label: bugLabel } : {}),
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(requestedName ? { name: requestedName } : {}),
           ...(sessionModel || sessionEffort ? { model: sessionModel, effort: sessionEffort } : {}),
@@ -17150,6 +17333,19 @@ function AuthenticatedApp() {
                       }}
                     />
                   )}
+                  <div className="home-bug-label-row">
+                    <BugLabelPicker
+                      value={homeBugLabel}
+                      disabled={busy}
+                      requestPath={localSessionPath}
+                      onSave={(name) => {
+                        setHomeBugLabel(name?.trim() ?? "");
+                      }}
+                    />
+                    <span className="home-bug-label-summary">
+                      {homeBugLabel || "No bug label"}
+                    </span>
+                  </div>
                   {spireLensMcpAvailable && (
                     <button
                       type="button"
@@ -17277,6 +17473,16 @@ function AuthenticatedApp() {
                       title: "Available in an active chat session",
                     }}
                     pullRequest={{}}
+                    bugLabelControl={
+                      <BugLabelPicker
+                        value={homeBugLabel}
+                        disabled={busy}
+                        requestPath={localSessionPath}
+                        onSave={(name) => {
+                          setHomeBugLabel(name?.trim() ?? "");
+                        }}
+                      />
+                    }
                     slash={{
                       disabled: true,
                       title: "Slash commands appear once your session has skills",

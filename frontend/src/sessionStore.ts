@@ -42,6 +42,13 @@ import {
   type SessionListDebugEvent,
 } from "./sessionListDebug";
 
+export interface SessionBugLabel {
+  id?: number;
+  name: string;
+  slug: string;
+  display_name: string;
+}
+
 // SessionRow is the wire shape one row-update payload's `row` field
 // carries. Field set mirrors the SessionRecord projection the backend
 // emits in sessioncontroller.MarshalRowUpdate, and matches the
@@ -76,6 +83,7 @@ export interface SessionRow {
   // "no clone state yet" rather than "clone succeeded."
   clone_state?: Record<string, unknown>;
   capabilities: string[];
+  bug_label?: SessionBugLabel | null;
   model?: string;
   effort?: string;
   runtime_model?: string;
@@ -511,6 +519,7 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
             (entry): entry is string => typeof entry === "string",
           )
         : [],
+      bug_label: normalizeSessionBugLabel(rowRaw.bug_label),
       model: stringField(rowRaw, "model") ?? undefined,
       effort: stringField(rowRaw, "effort") ?? undefined,
       runtime_model: stringField(rowRaw, "runtime_model") ?? undefined,
@@ -536,6 +545,21 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeSessionBugLabel(value: unknown): SessionBugLabel | null {
+  if (!isRecord(value)) return null;
+  const name = stringField(value, "name");
+  const slug = stringField(value, "slug");
+  const displayName = stringField(value, "display_name") ?? (name ? `bug: ${name}` : null);
+  if (!name || !slug || !displayName) return null;
+  const id = numberField(value, "id");
+  return {
+    ...(id !== null ? { id } : {}),
+    name,
+    slug,
+    display_name: displayName,
+  };
 }
 
 function stringField(value: Record<string, unknown>, key: string): string | null {

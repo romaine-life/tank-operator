@@ -9,6 +9,7 @@ import (
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 func TestSessionReportWindowFromRequestSupportsOneDay(t *testing.T) {
@@ -147,14 +148,17 @@ func TestSummarizeSessionReportCreditsSelectedRepos(t *testing.T) {
 		},
 	}
 
-	repos, totals := summarizeSessionReport(sessions)
+	repos, bugLabels, totals := summarizeSessionReport(sessions)
 	if totals.SessionCount != 2 || totals.RepoCount != 3 || totals.TurnCount != 3 || totals.TotalTokens != 140 || totals.UsageEvents != 3 {
 		t.Fatalf("totals = %+v", totals)
+	}
+	if len(bugLabels) != 0 || totals.BugLabelCount != 0 {
+		t.Fatalf("bug labels = %+v totals=%+v", bugLabels, totals)
 	}
 	want := map[string]int64{
 		"romaine-life/tank-operator": 100,
 		"romaine-life/glimmung":      100,
-		sessionReportUnassigned:  40,
+		sessionReportUnassigned:      40,
 	}
 	for _, repo := range repos {
 		if got, ok := want[repo.Repo]; !ok || repo.TotalTokens != got {
@@ -167,5 +171,42 @@ func TestSummarizeSessionReportCreditsSelectedRepos(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing repo summaries: %v", want)
+	}
+}
+
+func TestSummarizeSessionReportGroupsBugLabels(t *testing.T) {
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	label := &sessionmodel.SessionBugLabel{
+		ID:          7,
+		Name:        "Slow checkout",
+		Slug:        "slow-checkout",
+		DisplayName: "bug: Slow checkout",
+	}
+	_, bugLabels, totals := summarizeSessionReport([]sessionReportRow{
+		{
+			SessionID: "1",
+			BugLabel:  label,
+			UpdatedAt: now,
+			Usage:     tokenUsage{TotalTokens: 25, InputTokens: 20, OutputTokens: 5, TurnCount: 1},
+		},
+		{
+			SessionID: "2",
+			BugLabel:  label,
+			UpdatedAt: now.Add(time.Minute),
+			Usage:     tokenUsage{TotalTokens: 75, InputTokens: 50, OutputTokens: 25, TurnCount: 3},
+		},
+	})
+	if totals.BugLabelCount != 1 {
+		t.Fatalf("totals = %+v", totals)
+	}
+	if len(bugLabels) != 1 {
+		t.Fatalf("bug labels = %+v", bugLabels)
+	}
+	got := bugLabels[0]
+	if got.Label != "bug: Slow checkout" || got.SessionCount != 2 || got.TurnCount != 4 || got.TotalTokens != 100 {
+		t.Fatalf("bug label summary = %+v", got)
+	}
+	if got.LastTouched == nil || !got.LastTouched.Equal(now.Add(time.Minute)) {
+		t.Fatalf("last touched = %v", got.LastTouched)
 	}
 }

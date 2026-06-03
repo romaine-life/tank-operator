@@ -383,6 +383,31 @@ func TestCreateSessionInitialTurnPersistsBeforeStartupStatus(t *testing.T) {
 	}
 }
 
+func TestCreateSessionAcceptsBugLabel(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"claude_gui",
+		"bug_label":"bug: repeated validation defect"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	var created sessions.Info
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create response: %v", err)
+	}
+	if created.BugLabel == nil || created.BugLabel.DisplayName != "bug: repeated validation defect" {
+		t.Fatalf("bug_label = %#v, want normalized display label", created.BugLabel)
+	}
+}
+
 func TestCreateSessionRejectsCodexWithoutExplicitModel(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus)

@@ -704,6 +704,14 @@ test("files tab is gated until the session container is available", () => {
   assert.match(appSource, /disabled=\{!filesAvailable\}/);
 });
 
+test("session bug labels are available at create time", () => {
+  assert.equal(appSource.includes("const [homeBugLabel, setHomeBugLabel]"), true);
+  assert.equal(appSource.includes("bug_label: bugLabel"), true);
+  assert.equal(appSource.includes("<SessionBugLabelPicker"), false);
+  assert.equal(appSource.includes("bugLabelControl={"), true);
+  assert.equal(sessionBarCapabilitiesSource.includes("splash composer tool strip stages the label"), true);
+});
+
 test("read-only cross-scope sessions keep an explicit composer affordance", () => {
   assert.match(appSource, /composerVisible=\{activeTab === "chat" && !publicView\}/);
   assert.equal(

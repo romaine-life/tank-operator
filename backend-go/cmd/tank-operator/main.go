@@ -876,6 +876,9 @@ func (r *stubSessionRegistry) Upsert(_ context.Context, _ sessionmodel.SessionRe
 	return nil
 }
 func (r *stubSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
+func (r *stubSessionRegistry) SetBugLabel(_ context.Context, _, _ string, _ *sessionmodel.SessionBugLabel) error {
+	return nil
+}
 func (r *stubSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }

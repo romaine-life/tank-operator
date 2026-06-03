@@ -2,6 +2,7 @@ package sessionregistry
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -215,6 +216,72 @@ func (s *Store) SetName(ctx context.Context, email, sessionID string, name *stri
 	return err
 }
 
+// SetBugLabel attaches or clears the user's Tank-native bug label for one
+// session. Missing-session errors are left to Postgres' FK/UPDATE behavior:
+// callers validate ownership through Manager before writing. The sessions
+// row_version bump is load-bearing for row-update catch-up.
+func (s *Store) SetBugLabel(ctx context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	sessionID = strings.TrimSpace(sessionID)
+	if normalized == "" || sessionID == "" {
+		return nil
+	}
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	if label == nil {
+		if _, err := tx.Exec(ctx, `
+			DELETE FROM session_bug_labels
+			WHERE owner_email = $1 AND session_scope = $2 AND session_id = $3
+		`, normalized, s.scope, sessionID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE sessions
+			SET updated_at = now(),
+				row_version = nextval('sessions_row_version_seq')
+			WHERE email = $1 AND session_scope = $2 AND session_id = $3
+		`, normalized, s.scope, sessionID); err != nil {
+			return err
+		}
+		return tx.Commit(ctx)
+	}
+
+	var labelID int64
+	if err := tx.QueryRow(ctx, `
+		INSERT INTO bug_labels (owner_email, session_scope, name, slug, updated_at, archived_at)
+		VALUES ($1, $2, $3, $4, now(), NULL)
+		ON CONFLICT (owner_email, session_scope, slug) DO UPDATE
+		SET name = EXCLUDED.name,
+			updated_at = now(),
+			archived_at = NULL
+		RETURNING id
+	`, normalized, s.scope, strings.TrimSpace(label.Name), strings.TrimSpace(label.Slug)).Scan(&labelID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO session_bug_labels (owner_email, session_scope, session_id, bug_label_id, attached_at)
+		VALUES ($1, $2, $3, $4, now())
+		ON CONFLICT (owner_email, session_scope, session_id) DO UPDATE
+		SET bug_label_id = EXCLUDED.bug_label_id,
+			attached_at = now()
+	`, normalized, s.scope, sessionID, labelID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE sessions
+		SET updated_at = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`, normalized, s.scope, sessionID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // SetTestState replaces the row's test_state jsonb. nil clears the
 // column. Pod annotations are patched separately by Manager — the
 // session-agent reads the annotation at runtime via the projected
@@ -293,33 +360,42 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		return sessionmodel.SessionRecord{}, false, nil
 	}
 	const q = `
-		SELECT mode, pod_name, name, visible,
-			COALESCE(to_char(requested_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
-			COALESCE(to_char(created_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
-			COALESCE(to_char(updated_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at,
-			status,
-			COALESCE(to_char(ready_at       AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS ready_at,
-			COALESCE(to_char(terminating_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS terminating_at,
-			activity_summary,
-			test_state,
-			rollout_state,
-			COALESCE(repos, '{}'::text[]),
-			clone_state,
-			COALESCE(capabilities, '{}'::text[]),
-			model,
-			effort,
-				runtime_model,
-				runtime_effort,
-				COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
-				runtime_context_window_tokens,
-				runtime_context_window_source,
-				COALESCE(to_char(runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
-				COALESCE(agent_avatar_id, ''),
-				COALESCE(system_avatar_id, ''),
-			sidebar_position,
-			row_version
+		SELECT sessions.mode, sessions.pod_name, sessions.name, sessions.visible,
+			COALESCE(to_char(sessions.requested_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
+			COALESCE(to_char(sessions.created_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
+			COALESCE(to_char(sessions.updated_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at,
+			sessions.status,
+			COALESCE(to_char(sessions.ready_at       AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS ready_at,
+			COALESCE(to_char(sessions.terminating_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS terminating_at,
+			sessions.activity_summary,
+			sessions.test_state,
+			sessions.rollout_state,
+			COALESCE(sessions.repos, '{}'::text[]),
+			sessions.clone_state,
+			COALESCE(sessions.capabilities, '{}'::text[]),
+			sessions.model,
+			sessions.effort,
+			sessions.runtime_model,
+			sessions.runtime_effort,
+			COALESCE(to_char(sessions.runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
+			sessions.runtime_context_window_tokens,
+			sessions.runtime_context_window_source,
+			COALESCE(to_char(sessions.runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+			COALESCE(sessions.agent_avatar_id, ''),
+			COALESCE(sessions.system_avatar_id, ''),
+			sessions.sidebar_position,
+			sessions.row_version,
+			bug_labels.id,
+			bug_labels.name,
+			bug_labels.slug
 		FROM sessions
-		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+		LEFT JOIN session_bug_labels
+			ON session_bug_labels.owner_email = sessions.email
+			AND session_bug_labels.session_scope = sessions.session_scope
+			AND session_bug_labels.session_id = sessions.session_id
+		LEFT JOIN bug_labels
+			ON bug_labels.id = session_bug_labels.bug_label_id
+		WHERE sessions.email = $1 AND sessions.session_scope = $2 AND sessions.session_id = $3
 	`
 	var (
 		mode, podName, requestedAt, createdAt, updatedAt        string
@@ -332,6 +408,8 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		runtimeContextWindowSource, runtimeContextWindowAt      string
 		agentAvatarID, systemAvatarID                           string
 		runtimeContextWindowTokens, sidebarPosition, rowVersion int64
+		bugLabelID                                              sql.NullInt64
+		bugLabelName, bugLabelSlug                              sql.NullString
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
 		&mode, &podName, &name, &visible,
@@ -344,6 +422,9 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&agentAvatarID, &systemAvatarID,
 		&sidebarPosition,
 		&rowVersion,
+		&bugLabelID,
+		&bugLabelName,
+		&bugLabelSlug,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return sessionmodel.SessionRecord{}, false, nil
@@ -386,6 +467,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		SystemAvatarID:                 systemAvatarID,
 		SidebarPosition:                sidebarPosition,
 		RowVersion:                     rowVersion,
+		BugLabel:                       bugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug),
 	}
 	return record, true, nil
 }

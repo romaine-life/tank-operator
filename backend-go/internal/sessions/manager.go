@@ -52,6 +52,7 @@ type SessionRegistry interface {
 	NextSessionID(ctx context.Context) (string, error)
 	Upsert(ctx context.Context, record sessionmodel.SessionRecord) error
 	SetName(ctx context.Context, email, sessionID string, name *string) error
+	SetBugLabel(ctx context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
@@ -359,6 +360,10 @@ type CreateOptions struct {
 	// manifest input; unsupported modes/configurations are rejected before a
 	// row or pod is created.
 	Capabilities []string
+	// BugLabel is the optional Tank-native bug bucket selected at session
+	// creation. It is registry-only state and is persisted before the pod is
+	// created so the POST response and first row snapshot agree.
+	BugLabel *sessionmodel.SessionBugLabel
 }
 
 // Create creates a new session pod and registers it in the registry.
@@ -475,6 +480,11 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			slog.Warn("create registry upsert failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
+		if opts.BugLabel != nil {
+			if regErr := m.registry.SetBugLabel(ctx, owner, sessionID, opts.BugLabel); regErr != nil {
+				return Info{}, regErr
+			}
+		}
 	}
 
 	created, err := m.client.CoreV1().Pods(m.namespace).Create(ctx, &pod, metav1.CreateOptions{})
@@ -510,6 +520,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		Name:           name,
 		Repos:          repos,
 		Capabilities:   capabilities,
+		BugLabel:       opts.BugLabel,
 		Model:          model,
 		Effort:         effort,
 		AgentAvatarID:  assignment.AgentAvatarID,
@@ -618,6 +629,25 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 		return registered, nil
 	}
 	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// SetBugLabel attaches or clears the optional Tank-native bug label for a
+// session. It is registry-only state, so no pod annotation is patched.
+func (m *Manager) SetBugLabel(ctx context.Context, owner, sessionID string, labelName *string) (Info, error) {
+	label, err := sessionmodel.NormalizeBugLabelName(labelName)
+	if err != nil {
+		return Info{}, err
+	}
+	if _, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err != nil {
+		return Info{}, err
+	}
+	if m.registry != nil {
+		if regErr := m.registry.SetBugLabel(ctx, owner, sessionID, label); regErr != nil {
+			return Info{}, regErr
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetRegisteredByOwner(ctx, owner, sessionID)
 }
 
 // SetTestState updates the row's test_state column AND patches the

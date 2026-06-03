@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -30,15 +31,16 @@ const (
 )
 
 type sessionReportRow struct {
-	Owner     string     `json:"owner"`
-	SessionID string     `json:"session_id"`
-	Name      string     `json:"name"`
-	Mode      string     `json:"mode"`
-	Repos     []string   `json:"repos"`
-	Visible   bool       `json:"visible"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	Usage     tokenUsage `json:"usage"`
+	Owner     string                        `json:"owner"`
+	SessionID string                        `json:"session_id"`
+	Name      string                        `json:"name"`
+	Mode      string                        `json:"mode"`
+	Repos     []string                      `json:"repos"`
+	BugLabel  *sessionmodel.SessionBugLabel `json:"bug_label,omitempty"`
+	Visible   bool                          `json:"visible"`
+	CreatedAt time.Time                     `json:"created_at"`
+	UpdatedAt time.Time                     `json:"updated_at"`
+	Usage     tokenUsage                    `json:"usage"`
 }
 
 type sessionReportRepo struct {
@@ -51,14 +53,27 @@ type sessionReportRepo struct {
 	LastTouched  *time.Time `json:"last_touched,omitempty"`
 }
 
+type sessionReportBugLabel struct {
+	Label        string     `json:"label"`
+	Name         string     `json:"name"`
+	Slug         string     `json:"slug"`
+	SessionCount int        `json:"session_count"`
+	TurnCount    int        `json:"turn_count"`
+	TotalTokens  int64      `json:"total_tokens"`
+	InputTokens  int64      `json:"input_tokens"`
+	OutputTokens int64      `json:"output_tokens"`
+	LastTouched  *time.Time `json:"last_touched,omitempty"`
+}
+
 type sessionReportTotals struct {
-	SessionCount int   `json:"session_count"`
-	RepoCount    int   `json:"repo_count"`
-	TurnCount    int   `json:"turn_count"`
-	TotalTokens  int64 `json:"total_tokens"`
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-	UsageEvents  int   `json:"usage_events"`
+	SessionCount  int   `json:"session_count"`
+	RepoCount     int   `json:"repo_count"`
+	BugLabelCount int   `json:"bug_label_count"`
+	TurnCount     int   `json:"turn_count"`
+	TotalTokens   int64 `json:"total_tokens"`
+	InputTokens   int64 `json:"input_tokens"`
+	OutputTokens  int64 `json:"output_tokens"`
+	UsageEvents   int   `json:"usage_events"`
 }
 
 type tokenUsage struct {
@@ -261,7 +276,7 @@ func (s *appServer) buildSessionReportBody(ctx context.Context, scope string, wi
 		return nil, fmt.Errorf("session report usage: %w", err)
 	}
 
-	repos, totals := summarizeSessionReport(sessions)
+	repos, bugLabels, totals := summarizeSessionReport(sessions)
 	return map[string]any{
 		"description": "Cheap draft report over recent sessions. Repo attribution uses create-time sessions.repos only.",
 		"scope":       scope,
@@ -272,6 +287,7 @@ func (s *appServer) buildSessionReportBody(ctx context.Context, scope string, wi
 		"attribution": "A session's latest-per-turn usage is credited to every selected repo on that session; multi-repo sessions intentionally appear in multiple repo buckets.",
 		"totals":      totals,
 		"repos":       repos,
+		"bug_labels":  bugLabels,
 		"sessions":    sessions,
 		"share":       share,
 		"fetched_at":  fetchedAt.UTC().Format(time.RFC3339Nano),
@@ -424,13 +440,28 @@ func decodeSessionReportShareSnapshot(share pgstore.MessageLinkShare) (json.RawM
 
 func fetchSessionReportRows(ctx context.Context, s *appServer, scope string, window sessionReportWindow, limit int) ([]sessionReportRow, error) {
 	const q = `
-		SELECT email, session_id, COALESCE(name, ''), mode, COALESCE(repos, '{}'::text[]),
-		       visible, created_at, updated_at
+		SELECT sessions.email,
+		       sessions.session_id,
+		       COALESCE(sessions.name, ''),
+		       sessions.mode,
+		       COALESCE(sessions.repos, '{}'::text[]),
+		       bug_labels.id,
+		       bug_labels.name,
+		       bug_labels.slug,
+		       sessions.visible,
+		       sessions.created_at,
+		       sessions.updated_at
 		FROM sessions
-		WHERE session_scope = $1
-		  AND created_at >= $2
-		  AND created_at < $3
-		ORDER BY created_at DESC
+		LEFT JOIN session_bug_labels
+			ON session_bug_labels.owner_email = sessions.email
+			AND session_bug_labels.session_scope = sessions.session_scope
+			AND session_bug_labels.session_id = sessions.session_id
+		LEFT JOIN bug_labels
+			ON bug_labels.id = session_bug_labels.bug_label_id
+		WHERE sessions.session_scope = $1
+		  AND sessions.created_at >= $2
+		  AND sessions.created_at < $3
+		ORDER BY sessions.created_at DESC
 		LIMIT $4
 	`
 	rows, err := s.pgPool.Query(ctx, q, scope, window.StartsAt, window.EndsAt, limit)
@@ -442,9 +473,16 @@ func fetchSessionReportRows(ctx context.Context, s *appServer, scope string, win
 	out := make([]sessionReportRow, 0, limit)
 	for rows.Next() {
 		var row sessionReportRow
-		if err := rows.Scan(&row.Owner, &row.SessionID, &row.Name, &row.Mode, &row.Repos, &row.Visible, &row.CreatedAt, &row.UpdatedAt); err != nil {
+		var bugLabelID sql.NullInt64
+		var bugLabelName, bugLabelSlug sql.NullString
+		if err := rows.Scan(
+			&row.Owner, &row.SessionID, &row.Name, &row.Mode, &row.Repos,
+			&bugLabelID, &bugLabelName, &bugLabelSlug,
+			&row.Visible, &row.CreatedAt, &row.UpdatedAt,
+		); err != nil {
 			return nil, err
 		}
+		row.BugLabel = reportBugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug)
 		out = append(out, row)
 	}
 	return out, rows.Err()
@@ -569,8 +607,9 @@ func numericUsageField(usage map[string]any, names ...string) int64 {
 	return 0
 }
 
-func summarizeSessionReport(sessions []sessionReportRow) ([]sessionReportRepo, sessionReportTotals) {
+func summarizeSessionReport(sessions []sessionReportRow) ([]sessionReportRepo, []sessionReportBugLabel, sessionReportTotals) {
 	byRepo := map[string]*sessionReportRepo{}
+	byBugLabel := map[string]*sessionReportBugLabel{}
 	var totals sessionReportTotals
 	totals.SessionCount = len(sessions)
 
@@ -606,6 +645,27 @@ func summarizeSessionReport(sessions []sessionReportRow) ([]sessionReportRepo, s
 				summary.LastTouched = &copied
 			}
 		}
+		if session.BugLabel != nil {
+			summary := byBugLabel[session.BugLabel.Slug]
+			if summary == nil {
+				summary = &sessionReportBugLabel{
+					Label: session.BugLabel.DisplayName,
+					Name:  session.BugLabel.Name,
+					Slug:  session.BugLabel.Slug,
+				}
+				byBugLabel[session.BugLabel.Slug] = summary
+			}
+			summary.SessionCount++
+			summary.TurnCount += session.Usage.TurnCount
+			summary.TotalTokens += session.Usage.TotalTokens
+			summary.InputTokens += session.Usage.InputTokens
+			summary.OutputTokens += session.Usage.OutputTokens
+			touched := session.UpdatedAt
+			if summary.LastTouched == nil || touched.After(*summary.LastTouched) {
+				copied := touched
+				summary.LastTouched = &copied
+			}
+		}
 	}
 
 	out := make([]sessionReportRepo, 0, len(byRepo))
@@ -622,5 +682,32 @@ func summarizeSessionReport(sessions []sessionReportRow) ([]sessionReportRepo, s
 		}
 	}
 	totals.RepoCount = len(out)
-	return out, totals
+	bugOut := make([]sessionReportBugLabel, 0, len(byBugLabel))
+	for _, summary := range byBugLabel {
+		bugOut = append(bugOut, *summary)
+	}
+	for i := 0; i < len(bugOut); i++ {
+		for j := i + 1; j < len(bugOut); j++ {
+			if bugOut[j].TotalTokens > bugOut[i].TotalTokens ||
+				(bugOut[j].TotalTokens == bugOut[i].TotalTokens && bugOut[j].SessionCount > bugOut[i].SessionCount) ||
+				(bugOut[j].TotalTokens == bugOut[i].TotalTokens && bugOut[j].SessionCount == bugOut[i].SessionCount && bugOut[j].Label < bugOut[i].Label) {
+				bugOut[i], bugOut[j] = bugOut[j], bugOut[i]
+			}
+		}
+	}
+	totals.BugLabelCount = len(bugOut)
+	return out, bugOut, totals
+}
+
+func reportBugLabelFromScan(id sql.NullInt64, name, slug sql.NullString) *sessionmodel.SessionBugLabel {
+	if !id.Valid || !name.Valid || strings.TrimSpace(name.String) == "" || !slug.Valid || strings.TrimSpace(slug.String) == "" {
+		return nil
+	}
+	labelName := strings.TrimSpace(name.String)
+	return &sessionmodel.SessionBugLabel{
+		ID:          id.Int64,
+		Name:        labelName,
+		Slug:        strings.TrimSpace(slug.String),
+		DisplayName: "bug: " + labelName,
+	}
 }
