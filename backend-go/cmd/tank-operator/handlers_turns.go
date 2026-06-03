@@ -265,6 +265,32 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
 	interruptTurnID := "interrupt_" + auth.RandomHex(12)
 
+	terminal, err := s.sessionEvents.FindTurnTerminal(r.Context(), sessionID, targetTurnID)
+	if err != nil {
+		turnInterruptRequestTotal.WithLabelValues("terminal_lookup_failed").Inc()
+		writeError(w, http.StatusInternalServerError, "check turn terminal: "+err.Error())
+		return
+	}
+	if terminal != nil {
+		turnInterruptRequestTotal.WithLabelValues("already_terminal").Inc()
+		if s.activityRefresher != nil {
+			if err := s.activityRefresher.RefreshSessionActivity(r.Context(), owner, s.sessionScope, sessionID); err != nil {
+				slog.Warn("interrupt target already terminal: activity refresh failed",
+					"session_id", sessionID,
+					"target_turn_id", targetTurnID,
+					"error", err,
+				)
+			}
+		}
+		terminalType := stringMapField(terminal, "type")
+		writeJSON(w, http.StatusAccepted, map[string]string{
+			"status":               "already_terminal",
+			"target_turn_id":       targetTurnID,
+			"target_terminal_type": terminalType,
+		})
+		return
+	}
+
 	// Durable-first: persist turn.interrupt_requested before publishing the
 	// JetStream command, so a refresh-after-stop replays the stopping
 	// projection state from the ledger instead of relying on a UI-local

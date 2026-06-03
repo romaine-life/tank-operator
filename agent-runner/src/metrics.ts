@@ -62,6 +62,12 @@ export const providerFailureClassTotal = new Counter({
   registers: [registry],
 });
 
+export const providerRateLimitEventTotal = new Counter({
+  name: "tank_runner_provider_rate_limit_event_total",
+  help: "Provider SDK rate-limit stream frames observed by the runner. Each frame must resolve the active turn to durable user-visible state instead of leaving it stranded.",
+  registers: [registry],
+});
+
 export const providerControlTotal = new Counter({
   name: "tank_runner_provider_control_total",
   help: "Provider control-plane calls issued by the runner, such as interrupt and background foreground tasks.",

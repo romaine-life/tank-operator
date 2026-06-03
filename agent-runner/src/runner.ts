@@ -70,6 +70,7 @@ import {
   providerControlTotal,
   providerErrorTotal,
   providerFailureClassTotal,
+  providerRateLimitEventTotal,
   recordTurnStart,
   recordTurnTerminal,
   unmappedProviderEventTotal,
@@ -232,6 +233,23 @@ export function logUnhandledSdkMessage(message: SDKMessage): void {
     if (v !== undefined) fields[key] = v;
   }
   console.log(JSON.stringify(fields));
+}
+
+function isClaudeRateLimitEvent(message: ClaudeProviderEvent): boolean {
+  return message.type === "rate_limit_event";
+}
+
+function claudeRateLimitError(message: ClaudeProviderEvent): string {
+  const parts = ["Claude provider emitted rate_limit_event"];
+  for (const key of ["message", "error", "summary", "description", "retry_after_ms", "retry_after_seconds"]) {
+    const value = message[key];
+    if (typeof value === "string" && value.trim()) {
+      parts.push(`${key}=${value.trim()}`);
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      parts.push(`${key}=${value}`);
+    }
+  }
+  return parts.join("; ");
 }
 
 export interface PendingTurn {
@@ -710,6 +728,15 @@ export class Runner {
       }
       return;
     }
+    if (isClaudeRateLimitEvent(providerEvent)) {
+      if (activeTurn) {
+        await this.failTurnForProviderRateLimit(activeTurn, providerEvent);
+        return;
+      }
+      providerRateLimitEventTotal.inc();
+      logUnhandledSdkMessage(message);
+      return;
+    }
     const adapterTurn = this.turnContextForProviderEvent(providerEvent, activeTurn);
     if (isClaudeTaskLifecycleMessage(providerEvent) && !adapterTurn) {
       const { taskID, toolUseID } = claudeTaskIdentifiers(providerEvent);
@@ -755,6 +782,38 @@ export class Runner {
     const wakeup = extractWakeup(message);
     if (wakeup) {
       this.scheduleWakeup(wakeup);
+    }
+  }
+
+  private async failTurnForProviderRateLimit(
+    turn: PendingTurn,
+    message: ClaudeProviderEvent,
+  ): Promise<void> {
+    providerRateLimitEventTotal.inc();
+    if (turn.terminalEmitted) return;
+    const error = claudeRateLimitError(message);
+    providerFailureClassTotal.labels("rate_limit").inc();
+    const dispatched = await dispatch(
+      this.sink,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.failed",
+        reason: "provider_rate_limit",
+        error,
+        providerEventID: message.uuid,
+      }),
+    );
+    if (!dispatched) return;
+    turn.terminalEmitted = true;
+    this.signalStopToSdk();
+    await this.markCommandTerminal(turn, "turn.failed").catch((markErr) =>
+      console.error("session command rate-limit terminal mark failed:", markErr),
+    );
+    if (this.activeTurn === turn) {
+      this.activeTurn = null;
     }
   }
 
