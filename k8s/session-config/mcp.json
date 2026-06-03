@@ -23,6 +23,10 @@
     "tank-operator": {
       "type": "http",
       "url": "http://127.0.0.1:9996/"
+    },
+    "grafana": {
+      "type": "http",
+      "url": "http://127.0.0.1:9998/"
     }
   }
 }

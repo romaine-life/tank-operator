@@ -30,8 +30,8 @@ RUN pip install --no-cache-dir .
 USER nobody
 
 # Defaults match the in-pod sidecar behavior:
-#   127.0.0.1:9991..9996  — MCP listener ports (bound inside the proxy)
+#   127.0.0.1:9991..9998  — MCP listener ports (bound inside the proxy)
 #   0.0.0.0:9990          — Prometheus /metrics + /healthz
-# Consumers wire their MCP client config at 127.0.0.1:9991..9996 the
+# Consumers wire their MCP client config at 127.0.0.1:9991..9998 the
 # same way Tank session pods do.
 ENTRYPOINT ["mcp-auth-proxy"]

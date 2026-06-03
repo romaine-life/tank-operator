@@ -107,6 +107,7 @@ GITHUB_MCP_PORT = 9992
 GLIMMUNG_MCP_PORT = 9995
 TANK_OPERATOR_MCP_PORT = 9996
 SPIRELENS_MCP_PORT = 9997
+GRAFANA_MCP_PORT = 9998
 
 # Optional tailnet upstream: the SpireLens game-host MCP (spire-lens-mcp's
 # server.py --transport http). Unlike the in-cluster .svc upstreams below it
@@ -161,13 +162,15 @@ ORIGIN_SESSION_ID = (os.environ.get("SESSION_ID") or "").strip()
 # (port, upstream URL). Mirrors k8s/session-config/mcp.json. Adding an
 # MCP means: append here, append a port mapping in mcp.json, ship.
 #
-# Port allocation (next free: 9998):
+# Port allocation (next free: 9999):
 #   9991 â€” mcp-azure-personal
 #   9992 â€” mcp-github
 #   9993 â€” mcp-k8s
 #   9994 â€” mcp-argocd
 #   9995 â€” mcp-glimmung
 #   9996 â€” mcp-tank-operator
+#   9997 â€” optional SpireLens MCP, only when SPIRELENS_MCP_UPSTREAM is set
+#   9998 â€” mcp-grafana
 LISTENERS: list[tuple[int, str]] = [
     (9991, "http://mcp-azure-personal.mcp-azure-personal.svc:80"),
     (9992, "http://mcp-github.mcp-github.svc:80"),
@@ -175,6 +178,7 @@ LISTENERS: list[tuple[int, str]] = [
     (9994, "http://mcp-argocd.mcp-argocd.svc:80"),
     (9995, "http://mcp-glimmung.mcp-glimmung.svc:80"),
     (9996, "http://mcp-tank-operator.mcp-tank-operator.svc:80"),
+    (9998, "http://mcp-grafana.mcp-grafana.svc:80"),
 ]
 
 
@@ -598,14 +602,14 @@ async def run() -> None:
             else:
                 token_provider = ServiceAccountTokenProvider()
 
-            # mcp-tank-operator and mcp-glimmung both gate their tool
+            # mcp-tank-operator, mcp-glimmung, and mcp-grafana gate their tool
             # surface on the caller's auth.romaine.life service JWT (read
             # from X-Auth-Romaine-Token because Authorization is consumed
             # by kube-rbac-proxy in front of each, which strips it before
             # forwarding upstream). Inject the header so the upstreams
             # can attribute every call to the originating user.
             extra_header_provider = None
-            if port in (TANK_OPERATOR_MCP_PORT, GLIMMUNG_MCP_PORT):
+            if port in (TANK_OPERATOR_MCP_PORT, GLIMMUNG_MCP_PORT, GRAFANA_MCP_PORT):
                 async def _provide_auth_romaine_header(
                     provider=auth_romaine_provider,
                 ) -> tuple[str, str]:
