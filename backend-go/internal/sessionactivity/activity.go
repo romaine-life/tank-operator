@@ -44,7 +44,8 @@ type ActivityFoldStats struct {
 //   - prior: the previous summary (the value last written into a
 //     session.activity_changed payload) or nil if none yet.
 //   - events: chat events in ascending order_key, scoped to the lifecycle
-//     event_types that drive sidebar indicators (turn.* + tool.approval_*).
+//     event_types that drive sidebar indicators (the turn.* lifecycle set,
+//     including turn.awaiting_input).
 //     The caller is responsible for the filter — same event-type allowlist
 //     the activity handler used. item.failed is intentionally NOT in this
 //     set: a single failed tool call is an in-turn signal the agent will

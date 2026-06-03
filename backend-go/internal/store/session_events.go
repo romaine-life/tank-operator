@@ -39,7 +39,8 @@ type SessionEventStore interface {
 	EventsForTurn(ctx context.Context, tankSessionID, turnID string, limit int) (SessionEventPage, error)
 	FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error)
 	// LatestLifecycleEvents returns the most recent N lifecycle events
-	// (turn.*, tool.approval_*) for a session in ascending order_key.
+	// (the turn.* lifecycle set, including turn.awaiting_input) for a
+	// session in ascending order_key.
 	// Bounded read used by the lifecycle emitter (chat→sidebar activity-
 	// delta bridge) instead of folding the full ledger. item.failed is
 	// intentionally excluded — see sessionactivity.LifecycleChatEventTypes.
@@ -427,7 +428,7 @@ func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSe
 }
 
 // LatestLifecycleEvents returns up to `limit` recent lifecycle events
-// (turn.*, item.failed, tool.approval_*) for one session, ascending by
+// (the turn.* lifecycle set, including turn.awaiting_input) for one session, ascending by
 // order_key. Postgres returns the slice DESC LIMIT N and we reverse in Go;
 // indexed on (tank_session_id, order_key) so this is a bounded backwards
 // scan, not a full ledger fold.

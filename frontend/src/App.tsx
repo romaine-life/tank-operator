@@ -5611,10 +5611,10 @@ function RunReasoningBlock({
   );
 }
 
-// (Removed RunNeedsInputAnnouncement — the AskUserQuestion handoff is now the
-// interactive RunAwaitingInputCard rendered from the `turn.awaiting_input`
-// projection row; there is no separate "waiting on you" pointer to Turn
-// activity because the card itself lives in the main transcript.)
+// (The AskUserQuestion handoff is now the interactive RunAwaitingInputCard
+// rendered from the `turn.awaiting_input` projection row; there is no longer a
+// separate "waiting on you" pointer to Turn activity because the card itself
+// lives in the main transcript.)
 
 // RunMetaBlock renders the transcript's "headless" status lines — the
 // per-turn terminal notices ("Stopped" / "Turn stopped by user.", "Turn
@@ -6389,13 +6389,10 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
       const notesText = q.allowFreeForm ? notes[q.question]?.trim() ?? "" : "";
       // The wire shape requires `answers[question]` to be a non-empty
       // string array. When the user only typed free-form text, we
-      // synthesize a single "Other" label so the answers map stays
-      // valid; the actual free-form text rides in
-      // `annotations[question].notes`, which is the Claude Agent SDK's
-      // blessed channel for caller-supplied context on a tool answer.
-      // The runner's canUseTool allow path returns both halves to the
-      // SDK, and `tool.approval_resolved` mirrors them back into the
-      // durable ledger.
+      // synthesize a single "Other" label so the answers map stays valid;
+      // the actual free-form text rides in `annotations[question].notes`.
+      // Both halves post to /answer and are re-grounded into the new answer
+      // turn's durable user message.
       if (labels.length > 0) {
         answers[q.question] = labels;
       } else if (notesText) {

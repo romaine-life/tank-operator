@@ -660,7 +660,7 @@ The backend validates ownership, then performs two writes in this order:
 2. **Publish a durable JetStream `interrupt_turn` command** on the
    per-session/per-provider **control-plane subject**
    (`tank.session.<scope-token>.<session-token>.control.<provider>`), not the command subject
-   used for `submit_turn` / `input_reply`. Runners consume the command
+   used for `submit_turn`. Runners consume the command
    from a dedicated control-plane JetStream consumer (separate
    `durable_name`, separate `filter_subject`, higher `max_ack_pending`)
    and abort the matching active turn from inside the session pod.

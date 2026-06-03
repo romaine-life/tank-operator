@@ -191,6 +191,10 @@ export function conversationReducer(
         ...next,
         runStatus: "submitted",
         activeTurnId: event.turn_id ?? next.activeTurnId,
+        // A new turn submitting is forward progress out of any prior
+        // needs_input (e.g. the AskUserQuestion answer turn): the session is
+        // no longer waiting on the user.
+        needsInput: false,
         failed: false,
         lastError: null,
       };
@@ -199,6 +203,7 @@ export function conversationReducer(
         ...next,
         runStatus: "streaming",
         activeTurnId: event.turn_id ?? next.activeTurnId,
+        needsInput: false,
         failed: false,
         lastError: null,
       };

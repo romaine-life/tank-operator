@@ -103,9 +103,7 @@ test("adapter maps Claude assistant text and tool_use blocks to Tank items", () 
           },
         ],
       },
-    },
-    new Set<string>(),
-  );
+    },  );
 
   assert.deepEqual(events.map((event) => event.type), [
     "item.completed",
@@ -136,9 +134,7 @@ test("adapter gives each text block in one Claude message a unique canonical id"
           { type: "text", text: "Second paragraph." },
         ],
       },
-    },
-    new Set<string>(),
-  );
+    },  );
 
   assert.deepEqual(events.map((event) => event.payload?.text), [
     "First paragraph.",
@@ -165,9 +161,7 @@ test("adapter carries explicit Claude final-answer ids on successful result", ()
           { type: "text", text: "Second final paragraph." },
         ],
       },
-    },
-    new Set<string>(),
-  );
+    },  );
   assert.equal(assistant.length, 2);
 
   const result = canonicalEventsForClaudeMessage(
@@ -177,9 +171,7 @@ test("adapter carries explicit Claude final-answer ids on successful result", ()
       type: "result",
       subtype: "success",
       uuid: "claude-result-success",
-    },
-    new Set<string>(),
-  );
+    },  );
 
   assert.equal(result.length, 1);
   assertTankEventFixture(result[0]!);
@@ -210,9 +202,7 @@ test("adapter does not mark Claude assistant text with tool_use as final", () =>
           { type: "tool_use", id: "toolu_read", name: "Read", input: { file_path: "README.md" } },
         ],
       },
-    },
-    new Set<string>(),
-  );
+    },  );
   const result = canonicalEventsForClaudeMessage(
     cfg(),
     ctx,
@@ -220,68 +210,53 @@ test("adapter does not mark Claude assistant text with tool_use as final", () =>
       type: "result",
       subtype: "success",
       uuid: "claude-result-no-final",
-    },
-    new Set<string>(),
-  );
+    },  );
 
   assert.equal(result[0]?.payload?.final_answer, undefined);
 });
 
-test("adapter maps Claude AskUserQuestion to needs-input lifecycle", () => {
-  const needsInputProviderItemIDs = new Set<string>();
-  const requested = canonicalEventsForClaudeMessage(
-    cfg(),
-    turn(),
-    {
-      type: "assistant",
-      uuid: "claude-msg-approval",
-      message: {
-        content: [
-          {
-            type: "tool_use",
-            id: "toolu_ask",
-            name: "AskUserQuestion",
-            input: { question: "Proceed?" },
-          },
-        ],
-      },
+test("adapter emits no item events for Claude AskUserQuestion (the runner ends the turn awaiting input)", () => {
+  // AskUserQuestion is handled by the runner's canUseTool, which ends the
+  // asking turn with a durable turn.awaiting_input terminal carrying the
+  // Tank-canonical questions. The adapter must NOT emit a dangling
+  // item.started / approval event on that settled turn — there is no in-turn
+  // tool item and no tool.approval_* event anymore.
+  const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
+    type: "assistant",
+    uuid: "claude-msg-ask",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_ask",
+          name: "AskUserQuestion",
+          input: { question: "Proceed?" },
+        },
+      ],
     },
-    needsInputProviderItemIDs,
-  );
+  });
 
-  assert.deepEqual(requested.map((event) => event.type), [
-    "item.started",
-    "tool.approval_requested",
-  ]);
-  for (const event of requested) assertTankEventFixture(event);
-  assert.equal(needsInputProviderItemIDs.has("toolu_ask"), true);
+  assert.deepEqual(events, []);
+});
 
-  const resolved = canonicalEventsForClaudeMessage(
-    cfg(),
-    turn(),
-    {
-      type: "user",
-      uuid: "claude-tool-result",
-      message: {
-        content: [
-          {
-            type: "tool_result",
-            tool_use_id: "toolu_ask",
-            content: "yes",
-            is_error: false,
-          },
-        ],
-      },
+test("adapter still emits item.started for a non-AskUserQuestion tool_use", () => {
+  const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
+    type: "assistant",
+    uuid: "claude-msg-bash",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_bash",
+          name: "Bash",
+          input: { command: "ls" },
+        },
+      ],
     },
-    needsInputProviderItemIDs,
-  );
+  });
 
-  assert.deepEqual(resolved.map((event) => event.type), [
-    "item.completed",
-    "tool.approval_resolved",
-  ]);
-  for (const event of resolved) assertTankEventFixture(event);
-  assert.equal(needsInputProviderItemIDs.has("toolu_ask"), false);
+  assert.deepEqual(events.map((event) => event.type), ["item.started"]);
+  for (const event of events) assertTankEventFixture(event);
 });
 
 test("adapter maps Claude tool_result is_error to completed result_failed outcome", () => {
@@ -301,9 +276,7 @@ test("adapter maps Claude tool_result is_error to completed result_failed outcom
           },
         ],
       },
-    },
-    new Set<string>(),
-  );
+    },  );
 
   assert.equal(events.length, 1);
   assertTankEventFixture(events[0]!);
@@ -323,9 +296,7 @@ test("adapter maps Claude result failures and interrupts to terminal turn events
       subtype: "error",
       result: "provider failed",
       uuid: "claude-result-failed",
-    },
-    new Set<string>(),
-  );
+    },  );
   assert.equal(failed.length, 1);
   assertTankEventFixture(failed[0]!);
   assert.equal(failed[0]?.type, "turn.failed");
@@ -340,9 +311,7 @@ test("adapter maps Claude result failures and interrupts to terminal turn events
       subtype: "success",
       result: "stopped",
       uuid: "claude-result-interrupted",
-    },
-    new Set<string>(),
-  );
+    },  );
   assert.equal(interrupted.length, 1);
   assertTankEventFixture(interrupted[0]!);
   assert.equal(interrupted[0]?.type, "turn.interrupted");
@@ -361,9 +330,7 @@ test("adapter maps Claude background task lifecycle to shell task events", () =>
       status: "running",
       summary: "Watching logs",
       uuid: "task-event-1",
-    },
-    new Set<string>(),
-  );
+    },  );
 
   assert.equal(started.length, 1);
   assertTankEventFixture(started[0]!);
@@ -392,9 +359,7 @@ test("adapter maps Claude background task lifecycle to shell task events", () =>
       summary: "Monitor exited nonzero",
       error: "exit 1",
       uuid: "task-event-2",
-    },
-    new Set<string>(),
-  );
+    },  );
 
   assert.equal(exited.length, 1);
   assertTankEventFixture(exited[0]!);

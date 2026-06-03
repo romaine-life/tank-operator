@@ -129,7 +129,7 @@ export function canonicalEventsForClaudeMessage(
         // carrying the Tank-canonical questions (claudeQuestionsToTankShape);
         // the transcript renders the question card from that terminal, so
         // there is no dangling "started" tool item on a settled turn.
-        // (Previously this emitted item.started + tool.approval_requested.)
+        // (Previously this emitted item.started plus an in-turn approval-request event.)
         if (name !== "AskUserQuestion") {
           events.push(
             itemEvent({

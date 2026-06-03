@@ -163,9 +163,13 @@ test("stop control waits for durable turn interruption", () => {
   assert.equal(appSource.includes("if (!res.ok)"), true);
 });
 
-test("AskUserQuestion replies use durable input-reply turns", () => {
+test("AskUserQuestion answers open a brand-new turn via POST /answer", () => {
+  // The answer is a durable new turn, not an in-turn reply: no terminal
+  // socket (sendStdin), no retired /input-reply route — the card posts to
+  // /turns/{askingTurnId}/answer.
   assert.equal(appSource.includes("sendStdin"), false);
-  assert.equal(appSource.includes("/input-reply"), true);
+  assert.equal(appSource.includes("/input-reply"), false);
+  assert.equal(appSource.includes("/answer"), true);
 });
 
 // The AskUserQuestion cutover (durable canUseTool resolution) deletes
@@ -187,13 +191,14 @@ test("ToolAskUserBody renders the SDK AskUserQuestion question shape", () => {
   );
 });
 
-test("ToolAskUserBody reads the answered state from the durable event payload", () => {
-  // Local selection state alone is not allowed to drive the answered
-  // pill — a fresh tab opened after another tab answered must still
-  // render the user's selections. The durable answers come from
-  // `entry.askUserAnswers`, which `conversationProjection.ts` lifts off
-  // the merged `tool.approval_resolved` payload.
-  assert.equal(appSource.includes("entry.askUserAnswers"), true);
+test("the awaiting-input card reads answered state from the durable event payload", () => {
+  // Local selection state alone is not allowed to drive the answered pill —
+  // a fresh tab opened after another tab answered must still render the
+  // resolved card. The answered flag comes from the durable awaiting-input
+  // card payload (entry.awaitingInput), derived server-side from a later
+  // ask_user_answer turn — not the retired in-turn `askUserAnswers`.
+  assert.equal(appSource.includes("entry.awaitingInput"), true);
+  assert.equal(appSource.includes("askUserAnswers"), false);
 });
 
 test("pending AskUserQuestion opens collapsed tool groups", () => {
@@ -203,25 +208,11 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
   assert.match(appSource, /toolGroupDefaultOpen\(g\.entries, autoExpandTools, toolExpansionOverrides\)/);
 });
 
-test("AskUserQuestion handoff renders as the session system identity", () => {
-  const componentMatch = appSource.match(
-    /function RunNeedsInputAnnouncement\([\s\S]*?\n}\n\n(?:\/\/[^\n]*\n)*function RunMetaBlock/,
-  );
-  assert.ok(componentMatch, "RunNeedsInputAnnouncement component should be present");
-  const componentSource = componentMatch[0]!;
-  assert.equal(componentSource.includes("systemAvatar: AgentAvatar | null"), true);
-  assert.equal(componentSource.includes('className="run-transcript-message"'), true);
-  assert.equal(componentSource.includes('data-variant="system"'), true);
-  assert.equal(componentSource.includes('data-kind="needs-input-announcement"'), true);
-  assert.equal(componentSource.includes('className="run-msg-system-avatar"'), true);
-  assert.equal(componentSource.includes("AgentAvatarIcon avatar={systemAvatar}"), true);
-  assert.equal(componentSource.includes("<BotIcon"), true);
-  assert.match(
-    appSource,
-    /<RunNeedsInputAnnouncement[\s\S]*systemAvatar=\{systemAvatar\}[\s\S]*showTimestamps=\{showTimestamps\}/,
-  );
-  assert.equal(indexCssSource.includes(".run-needs-input-announcement-copy"), true);
-});
+// The retired "Claude is waiting on you" system-identity handoff row
+// (RunNeedsInputAnnouncement) is replaced by the interactive
+// RunAwaitingInputCard. The new card's presence + wiring is pinned by
+// scripts/check-askuserquestion-migration.mjs (REQUIRED entries); there is no
+// system-identity announcement row to assert here anymore.
 
 test("transcript meta status lines are attributed to the session system identity", () => {
   // "Stopped" / "Turn stopped by user.", "Turn failed" + provider error,

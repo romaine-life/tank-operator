@@ -447,9 +447,9 @@ export class Runner {
   // Run forever (or until externally aborted). Drives the SDK against
   // the user queue and fans events out to both sinks.
   async run(signal: AbortSignal): Promise<void> {
-    // Two independent JetStream consumers: data plane (submit_turn,
-    // input_reply — serial, ack-after-terminal) and control plane
-    // (interrupt_turn — low-latency, never blocked by an in-flight turn).
+    // Two independent JetStream consumers: data plane (submit_turn —
+    // serial, ack-after-terminal) and control plane (interrupt_turn,
+    // stop_background_task — low-latency, never blocked by an in-flight turn).
     // See runner-shared/sessionBus.js for the consumer config split and
     // docs/tank-conversation-protocol.md → "Durable turn interruption"
     // for the contract. Don't fold these back into one consumer; that's
@@ -554,9 +554,11 @@ export class Runner {
       // AskUserQuestion, so non-AskUserQuestion tools retain the same
       // zero-friction shape as before.
       permissionMode: "default",
-      // canUseTool gates AskUserQuestion on a durable input_reply
-      // command. All other tools pass through unconditionally — see the
-      // callback for the policy.
+      // canUseTool ends the asking turn when AskUserQuestion is invoked:
+      // it publishes a durable turn.awaiting_input terminal, then resolves
+      // deny+interrupt. The user's answer arrives as a brand-new turn, not
+      // an in-turn reply. All other tools pass through unconditionally —
+      // see the callback for the policy.
       canUseTool: this.canUseTool,
       // Resume an on-disk JSONL if one exists from a prior process
       // life (e.g., agent-runner restart within the same pod).
@@ -747,7 +749,7 @@ export class Runner {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
       .startCommandConsumer(async (record) => {
-        // Interrupts and input_reply MUST arrive via startControlConsumer
+        // Interrupts and stop_background_task MUST arrive via startControlConsumer
         // (separate JetStream consumer on the control subject). The
         // data-plane consumer has max_ack_pending=1 by design; any control
         // command delivered here would block behind the in-flight
@@ -771,14 +773,14 @@ export class Runner {
   }
 
   // startControlConsumer drives the control-plane JetStream consumer.
-  // Today: interrupt_turn + input_reply. Future low-latency control
-  // signals (resume, cancel-with-reason, etc.) should land here as
-  // additional branches, not on the data-plane consumer. input_reply
-  // is control-plane because it resolves a canUseTool gate inside an
-  // already-running submit_turn that is, by construction, holding the
-  // data plane's single max_ack_pending slot — see
-  // backend-go/internal/sessionbus/subjects.go → SubjectForCommand for
-  // the publish-side reasoning that pairs with this consumer branch.
+  // Today: interrupt_turn + stop_background_task. Future low-latency
+  // control signals (resume, cancel-with-reason, etc.) should land here as
+  // additional branches, not on the data-plane consumer. These are
+  // control-plane because they must preempt an already-running submit_turn
+  // that is, by construction, holding the data plane's single
+  // max_ack_pending slot — see backend-go/internal/sessionbus/subjects.go
+  // → SubjectForCommand for the publish-side reasoning that pairs with
+  // this consumer branch.
   private startControlConsumer(signal: AbortSignal): () => void {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus

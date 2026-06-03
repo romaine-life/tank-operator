@@ -212,7 +212,7 @@ func firstNonEmpty(values ...string) string {
 
 // TurnCommandFailedArgs describes the durable event emitted when the
 // orchestrator fails to publish a session command (submit_turn,
-// interrupt_turn, input_reply) to the session bus. The runner never
+// interrupt_turn, stop_background_task) to the session bus. The runner never
 // gets the command, so the runner-emitted turn.* terminal events never
 // arrive. Without this event, a client refreshing /timeline sees the
 // user_message.created stranded and the turn perpetually "submitted."

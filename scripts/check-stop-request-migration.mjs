@@ -537,9 +537,9 @@ const CHECKS = [
   // command consumer is configured with max_ack_pending=1 so the
   // in-flight submit_turn's ack window (sustained by working() heartbeats
   // for the duration of the turn) held the queued interrupt_turn
-  // command behind it. The fix splits data plane (submit_turn,
-  // input_reply — serial, max_ack_pending=1) from control plane
-  // (interrupt_turn — low-latency, separate durable consumer) onto
+  // command behind it. The fix splits data plane (submit_turn — serial,
+  // max_ack_pending=1) from control plane (interrupt_turn,
+  // stop_background_task — low-latency, separate durable consumer) onto
   // distinct JetStream subjects. The checks below pin the load-bearing
   // invariants so a future refactor can't merge the planes back.
   {
@@ -805,12 +805,23 @@ const CHECKS = [
     id: "runner-sdk-interrupt-first",
     from: "Four-outcome contract (post-#532)",
     file: "agent-runner/src/runner.ts",
-    description: "applyInterruptToTurn calls sdkQuery.interrupt() BEFORE publishing the durable terminal (load-bearing ordering)",
+    description: "applyInterruptToTurn signals the SDK interrupt (signalStopToSdk) BEFORE publishing the durable terminal (load-bearing ordering)",
     kind: "grep-present",
-    // sdkQuery.interrupt() must appear before publishTerminalWithRetry
-    // inside applyInterruptToTurn. The match is intentionally loose so
-    // formatting / comments / try-catch can vary.
-    pattern: /applyInterruptToTurn[\s\S]{0,2000}?this\.sdkQuery\?\.\s*interrupt\(\)[\s\S]{0,1200}?publishTerminalWithRetry/,
+    // The SDK interrupt must be signaled before publishTerminalWithRetry
+    // inside applyInterruptToTurn. The interrupt call itself is extracted
+    // into signalStopToSdk(); this pins the call-site ordering, and
+    // runner-signal-stop-calls-interrupt (below) pins that the helper
+    // actually drives sdkQuery.interrupt(). The match is intentionally
+    // loose so formatting / comments / the client_interrupt guard can vary.
+    pattern: /applyInterruptToTurn[\s\S]{0,2000}?this\.signalStopToSdk\(\)[\s\S]{0,1200}?publishTerminalWithRetry/,
+  },
+  {
+    id: "runner-signal-stop-calls-interrupt",
+    from: "Four-outcome contract (post-#532)",
+    file: "agent-runner/src/runner.ts",
+    description: "signalStopToSdk drives sdkQuery.interrupt() so the extracted helper still delivers the SDK interrupt",
+    kind: "grep-present",
+    pattern: /private signalStopToSdk\(\): void \{[\s\S]{0,1500}?sdkQuery\.interrupt\(\)/,
   },
   {
     id: "runner-publish-retry-fallback",

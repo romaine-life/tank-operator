@@ -504,36 +504,47 @@ test("Duplicate user submissions with the same client nonce do not duplicate bub
   assert.equal(state.messages[0]?.text, "same prompt");
 });
 
-test("Approval pause is explicit needs-input state and resumes streaming", () => {
-  const state = reduceConversationEvents([
-    ev("1", "turn.started", { turn_id: "turn-approval" }),
-    ev("2", "tool.approval_requested", {
-      turn_id: "turn-approval",
-      timeline_id: "approval-1",
-      actor: "tool",
-      payload: { kind: "approval", title: "Run tests" },
-    }),
-    ev("3", "tool.approval_resolved", {
-      turn_id: "turn-approval",
-      timeline_id: "approval-1",
-      actor: "tool",
-      payload: { decision: "allow" },
+test("turn.awaiting_input is explicit needs-input state; the answer turn resumes streaming", () => {
+  // AskUserQuestion ends the asking turn awaiting input — needs_input with no
+  // active turn. The answer is a brand-new turn whose turn.started clears the
+  // needs_input signal and resumes streaming.
+  const paused = reduceConversationEvents([
+    ev("1", "turn.started", { turn_id: "turn-ask" }),
+    ev("2", "turn.awaiting_input", {
+      turn_id: "turn-ask",
+      source: "claude",
+      payload: {
+        questions: [{ question: "Proceed?" }],
+        provider_item_id: "toolu_ask",
+        timeline_id: "turn-ask:item:toolu_ask",
+      },
     }),
   ]);
+  assert.equal(paused.needsInput, true);
+  assert.equal(paused.runStatus, "needs_input");
+  assert.equal(paused.activeTurnId, null);
 
-  assert.equal(state.needsInput, false);
-  assert.equal(state.runStatus, "streaming");
-  assert.equal(state.items[0]?.kind, "approval");
+  const resumed = reduceConversationEvents([
+    ev("1", "turn.started", { turn_id: "turn-ask" }),
+    ev("2", "turn.awaiting_input", {
+      turn_id: "turn-ask",
+      source: "claude",
+      payload: {
+        questions: [{ question: "Proceed?" }],
+        provider_item_id: "toolu_ask",
+        timeline_id: "turn-ask:item:toolu_ask",
+      },
+    }),
+    ev("3", "turn.submitted", { turn_id: "turn-answer", source: "claude", client_nonce: "turn-answer" }),
+    ev("4", "turn.started", { turn_id: "turn-answer", source: "claude" }),
+  ]);
+  assert.equal(resumed.needsInput, false);
+  assert.equal(resumed.runStatus, "streaming");
 });
 
 test("Provider error becomes terminal error state without needs-input", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.started", { source: "claude" }),
-    ev("2", "tool.approval_requested", {
-      timeline_id: "approval-1",
-      actor: "tool",
-      payload: { kind: "approval", title: "Run command" },
-    }),
     ev("3", "turn.failed", {
       source: "claude",
       payload: { reason: "provider_failure", error: "quota exceeded" },
@@ -704,30 +715,6 @@ test("completed command item with legacy nonzero raw exit code marks the item fa
   ]);
 
   assert.equal(state.items.find((item) => item.id === "legacy-exit")?.status, "failed");
-});
-
-test("tool.approval_resolved preserves failed item status from result_failed outcome", () => {
-  const state = reduceConversationEvents([
-    ev("1", "turn.started", { source: "claude" }),
-    ev("2", "tool.approval_requested", {
-      actor: "tool",
-      source: "claude",
-      timeline_id: "tool-question",
-      payload: { kind: "needs_input" },
-    }),
-    ev("3", "tool.approval_resolved", {
-      actor: "tool",
-      source: "claude",
-      timeline_id: "tool-question",
-      payload: {
-        kind: "needs_input",
-        resolved: true,
-        outcome: { kind: "result_failed", reason: "claude_tool_result_is_error" },
-      },
-    }),
-  ]);
-
-  assert.equal(state.items.find((item) => item.id === "tool-question")?.status, "failed");
 });
 
 test("turn.completed after a mid-turn item.failed resolves to ready, not error", () => {

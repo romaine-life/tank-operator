@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
-  answersForCodexAppServer,
+  codexQuestionsToTankShape,
   dispatch,
   interruptTargetMatchesTurn,
   Runner,
@@ -179,18 +179,58 @@ test("pending Codex interrupts are consumed when their turn becomes current", ()
   assert.equal(takePendingInterruptForTurn(pendingInterrupts, turn), null);
 });
 
-test("answersForCodexAppServer includes free-form notes in provider-visible answers", () => {
+// codexQuestionsToTankShape is the codex-side parity for the AskUserQuestion
+// handoff: the app-server question shape is normalized to the Tank-canonical
+// questions that ride the durable turn.awaiting_input terminal. There is no
+// in-turn answer injection anymore (the retired answer-join helper is gone);
+// the answer arrives as a brand-new turn.
+test("codexQuestionsToTankShape maps codex app-server questions into the Tank shape", () => {
   assert.deepEqual(
-    answersForCodexAppServer(["Personality (Recommended)"], {
-      notes: "ask about chat box behavior",
-    }),
-    ["Personality (Recommended)", "Additional context: ask about chat box behavior"],
+    codexQuestionsToTankShape([
+      {
+        id: "q1",
+        question: "Which auth method?",
+        header: "Auth",
+        isOther: true,
+        isSecret: false,
+        options: [
+          { label: "OAuth", description: "Use OAuth" },
+          { label: "API key" },
+        ],
+      },
+    ] as never),
+    [
+      {
+        question: "Which auth method?",
+        header: "Auth",
+        multiSelect: false,
+        options: [
+          { label: "OAuth", description: "Use OAuth" },
+          { label: "API key" },
+        ],
+        allowFreeForm: true,
+        secret: false,
+      },
+    ],
   );
+});
+
+test("codexQuestionsToTankShape tolerates pure free-form (null options) and drops malformed entries", () => {
   assert.deepEqual(
-    answersForCodexAppServer(["Other"], { notes: "use this as the answer" }),
-    ["use this as the answer"],
+    codexQuestionsToTankShape([
+      { id: "q", question: "Say something", isOther: true, options: null },
+      { id: "bad", question: "", options: [] },
+    ] as never),
+    [
+      {
+        question: "Say something",
+        multiSelect: false,
+        options: [],
+        allowFreeForm: true,
+        secret: false,
+      },
+    ],
   );
-  assert.deepEqual(answersForCodexAppServer(["Care"], { notes: "   " }), ["Care"]);
 });
 
 test("threadOptionsForCommand forwards first-turn Codex model and effort", () => {
