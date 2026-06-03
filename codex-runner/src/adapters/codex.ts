@@ -1,7 +1,7 @@
 import type { Config } from "../config.js";
 import type { CodexEvent } from "../sessionEvents.js";
 import type { TankConversationEvent } from "../../../runner-shared/conversation.js";
-import { itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
+import { contextCompactedEvent, itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
 import { itemOutcomeTotal } from "../metrics.js";
 
 export interface CodexAdapterTurn {
@@ -30,6 +30,15 @@ function codexItemText(item: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
+function codexCompactTrigger(event: CodexEvent): "auto" | "manual" {
+  return event.trigger === "manual" ? "manual" : "auto";
+}
+
+function codexCompactPreTokens(event: CodexEvent): number | undefined {
+  const value = event.pre_tokens;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
 export class CodexTankEventAdapter {
   private readonly itemTextByID = new Map<string, string>();
   private readonly finalAnswerByTurn = new Map<string, { timelineIDs: string[]; providerItemIDs: string[] }>();
@@ -43,6 +52,18 @@ export class CodexTankEventAdapter {
     event: CodexEvent,
   ): TankConversationEvent[] {
     const providerID = codexProviderEventID(event);
+    if (event.type === "context.compacted") {
+      return [
+        contextCompactedEvent({
+          sessionID: this.cfg.sessionId,
+          turnID: turn.turnID,
+          source: "codex",
+          trigger: codexCompactTrigger(event),
+          preTokens: codexCompactPreTokens(event),
+          providerEventID: providerID,
+        }),
+      ];
+    }
     if (event.type === "turn.usage") {
       return [
         turnEvent({

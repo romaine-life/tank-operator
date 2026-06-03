@@ -208,6 +208,45 @@ export function shellTaskEvent(args) {
   return event;
 }
 
+// contextCompactedEvent records that the provider summarized earlier
+// conversation context to reclaim context-window space. It is a durable,
+// turn-scoped system notice (actor=runner, mirroring turn.usage: the runner
+// observed a provider event and emitted the Tank-shape equivalent). The
+// backend projection promotes it into the main transcript as a meta row so
+// the user can see — in the conversation surface they read — that the agent's
+// memory of earlier turns was condensed. See
+// docs/tank-conversation-protocol.md → "Context Compaction Notice".
+export function contextCompactedEvent(args) {
+  const turnID = requireNonEmpty(args.turnID, "turnID");
+  const source = requireNonEmpty(args.source, "source");
+  const trigger = args.trigger === "manual" ? "manual" : "auto";
+  const payload = { trigger };
+  if (typeof args.preTokens === "number" && Number.isFinite(args.preTokens) && args.preTokens >= 0) {
+    payload.pre_tokens = Math.floor(args.preTokens);
+  }
+  const providerPart = args.providerEventID
+    ? stableIDPart(args.providerEventID)
+    : stableIDPart(JSON.stringify({ trigger, preTokens: payload.pre_tokens ?? null }));
+  const event = {
+    event_id: `${turnID}:context.compacted:${providerPart}`,
+    conversation_id: args.sessionID,
+    session_id: args.sessionID,
+    turn_id: turnID,
+    actor: "runner",
+    source,
+    type: "context.compacted",
+    created_at: new Date().toISOString(),
+    producer: {
+      name: `${source}-runner`,
+      runtime: source,
+    },
+    visibility: "durable",
+    payload,
+  };
+  if (args.providerEventID) event.producer.provider_event_id = args.providerEventID;
+  return event;
+}
+
 const VALID_VISIBILITIES = new Set(["durable"]);
 
 // stampTankEvent attaches uuid, order_key, sequence, and written_at to a

@@ -112,6 +112,7 @@
         "turn.command_failed",
         "turn.interrupt_requested",
         "turn.interrupted",
+        "context.compacted",
         "session.status",
         "item.started",
         "item.completed",
@@ -404,6 +405,23 @@
         "required": ["turn_id"],
         "properties": {
           "actor": { "const": "runner" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "context.compacted" } }, "required": ["type"] },
+      "then": {
+        "required": ["turn_id", "payload"],
+        "properties": {
+          "actor": { "const": "runner" },
+          "payload": {
+            "type": "object",
+            "required": ["trigger"],
+            "properties": {
+              "trigger": { "enum": ["auto", "manual"] },
+              "pre_tokens": { "type": "number", "minimum": 0 }
+            }
+          }
         }
       }
     },

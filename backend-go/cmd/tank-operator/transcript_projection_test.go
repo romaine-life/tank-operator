@@ -62,6 +62,64 @@ func TestProjectTranscriptEventsEmitsCollapsedTurnActivityShell(t *testing.T) {
 	}
 }
 
+func TestProjectTranscriptEventsPromotesContextCompactedNotice(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "do a long task",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("tool-start", "002", "item.started", "tool", "claude", "turn-1", "turn-1:item:tool-1", map[string]any{
+			"kind":  "tool",
+			"title": "Bash",
+		}),
+		projectionTestEvent("compact", "003", "context.compacted", "runner", "claude", "turn-1", "", map[string]any{
+			"trigger":    "auto",
+			"pre_tokens": float64(158000),
+		}),
+		projectionTestEvent("tool-done", "004", "item.completed", "tool", "claude", "turn-1", "turn-1:item:tool-1", map[string]any{
+			"kind":   "tool_result",
+			"output": "ok",
+		}),
+		projectionTestEvent("final", "005", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:msg-1", map[string]any{
+			"kind": "message",
+			"text": "done",
+		}),
+		projectionTestEvent("terminal", "006", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:msg-1")),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	var notice map[string]any
+	for _, entry := range projection.Entries {
+		if entry["metaKind"] == "context_compacted" {
+			notice = entry
+			break
+		}
+	}
+	if notice == nil {
+		t.Fatalf("context.compacted was not promoted to the main transcript: %#v", projection.Entries)
+	}
+	if notice["kind"] != "meta" {
+		t.Fatalf("context compacted notice kind = %v, want meta", notice["kind"])
+	}
+	meta, ok := notice["meta"].(map[string]any)
+	if !ok || meta["title"] != "Context compacted" {
+		t.Fatalf("context compacted meta = %#v, want title 'Context compacted'", notice["meta"])
+	}
+	if detail, _ := meta["detail"].(string); !strings.Contains(detail, "158k") {
+		t.Fatalf("context compacted detail = %q, want compact token count", meta["detail"])
+	}
+	// Promotion-only: the notice must NOT be folded into the turn-activity
+	// shell, mirroring the AskUserQuestion handoff row.
+	if body, ok := projection.ActivityBodies["turn-1"]; ok {
+		for _, id := range body.CompactedEntryIDs {
+			if id == notice["id"] {
+				t.Fatalf("context compacted notice was compacted into turn activity: %v", id)
+			}
+		}
+	}
+}
+
 func TestProjectTranscriptEventsCarriesUserAttachments(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

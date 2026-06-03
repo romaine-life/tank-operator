@@ -72,6 +72,7 @@ import {
   providerFailureClassTotal,
   recordTurnStart,
   recordTurnTerminal,
+  unmappedProviderEventTotal,
 } from "./metrics.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 
@@ -203,15 +204,25 @@ export function classifyProviderFailure(message: string): ProviderFailureClass {
 export function logUnhandledSdkMessage(message: SDKMessage): void {
   const m = message as Record<string, unknown> & { type?: unknown };
   const type = typeof m.type === "string" ? m.type : "";
+  const subtype = typeof m.subtype === "string" ? m.subtype : "";
   if (
     type === "assistant" ||
     type === "user" ||
     type === "result" ||
     isClaudeTaskLifecycleMessage(m as ClaudeProviderEvent) ||
-    type === "stream_event"
+    type === "stream_event" ||
+    // system/init is session-setup metadata; system/compact_boundary is now
+    // mapped by the Claude adapter to context.compacted. Both are explicitly
+    // ignored here so they don't inflate the unmapped-drop counter.
+    (type === "system" && (subtype === "init" || subtype === "compact_boundary"))
   ) {
     return;
   }
+  // Anything still here is a provider event the adapter neither mapped nor
+  // explicitly ignored — the silent-drop class that hid context compaction.
+  // Count it (bounded type/subtype labels) so the next semantically-significant
+  // provider event surfaces in metrics instead of vanishing from the ledger.
+  unmappedProviderEventTotal.labels(type || "unknown", subtype || "none").inc();
   const fields: Record<string, unknown> = {
     msg: "sdk_message_unhandled",
     type,

@@ -363,7 +363,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // on rows it wants surfaced specially in chat — see
   // backend-go/cmd/tank-operator/transcript_projection.go →
   // projectNeedsInputAnnouncement.
-  metaKind?: "needs_input_announcement" | "turn_usage";
+  metaKind?: "needs_input_announcement" | "turn_usage" | "context_compacted";
   // For `needs_input_announcement` rows: the AskUserQuestion item's
   // provider id and the turn it lives on, so RunNeedsInputAnnouncement's
   // click handler can navigate the user to the Turns tab scrolled to the

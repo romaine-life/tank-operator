@@ -70,6 +70,7 @@ const (
 	EventTurnCommandFailed      EventType = "turn.command_failed"
 	EventTurnInterruptRequested EventType = "turn.interrupt_requested"
 	EventTurnInterrupted        EventType = "turn.interrupted"
+	EventContextCompacted       EventType = "context.compacted"
 	EventSessionStatus          EventType = "session.status"
 	EventItemStarted            EventType = "item.started"
 	EventItemCompleted          EventType = "item.completed"
@@ -225,6 +226,14 @@ func validateEventMap(event map[string]any) error {
 		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
 			return fmt.Errorf("turn.interrupt_requested must be actor=system source=tank")
 		}
+	case EventContextCompacted:
+		if err := requireFields(event, "turn_id"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorRunner {
+			return fmt.Errorf("%s must be actor=runner", eventType)
+		}
+		return validateContextCompactedPayload(event)
 	case EventSessionStatus:
 		if err := requireFields(event, "timeline_id"); err != nil {
 			return err
@@ -382,6 +391,29 @@ func requirePayload(event map[string]any) (map[string]any, error) {
 		return nil, fmt.Errorf("payload is required for %s", stringField(event, "type"))
 	}
 	return payload, nil
+}
+
+// validateContextCompactedPayload enforces the context.compacted contract:
+// every notice must name WHY the agent's memory changed (trigger), so the
+// transcript row is self-describing per docs/quality-timeframes.md's
+// "Failure ... states are designed and visible" — compaction is a
+// context-state change the user is entitled to see, not silent bookkeeping.
+func validateContextCompactedPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	switch stringField(payload, "trigger") {
+	case "auto", "manual":
+	default:
+		return fmt.Errorf("payload.trigger must be auto or manual for %s", stringField(event, "type"))
+	}
+	if raw, ok := payload["pre_tokens"]; ok {
+		if n, isNumber := numericField(raw); !isNumber || n < 0 {
+			return fmt.Errorf("payload.pre_tokens must be a non-negative number for %s", stringField(event, "type"))
+		}
+	}
+	return nil
 }
 
 func validateSessionStatusPayload(event map[string]any) error {
@@ -675,6 +707,7 @@ func validEventType(eventType EventType) bool {
 		EventTurnCommandFailed,
 		EventTurnInterruptRequested,
 		EventTurnInterrupted,
+		EventContextCompacted,
 		EventSessionStatus,
 		EventItemStarted,
 		EventItemCompleted,
