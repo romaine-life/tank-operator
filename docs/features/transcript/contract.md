@@ -119,7 +119,7 @@ answer; it must not visibly move a rendered row from one surface to the other.
   (denominator) is the provider-observed context window persisted on the
   session row as `runtime_context_window_tokens`, reported by the runners
   through `PUT /api/internal/sessions/{id}/runtime-config` (Codex app-server
-  token usage; the Anthropic Models API `max_input_tokens`). There is no
+  token usage; the Claude Agent SDK per-turn `modelUsage.contextWindow`). There is no
   frontend model-window table and no percent ring: the denominator is never
   a frontend-assumed default keyed off a model id. Before the provider has
   reported a window — pre-session previews on the splash composer, or any

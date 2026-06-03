@@ -12,7 +12,7 @@ import {
   inputReplyTargetProviderItemID,
   joinAnswersForSDK,
   logUnhandledSdkMessage,
-  parseModelContextWindow,
+  pickContextWindowFromModelUsage,
   Runner,
 } from "./runner.js";
 import {
@@ -59,36 +59,64 @@ test("classifyProviderFailure maps the other known provider failure shapes", () 
   );
 });
 
-test("parseModelContextWindow extracts max_input_tokens from a ModelInfo body", () => {
-  // Shape of GET /v1/models/{model} → ModelInfo. max_input_tokens is the
-  // documented "Maximum input context window size in tokens for this model".
+test("pickContextWindowFromModelUsage reads contextWindow from a populated entry", () => {
+  // Shape of SDKResultMessage.modelUsage: Record<string, ModelUsage>, where
+  // each ModelUsage carries `contextWindow`. Single entry → its window.
   assert.equal(
-    parseModelContextWindow({
-      id: "claude-opus-4-8",
-      type: "model",
-      max_input_tokens: 200000,
+    pickContextWindowFromModelUsage({
+      "claude-opus-4-8": {
+        contextWindow: 200000,
+      } as { contextWindow?: number },
     }),
     200000,
   );
 });
 
-test("parseModelContextWindow floors fractional token counts", () => {
-  assert.equal(parseModelContextWindow({ max_input_tokens: 199999.9 }), 199999);
+test("pickContextWindowFromModelUsage returns the max across multiple entries", () => {
+  // A turn can touch more than one model (e.g. a subagent on Haiku); take the
+  // largest positive window so the composer fraction reflects the main model.
+  assert.equal(
+    pickContextWindowFromModelUsage({
+      "claude-haiku": { contextWindow: 100000 },
+      "claude-opus-4-8": { contextWindow: 200000 },
+      "claude-sonnet": { contextWindow: 150000 },
+    }),
+    200000,
+  );
 });
 
-test("parseModelContextWindow returns null for missing/malformed windows", () => {
+test("pickContextWindowFromModelUsage floors a fractional window", () => {
+  assert.equal(
+    pickContextWindowFromModelUsage({ "claude-opus-4-8": { contextWindow: 199999.9 } }),
+    199999,
+  );
+});
+
+test("pickContextWindowFromModelUsage returns null for missing/empty/non-positive windows", () => {
   // null (not 0) is the contract so the caller skips the report rather than
-  // reporting a zero window. reportRuntimeConfig itself coerces 0 → no-op,
-  // but the runner must not even reach the report on a bad lookup.
-  assert.equal(parseModelContextWindow(null), null);
-  assert.equal(parseModelContextWindow(undefined), null);
-  assert.equal(parseModelContextWindow("nope"), null);
-  assert.equal(parseModelContextWindow({}), null);
-  assert.equal(parseModelContextWindow({ max_input_tokens: 0 }), null);
-  assert.equal(parseModelContextWindow({ max_input_tokens: -5 }), null);
-  assert.equal(parseModelContextWindow({ max_input_tokens: "200000" }), null);
-  assert.equal(parseModelContextWindow({ max_input_tokens: Number.NaN }), null);
-  assert.equal(parseModelContextWindow({ max_input_tokens: Infinity }), null);
+  // reporting a zero window. The runner must not even reach the report when
+  // every entry's window is missing/zero/negative/non-finite.
+  assert.equal(pickContextWindowFromModelUsage(undefined), null);
+  assert.equal(pickContextWindowFromModelUsage({}), null);
+  assert.equal(pickContextWindowFromModelUsage({ "m": {} }), null);
+  assert.equal(pickContextWindowFromModelUsage({ "m": { contextWindow: 0 } }), null);
+  assert.equal(pickContextWindowFromModelUsage({ "m": { contextWindow: -5 } }), null);
+  assert.equal(
+    pickContextWindowFromModelUsage({ "m": { contextWindow: Number.NaN } }),
+    null,
+  );
+  assert.equal(
+    pickContextWindowFromModelUsage({ "m": { contextWindow: Infinity } }),
+    null,
+  );
+  // A mix where only some entries are unusable still yields the best positive.
+  assert.equal(
+    pickContextWindowFromModelUsage({
+      "bad": { contextWindow: 0 },
+      "good": { contextWindow: 200000 },
+    }),
+    200000,
+  );
 });
 
 type Order = string[];

@@ -200,27 +200,33 @@ export function classifyProviderFailure(message: string): ProviderFailureClass {
   return "other";
 }
 
-// parseModelContextWindow extracts the model's input context window from an
-// Anthropic Models API response body (`GET /v1/models/{model}` → ModelInfo).
-// The window lives on `max_input_tokens` ("Maximum input context window size
-// in tokens for this model"). Returns a positive finite integer, or null when
-// the field is missing/malformed — callers must treat null as "don't report",
-// never as a zero window. Kept as a pure exported function so the extraction
-// is unit-testable without an HTTP round-trip (see runner.test.ts).
+// pickContextWindowFromModelUsage extracts the model's context window from the
+// Claude Agent SDK `result` message's per-model usage map
+// (SDKResultMessage.modelUsage: Record<string, ModelUsage>, where each
+// ModelUsage carries `contextWindow: number`). Returns the max positive finite
+// window across all entries, or null when the map is missing/empty or every
+// entry's window is missing/zero/negative/non-finite — callers must treat null
+// as "don't report", never as a zero window. Kept as a pure exported function
+// so the extraction is unit-tested without driving the SDK (see runner.test.ts).
 //
-// Why the Models API and not the SDK init message: the Claude Agent SDK's
-// `system`/`init` message (SDKSystemMessage, subtype "init") carries model,
-// tools, mcp_servers, skills, etc. but NOT any context-window field, and the
-// SDK's ModelInfo type has no max_input_tokens either (checked against
-// @anthropic-ai/claude-agent-sdk 0.3.158). `contextWindow` only appears on
-// per-turn ModelUsage. So the provider-sourced window comes from the REST
-// Models API, reached through the in-cluster claude-api-proxy (no API key).
-export function parseModelContextWindow(json: unknown): number | null {
-  if (!json || typeof json !== "object") return null;
-  const raw = (json as Record<string, unknown>).max_input_tokens;
-  const n = typeof raw === "number" ? raw : Number.NaN;
-  if (!Number.isFinite(n) || n <= 0) return null;
-  return Math.floor(n);
+// Why ModelUsage and not the Anthropic Models API: `GET /v1/models/{model}`
+// returns HTTP 401 under the session's subscription-OAuth proxy, so Claude
+// sessions never got a window from that path. The SDK's `system`/`init` message
+// (SDKSystemMessage, subtype "init") carries model/tools/skills but NO
+// context-window field; `contextWindow` only appears on per-turn ModelUsage
+// attached to the `result` message — observed, no HTTP/auth round-trip.
+export function pickContextWindowFromModelUsage(
+  modelUsage: Record<string, { contextWindow?: number }> | undefined,
+): number | null {
+  if (!modelUsage || typeof modelUsage !== "object") return null;
+  let best = 0;
+  for (const usage of Object.values(modelUsage)) {
+    const raw = usage?.contextWindow;
+    const n = typeof raw === "number" ? raw : Number.NaN;
+    if (Number.isFinite(n) && n > best) best = n;
+  }
+  if (best <= 0) return null;
+  return Math.floor(best);
 }
 
 export function logUnhandledSdkMessage(message: SDKMessage): void {
@@ -550,6 +556,12 @@ export class Runner {
   // expect a mid-session switch to take effect.
   private pinnedModel: string | null = null;
   private pinnedEffort: EffortLevel | null = null;
+  // reportedContextWindowTokens latches the per-turn ModelUsage context
+  // window so the runner POSTs it to the orchestrator exactly once per
+  // process (the backend is first-observed-wins). Mirrors the codex-runner
+  // app-server transport's first-observed latch. Stays null until the first
+  // `result` message carries a usable window.
+  private reportedContextWindowTokens: number | null = null;
   // sdkReady gates run()'s for-await loop on the first submit_turn
   // arriving so we can pin model/effort from that command's payload
   // before constructing query(). resolveSdkReady is called exactly once
@@ -699,53 +711,36 @@ export class Runner {
     void reportRuntimeConfig(this.cfg, { model, effort }).catch((err) => {
       console.warn("runtime config report failed:", err);
     });
-    // Report the model's provider-sourced context window so the composer can
-    // render a used/window fraction (parity with the codex-runner, which
-    // reports the app-server's modelContextWindow). Fire-and-forget and
-    // best-effort: the helper swallows every failure internally, so this must
-    // never block the turn loop or throw out of pinning. Reported once —
-    // the backend is first-observed-wins.
-    void this.reportContextWindow(model);
+    // The model's context window is reported later, from the first SDK
+    // `result` message's per-model ModelUsage (see maybeReportContextWindow).
+    // The Anthropic Models API path was removed: `GET /v1/models/{model}`
+    // returns HTTP 401 under the subscription-OAuth proxy, so Claude sessions
+    // never got a window from it.
     this.resolveSdkReady();
   }
 
-  // reportContextWindow fetches the model's input context window from the
-  // Anthropic Models API and reports it to the orchestrator. The runner holds
-  // no API key: api.anthropic.com is routed through the in-cluster
-  // claude-api-proxy, which injects the subscription OAuth token + required
-  // headers, so a plain fetch is auth-injected automatically (do NOT add a
-  // key here). The window is non-critical UI sugar, so every failure path —
-  // network error, non-2xx, unparseable body, missing max_input_tokens — is
-  // caught, logged at warn, and skipped. We only ever report a positive
-  // finite integer. Mirrors the reportRuntimeConfig(...).catch(...) style.
-  private async reportContextWindow(model: string): Promise<void> {
-    const trimmed = String(model ?? "").trim();
-    if (!trimmed) return;
-    try {
-      const url = `https://api.anthropic.com/v1/models/${encodeURIComponent(trimmed)}`;
-      const response = await fetch(url);
-      if (!response.ok) {
-        console.warn(
-          "context window lookup failed: Models API returned non-2xx",
-          JSON.stringify({ model: trimmed, status: response.status }),
-        );
-        return;
-      }
-      const window = parseModelContextWindow(await response.json());
-      if (window === null) {
-        console.warn(
-          "context window lookup skipped: Models API response carried no usable max_input_tokens",
-          JSON.stringify({ model: trimmed }),
-        );
-        return;
-      }
-      await reportRuntimeConfig(this.cfg, {
-        contextWindowTokens: window,
-        contextWindowSource: "anthropic_models_api",
-      });
-    } catch (err) {
-      console.warn("context window report failed:", err);
-    }
+  // maybeReportContextWindow reads the model's context window from a Claude
+  // Agent SDK `result` message's per-model usage map
+  // (SDKResultMessage.modelUsage → ModelUsage.contextWindow) and POSTs it to
+  // the orchestrator so the composer can render a used/window fraction (parity
+  // with the codex-runner, which reports the app-server's modelContextWindow).
+  // Observed, no HTTP/auth: the prior Anthropic Models API path returned 401
+  // under the subscription-OAuth proxy and is removed.
+  //
+  // Latched via reportedContextWindowTokens so it POSTs once per process (the
+  // backend is first-observed-wins) instead of on every result. Fire-and-forget
+  // and best-effort — never throws out of the turn loop. We only ever report a
+  // positive integer.
+  private maybeReportContextWindow(message: SDKMessage): void {
+    if (this.reportedContextWindowTokens !== null) return;
+    const result = message as { modelUsage?: Record<string, { contextWindow?: number }> };
+    const window = pickContextWindowFromModelUsage(result.modelUsage);
+    if (window === null) return;
+    this.reportedContextWindowTokens = window;
+    void reportRuntimeConfig(this.cfg, {
+      contextWindowTokens: window,
+      contextWindowSource: "claude_sdk_model_usage",
+    }).catch(console.warn);
   }
 
   // launchSdkQuery wraps the SDK's query() construction in a method so
@@ -761,6 +756,12 @@ export class Runner {
 
   private async handleEvent(message: SDKMessage): Promise<void> {
     const providerEvent = message as ClaudeProviderEvent;
+    // The per-turn `result` message carries ModelUsage with the provider's
+    // context window. Read it before any early-return branching below so the
+    // window still latches even when the active turn was already interrupted.
+    if (providerEvent.type === "result") {
+      this.maybeReportContextWindow(message);
+    }
     const activeTurn = await this.ensureActiveTurn(providerEvent);
     if (activeTurn?.terminalEmitted && !isClaudeTaskLifecycleMessage(providerEvent)) {
       if (providerEvent.type === "result" && this.activeTurn === activeTurn) {

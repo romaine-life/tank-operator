@@ -14,7 +14,7 @@
 //   denominator is the provider-observed context window persisted on the
 //   session row (`runtime_context_window_tokens`, reported by the runners
 //   through PUT /api/internal/sessions/{id}/runtime-config — codex
-//   app-server token usage; Anthropic Models API max_input_tokens). There
+//   app-server token usage; Claude Agent SDK modelUsage.contextWindow). There
 //   is NO frontend model-window table and NO percent ring. The frontend
 //   `CONTEXT_WINDOW_BY_MODEL` table and its `getContextWindow` lookup are
 //   deleted; nothing under frontend/src may reintroduce them.

@@ -1167,9 +1167,9 @@ var schemaMigrations = []migration{
 
 	// Provider-observed runtime context window. The session's requested model is
 	// immutable after create; this records the first concrete window reported by
-	// the provider runtime (codex app-server token usage; Anthropic Models API
-	// max_input_tokens) so the composer context fraction hydrates from durable
-	// row metadata instead of a frontend model table.
+	// the provider runtime (codex app-server token usage; Claude Agent SDK
+	// per-turn modelUsage.contextWindow) so the composer context fraction
+	// hydrates from durable row metadata instead of a frontend model table.
 	{ID: "0095", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_context_window_tokens bigint NOT NULL DEFAULT 0`},
 	{ID: "0096", SQL: `ALTER TABLE sessions

@@ -542,10 +542,9 @@ var sessionRuntimeConfigUpdateTotal = promauto.NewCounterVec(
 // not_found / update_failed on the matching write errors, and ignored when
 // the call carried no positive window (context_window_tokens <= 0). The
 // source label is the bounded provider-observation tag (codex app-server
-// token usage, the Anthropic Models API max_input_tokens read, the Claude
-// Agent SDK init handshake) with an "other" bucket so a future producer
-// tag can't bloat Prometheus' active series. Cardinality is bounded at
-// providers * 4 sources * 4 results.
+// token usage; the Claude Agent SDK per-turn ModelUsage.contextWindow) with
+// an "other" bucket so a future producer tag can't bloat Prometheus' active
+// series. Cardinality is bounded at providers * 3 sources * 4 results.
 var sessionContextWindowReportTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_session_context_window_report_total",
@@ -680,13 +679,13 @@ func sessionRuntimeConfigResultLabel(result string) string {
 
 // sessionContextWindowSourceLabel bounds the context-window observation
 // source to the known provider tags. codex_app_server_token_usage is the
-// Codex app-server thread.tokenUsage observation; anthropic_models_api is
-// the Anthropic Models API max_input_tokens read; claude_agent_sdk_init is
-// the Claude Agent SDK init handshake. Anything else collapses to "other"
-// so a new producer tag cannot grow Prometheus' active series unbounded.
+// Codex app-server thread.tokenUsage observation; claude_sdk_model_usage is
+// the Claude Agent SDK per-turn result modelUsage.contextWindow. Anything
+// else collapses to "other" so a new producer tag cannot grow Prometheus'
+// active series unbounded.
 func sessionContextWindowSourceLabel(source string) string {
 	switch source {
-	case "codex_app_server_token_usage", "anthropic_models_api", "claude_agent_sdk_init":
+	case "codex_app_server_token_usage", "claude_sdk_model_usage":
 		return source
 	default:
 		return "other"

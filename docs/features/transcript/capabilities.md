@@ -208,7 +208,7 @@ Intent:
 The composer context indicator is a `used/window` fraction whose window is the
 real, provider-observed context size for the running model — not a number the
 frontend guesses from a model id. The runners observe the window at runtime
-(Codex app-server token usage; the Anthropic Models API `max_input_tokens`) and
+(Codex app-server token usage; the Claude Agent SDK per-turn `modelUsage.contextWindow`) and
 report it on the runtime-config PUT; the orchestrator persists it on the session
 row and the composer renders the fraction against it. Pre-session previews and
 not-yet-reported sessions show a placeholder used count instead of a fraction.
