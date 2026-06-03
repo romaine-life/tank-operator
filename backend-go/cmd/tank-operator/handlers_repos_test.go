@@ -59,8 +59,8 @@ func TestValidateRepoSlugs(t *testing.T) {
 		},
 		{
 			name:    "case-insensitive dedup, first-seen wins",
-			in:      []string{"NelsonG6/Tank-Operator", "romaine-life/tank-operator"},
-			wantOut: []string{"NelsonG6/Tank-Operator"},
+			in:      []string{"Romaine-Life/Tank-Operator", "romaine-life/tank-operator"},
+			wantOut: []string{"Romaine-Life/Tank-Operator"},
 		},
 		{
 			name:    "empty entry rejected",
@@ -139,8 +139,8 @@ func TestValidatePinnedRepoSlugs(t *testing.T) {
 		},
 		{
 			name:    "dedups and preserves first casing",
-			in:      []string{"  NelsonG6/Tank-Operator  ", "romaine-life/tank-operator", "romaine-life/glimmung"},
-			wantOut: []string{"NelsonG6/Tank-Operator", "romaine-life/glimmung"},
+			in:      []string{"  Romaine-Life/Tank-Operator  ", "romaine-life/tank-operator", "romaine-life/glimmung"},
+			wantOut: []string{"Romaine-Life/Tank-Operator", "romaine-life/glimmung"},
 		},
 		{
 			name:    "bad slug rejected",

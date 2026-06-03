@@ -7,8 +7,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/nelsong6/tank-operator/backend-go/internal/auth"
-	"github.com/nelsong6/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
 // imageOverrideAdapter adapts the pgstore session-image override store to the
