@@ -21,7 +21,7 @@ test("every reference link is an absolute https URL on the tank-operator repo", 
   for (const link of ADMIN_REFERENCE_LINKS) {
     assert.match(
       link.href,
-      /^https:\/\/github\.com\/nelsong6\/tank-operator\//,
+      /^https:\/\/github\.com\/romaine-life\/tank-operator\//,
     );
     // Throws if malformed; asserts the scheme explicitly.
     assert.equal(new URL(link.href).protocol, "https:");
