@@ -1165,16 +1165,53 @@ var schemaMigrations = []migration{
 		WHEN (NEW.turn_id IS NOT NULL AND NEW.turn_id <> '')
 		EXECUTE FUNCTION tank_session_events_allocate_turn_number()`},
 
+	// session_scheduled_wakeups — durable backend-owned ScheduleWakeup state.
+	// Claude emits ScheduleWakeup as a provider tool_use item; the runner
+	// registers that item here and the orchestrator claims due rows, persists
+	// normal user_message.created + turn.submitted boundary events, then
+	// publishes the submit_turn command. The provider_item_id uniqueness is the
+	// idempotency key for SDK replay and runner restart: one Claude tool_use can
+	// produce at most one scheduled wakeup row.
+	{ID: "0095", SQL: `CREATE TABLE IF NOT EXISTS session_scheduled_wakeups (
+		wakeup_id         text PRIMARY KEY,
+		session_scope     text NOT NULL,
+		session_id        text NOT NULL,
+		tank_session_id   text NOT NULL,
+		owner_email       text NOT NULL,
+		provider          text NOT NULL,
+		prompt            text NOT NULL,
+		client_nonce      text NOT NULL,
+		scheduled_turn_id text NOT NULL DEFAULT '',
+		provider_item_id  text NOT NULL,
+		scheduled_at      timestamptz NOT NULL,
+		due_at            timestamptz NOT NULL,
+		status            text NOT NULL CHECK (status IN ('scheduled', 'claiming', 'fired', 'failed')),
+		attempt_count     integer NOT NULL DEFAULT 0,
+		locked_at         timestamptz,
+		fired_at          timestamptz,
+		fired_turn_id     text NOT NULL DEFAULT '',
+		last_error        text NOT NULL DEFAULT '',
+		created_at        timestamptz NOT NULL DEFAULT now(),
+		updated_at        timestamptz NOT NULL DEFAULT now()
+	)`},
+	{ID: "0096", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_scheduled_wakeups_provider_item
+		ON session_scheduled_wakeups (tank_session_id, provider, provider_item_id)`},
+	{ID: "0097", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_scheduled_wakeups_client_nonce
+		ON session_scheduled_wakeups (tank_session_id, client_nonce)`},
+	{ID: "0098", SQL: `CREATE INDEX IF NOT EXISTS session_scheduled_wakeups_due
+		ON session_scheduled_wakeups (session_scope, status, due_at, created_at)
+		WHERE status IN ('scheduled', 'claiming')`},
+
 	// Provider-observed runtime context window. The session's requested model is
 	// immutable after create; this records the first concrete window reported by
 	// the provider runtime (codex app-server token usage; Claude Agent SDK
 	// per-turn modelUsage.contextWindow) so the composer context fraction
 	// hydrates from durable row metadata instead of a frontend model table.
-	{ID: "0095", SQL: `ALTER TABLE sessions
+	{ID: "0099", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_context_window_tokens bigint NOT NULL DEFAULT 0`},
-	{ID: "0096", SQL: `ALTER TABLE sessions
+	{ID: "0100", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_context_window_source text NOT NULL DEFAULT ''`},
-	{ID: "0097", SQL: `ALTER TABLE sessions
+	{ID: "0101", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_context_window_observed_at timestamptz`},
 }
 

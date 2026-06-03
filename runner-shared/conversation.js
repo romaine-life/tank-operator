@@ -30,6 +30,7 @@ export const TANK_EVENT_TYPES = [
   "turn.command_failed",
   "turn.interrupt_requested",
   "turn.interrupted",
+  "context.compacted",
   "session.status",
   "item.started",
   "item.completed",
@@ -114,6 +115,10 @@ function isValidEventByType(event) {
       return event.actor === "system" &&
         event.source === "tank" &&
         hasStrings(event, ["turn_id"]);
+    case "context.compacted":
+      return event.actor === "runner" &&
+        hasStrings(event, ["turn_id"]) &&
+        isContextCompactedPayload(event.payload);
     case "session.status":
       return event.actor === "system" &&
         event.source === "tank" &&
@@ -208,6 +213,13 @@ function isNonEmptyStringArray(value) {
   return Array.isArray(value) &&
     value.length > 0 &&
     value.every((item) => typeof item === "string" && item.length > 0);
+}
+
+function isContextCompactedPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (payload.trigger !== "auto" && payload.trigger !== "manual") return false;
+  return payload.pre_tokens === undefined ||
+    (typeof payload.pre_tokens === "number" && Number.isFinite(payload.pre_tokens) && payload.pre_tokens >= 0);
 }
 
 function isSessionStatusPayload(payload) {

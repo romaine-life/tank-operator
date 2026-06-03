@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 
 import type { Config } from "../config.js";
 import type { TankConversationEvent, TankFinalAnswer } from "../../../runner-shared/conversation.js";
-import { itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
+import { contextCompactedEvent, itemEvent, shellTaskEvent, turnEvent } from "../../../runner-shared/conversation-builders.js";
 import { itemOutcomeTotal, turnUsageEmittedTotal } from "../metrics.js";
 
 // ClaudeProviderEvent is the runner's view of the raw Claude SDK message
@@ -68,6 +68,23 @@ export function canonicalEventsForClaudeMessage(
 ): TankConversationEvent[] {
   if (!turn) return [];
   const providerID = providerEventID(message);
+  // Context compaction is a durable, user-visible event, not a silent
+  // provider-internal action. Mapping it here is the close of the architectural
+  // gap that hid it: the SDK's system/compact_boundary used to fall through to
+  // `return []` (logged-but-dropped) like any unrecognized message. See
+  // docs/tank-conversation-protocol.md → "Context Compaction Notice".
+  if (message.type === "system" && message.subtype === "compact_boundary") {
+    return [
+      contextCompactedEvent({
+        sessionID: cfg.sessionId,
+        turnID: turn.turnID,
+        source: "claude",
+        trigger: claudeCompactTrigger(message),
+        preTokens: claudeCompactPreTokens(message),
+        providerEventID: providerID,
+      }),
+    ];
+  }
   if (message.type === "system" && isClaudeTaskLifecycleMessage(message)) {
     return canonicalEventsForClaudeTaskLifecycle(cfg, turn, message, providerID);
   }
@@ -320,6 +337,27 @@ export function isClaudeTaskLifecycleMessage(message: ClaudeProviderEvent): bool
       message.subtype === "task_updated"
     )
   );
+}
+
+// claudeCompactTrigger / claudeCompactPreTokens read the Claude Agent SDK's
+// `compact_metadata` off a system/compact_boundary message: whether compaction
+// was auto-triggered (context filled) or manual (/compact), and the
+// pre-compaction token count. Unknown/missing shapes default to "auto" with no
+// token count rather than throwing, so malformed metadata still yields a
+// renderable notice instead of a turn-failing crash.
+function claudeCompactTrigger(message: ClaudeProviderEvent): "auto" | "manual" {
+  const meta = message.compact_metadata;
+  if (meta && typeof meta === "object" && (meta as Record<string, unknown>).trigger === "manual") {
+    return "manual";
+  }
+  return "auto";
+}
+
+function claudeCompactPreTokens(message: ClaudeProviderEvent): number | undefined {
+  const meta = message.compact_metadata;
+  if (!meta || typeof meta !== "object") return undefined;
+  const value = (meta as Record<string, unknown>).pre_tokens;
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function canonicalEventsForClaudeTaskLifecycle(

@@ -8,7 +8,7 @@
   "scripts": {
     "build": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\" && tsc",
     "start": "node dist/index.js",
-    "test": "node --test $(find dist -name '*.test.js')"
+    "test": "node --test dist/*.test.js dist/**/*.test.js"
   },
   "engines": {
     "node": ">=20"

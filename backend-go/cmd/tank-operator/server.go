@@ -87,6 +87,12 @@ type appServer struct {
 	// nil when pgPool is unset (stub mode).
 	providerHealth *providerhealth.Manager
 
+	// scheduledWakeups is the durable backend-owned Claude ScheduleWakeup
+	// store. Runners register provider tool_use items here; the
+	// orchestrator claims due rows and feeds them through the normal SDK
+	// turn boundary instead of holding process-local timers in a session pod.
+	scheduledWakeups scheduledWakeupStore
+
 	// imageOverrides backs the test-slot session-image repoint flow
 	// (docs/testing.md): the internal /session-scopes/{scope}/image-override
 	// endpoints read/write it, and the Manager resolves it at session-create.
@@ -122,6 +128,15 @@ type streamAuthTicketStore interface {
 type messageLinkShareStore interface {
 	Create(context.Context, pgstore.MessageLinkShare) error
 	Get(context.Context, string) (pgstore.MessageLinkShare, error)
+}
+
+type scheduledWakeupStore interface {
+	Register(context.Context, pgstore.RegisterScheduledWakeupRequest) (pgstore.ScheduledWakeup, error)
+	ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.ScheduledWakeup, error)
+	ListBySession(context.Context, string, string) ([]pgstore.ScheduledWakeup, error)
+	MarkFired(context.Context, string, string) error
+	MarkFailed(context.Context, string, string) error
+	ScheduledDueCount(context.Context, time.Time) (int, error)
 }
 
 // sessionImageOverrideStore is the durable per-scope session-image override
@@ -269,6 +284,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/background-tasks/{task_id}/stop", s.handleStopBackgroundTask)
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleSessionEventStream)
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
+	mux.HandleFunc("GET /api/sessions/{session_id}/scheduled-wakeups", s.handleListScheduledWakeups)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
 	// Durable resolver for the public per-session turn number: the canonical
 	// route is /sessions/{id}/turns/{n}; this maps n -> turn_id + anchor cursor
@@ -306,6 +322,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/timeline", s.handleInternalSessionTimeline)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)

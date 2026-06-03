@@ -219,6 +219,10 @@ func main() {
 
 	// 8. Init per-user SDK conversation read-state store.
 	readStateStore := buildConversationReadStateStore(pgPool, sessionScope)
+	var scheduledWakeupStore *pgstore.ScheduledWakeupStore
+	if pgPool != nil {
+		scheduledWakeupStore = pgstore.NewScheduledWakeupStore(pgPool, sessionScope)
+	}
 
 	// 8. Init Manager. SessionListWaker wakes are routed through the
 	// NATS session bus (per-email subject), replacing the prior
@@ -491,12 +495,20 @@ func main() {
 		spawnQuota:               NewSpawnQuotaTracker(),
 		mcpGitHub:                buildMCPGitHubClient(),
 		providerHealth:           providerHealthManager,
+		scheduledWakeups:         scheduledWakeupStore,
 	}
 	// Assign the override store only when non-nil so the appServer field stays
 	// a true nil interface in stub mode (avoids the typed-nil-pointer trap that
 	// would make `s.imageOverrides == nil` false and panic on first use).
 	if imageOverrideStore != nil {
 		srv.imageOverrides = imageOverrideStore
+	}
+	if scheduledWakeupStore != nil && sessionBus != nil {
+		go func() {
+			if err := runScheduledWakeupLoop(ctx, srv, scheduledWakeupDefaultInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("scheduled wakeup loop stopped", "error", err)
+			}
+		}()
 	}
 	srv.registerRoutes(mux)
 

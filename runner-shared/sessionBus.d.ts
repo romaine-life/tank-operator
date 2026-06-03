@@ -126,10 +126,6 @@ export class SharedSessionBus {
     signal?: AbortSignal,
   ): Promise<() => Promise<void>>;
   publishEvent(event: Record<string, unknown>): Promise<"created" | "exists">;
-  enqueueWakeupSubmitTurn(args: {
-    prompt: string;
-    clientNonce: string;
-  }): Promise<SessionCommand>;
   findTurnTerminal(turnID: string): Promise<Record<string, unknown> | null>;
   markCompleted(record: SessionCommandRecord): Promise<boolean>;
   markFailed(record: SessionCommandRecord, err: unknown): Promise<boolean>;
@@ -137,15 +133,6 @@ export class SharedSessionBus {
   attemptsExceeded(record: SessionCommandRecord): boolean;
   close(): Promise<void>;
 }
-
-export function buildWakeupSubmitTurnCommand(args: {
-  sessionID: string;
-  sessionStorageKey?: string;
-  email: string;
-  provider: "claude" | "codex" | string;
-  prompt: string;
-  clientNonce: string;
-}): SessionCommand;
 
 export function isInterruptCommand(record: SessionCommand | null | undefined): boolean;
 export function commandSubject(sessionStorageKey: string, provider: string): string;

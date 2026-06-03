@@ -1,19 +1,14 @@
-// ScheduleWakeup detection in SDK events. The pod-side runner extracts
-// the agent's tool_use call and schedules an in-process setTimeout; when
-// the timer fires, the runner publishes the wakeup prompt as a normal
-// submit_turn command (source=schedule-wakeup) to the session command
-// subject, which the same runner then consumes as if it were a user turn.
-// Timer state lives in the runner process: it survives orchestrator
-// rollouts (the session pod is independent), but a runner-process restart
-// inside a live pod loses pending wakeups. That matches the durability
-// boundary in docs/product-inspirations.md, which scopes scheduled-wake
-// state to runtime state rather than durable messaging.
+// ScheduleWakeup detection in SDK events. The runner extracts the Claude
+// tool_use call and registers it with the orchestrator, which owns the
+// durable timer row and later submits the wakeup through the same backend
+// turn boundary as a user turn.
 
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 
 export interface WakeupRequest {
   delayMs: number;
   prompt: string;
+  providerItemID: string;
 }
 
 // Scan an assistant SDK event's content blocks for a ScheduleWakeup
@@ -39,9 +34,12 @@ export function extractWakeup(message: SDKMessage): WakeupRequest | null {
     const prompt = String((input as any).prompt ?? "");
     if (!Number.isFinite(delaySeconds) || delaySeconds < 0) continue;
     if (!prompt) continue;
+    const providerItemID = String(block.id ?? "").trim();
+    if (!providerItemID) continue;
     found = {
       delayMs: Math.floor(delaySeconds * 1000),
       prompt,
+      providerItemID,
     };
   }
   return found;

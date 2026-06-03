@@ -3,10 +3,10 @@ import assert from "node:assert/strict";
 import { once } from "node:events";
 
 import {
-  pendingWakeupsGauge,
   recordTurnStart,
   recordTurnTerminal,
   registry,
+  scheduledWakeupRegisterTotal,
   startMetricsServer,
 } from "./metrics.js";
 
@@ -18,17 +18,19 @@ test("metrics endpoint serves prom-format with tank_runner_ counters", async () 
   const port = (addr as { port: number }).port;
 
   // Drive a counter so the scrape has something to assert.
-  pendingWakeupsGauge.inc();
+  scheduledWakeupRegisterTotal.labels("ok").inc();
 
   try {
     const res = await fetch(`http://127.0.0.1:${port}/metrics`);
     assert.equal(res.status, 200);
     const body = await res.text();
-    assert.match(body, /tank_runner_pending_wakeups\{mode="claude"\} 1/);
+    assert.match(
+      body,
+      /tank_runner_scheduled_wakeup_register_total\{(?=[^}]*result="ok")(?=[^}]*mode="claude")[^}]*\} 1/,
+    );
     assert.match(body, /tank_runner_commands_consumed_total/);
     assert.match(body, /tank_runner_turn_duration_seconds/);
   } finally {
-    pendingWakeupsGauge.dec();
     server.close();
     await once(server, "close");
   }

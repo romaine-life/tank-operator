@@ -492,6 +492,24 @@ test("maps Codex terminal events to Tank turn lifecycle", () => {
   assert.deepEqual(failed.payload?.usage, { input_tokens: 7 });
 });
 
+test("maps Codex context compaction to a durable Tank notice", () => {
+  const event = mappedEvent(new CodexTankEventAdapter(cfg()), {
+    type: "context.compacted",
+    id: "thread/compacted:turn-provider-1",
+    thread_id: "thread-1",
+    turn_id: "turn-provider-1",
+    trigger: "auto",
+  });
+
+  assert.equal(event.type, "context.compacted");
+  assert.equal(event.source, "codex");
+  assert.equal(event.actor, "runner");
+  assert.equal(event.turn_id, "turn-run-123");
+  assert.equal(event.visibility, "durable");
+  assert.equal(event.producer?.provider_event_id, "turn-provider-1");
+  assert.deepEqual(event.payload, { trigger: "auto" });
+});
+
 test("ignores unknown Codex provider event types", () => {
   const events = canonicalEventsForCodexEvent(
     cfg(),

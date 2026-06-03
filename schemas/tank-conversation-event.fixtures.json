@@ -1,6 +1,32 @@
 {
   "events": [
     {
+      "name": "context compacted",
+      "event": {
+        "event_id": "turn_contract:context.compacted:provider-compact-1",
+        "order_key": "1768179841750-00000004-turn_contract:context.compacted:provider-compact-1",
+        "sequence": 4,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "client_nonce": "client-nonce-contract",
+        "actor": "runner",
+        "source": "claude",
+        "type": "context.compacted",
+        "created_at": "2026-05-12T00:00:04.750Z",
+        "producer": {
+          "name": "claude-runner",
+          "runtime": "claude",
+          "provider_event_id": "provider-compact-1"
+        },
+        "visibility": "durable",
+        "payload": {
+          "trigger": "auto",
+          "pre_tokens": 158000
+        }
+      }
+    },
+    {
       "name": "persisted codex user message with runner and storage stamps",
       "event": {
         "event_id": "turn_contract:user_message.created",

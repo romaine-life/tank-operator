@@ -37,11 +37,21 @@ the rest of the product reconstruct what happened.
   and exactly one terminal turn outcome.
 - Stop/interrupt remains pending until a durable interrupted, completed,
   failed, or already-terminal event resolves it.
+- Stop/interrupt against a turn that is already terminal must not create a new
+  `turn.interrupt_requested` row or move activity back to `stopping`; the
+  existing durable terminal is the resolution and activity is refreshed from
+  the ledger.
 - Tool approval replies are routed to the intended provider item and resolved
   durably.
 - Runner events must wake transcript and session-list followers after
   persistence.
 - A runner must not require an open browser to continue work.
+- Claude `ScheduleWakeup` state is durable in Postgres. The runner registers
+  the provider tool_use item with the backend; the orchestrator later submits
+  the wakeup through the same backend-owned turn boundary as a user turn.
+  The browser reads `GET /api/sessions/{session_id}/scheduled-wakeups` and
+  renders those rows in Background -> Scheduled so users can confirm due,
+  firing, fired, and failed state without inspecting logs.
 - Token usage is durable. Each turn emits cumulative usage on its terminal
   (for cost) and, where the provider exposes per-call usage, a `turn.usage`
   snapshot per model call (for live context-window occupancy). Claude reports
@@ -56,12 +66,17 @@ the rest of the product reconstruct what happened.
 - Browser disconnect and orchestrator rollout must not cancel runner work while
   the session pod and runner remain alive.
 - Runner-process restart may lose in-process state that is explicitly outside
-  the durability boundary, such as current provider call state or pod-local
-  scheduled wakeups.
+  the durability boundary, such as current provider call state. Scheduled
+  wakeups are not in-process state and must remain visible from the backend
+  scheduled-wakeup table after a runner restart.
 - Command redelivery must be idempotent through command keys, turn IDs, or
   provider item IDs.
 - Provider failures must become durable failure events instead of silent
   strandings.
+- Provider rate-limit stream frames are provider failures for Tank's user
+  contract: they must produce durable user-visible state, and absent a
+  provider-owned bounded retry contract they resolve the active turn with
+  `turn.failed{reason:"provider_rate_limit"}`.
 
 ## Observability
 

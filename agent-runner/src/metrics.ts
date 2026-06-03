@@ -62,6 +62,12 @@ export const providerFailureClassTotal = new Counter({
   registers: [registry],
 });
 
+export const providerRateLimitEventTotal = new Counter({
+  name: "tank_runner_provider_rate_limit_event_total",
+  help: "Provider SDK rate-limit stream frames observed by the runner. Each frame must resolve the active turn to durable user-visible state instead of leaving it stranded.",
+  registers: [registry],
+});
+
 export const providerControlTotal = new Counter({
   name: "tank_runner_provider_control_total",
   help: "Provider control-plane calls issued by the runner, such as interrupt and background foreground tasks.",
@@ -98,6 +104,23 @@ export const turnUsageEmittedTotal = new Counter({
   name: "tank_runner_turn_usage_emitted_total",
   help: "Durable usage events published by the runner. kind='snapshot' is the per-assistant-message context-occupancy turn.usage; kind='terminal' is the cumulative usage on the turn terminal. A Claude turn with assistant messages but zero snapshots is the context-gauge regression signature.",
   labelNames: ["kind"],
+  registers: [registry],
+});
+
+// unmappedProviderEventTotal counts provider SDK messages that reached the
+// adapter fall-through with no Tank-event mapping AND are not on the
+// explicit-ignore list (assistant / user / result / Claude task-lifecycle /
+// stream_event / system:init / system:compact_boundary). Steady state is
+// zero. A nonzero rate is the architectural alarm for the silent-drop class
+// that hid context compaction: a semantically-significant provider event is
+// vanishing from the durable ledger instead of being mapped or explicitly
+// ignored with a test, which the Tank conversation protocol requires. The
+// labels are the bounded SDK message type and subtype so a spike names the
+// event to investigate (e.g. a new system subtype a provider upgrade added).
+export const unmappedProviderEventTotal = new Counter({
+  name: "tank_runner_unmapped_provider_event_total",
+  help: "Provider SDK messages dropped at the adapter with no Tank mapping and not on the explicit-ignore list. Nonzero means a provider event is silently missing from the durable ledger; labels name the SDK type/subtype to investigate.",
+  labelNames: ["type", "subtype"],
   registers: [registry],
 });
 
@@ -143,9 +166,10 @@ export const interruptOutcomeTotal = new Counter({
   registers: [registry],
 });
 
-export const pendingWakeupsGauge = new Gauge({
-  name: "tank_runner_pending_wakeups",
-  help: "Currently-pending ScheduleWakeup timers held in this runner process.",
+export const scheduledWakeupRegisterTotal = new Counter({
+  name: "tank_runner_scheduled_wakeup_register_total",
+  help: "ScheduleWakeup registrations attempted against the orchestrator durable wakeup API.",
+  labelNames: ["result"],
   registers: [registry],
 });
 

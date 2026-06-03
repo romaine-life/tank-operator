@@ -9,8 +9,8 @@
 // Tank events on the session bus. Raw provider events never reach the
 // bus. Boundary events (user_message.created, turn.submitted) are owned
 // by the backend (handlers_turns.go) — the runner does not republish them.
-// ScheduleWakeup is a pod-local setTimeout that re-enqueues a submit_turn
-// command when the timer fires.
+// ScheduleWakeup tool_use calls are registered with the backend, which owns
+// durable timer state and submits the later turn through handlers_turns.go.
 //
 // On error: log and keep running. Single-turn failures shouldn't kill the
 // runner; persistent failures will surface via session-bus publish errors.
@@ -25,8 +25,6 @@ import {
   type SDKUserMessage,
   type Options,
 } from "@anthropic-ai/claude-agent-sdk";
-import { randomUUID } from "node:crypto";
-
 import {
   canonicalEventsForClaudeMessage,
   claudeTaskIdentifiers,
@@ -66,14 +64,17 @@ import {
   natsPublishFailureTotal,
   optionsOverrideIgnoredTotal,
   optionsPinnedTotal,
-  pendingWakeupsGauge,
   providerControlTotal,
   providerErrorTotal,
   providerFailureClassTotal,
+  providerRateLimitEventTotal,
   recordTurnStart,
   recordTurnTerminal,
+  scheduledWakeupRegisterTotal,
+  unmappedProviderEventTotal,
 } from "./metrics.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
+import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js";
 
 // Pull a single dispatch out as a free function so the session-bus publish
 // contract is testable without spinning up a Runner. The sink only accepts
@@ -232,15 +233,25 @@ export function pickContextWindowFromModelUsage(
 export function logUnhandledSdkMessage(message: SDKMessage): void {
   const m = message as Record<string, unknown> & { type?: unknown };
   const type = typeof m.type === "string" ? m.type : "";
+  const subtype = typeof m.subtype === "string" ? m.subtype : "";
   if (
     type === "assistant" ||
     type === "user" ||
     type === "result" ||
     isClaudeTaskLifecycleMessage(m as ClaudeProviderEvent) ||
-    type === "stream_event"
+    type === "stream_event" ||
+    // system/init is session-setup metadata; system/compact_boundary is now
+    // mapped by the Claude adapter to context.compacted. Both are explicitly
+    // ignored here so they don't inflate the unmapped-drop counter.
+    (type === "system" && (subtype === "init" || subtype === "compact_boundary"))
   ) {
     return;
   }
+  // Anything still here is a provider event the adapter neither mapped nor
+  // explicitly ignored — the silent-drop class that hid context compaction.
+  // Count it (bounded type/subtype labels) so the next semantically-significant
+  // provider event surfaces in metrics instead of vanishing from the ledger.
+  unmappedProviderEventTotal.labels(type || "unknown", subtype || "none").inc();
   const fields: Record<string, unknown> = {
     msg: "sdk_message_unhandled",
     type,
@@ -250,6 +261,23 @@ export function logUnhandledSdkMessage(message: SDKMessage): void {
     if (v !== undefined) fields[key] = v;
   }
   console.log(JSON.stringify(fields));
+}
+
+function isClaudeRateLimitEvent(message: ClaudeProviderEvent): boolean {
+  return message.type === "rate_limit_event";
+}
+
+function claudeRateLimitError(message: ClaudeProviderEvent): string {
+  const parts = ["Claude provider emitted rate_limit_event"];
+  for (const key of ["message", "error", "summary", "description", "retry_after_ms", "retry_after_seconds"]) {
+    const value = message[key];
+    if (typeof value === "string" && value.trim()) {
+      parts.push(`${key}=${value.trim()}`);
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      parts.push(`${key}=${value}`);
+    }
+  }
+  return parts.join("; ");
 }
 
 export interface PendingTurn {
@@ -769,6 +797,15 @@ export class Runner {
       }
       return;
     }
+    if (isClaudeRateLimitEvent(providerEvent)) {
+      if (activeTurn) {
+        await this.failTurnForProviderRateLimit(activeTurn, providerEvent);
+        return;
+      }
+      providerRateLimitEventTotal.inc();
+      logUnhandledSdkMessage(message);
+      return;
+    }
     const adapterTurn = this.turnContextForProviderEvent(providerEvent, activeTurn);
     if (isClaudeTaskLifecycleMessage(providerEvent) && !adapterTurn) {
       const { taskID, toolUseID } = claudeTaskIdentifiers(providerEvent);
@@ -813,7 +850,39 @@ export class Runner {
 
     const wakeup = extractWakeup(message);
     if (wakeup) {
-      this.scheduleWakeup(wakeup);
+      await this.registerWakeup(wakeup, activeTurn?.turnID ?? "");
+    }
+  }
+
+  private async failTurnForProviderRateLimit(
+    turn: PendingTurn,
+    message: ClaudeProviderEvent,
+  ): Promise<void> {
+    providerRateLimitEventTotal.inc();
+    if (turn.terminalEmitted) return;
+    const error = claudeRateLimitError(message);
+    providerFailureClassTotal.labels("rate_limit").inc();
+    const dispatched = await dispatch(
+      this.sink,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.failed",
+        reason: "provider_rate_limit",
+        error,
+        providerEventID: message.uuid,
+      }),
+    );
+    if (!dispatched) return;
+    turn.terminalEmitted = true;
+    this.signalStopToSdk();
+    await this.markCommandTerminal(turn, "turn.failed").catch((markErr) =>
+      console.error("session command rate-limit terminal mark failed:", markErr),
+    );
+    if (this.activeTurn === turn) {
+      this.activeTurn = null;
     }
   }
 
@@ -1704,18 +1773,19 @@ export class Runner {
     );
   }
 
-  private scheduleWakeup(req: WakeupRequest): void {
-    const delayMs = Math.max(0, req.delayMs);
-    pendingWakeupsGauge.inc();
-    setTimeout(() => {
-      pendingWakeupsGauge.dec();
-      void this.commandBus
-        .enqueueWakeupSubmitTurn({
-          prompt: req.prompt,
-          clientNonce: `schedule_wakeup-${randomUUID()}`,
-        })
-        .catch((err) => console.error("schedule wakeup fire failed:", err));
-    }, delayMs);
+  private async registerWakeup(req: WakeupRequest, scheduledTurnID: string): Promise<void> {
+    try {
+      const registered = await registerScheduledWakeup(this.cfg, {
+        delayMs: req.delayMs,
+        prompt: req.prompt,
+        providerItemID: req.providerItemID,
+        scheduledTurnID,
+      });
+      scheduledWakeupRegisterTotal.labels(registered ? "ok" : "disabled").inc();
+    } catch (err) {
+      scheduledWakeupRegisterTotal.labels("failed").inc();
+      console.error("scheduled wakeup register failed:", err);
+    }
   }
 
   private async finalizeCommandIfAlreadyTerminal(

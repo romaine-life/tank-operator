@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import type { ThreadOptions } from "@openai/codex-sdk";
 
 import { CodexAppServerTransport, appServerItemToCodexItem } from "./appServerTransport.js";
+import { registry } from "./metrics.js";
 
 test("appServerItemToCodexItem preserves unified exec process metadata", () => {
   const item = appServerItemToCodexItem({
@@ -30,6 +31,120 @@ test("appServerItemToCodexItem preserves unified exec process metadata", () => {
     status: "completed",
     duration_ms: 1234,
   });
+});
+
+test("unmapped app-server notifications increment the provider-event counter", async () => {
+  await registry.resetMetrics();
+  const transport = new CodexAppServerTransport({
+    cwd: "/workspace/app",
+    onRequestUserInput: async () => ({ answers: {} }),
+  });
+  const internals = transport as unknown as {
+    handleNotification: (method: string, params?: Record<string, unknown>) => void;
+  };
+
+  internals.handleNotification("thread/futureNotification", {
+    threadId: "thread-1",
+    turnId: "turn-provider-1",
+  });
+
+  const metrics = await registry.metrics();
+  assert.match(
+    metrics,
+    /tank_runner_unmapped_provider_event_total\{(?=[^}]*type="thread\/futureNotification")(?=[^}]*subtype="none")(?=[^}]*mode="codex")[^}]*\} 1/,
+  );
+});
+
+test("runTurn maps Codex thread/compacted notifications to context.compacted events", async () => {
+  const transport = new CodexAppServerTransport({
+    cwd: "/workspace/app",
+    onRequestUserInput: async () => ({ answers: {} }),
+  });
+  const internals = transport as unknown as {
+    start: () => Promise<void>;
+    ensureThread: (threadOptions: ThreadOptions) => Promise<string>;
+    request: (method: string, params: unknown) => Promise<unknown>;
+    handleNotification: (method: string, params?: Record<string, unknown>) => void;
+  };
+  internals.start = async () => {};
+  internals.ensureThread = async () => "thread-1";
+  internals.request = async () => ({ turn: { id: "turn-provider-1" } });
+
+  const iter = transport.runTurn("compact context", {} as ThreadOptions);
+  const first = iter.next();
+  await new Promise((resolve) => setImmediate(resolve));
+  internals.handleNotification("thread/compacted", {
+    threadId: "thread-1",
+    turnId: "turn-provider-1",
+  });
+
+  assert.deepEqual(await first, {
+    done: false,
+    value: {
+      type: "context.compacted",
+      id: "thread/compacted:turn-provider-1",
+      thread_id: "thread-1",
+      turn_id: "turn-provider-1",
+      trigger: "auto",
+    },
+  });
+
+  internals.handleNotification("turn/completed", {
+    threadId: "thread-1",
+    turn: { id: "turn-provider-1", status: "completed" },
+  });
+  const terminal = await iter.next();
+  assert.equal(terminal.done, false);
+  if (terminal.done) throw new Error("expected terminal event");
+  assert.equal(terminal.value.type, "turn.completed");
+});
+
+test("runTurn maps Codex contextCompaction item frames once", async () => {
+  const transport = new CodexAppServerTransport({
+    cwd: "/workspace/app",
+    onRequestUserInput: async () => ({ answers: {} }),
+  });
+  const internals = transport as unknown as {
+    start: () => Promise<void>;
+    ensureThread: (threadOptions: ThreadOptions) => Promise<string>;
+    request: (method: string, params: unknown) => Promise<unknown>;
+    handleNotification: (method: string, params?: Record<string, unknown>) => void;
+  };
+  internals.start = async () => {};
+  internals.ensureThread = async () => "thread-1";
+  internals.request = async () => ({ turn: { id: "turn-provider-1" } });
+
+  const iter = transport.runTurn("compact context", {} as ThreadOptions);
+  const first = iter.next();
+  await new Promise((resolve) => setImmediate(resolve));
+  const params = {
+    threadId: "thread-1",
+    turnId: "turn-provider-1",
+    item: { id: "context-compaction-1", type: "contextCompaction" },
+  };
+  internals.handleNotification("item/started", params);
+  internals.handleNotification("item/completed", params);
+
+  assert.deepEqual(await first, {
+    done: false,
+    value: {
+      type: "context.compacted",
+      id: "turn-provider-1:context-compaction-1",
+      thread_id: "thread-1",
+      turn_id: "turn-provider-1",
+      item_id: "context-compaction-1",
+      trigger: "auto",
+    },
+  });
+
+  internals.handleNotification("turn/completed", {
+    threadId: "thread-1",
+    turn: { id: "turn-provider-1", status: "completed" },
+  });
+  const terminal = await iter.next();
+  assert.equal(terminal.done, false);
+  if (terminal.done) throw new Error("expected terminal event");
+  assert.equal(terminal.value.type, "turn.completed");
 });
 
 test("runTurn abort cuts ahead of queued events and interrupts once turn id is known", async () => {

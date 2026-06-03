@@ -18,3 +18,7 @@ In the first response:
 6. Stop and wait for permission before making code changes.
 
 After I approve the proposal, treat the session normally and make code changes when the work calls for it.
+
+This is the end of the intro message. The user's message will be below.
+
+---

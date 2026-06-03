@@ -342,8 +342,9 @@ var (
 
 	// turnInterruptRequestTotal counts stop requests posted to /interrupt,
 	// labeled by outcome at each exit point. Steady-state expectation:
-	// persisted dominates; persist_failed and publish_failed near zero.
-	// Cardinality bounded at 3, respects docs/observability.md budget.
+	// persisted dominates; already_terminal is a legitimate race; failures
+	// remain near zero. Cardinality is a fixed small set, respecting
+	// docs/observability.md budget.
 	// The "stopping" durable-state migration is observable through this
 	// counter — a regression that lets requests slip silently shows up as
 	// a divergence between persisted and the durable session_events ledger
@@ -553,6 +554,27 @@ var sessionContextWindowReportTotal = promauto.NewCounterVec(
 	[]string{"provider", "source", "result"},
 )
 
+var scheduledWakeupRegisterTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_scheduled_wakeup_register_total",
+		Help: "Claude ScheduleWakeup registrations accepted by the orchestrator, labeled by provider and bounded result.",
+	},
+	[]string{"provider", "result"},
+)
+
+var scheduledWakeupFireTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_scheduled_wakeup_fire_total",
+		Help: "Durable scheduled wakeup fire attempts, labeled by provider and bounded result.",
+	},
+	[]string{"provider", "result"},
+)
+
+var scheduledWakeupsDue = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "tank_scheduled_wakeups_due",
+	Help: "Durable scheduled wakeup rows in this scope that are due and not terminal.",
+})
+
 var messageLinkShareTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_message_link_share_total",
@@ -574,6 +596,27 @@ func recordSessionContextWindowReport(provider, source, result string) {
 		sessionContextWindowSourceLabel(source),
 		sessionContextWindowResultLabel(result),
 	).Inc()
+}
+
+func recordScheduledWakeupRegister(provider, result string) {
+	scheduledWakeupRegisterTotal.WithLabelValues(
+		sessionRuntimeConfigProviderLabel(provider),
+		scheduledWakeupRegisterResultLabel(result),
+	).Inc()
+}
+
+func recordScheduledWakeupFire(provider, result string) {
+	scheduledWakeupFireTotal.WithLabelValues(
+		sessionRuntimeConfigProviderLabel(provider),
+		scheduledWakeupFireResultLabel(result),
+	).Inc()
+}
+
+func setScheduledWakeupsDue(count int) {
+	if count < 0 {
+		count = 0
+	}
+	scheduledWakeupsDue.Set(float64(count))
 }
 
 func recordMessageLinkShare(operation, result string) {
@@ -697,6 +740,24 @@ func sessionContextWindowSourceLabel(source string) string {
 func sessionContextWindowResultLabel(result string) string {
 	switch result {
 	case "ok", "not_found", "update_failed", "ignored":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func scheduledWakeupRegisterResultLabel(result string) string {
+	switch result {
+	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "manager_unavailable", "store_error":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func scheduledWakeupFireResultLabel(result string) string {
+	switch result {
+	case "ok", "session_not_found", "session_not_active", "enqueue_failed", "store_error", "failed":
 		return result
 	default:
 		return "other"

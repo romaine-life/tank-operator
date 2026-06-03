@@ -966,6 +966,43 @@ test("acceptInterrupt when turn already terminal: ack without re-emitting a term
   assert.deepEqual(harness.bus, ["ack"], "interrupt command still acked (it was delivered correctly)");
 });
 
+test("Claude rate_limit_event fails active turn durably instead of stranding the queue", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    handleEvent: (message: unknown) => Promise<void>;
+  };
+  r.activeTurn = {
+    turnID: "turn_rate-limited",
+    clientNonce: "rate-limited",
+    text: "hello",
+    started: true,
+    interrupted: false,
+    terminalEmitted: false,
+    commandRecord: { id: "submit-1", type: "submit_turn" },
+    stopCommandHeartbeat: () => harness.sdkControlCalls.push("stop-heartbeat"),
+  };
+
+  await r.handleEvent({
+    type: "rate_limit_event",
+    uuid: "rate-limit-1",
+    retry_after_ms: 60000,
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.events.length, 1, "rate limit must emit exactly one durable terminal");
+  assert.equal(harness.events[0]!.type, "turn.failed");
+  assert.equal(
+    (harness.events[0] as { payload?: { reason?: string; error?: string } }).payload?.reason,
+    "provider_rate_limit",
+  );
+  assert.match(
+    (harness.events[0] as { payload?: { error?: string } }).payload?.error ?? "",
+    /retry_after_ms=60000/,
+  );
+  assert.deepEqual(harness.bus, ["ack"], "submit command must ack after the durable rate-limit terminal");
+});
+
 test("acceptInterrupt with missing target: fails command explicitly instead of silently acking", async () => {
   const { runner, harness } = makeInterruptHarness();
   const r = runner as unknown as { acceptInterrupt: (record: unknown) => Promise<void> };
