@@ -513,6 +513,19 @@ func main() {
 			}
 		}()
 	}
+	// Durable backstop for stranded attachment launches: an
+	// initial_turn.deferred=true launch writes user_message.created at create
+	// time and relies on the browser to finish phase two (upload files, POST
+	// /turns). If that never completes, the turn is durably recorded but never
+	// dispatched and nothing else fails it. This loop flips such strands to
+	// turn.command_failed. Postgres-only — the stub store returns no rows.
+	if pgPool != nil {
+		go func() {
+			if err := runStrandedLaunchSweepLoop(ctx, srv, strandedLaunchSweepInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("stranded launch sweep loop stopped", "error", err)
+			}
+		}()
+	}
 	srv.registerRoutes(mux)
 
 	// 13.5. Start the conversation read-cursor stagnation sampler.

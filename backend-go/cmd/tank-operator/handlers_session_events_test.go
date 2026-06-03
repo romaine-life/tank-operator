@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
@@ -19,6 +20,10 @@ type fakeSessionEventStore struct {
 
 func (s fakeSessionEventStore) Upsert(_ context.Context, _ map[string]any) error {
 	return nil
+}
+
+func (s fakeSessionEventStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
+	return nil, nil
 }
 
 func (s fakeSessionEventStore) ListBySession(_ context.Context, _ string, cursor store.SessionEventCursor, _ int) (store.SessionEventPage, error) {

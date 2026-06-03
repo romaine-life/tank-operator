@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionactivity"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
@@ -202,6 +203,10 @@ type activityEventStore struct {
 
 func (s *activityEventStore) Upsert(_ context.Context, _ map[string]any) error {
 	return nil
+}
+
+func (s *activityEventStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
+	return nil, nil
 }
 
 func (s *activityEventStore) ListBySession(_ context.Context, _ string, _ store.SessionEventCursor, _ int) (store.SessionEventPage, error) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -51,6 +52,32 @@ type SessionEventStore interface {
 	// COUNT(DISTINCT ...) queries against the (tank_session_id, order_key)
 	// index so it stays bounded per session regardless of history size.
 	UnreadOutputCount(ctx context.Context, tankSessionID, afterOrderKey string) (int, error)
+	// FindStrandedLaunchTurns returns deferred-launch turns that were durably
+	// recorded (a lone user_message.created) but never dispatched: their
+	// turn_id carries no other event of any kind. This is the cross-session
+	// read backing the stranded-launch sweep
+	// (cmd/tank-operator/stranded_launch_sweep.go). The scan is bounded to
+	// launches whose user_message.created lands in [notBefore, olderThan):
+	// the olderThan floor keeps a just-submitted turn — whose turn.submitted
+	// is written milliseconds after user_message.created in the same backend
+	// call — from ever being mistaken for a strand, and the notBefore ceiling
+	// keeps the scan off the deep history. Returns at most `limit` rows, ASC
+	// by created_at (oldest strands first).
+	FindStrandedLaunchTurns(ctx context.Context, olderThan, notBefore time.Time, limit int) ([]StrandedLaunchTurn, error)
+}
+
+// StrandedLaunchTurn is one never-dispatched launch turn — exactly the fields
+// needed to emit a durable turn.command_failed keyed to the same turn id and
+// client nonce the launch user_message.created carried. SessionID is the
+// public id; TankSessionID is the storage key (scope-qualified partition key).
+type StrandedLaunchTurn struct {
+	TankSessionID string
+	SessionID     string
+	TurnID        string
+	ClientNonce   string
+	Email         string
+	Runtime       string
+	CreatedAt     time.Time
 }
 
 // LifecycleEventTypes is the set of event types that drive run-status,
@@ -427,6 +454,74 @@ func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSe
 	return doc, nil
 }
 
+// FindStrandedLaunchTurns scans for user_message.created rows whose turn_id
+// has no sibling event of any kind, created in [notBefore, olderThan). The
+// NOT EXISTS rides the (tank_session_id, turn_id, order_key) index, and the
+// created_at predicates ride the session_events_created_at index, so the
+// outer pass is a bounded time-window scan rather than a whole-ledger fold.
+// Cross-session by design (no tank_session_id filter): the sweep that calls
+// this addresses every owner/scope from the per-row payload.
+func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context, olderThan, notBefore time.Time, limit int) ([]StrandedLaunchTurn, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	const q = `
+		SELECT
+			e.tank_session_id,
+			COALESCE(e.payload ->> 'session_id', '')   AS session_id,
+			e.turn_id,
+			COALESCE(e.payload ->> 'client_nonce', '') AS client_nonce,
+			COALESCE(e.payload ->> 'email', '')        AS email,
+			COALESCE(e.payload ->> 'runtime', '')      AS runtime,
+			e.created_at
+		FROM session_events e
+		WHERE e.event_type = $1
+			AND e.turn_id IS NOT NULL
+			AND e.created_at < $2
+			AND e.created_at >= $3
+			AND NOT EXISTS (
+				SELECT 1
+				FROM session_events o
+				WHERE o.tank_session_id = e.tank_session_id
+					AND o.turn_id = e.turn_id
+					AND o.event_id <> e.event_id
+			)
+		ORDER BY e.created_at ASC
+		LIMIT $4
+	`
+	rows, err := s.pool.Query(ctx, q,
+		string(conversation.EventUserMessageCreated),
+		olderThan.UTC(),
+		notBefore.UTC(),
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]StrandedLaunchTurn, 0, limit)
+	for rows.Next() {
+		var row StrandedLaunchTurn
+		if err := rows.Scan(
+			&row.TankSessionID,
+			&row.SessionID,
+			&row.TurnID,
+			&row.ClientNonce,
+			&row.Email,
+			&row.Runtime,
+			&row.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // LatestLifecycleEvents returns up to `limit` recent lifecycle events
 // (the turn.* lifecycle set, including turn.awaiting_input) for one session, ascending by
 // order_key. Postgres returns the slice DESC LIMIT N and we reverse in Go;
@@ -644,6 +739,10 @@ func (StubSessionEventStore) OrderKeyForTimelineID(_ context.Context, _, _ strin
 }
 
 func (StubSessionEventStore) FindTurnTerminal(_ context.Context, _, _ string) (map[string]any, error) {
+	return nil, nil
+}
+
+func (StubSessionEventStore) FindStrandedLaunchTurns(_ context.Context, _, _ time.Time, _ int) ([]StrandedLaunchTurn, error) {
 	return nil, nil
 }
 

@@ -1213,6 +1213,15 @@ var schemaMigrations = []migration{
 		ADD COLUMN IF NOT EXISTS runtime_context_window_source text NOT NULL DEFAULT ''`},
 	{ID: "0101", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_context_window_observed_at timestamptz`},
+	// Partial index backing the stranded-launch sweep
+	// (store.FindStrandedLaunchTurns / cmd/tank-operator/stranded_launch_sweep.go).
+	// That sweep scans for user_message.created rows in a created_at window;
+	// the broad session_events_created_at index would force a scan across every
+	// event type in the window, so this restricts the index to launch rows and
+	// makes the periodic backstop a bounded range scan over launches alone.
+	{ID: "0102", SQL: `CREATE INDEX IF NOT EXISTS session_events_user_message_created_at
+		ON session_events (created_at)
+		WHERE event_type = 'user_message.created'`},
 
 	// control_action_events is the immutable audit ledger for privileged
 	// cross-system effects initiated from session pods through MCP servers.
@@ -1220,7 +1229,7 @@ var schemaMigrations = []migration{
 	// target identity (service/tool/action/target_ref) because GitHub, Loki,
 	// and the chat transcript each own only part of that story. The payload is
 	// bounded JSON evidence for the action, not a raw request dump.
-	{ID: "0102", SQL: `CREATE TABLE IF NOT EXISTS control_action_events (
+	{ID: "0103", SQL: `CREATE TABLE IF NOT EXISTS control_action_events (
 		event_id      text PRIMARY KEY,
 		invocation_id text NOT NULL,
 		created_at    timestamptz NOT NULL DEFAULT now(),
@@ -1240,9 +1249,9 @@ var schemaMigrations = []migration{
 		error          text NOT NULL DEFAULT '',
 		payload        jsonb NOT NULL DEFAULT '{}'::jsonb
 	)`},
-	{ID: "0103", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_session_created
+	{ID: "0104", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_session_created
 		ON control_action_events (owner_email, session_scope, session_id, created_at DESC)`},
-	{ID: "0104", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_target_created
+	{ID: "0105", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_target_created
 		ON control_action_events (source_service, target_kind, target_ref, created_at DESC)`},
 }
 
