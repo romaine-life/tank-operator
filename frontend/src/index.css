@@ -3119,8 +3119,37 @@ button:disabled {
   height: 0.85rem;
 }
 
+/* Drag-to-reorder applied to the always-visible Pinned shortcut chips. The
+   whole chip is the drag source (no grip, to keep the compact horizontal row);
+   clicking still selects, dragging reorders through the same durable PUT. */
+.home-repos-reorderable-chip {
+  cursor: grab;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
+  padding: 0.1rem;
+  transition: opacity 0.12s ease, border-color 0.12s ease, background 0.12s ease;
+}
+
+.home-repos-reorderable-chip .home-repos-recent-chip {
+  cursor: inherit;
+}
+
+.home-repos-reorderable-chip:active {
+  cursor: grabbing;
+}
+
+.home-repos-reorderable-chip.is-dragging {
+  opacity: 0.45;
+}
+
+.home-repos-reorderable-chip.is-drop-target {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .home-repos-pinned-reorder-item {
+  .home-repos-pinned-reorder-item,
+  .home-repos-reorderable-chip {
     transition: none;
   }
 }

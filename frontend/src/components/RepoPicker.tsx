@@ -18,11 +18,14 @@
 //   - Already-selected suggestions are visually dimmed and a no-op
 //     to click — clearer than removing them from the list, which
 //     would reorder things every time the user clicks a chip.
-//   - The unfiltered "Pinned" section in the panel is drag-and-drop
-//     (and keyboard, via each row's grip handle) reorderable. The
-//     durable pinned_repos[] order IS the pin order and the splash
-//     shortcut order, so a reorder is the same PUT the pin toggle
-//     uses — the parent owns the optimistic-then-reconciled write.
+//   - Pin order is user-controlled by drag-and-drop on two surfaces:
+//     the always-visible numbered "Pinned" shortcuts (drag a chip) and
+//     the full "Pinned" list inside the panel (drag a grip handle, or
+//     use ArrowUp/ArrowDown for keyboard reorder). Both share one drag
+//     implementation (usePinDragReorder). The durable pinned_repos[]
+//     order IS the pin order and the shortcut order, so every reorder
+//     is the same PUT the pin toggle uses — the parent owns the
+//     optimistic-then-reconciled write.
 //
 // The parent (App.tsx) owns all state — selected[], recent[], the
 // open flag, the input value, and the inline validation error. This
@@ -214,6 +217,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
               busy={busy}
               onSelectExclusive={onSelectExclusive}
               onTogglePin={onTogglePin}
+              onReorderPin={onReorderPin}
             />
           )}
           {recentPreview.length > 0 && (
@@ -280,6 +284,69 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
   );
 }
 
+// NOOP_REORDER is a stable no-op so usePinDragReorder can be called
+// unconditionally (rules of hooks) from a section that isn't reorderable.
+const NOOP_REORDER = (): void => {};
+
+// usePinDragReorder is the shared HTML5 drag-and-drop reorder behavior for the
+// pinned-repo surfaces: the always-visible shortcut preview and the picker
+// panel's full Pinned list. Both reorder the same durable list, so they share
+// one drag implementation — `dragHandlers(slug)` spreads onto a list item and
+// `itemState(slug)` drives the dragging/drop-target styling. The actual reorder
+// is slug-based (`onReorderPin(source, target)`), so dragging works the same
+// whether the surface shows the full list or just the first few pins.
+function usePinDragReorder(
+  busy: boolean,
+  onReorderPin: (sourceSlug: string, targetSlug: string) => void,
+) {
+  const [draggingSlug, setDraggingSlug] = useState<string | null>(null);
+  const [overSlug, setOverSlug] = useState<string | null>(null);
+
+  const clearDrag = useCallback(() => {
+    setDraggingSlug(null);
+    setOverSlug(null);
+  }, []);
+
+  const itemState = (slug: string) => {
+    const key = slug.toLowerCase();
+    const isDragging = draggingSlug?.toLowerCase() === key;
+    const isDropTarget =
+      !!draggingSlug && !isDragging && overSlug?.toLowerCase() === key;
+    return { isDragging, isDropTarget };
+  };
+
+  const dragHandlers = (slug: string) => ({
+    draggable: !busy,
+    onDragStart: (e: React.DragEvent) => {
+      if (busy) return;
+      setDraggingSlug(slug);
+      setOverSlug(slug);
+      e.dataTransfer.effectAllowed = "move";
+      // Firefox requires data to be set for a drag to start.
+      e.dataTransfer.setData("text/plain", slug);
+    },
+    onDragEnter: () => {
+      if (draggingSlug) setOverSlug(slug);
+    },
+    onDragOver: (e: React.DragEvent) => {
+      if (!draggingSlug) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "move";
+      if (overSlug?.toLowerCase() !== slug.toLowerCase()) setOverSlug(slug);
+    },
+    onDrop: (e: React.DragEvent) => {
+      e.preventDefault();
+      if (draggingSlug && draggingSlug.toLowerCase() !== slug.toLowerCase()) {
+        onReorderPin(draggingSlug, slug);
+      }
+      clearDrag();
+    },
+    onDragEnd: clearDrag,
+  });
+
+  return { itemState, dragHandlers };
+}
+
 interface RepoPreviewItem {
   slug: string;
   shortcut: number;
@@ -293,18 +360,42 @@ interface RepoPreviewSectionProps {
   busy: boolean;
   onSelectExclusive: (slug: string) => void;
   onTogglePin: (slug: string) => void;
+  /** When provided, the section's chips become drag-to-reorder — used for the
+   *  always-visible Pinned shortcuts so users can rearrange pin order without
+   *  opening the picker. Reorder runs through the same durable PUT as the panel
+   *  Pinned list; Recent chips never receive this (recency is not user-ordered). */
+  onReorderPin?: (sourceSlug: string, targetSlug: string) => void;
 }
 
 function RepoPreviewSection(props: RepoPreviewSectionProps): JSX.Element {
-  const { label, items, selectedLower, busy, onSelectExclusive, onTogglePin } = props;
+  const { label, items, selectedLower, busy, onSelectExclusive, onTogglePin, onReorderPin } =
+    props;
+  // Called unconditionally (rules of hooks); a section is reorderable only when
+  // a reorder callback is supplied and there is more than one chip to order.
+  const { itemState, dragHandlers } = usePinDragReorder(busy, onReorderPin ?? NOOP_REORDER);
+  const reorderable = !!onReorderPin && items.length > 1;
   return (
     <div className="home-repos-preview-group">
-      <div className="home-repos-recent-label">{label}</div>
+      <div className="home-repos-recent-label">
+        {label}
+        {reorderable && (
+          <span className="home-repos-recent-count"> (drag to reorder)</span>
+        )}
+      </div>
       <ul className="home-repos-recent-list" role="list">
         {items.map((item) => {
           const selectedRecent = selectedLower.has(item.slug.toLowerCase());
+          const { isDragging, isDropTarget } = reorderable
+            ? itemState(item.slug)
+            : { isDragging: false, isDropTarget: false };
+          const dnd = reorderable ? dragHandlers(item.slug) : {};
+          const itemClass =
+            "home-repos-recent-item" +
+            (reorderable ? " home-repos-reorderable-chip" : "") +
+            (isDragging ? " is-dragging" : "") +
+            (isDropTarget ? " is-drop-target" : "");
           return (
-            <li key={`preview:${item.slug}`} className="home-repos-recent-item">
+            <li key={`preview:${item.slug}`} className={itemClass} {...dnd}>
               <button
                 type="button"
                 className={
@@ -313,7 +404,7 @@ function RepoPreviewSection(props: RepoPreviewSectionProps): JSX.Element {
                 }
                 onClick={() => onSelectExclusive(item.slug)}
                 disabled={busy}
-                title={item.slug}
+                title={reorderable ? `${item.slug} — drag to reorder` : item.slug}
                 aria-pressed={selectedRecent}
                 aria-keyshortcuts={String(item.shortcut)}
                 aria-label={`Select ${label.toLowerCase()} repository ${item.shortcut}: ${item.slug}`}
@@ -563,17 +654,11 @@ interface DraggablePinnedSectionProps {
 
 function DraggablePinnedSection(props: DraggablePinnedSectionProps): JSX.Element {
   const { slugs, selectedLower, busy, onAdd, onTogglePin, onReorderPin } = props;
-  const [draggingSlug, setDraggingSlug] = useState<string | null>(null);
-  const [overSlug, setOverSlug] = useState<string | null>(null);
+  const { itemState, dragHandlers } = usePinDragReorder(busy, onReorderPin);
   // After a keyboard move the list re-renders in a new order; keep focus on the
   // row the user is moving so repeated ArrowUp/ArrowDown presses keep working.
   const handleRefs = useRef<Map<string, HTMLButtonElement | null>>(new Map());
   const pendingFocusSlug = useRef<string | null>(null);
-
-  const clearDrag = useCallback(() => {
-    setDraggingSlug(null);
-    setOverSlug(null);
-  }, []);
 
   // Keep keyboard focus on the row the user is moving. After an arrow-key
   // reorder the list re-renders in the new order and the grip is briefly
@@ -613,11 +698,7 @@ function DraggablePinnedSection(props: DraggablePinnedSectionProps): JSX.Element
       <ul className="home-repos-recent-list home-repos-pinned-reorder" role="list">
         {slugs.map((slug, index) => {
           const alreadyPicked = selectedLower.has(slug.toLowerCase());
-          const isDragging = draggingSlug?.toLowerCase() === slug.toLowerCase();
-          const isDropTarget =
-            !!draggingSlug &&
-            !isDragging &&
-            overSlug?.toLowerCase() === slug.toLowerCase();
+          const { isDragging, isDropTarget } = itemState(slug);
           const itemClass =
             "home-repos-recent-item home-repos-pinned-reorder-item" +
             (isDragging ? " is-dragging" : "") +
@@ -626,33 +707,8 @@ function DraggablePinnedSection(props: DraggablePinnedSectionProps): JSX.Element
             <li
               key={`Pinned:${slug}`}
               className={itemClass}
-              draggable={!busy}
               aria-label={`Pinned repository ${slug}, position ${index + 1} of ${slugs.length}`}
-              onDragStart={(e) => {
-                if (busy) return;
-                setDraggingSlug(slug);
-                setOverSlug(slug);
-                e.dataTransfer.effectAllowed = "move";
-                // Firefox requires data to be set for a drag to start.
-                e.dataTransfer.setData("text/plain", slug);
-              }}
-              onDragEnter={() => {
-                if (draggingSlug) setOverSlug(slug);
-              }}
-              onDragOver={(e) => {
-                if (!draggingSlug) return;
-                e.preventDefault();
-                e.dataTransfer.dropEffect = "move";
-                if (overSlug?.toLowerCase() !== slug.toLowerCase()) setOverSlug(slug);
-              }}
-              onDrop={(e) => {
-                e.preventDefault();
-                if (draggingSlug && draggingSlug.toLowerCase() !== slug.toLowerCase()) {
-                  onReorderPin(draggingSlug, slug);
-                }
-                clearDrag();
-              }}
-              onDragEnd={clearDrag}
+              {...dragHandlers(slug)}
             >
               <button
                 type="button"

@@ -56,11 +56,13 @@ Named behaviors in the session-bar surface. See
     focus, and visible-tab return, and applies both PUT responses and SSE
     snapshots through the same normalization path. The retired
     `tank.homePinnedRepos` localStorage key is not allowlisted on boot.
-  - Reorder: the unfiltered "Pinned" section in the picker panel is
-    drag-and-drop and keyboard (per-row grip handle, ArrowUp/ArrowDown)
-    reorderable. A reorder issues the same `PUT /api/github/pinned-repos` write
-    as pin/unpin with the reordered list — there is no separate order field and
-    no order-only endpoint. The SPA applies the new order optimistically for
+  - Reorder: pin order is user-controlled by drag-and-drop on two surfaces —
+    the always-visible numbered "Pinned" shortcut chips and the full "Pinned"
+    list in the picker panel (the panel also supports keyboard reorder via a
+    per-row grip handle + ArrowUp/ArrowDown). Both surfaces share one drag
+    implementation and reorder the same durable list. A reorder issues the same
+    `PUT /api/github/pinned-repos` write as pin/unpin with the reordered list —
+    there is no separate order field and no order-only endpoint. The SPA applies the new order optimistically for
     drag responsiveness, reconciles against the authoritative PUT response, and
     reverts to the pre-drag order if the durable write fails, so local order
     never persistently contradicts the profile row. Correctness depends on the
