@@ -294,6 +294,7 @@ type AskUserQuestionAnswer = {
 };
 type TurnActivitySummary = {
   turnId?: string;
+  turnNumber?: number;
   status?: "active" | "completed" | string;
   active?: boolean;
   toolCount?: number;
@@ -325,6 +326,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   activityEndOrderKey?: string;
   localOnly?: boolean;
   turnId?: string;
+  turnNumber?: number;
   clientNonce?: string;
   providerItemId?: string;
   display?: UserMessageDisplay;
@@ -1385,8 +1387,8 @@ function readAppRouteFromPath(pathname = window.location.pathname): AppRoute | n
   return readAppRouteFromPathname(pathname);
 }
 
-function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnId?: string | null): string {
-  return buildSessionRouteUrl(window.location.href, id, tab, turnId);
+function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null): string {
+  return buildSessionRouteUrl(window.location.href, id, tab, turnNumber);
 }
 
 function homeRouteUrl(tab: HomeRouteTab = "chat"): string {
@@ -1426,9 +1428,9 @@ function readInitialPublicSessionReportRoute(): PublicSessionReportRoute | null 
   return { token };
 }
 
-function replaceSessionRoute(id: string, tab: SessionRouteTab = "chat", turnId?: string | null): void {
+function replaceSessionRoute(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null): void {
   if (routeHasMessageTarget()) return;
-  const next = sessionRouteUrl(id, tab, turnId);
+  const next = sessionRouteUrl(id, tab, turnNumber);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -7124,6 +7126,7 @@ function turnActivityShellSummary(summary: TurnActivitySummary | undefined): str
 
 type TurnViewItem = {
   turnId: string;
+  turnNumber: number | null;
   label: string;
   summary: string;
   entries: TranscriptEntry[];
@@ -7220,8 +7223,10 @@ function buildTurnViewItems(
 
   return Array.from(order.entries())
     .sort((a, b) => a[1] - b[1])
-    .map(([turnId], index) => {
+    .map(([turnId]) => {
       const shell = shells.get(turnId);
+      const turnNumber =
+        typeof shell?.turnNumber === "number" ? shell.turnNumber : null;
       const loadedEntries = activityEntriesByTurn[turnId];
       const turnEntries = loadedEntries ?? rawEntries.get(turnId) ?? [];
       const shellSummary = shell?.activity;
@@ -7238,7 +7243,13 @@ function buildTurnViewItems(
       const costRows = Array.from(costRowsByTurn.get(turnId)?.values() ?? []);
       return {
         turnId,
-        label: `Turn ${index + 1}`,
+        turnNumber,
+        // Durable, submission-ordered number from session_turns, stamped onto the
+        // turn_activity shell by the server projection. A turn whose number has
+        // not yet materialized (the sub-second active-turn window) shows a
+        // neutral label rather than an array index, which is not a stable
+        // identity and is blocked from reintroduction by the migration guard.
+        label: turnNumber != null ? `Turn ${turnNumber}` : "Current turn",
         summary: shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(turnEntries),
         entries: turnEntries,
         shell,
@@ -9267,11 +9278,20 @@ function ChatPane({
   const [adminView, setAdminView] = useState<AdminView>(
     initialAppRoute?.tab === "settings" ? initialAppRoute.adminView : "controls",
   );
-  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(
-    initialRunRoute?.tab === "turns" ? initialRunRoute.turnId : null,
+  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
+  // The route now carries a durable per-session turn NUMBER, not a turn_id. It
+  // is resolved to a turn_id server-side (or from the loaded window) into
+  // selectedTurnId; until then it stays pending so the URL isn't overwritten.
+  const [pendingRouteTurnNumber, setPendingRouteTurnNumber] = useState<number | null>(
+    initialRunRoute?.tab === "turns" ? initialRunRoute.turnNumber : null,
   );
-  const [pendingRouteTurnId, setPendingRouteTurnId] = useState<string | null>(
-    initialRunRoute?.tab === "turns" ? initialRunRoute.turnId : null,
+  // A present-but-unresolvable turn segment (a bad number, or a bookmarked
+  // retired turn_<uuid>) routes to an explicit unavailable-target state rather
+  // than silently falling back to the latest turn.
+  const [routeTurnUnavailable, setRouteTurnUnavailable] = useState<boolean>(
+    initialRunRoute?.tab === "turns"
+      ? initialRunRoute.turnSegmentPresent && initialRunRoute.turnNumber == null
+      : false,
   );
   const [pendingTurnViewRouteAnchor, setPendingTurnViewRouteAnchor] =
     useState<TurnViewScrollAnchor | null>(initialRunRoute?.tab === "turns" ? "bottom" : null);
@@ -10285,13 +10305,13 @@ function ChatPane({
       setActiveTab("settings");
       setSettingsTab(appRoute.settingsTab);
       setAdminView(appRoute.adminView);
-      setPendingRouteTurnId(null);
+      setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       return;
     }
     if (appRoute?.tab === "help") {
       setActiveTab("help");
-      setPendingRouteTurnId(null);
+      setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       return;
     }
@@ -10299,13 +10319,13 @@ function ChatPane({
     if (route?.sessionId !== session.id) return;
     if (route.tab === "turns") {
       setActiveTab("turns");
-      setPendingRouteTurnId(route.turnId);
-      if (route.turnId) setSelectedTurnId(route.turnId);
+      setPendingRouteTurnNumber(route.turnNumber);
+      setRouteTurnUnavailable(route.turnSegmentPresent && route.turnNumber == null);
       setPendingTurnViewRouteAnchor("bottom");
       return;
     }
     setActiveTab("chat");
-    setPendingRouteTurnId(null);
+    setPendingRouteTurnNumber(null);
     setPendingTurnViewRouteAnchor(null);
   }, [publicView, session.id, visible]);
   useEffect(() => {
@@ -10321,7 +10341,7 @@ function ChatPane({
     if (publicView) return;
     if (!visible || sidebarTranscriptOpenRequest === 0) return;
     setActiveTab("chat");
-    setPendingRouteTurnId(null);
+    setPendingRouteTurnNumber(null);
     setPendingTurnViewRouteAnchor(null);
     slashManualOpenRef.current = false;
     setSlashOpen(false);
@@ -12393,7 +12413,18 @@ function ChatPane({
     selectedTurnId != null && turnViewItems.some((turn) => turn.turnId === selectedTurnId);
   const effectiveSelectedTurnId = selectedTurnExists ? selectedTurnId : latestTurnId;
   const routedSelectedTurnId =
-    activeTab === "turns" ? (pendingRouteTurnId ?? effectiveSelectedTurnId) : null;
+    activeTab === "turns" ? effectiveSelectedTurnId : null;
+  // The URL carries the durable per-session turn number. While a route number
+  // is pending (resolving), keep showing it so the URL isn't overwritten with
+  // the latest turn; once resolved, reflect the selected turn's own number.
+  const routedSelectedTurnNumber =
+    activeTab === "turns"
+      ? (pendingRouteTurnNumber ??
+          (routedSelectedTurnId != null
+            ? (turnViewItems.find((turn) => turn.turnId === routedSelectedTurnId)?.turnNumber ??
+              null)
+            : null))
+      : null;
   const ensureTurnActivityLoaded = useCallback((
     turnId: string,
     options?: { force?: boolean },
@@ -12427,40 +12458,86 @@ function ChatPane({
         setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
       });
   }, [activityEntriesByTurn, fetchTurnActivityEntries, loadingActivityTurns]);
+  // Cold-load deep links carry a number that isn't in the loaded window. Resolve
+  // it server-side from durable session_turns (not from render state, per the
+  // transcript-navigation contract). Deduped via the ref so the async resolve
+  // fires once per pending number; a miss/404 lands the unavailable-target state.
+  const resolvingRouteTurnNumberRef = useRef<number | null>(null);
+  const resolveRouteTurnNumber = useCallback(
+    async (turnNumber: number) => {
+      try {
+        if (publicView) {
+          setRouteTurnUnavailable(true);
+          return;
+        }
+        const res = await fetchPaneResource(
+          scopedSessionPathForPane(
+            `/api/sessions/${encodeURIComponent(session.id)}/turns/${turnNumber}`,
+          ),
+        );
+        if (!res.ok) {
+          setRouteTurnUnavailable(true);
+          return;
+        }
+        const body = (await res.json()) as { turn_id?: string };
+        const resolvedTurnId = (body.turn_id ?? "").trim();
+        if (!resolvedTurnId) {
+          setRouteTurnUnavailable(true);
+          return;
+        }
+        setSelectedTurnId(resolvedTurnId);
+        setRouteTurnUnavailable(false);
+        ensureTurnActivityLoaded(resolvedTurnId);
+      } catch {
+        setRouteTurnUnavailable(true);
+      } finally {
+        setPendingRouteTurnNumber(null);
+        resolvingRouteTurnNumberRef.current = null;
+      }
+    },
+    [ensureTurnActivityLoaded, fetchPaneResource, publicView, scopedSessionPathForPane, session.id],
+  );
   useEffect(() => {
     if (turnViewItems.length === 0) {
       if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);
       return;
     }
-    if (pendingRouteTurnId) {
-      const routeTurnExists = turnViewItems.some((turn) => turn.turnId === pendingRouteTurnId);
-      if (routeTurnExists) {
-        if (selectedTurnId !== pendingRouteTurnId) setSelectedTurnId(pendingRouteTurnId);
-        setPendingRouteTurnId(null);
+    if (pendingRouteTurnNumber != null) {
+      const match = turnViewItems.find((turn) => turn.turnNumber === pendingRouteTurnNumber);
+      if (match) {
+        if (selectedTurnId !== match.turnId) setSelectedTurnId(match.turnId);
+        setRouteTurnUnavailable(false);
+        setPendingRouteTurnNumber(null);
         return;
       }
       if (!historyBootstrapped) return;
-      setPendingRouteTurnId(null);
+      if (resolvingRouteTurnNumberRef.current !== pendingRouteTurnNumber) {
+        resolvingRouteTurnNumberRef.current = pendingRouteTurnNumber;
+        void resolveRouteTurnNumber(pendingRouteTurnNumber);
+      }
+      return;
     }
-    if (!selectedTurnExists && latestTurnId) setSelectedTurnId(latestTurnId);
+    if (!routeTurnUnavailable && !selectedTurnExists && latestTurnId) setSelectedTurnId(latestTurnId);
   }, [
     historyBootstrapped,
     latestTurnId,
-    pendingRouteTurnId,
+    pendingRouteTurnNumber,
+    resolveRouteTurnNumber,
+    routeTurnUnavailable,
     selectedTurnExists,
     selectedTurnId,
     turnViewItems,
   ]);
   useEffect(() => {
     if (activeTab !== "turns" || turnsAvailable) return;
-    if (!historyBootstrapped || pendingRouteTurnId) return;
+    if (!historyBootstrapped || pendingRouteTurnNumber != null) return;
     setActiveTab("chat");
-  }, [activeTab, historyBootstrapped, pendingRouteTurnId, turnsAvailable]);
+  }, [activeTab, historyBootstrapped, pendingRouteTurnNumber, turnsAvailable]);
   useEffect(() => {
     if (publicView) return;
     if (!visible || pendingScrollMessageId) return;
     if (activeTab === "turns") {
-      replaceSessionRoute(session.id, "turns", routedSelectedTurnId);
+      replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber);
     } else if (activeTab === "settings") {
       replaceAppRoute("settings", settingsTab, adminView);
     } else if (activeTab === "help") {
@@ -12468,7 +12545,7 @@ function ChatPane({
     } else {
       replaceSessionRoute(session.id, "chat");
     }
-  }, [activeTab, adminView, pendingScrollMessageId, publicView, routedSelectedTurnId, session.id, settingsTab, visible]);
+  }, [activeTab, adminView, pendingScrollMessageId, publicView, routedSelectedTurnNumber, session.id, settingsTab, visible]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -12477,7 +12554,7 @@ function ChatPane({
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (pendingTurnViewRouteAnchor !== "bottom") return;
-    if (pendingRouteTurnId) return;
+    if (pendingRouteTurnNumber != null) return;
     if (!effectiveSelectedTurnId) return;
     turnViewScrollRequestSeqRef.current += 1;
     setTurnViewScrollRequest({
@@ -12486,11 +12563,12 @@ function ChatPane({
       signal: turnViewScrollRequestSeqRef.current,
     });
     setPendingTurnViewRouteAnchor(null);
-  }, [activeTab, effectiveSelectedTurnId, pendingRouteTurnId, pendingTurnViewRouteAnchor]);
+  }, [activeTab, effectiveSelectedTurnId, pendingRouteTurnNumber, pendingTurnViewRouteAnchor]);
   const openTurnPage = useCallback((turnId?: string, options?: TurnPageOpenOptions) => {
     const target = turnId?.trim() || activeTurnViewId || effectiveSelectedTurnId || latestTurnId;
     if (target) {
-      setPendingRouteTurnId(null);
+      setPendingRouteTurnNumber(null);
+      setRouteTurnUnavailable(false);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnId(target);
       ensureTurnActivityLoaded(target);
@@ -12537,7 +12615,7 @@ function ChatPane({
       if (!isTurnsToTranscriptShortcut(ctx)) return;
       e.preventDefault();
       e.stopImmediatePropagation();
-      setPendingRouteTurnId(null);
+      setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setActiveTab("chat");
       requestAnimationFrame(() => {
@@ -13408,11 +13486,33 @@ function ChatPane({
             </div>
           </div>
         ) : activeTab === "turns" ? (
+          routeTurnUnavailable ? (
+            <div className="run-turn-view" aria-label="Turn view">
+              <div className="run-turn-view-body run-transcript run-transcript-claude">
+                <div className="run-turn-view-alert" role="alert">
+                  <span>This turn isn’t available in this session.</span>
+                  <button
+                    type="button"
+                    className="btn-secondary run-turn-view-alert-action"
+                    onClick={() => {
+                      setRouteTurnUnavailable(false);
+                      if (latestTurnId) {
+                        setSelectedTurnId(latestTurnId);
+                        ensureTurnActivityLoaded(latestTurnId);
+                      }
+                    }}
+                  >
+                    Go to the latest turn
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : (
           <RunTurnActivityScreen
             turns={turnViewItems}
             selectedTurnId={effectiveSelectedTurnId}
             onSelectTurn={(turnId) => {
-              setPendingRouteTurnId(null);
+              setPendingRouteTurnNumber(null);
               setSelectedTurnId(turnId);
               ensureTurnActivityLoaded(turnId);
             }}
@@ -13433,6 +13533,7 @@ function ChatPane({
             scrollRequest={turnViewScrollRequest}
             onScrollRequestConsumed={clearTurnViewScrollRequest}
           />
+          )
         ) : activeTab === "background" ? (
           <BackgroundScreen
             shellEntries={activeBackgroundEntries}

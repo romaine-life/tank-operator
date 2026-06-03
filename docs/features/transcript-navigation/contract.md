@@ -151,3 +151,11 @@ yanking the viewport away from a user reading history.
   live-tail mode or historical-anchor mode.
 - Legacy browser-local scroll restoration cannot reappear without failing a
   migration guard or contract test.
+- A turn deep link uses the durable per-session number
+  (`/sessions/{id}/turns/{n}`) and resolves server-side: an in-window turn
+  resolves from the loaded shells, an out-of-window turn resolves via
+  `GET /api/sessions/{id}/turns/{n}`, and an unknown or non-numeric segment
+  renders an explicit unavailable-target state instead of silently falling back
+  to the latest turn. The retired `turn_<uuid>` public route form and the
+  array-position "Turn N" label cannot reappear without failing
+  `scripts/check-removed-chat-runtime.mjs`.
