@@ -259,7 +259,13 @@ func (s *PendingLaunchStore) ClaimReady(ctx context.Context, now time.Time, limi
 			  AND sess.terminating_at IS NULL
 			  AND (
 			    pl.status = 'ready'
-			    OR (pl.status = 'claiming' AND pl.locked_at < $2 - make_interval(secs => $4::double precision))
+			    -- $2 is cast explicitly. This is the first use of $2 in the query,
+			    -- and without the cast Postgres infers it as interval here (making
+			    -- the RHS interval) so locked_at < RHS fails with "operator does not
+			    -- exist: timestamp with time zone < interval". The scheduled-wakeup
+			    -- query avoids this only because its first $2 use is a timestamptz
+			    -- comparison that pins the type.
+			    OR (pl.status = 'claiming' AND pl.locked_at < $2::timestamptz - make_interval(secs => $4::double precision))
 			  )
 			ORDER BY pl.created_at ASC
 			LIMIT $3
