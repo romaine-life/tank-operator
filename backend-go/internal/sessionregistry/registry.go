@@ -2,6 +2,7 @@ package sessionregistry
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"strings"
 
@@ -47,34 +48,43 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 		return nil, nil
 	}
 	const q = `
-		SELECT session_id, mode, pod_name, name, visible,
-			COALESCE(to_char(requested_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
-			COALESCE(to_char(created_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
-			COALESCE(to_char(updated_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at,
-			status,
-			COALESCE(to_char(ready_at       AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS ready_at,
-			COALESCE(to_char(terminating_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS terminating_at,
-			activity_summary,
-			test_state,
-			rollout_state,
-			COALESCE(repos, '{}'::text[]),
-			clone_state,
-			COALESCE(capabilities, '{}'::text[]),
-			model,
-			effort,
-				runtime_model,
-				runtime_effort,
-				COALESCE(to_char(runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
-				runtime_context_window_tokens,
-				runtime_context_window_source,
-				COALESCE(to_char(runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
-				COALESCE(agent_avatar_id, ''),
-				COALESCE(system_avatar_id, ''),
-			sidebar_position,
-			row_version
+		SELECT sessions.session_id, sessions.mode, sessions.pod_name, sessions.name, sessions.visible,
+			COALESCE(to_char(sessions.requested_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
+			COALESCE(to_char(sessions.created_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
+			COALESCE(to_char(sessions.updated_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at,
+			sessions.status,
+			COALESCE(to_char(sessions.ready_at       AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS ready_at,
+			COALESCE(to_char(sessions.terminating_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS terminating_at,
+			sessions.activity_summary,
+			sessions.test_state,
+			sessions.rollout_state,
+			COALESCE(sessions.repos, '{}'::text[]),
+			sessions.clone_state,
+			COALESCE(sessions.capabilities, '{}'::text[]),
+			sessions.model,
+			sessions.effort,
+			sessions.runtime_model,
+			sessions.runtime_effort,
+			COALESCE(to_char(sessions.runtime_configured_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_configured_at,
+			sessions.runtime_context_window_tokens,
+			sessions.runtime_context_window_source,
+			COALESCE(to_char(sessions.runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+			COALESCE(sessions.agent_avatar_id, ''),
+			COALESCE(sessions.system_avatar_id, ''),
+			sessions.sidebar_position,
+			sessions.row_version,
+			bug_labels.id,
+			bug_labels.name,
+			bug_labels.slug
 		FROM sessions
-		WHERE email = $1 AND session_scope = $2
-		ORDER BY sidebar_position DESC, created_at DESC, session_id DESC
+		LEFT JOIN session_bug_labels
+			ON session_bug_labels.owner_email = sessions.email
+			AND session_bug_labels.session_scope = sessions.session_scope
+			AND session_bug_labels.session_id = sessions.session_id
+		LEFT JOIN bug_labels
+			ON bug_labels.id = session_bug_labels.bug_label_id
+		WHERE sessions.email = $1 AND sessions.session_scope = $2
+		ORDER BY sessions.sidebar_position DESC, sessions.created_at DESC, sessions.session_id DESC
 	`
 	rows, err := s.pool.Query(ctx, q, normalized, s.scope)
 	if err != nil {
@@ -95,6 +105,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			runtimeContextWindowSource, runtimeContextWindowObservedAt  string
 			agentAvatarID, systemAvatarID                               string
 			runtimeContextWindowTokens, sidebarPosition, rowVersion     int64
+			bugLabelID                                                  sql.NullInt64
+			bugLabelName, bugLabelSlug                                  sql.NullString
 		)
 		if err := rows.Scan(
 			&sessionID, &mode, &podName, &name, &visible,
@@ -107,6 +119,9 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&agentAvatarID, &systemAvatarID,
 			&sidebarPosition,
 			&rowVersion,
+			&bugLabelID,
+			&bugLabelName,
+			&bugLabelSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -145,9 +160,23 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			SystemAvatarID:                 systemAvatarID,
 			SidebarPosition:                sidebarPosition,
 			RowVersion:                     rowVersion,
+			BugLabel:                       bugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug),
 		})
 	}
 	return records, rows.Err()
+}
+
+func bugLabelFromScan(id sql.NullInt64, name, slug sql.NullString) *sessionmodel.SessionBugLabel {
+	if !id.Valid || !name.Valid || strings.TrimSpace(name.String) == "" || !slug.Valid || strings.TrimSpace(slug.String) == "" {
+		return nil
+	}
+	labelName := strings.TrimSpace(name.String)
+	return &sessionmodel.SessionBugLabel{
+		ID:          id.Int64,
+		Name:        labelName,
+		Slug:        strings.TrimSpace(slug.String),
+		DisplayName: "bug: " + labelName,
+	}
 }
 
 // ListAllIDsForScope returns every session_id in this orchestrator's

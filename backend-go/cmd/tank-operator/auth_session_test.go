@@ -330,11 +330,23 @@ func (r *testSessionRegistry) Upsert(_ context.Context, record sessionmodel.Sess
 	if r.records[owner] == nil {
 		r.records[owner] = map[string]sessionmodel.SessionRecord{}
 	}
+	if existing, ok := r.records[owner][record.ID]; ok && record.BugLabel == nil {
+		record.BugLabel = existing.BugLabel
+	}
 	r.records[owner][record.ID] = record
 	return nil
 }
 
 func (r *testSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
+func (r *testSessionRegistry) SetBugLabel(_ context.Context, owner, sessionID string, label *sessionmodel.SessionBugLabel) error {
+	if r.records == nil || r.records[owner] == nil {
+		return nil
+	}
+	record := r.records[owner][sessionID]
+	record.BugLabel = label
+	r.records[owner][sessionID] = record
+	return nil
+}
 func (r *testSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }

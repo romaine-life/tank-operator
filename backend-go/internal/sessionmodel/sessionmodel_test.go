@@ -21,6 +21,26 @@ func TestNormalizeSessionMode(t *testing.T) {
 	}
 }
 
+func TestNormalizeBugLabelName(t *testing.T) {
+	raw := "  bug:  Slow checkout   regression  "
+	label, err := NormalizeBugLabelName(&raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label == nil || label.Name != "Slow checkout regression" || label.Slug != "slow-checkout-regression" || label.DisplayName != "bug: Slow checkout regression" {
+		t.Fatalf("label = %+v", label)
+	}
+
+	empty := "bug:"
+	label, err = NormalizeBugLabelName(&empty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if label != nil {
+		t.Fatalf("empty bug prefix should clear, got %+v", label)
+	}
+}
+
 func TestOwnerLabelMatchesPython(t *testing.T) {
 	if got, want := OwnerLabel("nelson@romaine.life"), "u-db1458e0eb6e9e75"; got != want {
 		t.Fatalf("OwnerLabel() = %q, want %q", got, want)

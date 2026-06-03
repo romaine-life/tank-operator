@@ -3330,6 +3330,22 @@ button:disabled {
   color: var(--text-faint);
 }
 
+.home-bug-label-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  min-height: 2.25rem;
+}
+
+.home-bug-label-summary {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 900px) {
   .home-grid {
     grid-template-columns: 1fr;
@@ -5052,7 +5068,7 @@ button:disabled {
   position: relative;
   z-index: 0;
   display: grid;
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 21rem), 1fr));
   gap: var(--space-4);
 }
 
@@ -6448,6 +6464,123 @@ button:disabled {
 
 .run-composer-action-btn {
   text-decoration: none;
+}
+
+.run-bug-label-picker {
+  position: relative;
+  display: inline-flex;
+  flex: 0 0 auto;
+}
+
+.run-bug-label-trigger.is-active {
+  color: #f0b429;
+  background: rgba(240, 180, 41, 0.12);
+}
+
+.run-bug-label-popover {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 0.5rem);
+  width: min(20rem, calc(100vw - 2rem));
+  padding: 0.65rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.5rem;
+  background: rgba(16, 18, 24, 0.98);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.35);
+  z-index: 35;
+}
+
+.run-bug-label-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+}
+
+.run-bug-label-form input {
+  min-width: 0;
+  height: 2rem;
+  padding: 0 0.6rem;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-primary);
+  font: inherit;
+}
+
+.run-bug-label-form button,
+.run-bug-label-clear {
+  height: 2rem;
+  padding: 0 0.7rem;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 0.4rem;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.run-bug-label-form button:disabled,
+.run-bug-label-clear:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.run-bug-label-list {
+  display: grid;
+  gap: 0.25rem;
+  max-height: 12rem;
+  margin-top: 0.55rem;
+  overflow: auto;
+}
+
+.run-bug-label-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.5rem;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: 0.35rem;
+  background: transparent;
+  color: var(--text-body);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.run-bug-label-option:hover,
+.run-bug-label-option.is-active {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-primary);
+}
+
+.run-bug-label-option span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-bug-label-option span:last-child,
+.run-bug-label-empty,
+.run-bug-label-error {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.run-bug-label-error {
+  margin-top: 0.45rem;
+  color: #ffb4a6;
+}
+
+.run-bug-label-empty {
+  padding: 0.45rem 0.25rem;
+}
+
+.run-bug-label-clear {
+  width: 100%;
+  margin-top: 0.55rem;
 }
 
 @media (max-width: 760px) {
