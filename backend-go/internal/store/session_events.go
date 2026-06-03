@@ -93,6 +93,7 @@ type StrandedLaunchTurn struct {
 // the session-level status.
 var LifecycleEventTypes = []string{
 	"turn.submitted",
+	"turn.claimed",
 	"turn.started",
 	"turn.completed",
 	"turn.failed",

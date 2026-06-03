@@ -1,6 +1,7 @@
 export type ConversationActivityStatus =
   | "ready"
   | "submitted"
+  | "claimed"
   | "streaming"
   | "needs_input"
   | "stopping"
@@ -91,7 +92,7 @@ export function sessionActivityDotStatus(
   if (activity?.needs_input || activity?.status === "needs_input") return "agent-needs-input";
   if (activity?.status === "stopping") return "agent-stopping";
   if (activity?.status === "stopped") return "agent-stopped";
-  if (activity?.status === "submitted" || activity?.status === "streaming") {
+  if (activity?.status === "submitted" || activity?.status === "claimed" || activity?.status === "streaming") {
     return "agent-working";
   }
   return "agent-waiting";
@@ -106,6 +107,7 @@ export function sessionActivityStatusLabel(
   if (activity?.failed || activity?.status === "error") return "Failed";
   if (activity?.needs_input || activity?.status === "needs_input") return "Needs input";
   if (activity?.status === "submitted") return "Submitted";
+  if (activity?.status === "claimed") return "Starting";
   if (activity?.status === "streaming") return "Running";
   if (activity?.status === "stopping") return "Stopping";
   if (activity?.status === "stopped") return "Stopped";
@@ -186,6 +188,7 @@ function activityStatus(value: string | null): ConversationActivityStatus | null
   switch (value) {
     case "ready":
     case "submitted":
+    case "claimed":
     case "streaming":
     case "needs_input":
     case "stopping":
