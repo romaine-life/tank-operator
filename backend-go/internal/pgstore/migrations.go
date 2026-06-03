@@ -1213,6 +1213,37 @@ var schemaMigrations = []migration{
 		ADD COLUMN IF NOT EXISTS runtime_context_window_source text NOT NULL DEFAULT ''`},
 	{ID: "0101", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS runtime_context_window_observed_at timestamptz`},
+
+	// control_action_events is the immutable audit ledger for privileged
+	// cross-system effects initiated from session pods through MCP servers.
+	// It intentionally records both caller identity (owner/session/scope) and
+	// target identity (service/tool/action/target_ref) because GitHub, Loki,
+	// and the chat transcript each own only part of that story. The payload is
+	// bounded JSON evidence for the action, not a raw request dump.
+	{ID: "0102", SQL: `CREATE TABLE IF NOT EXISTS control_action_events (
+		event_id      text PRIMARY KEY,
+		invocation_id text NOT NULL,
+		created_at    timestamptz NOT NULL DEFAULT now(),
+		owner_email   text NOT NULL,
+		session_scope text NOT NULL,
+		session_id    text NOT NULL,
+		source_service text NOT NULL,
+		source_tool    text NOT NULL,
+		action         text NOT NULL,
+		status         text NOT NULL,
+		target_kind    text NOT NULL,
+		target_ref     text NOT NULL,
+		repo_owner     text NOT NULL DEFAULT '',
+		repo_name      text NOT NULL DEFAULT '',
+		pr_number      integer,
+		result_sha     text NOT NULL DEFAULT '',
+		error          text NOT NULL DEFAULT '',
+		payload        jsonb NOT NULL DEFAULT '{}'::jsonb
+	)`},
+	{ID: "0103", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_session_created
+		ON control_action_events (owner_email, session_scope, session_id, created_at DESC)`},
+	{ID: "0104", SQL: `CREATE INDEX IF NOT EXISTS control_action_events_target_created
+		ON control_action_events (source_service, target_kind, target_ref, created_at DESC)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

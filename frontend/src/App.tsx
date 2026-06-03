@@ -137,6 +137,12 @@ import {
   type ScheduledWakeupRow,
   type ScheduledWakeupStatus,
 } from "./scheduledWakeups";
+import {
+  controlActionRowsToEntries,
+  controlActionStatusLabel,
+  type ControlActionRow,
+  type ControlActionStatus,
+} from "./controlActions";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
 import {
   type ConversationBackgroundTaskStatus,
@@ -381,7 +387,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   taskExitCode?: number;
   taskDurationMs?: number;
   taskRawItem?: unknown;
-  taskKind?: "scheduled_wakeup";
+  taskKind?: "scheduled_wakeup" | "control_action";
   wakeupStatus?: ScheduledWakeupStatus;
   wakeupDueAt?: string;
   wakeupScheduledAt?: string;
@@ -389,6 +395,13 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   wakeupFiredTurnId?: string;
   wakeupLastError?: string;
   wakeupAttemptCount?: number;
+  controlActionStatus?: ControlActionStatus;
+  controlActionTool?: string;
+  controlActionAction?: string;
+  controlActionTarget?: string;
+  controlActionRepo?: string;
+  controlActionPrNumber?: number;
+  controlActionSha?: string;
   lastToolName?: string;
   activity?: TurnActivitySummary;
   activityIds?: string[];
@@ -3282,7 +3295,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // now that the inline RunMessages renderer owns class names directly.)
 
 type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
-type BackgroundView = "shells" | "scheduled" | "detached";
+type BackgroundView = "shells" | "scheduled" | "control" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
 
 type TurnPageOpenOptions = {
@@ -5652,6 +5665,10 @@ function isScheduledWakeupEntry(entry: TranscriptEntry): boolean {
   return isBackgroundTaskEntry(entry) && entry.taskKind === "scheduled_wakeup";
 }
 
+function isControlActionEntry(entry: TranscriptEntry): boolean {
+  return isBackgroundTaskEntry(entry) && entry.taskKind === "control_action";
+}
+
 function isShellToolEntry(entry: TranscriptEntry): boolean {
   return entry.kind === "tool" && entry.toolKind === "shell";
 }
@@ -5707,17 +5724,27 @@ function backgroundTaskSubtitle(entry: TranscriptEntry): string {
 
 function backgroundActivityKindLabel(entry: TranscriptEntry): string {
   if (isScheduledWakeupEntry(entry)) return "Scheduled continuation";
+  if (isControlActionEntry(entry)) return "Control action";
   if (isDetachedShellCandidateEntry(entry)) return "Detached process";
   return isBackgroundTaskEntry(entry) ? "Managed task" : "Shell command";
 }
 
 function backgroundActivityTitle(entry: TranscriptEntry): string {
   if (isScheduledWakeupEntry(entry)) return entry.taskSummary ?? "Scheduled continuation";
+  if (isControlActionEntry(entry)) return entry.taskSummary ?? "Control action";
   if (isBackgroundTaskEntry(entry)) return backgroundTaskTitle(entry);
   return shellInvocationCommand(entry) ?? "Shell command";
 }
 
 function backgroundActivitySubtitle(entry: TranscriptEntry): string {
+  if (isControlActionEntry(entry)) {
+    const parts = [
+      entry.controlActionRepo,
+      entry.controlActionPrNumber == null ? "" : `#${entry.controlActionPrNumber}`,
+      entry.controlActionTarget,
+    ].filter(Boolean);
+    return parts.join(" ") || "privileged action";
+  }
   if (isScheduledWakeupEntry(entry)) {
     const parts = [
       entry.wakeupDueAt ? `due ${formatToolFullTime(entry.wakeupDueAt)}` : "",
@@ -5736,6 +5763,7 @@ function backgroundActivitySubtitle(entry: TranscriptEntry): string {
 
 function backgroundActivityStatusLabel(entry: TranscriptEntry): string {
   if (isDetachedShellCandidateEntry(entry)) return "untracked";
+  if (isControlActionEntry(entry)) return controlActionStatusLabel(entry.controlActionStatus ?? "started");
   if (isScheduledWakeupEntry(entry)) return scheduledWakeupStatusLabel(entry.wakeupStatus ?? "scheduled");
   return isBackgroundTaskEntry(entry)
     ? backgroundTaskStatusLabel(entry.taskStatus)
@@ -5748,6 +5776,7 @@ function canStopBackgroundActivity(
 ): boolean {
   if (isDetachedShellCandidateEntry(entry)) return false;
   if (isRunningShellInvocationEntry(entry)) return Boolean(entry.turnId?.trim());
+  if (isControlActionEntry(entry)) return false;
   if (isScheduledWakeupEntry(entry)) return false;
   return (
     isBackgroundTaskEntry(entry) &&
@@ -5769,11 +5798,17 @@ function backgroundStopTitle(entry: TranscriptEntry): string {
 }
 
 function backgroundActivityCommand(entry: TranscriptEntry): string | undefined {
+  if (isControlActionEntry(entry)) return entry.controlActionTarget;
   if (isScheduledWakeupEntry(entry)) return entry.wakeupPrompt;
   return isBackgroundTaskEntry(entry) ? entry.taskCommand : shellInvocationCommand(entry);
 }
 
 function backgroundActivityOutput(entry: TranscriptEntry): string | undefined {
+  if (isControlActionEntry(entry)) {
+    if (entry.taskError) return String(entry.taskError);
+    if (entry.controlActionSha) return `Result ${entry.controlActionSha}`;
+    return undefined;
+  }
   if (isScheduledWakeupEntry(entry)) {
     if (entry.wakeupLastError) return entry.wakeupLastError;
     if (entry.wakeupFiredTurnId) return `Fired turn ${entry.wakeupFiredTurnId}`;
@@ -5789,6 +5824,7 @@ function backgroundActivityStartedAt(entry: TranscriptEntry): string | undefined
 
 function backgroundActivityState(entry: TranscriptEntry): string {
   if (isDetachedShellCandidateEntry(entry)) return "unknown";
+  if (isControlActionEntry(entry)) return entry.controlActionStatus ?? "started";
   if (isScheduledWakeupEntry(entry)) return entry.wakeupStatus ?? "scheduled";
   if (isBackgroundTaskEntry(entry)) return entry.taskStatus ?? "unknown";
   return "running";
@@ -5977,6 +6013,7 @@ function BackgroundMeta({
 function BackgroundScreen({
   shellEntries,
   scheduledEntries,
+  controlEntries,
   detachedEntries,
   view,
   onViewChange,
@@ -5987,6 +6024,7 @@ function BackgroundScreen({
 }: {
   shellEntries: TranscriptEntry[];
   scheduledEntries: TranscriptEntry[];
+  controlEntries: TranscriptEntry[];
   detachedEntries: TranscriptEntry[];
   view: BackgroundView;
   onViewChange: (view: BackgroundView) => void;
@@ -5997,6 +6035,8 @@ function BackgroundScreen({
 }) {
   const displayEntries = view === "scheduled"
     ? scheduledEntries
+    : view === "control"
+      ? controlEntries
     : view === "shells"
       ? shellEntries
       : detachedEntries;
@@ -6006,9 +6046,11 @@ function BackgroundScreen({
     displayEntries.find((entry) => entry.id === selectedId) ??
     displayEntries[0] ??
     null;
-  const listLabel = view === "scheduled" ? "Scheduled" : view === "shells" ? "Active" : "Detected";
+  const listLabel = view === "scheduled" ? "Scheduled" : view === "control" ? "Control" : view === "shells" ? "Active" : "Detected";
   const emptyText = view === "scheduled"
     ? "No scheduled continuations."
+    : view === "control"
+      ? "No control actions."
     : view === "shells"
       ? "No active shells."
       : "No detached process candidates.";
@@ -6024,6 +6066,7 @@ function BackgroundScreen({
           <span>Tasks {managedTaskCount}</span>
           <span>Shell {shellInvocationCount}</span>
           <span>Scheduled {scheduledEntries.length}</span>
+          <span>Control {controlEntries.length}</span>
         </div>
         <div className="run-background-tabs" role="tablist" aria-label="Background views">
           <button
@@ -6045,6 +6088,16 @@ function BackgroundScreen({
           >
             <span>Scheduled</span>
             <span>{scheduledEntries.length}</span>
+          </button>
+          <button
+            type="button"
+            className={`run-background-tab${view === "control" ? " run-background-tab-active" : ""}`}
+            role="tab"
+            aria-selected={view === "control"}
+            onClick={() => onViewChange("control")}
+          >
+            <span>Control</span>
+            <span>{controlEntries.length}</span>
           </button>
           <button
             type="button"
@@ -6090,7 +6143,9 @@ function BackgroundScreen({
           <>
             <div className="run-shell-task-detail-head">
               <div className="run-shell-task-detail-title">
-                {isScheduledWakeupEntry(selected) ? (
+                {isControlActionEntry(selected) ? (
+                  <GitPullRequestIcon size={16} aria-hidden="true" />
+                ) : isScheduledWakeupEntry(selected) ? (
                   <TimerIcon size={16} aria-hidden="true" />
                 ) : isBackgroundTaskEntry(selected) ? (
                   <SquareTerminalIcon size={16} aria-hidden="true" />
@@ -6123,7 +6178,16 @@ function BackgroundScreen({
             </div>
             <div className="run-shell-task-meta">
               <BackgroundMeta label="Type" value={backgroundActivityKindLabel(selected)} />
-              {isScheduledWakeupEntry(selected) ? (
+              {isControlActionEntry(selected) ? (
+                <>
+                  <BackgroundMeta label="Invocation" value={selected.taskId} />
+                  <BackgroundMeta label="Tool" value={selected.controlActionTool} />
+                  <BackgroundMeta label="Action" value={selected.controlActionAction} />
+                  <BackgroundMeta label="Repo" value={selected.controlActionRepo} />
+                  <BackgroundMeta label="PR" value={selected.controlActionPrNumber == null ? undefined : `#${selected.controlActionPrNumber}`} />
+                  <BackgroundMeta label="SHA" value={selected.controlActionSha} />
+                </>
+              ) : isScheduledWakeupEntry(selected) ? (
                 <>
                   <BackgroundMeta label="Wakeup" value={selected.taskId} />
                   <BackgroundMeta label="Item" value={selected.providerItemId} />
@@ -6157,7 +6221,7 @@ function BackgroundScreen({
             {backgroundActivityCommand(selected) && (
               <div className="run-shell-task-section">
                 <div className="run-shell-task-section-label">
-                  {isScheduledWakeupEntry(selected) ? "Prompt" : "Command"}
+                {isScheduledWakeupEntry(selected) ? "Prompt" : "Command"}
                 </div>
                 <pre className="run-shell-task-code">{backgroundActivityCommand(selected)}</pre>
               </div>
@@ -6169,7 +6233,9 @@ function BackgroundScreen({
               <pre className="run-shell-task-output">
                 {backgroundActivityOutput(selected)?.trim()
                   ? backgroundActivityOutput(selected)
-                  : isScheduledWakeupEntry(selected)
+                  : isControlActionEntry(selected)
+                    ? "Waiting for terminal audit event."
+                    : isScheduledWakeupEntry(selected)
                     ? "Waiting for due time."
                     : "No output yet."}
               </pre>
@@ -9124,6 +9190,7 @@ function ChatPane({
   const [backgroundView, setBackgroundView] = useState<BackgroundView>("shells");
   const [selectedBackgroundId, setSelectedBackgroundId] = useState<string | null>(null);
   const [scheduledWakeupEntries, setScheduledWakeupEntries] = useState<TranscriptEntry[]>([]);
+  const [controlActionEntries, setControlActionEntries] = useState<TranscriptEntry[]>([]);
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
   const [rolloutState, setRolloutState] = useState<RolloutState | null>(session.rollout_state ?? null);
   const isClaude = isClaudeRunMode(session.mode);
@@ -9167,6 +9234,20 @@ function ChatPane({
     const body = (await res.json()) as { scheduled_wakeups?: ScheduledWakeupRow[] };
     setScheduledWakeupEntries(
       scheduledWakeupRowsToEntries(body.scheduled_wakeups ?? []) as TranscriptEntry[],
+    );
+  }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
+  const fetchControlActionEntries = useCallback(async () => {
+    if (publicView) {
+      setControlActionEntries([]);
+      return;
+    }
+    const res = await fetchPaneResource(
+      scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(session.id)}/control-actions`),
+    );
+    if (!res.ok) return;
+    const body = (await res.json()) as ControlActionRow[];
+    setControlActionEntries(
+      controlActionRowsToEntries(body) as TranscriptEntry[],
     );
   }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
   const supportsFileAttachments = !readOnly && !publicView && sessionModeSupportsWorkspaceFiles(session.mode);
@@ -12242,12 +12323,16 @@ function ChatPane({
   useEffect(() => {
     if (publicView || !visible) {
       setScheduledWakeupEntries([]);
+      setControlActionEntries([]);
       return;
     }
     let cancelled = false;
     const refresh = () => {
       void fetchScheduledWakeupEntries().catch(() => {
         if (!cancelled) setScheduledWakeupEntries([]);
+      });
+      void fetchControlActionEntries().catch(() => {
+        if (!cancelled) setControlActionEntries([]);
       });
     };
     refresh();
@@ -12256,7 +12341,7 @@ function ChatPane({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [fetchScheduledWakeupEntries, publicView, visible]);
+  }, [fetchControlActionEntries, fetchScheduledWakeupEntries, publicView, visible]);
   const backgroundTaskEntries = useMemo(
     () => renderedEntries.filter(isBackgroundTaskEntry),
     [renderedEntries],
@@ -12283,10 +12368,11 @@ function ChatPane({
   const backgroundLedgerEntries = useMemo(
     () => [
       ...scheduledWakeupEntries,
+      ...controlActionEntries,
       ...activeBackgroundEntries,
       ...detachedShellEntries,
     ],
-    [activeBackgroundEntries, detachedShellEntries, scheduledWakeupEntries],
+    [activeBackgroundEntries, controlActionEntries, detachedShellEntries, scheduledWakeupEntries],
   );
   const appliedModelId = (session.runtime_model ?? "").trim();
   const modelForCostEstimate = appliedModelId || selectedModelId;
@@ -12704,10 +12790,14 @@ function ChatPane({
     if (publicView) return;
     if (entry?.id) setSelectedBackgroundId(entry.id);
     setBackgroundView(
-      entry && isScheduledWakeupEntry(entry)
+      entry && isControlActionEntry(entry)
+        ? "control"
+      : entry && isScheduledWakeupEntry(entry)
         ? "scheduled"
         : entry && isDetachedShellCandidateEntry(entry)
         ? "detached"
+        : activeBackgroundEntries.length === 0 && controlActionEntries.length > 0
+          ? "control"
         : activeBackgroundEntries.length === 0 && activeScheduledWakeupEntries.length > 0
           ? "scheduled"
         : activeBackgroundEntries.length === 0 && detachedShellEntries.length > 0
@@ -12715,7 +12805,7 @@ function ChatPane({
           : "shells",
     );
     setActiveTab("background");
-  }, [activeBackgroundEntries.length, activeScheduledWakeupEntries.length, detachedShellEntries.length, publicView]);
+  }, [activeBackgroundEntries.length, activeScheduledWakeupEntries.length, controlActionEntries.length, detachedShellEntries.length, publicView]);
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
@@ -12791,10 +12881,12 @@ function ChatPane({
     ) {
       setSelectedBackgroundId(
         backgroundView === "scheduled"
-          ? scheduledWakeupEntries[0]?.id ?? activeBackgroundEntries[0]?.id ?? detachedShellEntries[0]?.id ?? null
+          ? scheduledWakeupEntries[0]?.id ?? activeBackgroundEntries[0]?.id ?? controlActionEntries[0]?.id ?? detachedShellEntries[0]?.id ?? null
+          : backgroundView === "control"
+            ? controlActionEntries[0]?.id ?? activeBackgroundEntries[0]?.id ?? scheduledWakeupEntries[0]?.id ?? detachedShellEntries[0]?.id ?? null
           : backgroundView === "detached"
-            ? detachedShellEntries[0]?.id ?? activeBackgroundEntries[0]?.id ?? scheduledWakeupEntries[0]?.id ?? null
-            : activeBackgroundEntries[0]?.id ?? scheduledWakeupEntries[0]?.id ?? detachedShellEntries[0]?.id ?? null,
+            ? detachedShellEntries[0]?.id ?? activeBackgroundEntries[0]?.id ?? controlActionEntries[0]?.id ?? scheduledWakeupEntries[0]?.id ?? null
+            : activeBackgroundEntries[0]?.id ?? controlActionEntries[0]?.id ?? scheduledWakeupEntries[0]?.id ?? detachedShellEntries[0]?.id ?? null,
       );
     }
   }, [
@@ -12802,6 +12894,7 @@ function ChatPane({
     activeBackgroundEntries,
     backgroundLedgerEntries,
     backgroundView,
+    controlActionEntries,
     detachedShellEntries,
     selectedBackgroundId,
     scheduledWakeupEntries,
@@ -13430,6 +13523,7 @@ function ChatPane({
           <BackgroundScreen
             shellEntries={activeBackgroundEntries}
             scheduledEntries={scheduledWakeupEntries}
+            controlEntries={controlActionEntries}
             detachedEntries={detachedShellEntries}
             view={backgroundView}
             onViewChange={setBackgroundView}

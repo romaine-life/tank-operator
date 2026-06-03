@@ -753,7 +753,7 @@ test("background page includes active shell invocations alongside managed tasks"
 });
 
 test("background page surfaces scheduled wakeups as first-class continuation state", () => {
-  assert.match(appSource, /type BackgroundView = "shells" \| "scheduled" \| "detached"/);
+  assert.match(appSource, /type BackgroundView = "shells" \| "scheduled" \| "control" \| "detached"/);
   assert.match(
     appSource,
     /function isScheduledWakeupEntry\([\s\S]*?entry\.taskKind === "scheduled_wakeup"/,
@@ -769,6 +769,22 @@ test("background page surfaces scheduled wakeups as first-class continuation sta
   );
 });
 
+test("background page surfaces control actions as first-class audit state", () => {
+  assert.match(
+    appSource,
+    /function isControlActionEntry\([\s\S]*?entry\.taskKind === "control_action"/,
+  );
+  assert.match(appSource, /<span>Control<\/span>[\s\S]*?<span>\{controlEntries\.length\}<\/span>/);
+  assert.match(
+    appSource,
+    /controlActionRowsToEntries\(body\)/,
+  );
+  assert.match(
+    appSource,
+    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+scheduledEntries=\{scheduledWakeupEntries\}\n\s+controlEntries=\{controlActionEntries\}/,
+  );
+});
+
 test("background page separates tracked shells from detached shell candidates", () => {
   assert.match(
     appSource,
@@ -781,7 +797,7 @@ test("background page separates tracked shells from detached shell candidates", 
   );
   assert.match(
     appSource,
-    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+scheduledEntries=\{scheduledWakeupEntries\}\n\s+detachedEntries=\{detachedShellEntries\}/,
+    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+scheduledEntries=\{scheduledWakeupEntries\}\n\s+controlEntries=\{controlActionEntries\}\n\s+detachedEntries=\{detachedShellEntries\}/,
   );
 });
 

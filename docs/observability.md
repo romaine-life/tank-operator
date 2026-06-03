@@ -511,6 +511,57 @@ the caller. Emits a structured `slog` line per call
 `/metrics`. `result` labels: `ok`, `empty`, `bad_request`,
 `forbidden`, `store_error`, `not_configured`.
 
+## Control Action Audit Surface
+
+Privileged cross-system effects initiated from session pods through MCP
+servers are recorded in `control_action_events`. This is the durable answer
+to "which session asked an MCP server to do something that changed another
+system?" and complements, rather than replaces, the chat transcript and MCP
+pod logs.
+
+Current producers:
+
+- `mcp-github` records `github.pull_request.ready_for_review` and
+  `github.pull_request.merge` around the MCP tools
+  `mark_pull_request_ready_for_review` and `merge_pull_request`.
+
+Each invocation writes immutable events sharing one `invocation_id`:
+
+- `started` before the external mutation is attempted. The MCP tool fails
+  closed if this write fails.
+- `succeeded` after the external system accepts the mutation.
+- `failed` when the external system rejects the mutation.
+
+The browser reads the per-session ledger through:
+
+```
+GET /api/sessions/<id>/control-actions?limit=100
+```
+
+The Run Background page renders these rows in the `Control` tab, with the MCP
+tool, action, repository, PR number, target URL, and result SHA. This is the
+user-facing surface for confirming whether a session merged or marked a PR
+ready without reading pod logs.
+
+Prometheus counters:
+
+- `tank_control_action_events_total{source_service,source_tool,action,status,result}`
+  counts accepted/rejected Tank ledger writes. Labels are deliberately bounded;
+  PR numbers, emails, session ids, and SHAs live in Postgres, not metrics.
+- MCP servers may expose their own action counters. For `mcp-github`, use
+  `mcp_github_control_action_total{tool,action,status,result}` and
+  `mcp_github_control_action_audit_append_total{status,result}`.
+
+Loki remains useful for raw HTTP evidence, for example:
+
+```
+{namespace="mcp-github"} |= "pulls/857"
+```
+
+Loki is not the source of truth for attribution. It does not carry the complete
+session identity/tool/action contract and may age out. The durable ledger is
+the traceable product model.
+
 ## Session List Capture Debug Surface
 
 `GET /api/debug/session-list-captures` (admin-only) returns durable
