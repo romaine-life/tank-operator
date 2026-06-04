@@ -53,6 +53,7 @@ type SessionRegistry interface {
 	Upsert(ctx context.Context, record sessionmodel.SessionRecord) error
 	SetName(ctx context.Context, email, sessionID string, name *string) error
 	SetBugLabel(ctx context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error
+	SetBugLabels(ctx context.Context, email, sessionID string, labels []*sessionmodel.SessionBugLabel) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetRolloutState(ctx context.Context, email, sessionID string, state map[string]any) error
 	SetCloneState(ctx context.Context, email, sessionID string, state map[string]any) error
@@ -364,6 +365,9 @@ type CreateOptions struct {
 	// creation. It is registry-only state and is persisted before the pod is
 	// created so the POST response and first row snapshot agree.
 	BugLabel *sessionmodel.SessionBugLabel
+	// BugLabels is the plural create-time form. BugLabel remains populated for
+	// compatibility with clients and row projections that read one label.
+	BugLabels []*sessionmodel.SessionBugLabel
 }
 
 // Create creates a new session pod and registers it in the registry.
@@ -480,7 +484,11 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			slog.Warn("create registry upsert failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
-		if opts.BugLabel != nil {
+		if len(opts.BugLabels) > 0 {
+			if regErr := m.registry.SetBugLabels(ctx, owner, sessionID, opts.BugLabels); regErr != nil {
+				return Info{}, regErr
+			}
+		} else if opts.BugLabel != nil {
 			if regErr := m.registry.SetBugLabel(ctx, owner, sessionID, opts.BugLabel); regErr != nil {
 				return Info{}, regErr
 			}

@@ -169,7 +169,9 @@ import {
   unpinRepoSlug,
 } from "./repos";
 import {
+  readHomeDismissedRecentRepos,
   readHomeSelectedRepos,
+  writeHomeDismissedRecentRepos,
   writeHomeSelectedRepos,
 } from "./homeRepos";
 import {
@@ -14752,6 +14754,7 @@ function AuthenticatedApp() {
   const [selectedRepos, setSelectedRepos] = useState<string[]>(readHomeSelectedRepos);
   const [pinnedRepos, setPinnedRepos] = useState<string[]>([]);
   const [recentRepos, setRecentRepos] = useState<string[]>([]);
+  const [dismissedRecentRepos, setDismissedRecentRepos] = useState<string[]>(readHomeDismissedRecentRepos);
   const [pinnedReposSaving, setPinnedReposSaving] = useState(false);
   const pinnedReposRefreshInFlightRef = useRef(false);
   const pinnedReposSnapshotVersionRef = useRef("");
@@ -14759,11 +14762,16 @@ function AuthenticatedApp() {
   const [repoPickerOpen, setRepoPickerOpen] = useState(false);
   const [repoInput, setRepoInput] = useState("");
   const [repoError, setRepoError] = useState<string | null>(null);
-  const [homeBugLabel, setHomeBugLabel] = useState("");
+  const [homeBugLabels, setHomeBugLabels] = useState<string[]>([]);
   const [homeSpireLensMcpEnabled, setHomeSpireLensMcpEnabled] = useState(false);
+  const visibleRecentRepos = useMemo(() => {
+    if (dismissedRecentRepos.length === 0) return recentRepos;
+    const dismissed = new Set(dismissedRecentRepos.map((slug) => slug.toLowerCase()));
+    return recentRepos.filter((slug) => !dismissed.has(slug.toLowerCase()));
+  }, [dismissedRecentRepos, recentRepos]);
   const recentRepoShortcuts = useMemo(
-    () => repoShortcutSlugs(pinnedRepos, recentRepos),
-    [pinnedRepos, recentRepos],
+    () => repoShortcutSlugs(pinnedRepos, visibleRecentRepos),
+    [pinnedRepos, visibleRecentRepos],
   );
   // All-repos lazy-load state. Sourced from /api/github/repos,
   // which proxies to mcp-github via an on-behalf-of token mint. The
@@ -15233,6 +15241,51 @@ function AuthenticatedApp() {
     writeHomeSelectedRepos(selectedRepos);
   }, [selectedRepos]);
 
+  useEffect(() => {
+    writeHomeDismissedRecentRepos(dismissedRecentRepos);
+  }, [dismissedRecentRepos]);
+
+  const addHomeBugLabel = useCallback((rawName: string | null) => {
+    const name = rawName?.trim() ?? "";
+    if (!name) return;
+    setHomeBugLabels((prev) => {
+      if (prev.some((existing) => existing.toLowerCase() === name.toLowerCase())) {
+        return prev;
+      }
+      return [...prev, name].slice(0, 5);
+    });
+  }, []);
+
+  const removeHomeBugLabel = useCallback((name: string) => {
+    setHomeBugLabels((prev) => prev.filter((existing) => existing !== name));
+  }, []);
+
+  const addSelectedRepo = useCallback((rawSlug: string) => {
+    const result = addRepoSlug(selectedRepos, rawSlug);
+    if (result.ok) {
+      setSelectedRepos(result.next);
+      setRepoInput("");
+      setRepoError(null);
+    } else {
+      setRepoError(result.error);
+    }
+  }, [selectedRepos]);
+
+  const dismissRecentRepo = useCallback((rawSlug: string) => {
+    const slug = rawSlug.trim();
+    if (slug && isValidRepoSlug(slug)) {
+      setDismissedRecentRepos((prev) =>
+        prev.some((existing) => existing.toLowerCase() === slug.toLowerCase())
+          ? prev
+          : [...prev, slug],
+      );
+    }
+    setRecentRepos((prev) =>
+      prev.filter((slug) => slug.toLowerCase() !== rawSlug.trim().toLowerCase()),
+    );
+    setRepoError(null);
+  }, []);
+
   const togglePinnedRepo = useCallback((slug: string) => {
     if (pinnedReposSaving) return;
     const current = pinnedRepoSlugs(pinnedRepos);
@@ -15311,17 +15364,6 @@ function AuthenticatedApp() {
     [pinnedRepos, pinnedReposSaving, applyPinnedReposSnapshot],
   );
 
-  const selectExclusiveRepo = useCallback((rawSlug: string) => {
-    const result = addRepoSlug([], rawSlug);
-    if (result.ok) {
-      setSelectedRepos(result.next);
-      setRepoInput("");
-      setRepoError(null);
-    } else {
-      setRepoError(result.error);
-    }
-  }, []);
-
   useEffect(() => {
     if (
       active !== null ||
@@ -15346,7 +15388,7 @@ function AuthenticatedApp() {
       if (!slug) return;
       event.preventDefault();
       event.stopPropagation();
-      selectExclusiveRepo(slug);
+      addSelectedRepo(slug);
     };
     window.addEventListener("keydown", selectRecentRepoByNumber, { capture: true });
     return () => {
@@ -15357,7 +15399,7 @@ function AuthenticatedApp() {
     defaultSessionMode,
     homeActiveTab,
     recentRepoShortcuts,
-    selectExclusiveRepo,
+    addSelectedRepo,
   ]);
 
   // Close the profile menu on an outside click. Menus use a `data-menu`
@@ -16174,7 +16216,7 @@ function AuthenticatedApp() {
     // mode-override createSession() call could otherwise send repos for a
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
-    const bugLabel = homeBugLabel.trim();
+    const bugLabel = homeBugLabels[0]?.trim() ?? "";
     const capabilities = spireLensMcpAvailable && homeSpireLensMcpEnabled ? ["spirelens_mcp"] : [];
     const requestedName = normalizedHomeTitleNameFrom(
       homeSessionNameRef.current,
@@ -16226,6 +16268,7 @@ function AuthenticatedApp() {
           mode,
           repos,
           ...(bugLabel ? { bug_label: bugLabel } : {}),
+          ...(homeBugLabels.length > 0 ? { bug_labels: homeBugLabels } : {}),
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(requestedName ? { name: requestedName } : {}),
           ...(sessionModel || sessionEffort ? { model: sessionModel, effort: sessionEffort } : {}),
@@ -17336,7 +17379,7 @@ function AuthenticatedApp() {
                     <RepoPicker
                       selected={selectedRepos}
                       pinned={pinnedRepos}
-                      recent={recentRepos}
+                      recent={visibleRecentRepos}
                       allRepos={allRepos}
                       onLoadAllRepos={loadAllRepos}
                       open={repoPickerOpen}
@@ -17355,38 +17398,50 @@ function AuthenticatedApp() {
                         setRepoInput(v);
                         setRepoError(null);
                       }}
-                      onAdd={(rawSlug) => {
-                        const result = addRepoSlug(selectedRepos, rawSlug);
-                        if (result.ok) {
-                          setSelectedRepos(result.next);
-                          setRepoInput("");
-                          setRepoError(null);
-                        } else {
-                          setRepoError(result.error);
-                        }
-                      }}
-                      onSelectExclusive={selectExclusiveRepo}
+                      onAdd={addSelectedRepo}
+                      onAddShortcut={addSelectedRepo}
                       onTogglePin={togglePinnedRepo}
                       onReorderPin={reorderPinnedRepo}
                       onRemove={(slug) => {
                         setSelectedRepos((prev) => removeRepoSlug(prev, slug));
                         setRepoError(null);
                       }}
+                      onDismissRecent={dismissRecentRepo}
                     />
                   )}
                   <div className="home-bug-label-row">
                     <BugLabelPicker
-                      value={homeBugLabel}
+                      value=""
                       disabled={busy}
                       requestPath={localSessionPath}
-                      onSave={(name) => {
-                        setHomeBugLabel(name?.trim() ?? "");
-                      }}
+                      onSave={addHomeBugLabel}
+                      allowClear={false}
                     />
                     <span className="home-bug-label-summary">
-                      {homeBugLabel || "No bug label"}
+                      {homeBugLabels.length === 0
+                        ? "No bug labels"
+                        : `${homeBugLabels.length} bug label${homeBugLabels.length === 1 ? "" : "s"}`}
                     </span>
                   </div>
+                  {homeBugLabels.length > 0 && (
+                    <ul className="home-bug-label-chips" role="list" aria-label="Selected bug labels">
+                      {homeBugLabels.map((label) => (
+                        <li key={label} className="home-bug-label-chip">
+                          <span className="home-bug-label-chip-name">{label}</span>
+                          <button
+                            type="button"
+                            className="home-bug-label-chip-remove"
+                            onClick={() => removeHomeBugLabel(label)}
+                            disabled={busy}
+                            aria-label={`Remove ${label}`}
+                            title={`Remove ${label}`}
+                          >
+                            <XIcon size={11} aria-hidden="true" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                   {spireLensMcpAvailable && (
                     <button
                       type="button"
@@ -17514,16 +17569,6 @@ function AuthenticatedApp() {
                       title: "Available in an active chat session",
                     }}
                     pullRequest={{}}
-                    bugLabelControl={
-                      <BugLabelPicker
-                        value={homeBugLabel}
-                        disabled={busy}
-                        requestPath={localSessionPath}
-                        onSave={(name) => {
-                          setHomeBugLabel(name?.trim() ?? "");
-                        }}
-                      />
-                    }
                     slash={{
                       disabled: true,
                       title: "Slash commands appear once your session has skills",

@@ -1344,7 +1344,6 @@ var schemaMigrations = []migration{
 		created_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (tank_session_id, turn_id, ordinal)
 	)`},
-
 	// session_background_task_wakes — durable backend-owned "a background task
 	// finished while the session was idle" wakes. The base Claude Bash tool
 	// promises "run_in_background … re-invokes you when it exits", but a
@@ -1386,6 +1385,11 @@ var schemaMigrations = []migration{
 	{ID: "0118", SQL: `CREATE INDEX IF NOT EXISTS session_background_task_wakes_due
 		ON session_background_task_wakes (session_scope, status, due_at, created_at)
 		WHERE status IN ('scheduled', 'claiming')`},
+	{ID: "0119", SQL: `ALTER TABLE session_bug_labels
+		DROP CONSTRAINT IF EXISTS session_bug_labels_pkey`},
+	{ID: "0120", SQL: `ALTER TABLE session_bug_labels
+		ADD CONSTRAINT session_bug_labels_pkey
+		PRIMARY KEY (owner_email, session_scope, session_id, bug_label_id)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

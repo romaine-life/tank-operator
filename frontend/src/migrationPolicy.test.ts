@@ -710,11 +710,12 @@ test("files tab is gated until the session container is available", () => {
 });
 
 test("session bug labels are available at create time", () => {
-  assert.equal(appSource.includes("const [homeBugLabel, setHomeBugLabel]"), true);
+  assert.equal(appSource.includes("const [homeBugLabels, setHomeBugLabels]"), true);
   assert.equal(appSource.includes("bug_label: bugLabel"), true);
+  assert.equal(appSource.includes("bug_labels: homeBugLabels"), true);
   assert.equal(appSource.includes("<SessionBugLabelPicker"), false);
-  assert.equal(appSource.includes("bugLabelControl={"), true);
-  assert.equal(sessionBarCapabilitiesSource.includes("splash composer tool strip stages the label"), true);
+  assert.equal(appSource.includes("bugLabelControl={"), false);
+  assert.equal(sessionBarCapabilitiesSource.includes("splash setup panel stages bug labels"), true);
 });
 
 test("read-only cross-scope sessions keep an explicit composer affordance", () => {

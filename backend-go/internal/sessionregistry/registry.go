@@ -77,12 +77,17 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			bug_labels.name,
 			bug_labels.slug
 		FROM sessions
-		LEFT JOIN session_bug_labels
-			ON session_bug_labels.owner_email = sessions.email
-			AND session_bug_labels.session_scope = sessions.session_scope
-			AND session_bug_labels.session_id = sessions.session_id
-		LEFT JOIN bug_labels
-			ON bug_labels.id = session_bug_labels.bug_label_id
+		LEFT JOIN LATERAL (
+			SELECT bug_labels.id, bug_labels.name, bug_labels.slug
+			FROM session_bug_labels
+			JOIN bug_labels
+				ON bug_labels.id = session_bug_labels.bug_label_id
+			WHERE session_bug_labels.owner_email = sessions.email
+			  AND session_bug_labels.session_scope = sessions.session_scope
+			  AND session_bug_labels.session_id = sessions.session_id
+			ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC
+			LIMIT 1
+		) bug_labels ON true
 		WHERE sessions.email = $1 AND sessions.session_scope = $2
 		ORDER BY sessions.sidebar_position DESC, sessions.created_at DESC, sessions.session_id DESC
 	`

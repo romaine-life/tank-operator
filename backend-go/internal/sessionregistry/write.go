@@ -221,6 +221,16 @@ func (s *Store) SetName(ctx context.Context, email, sessionID string, name *stri
 // callers validate ownership through Manager before writing. The sessions
 // row_version bump is load-bearing for row-update catch-up.
 func (s *Store) SetBugLabel(ctx context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error {
+	if label == nil {
+		return s.SetBugLabels(ctx, email, sessionID, nil)
+	}
+	return s.SetBugLabels(ctx, email, sessionID, []*sessionmodel.SessionBugLabel{label})
+}
+
+// SetBugLabels replaces the user's Tank-native bug labels for one session.
+// The session_bug_labels primary key includes bug_label_id, so this method can
+// attach multiple labels while preserving SetBugLabel's replace-all semantics.
+func (s *Store) SetBugLabels(ctx context.Context, email, sessionID string, labels []*sessionmodel.SessionBugLabel) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	sessionID = strings.TrimSpace(sessionID)
 	if normalized == "" || sessionID == "" {
@@ -232,44 +242,46 @@ func (s *Store) SetBugLabel(ctx context.Context, email, sessionID string, label 
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	if label == nil {
-		if _, err := tx.Exec(ctx, `
-			DELETE FROM session_bug_labels
-			WHERE owner_email = $1 AND session_scope = $2 AND session_id = $3
-		`, normalized, s.scope, sessionID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `
-			UPDATE sessions
-			SET updated_at = now(),
-				row_version = nextval('sessions_row_version_seq')
-			WHERE email = $1 AND session_scope = $2 AND session_id = $3
-		`, normalized, s.scope, sessionID); err != nil {
-			return err
-		}
-		return tx.Commit(ctx)
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM session_bug_labels
+		WHERE owner_email = $1 AND session_scope = $2 AND session_id = $3
+	`, normalized, s.scope, sessionID); err != nil {
+		return err
 	}
 
-	var labelID int64
-	if err := tx.QueryRow(ctx, `
-		INSERT INTO bug_labels (owner_email, session_scope, name, slug, updated_at, archived_at)
-		VALUES ($1, $2, $3, $4, now(), NULL)
-		ON CONFLICT (owner_email, session_scope, slug) DO UPDATE
-		SET name = EXCLUDED.name,
-			updated_at = now(),
-			archived_at = NULL
-		RETURNING id
-	`, normalized, s.scope, strings.TrimSpace(label.Name), strings.TrimSpace(label.Slug)).Scan(&labelID); err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO session_bug_labels (owner_email, session_scope, session_id, bug_label_id, attached_at)
-		VALUES ($1, $2, $3, $4, now())
-		ON CONFLICT (owner_email, session_scope, session_id) DO UPDATE
-		SET bug_label_id = EXCLUDED.bug_label_id,
-			attached_at = now()
-	`, normalized, s.scope, sessionID, labelID); err != nil {
-		return err
+	seen := map[string]struct{}{}
+	for _, label := range labels {
+		if label == nil {
+			continue
+		}
+		slug := strings.TrimSpace(label.Slug)
+		if slug == "" {
+			continue
+		}
+		if _, ok := seen[slug]; ok {
+			continue
+		}
+		seen[slug] = struct{}{}
+		var labelID int64
+		if err := tx.QueryRow(ctx, `
+			INSERT INTO bug_labels (owner_email, session_scope, name, slug, updated_at, archived_at)
+			VALUES ($1, $2, $3, $4, now(), NULL)
+			ON CONFLICT (owner_email, session_scope, slug) DO UPDATE
+			SET name = EXCLUDED.name,
+				updated_at = now(),
+				archived_at = NULL
+			RETURNING id
+		`, normalized, s.scope, strings.TrimSpace(label.Name), slug).Scan(&labelID); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO session_bug_labels (owner_email, session_scope, session_id, bug_label_id, attached_at)
+			VALUES ($1, $2, $3, $4, now())
+			ON CONFLICT (owner_email, session_scope, session_id, bug_label_id) DO UPDATE
+			SET attached_at = now()
+		`, normalized, s.scope, sessionID, labelID); err != nil {
+			return err
+		}
 	}
 	if _, err := tx.Exec(ctx, `
 		UPDATE sessions
@@ -389,12 +401,17 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			bug_labels.name,
 			bug_labels.slug
 		FROM sessions
-		LEFT JOIN session_bug_labels
-			ON session_bug_labels.owner_email = sessions.email
-			AND session_bug_labels.session_scope = sessions.session_scope
-			AND session_bug_labels.session_id = sessions.session_id
-		LEFT JOIN bug_labels
-			ON bug_labels.id = session_bug_labels.bug_label_id
+		LEFT JOIN LATERAL (
+			SELECT bug_labels.id, bug_labels.name, bug_labels.slug
+			FROM session_bug_labels
+			JOIN bug_labels
+				ON bug_labels.id = session_bug_labels.bug_label_id
+			WHERE session_bug_labels.owner_email = sessions.email
+			  AND session_bug_labels.session_scope = sessions.session_scope
+			  AND session_bug_labels.session_id = sessions.session_id
+			ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC
+			LIMIT 1
+		) bug_labels ON true
 		WHERE sessions.email = $1 AND sessions.session_scope = $2 AND sessions.session_id = $3
 	`
 	var (
