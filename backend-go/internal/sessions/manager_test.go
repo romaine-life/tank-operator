@@ -631,9 +631,19 @@ func (r *managerTestRegistry) ReserveSessionAvatars(_ context.Context, _ string,
 
 func (r *managerTestRegistry) SetName(context.Context, string, string, *string) error { return nil }
 func (r *managerTestRegistry) SetBugLabel(_ context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error {
+	if label == nil {
+		return r.SetBugLabels(context.Background(), email, sessionID, nil)
+	}
+	return r.SetBugLabels(context.Background(), email, sessionID, []*sessionmodel.SessionBugLabel{label})
+}
+func (r *managerTestRegistry) SetBugLabels(_ context.Context, email, sessionID string, labels []*sessionmodel.SessionBugLabel) error {
 	for i, record := range r.records {
 		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
-			r.records[i].BugLabel = label
+			if len(labels) > 0 {
+				r.records[i].BugLabel = labels[0]
+			} else {
+				r.records[i].BugLabel = nil
+			}
 			return nil
 		}
 	}

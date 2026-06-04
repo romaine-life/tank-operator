@@ -408,6 +408,27 @@ func TestCreateSessionAcceptsBugLabel(t *testing.T) {
 	}
 }
 
+func TestNormalizeCreateBugLabelsAcceptsPluralPayload(t *testing.T) {
+	single := "bug: fallback"
+	labels, err := normalizeCreateBugLabels(&single, []string{
+		"bug: repeated validation defect",
+		"needs migration",
+		"Repeated Validation Defect",
+	})
+	if err != nil {
+		t.Fatalf("normalizeCreateBugLabels: %v", err)
+	}
+	if len(labels) != 2 {
+		t.Fatalf("labels = %#v, want 2 deduped labels", labels)
+	}
+	if labels[0].DisplayName != "bug: repeated validation defect" {
+		t.Fatalf("first label = %#v", labels[0])
+	}
+	if labels[1].DisplayName != "bug: needs migration" {
+		t.Fatalf("second label = %#v", labels[1])
+	}
+}
+
 func TestCreateSessionRejectsCodexWithoutExplicitModel(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus)

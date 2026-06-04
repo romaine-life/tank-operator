@@ -33,7 +33,7 @@
 // what the vitest in RepoPicker.test.tsx asserts.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { GripVertical, PinIcon } from "lucide-react";
+import { GripVertical, PinIcon, XIcon } from "lucide-react";
 
 import { isValidRepoSlug, isRepoPinned, repoShortcutSlugs } from "../repos";
 
@@ -79,13 +79,14 @@ export interface RepoPickerProps {
   onClose: () => void;
   onInputChange: (value: string) => void;
   onAdd: (slug: string) => void;
-  onSelectExclusive: (slug: string) => void;
+  onAddShortcut: (slug: string) => void;
   onTogglePin: (slug: string) => void;
   /** Reorder the durable pin list by moving `sourceSlug` relative to
    *  `targetSlug`. Wired to the same PUT /api/github/pinned-repos write
    *  as pin/unpin — the pinned_repos[] order is the pin order. */
   onReorderPin: (sourceSlug: string, targetSlug: string) => void;
   onRemove: (slug: string) => void;
+  onDismissRecent: (slug: string) => void;
 }
 
 const REPO_PICKER_MENU = "repo-picker";
@@ -105,10 +106,11 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
     onClose,
     onInputChange,
     onAdd,
-    onSelectExclusive,
+    onAddShortcut,
     onTogglePin,
     onReorderPin,
     onRemove,
+    onDismissRecent,
   } = props;
 
   // Lazy-load the All-repos enumeration on first open. Parent owns
@@ -215,7 +217,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
               items={pinnedPreview}
               selectedLower={selectedLower.current}
               busy={busy}
-              onSelectExclusive={onSelectExclusive}
+              onAddShortcut={onAddShortcut}
               onTogglePin={onTogglePin}
               onReorderPin={onReorderPin}
             />
@@ -226,8 +228,9 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
               items={recentPreview}
               selectedLower={selectedLower.current}
               busy={busy}
-              onSelectExclusive={onSelectExclusive}
+              onAddShortcut={onAddShortcut}
               onTogglePin={onTogglePin}
+              onDismissRecent={onDismissRecent}
             />
           )}
         </div>
@@ -274,6 +277,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
             onAdd={onAdd}
             onTogglePin={onTogglePin}
             onReorderPin={onReorderPin}
+            onDismissRecent={onDismissRecent}
           />
           <div className="home-repos-help">
             Selected repos clone into <code>/workspace</code> at session start.
@@ -358,17 +362,18 @@ interface RepoPreviewSectionProps {
   items: RepoPreviewItem[];
   selectedLower: ReadonlySet<string>;
   busy: boolean;
-  onSelectExclusive: (slug: string) => void;
+  onAddShortcut: (slug: string) => void;
   onTogglePin: (slug: string) => void;
   /** When provided, the section's chips become drag-to-reorder — used for the
    *  always-visible Pinned shortcuts so users can rearrange pin order without
    *  opening the picker. Reorder runs through the same durable PUT as the panel
    *  Pinned list; Recent chips never receive this (recency is not user-ordered). */
   onReorderPin?: (sourceSlug: string, targetSlug: string) => void;
+  onDismissRecent?: (slug: string) => void;
 }
 
 function RepoPreviewSection(props: RepoPreviewSectionProps): JSX.Element {
-  const { label, items, selectedLower, busy, onSelectExclusive, onTogglePin, onReorderPin } =
+  const { label, items, selectedLower, busy, onAddShortcut, onTogglePin, onReorderPin, onDismissRecent } =
     props;
   // Called unconditionally (rules of hooks); a section is reorderable only when
   // a reorder callback is supplied and there is more than one chip to order.
@@ -402,18 +407,30 @@ function RepoPreviewSection(props: RepoPreviewSectionProps): JSX.Element {
                   "home-repos-recent-chip home-repos-recent-shortcut" +
                   (selectedRecent ? " is-selected" : "")
                 }
-                onClick={() => onSelectExclusive(item.slug)}
-                disabled={busy}
+                onClick={() => !selectedRecent && onAddShortcut(item.slug)}
+                disabled={busy || selectedRecent}
                 title={reorderable ? `${item.slug} — drag to reorder` : item.slug}
                 aria-pressed={selectedRecent}
                 aria-keyshortcuts={String(item.shortcut)}
-                aria-label={`Select ${label.toLowerCase()} repository ${item.shortcut}: ${item.slug}`}
+                aria-label={`Add ${label.toLowerCase()} repository ${item.shortcut}: ${item.slug}`}
               >
                 <span className="home-repos-recent-key" aria-hidden="true">
                   {item.shortcut}
                 </span>
                 <span>{item.slug}</span>
               </button>
+              {!item.pinned && onDismissRecent && (
+                <button
+                  type="button"
+                  className="home-repos-recent-remove"
+                  onClick={() => onDismissRecent(item.slug)}
+                  disabled={busy}
+                  aria-label={`Remove ${item.slug} from recent repositories`}
+                  title={`Remove ${item.slug} from Recent`}
+                >
+                  <XIcon aria-hidden="true" className="home-repos-recent-remove-icon" />
+                </button>
+              )}
               <PinToggleButton
                 slug={item.slug}
                 pinned={item.pinned}
@@ -453,10 +470,11 @@ interface RepoPickerSuggestionsProps {
   onAdd: (slug: string) => void;
   onTogglePin: (slug: string) => void;
   onReorderPin: (sourceSlug: string, targetSlug: string) => void;
+  onDismissRecent: (slug: string) => void;
 }
 
 function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
-  const { input, pinned, recent, allRepos, selectedLower, busy, onAdd, onTogglePin, onReorderPin } = props;
+  const { input, pinned, recent, allRepos, selectedLower, busy, onAdd, onTogglePin, onReorderPin, onDismissRecent } = props;
   const trimmed = input.trim();
   const looksLikeSlug = trimmed !== "" && isValidRepoSlug(trimmed);
 
@@ -561,6 +579,7 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
           busy={busy}
           onAdd={onAdd}
           onTogglePin={onTogglePin}
+          onDismissRecent={onDismissRecent}
         />
       )}
       {filteredAll.length > 0 && (
@@ -590,10 +609,11 @@ interface RepoSectionProps {
   busy: boolean;
   onAdd: (slug: string) => void;
   onTogglePin: (slug: string) => void;
+  onDismissRecent?: (slug: string) => void;
 }
 
 function RepoSection(props: RepoSectionProps): JSX.Element {
-  const { label, slugs, filtered, selectedLower, pinnedLower, busy, onAdd, onTogglePin } = props;
+  const { label, slugs, filtered, selectedLower, pinnedLower, busy, onAdd, onTogglePin, onDismissRecent } = props;
   return (
     <div className="home-repos-recent">
       <div className="home-repos-recent-label">
@@ -627,6 +647,18 @@ function RepoSection(props: RepoSectionProps): JSX.Element {
                 busy={busy}
                 onTogglePin={onTogglePin}
               />
+              {label === "Recent" && onDismissRecent && (
+                <button
+                  type="button"
+                  className="home-repos-recent-remove"
+                  onClick={() => onDismissRecent(slug)}
+                  disabled={busy}
+                  aria-label={`Remove ${slug} from recent repositories`}
+                  title={`Remove ${slug} from Recent`}
+                >
+                  <XIcon aria-hidden="true" className="home-repos-recent-remove-icon" />
+                </button>
+              )}
             </li>
           );
         })}

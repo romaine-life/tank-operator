@@ -911,6 +911,9 @@ func (r *stubSessionRegistry) SetName(_ context.Context, _, _ string, _ *string)
 func (r *stubSessionRegistry) SetBugLabel(_ context.Context, _, _ string, _ *sessionmodel.SessionBugLabel) error {
 	return nil
 }
+func (r *stubSessionRegistry) SetBugLabels(_ context.Context, _, _ string, _ []*sessionmodel.SessionBugLabel) error {
+	return nil
+}
 func (r *stubSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map[string]any) error {
 	return nil
 }

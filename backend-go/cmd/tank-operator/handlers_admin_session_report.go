@@ -452,12 +452,17 @@ func fetchSessionReportRows(ctx context.Context, s *appServer, scope string, win
 		       sessions.created_at,
 		       sessions.updated_at
 		FROM sessions
-		LEFT JOIN session_bug_labels
-			ON session_bug_labels.owner_email = sessions.email
-			AND session_bug_labels.session_scope = sessions.session_scope
-			AND session_bug_labels.session_id = sessions.session_id
-		LEFT JOIN bug_labels
-			ON bug_labels.id = session_bug_labels.bug_label_id
+		LEFT JOIN LATERAL (
+			SELECT bug_labels.id, bug_labels.name, bug_labels.slug
+			FROM session_bug_labels
+			JOIN bug_labels
+				ON bug_labels.id = session_bug_labels.bug_label_id
+			WHERE session_bug_labels.owner_email = sessions.email
+			  AND session_bug_labels.session_scope = sessions.session_scope
+			  AND session_bug_labels.session_id = sessions.session_id
+			ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC
+			LIMIT 1
+		) bug_labels ON true
 		WHERE sessions.session_scope = $1
 		  AND sessions.created_at >= $2
 		  AND sessions.created_at < $3

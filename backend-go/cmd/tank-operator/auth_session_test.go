@@ -339,11 +339,21 @@ func (r *testSessionRegistry) Upsert(_ context.Context, record sessionmodel.Sess
 
 func (r *testSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
 func (r *testSessionRegistry) SetBugLabel(_ context.Context, owner, sessionID string, label *sessionmodel.SessionBugLabel) error {
+	if label == nil {
+		return r.SetBugLabels(context.Background(), owner, sessionID, nil)
+	}
+	return r.SetBugLabels(context.Background(), owner, sessionID, []*sessionmodel.SessionBugLabel{label})
+}
+func (r *testSessionRegistry) SetBugLabels(_ context.Context, owner, sessionID string, labels []*sessionmodel.SessionBugLabel) error {
 	if r.records == nil || r.records[owner] == nil {
 		return nil
 	}
 	record := r.records[owner][sessionID]
-	record.BugLabel = label
+	if len(labels) > 0 {
+		record.BugLabel = labels[0]
+	} else {
+		record.BugLabel = nil
+	}
 	r.records[owner][sessionID] = record
 	return nil
 }

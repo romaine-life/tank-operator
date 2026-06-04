@@ -128,6 +128,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		Name         *string                          `json:"name,omitempty"`
 		Repos        []string                         `json:"repos"`
 		BugLabel     *string                          `json:"bug_label,omitempty"`
+		BugLabels    []string                         `json:"bug_labels,omitempty"`
 		Capabilities []string                         `json:"capabilities"`
 		InitialTurn  *createSessionInitialTurnRequest `json:"initial_turn,omitempty"`
 	}
@@ -138,6 +139,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		body.Name = nil
 		body.Repos = nil
 		body.BugLabel = nil
+		body.BugLabels = nil
 		body.InitialTurn = nil
 	}
 	mode := sessionmodel.NormalizeSessionMode(body.Mode)
@@ -150,10 +152,14 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, http.StatusBadRequest, errReposUnsupportedForMode.Error())
 		return
 	}
-	bugLabel, err := sessionmodel.NormalizeBugLabelName(body.BugLabel)
+	bugLabels, err := normalizeCreateBugLabels(body.BugLabel, body.BugLabels)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	var bugLabel *sessionmodel.SessionBugLabel
+	if len(bugLabels) > 0 {
+		bugLabel = bugLabels[0]
 	}
 	capabilities, status, detail := validateCreateSessionCapabilities(mode, body.Capabilities)
 	if status != 0 {
@@ -191,6 +197,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		Name:         body.Name,
 		Repos:        repos,
 		BugLabel:     bugLabel,
+		BugLabels:    bugLabels,
 		Capabilities: capabilities,
 		Model:        runConfig.Model,
 		Effort:       runConfig.Effort,
@@ -272,6 +279,34 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	s.backfillProviderHealthBanner(r.Context(), owner, info)
 	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
 	writeJSON(w, http.StatusCreated, info)
+}
+
+func normalizeCreateBugLabels(single *string, raw []string) ([]*sessionmodel.SessionBugLabel, error) {
+	inputs := raw
+	if len(inputs) == 0 && single != nil {
+		inputs = []string{*single}
+	}
+	const maxBugLabelsPerSession = 5
+	if len(inputs) > maxBugLabelsPerSession {
+		return nil, fmt.Errorf("too many bug labels: %d > %d", len(inputs), maxBugLabelsPerSession)
+	}
+	seen := map[string]struct{}{}
+	labels := make([]*sessionmodel.SessionBugLabel, 0, len(inputs))
+	for i := range inputs {
+		label, err := sessionmodel.NormalizeBugLabelName(&inputs[i])
+		if err != nil {
+			return nil, err
+		}
+		if label == nil {
+			continue
+		}
+		if _, ok := seen[label.Slug]; ok {
+			continue
+		}
+		seen[label.Slug] = struct{}{}
+		labels = append(labels, label)
+	}
+	return labels, nil
 }
 
 // backfillProviderHealthBanner is the session-create-time read-side of
