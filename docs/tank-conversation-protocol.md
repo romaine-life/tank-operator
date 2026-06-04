@@ -572,8 +572,9 @@ startup `session.status` row, then publishes the durable JetStream
 `submit_turn` command without waiting for the pod to become Ready. JetStream is
 the readiness buffer; the runner consumes the command after it starts. This is
 the only path for a no-attachment first prompt from the splash composer, so the
-first visible transcript row is the user's launch message, followed by durable
-startup status and then runner output.
+first visible transcript row is the user's launch message; the durable startup
+status folds into that turn's Turn activity (it is not a separate main-transcript
+row), and runner output follows.
 
 Attachment-backed SDK launches set `initial_turn.deferred=true`. The create
 request still writes `user_message.created` before startup status, using the

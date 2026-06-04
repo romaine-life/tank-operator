@@ -330,7 +330,11 @@ test("session.status:ready replaces a prior failed banner with the same timeline
   }
 });
 
-test("session.status projects as a system transcript message", () => {
+test("session-startup notices are turn noise, not main-transcript messages", () => {
+  // The authoritative server projection folds Session is loading./ready. into
+  // the owning turn's Turn activity (transcript_projection.go applySessionStatus;
+  // docs/features/transcript/contract.md). The client mirror agrees: a plain
+  // startup notice does not project as a main-transcript system message.
   const projection = projectConversationState(
     reduceConversationEvents([
       ev("session:63:status:loading", "session.status", {
@@ -348,14 +352,10 @@ test("session.status projects as a system transcript message", () => {
     ]),
   );
 
-  assert.deepEqual(projection.entries.map((entry) => entry.kind), ["message", "message"]);
   assert.deepEqual(
-    projection.entries.map((entry) => entry.kind === "message" ? entry.role : ""),
-    ["system", "system"],
-  );
-  assert.deepEqual(
-    projection.entries.map((entry) => entry.kind === "message" ? entry.text : ""),
-    ["Session is loading.", "Session is ready."],
+    projection.entries.filter((entry) => entry.kind === "message" && entry.role === "system"),
+    [],
+    "startup notices must not appear as main-transcript system messages",
   );
 });
 

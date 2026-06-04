@@ -390,10 +390,16 @@ func (s *projectionState) applySessionStatus(event map[string]any) {
 		"orderKey":      transcriptString(event, "order_key"),
 	}
 	status := transcriptPayloadString(event, "status")
-	// Mark the entry so the projection can fold happy-path session lifecycle
-	// (loading/ready) into the turn it belongs to, while leaving a failed
-	// banner promoted at conversation altitude. See assignSessionStatusOwnership.
-	entry["sessionStatus"] = status
+	// Only a plain session-startup notice (Session is loading./ready.) is turn
+	// noise that folds into the owning turn. A provider credential banner uses a
+	// ".../provider/.../status" timeline — including the recovery "back online"
+	// ready, which carries status=ready but must stay visible — and any failed
+	// status stays promoted as a top-level system message. Marking only the
+	// foldable startup notices keeps both banner classes out of the fold.
+	if (status == "loading" || status == "ready") &&
+		!strings.Contains(transcriptString(event, "timeline_id"), ":provider:") {
+		entry["sessionStatus"] = status
+	}
 	if status == "failed" {
 		entry["severity"] = "error"
 	} else {

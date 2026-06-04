@@ -844,19 +844,45 @@ func TestProjectTranscriptEventsKeepsFailedSessionBannerPromoted(t *testing.T) {
 
 	found := false
 	for _, entry := range projection.Entries {
-		if !isProjectionSessionStatus(entry) {
-			continue
-		}
-		found = true
-		if entry["severity"] != "error" {
-			t.Fatalf("failed banner severity = %v, want error", entry["severity"])
-		}
-		if tid, ok := entry["turnId"]; ok && tid != "" {
-			t.Fatalf("failed banner was folded into a turn: %#v", entry)
+		if entry["kind"] == "message" && entry["role"] == "system" && entry["severity"] == "error" {
+			found = true
+			if tid, ok := entry["turnId"]; ok && tid != "" {
+				t.Fatalf("failed banner was folded into a turn: %#v", entry)
+			}
 		}
 	}
 	if !found {
 		t.Fatalf("failed session banner missing from top-level transcript: %#v", projection.Entries)
+	}
+}
+
+func TestProjectTranscriptEventsKeepsProviderRecoveryBannerPromoted(t *testing.T) {
+	// A provider recovery (session.status:ready on a ".../provider/.../status"
+	// timeline) is a banner, not startup noise — it carries status=ready but must
+	// stay a visible top-level system message, never folded into the active turn.
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user",
+			map[string]any{"text": "hi", "display": map[string]any{"kind": "plain"}}),
+		projectionTestEvent("started", "002", "turn.started", "runner", "tank", "turn-1", "",
+			map[string]any{"status": "started"}),
+		projectionTestEvent("recover", "003", "session.status", "system", "tank", "", "session:63:provider:codex:status",
+			map[string]any{"status": "ready", "text": "Codex sign-in is back online."}),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	found := false
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "message" && entry["role"] == "system" &&
+			transcriptMapString(entry, "text") == "Codex sign-in is back online." {
+			found = true
+			if isProjectionSessionStatus(entry) {
+				t.Fatalf("provider recovery banner was marked foldable: %#v", entry)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("provider recovery banner must stay a top-level system message: %#v", projection.Entries)
 	}
 }
 
@@ -883,7 +909,7 @@ func TestProjectTranscriptEventsKeepsOrphanFailedBanner(t *testing.T) {
 			map[string]any{"status": "failed", "text": "Session failed to start."}),
 	}
 	projection := projectTranscriptEvents(events)
-	if len(projection.Entries) != 1 || !isProjectionSessionStatus(projection.Entries[0]) || projection.Entries[0]["severity"] != "error" {
+	if len(projection.Entries) != 1 || projection.Entries[0]["role"] != "system" || projection.Entries[0]["severity"] != "error" {
 		t.Fatalf("orphan failed banner should remain a top-level error row, got: %#v", projection.Entries)
 	}
 }
