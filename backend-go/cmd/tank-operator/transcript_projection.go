@@ -30,22 +30,22 @@ type projectedEntryItem struct {
 }
 
 type projectionState struct {
-	messages          []projectedEntryItem
-	items             []*projectionItem
-	itemIndex         map[string]int
-	backgroundTasks   []*projectionBackgroundTask
-	backgroundIndex   map[string]int
-	interruptRequests []projectedEntryItem
-	contextNotices    []projectedEntryItem
-	turnProgress      []projectedEntryItem
-	turnUsages        map[string]turnUsageProjection
-	turnTerminals     map[string]turnTerminalProjection
-	awaitingInputs    []projectionAwaitingInput
-	answeredQuestions map[string]projectionAnsweredInput
-	runStatus         string
-	activeTurnID      string
-	activeItemID      string
-	needsInput        bool
+	messages           []projectedEntryItem
+	items              []*projectionItem
+	itemIndex          map[string]int
+	backgroundTasks    []*projectionBackgroundTask
+	backgroundIndex    map[string]int
+	interruptRequests  []projectedEntryItem
+	contextCompactions []projectedEntryItem
+	turnProgress       []projectedEntryItem
+	turnUsages         map[string]turnUsageProjection
+	turnTerminals      map[string]turnTerminalProjection
+	awaitingInputs     []projectionAwaitingInput
+	answeredQuestions  map[string]projectionAnsweredInput
+	runStatus          string
+	activeTurnID       string
+	activeItemID       string
+	needsInput         bool
 }
 
 type projectionItem struct {
@@ -512,12 +512,16 @@ func (s *projectionState) applyInterruptRequested(event map[string]any) {
 	}
 }
 
-// applyContextCompacted promotes a durable context.compacted event into the
-// main transcript as a system notice (meta row), mirroring the AskUserQuestion
-// handoff: a mid-turn, promotion-only row that stays visible in the settled
-// conversation surface rather than being folded into the Turn-activity
-// compact (see isProjectionContextCompacted). Compaction changes what the
-// agent remembers, so the user is entitled to see it in the surface they read.
+// applyContextCompacted records a durable context.compacted event as an
+// ordinary mid-turn Turn-activity row. Compaction is intra-turn system noise —
+// the same tier as tool calls and reasoning, not part of the settled
+// conversation — so it is folded into the turn's collapsed activity shell like
+// any other non-final-answer row and is absent from the settled transcript.
+// The entry carries its real order_key, so it sorts at the point in the turn
+// where compaction happened. It is left out of the settled surface purely by
+// being a normal compactable activity row; there is no promotion path and no
+// activity-compact opt-out (the prior isProjectionContextCompacted exclusion
+// was the bug that made it flash-then-vanish on the turn-detail screen).
 func (s *projectionState) applyContextCompacted(event map[string]any) {
 	turnID := transcriptString(event, "turn_id")
 	if turnID == "" {
@@ -545,10 +549,10 @@ func (s *projectionState) applyContextCompacted(event map[string]any) {
 		"sourceEventId": transcriptString(event, "event_id"),
 		"orderKey":      transcriptString(event, "order_key"),
 	}
-	s.contextNotices = append(s.contextNotices, projectedEntryItem{
+	s.contextCompactions = append(s.contextCompactions, projectedEntryItem{
 		entry:    entry,
 		orderKey: transcriptString(event, "order_key"),
-		index:    len(s.contextNotices),
+		index:    len(s.contextCompactions),
 	})
 }
 
@@ -701,7 +705,7 @@ func (s *projectionState) upsertBackgroundTask(event map[string]any, status stri
 }
 
 func (s *projectionState) projectFlatEntries() []map[string]any {
-	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextNotices)+len(s.turnUsages)+len(s.turnTerminals))
+	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.turnUsages)+len(s.turnTerminals))
 	items = append(items, s.messages...)
 	baseIndex := len(items)
 	backgroundProviderIDs := s.backgroundProviderItemIDs()
@@ -732,11 +736,11 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 		items = append(items, request)
 	}
 	baseIndex += len(s.interruptRequests)
-	for idx, notice := range s.contextNotices {
+	for idx, notice := range s.contextCompactions {
 		notice.index = baseIndex + idx
 		items = append(items, notice)
 	}
-	baseIndex += len(s.contextNotices)
+	baseIndex += len(s.contextCompactions)
 	for idx, progress := range s.turnProgress {
 		progress.index = baseIndex + idx
 		items = append(items, progress)
@@ -1088,7 +1092,6 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 		for _, idx := range indexes {
 			entry := entries[idx]
 			if isProjectedUserMessage(entry) || isProjectionTerminalMetaEntry(entry, terminal) ||
-				isProjectionContextCompacted(entry) ||
 				isProjectionTurnProgress(entry) {
 				continue
 			}
@@ -1114,8 +1117,7 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string, ru
 	for _, entry := range entries {
 		if transcriptMapString(entry, "turnId") != activeTurnID ||
 			transcriptMapString(entry, "turnTerminalStatus") != "" ||
-			isProjectedUserMessage(entry) ||
-			isProjectionContextCompacted(entry) {
+			isProjectedUserMessage(entry) {
 			continue
 		}
 		if isProjectionTurnProgress(entry) {
@@ -1335,16 +1337,6 @@ func projectedEntryIndex(entries []map[string]any, target map[string]any) int {
 
 func isProjectedUserMessage(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "message" && transcriptMapString(entry, "role") == "user"
-}
-
-// isProjectionContextCompacted is the activity-compact opt-out for the
-// context.compacted notice projected by applyContextCompacted. The notice is a
-// transcript-level system notice, not Turn-activity noise, so
-// terminalProjectedActivities and activeProjectedActivities must not fold it
-// into the collapsed shell.
-func isProjectionContextCompacted(entry map[string]any) bool {
-	return transcriptMapString(entry, "kind") == "meta" &&
-		transcriptMapString(entry, "metaKind") == "context_compacted"
 }
 
 func isProjectionTurnProgress(entry map[string]any) bool {

@@ -218,9 +218,9 @@ export function shellTaskEvent(args) {
 // conversation context to reclaim context-window space. It is a durable,
 // turn-scoped system notice (actor=runner, mirroring turn.usage: the runner
 // observed a provider event and emitted the Tank-shape equivalent). The
-// backend projection promotes it into the main transcript as a meta row so
-// the user can see — in the conversation surface they read — that the agent's
-// memory of earlier turns was condensed. See
+// backend projection records it as an ordinary mid-turn Turn-activity row —
+// intra-turn system noise, the same tier as tool calls and reasoning — so it
+// surfaces in the turn's activity disclosure, not the settled transcript. See
 // docs/tank-conversation-protocol.md → "Context Compaction Notice".
 export function contextCompactedEvent(args) {
   const turnID = requireNonEmpty(args.turnID, "turnID");

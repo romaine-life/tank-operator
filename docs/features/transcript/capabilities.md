@@ -79,10 +79,12 @@ Status: active (Claude); Codex blocked on provider signal
 
 Intent:
 Surface provider context compaction — the agent summarizing earlier
-conversation to reclaim context-window space — as a durable, visible transcript
-row, so a user returning to a long session can see that the agent's memory of
-earlier turns was condensed, and whether it was automatic or a manual
-`/compact`. Previously this was invisible: the Claude SDK's
+conversation to reclaim context-window space — as a durable, visible
+Turn-activity row, so a user inspecting a long turn can see that the agent's
+memory of earlier turns was condensed, and whether it was automatic or a manual
+`/compact`. It is intra-turn system noise (the same tier as tool calls and
+reasoning), so it lives in the turn's activity disclosure, not the settled
+transcript. Previously this was invisible: the Claude SDK's
 `system/compact_boundary` fell through the runner adapter to a silent `return
 []`, so neither the durable ledger nor the UI recorded it. Two sessions that
 compacted left no transcript trace, which is what surfaced this gap.
@@ -96,12 +98,16 @@ Contract impact:
   + Go contract, kept in lockstep by the contract checks). The runner is its
   sole producer; the durable `session_events` ledger records every compaction,
   queryable independently of the UI.
-- The server projection promotes it into the main transcript as a `meta` row
-  (`metaKind: context_compacted`), excluded from the Turn-activity compact. This
-  is intentionally different from AskUserQuestion, whose question and answer
-  stay in Turn activity because the user's answer continues the same active
-  turn. The frontend renders compaction through the existing `RunMetaBlock`
-  primitive.
+- The server projection records it as an ordinary mid-turn Turn-activity row
+  (`meta`, `metaKind: context_compacted`), folded into the turn's collapsed
+  activity shell like any other non-final-answer row and absent from the settled
+  transcript — satisfying the Transcript contract's no-bounce invariant. This is
+  the same Turn-activity placement as AskUserQuestion (both are turn noise). The
+  frontend renders compaction through the existing `RunMetaBlock` primitive in
+  the Turn-activity disclosure. An earlier implementation promoted it into the
+  settled transcript and excluded it from the activity compact, which made it
+  flash-then-vanish on the per-turn detail screen; that promotion path was
+  deleted.
 - The silent-drop class that hid it is now observable:
   `tank_runner_unmapped_provider_event_total{type,subtype}` counts any provider
   event the adapter neither maps nor explicitly ignores. Steady state zero.
@@ -122,8 +128,10 @@ Evidence:
   id. `codex-runner/src/adapters/codex.ts` emits the durable Tank envelope with
   `source=codex`.
 - Projection: `backend-go/cmd/tank-operator/transcript_projection.go`
-  (`applyContextCompacted`, `isProjectionContextCompacted`);
-  `transcript_projection_test.go` proves promotion plus compact exclusion.
+  (`applyContextCompacted`); `transcript_projection_test.go`
+  (`TestProjectTranscriptEventsRecordsContextCompactedAsTurnActivity`) proves it
+  is recorded as a turn-activity child folded into the shell and is absent from
+  the settled transcript — the guard against the promotion path returning.
 - Observability: `agent-runner/src/metrics.ts` →
   `tank_runner_unmapped_provider_event_total`.
 
