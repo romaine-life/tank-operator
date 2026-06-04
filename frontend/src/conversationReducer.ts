@@ -269,10 +269,11 @@ export function conversationReducer(
     case "context.compacted":
       // Informational system notice: the provider summarized earlier context
       // to reclaim window space. It does not change run status, active turn,
-      // needs-input, or failure state. The visible transcript row is produced
-      // by the server projection (transcript_projection.go applyContextCompacted);
-      // the live reducer only records the event as seen (handled above) so it
-      // is not a parallel transcript path.
+      // needs-input, or failure state. The visible row is produced by the server
+      // projection (transcript_projection.go applyContextCompacted) as an
+      // ordinary Turn-activity entry — intra-turn noise, not a settled
+      // transcript row — and the live reducer only records the event as seen
+      // (handled above) so it is not a parallel transcript path.
       return next;
     case "turn.awaiting_input":
       // The agent asked the user a question and paused the same active turn.

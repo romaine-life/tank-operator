@@ -386,12 +386,24 @@ context filled, `manual` for an explicit `/compact`) plus optional `pre_tokens`
 (the token count before compaction). When a provider does not expose trigger or
 token metadata, the runner still emits the durable notice and defaults
 `trigger` to `auto` rather than inventing unsupported metadata. The server
-projection promotes it into the main transcript as a `meta` row
-(`metaKind: context_compacted`), excluded from the Turn-activity compact via
-`isProjectionContextCompacted` — the same promotion-only treatment as the
-context the user reads, not turn-activity noise. AskUserQuestion is different:
-its question and answer remain turn activity because the answer is part of the
-same active turn.
+projection (`applyContextCompacted`) records it as an ordinary mid-turn
+Turn-activity row (`meta`, `metaKind: context_compacted`): compaction is
+intra-turn system noise — the same tier as tool calls and reasoning, not part
+of the settled conversation a reader scans — so it is folded into the turn's
+collapsed activity shell like any other non-final-answer row and is absent from
+the settled transcript, surfacing only when the Turn-activity disclosure is
+opened. It is rendered there through the existing `RunMetaBlock` primitive.
+AskUserQuestion lives in Turn activity for the same reason — both are turn
+noise — though its card additionally drives the same active turn's input pause.
+
+This placement is what the Transcript contract's no-bounce invariant requires
+(*"compactable activity must not be rendered first as a settled transcript row
+and later relocated into Turn activity"*). An earlier implementation instead
+promoted compaction into the settled transcript and excluded it from the
+activity compact; on the per-turn detail screen that produced a flash-then-
+vanish, because the row showed before the turn's activity children loaded and
+was dropped once they did. Recording it as a normal activity child removes that
+bounce by construction.
 
 A provider event the runner adapter neither maps to a Tank event nor explicitly
 ignores increments `tank_runner_unmapped_provider_event_total{type,subtype}`

@@ -115,7 +115,7 @@ func TestProjectTranscriptEventsClaimedTurnAdvancesActiveShell(t *testing.T) {
 	}
 }
 
-func TestProjectTranscriptEventsPromotesContextCompactedNotice(t *testing.T) {
+func TestProjectTranscriptEventsRecordsContextCompactedAsTurnActivity(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
 			"text":    "do a long task",
@@ -142,15 +142,33 @@ func TestProjectTranscriptEventsPromotesContextCompactedNotice(t *testing.T) {
 
 	projection := projectTranscriptEvents(events)
 
-	var notice map[string]any
+	// Context compaction is intra-turn noise, not settled conversation: it must
+	// NOT appear as a top-level settled transcript row. A standalone
+	// context_compacted row in projection.Entries is the promotion bug that made
+	// it flash-then-vanish on the turn-detail screen (it showed pre-load, then
+	// dropped when the turn's activity children loaded, which excluded it).
 	for _, entry := range projection.Entries {
+		if entry["metaKind"] == "context_compacted" {
+			t.Fatalf("context.compacted leaked into the settled transcript as a top-level row: %#v", entry)
+		}
+	}
+
+	// It must live in the turn's Turn-activity body, folded into the collapsed
+	// shell like any other non-final-answer activity row, and render there as the
+	// existing meta system note.
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatalf("turn-1 has no activity body: %#v", projection.ActivityBodies)
+	}
+	var notice map[string]any
+	for _, entry := range body.Entries {
 		if entry["metaKind"] == "context_compacted" {
 			notice = entry
 			break
 		}
 	}
 	if notice == nil {
-		t.Fatalf("context.compacted was not promoted to the main transcript: %#v", projection.Entries)
+		t.Fatalf("context.compacted was not recorded as a turn-activity child: %#v", body.Entries)
 	}
 	if notice["kind"] != "meta" {
 		t.Fatalf("context compacted notice kind = %v, want meta", notice["kind"])
@@ -162,15 +180,21 @@ func TestProjectTranscriptEventsPromotesContextCompactedNotice(t *testing.T) {
 	if detail, _ := meta["detail"].(string); !strings.Contains(detail, "158k") {
 		t.Fatalf("context compacted detail = %q, want compact token count", meta["detail"])
 	}
-	// Promotion-only: the notice must NOT be folded into the turn-activity
-	// shell. AskUserQuestion is different: it stays in Turn activity because
-	// the answer continues the same active turn.
-	if body, ok := projection.ActivityBodies["turn-1"]; ok {
-		for _, id := range body.CompactedEntryIDs {
-			if id == notice["id"] {
-				t.Fatalf("context compacted notice was compacted into turn activity: %v", id)
-			}
+
+	// Folded into the shell: its id must be among the turn's compacted entry ids
+	// so it is collapsed out of the settled transcript and only revealed when the
+	// Turn-activity disclosure loads. AskUserQuestion differs only in that its
+	// card stays in Turn activity for the same reason — both are turn noise.
+	noticeID, _ := notice["id"].(string)
+	compacted := false
+	for _, id := range body.CompactedEntryIDs {
+		if id == noticeID {
+			compacted = true
+			break
 		}
+	}
+	if !compacted {
+		t.Fatalf("context compacted notice %q was not folded into the turn-activity shell: %#v", noticeID, body.CompactedEntryIDs)
 	}
 }
 
