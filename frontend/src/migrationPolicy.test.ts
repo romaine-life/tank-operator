@@ -502,6 +502,10 @@ test("turn view entry points open at the turn bottom", () => {
     appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })'),
     true,
   );
+  assert.equal(appSource.includes("function TurnViewButton"), true);
+  assert.equal(appSource.includes('href={href}'), true);
+  assert.equal(appSource.includes('sessionRouteUrl(sessionId, "turns", turnNumber)'), true);
+  assert.equal(appSource.includes('turnLinksEnabled={!publicView}'), true);
   assert.equal(
     appSource.includes('else openTurnPage(undefined, { anchor: "bottom" });'),
     true,

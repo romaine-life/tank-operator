@@ -75,6 +75,7 @@ import {
   ActivityIcon,
   AlertCircleIcon,
   ArrowLeftIcon,
+  ArrowRightIcon,
   ArrowUpFromLineIcon,
   BellIcon,
   BotIcon,
@@ -5001,23 +5002,45 @@ function LinkButton({
 
 function TurnViewButton({
   turnId,
+  href,
   onOpenTurn,
 }: {
   turnId: string;
+  href?: string;
   onOpenTurn: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
+  const openTurn = () => onOpenTurn(turnId, { anchor: "bottom" });
+  const label = "Open turn in Turns";
+  if (href) {
+    return (
+      <a
+        className="run-msg-action run-msg-turn"
+        href={href}
+        title={label}
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          openTurn();
+        }}
+      >
+        <ArrowRightIcon size={12} aria-hidden="true" />
+      </a>
+    );
+  }
   return (
     <button
       type="button"
       className="run-msg-action run-msg-turn"
-      title="Open turn"
-      aria-label="Open turn"
+      title={label}
+      aria-label={label}
       onClick={(e) => {
         e.stopPropagation();
-        onOpenTurn(turnId, { anchor: "bottom" });
+        openTurn();
       }}
     >
-      <ActivityIcon size={12} aria-hidden="true" />
+      <ArrowRightIcon size={12} aria-hidden="true" />
     </button>
   );
 }
@@ -5520,6 +5543,7 @@ function RunMessageBubble({
   onQuote,
   onFork,
   onOpenTurn,
+  turnHref,
   canonicalMessage = true,
   ownedByTurnActivity = false,
   showAssistantAvatar = !ownedByTurnActivity,
@@ -5535,6 +5559,7 @@ function RunMessageBubble({
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  turnHref?: string;
   canonicalMessage?: boolean;
   ownedByTurnActivity?: boolean;
   showAssistantAvatar?: boolean;
@@ -5672,8 +5697,8 @@ function RunMessageBubble({
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
         >
-          {variant === "assistant" && entry.turnId && onOpenTurn && (
-            <TurnViewButton turnId={entry.turnId} onOpenTurn={onOpenTurn} />
+          {canonicalMessage && variant === "assistant" && entry.turnId && onOpenTurn && (
+            <TurnViewButton turnId={entry.turnId} href={turnHref} onOpenTurn={onOpenTurn} />
           )}
           {canonicalMessage && variant === "assistant" && onFork && (
             <ForkButton entry={entry} onFork={onFork} />
@@ -8804,6 +8829,7 @@ export function RunMessages({
   onQuote,
   onFork,
   onOpenTurn,
+  turnLinksEnabled = true,
   onOpenBackgroundTask,
   scrollParent,
   onStartReached,
@@ -8849,6 +8875,7 @@ export function RunMessages({
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  turnLinksEnabled?: boolean;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollParent: HTMLElement | null;
   onStartReached?: () => void;
@@ -8875,6 +8902,18 @@ export function RunMessages({
     () => groupTranscriptEntries(entries, condenseCompletedTurns, activeTurnId, activityEntriesByTurn),
     [activeTurnId, activityEntriesByTurn, condenseCompletedTurns, entries],
   );
+  const turnNumberByTurnId = useMemo(() => {
+    const numbers = new Map<string, number>();
+    for (const entry of entries) {
+      const turnId = transcriptEntryTurnId(entry);
+      const turnNumber = entry.turnNumber;
+      if (!turnId || typeof turnNumber !== "number" || !Number.isSafeInteger(turnNumber) || turnNumber < 1) {
+        continue;
+      }
+      numbers.set(turnId, turnNumber);
+    }
+    return numbers;
+  }, [entries]);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
   const thinkingInvariantRef = useRef<string>("");
@@ -8907,6 +8946,14 @@ export function RunMessages({
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
     ));
   }, []);
+  const turnHrefForEntry = useCallback(
+    (entry: TranscriptEntry): string | undefined => {
+      if (!turnLinksEnabled || !entry.turnId) return undefined;
+      const turnNumber = turnNumberByTurnId.get(entry.turnId);
+      return turnNumber == null ? undefined : sessionRouteUrl(sessionId, "turns", turnNumber);
+    },
+    [sessionId, turnLinksEnabled, turnNumberByTurnId],
+  );
   useEffect(() => {
     const snapshot = chatScrollGroupSnapshot(groups, entries.length, entries);
     const durableActiveActivityGroups = chatScrollSnapshotNumber(
@@ -9214,6 +9261,7 @@ export function RunMessages({
           onQuote={onQuote}
           onFork={onFork}
           onOpenTurn={onOpenTurn}
+          turnHref={turnHrefForEntry(g.entry)}
           isAvatarContinuation={isMessageAvatarContinuation(groups, index)}
         />
       );
@@ -9242,6 +9290,7 @@ export function RunMessages({
       showTimestamps,
       toolExpansionOverrides,
       toolGroupOpenOverrides,
+      turnHrefForEntry,
     ],
   );
   const handleStartReached = useCallback(() => {
@@ -14567,6 +14616,7 @@ function ChatPane({
               }
               onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
               onOpenTurn={openTurnPage}
+              turnLinksEnabled={!publicView}
               scrollParent={transcriptScrollEl}
               onStartReached={() => {
                 void loadSdkOlderEvents();
