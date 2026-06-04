@@ -4278,6 +4278,10 @@ function createTurnActivityEntryGroup(
   };
 }
 
+function turnActivityGroupNeedsInput(group: Extract<EntryGroup, { kind: "activity" }>): boolean {
+  return group.shell?.activity?.status === "needs_input";
+}
+
 function flushTranscriptToolBucket(
   groups: EntryGroup[],
   bucket: { entries: TranscriptEntry[] },
@@ -4392,10 +4396,17 @@ function groupTranscriptEntries(
         const group = createTurnActivityEntryGroup(entry, activityEntriesByTurn, activeTurnId);
         if (group) {
           for (const id of group.compactedEntryIds) activityHiddenEntryIds.add(id);
-          if (group.active && !insertedThinkingTurnIds.has(group.turnId)) {
+          const needsInput = turnActivityGroupNeedsInput(group);
+          if (
+            group.active &&
+            !needsInput &&
+            !insertedThinkingTurnIds.has(group.turnId)
+          ) {
             pendingThinkingGroups.push(turnThinkingGroup(group.turnId, entry));
             pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
             insertedThinkingTurnIds.add(group.turnId);
+          } else if (needsInput) {
+            groups.push(group);
           }
         }
         continue;

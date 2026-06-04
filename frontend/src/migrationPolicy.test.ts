@@ -310,6 +310,12 @@ test("server-projected active turn activity shells own thinking row active state
     true,
   );
   assert.equal(appSource.includes("turnActivityGroupIsActive(entry.activity, turnId, activeTurnId)"), true);
+  assert.equal(appSource.includes("function turnActivityGroupNeedsInput"), true);
+  assert.match(
+    appSource,
+    /group\.active &&\s+!needsInput &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/,
+  );
+  assert.match(appSource, /else if \(needsInput\) \{\n\s+groups\.push\(group\);/);
   assert.equal(appSource.includes("turnActivityShellIsDurablyActive(group.shell.activity)"), true);
   assert.equal(appSource.includes("turnActivityShellIsDurablyActive(entry.activity)"), true);
   assert.equal(appSource.includes("durableActiveTurnActivityShells"), true);
