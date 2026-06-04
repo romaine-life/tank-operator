@@ -172,20 +172,20 @@ func (s *appServer) handlePublicMessageLinkTurnActivity(w http.ResponseWriter, r
 		writeError(w, http.StatusBadRequest, "turn_id is required")
 		return
 	}
-	page, err := s.sessionEventStoreForScope(share.SessionScope).EventsForTurn(r.Context(), share.SessionID, turnID, turnActivityEventLimit)
+	events, err := readAllTurnEvents(r.Context(), s.sessionEventStoreForScope(share.SessionScope), share.SessionID, turnID)
 	if err != nil {
 		recordMessageLinkShare("resolve", "store_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	projection := projectTranscriptEvents(page.Events)
+	projection := projectTranscriptEvents(events)
 	body := map[string]any{
 		"session_id":          share.SessionID,
 		"turn_id":             turnID,
 		"entries":             []map[string]any{},
 		"compacted_entry_ids": []string{},
 		"summary":             map[string]any{},
-		"has_more":            page.HasMore,
+		"has_more":            false,
 		"cursor_semantic":     "order_key",
 		"projection":          "server_turn_activity_v1",
 		"public":              true,

@@ -42,6 +42,15 @@ yanking the viewport away from a user reading history.
 - Server timeline pages own bounded windows of top-level transcript rows. Raw
   events inside a collapsed Turn activity row are loaded only through the
   explicit Turn activity endpoint.
+- Turn activity itself paginates. A turn's expansion body is split into pages
+  sealed at `turnPageEventLimit` events; the Turn activity endpoint
+  (`server_turn_activity_v2`) returns the page
+  directory (`page`, `page_count`, `pages[]`) and accepts `?page=N`, defaulting
+  to the last page. The page boundary is a durable `order_key`-range concept, so
+  a selected page is stable across reload and deep links. The shell's
+  active/terminal status is never a function of which page rendered — it is
+  folded from the complete turn so a finished long turn can never render as
+  perpetually active.
 - Copied message links may name rendered timeline IDs, but the server must
   translate them to durable cursors.
 - `sessions.visible` owns sidebar/list membership only. Soft-deleting a session

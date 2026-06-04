@@ -525,12 +525,15 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 
 	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
 
-	events, err := s.sessionEvents.EventsForTurn(r.Context(), sessionID, askingTurnID, turnActivityEventLimit)
+	// Read the whole turn: on a long paused turn the durable awaiting_input
+	// marker is the last event, and a bounded first-N read would miss it,
+	// rejecting a valid answer and re-stranding the turn.
+	events, err := readAllTurnEvents(r.Context(), s.sessionEvents, sessionID, askingTurnID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "lookup asking turn events: "+err.Error())
 		return
 	}
-	if !turnIsAwaitingQuestion(events.Events, timelineID, providerItemID) {
+	if !turnIsAwaitingQuestion(events, timelineID, providerItemID) {
 		writeError(w, http.StatusConflict, "asking turn is not awaiting input")
 		return
 	}

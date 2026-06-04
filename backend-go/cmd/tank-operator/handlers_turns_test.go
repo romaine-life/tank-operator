@@ -73,9 +73,12 @@ func (r *recordingSessionEventStore) FindTurnTerminal(_ context.Context, _ strin
 	return r.terminal, nil
 }
 
-func (r *recordingSessionEventStore) EventsForTurn(_ context.Context, _ string, _ string, _ int) (store.SessionEventPage, error) {
+func (r *recordingSessionEventStore) EventsForTurnAfter(_ context.Context, _ string, _ string, afterOrderKey string, _ int) (store.SessionEventPage, error) {
 	if r.err != nil {
 		return store.SessionEventPage{}, r.err
+	}
+	if afterOrderKey != "" {
+		return store.SessionEventPage{FoundNewest: true}, nil
 	}
 	return store.SessionEventPage{Events: r.turnEvents, FoundNewest: true}, nil
 }

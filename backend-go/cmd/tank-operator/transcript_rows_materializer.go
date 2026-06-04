@@ -34,8 +34,31 @@ type transcriptRowsMaterializationTxStore interface {
 }
 
 type transcriptEventsTxStore interface {
-	EventsForTurnTx(context.Context, pgx.Tx, string, string, int) (store.SessionEventPage, error)
+	EventsForTurnAfterTx(context.Context, pgx.Tx, string, string, string, int) (store.SessionEventPage, error)
 	ListBySessionTx(context.Context, pgx.Tx, string, store.SessionEventCursor, int) (store.SessionEventPage, error)
+}
+
+// readAllTurnEventsTx reads every event of a turn in ASC order inside a tx by
+// paging the turn-scoped cursor to exhaustion. The materializer folds the
+// COMPLETE turn so the stored turn-activity shell's terminal/active status can
+// never be a casualty of a bounded read — the bug that made a finished long
+// turn render as perpetually active. (Bounded-cost incremental re-projection of
+// only the live page is the named follow-up; correctness comes first.)
+func readAllTurnEventsTx(ctx context.Context, events transcriptEventsTxStore, tx pgx.Tx, sessionID, turnID string) ([]map[string]any, error) {
+	var all []map[string]any
+	cursor := ""
+	for {
+		page, err := events.EventsForTurnAfterTx(ctx, tx, sessionID, turnID, cursor, turnPageReadBatch)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page.Events...)
+		if page.FoundNewest || len(page.Events) == 0 || page.NextOrderKey == "" || page.NextOrderKey == cursor {
+			break
+		}
+		cursor = page.NextOrderKey
+	}
+	return all, nil
 }
 
 func (s transcriptMaterializingEventStore) Upsert(ctx context.Context, event map[string]any) error {
@@ -66,12 +89,12 @@ func (m transcriptRowsMaterializer) RefreshEvent(ctx context.Context, event map[
 		recordTranscriptProjectionInvariantViolations(sessionID, "", []map[string]any{event}, projection.Entries)
 		return m.rows.UpsertRows(ctx, sessionID, projection.Entries)
 	}
-	page, err := m.events.EventsForTurn(ctx, sessionID, turnID, turnActivityEventLimit)
+	turnEvents, err := readAllTurnEvents(ctx, m.events, sessionID, turnID)
 	if err != nil {
 		return err
 	}
-	projection := projectTranscriptEvents(page.Events)
-	recordTranscriptProjectionInvariantViolations(sessionID, turnID, page.Events, projection.Entries)
+	projection := projectTranscriptEvents(turnEvents)
+	recordTranscriptProjectionInvariantViolations(sessionID, turnID, turnEvents, projection.Entries)
 	if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
@@ -92,12 +115,12 @@ func (m transcriptRowsMaterializer) refreshEventTx(
 		recordTranscriptProjectionInvariantViolations(sessionID, "", []map[string]any{event}, projection.Entries)
 		return rows.UpsertRowsTx(ctx, tx, sessionID, projection.Entries)
 	}
-	page, err := events.EventsForTurnTx(ctx, tx, sessionID, turnID, turnActivityEventLimit)
+	turnEvents, err := readAllTurnEventsTx(ctx, events, tx, sessionID, turnID)
 	if err != nil {
 		return err
 	}
-	projection := projectTranscriptEvents(page.Events)
-	recordTranscriptProjectionInvariantViolations(sessionID, turnID, page.Events, projection.Entries)
+	projection := projectTranscriptEvents(turnEvents)
+	recordTranscriptProjectionInvariantViolations(sessionID, turnID, turnEvents, projection.Entries)
 	if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}

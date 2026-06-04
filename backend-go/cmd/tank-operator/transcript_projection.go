@@ -8,8 +8,6 @@ import (
 	"strings"
 )
 
-const turnActivityEventLimit = 1000
-
 type transcriptProjection struct {
 	Entries        []map[string]any
 	ActivityBodies map[string]turnActivityBody
@@ -136,14 +134,18 @@ type projectionAnsweredInput struct {
 	Annotations map[string]any
 }
 
-func projectTranscriptEvents(events []map[string]any) transcriptProjection {
-	state := projectionState{
+func newProjectionState() projectionState {
+	return projectionState{
 		itemIndex:       map[string]int{},
 		backgroundIndex: map[string]int{},
 		turnUsages:      map[string]turnUsageProjection{},
 		turnTerminals:   map[string]turnTerminalProjection{},
 		runStatus:       "ready",
 	}
+}
+
+func projectTranscriptEvents(events []map[string]any) transcriptProjection {
+	state := newProjectionState()
 	for _, event := range orderedTranscriptEvents(events) {
 		state.apply(event)
 	}

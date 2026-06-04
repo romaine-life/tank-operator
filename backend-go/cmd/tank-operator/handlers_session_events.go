@@ -130,26 +130,58 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		return
 	}
 	eventStore := s.sessionEventStoreForScope(sessionScope)
-	page, err := eventStore.EventsForTurn(r.Context(), sessionID, turnID, turnActivityEventLimit)
+	events, err := readAllTurnEvents(r.Context(), eventStore, sessionID, turnID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	projection := projectTranscriptEvents(page.Events)
+	pages := projectTurnPages(turnID, events)
+	recordTurnActivityPages(len(pages.Pages), pages.TotalEventCount)
+
+	// Default to the last page: for an active or just-completed long turn the
+	// user wants the latest activity and the terminal, not the oldest prefix.
+	selected := len(pages.Pages)
+	if requested := strings.TrimSpace(r.URL.Query().Get("page")); requested != "" {
+		if n, convErr := strconv.Atoi(requested); convErr == nil {
+			selected = n
+		}
+	}
+	if selected < 1 {
+		selected = 1
+	}
+	if selected > len(pages.Pages) {
+		selected = len(pages.Pages)
+	}
+
+	directory := pages.Shell["pages"]
+	if directory == nil {
+		directory = []map[string]any{}
+	}
 	body := map[string]any{
 		"session_id":          sessionID,
 		"turn_id":             turnID,
 		"entries":             []map[string]any{},
 		"compacted_entry_ids": []string{},
-		"summary":             map[string]any{},
-		"has_more":            page.HasMore,
+		"summary":             pages.Shell,
+		"page":                selected,
+		"page_count":          len(pages.Pages),
+		"pages":               directory,
+		"total_event_count":   pages.TotalEventCount,
+		"has_more":            false,
 		"cursor_semantic":     "order_key",
-		"projection":          "server_turn_activity_v1",
+		"projection":          "server_turn_activity_v2",
 	}
-	if activity, ok := projection.ActivityBodies[turnID]; ok {
-		body["entries"] = activity.Entries
-		body["compacted_entry_ids"] = activity.CompactedEntryIDs
-		body["summary"] = activity.Summary
+	if selected >= 1 && selected <= len(pages.Pages) {
+		current := pages.Pages[selected-1]
+		entries := current.Entries
+		if entries == nil {
+			entries = []map[string]any{}
+		}
+		body["entries"] = entries
+		body["sealed"] = current.Sealed
+		body["page_start_order_key"] = current.StartOrderKey
+		body["page_end_order_key"] = current.EndOrderKey
+		body["has_more"] = selected < len(pages.Pages)
 	}
 	writeJSON(w, http.StatusOK, body)
 }

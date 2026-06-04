@@ -59,8 +59,8 @@ func (f *fakeDebugSessionEventLedgerStore) LatestEvents(context.Context, string,
 	return store.SessionEventPage{}, nil
 }
 
-func (f *fakeDebugSessionEventLedgerStore) EventsForTurn(context.Context, string, string, int) (store.SessionEventPage, error) {
-	return store.SessionEventPage{}, nil
+func (f *fakeDebugSessionEventLedgerStore) EventsForTurnAfter(context.Context, string, string, string, int) (store.SessionEventPage, error) {
+	return store.SessionEventPage{FoundNewest: true}, nil
 }
 
 func (f *fakeDebugSessionEventLedgerStore) FindTurnTerminal(context.Context, string, string) (map[string]any, error) {

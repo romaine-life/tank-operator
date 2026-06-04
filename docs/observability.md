@@ -294,6 +294,20 @@ All metric names are prefixed `tank_`. The full namespace:
   now visible as user-requested per-session work, not pod-count-scaled
   background work. `TankTranscriptRowMaterializationFailing` alerts on
   `failed`/`timeout` results.
+- `tank_transcript_materialization_invariant_violation_total{invariant,terminal_status}` —
+  the turn-activity projection produced a shell that contradicts durable state.
+  The load-bearing label value is `active_shell_after_terminal`: a shell still
+  marked active for a turn that has a durable terminal. This is the
+  compaction/long-turn stall class — a finished turn rendering as perpetually
+  running. Steady-state expectation is zero; `TankTurnActiveWithDurableTerminal`
+  pages on it. The old fixed-size per-turn read could not raise this (it only
+  inspected the truncated window, which lacked the terminal); the projection now
+  folds the complete turn, so the check actually sees the terminal.
+- `tank_turn_activity_event_count` and `tank_turn_activity_page_count` — label-less
+  histograms of how many durable events a turn-activity projection folded and how
+  many pages it split into (pages seal at `turnPageEventLimit` events). A growing
+  tail past the threshold means long (often post-compaction) turns are common,
+  signalling the bounded-cost live-page incremental projection is worth landing.
 
 ## Scripted access via Grafana
 

@@ -34,10 +34,14 @@ type SessionEventStore interface {
 	// Go; bounded and indexed regardless of ledger size. Powers live SSE
 	// resume bootstrap after the transcript-row snapshot is loaded.
 	LatestEvents(ctx context.Context, tankSessionID string, limit int) (SessionEventPage, error)
-	// EventsForTurn returns a bounded ASC slice for one turn. Transcript
-	// projection uses this to build primary Turn activity shells and lazy
-	// expansion bodies without relying on a browser-local raw-event window.
-	EventsForTurn(ctx context.Context, tankSessionID, turnID string, limit int) (SessionEventPage, error)
+	// EventsForTurnAfter returns the next ASC page of a turn's events strictly
+	// after afterOrderKey (empty reads from the start). Paged to exhaustion it
+	// reads a whole turn. It replaced a bounded first-N per-turn read that
+	// truncated long turns oldest-first and silently dropped the turn's
+	// terminal, making a finished turn render as perpetually active; the
+	// terminal-correct shell and turn-activity pagination are both built on
+	// reading the complete turn, never a fixed-size prefix.
+	EventsForTurnAfter(ctx context.Context, tankSessionID, turnID, afterOrderKey string, limit int) (SessionEventPage, error)
 	FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error)
 	// LatestLifecycleEvents returns the most recent N lifecycle events
 	// (the turn.* lifecycle set, including turn.awaiting_input) for a
@@ -322,15 +326,19 @@ func (s *postgresSessionEventStore) LatestEvents(ctx context.Context, tankSessio
 	return s.ListBySession(ctx, tankSessionID, SessionEventCursor{Direction: "desc"}, limit)
 }
 
-func (s *postgresSessionEventStore) EventsForTurn(ctx context.Context, tankSessionID, turnID string, limit int) (SessionEventPage, error) {
-	return s.eventsForTurn(ctx, s.pool, tankSessionID, turnID, limit)
+// EventsForTurnAfter returns the next ASC page of one turn's events strictly
+// after afterOrderKey. Paging this to exhaustion reads a whole turn regardless
+// of size — the basis for turn-activity pagination, which must never truncate
+// the turn's terminal the way a single bounded EventsForTurn does.
+func (s *postgresSessionEventStore) EventsForTurnAfter(ctx context.Context, tankSessionID, turnID, afterOrderKey string, limit int) (SessionEventPage, error) {
+	return s.eventsForTurn(ctx, s.pool, tankSessionID, turnID, afterOrderKey, limit)
 }
 
-func (s *postgresSessionEventStore) EventsForTurnTx(ctx context.Context, tx pgx.Tx, tankSessionID, turnID string, limit int) (SessionEventPage, error) {
-	return s.eventsForTurn(ctx, tx, tankSessionID, turnID, limit)
+func (s *postgresSessionEventStore) EventsForTurnAfterTx(ctx context.Context, tx pgx.Tx, tankSessionID, turnID, afterOrderKey string, limit int) (SessionEventPage, error) {
+	return s.eventsForTurn(ctx, tx, tankSessionID, turnID, afterOrderKey, limit)
 }
 
-func (s *postgresSessionEventStore) eventsForTurn(ctx context.Context, qx sessionEventQueryer, tankSessionID, turnID string, limit int) (SessionEventPage, error) {
+func (s *postgresSessionEventStore) eventsForTurn(ctx context.Context, qx sessionEventQueryer, tankSessionID, turnID, afterOrderKey string, limit int) (SessionEventPage, error) {
 	limit = normalizeSessionEventLimit(limit)
 	queryLimit := limit + 1
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
@@ -340,10 +348,11 @@ func (s *postgresSessionEventStore) eventsForTurn(ctx context.Context, qx sessio
 		WHERE tank_session_id = $1
 			AND turn_id = $2
 			AND order_key <> ''
+			AND ($3 = '' OR order_key > $3)
 		ORDER BY order_key ASC
-		LIMIT $3
+		LIMIT $4
 	`
-	rows, err := qx.Query(ctx, q, storageKey, strings.TrimSpace(turnID), queryLimit)
+	rows, err := qx.Query(ctx, q, storageKey, strings.TrimSpace(turnID), strings.TrimSpace(afterOrderKey), queryLimit)
 	if err != nil {
 		return SessionEventPage{}, err
 	}
@@ -368,7 +377,7 @@ func (s *postgresSessionEventStore) eventsForTurn(ctx context.Context, qx sessio
 	if err := rows.Err(); err != nil {
 		return SessionEventPage{}, err
 	}
-	return sessionEventPageFromAscendingScan(out, limit, SessionEventCursor{}), nil
+	return sessionEventPageFromAscendingScan(out, limit, SessionEventCursor{AfterOrderKey: afterOrderKey}), nil
 }
 
 func (s *postgresSessionEventStore) HasOrderKey(ctx context.Context, tankSessionID, orderKey string) (bool, error) {
@@ -724,7 +733,7 @@ func (StubSessionEventStore) LatestEvents(_ context.Context, _ string, _ int) (S
 	}, nil
 }
 
-func (StubSessionEventStore) EventsForTurn(_ context.Context, _, _ string, _ int) (SessionEventPage, error) {
+func (StubSessionEventStore) EventsForTurnAfter(_ context.Context, _, _, _ string, _ int) (SessionEventPage, error) {
 	return SessionEventPage{
 		Events:      []map[string]any{},
 		FoundOldest: true,

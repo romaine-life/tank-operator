@@ -268,6 +268,25 @@ spec:
             summary: "tank-operator wake/event publishes to NATS are failing"
             runbook: "SSE clients will lag behind durable state until the next heartbeat or cursor-resume reconnect. Check NATS health in the nats namespace."
 
+        # A materialized turn-activity shell is still `active` even though the
+        # turn has a durable terminal in session_events. This is the exact
+        # class that made a finished long turn render as perpetually running:
+        # the turn-activity projection used to fold only the first N events of
+        # a turn (oldest-first), so a >N-event turn's terminal fell outside the
+        # window and the shell never went terminal. The fix folds the complete
+        # turn and paginates the body; a nonzero count here means that
+        # invariant regressed — the user is staring at a session that looks
+        # dead while the agent already finished. Steady-state expectation is
+        # zero.
+        - alert: TankTurnActiveWithDurableTerminal
+          expr: increase(tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}[15m]) > 0
+          for: 0m
+          labels:
+            severity: critical
+          annotations:
+            summary: "a turn-activity shell stayed active after a durable terminal event"
+            runbook: "The turn-activity projection produced an active shell for a turn that has a durable turn.completed/failed/interrupted in session_events — a finished turn rendering as perpetually running. This is the compaction/long-turn stall class. Inspect the slog `transcript materialization invariant violation` line for session_id/turn_id, then confirm readAllTurnEvents / projectTurnPages fold the whole turn (no fixed-size per-turn read reintroduced)."
+
         # ----- Per-session SSE live-delivery stethoscope -----
         #
         # The three alerts below correspond to the candidate-A / B / C

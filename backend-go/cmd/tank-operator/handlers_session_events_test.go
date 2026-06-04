@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -42,18 +44,24 @@ func (s fakeSessionEventStore) LatestEvents(_ context.Context, _ string, _ int) 
 	return s.pages[""], nil
 }
 
-func (s fakeSessionEventStore) EventsForTurn(_ context.Context, _ string, turnID string, _ int) (store.SessionEventPage, error) {
+func (s fakeSessionEventStore) EventsForTurnAfter(_ context.Context, _ string, turnID string, afterOrderKey string, _ int) (store.SessionEventPage, error) {
 	var events []map[string]any
 	for _, page := range s.pages {
 		for _, event := range page.Events {
-			if event["turn_id"] == turnID {
-				events = append(events, event)
+			if event["turn_id"] != turnID {
+				continue
 			}
+			if afterOrderKey != "" {
+				if ok, _ := event["order_key"].(string); ok <= afterOrderKey {
+					continue
+				}
+			}
+			events = append(events, event)
 		}
 	}
 	return store.SessionEventPage{
 		Events:      events,
-		FoundOldest: true,
+		FoundOldest: afterOrderKey == "",
 		FoundNewest: true,
 	}, nil
 }
@@ -217,6 +225,65 @@ func TestSessionEventCursorFromRequestUsesOrderKeyOnly(t *testing.T) {
 				t.Fatalf("AfterOrderKey = %q, want %q", got.AfterOrderKey, tt.want)
 			}
 		})
+	}
+}
+
+// The endpoint contract for the bug this fix targets: a turn with more than
+// turnPageEventLimit events still reports a completed (not perpetually active)
+// shell, splits into pages, and defaults to the last page.
+func TestHandleSessionTurnActivityPaginatesOverLimitTurnWithTerminalShell(t *testing.T) {
+	app := adminTestServer(t)
+	app.sessionScope = "default"
+
+	var events []map[string]any
+	seq := 0
+	next := func() string { seq++; return fmt.Sprintf("%08d", seq) }
+	events = append(events,
+		projectionTestEvent("u", next(), "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "go", "display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", next(), "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+	)
+	var lastMsg string
+	for i := 0; i < turnPageEventLimit+10; i++ {
+		lastMsg = fmt.Sprintf("turn-1:item:m-%d", i)
+		events = append(events, projectionTestEvent(fmt.Sprintf("m-%d", i), next(), "item.completed", "assistant", "claude", "turn-1", lastMsg,
+			map[string]any{"kind": "message", "text": fmt.Sprintf("step %d", i)}))
+	}
+	events = append(events, projectionTestEvent("terminal", next(), "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload(lastMsg)))
+
+	app.sessionEvents = fakeSessionEventStore{pages: map[string]store.SessionEventPage{
+		"": {Events: events, FoundOldest: true, FoundNewest: true},
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/turns/turn-1/activity", nil)
+	req.SetPathValue("session_id", "63")
+	req.SetPathValue("turn_id", "turn-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	app.handleSessionTurnActivity(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	summary, _ := body["summary"].(map[string]any)
+	if got, _ := summary["status"].(string); got != "completed" {
+		t.Fatalf("summary.status = %q, want completed (terminal must survive an over-limit turn)", got)
+	}
+	pageCount, _ := body["page_count"].(float64)
+	if pageCount < 2 {
+		t.Fatalf("page_count = %v, want >= 2", body["page_count"])
+	}
+	if page, _ := body["page"].(float64); page != pageCount {
+		t.Fatalf("default page = %v, want last page %v", body["page"], pageCount)
+	}
+	entries, _ := body["entries"].([]any)
+	if len(entries) == 0 {
+		t.Fatalf("last page entries empty, want the tail of the turn")
 	}
 }
 

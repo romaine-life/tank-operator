@@ -129,12 +129,12 @@ type txAwareSessionEventStore struct {
 	rows *lockingTranscriptRowsStore
 }
 
-func (s txAwareSessionEventStore) EventsForTurnTx(ctx context.Context, _ pgx.Tx, tankSessionID, turnID string, limit int) (store.SessionEventPage, error) {
+func (s txAwareSessionEventStore) EventsForTurnAfterTx(ctx context.Context, _ pgx.Tx, tankSessionID, turnID, afterOrderKey string, limit int) (store.SessionEventPage, error) {
 	if !s.rows.lockHeld {
-		s.rows.t.Fatal("EventsForTurnTx called outside materialization lock")
+		s.rows.t.Fatal("EventsForTurnAfterTx called outside materialization lock")
 	}
 	s.rows.eventsReadUnderLock = true
-	return s.fakeSessionEventStore.EventsForTurn(ctx, tankSessionID, turnID, limit)
+	return s.fakeSessionEventStore.EventsForTurnAfter(ctx, tankSessionID, turnID, afterOrderKey, limit)
 }
 
 func (s txAwareSessionEventStore) ListBySessionTx(ctx context.Context, _ pgx.Tx, tankSessionID string, cursor store.SessionEventCursor, limit int) (store.SessionEventPage, error) {
