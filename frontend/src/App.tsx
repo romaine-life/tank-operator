@@ -75,6 +75,7 @@ import {
   ActivityIcon,
   AlertCircleIcon,
   ArrowLeftIcon,
+  ArrowRightIcon,
   ArrowUpFromLineIcon,
   BellIcon,
   BotIcon,
@@ -5001,23 +5002,89 @@ function LinkButton({
 
 function TurnViewButton({
   turnId,
+  href,
   onOpenTurn,
 }: {
   turnId: string;
+  href?: string;
   onOpenTurn: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
+  const openTurn = () => onOpenTurn(turnId, { anchor: "bottom" });
+  const label = "Open turn in Turns";
+  if (href) {
+    return (
+      <a
+        className="run-msg-action run-msg-turn"
+        href={href}
+        title={label}
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          openTurn();
+        }}
+      >
+        <ArrowRightIcon size={12} aria-hidden="true" />
+      </a>
+    );
+  }
   return (
     <button
       type="button"
       className="run-msg-action run-msg-turn"
-      title="Open turn"
-      aria-label="Open turn"
+      title={label}
+      aria-label={label}
       onClick={(e) => {
         e.stopPropagation();
-        onOpenTurn(turnId, { anchor: "bottom" });
+        openTurn();
       }}
     >
-      <ActivityIcon size={12} aria-hidden="true" />
+      <ArrowRightIcon size={12} aria-hidden="true" />
+    </button>
+  );
+}
+
+function TranscriptViewButton({
+  href,
+  entryId,
+  onOpenTranscriptMessage,
+}: {
+  href?: string;
+  entryId: string;
+  onOpenTranscriptMessage: (entryId: string) => void;
+}) {
+  const label = "Open message in transcript";
+  if (href) {
+    return (
+      <a
+        className="run-msg-action run-msg-transcript"
+        href={href}
+        title={label}
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          onOpenTranscriptMessage(entryId);
+        }}
+      >
+        <ArrowLeftIcon size={12} aria-hidden="true" />
+      </a>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="run-msg-action run-msg-transcript"
+      title={label}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenTranscriptMessage(entryId);
+      }}
+    >
+      <ArrowLeftIcon size={12} aria-hidden="true" />
     </button>
   );
 }
@@ -5520,6 +5587,9 @@ function RunMessageBubble({
   onQuote,
   onFork,
   onOpenTurn,
+  turnHref,
+  transcriptHref,
+  onOpenTranscriptMessage,
   canonicalMessage = true,
   ownedByTurnActivity = false,
   showAssistantAvatar = !ownedByTurnActivity,
@@ -5535,6 +5605,9 @@ function RunMessageBubble({
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  turnHref?: string;
+  transcriptHref?: string;
+  onOpenTranscriptMessage?: (entryId: string) => void;
   canonicalMessage?: boolean;
   ownedByTurnActivity?: boolean;
   showAssistantAvatar?: boolean;
@@ -5672,8 +5745,15 @@ function RunMessageBubble({
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
         >
-          {variant === "assistant" && entry.turnId && onOpenTurn && (
-            <TurnViewButton turnId={entry.turnId} onOpenTurn={onOpenTurn} />
+          {canonicalMessage && variant === "assistant" && entry.turnId && onOpenTurn && (
+            <TurnViewButton turnId={entry.turnId} href={turnHref} onOpenTurn={onOpenTurn} />
+          )}
+          {!canonicalMessage && onOpenTranscriptMessage && (
+            <TranscriptViewButton
+              entryId={entry.id}
+              href={transcriptHref}
+              onOpenTranscriptMessage={onOpenTranscriptMessage}
+            />
           )}
           {canonicalMessage && variant === "assistant" && onFork && (
             <ForkButton entry={entry} onFork={onFork} />
@@ -8365,6 +8445,8 @@ function RunTurnActivityScreen({
   activityRefreshProblemsByTurn,
   onRetryActivityRefresh,
   onOpenBackgroundTask,
+  transcriptHrefForEntry,
+  onOpenTranscriptMessage,
   scrollRequest,
   onScrollRequestConsumed,
   turnActivityPageInfo,
@@ -8387,6 +8469,8 @@ function RunTurnActivityScreen({
   activityRefreshProblemsByTurn: Record<string, ActivityRefreshProblem | undefined>;
   onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+  transcriptHrefForEntry?: (entry: TranscriptEntry) => string | undefined;
+  onOpenTranscriptMessage?: (entryId: string) => void;
   scrollRequest?: TurnViewScrollRequest | null;
   onScrollRequestConsumed?: (signal: number) => void;
   turnActivityPageInfo?: Record<string, TurnActivityPageInfo | undefined>;
@@ -8562,6 +8646,8 @@ function RunTurnActivityScreen({
         canonicalMessage={false}
         ownedByTurnActivity
         showAssistantAvatar
+        transcriptHref={transcriptHrefForEntry?.(group.entry)}
+        onOpenTranscriptMessage={onOpenTranscriptMessage}
         isAvatarContinuation={isMessageAvatarContinuation(detailGroups, groupIndex)}
       />
     );
@@ -8804,6 +8890,7 @@ export function RunMessages({
   onQuote,
   onFork,
   onOpenTurn,
+  turnLinksEnabled = true,
   onOpenBackgroundTask,
   scrollParent,
   onStartReached,
@@ -8849,6 +8936,7 @@ export function RunMessages({
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  turnLinksEnabled?: boolean;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollParent: HTMLElement | null;
   onStartReached?: () => void;
@@ -8875,6 +8963,18 @@ export function RunMessages({
     () => groupTranscriptEntries(entries, condenseCompletedTurns, activeTurnId, activityEntriesByTurn),
     [activeTurnId, activityEntriesByTurn, condenseCompletedTurns, entries],
   );
+  const turnNumberByTurnId = useMemo(() => {
+    const numbers = new Map<string, number>();
+    for (const entry of entries) {
+      const turnId = transcriptEntryTurnId(entry);
+      const turnNumber = entry.turnNumber;
+      if (!turnId || typeof turnNumber !== "number" || !Number.isSafeInteger(turnNumber) || turnNumber < 1) {
+        continue;
+      }
+      numbers.set(turnId, turnNumber);
+    }
+    return numbers;
+  }, [entries]);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
   const thinkingInvariantRef = useRef<string>("");
@@ -8907,6 +9007,14 @@ export function RunMessages({
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
     ));
   }, []);
+  const turnHrefForEntry = useCallback(
+    (entry: TranscriptEntry): string | undefined => {
+      if (!turnLinksEnabled || !entry.turnId) return undefined;
+      const turnNumber = turnNumberByTurnId.get(entry.turnId);
+      return turnNumber == null ? undefined : sessionRouteUrl(sessionId, "turns", turnNumber);
+    },
+    [sessionId, turnLinksEnabled, turnNumberByTurnId],
+  );
   useEffect(() => {
     const snapshot = chatScrollGroupSnapshot(groups, entries.length, entries);
     const durableActiveActivityGroups = chatScrollSnapshotNumber(
@@ -9214,6 +9322,7 @@ export function RunMessages({
           onQuote={onQuote}
           onFork={onFork}
           onOpenTurn={onOpenTurn}
+          turnHref={turnHrefForEntry(g.entry)}
           isAvatarContinuation={isMessageAvatarContinuation(groups, index)}
         />
       );
@@ -9242,6 +9351,7 @@ export function RunMessages({
       showTimestamps,
       toolExpansionOverrides,
       toolGroupOpenOverrides,
+      turnHrefForEntry,
     ],
   );
   const handleStartReached = useCallback(() => {
@@ -10007,6 +10117,8 @@ function ChatPane({
   const [pendingRouteTurnNumber, setPendingRouteTurnNumber] = useState<number | null>(
     initialRunRoute?.tab === "turns" ? initialRunRoute.turnNumber : null,
   );
+  const [pendingTranscriptMessageId, setPendingTranscriptMessageId] = useState<string | null>(null);
+  const effectivePendingScrollMessageId = pendingTranscriptMessageId ?? pendingScrollMessageId;
   // A present-but-unresolvable turn segment (a bad number, or a bookmarked
   // retired turn_<uuid>) routes to an explicit unavailable-target state rather
   // than silently falling back to the latest turn.
@@ -11057,7 +11169,7 @@ function ChatPane({
     }
     if (wasVisible) return;
     if (session.status !== "Active") return;
-    const hasExplicitTarget = Boolean(pendingScrollMessageId?.trim());
+    const hasExplicitTarget = Boolean(effectivePendingScrollMessageId?.trim());
     resetSdkTimelineBootstrapState(
       hasExplicitTarget ? "visible-message-target" : "visible-reactivation",
       {
@@ -11069,7 +11181,7 @@ function ChatPane({
     dispatchNavigationMode(
       hasExplicitTarget ? "session-open-anchored" : "session-open-tail",
     );
-  }, [pendingScrollMessageId, session.id, session.status, visible]);
+  }, [effectivePendingScrollMessageId, session.id, session.status, visible]);
 
   useEffect(() => {
     visibleRef.current = visible;
@@ -11225,7 +11337,7 @@ function ChatPane({
     const requestId = nextSdkTimelineRequestId(source);
     const previousSnapshot = chatScrollEntrySnapshot(sdkServerProjectedEntriesRef.current);
     const load = async (): Promise<SdkHistoryRefreshResult> => {
-      const targetTimelineId = pendingScrollMessageId?.trim() ?? "";
+      const targetTimelineId = effectivePendingScrollMessageId?.trim() ?? "";
       const params = new URLSearchParams();
       let anchor = "newest";
       if (targetTimelineId) {
@@ -12108,7 +12220,7 @@ function ChatPane({
     resetSdkTimelineBootstrapState("session-change", {
       source: "history",
       clearRealtime: false,
-      scrollToLatestOnReady: !Boolean(pendingScrollMessageId?.trim()),
+      scrollToLatestOnReady: !Boolean(effectivePendingScrollMessageId?.trim()),
     });
     sdkAssistantDurationsRef.current = new Map();
     currentRunRef.current = null;
@@ -13317,6 +13429,37 @@ function ChatPane({
               null)
             : null))
       : null;
+  const transcriptHrefForEntry = useCallback(
+    (entry: TranscriptEntry): string | undefined => {
+      if (publicView && publicShareTokenValue) {
+        return messageUrl(session.id, entry.id, publicShareTokenValue);
+      }
+      if (publicView) return undefined;
+      return messageUrl(session.id, entry.id);
+    },
+    [publicShareTokenValue, publicView, session.id],
+  );
+  const openTranscriptMessage = useCallback(
+    (entryId: string) => {
+      const trimmedEntryId = entryId.trim();
+      if (!trimmedEntryId) return;
+      if (!publicView) {
+        const next = messageUrl(session.id, trimmedEntryId);
+        if (next !== window.location.href) window.history.replaceState({}, "", next);
+      }
+      setPendingTranscriptMessageId(trimmedEntryId);
+      setActiveTab("chat");
+    },
+    [publicView, session.id],
+  );
+  const handleTranscriptScrollConsumed = useCallback(() => {
+    if (pendingTranscriptMessageId) {
+      setPendingTranscriptMessageId(null);
+      clearInitialMessageId();
+      return;
+    }
+    onScrollConsumed?.();
+  }, [onScrollConsumed, pendingTranscriptMessageId]);
   const ensureTurnActivityLoaded = useCallback((
     turnId: string,
     options?: { force?: boolean },
@@ -13443,7 +13586,7 @@ function ChatPane({
   }, [activeTab, historyBootstrapped, pendingRouteTurnNumber, turnsAvailable]);
   useEffect(() => {
     if (publicView) return;
-    if (!visible || pendingScrollMessageId) return;
+    if (!visible || effectivePendingScrollMessageId) return;
     if (activeTab === "turns") {
       // While showing the unavailable-target state, leave the URL at the
       // requested (unresolvable) turn segment instead of rewriting it to the
@@ -13460,7 +13603,7 @@ function ChatPane({
     } else {
       replaceSessionRoute(session.id, "chat");
     }
-  }, [activeTab, adminView, pendingScrollMessageId, publicView, routeTurnUnavailable, routedSelectedTurnNumber, session.id, settingsTab, visible]);
+  }, [activeTab, adminView, effectivePendingScrollMessageId, publicView, routeTurnUnavailable, routedSelectedTurnNumber, session.id, settingsTab, visible]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -13942,7 +14085,7 @@ function ChatPane({
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
     timelineBootstrapClearRealtimeRef.current = false;
-    timelineBootstrapScrollToLatestRef.current = !Boolean(pendingScrollMessageId?.trim());
+    timelineBootstrapScrollToLatestRef.current = !Boolean(effectivePendingScrollMessageId?.trim());
     clearScrollToLatestRequest();
     dispatchTimelineBootstrap({
       type: "reset",
@@ -14439,6 +14582,8 @@ function ChatPane({
               ensureTurnActivityLoaded(turnId, { force: true });
             }}
             onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
+            transcriptHrefForEntry={transcriptHrefForEntry}
+            onOpenTranscriptMessage={openTranscriptMessage}
             scrollRequest={turnViewScrollRequest}
             onScrollRequestConsumed={clearTurnViewScrollRequest}
             turnActivityPageInfo={turnActivityPageInfo}
@@ -14540,8 +14685,8 @@ function ChatPane({
               systemAvatar={systemAvatar}
               sessionId={session.id}
               sessionMode={session.mode}
-              pendingScrollMessageId={pendingScrollMessageId}
-              onScrollConsumed={onScrollConsumed}
+              pendingScrollMessageId={effectivePendingScrollMessageId}
+              onScrollConsumed={handleTranscriptScrollConsumed}
               showThinking={runPrefs.showThinking}
               autoExpandTools={runPrefs.autoExpandTools}
               condenseCompletedTurns={runPrefs.condenseCompletedTurns}
@@ -14567,6 +14712,7 @@ function ChatPane({
               }
               onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
               onOpenTurn={openTurnPage}
+              turnLinksEnabled={!publicView}
               scrollParent={transcriptScrollEl}
               onStartReached={() => {
                 void loadSdkOlderEvents();

@@ -7657,6 +7657,7 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-msg-action {
+  padding: 0;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -7667,6 +7668,7 @@ textarea.run-files-viewer-editor:focus {
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-muted);
   cursor: pointer;
+  text-decoration: none;
   transition: background var(--motion-fast, 100ms) ease, color var(--motion-fast, 100ms) ease;
 }
 
