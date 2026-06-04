@@ -54,6 +54,17 @@ the rest of the product reconstruct what happened.
   The browser reads `GET /api/sessions/{session_id}/scheduled-wakeups` and
   renders those rows in Background -> Scheduled so users can confirm due,
   firing, fired, and failed state without inspecting logs.
+- A Claude background task (`run_in_background`) that reaches a natural terminal
+  while the session has no active turn wakes the session through the same
+  backend-owned turn boundary as a user turn (`source=background-task`). The
+  runner registers the terminal; the orchestrator owns the fire decision —
+  deferring while the session is awaiting an AskUserQuestion answer (so the wake
+  never clobbers a pending question) and failing the wake durably if the session
+  is no longer Active. The wake is idempotent per task id (durable
+  `session_background_task_wakes`), so an SDK frame repeat or a runner restart
+  cannot double-wake. This closes the silent stranding where a runner
+  backgrounds a task and ends the turn but the task's completion never re-invokes
+  the agent.
 - Token usage is durable. Each turn emits cumulative usage on its terminal
   (for cost) and, where the provider exposes per-call usage, a `turn.usage`
   snapshot per model call (for live context-window occupancy). Claude reports
@@ -95,6 +106,13 @@ the rest of the product reconstruct what happened.
 - A turn that emits assistant messages but no usage snapshot is a regression
   signature for the context-window gauge; `tank_runner_turn_usage_emitted_total{kind}`
   counts `snapshot` vs `terminal` usage emissions so the gap is visible.
+- Background-task wakes are counted on both sides so a regression localizes
+  between detection, registration, and firing: the runner's
+  `tank_runner_background_task_wake_total{result}` and the orchestrator's
+  `tank_background_task_wake_register_total` / `tank_background_task_wake_fire_total`
+  (plus the `tank_background_task_wakes_due` gauge). A task-lifecycle terminal
+  that the runner logs as `sdk_task_lifecycle_unbound` while wake registrations
+  stay flat is the detection-regressed signature.
 
 ## Acceptance Checks
 

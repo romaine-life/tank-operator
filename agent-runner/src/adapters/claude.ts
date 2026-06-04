@@ -283,6 +283,53 @@ export function isClaudeTaskLifecycleMessage(message: ClaudeProviderEvent): bool
   );
 }
 
+export interface ClaudeTerminalBackgroundTask {
+  taskID: string;
+  status: string;
+  description?: string;
+  summary?: string;
+  lastToolName?: string;
+  error?: string;
+}
+
+// naturalTerminalShellTaskStatuses is the subset of terminal statuses that
+// represent a background task finishing ON ITS OWN — completed/failed/exited.
+// It deliberately excludes the user-initiated stop statuses (stopped/cancelled/
+// canceled): those originate from stop_background_task, and waking the session
+// because the user cancelled a task would be surprising. The natural-vs-user
+// split is an assumption about the SDK's status strings; claude.test.ts pins it
+// so an SDK rename surfaces as a test failure instead of a silent missed/extra
+// wake.
+const naturalTerminalShellTaskStatuses = new Set(["completed", "failed", "exited"]);
+
+// claudeTerminalBackgroundTask returns the wake-relevant fields when a task-
+// lifecycle message reports a natural terminal, else null. The runner uses it
+// to register a durable backend wake so a background task that finishes while
+// the session is idle still re-invokes the agent — restoring the base Bash
+// tool's "run_in_background … re-invokes you when it exits" semantics that a
+// task-lifecycle frame (which never starts a turn) otherwise strands. Detection
+// is from the provider event directly, so it fires for unbound terminals too
+// (a task whose owner turn context was evicted produces no canonical event).
+export function claudeTerminalBackgroundTask(
+  message: ClaudeProviderEvent,
+): ClaudeTerminalBackgroundTask | null {
+  if (!isClaudeTaskLifecycleMessage(message)) return null;
+  const { taskID } = claudeTaskIdentifiers(message);
+  if (!taskID) return null;
+  const status = shellTaskStatus(message);
+  if (!naturalTerminalShellTaskStatuses.has(status.toLowerCase())) return null;
+  const out: ClaudeTerminalBackgroundTask = { taskID, status };
+  const description = nonEmptyString(message.description);
+  if (description) out.description = description;
+  const summary = nonEmptyString(message.summary);
+  if (summary) out.summary = summary;
+  const lastToolName = nonEmptyString(message.last_tool_name);
+  if (lastToolName) out.lastToolName = lastToolName;
+  const error = nonEmptyString(message.error);
+  if (error) out.error = error;
+  return out;
+}
+
 // claudeCompactTrigger / claudeCompactPreTokens read the Claude Agent SDK's
 // `compact_metadata` off a system/compact_boundary message: whether compaction
 // was auto-triggered (context filled) or manual (/compact), and the

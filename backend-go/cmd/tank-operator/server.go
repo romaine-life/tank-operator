@@ -93,6 +93,13 @@ type appServer struct {
 	// turn boundary instead of holding process-local timers in a session pod.
 	scheduledWakeups scheduledWakeupStore
 
+	// backgroundTaskWakes is the durable backend-owned store for "a Claude
+	// background task finished while the session was idle" wakes. The runner
+	// registers the natural terminal; the orchestrator claims due rows and
+	// feeds them through the normal SDK turn boundary (source=background-task)
+	// instead of relying on a task-lifecycle frame that never starts a turn.
+	backgroundTaskWakes backgroundTaskWakeStore
+
 	// controlActions is the durable audit ledger for privileged cross-system
 	// effects initiated by session pods through MCP servers. It backs the
 	// user-facing "what changed main, from which session?" trace.
@@ -161,6 +168,15 @@ type pendingLaunchStore interface {
 	MarkDispatched(context.Context, string, string, string) error
 	MarkFailed(context.Context, string, string, string) error
 	Get(context.Context, string, string) (pgstore.PendingLaunchTurn, error)
+}
+
+type backgroundTaskWakeStore interface {
+	Register(context.Context, pgstore.RegisterBackgroundTaskWakeRequest) (pgstore.BackgroundTaskWake, error)
+	ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.BackgroundTaskWake, error)
+	MarkFired(context.Context, string, string) error
+	MarkFailed(context.Context, string, string) error
+	Release(context.Context, string) error
+	DueCount(context.Context, time.Time) (int, error)
 }
 
 type controlActionStore interface {
@@ -361,6 +377,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes", s.handleInternalRegisterBackgroundTaskWake)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
