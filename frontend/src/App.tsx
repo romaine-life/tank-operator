@@ -689,6 +689,10 @@ interface Session {
   runtime_context_window_tokens?: number;
   runtime_context_window_source?: string;
   runtime_context_window_observed_at?: string | null;
+  // Durable count of context.compacted events for this session, projected from
+  // the session_events ledger onto the row. The composer renders it as the
+  // compaction metric; absent/0 means the session has not compacted yet.
+  compaction_count?: number;
   agent_avatar_id?: string | null;
   system_avatar_id?: string | null;
   sidebar_position?: number;
@@ -1177,6 +1181,11 @@ function normalizeSession(session: Session): Session {
     typeof session.runtime_context_window_tokens === "number" &&
     Number.isFinite(session.runtime_context_window_tokens)
       ? Math.max(0, Math.floor(session.runtime_context_window_tokens))
+      : 0;
+  next.compaction_count =
+    typeof session.compaction_count === "number" &&
+    Number.isFinite(session.compaction_count)
+      ? Math.max(0, Math.floor(session.compaction_count))
       : 0;
   next.runtime_context_window_source =
     typeof session.runtime_context_window_source === "string"
@@ -1676,6 +1685,10 @@ interface ComposerCostEstimateProps {
   // to the bare used count (or the "--" placeholder). Never a model-assumed
   // default.
   contextWindow?: number;
+  // Durable count of context compactions for the session scope. Rendered as a
+  // third metric only when > 0; sourced from durable row metadata, never
+  // inferred from whatever transcript entries the browser happens to hold.
+  compactionCount?: number | null;
   tokenScopeLabel?: string;
   placeholder?: boolean;
   scopeLabel?: string;
@@ -1686,6 +1699,7 @@ function ComposerCostEstimate({
   amountUsd,
   tokens,
   contextWindow,
+  compactionCount,
   tokenScopeLabel,
   placeholder = false,
   scopeLabel = "session",
@@ -1703,6 +1717,10 @@ function ComposerCostEstimate({
   const safeWindow =
     typeof contextWindow === "number" && Number.isFinite(contextWindow)
       ? Math.max(0, Math.floor(contextWindow))
+      : 0;
+  const safeCompactions =
+    !unavailable && typeof compactionCount === "number" && Number.isFinite(compactionCount)
+      ? Math.max(0, Math.floor(compactionCount))
       : 0;
   const normalizedScope = scopeLabel.trim() || "session";
   const formattedAmount = unavailable
@@ -1723,16 +1741,20 @@ function ComposerCostEstimate({
     safeWindow > 0
       ? `${safeTokens?.toLocaleString() ?? 0} of ${safeWindow.toLocaleString()} context tokens`
       : `${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`;
+  const compactionClause =
+    safeCompactions > 0
+      ? `, ${safeCompactions} context compaction${safeCompactions === 1 ? "" : "s"}`
+      : "";
   const defaultTitle = unavailable
     ? "Cost estimate appears after token usage is available"
-    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${tokenSentence}`;
+    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${tokenSentence}${compactionClause}`;
   return (
     <span
-      className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
+      className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}${safeCompactions > 0 ? " has-compactions" : ""}`}
       aria-label={
         unavailable
           ? `${sentenceScope} cost estimate unavailable`
-          : `Estimated ${normalizedScope} cost ${label}, ${tokenSentence}`
+          : `Estimated ${normalizedScope} cost ${label}, ${tokenSentence}${compactionClause}`
       }
       aria-disabled={unavailable || undefined}
       title={title ?? defaultTitle}
@@ -1741,6 +1763,17 @@ function ComposerCostEstimate({
         <span className="run-cost-estimate-value run-cost-estimate-token-count">{tokenLabel}</span>
         <span className="run-cost-estimate-label">ctx</span>
       </span>
+      {safeCompactions > 0 && (
+        <>
+          <span className="run-cost-estimate-divider" aria-hidden="true" />
+          <span className="run-cost-estimate-metric run-cost-estimate-metric-compactions">
+            <span className="run-cost-estimate-value run-cost-estimate-compaction-count">
+              {safeCompactions}
+            </span>
+            <span className="run-cost-estimate-label">cmp</span>
+          </span>
+        </>
+      )}
       <span className="run-cost-estimate-divider" aria-hidden="true" />
       <span className="run-cost-estimate-metric run-cost-estimate-metric-cost">
         <span className="run-cost-estimate-value run-cost-estimate-amount">{label}</span>
@@ -10100,6 +10133,15 @@ function ChatPane({
     session.runtime_context_window_tokens > 0
       ? Math.floor(session.runtime_context_window_tokens)
       : 0;
+  // Durable per-session compaction count from the session row. Unlike the live
+  // occupancy numerator (which self-resets after a compaction), this is the
+  // cumulative count of compactions and only ever advances.
+  const sessionCompactionCount =
+    typeof session.compaction_count === "number" &&
+    Number.isFinite(session.compaction_count) &&
+    session.compaction_count > 0
+      ? Math.floor(session.compaction_count)
+      : 0;
   const [tokensUsed, setTokensUsed] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
@@ -14828,6 +14870,7 @@ function ChatPane({
                 amountUsd: sessionCostEstimate?.amountUsd ?? null,
                 tokens: tokensUsed,
                 contextWindow: runtimeContextWindowTokens,
+                compactionCount: sessionCompactionCount,
                 tokenScopeLabel: "current context tokens",
                 placeholder: sessionUsageLoading,
               }}
@@ -16109,6 +16152,7 @@ function AuthenticatedApp() {
       runtime_context_window_tokens: row.runtime_context_window_tokens ?? 0,
       runtime_context_window_source: row.runtime_context_window_source ?? "",
       runtime_context_window_observed_at: row.runtime_context_window_observed_at ?? null,
+      compaction_count: row.compaction_count ?? 0,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
       row_version: row.row_version,
@@ -16162,6 +16206,10 @@ function AuthenticatedApp() {
       runtime_context_window_observed_at:
         typeof raw.runtime_context_window_observed_at === "string"
           ? raw.runtime_context_window_observed_at
+          : undefined,
+      compaction_count:
+        typeof raw.compaction_count === "number" && Number.isFinite(raw.compaction_count)
+          ? Math.max(0, Math.floor(raw.compaction_count))
           : undefined,
       agent_avatar_id:
         typeof raw.agent_avatar_id === "string" ? raw.agent_avatar_id : undefined,

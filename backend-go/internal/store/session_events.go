@@ -56,6 +56,13 @@ type SessionEventStore interface {
 	// COUNT(DISTINCT ...) queries against the (tank_session_id, order_key)
 	// index so it stays bounded per session regardless of history size.
 	UnreadOutputCount(ctx context.Context, tankSessionID, afterOrderKey string) (int, error)
+	// CountContextCompactions returns the total number of durable
+	// context.compacted events recorded for a session across its whole
+	// history. It backs the composer's durable compaction-count metric and is
+	// recomputed by the chat-activity emitter on each context.compacted upsert.
+	// Bounded and indexed by the session_events_context_compacted partial index
+	// so it stays cheap regardless of total ledger size.
+	CountContextCompactions(ctx context.Context, tankSessionID string) (int64, error)
 	// FindStrandedLaunchTurns returns deferred-launch turns that were durably
 	// recorded (a lone user_message.created) but never dispatched: their
 	// turn_id carries no other event of any kind. This is the cross-session
@@ -648,6 +655,29 @@ func (s *postgresSessionEventStore) countDistinctField(
 	return n, nil
 }
 
+// CountContextCompactions counts every durable context.compacted event for a
+// session. Served by the session_events_context_compacted partial index
+// (event_type = 'context.compacted'), so it is an indexed range scan over only
+// compaction rows — bounded regardless of how large the session's ledger has
+// grown. The chat-activity emitter calls this on each compaction upsert to
+// refresh the durable sessions.compaction_count projection; because it counts
+// an append-only ledger, the result is monotonic and a redelivered event
+// recomputes the same value.
+func (s *postgresSessionEventStore) CountContextCompactions(ctx context.Context, tankSessionID string) (int64, error) {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	const q = `
+		SELECT count(*)
+		FROM session_events
+		WHERE tank_session_id = $1
+			AND event_type = 'context.compacted'
+	`
+	var n int64
+	if err := s.pool.QueryRow(ctx, q, storageKey).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // sessionEventPageFromAscendingScan packages a forward-walk page. The caller
 // passed an ascending slice with one extra row (`limit + 1`) when `HasMore`
 // is true. FoundOldest is true when the page starts at the very head of the
@@ -762,6 +792,10 @@ func (StubSessionEventStore) LatestLifecycleEvents(_ context.Context, _ string, 
 }
 
 func (StubSessionEventStore) UnreadOutputCount(_ context.Context, _, _ string) (int, error) {
+	return 0, nil
+}
+
+func (StubSessionEventStore) CountContextCompactions(_ context.Context, _ string) (int64, error) {
 	return 0, nil
 }
 

@@ -6723,6 +6723,19 @@ button:disabled {
   opacity: 0.72;
 }
 
+/* The optional compaction metric is intrinsically narrow (a small count), so it
+   sizes to content rather than claiming an equal third of the row — the chip
+   widens via .has-compactions just enough to seat it without squeezing the ctx
+   fraction into an ellipsis. */
+.run-cost-estimate-metric-compactions {
+  flex: 0 0 auto;
+}
+
+.run-cost-estimate.has-compactions {
+  width: 13.5rem;
+  flex-basis: 13.5rem;
+}
+
 .run-model-chip {
   display: inline-flex;
   align-items: center;
@@ -7009,6 +7022,11 @@ button:disabled {
     flex-basis: 6.6rem;
     gap: 0.28rem;
     padding-inline: 0.42rem;
+  }
+
+  .run-cost-estimate.has-compactions {
+    width: 8.4rem;
+    flex-basis: 8.4rem;
   }
 
   .run-cost-estimate-label {

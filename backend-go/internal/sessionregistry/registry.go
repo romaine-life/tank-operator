@@ -69,6 +69,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			sessions.runtime_context_window_tokens,
 			sessions.runtime_context_window_source,
 			COALESCE(to_char(sessions.runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+			sessions.compaction_count,
 			COALESCE(sessions.agent_avatar_id, ''),
 			COALESCE(sessions.system_avatar_id, ''),
 			sessions.sidebar_position,
@@ -109,7 +110,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			model, effort, runtimeModel, runtimeEffort, runtimeAt       string
 			runtimeContextWindowSource, runtimeContextWindowObservedAt  string
 			agentAvatarID, systemAvatarID                               string
-			runtimeContextWindowTokens, sidebarPosition, rowVersion     int64
+			runtimeContextWindowTokens, compactionCount                 int64
+			sidebarPosition, rowVersion                                 int64
 			bugLabelID                                                  sql.NullInt64
 			bugLabelName, bugLabelSlug                                  sql.NullString
 		)
@@ -121,6 +123,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&repos, &cloneState, &capabilities, &model, &effort,
 			&runtimeModel, &runtimeEffort, &runtimeAt,
 			&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowObservedAt,
+			&compactionCount,
 			&agentAvatarID, &systemAvatarID,
 			&sidebarPosition,
 			&rowVersion,
@@ -161,6 +164,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			RuntimeContextWindowTokens:     runtimeContextWindowTokens,
 			RuntimeContextWindowSource:     runtimeContextWindowSource,
 			RuntimeContextWindowObservedAt: runtimeContextWindowObservedAt,
+			CompactionCount:                compactionCount,
 			AgentAvatarID:                  agentAvatarID,
 			SystemAvatarID:                 systemAvatarID,
 			SidebarPosition:                sidebarPosition,

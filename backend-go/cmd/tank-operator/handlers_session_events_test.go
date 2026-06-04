@@ -24,6 +24,10 @@ func (s fakeSessionEventStore) Upsert(_ context.Context, _ map[string]any) error
 	return nil
 }
 
+func (s fakeSessionEventStore) CountContextCompactions(_ context.Context, _ string) (int64, error) {
+	return 0, nil
+}
+
 func (s fakeSessionEventStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
 	return nil, nil
 }
