@@ -125,6 +125,7 @@ type projectionAwaitingInput struct {
 	TimelineID     string
 	Questions      []any
 	QuestionIndex  int
+	QuestionSet    int
 	OrderKey       string
 	Time           string
 	SourceEventID  string
@@ -470,6 +471,7 @@ func (s *projectionState) applyAwaitingInput(event map[string]any) {
 		TimelineID:     projectionFirstNonEmpty(transcriptPayloadString(event, "timeline_id"), transcriptString(event, "timeline_id")),
 		Questions:      questions,
 		QuestionIndex:  projectionAwaitingInputQuestionIndex(event),
+		QuestionSet:    projectionAwaitingInputQuestionSet(event),
 		OrderKey:       transcriptString(event, "order_key"),
 		Time:           transcriptString(event, "created_at"),
 		SourceEventID:  transcriptString(event, "event_id"),
@@ -478,6 +480,13 @@ func (s *projectionState) applyAwaitingInput(event map[string]any) {
 
 func projectionAwaitingInputQuestionIndex(event map[string]any) int {
 	if raw, ok := transcriptNumeric(transcriptPayloadValue(event, "question_index")); ok {
+		return int(raw)
+	}
+	return 0
+}
+
+func projectionAwaitingInputQuestionSet(event map[string]any) int {
+	if raw, ok := transcriptNumeric(transcriptPayloadValue(event, "question_set")); ok {
 		return int(raw)
 	}
 	return 0
@@ -1424,6 +1433,7 @@ func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectio
 		"timelineId":     awaiting.TimelineID,
 		"questionCount":  len(awaiting.Questions),
 		"questionIndex":  awaiting.QuestionIndex,
+		"questionSet":    awaiting.QuestionSet,
 		"questions":      awaiting.Questions,
 		"answered":       answered,
 	}

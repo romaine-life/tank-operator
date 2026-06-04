@@ -343,6 +343,9 @@ func TestHandleSessionTurnActivityDefaultsNeedsInputToQuestionPage(t *testing.T)
 	if got, _ := body["question_index"].(float64); got != 1 {
 		t.Fatalf("question_index = %v, want 1", body["question_index"])
 	}
+	if got, _ := body["question_set"].(float64); got != 1 {
+		t.Fatalf("question_set = %v, want 1", body["question_set"])
+	}
 	if got, _ := body["question_count"].(float64); got != 2 {
 		t.Fatalf("question_count = %v, want 2", body["question_count"])
 	}
@@ -360,6 +363,9 @@ func TestHandleSessionTurnActivityDefaultsNeedsInputToQuestionPage(t *testing.T)
 	awaiting, _ := entry["awaitingInput"].(map[string]any)
 	if got, _ := awaiting["questionIndex"].(float64); got != 1 {
 		t.Fatalf("entry awaitingInput.questionIndex = %v, want 1", awaiting["questionIndex"])
+	}
+	if got, _ := awaiting["questionSet"].(float64); got != 1 {
+		t.Fatalf("entry awaitingInput.questionSet = %v, want 1", awaiting["questionSet"])
 	}
 }
 

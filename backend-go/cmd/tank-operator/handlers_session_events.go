@@ -185,6 +185,7 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		if current.Kind == "question_set" {
 			body["question_count"] = current.QuestionCount
 			body["question_index"] = current.QuestionIndex
+			body["question_set"] = current.QuestionSet
 			body["answered"] = current.Answered
 		}
 		body["page_start_order_key"] = current.StartOrderKey

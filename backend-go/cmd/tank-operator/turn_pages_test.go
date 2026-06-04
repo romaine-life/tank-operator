@@ -188,6 +188,9 @@ func TestProjectTurnPagesMakesQuestionSetSemanticPage(t *testing.T) {
 	if firstQuestionPage.QuestionIndex != 1 || firstQuestionPage.QuestionCount != 2 {
 		t.Fatalf("first question page index/count = %d/%d, want 1/2", firstQuestionPage.QuestionIndex, firstQuestionPage.QuestionCount)
 	}
+	if firstQuestionPage.QuestionSet != 1 {
+		t.Fatalf("first question page set = %d, want 1", firstQuestionPage.QuestionSet)
+	}
 	if firstQuestionPage.Answered {
 		t.Fatalf("question page answered = true, want false")
 	}
@@ -200,6 +203,9 @@ func TestProjectTurnPagesMakesQuestionSetSemanticPage(t *testing.T) {
 	}
 	if secondQuestionPage.QuestionIndex != 2 || secondQuestionPage.QuestionCount != 2 {
 		t.Fatalf("second question page index/count = %d/%d, want 2/2", secondQuestionPage.QuestionIndex, secondQuestionPage.QuestionCount)
+	}
+	if secondQuestionPage.QuestionSet != 1 {
+		t.Fatalf("second question page set = %d, want 1", secondQuestionPage.QuestionSet)
 	}
 	if secondQuestionPage.Sealed {
 		t.Fatalf("last pending question page sealed = true, want live while the turn needs input")

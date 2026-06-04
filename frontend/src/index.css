@@ -8882,6 +8882,8 @@ textarea.run-files-viewer-editor:focus {
 .run-tool-ask-submit-row {
   display: flex;
   justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: var(--space-2);
   margin-top: 0.1rem;
 }
 
@@ -8904,6 +8906,18 @@ textarea.run-files-viewer-editor:focus {
 .run-tool-ask-submit:hover:not(:disabled) {
   background: rgba(79, 140, 247, 0.25);
   border-color: rgba(79, 140, 247, 0.8);
+  color: var(--text-primary);
+}
+
+.run-tool-ask-secondary-action {
+  border-color: var(--border-soft, rgba(255, 255, 255, 0.14));
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-secondary);
+}
+
+.run-tool-ask-secondary-action:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.075);
+  border-color: var(--border-strong, rgba(255, 255, 255, 0.2));
   color: var(--text-primary);
 }
 

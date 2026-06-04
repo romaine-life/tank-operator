@@ -237,6 +237,10 @@ test("AskUserQuestion handoff button is restored in transcript and answer form i
   assert.equal(indexCssSource.includes('.run-turn-view-body[data-page-kind="question_set"]'), true);
   assert.equal(appSource.includes("askUserQuestionDrafts"), true);
   assert.equal(appSource.includes("questionIndex: typeof body.question_index === \"number\""), true);
+  assert.equal(appSource.includes("questionSet: typeof body.question_set === \"number\""), true);
+  assert.equal(appSource.includes("turnActivityPageOptionLabel"), true);
+  assert.equal(appSource.includes("Next question"), true);
+  assert.equal(appSource.includes("Question set ${selectedPageInfo.questionSet}"), true);
   assert.equal(appSource.includes("Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}"), true);
 });
 

@@ -284,15 +284,18 @@ When the in-pod agent invokes AskUserQuestion, the active turn pauses with a
 durable `turn.awaiting_input` event carrying the Tank-canonical questions. The
 turn-activity page projection records a compact AskUserQuestion invocation
 marker on the preceding activity page, then opens one semantic `question_set`
-page per question in the set. If the agent asks immediately, that first
-activity page is marker-only by design: it preserves the ledger handoff without
-squeezing the question UI into activity history. The main transcript renders a restored
-AskUserQuestion handoff button (`RunNeedsInputAnnouncement`, originally removed
-by PR #861) from the durable `awaiting_input` meta row so the user can reach the
-question set from the conversation. The interactive answer form is owned by the
-Turns question page, which reflects durable state rather than local React
-optimism, so a fresh tab renders the same question set and defaults to it while
-the turn is still waiting for input.
+page per question in the set. Those adjacent pages carry the same
+`questionSet` number and individual `questionIndex`/`questionCount` metadata,
+letting the Turns UI label the set and provide previous/next question shortcuts
+without creating a third navigation system. If the agent asks immediately, that
+first activity page is marker-only by design: it preserves the ledger handoff
+without squeezing the question UI into activity history. The main transcript
+renders a restored AskUserQuestion handoff button (`RunNeedsInputAnnouncement`,
+originally removed by PR #861) from the durable `awaiting_input` meta row so the
+user can reach the question set from the conversation. The interactive answer
+form is owned by the Turns question page, which reflects durable state rather
+than local React optimism, so a fresh tab renders the same question set and
+defaults to it while the turn is still waiting for input.
 
 Answering resumes the same turn:
 - The user's selection posts to `POST /turns/{askingTurnId}/answer`, which
@@ -327,8 +330,10 @@ Contract impact:
   provider-specific raw tool rows.
 - Turn activity pagination is semantic as well as size-bounded: each
   `turn.awaiting_input` event starts one `question_set` page per question while
-  preserving one durable answer set. Answered/history state remains visible
-  when revisiting any question page.
+  preserving one durable answer set. The pages expose shared set identity and
+  per-question position so the page selector and question card can show
+  "question 1 of N" and move to the adjacent question page. Answered/history
+  state remains visible when revisiting any question page.
 - A pending `needs_input` turn defaults to the first unanswered `question_set`
   page; normal turns still default to the latest activity page.
 - `answered` is derived from a durable fact (a later `turn.input_answered` event

@@ -401,6 +401,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     questions: unknown[];
     questionCount: number;
     questionIndex?: number;
+    questionSet?: number;
     answered: boolean;
     answers?: Record<string, string[]>;
     annotations?: Record<string, { preview?: string; notes?: string }>;
@@ -5447,6 +5448,15 @@ interface AskUserQuestionDraft {
   submittedSnapshot: AskUserQuestionSubmittedSnapshot | null;
 }
 
+interface QuestionPageNavigation {
+  questionSet?: number;
+  questionIndex?: number;
+  questionCount?: number;
+  previousPage?: number;
+  nextPage?: number;
+  onSelectPage?: (page: number) => void;
+}
+
 const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   submitAnswer: (askingTurnId: string, payload: AnswerPayload) => Promise<void>;
@@ -6632,7 +6642,13 @@ function emptyAskUserQuestionDraft(): AskUserQuestionDraft {
   return { selections: {}, notes: {}, submittedSnapshot: null };
 }
 
-function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
+function RunAwaitingInputCard({
+  entry,
+  questionNavigation,
+}: {
+  entry: TranscriptEntry;
+  questionNavigation?: QuestionPageNavigation;
+}) {
   const {
     submitAnswer,
     askUserQuestionDrafts,
@@ -6719,6 +6735,15 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
     !submitting &&
     questions.length > 0 &&
     questions.every((q) => questionHasResponse(q));
+  const visibleQuestion =
+    visibleQuestionIndex == null ? null : questions[visibleQuestionIndex] ?? null;
+  const visibleQuestionAnswered = visibleQuestion ? questionHasResponse(visibleQuestion) : false;
+  const hasNextQuestion = Boolean(questionNavigation?.nextPage);
+  const hasPreviousQuestion = Boolean(questionNavigation?.previousPage);
+  const questionSetLabel =
+    questionNavigation?.questionSet && questionNavigation.questionSet > 0
+      ? `Question set ${questionNavigation.questionSet}`
+      : "Question set";
 
   function toggleSelection(q: AskUserQuestion, label: string): void {
     if (answered || submitting) return;
@@ -6935,11 +6960,36 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
       })}
       {!answered && (
         <div className="run-tool-ask-submit-row">
+          {hasPreviousQuestion && (
+            <button
+              type="button"
+              className="run-tool-ask-submit run-tool-ask-secondary-action"
+              disabled={submitting}
+              onClick={() => questionNavigation?.previousPage && questionNavigation.onSelectPage?.(questionNavigation.previousPage)}
+            >
+              Previous question
+            </button>
+          )}
+          {hasNextQuestion && (
+            <button
+              type="button"
+              className="run-tool-ask-submit"
+              disabled={submitting || !visibleQuestionAnswered}
+              onClick={() => questionNavigation?.nextPage && questionNavigation.onSelectPage?.(questionNavigation.nextPage)}
+            >
+              Next question
+            </button>
+          )}
           <button
             type="button"
-            className="run-tool-ask-submit"
+            className={`run-tool-ask-submit${hasNextQuestion ? " run-tool-ask-secondary-action" : ""}`}
             disabled={!isReady || submitting}
             onClick={() => void submit()}
+            title={
+              !isReady && questions.length > 1
+                ? `${questionSetLabel} needs an answer on every question page before submit.`
+                : undefined
+            }
           >
             {submitting ? "Sending…" : questions.length > 1 ? "Submit answers" : "Submit answer"}
           </button>
@@ -7542,10 +7592,29 @@ function normalizeTurnActivityPageDirectory(input: unknown): TurnActivityPageDir
       sealed: typeof item.sealed === "boolean" ? item.sealed : undefined,
       questionCount: typeof item.questionCount === "number" ? item.questionCount : undefined,
       questionIndex: typeof item.questionIndex === "number" ? item.questionIndex : undefined,
+      questionSet: typeof item.questionSet === "number" ? item.questionSet : undefined,
       answered: typeof item.answered === "boolean" ? item.answered : undefined,
     });
   }
   return pages;
+}
+
+function turnActivityPageOptionLabel(
+  pageNumber: number,
+  pageCount: number,
+  directoryItem?: TurnActivityPageDirectoryItem,
+): string {
+  if (directoryItem?.kind === "question_set") {
+    const setLabel =
+      directoryItem.questionSet && directoryItem.questionSet > 0
+        ? `Question set ${directoryItem.questionSet}`
+        : "Question set";
+    if (directoryItem.questionIndex && directoryItem.questionCount) {
+      return `${setLabel}: question ${directoryItem.questionIndex} of ${directoryItem.questionCount}`;
+    }
+    return setLabel;
+  }
+  return `Page ${pageNumber} of ${pageCount}`;
 }
 
 type TurnViewItem = {
@@ -8307,6 +8376,35 @@ function RunTurnActivityScreen({
   const loading = selected ? loadingActivityTurns[selected.turnId] === true : false;
   const refreshProblem = selected ? activityRefreshProblemsByTurn[selected.turnId] : undefined;
   const showRefreshProblemOnly = Boolean(refreshProblem) && detailGroups.length === 0;
+  const questionPageNavigation = useMemo<QuestionPageNavigation | undefined>(() => {
+    if (!selectedPageInfo || selectedPageInfo.kind !== "question_set") return undefined;
+    const directory = selectedPageInfo.pages ?? [];
+    const sameSetPages = directory
+      .filter((page) =>
+        page.kind === "question_set" &&
+        (selectedPageInfo.questionSet
+          ? page.questionSet === selectedPageInfo.questionSet
+          : true),
+      )
+      .sort((a, b) => {
+        const ai = a.questionIndex ?? a.number;
+        const bi = b.questionIndex ?? b.number;
+        return ai - bi;
+      });
+    const currentIndex = sameSetPages.findIndex((page) => page.number === selectedPageInfo.page);
+    const previousPage = currentIndex > 0 ? sameSetPages[currentIndex - 1]?.number : undefined;
+    const nextPage =
+      currentIndex >= 0 && currentIndex < sameSetPages.length - 1
+        ? sameSetPages[currentIndex + 1]?.number
+        : undefined;
+    return {
+      questionSet: selectedPageInfo.questionSet,
+      questionIndex: selectedPageInfo.questionIndex,
+      questionCount: selectedPageInfo.questionCount,
+      previousPage,
+      nextPage,
+    };
+  }, [selectedPageInfo]);
   useLayoutEffect(() => {
     if (!scrollRequest || !selected) return;
     if (scrollRequest.turnId !== selected.turnId) return;
@@ -8353,7 +8451,20 @@ function RunTurnActivityScreen({
     }
     if (group.kind === "meta") {
       if (group.entry.metaKind === "awaiting_input") {
-        return <RunAwaitingInputCard key={group.entry.id} entry={group.entry} />;
+        return (
+          <RunAwaitingInputCard
+            key={group.entry.id}
+            entry={group.entry}
+            questionNavigation={
+              questionPageNavigation && selected && onActivitySelectPage
+                ? {
+                    ...questionPageNavigation,
+                    onSelectPage: (page) => onActivitySelectPage(selected.turnId, page),
+                  }
+                : questionPageNavigation
+            }
+          />
+        );
       }
       if (group.entry.metaKind === "turn_usage") return null;
       return (
@@ -8433,15 +8544,18 @@ function RunTurnActivityScreen({
                 align="end"
               >
                 {Array.from({ length: pagerState.pageCount }, (_, index) => index + 1).map(
-                  (pageNumber) => (
-                    <SelectItem
-                      key={pageNumber}
-                      value={String(pageNumber)}
-                      className="run-turn-view-select-item"
-                    >
-                      Page {pageNumber} of {pagerState.pageCount}
-                    </SelectItem>
-                  ),
+                  (pageNumber) => {
+                    const directoryItem = selectedPageInfo?.pages?.find((page) => page.number === pageNumber);
+                    return (
+                      <SelectItem
+                        key={pageNumber}
+                        value={String(pageNumber)}
+                        className="run-turn-view-select-item"
+                      >
+                        {turnActivityPageOptionLabel(pageNumber, pagerState.pageCount, directoryItem)}
+                      </SelectItem>
+                    );
+                  },
                 )}
               </SelectContent>
             </Select>
@@ -8500,7 +8614,11 @@ function RunTurnActivityScreen({
               data-answered={selectedPageInfo.answered ? "true" : "false"}
             >
               <span className="run-turn-question-page-title">
-                {selectedPageInfo.answered ? "Question set answered" : "Agent needs input"}
+                {selectedPageInfo.questionSet && selectedPageInfo.questionSet > 0
+                  ? `Question set ${selectedPageInfo.questionSet}`
+                  : selectedPageInfo.answered
+                    ? "Question set answered"
+                    : "Question set"}
               </span>
               <span className="run-turn-question-page-count">
                 {selectedPageInfo.questionIndex && selectedPageInfo.questionCount
@@ -10455,6 +10573,7 @@ function ChatPane({
       page_kind?: string;
       question_count?: number;
       question_index?: number;
+      question_set?: number;
       answered?: boolean;
       pages?: unknown;
     };
@@ -10465,6 +10584,7 @@ function ChatPane({
         kind: typeof body.page_kind === "string" ? body.page_kind : undefined,
         questionCount: typeof body.question_count === "number" ? body.question_count : undefined,
         questionIndex: typeof body.question_index === "number" ? body.question_index : undefined,
+        questionSet: typeof body.question_set === "number" ? body.question_set : undefined,
         answered: typeof body.answered === "boolean" ? body.answered : undefined,
         pages: normalizeTurnActivityPageDirectory(body.pages),
       };
@@ -10477,6 +10597,7 @@ function ChatPane({
           existing.kind === info.kind &&
           existing.questionCount === info.questionCount &&
           existing.questionIndex === info.questionIndex &&
+          existing.questionSet === info.questionSet &&
           existing.answered === info.answered &&
           JSON.stringify(existing.pages ?? []) === JSON.stringify(info.pages ?? [])
         ) {
