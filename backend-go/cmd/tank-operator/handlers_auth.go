@@ -174,6 +174,11 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 		SessionID:    sessionID,
 		ExpiresAt:    expiresAt,
 	}); err != nil {
+		if isClientCanceled(err) {
+			recordStreamAuthTicket("create", streamKind, "canceled")
+			writeError(w, statusClientClosedRequest, "client canceled request")
+			return
+		}
 		recordStreamAuthTicket("create", streamKind, "store_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

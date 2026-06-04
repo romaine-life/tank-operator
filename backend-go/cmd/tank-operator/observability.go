@@ -994,7 +994,7 @@ func streamAuthTicketStreamLabel(stream string) string {
 
 func streamAuthTicketResultLabel(result string) string {
 	switch result {
-	case "ok", "invalid", "denied", "store_unavailable", "store_error":
+	case "ok", "invalid", "denied", "canceled", "store_unavailable", "store_error":
 		return result
 	default:
 		return "other"
