@@ -273,7 +273,7 @@ test("historical transcript bootstrap requires server-projected turn activity", 
   assert.equal(appSource.includes("before_order_key"), false);
   assert.equal(appSource.includes("min_transcript_entries"), false);
   assert.equal(appSource.includes("SDK_TIMELINE_TAIL_EVENT_LIMIT"), false);
-  assert.equal(appSource.includes("turnActivityRequestPathForPane(trimmedTurnId)"), true);
+  assert.equal(appSource.includes("turnActivityRequestPathForPane(trimmedTurnId, selectedPage)"), true);
   assert.match(
     appSource,
     /\/api\/public\/message-links\/\$\{encodeURIComponent\(publicShareTokenValue\)\}\/turns\/\$\{encodeURIComponent\(turnId\)\}\/activity/,

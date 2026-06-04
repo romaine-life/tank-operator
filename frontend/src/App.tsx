@@ -304,6 +304,15 @@ type DefaultSessionMode = Extract<
 type Provider = "anthropic" | "codex";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
+// Page directory for one turn's activity, returned by the per-turn
+// /activity endpoint (server_turn_activity_v2). A long turn splits into pages
+// sealed at the event threshold; the Turns view defaults to the last page and
+// lets the reader page back through sealed earlier pages.
+type TurnActivityPageInfo = {
+  page: number;
+  pageCount: number;
+};
+
 type TurnActivitySummary = {
   turnId?: string;
   turnNumber?: number;
@@ -7580,6 +7589,8 @@ function RunTurnActivityGroup({
   onFork,
   onOpenBackgroundTask,
   loading,
+  pageInfo,
+  onSelectPage,
 }: {
   group: Extract<EntryGroup, { kind: "activity" }>;
   open: boolean;
@@ -7600,6 +7611,8 @@ function RunTurnActivityGroup({
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   loading?: boolean;
+  pageInfo?: TurnActivityPageInfo;
+  onSelectPage?: (page: number) => void;
 }) {
   const ownedAssistantEntries = useMemo(
     () => turnActivityOwnedAssistantEntries(group),
@@ -7675,6 +7688,37 @@ function RunTurnActivityGroup({
           </button>
           {open && (
             <div className="run-turn-activity-body">
+              {pageInfo && pageInfo.pageCount > 1 && onSelectPage && (
+                <div
+                  className="run-turn-activity-pages"
+                  role="group"
+                  aria-label="Turn activity pages"
+                >
+                  <button
+                    type="button"
+                    className="run-turn-activity-page-nav"
+                    onClick={() => onSelectPage(Math.max(1, pageInfo.page - 1))}
+                    disabled={pageInfo.page <= 1}
+                    aria-label="Older activity page"
+                  >
+                    ‹
+                  </button>
+                  <span className="run-turn-activity-page-label">
+                    page {pageInfo.page} of {pageInfo.pageCount}
+                  </span>
+                  <button
+                    type="button"
+                    className="run-turn-activity-page-nav"
+                    onClick={() =>
+                      onSelectPage(Math.min(pageInfo.pageCount, pageInfo.page + 1))
+                    }
+                    disabled={pageInfo.page >= pageInfo.pageCount}
+                    aria-label="Newer activity page"
+                  >
+                    ›
+                  </button>
+                </div>
+              )}
               {group.shell && !group.loaded ? (
                 <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
                   <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
@@ -8135,6 +8179,8 @@ export function RunMessages({
   activityEntriesByTurn = {},
   loadingActivityTurns = {},
   onActivityOpen,
+  turnActivityPageInfo = {},
+  onActivitySelectPage,
 }: {
   entries: TranscriptEntry[];
   avatar: AgentAvatar | null;
@@ -8184,6 +8230,8 @@ export function RunMessages({
   activityEntriesByTurn?: Record<string, TranscriptEntry[] | undefined>;
   loadingActivityTurns?: Record<string, boolean | undefined>;
   onActivityOpen?: (turnId: string) => void;
+  turnActivityPageInfo?: Record<string, TurnActivityPageInfo | undefined>;
+  onActivitySelectPage?: (turnId: string, page: number) => void;
 }) {
   const groups = useMemo(
     () => groupTranscriptEntries(entries, condenseCompletedTurns, activeTurnId, activityEntriesByTurn),
@@ -8496,6 +8544,12 @@ export function RunMessages({
             onFork={onFork}
             onOpenBackgroundTask={onOpenBackgroundTask}
             loading={loadingActivityTurns[g.turnId] === true}
+            pageInfo={turnActivityPageInfo[g.turnId]}
+            onSelectPage={
+              onActivitySelectPage
+                ? (page) => onActivitySelectPage(g.turnId, page)
+                : undefined
+            }
           />
         );
       }
@@ -8523,6 +8577,8 @@ export function RunMessages({
       systemAvatar,
       highlightedEntryId,
       loadingActivityTurns,
+      turnActivityPageInfo,
+      onActivitySelectPage,
       onFork,
       onOpenTurn,
       onActivityOpen,
@@ -9259,6 +9315,13 @@ function ChatPane({
     useState<Record<string, TranscriptEntry[] | undefined>>({});
   const activityEntriesByTurnRef = useRef<Record<string, TranscriptEntry[] | undefined>>({});
   activityEntriesByTurnRef.current = activityEntriesByTurn;
+  // Per-turn page directory from the /activity endpoint, plus the page the
+  // reader has selected (default: undefined → the endpoint returns the last
+  // page). selectedTurnPageRef is the source of truth the fetch reads so a
+  // live refresh re-fetches the page being viewed, not always the tail.
+  const [turnActivityPageInfo, setTurnActivityPageInfo] =
+    useState<Record<string, TurnActivityPageInfo | undefined>>({});
+  const selectedTurnPageRef = useRef<Record<string, number>>({});
   const activityLiveRefreshTimersRef = useRef<Map<string, number>>(new Map());
   const activityLiveRefreshInFlightRef = useRef<Set<string>>(new Set());
   const activityLiveRefreshPendingCursorRef = useRef<Map<string, string>>(new Map());
@@ -9327,12 +9390,13 @@ function ChatPane({
       `/api/sessions/${encodeURIComponent(targetSessionId)}/timeline${query ? `?${query}` : ""}`,
     );
   }, [publicShareTokenValue, publicView, scopedSessionPathForPane]);
-  const turnActivityRequestPathForPane = useCallback((turnId: string) => {
+  const turnActivityRequestPathForPane = useCallback((turnId: string, page?: number) => {
+    const query = page && page > 0 ? `?page=${page}` : "";
     if (publicView && publicShareTokenValue) {
-      return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/turns/${encodeURIComponent(turnId)}/activity`;
+      return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/turns/${encodeURIComponent(turnId)}/activity${query}`;
     }
     return scopedSessionPathForPane(
-      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnId)}/activity`,
+      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnId)}/activity${query}`,
     );
   }, [publicShareTokenValue, publicView, scopedSessionPathForPane, session.id]);
   const fetchPaneResource = useCallback(
@@ -9891,13 +9955,49 @@ function ChatPane({
   const fetchTurnActivityEntries = useCallback(async (
     trimmedTurnId: string,
   ): Promise<TranscriptEntry[]> => {
-    const res = await fetchPaneResource(turnActivityRequestPathForPane(trimmedTurnId));
+    const selectedPage = selectedTurnPageRef.current[trimmedTurnId];
+    const res = await fetchPaneResource(
+      turnActivityRequestPathForPane(trimmedTurnId, selectedPage),
+    );
     if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
-    const body = (await res.json()) as { entries?: unknown[] };
+    const body = (await res.json()) as {
+      entries?: unknown[];
+      page?: number;
+      page_count?: number;
+    };
+    if (typeof body.page === "number" && typeof body.page_count === "number") {
+      const info: TurnActivityPageInfo = { page: body.page, pageCount: body.page_count };
+      setTurnActivityPageInfo((prev) => {
+        const existing = prev[trimmedTurnId];
+        if (existing && existing.page === info.page && existing.pageCount === info.pageCount) {
+          return prev;
+        }
+        return { ...prev, [trimmedTurnId]: info };
+      });
+    }
     return normalizeProjectedTranscriptEntries(
       Array.isArray(body.entries) ? body.entries : [],
     );
   }, [fetchPaneResource, turnActivityRequestPathForPane]);
+  const selectTurnActivityPage = useCallback((turnId: string, page: number) => {
+    const trimmedTurnId = turnId.trim();
+    if (!trimmedTurnId) return;
+    selectedTurnPageRef.current = {
+      ...selectedTurnPageRef.current,
+      [trimmedTurnId]: page,
+    };
+    void fetchTurnActivityEntries(trimmedTurnId)
+      .then((loaded) => {
+        setActivityEntriesByTurn((prev) => {
+          const next = { ...prev, [trimmedTurnId]: loaded };
+          activityEntriesByTurnRef.current = next;
+          return next;
+        });
+      })
+      .catch(() => {
+        /* page switch failures fall back to the loaded page; live refresh retries */
+      });
+  }, [fetchTurnActivityEntries]);
   function silentlyRefreshCachedTurnActivity(turnId: string): void {
     if (activityLiveRefreshInFlightRef.current.has(turnId)) return;
     if (!cachedTurnActivityIsLoaded(turnId)) {
@@ -10035,6 +10135,8 @@ function ChatPane({
     clearActivityLiveRefreshState();
     activityEntriesByTurnRef.current = {};
     setActivityEntriesByTurn({});
+    selectedTurnPageRef.current = {};
+    setTurnActivityPageInfo({});
     setLoadingActivityTurns({});
     setActivityRefreshProblemsByTurn({});
     setSdkConnectionState("idle");
@@ -13748,6 +13850,8 @@ function ChatPane({
               activityEntriesByTurn={activityEntriesByTurn}
               loadingActivityTurns={loadingActivityTurns}
               onActivityOpen={ensureTurnActivityLoaded}
+              turnActivityPageInfo={turnActivityPageInfo}
+              onActivitySelectPage={selectTurnActivityPage}
             />
           </>
         )}

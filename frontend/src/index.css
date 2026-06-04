@@ -7685,6 +7685,49 @@ textarea.run-files-viewer-editor:focus {
   min-width: 0;
 }
 
+/* Per-turn page selector: a long turn splits into pages sealed at the event
+   threshold; the reader defaults to the last page and can step back through
+   sealed earlier pages. */
+.run-turn-activity-pages {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding-bottom: var(--space-1);
+  font-variant-numeric: tabular-nums;
+}
+
+.run-turn-activity-page-label {
+  font-size: var(--font-size-xs, 0.75rem);
+  color: var(--text-muted, #8b8b8b);
+  letter-spacing: 0.01em;
+}
+
+.run-turn-activity-page-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.5rem;
+  height: 1.5rem;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-subtle, #2a2a2a);
+  border-radius: var(--radius-1, 4px);
+  background: transparent;
+  color: var(--text-muted, #8b8b8b);
+  cursor: pointer;
+  line-height: 1;
+}
+
+.run-turn-activity-page-nav:hover:not(:disabled) {
+  color: var(--text-default, #e6e6e6);
+  border-color: var(--border-strong, #3a3a3a);
+}
+
+.run-turn-activity-page-nav:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .run-turn-activity-body .run-transcript-message {
   grid-template-columns: 2rem minmax(0, 1fr);
   width: 100%;

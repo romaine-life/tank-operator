@@ -165,6 +165,16 @@ var (
 		Name: "tank_turn_number_missing_total",
 		Help: "Turn-activity shells materialized without a durable session_turns number while numbering is active; nonzero means the allocation trigger regressed or an event bypassed it.",
 	}, []string{"phase"})
+	turnActivityEventCount = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_turn_activity_event_count",
+		Help:    "Number of durable events folded into one turn-activity projection. A growing tail past turnPageEventLimit means long (often post-compaction) turns are common and the live-page incremental projection is worth landing.",
+		Buckets: []float64{10, 50, 100, 250, 500, 1000, 2000, 5000, 10000},
+	})
+	turnActivityPageCount = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_turn_activity_page_count",
+		Help:    "Number of pages a turn-activity projection split into (sealed at turnPageEventLimit events).",
+		Buckets: []float64{1, 2, 3, 5, 10, 25, 50},
+	})
 
 	// Provider-credential health: the durable Layer 1 surface for
 	// "Codex / Claude sign-in expired" banners. Replaces the SPA pill
@@ -1953,6 +1963,14 @@ func turnNumberResolveResultLabel(raw string) string {
 
 func recordTurnNumberMissing(phase string) {
 	turnNumberMissingTotal.WithLabelValues(turnNumberMissingPhaseLabel(phase)).Inc()
+}
+
+// recordTurnActivityPages observes the page count and total event count of a
+// turn-activity projection so long-turn frequency (the pagination trigger) is
+// visible without high-cardinality labels.
+func recordTurnActivityPages(pageCount, eventCount int) {
+	turnActivityPageCount.Observe(float64(pageCount))
+	turnActivityEventCount.Observe(float64(eventCount))
 }
 
 func turnNumberMissingPhaseLabel(raw string) string {

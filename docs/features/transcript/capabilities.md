@@ -73,6 +73,41 @@ Evidence:
   completed turn can retain a Turn activity log copy of assistant prose while
   exposing only one settled transcript message for counts and message actions.
 
+## Turn Activity Pagination
+
+Show every event of an arbitrarily long turn, and always reflect the turn's
+durable terminal, without folding a fixed-size prefix that drops the terminal
+and renders a finished turn as perpetually active.
+
+Affected contracts:
+- Transcript
+- Transcript Navigation
+- Tank Conversation Protocol
+
+Contract impact:
+- The turn-activity shell's `active`/terminal status, counts, and `completedAt`
+  are folded from the **complete** set of a turn's `session_events`, never a
+  bounded prefix. The terminal is the last event of a long turn and can never be
+  a casualty of a body window.
+- The expansion body paginates: a turn splits into pages sealed at
+  `turnPageEventLimit` (1000) events. The endpoint (`server_turn_activity_v2`)
+  returns the page directory and defaults to the last page; `?page=N` selects
+  another. Page boundaries are durable `order_key` ranges, so a selected page is
+  stable across reload and deep links.
+- The fixed-size per-turn read that truncated long turns oldest-first is deleted
+  end to end (the bounded `EventsForTurn` store method no longer exists); reads
+  go through `EventsForTurnAfter` paged to exhaustion.
+
+Evidence:
+- Backend unit: `backend-go/cmd/tank-operator/turn_pages_test.go` proves an
+  over-limit turn keeps a `completed` shell and seals pages at the threshold.
+- Backend contract: `TestHandleSessionTurnActivityPaginatesOverLimitTurnWithTerminalShell`
+  proves the endpoint reports a completed shell, `page_count >= 2`, and defaults
+  to the last page.
+- Observability: `tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}`
+  + `TankTurnActiveWithDurableTerminal` guard the regression; `tank_turn_activity_event_count`
+  / `tank_turn_activity_page_count` track long-turn frequency.
+
 ## Context Compaction Notice
 
 Status: active (Claude); Codex blocked on provider signal

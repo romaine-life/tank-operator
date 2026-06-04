@@ -217,8 +217,8 @@ func (s *activityEventStore) LatestEvents(_ context.Context, _ string, _ int) (s
 	return store.SessionEventPage{}, nil
 }
 
-func (s *activityEventStore) EventsForTurn(_ context.Context, _ string, _ string, _ int) (store.SessionEventPage, error) {
-	return store.SessionEventPage{}, nil
+func (s *activityEventStore) EventsForTurnAfter(_ context.Context, _ string, _ string, _ string, _ int) (store.SessionEventPage, error) {
+	return store.SessionEventPage{FoundNewest: true}, nil
 }
 
 func (s *activityEventStore) HasOrderKey(_ context.Context, _ string, _ string) (bool, error) {

@@ -321,6 +321,23 @@ counts, compacted child ids, order range, timestamps, status, and error count.
 The child entries for a Turn activity row are fetched only when the row is
 expanded through the turn activity endpoint. This keeps previous-conversation
 navigation bounded while preserving a durable replay path for deep links.
+
+The shell's `active`/terminal status, counts, and `completedAt` are folded from
+the **complete** set of a turn's `session_events`, never from a fixed-size
+prefix. A turn that accumulates many events — most commonly one that crosses a
+`context.compacted` boundary and keeps running — must still report its durable
+terminal: the terminal is the last event, and a bounded oldest-first per-turn
+read used to drop it, leaving a finished turn rendered as perpetually active.
+The turn activity endpoint (`server_turn_activity_v2`) therefore **paginates**
+the expansion body: a turn splits into pages sealed at `turnPageEventLimit`
+events. The endpoint
+returns the page directory (`page`, `page_count`, `pages[]`) and defaults to the
+**last** page (`?page=N` selects another); the Turns view shows a page selector
+and lets the reader step back through sealed earlier pages. Sealing is a durable
+`order_key`-range concept so deep links and reloads are stable. The
+`tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}`
+counter and `TankTurnActiveWithDurableTerminal` alert guard against a regression
+to a window that can't see the terminal.
 When a projected shell carries `active: true` or `status: "active"`, that shell
 also owns the main transcript's running `...` placeholder. The browser may also
 learn the active turn from the session activity summary, but the shell's durable
