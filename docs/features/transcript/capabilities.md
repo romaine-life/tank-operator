@@ -282,14 +282,17 @@ Status: active
 Intent:
 When the in-pod agent invokes AskUserQuestion, the active turn pauses with a
 durable `turn.awaiting_input` event carrying the Tank-canonical questions. The
-turn-activity page projection seals the preceding activity page and opens a
-semantic `question_set` page for that pause. The main transcript renders a
-restored AskUserQuestion handoff button (`RunNeedsInputAnnouncement`, originally
-removed by PR #861) from the durable `awaiting_input` meta row so the user can
-reach the question set from the conversation. The interactive answer form is
-owned by the Turns question page, which reflects durable state rather than
-local React optimism, so a fresh tab renders the same question set and defaults
-to it while the turn is still waiting for input.
+turn-activity page projection records a compact AskUserQuestion invocation
+marker on the preceding activity page, then opens a semantic `question_set`
+page for that pause. If the agent asks immediately, that first activity page is
+marker-only by design: it preserves the ledger handoff without squeezing the
+question UI into activity history. The main transcript renders a restored
+AskUserQuestion handoff button (`RunNeedsInputAnnouncement`, originally removed
+by PR #861) from the durable `awaiting_input` meta row so the user can reach the
+question set from the conversation. The interactive answer form is owned by the
+Turns question page, which reflects durable state rather than local React
+optimism, so a fresh tab renders the same question set and defaults to it while
+the turn is still waiting for input.
 
 Answering resumes the same turn:
 - The user's selection posts to `POST /turns/{askingTurnId}/answer`, which
@@ -317,6 +320,10 @@ Contract impact:
   `awaiting_input` meta row appears in the main transcript as the navigation
   button to the question set, never as a standalone authored message or
   synthetic turn.
+- The preceding activity page receives a compact `AskUserQuestion` tool marker
+  derived from the same durable `turn.awaiting_input` event. It is an audit
+  marker for the invocation, not the answer surface and not a dependency on
+  provider-specific raw tool rows.
 - Turn activity pagination is semantic as well as size-bounded: each
   `turn.awaiting_input` event starts a `question_set` page, multiple questions
   inside that event stay together as one set, and answered/history state remains
@@ -331,8 +338,9 @@ Contract impact:
 
 Evidence:
 - Backend: `backend-go/cmd/tank-operator/turn_pages_test.go` proves
-  `turn.awaiting_input` starts a `question_set` page, multi-question sets stay
-  together, and an answered set seals before resumed activity.
+  `turn.awaiting_input` creates the compact invocation marker page, starts a
+  `question_set` page, keeps multi-question sets together, and seals an
+  answered set before resumed activity.
 - Backend API: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
   proves an unanswered `needs_input` turn defaults to the question page.
 - Frontend: `frontend/src/migrationPolicy.test.ts` proves transcript renderers

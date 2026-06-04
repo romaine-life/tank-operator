@@ -167,6 +167,20 @@ func TestProjectTurnPagesMakesQuestionSetSemanticPage(t *testing.T) {
 	if len(proj.Pages) != 2 {
 		t.Fatalf("page count = %d, want activity page + question page", len(proj.Pages))
 	}
+	activityPage := proj.Pages[0]
+	if activityPage.Kind != "activity" {
+		t.Fatalf("first page kind = %q, want activity", activityPage.Kind)
+	}
+	if len(activityPage.Entries) != 2 {
+		t.Fatalf("activity entries = %d, want prior tool + AskUserQuestion marker: %#v", len(activityPage.Entries), activityPage.Entries)
+	}
+	marker := activityPage.Entries[1]
+	if marker["kind"] != "tool" || marker["toolName"] != "AskUserQuestion" {
+		t.Fatalf("activity marker = %#v, want AskUserQuestion tool row", marker)
+	}
+	if marker["toolStatus"] != "completed" {
+		t.Fatalf("marker toolStatus = %v, want completed", marker["toolStatus"])
+	}
 	questionPage := proj.Pages[1]
 	if questionPage.Kind != "question_set" {
 		t.Fatalf("question page kind = %q, want question_set", questionPage.Kind)
@@ -207,13 +221,57 @@ func TestProjectTurnPagesQuestionSetSealsAfterDurableAnswer(t *testing.T) {
 	}
 
 	proj := projectTurnPages("turn-1", events)
+	if len(proj.Pages) != 3 {
+		t.Fatalf("page count = %d, want invocation marker + answered question page + resumed activity page", len(proj.Pages))
+	}
+	if proj.Pages[0].Kind != "activity" {
+		t.Fatalf("first page kind = %q, want activity marker page", proj.Pages[0].Kind)
+	}
+	if len(proj.Pages[0].Entries) != 1 || proj.Pages[0].Entries[0]["toolName"] != "AskUserQuestion" {
+		t.Fatalf("first page entries = %#v, want AskUserQuestion marker", proj.Pages[0].Entries)
+	}
+	if proj.Pages[1].Kind != "question_set" || !proj.Pages[1].Answered {
+		t.Fatalf("second page = kind %q answered %v, want answered question_set", proj.Pages[1].Kind, proj.Pages[1].Answered)
+	}
+	if proj.Pages[2].Kind != "activity" {
+		t.Fatalf("third page kind = %q, want resumed activity", proj.Pages[2].Kind)
+	}
+}
+
+func TestProjectTurnPagesQuestionFirstStillShowsInvocationMarkerPage(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("await", "00000001", "turn.awaiting_input", "runner", "claude", "turn-1", "turn-1:item:ask", map[string]any{
+			"provider_item_id": "toolu_ask",
+			"questions": []any{
+				map[string]any{
+					"question": "Can I proceed?",
+					"options":  []any{map[string]any{"label": "Yes"}, map[string]any{"label": "No"}},
+				},
+			},
+		}),
+	}
+
+	proj := projectTurnPages("turn-1", events)
 	if len(proj.Pages) != 2 {
-		t.Fatalf("page count = %d, want answered question page + resumed activity page", len(proj.Pages))
+		t.Fatalf("page count = %d, want invocation marker page + question page", len(proj.Pages))
 	}
-	if proj.Pages[0].Kind != "question_set" || !proj.Pages[0].Answered {
-		t.Fatalf("first page = kind %q answered %v, want answered question_set", proj.Pages[0].Kind, proj.Pages[0].Answered)
+	if proj.Pages[0].Kind != "activity" {
+		t.Fatalf("first page kind = %q, want activity", proj.Pages[0].Kind)
 	}
-	if proj.Pages[1].Kind != "activity" {
-		t.Fatalf("second page kind = %q, want resumed activity", proj.Pages[1].Kind)
+	if len(proj.Pages[0].Entries) != 1 {
+		t.Fatalf("first page entries = %d, want one AskUserQuestion marker: %#v", len(proj.Pages[0].Entries), proj.Pages[0].Entries)
+	}
+	marker := proj.Pages[0].Entries[0]
+	if marker["kind"] != "tool" || marker["toolName"] != "AskUserQuestion" {
+		t.Fatalf("first page entry = %#v, want AskUserQuestion tool marker", marker)
+	}
+	if marker["sourceEventId"] != "await" {
+		t.Fatalf("marker sourceEventId = %v, want durable awaiting event id", marker["sourceEventId"])
+	}
+	if proj.Pages[1].Kind != "question_set" {
+		t.Fatalf("second page kind = %q, want question_set", proj.Pages[1].Kind)
+	}
+	if got := defaultTurnActivityPageNumber(proj); got != 2 {
+		t.Fatalf("default page = %d, want pending question page 2", got)
 	}
 }

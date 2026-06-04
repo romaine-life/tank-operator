@@ -45,7 +45,9 @@ yanking the viewport away from a user reading history.
 - Turn activity itself paginates. A turn's expansion body is split into pages
   sealed at `turnPageEventLimit` events and at semantic AskUserQuestion
   boundaries; each `turn.awaiting_input` event starts a `question_set` page that
-  owns the whole question set. The Turn activity endpoint
+  owns the whole question set. The preceding activity page gets a compact
+  AskUserQuestion invocation marker derived from the same durable event, even
+  when that means a marker-only first page. The Turn activity endpoint
   (`server_turn_activity_v2`) returns the page directory (`page`,
   `page_count`, `pages[]`) and accepts `?page=N`. A `needs_input` turn defaults
   to the unanswered `question_set` page; all other turns default to the latest

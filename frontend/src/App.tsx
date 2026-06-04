@@ -7366,7 +7366,7 @@ function RunToolGroup({
 }
 
 function toolItemDefaultExpanded(entry: TranscriptEntry, autoExpand: boolean): boolean {
-  return autoExpand || isAskUserQuestionTool(entry);
+  return autoExpand || isPendingAskUserQuestionTool(entry);
 }
 
 function toolItemExpanded(

@@ -336,7 +336,10 @@ The turn activity endpoint (`server_turn_activity_v2`) therefore **paginates**
 the expansion body: a turn splits into pages sealed at `turnPageEventLimit`
 events and at AskUserQuestion boundaries. A `turn.awaiting_input` event starts
 a semantic `question_set` page that owns the full question set from that tool
-invocation; a later matching `turn.input_answered` seals that page before
+invocation; the immediately preceding activity page carries a compact
+AskUserQuestion invocation marker derived from that same durable event, so a
+question-first turn still has an audit page before the harness-owned question
+surface. A later matching `turn.input_answered` seals that question page before
 resumed provider activity continues on a normal activity page. The endpoint
 returns the page directory (`page`, `page_count`, `pages[]`) and defaults to the
 pending unanswered `question_set` page while the turn is `needs_input`, and to
@@ -1014,10 +1017,12 @@ suffix). The row carries an `awaitingInput` payload — `askingTurnId`,
 `providerItemId`, `timelineId`, `questions`, `questionCount`, `answered`,
 `answers`, and `annotations` — sourced entirely from durable state (`answered`
 is true once a later `turn.input_answered` event references the question). The
-turn page splitter seals the preceding activity page and starts a semantic
-`question_set` page at that row. The SPA renders the interactive answer surface
-from that durable row in the Turns question page; the main transcript renders
-the restored `RunNeedsInputAnnouncement` button to that question set.
+turn page splitter projects a compact `AskUserQuestion` tool marker onto the
+preceding activity page and starts a semantic `question_set` page at that row.
+That marker is sourced from the same durable pause, not from provider-specific
+raw tool rows. The SPA renders the interactive answer surface from the durable
+row in the Turns question page; the main transcript renders the restored
+`RunNeedsInputAnnouncement` button to that question set.
 Submitting the form posts `/answer`, which resumes the same active turn.
 
 The Turn-activity placement follows

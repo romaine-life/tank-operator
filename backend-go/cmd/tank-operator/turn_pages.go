@@ -137,6 +137,7 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 
 	for _, event := range ordered {
 		if isTurnAwaitingInputEvent(event) {
+			current = append(current, awaitingInputInvocationEvent(event))
 			flush()
 			currentKind = "question_set"
 			questionTimelineID = transcriptString(event, "timeline_id")
@@ -162,6 +163,12 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 
 func isTurnAwaitingInputEvent(event map[string]any) bool {
 	return transcriptString(event, "type") == "turn.awaiting_input"
+}
+
+func awaitingInputInvocationEvent(event map[string]any) map[string]any {
+	out := cloneAnyMap(event)
+	out["type"] = "turn.awaiting_input.invocation"
+	return out
 }
 
 func isTurnInputAnsweredForQuestion(event map[string]any, questionTimelineID string) bool {

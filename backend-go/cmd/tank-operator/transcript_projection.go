@@ -39,6 +39,7 @@ type projectionState struct {
 	turnUsages         map[string]turnUsageProjection
 	turnTerminals      map[string]turnTerminalProjection
 	awaitingInputs     []projectionAwaitingInput
+	awaitingInputTools []projectedEntryItem
 	answeredQuestions  map[string]projectionAnsweredInput
 	runStatus          string
 	activeTurnID       string
@@ -268,6 +269,8 @@ func (s *projectionState) apply(event map[string]any) {
 		s.needsInput = true
 		s.activeTurnID = transcriptString(event, "turn_id")
 		s.activeItemID = ""
+	case "turn.awaiting_input.invocation":
+		s.applyAwaitingInputInvocation(event)
 	case "turn.input_answered":
 		s.applyInputAnswered(event)
 		if turnID := transcriptString(event, "turn_id"); turnID != "" {
@@ -468,6 +471,52 @@ func (s *projectionState) applyAwaitingInput(event map[string]any) {
 		OrderKey:       transcriptString(event, "order_key"),
 		Time:           transcriptString(event, "created_at"),
 		SourceEventID:  transcriptString(event, "event_id"),
+	})
+}
+
+func (s *projectionState) applyAwaitingInputInvocation(event map[string]any) {
+	turnID := transcriptString(event, "turn_id")
+	if turnID == "" {
+		return
+	}
+	questions := projectionAwaitingInputQuestions(event)
+	if len(questions) == 0 {
+		return
+	}
+	summary := awaitingInputSummary(questions)
+	anchor := transcriptPayloadString(event, "timeline_id")
+	if anchor == "" {
+		anchor = transcriptString(event, "timeline_id")
+	}
+	if anchor == "" {
+		anchor = transcriptString(event, "event_id")
+	}
+	orderKey := transcriptString(event, "order_key")
+	if orderKey != "" {
+		orderKey = orderKey + "~ask_user_question"
+	}
+	entry := map[string]any{
+		"id":             anchor + ":ask_user_question_invocation",
+		"kind":           "tool",
+		"toolName":       "AskUserQuestion",
+		"toolStatus":     "completed",
+		"toolInput":      projectionFormatValue(map[string]any{"questions": questions}),
+		"toolOutput":     "Question set opened on the next turn page.",
+		"turnId":         turnID,
+		"providerItemId": transcriptPayloadString(event, "provider_item_id"),
+		"time":           transcriptString(event, "created_at"),
+		"startedAt":      transcriptString(event, "created_at"),
+		"completedAt":    transcriptString(event, "created_at"),
+		"sourceEventId":  transcriptString(event, "event_id"),
+		"orderKey":       orderKey,
+	}
+	if summary != "" {
+		entry["toolSummary"] = summary
+	}
+	s.awaitingInputTools = append(s.awaitingInputTools, projectedEntryItem{
+		entry:    entry,
+		orderKey: orderKey,
+		index:    len(s.awaitingInputTools),
 	})
 }
 
@@ -699,7 +748,7 @@ func (s *projectionState) upsertBackgroundTask(event map[string]any, status stri
 }
 
 func (s *projectionState) projectFlatEntries() []map[string]any {
-	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.turnUsages)+len(s.turnTerminals))
+	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.turnUsages)+len(s.turnTerminals)+len(s.awaitingInputTools))
 	items = append(items, s.messages...)
 	baseIndex := len(items)
 	backgroundProviderIDs := s.backgroundProviderItemIDs()
@@ -794,6 +843,11 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 			orderKey: transcriptMapString(card, "orderKey"),
 			index:    baseIndex + idx,
 		})
+	}
+	baseIndex += len(s.awaitingInputs)
+	for idx, tool := range s.awaitingInputTools {
+		tool.index = baseIndex + idx
+		items = append(items, tool)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].orderKey != "" && items[j].orderKey != "" && items[i].orderKey != items[j].orderKey {

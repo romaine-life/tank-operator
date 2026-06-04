@@ -207,6 +207,7 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
   assert.equal(appSource.includes("pendingAskUserCount"), true);
   assert.match(appSource, /entries\.some\(isPendingAskUserQuestionTool\)/);
   assert.match(appSource, /toolGroupDefaultOpen\(g\.entries, autoExpandTools, toolExpansionOverrides\)/);
+  assert.equal(appSource.includes("return autoExpand || isPendingAskUserQuestionTool(entry);"), true);
 });
 
 test("AskUserQuestion handoff button is restored in transcript and answer form is owned by Turns", () => {
