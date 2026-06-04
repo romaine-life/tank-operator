@@ -760,6 +760,92 @@ func TestProjectTranscriptEventsPopulatesActivityBodiesForTurnsWithoutCompactedE
 	}
 }
 
+func TestProjectTranscriptEventsFoldsSessionLifecycleIntoTurn(t *testing.T) {
+	// Create-with-initial-turn race: "Session is loading." lands before the
+	// first turn's user message and "Session is ready." just after. Both are
+	// operational noise that must fold into turn-1's activity body — the noise
+	// bin — never rendering as top-level rows above the user's message.
+	events := []map[string]any{
+		projectionTestEvent("loading", "001", "session.status", "system", "tank", "", "sess:loading",
+			map[string]any{"status": "loading", "text": "Session is loading."}),
+		projectionTestEvent("u", "002", "user_message.created", "user", "tank", "turn-1", "turn-1:user",
+			map[string]any{"text": "hi", "display": map[string]any{"kind": "plain"}}),
+		projectionTestEvent("ready", "003", "session.status", "system", "tank", "", "sess:ready",
+			map[string]any{"status": "ready", "text": "Session is ready."}),
+		projectionTestEvent("started", "004", "turn.started", "runner", "tank", "turn-1", "",
+			map[string]any{"status": "started"}),
+		projectionTestEvent("final", "005", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:msg-1",
+			map[string]any{"kind": "message", "text": "hello"}),
+		projectionTestEvent("terminal", "006", "turn.completed", "runner", "codex", "turn-1", "",
+			projectionFinalAnswerPayload("turn-1:item:msg-1")),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	for _, entry := range projection.Entries {
+		if isProjectionSessionStatus(entry) {
+			t.Fatalf("session lifecycle leaked to conversation altitude: %#v", entry)
+		}
+	}
+	if len(projection.Entries) == 0 || projection.Entries[0]["role"] != "user" {
+		t.Fatalf("first top-level row = %#v, want the user message", projection.Entries)
+	}
+	hasShell := false
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "turn_activity" {
+			hasShell = true
+		}
+	}
+	if !hasShell {
+		t.Fatalf("expected a turn_activity shell holding the folded lifecycle: %#v", projection.Entries)
+	}
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatalf("missing activity body for turn-1")
+	}
+	folded := 0
+	for _, entry := range body.Entries {
+		if isProjectionSessionStatus(entry) {
+			folded++
+		}
+	}
+	if folded != 2 {
+		t.Fatalf("turn-1 body session lifecycle entries = %d, want 2: %#v", folded, body.Entries)
+	}
+}
+
+func TestProjectTranscriptEventsKeepsFailedSessionBannerPromoted(t *testing.T) {
+	// A session.status:failed banner is a failure we surface: it stays a
+	// top-level row, never folded into a turn's collapsed activity body.
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user",
+			map[string]any{"text": "hi", "display": map[string]any{"kind": "plain"}}),
+		projectionTestEvent("started", "002", "turn.started", "runner", "tank", "turn-1", "",
+			map[string]any{"status": "started"}),
+		projectionTestEvent("failed", "003", "session.status", "system", "tank", "", "sess:failed",
+			map[string]any{"status": "failed", "text": "Session failed to start."}),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	found := false
+	for _, entry := range projection.Entries {
+		if !isProjectionSessionStatus(entry) {
+			continue
+		}
+		found = true
+		if entry["severity"] != "error" {
+			t.Fatalf("failed banner severity = %v, want error", entry["severity"])
+		}
+		if tid, ok := entry["turnId"]; ok && tid != "" {
+			t.Fatalf("failed banner was folded into a turn: %#v", entry)
+		}
+	}
+	if !found {
+		t.Fatalf("failed session banner missing from top-level transcript: %#v", projection.Entries)
+	}
+}
+
 func projectionTestEvent(eventID, orderKey, eventType, actor, source, turnID, timelineID string, payload map[string]any) map[string]any {
 	event := map[string]any{
 		"event_id":   eventID,

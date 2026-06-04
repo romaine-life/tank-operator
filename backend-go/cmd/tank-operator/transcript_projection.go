@@ -150,6 +150,7 @@ func projectTranscriptEvents(events []map[string]any) transcriptProjection {
 		state.apply(event)
 	}
 	flat := state.projectFlatEntries()
+	assignSessionStatusOwnership(flat)
 	return compactProjectedTranscript(flat, state.activeTurnID, state.runStatus, state.turnTerminals)
 }
 
@@ -387,7 +388,12 @@ func (s *projectionState) applySessionStatus(event map[string]any) {
 		"sourceEventId": transcriptString(event, "event_id"),
 		"orderKey":      transcriptString(event, "order_key"),
 	}
-	if transcriptPayloadString(event, "status") == "failed" {
+	status := transcriptPayloadString(event, "status")
+	// Mark the entry so the projection can fold happy-path session lifecycle
+	// (loading/ready) into the turn it belongs to, while leaving a failed
+	// banner promoted at conversation altitude. See assignSessionStatusOwnership.
+	entry["sessionStatus"] = status
+	if status == "failed" {
 		entry["severity"] = "error"
 	} else {
 		entry["severity"] = "info"
@@ -1126,11 +1132,27 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string, ru
 }
 
 func projectedActivityInsertIndex(entries []map[string]any, activity turnActivityBody) int {
+	base := -1
 	if idx := firstTurnProgressIndex(entries, activity.TurnID); idx >= 0 {
-		return idx
+		base = idx
+	} else if len(activity.Entries) > 0 {
+		base = projectedEntryIndex(entries, activity.Entries[0])
 	}
-	if len(activity.Entries) > 0 {
-		return projectedEntryIndex(entries, activity.Entries[0])
+	// A turn's activity body (its noise bin) must never render above the turn's
+	// own user message. Folded session-lifecycle entries can carry order keys
+	// that predate the message (the session reported ready after you pressed
+	// enter), so clamp the shell to sit just after the user message.
+	if um := turnUserMessageIndex(entries, activity.TurnID); um >= 0 && base <= um {
+		base = um + 1
+	}
+	return base
+}
+
+func turnUserMessageIndex(entries []map[string]any, turnID string) int {
+	for idx, entry := range entries {
+		if transcriptMapString(entry, "turnId") == turnID && isProjectedUserMessage(entry) {
+			return idx
+		}
 	}
 	return -1
 }
@@ -1317,6 +1339,61 @@ func isProjectedUserMessage(entry map[string]any) bool {
 func isProjectionTurnProgress(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "meta" &&
 		transcriptMapString(entry, "metaKind") == "turn_progress"
+}
+
+func isProjectionSessionStatus(entry map[string]any) bool {
+	_, ok := entry["sessionStatus"]
+	return ok
+}
+
+// assignSessionStatusOwnership folds happy-path session lifecycle (session.status
+// loading/ready) into the turn it belongs to, so "Session is loading./ready."
+// lives inside that turn's activity body — the noise bin — instead of floating at
+// conversation altitude as a top-level system message. The conversation transcript
+// is for turns; operational lifecycle is turn-scoped activity.
+//
+// Ownership is the turn whose epoch contains the event by order key. Lifecycle
+// that precedes the first turn's user message (the create-with-initial-turn race,
+// where the session reports loading/ready around the same instant you press enter)
+// is owned by that first turn, which is why the startup rows can no longer sort
+// above your message. A session.status:failed event is left unattached so it stays
+// promoted as a top-level banner — failures are exactly the case we surface.
+func assignSessionStatusOwnership(entries []map[string]any) {
+	type turnAnchor struct{ turnID, orderKey string }
+	var anchors []turnAnchor
+	for _, entry := range entries {
+		if isProjectedUserMessage(entry) {
+			anchors = append(anchors, turnAnchor{
+				turnID:   transcriptMapString(entry, "turnId"),
+				orderKey: transcriptMapString(entry, "orderKey"),
+			})
+		}
+	}
+	if len(anchors) == 0 {
+		return
+	}
+	for _, entry := range entries {
+		if !isProjectionSessionStatus(entry) ||
+			transcriptMapString(entry, "sessionStatus") == "failed" ||
+			transcriptMapString(entry, "turnId") != "" {
+			continue
+		}
+		orderKey := transcriptMapString(entry, "orderKey")
+		owner := anchors[0].turnID
+		for _, a := range anchors {
+			if a.orderKey == "" {
+				continue
+			}
+			if orderKey >= a.orderKey {
+				owner = a.turnID
+			} else {
+				break
+			}
+		}
+		if owner != "" {
+			entry["turnId"] = owner
+		}
+	}
 }
 
 // projectAwaitingInputCard projects a turn.awaiting_input pause into the
