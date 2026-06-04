@@ -265,7 +265,7 @@ func (s *projectionState) apply(event map[string]any) {
 	case "turn.awaiting_input":
 		// The agent asked the user a question and paused the same turn. The
 		// durable question set owns the Turn question page; the main
-		// transcript keeps the same durable meta row as a navigation button.
+		// transcript keeps the same durable meta row as the assistant handoff.
 		// The turn remains active until an answer resumes it, stop interrupts
 		// it, or a final terminal arrives.
 		s.applyAwaitingInput(event)
@@ -1562,17 +1562,17 @@ func isProjectionAwaitingInputEntry(entry map[string]any) bool {
 
 // projectAwaitingInputCard projects a turn.awaiting_input pause into the
 // asking turn's activity detail as the question-set payload and into the main
-// transcript as the navigation button. It is anchored at the asking turn's tail
+// transcript as the assistant handoff row. It is anchored at the asking turn's tail
 // (orderKey + "~awaiting_input") so historical replay and live streaming agree
 // on placement. `answered` is derived from a later turn.input_answered event,
 // not a browser-local flag, so a fresh tab opened after the user answered
 // renders the resolved question set.
 func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectionAnsweredInput) map[string]any {
 	summary := awaitingInputSummary(awaiting.Questions)
-	title := "Claude is waiting on you"
+	title := "I need your input"
 	answered := answer.Answered
 	if answered {
-		title = "Answered"
+		title = "Input answered"
 	}
 	orderKey := awaiting.OrderKey
 	if orderKey != "" {

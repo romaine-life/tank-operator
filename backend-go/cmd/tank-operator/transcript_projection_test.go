@@ -583,7 +583,7 @@ func TestProjectTranscriptEventsKeepsFailedTurnActivityOutOfMainTranscript(t *te
 // TestProjectTranscriptEventsPromotesAwaitingInputCard verifies the projection
 // places a turn.awaiting_input pause inside Turn activity as a question-set
 // payload and keeps the same durable meta row in the main transcript as the
-// navigation button row. The row is anchored at the asking turn's tail and stays
+// assistant handoff row. The row is anchored at the asking turn's tail and stays
 // unanswered until a later turn.input_answered arrives.
 func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	events := []map[string]any{
@@ -626,25 +626,25 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	if card == nil {
 		t.Fatalf("expected awaiting_input question payload in activity body, got bodies: %#v", projection.ActivityBodies)
 	}
-	var transcriptButton map[string]any
+	var transcriptHandoff map[string]any
 	for _, entry := range projection.Entries {
 		if entry["metaKind"] == "awaiting_input" {
-			transcriptButton = entry
+			transcriptHandoff = entry
 			break
 		}
 	}
-	if transcriptButton == nil {
-		t.Fatalf("expected awaiting_input navigation button row in main transcript, got entries: %#v", projection.Entries)
+	if transcriptHandoff == nil {
+		t.Fatalf("expected awaiting_input handoff row in main transcript, got entries: %#v", projection.Entries)
 	}
 	if shell := projection.Entries[1]; shell["kind"] != "turn_activity" {
 		t.Fatalf("main transcript entry = %#v, want turn_activity shell", shell)
 	}
 	if projection.Entries[2]["metaKind"] != "awaiting_input" {
-		t.Fatalf("third transcript entry = %#v, want awaiting_input navigation button row", projection.Entries[2])
+		t.Fatalf("third transcript entry = %#v, want awaiting_input handoff row", projection.Entries[2])
 	}
 	meta, _ := card["meta"].(map[string]any)
-	if meta["title"] != "Claude is waiting on you" {
-		t.Errorf("card title = %q, want Claude is waiting on you", meta["title"])
+	if meta["title"] != "I need your input" {
+		t.Errorf("card title = %q, want I need your input", meta["title"])
 	}
 	if got := meta["detail"]; got != "Which auth method?" {
 		t.Errorf("card detail = %q, want question text", got)
@@ -673,8 +673,8 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	if !strings.HasSuffix(card["orderKey"].(string), "~awaiting_input") {
 		t.Errorf("card orderKey = %q, want suffix ~awaiting_input", card["orderKey"])
 	}
-	if transcriptButton["orderKey"] != card["orderKey"] {
-		t.Errorf("transcript button orderKey = %q, want activity card orderKey %q", transcriptButton["orderKey"], card["orderKey"])
+	if transcriptHandoff["orderKey"] != card["orderKey"] {
+		t.Errorf("transcript handoff orderKey = %q, want activity card orderKey %q", transcriptHandoff["orderKey"], card["orderKey"])
 	}
 }
 
@@ -716,7 +716,7 @@ func TestProjectTranscriptEventsAwaitingInputButtonSortsAfterStartupStatus(t *te
 		t.Fatalf("fourth entry = %#v, want turn_activity shell", projection.Entries[3])
 	}
 	if projection.Entries[4]["metaKind"] != "awaiting_input" {
-		t.Fatalf("fifth entry = %#v, want awaiting_input navigation button row after startup status", projection.Entries[4])
+		t.Fatalf("fifth entry = %#v, want awaiting_input handoff row after startup status", projection.Entries[4])
 	}
 	activity := projection.Entries[3]["activity"].(map[string]any)
 	if activity["status"] != "needs_input" {
@@ -725,7 +725,7 @@ func TestProjectTranscriptEventsAwaitingInputButtonSortsAfterStartupStatus(t *te
 	activityIDs, _ := projection.Entries[3]["activityIds"].([]string)
 	for _, id := range activityIDs {
 		if id == projection.Entries[4]["id"] {
-			t.Fatalf("awaiting_input navigation button row was compacted by activity shell: activityIds=%#v", activityIDs)
+			t.Fatalf("awaiting_input handoff row was compacted by activity shell: activityIds=%#v", activityIDs)
 		}
 	}
 }
@@ -763,8 +763,8 @@ func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.
 				continue
 			}
 			meta := entry["meta"].(map[string]any)
-			if meta["title"] != "Answered" {
-				t.Errorf("answered card title = %q, want Answered", meta["title"])
+			if meta["title"] != "Input answered" {
+				t.Errorf("answered card title = %q, want Input answered", meta["title"])
 			}
 			awaiting := entry["awaitingInput"].(map[string]any)
 			if awaiting["answered"] != true {
