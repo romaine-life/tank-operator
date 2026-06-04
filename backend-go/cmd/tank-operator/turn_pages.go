@@ -58,7 +58,81 @@ func readAllTurnEvents(ctx context.Context, eventStore store.SessionEventStore, 
 		}
 		cursor = page.NextOrderKey
 	}
-	return all, nil
+	return adoptLeadingSessionLifecycle(ctx, eventStore, sessionID, all)
+}
+
+// adoptLeadingSessionLifecycle prepends the session-startup lifecycle
+// (session.status loading/ready emitted before the first turn) onto the FIRST
+// turn's event set, so projectTranscriptEvents folds it into that turn's activity
+// body — the noise bin — instead of leaving it as standalone top-level rows.
+//
+// Only the first turn adopts: if any user_message.created precedes this turn, the
+// leading window belongs to an earlier turn and the events are returned
+// unchanged. session.status:failed is not adopted; it stays a promoted top-level
+// banner. This is the single seam shared by the materializer (durable /timeline
+// rows) and the lazy /activity body, so both fold the lifecycle identically.
+func adoptLeadingSessionLifecycle(ctx context.Context, eventStore store.SessionEventStore, sessionID string, turnEvents []map[string]any) ([]map[string]any, error) {
+	bound := firstEventOrderKey(turnEvents)
+	if bound == "" {
+		return turnEvents, nil
+	}
+	var lifecycle []map[string]any
+	cursor := ""
+	for {
+		page, err := eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{AfterOrderKey: cursor}, turnPageReadBatch)
+		if err != nil {
+			return nil, err
+		}
+		adopt, stop, prior := scanLeadingLifecycle(page.Events, bound)
+		if prior {
+			return turnEvents, nil
+		}
+		lifecycle = append(lifecycle, adopt...)
+		if stop || page.FoundNewest || len(page.Events) == 0 || page.NextOrderKey == "" || page.NextOrderKey == cursor {
+			break
+		}
+		cursor = page.NextOrderKey
+	}
+	if len(lifecycle) == 0 {
+		return turnEvents, nil
+	}
+	return append(lifecycle, turnEvents...), nil
+}
+
+// scanLeadingLifecycle walks a page of session-ordered events that precede a
+// turn's first event (`bound`). It collects session.status loading/ready
+// (prior=false), stops once it reaches the bound (stop=true), and reports
+// prior=true the moment it sees an earlier user_message.created — meaning a prior
+// turn already owns this leading window, so nothing is adopted.
+func scanLeadingLifecycle(events []map[string]any, bound string) (adopt []map[string]any, stop bool, prior bool) {
+	for _, ev := range events {
+		if transcriptString(ev, "order_key") >= bound {
+			return adopt, true, false
+		}
+		switch transcriptString(ev, "type") {
+		case "user_message.created":
+			return nil, true, true
+		case "session.status":
+			if st := transcriptPayloadString(ev, "status"); st == "loading" || st == "ready" {
+				adopt = append(adopt, ev)
+			}
+		}
+	}
+	return adopt, false, false
+}
+
+func firstEventOrderKey(events []map[string]any) string {
+	best := ""
+	for _, ev := range events {
+		ok := transcriptString(ev, "order_key")
+		if ok == "" {
+			continue
+		}
+		if best == "" || ok < best {
+			best = ok
+		}
+	}
+	return best
 }
 
 // turnPage is one sealed-or-live page of a turn's activity body.

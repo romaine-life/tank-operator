@@ -151,6 +151,7 @@ func projectTranscriptEvents(events []map[string]any) transcriptProjection {
 	}
 	flat := state.projectFlatEntries()
 	assignSessionStatusOwnership(flat)
+	flat = dropOrphanSessionLifecycle(flat)
 	return compactProjectedTranscript(flat, state.activeTurnID, state.runStatus, state.turnTerminals)
 }
 
@@ -1344,6 +1345,26 @@ func isProjectionTurnProgress(entry map[string]any) bool {
 func isProjectionSessionStatus(entry map[string]any) bool {
 	_, ok := entry["sessionStatus"]
 	return ok
+}
+
+// dropOrphanSessionLifecycle removes happy-path session lifecycle (loading/ready)
+// that has no owning turn. Such an event is operational noise with nowhere to
+// live — a session opened with no message yet, or the per-event materialization
+// path projecting a lone session.status — so it produces no transcript row. It
+// only surfaces by folding into the turn that adopts it (assignSessionStatusOwnership
+// plus the leading-lifecycle adoption in readAllTurnEvents). A failed banner is
+// never dropped: failures are surfaced as top-level rows.
+func dropOrphanSessionLifecycle(entries []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		if isProjectionSessionStatus(entry) &&
+			transcriptMapString(entry, "sessionStatus") != "failed" &&
+			transcriptMapString(entry, "turnId") == "" {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 // assignSessionStatusOwnership folds happy-path session lifecycle (session.status

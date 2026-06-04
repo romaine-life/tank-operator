@@ -846,6 +846,34 @@ func TestProjectTranscriptEventsKeepsFailedSessionBannerPromoted(t *testing.T) {
 	}
 }
 
+func TestProjectTranscriptEventsDropsOrphanSessionLifecycle(t *testing.T) {
+	// A loading/ready event with no owning turn (a session opened with no message
+	// yet, or the per-event materialization path projecting a lone session.status)
+	// produces no transcript row — happy-path lifecycle only surfaces by folding
+	// into a turn.
+	events := []map[string]any{
+		projectionTestEvent("ready", "001", "session.status", "system", "tank", "", "sess:ready",
+			map[string]any{"status": "ready", "text": "Session is ready."}),
+	}
+	projection := projectTranscriptEvents(events)
+	if len(projection.Entries) != 0 {
+		t.Fatalf("orphan session lifecycle should produce no rows, got: %#v", projection.Entries)
+	}
+}
+
+func TestProjectTranscriptEventsKeepsOrphanFailedBanner(t *testing.T) {
+	// A failed banner with no turn (the freshly-created-session failure backfill)
+	// stays a top-level error row.
+	events := []map[string]any{
+		projectionTestEvent("failed", "001", "session.status", "system", "tank", "", "sess:failed",
+			map[string]any{"status": "failed", "text": "Session failed to start."}),
+	}
+	projection := projectTranscriptEvents(events)
+	if len(projection.Entries) != 1 || !isProjectionSessionStatus(projection.Entries[0]) || projection.Entries[0]["severity"] != "error" {
+		t.Fatalf("orphan failed banner should remain a top-level error row, got: %#v", projection.Entries)
+	}
+}
+
 func projectionTestEvent(eventID, orderKey, eventType, actor, source, turnID, timelineID string, payload map[string]any) map[string]any {
 	event := map[string]any{
 		"event_id":   eventID,
