@@ -7412,9 +7412,9 @@ textarea.run-files-viewer-editor:focus {
 }
 
 /* SSE connectivity pill — rendered beside the session title when the live
-   event stream is degraded (connecting / connection_lost / resyncing). It
-   lives in the absolute title chrome so transient reconnects do not move the
-   transcript or composer. */
+   event stream is user-visibly degraded (slow reconnect / connection_lost /
+   resyncing). It lives in the absolute title chrome so transient reconnects
+   do not move the transcript or composer. */
 .run-connection-pill {
   flex: 0 0 auto;
   display: inline-flex;
