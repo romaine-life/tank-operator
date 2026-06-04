@@ -3907,6 +3907,18 @@ button:disabled {
   font-weight: 650;
 }
 
+.run-turn-view-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+
+.run-turn-view-page-select {
+  min-width: 7rem;
+  max-width: 11rem;
+}
+
 .run-turn-view-select {
   min-width: 9rem;
   max-width: 16rem;
