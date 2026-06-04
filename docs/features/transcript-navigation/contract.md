@@ -43,14 +43,16 @@ yanking the viewport away from a user reading history.
   events inside a collapsed Turn activity row are loaded only through the
   explicit Turn activity endpoint.
 - Turn activity itself paginates. A turn's expansion body is split into pages
-  sealed at `turnPageEventLimit` events; the Turn activity endpoint
-  (`server_turn_activity_v2`) returns the page
-  directory (`page`, `page_count`, `pages[]`) and accepts `?page=N`, defaulting
-  to the last page. The page boundary is a durable `order_key`-range concept, so
-  a selected page is stable across reload and deep links. The shell's
-  active/terminal status is never a function of which page rendered — it is
-  folded from the complete turn so a finished long turn can never render as
-  perpetually active.
+  sealed at `turnPageEventLimit` events and at semantic AskUserQuestion
+  boundaries; each `turn.awaiting_input` event starts a `question_set` page that
+  owns the whole question set. The Turn activity endpoint
+  (`server_turn_activity_v2`) returns the page directory (`page`,
+  `page_count`, `pages[]`) and accepts `?page=N`. A `needs_input` turn defaults
+  to the unanswered `question_set` page; all other turns default to the latest
+  page. The page boundary is a durable `order_key`-range concept, so a selected
+  page is stable across reload and deep links. The shell's active/terminal
+  status is never a function of which page rendered — it is folded from the
+  complete turn so a finished long turn can never render as perpetually active.
 - Copied message links may name rendered timeline IDs, but the server must
   translate them to durable cursors.
 - `sessions.visible` owns sidebar/list membership only. Soft-deleting a session
@@ -168,3 +170,7 @@ yanking the viewport away from a user reading history.
   to the latest turn. The retired `turn_<uuid>` public route form and the
   array-position "Turn N" label cannot reappear without failing
   `scripts/check-removed-chat-runtime.mjs`.
+- Opening a pending `needs_input` turn lands on the question-set page, not the
+  last output page. Multiple questions from one AskUserQuestion invocation stay
+  on the same page, and the surrounding activity pages remain reachable through
+  the page selector.

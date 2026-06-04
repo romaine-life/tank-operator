@@ -209,11 +209,23 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
   assert.match(appSource, /toolGroupDefaultOpen\(g\.entries, autoExpandTools, toolExpansionOverrides\)/);
 });
 
-// The retired "Claude is waiting on you" system-identity handoff row
-// (RunNeedsInputAnnouncement) is replaced by the interactive
-// RunAwaitingInputCard. The new card's presence + wiring is pinned by
-// scripts/check-askuserquestion-migration.mjs (REQUIRED entries); there is no
-// system-identity announcement row to assert here anymore.
+test("AskUserQuestion answer form is owned by the Turns question page", () => {
+  const messagesMatch = appSource.match(/export function RunMessages\([\s\S]*?\n}\n\nfunction AdminObservabilityPanel/);
+  assert.ok(messagesMatch, "RunMessages source should be present");
+  assert.equal(messagesMatch![0].includes("RunAwaitingInputCard"), false);
+  assert.equal(messagesMatch![0].includes("RunAwaitingInputNotice"), true);
+
+  const transcriptActivityMatch = appSource.match(/function RunTurnActivityGroup\([\s\S]*?\n}\n\nfunction RunTurnActivityScreen/);
+  assert.ok(transcriptActivityMatch, "RunTurnActivityGroup source should be present");
+  assert.equal(transcriptActivityMatch![0].includes("RunAwaitingInputCard"), false);
+  assert.equal(transcriptActivityMatch![0].includes("RunAwaitingInputNotice"), true);
+
+  const turnScreenMatch = appSource.match(/function RunTurnActivityScreen\([\s\S]*?\n}\n\nfunction rangeIntersectsNode/);
+  assert.ok(turnScreenMatch, "RunTurnActivityScreen source should be present");
+  assert.equal(turnScreenMatch![0].includes("RunAwaitingInputCard"), true);
+  assert.equal(appSource.includes('kind === "question_set"'), true);
+  assert.equal(appSource.includes("resetPage?: boolean"), true);
+});
 
 test("transcript meta status lines are attributed to the session system identity", () => {
   // "Stopped" / "Turn stopped by user.", "Turn failed" + provider error,
@@ -450,14 +462,14 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
 });
 
 test("turn view entry points open at the turn bottom", () => {
-  assert.equal(appSource.includes('type TurnViewScrollAnchor = "bottom"'), true);
+  assert.equal(appSource.includes('type TurnViewScrollAnchor = "bottom" | "top"'), true);
   assert.equal(
     appSource.includes('onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}'),
     true,
   );
-  // The AskUserQuestion pause is now the interactive RunAwaitingInputCard in
-  // Turn activity, so the retired RunNeedsInputAnnouncement "go to the question
-  // turn" navigation (onOpenTurn?.(targetTurnId, …)) is gone.
+  // AskUserQuestion uses the same turn navigation path, but with resetPage so
+  // the server default opens the pending question-set page.
+  assert.equal(appSource.includes('{ anchor: "top", resetPage: true }'), true);
   assert.equal(
     appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })'),
     true,

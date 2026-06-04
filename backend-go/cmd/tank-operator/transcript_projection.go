@@ -102,7 +102,7 @@ type turnTerminalProjection struct {
 
 // projectionAwaitingInput captures a turn.awaiting_input pause: the agent asked
 // the user a question and the same turn is waiting for a reply. The
-// turn-activity card renders from this (questions + ids), and "answered" is
+// turn question-set page renders from this (questions + ids), and "answered" is
 // derived from a later turn.input_answered event on the same turn.
 type projectionAwaitingInput struct {
 	AskingTurnID   string
@@ -243,7 +243,7 @@ func (s *projectionState) apply(event map[string]any) {
 		s.upsertBackgroundTask(event, status)
 	case "turn.awaiting_input":
 		// The agent asked the user a question and paused the same turn. The
-		// durable question card stays in Turn activity; the turn remains active
+		// durable question set stays in Turn activity; the turn remains active
 		// until an answer resumes it, stop interrupts it, or a final terminal
 		// arrives.
 		s.applyAwaitingInput(event)
@@ -1200,11 +1200,11 @@ func isProjectionTurnProgress(entry map[string]any) bool {
 }
 
 // projectAwaitingInputCard projects a turn.awaiting_input pause into the
-// asking turn's activity detail as the interactive question card. It is anchored
+// asking turn's activity detail as the question-set payload. It is anchored
 // at the asking turn's tail (orderKey + "~awaiting_input") so historical replay
 // and live streaming agree on placement inside the turn body. `answered` is
 // derived from a later turn.input_answered event, not a browser-local flag, so a
-// fresh tab opened after the user answered renders the resolved card.
+// fresh tab opened after the user answered renders the resolved question set.
 func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectionAnsweredInput) map[string]any {
 	summary := awaitingInputSummary(awaiting.Questions)
 	title := "Claude is waiting on you"

@@ -311,6 +311,19 @@ type ToolKind = "mcp" | "shell";
 type TurnActivityPageInfo = {
   page: number;
   pageCount: number;
+  kind?: string;
+  questionCount?: number;
+  answered?: boolean;
+  pages?: TurnActivityPageDirectoryItem[];
+};
+
+type TurnActivityPageDirectoryItem = {
+  number: number;
+  kind?: string;
+  eventCount?: number;
+  sealed?: boolean;
+  questionCount?: number;
+  answered?: boolean;
 };
 
 type TurnActivitySummary = {
@@ -375,7 +388,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // rows it surfaces specially in chat — see transcript_projection.go.
   metaKind?: "awaiting_input" | "context_compacted";
   // For `awaiting_input` rows inside Turn activity: the Tank-canonical
-  // questions plus the target ids RunAwaitingInputCard posts to /answer.
+  // questions plus the target ids the Turns question page posts to /answer.
   // `answered` is durable — set once a later turn.input_answered event
   // references the question.
   awaitingInput?: {
@@ -3381,6 +3394,7 @@ type TurnViewScrollAnchor = "bottom" | "top";
 
 type TurnPageOpenOptions = {
   anchor?: TurnViewScrollAnchor;
+  resetPage?: boolean;
 };
 
 type TurnViewScrollRequest = {
@@ -6755,6 +6769,42 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
   );
 }
 
+function RunAwaitingInputNotice({
+  entry,
+  onOpenTurn,
+}: {
+  entry: TranscriptEntry;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+}) {
+  const questionCount = entry.awaitingInput?.questionCount ?? 0;
+  const answered = entry.awaitingInput?.answered === true;
+  const turnId = entry.awaitingInput?.askingTurnId ?? entry.turnId ?? "";
+  return (
+    <div
+      className="run-tool-body run-tool-ask-notice"
+      data-answered={answered ? "true" : "false"}
+    >
+      <div className="run-tool-ask-notice-main">
+        <span className="run-tool-ask-notice-kicker">
+          {answered ? "Question set answered" : "Agent needs input"}
+        </span>
+        <span className="run-tool-ask-notice-detail">
+          {questionCount > 0 ? plural(questionCount, "question") : "Question set"}
+        </span>
+      </div>
+      {!answered && turnId && onOpenTurn && (
+        <button
+          type="button"
+          className="run-tool-ask-notice-action"
+          onClick={() => onOpenTurn(turnId, { anchor: "top", resetPage: true })}
+        >
+          Answer questions
+        </button>
+      )}
+    </div>
+  );
+}
+
 function ToolDiffBody({
   entry,
   input,
@@ -7177,6 +7227,35 @@ function turnActivityShellSummary(summary: TurnActivitySummary | undefined): str
   return parts.length > 0 ? parts.join(" / ") : plural(childCount, "update");
 }
 
+function normalizeTurnActivityPageDirectory(input: unknown): TurnActivityPageDirectoryItem[] {
+  if (!Array.isArray(input)) return [];
+  const pages: TurnActivityPageDirectoryItem[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    const number = typeof item.number === "number" ? item.number : null;
+    if (number == null || !Number.isFinite(number)) continue;
+    pages.push({
+      number,
+      kind: typeof item.kind === "string" ? item.kind : undefined,
+      eventCount: typeof item.eventCount === "number" ? item.eventCount : undefined,
+      sealed: typeof item.sealed === "boolean" ? item.sealed : undefined,
+      questionCount: typeof item.questionCount === "number" ? item.questionCount : undefined,
+      answered: typeof item.answered === "boolean" ? item.answered : undefined,
+    });
+  }
+  return pages;
+}
+
+function turnActivityPageLabel(page: TurnActivityPageDirectoryItem): string {
+  if (page.kind === "question_set") {
+    const count = page.questionCount ?? 0;
+    const status = page.answered ? "answered" : "needs input";
+    return count > 0 ? `Questions ${page.number} · ${plural(count, "question")} · ${status}` : `Questions ${page.number} · ${status}`;
+  }
+  return `Activity ${page.number}`;
+}
+
 type TurnViewItem = {
   turnId: string;
   turnNumber: number | null;
@@ -7587,6 +7666,7 @@ function RunTurnActivityGroup({
   highlightedEntryId,
   onQuote,
   onFork,
+  onOpenTurn,
   onOpenBackgroundTask,
   loading,
   pageInfo,
@@ -7609,6 +7689,7 @@ function RunTurnActivityGroup({
   highlightedEntryId: string | null;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   loading?: boolean;
   pageInfo?: TurnActivityPageInfo;
@@ -7637,6 +7718,8 @@ function RunTurnActivityGroup({
     .reverse()
     .find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time);
   const shellSummary = group.shell?.activity;
+  const needsInput = shellSummary?.status === "needs_input";
+  const questionCount = shellSummary?.questionCount ?? pageInfo?.questionCount ?? 0;
   return (
     <div
       className="run-turn-activity"
@@ -7657,14 +7740,20 @@ function RunTurnActivityGroup({
           >
             <span
               className="run-turn-activity-icon"
-              title="Condensed turn activity"
-              aria-label="Condensed turn activity"
+              title={needsInput ? "Agent needs input" : "Condensed turn activity"}
+              aria-label={needsInput ? "Agent needs input" : "Condensed turn activity"}
             >
               <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
             </span>
-            <span className="run-turn-activity-label">Turn activity</span>
+            <span className="run-turn-activity-label">
+              {needsInput ? "Agent needs input" : "Turn activity"}
+            </span>
             <span className="run-turn-activity-summary">
-              {group.shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(group.entries)}
+              {needsInput && questionCount > 0
+                ? plural(questionCount, "question")
+                : group.shell
+                  ? turnActivityShellSummary(shellSummary)
+                  : turnActivitySummary(group.entries)}
             </span>
             {showTimestamps && (
               <ToolTiming
@@ -7686,6 +7775,15 @@ function RunTurnActivityGroup({
               )}
             </span>
           </button>
+          {needsInput && onOpenTurn && (
+            <button
+              type="button"
+              className="run-turn-activity-action"
+              onClick={() => onOpenTurn(group.turnId, { anchor: "top", resetPage: true })}
+            >
+              Answer questions
+            </button>
+          )}
           {open && (
             <div className="run-turn-activity-body">
               {pageInfo && pageInfo.pageCount > 1 && onSelectPage && (
@@ -7760,7 +7858,13 @@ function RunTurnActivityGroup({
                 }
                 if (child.kind === "meta") {
                   if (child.entry.metaKind === "awaiting_input") {
-                    return <RunAwaitingInputCard key={child.entry.id} entry={child.entry} />;
+                    return (
+                      <RunAwaitingInputNotice
+                        key={child.entry.id}
+                        entry={child.entry}
+                        onOpenTurn={onOpenTurn}
+                      />
+                    );
                   }
                   return (
                     <RunMetaBlock
@@ -7850,6 +7954,8 @@ function RunTurnActivityScreen({
   activityRefreshProblemsByTurn,
   onRetryActivityRefresh,
   onOpenBackgroundTask,
+  turnActivityPageInfo,
+  onSelectPage,
   scrollRequest,
   onScrollRequestConsumed,
 }: {
@@ -7870,10 +7976,13 @@ function RunTurnActivityScreen({
   activityRefreshProblemsByTurn: Record<string, ActivityRefreshProblem | undefined>;
   onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+  turnActivityPageInfo: Record<string, TurnActivityPageInfo | undefined>;
+  onSelectPage: (turnId: string, page: number) => void;
   scrollRequest?: TurnViewScrollRequest | null;
   onScrollRequestConsumed?: (signal: number) => void;
 }) {
   const selected = turns.find((turn) => turn.turnId === selectedTurnId) ?? turns[turns.length - 1] ?? null;
+  const selectedPageInfo = selected ? turnActivityPageInfo[selected.turnId] : undefined;
   const detailEntries = useMemo(
     () =>
       (selected?.entries ?? []).filter(
@@ -8044,6 +8153,38 @@ function RunTurnActivityScreen({
             {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
             {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
           </div>
+          {selectedPageInfo?.pages && selectedPageInfo.pages.length > 1 && (
+            <div className="run-turn-view-pages" role="tablist" aria-label="Turn pages">
+              {selectedPageInfo.pages.map((page) => (
+                <button
+                  key={page.number}
+                  type="button"
+                  role="tab"
+                  aria-selected={selectedPageInfo.page === page.number}
+                  className={`run-turn-view-page${selectedPageInfo.page === page.number ? " is-active" : ""}`}
+                  data-kind={page.kind}
+                  onClick={() => onSelectPage(selected.turnId, page.number)}
+                >
+                  {turnActivityPageLabel(page)}
+                </button>
+              ))}
+            </div>
+          )}
+          {selectedPageInfo?.kind === "question_set" && (
+            <div
+              className="run-turn-question-page-head"
+              data-answered={selectedPageInfo.answered ? "true" : "false"}
+            >
+              <span className="run-turn-question-page-title">
+                {selectedPageInfo.answered ? "Question set answered" : "Agent needs input"}
+              </span>
+              <span className="run-turn-question-page-count">
+                {selectedPageInfo.questionCount
+                  ? plural(selectedPageInfo.questionCount, "question")
+                  : "Question set"}
+              </span>
+            </div>
+          )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
             onCopy={handleTranscriptCopy}
@@ -8484,7 +8625,7 @@ export function RunMessages({
       }
       if (g.kind === "meta") {
         if (g.entry.metaKind === "awaiting_input") {
-          return <RunAwaitingInputCard entry={g.entry} />;
+          return <RunAwaitingInputNotice entry={g.entry} onOpenTurn={onOpenTurn} />;
         }
         return <RunMetaBlock entry={g.entry} systemAvatar={systemAvatar} />;
       }
@@ -8542,6 +8683,7 @@ export function RunMessages({
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
             onFork={onFork}
+            onOpenTurn={onOpenTurn}
             onOpenBackgroundTask={onOpenBackgroundTask}
             loading={loadingActivityTurns[g.turnId] === true}
             pageInfo={turnActivityPageInfo[g.turnId]}
@@ -9964,12 +10106,31 @@ function ChatPane({
       entries?: unknown[];
       page?: number;
       page_count?: number;
+      page_kind?: string;
+      question_count?: number;
+      answered?: boolean;
+      pages?: unknown;
     };
     if (typeof body.page === "number" && typeof body.page_count === "number") {
-      const info: TurnActivityPageInfo = { page: body.page, pageCount: body.page_count };
+      const info: TurnActivityPageInfo = {
+        page: body.page,
+        pageCount: body.page_count,
+        kind: typeof body.page_kind === "string" ? body.page_kind : undefined,
+        questionCount: typeof body.question_count === "number" ? body.question_count : undefined,
+        answered: typeof body.answered === "boolean" ? body.answered : undefined,
+        pages: normalizeTurnActivityPageDirectory(body.pages),
+      };
       setTurnActivityPageInfo((prev) => {
         const existing = prev[trimmedTurnId];
-        if (existing && existing.page === info.page && existing.pageCount === info.pageCount) {
+        if (
+          existing &&
+          existing.page === info.page &&
+          existing.pageCount === info.pageCount &&
+          existing.kind === info.kind &&
+          existing.questionCount === info.questionCount &&
+          existing.answered === info.answered &&
+          JSON.stringify(existing.pages ?? []) === JSON.stringify(info.pages ?? [])
+        ) {
           return prev;
         }
         return { ...prev, [trimmedTurnId]: info };
@@ -12788,8 +12949,13 @@ function ChatPane({
       setPendingRouteTurnNumber(null);
       setRouteTurnUnavailable(false);
       setPendingTurnViewRouteAnchor(null);
+      if (options?.resetPage) {
+        const nextSelectedPages = { ...selectedTurnPageRef.current };
+        delete nextSelectedPages[target];
+        selectedTurnPageRef.current = nextSelectedPages;
+      }
       setSelectedTurnId(target);
-      ensureTurnActivityLoaded(target);
+      ensureTurnActivityLoaded(target, { force: options?.resetPage });
       if (options?.anchor) {
         turnViewScrollRequestSeqRef.current += 1;
         setTurnViewScrollRequest({
@@ -12799,7 +12965,7 @@ function ChatPane({
         });
       }
     }
-    setActiveTab("turns");
+      setActiveTab("turns");
   }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
 
   // T opens the turn-detail view from the focused transcript; Escape returns
@@ -13691,8 +13857,15 @@ function ChatPane({
             selectedTurnId={effectiveSelectedTurnId}
             onSelectTurn={(turnId) => {
               setPendingRouteTurnNumber(null);
+              const selectedTurn = turnViewItems.find((turn) => turn.turnId === turnId);
+              const resetPage = selectedTurn?.shell?.activity?.status === "needs_input";
+              if (resetPage) {
+                const nextSelectedPages = { ...selectedTurnPageRef.current };
+                delete nextSelectedPages[turnId];
+                selectedTurnPageRef.current = nextSelectedPages;
+              }
               setSelectedTurnId(turnId);
-              ensureTurnActivityLoaded(turnId);
+              ensureTurnActivityLoaded(turnId, { force: resetPage });
             }}
             avatar={sessionAvatar}
             systemAvatar={systemAvatar}
@@ -13708,6 +13881,8 @@ function ChatPane({
               ensureTurnActivityLoaded(turnId, { force: true });
             }}
             onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
+            turnActivityPageInfo={turnActivityPageInfo}
+            onSelectPage={selectTurnActivityPage}
             scrollRequest={turnViewScrollRequest}
             onScrollRequestConsumed={clearTurnViewScrollRequest}
           />

@@ -553,10 +553,10 @@ func TestProjectTranscriptEventsKeepsFailedTurnActivityOutOfMainTranscript(t *te
 }
 
 // TestProjectTranscriptEventsPromotesAwaitingInputCard verifies the projection
-// places a turn.awaiting_input pause inside Turn activity as the interactive
-// question card (metaKind "awaiting_input"), anchored at the asking turn's tail,
-// and unanswered until a later turn.input_answered arrives. The main transcript
-// gets only the Turn activity shell.
+// places a turn.awaiting_input pause inside Turn activity as a question-set
+// payload (metaKind "awaiting_input"), anchored at the asking turn's tail, and
+// unanswered until a later turn.input_answered arrives. The main transcript gets
+// only the Turn activity shell.
 func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
@@ -596,11 +596,11 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 		}
 	}
 	if card == nil {
-		t.Fatalf("expected awaiting_input card in activity body, got bodies: %#v", projection.ActivityBodies)
+		t.Fatalf("expected awaiting_input question payload in activity body, got bodies: %#v", projection.ActivityBodies)
 	}
 	for _, entry := range projection.Entries {
 		if entry["metaKind"] == "awaiting_input" {
-			t.Fatalf("awaiting_input card leaked into main transcript: %#v", entry)
+			t.Fatalf("awaiting_input payload leaked into main transcript: %#v", entry)
 		}
 	}
 	if shell := projection.Entries[1]; shell["kind"] != "turn_activity" {
@@ -627,12 +627,12 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 		t.Errorf("timelineId = %v, want turn-1:item:tool-ask", awaiting["timelineId"])
 	}
 	if awaiting["answered"] != false {
-		t.Errorf("answered = %v, want false for an unanswered card", awaiting["answered"])
+		t.Errorf("answered = %v, want false for an unanswered question set", awaiting["answered"])
 	}
 	if awaiting["questionCount"] != 1 {
 		t.Errorf("questionCount = %v, want 1", awaiting["questionCount"])
 	}
-	// Card orderKey must sort immediately after the asking turn's tail so
+	// Awaiting-input orderKey must sort immediately after the asking turn's tail so
 	// historical replay and live streaming agree on placement.
 	if !strings.HasSuffix(card["orderKey"].(string), "~awaiting_input") {
 		t.Errorf("card orderKey = %q, want suffix ~awaiting_input", card["orderKey"])
@@ -640,10 +640,10 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 }
 
 // TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent proves the
-// card's "answered" state is derived from durable state — a later
+// question set's "answered" state is derived from durable state — a later
 // turn.input_answered event whose question_timeline_id matches the pause — not a
 // browser-local flag. A fresh tab opened after the user answered renders the
-// resolved card.
+// resolved question set.
 func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
