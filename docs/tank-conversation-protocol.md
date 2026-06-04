@@ -332,8 +332,9 @@ The turn activity endpoint (`server_turn_activity_v2`) therefore **paginates**
 the expansion body: a turn splits into pages sealed at `turnPageEventLimit`
 events. The endpoint
 returns the page directory (`page`, `page_count`, `pages[]`) and defaults to the
-**last** page (`?page=N` selects another); the Turns view shows a page selector
-and lets the reader step back through sealed earlier pages. Sealing is a durable
+**last** page (`?page=N` selects another); the Turns view always shows a page
+selector (disabled at a single-page boundary) and lets the reader step back
+through sealed earlier pages. Sealing is a durable
 `order_key`-range concept so deep links and reloads are stable. The
 `tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}`
 counter and `TankTurnActiveWithDurableTerminal` alert guard against a regression

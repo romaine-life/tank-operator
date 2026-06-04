@@ -23,6 +23,10 @@ import {
   pruneRealtimeEntries,
 } from "./transcriptMerge";
 import { cachedTurnActivityRefreshRequests } from "./turnActivityCache";
+import {
+  turnActivityPagerState,
+  type TurnActivityPageInfo,
+} from "./turnActivityPager";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer } from "./ChatComposer";
@@ -304,14 +308,8 @@ type DefaultSessionMode = Extract<
 type Provider = "anthropic" | "codex";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
-// Page directory for one turn's activity, returned by the per-turn
-// /activity endpoint (server_turn_activity_v2). A long turn splits into pages
-// sealed at the event threshold; the Turns view defaults to the last page and
-// lets the reader page back through sealed earlier pages.
-type TurnActivityPageInfo = {
-  page: number;
-  pageCount: number;
-};
+// TurnActivityPageInfo (the per-turn /activity page directory) and the rule for
+// turning it into a rendered pager live in ./turnActivityPager.
 
 type TurnActivitySummary = {
   turnId?: string;
@@ -7637,6 +7635,9 @@ function RunTurnActivityGroup({
     .reverse()
     .find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time);
   const shellSummary = group.shell?.activity;
+  // Always-present pager state: a single-page turn renders a disabled
+  // "page 1 of 1" rather than vanishing, so the affordance never looks absent.
+  const pagerState = turnActivityPagerState(pageInfo);
   return (
     <div
       className="run-turn-activity"
@@ -7688,7 +7689,7 @@ function RunTurnActivityGroup({
           </button>
           {open && (
             <div className="run-turn-activity-body">
-              {pageInfo && pageInfo.pageCount > 1 && onSelectPage && (
+              {pagerState.visible && onSelectPage && (
                 <div
                   className="run-turn-activity-pages"
                   role="group"
@@ -7697,22 +7698,20 @@ function RunTurnActivityGroup({
                   <button
                     type="button"
                     className="run-turn-activity-page-nav"
-                    onClick={() => onSelectPage(Math.max(1, pageInfo.page - 1))}
-                    disabled={pageInfo.page <= 1}
+                    onClick={() => onSelectPage(pagerState.olderPage)}
+                    disabled={!pagerState.canPageOlder}
                     aria-label="Older activity page"
                   >
                     ‹
                   </button>
                   <span className="run-turn-activity-page-label">
-                    page {pageInfo.page} of {pageInfo.pageCount}
+                    {pagerState.label}
                   </span>
                   <button
                     type="button"
                     className="run-turn-activity-page-nav"
-                    onClick={() =>
-                      onSelectPage(Math.min(pageInfo.pageCount, pageInfo.page + 1))
-                    }
-                    disabled={pageInfo.page >= pageInfo.pageCount}
+                    onClick={() => onSelectPage(pagerState.newerPage)}
+                    disabled={!pagerState.canPageNewer}
                     aria-label="Newer activity page"
                   >
                     ›

@@ -75,6 +75,9 @@ Evidence:
 
 ## Turn Activity Pagination
 
+Status: active
+
+Intent:
 Show every event of an arbitrarily long turn, and always reflect the turn's
 durable terminal, without folding a fixed-size prefix that drops the terminal
 and renders a finished turn as perpetually active.
@@ -94,6 +97,11 @@ Contract impact:
   returns the page directory and defaults to the last page; `?page=N` selects
   another. Page boundaries are durable `order_key` ranges, so a selected page is
   stable across reload and deep links.
+- The page selector is an always-present affordance, not a threshold-gated
+  control: an expanded Turn activity disclosure renders the selector even for a
+  single-page turn (disabled "page 1 of 1"), so pagination never reads as absent
+  on a normal-length turn. `frontend/src/turnActivityPager.ts` is the pure gate
+  that owns when the selector shows and which arrows are live.
 - The fixed-size per-turn read that truncated long turns oldest-first is deleted
   end to end (the bounded `EventsForTurn` store method no longer exists); reads
   go through `EventsForTurnAfter` paged to exhaustion.
@@ -107,6 +115,10 @@ Evidence:
 - Observability: `tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}`
   + `TankTurnActiveWithDurableTerminal` guard the regression; `tank_turn_activity_event_count`
   / `tank_turn_activity_page_count` track long-turn frequency.
+- Frontend gate: `frontend/src/turnActivityPager.ts` +
+  `frontend/src/turnActivityPager.test.ts` prove the selector stays visible
+  (disabled) at a single page and enables ‹ / › only toward a sealed page — the
+  regression guard against threshold-gated appearance.
 
 ## Context Compaction Notice
 
