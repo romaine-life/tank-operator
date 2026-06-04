@@ -35,3 +35,18 @@ test("completed turn activity shell is not active without a matching active turn
     false,
   );
 });
+
+test("needs-input turn activity shell is a handoff, not active-running UI", () => {
+  assert.equal(
+    turnActivityShellIsDurablyActive({ turnId: "turn-1", status: "needs_input", active: true }),
+    false,
+  );
+  assert.equal(
+    turnActivityGroupIsActive(
+      { turnId: "turn-1", status: "needs_input", active: true },
+      "turn-1",
+      "turn-1",
+    ),
+    false,
+  );
+});

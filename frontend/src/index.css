@@ -8020,6 +8020,7 @@ textarea.run-files-viewer-editor:focus {
   display: flex;
   align-items: center;
   gap: 0.75rem;
+  width: 100%;
   padding: 0.7rem 0.95rem;
   border-radius: 0.625rem;
   border: 1px solid color-mix(in oklch, var(--status-agent-needs-input) 55%, transparent);
@@ -8027,6 +8028,20 @@ textarea.run-files-viewer-editor:focus {
   font-family: var(--font-primary);
   font-size: var(--run-chat-font-code-sm);
   color: var(--text-strong, #f5f5f4);
+  text-align: left;
+}
+
+.run-needs-input-announcement[data-clickable="true"] {
+  appearance: none;
+  cursor: pointer;
+  transition:
+    background var(--motion-fast, 120ms) ease,
+    border-color var(--motion-fast, 120ms) ease;
+}
+
+.run-needs-input-announcement[data-clickable="true"]:hover {
+  border-color: color-mix(in oklch, var(--status-agent-needs-input) 72%, transparent);
+  background: color-mix(in oklch, var(--status-agent-needs-input) 12%, transparent);
 }
 
 /* Settled handoff rows (answered, or unanswered past a terminal turn) drop
@@ -8066,6 +8081,8 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-needs-input-announcement-copy {
+  display: grid;
+  gap: 0.18rem;
   flex: 1 1 auto;
   min-width: 0;
 }
@@ -8076,7 +8093,8 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-needs-input-announcement-detail {
-  margin: 0.2rem 0 0;
+  display: block;
+  margin: 0;
   font-size: var(--run-chat-font-code-xs);
   color: var(--text-muted);
   overflow: hidden;
@@ -8086,6 +8104,8 @@ textarea.run-files-viewer-editor:focus {
 
 .run-needs-input-announcement-cta {
   flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
   font-family: inherit;
   font-size: 0.78rem;
   font-weight: 600;
@@ -8095,19 +8115,11 @@ textarea.run-files-viewer-editor:focus {
   border: 1px solid color-mix(in oklch, var(--status-agent-needs-input) 60%, transparent);
   background: var(--status-agent-needs-input);
   color: #1f1300;
-  cursor: pointer;
-  transition: filter 80ms ease, transform 80ms ease;
+  pointer-events: none;
 }
 
-.run-needs-input-announcement-cta:hover {
-  filter: brightness(1.05);
-}
-
-.run-needs-input-announcement-cta:active {
-  transform: translateY(1px);
-}
-
-.run-needs-input-announcement-cta-secondary {
+.run-needs-input-announcement-answered .run-needs-input-announcement-cta,
+.run-needs-input-announcement-settled .run-needs-input-announcement-cta {
   background: transparent;
   color: var(--text-muted);
   border-color: color-mix(in oklch, var(--text-muted) 35%, transparent);
@@ -8998,100 +9010,6 @@ textarea.run-files-viewer-editor:focus {
   color: #fca5a5;
   font-family: var(--font-primary);
   font-size: var(--run-chat-font-meta);
-}
-
-.run-needs-input-announcement {
-  display: flex;
-  align-items: center;
-  gap: 0.75rem;
-  padding: 0.7rem 0.95rem;
-  border-radius: 0.625rem;
-  border: 1px solid color-mix(in oklch, var(--status-agent-needs-input) 55%, transparent);
-  background: color-mix(in oklch, var(--status-agent-needs-input) 8%, transparent);
-  font-family: var(--font-primary);
-  font-size: var(--run-chat-font-code-sm);
-  color: var(--text-strong, #f5f5f4);
-}
-
-.run-needs-input-announcement-answered,
-.run-needs-input-announcement-settled {
-  border-color: color-mix(in oklch, var(--text-muted) 28%, transparent);
-  background: color-mix(in oklch, var(--text-muted) 6%, transparent);
-  color: var(--text-muted);
-}
-
-.run-needs-input-announcement-icon {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 1.6rem;
-  height: 1.6rem;
-  border-radius: 999px;
-  background: color-mix(in oklch, var(--status-agent-needs-input) 18%, transparent);
-  color: var(--status-agent-needs-input);
-}
-
-.run-needs-input-announcement-answered .run-needs-input-announcement-icon,
-.run-needs-input-announcement-settled .run-needs-input-announcement-icon {
-  background: color-mix(in oklch, var(--text-muted) 14%, transparent);
-  color: var(--text-muted);
-}
-
-.run-needs-input-announcement-body {
-  grid-column: 2;
-  grid-row: 1;
-  width: fit-content;
-  max-width: min(42rem, 100%);
-  min-width: 0;
-}
-
-.run-needs-input-announcement-copy {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.run-needs-input-announcement-title {
-  font-weight: 600;
-  letter-spacing: 0.005em;
-}
-
-.run-needs-input-announcement-detail {
-  margin: 0.2rem 0 0;
-  font-size: var(--run-chat-font-code-xs);
-  color: var(--text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.run-needs-input-announcement-cta {
-  flex: 0 0 auto;
-  font-family: inherit;
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.02em;
-  padding: 0.4rem 0.75rem;
-  border-radius: 999px;
-  border: 1px solid color-mix(in oklch, var(--status-agent-needs-input) 60%, transparent);
-  background: var(--status-agent-needs-input);
-  color: #1f1300;
-  cursor: pointer;
-  transition: filter 80ms ease, transform 80ms ease;
-}
-
-.run-needs-input-announcement-cta:hover {
-  filter: brightness(1.05);
-}
-
-.run-needs-input-announcement-cta:active {
-  transform: translateY(1px);
-}
-
-.run-needs-input-announcement-cta-secondary {
-  background: transparent;
-  color: var(--text-muted);
-  border-color: color-mix(in oklch, var(--text-muted) 35%, transparent);
 }
 
 .run-composer textarea {

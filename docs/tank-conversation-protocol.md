@@ -306,9 +306,9 @@ projection has two distinct surfaces:
 The main transcript is promotion-only. User messages, durable session/system
 notices, terminal meta rows, and explicitly promoted final-answer assistant rows
 belong there. AskUserQuestion's `turn.awaiting_input` meta row also belongs
-there as the restored `RunNeedsInputAnnouncement` navigation button to the
-question set; the Turn question page owns the interactive answer form for the
-same durable question set. Provider
+there as the `RunNeedsInputAnnouncement` assistant handoff row to the question
+set; the Turn question page owns the interactive answer form for the same
+durable question set. Provider
 activity, reasoning, tool output,
 background-task rows, assistant progress notes, provisional assistant prose, and
 failure/stop context belong to Turn activity by default. Rows must not visibly
@@ -923,8 +923,8 @@ stays in flight with runner heartbeats, the run-state becomes `needs_input`,
 and `activeTurnId` remains the asking turn. The turn-page projection renders a
 semantic `question_set` page (`metaKind: "awaiting_input"`, carrying the
 questions + target ids) anchored at the asking turn's tail. The main transcript
-gets the same durable meta row as the `RunNeedsInputAnnouncement` navigation
-button to the question set.
+gets the same durable meta row as the `RunNeedsInputAnnouncement` assistant
+handoff row to the question set.
 
 - **Claude**: the runner's `canUseTool` callback, on AskUserQuestion, publishes
   `turn.awaiting_input` and keeps the permission callback pending. When
@@ -1031,8 +1031,12 @@ one set-level answer draft; the Submit action posts the whole answer set once
 every question page has a response. The marker is sourced from the same durable
 pause, not from provider-specific raw tool rows. The SPA renders the
 interactive answer surface from the durable row in the Turns question pages;
-the main transcript renders the restored `RunNeedsInputAnnouncement` button to
-that question set.
+the main transcript renders the same durable row as an assistant handoff
+message. That whole row navigates to the pending question page, because
+`turn.awaiting_input` is the point where the assistant has stopped speaking and
+handed communication back to the user. This is a conversation-projection
+boundary, not a runner terminal: the same provider turn still resumes through
+`/answer`.
 Submitting the form posts `/answer`, which resumes the same active turn.
 
 The Turn-activity placement follows

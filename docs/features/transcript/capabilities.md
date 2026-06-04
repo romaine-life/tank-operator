@@ -409,12 +409,13 @@ letting the Turns UI label the set and provide previous/next question shortcuts
 without creating a third navigation system. If the agent asks immediately, that
 first activity page is marker-only by design: it preserves the ledger handoff
 without squeezing the question UI into activity history. The main transcript
-renders a restored AskUserQuestion handoff button (`RunNeedsInputAnnouncement`,
-originally removed by PR #861) from the durable `awaiting_input` meta row so the
-user can reach the question set from the conversation. The interactive answer
-form is owned by the Turns question page, which reflects durable state rather
-than local React optimism, so a fresh tab renders the same question set and
-defaults to it while the turn is still waiting for input.
+renders the durable `awaiting_input` meta row as an assistant handoff message
+(`RunNeedsInputAnnouncement`, originally restored after PR #861) so the user
+sees the agent's summary/question at the same conversation level as a normal
+final answer. The whole row navigates to the question set in Turns. The
+interactive answer form is owned by the Turns question page, which reflects
+durable state rather than local React optimism, so a fresh tab renders the same
+question set and defaults to it while the turn is still waiting for input.
 
 Answering resumes the same turn:
 - The user's selection posts to `POST /turns/{askingTurnId}/answer`, which
@@ -440,9 +441,9 @@ Affected contracts:
 Contract impact:
 - The question page is a Turn activity projection of durable
   `turn.awaiting_input`; it is not a second ledger. The same durable
-  `awaiting_input` meta row appears in the main transcript as the navigation
-  button to the question set, never as a standalone authored message or
-  synthetic turn.
+  `awaiting_input` meta row appears in the main transcript as the assistant
+  handoff and navigation target to the question set, never as a synthetic user
+  message or synthetic turn.
 - The preceding activity page receives a compact `AskUserQuestion` tool marker
   derived from the same durable `turn.awaiting_input` event. It is an audit
   marker for the invocation, not the answer surface and not a dependency on
@@ -469,7 +470,7 @@ Evidence:
 - Backend API: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
   proves an unanswered `needs_input` turn defaults to the question page.
 - Frontend: `frontend/src/migrationPolicy.test.ts` proves transcript renderers
-  use the restored `RunNeedsInputAnnouncement` button while
+  use the `RunNeedsInputAnnouncement` handoff row while
   `RunAwaitingInputCard` is owned by `RunTurnActivityScreen`.
 - Migration guard: `scripts/check-askuserquestion-migration.mjs` requires the
   semantic page path and same-turn `/answer` path.

@@ -7109,18 +7109,17 @@ function RunAwaitingInputCard({
   );
 }
 
-// RunNeedsInputAnnouncement restores the AskUserQuestion handoff button that
-// PR #861 removed. The original row read `entry.announcement`; the current
-// durable source is `entry.awaitingInput`, but the transcript behavior remains
-// the same: tell the user the agent is waiting and provide one click into Turns.
+// RunNeedsInputAnnouncement paints turn.awaiting_input as the agent's
+// conversational handoff: execution is paused, but the assistant has stopped
+// speaking and the user owns the next input surface in Turns.
 function RunNeedsInputAnnouncement({
   entry,
-  systemAvatar,
+  avatar,
   onOpenTurn,
   showTimestamps,
 }: {
   entry: TranscriptEntry;
-  systemAvatar: AgentAvatar | null;
+  avatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   showTimestamps: boolean;
 }) {
@@ -7133,83 +7132,81 @@ function RunNeedsInputAnnouncement({
   });
   const title =
     state === "settled"
-      ? "No longer waiting"
-      : entry.meta?.title ?? (state === "answered" ? "Answered" : "Claude is waiting on you");
+      ? "Input no longer needed"
+      : entry.meta?.title ?? (state === "answered" ? "Input answered" : "I need your input");
   const targetTurnId = awaitingInput?.askingTurnId ?? entry.turnId ?? "";
   const handleOpen = (): void => {
     if (!targetTurnId) return;
     onOpenTurn?.(targetTurnId, { anchor: "top", resetPage: true });
   };
   const navigable = Boolean(targetTurnId && onOpenTurn);
-  const showPrimaryCta = state === "waiting" && navigable;
-  const showSecondaryCta = state !== "waiting" && navigable;
+  const ctaLabel = state === "waiting" ? "Answer in Turns" : "View in Turns";
+  const content = (
+    <>
+      <span className="run-needs-input-announcement-icon" aria-hidden="true">
+        {state === "answered" ? (
+          <CheckIcon size={14} aria-hidden="true" />
+        ) : state === "settled" ? (
+          <MessageSquareOffIcon size={14} aria-hidden="true" />
+        ) : (
+          <MessageSquareIcon size={14} aria-hidden="true" />
+        )}
+      </span>
+      <span className="run-needs-input-announcement-copy" data-slot="message-text">
+        <span className="run-needs-input-announcement-title">{title}</span>
+        {summary && (
+          <span className="run-needs-input-announcement-detail">{summary}</span>
+        )}
+      </span>
+      {navigable && (
+        <span className="run-needs-input-announcement-cta" aria-hidden="true">
+          {ctaLabel}
+        </span>
+      )}
+    </>
+  );
   return (
     <div
       className="run-transcript-message"
       data-slot="message"
-      data-variant="system"
-      data-role="system"
+      data-variant="assistant"
+      data-role="assistant"
       data-kind="needs-input-announcement"
       data-message-id={entry.id}
     >
-      <span className="run-msg-system-avatar" aria-hidden={systemAvatar ? undefined : "true"}>
-        {systemAvatar ? (
-          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
-        ) : (
-          <BotIcon size={16} strokeWidth={2.1} />
-        )}
+      <span className="run-msg-ai-avatar" aria-hidden="true">
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
       </span>
       <div className="run-needs-input-announcement-body">
-        <div
-          className={`run-needs-input-announcement${
-            state === "answered" ? " run-needs-input-announcement-answered" : ""
-          }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
-          data-slot="message-content"
-          data-state={state}
-          data-answered={answered ? "true" : "false"}
-          role="group"
-          aria-label={title}
-        >
-          <span className="run-needs-input-announcement-icon" aria-hidden="true">
-            {state === "answered" ? (
-              <CheckIcon size={14} aria-hidden="true" />
-            ) : state === "settled" ? (
-              <MessageSquareOffIcon size={14} aria-hidden="true" />
-            ) : (
-              <MessageSquareIcon size={14} aria-hidden="true" />
-            )}
-          </span>
-          <div className="run-needs-input-announcement-copy" data-slot="message-text">
-            <div className="run-needs-input-announcement-title">{title}</div>
-            {summary && (
-              <p className="run-needs-input-announcement-detail">{summary}</p>
-            )}
+        {navigable ? (
+          <button
+            type="button"
+            className={`run-needs-input-announcement${
+              state === "answered" ? " run-needs-input-announcement-answered" : ""
+            }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
+            onClick={handleOpen}
+            data-slot="message-content"
+            data-state={state}
+            data-answered={answered ? "true" : "false"}
+            data-clickable="true"
+            aria-label={state === "waiting" ? "Answer the question in Turns" : "View the question in Turns"}
+          >
+            {content}
+          </button>
+        ) : (
+          <div
+            className={`run-needs-input-announcement${
+              state === "answered" ? " run-needs-input-announcement-answered" : ""
+            }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
+            data-slot="message-content"
+            data-state={state}
+            data-answered={answered ? "true" : "false"}
+            role="group"
+            aria-label={title}
+          >
+            {content}
           </div>
-          {showPrimaryCta && (
-            <button
-              type="button"
-              className="run-needs-input-announcement-cta"
-              onClick={handleOpen}
-              aria-label="Open the question in Turns"
-            >
-              Open in Turns
-            </button>
-          )}
-          {showSecondaryCta && (
-            <button
-              type="button"
-              className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
-              onClick={handleOpen}
-              aria-label={
-                state === "answered"
-                  ? "View answered question in Turns"
-                  : "View the question in Turns"
-              }
-            >
-              View in Turns
-            </button>
-          )}
-        </div>
+        )}
         {showTimestamps && entry.time && (
           <div className="run-msg-footer" data-always-visible="">
             <div className="run-msg-timings">
@@ -7876,7 +7873,9 @@ function buildTurnViewItems(
         summary: shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(turnEntries),
         entries: turnEntries,
         shell,
-        active: turnId === active,
+        active:
+          turnActivityShellIsDurablyActive(shellSummary) ||
+          (turnId === active && shellSummary?.status !== "needs_input"),
         loaded: Boolean(loadedEntries),
         costEstimate: estimateTurnCost(costRows, modelId, turnId),
         contextTokens: estimateTurnContextTokens(costRows, contextWindow, turnId),
@@ -8350,7 +8349,7 @@ function RunTurnActivityGroup({
                       <RunNeedsInputAnnouncement
                         key={child.entry.id}
                         entry={child.entry}
-                        systemAvatar={systemAvatar}
+                        avatar={avatar}
                         onOpenTurn={onOpenTurn}
                         showTimestamps={showTimestamps}
                       />
@@ -9233,7 +9232,7 @@ export function RunMessages({
           return (
             <RunNeedsInputAnnouncement
               entry={g.entry}
-              systemAvatar={systemAvatar}
+              avatar={avatar}
               onOpenTurn={onOpenTurn}
               showTimestamps={showTimestamps}
             />
