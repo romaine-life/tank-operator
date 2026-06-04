@@ -240,7 +240,8 @@ test("AskUserQuestion handoff button is restored in transcript and answer form i
   assert.equal(appSource.includes("questionSet: typeof body.question_set === \"number\""), true);
   assert.equal(appSource.includes("turnActivityPageOptionLabel"), true);
   assert.equal(appSource.includes("Next question"), true);
-  assert.equal(appSource.includes("Question set ${selectedPageInfo.questionSet}"), true);
+  assert.equal(appSource.includes("Question set ${selectedPageInfo.questionSet}"), false);
+  assert.equal(appSource.includes("Answer every question before submit."), true);
   assert.equal(appSource.includes("Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}"), true);
 });
 

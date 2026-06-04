@@ -6740,10 +6740,6 @@ function RunAwaitingInputCard({
   const visibleQuestionAnswered = visibleQuestion ? questionHasResponse(visibleQuestion) : false;
   const hasNextQuestion = Boolean(questionNavigation?.nextPage);
   const hasPreviousQuestion = Boolean(questionNavigation?.previousPage);
-  const questionSetLabel =
-    questionNavigation?.questionSet && questionNavigation.questionSet > 0
-      ? `Question set ${questionNavigation.questionSet}`
-      : "Question set";
 
   function toggleSelection(q: AskUserQuestion, label: string): void {
     if (answered || submitting) return;
@@ -6987,7 +6983,7 @@ function RunAwaitingInputCard({
             onClick={() => void submit()}
             title={
               !isReady && questions.length > 1
-                ? `${questionSetLabel} needs an answer on every question page before submit.`
+                ? "Answer every question before submit."
                 : undefined
             }
           >
@@ -7605,14 +7601,10 @@ function turnActivityPageOptionLabel(
   directoryItem?: TurnActivityPageDirectoryItem,
 ): string {
   if (directoryItem?.kind === "question_set") {
-    const setLabel =
-      directoryItem.questionSet && directoryItem.questionSet > 0
-        ? `Question set ${directoryItem.questionSet}`
-        : "Question set";
     if (directoryItem.questionIndex && directoryItem.questionCount) {
-      return `${setLabel}: question ${directoryItem.questionIndex} of ${directoryItem.questionCount}`;
+      return `Question ${directoryItem.questionIndex} of ${directoryItem.questionCount}`;
     }
-    return setLabel;
+    return "Question";
   }
   return `Page ${pageNumber} of ${pageCount}`;
 }
@@ -8614,18 +8606,16 @@ function RunTurnActivityScreen({
               data-answered={selectedPageInfo.answered ? "true" : "false"}
             >
               <span className="run-turn-question-page-title">
-                {selectedPageInfo.questionSet && selectedPageInfo.questionSet > 0
-                  ? `Question set ${selectedPageInfo.questionSet}`
-                  : selectedPageInfo.answered
-                    ? "Question set answered"
-                    : "Question set"}
+                {selectedPageInfo.questionCount && selectedPageInfo.questionCount > 1
+                  ? "Questions"
+                  : "Question"}
               </span>
               <span className="run-turn-question-page-count">
                 {selectedPageInfo.questionIndex && selectedPageInfo.questionCount
                   ? `Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}`
                   : selectedPageInfo.questionCount
                   ? plural(selectedPageInfo.questionCount, "question")
-                  : "Question set"}
+                  : "Question"}
               </span>
             </div>
           )}
