@@ -3,7 +3,14 @@
 // independently. Keep behavior + markup identical to what was inline
 // before; this is a pure structural move.
 
-import { ActivityIcon, ArrowLeftIcon, FolderIcon, MoreHorizontalIcon } from "lucide-react";
+import {
+  ActivityIcon,
+  ArrowLeftIcon,
+  EllipsisVerticalIcon,
+  FolderIcon,
+  InfoIcon,
+  SettingsIcon,
+} from "lucide-react";
 import {
   BackLink,
   captionStyle,
@@ -13,74 +20,8 @@ import {
   styleguideShellStyle,
 } from "./shared";
 
-function BackgroundTab({
-  active = false,
-  count = 2,
-  disabled = false,
-}: {
-  active?: boolean;
-  count?: number;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      className={`run-tab run-shell-tasks-trigger${active ? " run-tab-active" : ""}`}
-      type="button"
-      aria-pressed={active}
-      disabled={disabled}
-      title={disabled ? "Background activity is available once the session starts" : "Background"}
-      data-design-component="RunHeaderTab"
-      data-design-state={active ? "background-active" : disabled ? "background-disabled" : "background-rest"}
-      data-design-source="frontend/src/App.tsx"
-    >
-      <ActivityIcon className="run-tab-icon" aria-hidden="true" />
-      <span>Background</span>
-      <span
-        className="run-shell-tasks-count"
-        data-active={count > 0 ? "true" : undefined}
-        aria-label={`${count} background items`}
-      >
-        {count}
-      </span>
-    </button>
-  );
-}
-
-function TurnsTab({
-  active = false,
-  count = 0,
-  disabled = false,
-}: {
-  active?: boolean;
-  count?: number;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      className={`run-tab run-turns-trigger${active ? " run-tab-active" : ""}`}
-      type="button"
-      aria-pressed={active}
-      disabled={disabled}
-      title={disabled ? "Turns are available once the agent has turn activity" : "Turns"}
-      data-design-component="RunHeaderTab"
-      data-design-state={active ? "turns-active" : disabled ? "turns-disabled" : "turns-rest"}
-      data-design-source="frontend/src/App.tsx"
-    >
-      <ActivityIcon className="run-tab-icon" aria-hidden="true" />
-      <span>Turns</span>
-      {count > 0 && (
-        <span
-          className="run-shell-tasks-count"
-          data-active={active ? "true" : undefined}
-          aria-label={`${count} turns`}
-        >
-          {count}
-        </span>
-      )}
-    </button>
-  );
-}
-
+// The single overflow control that now owns every top-right session action.
+// Mirrors RunHeaderOverflowMenu's trigger in App.tsx.
 function MoreTab({
   active = false,
   attention = false,
@@ -92,17 +33,96 @@ function MoreTab({
     <button
       className={`run-tab run-tab-more${active ? " run-tab-active" : ""}`}
       type="button"
+      aria-label="More session actions"
       aria-pressed={active}
       title="More"
-      data-design-component="RunHeaderTab"
+      data-design-component="RunHeaderOverflowMenu"
       data-design-state={active ? "more-active" : attention ? "more-attention" : "more-rest"}
       data-design-source="frontend/src/App.tsx"
     >
-      <MoreHorizontalIcon className="run-tab-icon" aria-hidden="true" />
+      <EllipsisVerticalIcon className="run-tab-icon" aria-hidden="true" />
       {attention && (
         <span className="run-tab-alert is-warning" aria-hidden="true" />
       )}
     </button>
+  );
+}
+
+// Static specimen of one open overflow-menu row. The real rows are Radix
+// DropdownMenuItems; here a plain button carries the same classes so the
+// menu's density and states stay reviewable.
+function MoreMenuItem({
+  icon,
+  label,
+  active = false,
+  disabled = false,
+  count,
+  countActive = false,
+  attention = false,
+}: {
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+  count?: number;
+  countActive?: boolean;
+  attention?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={`run-tab-more-item${active ? " is-active" : ""}`}
+      style={{ display: "flex", alignItems: "center", width: "100%" }}
+      disabled={disabled}
+      aria-disabled={disabled || undefined}
+    >
+      {icon}
+      <span>{label}</span>
+      {count !== undefined && (
+        <span
+          className="run-shell-tasks-count run-tab-more-item-count"
+          data-active={countActive ? "true" : undefined}
+        >
+          {count}
+        </span>
+      )}
+      {attention && <span className="run-tab-alert is-warning" aria-hidden="true" />}
+    </button>
+  );
+}
+
+// The open menu panel — every top-right action lives here now.
+function MoreMenuPanel() {
+  return (
+    <div className="run-tab-more-menu" role="menu" aria-label="Session actions">
+      <MoreMenuItem
+        icon={<ActivityIcon className="run-tab-more-item-icon" aria-hidden="true" />}
+        label="Turns"
+        count={4}
+        countActive
+      />
+      <MoreMenuItem
+        icon={<ActivityIcon className="run-tab-more-item-icon" aria-hidden="true" />}
+        label="Background"
+        count={2}
+        countActive
+      />
+      <MoreMenuItem
+        icon={<FolderIcon className="run-tab-more-item-icon" strokeWidth={1.8} aria-hidden="true" />}
+        label="Files"
+        active
+      />
+      <div className="run-tab-more-separator" style={{ height: 1, margin: "0.3rem -0.35rem" }} />
+      <MoreMenuItem
+        icon={<SettingsIcon className="run-tab-more-item-icon" aria-hidden="true" />}
+        label="Settings"
+        attention
+      />
+      <MoreMenuItem
+        icon={<InfoIcon className="run-tab-more-item-icon" aria-hidden="true" />}
+        label="Help"
+      />
+    </div>
   );
 }
 
@@ -113,9 +133,12 @@ export function StyleguideRunHeaderTabs() {
         <BackLink />
         <h1 style={pageTitleStyle}>run header tabs</h1>
         <p style={captionStyle}>
-          Header tabs that open side-pane views inside a session. The label
-          text must stay aligned with the icon at desktop width and remain
-          readable in the narrow horizontal-scroll state.
+          The header now collapses every top-right session action — the view
+          tabs (Turns / Background / Files) and the auxiliary actions (Settings
+          / Help) — into a single vertical overflow control (⋮). The header
+          stays a clean title-plus-menu strip at any width; live counts and an
+          attention dot ride the menu so ambient signal survives when it is
+          closed.
         </p>
         <section style={sectionStyle}>
           <div style={{ display: "grid", gap: 14 }}>
@@ -128,21 +151,7 @@ export function StyleguideRunHeaderTabs() {
                     </button>
                   </div>
                   <nav className="run-tabs" aria-label="Session actions">
-                    <TurnsTab disabled />
-                    <BackgroundTab count={0} />
-                    <button
-                      className="run-tab"
-                      type="button"
-                      aria-pressed={false}
-                      data-testid="styleguide-run-tab-files"
-                      data-design-component="RunHeaderTab"
-                      data-design-state="rest"
-                      data-design-source="frontend/src/App.tsx"
-                    >
-                      <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
-                      <span>Files</span>
-                    </button>
-                    <MoreTab active attention />
+                    <MoreTab attention />
                   </nav>
                 </header>
               </section>
@@ -167,63 +176,16 @@ export function StyleguideRunHeaderTabs() {
                       <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
                       <span>Back</span>
                     </button>
-                    <TurnsTab count={4} />
-                    <BackgroundTab count={3} />
-                    <button
-                      className="run-tab run-tab-active"
-                      type="button"
-                      aria-pressed={true}
-                      data-testid="styleguide-run-tab-files-active"
-                      data-design-component="RunHeaderTab"
-                      data-design-state="side-pane-open"
-                      data-design-source="frontend/src/App.tsx"
-                    >
-                      <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
-                      <span>Files</span>
-                    </button>
-                    <MoreTab />
+                    <MoreTab active />
                   </nav>
                 </header>
               </section>
             </div>
-            <div style={{ ...showcaseFrameStyle, maxWidth: 390 }}>
-              <section className="run-panel" style={{ minHeight: 142 }}>
-                <header className="run-header">
-                  <div className="run-header-title">
-                    <button className="run-header-name-btn" type="button">
-                      narrow-session
-                    </button>
-                  </div>
-                  <nav className="run-tabs" aria-label="Session actions">
-                    <button
-                      className="run-tab run-tab-back"
-                      type="button"
-                      data-testid="styleguide-run-tab-back-narrow"
-                      data-design-component="RunHeaderTab"
-                      data-design-state="narrow-side-pane-back"
-                      data-design-source="frontend/src/App.tsx"
-                    >
-                      <ArrowLeftIcon className="run-tab-icon" strokeWidth={2.2} aria-hidden="true" />
-                      <span>Back</span>
-                    </button>
-                    <TurnsTab count={2} />
-                    <BackgroundTab count={1} />
-                    <button
-                      className="run-tab run-tab-active"
-                      type="button"
-                      aria-pressed={true}
-                      data-testid="styleguide-run-tab-files-narrow-active"
-                      data-design-component="RunHeaderTab"
-                      data-design-state="narrow-side-pane-open"
-                      data-design-source="frontend/src/App.tsx"
-                    >
-                      <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
-                      <span>Files</span>
-                    </button>
-                    <MoreTab />
-                  </nav>
-                </header>
-              </section>
+            <div style={showcaseFrameStyle}>
+              <p style={captionStyle}>Open overflow menu</p>
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <MoreMenuPanel />
+              </div>
             </div>
           </div>
         </section>
