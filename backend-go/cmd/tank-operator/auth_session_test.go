@@ -121,16 +121,18 @@ func registryOnlyAuthTestServer(t *testing.T, records ...sessionmodel.SessionRec
 
 type fakeStreamAuthTicketStore struct {
 	created          pgstore.StreamAuthTicket
+	createErr        error
 	validateToken    string
 	validateKind     string
 	validateScope    string
 	validateSession  string
 	validateResponse pgstore.StreamAuthTicket
+	validateErr      error
 }
 
 func (s *fakeStreamAuthTicketStore) Create(_ context.Context, ticket pgstore.StreamAuthTicket) error {
 	s.created = ticket
-	return nil
+	return s.createErr
 }
 
 func (s *fakeStreamAuthTicketStore) Validate(_ context.Context, token, streamKind, sessionScope, sessionID string) (pgstore.StreamAuthTicket, error) {
@@ -138,7 +140,7 @@ func (s *fakeStreamAuthTicketStore) Validate(_ context.Context, token, streamKin
 	s.validateKind = streamKind
 	s.validateScope = sessionScope
 	s.validateSession = sessionID
-	return s.validateResponse, nil
+	return s.validateResponse, s.validateErr
 }
 
 func TestRequireBrowserStreamAuthAcceptsStreamTicket(t *testing.T) {
@@ -169,6 +171,20 @@ func TestRequireBrowserStreamAuthAcceptsStreamTicket(t *testing.T) {
 	}
 	if tickets.validateToken != "ticket-123" || tickets.validateKind != streamKindSessionEvents || tickets.validateScope != "default" || tickets.validateSession != "63" {
 		t.Fatalf("validate args = (%q,%q,%q,%q)", tickets.validateToken, tickets.validateKind, tickets.validateScope, tickets.validateSession)
+	}
+}
+
+func TestRequireBrowserStreamAuthDoesNotTurnClientCancelIntoStoreFailure(t *testing.T) {
+	tickets := &fakeStreamAuthTicketStore{validateErr: context.Canceled}
+	app := &appServer{streamAuthTickets: tickets, sessionScope: "default"}
+	request := httptest.NewRequest(http.MethodGet, "/api/sessions/63/events?stream_ticket=ticket-123", nil)
+	response := httptest.NewRecorder()
+
+	if _, _, ok := app.requireBrowserStreamAuth(response, request, streamKindSessionEvents, "63"); ok {
+		t.Fatal("requireBrowserStreamAuth accepted a canceled validation")
+	}
+	if response.Code != statusClientClosedRequest {
+		t.Fatalf("status = %d, want %d", response.Code, statusClientClosedRequest)
 	}
 }
 
@@ -238,6 +254,27 @@ func TestHandleCreateStreamTicketScopesPinnedReposTicket(t *testing.T) {
 		tickets.created.SessionID != "" ||
 		tickets.created.SessionScope != "default" {
 		t.Fatalf("created ticket = %#v", tickets.created)
+	}
+}
+
+func TestHandleCreateStreamTicketDoesNotTurnClientCancelIntoStoreFailure(t *testing.T) {
+	app := adminTestServer(t)
+	tickets := &fakeStreamAuthTicketStore{createErr: context.Canceled}
+	app.streamAuthTickets = tickets
+	app.sessionScope = "default"
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/stream-ticket", strings.NewReader(`{
+		"stream": "pinned-repos"
+	}`))
+	request.Header.Set("Authorization", "Bearer "+signedServiceToken(
+		t,
+		"pod-orchestrator@service.tank-operator.romaine.life",
+		otherUser,
+	))
+	response := httptest.NewRecorder()
+
+	app.handleCreateStreamTicket(response, request)
+	if response.Code != statusClientClosedRequest {
+		t.Fatalf("status = %d, want %d", response.Code, statusClientClosedRequest)
 	}
 }
 

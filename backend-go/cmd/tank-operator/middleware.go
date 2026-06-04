@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -139,6 +140,11 @@ func (s *appServer) requireBrowserStreamAuth(w http.ResponseWriter, r *http.Requ
 			writeError(w, http.StatusUnauthorized, err.Error())
 			return auth.User{}, "", false
 		}
+		if isClientCanceled(err) {
+			recordStreamAuthTicket("validate", streamKind, "canceled")
+			writeError(w, statusClientClosedRequest, "client canceled request")
+			return auth.User{}, "", false
+		}
 		recordStreamAuthTicket("validate", streamKind, "store_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return auth.User{}, "", false
@@ -158,6 +164,17 @@ func (s *appServer) requireBrowserStreamAuth(w http.ResponseWriter, r *http.Requ
 	}
 	attachAuthToRequest(r, user)
 	return user, resolvedScope, true
+}
+
+const statusClientClosedRequest = 499
+
+func isClientCanceled(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	detail := err.Error()
+	return strings.Contains(detail, "context canceled") ||
+		strings.Contains(detail, "context already done")
 }
 
 // requireWSAuth extracts the user from a WebSocket upgrade request.

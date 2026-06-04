@@ -96,6 +96,14 @@ yanking the viewport away from a user reading history.
 - Returning to the live tail is an explicit state transition.
 - Load, ready, reconnect, and resync must not reset the viewport unless the
   user has explicitly returned to live tail or the current cursor is invalid.
+- The Turns view exposes a dedicated **Page dropdown** beside the turn selector.
+  It is present whenever a turn is selected; a single-page turn renders it
+  **disabled** ("Page 1 of 1") rather than omitting it, and a turn that crosses
+  the per-turn event seal enables it as a page picker (Page 1..N). The control is
+  never hidden — the pagination affordance stays visible even when there is
+  nothing to navigate to. (The Turns view reads the page-defaulted `/activity`
+  endpoint, so without this control a long turn would show only its last page
+  there with no way back.)
 
 ## Failure And Recovery
 
@@ -174,3 +182,10 @@ yanking the viewport away from a user reading history.
   last output page. Multiple questions from one AskUserQuestion invocation stay
   on the same page, and the surrounding activity pages remain reachable through
   the page selector.
+- The Turns view always shows the dedicated Page dropdown for a selected turn: a
+  single-page turn renders it disabled ("Page 1 of 1"); a multi-page turn lists
+  Page 1..N and selecting one re-reads that page via `?page=N`. The control is
+  not hidden when `page_count` is 1. The pure gate
+  `frontend/src/turnActivityPager.ts` (tested in `turnActivityPager.test.ts`)
+  owns the clamped current page, total page count, and disabled state, blocking
+  a regression to a threshold-hidden control.

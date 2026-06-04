@@ -329,7 +329,7 @@ func TestProjectTranscriptEventsCollapsesActiveTurnBeforeFinalAnswer(t *testing.
 	}
 }
 
-func TestProjectTranscriptEventsKeepsTurnUsageOutOfProjectedActivity(t *testing.T) {
+func TestProjectTranscriptEventsProjectsTurnUsageForContextChip(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
 			"text":    "think for a while",
@@ -376,28 +376,40 @@ func TestProjectTranscriptEventsKeepsTurnUsageOutOfProjectedActivity(t *testing.
 		t.Fatalf("active tool should project as turn_activity, got %#v", shell)
 	}
 	activity := transcriptAnyMap(shell["activity"])
-	if _, ok := shell["turnUsage"]; ok {
-		t.Fatalf("shell unexpectedly exposed turnUsage: %#v", shell)
+	shellUsage := transcriptAnyMap(shell["turnUsage"])
+	if got, want := shellUsage["input_tokens"], float64(120); got != want {
+		t.Fatalf("shell turnUsage input_tokens = %#v, want %#v in %#v", got, want, shell)
 	}
-	if _, ok := shell["usageObservation"]; ok {
-		t.Fatalf("shell unexpectedly exposed usageObservation: %#v", shell)
+	shellObservation := transcriptAnyMap(shell["usageObservation"])
+	if got, want := shellObservation["update_count"], float64(2); got != want {
+		t.Fatalf("shell usageObservation update_count = %#v, want %#v in %#v", got, want, shell)
 	}
-	if _, ok := activity["turnUsage"]; ok {
-		t.Fatalf("activity summary unexpectedly exposed turnUsage: %#v", activity)
+	activityUsage := transcriptAnyMap(activity["turnUsage"])
+	if got, want := activityUsage["input_tokens"], float64(120); got != want {
+		t.Fatalf("activity turnUsage input_tokens = %#v, want %#v in %#v", got, want, activity)
 	}
-	if _, ok := activity["usageObservation"]; ok {
-		t.Fatalf("activity summary unexpectedly exposed usageObservation: %#v", activity)
+	activityObservation := transcriptAnyMap(activity["usageObservation"])
+	if got, want := activityObservation["usage_source"], "thread.tokenUsage.updated"; got != want {
+		t.Fatalf("activity usageObservation source = %#v, want %#v in %#v", got, want, activity)
 	}
 	body := projection.ActivityBodies["turn-1"]
-	if got, want := body.CompactedEntryIDs, []string{"turn-1:item:tool"}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("compacted ids = %#v, want %#v", got, want)
+	var foundUsageRow bool
+	for _, entry := range body.Entries {
+		if entry["metaKind"] != "turn_usage" {
+			continue
+		}
+		foundUsageRow = true
+		usage := transcriptAnyMap(entry["turnUsage"])
+		if got, want := usage["input_tokens"], float64(120); got != want {
+			t.Fatalf("usage row input_tokens = %#v, want %#v in %#v", got, want, entry)
+		}
 	}
-	if got := body.Entries[0]["id"]; got != "turn-1:item:tool" {
-		t.Fatalf("activity entry id = %#v, want only the tool row", got)
+	if !foundUsageRow {
+		t.Fatalf("activity body missing hidden turn_usage row: %#v", body.Entries)
 	}
 }
 
-func TestProjectTranscriptEventsKeepsTerminalUsageOutOfProjectedRows(t *testing.T) {
+func TestProjectTranscriptEventsKeepsSnapshotAndTerminalUsageDistinct(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
 			"text":    "do the thing",
@@ -442,21 +454,37 @@ func TestProjectTranscriptEventsKeepsTerminalUsageOutOfProjectedRows(t *testing.
 	if !ok {
 		t.Fatalf("expected turn-1 activity body, got %#v", projection.ActivityBodies)
 	}
+	var snapshot map[string]any
 	for _, entry := range body.Entries {
-		if _, ok := entry["turnUsage"]; ok {
-			t.Fatalf("activity body entry unexpectedly exposed turnUsage: %#v", entry)
-		}
-		if _, ok := entry["usageObservation"]; ok {
-			t.Fatalf("activity body entry unexpectedly exposed usageObservation: %#v", entry)
+		if entry["metaKind"] == "turn_usage" {
+			snapshot = entry
+			break
 		}
 	}
+	if snapshot == nil {
+		t.Fatalf("activity body missing hidden usage snapshot row: %#v", body.Entries)
+	}
+	snapshotObservation := transcriptAnyMap(snapshot["usageObservation"])
+	if got, want := snapshotObservation["usage_source"], "claude.message"; got != want {
+		t.Fatalf("snapshot source = %#v, want %#v in %#v", got, want, snapshot)
+	}
+	snapshotUsage := transcriptAnyMap(snapshot["turnUsage"])
+	if got, want := snapshotUsage["cache_read_input_tokens"], float64(540_000); got != want {
+		t.Fatalf("snapshot cache_read_input_tokens = %#v, want %#v in %#v", got, want, snapshot)
+	}
+	var terminalAnnotated map[string]any
 	for _, entry := range projection.Entries {
-		if _, ok := entry["turnUsage"]; ok {
-			t.Fatalf("projected entry unexpectedly exposed turnUsage: %#v", entry)
+		if entry["id"] == "turn-1:item:answer" {
+			terminalAnnotated = entry
+			break
 		}
-		if _, ok := entry["usageObservation"]; ok {
-			t.Fatalf("projected entry unexpectedly exposed usageObservation: %#v", entry)
-		}
+	}
+	if terminalAnnotated == nil {
+		t.Fatalf("projected entries missing final answer: %#v", projection.Entries)
+	}
+	terminalObservation := transcriptAnyMap(terminalAnnotated["usageObservation"])
+	if got, want := terminalObservation["usage_source"], "claude.result"; got != want {
+		t.Fatalf("terminal source = %#v, want %#v in %#v", got, want, terminalAnnotated)
 	}
 }
 

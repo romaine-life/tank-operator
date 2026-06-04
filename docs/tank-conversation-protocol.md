@@ -340,10 +340,10 @@ invocation; a later matching `turn.input_answered` seals that page before
 resumed provider activity continues on a normal activity page. The endpoint
 returns the page directory (`page`, `page_count`, `pages[]`) and defaults to the
 pending unanswered `question_set` page while the turn is `needs_input`, and to
-the **last** page otherwise (`?page=N` selects another); the Turns view shows a
-page selector and lets the reader move between sealed activity pages and
-question pages. Sealing is a durable `order_key`-range concept so deep links
-and reloads are stable. The
+the **last** page otherwise (`?page=N` selects another); the Turns view always
+shows a page selector (disabled at a single-page boundary) and lets the reader
+move between sealed activity pages and question pages. Sealing is a durable
+`order_key`-range concept so deep links and reloads are stable. The
 `tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}`
 counter and `TankTurnActiveWithDurableTerminal` alert guard against a regression
 to a window that can't see the terminal.

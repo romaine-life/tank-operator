@@ -473,24 +473,28 @@ func (s *appServer) writeSessionEventStreamPage(ctx context.Context, w http.Resp
 	}
 	count := 0
 	for _, group := range transcriptRowDeltaGroups(page.Rows) {
-		orderKey := group.OrderKey
-		if orderKey == "" {
-			continue
-		}
-		writeSSEJSONEvent(w, "transcript-rows", orderKey, map[string]any{
-			"order_key": orderKey,
-			"rows":      group.Rows,
-		})
-		cursor.AfterOrderKey = orderKey
-		count += len(group.Rows)
-		sessionEventStreamEmittedTotal.Add(1)
-		recordSessionEventStreamEmittedByType("transcript_rows")
-		state.RecordEmit(time.Now(), orderKey, "transcript_rows", orderKey)
+		count += emitTranscriptRowGroup(w, cursor, state, group)
 	}
-	if page.NextOrderKey != "" {
+	if page.NextOrderKey != "" && page.NextOrderKey > cursor.AfterOrderKey {
 		cursor.AfterOrderKey = page.NextOrderKey
 	}
 	return page.HasMore, count, nil
+}
+
+func emitTranscriptRowGroup(w http.ResponseWriter, cursor *store.SessionEventCursor, state *sessionstream.StreamState, group transcriptRowDeltaGroup) int {
+	orderKey := group.OrderKey
+	if orderKey == "" {
+		return 0
+	}
+	writeSSEJSONEvent(w, "transcript-rows", orderKey, map[string]any{
+		"order_key": orderKey,
+		"rows":      group.Rows,
+	})
+	cursor.AfterOrderKey = orderKey
+	sessionEventStreamEmittedTotal.Add(1)
+	recordSessionEventStreamEmittedByType("transcript_rows")
+	state.RecordEmit(time.Now(), orderKey, "transcript_rows", orderKey)
+	return len(group.Rows)
 }
 
 type transcriptRowDeltaGroup struct {

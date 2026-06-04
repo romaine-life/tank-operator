@@ -23,6 +23,12 @@ import {
   pruneRealtimeEntries,
 } from "./transcriptMerge";
 import { cachedTurnActivityRefreshRequests } from "./turnActivityCache";
+import {
+  turnActivityPagerState,
+  type TurnActivityPageDirectoryItem,
+  type TurnActivityPageInfo,
+  type TurnActivityPagerState,
+} from "./turnActivityPager";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer } from "./ChatComposer";
@@ -145,6 +151,16 @@ import {
   sessionConnectionIndicatorLabel,
   type SdkConnectionState,
 } from "./sessionConnectionIndicator";
+import {
+  contextWindowTokenCount,
+  estimateTranscriptCost,
+  estimateTurnCost,
+  estimateTurnContextTokens,
+  formatCompactTokens,
+  formatComposerCostUsd,
+  formatTurnCostUsd,
+  type SessionCostEstimate,
+} from "./sessionCostEstimate";
 import {
   scheduledWakeupRowsToEntries,
   scheduledWakeupStatusLabel,
@@ -306,27 +322,8 @@ type DefaultSessionMode = Extract<
 type Provider = "anthropic" | "codex";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
-// Page directory for one turn's activity, returned by the per-turn
-// /activity endpoint (server_turn_activity_v2). A long turn splits into pages
-// sealed at the event threshold; the Turns view defaults to the last page and
-// lets the reader page back through sealed earlier pages.
-type TurnActivityPageInfo = {
-  page: number;
-  pageCount: number;
-  kind?: string;
-  questionCount?: number;
-  answered?: boolean;
-  pages?: TurnActivityPageDirectoryItem[];
-};
-
-type TurnActivityPageDirectoryItem = {
-  number: number;
-  kind?: string;
-  eventCount?: number;
-  sealed?: boolean;
-  questionCount?: number;
-  answered?: boolean;
-};
+// TurnActivityPageInfo (the per-turn /activity page directory) and the rule for
+// turning it into a rendered pager live in ./turnActivityPager.
 
 type TurnActivitySummary = {
   turnId?: string;
@@ -348,6 +345,8 @@ type TurnActivitySummary = {
   startOrderKey?: string;
   endOrderKey?: string;
   sourceEventId?: string;
+  turnUsage?: unknown;
+  usageObservation?: unknown;
 };
 export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   kind: SandboxTranscriptEntry["kind"] | "background_task" | "turn_activity";
@@ -372,6 +371,8 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   turnTerminalAt?: string;
   turnTerminalEventId?: string;
   turnTerminalOrderKey?: string;
+  turnUsage?: unknown;
+  usageObservation?: unknown;
   attachments?: MessageAttachmentDisplay[];
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
@@ -388,7 +389,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // sandbox-agent SDK). renderItem branches on metaKind before falling
   // through to the generic RunMetaBlock. Server projection sets metaKind on
   // rows it surfaces specially in chat — see transcript_projection.go.
-  metaKind?: "awaiting_input" | "context_compacted";
+  metaKind?: "awaiting_input" | "turn_usage" | "context_compacted";
   // For `awaiting_input` rows inside Turn activity: the Tank-canonical
   // questions plus the target ids the Turns question page posts to /answer.
   // `answered` is durable — set once a later turn.input_answered event
@@ -1665,12 +1666,95 @@ function currentSessionSkillState(
   return null;
 }
 
+interface ComposerCostEstimateProps {
+  amountUsd: number | null;
+  tokens?: number | null;
+  // Provider-observed live context window for the session's model. When > 0,
+  // the ctx metric renders as a used/window fraction; otherwise it falls back
+  // to the bare used count (or the "--" placeholder). Never a model-assumed
+  // default.
+  contextWindow?: number;
+  tokenScopeLabel?: string;
+  placeholder?: boolean;
+  scopeLabel?: string;
+  title?: string;
+}
+
+function ComposerCostEstimate({
+  amountUsd,
+  tokens,
+  contextWindow,
+  tokenScopeLabel,
+  placeholder = false,
+  scopeLabel = "session",
+  title,
+}: ComposerCostEstimateProps) {
+  const unavailable = placeholder;
+  const safeAmountUsd = !unavailable && typeof amountUsd === "number" && Number.isFinite(amountUsd)
+    ? Math.max(0, amountUsd)
+    : 0;
+  const safeTokens = unavailable
+    ? null
+    : typeof tokens === "number" && Number.isFinite(tokens)
+      ? Math.max(0, Math.floor(tokens))
+      : 0;
+  const safeWindow =
+    typeof contextWindow === "number" && Number.isFinite(contextWindow)
+      ? Math.max(0, Math.floor(contextWindow))
+      : 0;
+  const normalizedScope = scopeLabel.trim() || "session";
+  const formattedAmount = unavailable
+    ? "$--"
+    : normalizedScope === "turn"
+      ? formatTurnCostUsd(safeAmountUsd)
+      : formatComposerCostUsd(safeAmountUsd);
+  const label = formattedAmount;
+  const tokenLabel =
+    safeTokens === null
+      ? "--"
+      : safeWindow > 0
+        ? `${formatCompactTokens(safeTokens)}/${formatCompactTokens(safeWindow)}`
+        : formatCompactTokens(safeTokens);
+  const sentenceScope = `${normalizedScope.charAt(0).toUpperCase()}${normalizedScope.slice(1)}`;
+  const normalizedTokenScope = tokenScopeLabel?.trim() || `${normalizedScope} tokens`;
+  const tokenSentence =
+    safeWindow > 0
+      ? `${safeTokens?.toLocaleString() ?? 0} of ${safeWindow.toLocaleString()} context tokens`
+      : `${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`;
+  const defaultTitle = unavailable
+    ? "Cost estimate appears after token usage is available"
+    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${tokenSentence}`;
+  return (
+    <span
+      className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
+      aria-label={
+        unavailable
+          ? `${sentenceScope} cost estimate unavailable`
+          : `Estimated ${normalizedScope} cost ${label}, ${tokenSentence}`
+      }
+      aria-disabled={unavailable || undefined}
+      title={title ?? defaultTitle}
+    >
+      <span className="run-cost-estimate-metric run-cost-estimate-metric-tokens">
+        <span className="run-cost-estimate-value run-cost-estimate-token-count">{tokenLabel}</span>
+        <span className="run-cost-estimate-label">ctx</span>
+      </span>
+      <span className="run-cost-estimate-divider" aria-hidden="true" />
+      <span className="run-cost-estimate-metric run-cost-estimate-metric-cost">
+        <span className="run-cost-estimate-value run-cost-estimate-amount">{label}</span>
+        <span className="run-cost-estimate-label">usd</span>
+      </span>
+    </span>
+  );
+}
+
 interface ComposerToolButtonsProps {
   attach: {
     disabled?: boolean;
     title: string;
     onClick?: () => void;
   };
+  cost: ComponentProps<typeof ComposerCostEstimate>;
   rollout?: {
     visible?: boolean;
     active?: boolean;
@@ -1707,6 +1791,7 @@ interface ComposerToolButtonsProps {
 
 function ComposerToolButtons({
   attach,
+  cost,
   rollout,
   test,
   pullRequest,
@@ -1730,6 +1815,7 @@ function ComposerToolButtons({
       >
         <ImageIcon className="run-composer-icon" aria-hidden="true" />
       </button>
+      <ComposerCostEstimate {...cost} />
       {rollout?.visible && (
         <button
           type="button"
@@ -3026,6 +3112,11 @@ function DemoLanding() {
                   toolButtons={
                     <ComposerToolButtons
                       attach={{ disabled: true, title: "Sign in to attach files" }}
+                      cost={{
+                        amountUsd: 0,
+                        tokens: 0,
+                        title: "Cost estimate appears after usage is available",
+                      }}
                       rollout={{
                         visible: GUI_ROLLOUT_MODES.has(selectedMode),
                         disabled: true,
@@ -3503,6 +3594,21 @@ function isImagePath(path: string): boolean {
   const ext = path.toLowerCase().split(".").pop() ?? "";
   return IMAGE_EXTS.has(ext);
 }
+
+function latestContextTokens(entries: TranscriptEntry[], contextWindow: number): number {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const total = contextWindowTokenCount(
+      entry.turnUsage,
+      contextWindow,
+      entry.usageObservation,
+    );
+    if (total > 0) return total;
+  }
+  return 0;
+}
+
 // Verbs cycled by the streaming status pill. Matches cloudcli's
 // ClaudeStatus rotation so the user sees motion even when the model
 // hasn't sent any text deltas yet.
@@ -3902,6 +4008,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           activityIds: entry.activityIds,
           orderKey: entry.orderKey,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "message") {
@@ -3915,6 +4023,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "tool") {
@@ -3930,6 +4040,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "reasoning") {
@@ -3940,6 +4052,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "background_task") {
@@ -3963,6 +4077,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       return {
@@ -3973,6 +4089,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
         turnTerminalStatus: entry.turnTerminalStatus,
         turnTerminalAt: entry.turnTerminalAt,
         turnTerminalOrderKey: entry.turnTerminalOrderKey,
+        turnUsage: entry.turnUsage,
+        usageObservation: entry.usageObservation,
       };
     }),
   );
@@ -4015,6 +4133,8 @@ function normalizeProjectedTranscriptEntry(raw: unknown): TranscriptEntry | null
       turnId: stringRecordValue(record, "turnId"),
       activity: normalizeTurnActivitySummary(record.activity),
       activityIds: normalizeStringArray(record.activityIds),
+      turnUsage: record.turnUsage,
+      usageObservation: record.usageObservation,
     } as TranscriptEntry;
   }
   return {
@@ -4047,6 +4167,8 @@ function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undef
     startOrderKey: stringRecordValue(record, "startOrderKey"),
     endOrderKey: stringRecordValue(record, "endOrderKey"),
     sourceEventId: stringRecordValue(record, "sourceEventId"),
+    turnUsage: record.turnUsage,
+    usageObservation: record.usageObservation,
   };
 }
 
@@ -7296,6 +7418,48 @@ function turnActivitySummary(entries: TranscriptEntry[]): string {
   return parts.length > 0 ? parts.join(" / ") : plural(entries.length, "update");
 }
 
+// Shared page-selector control for a turn's activity, used by BOTH the inline
+// chat Turn-activity disclosure (RunTurnActivityGroup) and the dedicated Turns
+// view (RunTurnActivityScreen) so the two surfaces stay identical. Always
+// rendered once the page directory has loaded; ‹ / › disable at the
+// single-page boundary (see turnActivityPagerState).
+function TurnActivityPager({
+  pagerState,
+  onSelectPage,
+}: {
+  pagerState: TurnActivityPagerState;
+  onSelectPage: (page: number) => void;
+}) {
+  if (!pagerState.visible) return null;
+  return (
+    <div
+      className="run-turn-activity-pages"
+      role="group"
+      aria-label="Turn activity pages"
+    >
+      <button
+        type="button"
+        className="run-turn-activity-page-nav"
+        onClick={() => onSelectPage(pagerState.olderPage)}
+        disabled={!pagerState.canPageOlder}
+        aria-label="Older activity page"
+      >
+        ‹
+      </button>
+      <span className="run-turn-activity-page-label">{pagerState.label}</span>
+      <button
+        type="button"
+        className="run-turn-activity-page-nav"
+        onClick={() => onSelectPage(pagerState.newerPage)}
+        disabled={!pagerState.canPageNewer}
+        aria-label="Newer activity page"
+      >
+        ›
+      </button>
+    </div>
+  );
+}
+
 function turnActivityShellSummary(summary: TurnActivitySummary | undefined): string {
   if (!summary) return "Activity";
   const parts: string[] = [];
@@ -7335,15 +7499,6 @@ function normalizeTurnActivityPageDirectory(input: unknown): TurnActivityPageDir
   return pages;
 }
 
-function turnActivityPageLabel(page: TurnActivityPageDirectoryItem): string {
-  if (page.kind === "question_set") {
-    const count = page.questionCount ?? 0;
-    const status = page.answered ? "answered" : "needs input";
-    return count > 0 ? `Questions ${page.number} · ${plural(count, "question")} · ${status}` : `Questions ${page.number} · ${status}`;
-  }
-  return `Activity ${page.number}`;
-}
-
 type TurnViewItem = {
   turnId: string;
   turnNumber: number | null;
@@ -7353,6 +7508,8 @@ type TurnViewItem = {
   shell?: TranscriptEntry;
   active: boolean;
   loaded: boolean;
+  costEstimate: SessionCostEstimate | null;
+  contextTokens: number | null;
   startedAt?: string;
   completedAt?: string;
   lastActivityAt?: string;
@@ -7401,13 +7558,27 @@ function buildTurnViewItems(
   entries: TranscriptEntry[],
   activeTurnId: string | null,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
+  modelId: string,
+  contextWindow: number,
 ): TurnViewItem[] {
   const order = new Map<string, number>();
   const shells = new Map<string, TranscriptEntry>();
   const rawEntries = new Map<string, TranscriptEntry[]>();
+  const costRowsByTurn = new Map<string, Map<string, TranscriptEntry>>();
+  const addCostRow = (entry: TranscriptEntry) => {
+    const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
+    if (!turnId) return;
+    let rows = costRowsByTurn.get(turnId);
+    if (!rows) {
+      rows = new Map<string, TranscriptEntry>();
+      costRowsByTurn.set(turnId, rows);
+    }
+    rows.set(entry.id, entry);
+  };
   entries.forEach((entry, index) => {
     const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
     if (!turnId) return;
+    addCostRow(entry);
     if (!order.has(turnId)) order.set(turnId, index);
     if (isTurnActivityEntry(entry)) {
       shells.set(turnId, entry);
@@ -7418,6 +7589,9 @@ function buildTurnViewItems(
     bucket.push(entry);
     rawEntries.set(turnId, bucket);
   });
+  for (const loadedEntries of Object.values(activityEntriesByTurn)) {
+    for (const entry of loadedEntries ?? []) addCostRow(entry);
+  }
 
   const active = activeTurnId?.trim() ?? "";
   if (active && !order.has(active)) order.set(active, entries.length);
@@ -7441,6 +7615,7 @@ function buildTurnViewItems(
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.turnTerminalAt ??
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.time;
       const lastActivityAt = turnActivityLastActivityAt(shell, turnEntries);
+      const costRows = Array.from(costRowsByTurn.get(turnId)?.values() ?? []);
       return {
         turnId,
         turnNumber,
@@ -7455,6 +7630,8 @@ function buildTurnViewItems(
         shell,
         active: turnId === active,
         loaded: Boolean(loadedEntries),
+        costEstimate: estimateTurnCost(costRows, modelId, turnId),
+        contextTokens: estimateTurnContextTokens(costRows, contextWindow, turnId),
         startedAt,
         completedAt,
         lastActivityAt,
@@ -7808,6 +7985,9 @@ function RunTurnActivityGroup({
   const shellSummary = group.shell?.activity;
   const needsInput = shellSummary?.status === "needs_input";
   const questionCount = shellSummary?.questionCount ?? pageInfo?.questionCount ?? 0;
+  // Always-present pager state: a single-page turn renders a disabled
+  // "page 1 of 1" rather than vanishing, so the affordance never looks absent.
+  const pagerState = turnActivityPagerState(pageInfo);
   return (
     <div
       className="run-turn-activity"
@@ -7874,36 +8054,8 @@ function RunTurnActivityGroup({
           )}
           {open && (
             <div className="run-turn-activity-body">
-              {pageInfo && pageInfo.pageCount > 1 && onSelectPage && (
-                <div
-                  className="run-turn-activity-pages"
-                  role="group"
-                  aria-label="Turn activity pages"
-                >
-                  <button
-                    type="button"
-                    className="run-turn-activity-page-nav"
-                    onClick={() => onSelectPage(Math.max(1, pageInfo.page - 1))}
-                    disabled={pageInfo.page <= 1}
-                    aria-label="Older activity page"
-                  >
-                    ‹
-                  </button>
-                  <span className="run-turn-activity-page-label">
-                    page {pageInfo.page} of {pageInfo.pageCount}
-                  </span>
-                  <button
-                    type="button"
-                    className="run-turn-activity-page-nav"
-                    onClick={() =>
-                      onSelectPage(Math.min(pageInfo.pageCount, pageInfo.page + 1))
-                    }
-                    disabled={pageInfo.page >= pageInfo.pageCount}
-                    aria-label="Newer activity page"
-                  >
-                    ›
-                  </button>
-                </div>
+              {onSelectPage && (
+                <TurnActivityPager pagerState={pagerState} onSelectPage={onSelectPage} />
               )}
               {group.shell && !group.loaded ? (
                 <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
@@ -7956,6 +8108,7 @@ function RunTurnActivityGroup({
                       />
                     );
                   }
+                  if (child.entry.metaKind === "turn_usage") return null;
                   return (
                     <RunMetaBlock
                       key={child.entry.id}
@@ -8044,10 +8197,10 @@ function RunTurnActivityScreen({
   activityRefreshProblemsByTurn,
   onRetryActivityRefresh,
   onOpenBackgroundTask,
-  turnActivityPageInfo,
-  onSelectPage,
   scrollRequest,
   onScrollRequestConsumed,
+  turnActivityPageInfo,
+  onActivitySelectPage,
 }: {
   turns: TurnViewItem[];
   selectedTurnId: string | null;
@@ -8066,13 +8219,17 @@ function RunTurnActivityScreen({
   activityRefreshProblemsByTurn: Record<string, ActivityRefreshProblem | undefined>;
   onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
-  turnActivityPageInfo: Record<string, TurnActivityPageInfo | undefined>;
-  onSelectPage: (turnId: string, page: number) => void;
   scrollRequest?: TurnViewScrollRequest | null;
   onScrollRequestConsumed?: (signal: number) => void;
+  turnActivityPageInfo?: Record<string, TurnActivityPageInfo | undefined>;
+  onActivitySelectPage?: (turnId: string, page: number) => void;
 }) {
   const selected = turns.find((turn) => turn.turnId === selectedTurnId) ?? turns[turns.length - 1] ?? null;
-  const selectedPageInfo = selected ? turnActivityPageInfo[selected.turnId] : undefined;
+  const selectedPageInfo = selected && turnActivityPageInfo ? turnActivityPageInfo[selected.turnId] : undefined;
+  // Same always-present pager as the inline chat disclosure, for the surface a
+  // user actually inspects turns from. Without it, a turn over the page limit
+  // shows only its last page here (the endpoint default) with no way back.
+  const pagerState = turnActivityPagerState(selectedPageInfo);
   const detailEntries = useMemo(
     () =>
       (selected?.entries ?? []).filter(
@@ -8149,6 +8306,7 @@ function RunTurnActivityScreen({
       if (group.entry.metaKind === "awaiting_input") {
         return <RunAwaitingInputCard key={group.entry.id} entry={group.entry} />;
       }
+      if (group.entry.metaKind === "turn_usage") return null;
       return (
         <RunMetaBlock
           key={group.entry.id}
@@ -8204,34 +8362,70 @@ function RunTurnActivityScreen({
           <ActivityIcon size={16} strokeWidth={2.1} aria-hidden="true" />
           <h2>Turns</h2>
         </div>
-        <Select
-          value={selected?.turnId ?? ""}
-          onValueChange={onSelectTurn}
-          disabled={turns.length === 0}
-        >
-          <SelectTrigger
-            className="run-turn-view-select"
-            size="sm"
-            aria-label="Select turn"
-          >
-            <SelectValue placeholder="No turns" />
-          </SelectTrigger>
-          <SelectContent
-            className="run-turn-view-select-menu"
-            position="popper"
-            align="end"
-          >
-            {turns.map((turn) => (
-              <SelectItem
-                key={turn.turnId}
-                value={turn.turnId}
-                className="run-turn-view-select-item"
+        <div className="run-turn-view-controls">
+          {selected && onActivitySelectPage && (
+            <Select
+              value={String(pagerState.page)}
+              onValueChange={(value) =>
+                onActivitySelectPage(selected.turnId, Number(value))
+              }
+              disabled={pagerState.pageCount <= 1}
+            >
+              <SelectTrigger
+                className="run-turn-view-select run-turn-view-page-select"
+                size="sm"
+                aria-label="Select activity page"
               >
-                {turn.label}{turn.active ? " (running)" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent
+                className="run-turn-view-select-menu"
+                position="popper"
+                align="end"
+              >
+                {Array.from({ length: pagerState.pageCount }, (_, index) => index + 1).map(
+                  (pageNumber) => (
+                    <SelectItem
+                      key={pageNumber}
+                      value={String(pageNumber)}
+                      className="run-turn-view-select-item"
+                    >
+                      Page {pageNumber} of {pagerState.pageCount}
+                    </SelectItem>
+                  ),
+                )}
+              </SelectContent>
+            </Select>
+          )}
+          <Select
+            value={selected?.turnId ?? ""}
+            onValueChange={onSelectTurn}
+            disabled={turns.length === 0}
+          >
+            <SelectTrigger
+              className="run-turn-view-select"
+              size="sm"
+              aria-label="Select turn"
+            >
+              <SelectValue placeholder="No turns" />
+            </SelectTrigger>
+            <SelectContent
+              className="run-turn-view-select-menu"
+              position="popper"
+              align="end"
+            >
+              {turns.map((turn) => (
+                <SelectItem
+                  key={turn.turnId}
+                  value={turn.turnId}
+                  className="run-turn-view-select-item"
+                >
+                  {turn.label}{turn.active ? " (running)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       {selected ? (
         <>
@@ -8242,24 +8436,15 @@ function RunTurnActivityScreen({
             <span>{selected.summary}</span>
             {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
             {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
+            {selected.costEstimate && (
+              <ComposerCostEstimate
+                amountUsd={selected.costEstimate.amountUsd}
+                tokens={selected.contextTokens}
+                tokenScopeLabel="current context tokens"
+                scopeLabel="turn"
+              />
+            )}
           </div>
-          {selectedPageInfo?.pages && selectedPageInfo.pages.length > 1 && (
-            <div className="run-turn-view-pages" role="tablist" aria-label="Turn pages">
-              {selectedPageInfo.pages.map((page) => (
-                <button
-                  key={page.number}
-                  type="button"
-                  role="tab"
-                  aria-selected={selectedPageInfo.page === page.number}
-                  className={`run-turn-view-page${selectedPageInfo.page === page.number ? " is-active" : ""}`}
-                  data-kind={page.kind}
-                  onClick={() => onSelectPage(selected.turnId, page.number)}
-                >
-                  {turnActivityPageLabel(page)}
-                </button>
-              ))}
-            </div>
-          )}
           {selectedPageInfo?.kind === "question_set" && (
             <div
               className="run-turn-question-page-head"
@@ -8724,6 +8909,9 @@ export function RunMessages({
               showTimestamps={showTimestamps}
             />
           );
+        }
+        if (g.entry.metaKind === "turn_usage") {
+          return null;
         }
         return <RunMetaBlock entry={g.entry} systemAvatar={systemAvatar} />;
       }
@@ -9718,6 +9906,13 @@ function ChatPane({
     : (effortOptions.some((opt) => opt.id === preferredEffortId) ? preferredEffortId : fallbackEffortId);
   const [selectedModelId] = useState<string>(initialModelId);
   const [selectedEffortId] = useState<string>(initialEffortId);
+  const runtimeContextWindowTokens =
+    typeof session.runtime_context_window_tokens === "number" &&
+    Number.isFinite(session.runtime_context_window_tokens) &&
+    session.runtime_context_window_tokens > 0
+      ? Math.floor(session.runtime_context_window_tokens)
+      : 0;
+  const [tokensUsed, setTokensUsed] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
   // and `slashIndex` drive filtering and keyboard selection.
@@ -9997,6 +10192,8 @@ function ChatPane({
     sdkServerEntriesRef.current = applySdkAssistantDurations(
       sdkServerProjectedEntriesRef.current,
     );
+    const latestUsageTokens = latestContextTokens(sdkServerEntriesRef.current, runtimeContextWindowTokens);
+    if (latestUsageTokens > 0) setTokensUsed(latestUsageTokens);
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
       sdkServerEntriesRef.current,
       sdkRealtimeEntriesRef.current,
@@ -10391,6 +10588,7 @@ function ChatPane({
     setSdkPendingTailCount(0);
     setSdkOlderError(null);
     setEntries([]);
+    setTokensUsed(0);
     clearActivityLiveRefreshState();
     activityEntriesByTurnRef.current = {};
     setActivityEntriesByTurn({});
@@ -12852,13 +13050,17 @@ function ChatPane({
     [activeBackgroundEntries, controlActionEntries, detachedShellEntries, scheduledWakeupEntries],
   );
   const appliedModelId = (session.runtime_model ?? "").trim();
+  const modelForCostEstimate = appliedModelId || selectedModelId;
+  const contextWindow = runtimeContextWindowTokens;
   const turnViewItems = useMemo(
     () => buildTurnViewItems(
       renderedEntries,
       renderedActiveTurnId,
       activityEntriesByTurn,
+      modelForCostEstimate,
+      contextWindow,
     ),
-    [activityEntriesByTurn, renderedActiveTurnId, renderedEntries],
+    [activityEntriesByTurn, contextWindow, modelForCostEstimate, renderedActiveTurnId, renderedEntries],
   );
   const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
@@ -13302,6 +13504,13 @@ function ChatPane({
       ? `Runtime applied: ${modelChipLabel}${effortChipLabel ? ` / ${effortChipLabel}` : ""}`
       : `Runtime did not report a model. Selected: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`)
     : `Waiting for runner report. Intended: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`;
+  const sessionCostEstimate = useMemo(
+    () => estimateTranscriptCost(entries, modelForCostEstimate),
+    [entries, modelForCostEstimate],
+  );
+  const sessionUsageLoading =
+    CHAT_MODES.has(session.mode) &&
+    (timelineBootstrap.status === "idle" || timelineBootstrap.status === "loading");
 
   useEffect(() => {
     if (publicView) return;
@@ -13979,10 +14188,10 @@ function ChatPane({
               ensureTurnActivityLoaded(turnId, { force: true });
             }}
             onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
-            turnActivityPageInfo={turnActivityPageInfo}
-            onSelectPage={selectTurnActivityPage}
             scrollRequest={turnViewScrollRequest}
             onScrollRequestConsumed={clearTurnViewScrollRequest}
+            turnActivityPageInfo={turnActivityPageInfo}
+            onActivitySelectPage={selectTurnActivityPage}
           />
           )
         ) : activeTab === "background" ? (
@@ -14405,6 +14614,13 @@ function ChatPane({
                   : "File attachments require a session workspace",
                 onClick: () => fileInputRef.current?.click(),
                 disabled: !supportsFileAttachments,
+              }}
+              cost={{
+                amountUsd: sessionCostEstimate?.amountUsd ?? null,
+                tokens: tokensUsed,
+                contextWindow: runtimeContextWindowTokens,
+                tokenScopeLabel: "current context tokens",
+                placeholder: sessionUsageLoading,
               }}
               rollout={{
                 visible: GUI_ROLLOUT_MODES.has(session.mode),
@@ -17769,6 +17985,11 @@ function AuthenticatedApp() {
                         : "File attachments require a session workspace",
                       onClick: () => homeFileInputRef.current?.click(),
                       disabled: busy || !sessionModeSupportsWorkspaceFiles(defaultSessionMode),
+                    }}
+                    cost={{
+                      amountUsd: 0,
+                      tokens: 0,
+                      title: "Cost estimate appears after usage is available",
                     }}
                     rollout={{
                       visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),
