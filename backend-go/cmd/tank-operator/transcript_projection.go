@@ -1025,13 +1025,16 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 	for idx, entry := range entries {
 		if activity, ok := activityByInsertIndex[idx]; ok {
 			shellOrderKey := transcriptMapString(activity.Summary, "startOrderKey")
-			if umKey := turnUserMessageOrderKey(entries, activity.TurnID); umKey != "" && shellOrderKey < umKey {
+			if umKey := turnUserMessageOrderKey(entries, activity.TurnID); umKey != "" && shellOrderKey <= umKey {
 				// Folded session-startup lifecycle carries order keys that predate
-				// the turn's message. The transcript sorts rows by orderKey, so
-				// anchor the shell just after the user message — the noise bin must
-				// never sort above the message it belongs to. ("~" sorts after the
-				// normal order-key alphabet, like the awaiting-input tail anchor.)
-				shellOrderKey = umKey + "~activity"
+				// the turn's message, so the shell's natural start key would sort
+				// the noise bin above the message. Anchor the shell to the turn's
+				// first real event after the message (turn.submitted/started or the
+				// first item) — a genuine larger order key, which is collation-
+				// robust unlike a suffix on the message key.
+				if anchored := turnFirstOrderKeyAfter(entries, activity.TurnID, umKey); anchored != "" {
+					shellOrderKey = anchored
+				}
 			}
 			shell := map[string]any{
 				"id":            "turn-activity-" + activity.TurnID,
@@ -1174,6 +1177,27 @@ func turnUserMessageOrderKey(entries []map[string]any, turnID string) string {
 		}
 	}
 	return ""
+}
+
+// turnFirstOrderKeyAfter returns the smallest order key strictly greater than
+// afterKey among entries belonging to turnID. Used to anchor a turn's activity
+// shell to the turn's first real event after its user message, so folded
+// pre-message lifecycle can't drag the shell above the message.
+func turnFirstOrderKeyAfter(entries []map[string]any, turnID, afterKey string) string {
+	best := ""
+	for _, entry := range entries {
+		if transcriptMapString(entry, "turnId") != turnID {
+			continue
+		}
+		ok := transcriptMapString(entry, "orderKey")
+		if ok == "" || ok <= afterKey {
+			continue
+		}
+		if best == "" || ok < best {
+			best = ok
+		}
+	}
+	return best
 }
 
 func firstTurnProgressIndex(entries []map[string]any, turnID string) int {
