@@ -101,7 +101,7 @@ func TestAppliedMigration0078ChecksumIsStable(t *testing.T) {
 	t.Fatalf("migration %s not found", id)
 }
 
-func TestAppliedRuntimeContextLegacyChecksumsAreAccepted(t *testing.T) {
+func TestAppliedLegacyChecksumsAreAccepted(t *testing.T) {
 	cases := []struct {
 		id              string
 		legacyChecksum  string
@@ -121,6 +121,11 @@ func TestAppliedRuntimeContextLegacyChecksumsAreAccepted(t *testing.T) {
 			id:              "0102",
 			legacyChecksum:  "3698dba005984cc9317a14fc9b9561ad228d55d5a8950110dc1c9e3fc2ed0bbf",
 			currentChecksum: "e6b3d6ff71d8dbbb9072e0cfab61ed9be113c3a4934896b8a4544bd254ce4b21",
+		},
+		{
+			id:              "0115",
+			legacyChecksum:  "31f797615bbd4bfef55d14431881805ea425e15727c75267bb4a4563aabdb04e",
+			currentChecksum: "e004ebd5b5532a4b85984a62f8ad48a81aa3460c1ca07701f386135d72cdecf5",
 		},
 	}
 

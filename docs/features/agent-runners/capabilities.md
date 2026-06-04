@@ -42,4 +42,4 @@ Evidence:
 - Metrics: `tank_runner_background_task_wake_total{result}`,
   `tank_background_task_wake_register_total`,
   `tank_background_task_wake_fire_total`, `tank_background_task_wakes_due`.
-- Durable schema: migrations 0115–0118 (`session_background_task_wakes`).
+- Durable schema: migrations 0121–0124 (`session_background_task_wakes`).
