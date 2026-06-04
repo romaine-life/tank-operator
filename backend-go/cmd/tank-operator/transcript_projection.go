@@ -1024,12 +1024,21 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 	out := make([]map[string]any, 0, len(entries))
 	for idx, entry := range entries {
 		if activity, ok := activityByInsertIndex[idx]; ok {
+			shellOrderKey := transcriptMapString(activity.Summary, "startOrderKey")
+			if umKey := turnUserMessageOrderKey(entries, activity.TurnID); umKey != "" && shellOrderKey < umKey {
+				// Folded session-startup lifecycle carries order keys that predate
+				// the turn's message. The transcript sorts rows by orderKey, so
+				// anchor the shell just after the user message — the noise bin must
+				// never sort above the message it belongs to. ("~" sorts after the
+				// normal order-key alphabet, like the awaiting-input tail anchor.)
+				shellOrderKey = umKey + "~activity"
+			}
 			shell := map[string]any{
 				"id":            "turn-activity-" + activity.TurnID,
 				"kind":          "turn_activity",
 				"turnId":        activity.TurnID,
 				"time":          transcriptMapString(activity.Summary, "startedAt"),
-				"orderKey":      transcriptMapString(activity.Summary, "startOrderKey"),
+				"orderKey":      shellOrderKey,
 				"activity":      activity.Summary,
 				"activityIds":   activity.CompactedEntryIDs,
 				"sourceEventId": transcriptMapString(activity.Summary, "sourceEventId"),
@@ -1156,6 +1165,15 @@ func turnUserMessageIndex(entries []map[string]any, turnID string) int {
 		}
 	}
 	return -1
+}
+
+func turnUserMessageOrderKey(entries []map[string]any, turnID string) string {
+	for _, entry := range entries {
+		if transcriptMapString(entry, "turnId") == turnID && isProjectedUserMessage(entry) {
+			return transcriptMapString(entry, "orderKey")
+		}
+	}
+	return ""
 }
 
 func firstTurnProgressIndex(entries []map[string]any, turnID string) int {

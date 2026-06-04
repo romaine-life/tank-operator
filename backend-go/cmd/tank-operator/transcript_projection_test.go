@@ -790,14 +790,23 @@ func TestProjectTranscriptEventsFoldsSessionLifecycleIntoTurn(t *testing.T) {
 	if len(projection.Entries) == 0 || projection.Entries[0]["role"] != "user" {
 		t.Fatalf("first top-level row = %#v, want the user message", projection.Entries)
 	}
-	hasShell := false
-	for _, entry := range projection.Entries {
-		if entry["kind"] == "turn_activity" {
-			hasShell = true
+	var userKey, shellKey string
+	userIdx, shellIdx := -1, -1
+	for i, entry := range projection.Entries {
+		switch {
+		case entry["kind"] == "message" && entry["role"] == "user":
+			userKey, userIdx = transcriptMapString(entry, "orderKey"), i
+		case entry["kind"] == "turn_activity":
+			shellKey, shellIdx = transcriptMapString(entry, "orderKey"), i
 		}
 	}
-	if !hasShell {
+	if shellIdx < 0 {
 		t.Fatalf("expected a turn_activity shell holding the folded lifecycle: %#v", projection.Entries)
+	}
+	// The shell carries folded lifecycle whose order keys predate the message;
+	// it must still sort after the user message, by index and by orderKey.
+	if shellIdx <= userIdx || shellKey <= userKey {
+		t.Fatalf("activity shell must sort after the user message: userKey=%q shellKey=%q (idx %d vs %d)", userKey, shellKey, userIdx, shellIdx)
 	}
 	body, ok := projection.ActivityBodies["turn-1"]
 	if !ok {
