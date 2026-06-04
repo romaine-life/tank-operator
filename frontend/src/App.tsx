@@ -163,6 +163,12 @@ import {
   type SessionCostEstimate,
 } from "./sessionCostEstimate";
 import {
+  buildSessionDataStatusRows,
+  type StatusTone,
+  type SessionDataStatusId,
+  type SessionDataStatusRow,
+} from "./sessionDataStatus";
+import {
   scheduledWakeupRowsToEntries,
   scheduledWakeupStatusLabel,
   type ScheduledWakeupRow,
@@ -1955,6 +1961,10 @@ function BugLabelPicker({
   requestPath,
   onSave,
   allowClear = true,
+  wrapperClassName = "",
+  triggerClassName,
+  iconClassName = "run-composer-icon",
+  triggerContent = null,
 }: {
   value: string;
   activeSlug?: string | null;
@@ -1962,6 +1972,10 @@ function BugLabelPicker({
   requestPath: (path: string) => string;
   onSave: (name: string | null) => Promise<void> | void;
   allowClear?: boolean;
+  wrapperClassName?: string;
+  triggerClassName?: string;
+  iconClassName?: string;
+  triggerContent?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [labels, setLabels] = useState<BugLabelSuggestion[]>([]);
@@ -2013,6 +2027,9 @@ function BugLabelPicker({
   const currentLabel = value;
   const title = currentLabel ? `Bug label: ${currentLabel}` : "Set bug label";
   const normalizedDraft = draft.trim();
+  const triggerClasses = triggerClassName
+    ? `${triggerClassName}${currentLabel ? " is-active" : ""}`
+    : `run-composer-icon-btn run-bug-label-trigger${currentLabel ? " is-active" : ""}`;
   const save = async (name: string | null) => {
     setSaving(true);
     setError("");
@@ -2027,16 +2044,17 @@ function BugLabelPicker({
   };
 
   return (
-    <span className="run-bug-label-picker">
+    <span className={`run-bug-label-picker${wrapperClassName ? ` ${wrapperClassName}` : ""}`}>
       <button
         type="button"
-        className={`run-composer-icon-btn run-bug-label-trigger${currentLabel ? " is-active" : ""}`}
+        className={triggerClasses}
         aria-label={title}
         title={title}
         disabled={disabled}
         onClick={() => setOpen((value) => !value)}
       >
-        <BugIcon className="run-composer-icon" aria-hidden="true" />
+        <BugIcon className={iconClassName} aria-hidden="true" />
+        {triggerContent}
       </button>
       {open && (
         <div className="run-bug-label-popover">
@@ -3517,7 +3535,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
+type RunTab = "chat" | "turns" | "background" | "files" | "session-data" | "settings" | "help";
 type BackgroundView = "shells" | "scheduled" | "control" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
 
@@ -6316,6 +6334,7 @@ function RunHeaderOverflowMenu({
   turns,
   background,
   files,
+  sessionData,
   settingsActive,
   helpActive,
   onSettings,
@@ -6326,6 +6345,7 @@ function RunHeaderOverflowMenu({
   turns: RunHeaderMenuTabState;
   background: RunHeaderMenuTabState;
   files: RunHeaderMenuTabState;
+  sessionData: RunHeaderMenuTabState;
   settingsActive: boolean;
   helpActive: boolean;
   onSettings: () => void;
@@ -6403,6 +6423,15 @@ function RunHeaderOverflowMenu({
           />
           <span>Files</span>
         </DropdownMenuItem>
+        <DropdownMenuItem
+          className={`run-tab-more-item${sessionData.active ? " is-active" : ""}`}
+          disabled={sessionData.disabled}
+          onSelect={sessionData.onOpen}
+          title={sessionData.title}
+        >
+          <ClipboardListIcon className="run-tab-more-item-icon" aria-hidden="true" />
+          <span>Session data</span>
+        </DropdownMenuItem>
         <DropdownMenuSeparator className="run-tab-more-separator" />
         <DropdownMenuItem
           className={`run-tab-more-item${settingsActive ? " is-active" : ""}`}
@@ -6427,6 +6456,247 @@ function RunHeaderOverflowMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
+  switch (id) {
+    case "test":
+      return <FlaskConicalIcon />;
+    case "context":
+      return <BrainIcon />;
+    case "rollout":
+      return <ArrowUpFromLineIcon />;
+    case "pull_request":
+      return <GitPullRequestIcon />;
+    case "bug_report":
+      return <BugIcon />;
+    case "linked_repo":
+      return <GitBranchIcon />;
+  }
+}
+
+function SessionDataScreen({
+  rows,
+  session,
+  requestPath,
+  onBugLabelSave,
+  readOnly,
+}: {
+  rows: SessionDataStatusRow[];
+  session: Session;
+  requestPath: (path: string) => string;
+  onBugLabelSave: (name: string | null) => Promise<void>;
+  readOnly?: boolean;
+}) {
+  const activeCount = rows.filter((row) => row.tone !== "muted").length;
+  const bugLabel = session.bug_label?.display_name ?? session.bug_label?.name ?? "";
+  return (
+    <div className="run-session-data-screen">
+      <section className="run-session-data-section" aria-labelledby="run-session-data-title">
+        <div className="run-session-data-page-head">
+          <h2 className="run-session-data-title" id="run-session-data-title">Session data</h2>
+          <span className="run-session-data-summary">{activeCount}/{rows.length} active</span>
+        </div>
+        <div className="run-session-data-page-list" aria-label="Session data status">
+          {rows.map((row) => (
+            <div
+              key={row.id}
+              className={`run-session-data-card is-${row.tone}`}
+            >
+              <div className="run-session-data-card-top">
+                <span className="run-session-data-card-icon" aria-hidden="true">
+                  <SessionDataIcon id={row.id} />
+                </span>
+                <span className="run-session-data-card-main">
+                  <span className="run-session-data-card-label">{row.label}</span>
+                  <span className="run-session-data-card-detail">{row.detail}</span>
+                </span>
+                {row.href ? (
+                  <a
+                    className="run-session-data-card-status"
+                    href={row.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={row.href}
+                  >
+                    <span>{row.status}</span>
+                    <ExternalLinkIcon aria-hidden="true" />
+                  </a>
+                ) : (
+                  <span className="run-session-data-card-status">{row.status}</span>
+                )}
+              </div>
+              <SessionDataCardDetails
+                row={row}
+                session={session}
+                bugLabel={bugLabel}
+                requestPath={requestPath}
+                onBugLabelSave={onBugLabelSave}
+                readOnly={readOnly}
+              />
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SessionDataCardDetails({
+  row,
+  session,
+  bugLabel,
+  requestPath,
+  onBugLabelSave,
+  readOnly,
+}: {
+  row: SessionDataStatusRow;
+  session: Session;
+  bugLabel: string;
+  requestPath: (path: string) => string;
+  onBugLabelSave: (name: string | null) => Promise<void>;
+  readOnly?: boolean;
+}) {
+  switch (row.id) {
+    case "test":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Slot", session.test_state?.slot_index != null ? String(session.test_state.slot_index) : "Not assigned"],
+            ["URL", session.test_state?.url ? session.test_state.url : "No test environment URL"],
+          ]}
+        />
+      );
+    case "context":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Compactions", String(Math.max(0, Math.floor(session.compaction_count ?? 0)))],
+            ["Window", session.runtime_context_window_tokens ? formatCompactTokens(session.runtime_context_window_tokens) : "Not reported"],
+            ["Source", session.runtime_context_window_source || "Not reported"],
+            ["Observed", formatToolFullTime(session.runtime_context_window_observed_at ?? undefined) || "Not observed"],
+          ]}
+        />
+      );
+    case "rollout":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["State", session.rollout_state?.active ? "Release workflow in progress" : "No active rollout"],
+          ]}
+        />
+      );
+    case "pull_request":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Link", session.test_state?.pull_request_url ? row.detail : "No pull request linked"],
+          ]}
+        />
+      );
+    case "bug_report":
+      return (
+        <div className="run-session-data-actions">
+          <BugLabelPicker
+            value={bugLabel}
+            activeSlug={session.bug_label?.slug}
+            disabled={readOnly}
+            requestPath={requestPath}
+            onSave={onBugLabelSave}
+            wrapperClassName="run-session-data-bug-picker"
+            triggerClassName="run-session-data-action"
+            iconClassName="run-session-data-action-icon"
+            triggerContent={<span>{bugLabel ? "Change bug" : "Attach bug"}</span>}
+          />
+          {readOnly && (
+            <span className="run-session-data-readonly">Read-only session</span>
+          )}
+        </div>
+      );
+    case "linked_repo":
+      return (
+        <SessionDataRepoList
+          repos={session.repos}
+          cloneState={session.clone_state ?? null}
+        />
+      );
+  }
+}
+
+function SessionDataFacts({ facts }: { facts: Array<[string, string]> }) {
+  return (
+    <dl className="run-session-data-facts">
+      {facts.map(([label, value]) => (
+        <div key={label} className="run-session-data-fact">
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function SessionDataRepoList({
+  repos,
+  cloneState,
+}: {
+  repos: string[];
+  cloneState: Record<string, unknown> | null;
+}) {
+  if (repos.length === 0) {
+    return <div className="run-session-data-empty">No repositories are linked to this session.</div>;
+  }
+  return (
+    <div className="run-session-data-repo-list" role="list" aria-label="Linked repositories">
+      {repos.map((repo) => {
+        const clone = sessionDataCloneDisplay(cloneState?.[repo]);
+        return (
+          <div key={repo} className="run-session-data-repo-row" role="listitem">
+            <a
+              className="run-session-data-repo-link"
+              href={`https://github.com/${repo}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <GitBranchIcon aria-hidden="true" />
+              <span>{repo}</span>
+              <ExternalLinkIcon aria-hidden="true" />
+            </a>
+            <span className={`run-session-data-repo-state is-${clone.tone}`}>
+              {clone.label}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function sessionDataCloneDisplay(value: unknown): { label: string; tone: StatusTone } {
+  if (value === undefined) return { label: "Selected", tone: "info" };
+  const text = sessionDataCloneText(value);
+  if (/\b(error|failed|failure|fatal|denied|unauthorized|timeout)\b/i.test(text)) {
+    return { label: "Clone issue", tone: "danger" };
+  }
+  if (/\b(pending|running|cloning|checkout|queued|starting)\b/i.test(text)) {
+    return { label: "Syncing", tone: "warning" };
+  }
+  if (/\b(ok|ready|done|success|succeeded|complete|completed|cloned)\b/i.test(text)) {
+    return { label: "Ready", tone: "good" };
+  }
+  return text.trim() ? { label: "Checking", tone: "warning" } : { label: "Selected", tone: "info" };
+}
+
+function sessionDataCloneText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) return value.map(sessionDataCloneText).join(" ");
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).map(sessionDataCloneText).join(" ");
+  }
+  return "";
 }
 
 function BackgroundMeta({
@@ -11280,6 +11550,12 @@ function ChatPane({
       setPendingTurnViewRouteAnchor("bottom");
       return;
     }
+    if (route.tab === "session-data") {
+      setActiveTab("session-data");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      return;
+    }
     setActiveTab("chat");
     setPendingRouteTurnNumber(null);
     setPendingTurnViewRouteAnchor(null);
@@ -13009,6 +13285,26 @@ function ChatPane({
     onSessionPatch(session.id, { test_state: null, rollout_state: nextState });
   }
 
+  async function saveSessionBugLabel(name: string | null): Promise<void> {
+    const res = await authedFetch(scopedSessionPathForPane(`/api/sessions/${session.id}/bug-label`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      let detail = `bug label update failed: ${res.status}`;
+      try {
+        const body = await res.json();
+        if (typeof body?.detail === "string") detail = body.detail;
+      } catch {
+        // Keep the status-only detail when the response is not JSON.
+      }
+      throw new Error(detail);
+    }
+    const updated: Session = normalizeSession(await res.json());
+    onSessionPatch(session.id, { bug_label: updated.bug_label ?? null });
+  }
+
   function startTestSkill() {
     if (session.status !== "Active") return;
     const promptText = getComposerValue().trim();
@@ -13600,6 +13896,8 @@ function ChatPane({
       replaceAppRoute("settings", settingsTab, adminView);
     } else if (activeTab === "help") {
       replaceAppRoute("help");
+    } else if (activeTab === "session-data") {
+      replaceSessionRoute(session.id, "session-data");
     } else {
       replaceSessionRoute(session.id, "chat");
     }
@@ -13867,6 +14165,14 @@ function ChatPane({
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
   const pullRequestURL = testState?.pull_request_url?.trim() || "";
+  const sessionDataRows = useMemo(
+    () => buildSessionDataStatusRows({
+      ...session,
+      test_state: testState,
+      rollout_state: rolloutState,
+    }),
+    [session, testState, rolloutState],
+  );
   const appliedEffortId = (session.runtime_effort ?? "").trim();
   const hasAppliedRuntimeConfig = Boolean(session.runtime_configured_at);
   const configuredModelLabel =
@@ -14232,6 +14538,12 @@ function ChatPane({
                 disabled: !filesAvailable,
                 title: filesTabTitle,
                 onOpen: () => toggleRunTab("files"),
+              }}
+              sessionData={{
+                active: activeTab === "session-data",
+                disabled: false,
+                title: "Session data",
+                onOpen: () => toggleRunTab("session-data"),
               }}
               settingsActive={activeTab === "settings"}
               helpActive={activeTab === "help"}
@@ -14602,6 +14914,14 @@ function ChatPane({
             onSelect={setSelectedBackgroundId}
             canStopEntry={canStopBackgroundEntry}
             onStop={stopBackgroundActivity}
+          />
+        ) : activeTab === "session-data" ? (
+          <SessionDataScreen
+            rows={sessionDataRows}
+            session={session}
+            requestPath={scopedSessionPathForPane}
+            onBugLabelSave={saveSessionBugLabel}
+            readOnly={readOnly}
           />
         ) : activeTab === "settings" ? (
           <RunSettingsPanel
@@ -17973,6 +18293,12 @@ function AuthenticatedApp() {
                   active: false,
                   disabled: true,
                   title: "Files are available once the session starts",
+                  onOpen: () => undefined,
+                }}
+                sessionData={{
+                  active: false,
+                  disabled: true,
+                  title: "Session data is available once the session starts",
                   onOpen: () => undefined,
                 }}
                 settingsActive={homeActiveTab === "settings"}

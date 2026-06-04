@@ -10,7 +10,7 @@ import {
   readSessionRouteFromPathname,
 } from "./appRoutes";
 
-test("session routes parse only session-scoped chat and turns pages", () => {
+test("session routes parse only session-scoped pages", () => {
   assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1"), {
     sessionId: "s-1",
     tab: "chat",
@@ -51,6 +51,15 @@ test("session routes parse only session-scoped chat and turns pages", () => {
   // Leading-zero / signed / decimal segments are not valid turn numbers.
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/turns/01")?.turnNumber, null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/turns/-1")?.turnNumber, null);
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/session-data"), {
+    sessionId: "s-1",
+    tab: "session-data",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  assert.equal(readSessionRouteFromPathname("/sessions/s-1/session-data/extra"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/settings"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/settings/admin/observability"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/help"), null);
@@ -70,6 +79,10 @@ test("session route urls broadcast only session-owned pages", () => {
   assert.equal(
     buildSessionRouteUrl(current, "s 1", "turns"),
     "https://tank.example.test/sessions/s%201/turns",
+  );
+  assert.equal(
+    buildSessionRouteUrl(current, "s 1", "session-data"),
+    "https://tank.example.test/sessions/s%201/session-data",
   );
 });
 
