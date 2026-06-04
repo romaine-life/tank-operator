@@ -101,26 +101,32 @@ answer; it must not visibly move a rendered row from one surface to the other.
   session's first turn, must stay above the placeholder. A turnId-structural
   placement rule strands the placeholder above those untagged notices because
   they carry no `turnId`.
-- Token usage updates are durable backend plumbing, not transcript UI. The
-  runners may emit `turn.usage` snapshots and terminal usage payloads, and the
-  backend/admin math may continue to use those durable events for accounting,
-  diagnostics, and reports. The transcript projection must not synthesize a
-  `turn_usage` meta row, annotate normal transcript rows with usage payloads,
-  or carry usage fields on Turn activity shells.
-- Context-window and cost math remain backend/diagnostic concerns. Per-message
+- Token usage updates are durable backend plumbing for the context/cost
+  indicator, not visible transcript UI. The runners may emit `turn.usage`
+  snapshots and terminal usage payloads, and the backend/admin math may
+  continue to use those durable events for accounting, diagnostics, and
+  reports. The projection may carry a data-only `turn_usage` meta row and
+  usage fields on Turn activity shells so the pre-regression composer chip can
+  render, but the frontend must render `turn_usage` rows as `null`; the
+  confusing "Token usage updated" transcript message must not be visible.
+- Cost/context math remains provider-observed, not guessed. Per-message
   snapshots (`usage_observation.usage_source = "claude.message"` for Claude;
   `thread.tokenUsage.updated` for Codex) and cumulative terminals
   (`claude.result`) have different semantics and are still validated by math
-  tests, but the product UI does not render token count, cost, or context
-  occupancy chips in the composer, transcript, or Turns view.
+  tests. The product UI must not render token/cost accounting messages in the
+  transcript; the composer restores the pre-regression `run-cost-estimate`
+  chip with `ctx` and `usd` metrics.
 - Provider-observed context window remains durable session metadata persisted
   as `runtime_context_window_tokens`, reported by the runners through
   `PUT /api/internal/sessions/{id}/runtime-config` (Codex app-server token
-  usage; the Claude Agent SDK per-turn `modelUsage.contextWindow`). There is
-  no frontend model-window table and no user-facing context fraction. The row
-  value is durable and first-observed-wins: the first positive window the
-  runner reports is persisted and not overwritten by later reports, so backend
-  diagnostics are stable across reloads and match a fresh tab.
+  usage; the Claude Agent SDK per-turn `modelUsage.contextWindow`). The
+  composer context indicator is a context-pressure affordance, not a billing
+  surface: it renders a `used/window` fraction from durable `turn.usage`
+  snapshots plus the durable session-row window, never from a frontend
+  model-window table or guessed denominator. The row value is durable and
+  first-observed-wins: the first positive window the runner reports is persisted
+  and not overwritten by later reports, so the composer indicator is stable
+  across reloads and matches a fresh tab.
 - Already-open Turn activity details are a cached view of the server projection,
   not a second browser-owned ledger. A live `transcript_rows` batch for a turn
   whose details are already loaded must invalidate that cache and re-read
@@ -200,7 +206,9 @@ answer; it must not visibly move a rendered row from one surface to the other.
   later successful `turn.completed` with explicit final-answer ids wins the race.
 - A session whose row carries no provider-observed window
   (`runtime_context_window_tokens = 0`) must not cause the frontend to guess a
-  model window or render a context fraction. `scripts/check-context-window-table-migration.mjs`
+  model window or render a context fraction. Once both a provider-observed
+  window and a durable usage snapshot exist, the composer renders the
+  `used/window` context fraction. `scripts/check-context-window-table-migration.mjs`
   proves no `CONTEXT_WINDOW_BY_MODEL` / `getContextWindow` model table remains
-  under `frontend/src`; the usage UI retirement guard proves the composer,
-  transcript, and Turns view do not render token usage or cost chips.
+  under `frontend/src`; the usage UI guard proves the composer chip exists
+  while the visible token-usage transcript message does not return.

@@ -145,6 +145,16 @@ import {
   type SdkConnectionState,
 } from "./sessionConnectionIndicator";
 import {
+  contextWindowTokenCount,
+  estimateTranscriptCost,
+  estimateTurnCost,
+  estimateTurnContextTokens,
+  formatCompactTokens,
+  formatComposerCostUsd,
+  formatTurnCostUsd,
+  type SessionCostEstimate,
+} from "./sessionCostEstimate";
+import {
   scheduledWakeupRowsToEntries,
   scheduledWakeupStatusLabel,
   type ScheduledWakeupRow,
@@ -333,6 +343,8 @@ type TurnActivitySummary = {
   startOrderKey?: string;
   endOrderKey?: string;
   sourceEventId?: string;
+  turnUsage?: unknown;
+  usageObservation?: unknown;
 };
 export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   kind: SandboxTranscriptEntry["kind"] | "background_task" | "turn_activity";
@@ -357,6 +369,8 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   turnTerminalAt?: string;
   turnTerminalEventId?: string;
   turnTerminalOrderKey?: string;
+  turnUsage?: unknown;
+  usageObservation?: unknown;
   attachments?: MessageAttachmentDisplay[];
   // For user-role messages authored by a sibling tank-operator session
   // via the mcp-tank-operator handoff path: the originating session id.
@@ -373,7 +387,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // sandbox-agent SDK). renderItem branches on metaKind before falling
   // through to the generic RunMetaBlock. Server projection sets metaKind on
   // rows it surfaces specially in chat — see transcript_projection.go.
-  metaKind?: "awaiting_input" | "context_compacted";
+  metaKind?: "awaiting_input" | "turn_usage" | "context_compacted";
   // For `awaiting_input` rows inside Turn activity: the Tank-canonical
   // questions plus the target ids RunAwaitingInputCard posts to /answer.
   // `answered` is durable — set once a later turn.input_answered event
@@ -1650,12 +1664,95 @@ function currentSessionSkillState(
   return null;
 }
 
+interface ComposerCostEstimateProps {
+  amountUsd: number | null;
+  tokens?: number | null;
+  // Provider-observed live context window for the session's model. When > 0,
+  // the ctx metric renders as a used/window fraction; otherwise it falls back
+  // to the bare used count (or the "--" placeholder). Never a model-assumed
+  // default.
+  contextWindow?: number;
+  tokenScopeLabel?: string;
+  placeholder?: boolean;
+  scopeLabel?: string;
+  title?: string;
+}
+
+function ComposerCostEstimate({
+  amountUsd,
+  tokens,
+  contextWindow,
+  tokenScopeLabel,
+  placeholder = false,
+  scopeLabel = "session",
+  title,
+}: ComposerCostEstimateProps) {
+  const unavailable = placeholder;
+  const safeAmountUsd = !unavailable && typeof amountUsd === "number" && Number.isFinite(amountUsd)
+    ? Math.max(0, amountUsd)
+    : 0;
+  const safeTokens = unavailable
+    ? null
+    : typeof tokens === "number" && Number.isFinite(tokens)
+      ? Math.max(0, Math.floor(tokens))
+      : 0;
+  const safeWindow =
+    typeof contextWindow === "number" && Number.isFinite(contextWindow)
+      ? Math.max(0, Math.floor(contextWindow))
+      : 0;
+  const normalizedScope = scopeLabel.trim() || "session";
+  const formattedAmount = unavailable
+    ? "$--"
+    : normalizedScope === "turn"
+      ? formatTurnCostUsd(safeAmountUsd)
+      : formatComposerCostUsd(safeAmountUsd);
+  const label = formattedAmount;
+  const tokenLabel =
+    safeTokens === null
+      ? "--"
+      : safeWindow > 0
+        ? `${formatCompactTokens(safeTokens)}/${formatCompactTokens(safeWindow)}`
+        : formatCompactTokens(safeTokens);
+  const sentenceScope = `${normalizedScope.charAt(0).toUpperCase()}${normalizedScope.slice(1)}`;
+  const normalizedTokenScope = tokenScopeLabel?.trim() || `${normalizedScope} tokens`;
+  const tokenSentence =
+    safeWindow > 0
+      ? `${safeTokens?.toLocaleString() ?? 0} of ${safeWindow.toLocaleString()} context tokens`
+      : `${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`;
+  const defaultTitle = unavailable
+    ? "Cost estimate appears after token usage is available"
+    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${tokenSentence}`;
+  return (
+    <span
+      className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
+      aria-label={
+        unavailable
+          ? `${sentenceScope} cost estimate unavailable`
+          : `Estimated ${normalizedScope} cost ${label}, ${tokenSentence}`
+      }
+      aria-disabled={unavailable || undefined}
+      title={title ?? defaultTitle}
+    >
+      <span className="run-cost-estimate-metric run-cost-estimate-metric-tokens">
+        <span className="run-cost-estimate-value run-cost-estimate-token-count">{tokenLabel}</span>
+        <span className="run-cost-estimate-label">ctx</span>
+      </span>
+      <span className="run-cost-estimate-divider" aria-hidden="true" />
+      <span className="run-cost-estimate-metric run-cost-estimate-metric-cost">
+        <span className="run-cost-estimate-value run-cost-estimate-amount">{label}</span>
+        <span className="run-cost-estimate-label">usd</span>
+      </span>
+    </span>
+  );
+}
+
 interface ComposerToolButtonsProps {
   attach: {
     disabled?: boolean;
     title: string;
     onClick?: () => void;
   };
+  cost: ComponentProps<typeof ComposerCostEstimate>;
   rollout?: {
     visible?: boolean;
     active?: boolean;
@@ -1692,6 +1789,7 @@ interface ComposerToolButtonsProps {
 
 function ComposerToolButtons({
   attach,
+  cost,
   rollout,
   test,
   pullRequest,
@@ -1715,6 +1813,7 @@ function ComposerToolButtons({
       >
         <ImageIcon className="run-composer-icon" aria-hidden="true" />
       </button>
+      <ComposerCostEstimate {...cost} />
       {rollout?.visible && (
         <button
           type="button"
@@ -3011,6 +3110,11 @@ function DemoLanding() {
                   toolButtons={
                     <ComposerToolButtons
                       attach={{ disabled: true, title: "Sign in to attach files" }}
+                      cost={{
+                        amountUsd: 0,
+                        tokens: 0,
+                        title: "Cost estimate appears after usage is available",
+                      }}
                       rollout={{
                         visible: GUI_ROLLOUT_MODES.has(selectedMode),
                         disabled: true,
@@ -3487,6 +3591,21 @@ function isImagePath(path: string): boolean {
   const ext = path.toLowerCase().split(".").pop() ?? "";
   return IMAGE_EXTS.has(ext);
 }
+
+function latestContextTokens(entries: TranscriptEntry[], contextWindow: number): number {
+  for (let i = entries.length - 1; i >= 0; i -= 1) {
+    const entry = entries[i];
+    if (!entry) continue;
+    const total = contextWindowTokenCount(
+      entry.turnUsage,
+      contextWindow,
+      entry.usageObservation,
+    );
+    if (total > 0) return total;
+  }
+  return 0;
+}
+
 // Verbs cycled by the streaming status pill. Matches cloudcli's
 // ClaudeStatus rotation so the user sees motion even when the model
 // hasn't sent any text deltas yet.
@@ -3886,6 +4005,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           activityIds: entry.activityIds,
           orderKey: entry.orderKey,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "message") {
@@ -3899,6 +4020,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "tool") {
@@ -3914,6 +4037,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "reasoning") {
@@ -3924,6 +4049,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       if (entry.kind === "background_task") {
@@ -3947,6 +4074,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
           turnTerminalOrderKey: entry.turnTerminalOrderKey,
+          turnUsage: entry.turnUsage,
+          usageObservation: entry.usageObservation,
         };
       }
       return {
@@ -3957,6 +4086,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
         turnTerminalStatus: entry.turnTerminalStatus,
         turnTerminalAt: entry.turnTerminalAt,
         turnTerminalOrderKey: entry.turnTerminalOrderKey,
+        turnUsage: entry.turnUsage,
+        usageObservation: entry.usageObservation,
       };
     }),
   );
@@ -3999,6 +4130,8 @@ function normalizeProjectedTranscriptEntry(raw: unknown): TranscriptEntry | null
       turnId: stringRecordValue(record, "turnId"),
       activity: normalizeTurnActivitySummary(record.activity),
       activityIds: normalizeStringArray(record.activityIds),
+      turnUsage: record.turnUsage,
+      usageObservation: record.usageObservation,
     } as TranscriptEntry;
   }
   return {
@@ -4031,6 +4164,8 @@ function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undef
     startOrderKey: stringRecordValue(record, "startOrderKey"),
     endOrderKey: stringRecordValue(record, "endOrderKey"),
     sourceEventId: stringRecordValue(record, "sourceEventId"),
+    turnUsage: record.turnUsage,
+    usageObservation: record.usageObservation,
   };
 }
 
@@ -7186,6 +7321,8 @@ type TurnViewItem = {
   shell?: TranscriptEntry;
   active: boolean;
   loaded: boolean;
+  costEstimate: SessionCostEstimate | null;
+  contextTokens: number | null;
   startedAt?: string;
   completedAt?: string;
   lastActivityAt?: string;
@@ -7234,13 +7371,27 @@ function buildTurnViewItems(
   entries: TranscriptEntry[],
   activeTurnId: string | null,
   activityEntriesByTurn: Record<string, TranscriptEntry[] | undefined>,
+  modelId: string,
+  contextWindow: number,
 ): TurnViewItem[] {
   const order = new Map<string, number>();
   const shells = new Map<string, TranscriptEntry>();
   const rawEntries = new Map<string, TranscriptEntry[]>();
+  const costRowsByTurn = new Map<string, Map<string, TranscriptEntry>>();
+  const addCostRow = (entry: TranscriptEntry) => {
+    const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
+    if (!turnId) return;
+    let rows = costRowsByTurn.get(turnId);
+    if (!rows) {
+      rows = new Map<string, TranscriptEntry>();
+      costRowsByTurn.set(turnId, rows);
+    }
+    rows.set(entry.id, entry);
+  };
   entries.forEach((entry, index) => {
     const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
     if (!turnId) return;
+    addCostRow(entry);
     if (!order.has(turnId)) order.set(turnId, index);
     if (isTurnActivityEntry(entry)) {
       shells.set(turnId, entry);
@@ -7251,6 +7402,9 @@ function buildTurnViewItems(
     bucket.push(entry);
     rawEntries.set(turnId, bucket);
   });
+  for (const loadedEntries of Object.values(activityEntriesByTurn)) {
+    for (const entry of loadedEntries ?? []) addCostRow(entry);
+  }
 
   const active = activeTurnId?.trim() ?? "";
   if (active && !order.has(active)) order.set(active, entries.length);
@@ -7274,6 +7428,7 @@ function buildTurnViewItems(
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.turnTerminalAt ??
         [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.time;
       const lastActivityAt = turnActivityLastActivityAt(shell, turnEntries);
+      const costRows = Array.from(costRowsByTurn.get(turnId)?.values() ?? []);
       return {
         turnId,
         turnNumber,
@@ -7288,6 +7443,8 @@ function buildTurnViewItems(
         shell,
         active: turnId === active,
         loaded: Boolean(loadedEntries),
+        costEstimate: estimateTurnCost(costRows, modelId, turnId),
+        contextTokens: estimateTurnContextTokens(costRows, contextWindow, turnId),
         startedAt,
         completedAt,
         lastActivityAt,
@@ -7762,6 +7919,7 @@ function RunTurnActivityGroup({
                   if (child.entry.metaKind === "awaiting_input") {
                     return <RunAwaitingInputCard key={child.entry.id} entry={child.entry} />;
                   }
+                  if (child.entry.metaKind === "turn_usage") return null;
                   return (
                     <RunMetaBlock
                       key={child.entry.id}
@@ -7950,6 +8108,7 @@ function RunTurnActivityScreen({
       if (group.entry.metaKind === "awaiting_input") {
         return <RunAwaitingInputCard key={group.entry.id} entry={group.entry} />;
       }
+      if (group.entry.metaKind === "turn_usage") return null;
       return (
         <RunMetaBlock
           key={group.entry.id}
@@ -8043,6 +8202,14 @@ function RunTurnActivityScreen({
             <span>{selected.summary}</span>
             {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
             {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
+            {selected.costEstimate && (
+              <ComposerCostEstimate
+                amountUsd={selected.costEstimate.amountUsd}
+                tokens={selected.contextTokens}
+                tokenScopeLabel="current context tokens"
+                scopeLabel="turn"
+              />
+            )}
           </div>
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
@@ -8485,6 +8652,9 @@ export function RunMessages({
       if (g.kind === "meta") {
         if (g.entry.metaKind === "awaiting_input") {
           return <RunAwaitingInputCard entry={g.entry} />;
+        }
+        if (g.entry.metaKind === "turn_usage") {
+          return null;
         }
         return <RunMetaBlock entry={g.entry} systemAvatar={systemAvatar} />;
       }
@@ -9478,6 +9648,13 @@ function ChatPane({
     : (effortOptions.some((opt) => opt.id === preferredEffortId) ? preferredEffortId : fallbackEffortId);
   const [selectedModelId] = useState<string>(initialModelId);
   const [selectedEffortId] = useState<string>(initialEffortId);
+  const runtimeContextWindowTokens =
+    typeof session.runtime_context_window_tokens === "number" &&
+    Number.isFinite(session.runtime_context_window_tokens) &&
+    session.runtime_context_window_tokens > 0
+      ? Math.floor(session.runtime_context_window_tokens)
+      : 0;
+  const [tokensUsed, setTokensUsed] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
   // Slash-command palette state. `slashOpen` gates rendering; `slashQuery`
   // and `slashIndex` drive filtering and keyboard selection.
@@ -9757,6 +9934,8 @@ function ChatPane({
     sdkServerEntriesRef.current = applySdkAssistantDurations(
       sdkServerProjectedEntriesRef.current,
     );
+    const latestUsageTokens = latestContextTokens(sdkServerEntriesRef.current, runtimeContextWindowTokens);
+    if (latestUsageTokens > 0) setTokensUsed(latestUsageTokens);
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
       sdkServerEntriesRef.current,
       sdkRealtimeEntriesRef.current,
@@ -10132,6 +10311,7 @@ function ChatPane({
     setSdkPendingTailCount(0);
     setSdkOlderError(null);
     setEntries([]);
+    setTokensUsed(0);
     clearActivityLiveRefreshState();
     activityEntriesByTurnRef.current = {};
     setActivityEntriesByTurn({});
@@ -12593,13 +12773,17 @@ function ChatPane({
     [activeBackgroundEntries, controlActionEntries, detachedShellEntries, scheduledWakeupEntries],
   );
   const appliedModelId = (session.runtime_model ?? "").trim();
+  const modelForCostEstimate = appliedModelId || selectedModelId;
+  const contextWindow = runtimeContextWindowTokens;
   const turnViewItems = useMemo(
     () => buildTurnViewItems(
       renderedEntries,
       renderedActiveTurnId,
       activityEntriesByTurn,
+      modelForCostEstimate,
+      contextWindow,
     ),
-    [activityEntriesByTurn, renderedActiveTurnId, renderedEntries],
+    [activityEntriesByTurn, contextWindow, modelForCostEstimate, renderedActiveTurnId, renderedEntries],
   );
   const turnsAvailable = turnViewItems.length > 0;
   const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
@@ -13038,6 +13222,13 @@ function ChatPane({
       ? `Runtime applied: ${modelChipLabel}${effortChipLabel ? ` / ${effortChipLabel}` : ""}`
       : `Runtime did not report a model. Selected: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`)
     : `Waiting for runner report. Intended: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`;
+  const sessionCostEstimate = useMemo(
+    () => estimateTranscriptCost(entries, modelForCostEstimate),
+    [entries, modelForCostEstimate],
+  );
+  const sessionUsageLoading =
+    CHAT_MODES.has(session.mode) &&
+    (timelineBootstrap.status === "idle" || timelineBootstrap.status === "loading");
 
   useEffect(() => {
     if (publicView) return;
@@ -14132,6 +14323,13 @@ function ChatPane({
                   : "File attachments require a session workspace",
                 onClick: () => fileInputRef.current?.click(),
                 disabled: !supportsFileAttachments,
+              }}
+              cost={{
+                amountUsd: sessionCostEstimate?.amountUsd ?? null,
+                tokens: tokensUsed,
+                contextWindow: runtimeContextWindowTokens,
+                tokenScopeLabel: "current context tokens",
+                placeholder: sessionUsageLoading,
               }}
               rollout={{
                 visible: GUI_ROLLOUT_MODES.has(session.mode),
@@ -17496,6 +17694,11 @@ function AuthenticatedApp() {
                         : "File attachments require a session workspace",
                       onClick: () => homeFileInputRef.current?.click(),
                       disabled: busy || !sessionModeSupportsWorkspaceFiles(defaultSessionMode),
+                    }}
+                    cost={{
+                      amountUsd: 0,
+                      tokens: 0,
+                      title: "Cost estimate appears after usage is available",
                     }}
                     rollout={{
                       visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),
