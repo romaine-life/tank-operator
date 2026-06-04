@@ -400,6 +400,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     timelineId: string;
     questions: unknown[];
     questionCount: number;
+    questionIndex?: number;
     answered: boolean;
     answers?: Record<string, string[]>;
     annotations?: Record<string, { preview?: string; notes?: string }>;
@@ -5435,14 +5436,32 @@ interface AnswerPayload {
   annotations?: Record<string, { preview?: string; notes?: string }>;
 }
 
+interface AskUserQuestionSubmittedSnapshot {
+  answers: Record<string, string[]>;
+  annotations: Record<string, { preview?: string; notes?: string }>;
+}
+
+interface AskUserQuestionDraft {
+  selections: Record<string, string[]>;
+  notes: Record<string, string>;
+  submittedSnapshot: AskUserQuestionSubmittedSnapshot | null;
+}
+
 const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   submitAnswer: (askingTurnId: string, payload: AnswerPayload) => Promise<void>;
+  askUserQuestionDrafts: Record<string, AskUserQuestionDraft | undefined>;
+  setAskUserQuestionDraft: (
+    key: string,
+    updater: (previous: AskUserQuestionDraft | undefined) => AskUserQuestionDraft,
+  ) => void;
   createMessageLink: (sessionId: string, entryId: string) => Promise<string>;
   user: SessionUser | null;
 }>({
   openWorkspacePath: () => {},
   submitAnswer: async () => {},
+  askUserQuestionDrafts: {},
+  setAskUserQuestionDraft: () => {},
   createMessageLink: async (sessionId, entryId) => messageUrl(sessionId, entryId),
   user: null,
 });
@@ -6609,29 +6628,51 @@ function parseAskUserQuestions(input: Record<string, unknown> | null): AskUserQu
   });
 }
 
+function emptyAskUserQuestionDraft(): AskUserQuestionDraft {
+  return { selections: {}, notes: {}, submittedSnapshot: null };
+}
+
 function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
-  const { submitAnswer } = useContext(RunContext);
+  const {
+    submitAnswer,
+    askUserQuestionDrafts,
+    setAskUserQuestionDraft,
+  } = useContext(RunContext);
   // The card is driven by the durable turn.awaiting_input pause projected into
   // Turn activity. Submitting records turn.input_answered and resumes the same
   // provider turn through a control-plane input_reply.
   const aw = entry.awaitingInput;
+  const draftKey = aw?.timelineId || entry.id;
+  const draft = draftKey ? askUserQuestionDrafts[draftKey] ?? emptyAskUserQuestionDraft() : emptyAskUserQuestionDraft();
   // Per-question selections (multi-select carries an array; single-select
   // is a single-element array or empty). Submission converts to the wire
   // shape `Record<questionText, string[]>` so single + multi share a
   // payload.
-  const [selections, setSelections] = useState<Record<string, string[]>>({});
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  const selections = draft.selections;
+  const notes = draft.notes;
   const [submitting, setSubmitting] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   // submittedSnapshot locks the card the moment the user clicks and keeps
   // their picked options/notes visible until the durable answer event lands
   // (awaitingInput.answered flips).
-  const [submittedSnapshot, setSubmittedSnapshot] = useState<{
-    answers: Record<string, string[]>;
-    annotations: Record<string, { preview?: string; notes?: string }>;
-  } | null>(null);
+  const submittedSnapshot = draft.submittedSnapshot;
 
   const questions = parseAskUserQuestions(aw ? { questions: aw.questions } : null);
+  const visibleQuestionIndex =
+    aw?.questionIndex && aw.questionIndex >= 1 && aw.questionIndex <= questions.length
+      ? aw.questionIndex - 1
+      : null;
+  const visibleQuestions =
+    visibleQuestionIndex == null
+      ? questions
+      : questions[visibleQuestionIndex]
+        ? [questions[visibleQuestionIndex]]
+        : [];
+
+  function updateDraft(updater: (previous: AskUserQuestionDraft) => AskUserQuestionDraft): void {
+    if (!draftKey) return;
+    setAskUserQuestionDraft(draftKey, (previous) => updater(previous ?? emptyAskUserQuestionDraft()));
+  }
 
   // answered is durable: the server sets awaitingInput.answered=true once a
   // later turn.input_answered event references this question, so a fresh tab
@@ -6681,22 +6722,29 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
 
   function toggleSelection(q: AskUserQuestion, label: string): void {
     if (answered || submitting) return;
-    setSelections((prev) => {
+    updateDraft((draft) => {
+      const prev = draft.selections;
       const current = prev[q.question] ?? [];
+      let nextSelections: Record<string, string[]>;
       if (q.multiSelect) {
         const next = current.includes(label)
           ? current.filter((l) => l !== label)
           : [...current, label];
-        return { ...prev, [q.question]: next };
+        nextSelections = { ...prev, [q.question]: next };
+      } else {
+        // Single-select: clicking always selects exactly that label
+        // (re-clicking selected option is a no-op submit affordance).
+        nextSelections = { ...prev, [q.question]: [label] };
       }
-      // Single-select: clicking always selects exactly that label
-      // (re-clicking selected option is a no-op submit affordance).
-      return { ...prev, [q.question]: [label] };
+      return { ...draft, selections: nextSelections };
     });
   }
 
   function setNoteFor(question: string, value: string): void {
-    setNotes((prev) => ({ ...prev, [question]: value }));
+    updateDraft((draft) => ({
+      ...draft,
+      notes: { ...draft.notes, [question]: value },
+    }));
   }
 
   async function submit(): Promise<void> {
@@ -6729,7 +6777,7 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
     // truth until the durable answer event lands (awaitingInput.answered).
     setSubmitting(true);
     setReplyError(null);
-    setSubmittedSnapshot({ answers, annotations });
+    updateDraft((draft) => ({ ...draft, submittedSnapshot: { answers, annotations } }));
     try {
       if (!aw) throw new Error("awaiting-input target is not available");
       await submitAnswer(aw.askingTurnId, {
@@ -6740,7 +6788,7 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
       });
     } catch (err) {
       setReplyError(err instanceof Error ? err.message : String(err));
-      setSubmittedSnapshot(null);
+      updateDraft((draft) => ({ ...draft, submittedSnapshot: null }));
     } finally {
       setSubmitting(false);
     }
@@ -6775,7 +6823,7 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
           </span>
         </div>
       )}
-      {questions.map((q, qi) => {
+      {visibleQuestions.map((q, qi) => {
         const selectedLabels = selectedLabelsFor(q);
         const answeredNote = answeredNoteFor(q.question);
         const liveNote = notes[q.question] ?? "";
@@ -6893,7 +6941,7 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
             disabled={!isReady || submitting}
             onClick={() => void submit()}
           >
-            {submitting ? "Sending…" : "Submit answer"}
+            {submitting ? "Sending…" : questions.length > 1 ? "Submit answers" : "Submit answer"}
           </button>
         </div>
       )}
@@ -7493,6 +7541,7 @@ function normalizeTurnActivityPageDirectory(input: unknown): TurnActivityPageDir
       eventCount: typeof item.eventCount === "number" ? item.eventCount : undefined,
       sealed: typeof item.sealed === "boolean" ? item.sealed : undefined,
       questionCount: typeof item.questionCount === "number" ? item.questionCount : undefined,
+      questionIndex: typeof item.questionIndex === "number" ? item.questionIndex : undefined,
       answered: typeof item.answered === "boolean" ? item.answered : undefined,
     });
   }
@@ -8454,7 +8503,9 @@ function RunTurnActivityScreen({
                 {selectedPageInfo.answered ? "Question set answered" : "Agent needs input"}
               </span>
               <span className="run-turn-question-page-count">
-                {selectedPageInfo.questionCount
+                {selectedPageInfo.questionIndex && selectedPageInfo.questionCount
+                  ? `Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}`
+                  : selectedPageInfo.questionCount
                   ? plural(selectedPageInfo.questionCount, "question")
                   : "Question set"}
               </span>
@@ -10403,6 +10454,7 @@ function ChatPane({
       page_count?: number;
       page_kind?: string;
       question_count?: number;
+      question_index?: number;
       answered?: boolean;
       pages?: unknown;
     };
@@ -10412,6 +10464,7 @@ function ChatPane({
         pageCount: body.page_count,
         kind: typeof body.page_kind === "string" ? body.page_kind : undefined,
         questionCount: typeof body.question_count === "number" ? body.question_count : undefined,
+        questionIndex: typeof body.question_index === "number" ? body.question_index : undefined,
         answered: typeof body.answered === "boolean" ? body.answered : undefined,
         pages: normalizeTurnActivityPageDirectory(body.pages),
       };
@@ -10423,6 +10476,7 @@ function ChatPane({
           existing.pageCount === info.pageCount &&
           existing.kind === info.kind &&
           existing.questionCount === info.questionCount &&
+          existing.questionIndex === info.questionIndex &&
           existing.answered === info.answered &&
           JSON.stringify(existing.pages ?? []) === JSON.stringify(info.pages ?? [])
         ) {
@@ -13636,6 +13690,19 @@ function ChatPane({
     return () => onRefreshFlashChange(session.id, null);
   }, [onRefreshFlashChange, session.id, visibleRefreshFlash]);
 
+  const [askUserQuestionDrafts, setAskUserQuestionDrafts] = useState<Record<string, AskUserQuestionDraft | undefined>>({});
+  const setAskUserQuestionDraft = useCallback((
+    key: string,
+    updater: (previous: AskUserQuestionDraft | undefined) => AskUserQuestionDraft,
+  ) => {
+    const trimmed = key.trim();
+    if (!trimmed) return;
+    setAskUserQuestionDrafts((previous) => ({
+      ...previous,
+      [trimmed]: updater(previous[trimmed]),
+    }));
+  }, []);
+
   async function submitAnswer(
     askingTurnId: string,
     payload: AnswerPayload,
@@ -13733,6 +13800,8 @@ function ChatPane({
               throw new Error("session is read-only");
             }
           : submitAnswer,
+        askUserQuestionDrafts,
+        setAskUserQuestionDraft,
         createMessageLink,
         user,
       }}

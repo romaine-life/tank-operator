@@ -71,12 +71,14 @@ type turnPage struct {
 	Sealed        bool             `json:"sealed"`
 	Entries       []map[string]any `json:"entries"`
 	QuestionCount int              `json:"questionCount,omitempty"`
+	QuestionIndex int              `json:"questionIndex,omitempty"`
 	Answered      bool             `json:"answered,omitempty"`
 }
 
 type turnEventPage struct {
-	Kind   string
-	Events []map[string]any
+	Kind          string
+	Events        []map[string]any
+	QuestionIndex int
 }
 
 // turnPagesProjection is the page-aware projection of a single turn: a
@@ -123,7 +125,8 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 	pages := make([]turnEventPage, 0, len(ordered)/turnPageEventLimit+1)
 	currentKind := "activity"
 	var current []map[string]any
-	questionTimelineID := ""
+	var pendingQuestionPages []turnEventPage
+	pendingQuestionTimelineID := ""
 
 	flush := func() {
 		if len(current) == 0 {
@@ -132,25 +135,36 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 		pages = append(pages, turnEventPage{Kind: currentKind, Events: current})
 		current = nil
 		currentKind = "activity"
-		questionTimelineID = ""
+	}
+
+	flushPendingQuestionPages := func(answer map[string]any) {
+		if len(pendingQuestionPages) == 0 {
+			return
+		}
+		for _, page := range pendingQuestionPages {
+			if answer != nil {
+				page.Events = append(page.Events, answer)
+			}
+			pages = append(pages, page)
+		}
+		pendingQuestionPages = nil
+		pendingQuestionTimelineID = ""
 	}
 
 	for _, event := range ordered {
+		if len(pendingQuestionPages) > 0 {
+			if isTurnInputAnsweredForQuestion(event, pendingQuestionTimelineID) {
+				flushPendingQuestionPages(event)
+				continue
+			}
+			flushPendingQuestionPages(nil)
+		}
 		if isTurnAwaitingInputEvent(event) {
 			current = append(current, awaitingInputInvocationEvent(event))
 			flush()
-			currentKind = "question_set"
-			questionTimelineID = transcriptString(event, "timeline_id")
-			current = append(current, event)
+			pendingQuestionPages = awaitingInputQuestionPages(event)
+			pendingQuestionTimelineID = awaitingInputTimelineID(event)
 			continue
-		}
-		if currentKind == "question_set" {
-			if isTurnInputAnsweredForQuestion(event, questionTimelineID) {
-				current = append(current, event)
-				flush()
-				continue
-			}
-			flush()
 		}
 		current = append(current, event)
 		if len(current) >= turnPageEventLimit {
@@ -158,6 +172,7 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 		}
 	}
 	flush()
+	flushPendingQuestionPages(nil)
 	return pages
 }
 
@@ -169,6 +184,38 @@ func awaitingInputInvocationEvent(event map[string]any) map[string]any {
 	out := cloneAnyMap(event)
 	out["type"] = "turn.awaiting_input.invocation"
 	return out
+}
+
+func awaitingInputQuestionPages(event map[string]any) []turnEventPage {
+	questions := projectionAwaitingInputQuestions(event)
+	if len(questions) == 0 {
+		return []turnEventPage{{Kind: "question_set", Events: []map[string]any{event}}}
+	}
+	pages := make([]turnEventPage, 0, len(questions))
+	for idx := range questions {
+		pages = append(pages, turnEventPage{
+			Kind:          "question_set",
+			Events:        []map[string]any{awaitingInputQuestionPageEvent(event, idx, len(questions))},
+			QuestionIndex: idx + 1,
+		})
+	}
+	return pages
+}
+
+func awaitingInputQuestionPageEvent(event map[string]any, index, count int) map[string]any {
+	out := cloneAnyMap(event)
+	payload := cloneAnyMap(transcriptPayload(event))
+	payload["question_index"] = index + 1
+	payload["question_count"] = count
+	out["payload"] = payload
+	return out
+}
+
+func awaitingInputTimelineID(event map[string]any) string {
+	if timelineID := transcriptPayloadString(event, "timeline_id"); timelineID != "" {
+		return timelineID
+	}
+	return transcriptString(event, "timeline_id")
 }
 
 func isTurnInputAnsweredForQuestion(event map[string]any, questionTimelineID string) bool {
@@ -234,7 +281,7 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		// Every page but the last is sealed; the last page is sealed too once
 		// the turn has reached a durable terminal.
 		sealed := number < len(pageSlices) || !live
-		questionCount, answered := turnPageQuestionSetState(slice.Events)
+		questionIndex, questionCount, answered := turnPageQuestionSetState(slice)
 		entries := projectPageBodyEntries(slice.Events)
 		page := turnPage{
 			Number:        number,
@@ -245,6 +292,7 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 			Sealed:        sealed,
 			Entries:       entries,
 			QuestionCount: questionCount,
+			QuestionIndex: questionIndex,
 			Answered:      answered,
 		}
 		pages = append(pages, page)
@@ -258,6 +306,7 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		}
 		if page.Kind == "question_set" {
 			pageInfo["questionCount"] = page.QuestionCount
+			pageInfo["questionIndex"] = page.QuestionIndex
 			pageInfo["answered"] = page.Answered
 		}
 		directory = append(directory, pageInfo)
@@ -280,7 +329,7 @@ func defaultTurnActivityPageNumber(projection turnPagesProjection) int {
 		return 0
 	}
 	if transcriptMapString(projection.Shell, "status") == "needs_input" {
-		for i := len(projection.Pages) - 1; i >= 0; i-- {
+		for i := 0; i < len(projection.Pages); i++ {
 			page := projection.Pages[i]
 			if page.Kind == "question_set" && !page.Answered {
 				return page.Number
@@ -290,14 +339,18 @@ func defaultTurnActivityPageNumber(projection turnPagesProjection) int {
 	return len(projection.Pages)
 }
 
-func turnPageQuestionSetState(events []map[string]any) (int, bool) {
+func turnPageQuestionSetState(page turnEventPage) (int, int, bool) {
 	questionTimelineID := ""
+	questionIndex := page.QuestionIndex
 	questionCount := 0
 	answered := false
-	for _, event := range orderedTranscriptEvents(events) {
+	for _, event := range orderedTranscriptEvents(page.Events) {
 		if isTurnAwaitingInputEvent(event) {
-			questionTimelineID = transcriptString(event, "timeline_id")
+			questionTimelineID = awaitingInputTimelineID(event)
 			payload := transcriptPayload(event)
+			if rawIndex, ok := transcriptNumeric(payload["question_index"]); ok {
+				questionIndex = int(rawIndex)
+			}
 			if questions, ok := payload["questions"].([]any); ok {
 				questionCount = len(questions)
 			}
@@ -307,5 +360,5 @@ func turnPageQuestionSetState(events []map[string]any) (int, bool) {
 			answered = true
 		}
 	}
-	return questionCount, answered
+	return questionIndex, questionCount, answered
 }

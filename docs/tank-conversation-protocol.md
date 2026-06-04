@@ -335,15 +335,16 @@ read used to drop it, leaving a finished turn rendered as perpetually active.
 The turn activity endpoint (`server_turn_activity_v2`) therefore **paginates**
 the expansion body: a turn splits into pages sealed at `turnPageEventLimit`
 events and at AskUserQuestion boundaries. A `turn.awaiting_input` event starts
-a semantic `question_set` page that owns the full question set from that tool
-invocation; the immediately preceding activity page carries a compact
-AskUserQuestion invocation marker derived from that same durable event, so a
-question-first turn still has an audit page before the harness-owned question
-surface. A later matching `turn.input_answered` seals that question page before
-resumed provider activity continues on a normal activity page. The endpoint
+a sequence of semantic `question_set` pages, one per question in that tool
+invocation, while preserving one durable answer set. The immediately preceding
+activity page carries a compact AskUserQuestion invocation marker derived from
+that same durable event, so a question-first turn still has an audit page before
+the harness-owned question surface. A later matching `turn.input_answered`
+seals those question pages before resumed provider activity continues on a
+normal activity page. The endpoint
 returns the page directory (`page`, `page_count`, `pages[]`) and defaults to the
-pending unanswered `question_set` page while the turn is `needs_input`, and to
-the **last** page otherwise (`?page=N` selects another); the Turns view always
+first pending unanswered `question_set` page while the turn is `needs_input`,
+and to the **last** page otherwise (`?page=N` selects another); the Turns view always
 shows a page selector (disabled at a single-page boundary) and lets the reader
 move between sealed activity pages and question pages. Sealing is a durable
 `order_key`-range concept so deep links and reloads are stable. The
@@ -1018,11 +1019,14 @@ suffix). The row carries an `awaitingInput` payload — `askingTurnId`,
 `answers`, and `annotations` — sourced entirely from durable state (`answered`
 is true once a later `turn.input_answered` event references the question). The
 turn page splitter projects a compact `AskUserQuestion` tool marker onto the
-preceding activity page and starts a semantic `question_set` page at that row.
-That marker is sourced from the same durable pause, not from provider-specific
-raw tool rows. The SPA renders the interactive answer surface from the durable
-row in the Turns question page; the main transcript renders the restored
-`RunNeedsInputAnnouncement` button to that question set.
+preceding activity page and starts one semantic `question_set` page per
+question at that row. Those pages share the same durable `awaitingInput`
+payload and set-level answer draft; the Submit action posts the whole answer
+set once every question page has a response. The marker is sourced from the
+same durable pause, not from provider-specific raw tool rows. The SPA renders
+the interactive answer surface from the durable row in the Turns question
+pages; the main transcript renders the restored `RunNeedsInputAnnouncement`
+button to that question set.
 Submitting the form posts `/answer`, which resumes the same active turn.
 
 The Turn-activity placement follows

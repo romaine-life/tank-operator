@@ -164,8 +164,8 @@ func TestProjectTurnPagesMakesQuestionSetSemanticPage(t *testing.T) {
 	if got := transcriptMapString(proj.Shell, "status"); got != "needs_input" {
 		t.Fatalf("shell status = %q, want needs_input", got)
 	}
-	if len(proj.Pages) != 2 {
-		t.Fatalf("page count = %d, want activity page + question page", len(proj.Pages))
+	if len(proj.Pages) != 3 {
+		t.Fatalf("page count = %d, want activity page + one page per question", len(proj.Pages))
 	}
 	activityPage := proj.Pages[0]
 	if activityPage.Kind != "activity" {
@@ -181,21 +181,31 @@ func TestProjectTurnPagesMakesQuestionSetSemanticPage(t *testing.T) {
 	if marker["toolStatus"] != "completed" {
 		t.Fatalf("marker toolStatus = %v, want completed", marker["toolStatus"])
 	}
-	questionPage := proj.Pages[1]
-	if questionPage.Kind != "question_set" {
-		t.Fatalf("question page kind = %q, want question_set", questionPage.Kind)
+	firstQuestionPage := proj.Pages[1]
+	if firstQuestionPage.Kind != "question_set" {
+		t.Fatalf("first question page kind = %q, want question_set", firstQuestionPage.Kind)
 	}
-	if questionPage.QuestionCount != 2 {
-		t.Fatalf("question count = %d, want 2", questionPage.QuestionCount)
+	if firstQuestionPage.QuestionIndex != 1 || firstQuestionPage.QuestionCount != 2 {
+		t.Fatalf("first question page index/count = %d/%d, want 1/2", firstQuestionPage.QuestionIndex, firstQuestionPage.QuestionCount)
 	}
-	if questionPage.Answered {
+	if firstQuestionPage.Answered {
 		t.Fatalf("question page answered = true, want false")
 	}
-	if questionPage.Sealed {
-		t.Fatalf("pending question page sealed = true, want live while the turn needs input")
+	if !firstQuestionPage.Sealed {
+		t.Fatalf("first pending question page sealed = false, want sealed because the next question page is live")
 	}
-	if got := defaultTurnActivityPageNumber(proj); got != questionPage.Number {
-		t.Fatalf("default page = %d, want pending question page %d", got, questionPage.Number)
+	secondQuestionPage := proj.Pages[2]
+	if secondQuestionPage.Kind != "question_set" {
+		t.Fatalf("second question page kind = %q, want question_set", secondQuestionPage.Kind)
+	}
+	if secondQuestionPage.QuestionIndex != 2 || secondQuestionPage.QuestionCount != 2 {
+		t.Fatalf("second question page index/count = %d/%d, want 2/2", secondQuestionPage.QuestionIndex, secondQuestionPage.QuestionCount)
+	}
+	if secondQuestionPage.Sealed {
+		t.Fatalf("last pending question page sealed = true, want live while the turn needs input")
+	}
+	if got := defaultTurnActivityPageNumber(proj); got != firstQuestionPage.Number {
+		t.Fatalf("default page = %d, want first pending question page %d", got, firstQuestionPage.Number)
 	}
 }
 

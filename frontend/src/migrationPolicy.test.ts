@@ -235,6 +235,9 @@ test("AskUserQuestion handoff button is restored in transcript and answer form i
   assert.equal(appSource.includes('data-page-kind={selectedPageInfo?.kind ?? "activity"}'), true);
   assert.equal(indexCssSource.includes(".run-turn-view {\n  display: flex;"), true);
   assert.equal(indexCssSource.includes('.run-turn-view-body[data-page-kind="question_set"]'), true);
+  assert.equal(appSource.includes("askUserQuestionDrafts"), true);
+  assert.equal(appSource.includes("questionIndex: typeof body.question_index === \"number\""), true);
+  assert.equal(appSource.includes("Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}"), true);
 });
 
 test("transcript meta status lines are attributed to the session system identity", () => {

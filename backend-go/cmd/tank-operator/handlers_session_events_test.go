@@ -332,10 +332,16 @@ func TestHandleSessionTurnActivityDefaultsNeedsInputToQuestionPage(t *testing.T)
 		t.Fatalf("decode: %v", err)
 	}
 	if got, _ := body["page"].(float64); got != 2 {
-		t.Fatalf("default page = %v, want pending question page 2", body["page"])
+		t.Fatalf("default page = %v, want first pending question page 2", body["page"])
+	}
+	if got, _ := body["page_count"].(float64); got != 3 {
+		t.Fatalf("page_count = %v, want activity marker + two question pages", body["page_count"])
 	}
 	if got, _ := body["page_kind"].(string); got != "question_set" {
 		t.Fatalf("page_kind = %q, want question_set", got)
+	}
+	if got, _ := body["question_index"].(float64); got != 1 {
+		t.Fatalf("question_index = %v, want 1", body["question_index"])
 	}
 	if got, _ := body["question_count"].(float64); got != 2 {
 		t.Fatalf("question_count = %v, want 2", body["question_count"])
@@ -350,6 +356,10 @@ func TestHandleSessionTurnActivityDefaultsNeedsInputToQuestionPage(t *testing.T)
 	entry, _ := entries[0].(map[string]any)
 	if got, _ := entry["metaKind"].(string); got != "awaiting_input" {
 		t.Fatalf("entry metaKind = %q, want awaiting_input", got)
+	}
+	awaiting, _ := entry["awaitingInput"].(map[string]any)
+	if got, _ := awaiting["questionIndex"].(float64); got != 1 {
+		t.Fatalf("entry awaitingInput.questionIndex = %v, want 1", awaiting["questionIndex"])
 	}
 }
 

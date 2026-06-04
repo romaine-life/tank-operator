@@ -203,8 +203,8 @@ const required = [
   },
   {
     file: "backend-go/cmd/tank-operator/turn_pages.go",
-    name: "turn.awaiting_input creates a semantic question_set page",
-    pattern: /currentKind = "question_set"/,
+    name: "turn.awaiting_input creates semantic question_set pages",
+    pattern: /awaitingInputQuestionPages[\s\S]{0,700}Kind:\s*"question_set"/,
   },
   {
     file: "backend-go/cmd/tank-operator/turn_pages.go",

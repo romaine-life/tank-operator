@@ -24,6 +24,7 @@ export type TurnActivityPageInfo = {
   pageCount: number;
   kind?: string;
   questionCount?: number;
+  questionIndex?: number;
   answered?: boolean;
   pages?: TurnActivityPageDirectoryItem[];
 };
@@ -34,6 +35,7 @@ export type TurnActivityPageDirectoryItem = {
   eventCount?: number;
   sealed?: boolean;
   questionCount?: number;
+  questionIndex?: number;
   answered?: boolean;
 };
 

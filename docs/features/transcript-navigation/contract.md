@@ -44,17 +44,18 @@ yanking the viewport away from a user reading history.
   explicit Turn activity endpoint.
 - Turn activity itself paginates. A turn's expansion body is split into pages
   sealed at `turnPageEventLimit` events and at semantic AskUserQuestion
-  boundaries; each `turn.awaiting_input` event starts a `question_set` page that
-  owns the whole question set. The preceding activity page gets a compact
-  AskUserQuestion invocation marker derived from the same durable event, even
-  when that means a marker-only first page. The Turn activity endpoint
-  (`server_turn_activity_v2`) returns the page directory (`page`,
-  `page_count`, `pages[]`) and accepts `?page=N`. A `needs_input` turn defaults
-  to the unanswered `question_set` page; all other turns default to the latest
-  page. The page boundary is a durable `order_key`-range concept, so a selected
-  page is stable across reload and deep links. The shell's active/terminal
-  status is never a function of which page rendered — it is folded from the
-  complete turn so a finished long turn can never render as perpetually active.
+  boundaries; each `turn.awaiting_input` event starts one `question_set` page
+  per question while preserving one durable answer set. The preceding activity
+  page gets a compact AskUserQuestion invocation marker derived from the same
+  durable event, even when that means a marker-only first page. The Turn
+  activity endpoint (`server_turn_activity_v2`) returns the page directory
+  (`page`, `page_count`, `pages[]`) and accepts `?page=N`. A `needs_input` turn
+  defaults to the first unanswered `question_set` page; all other turns default
+  to the latest page. The page boundary is a durable `order_key`-range concept,
+  so a selected page is stable across reload and deep links. The shell's
+  active/terminal status is never a function of which page rendered — it is
+  folded from the complete turn so a finished long turn can never render as
+  perpetually active.
 - Copied message links may name rendered timeline IDs, but the server must
   translate them to durable cursors.
 - `sessions.visible` owns sidebar/list membership only. Soft-deleting a session
