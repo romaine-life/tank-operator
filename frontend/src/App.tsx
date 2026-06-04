@@ -26,6 +26,7 @@ import { cachedTurnActivityRefreshRequests } from "./turnActivityCache";
 import {
   turnActivityPagerState,
   type TurnActivityPageInfo,
+  type TurnActivityPagerState,
 } from "./turnActivityPager";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
@@ -7156,6 +7157,48 @@ function turnActivitySummary(entries: TranscriptEntry[]): string {
   return parts.length > 0 ? parts.join(" / ") : plural(entries.length, "update");
 }
 
+// Shared page-selector control for a turn's activity, used by BOTH the inline
+// chat Turn-activity disclosure (RunTurnActivityGroup) and the dedicated Turns
+// view (RunTurnActivityScreen) so the two surfaces stay identical. Always
+// rendered once the page directory has loaded; ‹ / › disable at the
+// single-page boundary (see turnActivityPagerState).
+function TurnActivityPager({
+  pagerState,
+  onSelectPage,
+}: {
+  pagerState: TurnActivityPagerState;
+  onSelectPage: (page: number) => void;
+}) {
+  if (!pagerState.visible) return null;
+  return (
+    <div
+      className="run-turn-activity-pages"
+      role="group"
+      aria-label="Turn activity pages"
+    >
+      <button
+        type="button"
+        className="run-turn-activity-page-nav"
+        onClick={() => onSelectPage(pagerState.olderPage)}
+        disabled={!pagerState.canPageOlder}
+        aria-label="Older activity page"
+      >
+        ‹
+      </button>
+      <span className="run-turn-activity-page-label">{pagerState.label}</span>
+      <button
+        type="button"
+        className="run-turn-activity-page-nav"
+        onClick={() => onSelectPage(pagerState.newerPage)}
+        disabled={!pagerState.canPageNewer}
+        aria-label="Newer activity page"
+      >
+        ›
+      </button>
+    </div>
+  );
+}
+
 function turnActivityShellSummary(summary: TurnActivitySummary | undefined): string {
   if (!summary) return "Activity";
   const parts: string[] = [];
@@ -7689,34 +7732,8 @@ function RunTurnActivityGroup({
           </button>
           {open && (
             <div className="run-turn-activity-body">
-              {pagerState.visible && onSelectPage && (
-                <div
-                  className="run-turn-activity-pages"
-                  role="group"
-                  aria-label="Turn activity pages"
-                >
-                  <button
-                    type="button"
-                    className="run-turn-activity-page-nav"
-                    onClick={() => onSelectPage(pagerState.olderPage)}
-                    disabled={!pagerState.canPageOlder}
-                    aria-label="Older activity page"
-                  >
-                    ‹
-                  </button>
-                  <span className="run-turn-activity-page-label">
-                    {pagerState.label}
-                  </span>
-                  <button
-                    type="button"
-                    className="run-turn-activity-page-nav"
-                    onClick={() => onSelectPage(pagerState.newerPage)}
-                    disabled={!pagerState.canPageNewer}
-                    aria-label="Newer activity page"
-                  >
-                    ›
-                  </button>
-                </div>
+              {onSelectPage && (
+                <TurnActivityPager pagerState={pagerState} onSelectPage={onSelectPage} />
               )}
               {group.shell && !group.loaded ? (
                 <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
@@ -7851,6 +7868,8 @@ function RunTurnActivityScreen({
   onOpenBackgroundTask,
   scrollRequest,
   onScrollRequestConsumed,
+  turnActivityPageInfo,
+  onActivitySelectPage,
 }: {
   turns: TurnViewItem[];
   selectedTurnId: string | null;
@@ -7871,8 +7890,16 @@ function RunTurnActivityScreen({
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollRequest?: TurnViewScrollRequest | null;
   onScrollRequestConsumed?: (signal: number) => void;
+  turnActivityPageInfo?: Record<string, TurnActivityPageInfo | undefined>;
+  onActivitySelectPage?: (turnId: string, page: number) => void;
 }) {
   const selected = turns.find((turn) => turn.turnId === selectedTurnId) ?? turns[turns.length - 1] ?? null;
+  // Same always-present pager as the inline chat disclosure, for the surface a
+  // user actually inspects turns from. Without it, a turn over the page limit
+  // shows only its last page here (the endpoint default) with no way back.
+  const pagerState = turnActivityPagerState(
+    selected && turnActivityPageInfo ? turnActivityPageInfo[selected.turnId] : undefined,
+  );
   const detailEntries = useMemo(
     () =>
       (selected?.entries ?? []).filter(
@@ -8043,6 +8070,12 @@ function RunTurnActivityScreen({
             {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
             {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
           </div>
+          {onActivitySelectPage && (
+            <TurnActivityPager
+              pagerState={pagerState}
+              onSelectPage={(page) => onActivitySelectPage(selected.turnId, page)}
+            />
+          )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
             onCopy={handleTranscriptCopy}
@@ -13709,6 +13742,8 @@ function ChatPane({
             onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
             scrollRequest={turnViewScrollRequest}
             onScrollRequestConsumed={clearTurnViewScrollRequest}
+            turnActivityPageInfo={turnActivityPageInfo}
+            onActivitySelectPage={selectTurnActivityPage}
           />
           )
         ) : activeTab === "background" ? (

@@ -98,10 +98,13 @@ Contract impact:
   another. Page boundaries are durable `order_key` ranges, so a selected page is
   stable across reload and deep links.
 - The page selector is an always-present affordance, not a threshold-gated
-  control: an expanded Turn activity disclosure renders the selector even for a
+  control, and it lives on **both** turn-activity surfaces: the inline chat
+  Turn-activity disclosure and the dedicated Turns view (`RunTurnActivityScreen`,
+  the surface users open to inspect a turn). Both render the selector even for a
   single-page turn (disabled "page 1 of 1"), so pagination never reads as absent
-  on a normal-length turn. `frontend/src/turnActivityPager.ts` is the pure gate
-  that owns when the selector shows and which arrows are live.
+  on a normal-length turn and a long turn is never silently capped to its last
+  page in the Turns view. The shared `TurnActivityPager` component renders it;
+  `frontend/src/turnActivityPager.ts` is the pure gate for visibility/arrows.
 - The fixed-size per-turn read that truncated long turns oldest-first is deleted
   end to end (the bounded `EventsForTurn` store method no longer exists); reads
   go through `EventsForTurnAfter` paged to exhaustion.
@@ -118,7 +121,10 @@ Evidence:
 - Frontend gate: `frontend/src/turnActivityPager.ts` +
   `frontend/src/turnActivityPager.test.ts` prove the selector stays visible
   (disabled) at a single page and enables ‹ / › only toward a sealed page — the
-  regression guard against threshold-gated appearance.
+  regression guard against threshold-gated appearance. The shared
+  `TurnActivityPager` component in `frontend/src/App.tsx` renders it on both the
+  inline chat disclosure (`RunTurnActivityGroup`) and the dedicated Turns view
+  (`RunTurnActivityScreen`).
 
 ## Context Compaction Notice
 
