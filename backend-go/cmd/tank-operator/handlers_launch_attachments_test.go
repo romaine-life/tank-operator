@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
@@ -66,11 +67,11 @@ func (f *fakePendingLaunchStore) MarkFailed(_ context.Context, _, turnID, reason
 	return nil
 }
 
-func stageReq(t *testing.T, sessionID, ordinal, turnID, name, body string) *http.Request {
+func stageReq(t *testing.T, sessionID, ordinal, clientNonce, name, body string) *http.Request {
 	t.Helper()
 	url := "/api/sessions/" + sessionID + "/launch-attachments/" + ordinal
-	if turnID != "" || name != "" {
-		url += "?turn_id=" + turnID + "&name=" + name
+	if clientNonce != "" || name != "" {
+		url += "?client_nonce=" + clientNonce + "&name=" + name
 	}
 	req := httptest.NewRequest(http.MethodPut, url, bytes.NewBufferString(body))
 	req.SetPathValue("session_id", sessionID)
@@ -82,12 +83,12 @@ func stageReq(t *testing.T, sessionID, ordinal, turnID, name, body string) *http
 
 func TestStageLaunchAttachmentStagesAndFlipsReady(t *testing.T) {
 	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "agent-runner"))
-	fake := &fakePendingLaunchStore{launch: &pgstore.PendingLaunchTurn{TurnID: "turn_launch700", AttachmentCount: 2}}
+	fake := &fakePendingLaunchStore{launch: &pgstore.PendingLaunchTurn{TurnID: conversation.TurnIDForClientNonce("launchseven00"), AttachmentCount: 2}}
 	app.pendingLaunch = fake
 
 	// First of two — awaiting.
 	rec := httptest.NewRecorder()
-	app.handleStageLaunchAttachment(rec, stageReq(t, "700", "0", "turn_launch700", "a.zip", "aaa"))
+	app.handleStageLaunchAttachment(rec, stageReq(t, "700", "0", "launchseven00", "a.zip", "aaa"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -101,7 +102,7 @@ func TestStageLaunchAttachmentStagesAndFlipsReady(t *testing.T) {
 
 	// Second — ready.
 	rec = httptest.NewRecorder()
-	app.handleStageLaunchAttachment(rec, stageReq(t, "700", "1", "turn_launch700", "b.png", "bbbb"))
+	app.handleStageLaunchAttachment(rec, stageReq(t, "700", "1", "launchseven00", "b.png", "bbbb"))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
 	}
@@ -117,7 +118,7 @@ func TestStageLaunchAttachmentStagesAndFlipsReady(t *testing.T) {
 
 func TestStageLaunchAttachmentValidationAndErrors(t *testing.T) {
 	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "agent-runner"))
-	app.pendingLaunch = &fakePendingLaunchStore{launch: &pgstore.PendingLaunchTurn{TurnID: "turn_launch700", AttachmentCount: 2}}
+	app.pendingLaunch = &fakePendingLaunchStore{launch: &pgstore.PendingLaunchTurn{TurnID: conversation.TurnIDForClientNonce("launchseven00"), AttachmentCount: 2}}
 
 	cases := []struct {
 		name    string
@@ -126,11 +127,11 @@ func TestStageLaunchAttachmentValidationAndErrors(t *testing.T) {
 		fname   string
 		want    int
 	}{
-		{"missing turn_id", "0", "", "a.zip", http.StatusBadRequest},
-		{"bad ordinal", "99", "turn_launch700", "a.zip", http.StatusBadRequest},
-		{"ordinal beyond count", "5", "turn_launch700", "a.zip", http.StatusBadRequest},
-		{"unknown launch", "0", "turn_other", "a.zip", http.StatusNotFound},
-		{"missing name", "0", "turn_launch700", "", http.StatusBadRequest},
+		{"missing client_nonce", "0", "", "a.zip", http.StatusBadRequest},
+		{"bad ordinal", "99", "launchseven00", "a.zip", http.StatusBadRequest},
+		{"ordinal beyond count", "5", "launchseven00", "a.zip", http.StatusBadRequest},
+		{"unknown launch", "0", "othernonce", "a.zip", http.StatusNotFound},
+		{"missing name", "0", "launchseven00", "", http.StatusBadRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -146,11 +147,11 @@ func TestStageLaunchAttachmentValidationAndErrors(t *testing.T) {
 func TestStageLaunchAttachmentConflictWhenNotAccepting(t *testing.T) {
 	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "agent-runner"))
 	app.pendingLaunch = &fakePendingLaunchStore{
-		launch:    &pgstore.PendingLaunchTurn{TurnID: "turn_launch700", AttachmentCount: 2},
+		launch:    &pgstore.PendingLaunchTurn{TurnID: conversation.TurnIDForClientNonce("launchseven00"), AttachmentCount: 2},
 		notAccept: true,
 	}
 	rec := httptest.NewRecorder()
-	app.handleStageLaunchAttachment(rec, stageReq(t, "700", "0", "turn_launch700", "a.zip", "aaa"))
+	app.handleStageLaunchAttachment(rec, stageReq(t, "700", "0", "launchseven00", "a.zip", "aaa"))
 	if rec.Code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409 (body %s)", rec.Code, rec.Body.String())
 	}
@@ -160,7 +161,7 @@ func TestStageLaunchAttachmentUnavailableWhenStoreNil(t *testing.T) {
 	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "agent-runner"))
 	app.pendingLaunch = nil
 	rec := httptest.NewRecorder()
-	app.handleStageLaunchAttachment(rec, stageReq(t, "700", "0", "turn_launch700", "a.zip", "aaa"))
+	app.handleStageLaunchAttachment(rec, stageReq(t, "700", "0", "launchseven00", "a.zip", "aaa"))
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("status = %d, want 503 (body %s)", rec.Code, rec.Body.String())
 	}

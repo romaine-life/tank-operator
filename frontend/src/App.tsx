@@ -16309,80 +16309,78 @@ function AuthenticatedApp() {
       // wake from session.created should beat this in practice. Does not
       // gate the UI.
       void refresh();
-      // Create-time submitted launch turns are already durable. Deferred
-      // launch turns already have their user row; after readiness this path
-      // uploads files and writes only the turn.submitted boundary.
+      // Create-time submitted launch turns are already durable. For an
+      // attachment launch (deferred), the backend registered the pending launch
+      // at create; the browser's only remaining job is to durably stage the
+      // attachment bytes, and the dispatch reconciler delivers the turn once the
+      // pod is Active — so the launch survives this tab going away (#865). It no
+      // longer waits for readiness or submits the turn itself. Non-create-time
+      // post-ready submits keep going through /turns unchanged.
       if (seedTurnRequested && !seedTurnSubmittedAtCreate) {
         try {
-          const readySession = await waitForSessionReady(created.id);
-          recordSessionListDebugEvent({
-            kind: "ready-session-response",
-            source: "createSession",
-            session_id: created.id,
-            row: sessionListDebugRow(readySession),
-            rows: sessionListDebugRows(sessionsRef.current),
-          });
-          setSessions((prev) => prev.map((s) => (s.id === created.id ? readySession : s)));
-          if (requestedInitialSkillName === "test") {
-            void markCreatedSessionTestState(created.id).catch((e) => {
-              setError(String(e));
+          if (seedTurnDeferredAtCreate) {
+            // Stage each attachment's bytes by ordinal, keyed by the launch's
+            // client_nonce. Durable (Postgres) — not the pod — so a tab that
+            // closes before the pod is ready does not strand the turn.
+            for (let i = 0; i < pendingHomeAttachments.length; i += 1) {
+              const att = pendingHomeAttachments[i];
+              const upRes = await authedFetch(
+                `/api/sessions/${created.id}/launch-attachments/${i}?client_nonce=${encodeURIComponent(seedClientNonce)}&name=${encodeURIComponent(att.name)}`,
+                {
+                  method: "PUT",
+                  headers: { "Content-Type": att.file.type || "application/octet-stream" },
+                  body: att.file,
+                },
+              );
+              if (!upRes.ok) {
+                throw new Error(`attachment staging failed: ${upRes.status}`);
+              }
+            }
+            // Clear the home buffer once the bytes are durably staged.
+            setHomeAttachments((prev) => {
+              for (const a of prev) {
+                if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
+              }
+              return [];
             });
-          }
-          // Upload home-buffered attachments to the new session pod before
-          // submitting the seed turn — same endpoint and shape the in-chat
-          // composer's uploadAttachment() uses, so the agent runner sees an
-          // identical attachments payload regardless of where the user
-          // started typing.
-          const uploadedPaths: { name: string; absPath: string }[] = [];
-          for (const att of pendingHomeAttachments) {
-            const upRes = await authedFetch(
-              `/api/sessions/${created.id}/files/upload?name=${encodeURIComponent(att.name)}`,
-              {
-                method: "POST",
-                headers: { "Content-Type": att.file.type || "application/octet-stream" },
-                body: att.file,
-              },
-            );
-            if (!upRes.ok) {
-              throw new Error(`attachment upload failed: ${upRes.status}`);
+            if (requestedInitialSkillName === "test") {
+              void markCreatedSessionTestState(created.id).catch((e) => {
+                setError(String(e));
+              });
             }
-            const body = (await upRes.json()) as { abs_path: string; name: string };
-            uploadedPaths.push({ name: body.name, absPath: body.abs_path });
-          }
-          // Clear the home buffer once the files are persisted on the pod.
-          setHomeAttachments((prev) => {
-            for (const a of prev) {
-              if (a.previewUrl) URL.revokeObjectURL(a.previewUrl);
-            }
-            return [];
-          });
-          const composedPrompt =
-            uploadedPaths.length > 0
-              ? composeAttachmentPathText(seedPrompt, uploadedPaths.map((p) => p.absPath))
+          } else {
+            const readySession = await waitForSessionReady(created.id);
+            recordSessionListDebugEvent({
+              kind: "ready-session-response",
+              source: "createSession",
+              session_id: created.id,
+              row: sessionListDebugRow(readySession),
+              rows: sessionListDebugRows(sessionsRef.current),
+            });
+            setSessions((prev) => prev.map((s) => (s.id === created.id ? readySession : s)));
+            const turnPrompt = requestedInitialSkillName
+              ? composeSkillPrompt(mode, requestedInitialSkillName, seedPrompt)
               : seedPrompt;
-          const turnPrompt = requestedInitialSkillName
-            ? composeSkillPrompt(mode, requestedInitialSkillName, composedPrompt)
-            : composedPrompt;
-          const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              client_nonce: seedClientNonce,
-              prompt: turnPrompt,
-              ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
-              ...(seedTurnDeferredAtCreate ? { existing_user_message: true } : {}),
-              follow_up: false,
-            }),
-          });
-          if (!turnRes.ok) {
-            let detail = `seed turn failed: ${turnRes.status}`;
-            try {
-              const body = await turnRes.json();
-              if (typeof body?.detail === "string") detail = body.detail;
-            } catch {
-              // Status-only detail is fine when the body isn't JSON.
+            const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                client_nonce: seedClientNonce,
+                prompt: turnPrompt,
+                ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
+                follow_up: false,
+              }),
+            });
+            if (!turnRes.ok) {
+              let detail = `seed turn failed: ${turnRes.status}`;
+              try {
+                const body = await turnRes.json();
+                if (typeof body?.detail === "string") detail = body.detail;
+              } catch {
+                // Status-only detail is fine when the body isn't JSON.
+              }
+              throw new Error(detail);
             }
-            throw new Error(detail);
           }
         } catch (e) {
           setError(String(e));
