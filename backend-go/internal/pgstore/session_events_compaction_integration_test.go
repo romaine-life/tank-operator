@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
 
@@ -83,18 +84,26 @@ func TestCountContextCompactionsCountsScopedCompactionRows(t *testing.T) {
 		}
 	}
 
-	// Session 63: two compactions interleaved with ordinary turn/item events.
-	insert("default:63", "001", "turn.submitted")
-	insert("default:63", "002", "context.compacted")
-	insert("default:63", "003", "item.completed")
-	insert("default:63", "004", "turn.completed")
-	insert("default:63", "005", "context.compacted")
-	// A different session's compaction must not leak into 63's count.
-	insert("default:99", "001", "context.compacted")
-	// A different scope sharing the public id must not leak either.
-	insert("slot:63", "001", "context.compacted")
+	// Storage keys are derived exactly as the store derives them, not
+	// hardcoded: the prod ("default") scope is unprefixed, so session 63's key
+	// is the bare "63" — a "default:63" literal would never match the query.
+	const scope = "default"
+	key63 := sessionmodel.SessionStorageKey(scope, "63")
+	key99 := sessionmodel.SessionStorageKey(scope, "99")
+	keyOtherScope := sessionmodel.SessionStorageKey("slot", "63")
 
-	es := store.NewPostgresSessionEventStore(pool, "default")
+	// Session 63: two compactions interleaved with ordinary turn/item events.
+	insert(key63, "001", "turn.submitted")
+	insert(key63, "002", "context.compacted")
+	insert(key63, "003", "item.completed")
+	insert(key63, "004", "turn.completed")
+	insert(key63, "005", "context.compacted")
+	// A different session's compaction must not leak into 63's count.
+	insert(key99, "001", "context.compacted")
+	// A different scope sharing the public id must not leak either.
+	insert(keyOtherScope, "001", "context.compacted")
+
+	es := store.NewPostgresSessionEventStore(pool, scope)
 
 	got, err := es.CountContextCompactions(ctx, "63")
 	if err != nil {
