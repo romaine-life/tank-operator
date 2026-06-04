@@ -16,12 +16,19 @@ import (
 
 const transcriptRowCursorSeparator = "\x1f"
 
-// Bumped 4 -> 5 so every session re-backfills its transcript rows once and picks
-// up the AskUserQuestion ownership change: the awaiting-input card is turn
-// activity, not a top-level main-transcript row. Without the bump, sessions that
-// already materialized turn.awaiting_input would keep stale main-transcript rows
-// until a new event happened to re-project their turn.
-const transcriptRowBackfillVersion = 5
+// Bumped 5 -> 6 so every session re-backfills its transcript rows once and picks
+// up the context.compacted ownership change: the compaction notice is turn
+// activity (intra-turn noise, folded into the collapsed shell), not a promoted
+// top-level main-transcript row. Without the bump, sessions that already
+// materialized context.compacted under the old promote-then-exclude projection
+// would keep stale main-transcript rows — and flash-then-vanish on the turn
+// detail screen — until a new event happened to re-project their turn.
+//
+// Prior bump (4 -> 5) made the same move for the AskUserQuestion awaiting-input
+// card; the pattern is: any projection change that relocates a row between the
+// main transcript and Turn activity must bump this version so dormant sessions
+// re-materialize on their next read instead of keeping the old placement.
+const transcriptRowBackfillVersion = 6
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error
