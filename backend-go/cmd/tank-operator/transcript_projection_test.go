@@ -329,22 +329,7 @@ func TestProjectTranscriptEventsCollapsesActiveTurnBeforeFinalAnswer(t *testing.
 	}
 }
 
-func TestProjectTranscriptEventsCarriesMidTurnUsageOnActiveActivity(t *testing.T) {
-	firstUsage := map[string]any{
-		"input_tokens":  float64(100),
-		"output_tokens": float64(25),
-		"total_tokens":  float64(125),
-	}
-	latestUsage := map[string]any{
-		"input_tokens":  float64(120),
-		"output_tokens": float64(30),
-		"total_tokens":  float64(150),
-	}
-	usageObservation := map[string]any{
-		"usage_source":     "thread.tokenUsage.updated",
-		"provider_turn_id": "provider-turn-1",
-		"update_count":     float64(2),
-	}
+func TestProjectTranscriptEventsKeepsTurnUsageOutOfProjectedActivity(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
 			"text":    "think for a while",
@@ -353,7 +338,11 @@ func TestProjectTranscriptEventsCarriesMidTurnUsageOnActiveActivity(t *testing.T
 		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
 		projectionTestEvent("started", "003", "turn.started", "runner", "codex", "turn-1", "", nil),
 		projectionTestEvent("usage-1", "004", "turn.usage", "runner", "codex", "turn-1", "", map[string]any{
-			"usage": firstUsage,
+			"usage": map[string]any{
+				"input_tokens":  float64(100),
+				"output_tokens": float64(25),
+				"total_tokens":  float64(125),
+			},
 			"usage_observation": map[string]any{
 				"usage_source":     "thread.tokenUsage.updated",
 				"provider_turn_id": "provider-turn-1",
@@ -365,8 +354,16 @@ func TestProjectTranscriptEventsCarriesMidTurnUsageOnActiveActivity(t *testing.T
 			"command": "go test ./...",
 		}),
 		projectionTestEvent("usage-2", "006", "turn.usage", "runner", "codex", "turn-1", "", map[string]any{
-			"usage":             latestUsage,
-			"usage_observation": usageObservation,
+			"usage": map[string]any{
+				"input_tokens":  float64(120),
+				"output_tokens": float64(30),
+				"total_tokens":  float64(150),
+			},
+			"usage_observation": map[string]any{
+				"usage_source":     "thread.tokenUsage.updated",
+				"provider_turn_id": "provider-turn-1",
+				"update_count":     float64(2),
+			},
 		}),
 	}
 
@@ -376,61 +373,31 @@ func TestProjectTranscriptEventsCarriesMidTurnUsageOnActiveActivity(t *testing.T
 	}
 	shell := projection.Entries[1]
 	if got, want := shell["kind"], "turn_activity"; got != want {
-		t.Fatalf("usage entry should project as active turn_activity, got %#v", shell)
-	}
-	if got := transcriptAnyMap(shell["turnUsage"]); got["input_tokens"] != float64(120) {
-		t.Fatalf("shell turnUsage = %#v, want usage payload", shell["turnUsage"])
-	}
-	if got := transcriptAnyMap(shell["usageObservation"]); got["usage_source"] != "thread.tokenUsage.updated" {
-		t.Fatalf("shell usageObservation = %#v, want observation payload", shell["usageObservation"])
+		t.Fatalf("active tool should project as turn_activity, got %#v", shell)
 	}
 	activity := transcriptAnyMap(shell["activity"])
-	if got := transcriptAnyMap(activity["turnUsage"]); got["total_tokens"] != float64(150) {
-		t.Fatalf("activity turnUsage = %#v, want usage payload", activity["turnUsage"])
+	if _, ok := shell["turnUsage"]; ok {
+		t.Fatalf("shell unexpectedly exposed turnUsage: %#v", shell)
 	}
-	if got := activity["endOrderKey"]; got != "006" {
-		t.Fatalf("activity endOrderKey = %#v, want latest usage order key", got)
+	if _, ok := shell["usageObservation"]; ok {
+		t.Fatalf("shell unexpectedly exposed usageObservation: %#v", shell)
+	}
+	if _, ok := activity["turnUsage"]; ok {
+		t.Fatalf("activity summary unexpectedly exposed turnUsage: %#v", activity)
+	}
+	if _, ok := activity["usageObservation"]; ok {
+		t.Fatalf("activity summary unexpectedly exposed usageObservation: %#v", activity)
 	}
 	body := projection.ActivityBodies["turn-1"]
-	if got, want := body.CompactedEntryIDs, []string{"turn-usage:turn-1", "turn-1:item:tool"}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	if got, want := body.CompactedEntryIDs, []string{"turn-1:item:tool"}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("compacted ids = %#v, want %#v", got, want)
 	}
-	if got := body.Entries[0]["metaKind"]; got != "turn_usage" {
-		t.Fatalf("activity body metaKind = %#v, want turn_usage", got)
-	}
-	if got := body.Entries[0]["orderKey"]; got != "004" {
-		t.Fatalf("usage row orderKey = %#v, want first usage order key", got)
-	}
-	if got := body.Entries[0]["activityEndOrderKey"]; got != "006" {
-		t.Fatalf("usage row activityEndOrderKey = %#v, want latest usage order key", got)
-	}
-	if got := transcriptAnyMap(body.Entries[0]["turnUsage"]); got["total_tokens"] != float64(150) {
-		t.Fatalf("usage row turnUsage = %#v, want latest usage payload", body.Entries[0]["turnUsage"])
-	}
-	if got := body.Entries[1]["id"]; got != "turn-1:item:tool" {
-		t.Fatalf("second activity entry id = %#v, want tool after anchored usage row", got)
+	if got := body.Entries[0]["id"]; got != "turn-1:item:tool" {
+		t.Fatalf("activity entry id = %#v, want only the tool row", got)
 	}
 }
 
-func TestProjectTranscriptEventsKeepsClaudeUsageSnapshotThroughTerminal(t *testing.T) {
-	// Claude per-message snapshots (usage_source=claude.message) are the
-	// context-occupancy signal; the terminal carries CUMULATIVE usage
-	// (claude.result), which sums cache reads across the turn's tool loop.
-	// The terminal annotation must NOT overwrite the dedicated turn_usage row
-	// with the cumulative usage — doing so collapses the context gauge to ~0
-	// once a turn completes and on every reload.
-	snapshotLatest := map[string]any{
-		"input_tokens":                float64(2),
-		"cache_read_input_tokens":     float64(540_000),
-		"cache_creation_input_tokens": float64(800),
-		"output_tokens":               float64(120),
-	}
-	cumulativeTerminal := map[string]any{
-		"input_tokens":                float64(266),
-		"cache_read_input_tokens":     float64(3_219_249),
-		"cache_creation_input_tokens": float64(21_332),
-		"output_tokens":               float64(19_380),
-	}
+func TestProjectTranscriptEventsKeepsTerminalUsageOutOfProjectedRows(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
 			"text":    "do the thing",
@@ -450,11 +417,21 @@ func TestProjectTranscriptEventsKeepsClaudeUsageSnapshotThroughTerminal(t *testi
 			"text": "all done",
 		}),
 		projectionTestEvent("usage-2", "005", "turn.usage", "runner", "claude", "turn-1", "", map[string]any{
-			"usage":             snapshotLatest,
+			"usage": map[string]any{
+				"input_tokens":                float64(2),
+				"cache_read_input_tokens":     float64(540_000),
+				"cache_creation_input_tokens": float64(800),
+				"output_tokens":               float64(120),
+			},
 			"usage_observation": map[string]any{"usage_source": "claude.message", "terminal_had_usage": false},
 		}),
 		projectionTestEvent("terminal", "006", "turn.completed", "runner", "claude", "turn-1", "", map[string]any{
-			"usage":             cumulativeTerminal,
+			"usage": map[string]any{
+				"input_tokens":                float64(266),
+				"cache_read_input_tokens":     float64(3_219_249),
+				"cache_creation_input_tokens": float64(21_332),
+				"output_tokens":               float64(19_380),
+			},
 			"usage_observation": map[string]any{"usage_source": "claude.result", "terminal_had_usage": true},
 			"final_answer":      map[string]any{"timeline_ids": []any{"turn-1:item:answer"}},
 		}),
@@ -465,44 +442,21 @@ func TestProjectTranscriptEventsKeepsClaudeUsageSnapshotThroughTerminal(t *testi
 	if !ok {
 		t.Fatalf("expected turn-1 activity body, got %#v", projection.ActivityBodies)
 	}
-	var usageRow map[string]any
 	for _, entry := range body.Entries {
-		if entry["metaKind"] == "turn_usage" {
-			usageRow = entry
-			break
+		if _, ok := entry["turnUsage"]; ok {
+			t.Fatalf("activity body entry unexpectedly exposed turnUsage: %#v", entry)
+		}
+		if _, ok := entry["usageObservation"]; ok {
+			t.Fatalf("activity body entry unexpectedly exposed usageObservation: %#v", entry)
 		}
 	}
-	if usageRow == nil {
-		t.Fatalf("expected a turn_usage row in the activity body, got %#v", body.Entries)
-	}
-	// The snapshot survives the terminal annotation: latest per-message usage,
-	// not the cumulative terminal.
-	if got := transcriptAnyMap(usageRow["turnUsage"]); got["cache_read_input_tokens"] != float64(540_000) {
-		t.Fatalf("usage row turnUsage = %#v, want latest snapshot (cache_read 540000), not the cumulative terminal", usageRow["turnUsage"])
-	}
-	if got := transcriptAnyMap(usageRow["usageObservation"]); got["usage_source"] != "claude.message" {
-		t.Fatalf("usage row usageObservation = %#v, want claude.message, not clobbered to claude.result", usageRow["usageObservation"])
-	}
-
-	// The compacted activity shell is the row the session-level context gauge
-	// scans (the turn_usage row is folded into it). It must surface the
-	// snapshot occupancy, not the cumulative terminal, or a completed Claude
-	// turn reads ~0 occupancy.
-	var shell map[string]any
 	for _, entry := range projection.Entries {
-		if entry["kind"] == "turn_activity" && entry["turnId"] == "turn-1" {
-			shell = entry
-			break
+		if _, ok := entry["turnUsage"]; ok {
+			t.Fatalf("projected entry unexpectedly exposed turnUsage: %#v", entry)
 		}
-	}
-	if shell == nil {
-		t.Fatalf("expected a turn_activity shell for turn-1, got %#v", projection.Entries)
-	}
-	if got := transcriptAnyMap(shell["turnUsage"]); got["cache_read_input_tokens"] != float64(540_000) {
-		t.Fatalf("shell turnUsage = %#v, want latest snapshot (cache_read 540000), not the cumulative terminal", shell["turnUsage"])
-	}
-	if got := transcriptAnyMap(shell["usageObservation"]); got["usage_source"] != "claude.message" {
-		t.Fatalf("shell usageObservation = %#v, want claude.message, not the cumulative terminal observation", shell["usageObservation"])
+		if _, ok := entry["usageObservation"]; ok {
+			t.Fatalf("projected entry unexpectedly exposed usageObservation: %#v", entry)
+		}
 	}
 }
 

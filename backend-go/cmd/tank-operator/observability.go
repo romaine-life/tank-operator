@@ -535,11 +535,10 @@ var sessionRuntimeConfigUpdateTotal = promauto.NewCounterVec(
 )
 
 // sessionContextWindowReportTotal counts provider-observed context-window
-// reports carried on the runtime-config PUT, the durable input to the
-// composer's used/window context fraction (the frontend model-window table
-// was deleted; the window is sourced only from the row's
-// runtime_context_window_tokens). The handler records exactly one outcome
-// per call around SetRuntimeContextWindow: ok on a successful persist,
+// reports carried on the runtime-config PUT. The window is durable session
+// metadata sourced from runtime_context_window_tokens; the run UI does not
+// render a token/context usage indicator. The handler records exactly one
+// outcome per call around SetRuntimeContextWindow: ok on a successful persist,
 // not_found / update_failed on the matching write errors, and ignored when
 // the call carried no positive window (context_window_tokens <= 0). The
 // source label is the bounded provider-observation tag (codex app-server

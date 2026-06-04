@@ -171,7 +171,7 @@ test("turn.completed produces no meta entry — success speaks through the bubbl
   assert.equal(metas.length, 0);
 });
 
-test("turn.usage projects a stable usage meta entry while the turn is active", () => {
+test("turn.usage remains backend plumbing and does not project a visible row", () => {
   const firstUsage = { input_tokens: 100, output_tokens: 25, total_tokens: 125 };
   const latestUsage = { input_tokens: 120, output_tokens: 30, total_tokens: 150 };
   const usageObservation = {
@@ -218,22 +218,14 @@ test("turn.usage projects a stable usage meta entry while the turn is active", (
     ]),
   );
 
-  const meta = projection.entries.find((entry) => entry.kind === "meta");
-  assert.ok(meta, "turn.usage should produce a projected usage row");
-  if (meta?.kind === "meta") {
-    assert.equal(meta.id, "turn-usage:turn-1");
-    assert.equal(meta.metaKind, "turn_usage");
-    assert.equal(meta.orderKey, "0004");
-    assert.equal(meta.activityEndOrderKey, "0006");
-    assert.deepEqual(meta.turnUsage, latestUsage);
-    assert.deepEqual(meta.usageObservation, usageObservation);
-  }
-  const metaIndex = projection.entries.findIndex((entry) => entry.kind === "meta" && entry.metaKind === "turn_usage");
+  assert.equal(projection.entries.some((entry) => entry.kind === "meta"), false);
+  assert.equal(projection.entries.some((entry) => "turnUsage" in entry), false);
+  assert.equal(projection.entries.some((entry) => "usageObservation" in entry), false);
   const toolIndex = projection.entries.findIndex((entry) => entry.kind === "tool");
-  assert.ok(metaIndex >= 0 && toolIndex >= 0 && metaIndex < toolIndex, "usage row should keep its first transcript position");
+  assert.ok(toolIndex >= 0, "non-usage turn activity should still project");
 });
 
-test("turn.usage meta row remains anchored once terminal usage annotates transcript rows", () => {
+test("terminal usage does not annotate projected transcript rows", () => {
   const midUsage = { input_tokens: 100, output_tokens: 25, total_tokens: 125 };
   const terminalUsage = { input_tokens: 120, output_tokens: 30, total_tokens: 150 };
   const projection = projectConversationState(
@@ -255,11 +247,11 @@ test("turn.usage meta row remains anchored once terminal usage annotates transcr
     ]),
   );
 
-  const meta = projection.entries.find((entry) => entry.kind === "meta" && entry.metaKind === "turn_usage");
-  assert.ok(meta, "turn.usage should remain as a durable turn activity row");
-  assert.equal(meta?.orderKey, "0003");
+  assert.equal(projection.entries.some((entry) => entry.kind === "meta"), false);
   const user = projection.entries.find((entry) => entry.kind === "message" && entry.role === "user");
-  assert.deepEqual(user?.turnUsage, terminalUsage);
+  assert.ok(user);
+  assert.equal(user && "turnUsage" in user, false);
+  assert.equal(user && "usageObservation" in user, false);
 });
 
 test("session.status:failed with provider extension carries severity + action onto the system message", () => {

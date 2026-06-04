@@ -101,35 +101,26 @@ answer; it must not visibly move a rendered row from one surface to the other.
   session's first turn, must stay above the placeholder. A turnId-structural
   placement rule strands the placeholder above those untagged notices because
   they carry no `turnId`.
-- Mid-turn token usage updates are durable turn activity, not a live-only
-  buffered status line. The projected usage row keeps the transcript position
-  of the first `turn.usage` event for that turn while its payload and the
-  activity shell's live-tail cursor advance with later usage updates.
-- Context-window occupancy is read from per-message usage snapshots
-  (`usage_observation.usage_source = "claude.message"` for Claude;
-  `thread.tokenUsage.updated` for Codex), never from a cumulative turn
-  terminal. The two provider shapes treat cached input oppositely: when cached
-  tokens are additive to `input_tokens` (Claude: `cache_read_input_tokens` +
-  `cache_creation_input_tokens`) occupancy is their sum; when the cached count
-  is a subset of `input_tokens` (Codex/OpenAI) occupancy is the uncached delta
-  or in-window prompt count. Reading a Claude blob with the subset rule yields
-  only the uncached `input_tokens` sliver — the regression this guards
-  against. The cumulative terminal usage (`claude.result`) drives cost, not
-  the gauge; terminal annotation must not overwrite the dedicated usage row's
-  snapshot with it.
-- The composer context indicator is a `used/window` fraction. The window
-  (denominator) is the provider-observed context window persisted on the
-  session row as `runtime_context_window_tokens`, reported by the runners
-  through `PUT /api/internal/sessions/{id}/runtime-config` (Codex app-server
-  token usage; the Claude Agent SDK per-turn `modelUsage.contextWindow`). There is no
-  frontend model-window table and no percent ring: the denominator is never
-  a frontend-assumed default keyed off a model id. Before the provider has
-  reported a window — pre-session previews on the splash composer, or any
-  session whose row still carries `runtime_context_window_tokens = 0` — the
-  indicator shows a placeholder (the bare used count, no fraction), never a
-  guessed window. The row value is durable and first-observed-wins: the first
-  positive window the runner reports is persisted and not overwritten by later
-  reports, so the fraction is stable across reloads and matches a fresh tab.
+- Token usage updates are durable backend plumbing, not transcript UI. The
+  runners may emit `turn.usage` snapshots and terminal usage payloads, and the
+  backend/admin math may continue to use those durable events for accounting,
+  diagnostics, and reports. The transcript projection must not synthesize a
+  `turn_usage` meta row, annotate normal transcript rows with usage payloads,
+  or carry usage fields on Turn activity shells.
+- Context-window and cost math remain backend/diagnostic concerns. Per-message
+  snapshots (`usage_observation.usage_source = "claude.message"` for Claude;
+  `thread.tokenUsage.updated` for Codex) and cumulative terminals
+  (`claude.result`) have different semantics and are still validated by math
+  tests, but the product UI does not render token count, cost, or context
+  occupancy chips in the composer, transcript, or Turns view.
+- Provider-observed context window remains durable session metadata persisted
+  as `runtime_context_window_tokens`, reported by the runners through
+  `PUT /api/internal/sessions/{id}/runtime-config` (Codex app-server token
+  usage; the Claude Agent SDK per-turn `modelUsage.contextWindow`). There is
+  no frontend model-window table and no user-facing context fraction. The row
+  value is durable and first-observed-wins: the first positive window the
+  runner reports is persisted and not overwritten by later reports, so backend
+  diagnostics are stable across reloads and match a fresh tab.
 - Already-open Turn activity details are a cached view of the server projection,
   not a second browser-owned ledger. A live `transcript_rows` batch for a turn
   whose details are already loaded must invalidate that cache and re-read
@@ -163,7 +154,7 @@ answer; it must not visibly move a rendered row from one surface to the other.
 - A durable terminal event that exists but is not visible in an open transcript
   must leave enough telemetry to localize the miss.
 - Provider context-window reports on the runtime-config PUT must be counted by
-  bounded labels so "the composer never got a window" is diagnosable without
+  bounded labels so missing or ignored runner reports are diagnosable without
   reading runner logs. `tank_session_context_window_report_total{provider,
   source,result}` records one outcome per call around `SetRuntimeContextWindow`
   (`ok` / `not_found` / `update_failed`, and `ignored` when the call carried no
@@ -208,9 +199,8 @@ answer; it must not visibly move a rendered row from one surface to the other.
   only the user message plus terminal context in the main transcript unless a
   later successful `turn.completed` with explicit final-answer ids wins the race.
 - A session whose row carries no provider-observed window
-  (`runtime_context_window_tokens = 0`) shows the composer placeholder, not a
-  fraction against a guessed default; once the runner reports a positive window
-  the indicator renders `used/window` and stays stable (first-observed-wins)
-  across reload. `scripts/check-context-window-table-migration.mjs` proves no
-  `CONTEXT_WINDOW_BY_MODEL` / `getContextWindow` model table remains under
-  `frontend/src` and that the composer reads `runtime_context_window_tokens`.
+  (`runtime_context_window_tokens = 0`) must not cause the frontend to guess a
+  model window or render a context fraction. `scripts/check-context-window-table-migration.mjs`
+  proves no `CONTEXT_WINDOW_BY_MODEL` / `getContextWindow` model table remains
+  under `frontend/src`; the usage UI retirement guard proves the composer,
+  transcript, and Turns view do not render token usage or cost chips.
