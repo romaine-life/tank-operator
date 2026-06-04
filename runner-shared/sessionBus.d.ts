@@ -135,6 +135,7 @@ export class SharedSessionBus {
 }
 
 export function isInterruptCommand(record: SessionCommand | null | undefined): boolean;
+export function isInputReplyCommand(record: SessionCommand | null | undefined): boolean;
 export function commandSubject(sessionStorageKey: string, provider: string): string;
 export function controlSubject(sessionStorageKey: string, provider: string): string;
 export function eventSubject(sessionStorageKey: string): string;

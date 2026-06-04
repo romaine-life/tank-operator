@@ -125,10 +125,10 @@ export function canonicalEventsForClaudeMessage(
               });
         const name = typeof item.name === "string" ? item.name : "tool";
         // AskUserQuestion produces no item events. The runner's canUseTool
-        // ends the asking turn with a durable turn.awaiting_input handoff
-        // carrying the Tank-canonical questions (claudeQuestionsToTankShape);
-        // the transcript renders the question card from that terminal, so
-        // there is no dangling "started" tool item on a settled turn.
+        // pauses the active turn with durable turn.awaiting_input carrying the
+        // Tank-canonical questions (claudeQuestionsToTankShape); the transcript
+        // renders the question card in Turn activity, so there is no dangling
+        // "started" tool item.
         // (Previously this emitted item.started plus an in-turn approval-request event.)
         if (name !== "AskUserQuestion") {
           events.push(

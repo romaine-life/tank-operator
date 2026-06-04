@@ -11,7 +11,7 @@ export type ConversationRunStatus =
   | "error";
 
 export type ConversationItemStatus = "started" | "completed" | "failed";
-export type ConversationTurnTerminalStatus = "completed" | "failed" | "interrupted" | "awaiting_input";
+export type ConversationTurnTerminalStatus = "completed" | "failed" | "interrupted";
 export type ConversationBackgroundTaskStatus =
   | "running"
   | "completed"
@@ -193,7 +193,7 @@ export function conversationReducer(
         runStatus: "submitted",
         activeTurnId: event.turn_id ?? next.activeTurnId,
         // A new turn submitting is forward progress out of any prior
-        // needs_input (e.g. the AskUserQuestion answer turn): the session is
+        // needs_input (e.g. the AskUserQuestion answer event): the session is
         // no longer waiting on the user.
         needsInput: false,
         failed: false,
@@ -275,15 +275,25 @@ export function conversationReducer(
       // is not a parallel transcript path.
       return next;
     case "turn.awaiting_input":
-      // The agent asked the user a question; the asking turn ended. There is
-      // no active turn — the session waits for the answer, which arrives as a
-      // brand-new turn. Settles to needs_input, not ready.
+      // The agent asked the user a question and paused the same active turn.
+      // The answer resumes this turn; final terminal events still own
+      // completion/failure/interruption.
       return {
-        ...applyTurnTerminal(next, event, "awaiting_input"),
+        ...next,
         runStatus: "needs_input",
-        activeTurnId: null,
+        activeTurnId: event.turn_id ?? next.activeTurnId,
         activeItemId: null,
         needsInput: true,
+        failed: false,
+        lastError: null,
+      };
+    case "turn.input_answered":
+      return {
+        ...next,
+        runStatus: "streaming",
+        activeTurnId: event.turn_id ?? next.activeTurnId,
+        activeItemId: null,
+        needsInput: false,
         failed: false,
         lastError: null,
       };

@@ -101,6 +101,7 @@ var LifecycleEventTypes = []string{
 	"turn.interrupt_requested",
 	"turn.interrupted",
 	"turn.awaiting_input",
+	"turn.input_answered",
 }
 
 // UnreadOutputItemTypes are event types whose timeline_id contributes to

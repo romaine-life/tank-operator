@@ -16,12 +16,12 @@ import (
 
 const transcriptRowCursorSeparator = "\x1f"
 
-// Bumped 3 -> 4 so every session re-backfills its transcript rows once and picks
-// up the durable turnNumber the projection now stamps onto turn_activity shells
-// (session_turns, added in the turn-number backend PR). Without the bump, shells
-// materialized before that PR keep no turnNumber until a new event re-projects
-// their turn, so dormant sessions would render a number-less turn label.
-const transcriptRowBackfillVersion = 4
+// Bumped 4 -> 5 so every session re-backfills its transcript rows once and picks
+// up the AskUserQuestion ownership change: the awaiting-input card is turn
+// activity, not a top-level main-transcript row. Without the bump, sessions that
+// already materialized turn.awaiting_input would keep stale main-transcript rows
+// until a new event happened to re-project their turn.
+const transcriptRowBackfillVersion = 5
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error

@@ -94,9 +94,9 @@ answer; it must not visibly move a rendered row from one surface to the other.
   live-tail order key — the furthest order key the turn has reached across both
   the shell's compacted activity (`endOrderKey`) and any turn-tagged row that
   stays in the main transcript. Two cases this must satisfy together:
-  companion rows anchored to a later order key, such as answered
-  AskUserQuestion handoffs, must not be overtaken by the placeholder; and
-  untagged durable rows that precede the turn's activity, such as the
+  companion rows anchored to a later order key must not be overtaken by the
+  placeholder; and untagged durable rows that precede the turn's activity, such
+  as the
   `Session is loading.` / `Session is ready.` `session.status` notices on a new
   session's first turn, must stay above the placeholder. A turnId-structural
   placement rule strands the placeholder above those untagged notices because

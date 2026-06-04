@@ -5,8 +5,14 @@ import "strings"
 const (
 	CommandSubmitTurn         = "submit_turn"
 	CommandInterrupt          = "interrupt_turn"
+	CommandInputReply         = "input_reply"
 	CommandStopBackgroundTask = "stop_background_task"
 )
+
+type InputReplyAnnotation struct {
+	Preview string `json:"preview,omitempty"`
+	Notes   string `json:"notes,omitempty"`
+}
 
 type Command struct {
 	SchemaVersion     int    `json:"schema_version"`
@@ -34,16 +40,18 @@ type Command struct {
 	Effort         string `json:"effort,omitempty"`
 	PermissionMode string `json:"permission_mode,omitempty"`
 	SkillName      string `json:"skill_name,omitempty"`
-	FollowUp     bool   `json:"follow_up,omitempty"`
-	TargetTurnID string `json:"target_turn_id,omitempty"`
+	FollowUp       bool   `json:"follow_up,omitempty"`
+	TargetTurnID   string `json:"target_turn_id,omitempty"`
 	// TargetTimelineID / TargetProviderItemID identify a specific item a
 	// command targets — today the stop_background_task command pointing at
 	// a shell-task item (its Tank timeline_id + provider item id).
-	TargetTimelineID     string `json:"target_timeline_id,omitempty"`
-	TargetProviderItemID string `json:"target_provider_item_id,omitempty"`
-	TargetTaskID         string `json:"target_task_id,omitempty"`
-	TargetProcessID      string `json:"target_process_id,omitempty"`
-	CreatedAt            string `json:"created_at"`
+	TargetTimelineID     string                          `json:"target_timeline_id,omitempty"`
+	TargetProviderItemID string                          `json:"target_provider_item_id,omitempty"`
+	TargetTaskID         string                          `json:"target_task_id,omitempty"`
+	TargetProcessID      string                          `json:"target_process_id,omitempty"`
+	Answers              map[string][]string             `json:"answers,omitempty"`
+	Annotations          map[string]InputReplyAnnotation `json:"annotations,omitempty"`
+	CreatedAt            string                          `json:"created_at"`
 }
 
 func (c Command) Normalize() Command {

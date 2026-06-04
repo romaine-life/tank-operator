@@ -163,10 +163,10 @@ test("stop control waits for durable turn interruption", () => {
   assert.equal(appSource.includes("if (!res.ok)"), true);
 });
 
-test("AskUserQuestion answers open a brand-new turn via POST /answer", () => {
-  // The answer is a durable new turn, not an in-turn reply: no terminal
-  // socket (sendStdin), no retired /input-reply route — the card posts to
-  // /turns/{askingTurnId}/answer.
+test("AskUserQuestion answers resume the same turn via POST /answer", () => {
+  // The answer is durably recorded by POST /turns/{askingTurnId}/answer and
+  // delivered to the paused runner as input_reply. There is still no terminal
+  // socket path or retired /input-reply browser route.
   assert.equal(appSource.includes("sendStdin"), false);
   assert.equal(appSource.includes("/input-reply"), false);
   assert.equal(appSource.includes("/answer"), true);
@@ -196,7 +196,7 @@ test("the awaiting-input card reads answered state from the durable event payloa
   // a fresh tab opened after another tab answered must still render the
   // resolved card. The answered flag comes from the durable awaiting-input
   // card payload (entry.awaitingInput), derived server-side from a later
-  // ask_user_answer turn — not the retired in-turn `askUserAnswers`.
+  // turn.input_answered event, not the retired `askUserAnswers` decoration.
   assert.equal(appSource.includes("entry.awaitingInput"), true);
   assert.equal(appSource.includes("askUserAnswers"), false);
 });
@@ -454,9 +454,9 @@ test("turn view entry points open at the turn bottom", () => {
     appSource.includes('onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}'),
     true,
   );
-  // The AskUserQuestion handoff is now the interactive RunAwaitingInputCard,
-  // answered inline in the transcript, so the retired RunNeedsInputAnnouncement
-  // "go to the question turn" navigation (onOpenTurn?.(targetTurnId, …)) is gone.
+  // The AskUserQuestion pause is now the interactive RunAwaitingInputCard in
+  // Turn activity, so the retired RunNeedsInputAnnouncement "go to the question
+  // turn" navigation (onOpenTurn?.(targetTurnId, …)) is gone.
   assert.equal(
     appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })'),
     true,

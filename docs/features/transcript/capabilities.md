@@ -97,9 +97,11 @@ Contract impact:
   sole producer; the durable `session_events` ledger records every compaction,
   queryable independently of the UI.
 - The server projection promotes it into the main transcript as a `meta` row
-  (`metaKind: context_compacted`), excluded from the Turn-activity compact —
-  promotion-only, like the AskUserQuestion handoff row. The frontend renders it
-  through the existing `RunMetaBlock` primitive.
+  (`metaKind: context_compacted`), excluded from the Turn-activity compact. This
+  is intentionally different from AskUserQuestion, whose question and answer
+  stay in Turn activity because the user's answer continues the same active
+  turn. The frontend renders compaction through the existing `RunMetaBlock`
+  primitive.
 - The silent-drop class that hid it is now observable:
   `tank_runner_unmapped_provider_event_total{type,subtype}` counts any provider
   event the adapter neither maps nor explicitly ignores. Steady state zero.
@@ -217,42 +219,41 @@ Evidence:
 Status: active
 
 Intent:
-When the in-pod agent invokes AskUserQuestion, the asking turn ENDS with a
-durable `turn.awaiting_input` terminal carrying the Tank-canonical questions.
-The transcript projection promotes an interactive question card
-(`metaKind: "awaiting_input"`) into the settled main transcript — the surface
-the user actually reads — and the user answers it in place. The card reflects
-durable state, not local React optimism, so a fresh tab renders the same thing.
+When the in-pod agent invokes AskUserQuestion, the active turn pauses with a
+durable `turn.awaiting_input` event carrying the Tank-canonical questions. The
+transcript projection places an interactive question card
+(`metaKind: "awaiting_input"`) inside Turn activity, while the main transcript
+shows the Turn activity shell. The card reflects durable state, not local React
+optimism, so a fresh tab renders the same thing.
 
-Answering is a brand-new turn:
-- The user's selection posts to `POST /turns/{askingTurnId}/answer`, which opens
-  a new durable turn (`user_message.created` with an `ask_user_answer` display
-  + `turn.submitted`). The agent re-reads its own question and the answer from
-  that durable user message under `continue:true`.
-- There is no in-turn tool result and no `input_reply` command; the asking turn
-  is already terminal, so nothing is parked on human-thinking time.
+Answering resumes the same turn:
+- The user's selection posts to `POST /turns/{askingTurnId}/answer`, which
+  persists durable `turn.input_answered` and publishes an `input_reply`
+  control-plane command to the paused runner.
+- The asking turn remains active while awaiting input; Stop can still interrupt
+  that turn because `activeTurnId` is preserved.
 
 The card has two states:
 - waiting — unanswered. The card surfaces the options (single/multi-select), the
   always-on free-form textarea when `allowFreeForm` is set, and a Submit button.
-- answered — a later `ask_user_answer` user message references the question
+- answered — a later `turn.input_answered` event references the question
   (`awaitingInput.answered` is true), or the user just submitted (a local
   snapshot locks the card for the round-trip). The card renders locked with the
-  user's picks; the answer also appears as the next user-message turn below.
+  user's picks.
 
 Affected contracts:
 - Transcript
 - Transcript Navigation
 
 Contract impact:
-- The card is a promotion-only projection of the durable `turn.awaiting_input`
-  terminal; it is not a second ledger and does not relocate a rendered row
-  between the activity/log and settled surfaces.
-- `answered` is derived from a durable fact (a later `ask_user_answer` user
-  message whose `display.question_timeline_id` matches), never a local "I
-  submitted" flag, so historical replay matches live.
-- The answer is its own durable turn — copy links, unread counts, and
-  latest-message state target that user message, not the card.
+- The card is a Turn activity projection of durable `turn.awaiting_input`; it is
+  not a second ledger and it does not appear as a standalone main-transcript
+  message.
+- `answered` is derived from a durable fact (a later `turn.input_answered` event
+  whose `payload.question_timeline_id` matches), never a local "I submitted"
+  flag, so historical replay matches live.
+- The answer is part of the same durable turn — copy links, unread counts, and
+  latest-message state do not point at a synthetic user-message turn.
 
 Evidence:
 - `frontend/src/needsInputAnnouncement.ts` is the single state machine shared
@@ -307,6 +308,7 @@ Evidence:
   (`frontend/src/App.tsx`) as the fraction denominator, with a placeholder when
   it is 0.
 - Required before status active: unit coverage that the projection emits the
-  `awaiting_input` card and marks it answered from a later `ask_user_answer`
-  turn, plus the live pre-deploy-pod gate (Claude AskUserQuestion -> answer ->
-  the answer turn reaches `turn.completed`, not `turn.failed`).
+  `awaiting_input` card in Turn activity and marks it answered from a later
+  `turn.input_answered` event, plus the live pre-deploy-pod gate (Claude
+  AskUserQuestion -> answer -> the same turn reaches `turn.completed`, not
+  `turn.failed`).

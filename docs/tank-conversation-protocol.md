@@ -210,10 +210,10 @@ Background shell task lifecycle:
 - `shell_task.updated`
 - `shell_task.exited`
 
-AskUserQuestion handoff (a turn terminal — see "AskUserQuestion ends the
-asking turn" below):
+AskUserQuestion pause/resume:
 
 - `turn.awaiting_input`
+- `turn.input_answered`
 
 Session activity is computed server-side by the lifecycle emitter as
 sessions evolve and published as `session.activity_changed` rows in the
@@ -233,8 +233,8 @@ A conversation projection has these UI states:
 - `submitted`: user input is durable and waiting for runner execution.
 - `streaming`: a runner is executing a turn or emitting items.
 - `needs_input`: the agent asked the user a question (AskUserQuestion); the
-  asking turn has ended (`turn.awaiting_input`) and the session is waiting for
-  the user's answer, which arrives as a new turn.
+  asking turn is paused at `turn.awaiting_input` and the session is waiting for
+  the user's answer, which arrives as `turn.input_answered` on the same turn.
 - `stopping`: a user-initiated stop has landed on the durable ledger; the
   runner has not yet emitted a terminal event.
 - `stopped`: the active turn ended by user interrupt or runner shutdown, not by
@@ -258,9 +258,9 @@ Turn transitions:
    without becoming a turn boundary.
 4. `turn.started` means provider output has begun; it moves the composer and
    sidebar to `streaming`.
-5. `turn.awaiting_input` (the AskUserQuestion handoff terminal) ends the
-   asking turn and moves the projection to `needs_input` with no active turn,
-   until the user answers in a new turn.
+5. `turn.awaiting_input` pauses the active turn for AskUserQuestion, moves the
+   projection to `needs_input`, and preserves `activeTurnId` so Stop can still
+   interrupt the same in-flight turn.
 6. `turn.interrupt_requested` moves the projection from `submitted`,
    `streaming`, or `needs_input` to `stopping`; `activeTurnId` is preserved
    because the turn is still mid-flight. A late-arriving request after a
@@ -389,8 +389,9 @@ token metadata, the runner still emits the durable notice and defaults
 projection promotes it into the main transcript as a `meta` row
 (`metaKind: context_compacted`), excluded from the Turn-activity compact via
 `isProjectionContextCompacted` — the same promotion-only treatment as the
-AskUserQuestion handoff row, because a memory change is settled-conversation
-context the user reads, not turn-activity noise.
+context the user reads, not turn-activity noise. AskUserQuestion is different:
+its question and answer remain turn activity because the answer is part of the
+same active turn.
 
 A provider event the runner adapter neither maps to a Tank event nor explicitly
 ignores increments `tank_runner_unmapped_provider_event_total{type,subtype}`
@@ -849,11 +850,11 @@ Provider mapping for the new event: there is no provider mapping.
 boundary, regardless of provider. `actor=system`, `source=tank`. Runners
 remain the sole producers of `turn.interrupted`.
 
-AskUserQuestion ends the asking turn (`turn.awaiting_input`):
+AskUserQuestion pauses the same turn (`turn.awaiting_input`):
 
 When the in-pod agent invokes the AskUserQuestion tool, the asking turn
-**ends** — it is not resolved in-turn. The runner captures the Tank-canonical
-questions and publishes a durable `turn.awaiting_input` terminal:
+pauses while waiting for user input. The runner captures the Tank-canonical
+questions and publishes durable `turn.awaiting_input`:
 
 ```json
 {
@@ -869,24 +870,25 @@ questions and publishes a durable `turn.awaiting_input` terminal:
 }
 ```
 
-`turn.awaiting_input` is a turn terminal (`conversation.IsTurnTerminalEvent`):
-the asking turn's `submit_turn` is acked, the run-state settles to
-`needs_input` with no active turn, and the transcript projection promotes a
-question **card** into the main transcript (`metaKind: "awaiting_input"`,
-carrying the questions + target ids) anchored at the asking turn's tail.
+`turn.awaiting_input` is not a turn terminal. The asking turn's `submit_turn`
+stays in flight with runner heartbeats, the run-state becomes `needs_input`,
+and `activeTurnId` remains the asking turn. The transcript projection renders a
+question **card** in Turn activity (`metaKind: "awaiting_input"`, carrying the
+questions + target ids) anchored at the asking turn's tail. The main transcript
+gets only the Turn activity shell.
 
 - **Claude**: the runner's `canUseTool` callback, on AskUserQuestion, publishes
-  `turn.awaiting_input` then resolves `{behavior:"deny", interrupt:true}`. The
-  SDK/CLI closes the tool call with a denied `tool_result` (so the conversation
-  history stays valid) and the turn terminates.
+  `turn.awaiting_input` and keeps the permission callback pending. When
+  `input_reply` arrives, the runner resolves the callback with
+  `{behavior:"allow", updatedInput:{answers}}` so the provider turn continues.
 - **Codex** (`codex_gui` / `codex_app_server`): on the App Server's
   `item/tool/requestUserInput`, the runner publishes `turn.awaiting_input`,
-  responds to the JSONRPC request (empty) to release it, and aborts the codex
-  turn.
+  keeps the JSON-RPC request pending, then responds with the submitted answers
+  when `input_reply` arrives.
 - `codex_exec_gui` never produces `turn.awaiting_input` — the `codex exec`
   transport rejects `request_user_input`, so it has no AskUserQuestion path.
 
-The user's answer is a **brand-new turn**, not an in-turn reply:
+The user's answer resumes the same turn:
 
 `POST /api/sessions/{session_id}/turns/{turn_id}/answer` — `{turn_id}` is the
 asking (awaiting-input) turn.
@@ -902,32 +904,28 @@ Body:
 }
 ```
 
-The handler validates ownership/mode/target ids, then requires the asking
-turn's durable terminal to be `turn.awaiting_input` (rejecting answers to a
-completed/failed turn or a non-AskUserQuestion turn). It builds a
-**self-describing re-grounding prompt** (`You asked: "…"` / `The user
-answered: …`) plus an `ask_user_answer` user-message display, and enqueues an
-ordinary `submit_turn` with a **deterministic `client_nonce`** — so a
-double-submit resolves to the same deterministic turn id
-(`turnIDForClientNonce`) and the same `turn:`-prefixed command key, answering
-the question once rather than forking a second answer turn. The agent re-reads its own question and
-the answer from that durable user message under `continue:true`; there is no
-in-turn tool result, no `input_reply` command, and no `tool.approval_*`
-events.
+The handler validates ownership/mode/target ids, then requires the asking turn
+to have a matching `turn.awaiting_input` event and no final terminal
+(`turn.completed`, `turn.failed`, `turn.command_failed`, or `turn.interrupted`).
+It persists durable `turn.input_answered` with a deterministic `client_nonce`
+so repeated submits dedupe at the `(tank_session_id, event_id)` unique
+constraint, then publishes a durable `input_reply` command on the control-plane
+subject. If command publish fails after the answer event is persisted, the
+deterministic command id lets a retry republish the same reply.
 
 `answers` is `Record<questionText, answerLabel[]>` — always an array so single-
 and multi-select share one shape. `annotations` is optional
 `Record<questionText, { preview?, notes? }>` carrying free-text the user
 attached. The card's answered state is derived durably — the projection marks
-it answered by finding a later `ask_user_answer` user message whose
-`display.question_timeline_id` matches the question — never from browser-local
+it answered by finding a later `turn.input_answered` event whose
+`payload.question_timeline_id` matches the question — never from browser-local
 optimism.
 
 Tank-canonical AskUserQuestion question shape:
 
 Both runner adapters normalize the provider's question payload into a single
 Tank-canonical shape before publishing it in the `turn.awaiting_input`
-terminal's `questions` payload. The frontend renders the Tank shape only —
+`questions` payload. The frontend renders the Tank shape only —
 provider-specific fields never reach the renderer directly. Per
 [docs/product-inspirations.md](product-inspirations.md): "Provider-specific
 event streams are adapter inputs. The frontend renders the Tank conversation
@@ -966,31 +964,23 @@ infers free-form support from the absence of those fields. A future
 backfill projects the existing durable rows into the canonical shape; the
 runtime read path stays Tank-shape-only.
 
-AskUserQuestion question card is promoted to the main transcript:
+AskUserQuestion question card stays in Turn activity:
 
 The transcript projection in `backend-go/cmd/tank-operator/transcript_projection.go`
 emits one `metaKind: "awaiting_input"` meta row per `turn.awaiting_input`
-terminal, anchored at the asking turn's tail (`orderKey` + `~awaiting_input`
+pause, anchored at the asking turn's tail (`orderKey` + `~awaiting_input`
 suffix). The row carries an `awaitingInput` payload — `askingTurnId`,
-`providerItemId`, `timelineId`, `questions`, `questionCount`, `answered` —
-sourced entirely from durable state (`answered` is true once a later
-`ask_user_answer` user message references the question). The SPA renders the
-row as the interactive question card in the chat stream; submitting it posts
-`/answer`, which opens the answer turn.
+`providerItemId`, `timelineId`, `questions`, `questionCount`, `answered`,
+`answers`, and `annotations` — sourced entirely from durable state (`answered`
+is true once a later `turn.input_answered` event references the question). The
+SPA renders the row as the interactive question card inside the Turns page and
+the collapsed Turn activity detail; submitting it posts `/answer`, which resumes
+the same active turn.
 
-The announcement is excluded from the Turn-activity compact via
-`isProjectionNeedsInputAnnouncement` (same predicate seam as
-`isProjectedUserMessage`), so the handoff stays visible in the main
-transcript whether the activity group is open or closed. The
-AskUserQuestion tool item itself continues to render inside Turn
-activity, where the full question card with options and free-form lives.
-
-The promotion is consistent with
-[docs/features/transcript/contract.md](features/transcript/contract.md)
--> "promotion-only": AskUserQuestion is a system-actor handoff back to
-the user, not provider tool output / reasoning / progress / failed work /
-stopped work. Same class as `session.status` and "Stop requested" entries
-that already promote to the main transcript.
+The Turn-activity placement follows
+[docs/features/transcript/contract.md](features/transcript/contract.md):
+AskUserQuestion is part of the provider turn's work loop, and the user's answer
+continues that same turn rather than becoming settled chat content.
 
 Durability scope: session commands are intended to survive browser
 disconnects, orchestrator restarts/rollouts, and runner-process restarts while

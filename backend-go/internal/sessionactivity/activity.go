@@ -149,14 +149,21 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 			out.NeedsInput = false
 			out.Failed = false
 		case "turn.awaiting_input":
-			terminalTurns[stringField(event, "turn_id")] = true
-			// The agent asked the user a question; the asking turn ended.
-			// There is no active turn — the session waits for the user's
-			// answer, which arrives as a brand-new turn. The next
-			// turn.submitted / turn.started clears needs_input.
+			// The agent asked the user a question and paused the same active
+			// turn. The next turn.input_answered clears needs_input; a final
+			// terminal still owns turn completion.
 			out.Status = "needs_input"
-			out.ActiveTurnID = nil
+			if id := optionalStringField(event, "turn_id"); id != nil {
+				out.ActiveTurnID = id
+			}
 			out.NeedsInput = true
+			out.Failed = false
+		case "turn.input_answered":
+			if id := optionalStringField(event, "turn_id"); id != nil {
+				out.ActiveTurnID = id
+			}
+			out.Status = "streaming"
+			out.NeedsInput = false
 			out.Failed = false
 		}
 	}
@@ -221,6 +228,7 @@ var LifecycleChatEventTypes = []string{
 	"turn.interrupt_requested",
 	"turn.interrupted",
 	"turn.awaiting_input",
+	"turn.input_answered",
 }
 
 // IsLifecycleChatEventType is a sugar wrapper used by the persister's

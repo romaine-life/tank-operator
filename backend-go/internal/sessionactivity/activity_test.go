@@ -26,12 +26,11 @@ func TestDeriveActivitySummaryFoldsTurnLifecycle(t *testing.T) {
 		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
 		{"type": "turn.claimed", "turn_id": "turn-1", "order_key": "2"},
 		{"type": "turn.started", "turn_id": "turn-1", "order_key": "3"},
-		// AskUserQuestion ends the asking turn awaiting input.
+		// AskUserQuestion pauses the same active turn awaiting input.
 		{"type": "turn.awaiting_input", "turn_id": "turn-1", "order_key": "4"},
-		// The answer is a brand-new turn; submitting + completing it clears
-		// the sticky needs_input.
-		{"type": "turn.submitted", "turn_id": "turn-2", "order_key": "5"},
-		{"type": "turn.completed", "turn_id": "turn-2", "order_key": "6"},
+		// The answer resumes the same turn; the final terminal clears it.
+		{"type": "turn.input_answered", "turn_id": "turn-1", "order_key": "5"},
+		{"type": "turn.completed", "turn_id": "turn-1", "order_key": "6"},
 	}
 	got := DeriveActivitySummary(nil, events, 0, false)
 	if got.Status != "ready" {
@@ -41,7 +40,7 @@ func TestDeriveActivitySummaryFoldsTurnLifecycle(t *testing.T) {
 		t.Fatalf("active turn id after completion = %v, want nil", *got.ActiveTurnID)
 	}
 	if got.NeedsInput {
-		t.Fatalf("needs_input stayed sticky after the answer turn completed")
+		t.Fatalf("needs_input stayed sticky after the answered turn completed")
 	}
 }
 
@@ -58,9 +57,9 @@ func TestDeriveActivitySummaryClaimedIsWorkingState(t *testing.T) {
 	}
 }
 
-// TestDeriveActivitySummaryAwaitingInputSetsNeedsInput pins the new
-// AskUserQuestion fold: turn.awaiting_input ends the asking turn (no active
-// turn) and raises the needs_input indicator until the user answers.
+// TestDeriveActivitySummaryAwaitingInputSetsNeedsInput pins the AskUserQuestion
+// fold: turn.awaiting_input keeps the turn active and raises needs_input until
+// the user answers.
 func TestDeriveActivitySummaryAwaitingInputSetsNeedsInput(t *testing.T) {
 	got := DeriveActivitySummary(nil, []map[string]any{
 		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
@@ -73,8 +72,8 @@ func TestDeriveActivitySummaryAwaitingInputSetsNeedsInput(t *testing.T) {
 	if !got.NeedsInput {
 		t.Fatalf("NeedsInput = false, want true after turn.awaiting_input")
 	}
-	if got.ActiveTurnID != nil {
-		t.Fatalf("active turn id = %v, want nil (the asking turn ended)", *got.ActiveTurnID)
+	if got.ActiveTurnID == nil || *got.ActiveTurnID != "turn-1" {
+		t.Fatalf("active turn id = %#v, want turn-1", got.ActiveTurnID)
 	}
 }
 

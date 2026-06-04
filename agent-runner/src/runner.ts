@@ -50,6 +50,7 @@ import {
 } from "../../runner-shared/conversation-builders.js";
 import {
   SessionCommandBus,
+  isInputReplyCommand,
   isInterruptCommand,
   isStopBackgroundTaskCommand,
   commandClientNonce,
@@ -283,6 +284,24 @@ function claudeRateLimitError(message: ClaudeProviderEvent): string {
   return parts.join("; ");
 }
 
+function inputReplyKey(turnID: string, timelineID: string, providerItemID: string): string {
+  return `${turnID}\x1f${timelineID}\x1f${providerItemID}`;
+}
+
+function answersForClaudeInput(
+  answers: Record<string, string[]> | undefined,
+  annotations: Record<string, { notes?: string }> | undefined,
+): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [question, labels] of Object.entries(answers ?? {})) {
+    const cleanLabels = labels.map((label) => String(label).trim()).filter(Boolean);
+    const note = String(annotations?.[question]?.notes ?? "").trim();
+    const value = cleanLabels.length > 0 ? cleanLabels.join(", ") : note;
+    if (value) out[question] = value;
+  }
+  return out;
+}
+
 export interface PendingTurn {
   turnID: string;
   clientNonce: string;
@@ -335,6 +354,14 @@ interface BufferedInterrupt {
   stopCommandHeartbeat: () => void;
   orphanTimer: ReturnType<typeof setTimeout>;
 }
+
+type PendingInputReply = {
+  turn: PendingTurn;
+  providerItemID: string;
+  timelineID: string;
+  input: unknown;
+  resolve: (result: PermissionResult) => void;
+};
 
 type InterruptOutcome = "interrupted" | "not_found" | "publish_failed";
 
@@ -443,6 +470,7 @@ export class Runner {
   // BufferedInterrupt docstring for the race this buffer fixes.
   // Linear-scan; expected depth is 0–1 in steady state.
   private readonly pendingInterrupts: BufferedInterrupt[] = [];
+  private readonly pendingInputReplies = new Map<string, PendingInputReply>();
   // Claude background shell tasks report their lifecycle through system
   // task_* frames. The start frame is turn-scoped, but progress and final
   // notification can arrive after the foreground turn has already completed.
@@ -601,11 +629,10 @@ export class Runner {
       // AskUserQuestion, so non-AskUserQuestion tools retain the same
       // zero-friction shape as before.
       permissionMode: "default",
-      // canUseTool ends the asking turn when AskUserQuestion is invoked:
-      // it publishes a durable turn.awaiting_input terminal, then resolves
-      // deny+interrupt. The user's answer arrives as a brand-new turn, not
-      // an in-turn reply. All other tools pass through unconditionally —
-      // see the callback for the policy.
+      // canUseTool pauses the active turn when AskUserQuestion is invoked:
+      // it publishes durable turn.awaiting_input and resolves only when the
+      // user's input_reply arrives. All other tools pass through
+      // unconditionally — see the callback for the policy.
       canUseTool: this.canUseTool,
       // Resume an on-disk JSONL if one exists from a prior process
       // life (e.g., agent-runner restart within the same pod).
@@ -869,6 +896,10 @@ export class Runner {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
       .startControlConsumer(async (record) => {
+        if (isInputReplyCommand(record)) {
+          await this.acceptInputReply(record);
+          return;
+        }
         if (isInterruptCommand(record)) {
           await this.acceptInterrupt(record);
           return;
@@ -1282,14 +1313,11 @@ export class Runner {
     return false;
   }
 
-  // canUseTool ends the asking turn when the agent invokes AskUserQuestion.
+  // canUseTool pauses the asking turn when the agent invokes AskUserQuestion.
   // Non-AskUserQuestion tools auto-allow (preserving the prior
-  // `bypassPermissions` posture). For AskUserQuestion we publish the durable
-  // `turn.awaiting_input` handoff carrying the Tank-canonical questions, then
-  // resolve `{deny, interrupt:true}` so the SDK closes the tool call and the
-  // turn terminates. The user's answer arrives later as a brand-new turn via
-  // POST /turns/{id}/answer — there is no in-turn tool result. See
-  // docs/tank-conversation-protocol.md → "AskUserQuestion".
+  // `bypassPermissions` posture). For AskUserQuestion we publish durable
+  // `turn.awaiting_input`, then keep this callback pending until an
+  // input_reply control command arrives for the same turn/tool item.
   private readonly canUseTool: CanUseTool = (toolName, input, { toolUseID }) => {
     if (toolName !== "AskUserQuestion") {
       return Promise.resolve({ behavior: "allow", updatedInput: input } satisfies PermissionResult);
@@ -1298,32 +1326,32 @@ export class Runner {
     if (!toolUseID || !turn) {
       return Promise.resolve({
         behavior: "deny",
-        message: "AskUserQuestion cannot end the turn (missing tool_use_id or active turn)",
+        message: "AskUserQuestion cannot pause the turn (missing tool_use_id or active turn)",
       } satisfies PermissionResult);
     }
     const questions = claudeQuestionsToTankShape(input);
-    return this.endTurnAwaitingInput(turn, questions, toolUseID).then(
-      () =>
-        ({
-          behavior: "deny",
-          message: "Awaiting your answer in a new turn.",
-          interrupt: true,
-        }) satisfies PermissionResult,
-    );
+    return this.pauseTurnForInput(turn, questions, toolUseID, input);
   };
 
-  // endTurnAwaitingInput publishes the durable turn.awaiting_input terminal
-  // for an AskUserQuestion handoff and acks the asking turn's submit_turn.
+  // pauseTurnForInput publishes durable turn.awaiting_input for an
+  // AskUserQuestion pause and resolves only when input_reply arrives.
   // Mirrors applyInterruptToTurn's durable-first posture: publish with retry,
-  // and fall back to turn.failed if the handoff publish ultimately fails so
+  // and fall back to turn.failed if the pause publish ultimately fails so
   // the turn never strands without a terminal.
-  private async endTurnAwaitingInput(
+  private async pauseTurnForInput(
     turn: PendingTurn,
     questions: unknown,
     providerItemID: string,
-  ): Promise<void> {
-    if (turn.terminalEmitted) return;
+    input: unknown,
+  ): Promise<PermissionResult> {
+    if (turn.terminalEmitted) {
+      return { behavior: "deny", message: "Turn already ended before AskUserQuestion could pause." };
+    }
     const timelineID = itemTimelineID(turn.turnID, providerItemID);
+    const replyKey = inputReplyKey(turn.turnID, timelineID, providerItemID);
+    const waitForReply = new Promise<PermissionResult>((resolve) => {
+      this.pendingInputReplies.set(replyKey, { turn, providerItemID, timelineID, input, resolve });
+    });
     const published = await this.publishTerminalWithRetry(
       turnEvent({
         sessionID: this.cfg.sessionId,
@@ -1337,12 +1365,9 @@ export class Runner {
       }),
     );
     if (published) {
-      turn.terminalEmitted = true;
-      if (turn.commandRecord) {
-        await this.markCommandTerminal(turn, "turn.awaiting_input");
-      }
-      return;
+      return waitForReply;
     }
+    this.pendingInputReplies.delete(replyKey);
     const fallback = await this.publishTerminalWithRetry(
       turnEvent({
         sessionID: this.cfg.sessionId,
@@ -1359,6 +1384,38 @@ export class Runner {
         await this.markCommandTerminal(turn, "turn.failed");
       }
     }
+    return { behavior: "deny", message: "Failed to persist AskUserQuestion pause.", interrupt: true };
+  }
+
+  private async acceptInputReply(record: SessionCommandRecord): Promise<void> {
+    commandsConsumedTotal.labels("input_reply", "accepted").inc();
+    const targetTurnID = String(record.target_turn_id ?? "").trim();
+    const targetTimelineID = String(record.target_timeline_id ?? "").trim();
+    const targetProviderItemID = String(record.target_provider_item_id ?? "").trim();
+    const key = inputReplyKey(targetTurnID, targetTimelineID, targetProviderItemID);
+    const pending = this.pendingInputReplies.get(key);
+    if (!pending) {
+      // Runner restart/race: the durable answer can arrive before the redelivered
+      // submit_turn has recreated the provider callback. Keep the control
+      // command alive so it can redeliver once pauseTurnForInput is pending.
+      commandsConsumedTotal.labels("input_reply", "not_ready").inc();
+      record.nak(1_000);
+      return;
+    }
+    if (pending.turn.terminalEmitted) {
+      commandsConsumedTotal.labels("input_reply", "not_found").inc();
+      await this.commandBus.markFailed(record, new Error("input_reply target is not awaiting input"));
+      return;
+    }
+    this.pendingInputReplies.delete(key);
+    pending.resolve({
+      behavior: "allow",
+      updatedInput: {
+        ...(typeof pending.input === "object" && pending.input !== null ? pending.input : {}),
+        answers: answersForClaudeInput(record.answers, record.annotations),
+      },
+    } satisfies PermissionResult);
+    await this.commandBus.markCompleted(record);
   }
 
   // acceptTurn normalizes the client nonce and assembles the in-memory

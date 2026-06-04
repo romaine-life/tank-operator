@@ -18,6 +18,7 @@ export const TANK_EVENT_TYPES: readonly [
   "turn.command_failed",
   "turn.interrupt_requested",
   "turn.interrupted",
+  "turn.input_answered",
   "context.compacted",
   "session.status",
   "item.started",
@@ -39,14 +40,7 @@ export interface TankProducerMetadata {
 
 export type UserMessageDisplay =
   | { kind: "plain" }
-  | { kind: "skill_invocation"; skill_name: string; supplemental_text?: string }
-  | {
-      kind: "ask_user_answer";
-      question_timeline_id: string;
-      asking_turn_id?: string;
-      answers?: Record<string, string[]>;
-      annotations?: Record<string, { preview?: string; notes?: string }>;
-    };
+  | { kind: "skill_invocation"; skill_name: string; supplemental_text?: string };
 
 export interface UserMessageAttachmentDisplay {
   label: string;

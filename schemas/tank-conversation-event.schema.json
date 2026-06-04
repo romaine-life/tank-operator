@@ -113,6 +113,7 @@
         "turn.command_failed",
         "turn.interrupt_requested",
         "turn.interrupted",
+        "turn.input_answered",
         "context.compacted",
         "session.status",
         "item.started",
@@ -198,8 +199,7 @@
         "display": {
           "oneOf": [
             { "$ref": "#/$defs/plainUserDisplay" },
-            { "$ref": "#/$defs/skillInvocationDisplay" },
-            { "$ref": "#/$defs/askUserAnswerDisplay" }
+            { "$ref": "#/$defs/skillInvocationDisplay" }
           ]
         },
         "attachments": {
@@ -243,28 +243,6 @@
         "supplemental_text": { "type": "string" }
       }
     },
-    "askUserAnswerDisplay": {
-      "description": "A user message that answers a prior AskUserQuestion handoff turn. The question/answer exchange is two durable turns: the agent's turn ends with turn.awaiting_input, and this user message opens the answer turn. question_timeline_id links back to the AskUserQuestion item so the projection can mark the handoff answered.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["kind", "question_timeline_id"],
-      "properties": {
-        "kind": { "const": "ask_user_answer" },
-        "question_timeline_id": { "$ref": "#/$defs/nonEmptyString" },
-        "asking_turn_id": { "type": "string", "minLength": 1 },
-        "answers": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "array",
-            "items": { "type": "string" }
-          }
-        },
-        "annotations": {
-          "type": "object",
-          "additionalProperties": true
-        }
-      }
-    },
     "askUserQuestion": {
       "description": "Tank-canonical AskUserQuestion question shape. Both runner adapters normalize the provider question into this shape before publishing turn.awaiting_input; the frontend renders this shape only.",
       "type": "object",
@@ -291,7 +269,7 @@
       }
     },
     "awaitingInputPayload": {
-      "description": "Payload for the turn.awaiting_input terminal: the questions the agent asked, plus the AskUserQuestion item ids the answer endpoint targets.",
+      "description": "Payload for turn.awaiting_input: the questions the agent asked while pausing the active turn, plus the AskUserQuestion item ids the answer endpoint targets.",
       "type": "object",
       "additionalProperties": true,
       "required": ["questions"],
@@ -303,6 +281,25 @@
         },
         "provider_item_id": { "type": "string", "minLength": 1 },
         "timeline_id": { "type": "string", "minLength": 1 }
+      }
+    },
+    "inputAnsweredPayload": {
+      "description": "Payload for turn.input_answered: the user's durable answer to a question that paused the same active turn.",
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["question_timeline_id", "provider_item_id", "answers"],
+      "properties": {
+        "question_timeline_id": { "type": "string", "minLength": 1 },
+        "provider_item_id": { "type": "string", "minLength": 1 },
+        "answers": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
+        "annotations": { "type": "object" }
       }
     },
     "statusPayload": {
@@ -593,6 +590,17 @@
         "required": ["payload"],
         "properties": {
           "payload": { "$ref": "#/$defs/awaitingInputPayload" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "turn.input_answered" } }, "required": ["type"] },
+      "then": {
+        "required": ["turn_id", "timeline_id", "client_nonce", "payload"],
+        "properties": {
+          "actor": { "const": "user" },
+          "source": { "const": "tank" },
+          "payload": { "$ref": "#/$defs/inputAnsweredPayload" }
         }
       }
     }

@@ -309,8 +309,8 @@ func TestPersistMessageDoesNotRecordTurnFailureForSuccess(t *testing.T) {
 }
 
 // TestPersistMessageRecordsTurnLifecycleCounter pins the silent-stranding
-// observability contract: each of the six lifecycle event types
-// (turn.submitted + the five terminal types) MUST bump
+// observability contract: each lifecycle boundary event type
+// (turn.submitted + the terminal types) MUST bump
 // tank_turn_lifecycle_total{event_type=<type>} when the persister
 // commits a durable row, and non-lifecycle types MUST NOT contribute
 // (so the alert's expr stays comparing the right cardinalities). The
@@ -324,7 +324,6 @@ func TestPersistMessageRecordsTurnLifecycleCounter(t *testing.T) {
 		"turn.failed",
 		"turn.command_failed",
 		"turn.interrupted",
-		"turn.awaiting_input",
 	}
 	for _, eventType := range lifecycleTypes {
 		t.Run(eventType, func(t *testing.T) {
@@ -353,45 +352,71 @@ func TestPersistMessageRecordsTurnLifecycleCounter(t *testing.T) {
 	}
 }
 
-// TestPersistMessageOmitsNonLifecycleFromLifecycleCounter pins the bound
-// on tank_turn_lifecycle_total's label set: only the six lifecycle
-// types contribute. turn.started, item.*, and session.* are
-// either intermediate or non-turn signals and must not skew the
-// submitted-vs-terminal divergence the silent-stranding alert reads.
+// TestPersistMessageOmitsNonLifecycleFromLifecycleCounter pins the bound on
+// tank_turn_lifecycle_total's label set: only submitted + terminal lifecycle
+// boundaries contribute. turn.awaiting_input and turn.input_answered are valid
+// same-turn AskUserQuestion state changes, but they are not terminal and must
+// not skew the submitted-vs-terminal divergence the silent-stranding alert reads.
 func TestPersistMessageOmitsNonLifecycleFromLifecycleCounter(t *testing.T) {
-	nonLifecycleTypes := []string{
-		"turn.started",
-		"turn.interrupt_requested",
-		"item.completed",
-		"item.started",
-		"session.status",
-		"user_message.created",
+	nonLifecycleEvents := []struct {
+		eventType string
+		payload   map[string]any
+		extra     map[string]any
+		actor     string
+		source    string
+	}{
+		{eventType: "turn.started"},
+		{eventType: "turn.interrupt_requested"},
+		{eventType: "item.completed", payload: map[string]any{"kind": "agent_message"}},
+		{eventType: "item.started", payload: map[string]any{"kind": "agent_message"}},
+		{eventType: "session.status", payload: map[string]any{"status": "ready"}},
+		{eventType: "user_message.created", actor: "user", source: "tank", payload: map[string]any{"text": "hello", "display": map[string]any{"kind": "plain"}}, extra: map[string]any{"timeline_id": "turn-1:user", "client_nonce": "turn-1"}},
+		{eventType: "turn.awaiting_input", payload: map[string]any{"questions": []any{map[string]any{"question": "Proceed?"}}}},
+		{eventType: "turn.input_answered", actor: "user", source: "tank", payload: map[string]any{"question_timeline_id": "turn-1:item:toolu_ask", "provider_item_id": "toolu_ask", "answers": map[string]any{"Proceed?": []any{"Yes"}}}, extra: map[string]any{"timeline_id": "turn-1:item:toolu_ask:answer", "client_nonce": "answer-1"}},
 	}
-	for _, eventType := range nonLifecycleTypes {
-		t.Run(eventType, func(t *testing.T) {
+	for _, tc := range nonLifecycleEvents {
+		t.Run(tc.eventType, func(t *testing.T) {
 			bus := &Bus{scope: "default"}
 			store := &recordingStore{}
 			metrics := &recordingMetrics{}
-			raw, _ := json.Marshal(map[string]any{
-				"event_id":   "evt-" + eventType,
+			actor := tc.actor
+			if actor == "" {
+				actor = "runner"
+			}
+			source := tc.source
+			if source == "" {
+				source = "codex"
+			}
+			event := map[string]any{
+				"event_id":   "evt-" + tc.eventType,
 				"session_id": "63",
-				"actor":      "runner",
-				"source":     "codex",
-				"type":       eventType,
+				"actor":      actor,
+				"source":     source,
+				"type":       tc.eventType,
 				"created_at": "2026-05-12T00:00:00.000Z",
-				"order_key":  "order-" + eventType,
+				"order_key":  "order-" + tc.eventType,
 				"visibility": "durable",
 				"turn_id":    "turn-1",
-			})
+			}
+			if tc.payload != nil {
+				event["payload"] = tc.payload
+			}
+			for key, value := range tc.extra {
+				event[key] = value
+			}
+			raw, _ := json.Marshal(event)
 			msg := &stubMsg{subject: SessionEventSubject("63"), data: raw}
 
 			bus.handlePersistMessage(context.Background(), store, metrics, msg)
 
-			if got := metrics.turnLifecycle[eventType]; got != 0 {
-				t.Fatalf("lifecycle counter unexpectedly bumped for %q (= %d); only the five lifecycle types contribute", eventType, got)
+			if len(store.upserts) != 1 {
+				t.Fatalf("persisted events = %d, want 1; event may be schema-invalid: %#v", len(store.upserts), event)
+			}
+			if got := metrics.turnLifecycle[tc.eventType]; got != 0 {
+				t.Fatalf("lifecycle counter unexpectedly bumped for %q (= %d); only lifecycle boundaries contribute", tc.eventType, got)
 			}
 			if len(metrics.turnLifecycle) != 0 {
-				t.Fatalf("lifecycle counter has %d entries after non-lifecycle event %q; want 0", len(metrics.turnLifecycle), eventType)
+				t.Fatalf("lifecycle counter has %d entries after non-lifecycle event %q; want 0", len(metrics.turnLifecycle), tc.eventType)
 			}
 		})
 	}
@@ -488,6 +513,24 @@ func TestSubjectForCommandRoutesInterruptToControlPlane(t *testing.T) {
 	}
 	if got == CommandSubject(storage, provider) {
 		t.Fatalf("interrupt MUST NOT publish to the command subject %q", got)
+	}
+}
+
+func TestSubjectForCommandRoutesInputReplyToControlPlane(t *testing.T) {
+	storage := "session-storage-key"
+	provider := "claude"
+	reply := Command{
+		Type:              CommandInputReply,
+		SessionStorageKey: storage,
+		Provider:          provider,
+	}
+	got := SubjectForCommand(reply)
+	want := ControlSubject(storage, provider)
+	if got != want {
+		t.Fatalf("input_reply subject = %q, want %q (control-plane)", got, want)
+	}
+	if got == CommandSubject(storage, provider) {
+		t.Fatalf("input_reply MUST NOT publish to the command subject %q", got)
 	}
 }
 

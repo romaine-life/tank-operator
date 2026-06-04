@@ -163,7 +163,8 @@ func TestProjectTranscriptEventsPromotesContextCompactedNotice(t *testing.T) {
 		t.Fatalf("context compacted detail = %q, want compact token count", meta["detail"])
 	}
 	// Promotion-only: the notice must NOT be folded into the turn-activity
-	// shell, mirroring the AskUserQuestion handoff row.
+	// shell. AskUserQuestion is different: it stays in Turn activity because
+	// the answer continues the same active turn.
 	if body, ok := projection.ActivityBodies["turn-1"]; ok {
 		for _, id := range body.CompactedEntryIDs {
 			if id == notice["id"] {
@@ -574,19 +575,18 @@ func TestProjectTranscriptEventsKeepsFailedTurnActivityOutOfMainTranscript(t *te
 }
 
 // TestProjectTranscriptEventsPromotesAwaitingInputCard verifies the projection
-// promotes a turn.awaiting_input handoff into the settled main transcript as the
-// interactive question card (metaKind "awaiting_input"), anchored at the asking
-// turn's tail, and unanswered until a later ask_user_answer arrives. The card is
-// kept OUT of the Turn-activity compact (same opt-out as a user message) so the
-// handoff stays visible whether the activity group is open or closed.
+// places a turn.awaiting_input pause inside Turn activity as the interactive
+// question card (metaKind "awaiting_input"), anchored at the asking turn's tail,
+// and unanswered until a later turn.input_answered arrives. The main transcript
+// gets only the Turn activity shell.
 func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
 			"text":    "which?",
 			"display": map[string]any{"kind": "plain"},
 		}),
-		// The asking turn ENDS here: turn.awaiting_input is the terminal that
-		// carries the Tank-canonical questions and the AUQ item's ids.
+		// The asking turn pauses here: turn.awaiting_input carries the
+		// Tank-canonical questions and the AUQ item's ids.
 		projectionTestEvent("await", "002", "turn.awaiting_input", "runner", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
 			"provider_item_id": "toolu_ask",
 			"timeline_id":      "turn-1:item:tool-ask",
@@ -606,14 +606,27 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	}
 	projection := projectTranscriptEvents(events)
 	var card map[string]any
-	for _, entry := range projection.Entries {
-		if entry["metaKind"] == "awaiting_input" {
-			card = entry
-			break
+	for _, body := range projection.ActivityBodies {
+		if body.TurnID != "turn-1" {
+			continue
+		}
+		for _, entry := range body.Entries {
+			if entry["metaKind"] == "awaiting_input" {
+				card = entry
+				break
+			}
 		}
 	}
 	if card == nil {
-		t.Fatalf("expected awaiting_input card, got entries: %#v", projection.Entries)
+		t.Fatalf("expected awaiting_input card in activity body, got bodies: %#v", projection.ActivityBodies)
+	}
+	for _, entry := range projection.Entries {
+		if entry["metaKind"] == "awaiting_input" {
+			t.Fatalf("awaiting_input card leaked into main transcript: %#v", entry)
+		}
+	}
+	if shell := projection.Entries[1]; shell["kind"] != "turn_activity" {
+		t.Fatalf("main transcript entry = %#v, want turn_activity shell", shell)
 	}
 	meta, _ := card["meta"].(map[string]any)
 	if meta["title"] != "Claude is waiting on you" {
@@ -648,15 +661,12 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	}
 }
 
-// TestProjectTranscriptEventsAwaitingInputAnsweredByLaterTurn proves the card's
-// "answered" state is derived from durable state — a later ask_user_answer user
-// message whose question_timeline_id matches the handoff — not a browser-local
-// flag. A fresh tab opened after the user answered renders the resolved card.
-//
-// In the new model there is no "interrupted while waiting" case: turn.awaiting_input
-// IS the terminal, so the asking turn has already ended; the card is either
-// unanswered (still waiting) or answered by a later turn.
-func TestProjectTranscriptEventsAwaitingInputAnsweredByLaterTurn(t *testing.T) {
+// TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent proves the
+// card's "answered" state is derived from durable state — a later
+// turn.input_answered event whose question_timeline_id matches the pause — not a
+// browser-local flag. A fresh tab opened after the user answered renders the
+// resolved card.
+func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
 			"text":    "decide",
@@ -669,34 +679,36 @@ func TestProjectTranscriptEventsAwaitingInputAnsweredByLaterTurn(t *testing.T) {
 				map[string]any{"question": "Pick one", "allowFreeForm": true},
 			},
 		}),
-		// The user's answer is a brand-new turn carrying an ask_user_answer
-		// display that links back to the handoff's timeline id.
-		projectionTestEvent("ans", "003", "user_message.created", "user", "tank", "turn-2", "turn-2:user", map[string]any{
-			"text": "A",
-			"display": map[string]any{
-				"kind":                 "ask_user_answer",
-				"question_timeline_id": "turn-1:item:tool-ask",
-				"asking_turn_id":       "turn-1",
-				"answers":              map[string]any{"Pick one": []any{"A"}},
-			},
+		// The user's answer is recorded on the same turn and links back to the
+		// paused question's timeline id.
+		projectionTestEvent("ans", "003", "turn.input_answered", "user", "tank", "turn-1", "turn-1:item:tool-ask:answer", map[string]any{
+			"question_timeline_id": "turn-1:item:tool-ask",
+			"provider_item_id":     "toolu_ask",
+			"answers":              map[string]any{"Pick one": []any{"A"}},
 		}),
 	}
 	projection := projectTranscriptEvents(events)
-	for _, entry := range projection.Entries {
-		if entry["metaKind"] != "awaiting_input" {
-			continue
+	for _, body := range projection.ActivityBodies {
+		for _, entry := range body.Entries {
+			if entry["metaKind"] != "awaiting_input" {
+				continue
+			}
+			meta := entry["meta"].(map[string]any)
+			if meta["title"] != "Answered" {
+				t.Errorf("answered card title = %q, want Answered", meta["title"])
+			}
+			awaiting := entry["awaitingInput"].(map[string]any)
+			if awaiting["answered"] != true {
+				t.Errorf("answered = %v, want true after turn.input_answered", awaiting["answered"])
+			}
+			answers := awaiting["answers"].(map[string]any)
+			if got := answers["Pick one"].([]any)[0]; got != "A" {
+				t.Errorf("answers = %#v, want Pick one=A", answers)
+			}
+			return
 		}
-		meta := entry["meta"].(map[string]any)
-		if meta["title"] != "Answered" {
-			t.Errorf("answered card title = %q, want Answered", meta["title"])
-		}
-		awaiting := entry["awaitingInput"].(map[string]any)
-		if awaiting["answered"] != true {
-			t.Errorf("answered = %v, want true after a later ask_user_answer turn", awaiting["answered"])
-		}
-		return
 	}
-	t.Fatalf("missing awaiting_input card: %#v", projection.Entries)
+	t.Fatalf("missing awaiting_input card: %#v", projection.ActivityBodies)
 }
 
 func TestProjectTranscriptEventsPopulatesActivityBodiesForTurnsWithoutCompactedEntries(t *testing.T) {

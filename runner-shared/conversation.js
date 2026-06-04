@@ -31,6 +31,7 @@ export const TANK_EVENT_TYPES = [
   "turn.command_failed",
   "turn.interrupt_requested",
   "turn.interrupted",
+  "turn.input_answered",
   "context.compacted",
   "session.status",
   "item.started",
@@ -116,6 +117,11 @@ function isValidEventByType(event) {
       return event.actor === "system" &&
         event.source === "tank" &&
         hasStrings(event, ["turn_id"]);
+    case "turn.input_answered":
+      return event.actor === "user" &&
+        event.source === "tank" &&
+        hasStrings(event, ["turn_id", "timeline_id", "client_nonce"]) &&
+        isInputAnsweredPayload(event.payload);
     case "context.compacted":
       return event.actor === "runner" &&
         hasStrings(event, ["turn_id"]) &&
@@ -164,9 +170,6 @@ function isUserMessagePayload(payload) {
 function isUserMessageDisplay(display) {
   if (!display || typeof display !== "object" || Array.isArray(display)) return false;
   if (display.kind === "plain") return true;
-  if (display.kind === "ask_user_answer") {
-    return typeof display.question_timeline_id === "string" && display.question_timeline_id.length > 0;
-  }
   return display.kind === "skill_invocation" &&
     isSkillName(display.skill_name) &&
     (display.supplemental_text === undefined || typeof display.supplemental_text === "string");
@@ -261,6 +264,16 @@ function isAwaitingInputPayload(payload) {
         q && typeof q === "object" && !Array.isArray(q) &&
         typeof q.question === "string" && q.question.length > 0,
     );
+}
+
+function isInputAnsweredPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (typeof payload.question_timeline_id !== "string" || payload.question_timeline_id.length === 0) return false;
+  if (typeof payload.provider_item_id !== "string" || payload.provider_item_id.length === 0) return false;
+  if (!payload.answers || typeof payload.answers !== "object" || Array.isArray(payload.answers)) return false;
+  return Object.values(payload.answers).some(
+    (labels) => Array.isArray(labels) && labels.some((label) => typeof label === "string" && label.length > 0),
+  );
 }
 
 function isSkillName(value) {

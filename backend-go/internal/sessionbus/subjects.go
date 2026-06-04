@@ -99,9 +99,11 @@ func ControlSubject(sessionStorageKey, provider string) string {
 // is the load-bearing fix for the "Stop doesn't interrupt deep tool-use
 // loops" failure mode where a JetStream `max_ack_pending: 1` consumer
 // held interrupt_turn behind submit_turn for the full duration of the
-// turn.
+// turn. AskUserQuestion answers are also control-plane: the turn is still
+// active but paused in a provider callback, so the reply must reach the runner
+// while the original submit_turn is still in flight.
 func SubjectForCommand(command Command) string {
-	if command.Type == CommandInterrupt || command.Type == CommandStopBackgroundTask {
+	if command.Type == CommandInterrupt || command.Type == CommandInputReply || command.Type == CommandStopBackgroundTask {
 		return ControlSubject(command.SessionStorageKey, command.Provider)
 	}
 	return CommandSubject(command.SessionStorageKey, command.Provider)
