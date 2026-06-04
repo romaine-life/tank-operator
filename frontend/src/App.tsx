@@ -8031,34 +8031,70 @@ function RunTurnActivityScreen({
           <ActivityIcon size={16} strokeWidth={2.1} aria-hidden="true" />
           <h2>Turns</h2>
         </div>
-        <Select
-          value={selected?.turnId ?? ""}
-          onValueChange={onSelectTurn}
-          disabled={turns.length === 0}
-        >
-          <SelectTrigger
-            className="run-turn-view-select"
-            size="sm"
-            aria-label="Select turn"
-          >
-            <SelectValue placeholder="No turns" />
-          </SelectTrigger>
-          <SelectContent
-            className="run-turn-view-select-menu"
-            position="popper"
-            align="end"
-          >
-            {turns.map((turn) => (
-              <SelectItem
-                key={turn.turnId}
-                value={turn.turnId}
-                className="run-turn-view-select-item"
+        <div className="run-turn-view-controls">
+          {selected && onActivitySelectPage && (
+            <Select
+              value={String(pagerState.page)}
+              onValueChange={(value) =>
+                onActivitySelectPage(selected.turnId, Number(value))
+              }
+              disabled={pagerState.pageCount <= 1}
+            >
+              <SelectTrigger
+                className="run-turn-view-select run-turn-view-page-select"
+                size="sm"
+                aria-label="Select activity page"
               >
-                {turn.label}{turn.active ? " (running)" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent
+                className="run-turn-view-select-menu"
+                position="popper"
+                align="end"
+              >
+                {Array.from({ length: pagerState.pageCount }, (_, index) => index + 1).map(
+                  (pageNumber) => (
+                    <SelectItem
+                      key={pageNumber}
+                      value={String(pageNumber)}
+                      className="run-turn-view-select-item"
+                    >
+                      Page {pageNumber} of {pagerState.pageCount}
+                    </SelectItem>
+                  ),
+                )}
+              </SelectContent>
+            </Select>
+          )}
+          <Select
+            value={selected?.turnId ?? ""}
+            onValueChange={onSelectTurn}
+            disabled={turns.length === 0}
+          >
+            <SelectTrigger
+              className="run-turn-view-select"
+              size="sm"
+              aria-label="Select turn"
+            >
+              <SelectValue placeholder="No turns" />
+            </SelectTrigger>
+            <SelectContent
+              className="run-turn-view-select-menu"
+              position="popper"
+              align="end"
+            >
+              {turns.map((turn) => (
+                <SelectItem
+                  key={turn.turnId}
+                  value={turn.turnId}
+                  className="run-turn-view-select-item"
+                >
+                  {turn.label}{turn.active ? " (running)" : ""}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       {selected ? (
         <>
@@ -8070,12 +8106,6 @@ function RunTurnActivityScreen({
             {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
             {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
           </div>
-          {onActivitySelectPage && (
-            <TurnActivityPager
-              pagerState={pagerState}
-              onSelectPage={(page) => onActivitySelectPage(selected.turnId, page)}
-            />
-          )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
             onCopy={handleTranscriptCopy}

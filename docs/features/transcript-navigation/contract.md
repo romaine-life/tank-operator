@@ -94,14 +94,14 @@ yanking the viewport away from a user reading history.
 - Returning to the live tail is an explicit state transition.
 - Load, ready, reconnect, and resync must not reset the viewport unless the
   user has explicitly returned to live tail or the current cursor is invalid.
-- Both turn-activity surfaces — the inline chat Turn-activity disclosure and the
-  dedicated Turns view — surface the page selector whenever the page directory
-  has loaded, not only when a turn spans multiple pages. A single-page turn
-  renders the selector disabled ("page 1 of 1") rather than omitting it, so the
-  pagination affordance is never threshold-gated into looking absent; ‹ / ›
-  enable only when a sealed older / newer page exists. (The Turns view reads the
-  same page-defaulted endpoint, so without the selector a long turn would show
-  only its last page there with no way back.)
+- The Turns view exposes a dedicated **Page dropdown** beside the turn selector.
+  It is present whenever a turn is selected; a single-page turn renders it
+  **disabled** ("Page 1 of 1") rather than omitting it, and a turn that crosses
+  the per-turn event seal enables it as a page picker (Page 1..N). The control is
+  never hidden — the pagination affordance stays visible even when there is
+  nothing to navigate to. (The Turns view reads the page-defaulted `/activity`
+  endpoint, so without this control a long turn would show only its last page
+  there with no way back.)
 
 ## Failure And Recovery
 
@@ -176,12 +176,10 @@ yanking the viewport away from a user reading history.
   to the latest turn. The retired `turn_<uuid>` public route form and the
   array-position "Turn N" label cannot reappear without failing
   `scripts/check-removed-chat-runtime.mjs`.
-- Both turn-activity surfaces — the inline chat disclosure and the dedicated
-  Turns view — always show the page selector: a single-page turn renders
-  "page 1 of 1" with both ‹ and › disabled, and a multi-page turn enables only
-  the directions that have a sealed page. The selector is not hidden when
-  `page_count` is 1. The shared `TurnActivityPager` component renders it on both
-  surfaces and the pure gate `frontend/src/turnActivityPager.ts` (tested in
-  `turnActivityPager.test.ts`) decides visibility/enablement, blocking a
-  regression to threshold-gated appearance or a selector that only exists in
-  chat.
+- The Turns view always shows the dedicated Page dropdown for a selected turn: a
+  single-page turn renders it disabled ("Page 1 of 1"); a multi-page turn lists
+  Page 1..N and selecting one re-reads that page via `?page=N`. The control is
+  not hidden when `page_count` is 1. The pure gate
+  `frontend/src/turnActivityPager.ts` (tested in `turnActivityPager.test.ts`)
+  owns the clamped current page, total page count, and disabled state — blocking
+  a regression to a threshold-hidden control.

@@ -30,6 +30,11 @@ export type TurnActivityPagerState = {
   // empty turn with no activity body to navigate) — never merely because the
   // turn happens to fit on a single page.
   visible: boolean;
+  // Clamped current page (>=1) and total page count (>=1). These drive the
+  // dedicated Page dropdown in the Turns view; they default to 1/1 so the
+  // control can render disabled ("Page 1 of 1") before the directory loads.
+  page: number;
+  pageCount: number;
   // Human label, e.g. "page 2 of 5". Empty when not visible.
   label: string;
   // Whether the ‹ (older) / › (newer) controls are actionable.
@@ -43,6 +48,8 @@ export type TurnActivityPagerState = {
 
 const HIDDEN: TurnActivityPagerState = {
   visible: false,
+  page: 1,
+  pageCount: 1,
   label: "",
   canPageOlder: false,
   canPageNewer: false,
@@ -65,6 +72,8 @@ export function turnActivityPagerState(
   const current = Math.min(Math.max(1, Math.floor(page)), totalPages);
   return {
     visible: true,
+    page: current,
+    pageCount: totalPages,
     label: `page ${current} of ${totalPages}`,
     canPageOlder: current > 1,
     canPageNewer: current < totalPages,

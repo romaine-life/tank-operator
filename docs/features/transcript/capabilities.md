@@ -97,14 +97,14 @@ Contract impact:
   returns the page directory and defaults to the last page; `?page=N` selects
   another. Page boundaries are durable `order_key` ranges, so a selected page is
   stable across reload and deep links.
-- The page selector is an always-present affordance, not a threshold-gated
-  control, and it lives on **both** turn-activity surfaces: the inline chat
-  Turn-activity disclosure and the dedicated Turns view (`RunTurnActivityScreen`,
-  the surface users open to inspect a turn). Both render the selector even for a
-  single-page turn (disabled "page 1 of 1"), so pagination never reads as absent
-  on a normal-length turn and a long turn is never silently capped to its last
-  page in the Turns view. The shared `TurnActivityPager` component renders it;
-  `frontend/src/turnActivityPager.ts` is the pure gate for visibility/arrows.
+- The page navigator is an always-present affordance, not a threshold-gated
+  control. It lives in the dedicated Turns view (`RunTurnActivityScreen`, the
+  surface users open to inspect a turn) as a **Page dropdown** beside the turn
+  selector: rendered even for a single-page turn (disabled "Page 1 of 1"), and a
+  page picker (Page 1..N) once a turn crosses the event seal. So pagination never
+  reads as absent on a normal-length turn, and a long turn is never silently
+  capped to its last page in the Turns view. `frontend/src/turnActivityPager.ts`
+  is the pure gate for the current page / total count / disabled state.
 - The fixed-size per-turn read that truncated long turns oldest-first is deleted
   end to end (the bounded `EventsForTurn` store method no longer exists); reads
   go through `EventsForTurnAfter` paged to exhaustion.
@@ -119,12 +119,11 @@ Evidence:
   + `TankTurnActiveWithDurableTerminal` guard the regression; `tank_turn_activity_event_count`
   / `tank_turn_activity_page_count` track long-turn frequency.
 - Frontend gate: `frontend/src/turnActivityPager.ts` +
-  `frontend/src/turnActivityPager.test.ts` prove the selector stays visible
-  (disabled) at a single page and enables ‹ / › only toward a sealed page — the
-  regression guard against threshold-gated appearance. The shared
-  `TurnActivityPager` component in `frontend/src/App.tsx` renders it on both the
-  inline chat disclosure (`RunTurnActivityGroup`) and the dedicated Turns view
-  (`RunTurnActivityScreen`).
+  `frontend/src/turnActivityPager.test.ts` prove the control stays visible
+  (disabled, "Page 1 of 1") at a single page and expose the clamped current page
+  + total count for the picker — the regression guard against a threshold-hidden
+  control. The Page dropdown is rendered by the Turns view
+  (`RunTurnActivityScreen`) in `frontend/src/App.tsx`.
 
 ## Context Compaction Notice
 

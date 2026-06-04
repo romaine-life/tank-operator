@@ -10,6 +10,24 @@ function info(page: number, pageCount: number): TurnActivityPageInfo {
   return { page, pageCount };
 }
 
+test("exposes clamped current page + total pageCount for the Page dropdown", () => {
+  let s = turnActivityPagerState(info(2, 3));
+  assert.equal(s.page, 2);
+  assert.equal(s.pageCount, 3);
+  s = turnActivityPagerState(info(9, 3)); // clamps above the top
+  assert.equal(s.page, 3);
+  assert.equal(s.pageCount, 3);
+  s = turnActivityPagerState(info(0, 3)); // clamps below the first
+  assert.equal(s.page, 1);
+  assert.equal(s.pageCount, 3);
+  s = turnActivityPagerState(info(1, 1));
+  assert.equal(s.page, 1);
+  assert.equal(s.pageCount, 1);
+  s = turnActivityPagerState(undefined); // default 1/1 so the dropdown can render disabled pre-load
+  assert.equal(s.page, 1);
+  assert.equal(s.pageCount, 1);
+});
+
 test("no page directory yet → pager hidden (nothing to show during load)", () => {
   const state = turnActivityPagerState(undefined);
   assert.equal(state.visible, false);
