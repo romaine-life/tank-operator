@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/kubeexec"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
@@ -586,11 +587,15 @@ func (s *appServer) handleStageLaunchAttachment(w http.ResponseWriter, r *http.R
 		writeError(w, http.StatusBadRequest, "ordinal must be an integer in [0, 32)")
 		return
 	}
-	turnID := strings.TrimSpace(r.URL.Query().Get("turn_id"))
-	if turnID == "" || !turnIDPattern.MatchString(turnID) {
-		writeError(w, http.StatusBadRequest, "turn_id is required and must match turn id syntax")
+	// Keyed by client_nonce (what the browser holds after create); the turn id
+	// is derived server-side the same way the create boundary and the runners
+	// do, so the frontend never has to replicate the (hashing) derivation.
+	clientNonce := strings.TrimSpace(r.URL.Query().Get("client_nonce"))
+	if clientNonce == "" || !turnIDPattern.MatchString(clientNonce) {
+		writeError(w, http.StatusBadRequest, "client_nonce is required and must match turn id syntax")
 		return
 	}
+	turnID := conversation.TurnIDForClientNonce(clientNonce)
 	name := strings.TrimSpace(r.URL.Query().Get("name"))
 	if name == "" {
 		writeError(w, http.StatusBadRequest, "missing name")

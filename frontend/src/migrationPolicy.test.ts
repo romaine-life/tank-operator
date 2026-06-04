@@ -552,7 +552,12 @@ test("startup transcript rows come from durable conversation events", () => {
   assert.equal(appSource.includes("CREATE_TIME_INITIAL_TURN_MODES"), true);
   assert.equal(appSource.includes("composeLaunchUserPrompt"), true);
   assert.equal(appSource.includes("seedTurnDeferredAtCreate"), true);
-  assert.match(appSource, /existing_user_message: true/);
+  // Attachment launches are durable (#865): the browser stages bytes to the
+  // launch-attachments endpoint and the backend reconciler dispatches the turn.
+  // The retired browser-owned phase two — wait-for-ready then a
+  // `existing_user_message` submit from the tab — must not come back.
+  assert.match(appSource, /launch-attachments\//);
+  assert.equal(appSource.includes("existing_user_message"), false);
   assert.match(appSource, /if \(seedTurnRequested && !seedTurnSubmittedAtCreate\) \{/);
   assert.equal(conversationReducerSource.includes('"session.status"'), true);
   assert.match(

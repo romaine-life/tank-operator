@@ -207,6 +207,33 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 				writeError(w, status, detail)
 				return
 			}
+			// Durable launch (#865): record the pending launch so the dispatch
+			// reconciler delivers the turn once the pod is Active and the browser
+			// has staged the attachment bytes — even if that browser is gone by
+			// then. The browser's only remaining job is the durable byte upload
+			// (PUT /launch-attachments); it no longer drives readiness or submit.
+			if s.pendingLaunch != nil {
+				runtime, _ := sdkProviderForMode(info.Mode)
+				turnID := conversation.TurnIDForClientNonce(initialTurn.ClientNonce)
+				if _, err := s.pendingLaunch.Register(r.Context(), pgstore.RegisterPendingLaunchRequest{
+					SessionScope:    s.sessionScope,
+					SessionID:       info.ID,
+					TurnID:          turnID,
+					ClientNonce:     initialTurn.ClientNonce,
+					OwnerEmail:      owner,
+					Runtime:         runtime,
+					SkillName:       initialTurn.SkillName,
+					BasePrompt:      initialTurn.Prompt,
+					DisplayText:     initialTurn.Prompt,
+					Model:           initialTurn.Model,
+					Effort:          initialTurn.Effort,
+					AttachmentCount: len(initialTurn.DisplayAttachments),
+				}); err != nil {
+					s.rollbackCreatedSession(r.Context(), owner, info.ID, "register pending launch", err.Error())
+					writeError(w, http.StatusInternalServerError, "register launch: "+err.Error())
+					return
+				}
+			}
 		} else {
 			if _, status, detail := s.enqueueSDKTurn(r.Context(), owner, info.ID, sdkTurnRequest{
 				ClientNonce:        initialTurn.ClientNonce,
