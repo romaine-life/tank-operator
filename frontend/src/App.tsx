@@ -8556,7 +8556,6 @@ function RunTurnActivityScreen({
                 aria-label="Select activity page"
               >
                 <TurnActivityPageOptionLabel parts={selectedPageOptionParts} />
-                <SelectValue className="run-turn-view-page-native-value" />
               </SelectTrigger>
               <SelectContent
                 className="run-turn-view-select-menu run-turn-view-page-select-menu"
