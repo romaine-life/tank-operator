@@ -1,0 +1,148 @@
+package main
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+)
+
+func TestComposeLaunchDispatchPrompt(t *testing.T) {
+	cases := []struct {
+		name      string
+		skill     string
+		base      string
+		paths     []string
+		want      string
+		skillTurn bool
+	}{
+		{
+			name: "skill with attachments", skill: "test", base: "do it",
+			paths:     []string{"/workspace/.attachments/turn_x-0-a.zip", "/workspace/.attachments/turn_x-1-b.png"},
+			want:      "/test\n\ndo it\n\nAttachments:\n- /workspace/.attachments/turn_x-0-a.zip\n- /workspace/.attachments/turn_x-1-b.png",
+			skillTurn: true,
+		},
+		{
+			name: "no skill with attachments", skill: "", base: "compare",
+			paths: []string{"/workspace/.attachments/turn_x-0-a.png"},
+			want:  "compare\n\nAttachments:\n- /workspace/.attachments/turn_x-0-a.png",
+		},
+		{
+			name: "skill no attachments", skill: "test", base: "go",
+			want: "/test\n\ngo", skillTurn: true,
+		},
+		{
+			name: "skill empty base with attachments", skill: "test", base: "",
+			paths:     []string{"/workspace/.attachments/turn_x-0-a.png"},
+			want:      "/test\n\nAttachments:\n- /workspace/.attachments/turn_x-0-a.png",
+			skillTurn: true,
+		},
+		{
+			name: "skill empty base no attachments", skill: "test", base: "",
+			want: "/test", skillTurn: true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := composeLaunchDispatchPrompt(tc.skill, tc.base, tc.paths)
+			if got != tc.want {
+				t.Fatalf("prompt =\n%q\nwant\n%q", got, tc.want)
+			}
+			// Whatever we compose for a skill launch must satisfy the gate
+			// enqueueSDKTurn enforces, or the dispatch would 400.
+			if tc.skillTurn && !promptMatchesSkillTrigger("claude", tc.skill, got) {
+				t.Fatalf("composed prompt does not match skill trigger: %q", got)
+			}
+		})
+	}
+}
+
+func TestProcessPendingLaunchesFailsAtAttemptCap(t *testing.T) {
+	// No pods registered, so GetByOwner fails (session unresolvable) — a
+	// transient error. With AttemptCount at the cap, the reconciler must fail
+	// the launch durably and emit turn.command_failed rather than retry forever.
+	app := testTurnsApp(t, &recordingSessionBus{})
+	app.sessionEvents = &recordingSessionEventStore{}
+	fake := &fakePendingLaunchStore{claimRows: []pgstore.PendingLaunchTurn{{
+		TankSessionID: "523", SessionID: "523", TurnID: "turn_x", ClientNonce: "x",
+		OwnerEmail: "user@example.com", Runtime: "claude", AttemptCount: maxLaunchDispatchAttempts,
+	}}}
+	app.pendingLaunch = fake
+
+	if err := app.processPendingLaunches(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("processPendingLaunches: %v", err)
+	}
+	if fake.failedTurn != "turn_x" {
+		t.Fatalf("failed turn = %q, want turn_x", fake.failedTurn)
+	}
+	if !strings.HasPrefix(fake.failReason, "launch_dispatch_failed") {
+		t.Fatalf("fail reason = %q, want launch_dispatch_failed prefix", fake.failReason)
+	}
+	upserts := app.sessionEvents.(*recordingSessionEventStore).upserts
+	var sawCommandFailed bool
+	for _, ev := range upserts {
+		if ev["type"] == "turn.command_failed" && ev["turn_id"] == "turn_x" {
+			sawCommandFailed = true
+		}
+	}
+	if !sawCommandFailed {
+		t.Fatalf("no turn.command_failed emitted for the stranded launch; upserts=%v", upserts)
+	}
+}
+
+func TestProcessStaleLaunchesFailsStuckLaunches(t *testing.T) {
+	// A launch still awaiting_bytes long past the deadline (the browser never
+	// finished staging) must be failed durably with turn.command_failed so the
+	// row self-cleans and the SPA stops showing it pending.
+	app := testTurnsApp(t, &recordingSessionBus{})
+	app.sessionEvents = &recordingSessionEventStore{}
+	fake := &fakePendingLaunchStore{staleRows: []pgstore.PendingLaunchTurn{{
+		TankSessionID: "523", SessionID: "523", TurnID: "turn_stale", ClientNonce: "stale",
+		OwnerEmail: "user@example.com", Runtime: "claude", Status: pgstore.PendingLaunchAwaitingBytes,
+	}}}
+	app.pendingLaunch = fake
+
+	if err := app.processStaleLaunches(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("processStaleLaunches: %v", err)
+	}
+	if fake.failedTurn != "turn_stale" {
+		t.Fatalf("failed turn = %q, want turn_stale", fake.failedTurn)
+	}
+	if !strings.HasPrefix(fake.failReason, "launch_never_completed") {
+		t.Fatalf("fail reason = %q, want launch_never_completed prefix", fake.failReason)
+	}
+	upserts := app.sessionEvents.(*recordingSessionEventStore).upserts
+	var sawCommandFailed bool
+	for _, ev := range upserts {
+		if ev["type"] == "turn.command_failed" && ev["turn_id"] == "turn_stale" {
+			sawCommandFailed = true
+		}
+	}
+	if !sawCommandFailed {
+		t.Fatalf("no turn.command_failed emitted for the stale launch; upserts=%v", upserts)
+	}
+}
+
+func TestProcessPendingLaunchesRetriesBelowCap(t *testing.T) {
+	// Same unresolvable session, but below the attempt cap: the reconciler
+	// must leave it for retry (no durable fail, no command_failed).
+	app := testTurnsApp(t, &recordingSessionBus{})
+	app.sessionEvents = &recordingSessionEventStore{}
+	fake := &fakePendingLaunchStore{claimRows: []pgstore.PendingLaunchTurn{{
+		TankSessionID: "523", SessionID: "523", TurnID: "turn_x", ClientNonce: "x",
+		OwnerEmail: "user@example.com", Runtime: "claude", AttemptCount: 1,
+	}}}
+	app.pendingLaunch = fake
+
+	if err := app.processPendingLaunches(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("processPendingLaunches: %v", err)
+	}
+	if fake.failedTurn != "" {
+		t.Fatalf("launch failed below attempt cap (turn %q); want retry", fake.failedTurn)
+	}
+	if n := len(app.sessionEvents.(*recordingSessionEventStore).upserts); n != 0 {
+		t.Fatalf("emitted %d events on a retryable failure, want 0", n)
+	}
+}

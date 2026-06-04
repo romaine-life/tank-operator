@@ -4,10 +4,8 @@
 // before; this is a pure structural move.
 
 import {
-  ActivityIcon,
-  FolderIcon,
+  EllipsisVerticalIcon,
   MonitorIcon,
-  MoreHorizontalIcon,
   XIcon,
 } from "lucide-react";
 import { ProviderIcon } from "../providerIcons";
@@ -134,22 +132,18 @@ function PortfolioWorkspaceScene() {
           <div className="run-header-title">
             <button className="run-header-name-btn" type="button">design-showcase</button>
           </div>
+          {/* All session views (Turns / Background / Files) and actions
+              (Settings / Help) collapse into the single overflow control, so
+              the header stays a clean title + ⋮ strip. */}
           <nav className="run-tabs" aria-label="Session actions">
-            <button className="run-tab run-turns-trigger" type="button" aria-pressed={false} disabled title="Turns are available once the agent has turn activity">
-              <ActivityIcon className="run-tab-icon" aria-hidden="true" />
-              <span>Turns</span>
-            </button>
-            <button className="run-tab run-shell-tasks-trigger" type="button" aria-pressed={false} title="Background">
-              <ActivityIcon className="run-tab-icon" aria-hidden="true" />
-              <span>Background</span>
-              <span className="run-shell-tasks-count" data-active="true" aria-label="2 background items">2</span>
-            </button>
-            <button className="run-tab" type="button">
-              <FolderIcon className="run-tab-icon" strokeWidth={1.8} aria-hidden="true" />
-              <span>Files</span>
-            </button>
-            <button className="run-tab run-tab-more run-tab-active" type="button" aria-pressed={true} title="More">
-              <MoreHorizontalIcon className="run-tab-icon" aria-hidden="true" />
+            <button
+              className="run-tab run-tab-more"
+              type="button"
+              aria-label="More session actions"
+              aria-pressed={false}
+              title="More"
+            >
+              <EllipsisVerticalIcon className="run-tab-icon" aria-hidden="true" />
             </button>
           </nav>
         </header>

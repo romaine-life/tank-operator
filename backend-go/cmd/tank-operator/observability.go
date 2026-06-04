@@ -575,6 +575,27 @@ var scheduledWakeupsDue = promauto.NewGauge(prometheus.GaugeOpts{
 	Help: "Durable scheduled wakeup rows in this scope that are due and not terminal.",
 })
 
+var backgroundTaskWakeRegisterTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_background_task_wake_register_total",
+		Help: "Background-task-completion wake registrations accepted by the orchestrator, labeled by provider and bounded result.",
+	},
+	[]string{"provider", "result"},
+)
+
+var backgroundTaskWakeFireTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_background_task_wake_fire_total",
+		Help: "Durable background-task wake fire attempts, labeled by provider and bounded result.",
+	},
+	[]string{"provider", "result"},
+)
+
+var backgroundTaskWakesDue = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "tank_background_task_wakes_due",
+	Help: "Durable background-task wake rows in this scope that are due and not terminal.",
+})
+
 var messageLinkShareTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_message_link_share_total",
@@ -627,6 +648,27 @@ func setScheduledWakeupsDue(count int) {
 	scheduledWakeupsDue.Set(float64(count))
 }
 
+func recordBackgroundTaskWakeRegister(provider, result string) {
+	backgroundTaskWakeRegisterTotal.WithLabelValues(
+		sessionRuntimeConfigProviderLabel(provider),
+		backgroundTaskWakeRegisterResultLabel(result),
+	).Inc()
+}
+
+func recordBackgroundTaskWakeFire(provider, result string) {
+	backgroundTaskWakeFireTotal.WithLabelValues(
+		sessionRuntimeConfigProviderLabel(provider),
+		backgroundTaskWakeFireResultLabel(result),
+	).Inc()
+}
+
+func setBackgroundTaskWakesDue(count int) {
+	if count < 0 {
+		count = 0
+	}
+	backgroundTaskWakesDue.Set(float64(count))
+}
+
 var strandedLaunchSweptTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_stranded_launch_swept_total",
@@ -637,6 +679,30 @@ var strandedLaunchSweptTotal = promauto.NewCounterVec(
 
 func recordStrandedLaunchSwept(result string) {
 	strandedLaunchSweptTotal.WithLabelValues(result).Inc()
+}
+
+var launchAttachmentStagedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_launch_attachment_staged_total",
+		Help: "Durable launch-attachment uploads staged, labeled by the launch status after staging (awaiting_bytes or ready).",
+	},
+	[]string{"status"},
+)
+
+func recordLaunchAttachmentStaged(status string) {
+	launchAttachmentStagedTotal.WithLabelValues(status).Inc()
+}
+
+var launchDispatchTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_launch_dispatch_total",
+		Help: "Durable launch dispatch reconciler outcomes, labeled by bounded result (dispatched, retry, failed, fail_mark_error, fail_event_error).",
+	},
+	[]string{"result"},
+)
+
+func recordLaunchDispatch(result string) {
+	launchDispatchTotal.WithLabelValues(result).Inc()
 }
 
 func recordMessageLinkShare(operation, result string) {
@@ -788,6 +854,24 @@ func scheduledWakeupRegisterResultLabel(result string) string {
 func scheduledWakeupFireResultLabel(result string) string {
 	switch result {
 	case "ok", "session_not_found", "session_not_active", "enqueue_failed", "store_error", "failed":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func backgroundTaskWakeRegisterResultLabel(result string) string {
+	switch result {
+	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "manager_unavailable", "store_error":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func backgroundTaskWakeFireResultLabel(result string) string {
+	switch result {
+	case "ok", "deferred_needs_input", "session_not_found", "session_not_active", "enqueue_failed", "store_error", "failed":
 		return result
 	default:
 		return "other"

@@ -349,10 +349,14 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes('data-kind="turn-thinking"'), true);
   assert.equal(appSource.includes("function TurnsTab"), true);
   assert.equal(appSource.includes("openTurnPage"), true);
+  // Turns stays a standalone tab only in the read-only public view, where the
+  // overflow menu is not rendered; the normal view folds it into the menu.
   assert.match(appSource, /<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{!turnsAvailable\}/);
+  // The pre-session home view exposes Turns through the overflow menu as a
+  // disabled, no-op entry until a session exists.
   assert.match(
     appSource,
-    /<TurnsTab\n\s+active=\{false\}\n\s+disabled\n\s+onOpen=\{\(\) => undefined\}/,
+    /turns=\{\{\n\s+active: false,\n\s+disabled: true,\n\s+title: "Turns are available once the agent has turn activity",\n\s+onOpen: \(\) => undefined,/,
   );
   assert.match(appSource, /if \(activeTab !== "turns" \|\| turnsAvailable\) return;/);
   assert.equal(indexCssSource.includes(".run-turn-view"), true);
@@ -552,7 +556,12 @@ test("startup transcript rows come from durable conversation events", () => {
   assert.equal(appSource.includes("CREATE_TIME_INITIAL_TURN_MODES"), true);
   assert.equal(appSource.includes("composeLaunchUserPrompt"), true);
   assert.equal(appSource.includes("seedTurnDeferredAtCreate"), true);
-  assert.match(appSource, /existing_user_message: true/);
+  // Attachment launches are durable (#865): the browser stages bytes to the
+  // launch-attachments endpoint and the backend reconciler dispatches the turn.
+  // The retired browser-owned phase two — wait-for-ready then a
+  // `existing_user_message` submit from the tab — must not come back.
+  assert.match(appSource, /launch-attachments\//);
+  assert.equal(appSource.includes("existing_user_message"), false);
   assert.match(appSource, /if \(seedTurnRequested && !seedTurnSubmittedAtCreate\) \{/);
   assert.equal(conversationReducerSource.includes('"session.status"'), true);
   assert.match(
@@ -701,15 +710,18 @@ test("styleguide catalog tracks current home and sidebar surfaces", () => {
 test("files tab is gated until the session container is available", () => {
   assert.equal(appSource.includes("sessionFilesAvailable(session)"), true);
   assert.match(appSource, /if \(tab === "files" && !filesAvailable\) return;/);
-  assert.match(appSource, /disabled=\{!filesAvailable\}/);
+  // Files is now a row in the run-header overflow menu; its availability gate
+  // rides the menu-tab descriptor rather than a standalone tab button.
+  assert.match(appSource, /files=\{\{[\s\S]{0,120}disabled: !filesAvailable,/);
 });
 
 test("session bug labels are available at create time", () => {
-  assert.equal(appSource.includes("const [homeBugLabel, setHomeBugLabel]"), true);
+  assert.equal(appSource.includes("const [homeBugLabels, setHomeBugLabels]"), true);
   assert.equal(appSource.includes("bug_label: bugLabel"), true);
+  assert.equal(appSource.includes("bug_labels: homeBugLabels"), true);
   assert.equal(appSource.includes("<SessionBugLabelPicker"), false);
-  assert.equal(appSource.includes("bugLabelControl={"), true);
-  assert.equal(sessionBarCapabilitiesSource.includes("splash composer tool strip stages the label"), true);
+  assert.equal(appSource.includes("bugLabelControl={"), false);
+  assert.equal(sessionBarCapabilitiesSource.includes("splash setup panel stages bug labels"), true);
 });
 
 test("read-only cross-scope sessions keep an explicit composer affordance", () => {
@@ -735,16 +747,21 @@ test("background page uses stacked full-width sections instead of a side pane", 
 });
 
 test("background tab stays discoverable before background entries exist", () => {
-  const backgroundLedgerMatch = appSource.match(
-    /function BackgroundLedger\([\s\S]*?\n}\n\nfunction BackgroundMeta/,
-  );
-  assert.ok(backgroundLedgerMatch, "BackgroundLedger body should be present");
-  assert.equal(backgroundLedgerMatch[0]!.includes("entries.length === 0"), false);
+  // Background is a permanent row in the run-header overflow menu, so the entry
+  // point renders unconditionally — there is no entries.length === 0 gate that
+  // could hide it before any background work exists.
   assert.match(appSource, /<span>Background<\/span>/);
-  assert.match(appSource, /disabled\?: boolean;/);
+  assert.equal(appSource.includes("function BackgroundLedger"), false);
+  // The session view feeds the live count straight through; an empty ledger
+  // shows "0" rather than dropping the row.
   assert.match(
     appSource,
-    /<BackgroundLedger\n\s+entries=\{\[\]\}\n\s+active=\{false\}\n\s+onOpen=\{\(\) => undefined\}\n\s+disabled\n\s+title="Background activity is available once the session starts"/,
+    /background=\{\{\n\s+active: activeTab === "background",\n\s+count: backgroundLedgerEntries\.length,/,
+  );
+  // The pre-session home view exposes Background as a disabled, no-op entry.
+  assert.match(
+    appSource,
+    /background=\{\{\n\s+active: false,\n\s+count: 0,\n\s+disabled: true,\n\s+title: "Background activity is available once the session starts",/,
   );
 });
 

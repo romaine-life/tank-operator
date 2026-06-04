@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   canonicalEventsForClaudeMessage,
+  claudeTerminalBackgroundTask,
   type ClaudeTurnContext,
 } from "./claude.js";
 import type { Config } from "../config.js";
@@ -20,6 +21,60 @@ function assertTankEventFixture(event: TankConversationEvent, label = event.type
   const stamped = stampTankEvent(event);
   assert.equal(isTankConversationEvent(stamped), true, `${label} should satisfy the Tank envelope`);
 }
+
+// claudeTerminalBackgroundTask drives the idle background-task wake. It must
+// fire only for NATURAL terminals (the task finished on its own) and stay
+// silent for user-initiated stops, lifecycle starts, and id-less frames — the
+// natural/user split is the load-bearing assumption about SDK status strings.
+test("claudeTerminalBackgroundTask wakes on natural terminals only", () => {
+  const note = (over: Record<string, unknown>) =>
+    ({ type: "system", subtype: "task_notification", task_id: "task-1", ...over }) as never;
+
+  for (const status of ["completed", "failed", "exited"]) {
+    const out = claudeTerminalBackgroundTask(note({ status }));
+    assert.ok(out, `${status} should be a wake`);
+    assert.equal(out?.taskID, "task-1");
+    assert.equal(out?.status, status);
+  }
+
+  for (const status of ["stopped", "cancelled", "canceled"]) {
+    assert.equal(
+      claudeTerminalBackgroundTask(note({ status })),
+      null,
+      `${status} is a user-initiated stop and must not wake the session`,
+    );
+  }
+
+  // lifecycle start, missing task id, and non-lifecycle messages never wake.
+  assert.equal(
+    claudeTerminalBackgroundTask({
+      type: "system",
+      subtype: "task_started",
+      task_id: "task-x",
+      status: "running",
+    } as never),
+    null,
+  );
+  assert.equal(claudeTerminalBackgroundTask(note({ status: "completed", task_id: "" })), null);
+  assert.equal(claudeTerminalBackgroundTask({ type: "assistant" } as never), null);
+});
+
+test("claudeTerminalBackgroundTask carries human-meaningful terminal fields", () => {
+  const out = claudeTerminalBackgroundTask({
+    type: "system",
+    subtype: "task_notification",
+    task_id: "task-2",
+    status: "failed",
+    description: "Wait for mcp-glimmung CI",
+    summary: "2 checks failed",
+    last_tool_name: "Bash",
+    error: "boom",
+  } as never);
+  assert.equal(out?.description, "Wait for mcp-glimmung CI");
+  assert.equal(out?.summary, "2 checks failed");
+  assert.equal(out?.lastToolName, "Bash");
+  assert.equal(out?.error, "boom");
+});
 
 function turn(fields: Partial<ClaudeTurnContext> = {}): ClaudeTurnContext {
   return {

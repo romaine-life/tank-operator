@@ -141,6 +141,75 @@ function runnerConfig() {
   };
 }
 
+// Background-task wake: a run_in_background task finishing while the session is
+// idle must register a durable backend wake so the agent is re-invoked (the
+// runner registers; the orchestrator owns the fire decision). The runner only
+// adds the task id to firedBackgroundTaskWakes after every gate passes, so the
+// Set is a faithful proxy for "registration was attempted". operatorInternalURL
+// is empty in runnerConfig(), so registerBackgroundTaskWake returns false
+// without any network call.
+test("maybeRegisterBackgroundTaskWake registers an idle natural terminal exactly once", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    activeTurn: unknown;
+    firedBackgroundTaskWakes: Set<string>;
+  };
+  runner.activeTurn = null;
+  const terminal = {
+    type: "system",
+    subtype: "task_notification",
+    task_id: "task-idle",
+    status: "completed",
+    uuid: "u-1",
+  };
+
+  await runner.maybeRegisterBackgroundTaskWake(terminal);
+  assert.equal(runner.firedBackgroundTaskWakes.has("task-idle"), true);
+
+  // A repeated terminal frame for the same task must not re-register.
+  await runner.maybeRegisterBackgroundTaskWake(terminal);
+  assert.equal(runner.firedBackgroundTaskWakes.size, 1);
+});
+
+test("maybeRegisterBackgroundTaskWake skips when a turn is active", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    activeTurn: unknown;
+    firedBackgroundTaskWakes: Set<string>;
+  };
+  runner.activeTurn = { turnID: "turn-active", clientNonce: "turn-active", terminalEmitted: false };
+  await runner.maybeRegisterBackgroundTaskWake({
+    type: "system",
+    subtype: "task_notification",
+    task_id: "task-bound",
+    status: "completed",
+  });
+  // The active turn receives the bound shell_task.exited in-turn; no wake needed.
+  assert.equal(runner.firedBackgroundTaskWakes.has("task-bound"), false);
+});
+
+test("maybeRegisterBackgroundTaskWake ignores user stops and lifecycle starts", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    activeTurn: unknown;
+    firedBackgroundTaskWakes: Set<string>;
+  };
+  runner.activeTurn = null;
+  await runner.maybeRegisterBackgroundTaskWake({
+    type: "system",
+    subtype: "task_notification",
+    task_id: "task-cancel",
+    status: "cancelled",
+  });
+  await runner.maybeRegisterBackgroundTaskWake({
+    type: "system",
+    subtype: "task_started",
+    task_id: "task-start",
+    status: "running",
+  });
+  assert.equal(runner.firedBackgroundTaskWakes.size, 0);
+});
+
 const fixturesPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../schemas/tank-conversation-event.fixtures.json",

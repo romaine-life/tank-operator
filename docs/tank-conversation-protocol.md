@@ -626,6 +626,26 @@ rows into Background -> Scheduled entries so a scheduled continuation is
 visually confirmable even when its original tool row has scrolled out of the
 loaded transcript window.
 
+A Claude background task (`run_in_background`) that finishes while the session
+has no active turn is resumed the same backend-owned way. A task-lifecycle SDK
+frame never starts a turn, so without this the base Bash tool's "re-invokes you
+when it exits" follow-up is silently stranded once the launching turn has ended.
+The agent-runner registers the natural terminal (`completed`/`failed`/`exited` —
+never a user-cancelled `stopped`/`cancelled`) through
+`POST /api/internal/sessions/{session_id}/background-task-wakes`. The task id is
+the idempotency key: the durable row `session_background_task_wakes` is keyed by
+`sha256(tank_session_id, provider, task_id)`, so an SDK frame repeat or a runner
+restart cannot double-wake. The orchestrator claims due rows and — unlike a
+scheduled wakeup — re-checks session liveness before firing: it skips and
+retries while the session is awaiting an AskUserQuestion answer (`needs_input`),
+so the wake never clobbers a pending question; it fails the wake durably if the
+session is no longer `Active`; otherwise it writes the normal
+`user_message.created` / `turn.submitted` boundary events and publishes
+`submit_turn` with `source=background-task`. Because each enqueue stamps a fresh
+`order_key` (`event_id` is indexed, not unique, so separate enqueues do not
+collapse), the durable wake row — not the event ledger — is what makes the wake
+fire exactly once.
+
 The UI consumes durable transcript delivery from
 `GET /api/sessions/{session_id}/events`. The stream emits `transcript-rows`
 SSE events whose payload is `{order_key, rows}` from `session_transcript_rows`;

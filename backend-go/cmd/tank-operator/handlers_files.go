@@ -3,18 +3,27 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/kubeexec"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
+
+// maxLaunchAttachments bounds the ordinal a launch-attachment upload may
+// target. Matches normalizeDisplayAttachments' 32-attachment cap.
+const maxLaunchAttachments = 32
 
 const (
 	maxFileBytes = 262144  // 256 KiB
@@ -552,6 +561,103 @@ func (s *appServer) handleUploadFile(w http.ResponseWriter, r *http.Request) {
 		"abs_path": destPath,
 		"name":     name,
 		"size":     len(data),
+	})
+}
+
+// handleStageLaunchAttachment durably stages one attachment's bytes for an
+// attachment-backed deferred launch (#865). Unlike handleUploadFile, which
+// writes straight into the live pod, the bytes land in Postgres keyed by the
+// launch turn id + ordinal, so the launch survives a browser that goes away
+// before the pod is ready; the dispatch reconciler materializes them into the
+// workspace when it dispatches. Targets the launch by `turn_id` (returned by
+// the create boundary) since one session can hold at most one pending launch
+// but the row is keyed by turn.
+func (s *appServer) handleStageLaunchAttachment(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "missing session_id")
+		return
+	}
+	ordinal, err := strconv.Atoi(strings.TrimSpace(r.PathValue("ordinal")))
+	if err != nil || ordinal < 0 || ordinal >= maxLaunchAttachments {
+		writeError(w, http.StatusBadRequest, "ordinal must be an integer in [0, 32)")
+		return
+	}
+	// Keyed by client_nonce (what the browser holds after create); the turn id
+	// is derived server-side the same way the create boundary and the runners
+	// do, so the frontend never has to replicate the (hashing) derivation.
+	clientNonce := strings.TrimSpace(r.URL.Query().Get("client_nonce"))
+	if clientNonce == "" || !turnIDPattern.MatchString(clientNonce) {
+		writeError(w, http.StatusBadRequest, "client_nonce is required and must match turn id syntax")
+		return
+	}
+	turnID := conversation.TurnIDForClientNonce(clientNonce)
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "missing name")
+		return
+	}
+	if s.pendingLaunch == nil {
+		writeError(w, http.StatusServiceUnavailable, "launch attachment staging unavailable")
+		return
+	}
+	owner := user.OwnerEmail()
+	// Ownership gate. Staging does not require the pod (bytes go to Postgres),
+	// so GetByOwner — not resolveSessionPod — is the right check: the pod may
+	// still be coming up while the browser uploads.
+	if _, err := s.mgr.GetByOwner(r.Context(), owner, sessionID); err != nil {
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
+	launch, err := s.pendingLaunch.Get(r.Context(), storageKey, turnID)
+	if errors.Is(err, pgstore.ErrPendingLaunchNotFound) {
+		writeError(w, http.StatusNotFound, "no pending launch for that turn")
+		return
+	}
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "lookup pending launch: "+err.Error())
+		return
+	}
+	// Reject ordinals beyond the declared attachment count so a stray upload
+	// can't push the staged-row count to the ready threshold with wrong slots.
+	if ordinal >= launch.AttachmentCount {
+		writeError(w, http.StatusBadRequest, "ordinal exceeds the launch attachment count")
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, maxRawBytes))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	status, err := s.pendingLaunch.StageAttachment(r.Context(), storageKey, turnID, pgstore.LaunchAttachmentBlob{
+		Ordinal:     ordinal,
+		Name:        name,
+		ContentType: r.Header.Get("Content-Type"),
+		Size:        int64(len(data)),
+		Bytes:       data,
+	})
+	switch {
+	case errors.Is(err, pgstore.ErrPendingLaunchNotFound):
+		writeError(w, http.StatusNotFound, "no pending launch for that turn")
+		return
+	case errors.Is(err, pgstore.ErrPendingLaunchNotAcceptingBytes):
+		writeError(w, http.StatusConflict, "launch is no longer accepting attachments")
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, "stage attachment: "+err.Error())
+		return
+	}
+	recordLaunchAttachmentStaged(string(status))
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":  string(status),
+		"ordinal": ordinal,
+		"size":    len(data),
+		"turn_id": turnID,
 	})
 }
 

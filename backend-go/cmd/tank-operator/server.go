@@ -93,10 +93,25 @@ type appServer struct {
 	// turn boundary instead of holding process-local timers in a session pod.
 	scheduledWakeups scheduledWakeupStore
 
+	// backgroundTaskWakes is the durable backend-owned store for "a Claude
+	// background task finished while the session was idle" wakes. The runner
+	// registers the natural terminal; the orchestrator claims due rows and
+	// feeds them through the normal SDK turn boundary (source=background-task)
+	// instead of relying on a task-lifecycle frame that never starts a turn.
+	backgroundTaskWakes backgroundTaskWakeStore
+
 	// controlActions is the durable audit ledger for privileged cross-system
 	// effects initiated by session pods through MCP servers. It backs the
 	// user-facing "what changed main, from which session?" trace.
 	controlActions controlActionStore
+
+	// pendingLaunch is the durable store for attachment-backed deferred
+	// launches (#865): the create boundary registers the launch, the
+	// launch-attachments upload endpoint stages bytes, and the dispatch
+	// reconciler claims ready rows, materializes the bytes into the pod, and
+	// publishes submit_turn — so the launch survives a browser that goes away
+	// after create. nil in stub mode / when pgPool is unset.
+	pendingLaunch pendingLaunchStore
 
 	// imageOverrides backs the test-slot session-image repoint flow
 	// (docs/testing.md): the internal /session-scopes/{scope}/image-override
@@ -142,6 +157,26 @@ type scheduledWakeupStore interface {
 	MarkFired(context.Context, string, string) error
 	MarkFailed(context.Context, string, string) error
 	ScheduledDueCount(context.Context, time.Time) (int, error)
+}
+
+type pendingLaunchStore interface {
+	Register(context.Context, pgstore.RegisterPendingLaunchRequest) (pgstore.PendingLaunchTurn, error)
+	StageAttachment(context.Context, string, string, pgstore.LaunchAttachmentBlob) (pgstore.PendingLaunchStatus, error)
+	ClaimReady(context.Context, time.Time, int, time.Duration) ([]pgstore.PendingLaunchTurn, error)
+	FindStale(context.Context, time.Time, int) ([]pgstore.PendingLaunchTurn, error)
+	LoadAttachments(context.Context, string, string) ([]pgstore.LaunchAttachmentBlob, error)
+	MarkDispatched(context.Context, string, string, string) error
+	MarkFailed(context.Context, string, string, string) error
+	Get(context.Context, string, string) (pgstore.PendingLaunchTurn, error)
+}
+
+type backgroundTaskWakeStore interface {
+	Register(context.Context, pgstore.RegisterBackgroundTaskWakeRequest) (pgstore.BackgroundTaskWake, error)
+	ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.BackgroundTaskWake, error)
+	MarkFired(context.Context, string, string) error
+	MarkFailed(context.Context, string, string) error
+	Release(context.Context, string) error
+	DueCount(context.Context, time.Time) (int, error)
 }
 
 type controlActionStore interface {
@@ -285,6 +320,12 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/files/walk", s.handleWalkFiles)
 	mux.HandleFunc("POST /api/sessions/{session_id}/files/upload", s.handleUploadFile)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/files/content", s.handleWriteFile)
+	// Durable staging for an attachment-backed deferred launch (#865): the
+	// bytes land in Postgres keyed by the launch turn id + ordinal, and the
+	// dispatch reconciler writes them into the pod. Unlike files/upload (which
+	// writes straight into the live pod), this survives a browser that goes
+	// away before the pod is ready.
+	mux.HandleFunc("PUT /api/sessions/{session_id}/launch-attachments/{ordinal}", s.handleStageLaunchAttachment)
 	mux.HandleFunc("GET /api/sessions/{session_id}/skills", s.handleListSkills)
 	mux.HandleFunc("GET /api/sessions/{session_id}/mcp-servers", s.handleListMCPServers)
 	mux.HandleFunc("GET /api/sessions/{session_id}/mcp-tools", s.handleListMCPTools)
@@ -336,6 +377,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/turns/{turn_id}/terminal", s.handleInternalSessionTurnTerminal)
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes", s.handleInternalRegisterBackgroundTaskWake)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)

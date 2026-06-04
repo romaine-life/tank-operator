@@ -690,7 +690,14 @@ declares one rule group per subsystem:
   outcomes, and backend due-wakeup backlog. Pending, fired, and failed
   scheduled wakeups are also user-visible from Background -> Scheduled via
   the backend scheduled-wakeup read model, so confirmation does not depend on
-  runner logs.
+  runner logs. Background-task-completion wakes (a `run_in_background` task
+  finishing while the session is idle) are counted the same way:
+  `tank_runner_background_task_wake_total{result}` on the runner and
+  `tank_background_task_wake_register_total` /
+  `tank_background_task_wake_fire_total` (+ the `tank_background_task_wakes_due`
+  gauge) on the orchestrator. `TankBackgroundTaskWakeFireFailing` pages when a
+  registered wake errors on fire — a silent stranding the Agent Runners contract
+  counts.
 - **Session spawn**: any single-spawn outlier above 60s in the trailing
   hour. Backed by recording rules
   `tank:session_pod_spawn_seconds:p50_24h`,

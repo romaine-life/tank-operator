@@ -29,6 +29,7 @@ import {
   canonicalEventsForClaudeMessage,
   claudeQuestionsToTankShape,
   claudeTaskIdentifiers,
+  claudeTerminalBackgroundTask,
   isClaudeTaskLifecycleMessage,
   startsClaudeTurn,
   type ClaudeProviderEvent,
@@ -58,6 +59,7 @@ import {
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
+  backgroundTaskWakeTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
   interruptOutcomeTotal,
@@ -76,6 +78,7 @@ import {
 } from "./metrics.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js";
+import { registerBackgroundTaskWake } from "../../runner-shared/backgroundTaskWake.js";
 
 // Pull a single dispatch out as a free function so the session-bus publish
 // contract is testable without spinning up a Runner. The sink only accepts
@@ -475,6 +478,12 @@ export class Runner {
   // late frames still land on the durable session transcript.
   private readonly backgroundTaskTurns = new Map<string, ClaudeTurnContext>();
   private readonly backgroundToolUseTurns = new Map<string, ClaudeTurnContext>();
+  // Task ids we've already registered a background-task wake for this process,
+  // so a repeated terminal frame for the same task does not re-POST. The
+  // backend Register is idempotent (ON CONFLICT wake_id), so this Set is a
+  // re-POST optimization, not the correctness boundary (it is intentionally
+  // lost on runner restart, like the other in-process task maps above).
+  private readonly firedBackgroundTaskWakes = new Set<string>();
   private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
   // Model + effort are pinned at pod boot from the first submit_turn
@@ -751,6 +760,8 @@ export class Runner {
     if (wakeup) {
       await this.registerWakeup(wakeup, activeTurn?.turnID ?? "");
     }
+
+    await this.maybeRegisterBackgroundTaskWake(providerEvent);
   }
 
   private async failTurnForProviderRateLimit(
@@ -1588,6 +1599,31 @@ export class Runner {
     } catch (err) {
       scheduledWakeupRegisterTotal.labels("failed").inc();
       console.error("scheduled wakeup register failed:", err);
+    }
+  }
+
+  // maybeRegisterBackgroundTaskWake closes the silent-stranding gap where a
+  // run_in_background task finishes while the session is idle: a task-lifecycle
+  // SDK frame never starts a turn, so without this the "re-invokes you when it
+  // exits" follow-up is lost. We register a durable backend wake on a NATURAL
+  // terminal; the orchestrator owns the fire decision (Active + not
+  // awaiting-input) and submits the turn through the same boundary as a user
+  // turn. We skip when a turn is active because that turn already receives the
+  // bound shell_task.exited in-turn and can act on it — only an idle terminal
+  // needs a wake. The backend Register is idempotent, so the worst case of the
+  // idle race (a pending turn about to start) is one harmless extra wake.
+  private async maybeRegisterBackgroundTaskWake(event: ClaudeProviderEvent): Promise<void> {
+    const terminal = claudeTerminalBackgroundTask(event);
+    if (!terminal) return;
+    if (this.activeTurn) return;
+    if (this.firedBackgroundTaskWakes.has(terminal.taskID)) return;
+    this.firedBackgroundTaskWakes.add(terminal.taskID);
+    try {
+      const registered = await registerBackgroundTaskWake(this.cfg, terminal);
+      backgroundTaskWakeTotal.labels(registered ? "registered" : "disabled").inc();
+    } catch (err) {
+      backgroundTaskWakeTotal.labels("failed").inc();
+      console.error("background task wake register failed:", err);
     }
   }
 

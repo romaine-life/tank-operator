@@ -3325,6 +3325,35 @@ button:disabled {
   cursor: not-allowed;
 }
 
+.home-repos-recent-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.home-repos-recent-remove:hover:not(:disabled) {
+  background: var(--bg-hover-soft);
+  color: var(--text-primary);
+}
+
+.home-repos-recent-remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.home-repos-recent-remove-icon {
+  width: 0.82rem;
+  height: 0.82rem;
+}
+
 .home-repos-help {
   font-size: var(--text-xs);
   color: var(--text-faint);
@@ -3344,6 +3373,58 @@ button:disabled {
   font-size: var(--text-xs);
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.home-bug-label-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.home-bug-label-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 100%;
+  padding: 0.15rem 0.45rem;
+  border-radius: var(--radius-md);
+  background: rgba(240, 180, 41, 0.12);
+  color: var(--text-primary);
+  font-size: var(--text-xs);
+}
+
+.home-bug-label-chip-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-bug-label-chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.1rem;
+  height: 1.1rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.home-bug-label-chip-remove:hover:not(:disabled) {
+  background: var(--bg-hover-soft);
+  color: var(--text-primary);
+}
+
+.home-bug-label-chip-remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 @media (max-width: 900px) {
@@ -3734,6 +3815,15 @@ button:disabled {
 
 .run-tab-more-item .run-tab-alert {
   margin-left: auto;
+}
+
+.run-tab-more-item-count {
+  margin-left: auto;
+}
+
+.run-tab-more-separator {
+  margin-block: 0.3rem;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .run-tab-alert,

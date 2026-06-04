@@ -87,6 +87,44 @@ Evidence:
 - PRs expanding shell process semantics should either update this ledger or add
   a dedicated Shells contract.
 
+## Run Header Overflow Menu
+
+Status: active
+
+Intent:
+Keep the run header a clean "title + ⋮" strip by collapsing every top-right
+session control — the view tabs (Turns, Background, Files) and the auxiliary
+actions (Settings, Help) — behind a single vertical overflow control instead of
+a row of competing buttons.
+
+Affected contracts:
+- App Chrome
+- Transcript Navigation, because the menu is the entry point to the Turns and
+  Background side-pane views
+- Observability, because the trigger carries the admin observability attention
+  dot
+
+Contract impact:
+- The menu is the single entry point for these actions in the normal view; the
+  old standalone Turns/Background/Files/Settings/Help tab buttons do not survive
+  alongside it (no duplicate control paths).
+- Availability gating stays on the row, not on header chrome: Turns is disabled
+  until the agent has turn activity, Files until the session container is
+  available. Disabled rows stay visible and non-selectable, never hidden.
+- The collapse does not hide ambient state: live Turns/Background counts ride
+  their rows, and a "needs attention" dot stays on the closed trigger so admin
+  observability state is visible without opening the menu.
+- The read-only public message-link view renders no overflow menu; it keeps the
+  standalone Turns tab, which is that view's only session surface.
+
+Evidence:
+- PRs changing this surface should verify the header renders a single overflow
+  trigger in the normal view, that every former tab is reachable inside the menu
+  with its availability gating intact, and that the public view still exposes
+  Turns.
+- `frontend/src/migrationPolicy.test.ts` pins the menu-based
+  Turns/Background/Files structure and the public-view standalone Turns tab.
+
 ## Cluster Health Sidebar Surface
 
 Status: active

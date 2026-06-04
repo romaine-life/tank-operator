@@ -1344,6 +1344,63 @@ var schemaMigrations = []migration{
 		created_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (tank_session_id, turn_id, ordinal)
 	)`},
+	// Collision repair for PR #874/#877: branch/prod rollouts recorded
+	// migrations 0115-0116 with checksums that did not match the final main
+	// text. Keep 0115-0118 as harmless placeholders and create the desired
+	// background-task wake schema with fresh IDs below. Do not put schema
+	// changes in these IDs.
+	{ID: "0115", SQL: `SELECT 1`},
+	{ID: "0116", SQL: `SELECT 1`},
+	{ID: "0117", SQL: `SELECT 1`},
+	{ID: "0118", SQL: `SELECT 1`},
+
+	{ID: "0119", SQL: `ALTER TABLE session_bug_labels
+		DROP CONSTRAINT IF EXISTS session_bug_labels_pkey`},
+	{ID: "0120", SQL: `ALTER TABLE session_bug_labels
+		ADD CONSTRAINT session_bug_labels_pkey
+		PRIMARY KEY (owner_email, session_scope, session_id, bug_label_id)`},
+
+	// session_background_task_wakes — durable backend-owned "a background task
+	// finished while the session was idle" wakes. The base Claude Bash tool
+	// promises "run_in_background … re-invokes you when it exits", but a
+	// task-lifecycle SDK message never starts a turn, so a task finishing while
+	// the session is idle is a silent stranding. The runner registers the
+	// natural terminal here and the orchestrator claims due rows, persists
+	// normal user_message.created + turn.submitted boundary events, then
+	// publishes the submit_turn command with source=background-task — the same
+	// backend-owned turn boundary as a user turn and as ScheduleWakeup. The
+	// (tank_session_id, task_id) uniqueness is the idempotency key for SDK frame
+	// repeats and runner restart: one background task produces at most one wake
+	// row per session.
+	{ID: "0121", SQL: `CREATE TABLE IF NOT EXISTS session_background_task_wakes (
+		wake_id           text PRIMARY KEY,
+		session_scope     text NOT NULL,
+		session_id        text NOT NULL,
+		tank_session_id   text NOT NULL,
+		owner_email       text NOT NULL,
+		provider          text NOT NULL,
+		task_id           text NOT NULL,
+		task_status       text NOT NULL DEFAULT '',
+		prompt            text NOT NULL,
+		client_nonce      text NOT NULL,
+		registered_at     timestamptz NOT NULL,
+		due_at            timestamptz NOT NULL,
+		status            text NOT NULL CHECK (status IN ('scheduled', 'claiming', 'fired', 'failed')),
+		attempt_count     integer NOT NULL DEFAULT 0,
+		locked_at         timestamptz,
+		fired_at          timestamptz,
+		fired_turn_id     text NOT NULL DEFAULT '',
+		last_error        text NOT NULL DEFAULT '',
+		created_at        timestamptz NOT NULL DEFAULT now(),
+		updated_at        timestamptz NOT NULL DEFAULT now()
+	)`},
+	{ID: "0122", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_background_task_wakes_task
+		ON session_background_task_wakes (tank_session_id, task_id)`},
+	{ID: "0123", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_background_task_wakes_client_nonce
+		ON session_background_task_wakes (tank_session_id, client_nonce)`},
+	{ID: "0124", SQL: `CREATE INDEX IF NOT EXISTS session_background_task_wakes_due
+		ON session_background_task_wakes (session_scope, status, due_at, created_at)
+		WHERE status IN ('scheduled', 'claiming')`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
@@ -1407,6 +1464,12 @@ var acceptedAppliedMigrationChecksums = map[string]map[string]struct{}{
 	},
 	"0102": {
 		"3698dba005984cc9317a14fc9b9561ad228d55d5a8950110dc1c9e3fc2ed0bbf": {},
+	},
+	"0115": {
+		"31f797615bbd4bfef55d14431881805ea425e15727c75267bb4a4563aabdb04e": {},
+	},
+	"0116": {
+		"579fb5bd6d8fdab3d5799f2e7e3cfda07ea6498de9948f3641ee6389d4a79243": {},
 	},
 }
 

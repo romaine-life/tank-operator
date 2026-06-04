@@ -220,10 +220,14 @@ func main() {
 	// 8. Init per-user SDK conversation read-state store.
 	readStateStore := buildConversationReadStateStore(pgPool, sessionScope)
 	var scheduledWakeupStore *pgstore.ScheduledWakeupStore
+	var backgroundTaskWakeStore *pgstore.BackgroundTaskWakeStore
 	var controlActionStore *pgstore.ControlActionStore
+	var pendingLaunchStore *pgstore.PendingLaunchStore
 	if pgPool != nil {
 		scheduledWakeupStore = pgstore.NewScheduledWakeupStore(pgPool, sessionScope)
+		backgroundTaskWakeStore = pgstore.NewBackgroundTaskWakeStore(pgPool, sessionScope)
 		controlActionStore = pgstore.NewControlActionStore(pgPool, sessionScope)
+		pendingLaunchStore = pgstore.NewPendingLaunchStore(pgPool, sessionScope)
 	}
 
 	// 8. Init Manager. SessionListWaker wakes are routed through the
@@ -498,6 +502,7 @@ func main() {
 		mcpGitHub:                buildMCPGitHubClient(),
 		providerHealth:           providerHealthManager,
 		scheduledWakeups:         scheduledWakeupStore,
+		backgroundTaskWakes:      backgroundTaskWakeStore,
 		controlActions:           controlActionStore,
 	}
 	// Assign the override store only when non-nil so the appServer field stays
@@ -506,10 +511,25 @@ func main() {
 	if imageOverrideStore != nil {
 		srv.imageOverrides = imageOverrideStore
 	}
+	// Same typed-nil-interface guard: only assign when the concrete store is
+	// non-nil so `s.pendingLaunch == nil` stays true in stub mode.
+	if pendingLaunchStore != nil {
+		srv.pendingLaunch = pendingLaunchStore
+	}
 	if scheduledWakeupStore != nil && sessionBus != nil {
 		go func() {
 			if err := runScheduledWakeupLoop(ctx, srv, scheduledWakeupDefaultInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("scheduled wakeup loop stopped", "error", err)
+			}
+		}()
+	}
+	// Durable "a background task finished while the session was idle" wakes.
+	// Same backend-owned turn boundary as scheduled wakeups; the runner only
+	// registers the natural terminal. Postgres-only — the stub store is nil.
+	if backgroundTaskWakeStore != nil && sessionBus != nil {
+		go func() {
+			if err := runBackgroundTaskWakeLoop(ctx, srv, backgroundTaskWakeDefaultInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("background task wake loop stopped", "error", err)
 			}
 		}()
 	}
@@ -523,6 +543,18 @@ func main() {
 		go func() {
 			if err := runStrandedLaunchSweepLoop(ctx, srv, strandedLaunchSweepInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("stranded launch sweep loop stopped", "error", err)
+			}
+		}()
+	}
+	// Backend-owned dispatch of durable attachment launches (#865): claim ready
+	// launches whose pod is Active, materialize the staged bytes into the
+	// workspace, and publish submit_turn — so the launch is delivered even if
+	// the browser that created it is gone. Needs both the durable store and the
+	// session bus (the publish target).
+	if pendingLaunchStore != nil && sessionBus != nil {
+		go func() {
+			if err := runLaunchDispatchLoop(ctx, srv, launchDispatchInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("launch dispatch loop stopped", "error", err)
 			}
 		}()
 	}
@@ -877,6 +909,9 @@ func (r *stubSessionRegistry) Upsert(_ context.Context, _ sessionmodel.SessionRe
 }
 func (r *stubSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
 func (r *stubSessionRegistry) SetBugLabel(_ context.Context, _, _ string, _ *sessionmodel.SessionBugLabel) error {
+	return nil
+}
+func (r *stubSessionRegistry) SetBugLabels(_ context.Context, _, _ string, _ []*sessionmodel.SessionBugLabel) error {
 	return nil
 }
 func (r *stubSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map[string]any) error {
