@@ -136,6 +136,15 @@ func TestStreamAuthTicketMetricsUseBoundedLabels(t *testing.T) {
 	}
 }
 
+func TestStreamAuthTicketResultLabelKeepsClientCancelOutOfStoreErrors(t *testing.T) {
+	if got := streamAuthTicketResultLabel("canceled"); got != "canceled" {
+		t.Fatalf("streamAuthTicketResultLabel(canceled) = %q, want canceled", got)
+	}
+	if got := streamAuthTicketResultLabel("store_error"); got != "store_error" {
+		t.Fatalf("streamAuthTicketResultLabel(store_error) = %q, want store_error", got)
+	}
+}
+
 // TestStatusClass covers the bucket boundaries the HTTP middleware uses
 // when labeling the request counter.
 func TestStatusClass(t *testing.T) {
