@@ -30,7 +30,11 @@ answer; it must not visibly move a rendered row from one surface to the other.
 
 - `session_events` owns transcript entries and ordering.
 - `order_key` owns transcript order and cursor movement.
-- `session.status` events own startup notices shown inside the transcript.
+- `session.status` events own session lifecycle. Plain startup notices
+  (`Session is loading.` / `Session is ready.`) are turn noise folded into the
+  owning turn's Turn activity, not main-transcript rows; provider credential
+  banners (`.../provider/.../status`, including the recovery "back online"
+  ready) and any `failed` status stay promoted as top-level system messages.
 - The Tank conversation protocol owns the projection rules for Turn activity
   versus settled transcript messages.
 - A `turn_activity` shell carries the durable `turnNumber` stamped from
@@ -65,8 +69,12 @@ answer; it must not visibly move a rendered row from one surface to the other.
 
 - A new transcript begins with the user's first durable message when the user
   provided one.
-- Startup notices appear as durable `session.status` transcript entries after
-  the first user message.
+- Startup notices (`session.status` `loading`/`ready`) are durable, but they are
+  not main-transcript rows: the server projection folds them into the owning
+  turn's Turn activity — the turn whose `order_key` epoch contains them, with a
+  notice preceding the first user message owned by that first turn. A startup
+  notice with no owning turn produces no transcript row. They surface in the
+  Turns view, not the conversation.
 - An already-open transcript client must receive and render post-cursor durable
   events without reload.
 - The live stream must keep draining persisted events until caught up whenever
@@ -93,14 +101,12 @@ answer; it must not visibly move a rendered row from one surface to the other.
   "latest row carrying this turnId" rule. The placeholder sorts at the turn's
   live-tail order key — the furthest order key the turn has reached across both
   the shell's compacted activity (`endOrderKey`) and any turn-tagged row that
-  stays in the main transcript. Two cases this must satisfy together:
-  companion rows anchored to a later order key must not be overtaken by the
-  placeholder; and untagged durable rows that precede the turn's activity, such
-  as the
-  `Session is loading.` / `Session is ready.` `session.status` notices on a new
-  session's first turn, must stay above the placeholder. A turnId-structural
-  placement rule strands the placeholder above those untagged notices because
-  they carry no `turnId`.
+  stays in the main transcript. Companion rows anchored to a later order key
+  must not be overtaken by the placeholder. The shell's own start key is
+  anchored to the turn's first post-message event, so folded session-startup
+  notices — whose durable order keys can precede the user message — never drag
+  the placeholder (or the settled activity shell) above the message that opened
+  the turn.
 - Token usage updates are durable backend plumbing for the context/cost
   indicator, not visible transcript UI. The runners may emit `turn.usage`
   snapshots and terminal usage payloads, and the backend/admin math may
@@ -183,13 +189,17 @@ answer; it must not visibly move a rendered row from one surface to the other.
 
 - Creating a session from a splash prompt writes the user message before
   startup status.
-- `session.status` loading and ready entries render from durable events.
+- `session.status` loading/ready notices fold into the owning turn's Turn
+  activity and render there from durable events; they are absent from the main
+  transcript. A `failed` status and provider credential banners render as
+  top-level system messages.
 - With an SSE stream already open at cursor X, persisting later transcript
   events causes the browser to render them without refresh.
 - Reconnect from a valid cursor replays missed events exactly once.
 - Reconnect from an unknown cursor triggers explicit resync.
-- A browser or integration check proves that load/ready does not reset the
-  transcript.
+- A browser or integration check proves that load/ready notices do not appear
+  as main-transcript rows and do not reorder the conversation; they are
+  reachable in the turn's Turns view.
 - An active turn that emits assistant prose and then later emits more work does
   not show that prose as a settled main-transcript row before moving it into
   Turn activity.

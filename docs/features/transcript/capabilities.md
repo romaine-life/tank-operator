@@ -197,6 +197,58 @@ Codex-specific notes:
   manual/auto trigger or pre-token metadata on these surfaces, so the runner
   defaults `payload.trigger` to `auto`.
 
+## Session Lifecycle In Turn Activity
+
+Status: active
+
+Intent:
+Treat session-startup notices (`session.status` `Session is loading.` /
+`Session is ready.`) as turn noise, not conversation. They are the same tier as
+tool calls, reasoning, AskUserQuestion, and context compaction, so they fold
+into the owning turn's Turn activity (the Turns view) instead of rendering as
+standalone system rows in the main transcript. This keeps chat a clean record of
+user/agent messages and fixes the turn-one defect where a startup notice — whose
+durable `order_key` predates the first user message — sorted *above* that message
+in the conversation. Provider credential banners and any `failed` status are not
+startup noise: they stay promoted as top-level system messages so failures and
+recoveries stay visible.
+
+Affected contracts:
+- Transcript
+- Tank Conversation Protocol
+
+Contract impact:
+- The server projection marks only plain startup notices (`loading`/`ready`
+  whose `timeline_id` is not a `.../provider/.../status` banner) as foldable,
+  assigns each the owning turn (the turn whose `order_key` epoch contains it; a
+  notice before the first user message is owned by that first turn), and folds it
+  into that turn's activity via the existing compaction. A foldable notice with
+  no owning turn produces no row. The activity shell's `startOrderKey` is
+  anchored to the turn's first post-message event, so folded pre-message notices
+  never drag the shell above the user message in the durable row order.
+- Provider banners (`.../provider/.../status`, including the recovery "back
+  online" `ready`) and `failed` keep their top-level placement and severity.
+- No new event type, schema, fixture, or runner change — `session.status` events
+  are unchanged; only their projection altitude moves.
+
+Evidence:
+- Projection: `backend-go/cmd/tank-operator/transcript_projection.go`
+  (`applySessionStatus` marker, `assignSessionStatusOwnership`,
+  `dropOrphanSessionLifecycle`, shell `startOrderKey` anchor) and the
+  `adoptLeadingSessionLifecycle` seam in `turn_pages.go` /
+  `transcript_rows_materializer.go` so the materializer and the lazy `/activity`
+  body fold identically.
+- Tests: `transcript_projection_test.go`
+  (`TestProjectTranscriptEventsFoldsSessionLifecycleIntoTurn`,
+  `…DropsOrphanSessionLifecycle`, `…KeepsFailedSessionBannerPromoted`,
+  `…KeepsProviderRecoveryBannerPromoted`).
+- Client mirror: `frontend/src/conversationProjection.ts` drops startup notices
+  to match; `conversationProjection.test.ts` ("session-startup notices are turn
+  noise, not main-transcript messages").
+- Live: validated on a Glimmung slot — fresh codex session, first turn shows
+  user → reply in chat with `Session is loading./ready.` in the Turns view; the
+  active-turn placeholder sorts below the user message.
+
 ## Composer Compaction Count
 
 Status: active

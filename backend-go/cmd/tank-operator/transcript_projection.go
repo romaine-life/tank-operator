@@ -153,6 +153,8 @@ func projectTranscriptEvents(events []map[string]any) transcriptProjection {
 		state.apply(event)
 	}
 	flat := state.projectFlatEntries()
+	assignSessionStatusOwnership(flat)
+	flat = dropOrphanSessionLifecycle(flat)
 	return compactProjectedTranscript(flat, state.activeTurnID, state.runStatus, state.turnTerminals)
 }
 
@@ -393,7 +395,18 @@ func (s *projectionState) applySessionStatus(event map[string]any) {
 		"sourceEventId": transcriptString(event, "event_id"),
 		"orderKey":      transcriptString(event, "order_key"),
 	}
-	if transcriptPayloadString(event, "status") == "failed" {
+	status := transcriptPayloadString(event, "status")
+	// Only a plain session-startup notice (Session is loading./ready.) is turn
+	// noise that folds into the owning turn. A provider credential banner uses a
+	// ".../provider/.../status" timeline — including the recovery "back online"
+	// ready, which carries status=ready but must stay visible — and any failed
+	// status stays promoted as a top-level system message. Marking only the
+	// foldable startup notices keeps both banner classes out of the fold.
+	if (status == "loading" || status == "ready") &&
+		!strings.Contains(transcriptString(event, "timeline_id"), ":provider:") {
+		entry["sessionStatus"] = status
+	}
+	if status == "failed" {
 		entry["severity"] = "error"
 	} else {
 		entry["severity"] = "info"
@@ -1091,12 +1104,32 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 	out := make([]map[string]any, 0, len(entries))
 	for idx, entry := range entries {
 		if activity, ok := activityByInsertIndex[idx]; ok {
+			shellOrderKey := transcriptMapString(activity.Summary, "startOrderKey")
+			shellStartedAt := transcriptMapString(activity.Summary, "startedAt")
+			if umKey := turnUserMessageOrderKey(entries, activity.TurnID); umKey != "" && shellOrderKey <= umKey {
+				// Folded session-startup lifecycle carries order keys that predate
+				// the turn's message. The transcript row store positions a
+				// turn_activity row by activity.startOrderKey (its row cursor is
+				// startOrderKey+id), so anchor the shell's start to the turn's first
+				// real event after the message (turn.submitted/started). The
+				// lifecycle stays inside the body; only the shell's placement and
+				// reported start move to the turn's own start — never above the
+				// message it belongs to.
+				if anchor := turnFirstEntryAfter(entries, activity.TurnID, umKey); anchor != nil {
+					shellOrderKey = transcriptMapString(anchor, "orderKey")
+					activity.Summary["startOrderKey"] = shellOrderKey
+					if t := transcriptMapString(anchor, "time"); t != "" {
+						shellStartedAt = t
+						activity.Summary["startedAt"] = t
+					}
+				}
+			}
 			shell := map[string]any{
 				"id":            "turn-activity-" + activity.TurnID,
 				"kind":          "turn_activity",
 				"turnId":        activity.TurnID,
-				"time":          transcriptMapString(activity.Summary, "startedAt"),
-				"orderKey":      transcriptMapString(activity.Summary, "startOrderKey"),
+				"time":          shellStartedAt,
+				"orderKey":      shellOrderKey,
 				"activity":      activity.Summary,
 				"activityIds":   activity.CompactedEntryIDs,
 				"sourceEventId": transcriptMapString(activity.Summary, "sourceEventId"),
@@ -1207,13 +1240,60 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string, ru
 }
 
 func projectedActivityInsertIndex(entries []map[string]any, activity turnActivityBody) int {
+	base := -1
 	if idx := firstTurnProgressIndex(entries, activity.TurnID); idx >= 0 {
-		return idx
+		base = idx
+	} else if len(activity.Entries) > 0 {
+		base = projectedEntryIndex(entries, activity.Entries[0])
 	}
-	if len(activity.Entries) > 0 {
-		return projectedEntryIndex(entries, activity.Entries[0])
+	// A turn's activity body (its noise bin) must never render above the turn's
+	// own user message. Folded session-lifecycle entries can carry order keys
+	// that predate the message (the session reported ready after you pressed
+	// enter), so clamp the shell to sit just after the user message.
+	if um := turnUserMessageIndex(entries, activity.TurnID); um >= 0 && base <= um {
+		base = um + 1
+	}
+	return base
+}
+
+func turnUserMessageIndex(entries []map[string]any, turnID string) int {
+	for idx, entry := range entries {
+		if transcriptMapString(entry, "turnId") == turnID && isProjectedUserMessage(entry) {
+			return idx
+		}
 	}
 	return -1
+}
+
+func turnUserMessageOrderKey(entries []map[string]any, turnID string) string {
+	for _, entry := range entries {
+		if transcriptMapString(entry, "turnId") == turnID && isProjectedUserMessage(entry) {
+			return transcriptMapString(entry, "orderKey")
+		}
+	}
+	return ""
+}
+
+// turnFirstEntryAfter returns the entry with the smallest order key strictly
+// greater than afterKey among entries belonging to turnID. Used to anchor a
+// turn's activity shell to the turn's first real event after its user message,
+// so folded pre-message lifecycle can't drag the shell above the message.
+func turnFirstEntryAfter(entries []map[string]any, turnID, afterKey string) map[string]any {
+	var best map[string]any
+	bestKey := ""
+	for _, entry := range entries {
+		if transcriptMapString(entry, "turnId") != turnID {
+			continue
+		}
+		ok := transcriptMapString(entry, "orderKey")
+		if ok == "" || ok <= afterKey {
+			continue
+		}
+		if bestKey == "" || ok < bestKey {
+			bestKey, best = ok, entry
+		}
+	}
+	return best
 }
 
 func firstTurnProgressIndex(entries []map[string]any, turnID string) int {
@@ -1398,6 +1478,81 @@ func isProjectedUserMessage(entry map[string]any) bool {
 func isProjectionTurnProgress(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "meta" &&
 		transcriptMapString(entry, "metaKind") == "turn_progress"
+}
+
+func isProjectionSessionStatus(entry map[string]any) bool {
+	_, ok := entry["sessionStatus"]
+	return ok
+}
+
+// dropOrphanSessionLifecycle removes happy-path session lifecycle (loading/ready)
+// that has no owning turn. Such an event is operational noise with nowhere to
+// live — a session opened with no message yet, or the per-event materialization
+// path projecting a lone session.status — so it produces no transcript row. It
+// only surfaces by folding into the turn that adopts it (assignSessionStatusOwnership
+// plus the leading-lifecycle adoption in readAllTurnEvents). A failed banner is
+// never dropped: failures are surfaced as top-level rows.
+func dropOrphanSessionLifecycle(entries []map[string]any) []map[string]any {
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		if isProjectionSessionStatus(entry) &&
+			transcriptMapString(entry, "sessionStatus") != "failed" &&
+			transcriptMapString(entry, "turnId") == "" {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+// assignSessionStatusOwnership folds happy-path session lifecycle (session.status
+// loading/ready) into the turn it belongs to, so "Session is loading./ready."
+// lives inside that turn's activity body — the noise bin — instead of floating at
+// conversation altitude as a top-level system message. The conversation transcript
+// is for turns; operational lifecycle is turn-scoped activity.
+//
+// Ownership is the turn whose epoch contains the event by order key. Lifecycle
+// that precedes the first turn's user message (the create-with-initial-turn race,
+// where the session reports loading/ready around the same instant you press enter)
+// is owned by that first turn, which is why the startup rows can no longer sort
+// above your message. A session.status:failed event is left unattached so it stays
+// promoted as a top-level banner — failures are exactly the case we surface.
+func assignSessionStatusOwnership(entries []map[string]any) {
+	type turnAnchor struct{ turnID, orderKey string }
+	var anchors []turnAnchor
+	for _, entry := range entries {
+		if isProjectedUserMessage(entry) {
+			anchors = append(anchors, turnAnchor{
+				turnID:   transcriptMapString(entry, "turnId"),
+				orderKey: transcriptMapString(entry, "orderKey"),
+			})
+		}
+	}
+	if len(anchors) == 0 {
+		return
+	}
+	for _, entry := range entries {
+		if !isProjectionSessionStatus(entry) ||
+			transcriptMapString(entry, "sessionStatus") == "failed" ||
+			transcriptMapString(entry, "turnId") != "" {
+			continue
+		}
+		orderKey := transcriptMapString(entry, "orderKey")
+		owner := anchors[0].turnID
+		for _, a := range anchors {
+			if a.orderKey == "" {
+				continue
+			}
+			if orderKey >= a.orderKey {
+				owner = a.turnID
+			} else {
+				break
+			}
+		}
+		if owner != "" {
+			entry["turnId"] = owner
+		}
+	}
 }
 
 func isProjectionAwaitingInputEntry(entry map[string]any) bool {
