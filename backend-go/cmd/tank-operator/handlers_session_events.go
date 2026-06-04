@@ -154,6 +154,81 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 	writeJSON(w, http.StatusOK, body)
 }
 
+func (s *appServer) handleSessionQuestions(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if _, status, err := s.authorizeSessionTranscriptReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	eventStore := s.sessionEventStoreForScope(sessionScope)
+	page, err := eventStore.QuestionEventsBySession(r.Context(), sessionID, sessionQuestionEventLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	turnNumbers, err := s.sessionTurnStoreForScope(sessionScope).TurnNumbersForSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	body := projectSessionQuestionSets(sessionID, page.Events, turnNumbers, page.HasMore)
+	writeJSON(w, http.StatusOK, body)
+}
+
+func (s *appServer) handleSessionQuestion(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	questionSetID := strings.TrimSpace(r.PathValue("question_set_id"))
+	if questionSetID == "" {
+		writeError(w, http.StatusBadRequest, "question_set_id is required")
+		return
+	}
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if _, status, err := s.authorizeSessionTranscriptReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	eventStore := s.sessionEventStoreForScope(sessionScope)
+	page, err := eventStore.QuestionEventsBySession(r.Context(), sessionID, sessionQuestionEventLimit)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	turnNumbers, err := s.sessionTurnStoreForScope(sessionScope).TurnNumbersForSession(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	body := projectSessionQuestionSets(sessionID, page.Events, turnNumbers, page.HasMore)
+	for _, set := range body.Sets {
+		if set.ID == questionSetID {
+			writeJSON(w, http.StatusOK, map[string]any{
+				"session_id": sessionID,
+				"projection": body.Projection,
+				"set":        set,
+			})
+			return
+		}
+	}
+	writeError(w, http.StatusNotFound, "question set not found")
+}
+
 // handleResolveSessionTurnNumber maps a public per-session turn number to its
 // durable turn_id and an anchor row cursor. This is the server-side resolution
 // the transcript-navigation contract requires for deep links: a cold load of

@@ -1,6 +1,6 @@
 export type SettingsTab = "preferences" | "admin";
 export type AdminView = "controls" | "avatars" | "report" | "observability";
-export type SessionRouteTab = "chat" | "turns";
+export type SessionRouteTab = "chat" | "turns" | "questions";
 export type HomeRouteTab = "chat";
 export type AppRouteTab = "settings" | "help";
 
@@ -20,6 +20,7 @@ export type SessionRoute = SettingsRoute & {
   // defaulting to the latest turn.
   turnNumber: number | null;
   turnSegmentPresent: boolean;
+  questionSetId: string | null;
 };
 
 export type HomeRoute = SettingsRoute & {
@@ -92,6 +93,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       tab: "chat",
       turnNumber: null,
       turnSegmentPresent: false,
+      questionSetId: null,
       ...defaultSettingsRoute,
     };
   }
@@ -102,6 +104,17 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       tab: "turns",
       turnNumber: parseTurnNumber(segment),
       turnSegmentPresent: segment !== "",
+      questionSetId: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "questions") {
+    return {
+      sessionId: parts[1],
+      tab: "questions",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      questionSetId: parts[3]?.trim() ? parts[3] : null,
       ...defaultSettingsRoute,
     };
   }
@@ -136,13 +149,23 @@ export function buildSessionRouteUrl(
   currentHref: string,
   id: string,
   tab: SessionRouteTab = "chat",
-  turnNumber?: number | null,
+  turnNumberOrQuestionSetId?: number | string | null,
 ): string {
   const url = new URL(currentHref);
   const encodedId = encodeURIComponent(id);
+  const questionSetId =
+    tab === "questions" && typeof turnNumberOrQuestionSetId === "string"
+      ? turnNumberOrQuestionSetId
+      : null;
+  const turnNumber =
+    tab === "turns" && typeof turnNumberOrQuestionSetId === "number"
+      ? turnNumberOrQuestionSetId
+      : null;
   url.pathname = `/sessions/${encodedId}${
     tab === "turns"
       ? `/turns${turnNumber != null ? `/${turnNumber}` : ""}`
+      : tab === "questions"
+        ? `/questions${questionSetId ? `/${encodeURIComponent(questionSetId)}` : ""}`
       : ""
   }`;
   url.search = "";

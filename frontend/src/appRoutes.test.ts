@@ -10,12 +10,13 @@ import {
   readSessionRouteFromPathname,
 } from "./appRoutes";
 
-test("session routes parse only session-scoped chat and turns pages", () => {
+test("session routes parse only session-scoped chat, turns, and questions pages", () => {
   assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1"), {
     sessionId: "s-1",
     tab: "chat",
     turnNumber: null,
     turnSegmentPresent: false,
+    questionSetId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -24,6 +25,7 @@ test("session routes parse only session-scoped chat and turns pages", () => {
     tab: "turns",
     turnNumber: 3,
     turnSegmentPresent: true,
+    questionSetId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -33,6 +35,7 @@ test("session routes parse only session-scoped chat and turns pages", () => {
     tab: "turns",
     turnNumber: null,
     turnSegmentPresent: false,
+    questionSetId: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -45,6 +48,16 @@ test("session routes parse only session-scoped chat and turns pages", () => {
     tab: "turns",
     turnNumber: null,
     turnSegmentPresent: true,
+    questionSetId: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/questions/tl-a%3Aawaiting_input"), {
+    sessionId: "s-1",
+    tab: "questions",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    questionSetId: "tl-a:awaiting_input",
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -70,6 +83,10 @@ test("session route urls broadcast only session-owned pages", () => {
   assert.equal(
     buildSessionRouteUrl(current, "s 1", "turns"),
     "https://tank.example.test/sessions/s%201/turns",
+  );
+  assert.equal(
+    buildSessionRouteUrl(current, "s 1", "questions", "tl-a:awaiting_input"),
+    "https://tank.example.test/sessions/s%201/questions/tl-a%3Aawaiting_input",
   );
 });
 

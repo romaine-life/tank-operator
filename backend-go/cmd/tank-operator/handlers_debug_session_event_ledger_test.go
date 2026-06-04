@@ -63,6 +63,10 @@ func (f *fakeDebugSessionEventLedgerStore) EventsForTurn(context.Context, string
 	return store.SessionEventPage{}, nil
 }
 
+func (f *fakeDebugSessionEventLedgerStore) QuestionEventsBySession(context.Context, string, int) (store.SessionEventPage, error) {
+	return store.SessionEventPage{}, nil
+}
+
 func (f *fakeDebugSessionEventLedgerStore) FindTurnTerminal(context.Context, string, string) (map[string]any, error) {
 	return nil, nil
 }

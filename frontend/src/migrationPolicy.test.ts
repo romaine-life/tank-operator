@@ -323,12 +323,12 @@ test("active turn thinking row is placed by durable order key, not a turnId-stru
 });
 
 test("turn internals move out of the transcript into a turn view", () => {
-  assert.equal(appSource.includes('type RunTab = "chat" | "turns"'), true);
+  assert.equal(appSource.includes('type RunTab = "chat" | "turns" | "questions"'), true);
   assert.equal(appSource.includes("buildTurnViewItems"), true);
   assert.equal(appSource.includes("const turnsAvailable = turnViewItems.length > 0"), true);
   assert.equal(appSource.includes("function readSessionRouteFromPath"), true);
   assert.equal(appRoutesSource.includes('url.pathname = `/sessions/${encodedId}${'), true);
-  assert.equal(appRoutesSource.includes('export type SessionRouteTab = "chat" | "turns";'), true);
+  assert.equal(appRoutesSource.includes('export type SessionRouteTab = "chat" | "turns" | "questions";'), true);
   assert.equal(appRoutesSource.includes('export type AppRouteTab = "settings" | "help";'), true);
   assert.equal(appRoutesSource.includes("readAppRouteFromPathname"), true);
   assert.equal(appRoutesSource.includes("buildAppRouteUrl"), true);
@@ -455,9 +455,14 @@ test("turn view entry points open at the turn bottom", () => {
     appSource.includes('onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}'),
     true,
   );
-  // The AskUserQuestion pause is now the interactive RunAwaitingInputCard in
-  // Turn activity, so the retired RunNeedsInputAnnouncement "go to the question
-  // turn" navigation (onOpenTurn?.(targetTurnId, …)) is gone.
+  // AskUserQuestion is a first-class Questions surface. The transcript can
+  // point at that route, but it must not be the only place the user can find
+  // and answer the question.
+  assert.equal(appRoutesSource.includes('"questions"'), true);
+  assert.equal(appSource.includes("function RunQuestionsScreen"), true);
+  assert.equal(appSource.includes("onOpenQuestionSet={openQuestionSet}"), true);
+  assert.equal(appSource.includes('span>Questions</span>'), true);
+  assert.equal(appSource.includes("awaitingInputTarget"), true);
   assert.equal(
     appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })'),
     true,
@@ -744,7 +749,7 @@ test("background page uses stacked full-width sections instead of a side pane", 
     indexCssSource.includes("grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr)"),
     false,
   );
-  assert.equal(indexCssSource.includes("border-right: 1px solid var(--border-subtle);"), false);
+  assert.equal(indexCssSource.includes(".run-background-list"), false);
 });
 
 test("background tab stays discoverable before background entries exist", () => {

@@ -336,6 +336,13 @@ type TurnActivitySummary = {
   sourceEventId?: string;
   turnUsage?: unknown;
   usageObservation?: unknown;
+  awaitingInputTarget?: {
+    questionSetId: string;
+    timelineId?: string;
+    providerItemId?: string;
+    turnId?: string;
+    questionCount?: number;
+  };
 };
 export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   kind: SandboxTranscriptEntry["kind"] | "background_task" | "turn_activity";
@@ -427,6 +434,31 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
 };
 type SdkTerminalStatus = "done" | "error" | "stopped";
 type LocalRunStatus = "idle" | "running" | "stopping" | "done" | "error";
+type SessionQuestionSetStatus = "waiting" | "answered" | "completed" | "failed" | "command_failed" | "interrupted" | string;
+type SessionQuestionSet = {
+  id: string;
+  session_id: string;
+  turn_id: string;
+  turn_number?: number;
+  provider_item_id: string;
+  timeline_id: string;
+  order_key: string;
+  created_at: string;
+  status: SessionQuestionSetStatus;
+  question_count: number;
+  questions: unknown[];
+  answers?: Record<string, string[]>;
+  annotations?: Record<string, { preview?: string; notes?: string }>;
+  terminal_status?: string;
+  terminal_at?: string;
+  summary?: string;
+};
+type SessionQuestionsState = {
+  status: "idle" | "loading" | "ready" | "error";
+  sets: SessionQuestionSet[];
+  pendingCount: number;
+  error: string | null;
+};
 type SdkTerminalResult = {
   status: SdkTerminalStatus;
   detail?: string;
@@ -1453,8 +1485,12 @@ function readAppRouteFromPath(pathname = window.location.pathname): AppRoute | n
   return readAppRouteFromPathname(pathname);
 }
 
-function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null): string {
-  return buildSessionRouteUrl(window.location.href, id, tab, turnNumber);
+function sessionRouteUrl(
+  id: string,
+  tab: SessionRouteTab = "chat",
+  turnNumberOrQuestionSetId?: number | string | null,
+): string {
+  return buildSessionRouteUrl(window.location.href, id, tab, turnNumberOrQuestionSetId);
 }
 
 function homeRouteUrl(tab: HomeRouteTab = "chat"): string {
@@ -1494,9 +1530,13 @@ function readInitialPublicSessionReportRoute(): PublicSessionReportRoute | null 
   return { token };
 }
 
-function replaceSessionRoute(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null): void {
+function replaceSessionRoute(
+  id: string,
+  tab: SessionRouteTab = "chat",
+  turnNumberOrQuestionSetId?: number | string | null,
+): void {
   if (routeHasMessageTarget()) return;
-  const next = sessionRouteUrl(id, tab, turnNumber);
+  const next = sessionRouteUrl(id, tab, turnNumberOrQuestionSetId);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -3469,7 +3509,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
+type RunTab = "chat" | "turns" | "questions" | "background" | "files" | "settings" | "help";
 type BackgroundView = "shells" | "scheduled" | "control" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
 
@@ -6154,6 +6194,7 @@ function RunHeaderOverflowMenu({
   triggerActive,
   triggerAttention,
   turns,
+  questions,
   background,
   files,
   settingsActive,
@@ -6164,6 +6205,7 @@ function RunHeaderOverflowMenu({
   triggerActive: boolean;
   triggerAttention?: "critical" | "warning" | null;
   turns: RunHeaderMenuTabState;
+  questions: RunHeaderMenuTabState;
   background: RunHeaderMenuTabState;
   files: RunHeaderMenuTabState;
   settingsActive: boolean;
@@ -6211,6 +6253,24 @@ function RunHeaderOverflowMenu({
               aria-label={`${turns.count} turns`}
             >
               {turns.count}
+            </span>
+          )}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={`run-tab-more-item${questions.active ? " is-active" : ""}`}
+          disabled={questions.disabled}
+          onSelect={questions.onOpen}
+          title={questions.title}
+        >
+          <MessageSquareIcon className="run-tab-more-item-icon" aria-hidden="true" />
+          <span>Questions</span>
+          {questions.count !== undefined && questions.count > 0 && (
+            <span
+              className="run-shell-tasks-count run-tab-more-item-count"
+              data-active={questions.countActive ? "true" : undefined}
+              aria-label={`${questions.count} pending questions`}
+            >
+              {questions.count}
             </span>
           )}
         </DropdownMenuItem>
@@ -6591,6 +6651,51 @@ function parseAskUserQuestions(input: Record<string, unknown> | null): AskUserQu
   });
 }
 
+function normalizeAnswerMap(input: unknown): Record<string, string[]> | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const out: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (Array.isArray(value)) out[key] = value.map(String);
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function normalizeAnnotationMap(input: unknown): Record<string, { preview?: string; notes?: string }> | undefined {
+  if (!input || typeof input !== "object") return undefined;
+  const out: Record<string, { preview?: string; notes?: string }> = {};
+  for (const [key, value] of Object.entries(input as Record<string, unknown>)) {
+    if (!value || typeof value !== "object") continue;
+    const raw = value as Record<string, unknown>;
+    const ann: { preview?: string; notes?: string } = {};
+    if (typeof raw.preview === "string") ann.preview = raw.preview;
+    if (typeof raw.notes === "string") ann.notes = raw.notes;
+    if (ann.preview || ann.notes) out[key] = ann;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
+function normalizeSessionQuestionSet(raw: any): SessionQuestionSet {
+  const turnNumber = Number(raw?.turn_number);
+  return {
+    id: String(raw?.id ?? ""),
+    session_id: String(raw?.session_id ?? ""),
+    turn_id: String(raw?.turn_id ?? ""),
+    turn_number: Number.isFinite(turnNumber) && turnNumber > 0 ? turnNumber : undefined,
+    provider_item_id: String(raw?.provider_item_id ?? ""),
+    timeline_id: String(raw?.timeline_id ?? ""),
+    order_key: String(raw?.order_key ?? ""),
+    created_at: String(raw?.created_at ?? ""),
+    status: String(raw?.status ?? "unknown"),
+    question_count: Number(raw?.question_count ?? 0),
+    questions: Array.isArray(raw?.questions) ? raw.questions : [],
+    answers: normalizeAnswerMap(raw?.answers),
+    annotations: normalizeAnnotationMap(raw?.annotations),
+    terminal_status: typeof raw?.terminal_status === "string" ? raw.terminal_status : undefined,
+    terminal_at: typeof raw?.terminal_at === "string" ? raw.terminal_at : undefined,
+    summary: typeof raw?.summary === "string" ? raw.summary : undefined,
+  };
+}
+
 function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
   const { submitAnswer } = useContext(RunContext);
   // The card is driven by the durable turn.awaiting_input pause projected into
@@ -6881,6 +6986,450 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
       )}
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
     </div>
+  );
+}
+
+function questionSetTurnLabel(set: SessionQuestionSet): string {
+  return set.turn_number ? `Turn ${set.turn_number}` : "Turn";
+}
+
+function questionSetStatusLabel(set: SessionQuestionSet): string {
+  switch (set.status) {
+    case "waiting":
+      return "Needs input";
+    case "answered":
+      return "Answered";
+    case "interrupted":
+      return "Interrupted";
+    case "failed":
+    case "command_failed":
+      return "Failed";
+    case "completed":
+      return "Completed";
+    default:
+      return set.status || "Unknown";
+  }
+}
+
+function RunQuestionsScreen({
+  state,
+  selectedSetId,
+  onSelectSet,
+  onRetry,
+}: {
+  state: SessionQuestionsState;
+  selectedSetId: string | null;
+  onSelectSet: (id: string) => void;
+  onRetry: () => void;
+}) {
+  const selected =
+    state.sets.find((set) => set.id === selectedSetId) ??
+    state.sets.find((set) => set.status === "waiting") ??
+    state.sets[0] ??
+    null;
+  const waiting = state.sets.filter((set) => set.status === "waiting");
+  const history = state.sets.filter((set) => set.status !== "waiting");
+  const loadingInitial = state.status === "loading" && state.sets.length === 0;
+
+  return (
+    <div className="run-questions" aria-label="Questions">
+      <aside className="run-questions-list" aria-label="Question sets">
+        <div className="run-questions-list-head">
+          <div>
+            <h2>Questions</h2>
+            <span>{state.pendingCount} pending</span>
+          </div>
+          <button
+            type="button"
+            className="run-questions-refresh"
+            onClick={onRetry}
+            disabled={state.status === "loading"}
+            aria-label="Refresh questions"
+            title="Refresh questions"
+          >
+            {state.status === "loading" ? (
+              <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+            ) : (
+              <RotateCcwIcon size={14} aria-hidden="true" />
+            )}
+          </button>
+        </div>
+        {state.error && (
+          <div className="run-turn-view-alert run-questions-alert" role="alert">
+            <span>{state.error}</span>
+          </div>
+        )}
+        {loadingInitial ? (
+          <div className="run-shell-loading run-questions-loading" role="status">
+            <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+            <span>Loading questions...</span>
+          </div>
+        ) : state.sets.length === 0 ? (
+          <div className="run-shell-tasks-empty">No questions.</div>
+        ) : (
+          <>
+            {waiting.length > 0 && <QuestionSetListSection title="Needs input" sets={waiting} selectedId={selected?.id ?? null} onSelect={onSelectSet} />}
+            {history.length > 0 && <QuestionSetListSection title="History" sets={history} selectedId={selected?.id ?? null} onSelect={onSelectSet} />}
+          </>
+        )}
+      </aside>
+      <main className="run-questions-detail">
+        {selected ? (
+          <RunQuestionSetSurface key={selected.id} questionSet={selected} />
+        ) : (
+          <div className="run-questions-empty">
+            <MessageSquareIcon size={28} aria-hidden="true" />
+            <span>No question selected</span>
+          </div>
+        )}
+      </main>
+    </div>
+  );
+}
+
+function QuestionSetListSection({
+  title,
+  sets,
+  selectedId,
+  onSelect,
+}: {
+  title: string;
+  sets: SessionQuestionSet[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <section className="run-questions-section">
+      <h3>{title}</h3>
+      {sets.map((set, index) => (
+        <button
+          key={set.id}
+          type="button"
+          className={`run-questions-set${selectedId === set.id ? " is-active" : ""}`}
+          onClick={() => onSelect(set.id)}
+        >
+          <span className="run-questions-set-title">
+            {questionSetTurnLabel(set)} question {index + 1}
+          </span>
+          <span className="run-questions-set-summary">{set.summary ?? "Answer to continue."}</span>
+          <span className="run-questions-set-meta">
+            {questionSetStatusLabel(set)} · {set.question_count} question{set.question_count === 1 ? "" : "s"}
+          </span>
+        </button>
+      ))}
+    </section>
+  );
+}
+
+function RunQuestionSetSurface({ questionSet }: { questionSet: SessionQuestionSet }) {
+  const { submitAnswer } = useContext(RunContext);
+  const questions = parseAskUserQuestions({ questions: questionSet.questions });
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [selections, setSelections] = useState<Record<string, string[]>>({});
+  const [notes, setNotes] = useState<Record<string, string>>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [replyError, setReplyError] = useState<string | null>(null);
+  const [submittedSnapshot, setSubmittedSnapshot] = useState<{
+    answers: Record<string, string[]>;
+    annotations: Record<string, { preview?: string; notes?: string }>;
+  } | null>(null);
+  const answered = questionSet.status !== "waiting" || submittedSnapshot !== null;
+  const reviewIndex = questions.length;
+  const currentQuestion = activeIndex < questions.length ? questions[activeIndex] : null;
+
+  function selectedLabelsFor(q: AskUserQuestion): string[] {
+    if (questionSet.answers?.[q.question]) return questionSet.answers[q.question] ?? [];
+    if (submittedSnapshot?.answers[q.question]) return submittedSnapshot.answers[q.question];
+    return selections[q.question] ?? [];
+  }
+
+  function answeredNoteFor(question: string): string | undefined {
+    if (questionSet.annotations?.[question]?.notes) return questionSet.annotations[question]?.notes;
+    return submittedSnapshot?.annotations[question]?.notes;
+  }
+
+  function questionHasResponse(q: AskUserQuestion): boolean {
+    if ((selections[q.question]?.length ?? 0) > 0) return true;
+    return q.allowFreeForm && (notes[q.question]?.trim().length ?? 0) > 0;
+  }
+
+  const isReady =
+    !answered &&
+    !submitting &&
+    questions.length > 0 &&
+    questions.every((q) => questionHasResponse(q));
+
+  function toggleSelection(q: AskUserQuestion, label: string): void {
+    if (answered || submitting) return;
+    setSelections((prev) => {
+      const current = prev[q.question] ?? [];
+      if (q.multiSelect) {
+        const next = current.includes(label)
+          ? current.filter((l) => l !== label)
+          : [...current, label];
+        return { ...prev, [q.question]: next };
+      }
+      return { ...prev, [q.question]: [label] };
+    });
+  }
+
+  function setNoteFor(question: string, value: string): void {
+    setNotes((prev) => ({ ...prev, [question]: value }));
+  }
+
+  async function submit(): Promise<void> {
+    if (submitting || answered || !isReady) return;
+    const answers: Record<string, string[]> = {};
+    const annotations: Record<string, { preview?: string; notes?: string }> = {};
+    for (const q of questions) {
+      const labels = selections[q.question] ?? [];
+      const notesText = q.allowFreeForm ? notes[q.question]?.trim() ?? "" : "";
+      if (labels.length > 0) answers[q.question] = labels;
+      else if (notesText) answers[q.question] = ["Other"];
+      else continue;
+      const preview = q.options.find((opt) => labels.includes(opt.label))?.preview;
+      const ann: { preview?: string; notes?: string } = {};
+      if (preview) ann.preview = preview;
+      if (notesText) ann.notes = notesText;
+      if (ann.preview || ann.notes) annotations[q.question] = ann;
+    }
+    setSubmitting(true);
+    setReplyError(null);
+    setSubmittedSnapshot({ answers, annotations });
+    try {
+      await submitAnswer(questionSet.turn_id, {
+        providerItemId: questionSet.provider_item_id,
+        timelineId: questionSet.timeline_id,
+        answers,
+        annotations,
+      });
+    } catch (err) {
+      setReplyError(err instanceof Error ? err.message : String(err));
+      setSubmittedSnapshot(null);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div className="run-question-set">
+      <div className="run-question-set-head">
+        <div>
+          <span className="run-question-set-kicker">{questionSetStatusLabel(questionSet)}</span>
+          <h2>{questionSetTurnLabel(questionSet)}</h2>
+        </div>
+        <span className="run-question-set-count">
+          {questions.length} question{questions.length === 1 ? "" : "s"}
+        </span>
+      </div>
+      <div className="run-question-steps" role="tablist" aria-label="Questions in set">
+        {questions.map((q, index) => {
+          const selected = activeIndex === index;
+          const complete = answered || questionHasResponse(q);
+          return (
+            <button
+              key={index}
+              type="button"
+              className={`run-question-step${selected ? " is-active" : ""}${complete ? " is-complete" : ""}`}
+              onClick={() => setActiveIndex(index)}
+              aria-selected={selected}
+            >
+              {index + 1}
+            </button>
+          );
+        })}
+        <button
+          type="button"
+          className={`run-question-step run-question-step-review${activeIndex === reviewIndex ? " is-active" : ""}`}
+          onClick={() => setActiveIndex(reviewIndex)}
+          aria-selected={activeIndex === reviewIndex}
+        >
+          Review
+        </button>
+      </div>
+      {currentQuestion ? (
+        <QuestionSurface
+          question={currentQuestion}
+          index={activeIndex}
+          answered={answered}
+          submitting={submitting}
+          selectedLabels={selectedLabelsFor(currentQuestion)}
+          answeredNote={answeredNoteFor(currentQuestion.question)}
+          liveNote={notes[currentQuestion.question] ?? ""}
+          onToggle={toggleSelection}
+          onNote={setNoteFor}
+          onSubmit={() => void submit()}
+        />
+      ) : (
+        <QuestionReview
+          questions={questions}
+          selectedLabelsFor={selectedLabelsFor}
+          answeredNoteFor={answeredNoteFor}
+        />
+      )}
+      <div className="run-question-actions">
+        <button
+          type="button"
+          className="btn-secondary"
+          disabled={activeIndex <= 0}
+          onClick={() => setActiveIndex((index) => Math.max(0, index - 1))}
+        >
+          Previous
+        </button>
+        {activeIndex < reviewIndex ? (
+          <button
+            type="button"
+            className="run-tool-ask-submit"
+            onClick={() => setActiveIndex((index) => Math.min(reviewIndex, index + 1))}
+          >
+            {activeIndex === questions.length - 1 ? "Review" : "Next"}
+          </button>
+        ) : !answered ? (
+          <button
+            type="button"
+            className="run-tool-ask-submit"
+            disabled={!isReady || submitting}
+            onClick={() => void submit()}
+          >
+            {submitting ? "Sending..." : "Submit answer"}
+          </button>
+        ) : (
+          <span className="run-tool-ask-status-label">Answered</span>
+        )}
+      </div>
+      {replyError && <p className="run-tool-ask-error">{replyError}</p>}
+    </div>
+  );
+}
+
+function QuestionSurface({
+  question,
+  index,
+  answered,
+  submitting,
+  selectedLabels,
+  answeredNote,
+  liveNote,
+  onToggle,
+  onNote,
+  onSubmit,
+}: {
+  question: AskUserQuestion;
+  index: number;
+  answered: boolean;
+  submitting: boolean;
+  selectedLabels: string[];
+  answeredNote?: string;
+  liveNote: string;
+  onToggle: (question: AskUserQuestion, label: string) => void;
+  onNote: (question: string, value: string) => void;
+  onSubmit: () => void;
+}) {
+  const showFreeForm = !answered && question.allowFreeForm;
+  return (
+    <section className="run-question-card">
+      <div className="run-question-card-head">
+        <span>Question {index + 1}</span>
+        {question.header && <strong>{question.header}</strong>}
+      </div>
+      {question.question && <p className="run-tool-ask-text">{question.question}</p>}
+      {question.options.length === 0 && question.allowFreeForm && !answered && (
+        <p className="run-tool-ask-text run-tool-ask-text-muted">No options offered — answer below.</p>
+      )}
+      <div className="run-tool-ask-options" role={question.multiSelect ? "group" : "radiogroup"} aria-label={question.question}>
+        {question.options.map((opt, oi) => {
+          const selected = selectedLabels.includes(opt.label);
+          const muted = answered && !selected;
+          return (
+            <button
+              key={oi}
+              type="button"
+              className={
+                "run-tool-ask-option" +
+                (selected ? " run-tool-ask-option-selected" : "") +
+                (muted ? " run-tool-ask-option-muted" : "") +
+                (answered ? " run-tool-ask-option-locked" : "")
+              }
+              aria-pressed={selected}
+              disabled={submitting || answered}
+              onClick={() => onToggle(question, opt.label)}
+            >
+              <span className="run-tool-ask-option-marker" aria-hidden="true" data-selected={selected ? "true" : "false"}>
+                {question.multiSelect ? (selected ? "☑" : "☐") : selected ? "●" : "○"}
+              </span>
+              <span className="run-tool-ask-option-body">
+                <span className="run-tool-ask-option-label">{opt.label}</span>
+                {opt.description && <span className="run-tool-ask-option-desc">{opt.description}</span>}
+                {opt.preview && selected && (
+                  <span
+                    className="run-tool-ask-option-preview"
+                    // eslint-disable-next-line react/no-danger -- SDK-vetted preview HTML fragment; mirrors RunAwaitingInputCard.
+                    dangerouslySetInnerHTML={{ __html: opt.preview }}
+                  />
+                )}
+              </span>
+            </button>
+          );
+        })}
+      </div>
+      {answered && answeredNote && (
+        <div className="run-tool-ask-notes-readonly">
+          <span className="run-tool-ask-notes-readonly-label">Notes</span>
+          <p className="run-tool-ask-notes-readonly-text">{answeredNote}</p>
+        </div>
+      )}
+      {showFreeForm && (
+        <label className="run-tool-ask-notes-label">
+          <span>{question.options.length === 0 ? "Your answer" : "Say something else (optional)"}</span>
+          <textarea
+            className="run-tool-ask-notes"
+            rows={question.options.length === 0 ? 5 : 3}
+            value={liveNote}
+            disabled={submitting}
+            onChange={(e) => onNote(question.question, e.target.value)}
+            onKeyDown={(e) => {
+              if (!shouldSubmitAskUserFreeFormKey(e)) return;
+              e.preventDefault();
+              e.stopPropagation();
+              onSubmit();
+            }}
+            placeholder={question.options.length === 0 ? "Type your answer..." : "Add a free-form reply or extra context..."}
+            {...(question.secret ? { spellCheck: false, autoComplete: "off" } : {})}
+          />
+        </label>
+      )}
+    </section>
+  );
+}
+
+function QuestionReview({
+  questions,
+  selectedLabelsFor,
+  answeredNoteFor,
+}: {
+  questions: AskUserQuestion[];
+  selectedLabelsFor: (question: AskUserQuestion) => string[];
+  answeredNoteFor: (question: string) => string | undefined;
+}) {
+  return (
+    <section className="run-question-card run-question-review">
+      <div className="run-question-card-head">
+        <span>Review</span>
+      </div>
+      {questions.map((q, index) => {
+        const labels = selectedLabelsFor(q);
+        const note = answeredNoteFor(q.question);
+        return (
+          <div key={index} className="run-question-review-row">
+            <span className="run-question-review-label">{index + 1}. {q.question}</span>
+            <span className="run-question-review-answer">
+              {labels.length > 0 ? labels.join(", ") : "No answer selected"}
+            </span>
+            {note && <span className="run-question-review-note">{note}</span>}
+          </div>
+        );
+      })}
+    </section>
   );
 }
 
@@ -7739,6 +8288,7 @@ function RunTurnActivityGroup({
   onQuote,
   onFork,
   onOpenBackgroundTask,
+  onOpenQuestionSet,
   loading,
 }: {
   group: Extract<EntryGroup, { kind: "activity" }>;
@@ -7759,6 +8309,7 @@ function RunTurnActivityGroup({
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+  onOpenQuestionSet?: (questionSetId: string) => void;
   loading?: boolean;
 }) {
   const ownedAssistantEntries = useMemo(
@@ -7833,6 +8384,18 @@ function RunTurnActivityGroup({
               )}
             </span>
           </button>
+          {shellSummary?.awaitingInputTarget?.questionSetId && onOpenQuestionSet && (
+            <button
+              type="button"
+              className="run-turn-activity-question-link"
+              onClick={() => onOpenQuestionSet(shellSummary.awaitingInputTarget!.questionSetId)}
+            >
+              <MessageSquareIcon size={14} aria-hidden="true" />
+              <span>
+                Needs input · {shellSummary.awaitingInputTarget.questionCount ?? shellSummary.questionCount ?? 1} question{(shellSummary.awaitingInputTarget.questionCount ?? shellSummary.questionCount ?? 1) === 1 ? "" : "s"}
+              </span>
+            </button>
+          )}
           {open && (
             <div className="run-turn-activity-body">
               {group.shell && !group.loaded ? (
@@ -8290,6 +8853,7 @@ export function RunMessages({
   onQuote,
   onFork,
   onOpenTurn,
+  onOpenQuestionSet,
   onOpenBackgroundTask,
   scrollParent,
   onStartReached,
@@ -8333,6 +8897,7 @@ export function RunMessages({
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  onOpenQuestionSet?: (questionSetId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollParent: HTMLElement | null;
   onStartReached?: () => void;
@@ -8665,6 +9230,7 @@ export function RunMessages({
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
             onFork={onFork}
+            onOpenQuestionSet={onOpenQuestionSet}
             onOpenBackgroundTask={onOpenBackgroundTask}
             loading={loadingActivityTurns[g.turnId] === true}
           />
@@ -8696,6 +9262,7 @@ export function RunMessages({
       loadingActivityTurns,
       onFork,
       onOpenTurn,
+      onOpenQuestionSet,
       onActivityOpen,
       onOpenBackgroundTask,
       onQuote,
@@ -9466,6 +10033,9 @@ function ChatPane({
   const [pendingRouteTurnNumber, setPendingRouteTurnNumber] = useState<number | null>(
     initialRunRoute?.tab === "turns" ? initialRunRoute.turnNumber : null,
   );
+  const [selectedQuestionSetId, setSelectedQuestionSetId] = useState<string | null>(
+    initialRunRoute?.tab === "questions" ? initialRunRoute.questionSetId : null,
+  );
   // A present-but-unresolvable turn segment (a bad number, or a bookmarked
   // retired turn_<uuid>) routes to an explicit unavailable-target state rather
   // than silently falling back to the latest turn.
@@ -9478,6 +10048,20 @@ function ChatPane({
     useState<TurnViewScrollAnchor | null>(initialRunRoute?.tab === "turns" ? "bottom" : null);
   const [backgroundView, setBackgroundView] = useState<BackgroundView>("shells");
   const [selectedBackgroundId, setSelectedBackgroundId] = useState<string | null>(null);
+  const [sessionQuestions, setSessionQuestions] = useState<SessionQuestionsState>({
+    status: "idle",
+    sets: [],
+    pendingCount: 0,
+    error: null,
+  });
+  useEffect(() => {
+    setSessionQuestions({
+      status: "idle",
+      sets: [],
+      pendingCount: 0,
+      error: null,
+    });
+  }, [session.id]);
   const [scheduledWakeupEntries, setScheduledWakeupEntries] = useState<TranscriptEntry[]>([]);
   const [controlActionEntries, setControlActionEntries] = useState<TranscriptEntry[]>([]);
   const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
@@ -10558,6 +11142,14 @@ function ChatPane({
       setPendingRouteTurnNumber(route.turnNumber);
       setRouteTurnUnavailable(route.turnSegmentPresent && route.turnNumber == null);
       setPendingTurnViewRouteAnchor("bottom");
+      return;
+    }
+    if (route.tab === "questions") {
+      setActiveTab("questions");
+      setSelectedQuestionSetId(route.questionSetId);
+      setPendingRouteTurnNumber(null);
+      setRouteTurnUnavailable(false);
+      setPendingTurnViewRouteAnchor(null);
       return;
     }
     setActiveTab("chat");
@@ -12851,10 +13443,12 @@ function ChatPane({
       replaceAppRoute("settings", settingsTab, adminView);
     } else if (activeTab === "help") {
       replaceAppRoute("help");
+    } else if (activeTab === "questions") {
+      replaceSessionRoute(session.id, "questions", selectedQuestionSetId);
     } else {
       replaceSessionRoute(session.id, "chat");
     }
-  }, [activeTab, adminView, pendingScrollMessageId, publicView, routeTurnUnavailable, routedSelectedTurnNumber, session.id, settingsTab, visible]);
+  }, [activeTab, adminView, pendingScrollMessageId, publicView, routeTurnUnavailable, routedSelectedTurnNumber, selectedQuestionSetId, session.id, settingsTab, visible]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -13261,6 +13855,60 @@ function ChatPane({
     return () => onRefreshFlashChange(session.id, null);
   }, [onRefreshFlashChange, session.id, visibleRefreshFlash]);
 
+  const refreshSessionQuestions = useCallback(async (): Promise<void> => {
+    if (publicView) return;
+    setSessionQuestions((prev) => ({
+      ...prev,
+      status: prev.status === "ready" ? "ready" : "loading",
+      error: null,
+    }));
+    try {
+      const res = await authedFetch(`/api/sessions/${encodeURIComponent(session.id)}/questions`);
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(typeof body?.detail === "string" ? body.detail : `questions failed: ${res.status}`);
+      }
+      const rawSets = Array.isArray(body?.sets) ? body.sets : [];
+      const sets: SessionQuestionSet[] = rawSets.map((raw: any) => normalizeSessionQuestionSet(raw));
+      setSessionQuestions({
+        status: "ready",
+        sets,
+        pendingCount: Number(body?.pending_count ?? sets.filter((set) => set.status === "waiting").length),
+        error: null,
+      });
+      setSelectedQuestionSetId((current) => {
+        if (current && sets.some((set) => set.id === current)) return current;
+        return sets.find((set) => set.status === "waiting")?.id ?? sets[0]?.id ?? null;
+      });
+    } catch (err) {
+      setSessionQuestions((prev) => ({
+        ...prev,
+        status: "error",
+        error: err instanceof Error ? err.message : String(err),
+      }));
+    }
+  }, [publicView, session.id]);
+
+  useEffect(() => {
+    if (!visible || publicView) return;
+    void refreshSessionQuestions();
+  }, [historyBootstrapped, publicView, refreshSessionQuestions, visible]);
+
+  const openQuestionSet = useCallback((questionSetId?: string | null) => {
+    if (publicView) return;
+    if (questionSetId?.trim()) {
+      setSelectedQuestionSetId(questionSetId.trim());
+    } else if (!selectedQuestionSetId && sessionQuestions.sets.length > 0) {
+      setSelectedQuestionSetId(
+        sessionQuestions.sets.find((set: SessionQuestionSet) => set.status === "waiting")?.id ??
+          sessionQuestions.sets[0]?.id ??
+          null,
+      );
+    }
+    setActiveTab("questions");
+    void refreshSessionQuestions();
+  }, [publicView, refreshSessionQuestions, selectedQuestionSetId, sessionQuestions.sets]);
+
   async function submitAnswer(
     askingTurnId: string,
     payload: AnswerPayload,
@@ -13300,6 +13948,7 @@ function ChatPane({
       }
       throw new Error(detail);
     }
+    void refreshSessionQuestions();
     // The answer lands durably as `turn.input_answered` on this same turn via
     // SSE; no local activity-cache patch.
   }
@@ -13446,6 +14095,26 @@ function ChatPane({
                 onOpen: () => {
                   if (activeTab === "turns") setActiveTab("chat");
                   else openTurnPage(undefined, { anchor: "bottom" });
+                },
+              }}
+              questions={{
+                active: activeTab === "questions",
+                count: sessionQuestions.pendingCount,
+                countActive: sessionQuestions.pendingCount > 0,
+                disabled: sessionQuestions.status === "loading" && sessionQuestions.sets.length === 0,
+                title: sessionQuestions.pendingCount > 0 ? "Questions need input" : "Questions",
+                onOpen: () => {
+                  if (activeTab === "questions") setActiveTab("chat");
+                  else {
+                    if (!selectedQuestionSetId && sessionQuestions.sets.length > 0) {
+                      setSelectedQuestionSetId(
+                        sessionQuestions.sets.find((set) => set.status === "waiting")?.id ??
+                          sessionQuestions.sets[0]?.id ??
+                          null,
+                      );
+                    }
+                    setActiveTab("questions");
+                  }
                 },
               }}
               background={{
@@ -13761,6 +14430,13 @@ function ChatPane({
               </div>
             </div>
           </div>
+        ) : activeTab === "questions" ? (
+          <RunQuestionsScreen
+            state={sessionQuestions}
+            selectedSetId={selectedQuestionSetId}
+            onSelectSet={setSelectedQuestionSetId}
+            onRetry={() => void refreshSessionQuestions()}
+          />
         ) : activeTab === "turns" ? (
           routeTurnUnavailable ? (
             <div className="run-turn-view" aria-label="Turn view">
@@ -13932,6 +14608,7 @@ function ChatPane({
               }
               onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
               onOpenTurn={openTurnPage}
+              onOpenQuestionSet={openQuestionSet}
               scrollParent={transcriptScrollEl}
               onStartReached={() => {
                 void loadSdkOlderEvents();
@@ -17171,6 +17848,12 @@ function AuthenticatedApp() {
                   active: false,
                   disabled: true,
                   title: "Turns are available once the agent has turn activity",
+                  onOpen: () => undefined,
+                }}
+                questions={{
+                  active: false,
+                  disabled: true,
+                  title: "Questions are available inside a session",
                   onOpen: () => undefined,
                 }}
                 background={{

@@ -38,6 +38,12 @@ type SessionEventStore interface {
 	// projection uses this to build primary Turn activity shells and lazy
 	// expansion bodies without relying on a browser-local raw-event window.
 	EventsForTurn(ctx context.Context, tankSessionID, turnID string, limit int) (SessionEventPage, error)
+	// QuestionEventsBySession returns the durable question-set ledger slice
+	// for one session: turn.awaiting_input, the matching turn.input_answered
+	// events, and terminal events for turns that asked a question. It backs the
+	// first-class Questions route, so the browser does not need a loaded
+	// transcript or Turn activity window to discover pending input.
+	QuestionEventsBySession(ctx context.Context, tankSessionID string, limit int) (SessionEventPage, error)
 	FindTurnTerminal(ctx context.Context, tankSessionID, turnID string) (map[string]any, error)
 	// LatestLifecycleEvents returns the most recent N lifecycle events
 	// (the turn.* lifecycle set, including turn.awaiting_input) for a
@@ -324,6 +330,65 @@ func (s *postgresSessionEventStore) LatestEvents(ctx context.Context, tankSessio
 
 func (s *postgresSessionEventStore) EventsForTurn(ctx context.Context, tankSessionID, turnID string, limit int) (SessionEventPage, error) {
 	return s.eventsForTurn(ctx, s.pool, tankSessionID, turnID, limit)
+}
+
+func (s *postgresSessionEventStore) QuestionEventsBySession(ctx context.Context, tankSessionID string, limit int) (SessionEventPage, error) {
+	limit = normalizeSessionEventLimit(limit)
+	queryLimit := limit + 1
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	const q = `
+		WITH question_turns AS (
+			SELECT DISTINCT turn_id
+			FROM session_events
+			WHERE tank_session_id = $1
+				AND event_type = 'turn.awaiting_input'
+				AND turn_id IS NOT NULL
+		)
+		SELECT e.payload
+		FROM session_events e
+		WHERE e.tank_session_id = $1
+			AND e.order_key <> ''
+			AND (
+				e.event_type IN ('turn.awaiting_input', 'turn.input_answered')
+				OR (
+					e.turn_id IN (SELECT turn_id FROM question_turns)
+					AND e.event_type IN (
+						'turn.completed',
+						'turn.failed',
+						'turn.command_failed',
+						'turn.interrupted'
+					)
+				)
+			)
+		ORDER BY e.order_key ASC
+		LIMIT $2
+	`
+	rows, err := s.pool.Query(ctx, q, storageKey, queryLimit)
+	if err != nil {
+		return SessionEventPage{}, err
+	}
+	defer rows.Close()
+
+	out := make([]map[string]any, 0, queryLimit)
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return SessionEventPage{}, err
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(payload, &doc); err != nil {
+			return SessionEventPage{}, fmt.Errorf("session-events doc is not JSON: %w", err)
+		}
+		if err := conversation.ValidateEventMap(doc); err != nil {
+			return SessionEventPage{}, fmt.Errorf("session-events doc rejected by schema: %w", err)
+		}
+		doc["tank_session_id"] = tankSessionID
+		out = append(out, doc)
+	}
+	if err := rows.Err(); err != nil {
+		return SessionEventPage{}, err
+	}
+	return sessionEventPageFromAscendingScan(out, limit, SessionEventCursor{}), nil
 }
 
 func (s *postgresSessionEventStore) EventsForTurnTx(ctx context.Context, tx pgx.Tx, tankSessionID, turnID string, limit int) (SessionEventPage, error) {
@@ -725,6 +790,14 @@ func (StubSessionEventStore) LatestEvents(_ context.Context, _ string, _ int) (S
 }
 
 func (StubSessionEventStore) EventsForTurn(_ context.Context, _, _ string, _ int) (SessionEventPage, error) {
+	return SessionEventPage{
+		Events:      []map[string]any{},
+		FoundOldest: true,
+		FoundNewest: true,
+	}, nil
+}
+
+func (StubSessionEventStore) QuestionEventsBySession(_ context.Context, _ string, _ int) (SessionEventPage, error) {
 	return SessionEventPage{
 		Events:      []map[string]any{},
 		FoundOldest: true,

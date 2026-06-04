@@ -58,6 +58,18 @@ func (s fakeSessionEventStore) EventsForTurn(_ context.Context, _ string, turnID
 	}, nil
 }
 
+func (s fakeSessionEventStore) QuestionEventsBySession(_ context.Context, _ string, _ int) (store.SessionEventPage, error) {
+	var events []map[string]any
+	for _, page := range s.pages {
+		events = append(events, page.Events...)
+	}
+	return store.SessionEventPage{
+		Events:      events,
+		FoundOldest: true,
+		FoundNewest: true,
+	}, nil
+}
+
 func (s fakeSessionEventStore) HasOrderKey(_ context.Context, _ string, orderKey string) (bool, error) {
 	if orderKey == "" {
 		return true, nil

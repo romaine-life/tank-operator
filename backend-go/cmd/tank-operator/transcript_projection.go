@@ -1242,6 +1242,21 @@ func turnActivitySummaryMap(activityEntries, compactedEntries []map[string]any, 
 		case "meta":
 			if transcriptMapString(entry, "metaKind") == "awaiting_input" {
 				out["questionCount"] = out["questionCount"].(int) + 1
+				if _, exists := out["awaitingInputTarget"]; !exists {
+					awaiting := transcriptMap(entry, "awaitingInput")
+					timelineID := transcriptMapString(awaiting, "timelineId")
+					out["awaitingInputTarget"] = map[string]any{
+						"questionSetId": sessionQuestionSetID(
+							timelineID,
+							transcriptMapString(awaiting, "askingTurnId"),
+							transcriptMapString(awaiting, "providerItemId"),
+						),
+						"timelineId":     timelineID,
+						"providerItemId": transcriptMapString(awaiting, "providerItemId"),
+						"turnId":         transcriptMapString(awaiting, "askingTurnId"),
+						"questionCount":  transcriptMapInt(awaiting, "questionCount"),
+					}
+				}
 			}
 			if meta := transcriptMap(entry, "meta"); transcriptMapString(meta, "severity") == "error" {
 				out["errorCount"] = out["errorCount"].(int) + 1
@@ -1298,6 +1313,20 @@ func projectionActivityEntryEndOrderKey(entry map[string]any) string {
 		transcriptMapString(entry, "activityEndOrderKey"),
 		transcriptMapString(entry, "orderKey"),
 	)
+}
+
+func transcriptMapInt(m map[string]any, key string) int {
+	v := m[key]
+	switch n := v.(type) {
+	case int:
+		return n
+	case int64:
+		return int(n)
+	case float64:
+		return int(n)
+	default:
+		return 0
+	}
 }
 
 func finalAnswerProjectedIndexes(entries []map[string]any, indexes []int, finalAnswerIDs map[string]bool) map[int]bool {
