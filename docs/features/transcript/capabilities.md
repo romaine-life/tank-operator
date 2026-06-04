@@ -153,13 +153,14 @@ Contract impact:
 - The server projection records it as an ordinary mid-turn Turn-activity row
   (`meta`, `metaKind: context_compacted`), folded into the turn's collapsed
   activity shell like any other non-final-answer row and absent from the settled
-  transcript — satisfying the Transcript contract's no-bounce invariant. This is
-  the same Turn-activity placement as AskUserQuestion (both are turn noise). The
-  frontend renders compaction through the existing `RunMetaBlock` primitive in
-  the Turn-activity disclosure. An earlier implementation promoted it into the
-  settled transcript and excluded it from the activity compact, which made it
-  flash-then-vanish on the per-turn detail screen; that promotion path was
-  deleted.
+  transcript — satisfying the Transcript contract's no-bounce invariant. It
+  shares AskUserQuestion's settled-transcript exclusion, while AskUserQuestion
+  additionally owns a semantic `question_set` turn page because it requires
+  user action. The frontend renders compaction through the existing
+  `RunMetaBlock` primitive in the Turn-activity disclosure. An earlier
+  implementation promoted it into the settled transcript and excluded it from
+  the activity compact, which made it flash-then-vanish on the per-turn detail
+  screen; that promotion path was deleted.
 - The silent-drop class that hid it is now observable:
   `tank_runner_unmapped_provider_event_total{type,subtype}` counts any provider
   event the adapter neither maps nor explicitly ignores. Steady state zero.
@@ -274,17 +275,27 @@ Evidence:
   loaded Turns detail re-reads `/turns/{id}/activity` after a live
   `transcript_rows` update without using a full page refresh.
 
-## AskUserQuestion Card (turn.awaiting_input)
+## AskUserQuestion Question Page (turn.awaiting_input)
 
 Status: active
 
 Intent:
 When the in-pod agent invokes AskUserQuestion, the active turn pauses with a
 durable `turn.awaiting_input` event carrying the Tank-canonical questions. The
-transcript projection places an interactive question card
-(`metaKind: "awaiting_input"`) inside Turn activity, while the main transcript
-shows the Turn activity shell. The card reflects durable state, not local React
-optimism, so a fresh tab renders the same thing.
+turn-activity page projection records a compact AskUserQuestion invocation
+marker on the preceding activity page, then opens one semantic `question_set`
+page per question in the set. Those adjacent pages carry the same
+`questionSet` number and individual `questionIndex`/`questionCount` metadata,
+letting the Turns UI label the set and provide previous/next question shortcuts
+without creating a third navigation system. If the agent asks immediately, that
+first activity page is marker-only by design: it preserves the ledger handoff
+without squeezing the question UI into activity history. The main transcript
+renders a restored AskUserQuestion handoff button (`RunNeedsInputAnnouncement`,
+originally removed by PR #861) from the durable `awaiting_input` meta row so the
+user can reach the question set from the conversation. The interactive answer
+form is owned by the Turns question page, which reflects durable state rather
+than local React optimism, so a fresh tab renders the same question set and
+defaults to it while the turn is still waiting for input.
 
 Answering resumes the same turn:
 - The user's selection posts to `POST /turns/{askingTurnId}/answer`, which
@@ -293,12 +304,14 @@ Answering resumes the same turn:
 - The asking turn remains active while awaiting input; Stop can still interrupt
   that turn because `activeTurnId` is preserved.
 
-The card has two states:
-- waiting — unanswered. The card surfaces the options (single/multi-select), the
-  always-on free-form textarea when `allowFreeForm` is set, and a Submit button.
-- answered — a later `turn.input_answered` event references the question
+Each question page has two states:
+- waiting — unanswered. The page surfaces one question from the set, with its
+  options (single/multi-select), the free-form textarea when `allowFreeForm` is
+  set, and one set-level Submit button that only enables after every question
+  page in the set has a response.
+- answered — a later `turn.input_answered` event references the question set
   (`awaitingInput.answered` is true), or the user just submitted (a local
-  snapshot locks the card for the round-trip). The card renders locked with the
+  snapshot locks the page for the round-trip). The page renders locked with the
   user's picks.
 
 Affected contracts:
@@ -306,9 +319,23 @@ Affected contracts:
 - Transcript Navigation
 
 Contract impact:
-- The card is a Turn activity projection of durable `turn.awaiting_input`; it is
-  not a second ledger and it does not appear as a standalone main-transcript
-  message.
+- The question page is a Turn activity projection of durable
+  `turn.awaiting_input`; it is not a second ledger. The same durable
+  `awaiting_input` meta row appears in the main transcript as the navigation
+  button to the question set, never as a standalone authored message or
+  synthetic turn.
+- The preceding activity page receives a compact `AskUserQuestion` tool marker
+  derived from the same durable `turn.awaiting_input` event. It is an audit
+  marker for the invocation, not the answer surface and not a dependency on
+  provider-specific raw tool rows.
+- Turn activity pagination is semantic as well as size-bounded: each
+  `turn.awaiting_input` event starts one `question_set` page per question while
+  preserving one durable answer set. The pages expose shared set identity and
+  per-question position so the page selector and question card can show
+  "question 1 of N" and move to the adjacent question page. Answered/history
+  state remains visible when revisiting any question page.
+- A pending `needs_input` turn defaults to the first unanswered `question_set`
+  page; normal turns still default to the latest activity page.
 - `answered` is derived from a durable fact (a later `turn.input_answered` event
   whose `payload.question_timeline_id` matches), never a local "I submitted"
   flag, so historical replay matches live.
@@ -316,14 +343,17 @@ Contract impact:
   latest-message state do not point at a synthetic user-message turn.
 
 Evidence:
-- `frontend/src/needsInputAnnouncement.ts` is the single state machine shared
-  by the live reducer projection and the server-projected (fresh-tab) path;
-  `frontend/src/needsInputAnnouncement.test.ts` covers all three states,
-  including that an answer wins over a later interrupt.
-- `frontend/src/conversationProjection.test.ts` and
-  `backend-go/cmd/tank-operator/transcript_projection_test.go` both prove an
-  interrupted, unanswered AskUserQuestion announcement carries
-  `turnTerminalStatus`, the fact the renderer uses to settle the row.
+- Backend: `backend-go/cmd/tank-operator/turn_pages_test.go` proves
+  `turn.awaiting_input` creates the compact invocation marker page, starts a
+  `question_set` page for each question, keeps a shared durable answer set, and
+  seals an answered set before resumed activity.
+- Backend API: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
+  proves an unanswered `needs_input` turn defaults to the question page.
+- Frontend: `frontend/src/migrationPolicy.test.ts` proves transcript renderers
+  use the restored `RunNeedsInputAnnouncement` button while
+  `RunAwaitingInputCard` is owned by `RunTurnActivityScreen`.
+- Migration guard: `scripts/check-askuserquestion-migration.mjs` requires the
+  semantic page path and same-turn `/answer` path.
 
 ## Provider Usage UI Retirement
 

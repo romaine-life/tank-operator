@@ -9,9 +9,12 @@
 // in-turn reply command for the paused provider callback.
 //
 // NEW model: invoking AskUserQuestion publishes durable `turn.awaiting_input`
-// as a same-turn pause, keeps that turn active, shows the question card only in
-// Turn activity, records the user's answer as `turn.input_answered`, and
-// delivers it to the paused runner over the control plane as `input_reply`.
+// as a same-turn pause, keeps that turn active, opens a semantic
+// Turn-activity question-set page, records the user's answer as
+// `turn.input_answered`, and delivers it to the paused runner over the control
+// plane as `input_reply`. The main transcript keeps the restored durable
+// RunNeedsInputAnnouncement button to the question set, while the Turn question
+// page owns the interactive answer form.
 //
 // This guard forbids the deleted new-turn surfaces and requires the same-turn
 // pause/resume surfaces so neither model can drift back. Fail-on-match is the
@@ -62,10 +65,8 @@ const forbidden = [
   { name: "removed EventApprovalRequested/Resolved Go consts", pattern: /\bEventApproval(Requested|Resolved)\b/ },
 
   { name: "removed needs_input_announcement metaKind/row", pattern: /needs_input_announcement/ },
-  { name: "removed RunNeedsInputAnnouncement component", pattern: /\bRunNeedsInputAnnouncement\b/ },
   { name: "removed projectNeedsInputAnnouncement projection", pattern: /\bprojectNeedsInputAnnouncement\b/ },
   { name: "removed isProjectionNeedsInputAnnouncement predicate", pattern: /\bisProjectionNeedsInputAnnouncement\b/ },
-  { name: "removed needsInputAnnouncement module", pattern: /needsInputAnnouncementState|needsInputAnnouncement"|\.\/needsInputAnnouncement/ },
 
   { name: "removed ask_user_answer user-message display kind", pattern: /ask_user_answer/ },
   { name: "removed askUserAnswers transcript decoration", pattern: /\baskUserAnswers\b/ },
@@ -189,6 +190,26 @@ const required = [
     file: "frontend/src/App.tsx",
     name: "RunAwaitingInputCard renders the question card",
     pattern: /\bRunAwaitingInputCard\b/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "RunNeedsInputAnnouncement is the restored transcript question button",
+    pattern: /\bRunNeedsInputAnnouncement\b/,
+  },
+  {
+    file: "frontend/src/App.tsx",
+    name: "question page uses the semantic question_set page kind",
+    pattern: /kind === "question_set"/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/turn_pages.go",
+    name: "turn.awaiting_input creates semantic question_set pages",
+    pattern: /awaitingInputQuestionPages[\s\S]{0,700}Kind:\s*"question_set"/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/turn_pages.go",
+    name: "needs_input defaults to pending question-set page",
+    pattern: /defaultTurnActivityPageNumber/,
   },
   {
     file: "frontend/src/App.tsx",
