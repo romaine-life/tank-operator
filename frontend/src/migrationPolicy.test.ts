@@ -12,6 +12,7 @@ const authSource = readSource("./auth.ts");
 const conversationReducerSource = readSource("./conversationReducer.ts");
 const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
 const sessionEventStreamTelemetrySource = readSource("./sessionEventStreamTelemetry.ts");
+const sessionConnectionIndicatorSource = readSource("./sessionConnectionIndicator.ts");
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
 const sessionListDebugSource = readSource("./sessionListDebug.ts");
 const sessionListDebugRecorderSource = readSource("./sessionListDebugRecorder.ts");
@@ -972,6 +973,9 @@ test("SSE reconnect status stays out of transcript/composer flow", () => {
   assert.equal(indexCssSource.includes(".run-connection-banner"), false);
   assert.equal(appSource.includes("onConnectionLabelChange"), true);
   assert.equal(appSource.includes("activeConnectionLabel"), true);
+  assert.equal(appSource.includes("sessionConnectionIndicatorLabel"), true);
+  assert.equal(sessionConnectionIndicatorSource.includes("CONNECTION_CONNECTING_VISIBLE_AFTER_MS"), true);
+  assert.match(sessionConnectionIndicatorSource, /case "connecting":[\s\S]*delayedConnectingVisible/);
   assert.equal(indexCssSource.includes(".run-connection-pill"), true);
   assert.match(indexCssSource, /absolute title chrome[\s\S]*\.run-connection-pill/);
   assert.match(indexCssSource, /\.workspace-title-overlay \.run-header-name-btn \{[\s\S]*flex: 0 1 auto;[\s\S]*text-align: left;/);

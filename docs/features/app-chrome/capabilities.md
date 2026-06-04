@@ -125,6 +125,44 @@ Evidence:
 - `frontend/src/migrationPolicy.test.ts` pins the menu-based
   Turns/Background/Files structure and the public-view standalone Turns tab.
 
+## Session Connection Indicator
+
+Status: active
+
+Intent:
+Surface only user-relevant live-stream degradation in the run title chrome,
+without turning routine SSE setup after tab/session reactivation into a warning
+the user learns to ignore.
+
+Affected contracts:
+- App Chrome
+- Auth And Streams
+- Transcript
+
+Contract impact:
+- Raw stream lifecycle remains telemetry-owned: open, ready, close, retry,
+  resync, and stream-error events stay observable even when they do not render
+  app chrome.
+- Routine `connecting` is telemetry-only until it outlasts the short display
+  threshold. The title pill then reads `reconnecting`, matching the user's
+  visible situation rather than the implementation's initial handshake.
+- `connection lost` and `resyncing` remain immediately visible because they
+  affect trust in whether the live tail is current.
+- The indicator is scoped to the visible chat pane and remains outside the
+  transcript/composer flow, so reconnect, resync, and retry state cannot move
+  transcript content or steal input focus.
+
+Evidence:
+- `frontend/src/sessionConnectionIndicator.ts` owns the pure display policy;
+  `frontend/src/sessionConnectionIndicator.test.ts` proves routine connecting
+  is suppressed below threshold, slow reconnect/failure/resync are visible, and
+  labels do not bleed onto hidden or non-chat panes.
+- `frontend/src/sessionEventStreamTelemetry.ts` continues to emit the raw
+  browser stream events consumed by the Auth And Streams and Transcript
+  observability contracts.
+- `frontend/src/migrationPolicy.test.ts` pins that the pill remains in title
+  chrome rather than the transcript/composer flow.
+
 ## Cluster Health Sidebar Surface
 
 Status: active

@@ -140,6 +140,11 @@ import {
   refreshFlashLabel,
 } from "./transcriptRefreshIndicator";
 import {
+  CONNECTION_CONNECTING_VISIBLE_AFTER_MS,
+  sessionConnectionIndicatorLabel,
+  type SdkConnectionState,
+} from "./sessionConnectionIndicator";
+import {
   scheduledWakeupRowsToEntries,
   scheduledWakeupStatusLabel,
   type ScheduledWakeupRow,
@@ -422,12 +427,6 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
 };
 type SdkTerminalStatus = "done" | "error" | "stopped";
 type LocalRunStatus = "idle" | "running" | "stopping" | "done" | "error";
-type SdkConnectionState =
-  | "idle"
-  | "connecting"
-  | "connected"
-  | "connection_lost"
-  | "resyncing";
 type SdkTerminalResult = {
   status: SdkTerminalStatus;
   detail?: string;
@@ -3286,20 +3285,6 @@ function advanceTimelineCursor(current: string | null, next: string | null): str
   if (!next) return current;
   if (!current || next > current) return next;
   return current;
-}
-
-function sdkConnectionLabel(state: SdkConnectionState): string | null {
-  switch (state) {
-    case "connecting":
-      return "Connecting";
-    case "connection_lost":
-      return "Connection lost";
-    case "resyncing":
-      return "Resyncing";
-    case "idle":
-    case "connected":
-      return null;
-  }
 }
 
 function isScheduleWakeupToolName(name: string | undefined): boolean {
@@ -9818,6 +9803,19 @@ function ChatPane({
   const silenceWatchdogRef = useRef<SilenceWatchdog | null>(null);
   const [sdkConnectionState, setSdkConnectionState] =
     useState<SdkConnectionState>("idle");
+  const [delayedConnectingVisible, setDelayedConnectingVisible] =
+    useState(false);
+  useEffect(() => {
+    if (sdkConnectionState !== "connecting") {
+      setDelayedConnectingVisible(false);
+      return;
+    }
+    setDelayedConnectingVisible(false);
+    const timer = window.setTimeout(() => {
+      setDelayedConnectingVisible(true);
+    }, CONNECTION_CONNECTING_VISIBLE_AFTER_MS);
+    return () => window.clearTimeout(timer);
+  }, [sdkConnectionState]);
   const currentRunRef = useRef<{
     id: string;
     turnId: string;
@@ -13241,9 +13239,12 @@ function ChatPane({
     return () => window.removeEventListener("keydown", onKey, true);
   }, [activeTab, focusComposerTextarea, publicView, visible]);
 
-  const connectionLabel = sdkConnectionLabel(sdkConnectionState);
-  const visibleConnectionLabel =
-    visible && activeTab === "chat" ? connectionLabel : null;
+  const visibleConnectionLabel = sessionConnectionIndicatorLabel({
+    state: sdkConnectionState,
+    visible,
+    activeTab,
+    delayedConnectingVisible,
+  });
 
   useEffect(() => {
     onConnectionLabelChange(session.id, visibleConnectionLabel);
