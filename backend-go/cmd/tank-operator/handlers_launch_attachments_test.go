@@ -20,6 +20,12 @@ type fakePendingLaunchStore struct {
 	launch    *pgstore.PendingLaunchTurn
 	staged    []pgstore.LaunchAttachmentBlob
 	notAccept bool
+	// reconciler-side knobs
+	claimRows    []pgstore.PendingLaunchTurn
+	loadBlobs    []pgstore.LaunchAttachmentBlob
+	failedTurn   string
+	failReason   string
+	dispatchTurn string
 }
 
 func (f *fakePendingLaunchStore) Register(context.Context, pgstore.RegisterPendingLaunchRequest) (pgstore.PendingLaunchTurn, error) {
@@ -45,15 +51,18 @@ func (f *fakePendingLaunchStore) StageAttachment(_ context.Context, _, _ string,
 }
 
 func (f *fakePendingLaunchStore) ClaimReady(context.Context, time.Time, int, time.Duration) ([]pgstore.PendingLaunchTurn, error) {
-	return nil, nil
+	return f.claimRows, nil
 }
 func (f *fakePendingLaunchStore) LoadAttachments(context.Context, string, string) ([]pgstore.LaunchAttachmentBlob, error) {
-	return nil, nil
+	return f.loadBlobs, nil
 }
-func (f *fakePendingLaunchStore) MarkDispatched(context.Context, string, string, string) error {
+func (f *fakePendingLaunchStore) MarkDispatched(_ context.Context, _, turnID, dispatchedTurnID string) error {
+	f.dispatchTurn = dispatchedTurnID
 	return nil
 }
-func (f *fakePendingLaunchStore) MarkFailed(context.Context, string, string, string) error {
+func (f *fakePendingLaunchStore) MarkFailed(_ context.Context, _, turnID, reason string) error {
+	f.failedTurn = turnID
+	f.failReason = reason
 	return nil
 }
 

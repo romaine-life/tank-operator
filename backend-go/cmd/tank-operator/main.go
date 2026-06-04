@@ -533,6 +533,18 @@ func main() {
 			}
 		}()
 	}
+	// Backend-owned dispatch of durable attachment launches (#865): claim ready
+	// launches whose pod is Active, materialize the staged bytes into the
+	// workspace, and publish submit_turn — so the launch is delivered even if
+	// the browser that created it is gone. Needs both the durable store and the
+	// session bus (the publish target).
+	if pendingLaunchStore != nil && sessionBus != nil {
+		go func() {
+			if err := runLaunchDispatchLoop(ctx, srv, launchDispatchInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("launch dispatch loop stopped", "error", err)
+			}
+		}()
+	}
 	srv.registerRoutes(mux)
 
 	// 13.5. Start the conversation read-cursor stagnation sampler.
