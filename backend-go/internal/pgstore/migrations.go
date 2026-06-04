@@ -1344,6 +1344,21 @@ var schemaMigrations = []migration{
 		created_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (tank_session_id, turn_id, ordinal)
 	)`},
+	// Collision repair for PR #874: a branch/prod rollout recorded migration
+	// 0115 with a checksum that did not match the final main text. Keep
+	// 0115-0118 as harmless placeholders and create the desired background-task
+	// wake schema with fresh IDs below. Do not put schema changes in these IDs.
+	{ID: "0115", SQL: `SELECT 1`},
+	{ID: "0116", SQL: `SELECT 1`},
+	{ID: "0117", SQL: `SELECT 1`},
+	{ID: "0118", SQL: `SELECT 1`},
+
+	{ID: "0119", SQL: `ALTER TABLE session_bug_labels
+		DROP CONSTRAINT IF EXISTS session_bug_labels_pkey`},
+	{ID: "0120", SQL: `ALTER TABLE session_bug_labels
+		ADD CONSTRAINT session_bug_labels_pkey
+		PRIMARY KEY (owner_email, session_scope, session_id, bug_label_id)`},
+
 	// session_background_task_wakes — durable backend-owned "a background task
 	// finished while the session was idle" wakes. The base Claude Bash tool
 	// promises "run_in_background … re-invokes you when it exits", but a
@@ -1356,7 +1371,7 @@ var schemaMigrations = []migration{
 	// (tank_session_id, task_id) uniqueness is the idempotency key for SDK frame
 	// repeats and runner restart: one background task produces at most one wake
 	// row per session.
-	{ID: "0115", SQL: `CREATE TABLE IF NOT EXISTS session_background_task_wakes (
+	{ID: "0121", SQL: `CREATE TABLE IF NOT EXISTS session_background_task_wakes (
 		wake_id           text PRIMARY KEY,
 		session_scope     text NOT NULL,
 		session_id        text NOT NULL,
@@ -1378,18 +1393,13 @@ var schemaMigrations = []migration{
 		created_at        timestamptz NOT NULL DEFAULT now(),
 		updated_at        timestamptz NOT NULL DEFAULT now()
 	)`},
-	{ID: "0116", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_background_task_wakes_task
+	{ID: "0122", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_background_task_wakes_task
 		ON session_background_task_wakes (tank_session_id, task_id)`},
-	{ID: "0117", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_background_task_wakes_client_nonce
+	{ID: "0123", SQL: `CREATE UNIQUE INDEX IF NOT EXISTS session_background_task_wakes_client_nonce
 		ON session_background_task_wakes (tank_session_id, client_nonce)`},
-	{ID: "0118", SQL: `CREATE INDEX IF NOT EXISTS session_background_task_wakes_due
+	{ID: "0124", SQL: `CREATE INDEX IF NOT EXISTS session_background_task_wakes_due
 		ON session_background_task_wakes (session_scope, status, due_at, created_at)
 		WHERE status IN ('scheduled', 'claiming')`},
-	{ID: "0119", SQL: `ALTER TABLE session_bug_labels
-		DROP CONSTRAINT IF EXISTS session_bug_labels_pkey`},
-	{ID: "0120", SQL: `ALTER TABLE session_bug_labels
-		ADD CONSTRAINT session_bug_labels_pkey
-		PRIMARY KEY (owner_email, session_scope, session_id, bug_label_id)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
@@ -1453,6 +1463,9 @@ var acceptedAppliedMigrationChecksums = map[string]map[string]struct{}{
 	},
 	"0102": {
 		"3698dba005984cc9317a14fc9b9561ad228d55d5a8950110dc1c9e3fc2ed0bbf": {},
+	},
+	"0115": {
+		"31f797615bbd4bfef55d14431881805ea425e15727c75267bb4a4563aabdb04e": {},
 	},
 }
 
