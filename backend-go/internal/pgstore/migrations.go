@@ -1344,10 +1344,11 @@ var schemaMigrations = []migration{
 		created_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (tank_session_id, turn_id, ordinal)
 	)`},
-	// Collision repair for PR #874: a branch/prod rollout recorded migration
-	// 0115 with a checksum that did not match the final main text. Keep
-	// 0115-0118 as harmless placeholders and create the desired background-task
-	// wake schema with fresh IDs below. Do not put schema changes in these IDs.
+	// Collision repair for PR #874/#877: branch/prod rollouts recorded
+	// migrations 0115-0116 with checksums that did not match the final main
+	// text. Keep 0115-0118 as harmless placeholders and create the desired
+	// background-task wake schema with fresh IDs below. Do not put schema
+	// changes in these IDs.
 	{ID: "0115", SQL: `SELECT 1`},
 	{ID: "0116", SQL: `SELECT 1`},
 	{ID: "0117", SQL: `SELECT 1`},
