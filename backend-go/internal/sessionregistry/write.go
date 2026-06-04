@@ -393,6 +393,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			sessions.runtime_context_window_tokens,
 			sessions.runtime_context_window_source,
 			COALESCE(to_char(sessions.runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+			sessions.compaction_count,
 			COALESCE(sessions.agent_avatar_id, ''),
 			COALESCE(sessions.system_avatar_id, ''),
 			sessions.sidebar_position,
@@ -415,18 +416,19 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		WHERE sessions.email = $1 AND sessions.session_scope = $2 AND sessions.session_id = $3
 	`
 	var (
-		mode, podName, requestedAt, createdAt, updatedAt        string
-		status, readyAt, terminatingAt                          string
-		name                                                    *string
-		visible                                                 bool
-		activitySummary, testState, rolloutState, cloneState    []byte
-		repos, capabilities                                     []string
-		model, effort, runtimeModel, runtimeEffort, runtimeAt   string
-		runtimeContextWindowSource, runtimeContextWindowAt      string
-		agentAvatarID, systemAvatarID                           string
-		runtimeContextWindowTokens, sidebarPosition, rowVersion int64
-		bugLabelID                                              sql.NullInt64
-		bugLabelName, bugLabelSlug                              sql.NullString
+		mode, podName, requestedAt, createdAt, updatedAt      string
+		status, readyAt, terminatingAt                        string
+		name                                                  *string
+		visible                                               bool
+		activitySummary, testState, rolloutState, cloneState  []byte
+		repos, capabilities                                   []string
+		model, effort, runtimeModel, runtimeEffort, runtimeAt string
+		runtimeContextWindowSource, runtimeContextWindowAt    string
+		agentAvatarID, systemAvatarID                         string
+		runtimeContextWindowTokens, compactionCount           int64
+		sidebarPosition, rowVersion                           int64
+		bugLabelID                                            sql.NullInt64
+		bugLabelName, bugLabelSlug                            sql.NullString
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
 		&mode, &podName, &name, &visible,
@@ -436,6 +438,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&repos, &cloneState, &capabilities, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
 		&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
+		&compactionCount,
 		&agentAvatarID, &systemAvatarID,
 		&sidebarPosition,
 		&rowVersion,
@@ -480,6 +483,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		RuntimeContextWindowTokens:     runtimeContextWindowTokens,
 		RuntimeContextWindowSource:     runtimeContextWindowSource,
 		RuntimeContextWindowObservedAt: runtimeContextWindowAt,
+		CompactionCount:                compactionCount,
 		AgentAvatarID:                  agentAvatarID,
 		SystemAvatarID:                 systemAvatarID,
 		SidebarPosition:                sidebarPosition,

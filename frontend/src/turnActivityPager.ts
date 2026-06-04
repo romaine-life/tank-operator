@@ -22,6 +22,23 @@
 export type TurnActivityPageInfo = {
   page: number;
   pageCount: number;
+  kind?: string;
+  questionCount?: number;
+  questionIndex?: number;
+  questionSet?: number;
+  answered?: boolean;
+  pages?: TurnActivityPageDirectoryItem[];
+};
+
+export type TurnActivityPageDirectoryItem = {
+  number: number;
+  kind?: string;
+  eventCount?: number;
+  sealed?: boolean;
+  questionCount?: number;
+  questionIndex?: number;
+  questionSet?: number;
+  answered?: boolean;
 };
 
 export type TurnActivityPagerState = {

@@ -84,6 +84,7 @@ type Info struct {
 	RuntimeContextWindowTokens     int64   `json:"runtime_context_window_tokens,omitempty"`
 	RuntimeContextWindowSource     string  `json:"runtime_context_window_source,omitempty"`
 	RuntimeContextWindowObservedAt *string `json:"runtime_context_window_observed_at,omitempty"`
+	CompactionCount                int64   `json:"compaction_count,omitempty"`
 	AgentAvatarID                  string  `json:"agent_avatar_id,omitempty"`
 	SystemAvatarID                 string  `json:"system_avatar_id,omitempty"`
 }
@@ -277,6 +278,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		RuntimeContextWindowTokens:     record.RuntimeContextWindowTokens,
 		RuntimeContextWindowSource:     record.RuntimeContextWindowSource,
 		RuntimeContextWindowObservedAt: optionalString(record.RuntimeContextWindowObservedAt),
+		CompactionCount:                record.CompactionCount,
 		AgentAvatarID:                  record.AgentAvatarID,
 		SystemAvatarID:                 record.SystemAvatarID,
 	}

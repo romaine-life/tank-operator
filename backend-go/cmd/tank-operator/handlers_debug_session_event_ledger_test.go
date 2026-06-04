@@ -75,6 +75,10 @@ func (f *fakeDebugSessionEventLedgerStore) UnreadOutputCount(context.Context, st
 	return 0, nil
 }
 
+func (f *fakeDebugSessionEventLedgerStore) CountContextCompactions(context.Context, string) (int64, error) {
+	return 0, nil
+}
+
 func newLedgerTestServer(t *testing.T) (*appServer, *fakeDebugSessionEventLedgerStore) {
 	t.Helper()
 	app := adminTestServer(t)

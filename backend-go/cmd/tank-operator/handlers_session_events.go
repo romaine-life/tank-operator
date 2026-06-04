@@ -138,9 +138,11 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 	pages := projectTurnPages(turnID, events)
 	recordTurnActivityPages(len(pages.Pages), pages.TotalEventCount)
 
-	// Default to the last page: for an active or just-completed long turn the
-	// user wants the latest activity and the terminal, not the oldest prefix.
-	selected := len(pages.Pages)
+	// Default to the pending question-set page when the turn is paused for
+	// user input; otherwise default to the latest activity page. The server
+	// owns this choice so fresh tabs and deep links do not reconstruct it from
+	// browser state.
+	selected := defaultTurnActivityPageNumber(pages)
 	if requested := strings.TrimSpace(r.URL.Query().Get("page")); requested != "" {
 		if n, convErr := strconv.Atoi(requested); convErr == nil {
 			selected = n
@@ -179,6 +181,13 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		}
 		body["entries"] = entries
 		body["sealed"] = current.Sealed
+		body["page_kind"] = current.Kind
+		if current.Kind == "question_set" {
+			body["question_count"] = current.QuestionCount
+			body["question_index"] = current.QuestionIndex
+			body["question_set"] = current.QuestionSet
+			body["answered"] = current.Answered
+		}
 		body["page_start_order_key"] = current.StartOrderKey
 		body["page_end_order_key"] = current.EndOrderKey
 		body["has_more"] = selected < len(pages.Pages)

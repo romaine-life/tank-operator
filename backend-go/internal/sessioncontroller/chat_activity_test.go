@@ -199,6 +199,8 @@ type activityEventStore struct {
 	lifecycleEvents []map[string]any
 	terminalTurns   map[string]map[string]any
 	terminalLookups int
+	compactions     int64
+	compactionScans int
 }
 
 func (s *activityEventStore) Upsert(_ context.Context, _ map[string]any) error {
@@ -246,6 +248,11 @@ func (s *activityEventStore) UnreadOutputCount(_ context.Context, _ string, afte
 	return s.unread, nil
 }
 
+func (s *activityEventStore) CountContextCompactions(_ context.Context, _ string) (int64, error) {
+	s.compactionScans++
+	return s.compactions, nil
+}
+
 func mustActivityJSON(t *testing.T, value map[string]any) []byte {
 	t.Helper()
 	body, err := json.Marshal(value)
@@ -253,4 +260,130 @@ func mustActivityJSON(t *testing.T, value map[string]any) []byte {
 		t.Fatal(err)
 	}
 	return body
+}
+
+type staticOwnerResolver struct{ owner string }
+
+func (r staticOwnerResolver) OwnerForSession(_ context.Context, _, _ string) (string, error) {
+	return r.owner, nil
+}
+
+// captureCompactionMetrics embeds the no-op metrics so it satisfies the full
+// LifecycleEmitterMetrics surface while only capturing the compaction counter.
+type captureCompactionMetrics struct {
+	noopLifecycleEmitterMetrics
+	calls    int
+	provider string
+	trigger  string
+}
+
+func (m *captureCompactionMetrics) RecordCompaction(provider, trigger string) {
+	m.calls++
+	m.provider = provider
+	m.trigger = trigger
+}
+
+func compactionEmitter(emitter *recordingRowEmitter, events *activityEventStore, metrics *captureCompactionMetrics, priorCount int64) *ChatActivityEmitter {
+	return &ChatActivityEmitter{
+		Writer:     &RowWriter{Emitter: emitter},
+		ChatEvents: events,
+		ReadStates: store.NewStubConversationReadStateStore(),
+		Registry:   staticOwnerResolver{owner: "user@example.com"},
+		Rows: activityRowFetcher{record: sessionmodel.SessionRecord{
+			ID:              "63",
+			Email:           "user@example.com",
+			Scope:           "default",
+			CompactionCount: priorCount,
+		}},
+		Metrics: metrics,
+		Scope:   "default",
+	}
+}
+
+func contextCompactedEvent() map[string]any {
+	return map[string]any{
+		"type":       "context.compacted",
+		"session_id": "63",
+		"source":     "claude",
+		"payload":    map[string]any{"trigger": "auto"},
+	}
+}
+
+// TestEmitChatActivityDeltaRecordsAdvancingCompaction proves a context.compacted
+// event whose recomputed total exceeds the durable prior writes + publishes the
+// row and records exactly one provider/trigger-labeled metric — and that it
+// takes the compaction branch, never the activity-summary unread path.
+func TestEmitChatActivityDeltaRecordsAdvancingCompaction(t *testing.T) {
+	emitter := &recordingRowEmitter{}
+	events := &activityEventStore{compactions: 2}
+	metrics := &captureCompactionMetrics{}
+	e := compactionEmitter(emitter, events, metrics, 1)
+
+	if err := e.EmitChatActivityDelta(context.Background(), contextCompactedEvent()); err != nil {
+		t.Fatal(err)
+	}
+	if events.compactionScans != 1 {
+		t.Fatalf("CountContextCompactions calls = %d, want 1", events.compactionScans)
+	}
+	if emitter.calls != 1 {
+		t.Fatalf("row publishes = %d, want 1 (advancing compaction must write+publish)", emitter.calls)
+	}
+	if events.afterOrderKey != "" {
+		t.Fatalf("activity unread path ran (afterOrderKey=%q); compaction must not touch the activity summary", events.afterOrderKey)
+	}
+	if metrics.calls != 1 || metrics.provider != "claude" || metrics.trigger != "auto" {
+		t.Fatalf("RecordCompaction = (calls=%d provider=%q trigger=%q), want (1, claude, auto)", metrics.calls, metrics.provider, metrics.trigger)
+	}
+}
+
+// TestEmitChatActivityDeltaDeduplicatesRedeliveredCompaction proves an
+// at-least-once redelivery — the recomputed total equals the durable prior — is
+// a no-op: no row publish and no metric. This is the idempotency guard that
+// keeps redelivered compaction events off the row-version cursor.
+func TestEmitChatActivityDeltaDeduplicatesRedeliveredCompaction(t *testing.T) {
+	emitter := &recordingRowEmitter{}
+	events := &activityEventStore{compactions: 1}
+	metrics := &captureCompactionMetrics{}
+	e := compactionEmitter(emitter, events, metrics, 1)
+
+	if err := e.EmitChatActivityDelta(context.Background(), contextCompactedEvent()); err != nil {
+		t.Fatal(err)
+	}
+	if emitter.calls != 0 {
+		t.Fatalf("row publishes = %d, want 0 (redelivered compaction at the same total must be a no-op)", emitter.calls)
+	}
+	if metrics.calls != 0 {
+		t.Fatalf("RecordCompaction calls = %d, want 0 on redelivery", metrics.calls)
+	}
+}
+
+// TestDeriveActivitySummaryIgnoresContextCompacted is a defensive guard: a
+// context.compacted event is inert for the activity summary — folding one
+// yields the same summary as folding nothing. Compaction is intra-turn noise,
+// not a lifecycle transition, so it must never move run status, active turn, or
+// needs-input. (In production it never reaches the fold at all — the lifecycle
+// query filters it out — but this locks the invariant if that filter changes.)
+func TestDeriveActivitySummaryIgnoresContextCompacted(t *testing.T) {
+	base := sessionactivity.DeriveActivitySummary(nil, nil, 0, false)
+	withCompaction := sessionactivity.DeriveActivitySummary(
+		nil,
+		[]map[string]any{{"type": "context.compacted", "turn_id": "turn-1", "order_key": "004"}},
+		0,
+		false,
+	)
+	// Compaction may advance LastOrderKey — it is a real ledger event — but it
+	// must not move any run-state field: it is intra-turn noise, not a
+	// lifecycle transition.
+	if withCompaction.Status != base.Status {
+		t.Fatalf("status = %q, want unchanged %q", withCompaction.Status, base.Status)
+	}
+	if withCompaction.ActiveTurnID != nil {
+		t.Fatalf("active turn id = %v, want nil (compaction is not a turn start)", *withCompaction.ActiveTurnID)
+	}
+	if withCompaction.NeedsInput != base.NeedsInput {
+		t.Fatalf("needs_input = %v, want unchanged %v", withCompaction.NeedsInput, base.NeedsInput)
+	}
+	if withCompaction.Failed != base.Failed {
+		t.Fatalf("failed = %v, want unchanged %v", withCompaction.Failed, base.Failed)
+	}
 }

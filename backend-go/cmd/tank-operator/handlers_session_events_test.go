@@ -24,6 +24,10 @@ func (s fakeSessionEventStore) Upsert(_ context.Context, _ map[string]any) error
 	return nil
 }
 
+func (s fakeSessionEventStore) CountContextCompactions(_ context.Context, _ string) (int64, error) {
+	return 0, nil
+}
+
 func (s fakeSessionEventStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
 	return nil, nil
 }
@@ -284,6 +288,88 @@ func TestHandleSessionTurnActivityPaginatesOverLimitTurnWithTerminalShell(t *tes
 	entries, _ := body["entries"].([]any)
 	if len(entries) == 0 {
 		t.Fatalf("last page entries empty, want the tail of the turn")
+	}
+}
+
+func TestHandleSessionTurnActivityDefaultsNeedsInputToQuestionPage(t *testing.T) {
+	app := adminTestServer(t)
+	app.sessionScope = "default"
+
+	events := []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "go", "display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("tool-a", "00000003", "item.completed", "tool", "claude", "turn-1", "turn-1:item:a", map[string]any{
+			"kind": "tool_result", "name": "Read", "output": "x",
+		}),
+		projectionTestEvent("await", "00000004", "turn.awaiting_input", "runner", "claude", "turn-1", "turn-1:item:ask", map[string]any{
+			"provider_item_id": "toolu_ask",
+			"questions": []any{
+				map[string]any{
+					"question": "Proceed?",
+					"options":  []any{map[string]any{"label": "Yes"}, map[string]any{"label": "No"}},
+				},
+				map[string]any{
+					"question":      "Anything else?",
+					"allowFreeForm": true,
+				},
+			},
+		}),
+	}
+	app.sessionEvents = fakeSessionEventStore{pages: map[string]store.SessionEventPage{
+		"": {Events: events, FoundOldest: true, FoundNewest: true},
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/turns/turn-1/activity", nil)
+	req.SetPathValue("session_id", "63")
+	req.SetPathValue("turn_id", "turn-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	app.handleSessionTurnActivity(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got, _ := body["page"].(float64); got != 2 {
+		t.Fatalf("default page = %v, want first pending question page 2", body["page"])
+	}
+	if got, _ := body["page_count"].(float64); got != 3 {
+		t.Fatalf("page_count = %v, want activity marker + two question pages", body["page_count"])
+	}
+	if got, _ := body["page_kind"].(string); got != "question_set" {
+		t.Fatalf("page_kind = %q, want question_set", got)
+	}
+	if got, _ := body["question_index"].(float64); got != 1 {
+		t.Fatalf("question_index = %v, want 1", body["question_index"])
+	}
+	if got, _ := body["question_set"].(float64); got != 1 {
+		t.Fatalf("question_set = %v, want 1", body["question_set"])
+	}
+	if got, _ := body["question_count"].(float64); got != 2 {
+		t.Fatalf("question_count = %v, want 2", body["question_count"])
+	}
+	if body["answered"] == true {
+		t.Fatalf("answered = true, want false for pending question set")
+	}
+	entries, _ := body["entries"].([]any)
+	if len(entries) != 1 {
+		t.Fatalf("entries = %d, want one question-set card entry", len(entries))
+	}
+	entry, _ := entries[0].(map[string]any)
+	if got, _ := entry["metaKind"].(string); got != "awaiting_input" {
+		t.Fatalf("entry metaKind = %q, want awaiting_input", got)
+	}
+	awaiting, _ := entry["awaitingInput"].(map[string]any)
+	if got, _ := awaiting["questionIndex"].(float64); got != 1 {
+		t.Fatalf("entry awaitingInput.questionIndex = %v, want 1", awaiting["questionIndex"])
+	}
+	if got, _ := awaiting["questionSet"].(float64); got != 1 {
+		t.Fatalf("entry awaitingInput.questionSet = %v, want 1", awaiting["questionSet"])
 	}
 }
 

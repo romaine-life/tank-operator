@@ -207,13 +207,44 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
   assert.equal(appSource.includes("pendingAskUserCount"), true);
   assert.match(appSource, /entries\.some\(isPendingAskUserQuestionTool\)/);
   assert.match(appSource, /toolGroupDefaultOpen\(g\.entries, autoExpandTools, toolExpansionOverrides\)/);
+  assert.equal(appSource.includes("return autoExpand || isPendingAskUserQuestionTool(entry);"), true);
 });
 
-// The retired "Claude is waiting on you" system-identity handoff row
-// (RunNeedsInputAnnouncement) is replaced by the interactive
-// RunAwaitingInputCard. The new card's presence + wiring is pinned by
-// scripts/check-askuserquestion-migration.mjs (REQUIRED entries); there is no
-// system-identity announcement row to assert here anymore.
+test("AskUserQuestion handoff button is restored in transcript and answer form is owned by Turns", () => {
+  const messagesMatch = appSource.match(/export function RunMessages\([\s\S]*?\n}\n\nfunction AdminObservabilityPanel/);
+  assert.ok(messagesMatch, "RunMessages source should be present");
+  assert.equal(messagesMatch![0].includes("RunAwaitingInputCard"), false);
+  assert.equal(messagesMatch![0].includes("RunNeedsInputAnnouncement"), true);
+
+  const transcriptActivityMatch = appSource.match(/function RunTurnActivityGroup\([\s\S]*?\n}\n\nfunction RunTurnActivityScreen/);
+  assert.ok(transcriptActivityMatch, "RunTurnActivityGroup source should be present");
+  assert.equal(transcriptActivityMatch![0].includes("RunAwaitingInputCard"), false);
+  assert.equal(transcriptActivityMatch![0].includes("RunNeedsInputAnnouncement"), true);
+
+  const turnScreenMatch = appSource.match(/function RunTurnActivityScreen\([\s\S]*?\n}\n\nfunction rangeIntersectsNode/);
+  assert.ok(turnScreenMatch, "RunTurnActivityScreen source should be present");
+  assert.equal(turnScreenMatch![0].includes("RunAwaitingInputCard"), true);
+  assert.equal(appSource.includes('kind === "question_set"'), true);
+  assert.equal(appSource.includes("resetPage?: boolean"), true);
+  assert.equal(appSource.includes("function RunAwaitingInputNotice"), false);
+  assert.equal(appSource.includes("function RunNeedsInputAnnouncement"), true);
+  assert.equal(appSource.includes('data-kind="needs-input-announcement"'), true);
+  assert.equal(appSource.includes("Open in Turns"), true);
+  assert.equal(appSource.includes("onOpenTurn?.(targetTurnId, { anchor: \"top\", resetPage: true })"), true);
+  assert.equal(indexCssSource.includes(".run-needs-input-announcement-copy"), true);
+  assert.equal(appSource.includes('data-page-kind={selectedPageInfo?.kind ?? "activity"}'), true);
+  assert.equal(indexCssSource.includes(".run-turn-view {\n  display: flex;"), true);
+  assert.equal(indexCssSource.includes('.run-turn-view-body[data-page-kind="question_set"]'), true);
+  assert.equal(appSource.includes("askUserQuestionDrafts"), true);
+  assert.equal(appSource.includes("questionIndex: typeof body.question_index === \"number\""), true);
+  assert.equal(appSource.includes("questionSet: typeof body.question_set === \"number\""), true);
+  assert.equal(appSource.includes("turnActivityPageOptionParts"), true);
+  assert.equal(indexCssSource.includes(".run-turn-view-page-option-index"), true);
+  assert.equal(appSource.includes("Next question"), true);
+  assert.equal(appSource.includes("Question set ${selectedPageInfo.questionSet}"), false);
+  assert.equal(appSource.includes("Answer every question before submit."), true);
+  assert.equal(appSource.includes("Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}"), true);
+});
 
 test("transcript meta status lines are attributed to the session system identity", () => {
   // "Stopped" / "Turn stopped by user.", "Turn failed" + provider error,
@@ -298,6 +329,15 @@ test("server-projected active turn activity shells own thinking row active state
     true,
   );
   assert.equal(appSource.includes("turnActivityGroupIsActive(entry.activity, turnId, activeTurnId)"), true);
+  assert.equal(appSource.includes("function turnActivityGroupNeedsInput"), true);
+  assert.equal(appSource.includes("function insertActiveTurnTailGroups"), false);
+  assert.equal(appSource.includes("const pendingNeedsInputGroups"), false);
+  assert.equal(appSource.includes("pendingNeedsInputFallbackIndexes.set(group.turnId, groups.length)"), false);
+  assert.match(
+    appSource,
+    /group\.active &&\s+!needsInput &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/,
+  );
+  assert.equal(appSource.includes("groups.push(group);"), false);
   assert.equal(appSource.includes("turnActivityShellIsDurablyActive(group.shell.activity)"), true);
   assert.equal(appSource.includes("turnActivityShellIsDurablyActive(entry.activity)"), true);
   assert.equal(appSource.includes("durableActiveTurnActivityShells"), true);
@@ -450,18 +490,27 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
 });
 
 test("turn view entry points open at the turn bottom", () => {
-  assert.equal(appSource.includes('type TurnViewScrollAnchor = "bottom"'), true);
+  assert.equal(appSource.includes('type TurnViewScrollAnchor = "bottom" | "top"'), true);
   assert.equal(
     appSource.includes('onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}'),
     true,
   );
-  // The AskUserQuestion pause is now the interactive RunAwaitingInputCard in
-  // Turn activity, so the retired RunNeedsInputAnnouncement "go to the question
-  // turn" navigation (onOpenTurn?.(targetTurnId, …)) is gone.
+  // AskUserQuestion uses the same turn navigation path, but with resetPage so
+  // the server default opens the pending question-set page.
+  assert.equal(appSource.includes('{ anchor: "top", resetPage: true }'), true);
   assert.equal(
     appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })'),
     true,
   );
+  assert.equal(appSource.includes("function TurnViewButton"), true);
+  assert.equal(appSource.includes("function TranscriptViewButton"), true);
+  assert.equal(appSource.includes('href={href}'), true);
+  assert.equal(appSource.includes('sessionRouteUrl(sessionId, "turns", turnNumber)'), true);
+  assert.equal(appSource.includes('turnLinksEnabled={!publicView}'), true);
+  assert.equal(appSource.includes("pendingTranscriptMessageId"), true);
+  assert.equal(appSource.includes("transcriptHrefForEntry"), true);
+  assert.equal(appSource.includes("onOpenTranscriptMessage"), true);
+  assert.equal(appSource.includes("Open message in transcript"), true);
   assert.equal(
     appSource.includes('else openTurnPage(undefined, { anchor: "bottom" });'),
     true,

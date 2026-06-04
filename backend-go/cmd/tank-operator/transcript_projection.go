@@ -39,6 +39,7 @@ type projectionState struct {
 	turnUsages         map[string]turnUsageProjection
 	turnTerminals      map[string]turnTerminalProjection
 	awaitingInputs     []projectionAwaitingInput
+	awaitingInputTools []projectedEntryItem
 	answeredQuestions  map[string]projectionAnsweredInput
 	runStatus          string
 	activeTurnID       string
@@ -116,13 +117,15 @@ type turnUsageProjection struct {
 
 // projectionAwaitingInput captures a turn.awaiting_input pause: the agent asked
 // the user a question and the same turn is waiting for a reply. The
-// turn-activity card renders from this (questions + ids), and "answered" is
+// turn question-set page renders from this (questions + ids), and "answered" is
 // derived from a later turn.input_answered event on the same turn.
 type projectionAwaitingInput struct {
 	AskingTurnID   string
 	ProviderItemID string
 	TimelineID     string
 	Questions      []any
+	QuestionIndex  int
+	QuestionSet    int
 	OrderKey       string
 	Time           string
 	SourceEventID  string
@@ -261,14 +264,17 @@ func (s *projectionState) apply(event map[string]any) {
 		s.upsertBackgroundTask(event, status)
 	case "turn.awaiting_input":
 		// The agent asked the user a question and paused the same turn. The
-		// durable question card stays in Turn activity; the turn remains active
-		// until an answer resumes it, stop interrupts it, or a final terminal
-		// arrives.
+		// durable question set owns the Turn question page; the main
+		// transcript keeps the same durable meta row as a navigation button.
+		// The turn remains active until an answer resumes it, stop interrupts
+		// it, or a final terminal arrives.
 		s.applyAwaitingInput(event)
 		s.runStatus = "needs_input"
 		s.needsInput = true
 		s.activeTurnID = transcriptString(event, "turn_id")
 		s.activeItemID = ""
+	case "turn.awaiting_input.invocation":
+		s.applyAwaitingInputInvocation(event)
 	case "turn.input_answered":
 		s.applyInputAnswered(event)
 		if turnID := transcriptString(event, "turn_id"); turnID != "" {
@@ -475,11 +481,73 @@ func (s *projectionState) applyAwaitingInput(event map[string]any) {
 	s.awaitingInputs = append(s.awaitingInputs, projectionAwaitingInput{
 		AskingTurnID:   turnID,
 		ProviderItemID: transcriptPayloadString(event, "provider_item_id"),
-		TimelineID:     transcriptPayloadString(event, "timeline_id"),
+		TimelineID:     projectionFirstNonEmpty(transcriptPayloadString(event, "timeline_id"), transcriptString(event, "timeline_id")),
 		Questions:      questions,
+		QuestionIndex:  projectionAwaitingInputQuestionIndex(event),
+		QuestionSet:    projectionAwaitingInputQuestionSet(event),
 		OrderKey:       transcriptString(event, "order_key"),
 		Time:           transcriptString(event, "created_at"),
 		SourceEventID:  transcriptString(event, "event_id"),
+	})
+}
+
+func projectionAwaitingInputQuestionIndex(event map[string]any) int {
+	if raw, ok := transcriptNumeric(transcriptPayloadValue(event, "question_index")); ok {
+		return int(raw)
+	}
+	return 0
+}
+
+func projectionAwaitingInputQuestionSet(event map[string]any) int {
+	if raw, ok := transcriptNumeric(transcriptPayloadValue(event, "question_set")); ok {
+		return int(raw)
+	}
+	return 0
+}
+
+func (s *projectionState) applyAwaitingInputInvocation(event map[string]any) {
+	turnID := transcriptString(event, "turn_id")
+	if turnID == "" {
+		return
+	}
+	questions := projectionAwaitingInputQuestions(event)
+	if len(questions) == 0 {
+		return
+	}
+	summary := awaitingInputSummary(questions)
+	anchor := transcriptPayloadString(event, "timeline_id")
+	if anchor == "" {
+		anchor = transcriptString(event, "timeline_id")
+	}
+	if anchor == "" {
+		anchor = transcriptString(event, "event_id")
+	}
+	orderKey := transcriptString(event, "order_key")
+	if orderKey != "" {
+		orderKey = orderKey + "~ask_user_question"
+	}
+	entry := map[string]any{
+		"id":             anchor + ":ask_user_question_invocation",
+		"kind":           "tool",
+		"toolName":       "AskUserQuestion",
+		"toolStatus":     "completed",
+		"toolInput":      projectionFormatValue(map[string]any{"questions": questions}),
+		"toolOutput":     "Question set opened on the next turn page.",
+		"turnId":         turnID,
+		"providerItemId": transcriptPayloadString(event, "provider_item_id"),
+		"time":           transcriptString(event, "created_at"),
+		"startedAt":      transcriptString(event, "created_at"),
+		"completedAt":    transcriptString(event, "created_at"),
+		"sourceEventId":  transcriptString(event, "event_id"),
+		"orderKey":       orderKey,
+	}
+	if summary != "" {
+		entry["toolSummary"] = summary
+	}
+	s.awaitingInputTools = append(s.awaitingInputTools, projectedEntryItem{
+		entry:    entry,
+		orderKey: orderKey,
+		index:    len(s.awaitingInputTools),
 	})
 }
 
@@ -711,7 +779,7 @@ func (s *projectionState) upsertBackgroundTask(event map[string]any, status stri
 }
 
 func (s *projectionState) projectFlatEntries() []map[string]any {
-	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.turnUsages)+len(s.turnTerminals))
+	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.turnUsages)+len(s.turnTerminals)+len(s.awaitingInputTools))
 	items = append(items, s.messages...)
 	baseIndex := len(items)
 	backgroundProviderIDs := s.backgroundProviderItemIDs()
@@ -806,6 +874,11 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 			orderKey: transcriptMapString(card, "orderKey"),
 			index:    baseIndex + idx,
 		})
+	}
+	baseIndex += len(s.awaitingInputs)
+	for idx, tool := range s.awaitingInputTools {
+		tool.index = baseIndex + idx
+		items = append(items, tool)
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		if items[i].orderKey != "" && items[j].orderKey != "" && items[i].orderKey != items[j].orderKey {
@@ -1010,7 +1083,8 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 	for _, activity := range activities {
 		insertBefore := projectedActivityInsertIndex(entries, activity)
 		activeProgressOnly := activity.Summary["active"] == true && len(activity.CompactedEntryIDs) == 0 && firstTurnProgressIndex(entries, activity.TurnID) >= 0
-		if len(activity.CompactedEntryIDs) == 0 && !activeProgressOnly {
+		activeNeedsInput := activity.Summary["active"] == true && activity.Status == "needs_input"
+		if len(activity.CompactedEntryIDs) == 0 && !activeProgressOnly && !activeNeedsInput {
 			continue
 		}
 		activityByInsertIndex[insertBefore] = activity
@@ -1114,7 +1188,7 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 				continue
 			}
 			activityEntries = append(activityEntries, entry)
-			if !finalIndexes[idx] {
+			if !finalIndexes[idx] && !isProjectionAwaitingInputEntry(entry) {
 				compacted = append(compacted, entry)
 			}
 		}
@@ -1151,7 +1225,14 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string, ru
 	if runStatus == "needs_input" {
 		status = "needs_input"
 	}
-	body := makeTurnActivityBody(activeTurnID, status, activityEntries, activityEntries, true)
+	compactedEntries := make([]map[string]any, 0, len(activityEntries))
+	for _, entry := range activityEntries {
+		if isProjectionAwaitingInputEntry(entry) {
+			continue
+		}
+		compactedEntries = append(compactedEntries, entry)
+	}
+	body := makeTurnActivityBody(activeTurnID, status, activityEntries, compactedEntries, true)
 	if len(progressEntries) > 0 {
 		applyActivityAnchorSummary(body.Summary, progressEntries, len(activityEntries) == 0)
 	}
@@ -1474,12 +1555,18 @@ func assignSessionStatusOwnership(entries []map[string]any) {
 	}
 }
 
+func isProjectionAwaitingInputEntry(entry map[string]any) bool {
+	return transcriptMapString(entry, "kind") == "meta" &&
+		transcriptMapString(entry, "metaKind") == "awaiting_input"
+}
+
 // projectAwaitingInputCard projects a turn.awaiting_input pause into the
-// asking turn's activity detail as the interactive question card. It is anchored
-// at the asking turn's tail (orderKey + "~awaiting_input") so historical replay
-// and live streaming agree on placement inside the turn body. `answered` is
-// derived from a later turn.input_answered event, not a browser-local flag, so a
-// fresh tab opened after the user answered renders the resolved card.
+// asking turn's activity detail as the question-set payload and into the main
+// transcript as the navigation button. It is anchored at the asking turn's tail
+// (orderKey + "~awaiting_input") so historical replay and live streaming agree
+// on placement. `answered` is derived from a later turn.input_answered event,
+// not a browser-local flag, so a fresh tab opened after the user answered
+// renders the resolved question set.
 func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectionAnsweredInput) map[string]any {
 	summary := awaitingInputSummary(awaiting.Questions)
 	title := "Claude is waiting on you"
@@ -1500,6 +1587,8 @@ func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectio
 		"providerItemId": awaiting.ProviderItemID,
 		"timelineId":     awaiting.TimelineID,
 		"questionCount":  len(awaiting.Questions),
+		"questionIndex":  awaiting.QuestionIndex,
+		"questionSet":    awaiting.QuestionSet,
 		"questions":      awaiting.Questions,
 		"answered":       answered,
 	}

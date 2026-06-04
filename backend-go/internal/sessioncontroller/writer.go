@@ -136,6 +136,7 @@ type rowColumnChanges struct {
 	readyAt         *time.Time
 	terminatingAt   *time.Time
 	activitySummary []byte // marshaled JSON; nil means leave unchanged
+	compactionCount *int64 // nil means leave unchanged
 }
 
 func deriveRowColumnChanges(event Event) (rowColumnChanges, bool) {
@@ -158,8 +159,33 @@ func deriveRowColumnChanges(event Event) (rowColumnChanges, bool) {
 			return rowColumnChanges{}, false
 		}
 		return rowColumnChanges{activitySummary: body}, true
+	case EventTypeCompactionChanged:
+		count, ok := compactionCountFromPayload(event.Payload)
+		if !ok {
+			return rowColumnChanges{}, false
+		}
+		return rowColumnChanges{compactionCount: &count}, true
 	}
 	return rowColumnChanges{}, false
+}
+
+// compactionCountFromPayload extracts the recomputed compaction total the
+// ChatActivityEmitter stamps on an EventTypeCompactionChanged transition. The
+// emitter builds the payload in-process with an int64, but tolerate the JSON
+// number shapes so a future direct caller can't silently zero the column.
+func compactionCountFromPayload(payload map[string]any) (int64, bool) {
+	if payload == nil {
+		return 0, false
+	}
+	switch v := payload["compaction_count"].(type) {
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	}
+	return 0, false
 }
 
 func (w *RowWriter) applyRowColumnChanges(ctx context.Context, event Event, c rowColumnChanges) error {
@@ -184,6 +210,11 @@ func (w *RowWriter) applyRowColumnChanges(ctx context.Context, event Event, c ro
 	if c.activitySummary != nil {
 		setParts = append(setParts, fmt.Sprintf("activity_summary = $%d", argIdx))
 		args = append(args, c.activitySummary)
+		argIdx++
+	}
+	if c.compactionCount != nil {
+		setParts = append(setParts, fmt.Sprintf("compaction_count = $%d", argIdx))
+		args = append(args, *c.compactionCount)
 		argIdx++
 	}
 	if len(setParts) == 0 {

@@ -12,13 +12,14 @@ import (
 // must grow with it.
 func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 	cases := []struct {
-		name        string
-		event       Event
-		wantOK      bool
-		wantStatus  string
-		wantReady   bool
-		wantTerm    bool
-		wantSummary bool
+		name           string
+		event          Event
+		wantOK         bool
+		wantStatus     string
+		wantReady      bool
+		wantTerm       bool
+		wantSummary    bool
+		wantCompaction bool
 	}{
 		{
 			name:       "pod_scheduled → status Pending",
@@ -68,6 +69,22 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 			wantSummary: true,
 		},
 		{
+			name: "compaction_changed → compaction_count",
+			event: Event{
+				Type:    EventTypeCompactionChanged,
+				Payload: map[string]any{"compaction_count": int64(3)},
+			},
+			wantOK:         true,
+			wantCompaction: true,
+		},
+		{
+			// A compaction transition with no usable count must be a no-op,
+			// never a write that could zero the durable column.
+			name:   "compaction_changed missing count → no row update",
+			event:  Event{Type: EventTypeCompactionChanged, Payload: map[string]any{}},
+			wantOK: false,
+		},
+		{
 			// session.created has no row-column effect — Manager.Create
 			// owns the row identity columns via registry.Upsert.
 			name:   "session.created → no row update",
@@ -110,6 +127,35 @@ func TestDeriveRowColumnChangesPerEventType(t *testing.T) {
 			}
 			if (got.activitySummary != nil) != tc.wantSummary {
 				t.Fatalf("activitySummary set = %v, want %v", got.activitySummary != nil, tc.wantSummary)
+			}
+			if (got.compactionCount != nil) != tc.wantCompaction {
+				t.Fatalf("compactionCount set = %v, want %v", got.compactionCount != nil, tc.wantCompaction)
+			}
+		})
+	}
+}
+
+// TestDeriveRowColumnChangesCompactionCarriesCount pins that the recomputed
+// total on an EventTypeCompactionChanged payload reaches the compaction_count
+// column verbatim, including the JSON float64 shape a non-in-process caller
+// could produce — guarding against a silent zeroing of the durable column.
+func TestDeriveRowColumnChangesCompactionCarriesCount(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload map[string]any
+		want    int64
+	}{
+		{"int64", map[string]any{"compaction_count": int64(7)}, 7},
+		{"float64", map[string]any{"compaction_count": float64(7)}, 7},
+		{"int", map[string]any{"compaction_count": 7}, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := deriveRowColumnChanges(Event{Type: EventTypeCompactionChanged, Payload: tc.payload})
+			if !ok {
+				t.Fatalf("ok = false, want true")
+			}
+			if got.compactionCount == nil || *got.compactionCount != tc.want {
+				t.Fatalf("compactionCount = %v, want %d", got.compactionCount, tc.want)
 			}
 		})
 	}

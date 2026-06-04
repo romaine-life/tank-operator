@@ -16,12 +16,13 @@ import (
 
 const transcriptRowCursorSeparator = "\x1f"
 
-// Bumped 4 -> 5 so every session re-backfills its transcript rows once and picks
-// up the AskUserQuestion ownership change: the awaiting-input card is turn
-// activity, not a top-level main-transcript row. Without the bump, sessions that
-// already materialized turn.awaiting_input would keep stale main-transcript rows
-// until a new event happened to re-project their turn.
-const transcriptRowBackfillVersion = 5
+// Bumped 5 -> 6 so every session re-backfills its transcript rows once and
+// restores AskUserQuestion's durable main-transcript navigation button while
+// keeping the answer form on the Turn question page. Without the bump, sessions
+// that already materialized turn.awaiting_input would keep stale turn_activity
+// shells whose activityIds hide the button row until a new event happened to
+// re-project their turn.
+const transcriptRowBackfillVersion = 6
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error

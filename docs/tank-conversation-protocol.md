@@ -305,15 +305,19 @@ projection has two distinct surfaces:
 
 The main transcript is promotion-only. User messages, durable session/system
 notices, terminal meta rows, and explicitly promoted final-answer assistant rows
-belong there. Provider activity, reasoning, tool output, background-task rows,
-assistant progress notes, provisional assistant prose, and failure/stop context
-belong to Turn activity by default. Rows must not visibly bounce between those
-surfaces. If an event is eligible for Turn activity, the server transcript
-projection classifies it before first paint; the frontend must not render the
-event as a standalone main-transcript row and later move that same rendered row
-into Turn activity. Conversely, content shown inside Turn activity while a turn
-is active is provisional activity output, not a settled transcript row being
-promoted later.
+belong there. AskUserQuestion's `turn.awaiting_input` meta row also belongs
+there as the restored `RunNeedsInputAnnouncement` navigation button to the
+question set; the Turn question page owns the interactive answer form for the
+same durable question set. Provider
+activity, reasoning, tool output,
+background-task rows, assistant progress notes, provisional assistant prose, and
+failure/stop context belong to Turn activity by default. Rows must not visibly
+bounce between those surfaces. If an event is eligible for Turn activity, the
+server transcript projection classifies it before first paint; the frontend
+must not render the event as a full main-transcript activity surface and later
+move that same rendered row into Turn activity. Conversely, content shown inside
+Turn activity while a turn is active is provisional activity output, not a
+settled transcript row being promoted later.
 
 Historical timeline reads return first-class `turn_activity` rows. These rows
 load collapsed by default and carry summary metadata only: turn id, activity
@@ -330,11 +334,22 @@ terminal: the terminal is the last event, and a bounded oldest-first per-turn
 read used to drop it, leaving a finished turn rendered as perpetually active.
 The turn activity endpoint (`server_turn_activity_v2`) therefore **paginates**
 the expansion body: a turn splits into pages sealed at `turnPageEventLimit`
-events. The endpoint
+events and at AskUserQuestion boundaries. A `turn.awaiting_input` event starts
+a sequence of semantic `question_set` pages, one per question in that tool
+invocation, while preserving one durable answer set. Each question page carries
+the shared `questionSet` number plus `questionIndex`/`questionCount` metadata,
+so the Turns UI can label the set and provide previous/next question shortcuts
+through ordinary page selection. The immediately preceding activity page
+carries a compact AskUserQuestion invocation marker derived from that same
+durable event, so a question-first turn still has an audit page before the
+harness-owned question surface. A later matching `turn.input_answered` seals
+those question pages before resumed provider activity continues on a normal
+activity page. The endpoint
 returns the page directory (`page`, `page_count`, `pages[]`) and defaults to the
-**last** page (`?page=N` selects another); the Turns view always shows a page
-selector (disabled at a single-page boundary) and lets the reader step back
-through sealed earlier pages. Sealing is a durable
+first pending unanswered `question_set` page while the turn is `needs_input`,
+and to the **last** page otherwise (`?page=N` selects another); the Turns view always
+shows a page selector (disabled at a single-page boundary) and lets the reader
+move between sealed activity pages and question pages. Sealing is a durable
 `order_key`-range concept so deep links and reloads are stable. The
 `tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}`
 counter and `TankTurnActiveWithDurableTerminal` alert guard against a regression
@@ -411,8 +426,10 @@ of the settled conversation a reader scans — so it is folded into the turn's
 collapsed activity shell like any other non-final-answer row and is absent from
 the settled transcript, surfacing only when the Turn-activity disclosure is
 opened. It is rendered there through the existing `RunMetaBlock` primitive.
-AskUserQuestion lives in Turn activity for the same reason — both are turn
-noise — though its card additionally drives the same active turn's input pause.
+AskUserQuestion is also intra-turn state, but it is not merely another inline
+activity child: the turn-page projection gives it a semantic `question_set`
+page. The main transcript renders the durable button to that page; the Turns
+question page is where the user answers and reviews the set.
 
 This placement is what the Transcript contract's no-bounce invariant requires
 (*"compactable activity must not be rendered first as a settled transcript row
@@ -903,10 +920,11 @@ questions and publishes durable `turn.awaiting_input`:
 
 `turn.awaiting_input` is not a turn terminal. The asking turn's `submit_turn`
 stays in flight with runner heartbeats, the run-state becomes `needs_input`,
-and `activeTurnId` remains the asking turn. The transcript projection renders a
-question **card** in Turn activity (`metaKind: "awaiting_input"`, carrying the
+and `activeTurnId` remains the asking turn. The turn-page projection renders a
+semantic `question_set` page (`metaKind: "awaiting_input"`, carrying the
 questions + target ids) anchored at the asking turn's tail. The main transcript
-gets only the Turn activity shell.
+gets the same durable meta row as the `RunNeedsInputAnnouncement` navigation
+button to the question set.
 
 - **Claude**: the runner's `canUseTool` callback, on AskUserQuestion, publishes
   `turn.awaiting_input` and keeps the permission callback pending. When
@@ -947,8 +965,8 @@ deterministic command id lets a retry republish the same reply.
 `answers` is `Record<questionText, answerLabel[]>` — always an array so single-
 and multi-select share one shape. `annotations` is optional
 `Record<questionText, { preview?, notes? }>` carrying free-text the user
-attached. The card's answered state is derived durably — the projection marks
-it answered by finding a later `turn.input_answered` event whose
+attached. The question page's answered state is derived durably — the projection
+marks it answered by finding a later `turn.input_answered` event whose
 `payload.question_timeline_id` matches the question — never from browser-local
 optimism.
 
@@ -973,7 +991,7 @@ protocol, not raw provider wire formats."
 }
 ```
 
-- `allowFreeForm` — when true, the question card surfaces an always-on
+- `allowFreeForm` — when true, the question page surfaces an always-on
   textarea for a "say something else" reply, and submit accepts text in lieu
   of an option pick. Claude SDK questions: always `true` (mirrors Claude
   Code's host-UI "Other" affordance). Codex app-server questions: mirrors the
@@ -995,18 +1013,27 @@ infers free-form support from the absence of those fields. A future
 backfill projects the existing durable rows into the canonical shape; the
 runtime read path stays Tank-shape-only.
 
-AskUserQuestion question card stays in Turn activity:
+AskUserQuestion question set owns a Turn page:
 
 The transcript projection in `backend-go/cmd/tank-operator/transcript_projection.go`
 emits one `metaKind: "awaiting_input"` meta row per `turn.awaiting_input`
 pause, anchored at the asking turn's tail (`orderKey` + `~awaiting_input`
 suffix). The row carries an `awaitingInput` payload — `askingTurnId`,
-`providerItemId`, `timelineId`, `questions`, `questionCount`, `answered`,
-`answers`, and `annotations` — sourced entirely from durable state (`answered`
-is true once a later `turn.input_answered` event references the question). The
-SPA renders the row as the interactive question card inside the Turns page and
-the collapsed Turn activity detail; submitting it posts `/answer`, which resumes
-the same active turn.
+`providerItemId`, `timelineId`, `questions`, `questionSet`, `questionIndex`,
+`questionCount`, `answered`, `answers`, and `annotations` — sourced entirely
+from durable state (`answered` is true once a later `turn.input_answered` event
+references the question). The
+turn page splitter projects a compact `AskUserQuestion` tool marker onto the
+preceding activity page and starts one semantic `question_set` page per
+question at that row. Those pages share the same durable `awaitingInput`
+payload, expose a shared set number with per-page question position, and keep
+one set-level answer draft; the Submit action posts the whole answer set once
+every question page has a response. The marker is sourced from the same durable
+pause, not from provider-specific raw tool rows. The SPA renders the
+interactive answer surface from the durable row in the Turns question pages;
+the main transcript renders the restored `RunNeedsInputAnnouncement` button to
+that question set.
+Submitting the form posts `/answer`, which resumes the same active turn.
 
 The Turn-activity placement follows
 [docs/features/transcript/contract.md](features/transcript/contract.md):

@@ -153,13 +153,14 @@ Contract impact:
 - The server projection records it as an ordinary mid-turn Turn-activity row
   (`meta`, `metaKind: context_compacted`), folded into the turn's collapsed
   activity shell like any other non-final-answer row and absent from the settled
-  transcript — satisfying the Transcript contract's no-bounce invariant. This is
-  the same Turn-activity placement as AskUserQuestion (both are turn noise). The
-  frontend renders compaction through the existing `RunMetaBlock` primitive in
-  the Turn-activity disclosure. An earlier implementation promoted it into the
-  settled transcript and excluded it from the activity compact, which made it
-  flash-then-vanish on the per-turn detail screen; that promotion path was
-  deleted.
+  transcript — satisfying the Transcript contract's no-bounce invariant. It
+  shares AskUserQuestion's settled-transcript exclusion, while AskUserQuestion
+  additionally owns a semantic `question_set` turn page because it requires
+  user action. The frontend renders compaction through the existing
+  `RunMetaBlock` primitive in the Turn-activity disclosure. An earlier
+  implementation promoted it into the settled transcript and excluded it from
+  the activity compact, which made it flash-then-vanish on the per-turn detail
+  screen; that promotion path was deleted.
 - The silent-drop class that hid it is now observable:
   `tank_runner_unmapped_provider_event_total{type,subtype}` counts any provider
   event the adapter neither maps nor explicitly ignores. Steady state zero.
@@ -248,6 +249,73 @@ Evidence:
   user → reply in chat with `Session is loading./ready.` in the Turns view; the
   active-turn placeholder sorts below the user message.
 
+## Composer Compaction Count
+
+Status: active
+
+Intent:
+Show, in the composer context indicator, how many times a session's context has
+been compacted — a durable, monotonic per-session count rendered as a third
+`cmp` metric beside the `ctx` used/window fraction and the `usd` cost. Occupancy
+alone cannot convey this: the live `ctx` numerator self-resets after each
+compaction (the next prompt is summary + recent turns), so a session that has
+compacted ten times reads identically to one that never has. The compaction
+count is the durable signal of how much earlier context has been summarized
+away — how lossy the session's working memory has become — which a user
+weighing "should I start a fresh session" needs and the occupancy gauge
+structurally hides. This is the stat the originating session asked for after
+observing the indicator climb past the window: the running number was cumulative
+spend, not occupancy, and "how many compactions" was the missing durable fact.
+
+Affected contracts:
+- Transcript (owns the composer context indicator and its durable sources)
+- Session Bar (the count rides the same durable session row as other indicators)
+- Observability
+
+Contract impact:
+- The count is durable session metadata: a `sessions.compaction_count` column,
+  maintained server-side as a projection over the append-only `session_events`
+  ledger, carried on the same snapshot/SSE row payload as
+  `runtime_context_window_tokens`. It is NOT derived from whatever transcript
+  entries the browser has loaded — a client-side count would undercount once
+  older `context.compacted` events scroll past the loaded window and disagree
+  across reload / fresh tab, the exact local-vs-durable contradiction the
+  Transcript and Session Bar contracts forbid.
+- The projection is idempotent under at-least-once delivery: the chat-activity
+  emitter recomputes `COUNT(*)` of `context.compacted` events on each such
+  upsert and writes the row only when the total advances, so a redelivered
+  event neither bumps `row_version` nor double-counts. The count is monotonic
+  because the ledger is append-only.
+- The bounded activity-summary fold (latest 50 lifecycle events) is
+  deliberately NOT the source — it cannot see compactions older than its window.
+  `context.compacted` stays out of `LifecycleChatEventTypes` (it must not move
+  run status); the dedicated full-history count column is the source instead.
+- The composer renders the metric only at session scope and only when > 0; the
+  per-turn pill does not carry it (compaction is a session-lifetime fact, not a
+  turn fact). The chip widens via a `has-compactions` modifier rather than
+  squeezing the `ctx` fraction into an ellipsis.
+
+Evidence:
+- Schema: `backend-go/internal/pgstore/migrations.go` migration 0125
+  (`compaction_count` column) and 0126 (partial index
+  `session_events_context_compacted`).
+- Store: `store.CountContextCompactions` +
+  `backend-go/internal/pgstore/session_events_compaction_integration_test.go`
+  (`TestCountContextCompactionsCountsScopedCompactionRows`) prove the count is
+  compaction-only and session-scoped.
+- Projection: `sessioncontroller.ChatActivityEmitter.refreshCompactionCount`;
+  `chat_activity_test.go` (`TestEmitChatActivityDeltaRecordsAdvancingCompaction`,
+  `TestEmitChatActivityDeltaDeduplicatesRedeliveredCompaction`,
+  `TestDeriveActivitySummaryIgnoresContextCompacted`) prove the advance-only
+  write, the at-least-once dedup, and that compaction does not move run status;
+  `writer_test.go` pins the `EventTypeCompactionChanged` → `compaction_count`
+  column mapping.
+- Frontend: `frontend/src/turnCostEstimateUi.test.ts` and
+  `frontend/src/composerCss.test.ts` prove the durable-sourced `cmp` metric, its
+  session-only scope, and the fixed-footprint widening.
+- Observability: `tank_session_compaction_total{provider,trigger}` counts each
+  newly-observed compaction (the exact per-session total is the durable column).
+
 ## Transcript Refresh Shortcut (R)
 
 Status: active
@@ -326,17 +394,27 @@ Evidence:
   loaded Turns detail re-reads `/turns/{id}/activity` after a live
   `transcript_rows` update without using a full page refresh.
 
-## AskUserQuestion Card (turn.awaiting_input)
+## AskUserQuestion Question Page (turn.awaiting_input)
 
 Status: active
 
 Intent:
 When the in-pod agent invokes AskUserQuestion, the active turn pauses with a
 durable `turn.awaiting_input` event carrying the Tank-canonical questions. The
-transcript projection places an interactive question card
-(`metaKind: "awaiting_input"`) inside Turn activity, while the main transcript
-shows the Turn activity shell. The card reflects durable state, not local React
-optimism, so a fresh tab renders the same thing.
+turn-activity page projection records a compact AskUserQuestion invocation
+marker on the preceding activity page, then opens one semantic `question_set`
+page per question in the set. Those adjacent pages carry the same
+`questionSet` number and individual `questionIndex`/`questionCount` metadata,
+letting the Turns UI label the set and provide previous/next question shortcuts
+without creating a third navigation system. If the agent asks immediately, that
+first activity page is marker-only by design: it preserves the ledger handoff
+without squeezing the question UI into activity history. The main transcript
+renders a restored AskUserQuestion handoff button (`RunNeedsInputAnnouncement`,
+originally removed by PR #861) from the durable `awaiting_input` meta row so the
+user can reach the question set from the conversation. The interactive answer
+form is owned by the Turns question page, which reflects durable state rather
+than local React optimism, so a fresh tab renders the same question set and
+defaults to it while the turn is still waiting for input.
 
 Answering resumes the same turn:
 - The user's selection posts to `POST /turns/{askingTurnId}/answer`, which
@@ -345,12 +423,14 @@ Answering resumes the same turn:
 - The asking turn remains active while awaiting input; Stop can still interrupt
   that turn because `activeTurnId` is preserved.
 
-The card has two states:
-- waiting — unanswered. The card surfaces the options (single/multi-select), the
-  always-on free-form textarea when `allowFreeForm` is set, and a Submit button.
-- answered — a later `turn.input_answered` event references the question
+Each question page has two states:
+- waiting — unanswered. The page surfaces one question from the set, with its
+  options (single/multi-select), the free-form textarea when `allowFreeForm` is
+  set, and one set-level Submit button that only enables after every question
+  page in the set has a response.
+- answered — a later `turn.input_answered` event references the question set
   (`awaitingInput.answered` is true), or the user just submitted (a local
-  snapshot locks the card for the round-trip). The card renders locked with the
+  snapshot locks the page for the round-trip). The page renders locked with the
   user's picks.
 
 Affected contracts:
@@ -358,9 +438,23 @@ Affected contracts:
 - Transcript Navigation
 
 Contract impact:
-- The card is a Turn activity projection of durable `turn.awaiting_input`; it is
-  not a second ledger and it does not appear as a standalone main-transcript
-  message.
+- The question page is a Turn activity projection of durable
+  `turn.awaiting_input`; it is not a second ledger. The same durable
+  `awaiting_input` meta row appears in the main transcript as the navigation
+  button to the question set, never as a standalone authored message or
+  synthetic turn.
+- The preceding activity page receives a compact `AskUserQuestion` tool marker
+  derived from the same durable `turn.awaiting_input` event. It is an audit
+  marker for the invocation, not the answer surface and not a dependency on
+  provider-specific raw tool rows.
+- Turn activity pagination is semantic as well as size-bounded: each
+  `turn.awaiting_input` event starts one `question_set` page per question while
+  preserving one durable answer set. The pages expose shared set identity and
+  per-question position so the page selector and question card can show
+  "question 1 of N" and move to the adjacent question page. Answered/history
+  state remains visible when revisiting any question page.
+- A pending `needs_input` turn defaults to the first unanswered `question_set`
+  page; normal turns still default to the latest activity page.
 - `answered` is derived from a durable fact (a later `turn.input_answered` event
   whose `payload.question_timeline_id` matches), never a local "I submitted"
   flag, so historical replay matches live.
@@ -368,14 +462,17 @@ Contract impact:
   latest-message state do not point at a synthetic user-message turn.
 
 Evidence:
-- `frontend/src/needsInputAnnouncement.ts` is the single state machine shared
-  by the live reducer projection and the server-projected (fresh-tab) path;
-  `frontend/src/needsInputAnnouncement.test.ts` covers all three states,
-  including that an answer wins over a later interrupt.
-- `frontend/src/conversationProjection.test.ts` and
-  `backend-go/cmd/tank-operator/transcript_projection_test.go` both prove an
-  interrupted, unanswered AskUserQuestion announcement carries
-  `turnTerminalStatus`, the fact the renderer uses to settle the row.
+- Backend: `backend-go/cmd/tank-operator/turn_pages_test.go` proves
+  `turn.awaiting_input` creates the compact invocation marker page, starts a
+  `question_set` page for each question, keeps a shared durable answer set, and
+  seals an answered set before resumed activity.
+- Backend API: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
+  proves an unanswered `needs_input` turn defaults to the question page.
+- Frontend: `frontend/src/migrationPolicy.test.ts` proves transcript renderers
+  use the restored `RunNeedsInputAnnouncement` button while
+  `RunAwaitingInputCard` is owned by `RunTurnActivityScreen`.
+- Migration guard: `scripts/check-askuserquestion-migration.mjs` requires the
+  semantic page path and same-turn `/answer` path.
 
 ## Provider Usage UI Retirement
 
