@@ -13,9 +13,10 @@
 //   Provider-observed context-window values remain durable backend/session-row
 //   metadata (`runtime_context_window_tokens`, reported by the runners through
 //   PUT /api/internal/sessions/{id}/runtime-config — codex app-server token
-//   usage; Claude Agent SDK modelUsage.contextWindow), but the frontend no
-//   longer renders a token/context usage indicator. There is NO frontend
-//   model-window table and NO percent ring. The frontend
+//   usage; Claude Agent SDK modelUsage.contextWindow), and the composer may
+//   render a context-pressure fraction from that durable window plus durable
+//   usage snapshots. There is NO frontend model-window table and NO percent
+//   ring. The frontend
 //   `CONTEXT_WINDOW_BY_MODEL` table and its `getContextWindow` lookup are
 //   deleted; nothing under frontend/src may reintroduce them.
 //

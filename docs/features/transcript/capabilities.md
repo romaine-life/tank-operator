@@ -313,14 +313,15 @@ Evidence:
 Status: retired
 
 Intent:
-Token usage, cost, and context-window occupancy remain backend plumbing and
-diagnostic math, but they are no longer a user-visible run UI feature. The
-runners may observe usage and context-window values at runtime (Codex app-server
-token usage; the Claude Agent SDK per-turn `modelUsage.contextWindow`) and
-report the provider-observed window on the runtime-config PUT; the orchestrator
-persists that value on the session row for diagnostics and admin reporting.
-The composer, transcript, and Turns view do not render usage, cost, or context
-chips.
+Token usage and cost remain backend plumbing and diagnostic math, not
+transcript or Turns UI. The composer still renders a context-pressure indicator:
+a `used/window` fraction sourced from durable `turn.usage` snapshots and the
+provider-observed context window on the session row. The runners may observe
+usage and context-window values at runtime (Codex app-server token usage; the
+Claude Agent SDK per-turn `modelUsage.contextWindow`) and report the
+provider-observed window on the runtime-config PUT; the orchestrator persists
+that value on the session row for diagnostics, admin reporting, and the
+composer denominator.
 
 Affected contracts:
 - Transcript
@@ -333,9 +334,14 @@ Contract impact:
 - The row value is first-observed-wins and durable, so diagnostics are stable
   across reload and identical in a fresh tab; a session with no reported window
   does not make the frontend guess a default.
-- The transcript projection must not synthesize `turn_usage` rows, annotate
-  transcript rows with usage payloads, or carry usage fields on Turn activity
-  shells.
+- The composer context/cost indicator uses the pre-regression
+  `run-cost-estimate` chip. It consumes provider-observed usage fields carried
+  on projected transcript/Turn activity rows plus the durable session
+  `runtime_context_window_tokens` denominator; it does not use a separate
+  `context_usage` timeline field or `context-usage` SSE event.
+- The transcript projection may synthesize a data-only `turn_usage` row and
+  usage fields for the indicator, but the frontend must render `turn_usage`
+  meta rows as `null`. The "Token usage updated" message is retired.
 - Provider reports are observable through
   `tank_session_context_window_report_total{provider,source,result}` with
   bounded `source` and `result` labels.
@@ -349,6 +355,6 @@ Evidence:
 - Migration guard: `scripts/check-context-window-table-migration.mjs` fails if
   `CONTEXT_WINDOW_BY_MODEL` or `getContextWindow` reappear under `frontend/src`;
   wired into CI via `.github/workflows/removed-chat-runtime-guard.yml`.
-- Frontend: `frontend/src/turnCostEstimateUi.test.ts` guards that the composer,
-  transcript, Turns view, and slash-command palette do not expose token usage or
-  cost UI.
+- Frontend: `frontend/src/turnCostEstimateUi.test.ts` guards that the composer
+  renders the restored `run-cost-estimate` context/cost chip while visible
+  transcript usage messages stay retired.
