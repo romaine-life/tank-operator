@@ -1454,6 +1454,9 @@ var acceptedAppliedMigrationChecksums = map[string]map[string]struct{}{
 	"0102": {
 		"3698dba005984cc9317a14fc9b9561ad228d55d5a8950110dc1c9e3fc2ed0bbf": {},
 	},
+	"0115": {
+		"31f797615bbd4bfef55d14431881805ea425e15727c75267bb4a4563aabdb04e": {},
+	},
 }
 
 func migrationChecksumAccepted(id, recorded, current string) bool {
