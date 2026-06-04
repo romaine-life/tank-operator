@@ -7595,18 +7595,43 @@ function normalizeTurnActivityPageDirectory(input: unknown): TurnActivityPageDir
   return pages;
 }
 
-function turnActivityPageOptionLabel(
+type TurnActivityPageOptionParts = {
+  pageLabel: string;
+  semanticLabel: string;
+  textValue: string;
+};
+
+function turnActivityPageOptionParts(
   pageNumber: number,
-  pageCount: number,
   directoryItem?: TurnActivityPageDirectoryItem,
-): string {
+): TurnActivityPageOptionParts {
+  const pageLabel = `Page ${pageNumber}`;
+  let semanticLabel = "Activity";
   if (directoryItem?.kind === "question_set") {
     if (directoryItem.questionIndex && directoryItem.questionCount) {
-      return `Question ${directoryItem.questionIndex} of ${directoryItem.questionCount}`;
+      semanticLabel = `Question ${directoryItem.questionIndex} of ${directoryItem.questionCount}`;
+    } else {
+      semanticLabel = "Question";
     }
-    return "Question";
   }
-  return `Page ${pageNumber} of ${pageCount}`;
+  return {
+    pageLabel,
+    semanticLabel,
+    textValue: `${pageLabel} ${semanticLabel}`,
+  };
+}
+
+function TurnActivityPageOptionLabel({
+  parts,
+}: {
+  parts: TurnActivityPageOptionParts;
+}) {
+  return (
+    <span className="run-turn-view-page-option">
+      <span className="run-turn-view-page-option-index">{parts.pageLabel}</span>
+      <span className="run-turn-view-page-option-label">{parts.semanticLabel}</span>
+    </span>
+  );
 }
 
 type TurnViewItem = {
@@ -8368,6 +8393,8 @@ function RunTurnActivityScreen({
   const loading = selected ? loadingActivityTurns[selected.turnId] === true : false;
   const refreshProblem = selected ? activityRefreshProblemsByTurn[selected.turnId] : undefined;
   const showRefreshProblemOnly = Boolean(refreshProblem) && detailGroups.length === 0;
+  const selectedPageDirectoryItem = selectedPageInfo?.pages?.find((page) => page.number === pagerState.page);
+  const selectedPageOptionParts = turnActivityPageOptionParts(pagerState.page, selectedPageDirectoryItem);
   const questionPageNavigation = useMemo<QuestionPageNavigation | undefined>(() => {
     if (!selectedPageInfo || selectedPageInfo.kind !== "question_set") return undefined;
     const directory = selectedPageInfo.pages ?? [];
@@ -8528,23 +8555,26 @@ function RunTurnActivityScreen({
                 size="sm"
                 aria-label="Select activity page"
               >
-                <SelectValue />
+                <TurnActivityPageOptionLabel parts={selectedPageOptionParts} />
+                <SelectValue className="run-turn-view-page-native-value" />
               </SelectTrigger>
               <SelectContent
-                className="run-turn-view-select-menu"
+                className="run-turn-view-select-menu run-turn-view-page-select-menu"
                 position="popper"
                 align="end"
               >
                 {Array.from({ length: pagerState.pageCount }, (_, index) => index + 1).map(
                   (pageNumber) => {
                     const directoryItem = selectedPageInfo?.pages?.find((page) => page.number === pageNumber);
+                    const optionParts = turnActivityPageOptionParts(pageNumber, directoryItem);
                     return (
                       <SelectItem
                         key={pageNumber}
                         value={String(pageNumber)}
-                        className="run-turn-view-select-item"
+                        textValue={optionParts.textValue}
+                        className="run-turn-view-select-item run-turn-view-page-select-item"
                       >
-                        {turnActivityPageOptionLabel(pageNumber, pagerState.pageCount, directoryItem)}
+                        <TurnActivityPageOptionLabel parts={optionParts} />
                       </SelectItem>
                     );
                   },
