@@ -64,7 +64,6 @@ import {
   interruptOutcomeTotal,
   natsPublishFailureTotal,
   providerErrorTotal,
-  recordTurnPreStartLatency,
   recordTurnStart,
   recordTurnTerminal,
 } from "./metrics.js";
@@ -151,12 +150,6 @@ class AsyncQueue<T> {
   }
 }
 
-function parseOptionalTimestampMs(value: unknown): number | undefined {
-  if (typeof value !== "string" || !value.trim()) return undefined;
-  const parsed = Date.parse(value);
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
 // Pull the per-event dispatch out as a free function so the session-bus
 // publish contract is testable without spinning up a Runner. The sink only
 // accepts stamped Tank conversation events; anything else is rejected here
@@ -223,8 +216,6 @@ function isAbortError(err: unknown): boolean {
 
 export type AcceptedTurn = CodexAdapterTurn & {
   commandRecord?: SessionCommandRecord;
-  commandCreatedAtMs?: number;
-  claimedAtMs?: number;
   interruptRecords?: SessionCommandRecord[];
   stopCommandHeartbeat?: () => void;
   // Set true when the run-loop dequeues a turn and finds a pre-arrived
@@ -519,10 +510,8 @@ export class Runner {
         if (commandRecord) {
           turn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(commandRecord);
         }
-        await this.publishTurnClaimed(turn);
 
         recordTurnStart(turn.turnID);
-        recordTurnPreStartLatency("claimed_to_started", turn.claimedAtMs);
         await dispatch(
           this.sink,
           turnEvent({
@@ -1081,26 +1070,8 @@ export class Runner {
       turnID: turnIDForClientNonce(clientNonce),
       clientNonce,
       turnSeq,
-      commandCreatedAtMs: parseOptionalTimestampMs(commandRecord?.created_at),
       ...(commandRecord ? { commandRecord } : {}),
     };
-  }
-
-  private async publishTurnClaimed(turn: AcceptedTurn): Promise<void> {
-    const claimedAtMs = Date.now();
-    const dispatched = await dispatch(
-      this.sink,
-      turnEvent({
-        sessionID: this.cfg.sessionId,
-        turnID: turn.turnID,
-        clientNonce: turn.clientNonce,
-        source: "codex",
-        type: "turn.claimed",
-      }),
-    );
-    if (!dispatched) return;
-    turn.claimedAtMs = claimedAtMs;
-    recordTurnPreStartLatency("command_created_to_claimed", turn.commandCreatedAtMs, claimedAtMs);
   }
 
   private async markCommandTerminal(

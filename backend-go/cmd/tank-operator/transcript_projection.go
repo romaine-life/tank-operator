@@ -35,7 +35,6 @@ type projectionState struct {
 	backgroundIndex    map[string]int
 	interruptRequests  []projectedEntryItem
 	contextCompactions []projectedEntryItem
-	turnProgress       []projectedEntryItem
 	turnUsages         map[string]turnUsageProjection
 	turnTerminals      map[string]turnTerminalProjection
 	awaitingInputs     []projectionAwaitingInput
@@ -189,26 +188,13 @@ func (s *projectionState) apply(event map[string]any) {
 	case "user_message.created":
 		s.applyUserMessage(event)
 	case "turn.submitted":
-		if _, terminal := s.turnTerminals[transcriptString(event, "turn_id")]; !terminal {
-			s.runStatus = "submitted"
-			s.activeTurnID = transcriptString(event, "turn_id")
-			s.needsInput = false
-		}
-		s.applyTurnProgress(event, "submitted")
-	case "turn.claimed":
-		if _, terminal := s.turnTerminals[transcriptString(event, "turn_id")]; !terminal {
-			s.runStatus = "claimed"
-			s.activeTurnID = transcriptString(event, "turn_id")
-			s.needsInput = false
-		}
-		s.applyTurnProgress(event, "claimed")
+		s.runStatus = "submitted"
+		s.activeTurnID = transcriptString(event, "turn_id")
+		s.needsInput = false
 	case "turn.started":
-		if _, terminal := s.turnTerminals[transcriptString(event, "turn_id")]; !terminal {
-			s.runStatus = "streaming"
-			s.activeTurnID = transcriptString(event, "turn_id")
-			s.needsInput = false
-		}
-		s.applyTurnProgress(event, "started")
+		s.runStatus = "streaming"
+		s.activeTurnID = transcriptString(event, "turn_id")
+		s.needsInput = false
 	case "turn.usage":
 		s.applyTurnUsage(event)
 	case "turn.completed":
@@ -333,44 +319,6 @@ func (s *projectionState) applyInputAnswered(event map[string]any) {
 		Answers:     transcriptAnyMap(payload["answers"]),
 		Annotations: transcriptAnyMap(payload["annotations"]),
 	}
-}
-
-func (s *projectionState) applyTurnProgress(event map[string]any, status string) {
-	turnID := transcriptString(event, "turn_id")
-	if turnID == "" {
-		return
-	}
-	title := "Turn queued"
-	detail := "Waiting for the session runner."
-	switch status {
-	case "claimed":
-		title = "Turn accepted"
-		detail = "Waiting for provider output."
-	case "started":
-		title = "Turn started"
-		detail = "Provider stream is active."
-	}
-	entry := map[string]any{
-		"id":       transcriptString(event, "event_id"),
-		"kind":     "meta",
-		"metaKind": "turn_progress",
-		"turnId":   turnID,
-		"meta": map[string]any{
-			"title":    title,
-			"detail":   detail,
-			"severity": "info",
-		},
-		"clientNonce":    transcriptString(event, "client_nonce"),
-		"time":           transcriptString(event, "created_at"),
-		"sourceEventId":  transcriptString(event, "event_id"),
-		"orderKey":       transcriptString(event, "order_key"),
-		"progressStatus": status,
-	}
-	s.turnProgress = append(s.turnProgress, projectedEntryItem{
-		entry:    entry,
-		orderKey: transcriptString(event, "order_key"),
-		index:    len(s.turnProgress),
-	})
 }
 
 func (s *projectionState) applySessionStatus(event map[string]any) {
@@ -500,7 +448,7 @@ func (s *projectionState) applyInterruptRequested(event map[string]any) {
 		orderKey: transcriptString(event, "order_key"),
 		index:    len(s.interruptRequests),
 	})
-	if s.runStatus == "submitted" || s.runStatus == "claimed" || s.runStatus == "streaming" || s.runStatus == "needs_input" {
+	if s.runStatus == "submitted" || s.runStatus == "streaming" || s.runStatus == "needs_input" {
 		s.runStatus = "stopping"
 	}
 }
@@ -734,11 +682,6 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 		items = append(items, notice)
 	}
 	baseIndex += len(s.contextCompactions)
-	for idx, progress := range s.turnProgress {
-		progress.index = baseIndex + idx
-		items = append(items, progress)
-	}
-	baseIndex += len(s.turnProgress)
 	offset := 0
 	for _, usage := range s.turnUsages {
 		entry := projectTurnUsage(usage)
@@ -995,10 +938,12 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 	activityByInsertIndex := map[int]turnActivityBody{}
 	compactedIndexes := map[int]bool{}
 	for _, activity := range activities {
-		insertBefore := projectedActivityInsertIndex(entries, activity)
-		activeProgressOnly := activity.Summary["active"] == true && len(activity.CompactedEntryIDs) == 0 && firstTurnProgressIndex(entries, activity.TurnID) >= 0
-		if len(activity.CompactedEntryIDs) == 0 && !activeProgressOnly {
+		if len(activity.CompactedEntryIDs) == 0 {
 			continue
+		}
+		insertBefore := 0
+		if len(activity.Entries) > 0 {
+			insertBefore = projectedEntryIndex(entries, activity.Entries[0])
 		}
 		activityByInsertIndex[insertBefore] = activity
 		for _, entryID := range activity.CompactedEntryIDs {
@@ -1007,11 +952,6 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 					compactedIndexes[idx] = true
 				}
 			}
-		}
-	}
-	for idx, entry := range entries {
-		if isProjectionTurnProgress(entry) {
-			compactedIndexes[idx] = true
 		}
 	}
 	out := make([]map[string]any, 0, len(entries))
@@ -1076,8 +1016,7 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 		var activityEntries []map[string]any
 		for _, idx := range indexes {
 			entry := entries[idx]
-			if isProjectedUserMessage(entry) || isProjectionTerminalMetaEntry(entry, terminal) ||
-				isProjectionTurnProgress(entry) {
+			if isProjectedUserMessage(entry) || isProjectionTerminalMetaEntry(entry, terminal) {
 				continue
 			}
 			activityEntries = append(activityEntries, entry)
@@ -1098,65 +1037,21 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string, ru
 		return nil
 	}
 	var activityEntries []map[string]any
-	var progressEntries []map[string]any
 	for _, entry := range entries {
-		if transcriptMapString(entry, "turnId") != activeTurnID ||
-			transcriptMapString(entry, "turnTerminalStatus") != "" ||
-			isProjectedUserMessage(entry) {
-			continue
+		if transcriptMapString(entry, "turnId") == activeTurnID &&
+			transcriptMapString(entry, "turnTerminalStatus") == "" &&
+			!isProjectedUserMessage(entry) {
+			activityEntries = append(activityEntries, entry)
 		}
-		if isProjectionTurnProgress(entry) {
-			progressEntries = append(progressEntries, entry)
-			continue
-		}
-		activityEntries = append(activityEntries, entry)
 	}
-	if len(activityEntries) == 0 && len(progressEntries) == 0 {
+	if len(activityEntries) == 0 {
 		return nil
 	}
 	status := "active"
 	if runStatus == "needs_input" {
 		status = "needs_input"
 	}
-	body := makeTurnActivityBody(activeTurnID, status, activityEntries, activityEntries, true)
-	if len(progressEntries) > 0 {
-		applyActivityAnchorSummary(body.Summary, progressEntries, len(activityEntries) == 0)
-	}
-	return []turnActivityBody{body}
-}
-
-func projectedActivityInsertIndex(entries []map[string]any, activity turnActivityBody) int {
-	if idx := firstTurnProgressIndex(entries, activity.TurnID); idx >= 0 {
-		return idx
-	}
-	if len(activity.Entries) > 0 {
-		return projectedEntryIndex(entries, activity.Entries[0])
-	}
-	return -1
-}
-
-func firstTurnProgressIndex(entries []map[string]any, turnID string) int {
-	for idx, entry := range entries {
-		if transcriptMapString(entry, "turnId") == turnID && isProjectionTurnProgress(entry) {
-			return idx
-		}
-	}
-	return -1
-}
-
-func applyActivityAnchorSummary(summary map[string]any, anchors []map[string]any, useAnchorEnd bool) {
-	if len(anchors) == 0 {
-		return
-	}
-	first := anchors[0]
-	summary["startedAt"] = transcriptMapString(first, "time")
-	summary["startOrderKey"] = transcriptMapString(first, "orderKey")
-	summary["sourceEventId"] = transcriptMapString(first, "sourceEventId")
-	if useAnchorEnd {
-		last := anchors[len(anchors)-1]
-		summary["lastActivityAt"] = transcriptMapString(last, "time")
-		summary["endOrderKey"] = transcriptMapString(last, "orderKey")
-	}
+	return []turnActivityBody{makeTurnActivityBody(activeTurnID, status, activityEntries, activityEntries, true)}
 }
 
 func makeTurnActivityBody(turnID, status string, activityEntries, compactedEntries []map[string]any, active bool) turnActivityBody {
@@ -1312,11 +1207,6 @@ func projectedEntryIndex(entries []map[string]any, target map[string]any) int {
 
 func isProjectedUserMessage(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "message" && transcriptMapString(entry, "role") == "user"
-}
-
-func isProjectionTurnProgress(entry map[string]any) bool {
-	return transcriptMapString(entry, "kind") == "meta" &&
-		transcriptMapString(entry, "metaKind") == "turn_progress"
 }
 
 // projectAwaitingInputCard projects a turn.awaiting_input pause into the

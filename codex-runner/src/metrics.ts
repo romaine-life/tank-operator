@@ -31,14 +31,6 @@ export const turnDurationSeconds = new Histogram({
   registers: [registry],
 });
 
-export const turnPreStartLatencySeconds = new Histogram({
-  name: "tank_runner_turn_pre_start_latency_seconds",
-  help: "Pre-provider turn latency observed by the runner, split into command_created_to_claimed and claimed_to_started stages.",
-  labelNames: ["stage"],
-  buckets: [0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120, 300],
-  registers: [registry],
-});
-
 export const providerErrorTotal = new Counter({
   name: "tank_runner_provider_error_total",
   help: "Errors raised by the provider SDK (the query iterator or interrupt() call).",
@@ -142,16 +134,6 @@ const turnStartTimes = new Map<string, number>();
 export function recordTurnStart(turnID: string): void {
   if (!turnID) return;
   turnStartTimes.set(turnID, Date.now());
-}
-
-export function recordTurnPreStartLatency(
-  stage: "command_created_to_claimed" | "claimed_to_started",
-  startMs: number | null | undefined,
-  endMs = Date.now(),
-): void {
-  if (typeof startMs !== "number" || !Number.isFinite(startMs) || startMs <= 0) return;
-  if (!Number.isFinite(endMs) || endMs < startMs) return;
-  turnPreStartLatencySeconds.labels(stage).observe((endMs - startMs) / 1000);
 }
 
 export function recordTurnTerminal(

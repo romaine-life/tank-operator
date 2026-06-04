@@ -47,27 +47,6 @@ test("context.compacted is a valid Tank envelope", () => {
   assert.equal(isTankConversationEvent(event), true);
 });
 
-test("turn.claimed is a valid Tank envelope and keeps the turn submitted", () => {
-  const event = ev("2", "turn.claimed", { source: "claude", client_nonce: "client-1" });
-  assert.equal(isTankConversationEvent(event), true);
-  const state = reduceConversationEvents([
-    ev("1", "turn.submitted"),
-    event,
-  ]);
-  assert.equal(state.runStatus, "submitted");
-  assert.equal(state.activeTurnId, "turn-1");
-});
-
-test("late turn.started after terminal does not reactivate a stopped turn", () => {
-  const state = reduceConversationEvents([
-    ev("1", "turn.submitted"),
-    ev("2", "turn.interrupted", { source: "claude", payload: { reason: "client_interrupt" } }),
-    ev("3", "turn.started", { source: "claude" }),
-  ]);
-  assert.equal(state.runStatus, "stopped");
-  assert.equal(state.activeTurnId, null);
-});
-
 test("context.compacted is an informational no-op for run state", () => {
   const state = reduceConversationEvents([
     ev("1", "turn.submitted"),

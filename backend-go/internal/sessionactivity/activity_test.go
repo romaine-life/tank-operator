@@ -24,13 +24,12 @@ func TestDeriveActivitySummaryStartsAtReady(t *testing.T) {
 func TestDeriveActivitySummaryFoldsTurnLifecycle(t *testing.T) {
 	events := []map[string]any{
 		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
-		{"type": "turn.claimed", "turn_id": "turn-1", "order_key": "2"},
-		{"type": "turn.started", "turn_id": "turn-1", "order_key": "3"},
+		{"type": "turn.started", "turn_id": "turn-1", "order_key": "2"},
 		// AskUserQuestion pauses the same active turn awaiting input.
-		{"type": "turn.awaiting_input", "turn_id": "turn-1", "order_key": "4"},
+		{"type": "turn.awaiting_input", "turn_id": "turn-1", "order_key": "3"},
 		// The answer resumes the same turn; the final terminal clears it.
-		{"type": "turn.input_answered", "turn_id": "turn-1", "order_key": "5"},
-		{"type": "turn.completed", "turn_id": "turn-1", "order_key": "6"},
+		{"type": "turn.input_answered", "turn_id": "turn-1", "order_key": "4"},
+		{"type": "turn.completed", "turn_id": "turn-1", "order_key": "5"},
 	}
 	got := DeriveActivitySummary(nil, events, 0, false)
 	if got.Status != "ready" {
@@ -41,19 +40,6 @@ func TestDeriveActivitySummaryFoldsTurnLifecycle(t *testing.T) {
 	}
 	if got.NeedsInput {
 		t.Fatalf("needs_input stayed sticky after the answered turn completed")
-	}
-}
-
-func TestDeriveActivitySummaryClaimedIsWorkingState(t *testing.T) {
-	got := DeriveActivitySummary(nil, []map[string]any{
-		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
-		{"type": "turn.claimed", "turn_id": "turn-1", "order_key": "2"},
-	}, 0, false)
-	if got.Status != "claimed" {
-		t.Fatalf("status after claimed = %q, want claimed", got.Status)
-	}
-	if got.ActiveTurnID == nil || *got.ActiveTurnID != "turn-1" {
-		t.Fatalf("ActiveTurnID after claimed = %#v, want turn-1", got.ActiveTurnID)
 	}
 }
 
@@ -224,20 +210,6 @@ func TestDeriveActivitySummaryIgnoresLateInterruptRequestedAfterTerminal(t *test
 				t.Fatalf("LateInterruptIgnoredStatuses = %#v, want [%q]", stats.LateInterruptIgnoredStatuses, tt.wantStatus)
 			}
 		})
-	}
-}
-
-func TestDeriveActivitySummaryIgnoresLateStartedAfterTerminalForSameTurn(t *testing.T) {
-	got := DeriveActivitySummary(nil, []map[string]any{
-		{"type": "turn.submitted", "turn_id": "turn-1", "order_key": "1"},
-		{"type": "turn.interrupted", "turn_id": "turn-1", "order_key": "2"},
-		{"type": "turn.started", "turn_id": "turn-1", "order_key": "3"},
-	}, 0, false)
-	if got.Status != "stopped" {
-		t.Fatalf("status after late started = %q, want stopped", got.Status)
-	}
-	if got.ActiveTurnID != nil {
-		t.Fatalf("ActiveTurnID after late started = %#v, want nil", got.ActiveTurnID)
 	}
 }
 

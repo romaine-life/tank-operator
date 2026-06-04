@@ -187,7 +187,6 @@ export function conversationReducer(
     case "user_message.created":
       return applyUserMessage(next, event);
     case "turn.submitted":
-      if (event.turn_id && next.turnTerminals[event.turn_id]) return next;
       return {
         ...next,
         runStatus: "submitted",
@@ -199,18 +198,7 @@ export function conversationReducer(
         failed: false,
         lastError: null,
       };
-    case "turn.claimed":
-      if (event.turn_id && next.turnTerminals[event.turn_id]) return next;
-      return {
-        ...next,
-        runStatus: "submitted",
-        activeTurnId: event.turn_id ?? next.activeTurnId,
-        needsInput: false,
-        failed: false,
-        lastError: null,
-      };
     case "turn.started":
-      if (event.turn_id && next.turnTerminals[event.turn_id]) return next;
       return {
         ...next,
         runStatus: "streaming",

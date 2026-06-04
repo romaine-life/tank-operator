@@ -470,30 +470,6 @@ test("dispatchInterruptIndependentlyOfSubmit: control handler dispatches interru
   ctl.abort();
 });
 
-test("acceptCommandTurn emits turn.claimed before provider output", async () => {
-  const { runner, harness } = makeInterruptHarness();
-  const r = runner as unknown as {
-    sink: { findTurnTerminal: () => Promise<null> };
-    ensureSdkQuery: () => void;
-    acceptCommandTurn: (record: unknown) => Promise<void>;
-  };
-  r.sink.findTurnTerminal = async () => null;
-  r.ensureSdkQuery = () => undefined;
-
-  await r.acceptCommandTurn({
-    type: "submit_turn",
-    id: "submit-1",
-    client_nonce: "client-claimed",
-    prompt: "work on this",
-    created_at: new Date(Date.now() - 250).toISOString(),
-  });
-
-  assert.equal(harness.events.length, 1, "claimed is the only pre-provider durable event");
-  assert.equal(harness.events[0]!.type, "turn.claimed");
-  assert.equal(harness.events[0]!.client_nonce, "client-claimed");
-  assert.deepEqual(harness.bus, [], "submit command is not acked until a terminal event");
-});
-
 // canUseTool is the AskUserQuestion pause point. When the agent invokes
 // AskUserQuestion the runner publishes durable turn.awaiting_input, keeps the
 // turn active, and resolves only when input_reply arrives for the same
@@ -942,10 +918,10 @@ test("acceptInterrupt with no matching turn: buffered, applied when submit_turn 
   assert.equal(r.pendingInterrupts.length, 0, "buffer must drain on matching submit_turn");
   assert.equal(harness.sdkInterrupts, 0, "SDK must not be interrupted — it was never fed the prompt");
   assert.equal(sdkFed.length, 0, "SDK userQueue must not receive the aborted-before-start turn");
-  const terminals = harness.events.filter((event) => event.type === "turn.interrupted");
-  assert.equal(terminals.length, 1, "synthetic turn.interrupted must be published");
+  assert.equal(harness.events.length, 1, "synthetic turn.interrupted must be published");
+  assert.equal(harness.events[0]!.type, "turn.interrupted");
   assert.equal(
-    (terminals[0] as { payload?: { reason?: string } }).payload?.reason,
+    (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
     "client_interrupt_before_start",
     "reason must distinguish the pre-SDK path from the during-turn path",
   );

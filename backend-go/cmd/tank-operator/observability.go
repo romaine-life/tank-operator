@@ -1722,7 +1722,7 @@ func (promLifecycleEmitterMetrics) RecordActivityLateInterruptIgnored(status str
 
 func sessionActivityStatusLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
-	case "ready", "submitted", "claimed", "streaming", "needs_input", "stopping", "stopped", "error":
+	case "ready", "submitted", "streaming", "needs_input", "stopping", "stopped", "error":
 		return strings.TrimSpace(raw)
 	default:
 		return "other"

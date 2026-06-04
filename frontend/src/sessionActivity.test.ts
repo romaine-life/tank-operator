@@ -74,21 +74,6 @@ test("running and unread activity stay on the status dot", () => {
   assert.equal(sessionActivityStatusLabel("Active", true, streaming ?? undefined), "Running");
 });
 
-test("claimed activity is a working starting state", () => {
-  const claimed = normalizeSessionActivity({
-    session_id: "63",
-    status: "claimed",
-    unread_count: 0,
-    needs_input: false,
-    failed: false,
-    active_turn_id: "turn-1",
-  });
-
-  assert.equal(claimed?.status, "claimed");
-  assert.equal(sessionActivityDotStatus("Active", true, claimed ?? undefined), "agent-working");
-  assert.equal(sessionActivityStatusLabel("Active", true, claimed ?? undefined), "Starting");
-});
-
 test("stopping status drives Stopping label and agent-stopping dot", () => {
   const stopping = normalizeSessionActivity({
     session_id: "63",

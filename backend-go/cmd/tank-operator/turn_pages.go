@@ -105,8 +105,8 @@ func splitTurnEventsIntoPages(events []map[string]any) [][]map[string]any {
 // projectPageBodyEntries renders the body rows for one page's events. Unlike
 // the turn shell it does not depend on lifecycle ownership, so a middle page
 // (no turn.submitted, no terminal) still renders its tool/message rows.
-// User-message and turn-progress rows are transcript-level, not page body, and
-// are dropped; the context.compacted marker is kept as the page's seam header.
+// User-message rows are transcript-level, not page body, and are dropped; the
+// context.compacted marker is kept as the page's seam header.
 func projectPageBodyEntries(events []map[string]any) []map[string]any {
 	state := newProjectionState()
 	for _, event := range orderedTranscriptEvents(events) {
@@ -115,7 +115,7 @@ func projectPageBodyEntries(events []map[string]any) []map[string]any {
 	flat := state.projectFlatEntries()
 	out := make([]map[string]any, 0, len(flat))
 	for _, entry := range flat {
-		if isProjectedUserMessage(entry) || isProjectionTurnProgress(entry) {
+		if isProjectedUserMessage(entry) {
 			continue
 		}
 		out = append(out, entry)

@@ -62,59 +62,6 @@ func TestProjectTranscriptEventsEmitsCollapsedTurnActivityShell(t *testing.T) {
 	}
 }
 
-func TestProjectTranscriptEventsSubmittedOnlyTurnGetsActiveShell(t *testing.T) {
-	events := []map[string]any{
-		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
-			"text":    "please investigate",
-			"display": map[string]any{"kind": "plain"},
-		}),
-		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
-	}
-
-	projection := projectTranscriptEvents(events)
-	if got, want := len(projection.Entries), 2; got != want {
-		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
-	}
-	shell := projection.Entries[1]
-	if shell["kind"] != "turn_activity" {
-		t.Fatalf("second entry kind = %v, want turn_activity: %#v", shell["kind"], projection.Entries)
-	}
-	activity := shell["activity"].(map[string]any)
-	if activity["active"] != true || activity["status"] != "active" {
-		t.Fatalf("activity summary = %#v, want active shell", activity)
-	}
-	if activity["startOrderKey"] != "002" || activity["endOrderKey"] != "002" {
-		t.Fatalf("activity order keys = %#v, want submitted key only", activity)
-	}
-	if body := projection.ActivityBodies["turn-1"]; body.Status != "active" || len(body.Entries) != 0 {
-		t.Fatalf("activity body = %#v, want active shell without synthetic progress children", body)
-	}
-}
-
-func TestProjectTranscriptEventsClaimedTurnAdvancesActiveShell(t *testing.T) {
-	events := []map[string]any{
-		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
-			"text":    "please investigate",
-			"display": map[string]any{"kind": "plain"},
-		}),
-		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
-		projectionTestEvent("claimed", "003", "turn.claimed", "runner", "claude", "turn-1", "", nil),
-	}
-
-	projection := projectTranscriptEvents(events)
-	shell := projection.Entries[1]
-	if shell["kind"] != "turn_activity" {
-		t.Fatalf("second entry kind = %v, want turn_activity: %#v", shell["kind"], projection.Entries)
-	}
-	activity := shell["activity"].(map[string]any)
-	if activity["startOrderKey"] != "002" || activity["endOrderKey"] != "003" {
-		t.Fatalf("activity order keys = %#v, want submitted through claimed", activity)
-	}
-	if body := projection.ActivityBodies["turn-1"]; body.Status != "active" || len(body.Entries) != 0 {
-		t.Fatalf("activity body = %#v, want active shell without synthetic progress children", body)
-	}
-}
-
 func TestProjectTranscriptEventsRecordsContextCompactedAsTurnActivity(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

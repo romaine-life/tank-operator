@@ -23,7 +23,6 @@ export const TANK_VISIBILITIES = ["durable"];
 export const TANK_EVENT_TYPES = [
   "user_message.created",
   "turn.submitted",
-  "turn.claimed",
   "turn.started",
   "turn.usage",
   "turn.completed",
@@ -95,7 +94,6 @@ function isValidEventByType(event) {
         event.source === "tank" &&
         hasStrings(event, ["turn_id", "client_nonce"]) &&
         isStringPayload(event.payload, "status");
-    case "turn.claimed":
     case "turn.started":
     case "turn.failed":
     case "turn.interrupted":

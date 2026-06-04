@@ -241,10 +241,6 @@ All metric names are prefixed `tank_`. The full namespace:
   `rate_limit_event` frames; each increment should pair with a durable
   `turn.failed{reason:"provider_rate_limit"}` so later submitted work does
   not remain blocked behind an invisible provider wait.
-  `tank_runner_turn_pre_start_latency_seconds{stage}` measures the previously
-  invisible interval before provider output: `command_created_to_claimed`
-  covers JetStream delivery plus runner acceptance, and `claimed_to_started`
-  covers provider/SDK startup until the first `turn.started`.
   `tank_runner_turn_usage_emitted_total{kind}` counts durable usage events by
   the closed set `kind` ∈ {`snapshot`,`terminal`}: `snapshot` is the
   per-assistant-message `turn.usage` used for backend accounting/diagnostics
