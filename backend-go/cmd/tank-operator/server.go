@@ -156,6 +156,7 @@ type pendingLaunchStore interface {
 	Register(context.Context, pgstore.RegisterPendingLaunchRequest) (pgstore.PendingLaunchTurn, error)
 	StageAttachment(context.Context, string, string, pgstore.LaunchAttachmentBlob) (pgstore.PendingLaunchStatus, error)
 	ClaimReady(context.Context, time.Time, int, time.Duration) ([]pgstore.PendingLaunchTurn, error)
+	FindStale(context.Context, time.Time, int) ([]pgstore.PendingLaunchTurn, error)
 	LoadAttachments(context.Context, string, string) ([]pgstore.LaunchAttachmentBlob, error)
 	MarkDispatched(context.Context, string, string, string) error
 	MarkFailed(context.Context, string, string, string) error

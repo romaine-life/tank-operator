@@ -240,6 +240,54 @@ func TestPendingLaunchStoreSkipsInactiveSession(t *testing.T) {
 	}
 }
 
+func TestPendingLaunchStoreFindStale(t *testing.T) {
+	ctx, pool := newPendingLaunchTestPool(t)
+	const (
+		owner = "nelson@romaine.life"
+		scope = "default"
+	)
+	insertSessionRow(t, ctx, pool, owner, scope, "700", "Active")
+	insertSessionRow(t, ctx, pool, owner, scope, "701", "Active")
+	st := NewPendingLaunchStore(pool, scope)
+
+	// Two launches: one old + still awaiting_bytes (stuck), one fresh.
+	for _, tc := range []struct{ session, turn string }{{"700", "turn_old"}, {"701", "turn_fresh"}} {
+		if _, err := st.Register(ctx, RegisterPendingLaunchRequest{
+			SessionScope: scope, SessionID: tc.session, TurnID: tc.turn,
+			OwnerEmail: owner, Runtime: "claude", BasePrompt: "x", AttachmentCount: 1,
+		}); err != nil {
+			t.Fatalf("Register %s: %v", tc.turn, err)
+		}
+	}
+	// Backdate the "old" one well past any deadline.
+	if _, err := pool.Exec(ctx, `
+		UPDATE session_pending_launch_turns SET created_at = now() - interval '1 hour'
+		WHERE tank_session_id = $1 AND turn_id = 'turn_old'
+	`, sessionmodel.SessionStorageKey(scope, "700")); err != nil {
+		t.Fatalf("backdate: %v", err)
+	}
+
+	stale, err := st.FindStale(ctx, time.Now().UTC().Add(-20*time.Minute), 100)
+	if err != nil {
+		t.Fatalf("FindStale: %v", err)
+	}
+	if len(stale) != 1 || stale[0].TurnID != "turn_old" {
+		t.Fatalf("FindStale = %+v, want exactly turn_old", stale)
+	}
+
+	// A dispatched launch is never stale.
+	if err := st.MarkDispatched(ctx, sessionmodel.SessionStorageKey(scope, "700"), "turn_old", "turn_old"); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	stale, err = st.FindStale(ctx, time.Now().UTC().Add(-20*time.Minute), 100)
+	if err != nil {
+		t.Fatalf("FindStale after dispatch: %v", err)
+	}
+	if len(stale) != 0 {
+		t.Fatalf("FindStale after dispatch = %+v, want none", stale)
+	}
+}
+
 func TestPendingLaunchStoreMarkFailedClearsBytes(t *testing.T) {
 	ctx, pool := newPendingLaunchTestPool(t)
 	const (

@@ -34,6 +34,13 @@ const (
 	// reconciler materializes staged launch attachments into. Deterministic per
 	// (turn, ordinal) so a retry overwrites the same path idempotently.
 	launchAttachmentsWorkspaceDir = ".attachments"
+	// launchStaleDeadline is how old a still-non-terminal launch must be before
+	// the sweep fails it. A healthy launch dispatches within seconds of the pod
+	// going Active, so a launch that is still awaiting_bytes / ready / claiming
+	// this long after create is stuck: the browser never finished staging the
+	// bytes, the session died before going Active, or dispatch retries were
+	// exhausted. Generous so it never races a healthy in-flight launch.
+	launchStaleDeadline = 20 * time.Minute
 )
 
 // runLaunchDispatchLoop drives backend-owned dispatch of durable attachment
@@ -54,8 +61,12 @@ func runLaunchDispatchLoop(ctx context.Context, app *appServer, interval time.Du
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
-		if err := app.processPendingLaunches(ctx, time.Now().UTC()); err != nil && !errors.Is(err, context.Canceled) {
+		now := time.Now().UTC()
+		if err := app.processPendingLaunches(ctx, now); err != nil && !errors.Is(err, context.Canceled) {
 			slog.Warn("launch dispatch scan failed", "error", err)
+		}
+		if err := app.processStaleLaunches(ctx, now); err != nil && !errors.Is(err, context.Canceled) {
+			slog.Warn("stale launch scan failed", "error", err)
 		}
 		select {
 		case <-ctx.Done():
@@ -63,6 +74,33 @@ func runLaunchDispatchLoop(ctx context.Context, app *appServer, interval time.Du
 		case <-ticker.C:
 		}
 	}
+}
+
+// processStaleLaunches fails launches that are still non-terminal long past the
+// point a healthy one would have dispatched — the durable-model counterpart to
+// the stranded-launch ledger sweep. Where the reconciler delivers a ready
+// launch, this gives a terminal to one that can never become ready (bytes never
+// finished staging) or can never be claimed (its session is gone), so the row
+// self-cleans and the SPA stops showing it as pending.
+func (s *appServer) processStaleLaunches(ctx context.Context, now time.Time) error {
+	if s == nil || s.pendingLaunch == nil {
+		return nil
+	}
+	rows, err := s.pendingLaunch.FindStale(ctx, now.Add(-launchStaleDeadline), launchDispatchBatchLimit)
+	if err != nil {
+		return err
+	}
+	for _, launch := range rows {
+		reason := fmt.Sprintf(
+			"launch_never_completed: stuck in %s for >%s (attachment bytes never finished staging, or the session went away before dispatch)",
+			launch.Status, launchStaleDeadline,
+		)
+		if err := s.failPendingLaunch(ctx, launch, now, reason); err != nil {
+			slog.Warn("stale launch fail-mark failed",
+				"session_id", launch.SessionID, "turn_id", launch.TurnID, "error", err)
+		}
+	}
+	return nil
 }
 
 func (s *appServer) processPendingLaunches(ctx context.Context, now time.Time) error {

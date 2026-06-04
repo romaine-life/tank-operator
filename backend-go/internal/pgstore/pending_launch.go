@@ -304,6 +304,50 @@ func (s *PendingLaunchStore) ClaimReady(ctx context.Context, now time.Time, limi
 	return out, rows.Err()
 }
 
+// FindStale returns non-terminal launches (awaiting_bytes / ready / claiming)
+// created before olderThan — launches that should have dispatched by now but
+// didn't: the browser never finished staging the bytes, the session died before
+// it went Active, or dispatch retries were exhausted without a terminal. The
+// dispatch loop fails these so the durable model self-cleans and the SPA shows a
+// terminal instead of a perpetually pending launch. The created_at floor keeps
+// healthy in-flight launches (which dispatch within seconds of pod-ready) out of
+// the set. Bounded by limit.
+func (s *PendingLaunchStore) FindStale(ctx context.Context, olderThan time.Time, limit int) ([]PendingLaunchTurn, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("pending launch store unavailable")
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	const q = `
+		SELECT tank_session_id, turn_id, session_scope, session_id, client_nonce,
+			owner_email, runtime, skill_name, base_prompt, display_text,
+			model, effort, attachment_count, status, attempt_count, last_error,
+			dispatched_turn_id, created_at,
+			NULL::text AS session_status, NULL::boolean AS session_terminated
+		FROM session_pending_launch_turns
+		WHERE session_scope = $1
+			AND status IN ('awaiting_bytes', 'ready', 'claiming')
+			AND created_at < $2
+		ORDER BY created_at ASC
+		LIMIT $3
+	`
+	rows, err := s.pool.Query(ctx, q, s.scope, olderThan.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []PendingLaunchTurn
+	for rows.Next() {
+		row, err := scanPendingLaunch(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
 // LoadAttachments returns the staged blobs for a launch, ordered by ordinal,
 // for the reconciler to materialize into the pod workspace.
 func (s *PendingLaunchStore) LoadAttachments(ctx context.Context, tankSessionID, turnID string) ([]LaunchAttachmentBlob, error) {

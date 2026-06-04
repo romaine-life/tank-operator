@@ -92,6 +92,39 @@ func TestProcessPendingLaunchesFailsAtAttemptCap(t *testing.T) {
 	}
 }
 
+func TestProcessStaleLaunchesFailsStuckLaunches(t *testing.T) {
+	// A launch still awaiting_bytes long past the deadline (the browser never
+	// finished staging) must be failed durably with turn.command_failed so the
+	// row self-cleans and the SPA stops showing it pending.
+	app := testTurnsApp(t, &recordingSessionBus{})
+	app.sessionEvents = &recordingSessionEventStore{}
+	fake := &fakePendingLaunchStore{staleRows: []pgstore.PendingLaunchTurn{{
+		TankSessionID: "523", SessionID: "523", TurnID: "turn_stale", ClientNonce: "stale",
+		OwnerEmail: "user@example.com", Runtime: "claude", Status: pgstore.PendingLaunchAwaitingBytes,
+	}}}
+	app.pendingLaunch = fake
+
+	if err := app.processStaleLaunches(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("processStaleLaunches: %v", err)
+	}
+	if fake.failedTurn != "turn_stale" {
+		t.Fatalf("failed turn = %q, want turn_stale", fake.failedTurn)
+	}
+	if !strings.HasPrefix(fake.failReason, "launch_never_completed") {
+		t.Fatalf("fail reason = %q, want launch_never_completed prefix", fake.failReason)
+	}
+	upserts := app.sessionEvents.(*recordingSessionEventStore).upserts
+	var sawCommandFailed bool
+	for _, ev := range upserts {
+		if ev["type"] == "turn.command_failed" && ev["turn_id"] == "turn_stale" {
+			sawCommandFailed = true
+		}
+	}
+	if !sawCommandFailed {
+		t.Fatalf("no turn.command_failed emitted for the stale launch; upserts=%v", upserts)
+	}
+}
+
 func TestProcessPendingLaunchesRetriesBelowCap(t *testing.T) {
 	// Same unresolvable session, but below the attempt cap: the reconciler
 	// must leave it for retry (no durable fail, no command_failed).

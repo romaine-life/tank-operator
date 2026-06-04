@@ -23,6 +23,7 @@ type fakePendingLaunchStore struct {
 	notAccept bool
 	// reconciler-side knobs
 	claimRows    []pgstore.PendingLaunchTurn
+	staleRows    []pgstore.PendingLaunchTurn
 	loadBlobs    []pgstore.LaunchAttachmentBlob
 	failedTurn   string
 	failReason   string
@@ -53,6 +54,9 @@ func (f *fakePendingLaunchStore) StageAttachment(_ context.Context, _, _ string,
 
 func (f *fakePendingLaunchStore) ClaimReady(context.Context, time.Time, int, time.Duration) ([]pgstore.PendingLaunchTurn, error) {
 	return f.claimRows, nil
+}
+func (f *fakePendingLaunchStore) FindStale(context.Context, time.Time, int) ([]pgstore.PendingLaunchTurn, error) {
+	return f.staleRows, nil
 }
 func (f *fakePendingLaunchStore) LoadAttachments(context.Context, string, string) ([]pgstore.LaunchAttachmentBlob, error) {
 	return f.loadBlobs, nil
