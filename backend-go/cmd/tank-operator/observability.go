@@ -639,6 +639,18 @@ func recordStrandedLaunchSwept(result string) {
 	strandedLaunchSweptTotal.WithLabelValues(result).Inc()
 }
 
+var launchAttachmentStagedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_launch_attachment_staged_total",
+		Help: "Durable launch-attachment uploads staged, labeled by the launch status after staging (awaiting_bytes or ready).",
+	},
+	[]string{"status"},
+)
+
+func recordLaunchAttachmentStaged(status string) {
+	launchAttachmentStagedTotal.WithLabelValues(status).Inc()
+}
+
 func recordMessageLinkShare(operation, result string) {
 	messageLinkShareTotal.WithLabelValues(
 		messageLinkShareOperationLabel(operation),

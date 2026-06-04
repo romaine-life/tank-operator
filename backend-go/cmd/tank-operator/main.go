@@ -221,9 +221,11 @@ func main() {
 	readStateStore := buildConversationReadStateStore(pgPool, sessionScope)
 	var scheduledWakeupStore *pgstore.ScheduledWakeupStore
 	var controlActionStore *pgstore.ControlActionStore
+	var pendingLaunchStore *pgstore.PendingLaunchStore
 	if pgPool != nil {
 		scheduledWakeupStore = pgstore.NewScheduledWakeupStore(pgPool, sessionScope)
 		controlActionStore = pgstore.NewControlActionStore(pgPool, sessionScope)
+		pendingLaunchStore = pgstore.NewPendingLaunchStore(pgPool, sessionScope)
 	}
 
 	// 8. Init Manager. SessionListWaker wakes are routed through the
@@ -505,6 +507,11 @@ func main() {
 	// would make `s.imageOverrides == nil` false and panic on first use).
 	if imageOverrideStore != nil {
 		srv.imageOverrides = imageOverrideStore
+	}
+	// Same typed-nil-interface guard: only assign when the concrete store is
+	// non-nil so `s.pendingLaunch == nil` stays true in stub mode.
+	if pendingLaunchStore != nil {
+		srv.pendingLaunch = pendingLaunchStore
 	}
 	if scheduledWakeupStore != nil && sessionBus != nil {
 		go func() {
