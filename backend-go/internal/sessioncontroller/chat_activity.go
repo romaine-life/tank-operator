@@ -61,11 +61,17 @@ type SessionToOwnerResolver interface {
 // failures." Without this, a future regression that introduces a new
 // path-to-error (or the historical item.failed inference) is invisible
 // in dashboards until a user complains.
+//
+// RecordCompaction fires once per newly-observed durable context.compaction,
+// labeled by provider and trigger, so a dashboard can answer "how often are
+// sessions compacting, automatically vs on /compact". The exact per-session
+// total is the durable compaction_count column; this counter is the rate view.
 type LifecycleEmitterMetrics interface {
 	RecordActivityDelta(emitted bool)
 	RecordActivityFailure()
 	RecordActivityErrorTransition(reason string)
 	RecordActivityLateInterruptIgnored(status string)
+	RecordCompaction(provider, trigger string)
 }
 
 type noopLifecycleEmitterMetrics struct{}
@@ -74,6 +80,14 @@ func (noopLifecycleEmitterMetrics) RecordActivityDelta(_ bool)                  
 func (noopLifecycleEmitterMetrics) RecordActivityFailure()                      {}
 func (noopLifecycleEmitterMetrics) RecordActivityErrorTransition(_ string)      {}
 func (noopLifecycleEmitterMetrics) RecordActivityLateInterruptIgnored(_ string) {}
+func (noopLifecycleEmitterMetrics) RecordCompaction(_, _ string)                {}
+
+// contextCompactedEventType is the durable Tank event the runner emits when the
+// provider summarized earlier context to reclaim window space. It is
+// intentionally NOT in sessionactivity.LifecycleChatEventTypes — it must not
+// perturb run status, active turn, or unread state — so the emitter handles it
+// on a dedicated branch that refreshes the durable compaction count.
+const contextCompactedEventType = "context.compacted"
 
 // activityErrorReason picks the label for
 // LifecycleEmitterMetrics.RecordActivityErrorTransition. Pod-state
@@ -114,7 +128,8 @@ func (e *ChatActivityEmitter) EmitChatActivityDelta(ctx context.Context, event m
 		metrics = noopLifecycleEmitterMetrics{}
 	}
 	eventType, _ := event["type"].(string)
-	if !sessionactivity.IsLifecycleChatEventType(eventType) {
+	isCompaction := eventType == contextCompactedEventType
+	if !isCompaction && !sessionactivity.IsLifecycleChatEventType(eventType) {
 		return nil
 	}
 	storageKey, _ := event["tank_session_id"].(string)
@@ -139,7 +154,108 @@ func (e *ChatActivityEmitter) EmitChatActivityDelta(ctx context.Context, event m
 		// emit; the sidebar dropped the row on session.deleted.
 		return nil
 	}
+	if isCompaction {
+		return e.refreshCompactionCount(ctx, owner, publicID, event)
+	}
 	return e.RefreshSessionActivity(ctx, owner, publicID)
+}
+
+// refreshCompactionCount recomputes the durable per-session compaction count
+// from the append-only session_events ledger and writes it onto the sessions
+// row when it advances. context.compacted is delivered at-least-once;
+// recompute-and-compare makes a redelivery a no-op — no row_version churn and
+// no double-count of the metric. The exact per-session total always lives in
+// the durable compaction_count column; the Prometheus counter increments only
+// on a genuine advance, labeled by the triggering event's provider and trigger.
+func (e *ChatActivityEmitter) refreshCompactionCount(ctx context.Context, owner, publicID string, event map[string]any) error {
+	metrics := e.Metrics
+	if metrics == nil {
+		metrics = noopLifecycleEmitterMetrics{}
+	}
+	if e.ChatEvents == nil || e.Writer == nil {
+		return nil
+	}
+	count, err := e.ChatEvents.CountContextCompactions(ctx, publicID)
+	if err != nil {
+		metrics.RecordActivityFailure()
+		return fmt.Errorf("chat-activity emitter: count compactions for %q: %w", publicID, err)
+	}
+	// Compare against the durable prior so an at-least-once redelivery that
+	// recomputes the same total neither bumps row_version nor double-counts the
+	// metric. A missing row means the session was deleted mid-flight.
+	prior := int64(-1)
+	if e.Rows != nil {
+		record, ok, rErr := e.Rows.Get(ctx, owner, publicID)
+		if rErr != nil {
+			metrics.RecordActivityFailure()
+			return fmt.Errorf("chat-activity emitter: read row for compaction %q: %w", publicID, rErr)
+		}
+		if !ok {
+			return nil
+		}
+		prior = record.CompactionCount
+	}
+	if prior >= 0 && count <= prior {
+		return nil
+	}
+	transition := Event{
+		Email:        owner,
+		SessionScope: e.Scope,
+		SessionID:    publicID,
+		Type:         EventTypeCompactionChanged,
+		Payload:      map[string]any{"compaction_count": count},
+		OccurredAt:   time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	outcome, err := e.Writer.RecordTransition(ctx, transition)
+	if err != nil {
+		metrics.RecordActivityFailure()
+		return fmt.Errorf("chat-activity emitter: record compaction transition for %q: %w", publicID, err)
+	}
+	if outcome == TransitionNoOp {
+		return nil
+	}
+	metrics.RecordCompaction(compactionProviderLabel(event), compactionTriggerLabel(event))
+	if outcome == TransitionPublishFailed {
+		slog.Warn("chat-activity emitter: compaction row committed but publish failed",
+			"session_id", publicID,
+			"owner", owner,
+			"scope", e.Scope,
+		)
+	}
+	return nil
+}
+
+// compactionProviderLabel and compactionTriggerLabel clamp the metric labels to
+// a bounded set so a malformed runner event cannot blow up cardinality.
+// provider rides the durable envelope's "source"; trigger rides
+// payload.trigger (Claude distinguishes auto vs a manual /compact; Codex
+// reports auto).
+func compactionProviderLabel(event map[string]any) string {
+	source, _ := event["source"].(string)
+	switch strings.ToLower(strings.TrimSpace(source)) {
+	case "claude":
+		return "claude"
+	case "codex":
+		return "codex"
+	default:
+		return "other"
+	}
+}
+
+func compactionTriggerLabel(event map[string]any) string {
+	payload, _ := event["payload"].(map[string]any)
+	trigger := ""
+	if payload != nil {
+		trigger, _ = payload["trigger"].(string)
+	}
+	switch strings.ToLower(strings.TrimSpace(trigger)) {
+	case "auto":
+		return "auto"
+	case "manual":
+		return "manual"
+	default:
+		return "other"
+	}
 }
 
 // RefreshSessionActivity recomputes and publishes the session row's activity

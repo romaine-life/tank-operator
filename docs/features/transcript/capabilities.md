@@ -196,6 +196,73 @@ Codex-specific notes:
   manual/auto trigger or pre-token metadata on these surfaces, so the runner
   defaults `payload.trigger` to `auto`.
 
+## Composer Compaction Count
+
+Status: active
+
+Intent:
+Show, in the composer context indicator, how many times a session's context has
+been compacted — a durable, monotonic per-session count rendered as a third
+`cmp` metric beside the `ctx` used/window fraction and the `usd` cost. Occupancy
+alone cannot convey this: the live `ctx` numerator self-resets after each
+compaction (the next prompt is summary + recent turns), so a session that has
+compacted ten times reads identically to one that never has. The compaction
+count is the durable signal of how much earlier context has been summarized
+away — how lossy the session's working memory has become — which a user
+weighing "should I start a fresh session" needs and the occupancy gauge
+structurally hides. This is the stat the originating session asked for after
+observing the indicator climb past the window: the running number was cumulative
+spend, not occupancy, and "how many compactions" was the missing durable fact.
+
+Affected contracts:
+- Transcript (owns the composer context indicator and its durable sources)
+- Session Bar (the count rides the same durable session row as other indicators)
+- Observability
+
+Contract impact:
+- The count is durable session metadata: a `sessions.compaction_count` column,
+  maintained server-side as a projection over the append-only `session_events`
+  ledger, carried on the same snapshot/SSE row payload as
+  `runtime_context_window_tokens`. It is NOT derived from whatever transcript
+  entries the browser has loaded — a client-side count would undercount once
+  older `context.compacted` events scroll past the loaded window and disagree
+  across reload / fresh tab, the exact local-vs-durable contradiction the
+  Transcript and Session Bar contracts forbid.
+- The projection is idempotent under at-least-once delivery: the chat-activity
+  emitter recomputes `COUNT(*)` of `context.compacted` events on each such
+  upsert and writes the row only when the total advances, so a redelivered
+  event neither bumps `row_version` nor double-counts. The count is monotonic
+  because the ledger is append-only.
+- The bounded activity-summary fold (latest 50 lifecycle events) is
+  deliberately NOT the source — it cannot see compactions older than its window.
+  `context.compacted` stays out of `LifecycleChatEventTypes` (it must not move
+  run status); the dedicated full-history count column is the source instead.
+- The composer renders the metric only at session scope and only when > 0; the
+  per-turn pill does not carry it (compaction is a session-lifetime fact, not a
+  turn fact). The chip widens via a `has-compactions` modifier rather than
+  squeezing the `ctx` fraction into an ellipsis.
+
+Evidence:
+- Schema: `backend-go/internal/pgstore/migrations.go` migration 0125
+  (`compaction_count` column) and 0126 (partial index
+  `session_events_context_compacted`).
+- Store: `store.CountContextCompactions` +
+  `backend-go/internal/pgstore/session_events_compaction_integration_test.go`
+  (`TestCountContextCompactionsCountsScopedCompactionRows`) prove the count is
+  compaction-only and session-scoped.
+- Projection: `sessioncontroller.ChatActivityEmitter.refreshCompactionCount`;
+  `chat_activity_test.go` (`TestEmitChatActivityDeltaRecordsAdvancingCompaction`,
+  `TestEmitChatActivityDeltaDeduplicatesRedeliveredCompaction`,
+  `TestDeriveActivitySummaryIgnoresContextCompacted`) prove the advance-only
+  write, the at-least-once dedup, and that compaction does not move run status;
+  `writer_test.go` pins the `EventTypeCompactionChanged` → `compaction_count`
+  column mapping.
+- Frontend: `frontend/src/turnCostEstimateUi.test.ts` and
+  `frontend/src/composerCss.test.ts` prove the durable-sourced `cmp` metric, its
+  session-only scope, and the fixed-footprint widening.
+- Observability: `tank_session_compaction_total{provider,trigger}` counts each
+  newly-observed compaction (the exact per-session total is the durable column).
+
 ## Transcript Refresh Shortcut (R)
 
 Status: active

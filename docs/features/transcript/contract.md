@@ -212,3 +212,15 @@ answer; it must not visibly move a rendered row from one surface to the other.
   proves no `CONTEXT_WINDOW_BY_MODEL` / `getContextWindow` model table remains
   under `frontend/src`; the usage UI guard proves the composer chip exists
   while the visible token-usage transcript message does not return.
+- The composer context indicator also surfaces a durable per-session compaction
+  count as a third `cmp` metric. It is durable session metadata
+  (`sessions.compaction_count`), maintained server-side as a projection over the
+  append-only `session_events` ledger (count of `context.compacted` events) and
+  carried on the session row, so it is reload/fresh-tab stable and never
+  inferred from whatever transcript entries the browser has loaded. Unlike the
+  `ctx` occupancy numerator — which self-resets after a compaction because the
+  next prompt is summary + recent turns — the count is cumulative and monotonic.
+  The projection is idempotent under at-least-once delivery (recompute-and-
+  compare; the row is written only when the total advances), and the bounded
+  activity-summary fold is explicitly not its source. See the Composer
+  Compaction Count capability in `capabilities.md`.

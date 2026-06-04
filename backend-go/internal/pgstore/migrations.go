@@ -1401,6 +1401,20 @@ var schemaMigrations = []migration{
 	{ID: "0124", SQL: `CREATE INDEX IF NOT EXISTS session_background_task_wakes_due
 		ON session_background_task_wakes (session_scope, status, due_at, created_at)
 		WHERE status IN ('scheduled', 'claiming')`},
+
+	// Durable per-session compaction count. context.compacted is an append-only
+	// durable event in session_events; this column is its projection onto the
+	// sessions row so the composer's compaction metric hydrates from durable row
+	// metadata, stable across reload and identical in a fresh tab — exactly the
+	// model runtime_context_window_tokens uses for the window denominator. The
+	// chat-activity emitter recomputes it with a bounded COUNT over the partial
+	// index below on each context.compacted upsert (recompute-and-compare, so an
+	// at-least-once redelivery is a no-op rather than a double-count).
+	{ID: "0125", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS compaction_count bigint NOT NULL DEFAULT 0`},
+	{ID: "0126", SQL: `CREATE INDEX IF NOT EXISTS session_events_context_compacted
+		ON session_events (tank_session_id)
+		WHERE event_type = 'context.compacted'`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
