@@ -311,11 +311,18 @@ test("server-projected active turn activity shells own thinking row active state
   );
   assert.equal(appSource.includes("turnActivityGroupIsActive(entry.activity, turnId, activeTurnId)"), true);
   assert.equal(appSource.includes("function turnActivityGroupNeedsInput"), true);
+  assert.equal(appSource.includes("function insertActiveTurnTailGroups"), true);
+  assert.equal(appSource.includes("const pendingNeedsInputGroups"), true);
+  assert.equal(appSource.includes("pendingNeedsInputFallbackIndexes.set(group.turnId, groups.length)"), true);
   assert.match(
     appSource,
     /group\.active &&\s+!needsInput &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/,
   );
-  assert.match(appSource, /else if \(needsInput\) \{\n\s+groups\.push\(group\);/);
+  assert.match(appSource, /else if \(needsInput\) \{\n\s+pendingNeedsInputGroups\.push\(group\);/);
+  assert.match(
+    appSource,
+    /insertActiveTurnTailGroups\(\n\s+insertActiveTurnThinkingGroups\([\s\S]{0,220}pendingNeedsInputGroups,\n\s+pendingNeedsInputFallbackIndexes,/,
+  );
   assert.equal(appSource.includes("turnActivityShellIsDurablyActive(group.shell.activity)"), true);
   assert.equal(appSource.includes("turnActivityShellIsDurablyActive(entry.activity)"), true);
   assert.equal(appSource.includes("durableActiveTurnActivityShells"), true);

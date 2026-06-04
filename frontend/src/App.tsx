@@ -4344,15 +4344,19 @@ function turnActivityShellTailOrderKey(shell?: TranscriptEntry): string {
   );
 }
 
-function insertActiveTurnThinkingGroups(
+type ActiveTurnTailGroup =
+  | Extract<EntryGroup, { kind: "thinking" }>
+  | Extract<EntryGroup, { kind: "activity" }>;
+
+function insertActiveTurnTailGroups(
   groups: EntryGroup[],
-  thinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[],
+  tailGroups: ActiveTurnTailGroup[],
   fallbackIndexes: Map<string, number>,
 ): EntryGroup[] {
-  if (thinkingGroups.length === 0) return groups;
+  if (tailGroups.length === 0) return groups;
   const out = [...groups];
-  for (const thinking of thinkingGroups) {
-    const turnId = thinking.turnId.trim();
+  for (const tailGroup of tailGroups) {
+    const turnId = tailGroup.turnId.trim();
     // Position the placeholder by durable order, not by which rows carry the
     // turnId. Session-lifecycle notices (loading/ready) are durable rows with
     // no turnId; a turnId-structural rule strands the placeholder above them.
@@ -4360,7 +4364,7 @@ function insertActiveTurnThinkingGroups(
       orderKey: entryGroupOrderKey(group),
       includesTurn: entryGroupIncludesTurn(group, turnId),
     }));
-    const shellTailOrderKey = turnActivityShellTailOrderKey(thinking.shell);
+    const shellTailOrderKey = turnActivityShellTailOrderKey(tailGroup.shell);
     const fallbackIndex = fallbackIndexes.get(turnId) ?? out.length;
     const insertIndex = resolveThinkingInsertIndex(
       placement,
@@ -4369,10 +4373,18 @@ function insertActiveTurnThinkingGroups(
     );
     // Record the resolved live-tail key so a second active turn's placeholder
     // (rare, multi-turn) orders consistently against this one.
-    thinking.orderKey = shellTailOrderKey;
-    out.splice(insertIndex, 0, thinking);
+    if (tailGroup.kind === "thinking") tailGroup.orderKey = shellTailOrderKey;
+    out.splice(insertIndex, 0, tailGroup);
   }
   return out;
+}
+
+function insertActiveTurnThinkingGroups(
+  groups: EntryGroup[],
+  thinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[],
+  fallbackIndexes: Map<string, number>,
+): EntryGroup[] {
+  return insertActiveTurnTailGroups(groups, thinkingGroups, fallbackIndexes);
 }
 
 function groupTranscriptEntries(
@@ -4390,6 +4402,8 @@ function groupTranscriptEntries(
     const insertedThinkingTurnIds = new Set<string>();
     const pendingThinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[] = [];
     const pendingThinkingFallbackIndexes = new Map<string, number>();
+    const pendingNeedsInputGroups: Extract<EntryGroup, { kind: "activity" }>[] = [];
+    const pendingNeedsInputFallbackIndexes = new Map<string, number>();
     for (const entry of entries) {
       if (isTurnActivityEntry(entry)) {
         flushTranscriptToolBucket(groups, bucket);
@@ -4406,7 +4420,8 @@ function groupTranscriptEntries(
             pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
             insertedThinkingTurnIds.add(group.turnId);
           } else if (needsInput) {
-            groups.push(group);
+            pendingNeedsInputGroups.push(group);
+            pendingNeedsInputFallbackIndexes.set(group.turnId, groups.length);
           }
         }
         continue;
@@ -4415,10 +4430,14 @@ function groupTranscriptEntries(
       pushTranscriptEntryGroup(groups, entry, bucket);
     }
     flushTranscriptToolBucket(groups, bucket);
-    return insertActiveTurnThinkingGroups(
-      groups,
-      pendingThinkingGroups,
-      pendingThinkingFallbackIndexes,
+    return insertActiveTurnTailGroups(
+      insertActiveTurnThinkingGroups(
+        groups,
+        pendingThinkingGroups,
+        pendingThinkingFallbackIndexes,
+      ),
+      pendingNeedsInputGroups,
+      pendingNeedsInputFallbackIndexes,
     );
   }
   for (const entry of entries) {
