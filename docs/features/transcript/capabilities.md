@@ -273,18 +273,19 @@ Evidence:
   interrupted, unanswered AskUserQuestion announcement carries
   `turnTerminalStatus`, the fact the renderer uses to settle the row.
 
-## Provider-Observed Context Window Fraction
+## Provider Usage UI Retirement
 
-Status: active
+Status: retired
 
 Intent:
-The composer context indicator is a `used/window` fraction whose window is the
-real, provider-observed context size for the running model — not a number the
-frontend guesses from a model id. The runners observe the window at runtime
-(Codex app-server token usage; the Claude Agent SDK per-turn `modelUsage.contextWindow`) and
-report it on the runtime-config PUT; the orchestrator persists it on the session
-row and the composer renders the fraction against it. Pre-session previews and
-not-yet-reported sessions show a placeholder used count instead of a fraction.
+Token usage, cost, and context-window occupancy remain backend plumbing and
+diagnostic math, but they are no longer a user-visible run UI feature. The
+runners may observe usage and context-window values at runtime (Codex app-server
+token usage; the Claude Agent SDK per-turn `modelUsage.contextWindow`) and
+report the provider-observed window on the runtime-config PUT; the orchestrator
+persists that value on the session row for diagnostics and admin reporting.
+The composer, transcript, and Turns view do not render usage, cost, or context
+chips.
 
 Affected contracts:
 - Transcript
@@ -293,11 +294,13 @@ Affected contracts:
 Contract impact:
 - The window denominator is sourced only from the durable session-row field
   `runtime_context_window_tokens`. There is no frontend `CONTEXT_WINDOW_BY_MODEL`
-  model-window table and no `getContextWindow` lookup, and the indicator is a
-  fraction, not a percent ring.
-- The row value is first-observed-wins and durable, so the fraction is stable
+  model-window table and no `getContextWindow` lookup.
+- The row value is first-observed-wins and durable, so diagnostics are stable
   across reload and identical in a fresh tab; a session with no reported window
-  renders the placeholder, never a frontend-assumed default.
+  does not make the frontend guess a default.
+- The transcript projection must not synthesize `turn_usage` rows, annotate
+  transcript rows with usage payloads, or carry usage fields on Turn activity
+  shells.
 - Provider reports are observable through
   `tank_session_context_window_report_total{provider,source,result}` with
   bounded `source` and `result` labels.
@@ -309,14 +312,8 @@ Evidence:
   `backend-go/internal/sessions/manager_test.go` covers first-observed-wins
   persistence (`TestManagerSetRuntimeContextWindowPersistsAndPublishes`).
 - Migration guard: `scripts/check-context-window-table-migration.mjs` fails if
-  `CONTEXT_WINDOW_BY_MODEL` or `getContextWindow` reappear under `frontend/src`
-  and asserts the composer reads `runtime_context_window_tokens`; wired into CI
-  via `.github/workflows/removed-chat-runtime-guard.yml`.
-- Frontend: the composer reads `session.runtime_context_window_tokens`
-  (`frontend/src/App.tsx`) as the fraction denominator, with a placeholder when
-  it is 0.
-- Required before status active: unit coverage that the projection emits the
-  `awaiting_input` card in Turn activity and marks it answered from a later
-  `turn.input_answered` event, plus the live pre-deploy-pod gate (Claude
-  AskUserQuestion -> answer -> the same turn reaches `turn.completed`, not
-  `turn.failed`).
+  `CONTEXT_WINDOW_BY_MODEL` or `getContextWindow` reappear under `frontend/src`;
+  wired into CI via `.github/workflows/removed-chat-runtime-guard.yml`.
+- Frontend: `frontend/src/turnCostEstimateUi.test.ts` guards that the composer,
+  transcript, Turns view, and slash-command palette do not expose token usage or
+  cost UI.

@@ -6,7 +6,6 @@ import type {
   ConversationRunStatus,
   ConversationTurnTerminal,
   ConversationTurnTerminalStatus,
-  ConversationTurnUsage,
 } from "./conversationReducer";
 import type { UserMessageDisplay } from "../../runner-shared/conversation.js";
 import type { MessageAttachmentDisplay } from "./attachmentLabels";
@@ -90,11 +89,6 @@ export interface ConversationMetaEntry extends ConversationEntryBase {
     detail?: string;
     severity?: "info" | "error";
   };
-  // metaKind specializes a meta entry into a distinguishable transcript
-  // surface without growing a top-level kind value. The only client-side
-  // meta kind today is turn_usage; the AskUserQuestion card is a
-  // server-projected row (App.tsx RunAwaitingInputCard), not derived here.
-  metaKind?: "turn_usage";
 }
 
 interface ConversationEntryBase {
@@ -110,8 +104,6 @@ interface ConversationEntryBase {
   turnTerminalStatus?: ConversationTurnTerminalStatus;
   turnTerminalAt?: string;
   turnTerminalEventId?: string;
-  turnUsage?: unknown;
-  usageObservation?: unknown;
 }
 
 export interface ConversationProjection {
@@ -201,7 +193,6 @@ export function projectConversationState(
         orderKey: request.orderKey,
       },
     })),
-    ...turnUsageMetaEntries(state),
     // Per-turn terminal failures and interruptions become durable transcript
     // meta lines, replacing the floating run-status pill. turn.completed
     // emits no meta entry — successful completion speaks through the
@@ -367,71 +358,13 @@ function annotateTurnTerminals(
     if (!entry.turnId) return entry;
     const terminal = terminals[entry.turnId];
     if (!terminal) return entry;
-    // The dedicated turn_usage row owns the live context-occupancy snapshot
-    // (the latest per-message usage). The terminal carries CUMULATIVE usage,
-    // which for Claude is a different quantity — it sums cache reads across
-    // every tool-loop iteration. Overwriting the snapshot with the terminal
-    // here would collapse the context gauge to ~0 the instant a turn
-    // completes and on every reload. Stamp the terminal markers, but leave
-    // the snapshot row's usage payload intact. For Codex the two are the same
-    // cumulative thread usage, so this is a no-op there.
-    const isUsageSnapshotRow = entry.kind === "meta" && entry.metaKind === "turn_usage";
     return {
       ...entry,
       turnTerminalStatus: terminal.status,
       turnTerminalAt: terminal.time,
       turnTerminalEventId: terminal.sourceEventId,
-      ...(isUsageSnapshotRow
-        ? {}
-        : {
-            ...(terminal.usage !== undefined ? { turnUsage: terminal.usage } : {}),
-            ...(terminal.usageObservation !== undefined
-              ? { usageObservation: terminal.usageObservation }
-              : {}),
-          }),
     };
   });
-}
-
-function turnUsageMetaEntries(
-  state: ConversationReducerState,
-): Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> {
-  const baseIndex =
-    state.messages.length +
-    state.items.length +
-    state.backgroundTasks.length +
-    state.interruptRequests.length;
-  const out: Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> = [];
-  let offset = 0;
-  for (const usage of Object.values(state.turnUsages)) {
-    out.push({
-      index: baseIndex + offset,
-      orderKey: usage.orderKey,
-      entry: projectTurnUsage(usage),
-    });
-    offset += 1;
-  }
-  return out;
-}
-
-function projectTurnUsage(usage: ConversationTurnUsage): ConversationViewEntry {
-  return {
-    id: `turn-usage:${usage.turnId}`,
-    kind: "meta",
-    metaKind: "turn_usage",
-    meta: {
-      title: "Token usage updated",
-      severity: "info",
-    },
-    turnId: usage.turnId,
-    time: usage.time,
-    updatedAt: usage.updatedAt,
-    sourceEventId: usage.sourceEventId,
-    orderKey: usage.orderKey,
-    activityEndOrderKey: usage.endOrderKey ?? usage.orderKey,
-    turnUsage: usage.usage,
-    ...(usage.usageObservation !== undefined ? { usageObservation: usage.usageObservation } : {}),
-  };
 }
 
 function turnTerminalMetaEntries(
@@ -441,8 +374,7 @@ function turnTerminalMetaEntries(
     state.messages.length +
     state.items.length +
     state.backgroundTasks.length +
-    state.interruptRequests.length +
-    Object.keys(state.turnUsages).length;
+    state.interruptRequests.length;
   const out: Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> = [];
   let offset = 0;
   for (const terminal of Object.values(state.turnTerminals)) {

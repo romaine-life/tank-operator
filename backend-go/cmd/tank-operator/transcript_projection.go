@@ -38,7 +38,6 @@ type projectionState struct {
 	interruptRequests  []projectedEntryItem
 	contextCompactions []projectedEntryItem
 	turnProgress       []projectedEntryItem
-	turnUsages         map[string]turnUsageProjection
 	turnTerminals      map[string]turnTerminalProjection
 	awaitingInputs     []projectionAwaitingInput
 	answeredQuestions  map[string]projectionAnsweredInput
@@ -93,27 +92,14 @@ type projectionBackgroundTask struct {
 }
 
 type turnTerminalProjection struct {
-	TurnID           string
-	Status           string
-	ClientNonce      string
-	OrderKey         string
-	Time             string
-	SourceEventID    string
-	Detail           string
-	Usage            any
-	UsageObservation any
-	FinalAnswerIDs   map[string]bool
-}
-
-type turnUsageProjection struct {
-	TurnID           string
-	OrderKey         string
-	EndOrderKey      string
-	Time             string
-	UpdatedAt        string
-	SourceEventID    string
-	Usage            any
-	UsageObservation any
+	TurnID         string
+	Status         string
+	ClientNonce    string
+	OrderKey       string
+	Time           string
+	SourceEventID  string
+	Detail         string
+	FinalAnswerIDs map[string]bool
 }
 
 // projectionAwaitingInput captures a turn.awaiting_input pause: the agent asked
@@ -140,7 +126,6 @@ func projectTranscriptEvents(events []map[string]any) transcriptProjection {
 	state := projectionState{
 		itemIndex:       map[string]int{},
 		backgroundIndex: map[string]int{},
-		turnUsages:      map[string]turnUsageProjection{},
 		turnTerminals:   map[string]turnTerminalProjection{},
 		runStatus:       "ready",
 	}
@@ -208,7 +193,6 @@ func (s *projectionState) apply(event map[string]any) {
 		}
 		s.applyTurnProgress(event, "started")
 	case "turn.usage":
-		s.applyTurnUsage(event)
 	case "turn.completed":
 		s.applyTurnTerminal(event, "completed")
 		s.runStatus = "ready"
@@ -406,16 +390,14 @@ func (s *projectionState) applyTurnTerminal(event map[string]any, status string)
 		return
 	}
 	s.turnTerminals[turnID] = turnTerminalProjection{
-		TurnID:           turnID,
-		Status:           status,
-		ClientNonce:      transcriptString(event, "client_nonce"),
-		OrderKey:         transcriptString(event, "order_key"),
-		Time:             transcriptString(event, "created_at"),
-		SourceEventID:    transcriptString(event, "event_id"),
-		Detail:           projectionErrorText(event),
-		Usage:            transcriptPayloadValue(event, "usage"),
-		UsageObservation: transcriptPayloadValue(event, "usage_observation"),
-		FinalAnswerIDs:   projectionFinalAnswerIDs(event),
+		TurnID:         turnID,
+		Status:         status,
+		ClientNonce:    transcriptString(event, "client_nonce"),
+		OrderKey:       transcriptString(event, "order_key"),
+		Time:           transcriptString(event, "created_at"),
+		SourceEventID:  transcriptString(event, "event_id"),
+		Detail:         projectionErrorText(event),
+		FinalAnswerIDs: projectionFinalAnswerIDs(event),
 	}
 }
 
@@ -443,44 +425,6 @@ func projectionAwaitingInputQuestions(event map[string]any) []any {
 	raw := transcriptPayloadValue(event, "questions")
 	questions, _ := raw.([]any)
 	return questions
-}
-
-func (s *projectionState) applyTurnUsage(event map[string]any) {
-	turnID := transcriptString(event, "turn_id")
-	usage := transcriptPayloadValue(event, "usage")
-	if turnID == "" || usage == nil {
-		return
-	}
-	orderKey := transcriptString(event, "order_key")
-	eventTime := transcriptString(event, "created_at")
-	existing, ok := s.turnUsages[turnID]
-	if ok {
-		existing.EndOrderKey = projectionFirstNonEmpty(orderKey, existing.EndOrderKey, existing.OrderKey)
-		existing.UpdatedAt = projectionFirstNonEmpty(eventTime, existing.UpdatedAt, existing.Time)
-		existing.Usage = usage
-		existing.UsageObservation = transcriptPayloadValue(event, "usage_observation")
-		s.turnUsages[turnID] = existing
-	} else {
-		s.turnUsages[turnID] = turnUsageProjection{
-			TurnID:           turnID,
-			OrderKey:         orderKey,
-			EndOrderKey:      orderKey,
-			Time:             eventTime,
-			UpdatedAt:        eventTime,
-			SourceEventID:    transcriptString(event, "event_id"),
-			Usage:            usage,
-			UsageObservation: transcriptPayloadValue(event, "usage_observation"),
-		}
-	}
-	if _, terminal := s.turnTerminals[turnID]; terminal {
-		return
-	}
-	if s.activeTurnID == "" {
-		s.activeTurnID = turnID
-	}
-	if s.runStatus == "ready" || s.runStatus == "submitted" {
-		s.runStatus = "streaming"
-	}
 }
 
 func (s *projectionState) applyInterruptRequested(event map[string]any) {
@@ -705,7 +649,7 @@ func (s *projectionState) upsertBackgroundTask(event map[string]any, status stri
 }
 
 func (s *projectionState) projectFlatEntries() []map[string]any {
-	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.turnUsages)+len(s.turnTerminals))
+	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.turnTerminals))
 	items = append(items, s.messages...)
 	baseIndex := len(items)
 	backgroundProviderIDs := s.backgroundProviderItemIDs()
@@ -747,17 +691,6 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 	}
 	baseIndex += len(s.turnProgress)
 	offset := 0
-	for _, usage := range s.turnUsages {
-		entry := projectTurnUsage(usage)
-		items = append(items, projectedEntryItem{
-			entry:    entry,
-			orderKey: usage.OrderKey,
-			index:    baseIndex + offset,
-		})
-		offset += 1
-	}
-	baseIndex += len(s.turnUsages)
-	offset = 0
 	for _, terminal := range s.turnTerminals {
 		if terminal.Status == "completed" {
 			continue
@@ -939,32 +872,6 @@ func projectProjectionBackgroundTask(task *projectionBackgroundTask) map[string]
 	return entry
 }
 
-func projectTurnUsage(usage turnUsageProjection) map[string]any {
-	entry := map[string]any{
-		"id":       "turn-usage:" + usage.TurnID,
-		"kind":     "meta",
-		"metaKind": "turn_usage",
-		"meta": map[string]any{
-			"title":    "Token usage updated",
-			"severity": "info",
-		},
-		"turnId":        usage.TurnID,
-		"time":          usage.Time,
-		"updatedAt":     usage.UpdatedAt,
-		"sourceEventId": usage.SourceEventID,
-		"orderKey":      usage.OrderKey,
-		"activityEndOrderKey": projectionFirstNonEmpty(
-			usage.EndOrderKey,
-			usage.OrderKey,
-		),
-		"turnUsage": usage.Usage,
-	}
-	if usage.UsageObservation != nil {
-		entry["usageObservation"] = usage.UsageObservation
-	}
-	return entry
-}
-
 func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnTerminalProjection) map[string]any {
 	turnID := transcriptMapString(entry, "turnId")
 	if turnID == "" {
@@ -979,22 +886,6 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 	out["turnTerminalAt"] = terminal.Time
 	out["turnTerminalEventId"] = terminal.SourceEventID
 	out["turnTerminalOrderKey"] = terminal.OrderKey
-	// The dedicated turn_usage row owns the live context-occupancy snapshot
-	// (the latest per-message usage). The terminal carries CUMULATIVE usage,
-	// which for Claude is a different quantity — it sums cache reads across
-	// every tool-loop iteration. Overwriting the snapshot with the terminal
-	// here would collapse the context gauge to ~0 once a turn completes and
-	// on every reload. Stamp the terminal markers but leave the snapshot
-	// row's usage payload intact. For Codex the two are the same cumulative
-	// thread usage, so this is a no-op there.
-	if transcriptMapString(entry, "metaKind") != "turn_usage" {
-		if terminal.Usage != nil {
-			out["turnUsage"] = terminal.Usage
-		}
-		if terminal.UsageObservation != nil {
-			out["usageObservation"] = terminal.UsageObservation
-		}
-	}
 	return out
 }
 
@@ -1041,12 +932,6 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 				"activity":      activity.Summary,
 				"activityIds":   activity.CompactedEntryIDs,
 				"sourceEventId": transcriptMapString(activity.Summary, "sourceEventId"),
-			}
-			if turnUsage := activity.Summary["turnUsage"]; turnUsage != nil {
-				shell["turnUsage"] = turnUsage
-			}
-			if usageObservation := activity.Summary["usageObservation"]; usageObservation != nil {
-				shell["usageObservation"] = usageObservation
 			}
 			out = append(out, shell)
 		}
@@ -1206,23 +1091,7 @@ func turnActivitySummaryMap(activityEntries, compactedEntries []map[string]any, 
 		"errorCount":          0,
 		"active":              active,
 	}
-	var snapshotUsage any
-	var snapshotObservation any
 	for _, entry := range activityEntries {
-		if turnUsage := entry["turnUsage"]; turnUsage != nil {
-			out["turnUsage"] = turnUsage
-		}
-		if usageObservation := entry["usageObservation"]; usageObservation != nil {
-			out["usageObservation"] = usageObservation
-		}
-		if transcriptMapString(entry, "metaKind") == "turn_usage" {
-			if turnUsage := entry["turnUsage"]; turnUsage != nil {
-				snapshotUsage = turnUsage
-			}
-			if usageObservation := entry["usageObservation"]; usageObservation != nil {
-				snapshotObservation = usageObservation
-			}
-		}
 		switch transcriptMapString(entry, "kind") {
 		case "tool":
 			out["toolCount"] = out["toolCount"].(int) + 1
@@ -1249,22 +1118,6 @@ func turnActivitySummaryMap(activityEntries, compactedEntries []map[string]any, 
 				out["errorCount"] = out["errorCount"].(int) + 1
 			}
 		}
-	}
-	// The activity shell represents the (compacted) turn in the main
-	// transcript, and the composer's context gauge reads occupancy from these
-	// top-level rows. Surface the dedicated turn_usage snapshot (the latest
-	// per-message usage = current context-window occupancy) rather than the
-	// cumulative usage that terminal annotation stamped onto sibling entries:
-	// for Claude the cumulative sum is a different, much larger quantity, and
-	// letting it win here makes a completed turn read ~0 occupancy. For Codex
-	// the snapshot and the terminal are the same cumulative thread usage, so
-	// this is a no-op there. Cost still reads the cumulative usage from the
-	// non-compacted terminal/final-answer entries.
-	if snapshotUsage != nil {
-		out["turnUsage"] = snapshotUsage
-	}
-	if snapshotObservation != nil {
-		out["usageObservation"] = snapshotObservation
 	}
 	if len(activityEntries) > 0 {
 		first := activityEntries[0]

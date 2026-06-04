@@ -10,12 +10,12 @@
 //
 // THE CONTRACT:
 //
-//   The composer's context indicator is a `used/window` fraction whose
-//   denominator is the provider-observed context window persisted on the
-//   session row (`runtime_context_window_tokens`, reported by the runners
-//   through PUT /api/internal/sessions/{id}/runtime-config — codex
-//   app-server token usage; Claude Agent SDK modelUsage.contextWindow). There
-//   is NO frontend model-window table and NO percent ring. The frontend
+//   Provider-observed context-window values remain durable backend/session-row
+//   metadata (`runtime_context_window_tokens`, reported by the runners through
+//   PUT /api/internal/sessions/{id}/runtime-config — codex app-server token
+//   usage; Claude Agent SDK modelUsage.contextWindow), but the frontend no
+//   longer renders a token/context usage indicator. There is NO frontend
+//   model-window table and NO percent ring. The frontend
 //   `CONTEXT_WINDOW_BY_MODEL` table and its `getContextWindow` lookup are
 //   deleted; nothing under frontend/src may reintroduce them.
 //
@@ -88,16 +88,6 @@ const CHECKS = [
     description: "getContextWindow model-window lookup does not appear anywhere under frontend/src",
     kind: "tree-absent",
     pattern: /\bgetContextWindow\b/,
-  },
-
-  // ────────────────────────── Composer reads the durable window ──────────────────────────
-  {
-    id: "composer-reads-runtime-context-window",
-    from: "Composer reads durable window",
-    root: "frontend/src",
-    description: "the composer context fraction reads the durable session-row field runtime_context_window_tokens",
-    kind: "tree-present",
-    pattern: /runtime_context_window_tokens/,
   },
 
   // ────────────────────────── Executable gates ──────────────────────────

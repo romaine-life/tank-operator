@@ -4000,15 +4000,6 @@ button:disabled {
   color: #bfdbfe;
 }
 
-.run-turn-view-summary .run-cost-estimate {
-  width: auto;
-  min-width: auto;
-  flex: 0 0 auto;
-  height: auto;
-  box-shadow: none;
-  font-variant-numeric: tabular-nums;
-}
-
 .run-turn-view-body {
   min-height: 0;
   overflow: auto;
@@ -6827,74 +6818,6 @@ button:disabled {
   line-height: 1;
 }
 
-/* Composer context + cost chip. The ctx metric renders a provider-observed
-   used/window fraction (e.g. 12k/258k); the percent ring it replaced is gone.
-   Width is sized to fit the widest fraction without reflow. */
-.run-cost-estimate {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 0.45rem;
-  width: 11rem;
-  flex: 0 0 11rem;
-  height: 2rem;
-  padding: 0 0.58rem;
-  border-radius: 0.5rem;
-  font-family: var(--font-mono);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  color: var(--text-body);
-  background: rgba(255, 255, 255, 0.04);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.055);
-}
-
-.run-cost-estimate-metric {
-  display: inline-flex;
-  min-width: 0;
-  flex: 1 1 0;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.08rem;
-  line-height: 1;
-}
-
-.run-cost-estimate-value {
-  display: block;
-  max-width: 100%;
-  overflow: hidden;
-  color: var(--text-body);
-  font-size: 0.68rem;
-  text-overflow: ellipsis;
-}
-
-.run-cost-estimate-token-count {
-  color: var(--text-muted);
-}
-
-.run-cost-estimate-label {
-  display: block;
-  color: var(--text-faint);
-  font-family: var(--font-primary);
-  font-size: 0.48rem;
-  font-weight: 650;
-  letter-spacing: 0;
-  line-height: 1;
-  text-transform: uppercase;
-}
-
-.run-cost-estimate-divider {
-  width: 1px;
-  height: 1.2rem;
-  flex: 0 0 1px;
-  background: rgba(148, 163, 184, 0.2);
-}
-
-.run-cost-estimate.is-placeholder {
-  color: var(--text-muted);
-  opacity: 0.72;
-}
-
 @container (max-width: 460px) {
   .run-composer-footer {
     gap: 0.38rem;
@@ -6911,21 +6834,6 @@ button:disabled {
   .run-composer-icon-btn {
     width: 1.85rem;
     height: 1.85rem;
-  }
-
-  .run-cost-estimate {
-    width: 6.6rem;
-    flex-basis: 6.6rem;
-    gap: 0.28rem;
-    padding-inline: 0.42rem;
-  }
-
-  .run-cost-estimate-label {
-    display: none;
-  }
-
-  .run-cost-estimate-divider {
-    height: 1rem;
   }
 
   .run-model-chip {

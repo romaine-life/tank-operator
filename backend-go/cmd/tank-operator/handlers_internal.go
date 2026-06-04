@@ -42,7 +42,6 @@ var builtinSlashCommands = []menuCommandEntry{
 	{Name: "/model", Desc: "Switch model", Source: "builtin"},
 	{Name: "/review", Desc: "Review the pending changes", Source: "builtin"},
 	{Name: "/security-review", Desc: "Run a security review", Source: "builtin"},
-	{Name: "/usage", Desc: "Show token / billing usage", Source: "builtin"},
 }
 
 // handleInternalGitHubInstallation resolves the caller's actor_email to a

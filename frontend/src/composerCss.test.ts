@@ -43,12 +43,7 @@ test("chat composer slash command highlight is drawn behind textarea text", () =
   assert.match(tokenRule, /line-height:\s*1\.22;/);
 });
 
-test("chat composer cost estimate keeps a fixed-width footprint", () => {
-  const composerRule = cssRule(".run-cost-estimate");
-  assert.match(composerRule, /width:\s*11rem;/);
-  assert.match(composerRule, /flex:\s*0\s+0\s+11rem;/);
-  assert.match(composerRule, /white-space:\s*nowrap;/);
-
+test("chat composer controls keep fixed footprints without a usage chip", () => {
   const iconRule = cssRule(".run-composer-icon-btn");
   assert.match(iconRule, /flex:\s*0\s+0\s+2rem;/);
 
@@ -59,27 +54,7 @@ test("chat composer cost estimate keeps a fixed-width footprint", () => {
   const modelLabelRule = cssRule(".run-model-chip-label");
   assert.match(modelLabelRule, /flex:\s*1\s+1\s+auto;/);
   assert.match(modelLabelRule, /text-overflow:\s*ellipsis;/);
-
-  const metricRule = cssRule(".run-cost-estimate-metric");
-  assert.match(metricRule, /flex:\s*1\s+1\s+0;/);
-  assert.match(metricRule, /min-width:\s*0;/);
-  assert.match(metricRule, /flex-direction:\s*column;/);
-
-  const valueRule = cssRule(".run-cost-estimate-value");
-  assert.match(valueRule, /overflow:\s*hidden;/);
-  assert.match(valueRule, /text-overflow:\s*ellipsis;/);
-
-  const labelRule = cssRule(".run-cost-estimate-label");
-  assert.match(labelRule, /letter-spacing:\s*0;/);
-  assert.match(labelRule, /text-transform:\s*uppercase;/);
-
-  const dividerRule = cssRule(".run-cost-estimate-divider");
-  assert.match(dividerRule, /width:\s*1px;/);
-  assert.match(dividerRule, /flex:\s*0\s+0\s+1px;/);
-
-  const turnRule = cssRule(".run-turn-view-summary .run-cost-estimate");
-  assert.match(turnRule, /width:\s*auto;/);
-  assert.match(turnRule, /flex:\s*0\s+0\s+auto;/);
+  assert.doesNotMatch(indexCssSource, /run-cost-estimate/);
 });
 
 test("run pane keeps the composer inside the viewport at high browser zoom", () => {
@@ -124,8 +99,6 @@ test("composer footer reflows controls instead of clipping them under zoom", () 
   assert.match(toolsRule, /max-width:\s*100%;/);
 
   assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-composer-tools\s*\{[\s\S]*?flex-wrap:\s*wrap;/);
-  assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate\s*\{[\s\S]*?flex-basis:\s*6\.6rem;/);
-  assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-cost-estimate-label\s*\{[\s\S]*?display:\s*none;/);
   assert.match(indexCssSource, /@container \(max-width:\s*460px\)\s*\{[\s\S]*?\.run-model-chip\s*\{[\s\S]*?max-width:\s*min\(11rem,\s*100%\);/);
 
   assert.match(indexCssSource, /@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-composer-hint\s*\{[\s\S]*?flex-basis:\s*100%;/);
