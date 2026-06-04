@@ -26,3 +26,7 @@ When the user invokes `/rollout`, carry the current change all the way through d
 ## Lease/Glimmung
 
 - Starting rollout means the test workflow is over. If you had the /test skill called previously, or if you took a lease using the glimmung mcp tool to utilize a test slot, return the lease and allow glimmung to handle the test environment cleanup.
+
+## Github status button
+
+- Once you have the pull request open, if not already done, call the Tank MCP set_pull_request_link tool with the current session id and PR URL so the Tank UI can link to it from the test workflow controls.
