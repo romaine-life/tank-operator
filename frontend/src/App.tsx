@@ -37,6 +37,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
 import { AdminAvatarManager } from "./AdminAvatarManager";
@@ -80,6 +81,7 @@ import {
   ClipboardListIcon,
   Code2Icon,
   CopyIcon,
+  EllipsisVerticalIcon,
   FileDiffIcon,
   FileIcon,
   FileTextIcon,
@@ -99,7 +101,6 @@ import {
   MessageSquareIcon,
   MinusIcon,
   MonitorIcon,
-  MoreHorizontalIcon,
   NotebookPenIcon,
   PlayIcon,
   PlusIcon,
@@ -6106,42 +6107,6 @@ function RunBackgroundTaskBlock({
   );
 }
 
-function BackgroundLedger({
-  entries,
-  active,
-  onOpen,
-  disabled = false,
-  title = "Background",
-}: {
-  entries: TranscriptEntry[];
-  active: boolean;
-  onOpen: () => void;
-  disabled?: boolean;
-  title?: string;
-}) {
-  const activeCount = entries.length;
-  return (
-    <button
-      type="button"
-      className={`run-tab run-shell-tasks-trigger${active ? " run-tab-active" : ""}`}
-      onClick={disabled ? undefined : onOpen}
-      aria-pressed={active}
-      disabled={disabled}
-      title={title}
-    >
-      <ActivityIcon className="run-tab-icon" aria-hidden="true" />
-      <span>Background</span>
-      <span
-        className="run-shell-tasks-count"
-        data-active={activeCount > 0 ? "true" : undefined}
-        aria-label={`${activeCount} background items`}
-      >
-        {activeCount}
-      </span>
-    </button>
-  );
-}
-
 function TurnsTab({
   active,
   count = 0,
@@ -6180,35 +6145,59 @@ function TurnsTab({
   );
 }
 
+// One menu-row's worth of state for a header view (Turns / Background / Files).
+// The overflow menu owns the icon + label markup so the labels stay literal
+// and testable; callers pass only the live state.
+type RunHeaderMenuTabState = {
+  active: boolean;
+  disabled: boolean;
+  title: string;
+  onOpen: () => void;
+  count?: number;
+  countActive?: boolean;
+};
+
+// The run header's single overflow control. It is the one consolidation point
+// for every top-right session action: the view tabs (Turns / Background /
+// Files) and the auxiliary actions (Settings / Help). Keeping all of them here
+// means the header stays a clean "title + ⋮" strip instead of a row of
+// competing buttons. Live counts ride each row, and an attention dot surfaces
+// on the trigger so ambient signal is not lost when the menu is closed.
 function RunHeaderOverflowMenu({
+  triggerActive,
+  triggerAttention,
+  turns,
+  background,
+  files,
   settingsActive,
   helpActive,
-  adminObservabilityAttention,
   onSettings,
   onHelp,
 }: {
+  triggerActive: boolean;
+  triggerAttention?: "critical" | "warning" | null;
+  turns: RunHeaderMenuTabState;
+  background: RunHeaderMenuTabState;
+  files: RunHeaderMenuTabState;
   settingsActive: boolean;
   helpActive: boolean;
-  adminObservabilityAttention?: ClusterHealthStatus | null;
   onSettings: () => void;
   onHelp: () => void;
 }) {
-  const active = settingsActive || helpActive;
-
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
-          className={`run-tab run-tab-more${active ? " run-tab-active" : ""}`}
+          className={`run-tab run-tab-more${triggerActive ? " run-tab-active" : ""}`}
           aria-label="More session actions"
-          aria-pressed={active}
+          aria-pressed={triggerActive}
           title="More"
         >
-          <MoreHorizontalIcon className="run-tab-icon" aria-hidden="true" />
-          {adminObservabilityAttention && (
+          <EllipsisVerticalIcon className="run-tab-icon" aria-hidden="true" />
+          {triggerAttention && (
             <span
-              className={`run-tab-alert is-${adminObservabilityAttention}`}
+              className={`run-tab-alert is-${triggerAttention}`}
               aria-hidden="true"
             />
           )}
@@ -6221,14 +6210,62 @@ function RunHeaderOverflowMenu({
         className="run-tab-more-menu"
       >
         <DropdownMenuItem
+          className={`run-tab-more-item${turns.active ? " is-active" : ""}`}
+          disabled={turns.disabled}
+          onSelect={turns.onOpen}
+          title={turns.title}
+        >
+          <ActivityIcon className="run-tab-more-item-icon" aria-hidden="true" />
+          <span>Turns</span>
+          {turns.count !== undefined && turns.count > 0 && (
+            <span
+              className="run-shell-tasks-count run-tab-more-item-count"
+              data-active={turns.countActive ? "true" : undefined}
+              aria-label={`${turns.count} turns`}
+            >
+              {turns.count}
+            </span>
+          )}
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={`run-tab-more-item${background.active ? " is-active" : ""}`}
+          disabled={background.disabled}
+          onSelect={background.onOpen}
+          title={background.title}
+        >
+          <ActivityIcon className="run-tab-more-item-icon" aria-hidden="true" />
+          <span>Background</span>
+          <span
+            className="run-shell-tasks-count run-tab-more-item-count"
+            data-active={(background.count ?? 0) > 0 ? "true" : undefined}
+            aria-label={`${background.count ?? 0} background items`}
+          >
+            {background.count ?? 0}
+          </span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={`run-tab-more-item${files.active ? " is-active" : ""}`}
+          disabled={files.disabled}
+          onSelect={files.onOpen}
+          title={files.title}
+        >
+          <FolderIcon
+            className="run-tab-more-item-icon"
+            strokeWidth={1.8}
+            aria-hidden="true"
+          />
+          <span>Files</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator className="run-tab-more-separator" />
+        <DropdownMenuItem
           className={`run-tab-more-item${settingsActive ? " is-active" : ""}`}
           onSelect={onSettings}
         >
           <SettingsIcon className="run-tab-more-item-icon" aria-hidden="true" />
           <span>Settings</span>
-          {adminObservabilityAttention && (
+          {triggerAttention && (
             <span
-              className={`run-tab-alert is-${adminObservabilityAttention}`}
+              className={`run-tab-alert is-${triggerAttention}`}
               aria-hidden="true"
             />
           )}
@@ -13367,50 +13404,55 @@ function ChatPane({
               <span>Back</span>
             </button>
           )}
-          <TurnsTab
-            active={activeTab === "turns"}
-            count={turnViewItems.length}
-            hasActiveTurn={turnViewItems.some((turn) => turn.active)}
-            disabled={!turnsAvailable}
-            title={turnsAvailable ? "Turns" : "Turns are available once the agent has turn activity"}
-            onOpen={() => {
-              if (activeTab === "turns") setActiveTab("chat");
-              else openTurnPage(undefined, { anchor: "bottom" });
-            }}
-          />
+          {publicView && (
+            <TurnsTab
+              active={activeTab === "turns"}
+              count={turnViewItems.length}
+              hasActiveTurn={turnViewItems.some((turn) => turn.active)}
+              disabled={!turnsAvailable}
+              title={turnsAvailable ? "Turns" : "Turns are available once the agent has turn activity"}
+              onOpen={() => {
+                if (activeTab === "turns") setActiveTab("chat");
+                else openTurnPage(undefined, { anchor: "bottom" });
+              }}
+            />
+          )}
           {!publicView && (
-            <>
-              <BackgroundLedger
-                entries={backgroundLedgerEntries}
-                active={activeTab === "background"}
-                onOpen={() => {
+            <RunHeaderOverflowMenu
+              triggerActive={activeTab !== "chat"}
+              triggerAttention={adminObservabilityAttention}
+              turns={{
+                active: activeTab === "turns",
+                count: turnViewItems.length,
+                countActive: turnViewItems.some((turn) => turn.active),
+                disabled: !turnsAvailable,
+                title: turnsAvailable ? "Turns" : "Turns are available once the agent has turn activity",
+                onOpen: () => {
+                  if (activeTab === "turns") setActiveTab("chat");
+                  else openTurnPage(undefined, { anchor: "bottom" });
+                },
+              }}
+              background={{
+                active: activeTab === "background",
+                count: backgroundLedgerEntries.length,
+                disabled: false,
+                title: "Background",
+                onOpen: () => {
                   if (activeTab === "background") setActiveTab("chat");
                   else openBackgroundPage();
-                }}
-              />
-              <button
-                type="button"
-                className={`run-tab${activeTab === "files" ? " run-tab-active" : ""}`}
-                onClick={() => toggleRunTab("files")}
-                aria-pressed={activeTab === "files"}
-                disabled={!filesAvailable}
-                title={filesTabTitle}
-              >
-                <FolderIcon
-                  className="run-tab-icon"
-                  strokeWidth={1.8}
-                  aria-hidden="true"
-                />
-                <span>Files</span>
-              </button>
-              <RunHeaderOverflowMenu
-                settingsActive={activeTab === "settings"}
-                helpActive={activeTab === "help"}
-                adminObservabilityAttention={adminObservabilityAttention}
-                onSettings={() => toggleRunTab("settings")}
-                onHelp={() => toggleRunTab("help")}
-              />
-            </>
+                },
+              }}
+              files={{
+                active: activeTab === "files",
+                disabled: !filesAvailable,
+                title: filesTabTitle,
+                onOpen: () => toggleRunTab("files"),
+              }}
+              settingsActive={activeTab === "settings"}
+              helpActive={activeTab === "help"}
+              onSettings={() => toggleRunTab("settings")}
+              onHelp={() => toggleRunTab("help")}
+            />
           )}
       </>)}
       body={(<>
@@ -17106,35 +17148,30 @@ function AuthenticatedApp() {
                   <span>Back</span>
                 </button>
               )}
-              <TurnsTab
-                active={false}
-                disabled
-                onOpen={() => undefined}
-              />
-              <BackgroundLedger
-                entries={[]}
-                active={false}
-                onOpen={() => undefined}
-                disabled
-                title="Background activity is available once the session starts"
-              />
-              <button
-                type="button"
-                className="run-tab"
-                disabled
-                title="Files are available once the session starts"
-              >
-                <FolderIcon
-                  className="run-tab-icon"
-                  strokeWidth={1.8}
-                  aria-hidden="true"
-                />
-                <span>Files</span>
-              </button>
               <RunHeaderOverflowMenu
+                triggerActive={homeActiveTab !== "chat"}
+                triggerAttention={adminObservabilityAttention}
+                turns={{
+                  active: false,
+                  disabled: true,
+                  title: "Turns are available once the agent has turn activity",
+                  onOpen: () => undefined,
+                }}
+                background={{
+                  active: false,
+                  count: 0,
+                  disabled: true,
+                  title: "Background activity is available once the session starts",
+                  onOpen: () => undefined,
+                }}
+                files={{
+                  active: false,
+                  disabled: true,
+                  title: "Files are available once the session starts",
+                  onOpen: () => undefined,
+                }}
                 settingsActive={homeActiveTab === "settings"}
                 helpActive={homeActiveTab === "help"}
-                adminObservabilityAttention={adminObservabilityAttention}
                 onSettings={() =>
                   setHomeActiveTab((current) =>
                     current === "settings" ? "chat" : "settings"

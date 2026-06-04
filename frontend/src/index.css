@@ -3817,6 +3817,15 @@ button:disabled {
   margin-left: auto;
 }
 
+.run-tab-more-item-count {
+  margin-left: auto;
+}
+
+.run-tab-more-separator {
+  margin-block: 0.3rem;
+  background: rgba(255, 255, 255, 0.08);
+}
+
 .run-tab-alert,
 .run-settings-tab-alert {
   width: 0.48rem;
