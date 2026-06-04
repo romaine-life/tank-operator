@@ -795,13 +795,10 @@ test("turn.awaiting_input surfaces the live needs-input signal", () => {
   assert.equal(projection.runStatus, "needs_input");
 });
 
-test("an ask_user_answer answer turn renders as a user message and clears needs-input", () => {
-  // The answer is a brand-new durable turn (POST /answer): a
-  // user_message.created carrying an ask_user_answer display, then
-  // turn.submitted. The live projection renders the answer as the next user
-  // message, and the new turn clears the session-level needs-input signal.
-  // (The durable card's answered-state is derived server-side from this same
-  // ask_user_answer turn.)
+test("turn.input_answered clears needs-input without adding a transcript message", () => {
+  // The user's answer is part of the same active turn, not a new user bubble.
+  // The server projection uses turn.input_answered to mark the question card
+  // answered inside Turn activity.
   const projection = projectConversationState(
     reduceConversationEvents([
       ev("1", "turn.awaiting_input", {
@@ -813,38 +810,24 @@ test("an ask_user_answer answer turn renders as a user message and clears needs-
           timeline_id: "turn-1:item:toolu_ask",
         },
       }),
-      ev("2", "user_message.created", {
+      ev("2", "turn.input_answered", {
         actor: "user",
         source: "tank",
-        turn_id: "turn-2",
-        timeline_id: "turn-2:user",
-        client_nonce: "turn-2",
+        turn_id: "turn-1",
+        timeline_id: "turn-1:item:toolu_ask:answer",
+        client_nonce: "answer-123",
         payload: {
-          text: "Search",
-          display: {
-            kind: "ask_user_answer",
-            question_timeline_id: "turn-1:item:toolu_ask",
-            asking_turn_id: "turn-1",
-            answers: { "Pick one": ["Search"] },
-          },
+          question_timeline_id: "turn-1:item:toolu_ask",
+          provider_item_id: "toolu_ask",
+          answers: { "Pick one": ["Search"] },
         },
       }),
-      ev("3", "turn.submitted", { source: "claude", turn_id: "turn-2", client_nonce: "turn-2" }),
     ]),
   );
 
   assert.equal(projection.needsInput, false);
-  const answerMsg = projection.entries.find(
-    (entry) => entry.kind === "message" && entry.role === "user",
-  );
-  assert.ok(answerMsg, "the answer turn should render as a user message");
-  if (answerMsg?.kind === "message") {
-    assert.equal(answerMsg.text, "Search");
-  }
+  assert.equal(projection.entries.some((entry) => entry.kind === "message" && entry.role === "user"), false);
 });
 
-// Note: there is no "interrupted while awaiting input" case in the new model —
-// turn.awaiting_input is itself the terminal, so the asking turn has already
-// ended. The durable card is either unanswered (waiting) or answered by a
-// later ask_user_answer turn; see the test above and the server projection
-// (backend transcript_projection_test.go) for the card's answered-state.
+// The interrupted-while-awaiting-input case is owned by the server projection:
+// turn.awaiting_input keeps the turn active, so Stop can still interrupt it.

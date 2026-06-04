@@ -213,12 +213,11 @@ test("adapter does not mark Claude assistant text with tool_use as final", () =>
   assert.equal(result[0]?.payload?.final_answer, undefined);
 });
 
-test("adapter emits no item events for Claude AskUserQuestion (the runner ends the turn awaiting input)", () => {
-  // AskUserQuestion is handled by the runner's canUseTool, which ends the
-  // asking turn with a durable turn.awaiting_input terminal carrying the
-  // Tank-canonical questions. The adapter must NOT emit a dangling
-  // item.started / approval event on that settled turn — there is no in-turn
-  // tool item and no tool.approval_* event anymore.
+test("adapter emits no item events for Claude AskUserQuestion (the runner pauses the turn awaiting input)", () => {
+  // AskUserQuestion is handled by the runner's canUseTool, which pauses the
+  // active turn with durable turn.awaiting_input carrying the Tank-canonical
+  // questions. The adapter must NOT emit a dangling item.started / approval
+  // event for this provider callback.
   const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
     type: "assistant",
     uuid: "claude-msg-ask",

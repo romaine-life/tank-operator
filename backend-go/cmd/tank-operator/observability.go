@@ -2036,6 +2036,7 @@ func sessionEventTypeLabel(raw string) string {
 		"turn.interrupt_requested",
 		"turn.interrupted",
 		"turn.awaiting_input",
+		"turn.input_answered",
 		"session.status",
 		"item.started",
 		"item.completed",

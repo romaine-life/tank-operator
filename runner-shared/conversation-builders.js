@@ -99,7 +99,7 @@ export function turnEvent(args) {
   if (args.error !== undefined) payload.error = args.error;
   if (args.finalAnswer !== undefined) payload.final_answer = normalizeFinalAnswer(args.finalAnswer);
   // turn.awaiting_input carries the Tank-canonical questions the agent asked
-  // (the handoff that ends the asking turn) plus the AskUserQuestion item ids
+  // (the pause point for the asking turn) plus the AskUserQuestion item ids
   // the /answer endpoint targets. See docs/tank-conversation-protocol.md.
   if (args.questions !== undefined) payload.questions = args.questions;
   if (args.awaitingProviderItemID) payload.provider_item_id = args.awaitingProviderItemID;

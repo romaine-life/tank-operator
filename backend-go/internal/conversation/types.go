@@ -71,6 +71,7 @@ const (
 	EventTurnCommandFailed      EventType = "turn.command_failed"
 	EventTurnInterruptRequested EventType = "turn.interrupt_requested"
 	EventTurnInterrupted        EventType = "turn.interrupted"
+	EventTurnInputAnswered      EventType = "turn.input_answered"
 	EventContextCompacted       EventType = "context.compacted"
 	EventSessionStatus          EventType = "session.status"
 	EventItemStarted            EventType = "item.started"
@@ -226,6 +227,14 @@ func validateEventMap(event map[string]any) error {
 		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
 			return fmt.Errorf("turn.interrupt_requested must be actor=system source=tank")
 		}
+	case EventTurnInputAnswered:
+		if err := requireFields(event, "turn_id", "timeline_id", "client_nonce"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorUser || Source(stringField(event, "source")) != SourceTank {
+			return fmt.Errorf("turn.input_answered must be actor=user source=tank")
+		}
+		return validateTurnInputAnsweredPayload(event)
 	case EventContextCompacted:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
@@ -305,13 +314,8 @@ func validateUserMessageCreated(event map[string]any) error {
 			}
 		}
 		return validateUserMessageAttachments(payload["attachments"])
-	case "ask_user_answer":
-		if stringField(display, "question_timeline_id") == "" {
-			return fmt.Errorf("payload.display.question_timeline_id is required for ask_user_answer")
-		}
-		return validateUserMessageAttachments(payload["attachments"])
 	default:
-		return fmt.Errorf("payload.display.kind must be plain, skill_invocation, or ask_user_answer")
+		return fmt.Errorf("payload.display.kind must be plain or skill_invocation")
 	}
 }
 
@@ -624,10 +628,28 @@ func validateShellTaskPayload(event map[string]any) error {
 	return nil
 }
 
-// validateAwaitingInputPayload enforces the turn.awaiting_input terminal
-// payload: the AskUserQuestion handoff that ends the asking turn must carry
-// the Tank-canonical questions the user is being asked. The provider item
-// ids ride as optional payload fields the answer endpoint targets.
+func validateTurnInputAnsweredPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	if stringField(payload, "question_timeline_id") == "" {
+		return fmt.Errorf("payload.question_timeline_id is required for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "provider_item_id") == "" {
+		return fmt.Errorf("payload.provider_item_id is required for %s", stringField(event, "type"))
+	}
+	rawAnswers, ok := payload["answers"].(map[string]any)
+	if !ok || len(rawAnswers) == 0 {
+		return fmt.Errorf("payload.answers is required for %s", stringField(event, "type"))
+	}
+	return nil
+}
+
+// validateAwaitingInputPayload enforces the turn.awaiting_input payload: the
+// AskUserQuestion pause that keeps the asking turn active must carry the
+// Tank-canonical questions the user is being asked. The provider item ids ride
+// as optional payload fields the answer endpoint targets.
 func validateAwaitingInputPayload(event map[string]any) error {
 	payload, err := requirePayload(event)
 	if err != nil {
@@ -739,8 +761,7 @@ func IsTurnTerminalEvent(eventType EventType) bool {
 	case EventTurnCompleted,
 		EventTurnFailed,
 		EventTurnCommandFailed,
-		EventTurnInterrupted,
-		EventTurnAwaitingInput:
+		EventTurnInterrupted:
 		return true
 	default:
 		return false
@@ -759,6 +780,7 @@ func validEventType(eventType EventType) bool {
 		EventTurnCommandFailed,
 		EventTurnInterruptRequested,
 		EventTurnInterrupted,
+		EventTurnInputAnswered,
 		EventContextCompacted,
 		EventSessionStatus,
 		EventItemStarted,

@@ -425,32 +425,41 @@ test("acceptCommandTurn emits turn.claimed before provider output", async () => 
   assert.deepEqual(harness.bus, [], "submit command is not acked until a terminal event");
 });
 
-// canUseTool is the AskUserQuestion handoff seam. When the agent invokes
-// AskUserQuestion the asking turn ENDS: the runner publishes a durable
-// turn.awaiting_input terminal and resolves deny+interrupt so the SDK turn
-// unwinds at the question. The answer arrives as a brand-new turn
-// (POST /answer), never an in-turn tool result — there is no input_reply
-// command anymore.
-test("canUseTool ends the asking turn with turn.awaiting_input for AskUserQuestion", async () => {
+// canUseTool is the AskUserQuestion pause point. When the agent invokes
+// AskUserQuestion the runner publishes durable turn.awaiting_input, keeps the
+// turn active, and resolves only when input_reply arrives for the same
+// turn/tool item.
+test("canUseTool pauses the active turn and resumes from input_reply", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     canUseTool: (
       toolName: string,
       input: unknown,
       ctx: { toolUseID?: string },
-    ) => Promise<{ behavior: string; interrupt?: boolean }>;
+    ) => Promise<{ behavior: string; updatedInput?: { answers?: Record<string, string> } }>;
+    acceptInputReply: (record: unknown) => Promise<void>;
     activeTurn: unknown;
     publishTerminalWithRetry: (event: TankConversationEvent) => Promise<boolean>;
     markCommandTerminal: (turn: unknown, outcome: string) => Promise<void>;
+    commandBus: { markCompleted: (record: unknown) => Promise<void>; markFailed: (record: unknown) => Promise<void> };
   };
 
   const published: TankConversationEvent[] = [];
   const outcomes: string[] = [];
+  let completedRecord: unknown;
   runner.publishTerminalWithRetry = async (event) => {
     published.push(event);
     return true;
   };
   runner.markCommandTerminal = async (_turn, outcome) => {
     outcomes.push(outcome);
+  };
+  runner.commandBus = {
+    async markCompleted(record) {
+      completedRecord = record;
+    },
+    async markFailed() {
+      assert.fail("input_reply should resolve the pending AskUserQuestion");
+    },
   };
   runner.activeTurn = {
     turnID: "turn-active",
@@ -459,24 +468,62 @@ test("canUseTool ends the asking turn with turn.awaiting_input for AskUserQuesti
     commandRecord: {},
   };
 
-  const result = await runner.canUseTool(
+  const resultPromise = runner.canUseTool(
     "AskUserQuestion",
     { questions: [{ question: "Which auth method?", options: [{ label: "OAuth" }] }] },
     { toolUseID: "toolu_ask" },
   );
+  await new Promise((resolve) => setImmediate(resolve));
 
-  // deny + interrupt unwinds the SDK turn so it ends at the question.
-  assert.equal(result.behavior, "deny");
-  assert.equal(result.interrupt, true);
-  // A durable turn.awaiting_input terminal carries the question forward.
+  // A durable turn.awaiting_input pause carries the question forward.
   const awaiting = published.find(
     (e) => (e as { type?: string }).type === "turn.awaiting_input",
   );
-  assert.ok(awaiting, "expected a turn.awaiting_input terminal to be published");
+  assert.ok(awaiting, "expected turn.awaiting_input to be published");
   assert.equal((awaiting as { turn_id?: string }).turn_id, "turn-active");
-  // The asking turn's submit_turn is acked with the awaiting_input outcome —
-  // disjoint from the interrupt four-outcome path (no stop-counter movement).
-  assert.deepEqual(outcomes, ["turn.awaiting_input"]);
+  assert.deepEqual(outcomes, [], "the submit_turn stays in flight while awaiting input");
+
+  await runner.acceptInputReply({
+    type: "input_reply",
+    target_turn_id: "turn-active",
+    target_timeline_id: "turn-active:item:toolu_ask",
+    target_provider_item_id: "toolu_ask",
+    answers: { "Which auth method?": ["OAuth"] },
+    annotations: { "Which auth method?": { notes: "matches the IdP" } },
+  });
+  const result = await resultPromise;
+  assert.equal(result.behavior, "allow");
+  assert.deepEqual(result.updatedInput?.answers, { "Which auth method?": "OAuth" });
+  assert.ok(completedRecord, "input_reply command should be acked after resolving the tool");
+});
+
+test("acceptInputReply redelivers when the provider callback is not recreated yet", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    acceptInputReply: (record: unknown) => Promise<void>;
+    commandBus: { markCompleted: () => Promise<void>; markFailed: () => Promise<void> };
+  };
+  let nakDelay: number | undefined;
+  runner.commandBus = {
+    async markCompleted() {
+      assert.fail("early input_reply should not complete without a pending callback");
+    },
+    async markFailed() {
+      assert.fail("early input_reply should redeliver instead of failing");
+    },
+  };
+
+  await runner.acceptInputReply({
+    type: "input_reply",
+    target_turn_id: "turn-active",
+    target_timeline_id: "turn-active:item:toolu_ask",
+    target_provider_item_id: "toolu_ask",
+    answers: { "Proceed?": ["Yes"] },
+    nak(delayMs: number) {
+      nakDelay = delayMs;
+    },
+  });
+
+  assert.equal(nakDelay, 1000);
 });
 
 test("canUseTool auto-allows non-AskUserQuestion tools unchanged", async () => {

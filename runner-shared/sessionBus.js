@@ -75,7 +75,7 @@ export class SharedSessionBus {
                 // logs. This is NOT a fallback path — the data-plane
                 // handler is never invoked for these; the control plane
                 // is the only place they can take effect.
-                if (isInterruptCommand(command) || isStopBackgroundTaskCommand(command)) {
+                if (isInterruptCommand(command) || isInputReplyCommand(command) || isStopBackgroundTaskCommand(command)) {
                     record.ack();
                     console.warn("session bus: dropped stray control command on data plane (control plane is the supported path)", {
                         type: command.type,
@@ -344,6 +344,10 @@ export class SessionCommandRecord {
 
 export function isInterruptCommand(record) {
     return record?.type === "interrupt_turn" || record?.source === "interrupt";
+}
+
+export function isInputReplyCommand(record) {
+    return record?.type === "input_reply" || record?.source === "answer";
 }
 
 export function isStopBackgroundTaskCommand(record) {

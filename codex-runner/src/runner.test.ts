@@ -180,10 +180,9 @@ test("pending Codex interrupts are consumed when their turn becomes current", ()
 });
 
 // codexQuestionsToTankShape is the codex-side parity for the AskUserQuestion
-// handoff: the app-server question shape is normalized to the Tank-canonical
-// questions that ride the durable turn.awaiting_input terminal. There is no
-// in-turn answer injection anymore (the retired answer-join helper is gone);
-// the answer arrives as a brand-new turn.
+// pause: the app-server question shape is normalized to the Tank-canonical
+// questions that ride durable turn.awaiting_input. The user's answer returns to
+// the paused app-server request through input_reply.
 test("codexQuestionsToTankShape maps codex app-server questions into the Tank shape", () => {
   assert.deepEqual(
     codexQuestionsToTankShape([
@@ -213,6 +212,35 @@ test("codexQuestionsToTankShape maps codex app-server questions into the Tank sh
       },
     ],
   );
+});
+
+test("acceptInputReply redelivers when the app-server request is not recreated yet", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    acceptInputReply: (record: unknown) => Promise<void>;
+    commandBus: { markCompleted: () => Promise<void>; markFailed: () => Promise<void> };
+  };
+  let nakDelay: number | undefined;
+  runner.commandBus = {
+    async markCompleted() {
+      assert.fail("early input_reply should not complete without a pending request");
+    },
+    async markFailed() {
+      assert.fail("early input_reply should redeliver instead of failing");
+    },
+  };
+
+  await runner.acceptInputReply({
+    type: "input_reply",
+    target_turn_id: "turn-active",
+    target_timeline_id: "turn-active:item:req_ask",
+    target_provider_item_id: "req_ask",
+    answers: { "Proceed?": ["Yes"] },
+    nak(delayMs: number) {
+      nakDelay = delayMs;
+    },
+  });
+
+  assert.equal(nakDelay, 1000);
 });
 
 test("codexQuestionsToTankShape tolerates pure free-form (null options) and drops malformed entries", () => {

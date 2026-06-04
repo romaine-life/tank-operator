@@ -205,7 +205,7 @@ const CHECKS = [
     file: "backend-go/internal/sessionactivity/activity.go",
     description: "stopping case does NOT null out ActiveTurnID (turn is still mid-flight)",
     kind: "block-absent",
-    blockPattern: /case "turn\.interrupt_requested":[\s\S]{0,400}?(?=case "|\}\s*$)/,
+    blockPattern: /case "turn\.interrupt_requested":[\s\S]{0,800}?(?=case "|\}\s*$)/,
     absentPattern: /ActiveTurnID\s*=\s*nil/,
   },
 
@@ -284,9 +284,9 @@ const CHECKS = [
     id: "activity-chip-stopping",
     from: "Frontend reducer + projection",
     file: "frontend/src/sessionActivity.ts",
-    description: "sessionActivityChips emits a chip with tone \"stopping\"",
+    description: "session activity legend includes the stopping dot status",
     kind: "grep-present",
-    pattern: /tone:\s*"stopping"/,
+    pattern: /key:\s*"stopping"[\s\S]{0,160}?dotStatus:\s*"agent-stopping"/,
   },
   {
     id: "activity-dot-stopping",
@@ -318,12 +318,9 @@ const CHECKS = [
     id: "app-projection-drives-stopping",
     from: "Frontend deletions",
     file: "frontend/src/App.tsx",
-    description: "applySdkProjectionToUi maps projection.runStatus === \"stopping\" to the local stopping run status (single, projection-driven path)",
+    description: "applySdkActivitySummaryToUi maps durable activity.status === \"stopping\" to the local stopping run status (single, durable-state path)",
     kind: "grep-present",
-    // setRunStatus(...) wraps a comparison-to-stopping that resolves to the
-    // "stopping" literal — either inline ternary or branched. The match is
-    // intentionally loose so a future refactor can split the branch out.
-    pattern: /setRunStatus\([\s\S]{0,400}?projection\.runStatus\s*===\s*"stopping"[\s\S]{0,200}?"stopping"/,
+    pattern: /applySdkActivitySummaryToUi[\s\S]{0,1200}?setRunStatus\(\s*activity\.status\s*===\s*"stopping"\s*\?\s*"stopping"/,
   },
   {
     id: "app-cancelrun-no-imperative-stopping",
@@ -807,10 +804,9 @@ const CHECKS = [
     file: "agent-runner/src/runner.ts",
     description: "applyInterruptToTurn calls sdkQuery.interrupt() BEFORE publishing the durable terminal (load-bearing ordering)",
     kind: "grep-present",
-    // sdkQuery.interrupt() must appear before publishTerminalWithRetry
-    // inside applyInterruptToTurn. The match is intentionally loose so
-    // formatting / comments / try-catch can vary.
-    pattern: /applyInterruptToTurn[\s\S]{0,2000}?this\.sdkQuery\?\.\s*interrupt\(\)[\s\S]{0,1200}?publishTerminalWithRetry/,
+    // signalStopToSdk() wraps the sdkQuery.interrupt() call; it must appear
+    // before publishTerminalWithRetry inside applyInterruptToTurn.
+    pattern: /applyInterruptToTurn[\s\S]{0,2000}?signalStopToSdk\(\)[\s\S]{0,1200}?publishTerminalWithRetry/,
   },
   {
     id: "runner-publish-retry-fallback",

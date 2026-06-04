@@ -1,25 +1,21 @@
 #!/usr/bin/env node
 
-// Migration guard for the AskUserQuestion "the answer is a new durable turn"
-// cutover.
+// Migration guard for the AskUserQuestion "pause the same turn" cutover.
 //
-// OLD model (deleted): AskUserQuestion was resolved IN-TURN. The runner parked
-// the Claude SDK `canUseTool` decision (or the codex app-server
-// `requestUserInput` request), the browser POSTed `/input-reply`, the backend
-// published a durable `input_reply` command, and the runner resolved the tool
-// with `{behavior:"allow", updatedInput:{answers}}`. The exchange produced
-// `tool.approval_requested` / `tool.approval_resolved` events and a
-// `needs_input_announcement` transcript row.
+// OLD model (deleted): AskUserQuestion ended the asking turn with a durable
+// `turn.awaiting_input` terminal. The user's answer opened a brand-new turn
+// through POST `/turns/{turn_id}/answer`, represented the answer as a
+// `user_message.created` display kind (`ask_user_answer`), and left no
+// in-turn reply command for the paused provider callback.
 //
-// NEW model: invoking AskUserQuestion ENDS the asking turn with a durable
-// `turn.awaiting_input` terminal carrying the Tank-canonical questions. The
-// user's answer is a BRAND-NEW turn (POST `/turns/{turn_id}/answer`). There is
-// no `input_reply` command, no in-turn tool result, and no `tool.approval_*`
-// events; the transcript promotes an interactive `awaiting_input` card.
+// NEW model: invoking AskUserQuestion publishes durable `turn.awaiting_input`
+// as a same-turn pause, keeps that turn active, shows the question card only in
+// Turn activity, records the user's answer as `turn.input_answered`, and
+// delivers it to the paused runner over the control plane as `input_reply`.
 //
-// This guard forbids the deleted in-turn surfaces and requires the new
-// turn-boundary surfaces so neither model can drift back. Fail-on-match is the
-// contract — there are no warnings. Run from CI alongside the other guards.
+// This guard forbids the deleted new-turn surfaces and requires the same-turn
+// pause/resume surfaces so neither model can drift back. Fail-on-match is the
+// contract; there are no warnings.
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -45,64 +41,47 @@ const ignoredDirs = new Set([
 
 const ignoredFiles = new Set(["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum"]);
 
-// Files allowed to reference the forbidden names: this guard (it must list
-// them), sibling guards, and the migration-policy test. Docs that narrate the
-// retired model by name are also allowed — they explain WHY it was removed, not
-// that it is supported. Keep this list minimal; every entry is a hole.
 const ignoredRelativePaths = new Set([
   "scripts/check-askuserquestion-migration.mjs",
   "scripts/check-removed-chat-runtime.mjs",
   "scripts/check-stop-request-migration.mjs",
   "frontend/src/migrationPolicy.test.ts",
-  "docs/tank-conversation-protocol.md",
   "docs/session-list-redesign.md",
 ]);
 
-// Forbidden: must NOT appear in any non-excluded file. Each retired surface
-// carries a one-line reason — the deletion target, not just THAT it is one.
 const forbidden = [
-  // --- input_reply command path (the answer is now a normal new turn) --------
-  { name: "removed input_reply command constant CommandInputReply", pattern: /\bCommandInputReply\b/ },
-  { name: "removed input_reply command type string", pattern: /["']input_reply["']/ },
   { name: "removed /input-reply HTTP route", pattern: /\/input-reply\b/ },
   { name: "removed handleInputReplySessionTurn backend handler", pattern: /\bhandleInputReplySessionTurn\b/ },
-  { name: "removed acceptInputReply runner handler", pattern: /\bacceptInputReply\b/ },
   { name: "removed frontend sendInputReply", pattern: /\bsendInputReply\b/ },
-  { name: "removed pendingInputReplies resolver map", pattern: /\bpendingInputReplies\b/ },
   { name: "removed resolvedInputReplies map", pattern: /\bresolvedInputReplies\b/ },
   { name: "removed markInputReplyCompleted", pattern: /\bmarkInputReplyCompleted\b/ },
-  { name: "removed joinAnswersForSDK in-turn answer injection", pattern: /\bjoinAnswersForSDK\b/ },
-  { name: "removed answersForCodexAppServer in-turn answer injection", pattern: /\banswersForCodexAppServer\b/ },
   { name: "removed buildInputReplyMessage synthetic tool_result helper", pattern: /\bbuildInputReplyMessage\b/ },
 
-  // --- tool.approval_* events (were EXCLUSIVELY AskUserQuestion; deleted) -----
   { name: "removed tool.approval_requested event type", pattern: /tool\.approval_requested/ },
   { name: "removed tool.approval_resolved event type", pattern: /tool\.approval_resolved/ },
   { name: "removed EventApprovalRequested/Resolved Go consts", pattern: /\bEventApproval(Requested|Resolved)\b/ },
 
-  // --- in-turn permission gating for AskUserQuestion -------------------------
-  { name: "removed updatedInput.answers in-turn answer injection", pattern: /updatedInput[^;\n]*\banswers\b/ },
-  { name: "removed permissionMode bypassPermissions", pattern: /permissionMode\s*:\s*["']bypassPermissions["']/ },
-
-  // --- the needs_input_announcement promotion (replaced by awaiting_input) ----
   { name: "removed needs_input_announcement metaKind/row", pattern: /needs_input_announcement/ },
   { name: "removed RunNeedsInputAnnouncement component", pattern: /\bRunNeedsInputAnnouncement\b/ },
   { name: "removed projectNeedsInputAnnouncement projection", pattern: /\bprojectNeedsInputAnnouncement\b/ },
   { name: "removed isProjectionNeedsInputAnnouncement predicate", pattern: /\bisProjectionNeedsInputAnnouncement\b/ },
   { name: "removed needsInputAnnouncement module", pattern: /needsInputAnnouncementState|needsInputAnnouncement"|\.\/needsInputAnnouncement/ },
-  { name: "removed frontend optimisticSubmit (in-turn answer optimism)", pattern: /\boptimisticSubmit\b/ },
 
-  // --- retired in-turn AskUserQuestion metric --------------------------------
+  { name: "removed ask_user_answer user-message display kind", pattern: /ask_user_answer/ },
+  { name: "removed askUserAnswers transcript decoration", pattern: /\baskUserAnswers\b/ },
+  { name: "removed AskUserAnswerDisplay builder", pattern: /\bAskUserAnswerDisplay\b/ },
+  { name: "removed endTurnAwaitingInput runner method", pattern: /\bendTurnAwaitingInput\b/ },
   {
-    name: "removed askUserQuestion pending gauge / wait histogram",
-    pattern: /askUserQuestionPendingGauge|tank_runner_askuser_question_(pending|wait_seconds)/,
+    name: "removed turn.awaiting_input terminal registration",
+    pattern: /func IsTurnTerminalEvent[\s\S]{0,500}EventTurnAwaitingInput/,
+  },
+  {
+    name: "removed AskUserQuestion deny+interrupt handoff",
+    pattern: /AskUserQuestion[\s\S]{0,900}deny[\s\S]{0,300}interrupt:\s*true/,
   },
 ];
 
-// Required: each entry names an anchor file and a pattern that MUST appear in
-// it. A missing anchor means the cutover regressed.
 const required = [
-  // --- contract -------------------------------------------------------------
   {
     file: "schemas/tank-conversation-event.schema.json",
     name: "turn.awaiting_input event type",
@@ -110,13 +89,18 @@ const required = [
   },
   {
     file: "schemas/tank-conversation-event.schema.json",
-    name: "ask_user_answer user-message display kind",
-    pattern: /ask_user_answer/,
+    name: "turn.input_answered event type",
+    pattern: /"turn\.input_answered"/,
   },
   {
     file: "runner-shared/conversation.js",
     name: "turn.awaiting_input in TANK_EVENT_TYPES",
     pattern: /"turn\.awaiting_input"/,
+  },
+  {
+    file: "runner-shared/conversation.js",
+    name: "turn.input_answered in TANK_EVENT_TYPES",
+    pattern: /"turn\.input_answered"/,
   },
   {
     file: "backend-go/internal/conversation/types.go",
@@ -125,11 +109,10 @@ const required = [
   },
   {
     file: "backend-go/internal/conversation/types.go",
-    name: "turn.awaiting_input registered as a turn terminal",
-    pattern: /func IsTurnTerminalEvent[\s\S]{0,400}EventTurnAwaitingInput/,
+    name: "EventTurnInputAnswered const",
+    pattern: /EventTurnInputAnswered\s+EventType\s*=\s*"turn\.input_answered"/,
   },
 
-  // --- backend answer endpoint ----------------------------------------------
   {
     file: "backend-go/cmd/tank-operator/handlers_turns.go",
     name: "handleAnswerSessionTurn handler",
@@ -137,57 +120,71 @@ const required = [
   },
   {
     file: "backend-go/cmd/tank-operator/handlers_turns.go",
-    name: "answer endpoint requires the asking turn's turn.awaiting_input terminal",
+    name: "answer endpoint requires the asking turn's turn.awaiting_input pause",
     pattern: /EventTurnAwaitingInput/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/handlers_turns.go",
+    name: "answer endpoint persists turn.input_answered",
+    pattern: /TurnInputAnsweredEventMap/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/handlers_turns.go",
+    name: "answer endpoint publishes input_reply",
+    pattern: /CommandInputReply/,
   },
   {
     file: "backend-go/cmd/tank-operator/server.go",
     name: "POST /turns/{turn_id}/answer route",
     pattern: /\/turns\/\{turn_id\}\/answer/,
   },
+  {
+    file: "backend-go/internal/sessionbus/subjects.go",
+    name: "input_reply routes to control plane",
+    pattern: /CommandInputReply[\s\S]{0,200}ControlSubject/,
+  },
 
-  // --- Claude runner --------------------------------------------------------
   {
     file: "agent-runner/src/runner.ts",
-    name: "endTurnAwaitingInput handoff",
-    pattern: /\bendTurnAwaitingInput\b/,
+    name: "Claude runner pauses AskUserQuestion",
+    pattern: /\bpauseTurnForInput\b/,
   },
   {
     file: "agent-runner/src/runner.ts",
-    name: "AskUserQuestion canUseTool ends the turn via deny+interrupt",
-    pattern: /AskUserQuestion[\s\S]{0,700}interrupt:\s*true/,
+    name: "Claude runner accepts input_reply",
+    pattern: /\bacceptInputReply\b[\s\S]{0,1200}updatedInput[\s\S]{0,400}answers/,
   },
   {
     file: "agent-runner/src/adapters/claude.ts",
     name: "Claude adapter normalizes questions via claudeQuestionsToTankShape",
     pattern: /\bclaudeQuestionsToTankShape\b/,
   },
-
-  // --- Codex runner ---------------------------------------------------------
   {
     file: "codex-runner/src/runner.ts",
-    name: "codex requestAppServerUserInput ends the turn awaiting input",
-    pattern: /requestAppServerUserInput[\s\S]{0,1200}endTurnAwaitingInput/,
+    name: "Codex requestAppServerUserInput pauses the same turn",
+    pattern: /requestAppServerUserInput[\s\S]{0,1200}pauseTurnForInput/,
   },
   {
     file: "codex-runner/src/runner.ts",
-    name: "codex publishes turn.awaiting_input",
-    pattern: /turn\.awaiting_input/,
+    name: "Codex runner accepts input_reply",
+    pattern: /\bacceptInputReply\b[\s\S]{0,900}answersForCodexInput/,
   },
   {
     file: "codex-runner/src/runner.ts",
-    name: "codex normalizes questions via codexQuestionsToTankShape",
+    name: "Codex normalizes questions via codexQuestionsToTankShape",
     pattern: /\bcodexQuestionsToTankShape\b/,
   },
 
-  // --- backend read path: the promoted question card ------------------------
   {
     file: "backend-go/cmd/tank-operator/transcript_projection.go",
     name: "projection emits the awaiting_input card",
     pattern: /projectAwaitingInputCard|"awaiting_input"/,
   },
-
-  // --- frontend interactive card --------------------------------------------
+  {
+    file: "backend-go/cmd/tank-operator/transcript_projection.go",
+    name: "projection marks card answered from turn.input_answered",
+    pattern: /applyInputAnswered/,
+  },
   {
     file: "frontend/src/App.tsx",
     name: "RunAwaitingInputCard renders the question card",
@@ -203,12 +200,10 @@ const required = [
     name: "card surfaces the allowFreeForm-driven free-form textarea",
     pattern: /\bshowFreeForm\b/,
   },
-
-  // --- protocol doc ---------------------------------------------------------
   {
     file: "docs/tank-conversation-protocol.md",
-    name: "protocol documents the turn.awaiting_input handoff",
-    pattern: /turn\.awaiting_input/,
+    name: "protocol documents same-turn AskUserQuestion pause",
+    pattern: /turn\.input_answered[\s\S]{0,1200}input_reply/,
   },
 ];
 
@@ -251,16 +246,9 @@ if (failures.length > 0) {
   console.error("AskUserQuestion migration guard failed:");
   for (const failure of failures) console.error(`- ${failure}`);
   console.error("");
-  console.error(
-    "Each FORBIDDEN entry is a retired in-turn surface that came back; each REQUIRED",
-  );
-  console.error(
-    "entry is a piece of the turn.awaiting_input cutover that's missing. See",
-  );
-  console.error(
-    "scripts/check-askuserquestion-migration.mjs for the rationale, and",
-  );
-  console.error("docs/migration-policy.md for the policy.");
+  console.error("Each FORBIDDEN entry is a retired AskUserQuestion surface that came back;");
+  console.error("each REQUIRED entry is a piece of the same-turn pause/resume contract.");
+  console.error("See scripts/check-askuserquestion-migration.mjs and docs/migration-policy.md.");
   process.exit(1);
 }
 

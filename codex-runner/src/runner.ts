@@ -50,6 +50,7 @@ import {
 } from "../../runner-shared/conversation-builders.js";
 import {
   SessionCommandBus,
+  isInputReplyCommand,
   isInterruptCommand,
   isStopBackgroundTaskCommand,
   commandClientNonce,
@@ -101,6 +102,21 @@ const TERMINAL_PUBLISH_BACKOFF_MS = parsePositiveEnvInt(
 function parsePositiveEnvInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt((value ?? "").trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function inputReplyKey(turnID: string, timelineID: string, providerItemID: string): string {
+  return `${turnID}\x1f${timelineID}\x1f${providerItemID}`;
+}
+
+function answersForCodexInput(
+  answers: Record<string, string[]> | undefined,
+): Record<string, { answers: string[] }> {
+  const out: Record<string, { answers: string[] }> = {};
+  for (const [question, labels] of Object.entries(answers ?? {})) {
+    const clean = labels.map((label) => String(label).trim()).filter(Boolean);
+    if (clean.length > 0) out[question] = { answers: clean };
+  }
+  return out;
 }
 
 // AsyncQueue — one writer, one consumer. Session commands push; the
@@ -218,11 +234,13 @@ export type AcceptedTurn = CodexAdapterTurn & {
   // counter bucket from terminated_via_sdk (interrupt arrived during
   // an in-flight thread). See romaine-life/tank-operator#532.
   interruptOnStart?: boolean;
-  // Set true when the agent invoked AskUserQuestion: the asking turn ends
-  // with a durable turn.awaiting_input handoff and the codex turn is aborted.
-  // The run-loop catch uses this to skip the interrupt terminal (already
-  // emitted) and the four-outcome counters.
-  awaitingInput?: boolean;
+};
+
+type PendingInputReply = {
+  turn: AcceptedTurn;
+  timelineID: string;
+  providerItemID: string;
+  resolve: (response: AppServerUserInputResponse) => void;
 };
 
 export function threadOptionsForCommand(
@@ -374,6 +392,7 @@ export class Runner {
   private thread: Thread | null = null;
   private currentAbort: AbortController | null = null;
   private currentTurn: AcceptedTurn | null = null;
+  private readonly pendingInputReplies = new Map<string, PendingInputReply>();
   private interruptRequested = false;
   private readonly pendingInterrupts: SessionCommandRecord[] = [];
   // orphanInterrupts holds interrupt_turn records whose target_turn_id
@@ -565,13 +584,6 @@ export class Runner {
             }
           }
         } catch (err) {
-          if (turn.awaitingInput) {
-            // The turn already ended via turn.awaiting_input (AskUserQuestion
-            // handoff). The abort that lands here is our own; emit no second
-            // terminal and no interrupt counter.
-            console.info("codex turn ended awaiting input");
-            continue;
-          }
           const interrupted =
             this.currentAbort.signal.aborted && isAbortError(err);
           if (interrupted) {
@@ -712,24 +724,23 @@ export class Runner {
   ): Promise<AppServerUserInputResponse> {
     const turn = this.currentTurn;
     if (!turn) throw new Error("request_user_input arrived with no active Codex turn");
-    // The agent asked the user a question: end the asking turn with a durable
-    // turn.awaiting_input handoff carrying the Tank-canonical questions, then
-    // abort the codex turn. The user's answer arrives later as a brand-new
-    // turn via POST /turns/{id}/answer — there is no in-turn answer. We
-    // respond to the app-server request with empty answers only to release
-    // its JSONRPC promise; the abort is what stops the turn.
-    await this.endTurnAwaitingInput(turn, request);
-    this.currentAbort?.abort();
-    return { answers: {} };
+    return this.pauseTurnForInput(turn, request);
   }
 
-  private async endTurnAwaitingInput(
+  private async pauseTurnForInput(
     turn: AcceptedTurn,
     request: AppServerUserInputRequest,
-  ): Promise<void> {
-    if (turn.awaitingInput) return;
-    turn.awaitingInput = true;
+  ): Promise<AppServerUserInputResponse> {
     const timelineID = itemTimelineID(turn.turnID, request.providerItemID);
+    const key = inputReplyKey(turn.turnID, timelineID, request.providerItemID);
+    const waitForReply = new Promise<AppServerUserInputResponse>((resolve) => {
+      this.pendingInputReplies.set(key, {
+        turn,
+        timelineID,
+        providerItemID: request.providerItemID,
+        resolve,
+      });
+    });
     const published = await this.publishTerminalWithRetry(
       turnEvent({
         sessionID: this.cfg.sessionId,
@@ -743,8 +754,30 @@ export class Runner {
       }),
     );
     if (published) {
-      await this.markCommandTerminal(turn, "turn.awaiting_input");
+      return waitForReply;
     }
+    this.pendingInputReplies.delete(key);
+    throw new Error("failed to persist AskUserQuestion pause");
+  }
+
+  private async acceptInputReply(record: SessionCommandRecord): Promise<void> {
+    commandsConsumedTotal.labels("input_reply", "accepted").inc();
+    const targetTurnID = String(record.target_turn_id ?? "").trim();
+    const targetTimelineID = String(record.target_timeline_id ?? "").trim();
+    const targetProviderItemID = String(record.target_provider_item_id ?? "").trim();
+    const key = inputReplyKey(targetTurnID, targetTimelineID, targetProviderItemID);
+    const pending = this.pendingInputReplies.get(key);
+    if (!pending) {
+      // Runner restart/race: the durable answer can arrive before the redelivered
+      // submit_turn has recreated the app-server request. Redeliver rather than
+      // failing the user's answer.
+      commandsConsumedTotal.labels("input_reply", "not_ready").inc();
+      record.nak(1_000);
+      return;
+    }
+    this.pendingInputReplies.delete(key);
+    pending.resolve({ answers: answersForCodexInput(record.answers) });
+    await this.commandBus.markCompleted(record);
   }
 
   private async acceptStopBackgroundTask(record: SessionCommandRecord): Promise<void> {
@@ -811,6 +844,10 @@ export class Runner {
     let stopConsumer: (() => Promise<void>) | null = null;
     void this.commandBus
       .startControlConsumer(async (record) => {
+        if (isInputReplyCommand(record)) {
+          await this.acceptInputReply(record);
+          return;
+        }
         if (isInterruptCommand(record)) {
           commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
           await this.acceptInterrupt(record);

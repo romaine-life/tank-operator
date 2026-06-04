@@ -42,9 +42,10 @@ runners consume those commands before feeding the provider SDK. The UI renders
 durable conversation events from `/timeline` and the
 `/api/sessions/{session_id}/events` SSE stream. Stop is a durable session
 command: it is not considered complete until the runner publishes
-`turn.interrupted`. Claude AskUserQuestion ends the asking turn with a durable
-`turn.awaiting_input` terminal; the user's answer is a brand-new turn (submitted
-to `/turns/{turn_id}/answer`), not a browser-runner socket reply. The backend session-bus persister writes runner events
+`turn.interrupted`. Claude AskUserQuestion pauses the active turn with durable
+`turn.awaiting_input`; the user's answer is recorded through
+`/turns/{turn_id}/answer` as `turn.input_answered` and delivered to the paused
+runner as `input_reply`. The backend session-bus persister writes runner events
 to the Postgres `session_events` ledger and wakes open SSE streams only after
 that write commits, so live delivery is a notification layer over persisted
 history rather than browser polling.

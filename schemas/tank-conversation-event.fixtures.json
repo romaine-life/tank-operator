@@ -630,19 +630,20 @@
       }
     },
     {
-      "name": "ask user answer user message",
+      "name": "ask user answer durable event",
       "event": {
-        "event_id": "turn_answer:user_message.created",
+        "event_id": "turn_contract:turn.input_answered:client-answer-contract",
         "order_key": "order-0015",
         "sequence": 15,
         "conversation_id": "63",
         "session_id": "63",
-        "turn_id": "turn_answer",
-        "timeline_id": "turn_answer:user",
+        "turn_id": "turn_contract",
+        "timeline_id": "toolu-question:answer",
+        "provider_item_id": "toolu_123",
         "client_nonce": "client-answer-contract",
         "actor": "user",
         "source": "tank",
-        "type": "user_message.created",
+        "type": "turn.input_answered",
         "created_at": "2026-05-12T00:00:14.000Z",
         "producer": {
           "name": "tank-operator",
@@ -650,18 +651,10 @@
         },
         "visibility": "durable",
         "payload": {
-          "text": "You asked: \"Which auth method should we use?\"\nThe user answered: OAuth",
-          "message": {
-            "role": "user",
-            "content": "You asked: \"Which auth method should we use?\"\nThe user answered: OAuth"
-          },
-          "display": {
-            "kind": "ask_user_answer",
-            "question_timeline_id": "toolu-question",
-            "asking_turn_id": "turn_contract",
-            "answers": {
-              "Which auth method should we use?": ["OAuth"]
-            }
+          "question_timeline_id": "toolu-question",
+          "provider_item_id": "toolu_123",
+          "answers": {
+            "Which auth method should we use?": ["OAuth"]
           }
         }
       }

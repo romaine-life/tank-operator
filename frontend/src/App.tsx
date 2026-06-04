@@ -315,6 +315,7 @@ type TurnActivitySummary = {
   progressNoteCount?: number;
   reasoningCount?: number;
   backgroundTaskCount?: number;
+  questionCount?: number;
   errorCount?: number;
   childCount?: number;
   compactedCount?: number;
@@ -370,10 +371,10 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // through to the generic RunMetaBlock. Server projection sets metaKind on
   // rows it surfaces specially in chat — see transcript_projection.go.
   metaKind?: "awaiting_input" | "turn_usage" | "context_compacted";
-  // For `awaiting_input` rows (the AskUserQuestion handoff promoted from a
-  // turn.awaiting_input terminal): the Tank-canonical questions plus the
-  // target ids RunAwaitingInputCard posts to /answer. `answered` is durable
-  // — set once a later ask_user_answer turn references the question.
+  // For `awaiting_input` rows inside Turn activity: the Tank-canonical
+  // questions plus the target ids RunAwaitingInputCard posts to /answer.
+  // `answered` is durable — set once a later turn.input_answered event
+  // references the question.
   awaitingInput?: {
     askingTurnId: string;
     providerItemId: string;
@@ -381,6 +382,8 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     questions: unknown[];
     questionCount: number;
     answered: boolean;
+    answers?: Record<string, string[]>;
+    annotations?: Record<string, { preview?: string; notes?: string }>;
   };
   taskId?: string;
   taskStatus?: ConversationBackgroundTaskStatus;
@@ -4156,6 +4159,7 @@ function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undef
     progressNoteCount: numericRecordValue(record, "progressNoteCount"),
     reasoningCount: numericRecordValue(record, "reasoningCount"),
     backgroundTaskCount: numericRecordValue(record, "backgroundTaskCount"),
+    questionCount: numericRecordValue(record, "questionCount"),
     errorCount: numericRecordValue(record, "errorCount"),
     childCount: numericRecordValue(record, "childCount"),
     compactedCount: numericRecordValue(record, "compactedCount"),
@@ -5763,18 +5767,16 @@ function RunReasoningBlock({
   );
 }
 
-// (The AskUserQuestion handoff is now the interactive RunAwaitingInputCard
-// rendered from the `turn.awaiting_input` projection row; there is no longer a
-// separate "waiting on you" pointer to Turn activity because the card itself
-// lives in the main transcript.)
+// AskUserQuestion renders as turn activity. The main transcript keeps only the
+// active turn shell, so the interactive question/answer card stays on the
+// Turns page instead of becoming authored chat content.
 
 // RunMetaBlock renders the transcript's "headless" status lines — the
 // per-turn terminal notices ("Stopped" / "Turn stopped by user.", "Turn
 // failed" + provider error), "Stop requested", and any generic non-tool
 // item meta. These are not authored by the human owner or the assistant;
 // they're spoken by the session's *system identity*. So they render inside
-// the same system-avatar message frame as session.status banners and the
-// AskUserQuestion handoff row — attributed to the system user rather than
+// the same system-avatar message frame as session.status banners rather than
 // floating in the column with no author. See docs/features/transcript/contract.md.
 function RunMetaBlock({
   entry,
@@ -6567,9 +6569,9 @@ function parseAskUserQuestions(input: Record<string, unknown> | null): AskUserQu
 
 function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
   const { submitAnswer } = useContext(RunContext);
-  // The card is driven by the durable turn.awaiting_input handoff promoted
-  // into the main transcript (entry.awaitingInput) — there is no in-turn tool
-  // item. Submitting opens the answer turn via POST /answer.
+  // The card is driven by the durable turn.awaiting_input pause projected into
+  // Turn activity. Submitting records turn.input_answered and resumes the same
+  // provider turn through a control-plane input_reply.
   const aw = entry.awaitingInput;
   // Per-question selections (multi-select carries an array; single-select
   // is a single-element array or empty). Submission converts to the wire
@@ -6580,9 +6582,8 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
   const [submitting, setSubmitting] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   // submittedSnapshot locks the card the moment the user clicks and keeps
-  // their picked options/notes visible until the durable answer turn lands
-  // (awaitingInput.answered flips). The answer itself also appears as the
-  // next user-message turn in the transcript; durable state is the truth.
+  // their picked options/notes visible until the durable answer event lands
+  // (awaitingInput.answered flips).
   const [submittedSnapshot, setSubmittedSnapshot] = useState<{
     answers: Record<string, string[]>;
     annotations: Record<string, { preview?: string; notes?: string }>;
@@ -6591,7 +6592,7 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
   const questions = parseAskUserQuestions(aw ? { questions: aw.questions } : null);
 
   // answered is durable: the server sets awaitingInput.answered=true once a
-  // later ask_user_answer turn references this question, so a fresh tab
+  // later turn.input_answered event references this question, so a fresh tab
   // renders the resolved card. submittedSnapshot covers the post-click window.
   const answered = (aw?.answered ?? false) || submittedSnapshot !== null;
 
@@ -6602,6 +6603,9 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
   // local in-flight selection. This keeps the historical record honest
   // for both the live submit window AND the activity-cache stale window.
   function selectedLabelsFor(q: AskUserQuestion): string[] {
+    if (aw?.answers?.[q.question]) {
+      return aw.answers[q.question] ?? [];
+    }
     if (submittedSnapshot && submittedSnapshot.answers[q.question]) {
       return submittedSnapshot.answers[q.question];
     }
@@ -6609,6 +6613,9 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
   }
 
   function answeredNoteFor(question: string): string | undefined {
+    if (aw?.annotations?.[question]?.notes) {
+      return aw.annotations[question]?.notes;
+    }
     return submittedSnapshot?.annotations[question]?.notes;
   }
 
@@ -6661,8 +6668,8 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
       // string array. When the user only typed free-form text, we
       // synthesize a single "Other" label so the answers map stays valid;
       // the actual free-form text rides in `annotations[question].notes`.
-      // Both halves post to /answer and are re-grounded into the new answer
-      // turn's durable user message.
+      // Both halves post to /answer and are re-grounded into the same turn's
+      // durable turn.input_answered event.
       if (labels.length > 0) {
         answers[q.question] = labels;
       } else if (notesText) {
@@ -6677,7 +6684,7 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
       if (ann.preview || ann.notes) annotations[q.question] = ann;
     }
     // Lock the card before the await; the snapshot is the user-visible
-    // truth until the durable answer turn lands (awaitingInput.answered).
+    // truth until the durable answer event lands (awaitingInput.answered).
     setSubmitting(true);
     setReplyError(null);
     setSubmittedSnapshot({ answers, annotations });
@@ -6697,7 +6704,7 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
     }
   }
 
-  // confirmingSubmit = "just submitted, the durable answer turn hasn't landed
+  // confirmingSubmit = "just submitted, the durable answer event hasn't landed
   // yet" vs answered (awaitingInput.answered is true). Drives the status copy.
   const confirmingSubmit = submittedSnapshot !== null && !(aw?.answered ?? false);
 
@@ -7238,6 +7245,7 @@ function turnActivitySummary(entries: TranscriptEntry[]): string {
   ).length;
   const reasoningCount = entries.filter((entry) => entry.kind === "reasoning").length;
   const taskCount = entries.filter((entry) => entry.kind === "background_task").length;
+  const questionCount = entries.filter((entry) => entry.metaKind === "awaiting_input").length;
   const errorCount = entries.filter(
     (entry) =>
       (entry.kind === "tool" &&
@@ -7247,6 +7255,7 @@ function turnActivitySummary(entries: TranscriptEntry[]): string {
   ).length;
   const parts: string[] = [];
   if (toolCount > 0) parts.push(plural(toolCount, "tool call"));
+  if (questionCount > 0) parts.push(plural(questionCount, "question"));
   if (taskCount > 0) parts.push(plural(taskCount, "background task"));
   if (noteCount > 0) parts.push(plural(noteCount, "progress note"));
   if (reasoningCount > 0) parts.push(plural(reasoningCount, "reasoning block"));
@@ -7258,6 +7267,7 @@ function turnActivityShellSummary(summary: TurnActivitySummary | undefined): str
   if (!summary) return "Activity";
   const parts: string[] = [];
   if ((summary.toolCount ?? 0) > 0) parts.push(plural(summary.toolCount ?? 0, "tool call"));
+  if ((summary.questionCount ?? 0) > 0) parts.push(plural(summary.questionCount ?? 0, "question"));
   if ((summary.backgroundTaskCount ?? 0) > 0) {
     parts.push(plural(summary.backgroundTaskCount ?? 0, "background task"));
   }
@@ -7841,6 +7851,9 @@ function RunTurnActivityGroup({
                   );
                 }
                 if (child.kind === "meta") {
+                  if (child.entry.metaKind === "awaiting_input") {
+                    return <RunAwaitingInputCard key={child.entry.id} entry={child.entry} />;
+                  }
                   return (
                     <RunMetaBlock
                       key={child.entry.id}
@@ -8026,6 +8039,9 @@ function RunTurnActivityScreen({
       return <RunReasoningBlock key={group.entry.id} entry={group.entry} showThinking={showThinking} />;
     }
     if (group.kind === "meta") {
+      if (group.entry.metaKind === "awaiting_input") {
+        return <RunAwaitingInputCard key={group.entry.id} entry={group.entry} />;
+      }
       return (
         <RunMetaBlock
           key={group.entry.id}
@@ -8114,7 +8130,7 @@ function RunTurnActivityScreen({
         <>
           <div className="run-turn-view-summary">
             <span data-active={selected.active ? "true" : undefined}>
-              {selected.active ? "running" : "complete"}
+              {selected.active ? (selected.shell?.activity?.status === "needs_input" ? "needs input" : "running") : "complete"}
             </span>
             <span>{selected.summary}</span>
             {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
@@ -13244,9 +13260,8 @@ function ChatPane({
       }
       throw new Error(detail);
     }
-    // The answer lands durably as the next user-message turn via SSE; no
-    // local activity-cache patch (that was the in-turn model's regression
-    // surface, gone now that the answer is its own durable turn).
+    // The answer lands durably as `turn.input_answered` on this same turn via
+    // SSE; no local activity-cache patch.
   }
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {

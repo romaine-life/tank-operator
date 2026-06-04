@@ -525,10 +525,10 @@ test("Duplicate user submissions with the same client nonce do not duplicate bub
   assert.equal(state.messages[0]?.text, "same prompt");
 });
 
-test("turn.awaiting_input is explicit needs-input state; the answer turn resumes streaming", () => {
-  // AskUserQuestion ends the asking turn awaiting input — needs_input with no
-  // active turn. The answer is a brand-new turn whose turn.started clears the
-  // needs_input signal and resumes streaming.
+test("turn.awaiting_input pauses the active turn; turn.input_answered resumes it", () => {
+  // AskUserQuestion keeps the same turn active while the runner waits for the
+  // user's answer. The durable answer event clears needs_input and resumes
+  // streaming for that same turn.
   const paused = reduceConversationEvents([
     ev("1", "turn.started", { turn_id: "turn-ask" }),
     ev("2", "turn.awaiting_input", {
@@ -543,7 +543,7 @@ test("turn.awaiting_input is explicit needs-input state; the answer turn resumes
   ]);
   assert.equal(paused.needsInput, true);
   assert.equal(paused.runStatus, "needs_input");
-  assert.equal(paused.activeTurnId, null);
+  assert.equal(paused.activeTurnId, "turn-ask");
 
   const resumed = reduceConversationEvents([
     ev("1", "turn.started", { turn_id: "turn-ask" }),
@@ -556,11 +556,19 @@ test("turn.awaiting_input is explicit needs-input state; the answer turn resumes
         timeline_id: "turn-ask:item:toolu_ask",
       },
     }),
-    ev("3", "turn.submitted", { turn_id: "turn-answer", source: "claude", client_nonce: "turn-answer" }),
-    ev("4", "turn.started", { turn_id: "turn-answer", source: "claude" }),
+    ev("3", "turn.input_answered", {
+      turn_id: "turn-ask",
+      source: "tank",
+      payload: {
+        question_timeline_id: "turn-ask:item:toolu_ask",
+        provider_item_id: "toolu_ask",
+        answers: { "Proceed?": ["Yes"] },
+      },
+    }),
   ]);
   assert.equal(resumed.needsInput, false);
   assert.equal(resumed.runStatus, "streaming");
+  assert.equal(resumed.activeTurnId, "turn-ask");
 });
 
 test("Provider error becomes terminal error state without needs-input", () => {
