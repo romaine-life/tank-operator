@@ -768,10 +768,10 @@ func TestProjectTranscriptEventsFoldsSessionLifecycleIntoTurn(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("loading", "001", "session.status", "system", "tank", "", "sess:loading",
 			map[string]any{"status": "loading", "text": "Session is loading."}),
-		projectionTestEvent("u", "002", "user_message.created", "user", "tank", "turn-1", "turn-1:user",
-			map[string]any{"text": "hi", "display": map[string]any{"kind": "plain"}}),
-		projectionTestEvent("ready", "003", "session.status", "system", "tank", "", "sess:ready",
+		projectionTestEvent("ready", "002", "session.status", "system", "tank", "", "sess:ready",
 			map[string]any{"status": "ready", "text": "Session is ready."}),
+		projectionTestEvent("u", "003", "user_message.created", "user", "tank", "turn-1", "turn-1:user",
+			map[string]any{"text": "hi", "display": map[string]any{"kind": "plain"}}),
 		projectionTestEvent("started", "004", "turn.started", "runner", "tank", "turn-1", "",
 			map[string]any{"status": "started"}),
 		projectionTestEvent("final", "005", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:msg-1",
@@ -790,7 +790,7 @@ func TestProjectTranscriptEventsFoldsSessionLifecycleIntoTurn(t *testing.T) {
 	if len(projection.Entries) == 0 || projection.Entries[0]["role"] != "user" {
 		t.Fatalf("first top-level row = %#v, want the user message", projection.Entries)
 	}
-	var userKey, shellKey string
+	var userKey, shellKey, shellStartKey string
 	userIdx, shellIdx := -1, -1
 	for i, entry := range projection.Entries {
 		switch {
@@ -798,15 +798,20 @@ func TestProjectTranscriptEventsFoldsSessionLifecycleIntoTurn(t *testing.T) {
 			userKey, userIdx = transcriptMapString(entry, "orderKey"), i
 		case entry["kind"] == "turn_activity":
 			shellKey, shellIdx = transcriptMapString(entry, "orderKey"), i
+			if act, ok := entry["activity"].(map[string]any); ok {
+				shellStartKey = transcriptMapString(act, "startOrderKey")
+			}
 		}
 	}
 	if shellIdx < 0 {
 		t.Fatalf("expected a turn_activity shell holding the folded lifecycle: %#v", projection.Entries)
 	}
-	// The shell carries folded lifecycle whose order keys predate the message;
-	// it must still sort after the user message, by index and by orderKey.
-	if shellIdx <= userIdx || shellKey <= userKey {
-		t.Fatalf("activity shell must sort after the user message: userKey=%q shellKey=%q (idx %d vs %d)", userKey, shellKey, userIdx, shellIdx)
+	// The shell carries folded lifecycle whose order keys predate the message; it
+	// must still sort after the user message — by entry index, by its orderKey,
+	// and by activity.startOrderKey (the field the row store turns into the row
+	// cursor that actually orders the durable transcript).
+	if shellIdx <= userIdx || shellKey <= userKey || shellStartKey <= userKey {
+		t.Fatalf("activity shell must sort after the user message: userKey=%q shellKey=%q startKey=%q (idx %d vs %d)", userKey, shellKey, shellStartKey, userIdx, shellIdx)
 	}
 	body, ok := projection.ActivityBodies["turn-1"]
 	if !ok {

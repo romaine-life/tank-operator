@@ -1025,22 +1025,30 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 	for idx, entry := range entries {
 		if activity, ok := activityByInsertIndex[idx]; ok {
 			shellOrderKey := transcriptMapString(activity.Summary, "startOrderKey")
+			shellStartedAt := transcriptMapString(activity.Summary, "startedAt")
 			if umKey := turnUserMessageOrderKey(entries, activity.TurnID); umKey != "" && shellOrderKey <= umKey {
 				// Folded session-startup lifecycle carries order keys that predate
-				// the turn's message, so the shell's natural start key would sort
-				// the noise bin above the message. Anchor the shell to the turn's
-				// first real event after the message (turn.submitted/started or the
-				// first item) — a genuine larger order key, which is collation-
-				// robust unlike a suffix on the message key.
-				if anchored := turnFirstOrderKeyAfter(entries, activity.TurnID, umKey); anchored != "" {
-					shellOrderKey = anchored
+				// the turn's message. The transcript row store positions a
+				// turn_activity row by activity.startOrderKey (its row cursor is
+				// startOrderKey+id), so anchor the shell's start to the turn's first
+				// real event after the message (turn.submitted/started). The
+				// lifecycle stays inside the body; only the shell's placement and
+				// reported start move to the turn's own start — never above the
+				// message it belongs to.
+				if anchor := turnFirstEntryAfter(entries, activity.TurnID, umKey); anchor != nil {
+					shellOrderKey = transcriptMapString(anchor, "orderKey")
+					activity.Summary["startOrderKey"] = shellOrderKey
+					if t := transcriptMapString(anchor, "time"); t != "" {
+						shellStartedAt = t
+						activity.Summary["startedAt"] = t
+					}
 				}
 			}
 			shell := map[string]any{
 				"id":            "turn-activity-" + activity.TurnID,
 				"kind":          "turn_activity",
 				"turnId":        activity.TurnID,
-				"time":          transcriptMapString(activity.Summary, "startedAt"),
+				"time":          shellStartedAt,
 				"orderKey":      shellOrderKey,
 				"activity":      activity.Summary,
 				"activityIds":   activity.CompactedEntryIDs,
@@ -1179,12 +1187,13 @@ func turnUserMessageOrderKey(entries []map[string]any, turnID string) string {
 	return ""
 }
 
-// turnFirstOrderKeyAfter returns the smallest order key strictly greater than
-// afterKey among entries belonging to turnID. Used to anchor a turn's activity
-// shell to the turn's first real event after its user message, so folded
-// pre-message lifecycle can't drag the shell above the message.
-func turnFirstOrderKeyAfter(entries []map[string]any, turnID, afterKey string) string {
-	best := ""
+// turnFirstEntryAfter returns the entry with the smallest order key strictly
+// greater than afterKey among entries belonging to turnID. Used to anchor a
+// turn's activity shell to the turn's first real event after its user message,
+// so folded pre-message lifecycle can't drag the shell above the message.
+func turnFirstEntryAfter(entries []map[string]any, turnID, afterKey string) map[string]any {
+	var best map[string]any
+	bestKey := ""
 	for _, entry := range entries {
 		if transcriptMapString(entry, "turnId") != turnID {
 			continue
@@ -1193,8 +1202,8 @@ func turnFirstOrderKeyAfter(entries []map[string]any, turnID, afterKey string) s
 		if ok == "" || ok <= afterKey {
 			continue
 		}
-		if best == "" || ok < best {
-			best = ok
+		if bestKey == "" || ok < bestKey {
+			bestKey, best = ok, entry
 		}
 	}
 	return best
