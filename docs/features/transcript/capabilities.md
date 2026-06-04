@@ -266,12 +266,13 @@ Intent:
 When the in-pod agent invokes AskUserQuestion, the active turn pauses with a
 durable `turn.awaiting_input` event carrying the Tank-canonical questions. The
 turn-activity page projection seals the preceding activity page and opens a
-semantic `question_set` page for that pause. The main transcript shows only an
-awareness/navigation surface on the Turn activity shell ("Agent needs input" /
-"Answer questions"); the interactive answer form is owned by the Turns question
-page. The page reflects durable state, not local React optimism, so a fresh tab
-renders the same question set and defaults to it while the turn is still waiting
-for input.
+semantic `question_set` page for that pause. The main transcript renders a
+restored AskUserQuestion handoff button (`RunNeedsInputAnnouncement`, originally
+removed by PR #861) from the durable `awaiting_input` meta row so the user can
+reach the question set from the conversation. The interactive answer form is
+owned by the Turns question page, which reflects durable state rather than
+local React optimism, so a fresh tab renders the same question set and defaults
+to it while the turn is still waiting for input.
 
 Answering resumes the same turn:
 - The user's selection posts to `POST /turns/{askingTurnId}/answer`, which
@@ -295,9 +296,10 @@ Affected contracts:
 
 Contract impact:
 - The question page is a Turn activity projection of durable
-  `turn.awaiting_input`; it is not a second ledger and it does not appear as a
-  standalone main-transcript message or as an embedded main-transcript answer
-  form.
+  `turn.awaiting_input`; it is not a second ledger. The same durable
+  `awaiting_input` meta row appears in the main transcript as the navigation
+  button to the question set, never as a standalone authored message or
+  synthetic turn.
 - Turn activity pagination is semantic as well as size-bounded: each
   `turn.awaiting_input` event starts a `question_set` page, multiple questions
   inside that event stay together as one set, and answered/history state remains
@@ -317,8 +319,8 @@ Evidence:
 - Backend API: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
   proves an unanswered `needs_input` turn defaults to the question page.
 - Frontend: `frontend/src/migrationPolicy.test.ts` proves transcript renderers
-  use `RunAwaitingInputNotice` while `RunAwaitingInputCard` is owned by
-  `RunTurnActivityScreen`.
+  use the restored `RunNeedsInputAnnouncement` button while
+  `RunAwaitingInputCard` is owned by `RunTurnActivityScreen`.
 - Migration guard: `scripts/check-askuserquestion-migration.mjs` requires the
   semantic page path and same-turn `/answer` path.
 

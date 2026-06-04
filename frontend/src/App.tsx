@@ -98,6 +98,7 @@ import {
   LinkIcon,
   ListChecksIcon,
   Loader2Icon,
+  MessageSquareOffIcon,
   MessageSquareIcon,
   MinusIcon,
   MonitorIcon,
@@ -189,6 +190,7 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
+import { needsInputAnnouncementState } from "./needsInputAnnouncement";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -4344,19 +4346,15 @@ function turnActivityShellTailOrderKey(shell?: TranscriptEntry): string {
   );
 }
 
-type ActiveTurnTailGroup =
-  | Extract<EntryGroup, { kind: "thinking" }>
-  | Extract<EntryGroup, { kind: "activity" }>;
-
-function insertActiveTurnTailGroups(
+function insertActiveTurnThinkingGroups(
   groups: EntryGroup[],
-  tailGroups: ActiveTurnTailGroup[],
+  thinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[],
   fallbackIndexes: Map<string, number>,
 ): EntryGroup[] {
-  if (tailGroups.length === 0) return groups;
+  if (thinkingGroups.length === 0) return groups;
   const out = [...groups];
-  for (const tailGroup of tailGroups) {
-    const turnId = tailGroup.turnId.trim();
+  for (const thinking of thinkingGroups) {
+    const turnId = thinking.turnId.trim();
     // Position the placeholder by durable order, not by which rows carry the
     // turnId. Session-lifecycle notices (loading/ready) are durable rows with
     // no turnId; a turnId-structural rule strands the placeholder above them.
@@ -4364,7 +4362,7 @@ function insertActiveTurnTailGroups(
       orderKey: entryGroupOrderKey(group),
       includesTurn: entryGroupIncludesTurn(group, turnId),
     }));
-    const shellTailOrderKey = turnActivityShellTailOrderKey(tailGroup.shell);
+    const shellTailOrderKey = turnActivityShellTailOrderKey(thinking.shell);
     const fallbackIndex = fallbackIndexes.get(turnId) ?? out.length;
     const insertIndex = resolveThinkingInsertIndex(
       placement,
@@ -4373,18 +4371,10 @@ function insertActiveTurnTailGroups(
     );
     // Record the resolved live-tail key so a second active turn's placeholder
     // (rare, multi-turn) orders consistently against this one.
-    if (tailGroup.kind === "thinking") tailGroup.orderKey = shellTailOrderKey;
-    out.splice(insertIndex, 0, tailGroup);
+    thinking.orderKey = shellTailOrderKey;
+    out.splice(insertIndex, 0, thinking);
   }
   return out;
-}
-
-function insertActiveTurnThinkingGroups(
-  groups: EntryGroup[],
-  thinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[],
-  fallbackIndexes: Map<string, number>,
-): EntryGroup[] {
-  return insertActiveTurnTailGroups(groups, thinkingGroups, fallbackIndexes);
 }
 
 function groupTranscriptEntries(
@@ -4402,8 +4392,6 @@ function groupTranscriptEntries(
     const insertedThinkingTurnIds = new Set<string>();
     const pendingThinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[] = [];
     const pendingThinkingFallbackIndexes = new Map<string, number>();
-    const pendingNeedsInputGroups: Extract<EntryGroup, { kind: "activity" }>[] = [];
-    const pendingNeedsInputFallbackIndexes = new Map<string, number>();
     for (const entry of entries) {
       if (isTurnActivityEntry(entry)) {
         flushTranscriptToolBucket(groups, bucket);
@@ -4419,9 +4407,6 @@ function groupTranscriptEntries(
             pendingThinkingGroups.push(turnThinkingGroup(group.turnId, entry));
             pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
             insertedThinkingTurnIds.add(group.turnId);
-          } else if (needsInput) {
-            pendingNeedsInputGroups.push(group);
-            pendingNeedsInputFallbackIndexes.set(group.turnId, groups.length);
           }
         }
         continue;
@@ -4430,14 +4415,10 @@ function groupTranscriptEntries(
       pushTranscriptEntryGroup(groups, entry, bucket);
     }
     flushTranscriptToolBucket(groups, bucket);
-    return insertActiveTurnTailGroups(
-      insertActiveTurnThinkingGroups(
-        groups,
-        pendingThinkingGroups,
-        pendingThinkingFallbackIndexes,
-      ),
-      pendingNeedsInputGroups,
-      pendingNeedsInputFallbackIndexes,
+    return insertActiveTurnThinkingGroups(
+      groups,
+      pendingThinkingGroups,
+      pendingThinkingFallbackIndexes,
     );
   }
   for (const entry of entries) {
@@ -6799,38 +6780,115 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
   );
 }
 
-function RunAwaitingInputNotice({
+// RunNeedsInputAnnouncement restores the AskUserQuestion handoff button that
+// PR #861 removed. The original row read `entry.announcement`; the current
+// durable source is `entry.awaitingInput`, but the transcript behavior remains
+// the same: tell the user the agent is waiting and provide one click into Turns.
+function RunNeedsInputAnnouncement({
   entry,
+  systemAvatar,
   onOpenTurn,
+  showTimestamps,
 }: {
   entry: TranscriptEntry;
+  systemAvatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  showTimestamps: boolean;
 }) {
-  const questionCount = entry.awaitingInput?.questionCount ?? 0;
-  const answered = entry.awaitingInput?.answered === true;
-  const turnId = entry.awaitingInput?.askingTurnId ?? entry.turnId ?? "";
+  const awaitingInput = entry.awaitingInput;
+  const answered = awaitingInput?.answered ?? false;
+  const summary = entry.meta?.detail ?? "";
+  const state = needsInputAnnouncementState({
+    answered,
+    turnTerminalStatus: entry.turnTerminalStatus,
+  });
+  const title =
+    state === "settled"
+      ? "No longer waiting"
+      : entry.meta?.title ?? (state === "answered" ? "Answered" : "Claude is waiting on you");
+  const targetTurnId = awaitingInput?.askingTurnId ?? entry.turnId ?? "";
+  const handleOpen = (): void => {
+    if (!targetTurnId) return;
+    onOpenTurn?.(targetTurnId, { anchor: "top", resetPage: true });
+  };
+  const navigable = Boolean(targetTurnId && onOpenTurn);
+  const showPrimaryCta = state === "waiting" && navigable;
+  const showSecondaryCta = state !== "waiting" && navigable;
   return (
     <div
-      className="run-tool-body run-tool-ask-notice"
-      data-answered={answered ? "true" : "false"}
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant="system"
+      data-role="system"
+      data-kind="needs-input-announcement"
+      data-message-id={entry.id}
     >
-      <div className="run-tool-ask-notice-main">
-        <span className="run-tool-ask-notice-kicker">
-          {answered ? "Question set answered" : "Agent needs input"}
-        </span>
-        <span className="run-tool-ask-notice-detail">
-          {questionCount > 0 ? plural(questionCount, "question") : "Question set"}
-        </span>
-      </div>
-      {!answered && turnId && onOpenTurn && (
-        <button
-          type="button"
-          className="run-tool-ask-notice-action"
-          onClick={() => onOpenTurn(turnId, { anchor: "top", resetPage: true })}
+      <span className="run-msg-system-avatar" aria-hidden={systemAvatar ? undefined : "true"}>
+        {systemAvatar ? (
+          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
+        ) : (
+          <BotIcon size={16} strokeWidth={2.1} />
+        )}
+      </span>
+      <div className="run-needs-input-announcement-body">
+        <div
+          className={`run-needs-input-announcement${
+            state === "answered" ? " run-needs-input-announcement-answered" : ""
+          }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
+          data-slot="message-content"
+          data-state={state}
+          data-answered={answered ? "true" : "false"}
+          role="group"
+          aria-label={title}
         >
-          Answer questions
-        </button>
-      )}
+          <span className="run-needs-input-announcement-icon" aria-hidden="true">
+            {state === "answered" ? (
+              <CheckIcon size={14} aria-hidden="true" />
+            ) : state === "settled" ? (
+              <MessageSquareOffIcon size={14} aria-hidden="true" />
+            ) : (
+              <MessageSquareIcon size={14} aria-hidden="true" />
+            )}
+          </span>
+          <div className="run-needs-input-announcement-copy" data-slot="message-text">
+            <div className="run-needs-input-announcement-title">{title}</div>
+            {summary && (
+              <p className="run-needs-input-announcement-detail">{summary}</p>
+            )}
+          </div>
+          {showPrimaryCta && (
+            <button
+              type="button"
+              className="run-needs-input-announcement-cta"
+              onClick={handleOpen}
+              aria-label="Open the question in Turns"
+            >
+              Open in Turns
+            </button>
+          )}
+          {showSecondaryCta && (
+            <button
+              type="button"
+              className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
+              onClick={handleOpen}
+              aria-label={
+                state === "answered"
+                  ? "View answered question in Turns"
+                  : "View the question in Turns"
+              }
+            >
+              View in Turns
+            </button>
+          )}
+        </div>
+        {showTimestamps && entry.time && (
+          <div className="run-msg-footer" data-always-visible="">
+            <div className="run-msg-timings">
+              <span className="run-msg-timing-row">{formatMessageTime(entry.time)}</span>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -7889,10 +7947,12 @@ function RunTurnActivityGroup({
                 if (child.kind === "meta") {
                   if (child.entry.metaKind === "awaiting_input") {
                     return (
-                      <RunAwaitingInputNotice
+                      <RunNeedsInputAnnouncement
                         key={child.entry.id}
                         entry={child.entry}
+                        systemAvatar={systemAvatar}
                         onOpenTurn={onOpenTurn}
+                        showTimestamps={showTimestamps}
                       />
                     );
                   }
@@ -8217,6 +8277,7 @@ function RunTurnActivityScreen({
           )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
+            data-page-kind={selectedPageInfo?.kind ?? "activity"}
             onCopy={handleTranscriptCopy}
             ref={bodyRef}
           >
@@ -8655,7 +8716,14 @@ export function RunMessages({
       }
       if (g.kind === "meta") {
         if (g.entry.metaKind === "awaiting_input") {
-          return <RunAwaitingInputNotice entry={g.entry} onOpenTurn={onOpenTurn} />;
+          return (
+            <RunNeedsInputAnnouncement
+              entry={g.entry}
+              systemAvatar={systemAvatar}
+              onOpenTurn={onOpenTurn}
+              showTimestamps={showTimestamps}
+            />
+          );
         }
         return <RunMetaBlock entry={g.entry} systemAvatar={systemAvatar} />;
       }

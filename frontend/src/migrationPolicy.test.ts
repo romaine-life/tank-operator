@@ -209,22 +209,31 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
   assert.match(appSource, /toolGroupDefaultOpen\(g\.entries, autoExpandTools, toolExpansionOverrides\)/);
 });
 
-test("AskUserQuestion answer form is owned by the Turns question page", () => {
+test("AskUserQuestion handoff button is restored in transcript and answer form is owned by Turns", () => {
   const messagesMatch = appSource.match(/export function RunMessages\([\s\S]*?\n}\n\nfunction AdminObservabilityPanel/);
   assert.ok(messagesMatch, "RunMessages source should be present");
   assert.equal(messagesMatch![0].includes("RunAwaitingInputCard"), false);
-  assert.equal(messagesMatch![0].includes("RunAwaitingInputNotice"), true);
+  assert.equal(messagesMatch![0].includes("RunNeedsInputAnnouncement"), true);
 
   const transcriptActivityMatch = appSource.match(/function RunTurnActivityGroup\([\s\S]*?\n}\n\nfunction RunTurnActivityScreen/);
   assert.ok(transcriptActivityMatch, "RunTurnActivityGroup source should be present");
   assert.equal(transcriptActivityMatch![0].includes("RunAwaitingInputCard"), false);
-  assert.equal(transcriptActivityMatch![0].includes("RunAwaitingInputNotice"), true);
+  assert.equal(transcriptActivityMatch![0].includes("RunNeedsInputAnnouncement"), true);
 
   const turnScreenMatch = appSource.match(/function RunTurnActivityScreen\([\s\S]*?\n}\n\nfunction rangeIntersectsNode/);
   assert.ok(turnScreenMatch, "RunTurnActivityScreen source should be present");
   assert.equal(turnScreenMatch![0].includes("RunAwaitingInputCard"), true);
   assert.equal(appSource.includes('kind === "question_set"'), true);
   assert.equal(appSource.includes("resetPage?: boolean"), true);
+  assert.equal(appSource.includes("function RunAwaitingInputNotice"), false);
+  assert.equal(appSource.includes("function RunNeedsInputAnnouncement"), true);
+  assert.equal(appSource.includes('data-kind="needs-input-announcement"'), true);
+  assert.equal(appSource.includes("Open in Turns"), true);
+  assert.equal(appSource.includes("onOpenTurn?.(targetTurnId, { anchor: \"top\", resetPage: true })"), true);
+  assert.equal(indexCssSource.includes(".run-needs-input-announcement-copy"), true);
+  assert.equal(appSource.includes('data-page-kind={selectedPageInfo?.kind ?? "activity"}'), true);
+  assert.equal(indexCssSource.includes(".run-turn-view {\n  display: flex;"), true);
+  assert.equal(indexCssSource.includes('.run-turn-view-body[data-page-kind="question_set"]'), true);
 });
 
 test("transcript meta status lines are attributed to the session system identity", () => {
@@ -311,18 +320,14 @@ test("server-projected active turn activity shells own thinking row active state
   );
   assert.equal(appSource.includes("turnActivityGroupIsActive(entry.activity, turnId, activeTurnId)"), true);
   assert.equal(appSource.includes("function turnActivityGroupNeedsInput"), true);
-  assert.equal(appSource.includes("function insertActiveTurnTailGroups"), true);
-  assert.equal(appSource.includes("const pendingNeedsInputGroups"), true);
-  assert.equal(appSource.includes("pendingNeedsInputFallbackIndexes.set(group.turnId, groups.length)"), true);
+  assert.equal(appSource.includes("function insertActiveTurnTailGroups"), false);
+  assert.equal(appSource.includes("const pendingNeedsInputGroups"), false);
+  assert.equal(appSource.includes("pendingNeedsInputFallbackIndexes.set(group.turnId, groups.length)"), false);
   assert.match(
     appSource,
     /group\.active &&\s+!needsInput &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/,
   );
-  assert.match(appSource, /else if \(needsInput\) \{\n\s+pendingNeedsInputGroups\.push\(group\);/);
-  assert.match(
-    appSource,
-    /insertActiveTurnTailGroups\(\n\s+insertActiveTurnThinkingGroups\([\s\S]{0,220}pendingNeedsInputGroups,\n\s+pendingNeedsInputFallbackIndexes,/,
-  );
+  assert.equal(appSource.includes("groups.push(group);"), false);
   assert.equal(appSource.includes("turnActivityShellIsDurablyActive(group.shell.activity)"), true);
   assert.equal(appSource.includes("turnActivityShellIsDurablyActive(entry.activity)"), true);
   assert.equal(appSource.includes("durableActiveTurnActivityShells"), true);

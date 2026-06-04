@@ -12,8 +12,9 @@
 // as a same-turn pause, keeps that turn active, opens a semantic
 // Turn-activity question-set page, records the user's answer as
 // `turn.input_answered`, and delivers it to the paused runner over the control
-// plane as `input_reply`. The main transcript may announce and navigate to the
-// question page, but it must not own the interactive answer form.
+// plane as `input_reply`. The main transcript keeps the restored durable
+// RunNeedsInputAnnouncement button to the question set, while the Turn question
+// page owns the interactive answer form.
 //
 // This guard forbids the deleted new-turn surfaces and requires the same-turn
 // pause/resume surfaces so neither model can drift back. Fail-on-match is the
@@ -64,10 +65,8 @@ const forbidden = [
   { name: "removed EventApprovalRequested/Resolved Go consts", pattern: /\bEventApproval(Requested|Resolved)\b/ },
 
   { name: "removed needs_input_announcement metaKind/row", pattern: /needs_input_announcement/ },
-  { name: "removed RunNeedsInputAnnouncement component", pattern: /\bRunNeedsInputAnnouncement\b/ },
   { name: "removed projectNeedsInputAnnouncement projection", pattern: /\bprojectNeedsInputAnnouncement\b/ },
   { name: "removed isProjectionNeedsInputAnnouncement predicate", pattern: /\bisProjectionNeedsInputAnnouncement\b/ },
-  { name: "removed needsInputAnnouncement module", pattern: /needsInputAnnouncementState|needsInputAnnouncement"|\.\/needsInputAnnouncement/ },
 
   { name: "removed ask_user_answer user-message display kind", pattern: /ask_user_answer/ },
   { name: "removed askUserAnswers transcript decoration", pattern: /\baskUserAnswers\b/ },
@@ -194,8 +193,8 @@ const required = [
   },
   {
     file: "frontend/src/App.tsx",
-    name: "RunAwaitingInputNotice is the transcript navigation surface",
-    pattern: /\bRunAwaitingInputNotice\b/,
+    name: "RunNeedsInputAnnouncement is the restored transcript question button",
+    pattern: /\bRunNeedsInputAnnouncement\b/,
   },
   {
     file: "frontend/src/App.tsx",

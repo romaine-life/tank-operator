@@ -243,9 +243,10 @@ func (s *projectionState) apply(event map[string]any) {
 		s.upsertBackgroundTask(event, status)
 	case "turn.awaiting_input":
 		// The agent asked the user a question and paused the same turn. The
-		// durable question set stays in Turn activity; the turn remains active
-		// until an answer resumes it, stop interrupts it, or a final terminal
-		// arrives.
+		// durable question set owns the Turn question page; the main
+		// transcript keeps the same durable meta row as a navigation button.
+		// The turn remains active until an answer resumes it, stop interrupts
+		// it, or a final terminal arrives.
 		s.applyAwaitingInput(event)
 		s.runStatus = "needs_input"
 		s.needsInput = true
@@ -905,7 +906,8 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 	for _, activity := range activities {
 		insertBefore := projectedActivityInsertIndex(entries, activity)
 		activeProgressOnly := activity.Summary["active"] == true && len(activity.CompactedEntryIDs) == 0 && firstTurnProgressIndex(entries, activity.TurnID) >= 0
-		if len(activity.CompactedEntryIDs) == 0 && !activeProgressOnly {
+		activeNeedsInput := activity.Summary["active"] == true && activity.Status == "needs_input"
+		if len(activity.CompactedEntryIDs) == 0 && !activeProgressOnly && !activeNeedsInput {
 			continue
 		}
 		activityByInsertIndex[insertBefore] = activity
@@ -983,7 +985,7 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 				continue
 			}
 			activityEntries = append(activityEntries, entry)
-			if !finalIndexes[idx] {
+			if !finalIndexes[idx] && !isProjectionAwaitingInputEntry(entry) {
 				compacted = append(compacted, entry)
 			}
 		}
@@ -1020,7 +1022,14 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string, ru
 	if runStatus == "needs_input" {
 		status = "needs_input"
 	}
-	body := makeTurnActivityBody(activeTurnID, status, activityEntries, activityEntries, true)
+	compactedEntries := make([]map[string]any, 0, len(activityEntries))
+	for _, entry := range activityEntries {
+		if isProjectionAwaitingInputEntry(entry) {
+			continue
+		}
+		compactedEntries = append(compactedEntries, entry)
+	}
+	body := makeTurnActivityBody(activeTurnID, status, activityEntries, compactedEntries, true)
 	if len(progressEntries) > 0 {
 		applyActivityAnchorSummary(body.Summary, progressEntries, len(activityEntries) == 0)
 	}
@@ -1199,12 +1208,18 @@ func isProjectionTurnProgress(entry map[string]any) bool {
 		transcriptMapString(entry, "metaKind") == "turn_progress"
 }
 
+func isProjectionAwaitingInputEntry(entry map[string]any) bool {
+	return transcriptMapString(entry, "kind") == "meta" &&
+		transcriptMapString(entry, "metaKind") == "awaiting_input"
+}
+
 // projectAwaitingInputCard projects a turn.awaiting_input pause into the
-// asking turn's activity detail as the question-set payload. It is anchored
-// at the asking turn's tail (orderKey + "~awaiting_input") so historical replay
-// and live streaming agree on placement inside the turn body. `answered` is
-// derived from a later turn.input_answered event, not a browser-local flag, so a
-// fresh tab opened after the user answered renders the resolved question set.
+// asking turn's activity detail as the question-set payload and into the main
+// transcript as the navigation button. It is anchored at the asking turn's tail
+// (orderKey + "~awaiting_input") so historical replay and live streaming agree
+// on placement. `answered` is derived from a later turn.input_answered event,
+// not a browser-local flag, so a fresh tab opened after the user answered
+// renders the resolved question set.
 func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectionAnsweredInput) map[string]any {
 	summary := awaitingInputSummary(awaiting.Questions)
 	title := "Claude is waiting on you"

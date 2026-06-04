@@ -305,15 +305,19 @@ projection has two distinct surfaces:
 
 The main transcript is promotion-only. User messages, durable session/system
 notices, terminal meta rows, and explicitly promoted final-answer assistant rows
-belong there. Provider activity, reasoning, tool output, background-task rows,
-assistant progress notes, provisional assistant prose, and failure/stop context
-belong to Turn activity by default. Rows must not visibly bounce between those
-surfaces. If an event is eligible for Turn activity, the server transcript
-projection classifies it before first paint; the frontend must not render the
-event as a standalone main-transcript row and later move that same rendered row
-into Turn activity. Conversely, content shown inside Turn activity while a turn
-is active is provisional activity output, not a settled transcript row being
-promoted later.
+belong there. AskUserQuestion's `turn.awaiting_input` meta row also belongs
+there as the restored `RunNeedsInputAnnouncement` navigation button to the
+question set; the Turn question page owns the interactive answer form for the
+same durable question set. Provider
+activity, reasoning, tool output,
+background-task rows, assistant progress notes, provisional assistant prose, and
+failure/stop context belong to Turn activity by default. Rows must not visibly
+bounce between those surfaces. If an event is eligible for Turn activity, the
+server transcript projection classifies it before first paint; the frontend
+must not render the event as a full main-transcript activity surface and later
+move that same rendered row into Turn activity. Conversely, content shown inside
+Turn activity while a turn is active is provisional activity output, not a
+settled transcript row being promoted later.
 
 Historical timeline reads return first-class `turn_activity` rows. These rows
 load collapsed by default and carry summary metadata only: turn id, activity
@@ -417,8 +421,8 @@ the settled transcript, surfacing only when the Turn-activity disclosure is
 opened. It is rendered there through the existing `RunMetaBlock` primitive.
 AskUserQuestion is also intra-turn state, but it is not merely another inline
 activity child: the turn-page projection gives it a semantic `question_set`
-page. The main transcript may show an "Agent needs input" navigation surface,
-but the answer form belongs to the Turns question page.
+page. The main transcript renders the durable button to that page; the Turns
+question page is where the user answers and reviews the set.
 
 This placement is what the Transcript contract's no-bounce invariant requires
 (*"compactable activity must not be rendered first as a settled transcript row
@@ -911,7 +915,8 @@ stays in flight with runner heartbeats, the run-state becomes `needs_input`,
 and `activeTurnId` remains the asking turn. The turn-page projection renders a
 semantic `question_set` page (`metaKind: "awaiting_input"`, carrying the
 questions + target ids) anchored at the asking turn's tail. The main transcript
-gets only the Turn activity shell plus an awareness/navigation CTA.
+gets the same durable meta row as the `RunNeedsInputAnnouncement` navigation
+button to the question set.
 
 - **Claude**: the runner's `canUseTool` callback, on AskUserQuestion, publishes
   `turn.awaiting_input` and keeps the permission callback pending. When
@@ -1011,9 +1016,9 @@ suffix). The row carries an `awaitingInput` payload — `askingTurnId`,
 is true once a later `turn.input_answered` event references the question). The
 turn page splitter seals the preceding activity page and starts a semantic
 `question_set` page at that row. The SPA renders the interactive answer surface
-only inside the Turns question page; the main transcript and inline collapsed
-Turn activity detail render a navigation notice that opens the question page.
-Submitting it posts `/answer`, which resumes the same active turn.
+from that durable row in the Turns question page; the main transcript renders
+the restored `RunNeedsInputAnnouncement` button to that question set.
+Submitting the form posts `/answer`, which resumes the same active turn.
 
 The Turn-activity placement follows
 [docs/features/transcript/contract.md](features/transcript/contract.md):
