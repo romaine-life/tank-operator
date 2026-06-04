@@ -663,6 +663,21 @@ test("session rows do not fall back to client-hashed avatar identity", () => {
   assert.equal(appSource.includes("display_name_source"), true);
 });
 
+test("signed-in profile chrome supports collapse and Gravatar display", () => {
+  assert.equal(appSource.includes("PanelLeftCloseIcon"), true);
+  assert.equal(appSource.includes("PanelLeftOpenIcon"), true);
+  assert.match(
+    appSource,
+    /<div className="sidebar-brand">[\s\S]*?className="sidebar-collapse"[\s\S]*?aria-label=\{sidebarCollapsed \? "expand sidebar" : "collapse sidebar"\}/,
+  );
+  assert.match(
+    appSource,
+    /function isGravatarAvatarURL\(raw: string\)[\s\S]*?hostname === "gravatar\.com"[\s\S]*?hostname\.endsWith\("\.gravatar\.com"\)[\s\S]*?url\.pathname\.startsWith\("\/avatar\/"\)/,
+  );
+  assert.match(appSource, /function profileAvatarURL\(user: SessionUser\): string \{[\s\S]*?return user\.avatar_url\.trim\(\);/);
+  assert.match(appSource, /<img[\s\S]*?src=\{avatarURL\}[\s\S]*?referrerPolicy=\{isGravatarAvatarURL\(avatarURL\) \? "no-referrer" : undefined\}/);
+});
+
 test("home splash test action seeds the first turn as a skill invocation", () => {
   assert.equal(appSource.includes("composeSkillPrompt"), true);
   assert.match(appSource, /initialSkillName\?: SkillStateName/);

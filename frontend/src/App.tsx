@@ -109,6 +109,8 @@ import {
   MinusIcon,
   MonitorIcon,
   NotebookPenIcon,
+  PanelLeftCloseIcon,
+  PanelLeftOpenIcon,
   PlayIcon,
   PlusIcon,
   RotateCcwIcon,
@@ -2366,27 +2368,6 @@ function IconKey({ className }: { className?: string }) {
   );
 }
 
-function IconPanelToggle({ collapsed }: { collapsed: boolean }) {
-  return (
-    <svg
-      viewBox="0 0 16 16"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      focusable="false"
-      aria-hidden="true"
-    >
-      <rect x="2.25" y="2.25" width="11.5" height="11.5" rx="2" />
-      <path d="M6 2.5v11" />
-      {collapsed ? <path d="M9 6 11 8 9 10" /> : <path d="M11 6 9 8l2 2" />}
-    </svg>
-  );
-}
-
 function IconKebab() {
   return (
     <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
@@ -2529,8 +2510,9 @@ function initials(user: SessionUser): string {
 function largerProfileAvatarURL(raw: string): string {
   try {
     const url = new URL(raw);
-    if (url.hostname.endsWith("gravatar.com")) {
+    if (isGravatarAvatarURL(raw)) {
       url.searchParams.set("s", "512");
+      if (!url.searchParams.has("d")) url.searchParams.set("d", "mp");
     }
     return url.toString();
   } catch {
@@ -2538,9 +2520,31 @@ function largerProfileAvatarURL(raw: string): string {
   }
 }
 
+function isGravatarAvatarURL(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    const hostname = url.hostname.toLowerCase();
+    return (
+      (hostname === "gravatar.com" || hostname.endsWith(".gravatar.com")) &&
+      url.pathname.startsWith("/avatar/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+function profileAvatarURL(user: SessionUser): string {
+  return user.avatar_url.trim();
+}
+
 function Avatar({ user }: { user: SessionUser }) {
+  const avatarURL = profileAvatarURL(user);
   const [failed, setFailed] = useState(false);
-  if (failed || !user.avatar_url) {
+  useEffect(() => {
+    setFailed(false);
+  }, [avatarURL]);
+
+  if (failed || !avatarURL) {
     return <span className="avatar" aria-hidden="true">{initials(user)}</span>;
   }
   const openPreview = (
@@ -2551,7 +2555,7 @@ function Avatar({ user }: { user: SessionUser }) {
     openAvatarPreview(
       {
         name: user.name || user.email,
-        avatarSrc: largerProfileAvatarURL(user.avatar_url),
+        avatarSrc: largerProfileAvatarURL(avatarURL),
         kind: "personal",
       },
       event,
@@ -2568,7 +2572,12 @@ function Avatar({ user }: { user: SessionUser }) {
         if (event.key === "Enter" || event.key === " ") openPreview(event);
       }}
     >
-      <img src={user.avatar_url} alt="" onError={() => setFailed(true)} />
+      <img
+        src={avatarURL}
+        alt=""
+        referrerPolicy={isGravatarAvatarURL(avatarURL) ? "no-referrer" : undefined}
+        onError={() => setFailed(true)}
+      />
     </span>
   );
 }
@@ -17627,6 +17636,7 @@ function AuthenticatedApp() {
   const paneFontScale = runPrefs.chatFontScale;
   const paneFontScalePct = Math.round(paneFontScale * 100);
   const turnCompleteSoundVolumePct = Math.round(runPrefs.turnCompleteSoundVolume * 100);
+  const SidebarCollapseIcon = sidebarCollapsed ? PanelLeftOpenIcon : PanelLeftCloseIcon;
 
   return (
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -17649,7 +17659,7 @@ function AuthenticatedApp() {
               aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
               aria-pressed={sidebarCollapsed}
             >
-              <IconPanelToggle collapsed={sidebarCollapsed} />
+              <SidebarCollapseIcon size={16} strokeWidth={2.1} aria-hidden="true" />
             </button>
           </div>
         </div>
