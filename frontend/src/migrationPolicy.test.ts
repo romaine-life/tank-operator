@@ -164,10 +164,11 @@ test("stop control waits for durable turn interruption", () => {
   assert.equal(appSource.includes("if (!res.ok)"), true);
 });
 
-test("AskUserQuestion answers resume the same turn via POST /answer", () => {
-  // The answer is durably recorded by POST /turns/{askingTurnId}/answer and
-  // delivered to the paused runner as input_reply. There is still no terminal
-  // socket path or retired /input-reply browser route.
+test("AskUserQuestion answers submit a continuation turn via POST /answer", () => {
+  // The answer is durably recorded by POST /turns/{askingTurnId}/answer,
+  // surfaced as a normal user submission, and delivered to the paused provider
+  // callback as input_reply. There is still no terminal socket path or retired
+  // /input-reply browser route.
   assert.equal(appSource.includes("sendStdin"), false);
   assert.equal(appSource.includes("/input-reply"), false);
   assert.equal(appSource.includes("/answer"), true);

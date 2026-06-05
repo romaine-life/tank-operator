@@ -770,9 +770,7 @@ export class Runner {
         awaitingTimelineID: timelineID,
       }),
     );
-    if (published) {
-      return waitForReply;
-    }
+    if (published) return waitForReply;
     this.pendingInputReplies.delete(key);
     throw new Error("failed to persist AskUserQuestion pause");
   }
@@ -793,8 +791,37 @@ export class Runner {
       return;
     }
     this.pendingInputReplies.delete(key);
+    await this.rotateTurnForInputReply(pending.turn, record);
     pending.resolve({ answers: answersForCodexInput(record.answers, record.annotations) });
     await this.commandBus.markCompleted(record);
+  }
+
+  private async rotateTurnForInputReply(turn: AcceptedTurn, record: SessionCommandRecord): Promise<void> {
+    const continuationClientNonce = normalizeClientNonce(record.client_nonce);
+    if (!continuationClientNonce) {
+      throw new Error("input_reply missing continuation client_nonce");
+    }
+    const previousTurnID = turn.turnID;
+    turn.clientNonce = continuationClientNonce;
+    turn.turnID = turnIDForClientNonce(continuationClientNonce);
+    turn.turnSeq += 1;
+    console.info("codex AskUserQuestion continuation turn", {
+      previous_turn_id: previousTurnID,
+      continuation_turn_id: turn.turnID,
+    });
+    await this.publishTurnClaimed(turn);
+    recordTurnStart(turn.turnID);
+    recordTurnPreStartLatency("claimed_to_started", turn.claimedAtMs);
+    await dispatch(
+      this.sink,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "codex",
+        type: "turn.started",
+      }),
+    );
   }
 
   private async acceptStopBackgroundTask(record: SessionCommandRecord): Promise<void> {

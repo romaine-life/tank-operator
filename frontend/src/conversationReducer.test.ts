@@ -525,10 +525,10 @@ test("Duplicate user submissions with the same client nonce do not duplicate bub
   assert.equal(state.messages[0]?.text, "same prompt");
 });
 
-test("turn.awaiting_input pauses the active turn; turn.input_answered resumes it", () => {
-  // AskUserQuestion keeps the same turn active while the runner waits for the
-  // user's answer. The durable answer event clears needs_input and resumes
-  // streaming for that same turn.
+test("turn.awaiting_input hands off; answer submission opens a continuation turn", () => {
+  // AskUserQuestion is the Tank-visible response for the asking turn. The
+  // durable answer event clears needs_input, then the answer's normal
+  // turn.submitted event owns the continuation turn.
   const paused = reduceConversationEvents([
     ev("1", "turn.started", { turn_id: "turn-ask" }),
     ev("2", "turn.awaiting_input", {
@@ -565,10 +565,19 @@ test("turn.awaiting_input pauses the active turn; turn.input_answered resumes it
         answers: { "Proceed?": ["Yes"] },
       },
     }),
+    ev("4", "user_message.created", {
+      turn_id: "turn-answer",
+      client_nonce: "answer-1",
+      payload: { text: "1. Proceed?\nAnswer: Yes", display: { kind: "plain" } },
+    }),
+    ev("5", "turn.submitted", {
+      turn_id: "turn-answer",
+      client_nonce: "answer-1",
+    }),
   ]);
   assert.equal(resumed.needsInput, false);
-  assert.equal(resumed.runStatus, "streaming");
-  assert.equal(resumed.activeTurnId, "turn-ask");
+  assert.equal(resumed.runStatus, "submitted");
+  assert.equal(resumed.activeTurnId, "turn-answer");
 });
 
 test("Provider error becomes terminal error state without needs-input", () => {

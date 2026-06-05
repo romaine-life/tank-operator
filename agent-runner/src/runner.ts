@@ -707,10 +707,11 @@ export class Runner {
       // AskUserQuestion, so non-AskUserQuestion tools retain the same
       // zero-friction shape as before.
       permissionMode: "default",
-      // canUseTool pauses the active turn when AskUserQuestion is invoked:
-      // it publishes durable turn.awaiting_input and resolves only when the
-      // user's input_reply arrives. All other tools pass through
-      // unconditionally — see the callback for the policy.
+      // canUseTool turns AskUserQuestion into a Tank-visible handoff:
+      // it publishes durable turn.awaiting_input and then leaves only the
+      // provider callback pending until the user's input_reply arrives. All
+      // other tools pass through unconditionally — see the callback for the
+      // policy.
       canUseTool: this.canUseTool,
       // Resume an on-disk JSONL if one exists from a prior process
       // life (e.g., agent-runner restart within the same pod).
@@ -1417,11 +1418,14 @@ export class Runner {
     return false;
   }
 
-  // canUseTool pauses the asking turn when the agent invokes AskUserQuestion.
+  // canUseTool records a question handoff when the agent invokes
+  // AskUserQuestion.
   // Non-AskUserQuestion tools auto-allow (preserving the prior
   // `bypassPermissions` posture). For AskUserQuestion we publish durable
-  // `turn.awaiting_input`, then keep this callback pending until an
-  // input_reply control command arrives for the same turn/tool item.
+  // `turn.awaiting_input`, then keep the provider callback pending until an
+  // input_reply control command arrives for the same question-set target. The
+  // submit command remains in flight so runner restarts can recreate the
+  // callback before the user answers.
   private readonly canUseTool: CanUseTool = (toolName, input, { toolUseID }) => {
     if (toolName !== "AskUserQuestion") {
       return Promise.resolve({ behavior: "allow", updatedInput: input } satisfies PermissionResult);
@@ -1438,7 +1442,7 @@ export class Runner {
   };
 
   // pauseTurnForInput publishes durable turn.awaiting_input for an
-  // AskUserQuestion pause and resolves only when input_reply arrives.
+  // AskUserQuestion handoff and resolves only when input_reply arrives.
   // Mirrors applyInterruptToTurn's durable-first posture: publish with retry,
   // and fall back to turn.failed if the pause publish ultimately fails so
   // the turn never strands without a terminal.
@@ -1468,9 +1472,7 @@ export class Runner {
         awaitingTimelineID: timelineID,
       }),
     );
-    if (published) {
-      return waitForReply;
-    }
+    if (published) return waitForReply;
     this.pendingInputReplies.delete(replyKey);
     const fallback = await this.publishTerminalWithRetry(
       turnEvent({
@@ -1512,6 +1514,7 @@ export class Runner {
       return;
     }
     this.pendingInputReplies.delete(key);
+    await this.rotateTurnForInputReply(pending.turn, record);
     pending.resolve({
       behavior: "allow",
       updatedInput: {
@@ -1520,6 +1523,34 @@ export class Runner {
       },
     } satisfies PermissionResult);
     await this.commandBus.markCompleted(record);
+  }
+
+  private async rotateTurnForInputReply(turn: PendingTurn, record: SessionCommandRecord): Promise<void> {
+    const continuationClientNonce = normalizeClientNonce(record.client_nonce);
+    if (!continuationClientNonce) {
+      throw new Error("input_reply missing continuation client_nonce");
+    }
+    const previousTurnID = turn.turnID;
+    turn.clientNonce = continuationClientNonce;
+    turn.turnID = turnIDForClientNonce(continuationClientNonce);
+    turn.started = true;
+    console.info("claude AskUserQuestion continuation turn", {
+      previous_turn_id: previousTurnID,
+      continuation_turn_id: turn.turnID,
+    });
+    await this.publishTurnClaimed(turn);
+    recordTurnStart(turn.turnID);
+    recordTurnPreStartLatency("claimed_to_started", turn.claimedAtMs);
+    await dispatch(
+      this.sink,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.started",
+      }),
+    );
   }
 
   // acceptTurn normalizes the client nonce and assembles the in-memory

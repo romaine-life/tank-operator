@@ -7178,9 +7178,10 @@ function RunAwaitingInputCard({
     askUserQuestionDrafts,
     setAskUserQuestionDraft,
   } = useContext(RunContext);
-  // The card is driven by the durable turn.awaiting_input pause projected into
-  // Turn activity. Submitting records turn.input_answered and resumes the same
-  // provider turn through a control-plane input_reply.
+  // The card is driven by the durable turn.awaiting_input handoff projected
+  // into Turn activity. Submitting records the answer and creates a normal
+  // Tank-visible continuation turn while the provider callback resumes through
+  // a control-plane input_reply.
   const aw = entry.awaitingInput;
   const draftKey = aw?.timelineId || entry.id;
   const draft = draftKey ? askUserQuestionDrafts[draftKey] ?? emptyAskUserQuestionDraft() : emptyAskUserQuestionDraft();
@@ -7303,8 +7304,8 @@ function RunAwaitingInputCard({
       // string array. When the user only typed free-form text, we
       // synthesize a single "Other" label so the answers map stays valid;
       // the actual free-form text rides in `annotations[question].notes`.
-      // Both halves post to /answer and are re-grounded into the same turn's
-      // durable turn.input_answered event.
+      // Both halves post to /answer; turn.input_answered resolves the question
+      // set, and the same backend request records the visible answer turn.
       if (labels.length > 0) {
         answers[q.question] = labels;
       } else if (notesText) {
@@ -14640,8 +14641,7 @@ function ChatPane({
       }
       throw new Error(detail);
     }
-    // The answer lands durably as `turn.input_answered` on this same turn via
-    // SSE; no local activity-cache patch.
+    // The answer lands durably over SSE; no local activity-cache patch.
   }
 
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {

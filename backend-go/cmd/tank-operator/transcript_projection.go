@@ -115,10 +115,10 @@ type turnUsageProjection struct {
 	UsageObservation any
 }
 
-// projectionAwaitingInput captures a turn.awaiting_input pause: the agent asked
-// the user a question and the same turn is waiting for a reply. The
-// turn question-set page renders from this (questions + ids), and "answered" is
-// derived from a later turn.input_answered event on the same turn.
+// projectionAwaitingInput captures a turn.awaiting_input handoff: the agent
+// asked the user a question as the Tank-visible response. The turn question-set
+// page renders from this (questions + ids), and "answered" is derived from a
+// later turn.input_answered event targeting the same question set.
 type projectionAwaitingInput struct {
 	AskingTurnID   string
 	ProviderItemID string
@@ -263,11 +263,9 @@ func (s *projectionState) apply(event map[string]any) {
 		}
 		s.upsertBackgroundTask(event, status)
 	case "turn.awaiting_input":
-		// The agent asked the user a question and paused the same turn. The
-		// durable question set owns the Turn question page; the main
+		// The agent asked the user a question as the Tank-visible response.
+		// The durable question set owns the Turn question page; the main
 		// transcript keeps the same durable meta row as the assistant handoff.
-		// The turn remains active until an answer resumes it, stop interrupts
-		// it, or a final terminal arrives.
 		s.applyAwaitingInput(event)
 		s.runStatus = "needs_input"
 		s.needsInput = true

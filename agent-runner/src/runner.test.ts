@@ -538,6 +538,7 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
     activeTurn: unknown;
     publishTerminalWithRetry: (event: TankConversationEvent) => Promise<boolean>;
     markCommandTerminal: (turn: unknown, outcome: string) => Promise<void>;
+    rotateTurnForInputReply: (turn: unknown, record: unknown) => Promise<void>;
     commandBus: { markCompleted: (record: unknown) => Promise<void>; markFailed: (record: unknown) => Promise<void> };
   };
 
@@ -559,6 +560,9 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
       assert.fail("input_reply should resolve the pending AskUserQuestion");
     },
   };
+  runner.rotateTurnForInputReply = async (_turn, record) => {
+    assert.equal((record as { client_nonce?: string }).client_nonce, "answer-continuation");
+  };
   runner.activeTurn = {
     turnID: "turn-active",
     clientNonce: "turn-active",
@@ -579,10 +583,15 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
   );
   assert.ok(awaiting, "expected turn.awaiting_input to be published");
   assert.equal((awaiting as { turn_id?: string }).turn_id, "turn-active");
-  assert.deepEqual(outcomes, [], "the submit_turn stays in flight while awaiting input");
+  assert.deepEqual(
+    outcomes,
+    [],
+    "AskUserQuestion is the Tank-visible response, but the provider command stays in flight for callback recovery",
+  );
 
   await runner.acceptInputReply({
     type: "input_reply",
+    client_nonce: "answer-continuation",
     target_turn_id: "turn-active",
     target_timeline_id: "turn-active:item:toolu_ask",
     target_provider_item_id: "toolu_ask",
@@ -606,6 +615,7 @@ test("canUseTool delivers free-form Other text to Claude instead of synthetic la
     activeTurn: unknown;
     publishTerminalWithRetry: (event: TankConversationEvent) => Promise<boolean>;
     markCommandTerminal: (turn: unknown, outcome: string) => Promise<void>;
+    rotateTurnForInputReply: (turn: unknown, record: unknown) => Promise<void>;
     commandBus: { markCompleted: (record: unknown) => Promise<void>; markFailed: (record: unknown) => Promise<void> };
   };
 
@@ -616,6 +626,9 @@ test("canUseTool delivers free-form Other text to Claude instead of synthetic la
     async markFailed() {
       assert.fail("input_reply should resolve the pending AskUserQuestion");
     },
+  };
+  runner.rotateTurnForInputReply = async (_turn, record) => {
+    assert.equal((record as { client_nonce?: string }).client_nonce, "answer-continuation");
   };
   runner.activeTurn = {
     turnID: "turn-active",
@@ -633,6 +646,7 @@ test("canUseTool delivers free-form Other text to Claude instead of synthetic la
 
   await runner.acceptInputReply({
     type: "input_reply",
+    client_nonce: "answer-continuation",
     target_turn_id: "turn-active",
     target_timeline_id: "turn-active:item:toolu_ask",
     target_provider_item_id: "toolu_ask",

@@ -210,7 +210,7 @@ Background shell task lifecycle:
 - `shell_task.updated`
 - `shell_task.exited`
 
-AskUserQuestion pause/resume:
+AskUserQuestion handoff/answer:
 
 - `turn.awaiting_input`
 - `turn.input_answered`
@@ -232,9 +232,10 @@ A conversation projection has these UI states:
 - `ready`: no active turn needs attention.
 - `submitted`: user input is durable and waiting for runner execution.
 - `streaming`: a runner is executing a turn or emitting items.
-- `needs_input`: the agent asked the user a question (AskUserQuestion); the
-  asking turn is paused at `turn.awaiting_input` and the session is waiting for
-  the user's answer, which arrives as `turn.input_answered` on the same turn.
+- `needs_input`: the agent asked the user a question (AskUserQuestion). In the
+  Tank-visible product model, the question set is the assistant response for
+  the submitted turn. The provider callback may still be paused internally,
+  but the transcript turn boundary is owned by Tank.
 - `scheduled`: the agent parked itself with pending time-bound work (a
   `ScheduleWakeup` timer or a `run_in_background` wake). The sibling of
   `needs_input` — a non-terminal pause-phase of a live (simulated) turn that
@@ -269,9 +270,10 @@ Turn transitions:
    without becoming a turn boundary.
 4. `turn.started` means provider output has begun; it moves the composer and
    sidebar to `streaming`.
-5. `turn.awaiting_input` pauses the active turn for AskUserQuestion, moves the
-   projection to `needs_input`, and preserves `activeTurnId` so Stop can still
-   interrupt the same in-flight turn.
+5. `turn.awaiting_input` records AskUserQuestion as the Tank-visible response
+   for the submitted turn and moves the projection to `needs_input`. The
+   underlying submit command may stay in flight with runner heartbeats so a
+   runner restart can recreate the provider callback before the user answers.
 6. `turn.interrupt_requested` moves the projection from `submitted`,
    `streaming`, or `needs_input` to `stopping`; `activeTurnId` is preserved
    because the turn is still mid-flight. A late-arriving request after a
@@ -319,7 +321,11 @@ notices, terminal meta rows, and explicitly promoted final-answer assistant rows
 belong there. AskUserQuestion's `turn.awaiting_input` meta row also belongs
 there as the `RunNeedsInputAnnouncement` assistant handoff row to the question
 set; the Turn question page owns the interactive answer form for the same
-durable question set. Provider
+durable question set. Answering the form writes `turn.input_answered` for the
+question-set state and also writes a normal `user_message.created` plus
+`turn.submitted` pair whose client nonce owns the continuation turn. If the
+provider callback resumes from the same underlying harness run, the runner
+rotates subsequent provider events onto that continuation turn. Provider
 activity, reasoning, tool output,
 background-task rows, assistant progress notes, provisional assistant prose, and
 failure/stop context belong to Turn activity by default. Rows must not visibly

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -357,13 +358,14 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 
 // answerRequest is the JSON body shape accepted by
 // `POST /api/sessions/{session_id}/turns/{turn_id}/answer`, where {turn_id}
-// is the active turn currently paused at turn.awaiting_input.
+// is the turn that produced the durable turn.awaiting_input question set.
 //
 // `answers` is `{questionText: answerLabel[]}` — always a slice so
 // single-select and multi-select questions share one shape. `annotations`
 // is optional `{questionText: {preview?, notes?}}` carrying any free-form
-// the user attached. The handler records these durably on the same turn and
-// delivers an input_reply control command to the paused runner.
+// the user attached. The handler records these durably as question-set state
+// and as the user's continuation turn, then delivers an input_reply control
+// command to the paused provider callback.
 type answerRequest struct {
 	ProviderItemID string                      `json:"provider_item_id"`
 	TimelineID     string                      `json:"timeline_id"`
@@ -469,10 +471,10 @@ func (s *appServer) handleStopBackgroundTask(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// handleAnswerSessionTurn answers an AskUserQuestion pause inside the same
-// active turn. The answer is first recorded as durable turn.input_answered,
-// then delivered to the runner over the control plane as input_reply so the
-// provider callback can continue.
+// handleAnswerSessionTurn answers an AskUserQuestion handoff. The answer is
+// recorded as both a question-set state update and a normal Tank-visible user
+// continuation turn, then delivered to the runner over the control plane so the
+// provider callback can continue privately.
 func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
@@ -544,7 +546,10 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 
 	// Deterministic client_nonce so a double-submit of the same answer
 	// dedupes at the session_events (tank_session_id, event_id) UNIQUE
-	// constraint and the command-bus msg id.
+	// constraint and the command-bus msg id. This nonce also owns the
+	// Tank-visible continuation turn: the provider callback may still be
+	// paused inside the original harness run, but transcript/turn state
+	// treats the answer as the user's next turn.
 	sum := sha256.Sum256([]byte(askingTurnID + "\x00" + timelineID))
 	clientNonce := "answer-" + hex.EncodeToString(sum[:])[:24]
 
@@ -563,6 +568,34 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 	if err := s.persistBackendEvent(r.Context(), storageKey, answerEvent); err != nil {
 		writeError(w, http.StatusInternalServerError, "persist answer: "+err.Error())
 		return
+	}
+
+	answerText := askUserQuestionAnswerTranscriptText(answers, annotations)
+	_, answerTurnEvents, err := conversation.UserSubmissionEventMaps(conversation.UserSubmissionArgs{
+		SessionID:         sessionID,
+		SessionStorageKey: storageKey,
+		Email:             owner,
+		ClientNonce:       clientNonce,
+		Text:              answerText,
+		Message: map[string]any{
+			"role":    "user",
+			"content": answerText,
+		},
+		Runtime: provider,
+		Display: map[string]any{
+			"kind": "plain",
+		},
+		Now: time.Now().UTC(),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "build answer turn: "+err.Error())
+		return
+	}
+	for _, event := range answerTurnEvents {
+		if err := s.persistBackendEvent(r.Context(), storageKey, event); err != nil {
+			writeError(w, http.StatusInternalServerError, "persist answer turn: "+err.Error())
+			return
+		}
 	}
 
 	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
@@ -602,6 +635,7 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status":         "accepted",
 		"target_turn_id": askingTurnID,
+		"turn_id":        conversation.TurnIDForClientNonce(clientNonce),
 	})
 }
 
@@ -709,6 +743,42 @@ func commandAnswerAnnotations(in map[string]answerAnnotation) map[string]session
 		}
 	}
 	return out
+}
+
+func askUserQuestionAnswerTranscriptText(answers map[string][]string, annotations map[string]answerAnnotation) string {
+	var b strings.Builder
+	questions := make([]string, 0, len(answers))
+	for question := range answers {
+		questions = append(questions, question)
+	}
+	sort.Strings(questions)
+	for i, question := range questions {
+		labels := answers[question]
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "%d. %s\n", i+1, question)
+		cleanLabels := make([]string, 0, len(labels))
+		for _, label := range labels {
+			label = strings.TrimSpace(label)
+			if label != "" && strings.ToLower(label) != "other" {
+				cleanLabels = append(cleanLabels, label)
+			}
+		}
+		note := strings.TrimSpace(annotations[question].Notes)
+		if len(cleanLabels) > 0 {
+			b.WriteString("Answer: ")
+			b.WriteString(strings.Join(cleanLabels, ", "))
+			if note != "" {
+				b.WriteString("\n")
+			}
+		}
+		if note != "" {
+			b.WriteString("Answer: ")
+			b.WriteString(note)
+		}
+	}
+	return strings.TrimSpace(b.String())
 }
 
 func turnIsAwaitingQuestion(events []map[string]any, timelineID, providerItemID string) bool {

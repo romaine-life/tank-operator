@@ -757,8 +757,8 @@ func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.
 				map[string]any{"question": "Pick one", "allowFreeForm": true},
 			},
 		}),
-		// The user's answer is recorded on the same turn and links back to the
-		// paused question's timeline id.
+		// The question-set answer marker links back to the question's timeline
+		// id; the visible answer text is a separate user submission.
 		projectionTestEvent("ans", "003", "turn.input_answered", "user", "tank", "turn-1", "turn-1:item:tool-ask:answer", map[string]any{
 			"question_timeline_id": "turn-1:item:tool-ask",
 			"provider_item_id":     "toolu_ask",

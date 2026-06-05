@@ -788,9 +788,8 @@ test("turn.awaiting_input surfaces the live needs-input signal", () => {
 });
 
 test("turn.input_answered clears needs-input without adding a transcript message", () => {
-  // The user's answer is part of the same active turn, not a new user bubble.
-  // The server projection uses turn.input_answered to mark the question card
-  // answered inside Turn activity.
+  // turn.input_answered marks the question card answered. The visible answer
+  // bubble is the separate user_message.created written by POST /answer.
   const projection = projectConversationState(
     reduceConversationEvents([
       ev("1", "turn.awaiting_input", {

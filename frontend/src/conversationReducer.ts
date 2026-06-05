@@ -276,9 +276,9 @@ export function conversationReducer(
       // (handled above) so it is not a parallel transcript path.
       return next;
     case "turn.awaiting_input":
-      // The agent asked the user a question and paused the same active turn.
-      // The answer resumes this turn; final terminal events still own
-      // completion/failure/interruption.
+      // The agent asked the user a question as the Tank-visible response.
+      // The answer marker clears needs_input; the answer text itself arrives
+      // as a normal user_message.created + turn.submitted continuation turn.
       return {
         ...next,
         runStatus: "needs_input",

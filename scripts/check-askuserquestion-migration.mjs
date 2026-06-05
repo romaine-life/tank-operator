@@ -1,24 +1,24 @@
 #!/usr/bin/env node
 
-// Migration guard for the AskUserQuestion "pause the same turn" cutover.
+// Migration guard for the AskUserQuestion handoff + continuation-turn cutover.
 //
-// OLD model (deleted): AskUserQuestion ended the asking turn with a durable
-// `turn.awaiting_input` terminal. The user's answer opened a brand-new turn
-// through POST `/turns/{turn_id}/answer`, represented the answer as a
-// `user_message.created` display kind (`ask_user_answer`), and left no
-// in-turn reply command for the paused provider callback.
+// OLD models (deleted): browser-local /input-reply routes, synthetic
+// tool_result answers, AskUserQuestion-specific user-message display kinds, or
+// a provider callback that permanently owns the Tank-visible turn boundary.
 //
 // NEW model: invoking AskUserQuestion publishes durable `turn.awaiting_input`
-// as a same-turn pause, keeps that turn active, opens a semantic
-// Turn-activity question-set page, records the user's answer as
-// `turn.input_answered`, and delivers it to the paused runner over the control
-// plane as `input_reply`. The main transcript keeps the restored durable
-// RunNeedsInputAnnouncement button to the question set, while the Turn question
-// page owns the interactive answer form.
+// as the Tank-visible assistant handoff and opens a semantic Turn-activity
+// question-set page. The provider submit command may remain in flight with
+// runner heartbeats so restarts can recreate the callback. Answering records
+// `turn.input_answered` for the question-set state, writes a normal
+// `user_message.created` + `turn.submitted` continuation turn for the visible
+// answer, and delivers the answer to the paused provider callback over the
+// control plane as `input_reply`. When the provider callback resumes, runners
+// rotate subsequent provider events onto the continuation turn.
 //
-// This guard forbids the deleted new-turn surfaces and requires the same-turn
-// pause/resume surfaces so neither model can drift back. Fail-on-match is the
-// contract; there are no warnings.
+// This guard forbids retired AskUserQuestion surfaces and requires the durable
+// handoff/continuation pieces so neither model can drift back. Fail-on-match is
+// the contract; there are no warnings.
 
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -131,6 +131,11 @@ const required = [
   },
   {
     file: "backend-go/cmd/tank-operator/handlers_turns.go",
+    name: "answer endpoint writes a normal continuation user turn",
+    pattern: /UserSubmissionEventMaps[\s\S]{0,700}ClientNonce:\s+clientNonce/,
+  },
+  {
+    file: "backend-go/cmd/tank-operator/handlers_turns.go",
     name: "answer endpoint publishes input_reply",
     pattern: /CommandInputReply/,
   },
@@ -147,13 +152,18 @@ const required = [
 
   {
     file: "agent-runner/src/runner.ts",
-    name: "Claude runner pauses AskUserQuestion",
+    name: "Claude runner records AskUserQuestion handoff",
     pattern: /\bpauseTurnForInput\b/,
   },
   {
     file: "agent-runner/src/runner.ts",
     name: "Claude runner accepts input_reply",
-    pattern: /\bacceptInputReply\b[\s\S]{0,1200}updatedInput[\s\S]{0,400}answers/,
+    pattern: /\bacceptInputReply\b[\s\S]{0,1600}answersForClaudeInput/,
+  },
+  {
+    file: "agent-runner/src/runner.ts",
+    name: "Claude runner rotates resumed provider output to continuation turn",
+    pattern: /\brotateTurnForInputReply\b[\s\S]{0,700}turnIDForClientNonce/,
   },
   {
     file: "agent-runner/src/runner.ts",
@@ -177,13 +187,18 @@ const required = [
   },
   {
     file: "codex-runner/src/runner.ts",
-    name: "Codex requestAppServerUserInput pauses the same turn",
+    name: "Codex requestAppServerUserInput records a question handoff",
     pattern: /requestAppServerUserInput[\s\S]{0,1200}pauseTurnForInput/,
   },
   {
     file: "codex-runner/src/runner.ts",
     name: "Codex runner accepts input_reply",
-    pattern: /\bacceptInputReply\b[\s\S]{0,900}answersForCodexInput/,
+    pattern: /\bacceptInputReply\b[\s\S]{0,1200}answersForCodexInput/,
+  },
+  {
+    file: "codex-runner/src/runner.ts",
+    name: "Codex runner rotates resumed provider output to continuation turn",
+    pattern: /\brotateTurnForInputReply\b[\s\S]{0,700}turnIDForClientNonce/,
   },
   {
     file: "codex-runner/src/runner.ts",
@@ -253,8 +268,8 @@ const required = [
   },
   {
     file: "docs/tank-conversation-protocol.md",
-    name: "protocol documents same-turn AskUserQuestion pause",
-    pattern: /turn\.input_answered[\s\S]{0,1200}input_reply/,
+    name: "protocol documents AskUserQuestion continuation turns",
+    pattern: /turn\.input_answered[\s\S]*continuation turn[\s\S]*input_reply/,
   },
 ];
 
@@ -298,7 +313,7 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`- ${failure}`);
   console.error("");
   console.error("Each FORBIDDEN entry is a retired AskUserQuestion surface that came back;");
-  console.error("each REQUIRED entry is a piece of the same-turn pause/resume contract.");
+  console.error("each REQUIRED entry is a piece of the handoff/continuation-turn contract.");
   console.error("See scripts/check-askuserquestion-migration.mjs and docs/migration-policy.md.");
   process.exit(1);
 }
