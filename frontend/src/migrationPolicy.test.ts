@@ -372,7 +372,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes("const turnsAvailable = turnViewItems.length > 0"), true);
   assert.equal(appSource.includes("function readSessionRouteFromPath"), true);
   assert.equal(appRoutesSource.includes('url.pathname = `/sessions/${encodedId}${'), true);
-  assert.equal(appRoutesSource.includes('export type SessionRouteTab = "chat" | "turns";'), true);
+  assert.equal(appRoutesSource.includes('export type SessionRouteTab = "chat" | "turns" | "session-data";'), true);
   assert.equal(appRoutesSource.includes('export type AppRouteTab = "settings" | "help";'), true);
   assert.equal(appRoutesSource.includes("readAppRouteFromPathname"), true);
   assert.equal(appRoutesSource.includes("buildAppRouteUrl"), true);
