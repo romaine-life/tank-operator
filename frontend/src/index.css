@@ -4634,6 +4634,15 @@ button:disabled {
   display: grid;
   align-content: start;
   gap: var(--space-5);
+  /* `.run-main` is a flex-column scroll container. These centered screens
+     have no fixed sub-header, so the whole screen scrolls (like chat) via
+     `.run-main`. Without `flex-shrink: 0` they are shrinkable flex items:
+     flexbox compresses the screen to the pane height while its grid rows
+     overflow the shrunk box with `overflow: visible`, so `.run-main` never
+     registers scrollable overflow and content below the fold is unreachable
+     (no scrollbar). Refusing to shrink keeps the screen at its full content
+     height, so `.run-main`'s own scroll engages when it overflows. */
+  flex-shrink: 0;
 }
 
 .run-settings-screen-wide {
