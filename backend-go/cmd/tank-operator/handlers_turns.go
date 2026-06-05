@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -357,13 +358,14 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 
 // answerRequest is the JSON body shape accepted by
 // `POST /api/sessions/{session_id}/turns/{turn_id}/answer`, where {turn_id}
-// is the active turn currently paused at turn.awaiting_input.
+// is the turn that produced the durable turn.awaiting_input question set.
 //
 // `answers` is `{questionText: answerLabel[]}` — always a slice so
 // single-select and multi-select questions share one shape. `annotations`
 // is optional `{questionText: {preview?, notes?}}` carrying any free-form
-// the user attached. The handler records these durably on the same turn and
-// delivers an input_reply control command to the paused runner.
+// the user attached. The handler records these durably as question-set state
+// and as the user's continuation turn, then delivers an input_reply control
+// command to the paused provider callback.
 type answerRequest struct {
 	ProviderItemID string                      `json:"provider_item_id"`
 	TimelineID     string                      `json:"timeline_id"`
@@ -469,18 +471,18 @@ func (s *appServer) handleStopBackgroundTask(w http.ResponseWriter, r *http.Requ
 	})
 }
 
-// handleAnswerSessionTurn answers an AskUserQuestion pause inside the same
-// active turn. The answer is first recorded as durable turn.input_answered,
-// then delivered to the runner over the control plane as input_reply so the
-// provider callback can continue.
+// handleAnswerSessionTurn answers an AskUserQuestion handoff. The answer is
+// recorded as both a question-set state update and a normal Tank-visible user
+// continuation turn, then delivered to the runner over the control plane so the
+// provider callback can continue privately.
 func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	askingTurnID := strings.TrimSpace(r.PathValue("turn_id"))
-	if sessionID == "" || askingTurnID == "" || !turnIDPattern.MatchString(askingTurnID) {
+	questionTurnID := strings.TrimSpace(r.PathValue("turn_id"))
+	if sessionID == "" || questionTurnID == "" || !turnIDPattern.MatchString(questionTurnID) {
 		writeError(w, http.StatusBadRequest, "turn_id is required and must match turn id syntax")
 		return
 	}
@@ -532,27 +534,31 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 	// Read the whole turn: on a long paused turn the durable awaiting_input
 	// marker is the last event, and a bounded first-N read would miss it,
 	// rejecting a valid answer and re-stranding the turn.
-	events, err := readAllTurnEvents(r.Context(), s.sessionEvents, sessionID, askingTurnID)
+	events, err := readAllTurnEvents(r.Context(), s.sessionEvents, sessionID, questionTurnID)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, "lookup asking turn events: "+err.Error())
+		writeError(w, http.StatusInternalServerError, "lookup question turn events: "+err.Error())
 		return
 	}
-	if !turnIsAwaitingQuestion(events, timelineID, providerItemID) {
-		writeError(w, http.StatusConflict, "asking turn is not awaiting input")
+	awaiting, ok := turnAwaitingQuestionTarget(events, timelineID, providerItemID)
+	if !ok {
+		writeError(w, http.StatusConflict, "question turn is not awaiting input")
 		return
 	}
 
 	// Deterministic client_nonce so a double-submit of the same answer
 	// dedupes at the session_events (tank_session_id, event_id) UNIQUE
-	// constraint and the command-bus msg id.
-	sum := sha256.Sum256([]byte(askingTurnID + "\x00" + timelineID))
+	// constraint and the command-bus msg id. This nonce also owns the
+	// Tank-visible continuation turn: the provider callback may still be
+	// paused inside the original harness run, but transcript/turn state
+	// treats the answer as the user's next turn.
+	sum := sha256.Sum256([]byte(questionTurnID + "\x00" + timelineID))
 	clientNonce := "answer-" + hex.EncodeToString(sum[:])[:24]
 
 	answerEvent := conversation.TurnInputAnsweredEventMap(conversation.TurnInputAnsweredArgs{
 		SessionID:          sessionID,
 		SessionStorageKey:  storageKey,
 		Email:              owner,
-		TurnID:             askingTurnID,
+		TurnID:             questionTurnID,
 		ClientNonce:        clientNonce,
 		ProviderItemID:     providerItemID,
 		QuestionTimelineID: timelineID,
@@ -565,8 +571,36 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	answerText := askUserQuestionAnswerTranscriptText(answers, annotations)
+	_, answerTurnEvents, err := conversation.UserSubmissionEventMaps(conversation.UserSubmissionArgs{
+		SessionID:         sessionID,
+		SessionStorageKey: storageKey,
+		Email:             owner,
+		ClientNonce:       clientNonce,
+		Text:              answerText,
+		Message: map[string]any{
+			"role":    "user",
+			"content": answerText,
+		},
+		Runtime: provider,
+		Display: map[string]any{
+			"kind": "plain",
+		},
+		Now: time.Now().UTC(),
+	})
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "build answer turn: "+err.Error())
+		return
+	}
+	for _, event := range answerTurnEvents {
+		if err := s.persistBackendEvent(r.Context(), storageKey, event); err != nil {
+			writeError(w, http.StatusInternalServerError, "persist answer turn: "+err.Error())
+			return
+		}
+	}
+
 	if err := s.sessionBus.PublishCommand(r.Context(), sessionbus.Command{
-		CommandID:            "input_reply:" + askingTurnID + ":" + clientNonce,
+		CommandID:            "input_reply:" + awaiting.ProviderTurnID + ":" + clientNonce,
 		Type:                 sessionbus.CommandInputReply,
 		SessionID:            sessionID,
 		SessionStorageKey:    storageKey,
@@ -575,8 +609,8 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		Source:               "answer",
 		TurnID:               "input_reply_" + auth.RandomHex(12),
 		ClientNonce:          clientNonce,
-		TargetTurnID:         askingTurnID,
-		TargetTimelineID:     timelineID,
+		TargetTurnID:         awaiting.ProviderTurnID,
+		TargetTimelineID:     awaiting.ProviderTimelineID,
 		TargetProviderItemID: providerItemID,
 		Answers:              answers,
 		Annotations:          commandAnswerAnnotations(annotations),
@@ -586,7 +620,7 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 			SessionID:         sessionID,
 			SessionStorageKey: storageKey,
 			Email:             owner,
-			TurnID:            askingTurnID,
+			TurnID:            questionTurnID,
 			ClientNonce:       clientNonce,
 			Runtime:           provider,
 			Reason:            "publish_input_reply_failed: " + err.Error(),
@@ -594,14 +628,15 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 		})
 		if writeErr := s.persistBackendEvent(r.Context(), storageKey, failedEvent); writeErr != nil {
 			slog.Warn("persist turn.command_failed for input reply",
-				"session_id", sessionID, "target_turn_id", askingTurnID, "error", writeErr)
+				"session_id", sessionID, "target_turn_id", questionTurnID, "error", writeErr)
 		}
 		writeError(w, http.StatusInternalServerError, "publish answer: "+err.Error())
 		return
 	}
 	writeJSON(w, http.StatusAccepted, map[string]string{
 		"status":         "accepted",
-		"target_turn_id": askingTurnID,
+		"target_turn_id": questionTurnID,
+		"turn_id":        conversation.TurnIDForClientNonce(clientNonce),
 	})
 }
 
@@ -711,26 +746,81 @@ func commandAnswerAnnotations(in map[string]answerAnnotation) map[string]session
 	return out
 }
 
-func turnIsAwaitingQuestion(events []map[string]any, timelineID, providerItemID string) bool {
-	awaiting := false
+func askUserQuestionAnswerTranscriptText(answers map[string][]string, annotations map[string]answerAnnotation) string {
+	var b strings.Builder
+	questions := make([]string, 0, len(answers))
+	for question := range answers {
+		questions = append(questions, question)
+	}
+	sort.Strings(questions)
+	for i, question := range questions {
+		labels := answers[question]
+		if i > 0 {
+			b.WriteString("\n\n")
+		}
+		fmt.Fprintf(&b, "%d. %s\n", i+1, question)
+		cleanLabels := make([]string, 0, len(labels))
+		for _, label := range labels {
+			label = strings.TrimSpace(label)
+			if label != "" && strings.ToLower(label) != "other" {
+				cleanLabels = append(cleanLabels, label)
+			}
+		}
+		note := strings.TrimSpace(annotations[question].Notes)
+		if len(cleanLabels) > 0 {
+			b.WriteString("Answer: ")
+			b.WriteString(strings.Join(cleanLabels, ", "))
+			if note != "" {
+				b.WriteString("\n")
+			}
+		}
+		if note != "" {
+			b.WriteString("Answer: ")
+			b.WriteString(note)
+		}
+	}
+	return strings.TrimSpace(b.String())
+}
+
+type awaitingQuestionTarget struct {
+	QuestionTurnID     string
+	QuestionTimelineID string
+	ProviderTurnID     string
+	ProviderTimelineID string
+	ProviderItemID     string
+}
+
+func turnAwaitingQuestionTarget(events []map[string]any, timelineID, providerItemID string) (awaitingQuestionTarget, bool) {
+	var awaiting awaitingQuestionTarget
 	for _, event := range events {
 		switch stringMapField(event, "type") {
 		case string(conversation.EventTurnCompleted),
 			string(conversation.EventTurnFailed),
 			string(conversation.EventTurnCommandFailed),
 			string(conversation.EventTurnInterrupted):
-			return false
+			return awaitingQuestionTarget{}, false
 		case string(conversation.EventTurnAwaitingInput):
 			payload, _ := event["payload"].(map[string]any)
 			eventTimeline := stringMapField(payload, "timeline_id")
 			eventProvider := stringMapField(payload, "provider_item_id")
 			if (eventTimeline == "" || eventTimeline == timelineID) &&
 				(eventProvider == "" || eventProvider == providerItemID) {
-				awaiting = true
+				providerTimeline := stringMapField(payload, "provider_timeline_id")
+				providerTurnID := stringMapField(payload, "asking_turn_id")
+				awaiting = awaitingQuestionTarget{
+					QuestionTurnID:     stringMapField(event, "turn_id"),
+					QuestionTimelineID: eventTimeline,
+					ProviderTurnID:     providerTurnID,
+					ProviderTimelineID: providerTimeline,
+					ProviderItemID:     eventProvider,
+				}
 			}
 		}
 	}
-	return awaiting
+	if awaiting.ProviderTurnID == "" || awaiting.ProviderTimelineID == "" {
+		return awaitingQuestionTarget{}, false
+	}
+	return awaiting, true
 }
 
 type sdkTurnRequest struct {

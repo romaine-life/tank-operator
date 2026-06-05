@@ -13,6 +13,27 @@ Use `apply_test_slot_hot_swap` for supported artifact kinds, passing the pushed
 git ref and checked-out slot. Record the result with
 `record_test_slot_hot_swap` when the tool does not already do so.
 
+## PR CI and ACR proof images
+
+Open a draft PR early for normal tank-operator work. For same-repo PRs,
+`.github/workflows/docker-build-check.yaml` logs into ACR, checks whether each
+fingerprinted proof image already exists, and pushes the missing proof images.
+This is the ordinary branch image-build path. The PR is not just bookkeeping:
+it primes ACR while you keep using hot-swap for fast slot validation.
+
+Keep these image paths distinct:
+
+- PR CI proof images: build validation and ACR priming for every repo-owned
+  image in `docker-build-check.yaml`.
+- Hot-swap: fastest way to update an already-running Glimmung slot.
+- `session-images-build.yml`: publishes the actual `claude-container` and
+  `codex-container` session image tags used when a slot must stamp newly
+  created sessions with branch code.
+
+If a validation target requires a fresh session pod to boot branch runner code,
+use the session-image repoint path after the branch image exists; do not confuse
+that with the generic PR proof-image build.
+
 Before treating a hot-swap as validation evidence, run the repo classifier with
 the validation target you intend to prove:
 

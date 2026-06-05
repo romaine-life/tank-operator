@@ -194,6 +194,79 @@ func TestTranscriptRowsMaterializerStoresProjectedRowsForTurn(t *testing.T) {
 	}
 }
 
+func TestTranscriptRowsMaterializerInputAnsweredRefreshesAssistantQuestionRow(t *testing.T) {
+	questionTimelineID := "turn-question:item:toolu_ask"
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "ask me",
+		}),
+		projectionTestEvent("msg", "002", "assistant_message.created", "assistant", "claude", "turn-1", "turn-1:assistant_question:ask", map[string]any{
+			"text":    "1. Pick one",
+			"display": map[string]any{"kind": "ask_user_question"},
+			"awaiting_input": map[string]any{
+				"asking_turn_id":       "turn-1",
+				"question_turn_id":     "turn-question",
+				"provider_item_id":     "toolu_ask",
+				"timeline_id":          questionTimelineID,
+				"provider_timeline_id": "turn-1:item:toolu_ask",
+				"questions": []any{
+					map[string]any{"question": "Pick one"},
+				},
+			},
+		}),
+		projectionTestEvent("q-submit", "003", "turn.submitted", "runner", "tank", "turn-question", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("awaiting", "004", "turn.awaiting_input", "runner", "claude", "turn-question", questionTimelineID, map[string]any{
+			"asking_turn_id":       "turn-1",
+			"question_turn_id":     "turn-question",
+			"provider_item_id":     "toolu_ask",
+			"timeline_id":          questionTimelineID,
+			"provider_timeline_id": "turn-1:item:toolu_ask",
+			"questions": []any{
+				map[string]any{"question": "Pick one"},
+			},
+		}),
+		projectionTestEvent("answer", "005", "turn.input_answered", "user", "tank", "turn-question", questionTimelineID+":answer", map[string]any{
+			"question_timeline_id": questionTimelineID,
+			"provider_item_id":     "toolu_ask",
+			"answers": map[string]any{
+				"Pick one": []any{"Yes"},
+			},
+		}),
+	}
+	eventStore := fakeSessionEventStore{
+		pages: map[string]store.SessionEventPage{
+			"": {Events: events, FoundOldest: true, FoundNewest: true},
+		},
+	}
+	rowStore := &recordingTranscriptRowsStore{}
+	materializer := transcriptRowsMaterializer{events: eventStore, rows: rowStore}
+
+	if err := materializer.RefreshEvent(context.Background(), events[len(events)-1]); err != nil {
+		t.Fatalf("RefreshEvent: %v", err)
+	}
+
+	if rowStore.sessionID != "63" {
+		t.Fatalf("sessionID = %q, want full-session rematerialization", rowStore.sessionID)
+	}
+	var assistant map[string]any
+	for _, entry := range rowStore.sessionEntries {
+		if entry["role"] == "assistant" {
+			assistant = entry
+			break
+		}
+	}
+	if assistant == nil {
+		t.Fatalf("assistant question row missing from sessionEntries: %#v", rowStore.sessionEntries)
+	}
+	awaiting, _ := assistant["awaitingInput"].(map[string]any)
+	if awaiting["answered"] != true {
+		t.Fatalf("assistant awaitingInput.answered = %v, want true: %#v", awaiting["answered"], awaiting)
+	}
+	if answers, _ := awaiting["answers"].(map[string]any); answers == nil {
+		t.Fatalf("assistant awaitingInput.answers missing: %#v", awaiting)
+	}
+}
+
 func TestTranscriptRowsMaterializerLocksReadProjectionAndReplace(t *testing.T) {
 	turnEvents := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

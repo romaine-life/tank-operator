@@ -21,11 +21,18 @@ The orchestrator was a Python FastAPI + kubernetes-asyncio app until 2026-05-11 
 Session pods intentionally do not ship Docker or a container runtime. Do not
 report missing local Docker as a blocker. Run available repo checks first
 (`go test`, `npm test`, `helm template`, etc.). The normal container
-build gate is PR CI: `.github/workflows/docker-build-check.yaml` performs
-throwaway Docker builds for every repo-owned image with `push: false`. If an
-image-packaging change needs feedback before a PR is ready, manually dispatch
-that workflow with `git_ref`. Release/deploy workflows are the only path that
-publishes images.
+build gate is PR CI: `.github/workflows/docker-build-check.yaml` builds every
+repo-owned image. For normal same-repo PRs it logs into ACR, checks for an
+existing fingerprinted proof image, and pushes the missing proof image to ACR;
+those proof images prime later merge/deploy work. If an image-packaging change
+needs feedback before a PR is ready, manually dispatch that workflow with
+`git_ref`.
+
+Do not confuse PR proof images with deploy image publication. Release/deploy
+workflows are the paths that publish chart-consumed production tags. For Tank
+session pods specifically, `.github/workflows/session-images-build.yml`
+publishes the `claude-container` and `codex-container` tags used by
+session-image repointing and by the main-branch chart bump.
 
 ## Quality timeframe
 

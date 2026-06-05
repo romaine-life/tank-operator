@@ -583,6 +583,115 @@
       }
     },
     {
+      "name": "assistant ask user question message",
+      "event": {
+        "event_id": "turn_contract:assistant_message.created:ask_user_question:provider-message-2",
+        "uuid": "turn_contract:assistant_message.created:ask_user_question:provider-message-2",
+        "order_key": "1768179851500-00000012-turn_contract:assistant_message.created:ask_user_question",
+        "sequence": 12,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "timeline_id": "turn_contract:assistant_question:provider-message-2",
+        "provider_item_id": "toolu-question",
+        "actor": "assistant",
+        "source": "claude",
+        "type": "assistant_message.created",
+        "created_at": "2026-05-12T00:00:11.500Z",
+        "written_at": "2026-05-12T00:00:11.500Z",
+        "producer": {
+          "name": "claude-runner",
+          "runtime": "claude",
+          "provider_event_id": "provider-message-2"
+        },
+        "visibility": "durable",
+        "payload": {
+          "text": "1. Which auth method should we use?",
+          "message": {
+            "role": "assistant",
+            "content": "1. Which auth method should we use?"
+          },
+          "display": {
+            "kind": "ask_user_question"
+          },
+          "awaiting_input": {
+            "asking_turn_id": "turn_contract",
+            "question_turn_id": "turn_question_contract",
+            "provider_item_id": "toolu-question",
+            "timeline_id": "turn_question_contract:item:toolu-question",
+            "provider_timeline_id": "turn_contract:item:toolu-question",
+            "questions": [
+              {
+                "question": "Which auth method should we use?",
+                "header": "Auth method",
+                "multiSelect": false,
+                "allowFreeForm": true,
+                "secret": false,
+                "options": [
+                  {
+                    "label": "OAuth",
+                    "description": "Third-party identity providers (Google/Microsoft)."
+                  },
+                  {
+                    "label": "JWT",
+                    "description": "First-party signed sessions."
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "turn awaiting input invocation",
+      "event": {
+        "event_id": "turn_contract:turn.awaiting_input.invocation:provider-message-2",
+        "uuid": "turn_contract:turn.awaiting_input.invocation:provider-message-2",
+        "order_key": "1768179851250-00000011-turn_contract:turn.awaiting_input.invocation",
+        "sequence": 11,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "timeline_id": "turn_contract:item:toolu-question",
+        "provider_item_id": "toolu-question",
+        "actor": "runner",
+        "source": "claude",
+        "type": "turn.awaiting_input.invocation",
+        "created_at": "2026-05-12T00:00:11.250Z",
+        "written_at": "2026-05-12T00:00:11.250Z",
+        "producer": {
+          "name": "claude-runner",
+          "runtime": "claude",
+          "provider_event_id": "provider-message-2"
+        },
+        "visibility": "durable",
+        "payload": {
+          "provider_item_id": "toolu-question",
+          "timeline_id": "turn_contract:item:toolu-question",
+          "questions": [
+            {
+              "question": "Which auth method should we use?",
+              "header": "Auth method",
+              "multiSelect": false,
+              "allowFreeForm": true,
+              "secret": false,
+              "options": [
+                {
+                  "label": "OAuth",
+                  "description": "Third-party identity providers (Google/Microsoft)."
+                },
+                {
+                  "label": "JWT",
+                  "description": "First-party signed sessions."
+                }
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
       "name": "turn awaiting input",
       "event": {
         "event_id": "turn_contract:turn.awaiting_input:provider-message-2",
@@ -591,7 +700,7 @@
         "sequence": 13,
         "conversation_id": "63",
         "session_id": "63",
-        "turn_id": "turn_contract",
+        "turn_id": "turn_question_contract",
         "client_nonce": "client-nonce-contract",
         "actor": "runner",
         "source": "claude",
@@ -606,7 +715,10 @@
         "visibility": "durable",
         "payload": {
           "provider_item_id": "toolu-question",
-          "timeline_id": "toolu-question",
+          "timeline_id": "turn_question_contract:item:toolu-question",
+          "asking_turn_id": "turn_contract",
+          "question_turn_id": "turn_question_contract",
+          "provider_timeline_id": "turn_contract:item:toolu-question",
           "questions": [
             {
               "question": "Which auth method should we use?",

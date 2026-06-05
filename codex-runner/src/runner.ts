@@ -41,6 +41,7 @@ import {
   type TankConversationEvent,
 } from "../../runner-shared/conversation.js";
 import {
+  askUserQuestionHandoffEvents,
   itemTimelineID,
   stampTankEvent,
   itemEvent,
@@ -100,12 +101,19 @@ const TERMINAL_PUBLISH_BACKOFF_MS = parsePositiveEnvInt(
   500,
 );
 
-function parsePositiveEnvInt(value: string | undefined, fallback: number): number {
+function parsePositiveEnvInt(
+  value: string | undefined,
+  fallback: number,
+): number {
   const parsed = Number.parseInt((value ?? "").trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function inputReplyKey(turnID: string, timelineID: string, providerItemID: string): string {
+function inputReplyKey(
+  turnID: string,
+  timelineID: string,
+  providerItemID: string,
+): string {
   return `${turnID}\x1f${timelineID}\x1f${providerItemID}`;
 }
 
@@ -120,16 +128,26 @@ function answersForCodexInput(
     const semanticAnswers = note
       ? clean.filter((label) => label.toLowerCase() !== "other")
       : clean;
-    inputReplyAnswerShapeTotal.labels(inputReplyAnswerShape(semanticAnswers, note)).inc();
+    inputReplyAnswerShapeTotal
+      .labels(inputReplyAnswerShape(semanticAnswers, note))
+      .inc();
     if (note) semanticAnswers.push(note);
-    if (semanticAnswers.length > 0) out[question] = { answers: semanticAnswers };
+    if (semanticAnswers.length > 0)
+      out[question] = { answers: semanticAnswers };
   }
   return out;
 }
 
-type InputReplyAnswerShape = "selection_only" | "free_form_only" | "selection_with_notes" | "empty";
+type InputReplyAnswerShape =
+  | "selection_only"
+  | "free_form_only"
+  | "selection_with_notes"
+  | "empty";
 
-function inputReplyAnswerShape(labels: string[], note: string): InputReplyAnswerShape {
+function inputReplyAnswerShape(
+  labels: string[],
+  note: string,
+): InputReplyAnswerShape {
   if (labels.length > 0 && note) return "selection_with_notes";
   if (note) return "free_form_only";
   if (labels.length > 0) return "selection_only";
@@ -203,7 +221,9 @@ export async function dispatch(
     stamped as unknown as Record<string, unknown>,
   );
   if (sizeGuard.truncated) {
-    const severity = sizeGuard.payloadDropped ? "payload-dropped" : "strings-truncated";
+    const severity = sizeGuard.payloadDropped
+      ? "payload-dropped"
+      : "strings-truncated";
     eventTruncatedTotal.labels(stamped.type, severity).inc();
     console.warn(
       "session bus event truncated:",
@@ -346,7 +366,9 @@ export function codexQuestionsToTankShape(
     return [
       {
         question,
-        ...(typeof q.header === "string" && q.header ? { header: q.header } : {}),
+        ...(typeof q.header === "string" && q.header
+          ? { header: q.header }
+          : {}),
         multiSelect: false,
         options,
         allowFreeForm: q.isOther === true,
@@ -382,7 +404,9 @@ export function interruptTargetMatchesTurn(
 }
 
 export function takePendingInterruptForTurn(
-  pendingInterrupts: Array<Pick<SessionCommandRecord, "target_turn_id" | "client_nonce">>,
+  pendingInterrupts: Array<
+    Pick<SessionCommandRecord, "target_turn_id" | "client_nonce">
+  >,
   turn: Pick<AcceptedTurn, "turnID" | "clientNonce">,
 ): Pick<SessionCommandRecord, "target_turn_id" | "client_nonce"> | null {
   const index = pendingInterrupts.findIndex((record) =>
@@ -495,7 +519,10 @@ export class Runner {
         if (next.done) break;
         const { text: input, clientNonce, commandRecord } = next.value;
         if (!this.appServerTransport && !this.thread) {
-          const threadOptions = threadOptionsForCommand(this.cfg, commandRecord);
+          const threadOptions = threadOptionsForCommand(
+            this.cfg,
+            commandRecord,
+          );
           this.thread = this.codex.startThread(threadOptions);
           this.reportAppliedRuntimeConfig(threadOptions);
         }
@@ -534,7 +561,8 @@ export class Runner {
           continue;
         }
         if (commandRecord) {
-          turn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(commandRecord);
+          turn.stopCommandHeartbeat =
+            this.commandBus.startCommandHeartbeat(commandRecord);
         }
         await this.publishTurnClaimed(turn);
 
@@ -577,9 +605,11 @@ export class Runner {
                 threadOptionsForCommand(this.cfg, commandRecord),
                 this.currentAbort.signal,
               )
-            : (await this.thread!.runStreamed(input, {
-                signal: this.currentAbort.signal,
-              })).events;
+            : (
+                await this.thread!.runStreamed(input, {
+                  signal: this.currentAbort.signal,
+                })
+              ).events;
           for await (const event of events) {
             if (signal.aborted) break;
             // Codex provider events are adapter inputs, not bus content. The
@@ -716,7 +746,10 @@ export class Runner {
         const prompt = String(record.prompt ?? "").trim();
         if (!prompt) {
           commandsConsumedTotal.labels("submit_turn", "invalid").inc();
-          await this.commandBus.markFailed(record, new Error("submit command missing prompt"));
+          await this.commandBus.markFailed(
+            record,
+            new Error("submit command missing prompt"),
+          );
           return;
         }
         this.trackCommandTurnTarget(clientNonce);
@@ -729,7 +762,9 @@ export class Runner {
       .then((stop) => {
         stopConsumer = stop;
       })
-      .catch((err) => console.error("session bus command consumer crashed:", err));
+      .catch((err) =>
+        console.error("session bus command consumer crashed:", err),
+      );
     return () => {
       void stopConsumer?.();
     };
@@ -740,7 +775,8 @@ export class Runner {
     _signal?: AbortSignal,
   ): Promise<AppServerUserInputResponse> {
     const turn = this.currentTurn;
-    if (!turn) throw new Error("request_user_input arrived with no active Codex turn");
+    if (!turn)
+      throw new Error("request_user_input arrived with no active Codex turn");
     return this.pauseTurnForInput(turn, request);
   }
 
@@ -749,6 +785,15 @@ export class Runner {
     request: AppServerUserInputRequest,
   ): Promise<AppServerUserInputResponse> {
     const timelineID = itemTimelineID(turn.turnID, request.providerItemID);
+    const handoff = askUserQuestionHandoffEvents({
+      sessionID: this.cfg.sessionId,
+      askingTurnID: turn.turnID,
+      askingClientNonce: turn.clientNonce,
+      source: "codex",
+      providerItemID: request.providerItemID,
+      providerTimelineID: timelineID,
+      questions: codexQuestionsToTankShape(request.questions),
+    });
     const key = inputReplyKey(turn.turnID, timelineID, request.providerItemID);
     const waitForReply = new Promise<AppServerUserInputResponse>((resolve) => {
       this.pendingInputReplies.set(key, {
@@ -758,21 +803,12 @@ export class Runner {
         resolve,
       });
     });
-    const published = await this.publishTerminalWithRetry(
-      turnEvent({
-        sessionID: this.cfg.sessionId,
-        turnID: turn.turnID,
-        clientNonce: turn.clientNonce,
-        source: "codex",
-        type: "turn.awaiting_input",
-        questions: codexQuestionsToTankShape(request.questions),
-        awaitingProviderItemID: request.providerItemID,
-        awaitingTimelineID: timelineID,
-      }),
-    );
-    if (published) {
-      return waitForReply;
-    }
+    const published =
+      (await dispatch(this.sink, handoff.invocation)) &&
+      (await dispatch(this.sink, handoff.questionMessage)) &&
+      (await dispatch(this.sink, handoff.questionSubmitted)) &&
+      (await this.publishTerminalWithRetry(handoff.awaitingInput));
+    if (published) return waitForReply;
     this.pendingInputReplies.delete(key);
     throw new Error("failed to persist AskUserQuestion pause");
   }
@@ -781,8 +817,14 @@ export class Runner {
     commandsConsumedTotal.labels("input_reply", "accepted").inc();
     const targetTurnID = String(record.target_turn_id ?? "").trim();
     const targetTimelineID = String(record.target_timeline_id ?? "").trim();
-    const targetProviderItemID = String(record.target_provider_item_id ?? "").trim();
-    const key = inputReplyKey(targetTurnID, targetTimelineID, targetProviderItemID);
+    const targetProviderItemID = String(
+      record.target_provider_item_id ?? "",
+    ).trim();
+    const key = inputReplyKey(
+      targetTurnID,
+      targetTimelineID,
+      targetProviderItemID,
+    );
     const pending = this.pendingInputReplies.get(key);
     if (!pending) {
       // Runner restart/race: the durable answer can arrive before the redelivered
@@ -793,16 +835,54 @@ export class Runner {
       return;
     }
     this.pendingInputReplies.delete(key);
-    pending.resolve({ answers: answersForCodexInput(record.answers, record.annotations) });
+    await this.rotateTurnForInputReply(pending.turn, record);
+    pending.resolve({
+      answers: answersForCodexInput(record.answers, record.annotations),
+    });
     await this.commandBus.markCompleted(record);
   }
 
-  private async acceptStopBackgroundTask(record: SessionCommandRecord): Promise<void> {
+  private async rotateTurnForInputReply(
+    turn: AcceptedTurn,
+    record: SessionCommandRecord,
+  ): Promise<void> {
+    const continuationClientNonce = normalizeClientNonce(record.client_nonce);
+    if (!continuationClientNonce) {
+      throw new Error("input_reply missing continuation client_nonce");
+    }
+    const previousTurnID = turn.turnID;
+    turn.clientNonce = continuationClientNonce;
+    turn.turnID = turnIDForClientNonce(continuationClientNonce);
+    turn.turnSeq += 1;
+    console.info("codex AskUserQuestion continuation turn", {
+      previous_turn_id: previousTurnID,
+      continuation_turn_id: turn.turnID,
+    });
+    await this.publishTurnClaimed(turn);
+    recordTurnStart(turn.turnID);
+    recordTurnPreStartLatency("claimed_to_started", turn.claimedAtMs);
+    await dispatch(
+      this.sink,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "codex",
+        type: "turn.started",
+      }),
+    );
+  }
+
+  private async acceptStopBackgroundTask(
+    record: SessionCommandRecord,
+  ): Promise<void> {
     if (!this.appServerTransport) {
       commandsConsumedTotal.labels("stop_background_task", "unsupported").inc();
       await this.commandBus.markFailed(
         record,
-        new Error("background task stop is only supported by codex app-server transport"),
+        new Error(
+          "background task stop is only supported by codex app-server transport",
+        ),
       );
       return;
     }
@@ -813,13 +893,19 @@ export class Runner {
         record.target_provider_item_id ??
         "",
     ).trim();
-    const turnID = String(record.target_turn_id ?? record.client_nonce ?? "").trim();
+    const turnID = String(
+      record.target_turn_id ?? record.client_nonce ?? "",
+    ).trim();
     if (!taskID || !turnID) {
       commandsConsumedTotal.labels("stop_background_task", "invalid").inc();
-      await this.commandBus.markFailed(record, new Error("background task stop missing target task or turn"));
+      await this.commandBus.markFailed(
+        record,
+        new Error("background task stop missing target task or turn"),
+      );
       return;
     }
-    const providerItemID = String(record.target_provider_item_id ?? taskID).trim() || taskID;
+    const providerItemID =
+      String(record.target_provider_item_id ?? taskID).trim() || taskID;
     try {
       await this.appServerTransport.cleanBackgroundTerminals();
       const dispatched = await dispatch(
@@ -837,7 +923,8 @@ export class Runner {
             status: "stopped",
             stop_reason: "client_request",
             provider_item_id: providerItemID,
-            process_id: String(record.target_process_id ?? taskID).trim() || taskID,
+            process_id:
+              String(record.target_process_id ?? taskID).trim() || taskID,
           },
         }),
       );
@@ -850,7 +937,10 @@ export class Runner {
       }
       await this.commandBus.markCompleted(record);
     } catch (err) {
-      await this.commandBus.markFailed(record, err instanceof Error ? err : new Error(String(err)));
+      await this.commandBus.markFailed(
+        record,
+        err instanceof Error ? err : new Error(String(err)),
+      );
     }
   }
 
@@ -875,14 +965,18 @@ export class Runner {
           return;
         }
         commandsConsumedTotal.labels("control_unknown", "dropped").inc();
-        console.warn("session bus control consumer: unknown command type",
-          { type: record.type, command_id: record.id });
+        console.warn("session bus control consumer: unknown command type", {
+          type: record.type,
+          command_id: record.id,
+        });
         await this.commandBus.markCompleted(record);
       }, signal)
       .then((stop) => {
         stopConsumer = stop;
       })
-      .catch((err) => console.error("session bus control consumer crashed:", err));
+      .catch((err) =>
+        console.error("session bus control consumer crashed:", err),
+      );
     return () => {
       void stopConsumer?.();
     };
@@ -899,12 +993,16 @@ export class Runner {
   // buffering with an orphan timer.
   private async acceptInterrupt(record: SessionCommandRecord): Promise<void> {
     commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
-    const targetKey = String(record.target_turn_id ?? record.client_nonce ?? "").trim();
+    const targetKey = String(
+      record.target_turn_id ?? record.client_nonce ?? "",
+    ).trim();
     if (!targetKey) {
       interruptOutcomeTotal.labels("invalid_target").inc();
       await this.commandBus.markFailed(
         record,
-        new Error("interrupt_turn missing both target_turn_id and client_nonce"),
+        new Error(
+          "interrupt_turn missing both target_turn_id and client_nonce",
+        ),
       );
       return;
     }
@@ -936,7 +1034,10 @@ export class Runner {
     this.bufferOrphanInterrupt(record, targetKey);
   }
 
-  private bufferOrphanInterrupt(record: SessionCommandRecord, targetKey: string): void {
+  private bufferOrphanInterrupt(
+    record: SessionCommandRecord,
+    targetKey: string,
+  ): void {
     interruptOutcomeTotal.labels("buffered").inc();
     const stopHeartbeat = this.commandBus.startCommandHeartbeat(record);
     const orphanTimer = setTimeout(() => {
@@ -978,7 +1079,9 @@ export class Runner {
     this.orphanInterrupts.push(...remaining);
   }
 
-  private async expireOrphanInterrupt(record: SessionCommandRecord): Promise<void> {
+  private async expireOrphanInterrupt(
+    record: SessionCommandRecord,
+  ): Promise<void> {
     const idx = this.orphanInterrupts.findIndex((buf) => buf.record === record);
     if (idx < 0) return; // already drained
     const buf = this.orphanInterrupts[idx]!;
@@ -1004,7 +1107,10 @@ export class Runner {
       // Durable-terminal lookup is best-effort. If it fails we fall
       // through to publishing the orphan terminal — that's safer than
       // ack'ing without any durable response.
-      console.warn("findTurnTerminal failed for orphan check; falling through to interrupt_orphaned:", err);
+      console.warn(
+        "findTurnTerminal failed for orphan check; falling through to interrupt_orphaned:",
+        err,
+      );
     }
     const published = await this.publishTerminalWithRetry(
       turnEvent({
@@ -1028,7 +1134,9 @@ export class Runner {
     );
   }
 
-  private async publishTerminalWithRetry(event: TankConversationEvent): Promise<boolean> {
+  private async publishTerminalWithRetry(
+    event: TankConversationEvent,
+  ): Promise<boolean> {
     for (let attempt = 0; attempt < TERMINAL_PUBLISH_ATTEMPTS; attempt++) {
       if (attempt > 0) {
         const delay = TERMINAL_PUBLISH_BACKOFF_MS * 2 ** (attempt - 1);
@@ -1061,7 +1169,9 @@ export class Runner {
   }
 
   private addPendingInterrupt(record: SessionCommandRecord): void {
-    if (!this.pendingInterrupts.some((candidate) => candidate.id === record.id)) {
+    if (
+      !this.pendingInterrupts.some((candidate) => candidate.id === record.id)
+    ) {
       this.pendingInterrupts.push(record);
     }
   }
@@ -1075,7 +1185,9 @@ export class Runner {
         turn,
       );
       if (!pendingInterrupt) return;
-      await this.commandBus.markCompleted(pendingInterrupt as SessionCommandRecord);
+      await this.commandBus.markCompleted(
+        pendingInterrupt as SessionCommandRecord,
+      );
     }
   }
 
@@ -1117,12 +1229,20 @@ export class Runner {
     );
     if (!dispatched) return;
     turn.claimedAtMs = claimedAtMs;
-    recordTurnPreStartLatency("command_created_to_claimed", turn.commandCreatedAtMs, claimedAtMs);
+    recordTurnPreStartLatency(
+      "command_created_to_claimed",
+      turn.commandCreatedAtMs,
+      claimedAtMs,
+    );
   }
 
   private async markCommandTerminal(
     turn: AcceptedTurn,
-    type: "turn.completed" | "turn.failed" | "turn.interrupted" | "turn.awaiting_input",
+    type:
+      | "turn.completed"
+      | "turn.failed"
+      | "turn.interrupted"
+      | "turn.awaiting_input",
   ): Promise<void> {
     const outcome =
       type === "turn.completed"
@@ -1178,7 +1298,8 @@ export class Runner {
       await this.commandBus.markFailed(commandRecord, err);
       return;
     }
-    turn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(commandRecord);
+    turn.stopCommandHeartbeat =
+      this.commandBus.startCommandHeartbeat(commandRecord);
     const dispatched = await dispatch(
       this.sink,
       turnEvent({

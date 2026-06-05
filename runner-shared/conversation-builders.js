@@ -19,6 +19,14 @@ export function itemTimelineID(turnID, providerItemID) {
   return `${turnID}:item:${stableIDPart(providerItemID)}`;
 }
 
+export function questionClientNonce(askingTurnID, providerTimelineID) {
+  return `question-${hashIDPart(`${askingTurnID}\0${providerTimelineID}`)}`;
+}
+
+export function questionMessageTimelineID(askingTurnID, providerTimelineID) {
+  return `${askingTurnID}:assistant_question:${stableIDPart(providerTimelineID)}`;
+}
+
 export function shellTaskTimelineID(turnID, taskID) {
   return `${turnID}:shell_task:${stableIDPart(taskID)}`;
 }
@@ -46,12 +54,12 @@ export function userSubmissionEvents(args) {
       created_at: createdAt,
       producer,
       visibility: "durable",
-	      payload: {
-	        text,
-	        message: args.message,
-	        display,
-	        ...(attachments.length > 0 ? { attachments } : {}),
-	      },
+      payload: {
+        text,
+        message: args.message,
+        display,
+        ...(attachments.length > 0 ? { attachments } : {}),
+      },
     },
     turnSubmitted: {
       event_id: `${turnID}:turn.submitted`,
@@ -80,14 +88,24 @@ function userMessageAttachments(input) {
     const name = String(attachment.name || attachment.label || "").trim();
     if (!label || !name) return [];
     const kind = attachment.kind === "image" ? "image" : "file";
-    return [{
-      label,
-      name,
-      kind,
-      ...(typeof attachment.path === "string" && attachment.path.trim() ? { path: attachment.path.trim() } : {}),
-      ...(typeof attachment.absPath === "string" && attachment.absPath.trim() ? { absPath: attachment.absPath.trim() } : {}),
-      ...(typeof attachment.size === "number" && Number.isFinite(attachment.size) && attachment.size >= 0 ? { size: attachment.size } : {}),
-    }];
+    return [
+      {
+        label,
+        name,
+        kind,
+        ...(typeof attachment.path === "string" && attachment.path.trim()
+          ? { path: attachment.path.trim() }
+          : {}),
+        ...(typeof attachment.absPath === "string" && attachment.absPath.trim()
+          ? { absPath: attachment.absPath.trim() }
+          : {}),
+        ...(typeof attachment.size === "number" &&
+        Number.isFinite(attachment.size) &&
+        attachment.size >= 0
+          ? { size: attachment.size }
+          : {}),
+      },
+    ];
   });
 }
 
@@ -95,15 +113,22 @@ export function turnEvent(args) {
   const payload = {};
   if (args.reason) payload.reason = args.reason;
   if (args.usage !== undefined) payload.usage = args.usage;
-  if (args.usageObservation !== undefined) payload.usage_observation = args.usageObservation;
+  if (args.usageObservation !== undefined)
+    payload.usage_observation = args.usageObservation;
   if (args.error !== undefined) payload.error = args.error;
-  if (args.finalAnswer !== undefined) payload.final_answer = normalizeFinalAnswer(args.finalAnswer);
+  if (args.finalAnswer !== undefined)
+    payload.final_answer = normalizeFinalAnswer(args.finalAnswer);
   // turn.awaiting_input carries the Tank-canonical questions the agent asked
   // (the pause point for the asking turn) plus the AskUserQuestion item ids
   // the /answer endpoint targets. See docs/tank-conversation-protocol.md.
   if (args.questions !== undefined) payload.questions = args.questions;
-  if (args.awaitingProviderItemID) payload.provider_item_id = args.awaitingProviderItemID;
+  if (args.askingTurnID) payload.asking_turn_id = args.askingTurnID;
+  if (args.questionTurnID) payload.question_turn_id = args.questionTurnID;
+  if (args.awaitingProviderItemID)
+    payload.provider_item_id = args.awaitingProviderItemID;
   if (args.awaitingTimelineID) payload.timeline_id = args.awaitingTimelineID;
+  if (args.awaitingProviderTimelineID)
+    payload.provider_timeline_id = args.awaitingProviderTimelineID;
   const event = {
     event_id: `${args.turnID}:${args.type}:${args.reason ?? args.providerEventID ?? "runner"}`,
     conversation_id: args.sessionID,
@@ -120,16 +145,149 @@ export function turnEvent(args) {
     visibility: "durable",
   };
   if (args.clientNonce) event.client_nonce = args.clientNonce;
-  if (args.providerEventID) event.producer.provider_event_id = args.providerEventID;
+  if (args.providerEventID)
+    event.producer.provider_event_id = args.providerEventID;
   if (Object.keys(payload).length > 0) event.payload = payload;
   return event;
 }
 
+export function askUserQuestionHandoffEvents(args) {
+  const sessionID = requireNonEmpty(args.sessionID, "sessionID");
+  const askingTurnID = requireNonEmpty(args.askingTurnID, "askingTurnID");
+  const askingClientNonce = requireNonEmpty(
+    args.askingClientNonce,
+    "askingClientNonce",
+  );
+  const source = requireNonEmpty(args.source, "source");
+  const providerItemID = requireNonEmpty(args.providerItemID, "providerItemID");
+  const providerTimelineID = requireNonEmpty(
+    args.providerTimelineID,
+    "providerTimelineID",
+  );
+  const questions = requireQuestions(args.questions);
+  const questionNonce = questionClientNonce(askingTurnID, providerTimelineID);
+  const questionTurnID = turnIDForClientNonce(questionNonce);
+  const questionTimelineID = itemTimelineID(questionTurnID, providerItemID);
+  const text = formatAskUserQuestionText(questions);
+  const createdAt = new Date().toISOString();
+  const producer = { name: `${source}-runner`, runtime: source };
+  const awaitingInput = {
+    asking_turn_id: askingTurnID,
+    question_turn_id: questionTurnID,
+    provider_item_id: providerItemID,
+    timeline_id: questionTimelineID,
+    provider_timeline_id: providerTimelineID,
+    questions,
+  };
+  return {
+    questionClientNonce: questionNonce,
+    questionTurnID,
+    questionTimelineID,
+    questionMessage: {
+      event_id: `${askingTurnID}:assistant_message.created:ask_user_question:${stableIDPart(providerTimelineID)}`,
+      conversation_id: sessionID,
+      session_id: sessionID,
+      turn_id: askingTurnID,
+      timeline_id: questionMessageTimelineID(askingTurnID, providerTimelineID),
+      provider_item_id: providerItemID,
+      actor: "assistant",
+      source,
+      type: "assistant_message.created",
+      created_at: createdAt,
+      producer,
+      visibility: "durable",
+      payload: {
+        text,
+        message: { role: "assistant", content: text },
+        display: { kind: "ask_user_question" },
+        awaiting_input: awaitingInput,
+      },
+    },
+    invocation: {
+      event_id: `${askingTurnID}:turn.awaiting_input.invocation:${stableIDPart(providerTimelineID)}`,
+      conversation_id: sessionID,
+      session_id: sessionID,
+      turn_id: askingTurnID,
+      timeline_id: providerTimelineID,
+      provider_item_id: providerItemID,
+      actor: "runner",
+      source,
+      type: "turn.awaiting_input.invocation",
+      created_at: createdAt,
+      producer,
+      visibility: "durable",
+      payload: {
+        provider_item_id: providerItemID,
+        timeline_id: providerTimelineID,
+        questions,
+      },
+    },
+    questionSubmitted: {
+      event_id: `${questionTurnID}:turn.submitted`,
+      conversation_id: sessionID,
+      session_id: sessionID,
+      turn_id: questionTurnID,
+      client_nonce: questionNonce,
+      actor: "runner",
+      source: "tank",
+      type: "turn.submitted",
+      created_at: createdAt,
+      producer: { name: "tank-operator", runtime: source },
+      visibility: "durable",
+      payload: { status: "submitted" },
+    },
+    awaitingInput: {
+      event_id: `${questionTurnID}:turn.awaiting_input:runner`,
+      conversation_id: sessionID,
+      session_id: sessionID,
+      turn_id: questionTurnID,
+      client_nonce: questionNonce,
+      provider_item_id: providerItemID,
+      actor: "runner",
+      source,
+      type: "turn.awaiting_input",
+      created_at: createdAt,
+      producer,
+      visibility: "durable",
+      payload: awaitingInput,
+    },
+  };
+}
+
+function requireQuestions(value) {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new TypeError("questions must be a non-empty array");
+  }
+  return value;
+}
+
+function formatAskUserQuestionText(questions) {
+  return questions
+    .map((question, index) => {
+      const record = question && typeof question === "object" ? question : {};
+      const text =
+        typeof record.question === "string" && record.question.trim()
+          ? record.question.trim()
+          : typeof record.header === "string" && record.header.trim()
+            ? record.header.trim()
+            : "Answer to continue.";
+      return `${index + 1}. ${text}`;
+    })
+    .join("\n");
+}
+
 function normalizeFinalAnswer(finalAnswer) {
-  if (!finalAnswer || typeof finalAnswer !== "object" || Array.isArray(finalAnswer)) {
+  if (
+    !finalAnswer ||
+    typeof finalAnswer !== "object" ||
+    Array.isArray(finalAnswer)
+  ) {
     throw new TypeError("finalAnswer must be an object");
   }
-  const timelineIDs = nonEmptyStringArray(finalAnswer.timelineIDs ?? finalAnswer.timeline_ids, "finalAnswer.timelineIDs");
+  const timelineIDs = nonEmptyStringArray(
+    finalAnswer.timelineIDs ?? finalAnswer.timeline_ids,
+    "finalAnswer.timelineIDs",
+  );
   const providerItemIDs = optionalNonEmptyStringArray(
     finalAnswer.providerItemIDs ?? finalAnswer.provider_item_ids,
     "finalAnswer.providerItemIDs",
@@ -175,7 +333,8 @@ export function itemEvent(args) {
     },
     visibility: "durable",
   };
-  if (args.providerEventID) event.producer.provider_event_id = args.providerEventID;
+  if (args.providerEventID)
+    event.producer.provider_event_id = args.providerEventID;
   if (args.payload) event.payload = args.payload;
   return event;
 }
@@ -189,7 +348,8 @@ export function shellTaskEvent(args) {
     task_id: taskID,
     status,
   };
-  const providerEventPart = args.providerEventID ?? stableIDPart(JSON.stringify(payload));
+  const providerEventPart =
+    args.providerEventID ?? stableIDPart(JSON.stringify(payload));
   const event = {
     event_id: `${args.turnID}:${args.type}:${stableIDPart(taskID)}:${providerEventPart}`,
     conversation_id: args.sessionID,
@@ -210,7 +370,8 @@ export function shellTaskEvent(args) {
     visibility: "durable",
     payload,
   };
-  if (args.providerEventID) event.producer.provider_event_id = args.providerEventID;
+  if (args.providerEventID)
+    event.producer.provider_event_id = args.providerEventID;
   return event;
 }
 
@@ -227,12 +388,18 @@ export function contextCompactedEvent(args) {
   const source = requireNonEmpty(args.source, "source");
   const trigger = args.trigger === "manual" ? "manual" : "auto";
   const payload = { trigger };
-  if (typeof args.preTokens === "number" && Number.isFinite(args.preTokens) && args.preTokens >= 0) {
+  if (
+    typeof args.preTokens === "number" &&
+    Number.isFinite(args.preTokens) &&
+    args.preTokens >= 0
+  ) {
     payload.pre_tokens = Math.floor(args.preTokens);
   }
   const providerPart = args.providerEventID
     ? stableIDPart(args.providerEventID)
-    : stableIDPart(JSON.stringify({ trigger, preTokens: payload.pre_tokens ?? null }));
+    : stableIDPart(
+        JSON.stringify({ trigger, preTokens: payload.pre_tokens ?? null }),
+      );
   const event = {
     event_id: `${turnID}:context.compacted:${providerPart}`,
     conversation_id: args.sessionID,
@@ -249,7 +416,8 @@ export function contextCompactedEvent(args) {
     visibility: "durable",
     payload,
   };
-  if (args.providerEventID) event.producer.provider_event_id = args.providerEventID;
+  if (args.providerEventID)
+    event.producer.provider_event_id = args.providerEventID;
   return event;
 }
 
@@ -266,28 +434,40 @@ export function stampTankEvent(event) {
     throw new TypeError("stampTankEvent: event must be an object");
   }
   if (typeof event.event_id !== "string" || !event.event_id) {
-    throw new TypeError(`stampTankEvent: event_id is required (type=${event?.type})`);
+    throw new TypeError(
+      `stampTankEvent: event_id is required (type=${event?.type})`,
+    );
   }
-  if (typeof event.visibility !== "string" || !VALID_VISIBILITIES.has(event.visibility)) {
-    throw new TypeError(`stampTankEvent: visibility is required (type=${event.type})`);
+  if (
+    typeof event.visibility !== "string" ||
+    !VALID_VISIBILITIES.has(event.visibility)
+  ) {
+    throw new TypeError(
+      `stampTankEvent: visibility is required (type=${event.type})`,
+    );
   }
   tankEventSeq += 1;
   const now = Date.now();
-  const uuid = typeof event.uuid === "string" && event.uuid ? event.uuid : event.event_id;
-  const writtenAt = typeof event.written_at === "string" && event.written_at
-    ? event.written_at
-    : new Date(now).toISOString();
-  const orderKey = typeof event.order_key === "string" && event.order_key
-    ? event.order_key
-    : [
-        String(now).padStart(13, "0"),
-        String(tankEventSeq).padStart(8, "0"),
-        uuid,
-      ].join("-");
-  const sequence = typeof event.sequence === "number" ? event.sequence : tankEventSeq;
-  const createdAt = typeof event.created_at === "string" && event.created_at
-    ? event.created_at
-    : writtenAt;
+  const uuid =
+    typeof event.uuid === "string" && event.uuid ? event.uuid : event.event_id;
+  const writtenAt =
+    typeof event.written_at === "string" && event.written_at
+      ? event.written_at
+      : new Date(now).toISOString();
+  const orderKey =
+    typeof event.order_key === "string" && event.order_key
+      ? event.order_key
+      : [
+          String(now).padStart(13, "0"),
+          String(tankEventSeq).padStart(8, "0"),
+          uuid,
+        ].join("-");
+  const sequence =
+    typeof event.sequence === "number" ? event.sequence : tankEventSeq;
+  const createdAt =
+    typeof event.created_at === "string" && event.created_at
+      ? event.created_at
+      : writtenAt;
   return {
     ...event,
     uuid,
@@ -303,16 +483,24 @@ export function stableIDPart(value) {
   const trimmed = String(value ?? "").trim();
   let safe = trimmed.replace(/[^A-Za-z0-9_.:-]+/g, "-");
   safe = safe.replace(/-+/g, "-").replace(/^-|-$/g, "");
-  const hash = createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
+  const hash = hashIDPart(trimmed);
   if (safe.length >= 6 && safe.length <= 80) return safe;
   if (safe.length > 80) return `${safe.slice(0, 64)}-${hash}`;
   return hash;
 }
 
+function hashIDPart(value) {
+  return createHash("sha256")
+    .update(String(value ?? ""))
+    .digest("hex")
+    .slice(0, 12);
+}
+
 function userMessageDisplay(skillName, text) {
   const trimmed = (skillName ?? "").trim();
   if (!trimmed) return { kind: "plain" };
-  if (!/^[A-Za-z0-9_-]{1,64}$/.test(trimmed)) throw new Error("skillName is invalid");
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(trimmed))
+    throw new Error("skillName is invalid");
   return {
     kind: "skill_invocation",
     skill_name: trimmed,

@@ -64,6 +64,20 @@ If the user reviews the test site and has suggestions/improvements, be sure to c
 
 As you hot swap, push commits to the remote branch as well. That's a backup in case the pod goes down. You should also get latest from main and merge it into your branch.
 
-Open a draft PR from the branch immediately. After the PR exists, call the Tank MCP `set_pull_request_link` tool with the current session id and PR URL so the Tank UI can link to it from the test workflow controls. This kicks off builds, and makes it so as we iterate and hot swap code while simultaneously pushing code remotely, github CI will create builds from the code. These builds are able to be used when the PR completes for prod, so having them ready early means the PR is much faster to deploy. You should be checking if PR needs to have merge conflicts resolved. If they're unresolvable, that's cause to stop and get input, because the proposed fix needs to be adapted to main. You also need to make sure all checks are green before handing the test environment off.
+Open a draft PR from the branch immediately. After the PR exists, call the Tank
+MCP `set_pull_request_link` tool with the current session id and PR URL so the
+Tank UI can link to it from the test workflow controls. Opening the PR is also
+the normal image-build path for same-repo work: GitHub CI builds the relevant
+images and, when the repo's workflow is trusted to use registry credentials,
+pushes reusable fingerprint/proof images to the registry. Those pushed images
+are useful later for merge/deploy because the expensive build has already been
+primed. Keep hot-swapping for the fast live-test loop, but do not treat
+hot-swap as a substitute for opening the PR and letting CI build the image
+artifacts.
+
+You should be checking if PR needs to have merge conflicts resolved. If they're
+unresolvable, that's cause to stop and get input, because the proposed fix
+needs to be adapted to main. You also need to make sure all checks are green
+before handing the test environment off.
 
 When testing is complete or the user no longer needs the environment, call the Glimmung MCP `return_test_slot` tool with the project and slot index or slot name. Include `tank_session_id` so Tank clears the GUI test pill.

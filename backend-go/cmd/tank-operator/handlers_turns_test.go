@@ -865,9 +865,17 @@ func TestInterruptSessionTurnRejectsBadTurnID(t *testing.T) {
 	}
 }
 
-// awaitingInputEvent builds the durable turn.awaiting_input pause that
-// handleAnswerSessionTurn reads to confirm an answer targets a turn currently
-// awaiting user input.
+// awaitingInputEvent builds the durable turn.awaiting_input handoff that
+// handleAnswerSessionTurn reads to confirm an answer targets an open question
+// set.
+const (
+	answerTestAskingTurnID     = "turn-active_123"
+	answerTestQuestionTurnID   = "turn-question_123"
+	answerTestProviderTimeline = "turn-active_123:item:toolu_123"
+	answerTestQuestionTimeline = "turn-question_123:item:toolu_123"
+	answerTestProviderItemID   = "toolu_123"
+)
+
 func awaitingInputEvent(turnID string, questions ...string) map[string]any {
 	qs := make([]any, 0, len(questions))
 	for _, q := range questions {
@@ -876,8 +884,15 @@ func awaitingInputEvent(turnID string, questions ...string) map[string]any {
 	return map[string]any{
 		"type":        string(conversation.EventTurnAwaitingInput),
 		"turn_id":     turnID,
-		"timeline_id": turnID + ":item:toolu_123",
-		"payload":     map[string]any{"questions": qs},
+		"timeline_id": answerTestQuestionTimeline,
+		"payload": map[string]any{
+			"asking_turn_id":       answerTestAskingTurnID,
+			"question_turn_id":     turnID,
+			"provider_item_id":     answerTestProviderItemID,
+			"timeline_id":          answerTestQuestionTimeline,
+			"provider_timeline_id": answerTestProviderTimeline,
+			"questions":            qs,
+		},
 	}
 }
 
@@ -885,15 +900,15 @@ func TestAnswerSessionTurnPublishesInputReply(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
 	app.sessionEvents = &recordingSessionEventStore{
-		turnEvents: []map[string]any{awaitingInputEvent("turn-active_123", "Which auth method should we use?")},
+		turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "Which auth method should we use?")},
 	}
 	body := `{
 		"provider_item_id": "toolu_123",
-		"timeline_id": "turn-active_123:item:toolu_123",
+		"timeline_id": "turn-question_123:item:toolu_123",
 		"answers": {"Which auth method should we use?": ["  OAuth  "]},
 		"annotations": {"Which auth method should we use?": {"notes": "matches existing IdP"}}
 	}`
-	req := authedAnswerRequest(t, "63", "turn-active_123", body)
+	req := authedAnswerRequest(t, "63", answerTestQuestionTurnID, body)
 	resp := httptest.NewRecorder()
 
 	app.handleAnswerSessionTurn(resp, req)
@@ -908,20 +923,32 @@ func TestAnswerSessionTurnPublishesInputReply(t *testing.T) {
 	if got.Type != sessionbus.CommandInputReply || got.Provider != "claude" || got.Source != "answer" {
 		t.Fatalf("answer routing fields = %#v", got)
 	}
-	if got.TargetTurnID != "turn-active_123" ||
-		got.TargetTimelineID != "turn-active_123:item:toolu_123" ||
+	if got.TargetTurnID != answerTestAskingTurnID ||
+		got.TargetTimelineID != answerTestProviderTimeline ||
 		got.TargetProviderItemID != "toolu_123" {
 		t.Fatalf("answer target fields = %#v", got)
+	}
+	if !strings.HasPrefix(got.ClientNonce, "answer-") {
+		t.Fatalf("client_nonce = %q, want answer-<hash> continuation nonce", got.ClientNonce)
 	}
 	if got.Answers["Which auth method should we use?"][0] != "OAuth" {
 		t.Fatalf("answers = %#v", got.Answers)
 	}
 	es := app.sessionEvents.(*recordingSessionEventStore)
-	if len(es.upserts) != 1 {
-		t.Fatalf("session-event upserts = %d, want 1 (turn.input_answered)", len(es.upserts))
+	if len(es.upserts) != 3 {
+		t.Fatalf("session-event upserts = %d, want 3 (answer marker + answer turn)", len(es.upserts))
 	}
 	if gotType, _ := es.upserts[0]["type"].(string); gotType != string(conversation.EventTurnInputAnswered) {
 		t.Fatalf("upsert[0].type = %q, want turn.input_answered", gotType)
+	}
+	if gotType, _ := es.upserts[1]["type"].(string); gotType != string(conversation.EventUserMessageCreated) {
+		t.Fatalf("upsert[1].type = %q, want user_message.created", gotType)
+	}
+	if gotType, _ := es.upserts[2]["type"].(string); gotType != string(conversation.EventTurnSubmitted) {
+		t.Fatalf("upsert[2].type = %q, want turn.submitted", gotType)
+	}
+	if gotTurn, _ := es.upserts[1]["turn_id"].(string); gotTurn != conversation.TurnIDForClientNonce(got.ClientNonce) {
+		t.Fatalf("answer user turn_id = %q, want continuation turn for %q", gotTurn, got.ClientNonce)
 	}
 }
 
@@ -935,9 +962,9 @@ func TestAnswerSessionTurnPublishesCodexCommand(t *testing.T) {
 		Model:   "gpt-5-codex",
 	})
 	app := testTurnsAppWithRegistry(t, bus, registry, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
-	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent("turn-active_123", "Pick one")}}
-	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
-	req := authedAnswerRequest(t, "64", "turn-active_123", body)
+	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "Pick one")}}
+	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-question_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
+	req := authedAnswerRequest(t, "64", answerTestQuestionTurnID, body)
 	resp := httptest.NewRecorder()
 
 	app.handleAnswerSessionTurn(resp, req)
@@ -958,15 +985,15 @@ func TestAnswerSessionTurnPublishesCodexCommand(t *testing.T) {
 }
 
 // TestAnswerSessionTurnRejectsTurnNotAwaitingInput rejects an answer whose
-// asking turn is not currently paused at turn.awaiting_input.
+// asking turn has no open turn.awaiting_input question set.
 func TestAnswerSessionTurnRejectsTurnNotAwaitingInput(t *testing.T) {
 	cases := []struct {
 		name   string
 		events []map[string]any
 	}{
 		{"completed turn", []map[string]any{
-			awaitingInputEvent("turn-active_123", "Pick one"),
-			{"type": string(conversation.EventTurnCompleted), "turn_id": "turn-active_123"},
+			awaitingInputEvent(answerTestQuestionTurnID, "Pick one"),
+			{"type": string(conversation.EventTurnCompleted), "turn_id": answerTestQuestionTurnID},
 		}},
 		{"no awaiting input", nil},
 	}
@@ -975,8 +1002,8 @@ func TestAnswerSessionTurnRejectsTurnNotAwaitingInput(t *testing.T) {
 			bus := &recordingSessionBus{}
 			app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
 			app.sessionEvents = &recordingSessionEventStore{turnEvents: tc.events}
-			body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
-			req := authedAnswerRequest(t, "63", "turn-active_123", body)
+			body := `{"provider_item_id":"toolu_123","timeline_id":"turn-question_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
+			req := authedAnswerRequest(t, "63", answerTestQuestionTurnID, body)
 			resp := httptest.NewRecorder()
 
 			app.handleAnswerSessionTurn(resp, req)
@@ -997,11 +1024,11 @@ func TestAnswerSessionTurnRejectsTurnNotAwaitingInput(t *testing.T) {
 func TestAnswerSessionTurnDoubleSubmitSharesDeterministicNonce(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
-	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent("turn-active_123", "Pick one")}}
-	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
+	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "Pick one")}}
+	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-question_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
 
 	for i := 0; i < 2; i++ {
-		req := authedAnswerRequest(t, "63", "turn-active_123", body)
+		req := authedAnswerRequest(t, "63", answerTestQuestionTurnID, body)
 		resp := httptest.NewRecorder()
 		app.handleAnswerSessionTurn(resp, req)
 		if resp.Code != http.StatusAccepted {
@@ -1022,9 +1049,9 @@ func TestAnswerSessionTurnDoubleSubmitSharesDeterministicNonce(t *testing.T) {
 func TestAnswerSessionTurnRejectsMissingTarget(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
-	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent("turn-active_123", "Pick one")}}
-	body := `{"provider_item_id":"","timeline_id":"turn-active_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
-	req := authedAnswerRequest(t, "63", "turn-active_123", body)
+	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "Pick one")}}
+	body := `{"provider_item_id":"","timeline_id":"turn-question_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
+	req := authedAnswerRequest(t, "63", answerTestQuestionTurnID, body)
 	resp := httptest.NewRecorder()
 
 	app.handleAnswerSessionTurn(resp, req)
@@ -1040,9 +1067,9 @@ func TestAnswerSessionTurnRejectsMissingTarget(t *testing.T) {
 func TestAnswerSessionTurnRejectsEmptyAnswers(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
-	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent("turn-active_123", "Pick one")}}
-	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-active_123:item:toolu_123","answers":{}}`
-	req := authedAnswerRequest(t, "63", "turn-active_123", body)
+	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "Pick one")}}
+	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-question_123:item:toolu_123","answers":{}}`
+	req := authedAnswerRequest(t, "63", answerTestQuestionTurnID, body)
 	resp := httptest.NewRecorder()
 
 	app.handleAnswerSessionTurn(resp, req)

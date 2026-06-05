@@ -22,6 +22,7 @@ export const TANK_VISIBILITIES = ["durable"];
 
 export const TANK_EVENT_TYPES = [
   "user_message.created",
+  "assistant_message.created",
   "turn.submitted",
   "turn.claimed",
   "turn.started",
@@ -41,6 +42,7 @@ export const TANK_EVENT_TYPES = [
   "shell_task.updated",
   "shell_task.exited",
   "turn.awaiting_input",
+  "turn.awaiting_input.invocation",
 ];
 
 const TANK_EVENT_TYPE_SET = new Set(TANK_EVENT_TYPES);
@@ -52,15 +54,18 @@ export function isTankConversationEvent(event) {
   if (!event || typeof event !== "object") return false;
   const candidate = event;
   if (
-    typeof candidate.event_id !== "string" || !candidate.event_id ||
-    typeof candidate.session_id !== "string" || !candidate.session_id ||
+    typeof candidate.event_id !== "string" ||
+    !candidate.event_id ||
+    typeof candidate.session_id !== "string" ||
+    !candidate.session_id ||
     typeof candidate.type !== "string" ||
     !TANK_EVENT_TYPE_SET.has(candidate.type) ||
     typeof candidate.actor !== "string" ||
     !TANK_ACTOR_SET.has(candidate.actor) ||
     typeof candidate.source !== "string" ||
     !TANK_EVENT_SOURCE_SET.has(candidate.source) ||
-    typeof candidate.created_at !== "string" || !candidate.created_at ||
+    typeof candidate.created_at !== "string" ||
+    !candidate.created_at ||
     typeof candidate.visibility !== "string" ||
     !TANK_VISIBILITY_SET.has(candidate.visibility)
   ) {
@@ -86,70 +91,119 @@ export function normalizeClientNonce(value) {
 function isValidEventByType(event) {
   switch (event.type) {
     case "user_message.created":
-      return event.actor === "user" &&
+      return (
+        event.actor === "user" &&
         event.source === "tank" &&
         hasStrings(event, ["turn_id", "timeline_id", "client_nonce"]) &&
-        isUserMessagePayload(event.payload);
+        isUserMessagePayload(event.payload)
+      );
+    case "assistant_message.created":
+      return (
+        event.actor === "assistant" &&
+        hasStrings(event, ["turn_id", "timeline_id"]) &&
+        isAssistantMessagePayload(event.payload)
+      );
     case "turn.submitted":
-      return event.actor === "runner" &&
+      return (
+        event.actor === "runner" &&
         event.source === "tank" &&
         hasStrings(event, ["turn_id", "client_nonce"]) &&
-        isStringPayload(event.payload, "status");
+        isStringPayload(event.payload, "status")
+      );
     case "turn.claimed":
     case "turn.started":
     case "turn.failed":
     case "turn.interrupted":
       return event.actor === "runner" && hasStrings(event, ["turn_id"]);
     case "turn.usage":
-      return event.actor === "runner" &&
+      return (
+        event.actor === "runner" &&
         hasStrings(event, ["turn_id"]) &&
-        isTurnUsagePayload(event.payload);
+        isTurnUsagePayload(event.payload)
+      );
     case "turn.completed":
-      return event.actor === "runner" &&
+      return (
+        event.actor === "runner" &&
         hasStrings(event, ["turn_id"]) &&
-        isTurnCompletedPayload(event.payload);
+        isTurnCompletedPayload(event.payload)
+      );
     case "turn.command_failed":
-      return event.actor === "system" &&
+      return (
+        event.actor === "system" &&
         event.source === "tank" &&
         hasStrings(event, ["turn_id"]) &&
-        isStringPayload(event.payload, "reason");
+        isStringPayload(event.payload, "reason")
+      );
     case "turn.interrupt_requested":
-      return event.actor === "system" &&
+      return (
+        event.actor === "system" &&
         event.source === "tank" &&
-        hasStrings(event, ["turn_id"]);
+        hasStrings(event, ["turn_id"])
+      );
     case "turn.input_answered":
-      return event.actor === "user" &&
+      return (
+        event.actor === "user" &&
         event.source === "tank" &&
         hasStrings(event, ["turn_id", "timeline_id", "client_nonce"]) &&
-        isInputAnsweredPayload(event.payload);
+        isInputAnsweredPayload(event.payload)
+      );
     case "context.compacted":
-      return event.actor === "runner" &&
+      return (
+        event.actor === "runner" &&
         hasStrings(event, ["turn_id"]) &&
-        isContextCompactedPayload(event.payload);
+        isContextCompactedPayload(event.payload)
+      );
     case "session.status":
-      return event.actor === "system" &&
+      return (
+        event.actor === "system" &&
         event.source === "tank" &&
         hasStrings(event, ["timeline_id"]) &&
-        isSessionStatusPayload(event.payload);
+        isSessionStatusPayload(event.payload)
+      );
     case "item.started":
     case "item.completed":
     case "item.failed":
-      return hasStrings(event, ["turn_id", "timeline_id"]) &&
+      return (
+        hasStrings(event, ["turn_id", "timeline_id"]) &&
         isStringPayload(event.payload, "kind") &&
-        isItemOutcome(event.payload.outcome);
+        isItemOutcome(event.payload.outcome)
+      );
     case "shell_task.started":
     case "shell_task.updated":
     case "shell_task.exited":
-      return event.actor === "tool" &&
+      return (
+        event.actor === "tool" &&
         hasStrings(event, ["turn_id", "timeline_id"]) &&
-        isShellTaskPayload(event.payload);
+        isShellTaskPayload(event.payload)
+      );
     case "turn.awaiting_input":
-      return event.actor === "runner" &&
+      return (
+        event.actor === "runner" &&
         hasStrings(event, ["turn_id"]) &&
-        isAwaitingInputPayload(event.payload);
+        isAwaitingInputPayload(event.payload)
+      );
+    case "turn.awaiting_input.invocation":
+      return (
+        event.actor === "runner" &&
+        hasStrings(event, ["turn_id", "timeline_id"]) &&
+        isAwaitingInputPayload(event.payload)
+      );
     default:
       return false;
   }
+}
+
+function isAssistantMessagePayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  if (typeof payload.text !== "string" || !payload.text) return false;
+  const display = payload.display;
+  if (!display || typeof display !== "object" || Array.isArray(display))
+    return false;
+  if (display.kind !== "plain" && display.kind !== "ask_user_question")
+    return false;
+  if (payload.awaiting_input === undefined) return true;
+  return isAwaitingInputPayload(payload.awaiting_input);
 }
 
 function hasOrderCursor(event) {
@@ -161,49 +215,78 @@ function hasStrings(event, keys) {
 }
 
 function isUserMessagePayload(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
   if (typeof payload.text !== "string" || !payload.text) return false;
-  if (payload.attachments !== undefined && !isUserMessageAttachments(payload.attachments)) return false;
+  if (
+    payload.attachments !== undefined &&
+    !isUserMessageAttachments(payload.attachments)
+  )
+    return false;
   return isUserMessageDisplay(payload.display);
 }
 
 function isUserMessageDisplay(display) {
-  if (!display || typeof display !== "object" || Array.isArray(display)) return false;
+  if (!display || typeof display !== "object" || Array.isArray(display))
+    return false;
   if (display.kind === "plain") return true;
-  return display.kind === "skill_invocation" &&
+  return (
+    display.kind === "skill_invocation" &&
     isSkillName(display.skill_name) &&
-    (display.supplemental_text === undefined || typeof display.supplemental_text === "string");
+    (display.supplemental_text === undefined ||
+      typeof display.supplemental_text === "string")
+  );
 }
 
 function isUserMessageAttachments(attachments) {
   if (!Array.isArray(attachments) || attachments.length > 32) return false;
   return attachments.every((attachment) => {
-    if (!attachment || typeof attachment !== "object" || Array.isArray(attachment)) return false;
+    if (
+      !attachment ||
+      typeof attachment !== "object" ||
+      Array.isArray(attachment)
+    )
+      return false;
     if (typeof attachment.label !== "string" || !attachment.label) return false;
     if (typeof attachment.name !== "string" || !attachment.name) return false;
     if (attachment.kind !== "image" && attachment.kind !== "file") return false;
-    if (attachment.path !== undefined && (typeof attachment.path !== "string" || !attachment.path)) return false;
-    if (attachment.absPath !== undefined && (typeof attachment.absPath !== "string" || !attachment.absPath)) return false;
-    return attachment.size === undefined ||
-      (typeof attachment.size === "number" && Number.isFinite(attachment.size) && attachment.size >= 0);
+    if (
+      attachment.path !== undefined &&
+      (typeof attachment.path !== "string" || !attachment.path)
+    )
+      return false;
+    if (
+      attachment.absPath !== undefined &&
+      (typeof attachment.absPath !== "string" || !attachment.absPath)
+    )
+      return false;
+    return (
+      attachment.size === undefined ||
+      (typeof attachment.size === "number" &&
+        Number.isFinite(attachment.size) &&
+        attachment.size >= 0)
+    );
   });
 }
 
 function isStringPayload(payload, key) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
   const value = payload[key];
   return typeof value === "string" && value.length > 0;
 }
 
 function isTurnCompletedPayload(payload) {
   if (payload === undefined) return true;
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
   if (payload.final_answer === undefined) return true;
   return isFinalAnswer(payload.final_answer);
 }
 
 function isTurnUsagePayload(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
   const usage = payload.usage;
   return Boolean(usage && typeof usage === "object" && !Array.isArray(usage));
 }
@@ -211,26 +294,39 @@ function isTurnUsagePayload(payload) {
 function isFinalAnswer(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   if (!isNonEmptyStringArray(value.timeline_ids)) return false;
-  return value.provider_item_ids === undefined || isNonEmptyStringArray(value.provider_item_ids);
+  return (
+    value.provider_item_ids === undefined ||
+    isNonEmptyStringArray(value.provider_item_ids)
+  );
 }
 
 function isNonEmptyStringArray(value) {
-  return Array.isArray(value) &&
+  return (
+    Array.isArray(value) &&
     value.length > 0 &&
-    value.every((item) => typeof item === "string" && item.length > 0);
+    value.every((item) => typeof item === "string" && item.length > 0)
+  );
 }
 
 function isContextCompactedPayload(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
   if (payload.trigger !== "auto" && payload.trigger !== "manual") return false;
-  return payload.pre_tokens === undefined ||
-    (typeof payload.pre_tokens === "number" && Number.isFinite(payload.pre_tokens) && payload.pre_tokens >= 0);
+  return (
+    payload.pre_tokens === undefined ||
+    (typeof payload.pre_tokens === "number" &&
+      Number.isFinite(payload.pre_tokens) &&
+      payload.pre_tokens >= 0)
+  );
 }
 
 function isSessionStatusPayload(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
   return (
-    (payload.status === "loading" || payload.status === "ready" || payload.status === "failed") &&
+    (payload.status === "loading" ||
+      payload.status === "ready" ||
+      payload.status === "failed") &&
     typeof payload.text === "string" &&
     payload.text.length > 0
   );
@@ -238,41 +334,74 @@ function isSessionStatusPayload(payload) {
 
 function isItemOutcome(outcome) {
   if (outcome === undefined) return true;
-  if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) return false;
+  if (!outcome || typeof outcome !== "object" || Array.isArray(outcome))
+    return false;
   if (outcome.kind === "ok") return outcome.reason === undefined;
   if (outcome.kind === "result_failed") {
-    return ["claude_tool_result_is_error", "codex_item_status_failed", "exit_code"].includes(outcome.reason);
+    return [
+      "claude_tool_result_is_error",
+      "codex_item_status_failed",
+      "exit_code",
+    ].includes(outcome.reason);
   }
-  return outcome.kind === "execution_failed" && outcome.reason === "provider_item_error";
+  return (
+    outcome.kind === "execution_failed" &&
+    outcome.reason === "provider_item_error"
+  );
 }
 
 function isShellTaskPayload(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-  return payload.kind === "shell_task" &&
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  return (
+    payload.kind === "shell_task" &&
     typeof payload.task_id === "string" &&
     payload.task_id.length > 0 &&
     typeof payload.status === "string" &&
-    payload.status.length > 0;
+    payload.status.length > 0
+  );
 }
 
 function isAwaitingInputPayload(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-  return Array.isArray(payload.questions) &&
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  return (
+    Array.isArray(payload.questions) &&
     payload.questions.length > 0 &&
     payload.questions.every(
       (q) =>
-        q && typeof q === "object" && !Array.isArray(q) &&
-        typeof q.question === "string" && q.question.length > 0,
-    );
+        q &&
+        typeof q === "object" &&
+        !Array.isArray(q) &&
+        typeof q.question === "string" &&
+        q.question.length > 0,
+    )
+  );
 }
 
 function isInputAnsweredPayload(payload) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return false;
-  if (typeof payload.question_timeline_id !== "string" || payload.question_timeline_id.length === 0) return false;
-  if (typeof payload.provider_item_id !== "string" || payload.provider_item_id.length === 0) return false;
-  if (!payload.answers || typeof payload.answers !== "object" || Array.isArray(payload.answers)) return false;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  if (
+    typeof payload.question_timeline_id !== "string" ||
+    payload.question_timeline_id.length === 0
+  )
+    return false;
+  if (
+    typeof payload.provider_item_id !== "string" ||
+    payload.provider_item_id.length === 0
+  )
+    return false;
+  if (
+    !payload.answers ||
+    typeof payload.answers !== "object" ||
+    Array.isArray(payload.answers)
+  )
+    return false;
   return Object.values(payload.answers).some(
-    (labels) => Array.isArray(labels) && labels.some((label) => typeof label === "string" && label.length > 0),
+    (labels) =>
+      Array.isArray(labels) &&
+      labels.some((label) => typeof label === "string" && label.length > 0),
   );
 }
 
