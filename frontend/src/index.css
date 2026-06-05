@@ -4755,6 +4755,36 @@ button:disabled {
   background: rgba(255, 255, 255, 0.025);
 }
 
+.run-settings-rate-limit {
+  display: grid;
+  gap: var(--space-3);
+  padding: 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-md, 0.5rem);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.run-settings-rate-limit-grid {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.run-settings-rate-limit-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 0.8fr) minmax(0, 1.4fr);
+  gap: var(--space-3);
+  align-items: start;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.run-settings-rate-limit-row span:last-child {
+  min-width: 0;
+  color: var(--text-body);
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
 .run-settings-observability {
   display: grid;
   gap: var(--space-3);
