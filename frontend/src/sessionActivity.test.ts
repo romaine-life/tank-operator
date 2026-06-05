@@ -113,6 +113,7 @@ test("session activity legend mirrors sidebar dot mappings", () => {
   }> = [
     { key: "ready", activity: summary("ready"), dot: "agent-waiting" },
     { key: "running", activity: summary("streaming"), dot: "agent-working" },
+    { key: "scheduled", activity: summary("scheduled"), dot: "agent-scheduled" },
     { key: "needs-input", activity: summary("needs_input"), dot: "agent-needs-input" },
     { key: "stopping", activity: summary("stopping"), dot: "agent-stopping" },
     { key: "stopped", activity: summary("stopped"), dot: "agent-stopped" },
@@ -330,4 +331,61 @@ test("non-chat sessions keep pod lifecycle status", () => {
 
   assert.equal(sessionActivityDotStatus("Pending", false, activity ?? undefined), "pending");
   assert.equal(sessionActivityStatusLabel("Pending", false, activity ?? undefined), "Pending");
+});
+
+test("normalizes scheduled status (not coerced to ready)", () => {
+  const activity = normalizeSessionActivity({
+    session_id: "63",
+    status: "scheduled",
+    unread_count: 0,
+    needs_input: false,
+    failed: false,
+  });
+
+  assert.equal(activity?.status, "scheduled");
+  assert.equal(sessionActivityDotStatus("Active", true, activity ?? undefined), "agent-scheduled");
+  assert.equal(sessionActivityStatusLabel("Active", true, activity ?? undefined), "Scheduled");
+});
+
+// The scheduled status is the sibling of needs_input: both are non-terminal
+// pause-phases of a live (simulated) turn, decoupled from the backend's turn
+// boundaries. They differ only in what resumes them — your input vs the clock —
+// so needs_input summons and scheduled does not. The transitions below pin that
+// the turn-complete bell stays silent while the agent parks itself and fires
+// exactly once when the wake chain truly ends.
+test("shouldRingForActivityTransition: streaming -> scheduled does NOT ring (self-parked agent)", () => {
+  assert.equal(
+    shouldRingForActivityTransition(summary("streaming"), summary("scheduled")),
+    false,
+  );
+});
+
+test("shouldRingForActivityTransition: ready -> scheduled does NOT ring (armed a wake while idle)", () => {
+  assert.equal(
+    shouldRingForActivityTransition(summary("ready"), summary("scheduled")),
+    false,
+  );
+});
+
+test("shouldRingForActivityTransition: no prior -> scheduled does NOT ring", () => {
+  assert.equal(
+    shouldRingForActivityTransition(undefined, summary("scheduled")),
+    false,
+  );
+});
+
+test("shouldRingForActivityTransition: scheduled -> ready rings (chain truly ended)", () => {
+  // The wake fired, the agent finished, nothing is pending — the real "your
+  // turn" moment, so the bell fires exactly once at the end of the chain.
+  assert.equal(
+    shouldRingForActivityTransition(summary("scheduled"), summary("ready")),
+    true,
+  );
+});
+
+test("shouldRingForActivityTransition: scheduled -> needs_input rings (woke and asked you)", () => {
+  assert.equal(
+    shouldRingForActivityTransition(summary("scheduled"), summary("needs_input")),
+    true,
+  );
 });

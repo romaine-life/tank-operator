@@ -273,6 +273,36 @@ func (s *ScheduledWakeupStore) ScheduledDueCount(ctx context.Context, now time.T
 	return count, err
 }
 
+// HasPending reports whether the session has a registered wakeup not yet fired,
+// failed, or cancelled — self-scheduled work the agent is parked waiting on. It
+// is the durable authority for the non-summoning "scheduled" activity status
+// (docs/scheduled-turn-continuity.md): a session with a pending wake is
+// mid-(simulated)-turn, not idle, so a turn terminal folds to "scheduled"
+// instead of the summoning "ready".
+func (s *ScheduledWakeupStore) HasPending(ctx context.Context, sessionScope, sessionID string) (bool, error) {
+	if s == nil || s.pool == nil {
+		return false, errors.New("scheduled wakeup store unavailable")
+	}
+	sessionScope = strings.TrimSpace(sessionScope)
+	if sessionScope == "" {
+		sessionScope = s.scope
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false, nil
+	}
+	var pending bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM session_scheduled_wakeups
+			WHERE session_scope = $1
+			  AND session_id = $2
+			  AND status IN ('scheduled', 'claiming')
+		)
+	`, sessionScope, sessionID).Scan(&pending)
+	return pending, err
+}
+
 type scheduledWakeupScanner interface {
 	Scan(dest ...any) error
 }

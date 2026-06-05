@@ -4,6 +4,7 @@ export type ConversationActivityStatus =
   | "claimed"
   | "streaming"
   | "needs_input"
+  | "scheduled"
   | "stopping"
   | "stopped"
   | "error";
@@ -38,6 +39,12 @@ export const SESSION_ACTIVITY_STATUS_LEGEND: SessionActivityLegendItem[] = [
     label: "Submitted / running",
     detail: "The agent has queued or active work.",
     dotStatus: "agent-working",
+  },
+  {
+    key: "scheduled",
+    label: "Scheduled",
+    detail: "The agent parked itself on a timer or background task; it resumes on its own.",
+    dotStatus: "agent-scheduled",
   },
   {
     key: "needs-input",
@@ -92,6 +99,10 @@ export function sessionActivityDotStatus(
   if (activity?.needs_input || activity?.status === "needs_input") return "agent-needs-input";
   if (activity?.status === "stopping") return "agent-stopping";
   if (activity?.status === "stopped") return "agent-stopped";
+  // A self-parked agent (pending ScheduleWakeup / background-task wake) is
+  // mid-(simulated)-turn, holding on its own clock — not idle and not your turn.
+  // Distinct calm indicator; never the "waiting for you" treatment.
+  if (activity?.status === "scheduled") return "agent-scheduled";
   if (activity?.status === "submitted" || activity?.status === "claimed" || activity?.status === "streaming") {
     return "agent-working";
   }
@@ -111,6 +122,7 @@ export function sessionActivityStatusLabel(
   if (activity?.status === "streaming") return "Running";
   if (activity?.status === "stopping") return "Stopping";
   if (activity?.status === "stopped") return "Stopped";
+  if (activity?.status === "scheduled") return "Scheduled";
   return "Waiting";
 }
 
@@ -191,6 +203,7 @@ function activityStatus(value: string | null): ConversationActivityStatus | null
     case "claimed":
     case "streaming":
     case "needs_input":
+    case "scheduled":
     case "stopping":
     case "stopped":
     case "error":

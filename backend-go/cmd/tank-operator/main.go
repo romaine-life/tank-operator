@@ -362,6 +362,7 @@ func main() {
 			ReadStates: readStateStore,
 			Registry:   buildSessionRegistryOwnerResolver(sessionReg),
 			Rows:       rowFetcherFor(sessionReg),
+			Wakes:      combinedWakeChecker{scheduled: scheduledWakeupStore, background: backgroundTaskWakeStore},
 			Metrics:    promLifecycleEmitterMetrics{},
 			Scope:      sessionScope,
 		}

@@ -281,6 +281,36 @@ func (s *BackgroundTaskWakeStore) DueCount(ctx context.Context, now time.Time) (
 	return count, err
 }
 
+// HasPending reports whether the session has a registered background-task wake
+// not yet fired or failed — the agent ended a turn but a run_in_background task
+// it spawned has not re-invoked it. Like ScheduledWakeupStore.HasPending, this
+// is durable authority for the non-summoning "scheduled" activity status
+// (docs/scheduled-turn-continuity.md): the agent is parked waiting on its own
+// background work, so the session is mid-(simulated)-turn, not idle.
+func (s *BackgroundTaskWakeStore) HasPending(ctx context.Context, sessionScope, sessionID string) (bool, error) {
+	if s == nil || s.pool == nil {
+		return false, errors.New("background task wake store unavailable")
+	}
+	sessionScope = strings.TrimSpace(sessionScope)
+	if sessionScope == "" {
+		sessionScope = s.scope
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false, nil
+	}
+	var pending bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM session_background_task_wakes
+			WHERE session_scope = $1
+			  AND session_id = $2
+			  AND status IN ('scheduled', 'claiming')
+		)
+	`, sessionScope, sessionID).Scan(&pending)
+	return pending, err
+}
+
 type backgroundTaskWakeScanner interface {
 	Scan(dest ...any) error
 }
