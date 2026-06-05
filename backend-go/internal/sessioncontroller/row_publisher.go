@@ -125,10 +125,7 @@ type rowWireShape struct {
 	Scope   string `json:"session_scope"`
 	PodName string `json:"pod_name,omitempty"`
 	// Name is always present (NON-NULL) post-inversion, so no omitempty.
-	Name string `json:"name"`
-	// DisplayName stays on the wire for already-deployed clients; it now
-	// equals Name. A later stage deletes it.
-	DisplayName     string         `json:"display_name"`
+	Name            string         `json:"name"`
 	Visible         bool           `json:"visible"`
 	Status          string         `json:"status"`
 	RequestedAt     string         `json:"requested_at,omitempty"`
@@ -192,7 +189,6 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			Scope:                          record.Scope,
 			PodName:                        record.PodName,
 			Name:                           record.Name,
-			DisplayName:                    record.Name,
 			Visible:                        record.Visible,
 			Status:                         record.Status,
 			RequestedAt:                    record.RequestedAt,

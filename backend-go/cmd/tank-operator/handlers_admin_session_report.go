@@ -31,17 +31,16 @@ const (
 )
 
 type sessionReportRow struct {
-	Owner       string                        `json:"owner"`
-	SessionID   string                        `json:"session_id"`
-	Name        string                        `json:"name"`
-	DisplayName string                        `json:"display_name"`
-	Mode        string                        `json:"mode"`
-	Repos       []string                      `json:"repos"`
-	BugLabel    *sessionmodel.SessionBugLabel `json:"bug_label,omitempty"`
-	Visible     bool                          `json:"visible"`
-	CreatedAt   time.Time                     `json:"created_at"`
-	UpdatedAt   time.Time                     `json:"updated_at"`
-	Usage       tokenUsage                    `json:"usage"`
+	Owner     string                        `json:"owner"`
+	SessionID string                        `json:"session_id"`
+	Name      string                        `json:"name"`
+	Mode      string                        `json:"mode"`
+	Repos     []string                      `json:"repos"`
+	BugLabel  *sessionmodel.SessionBugLabel `json:"bug_label,omitempty"`
+	Visible   bool                          `json:"visible"`
+	CreatedAt time.Time                     `json:"created_at"`
+	UpdatedAt time.Time                     `json:"updated_at"`
+	Usage     tokenUsage                    `json:"usage"`
 }
 
 type sessionReportRepo struct {
@@ -489,14 +488,6 @@ func fetchSessionReportRows(ctx context.Context, s *appServer, scope string, win
 			return nil, err
 		}
 		row.BugLabel = reportBugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug)
-		// display_name stays on the wire for already-deployed clients. sessions.name
-		// is NON-NULL now (assigned at create / reassigned on clear) and the scan
-		// COALESCEs it to a string, so the canonical SessionDisplayName derivation
-		// here resolves to that always-present name — matching the sidebar's label
-		// and the live row wire. A later stage deletes display_name. pod_name is
-		// always "session-"+session_id, so passing the session id yields the same
-		// slug without selecting pod_name in the query.
-		row.DisplayName = sessionmodel.SessionDisplayName(&row.Name, "", row.SessionID)
 		out = append(out, row)
 	}
 	return out, rows.Err()

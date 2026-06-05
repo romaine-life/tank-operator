@@ -1,6 +1,7 @@
 package sessions
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -171,12 +172,11 @@ func TestGetRejectsWrongOwner(t *testing.T) {
 	}
 }
 
-// TestInfoJSONCarriesNonNullNameAndDisplayName pins the name/display_name
-// inversion: name is NON-NULL on the snapshot wire. An "unnamed" session
-// carries the canonical default the migration backfills (the short id from
-// the pod name), and display_name — kept on the wire this stage for
-// already-deployed clients — equals that name.
-func TestInfoJSONCarriesNonNullNameAndDisplayName(t *testing.T) {
+// TestInfoJSONCarriesNonNullName pins the name/display_name inversion: name
+// is NON-NULL on the snapshot wire. An "unnamed" session carries the canonical
+// default the migration backfills (the short id from the pod name). The
+// redundant display_name wire field has been removed; consumers read name.
+func TestInfoJSONCarriesNonNullName(t *testing.T) {
 	registry := registryRecords{
 		{
 			ID:      "622",
@@ -201,17 +201,13 @@ func TestInfoJSONCarriesNonNullNameAndDisplayName(t *testing.T) {
 	if got[0].Name != "622" {
 		t.Fatalf("name = %q, want %q (non-null default)", got[0].Name, "622")
 	}
-	if got[0].DisplayName != "622" {
-		t.Fatalf("display name = %q, want %q (equals name)", got[0].DisplayName, "622")
-	}
 
 	raw, err := json.Marshal(got[0])
 	if err != nil {
 		t.Fatal(err)
 	}
 	var decoded struct {
-		Name        string `json:"name"`
-		DisplayName string `json:"display_name"`
+		Name string `json:"name"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatal(err)
@@ -219,8 +215,9 @@ func TestInfoJSONCarriesNonNullNameAndDisplayName(t *testing.T) {
 	if decoded.Name != "622" {
 		t.Fatalf("serialized name = %q, want non-empty %q (name is non-null now)", decoded.Name, "622")
 	}
-	if decoded.DisplayName != "622" {
-		t.Fatalf("serialized display_name = %q, want %q (equals name)", decoded.DisplayName, "622")
+	// The redundant display_name field must no longer appear on the wire.
+	if bytes.Contains(raw, []byte(`"display_name"`)) {
+		t.Fatalf("serialized Info still carries display_name: %s", raw)
 	}
 }
 

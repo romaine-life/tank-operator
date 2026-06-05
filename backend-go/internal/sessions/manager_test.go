@@ -422,8 +422,7 @@ func TestManagerCreatePersistsInitialDisplayName(t *testing.T) {
 // inversion at create: a session created with NO name must still get a
 // NON-NULL, non-empty name — the canonical SessionDisplayName default (the
 // short id derived from the pod name). The pod annotation and the durable row
-// carry the same assigned value, and display_name (kept on the wire this
-// stage) equals it.
+// carry the same assigned value.
 func TestManagerCreateAssignsDefaultNameWhenNoneGiven(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	registry := &managerTestRegistry{
@@ -454,9 +453,6 @@ func TestManagerCreateAssignsDefaultNameWhenNoneGiven(t *testing.T) {
 	}
 	if info.Name == "" {
 		t.Fatal("info name must never be empty after create")
-	}
-	if info.DisplayName != wantName {
-		t.Fatalf("display_name = %q, want %q (equals name)", info.DisplayName, wantName)
 	}
 	pod, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
 	if err != nil {
@@ -508,9 +504,6 @@ func TestManagerSetNameClearReassignsDefault(t *testing.T) {
 	}
 	if info.Name == "" {
 		t.Fatal("cleared name must reassign the default, never empty")
-	}
-	if info.DisplayName != wantDefault {
-		t.Fatalf("cleared display_name = %q, want %q (equals name)", info.DisplayName, wantDefault)
 	}
 	if got := registry.records[0].Name; got != wantDefault {
 		t.Fatalf("persisted name after clear = %q, want reassigned default %q", got, wantDefault)

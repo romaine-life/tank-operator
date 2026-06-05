@@ -1,6 +1,7 @@
 package sessioncontroller
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"testing"
@@ -43,41 +44,44 @@ func (p *recordingRowPublisher) PublishSessionEventWake(_ context.Context, stora
 	return nil
 }
 
-func TestMarshalRowUpdateIncludesDisplayName(t *testing.T) {
-	decodeDisplayName := func(t *testing.T, record sessionmodel.SessionRecord) string {
+func TestMarshalRowUpdateIncludesName(t *testing.T) {
+	decodeName := func(t *testing.T, record sessionmodel.SessionRecord) string {
 		t.Helper()
 		payload, err := MarshalRowUpdate(record)
 		if err != nil {
 			t.Fatalf("MarshalRowUpdate: %v", err)
 		}
+		// The redundant display_name field must no longer ride the row wire.
+		if bytes.Contains(payload, []byte(`"display_name"`)) {
+			t.Fatalf("row payload still carries display_name: %s", payload)
+		}
 		var decoded struct {
 			Row struct {
-				DisplayName string `json:"display_name"`
+				Name string `json:"name"`
 			} `json:"row"`
 		}
 		if err := json.Unmarshal(payload, &decoded); err != nil {
 			t.Fatalf("unmarshal row payload: %v", err)
 		}
-		return decoded.Row.DisplayName
+		return decoded.Row.Name
 	}
 
-	if got, want := decodeDisplayName(t, sessionmodel.SessionRecord{
+	if got, want := decodeName(t, sessionmodel.SessionRecord{
 		ID:      "8",
 		PodName: "session-8",
 		Name:    "Launch draft",
 	}), "Launch draft"; got != want {
-		t.Fatalf("named row display_name = %q, want %q", got, want)
+		t.Fatalf("named row name = %q, want %q", got, want)
 	}
 
 	// Name is NON-NULL now: an "unnamed" session carries the canonical
-	// default that Create assigns / the migration backfills (the short id),
-	// and display_name (kept on the wire this stage) equals that name.
-	if got, want := decodeDisplayName(t, sessionmodel.SessionRecord{
+	// default that Create assigns / the migration backfills (the short id).
+	if got, want := decodeName(t, sessionmodel.SessionRecord{
 		ID:      "8",
 		PodName: "session-8",
 		Name:    "8",
 	}), "8"; got != want {
-		t.Fatalf("default-name row display_name = %q, want %q (equals name)", got, want)
+		t.Fatalf("default-name row name = %q, want %q", got, want)
 	}
 }
 
