@@ -826,7 +826,6 @@ const PROVIDER_QUOTA_WINDOW_DEFS: Record<Provider, Array<Pick<ProviderQuotaWindo
   anthropic: [
     { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
     { id: "weekly", label: "Weekly", shortLabel: "Week" },
-    { id: "opus_weekly", label: "Opus weekly", shortLabel: "Opus" },
   ],
   codex: [
     { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
@@ -3197,9 +3196,7 @@ function DemoLanding() {
                       const providerSelected = provider === selectedProvider;
                       const quota = demoProviderQuotaSnapshots[provider];
                       const fiveHour = quota.windows.find((window) => window.id === "five_hour");
-                      const weekly =
-                        quota.windows.find((window) => window.id === "weekly") ??
-                        quota.windows.find((window) => window.id === "opus_weekly");
+                      const weekly = quota.windows.find((window) => window.id === "weekly");
                       return (
                         <button
                           key={provider}
@@ -19044,9 +19041,7 @@ function AuthenticatedApp() {
                       const selected = provider === selectedProvider;
                       const quota = providerQuotaSnapshots[provider];
                       const fiveHour = quota.windows.find((window) => window.id === "five_hour");
-                      const weekly =
-                        quota.windows.find((window) => window.id === "weekly") ??
-                        quota.windows.find((window) => window.id === "opus_weekly");
+                      const weekly = quota.windows.find((window) => window.id === "weekly");
                       return (
                         <button
                           key={provider}

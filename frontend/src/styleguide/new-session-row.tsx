@@ -93,13 +93,6 @@ export function StyleguideNewSessionRow() {
                         </span>
                         <span className="home-provider-capacity-value">64% left</span>
                       </div>
-                      <div className="home-provider-capacity-row is-unknown">
-                        <span className="home-provider-capacity-label">Opus weekly</span>
-                        <span className="home-provider-capacity-meter" aria-hidden="true">
-                          <span style={{ width: "0%" }} />
-                        </span>
-                        <span className="home-provider-capacity-value">unknown</span>
-                      </div>
                     </div>
                   </div>
                   <div className="home-choice-grid" role="group" aria-label="interaction">
