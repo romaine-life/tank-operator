@@ -708,6 +708,113 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
             "attempt_id": self._health_attempt_id,
         }
 
+    async def usage_snapshot(self) -> dict[str, Any]:
+        """Fetch provider-side usage/quota metadata with the managed OAuth token.
+
+        This is the same trust boundary as ext_proc injection: the proxy owns
+        the live access token and account headers, while tank-operator owns the
+        UI normalization. A 401 invalidates and refreshes once before returning
+        an error snapshot.
+        """
+        urls = self._usage_urls()
+        if not urls:
+            return {
+                "provider": self._config.provider,
+                "status": "unsupported",
+                "error": "usage endpoint is not configured for provider",
+            }
+        token = await self._get_access_token()
+        if token in ("", "missing"):
+            return {
+                "provider": self._config.provider,
+                "status": "unavailable",
+                "error": "managed OAuth token is unavailable",
+            }
+
+        headers = self._usage_headers(token)
+        last_error = ""
+        last_status = 0
+        for attempt in range(2):
+            for url in urls:
+                try:
+                    async with httpx.AsyncClient(timeout=15.0) as http:
+                        resp = await http.get(url, headers=headers)
+                except Exception as err:
+                    log.warning("%s usage request failed: %s", self._config.provider, err)
+                    last_error = f"request_failed: {err}"
+                    continue
+                last_status = resp.status_code
+                if resp.status_code == 401 and attempt == 0:
+                    self._access_invalidated = True
+                    await self._refresh()
+                    token = await self._get_access_token()
+                    headers = self._usage_headers(token)
+                    break
+                if resp.status_code == 404 and len(urls) > 1:
+                    last_error = "usage endpoint not found"
+                    continue
+                if resp.status_code < 200 or resp.status_code >= 300:
+                    last_error = resp.text[:500]
+                    continue
+                try:
+                    body = resp.json()
+                except Exception as err:
+                    return {
+                        "provider": self._config.provider,
+                        "status": "error",
+                        "status_code": resp.status_code,
+                        "error": f"usage response was not JSON: {err}",
+                    }
+                return {
+                    "provider": self._config.provider,
+                    "status": "ok",
+                    "status_code": resp.status_code,
+                    "observed_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+                    "usage": body,
+                }
+        return {
+            "provider": self._config.provider,
+            "status": "error",
+            "status_code": last_status or None,
+            "error": last_error or "usage request failed",
+        }
+
+    def _usage_urls(self) -> list[str]:
+        if self._config.provider == "claude":
+            return [
+                os.environ.get(
+                    "CLAUDE_USAGE_URL",
+                    "https://api.anthropic.com/api/oauth/usage",
+                )
+            ]
+        if self._config.provider == "codex":
+            primary = os.environ.get(
+                "CODEX_USAGE_URL",
+                "https://chatgpt.com/backend-api/codex/usage",
+            )
+            fallback = os.environ.get(
+                "CODEX_USAGE_FALLBACK_URL",
+                "https://chatgpt.com/api/codex/usage",
+            )
+            return [primary, fallback] if primary != fallback else [primary]
+        return []
+
+    def _usage_headers(self, token: str) -> dict[str, str]:
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+        }
+        if self._config.provider == "claude":
+            headers["anthropic-beta"] = "oauth-2025-04-20"
+            headers["Content-Type"] = "application/json"
+        if self._config.provider == "codex":
+            headers["User-Agent"] = os.environ.get("CODEX_USAGE_USER_AGENT", "Codex CLI/0.131.0")
+            if self._cached_account_id:
+                headers["ChatGPT-Account-ID"] = self._cached_account_id
+            if self._cached_fedramp:
+                headers["X-OpenAI-Fedramp"] = "true"
+        return headers
+
     async def _persist_to_kv(self, expires_in: int) -> None:
         """Best-effort write of the rotated blob back to KV.
 

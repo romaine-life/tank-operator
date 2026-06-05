@@ -969,6 +969,17 @@ test("startup transcript rows come from durable conversation events", () => {
   );
 });
 
+test("browser transcript normalizer rejects startup session status rows", () => {
+  assert.equal(appSource.includes("isFoldableStartupSessionStatusTranscriptRow"), true);
+  assert.match(
+    appSource,
+    /if \(isFoldableStartupSessionStatusTranscriptRow\(record\)\) return null;/,
+  );
+  assert.equal(appSource.includes('text === "Session is loading."'), true);
+  assert.equal(appSource.includes('text === "Session is ready."'), true);
+  assert.equal(appSource.includes('!id.includes(":provider:")'), true);
+});
+
 test("sidebar order is not browser-local", () => {
   assert.equal(appSource.includes("tank.sessionOrder"), false);
   assert.equal(appSource.includes("readSessionOrder"), false);
@@ -1268,6 +1279,7 @@ test("session bug labels are available at create time", () => {
   );
   assert.equal(appSource.includes("bug_label: bugLabel"), true);
   assert.equal(appSource.includes("bug_labels: homeBugLabels"), true);
+  assert.equal(appSource.includes("setHomeBugLabels([]);"), true);
   assert.equal(appSource.includes("<SessionBugLabelPicker"), false);
   assert.equal(appSource.includes("bugLabelControl={"), false);
   assert.equal(

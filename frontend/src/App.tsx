@@ -37,6 +37,7 @@ import {
 } from "./transcriptMerge";
 import { cachedTurnActivityRefreshRequests } from "./turnActivityCache";
 import {
+  turnActivityEventProgress,
   turnActivityPagerState,
   type TurnActivityPageDirectoryItem,
   type TurnActivityPageInfo,
@@ -186,6 +187,12 @@ import {
   type SessionDataStatusId,
   type SessionDataStatusRow,
 } from "./sessionDataStatus";
+import {
+  addBugLabelName,
+  bugLabelNameKey,
+  filterBugLabelSuggestions,
+  normalizeBugLabelDisplayName,
+} from "./bugLabels";
 import {
   scheduledWakeupRowsToEntries,
   scheduledWakeupStatusLabel,
@@ -814,6 +821,46 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   codex: "Codex",
 };
 
+type ProviderQuotaWindowId = "five_hour" | "weekly" | "opus_weekly";
+type ProviderQuotaStatus = "ok" | "low" | "exhausted" | "stale" | "unknown";
+
+interface ProviderQuotaWindow {
+  id: ProviderQuotaWindowId;
+  label: string;
+  shortLabel: string;
+  status: ProviderQuotaStatus;
+  percentRemaining: number | null;
+  resetAt: string | null;
+  observedAt: string | null;
+}
+
+interface ProviderQuotaSnapshot {
+  provider: Provider;
+  status: ProviderQuotaStatus;
+  observedAt: string | null;
+  windows: ProviderQuotaWindow[];
+}
+
+interface ProviderQuotaEvidence {
+  provider: Provider;
+  rateLimitType: string;
+  status?: string;
+  utilization?: number;
+  resetsAt?: string | number | null;
+  observedAt?: string | null;
+}
+
+const PROVIDER_QUOTA_WINDOW_DEFS: Record<Provider, Array<Pick<ProviderQuotaWindow, "id" | "label" | "shortLabel">>> = {
+  anthropic: [
+    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
+    { id: "weekly", label: "Weekly", shortLabel: "Week" },
+  ],
+  codex: [
+    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
+    { id: "weekly", label: "Weekly", shortLabel: "Week" },
+  ],
+};
+
 const MODE_HINTS: Record<SessionMode, string> = {
   claude_cli: "Uses claude.ai login",
   claude_gui: "GUI chat pane for claude -p output",
@@ -1208,12 +1255,9 @@ function normalizeBugLabel(value: unknown): SessionBugLabel | null {
   const record = value as Record<string, unknown>;
   const name = typeof record.name === "string" ? record.name : "";
   const slug = typeof record.slug === "string" ? record.slug : "";
-  const displayName =
-    typeof record.display_name === "string" && record.display_name
-      ? record.display_name
-      : name
-        ? `bug: ${name}`
-        : "";
+  const rawDisplayName =
+    typeof record.display_name === "string" && record.display_name ? record.display_name : name;
+  const displayName = normalizeBugLabelDisplayName(rawDisplayName);
   if (!name || !slug || !displayName) return null;
   const id =
     typeof record.id === "number" && Number.isFinite(record.id)
@@ -2158,20 +2202,6 @@ type BugLabelSuggestion = SessionBugLabel & {
   session_count?: number;
 };
 
-function bugLabelNameKey(name: string): string {
-  const trimmed = name.trim().replace(/\s+/g, " ");
-  const withoutPrefix = trimmed.replace(/^bug:\s*/i, "");
-  return withoutPrefix.toLocaleLowerCase();
-}
-
-function addBugLabelName(labels: string[], name: string): string[] {
-  const trimmed = name.trim();
-  if (!trimmed) return labels;
-  const key = bugLabelNameKey(trimmed);
-  if (labels.some((label) => bugLabelNameKey(label) === key)) return labels;
-  return [...labels, trimmed];
-}
-
 function BugLabelPicker({
   value,
   activeSlug,
@@ -2207,6 +2237,7 @@ function BugLabelPicker({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const pickerRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -2252,6 +2283,21 @@ function BugLabelPicker({
     };
   }, [open, requestPath, value]);
 
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (target instanceof Node && pickerRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+    };
+  }, [open]);
+
   const multi = Boolean(onSaveLabels);
   const currentLabels = multi ? (selectedLabels ?? []) : value ? [value] : [];
   const activeSlugSet = new Set(
@@ -2270,10 +2316,11 @@ function BugLabelPicker({
       : currentLabelCount === 1
         ? `Bug label: ${currentLabels[0]}`
         : "Set bug label";
-  const normalizedDraft = draft.trim();
+  const normalizedDraft = normalizeBugLabelDisplayName(draft);
   const triggerClasses = triggerClassName
     ? `${triggerClassName}${currentLabelCount > 0 ? " is-active" : ""}`
     : `run-composer-icon-btn run-bug-label-trigger${currentLabelCount > 0 ? " is-active" : ""}`;
+  const filteredLabels = filterBugLabelSuggestions(labels, draft);
   const save = async (name: string | null) => {
     setSaving(true);
     setError("");
@@ -2329,6 +2376,7 @@ function BugLabelPicker({
 
   return (
     <span
+      ref={pickerRef}
       className={`run-bug-label-picker${wrapperClassName ? ` ${wrapperClassName}` : ""}`}
     >
       <button
@@ -2354,7 +2402,7 @@ function BugLabelPicker({
             <input
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="bug: label"
+              placeholder="Search or add bug"
               autoFocus
               maxLength={90}
             />
@@ -2373,22 +2421,23 @@ function BugLabelPicker({
           {error && <div className="run-bug-label-error">{error}</div>}
           <div className="run-bug-label-list">
             {loading && <div className="run-bug-label-empty">Loading...</div>}
-            {!loading &&
-              labels.map((label) => (
-                <button
-                  key={label.slug}
-                  type="button"
-                  className={`run-bug-label-option${activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(label.display_name)) ? " is-active" : ""}`}
-                  onClick={() => toggleLabel(label)}
-                >
-                  <span>{label.display_name}</span>
-                  {typeof label.session_count === "number" && (
-                    <span>{label.session_count}</span>
-                  )}
-                </button>
-              ))}
-            {!loading && labels.length === 0 && (
-              <div className="run-bug-label-empty">No labels</div>
+            {!loading && filteredLabels.map((label) => (
+              <button
+                key={label.slug}
+                type="button"
+                className={`run-bug-label-option${activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(label.display_name)) ? " is-active" : ""}`}
+                onClick={() => toggleLabel(label)}
+              >
+                <span>{label.display_name}</span>
+                {typeof label.session_count === "number" && (
+                  <span>{label.session_count}</span>
+                )}
+              </button>
+            ))}
+            {!loading && filteredLabels.length === 0 && (
+              <div className="run-bug-label-empty">
+                {labels.length === 0 ? "No labels" : "No matching labels"}
+              </div>
             )}
           </div>
           {allowClear && currentLabelCount > 0 && (
@@ -3213,6 +3262,7 @@ function DemoLanding() {
       : selectedProvider === "codex"
         ? demoCodexModelId
         : "";
+  const demoProviderQuotaSnapshots = useMemo(() => buildProviderQuotaSnapshots(demoSessions), [demoSessions]);
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -3507,28 +3557,34 @@ function DemoLanding() {
                     {PROVIDERS.map((provider) => {
                       const mode = defaultModeFor(provider, demoInteraction);
                       const providerSelected = provider === selectedProvider;
+                      const quota = demoProviderQuotaSnapshots[provider];
+                      const fiveHour = quota.windows.find((window) => window.id === "five_hour");
+                      const weekly = quota.windows.find((window) => window.id === "weekly");
                       return (
                         <button
                           key={provider}
-                          className={`home-choice${providerSelected ? " is-selected" : ""}`}
+                          className={`home-choice home-provider-choice is-${quota.status}${providerSelected ? " is-selected" : ""}`}
                           onClick={() => setDemoProvider(provider)}
                           aria-pressed={providerSelected}
                           title={MODE_LABELS[mode]}
                         >
-                          <ProviderIcon
-                            provider={provider}
-                            className="home-choice-icon"
-                          />
-                          <span>{PROVIDER_LABELS[provider]}</span>
+                          <span className="home-provider-choice-main">
+                            <ProviderIcon provider={provider} className="home-choice-icon" />
+                            <span>{PROVIDER_LABELS[provider]}</span>
+                          </span>
+                          <span className="home-provider-choice-usage">
+                            <span>{fiveHour?.shortLabel ?? "5h"} {providerQuotaSummary(fiveHour)}</span>
+                            <span>{weekly?.shortLabel ?? "Week"} {providerQuotaSummary(weekly)}</span>
+                          </span>
                         </button>
                       );
                     })}
                   </div>
-                  <div
-                    className="home-choice-grid"
-                    role="group"
-                    aria-label="interaction"
-                  >
+                  <ProviderCapacityStrip
+                    snapshots={demoProviderQuotaSnapshots}
+                    selectedProvider={selectedProvider}
+                  />
+                  <div className="home-choice-grid" role="group" aria-label="interaction">
                     {INTERACTION_OPTIONS.map((interaction) => {
                       const unavailable =
                         PROVIDER_INTERACTION_MODES[selectedProvider][
@@ -4618,6 +4674,21 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
+const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>(["initialMessageMode"]);
+
+function isDurableRunPref(key: keyof RunPrefs): boolean {
+  return !EPHEMERAL_RUN_PREF_KEYS.has(key);
+}
+
+function durableRunPrefs(prefs: RunPrefs): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(prefs) as (keyof RunPrefs)[]) {
+    if (!isDurableRunPref(key)) continue;
+    out[key] = prefs[key];
+  }
+  return out;
+}
+
 const CHAT_FONT_SCALE_MIN = 0.8;
 const CHAT_FONT_SCALE_MAX = 2.0;
 const CHAT_FONT_SCALE_STEP = 0.1;
@@ -4705,50 +4776,26 @@ function pickAllowedPrefId(
   return options.some((opt) => opt.id === trimmed) ? trimmed : fallback;
 }
 
-function pickInitialMessageMode(
-  raw: string | null,
-  fallback: InitialMessageMode,
-): InitialMessageMode {
-  return pickAllowedPrefId(
-    raw,
-    INITIAL_MESSAGE_MODE_OPTIONS,
-    fallback,
-  ) as InitialMessageMode;
-}
-
 function loadRunPrefs(): RunPrefs {
   const out = { ...DEFAULT_RUN_PREFS };
   try {
     for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
+      if (!isDurableRunPref(key)) continue;
       const raw = localStorage.getItem(RUN_PREF_PREFIX + key);
       if (key === "chatFontScale") {
         if (raw != null) out[key] = clampChatFontScale(Number(raw));
       } else if (key === "turnCompleteSoundVolume") {
         if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
       } else if (key === "claudeModelId") {
-        out[key] = pickAllowedPrefId(
-          raw,
-          CLAUDE_MODELS,
-          DEFAULT_CLAUDE_MODEL_ID,
-        );
+        out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID);
       } else if (key === "claudeEffort") {
-        out[key] = pickAllowedPrefId(
-          raw,
-          CLAUDE_EFFORTS,
-          DEFAULT_CLAUDE_EFFORT_ID,
-        );
+        out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID);
       } else if (key === "codexModelId") {
         out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
       } else if (key === "codexEffort") {
-        out[key] = pickAllowedPrefId(
-          raw,
-          CODEX_EFFORTS,
-          DEFAULT_CODEX_EFFORT_ID,
-        );
-      } else if (key === "initialMessageMode") {
-        out[key] = pickInitialMessageMode(raw, DEFAULT_INITIAL_MESSAGE_MODE);
+        out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
       } else if (raw === "true" || raw === "false") {
-        out[key] = raw === "true";
+        (out as unknown as Record<string, unknown>)[key] = raw === "true";
       }
     }
   } catch {
@@ -4766,12 +4813,10 @@ type SetRunPref = <K extends keyof RunPrefs>(
 // SPA's RunPrefs shape. Unknown keys are dropped (a future SPA may have
 // written them); unknown values for known keys are ignored (defensive
 // against type drift).
-function mergeServerRunPrefs(
-  prev: RunPrefs,
-  server: Record<string, unknown>,
-): RunPrefs {
+function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): RunPrefs {
   const out: RunPrefs = { ...prev };
   for (const key of Object.keys(prev) as (keyof RunPrefs)[]) {
+    if (!isDurableRunPref(key)) continue;
     const raw = server[key];
     if (raw === undefined) continue;
     if (key === "chatFontScale") {
@@ -4793,10 +4838,6 @@ function mergeServerRunPrefs(
     } else if (key === "codexEffort") {
       if (typeof raw === "string") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, prev.codexEffort);
-      }
-    } else if (key === "initialMessageMode") {
-      if (typeof raw === "string") {
-        out[key] = pickInitialMessageMode(raw, prev.initialMessageMode);
       }
     } else if (typeof raw === "boolean") {
       (out as unknown as Record<string, unknown>)[key] = raw;
@@ -4933,6 +4974,7 @@ function normalizeProjectedTranscriptEntry(
   const kind = typeof record.kind === "string" ? record.kind : "";
   const id = typeof record.id === "string" ? record.id : "";
   if (!id) return null;
+  if (isFoldableStartupSessionStatusTranscriptRow(record)) return null;
   if (
     kind !== "message" &&
     kind !== "tool" &&
@@ -4965,9 +5007,20 @@ function normalizeProjectedTranscriptEntry(
   } as TranscriptEntry;
 }
 
-function normalizeTurnActivitySummary(
-  raw: unknown,
-): TurnActivitySummary | undefined {
+function isFoldableStartupSessionStatusTranscriptRow(record: Record<string, unknown>): boolean {
+  if (record.kind !== "message" || record.role !== "system") return false;
+  const status = typeof record.sessionStatus === "string" ? record.sessionStatus.trim() : "";
+  const text = typeof record.text === "string" ? record.text.trim() : "";
+  const normalizedStatus =
+    status ||
+    (text === "Session is loading." ? "loading" : text === "Session is ready." ? "ready" : "");
+  if (normalizedStatus !== "loading" && normalizedStatus !== "ready") return false;
+  const id = typeof record.id === "string" ? record.id : "";
+  const sourceEventId = typeof record.sourceEventId === "string" ? record.sourceEventId : "";
+  return !id.includes(":provider:") && !sourceEventId.includes(":provider:");
+}
+
+function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const record = raw as Record<string, unknown>;
   return {
@@ -9111,11 +9164,14 @@ function turnActivitySummary(entries: TranscriptEntry[]): string {
 function TurnActivityPager({
   pagerState,
   onSelectPage,
+  pageInfo,
 }: {
   pagerState: TurnActivityPagerState;
   onSelectPage: (page: number) => void;
+  pageInfo?: TurnActivityPageInfo;
 }) {
   if (!pagerState.visible) return null;
+  const progress = turnActivityEventProgress(pageInfo, pagerState.page);
   return (
     <div
       className="run-turn-activity-pages"
@@ -9132,6 +9188,10 @@ function TurnActivityPager({
         ‹
       </button>
       <span className="run-turn-activity-page-label">{pagerState.label}</span>
+      <span className="run-turn-activity-event-progress">{progress.label}</span>
+      {progress.totalLabel && (
+        <span className="run-turn-activity-total-events">{progress.totalLabel}</span>
+      )}
       <button
         type="button"
         className="run-turn-activity-page-nav"
@@ -9877,6 +9937,7 @@ function RunTurnActivityGroup({
                 <TurnActivityPager
                   pagerState={pagerState}
                   onSelectPage={onSelectPage}
+                  pageInfo={pageInfo}
                 />
               )}
               {group.shell && !group.loaded ? (
@@ -10123,6 +10184,9 @@ function RunTurnActivityScreen({
     pagerState.page,
     selectedPageDirectoryItem,
   );
+  const selectedEventProgress = selected
+    ? turnActivityEventProgress(selectedPageInfo, pagerState.page)
+    : null;
   const questionPageNavigation = useMemo<
     QuestionPageNavigation | undefined
   >(() => {
@@ -10338,6 +10402,18 @@ function RunTurnActivityScreen({
               </SelectContent>
             </Select>
           )}
+          {selectedEventProgress && (
+            <span
+              className="run-turn-view-event-progress"
+              title={
+                selectedEventProgress.totalLabel
+                  ? `${selectedEventProgress.label} on this page; ${selectedEventProgress.totalLabel}`
+                  : `${selectedEventProgress.label} on this page`
+              }
+            >
+              {selectedEventProgress.label}
+            </span>
+          )}
           <Select
             value={selected?.turnId ?? ""}
             onValueChange={onSelectTurn}
@@ -10393,6 +10469,9 @@ function RunTurnActivityScreen({
                 tokenScopeLabel="current context tokens"
                 scopeLabel="turn"
               />
+            )}
+            {selectedEventProgress?.totalLabel && (
+              <span>{selectedEventProgress.totalLabel}</span>
             )}
           </div>
           {selectedPageInfo?.kind === "question_set" && (
@@ -11370,6 +11449,255 @@ function providerRateLimitRows(
       rows.push({ key, label: PROVIDER_RATE_LIMIT_LABELS[key] ?? key, value });
   }
   return rows;
+}
+
+function quotaProviderFromInfo(info: Record<string, unknown>, fallback: Provider): Provider {
+  const raw = typeof info.provider === "string" ? info.provider.toLowerCase() : "";
+  if (raw.includes("codex") || raw.includes("openai")) return "codex";
+  if (raw.includes("claude") || raw.includes("anthropic")) return "anthropic";
+  return fallback;
+}
+
+function quotaWindowIdFromInfo(info: Record<string, unknown>): ProviderQuotaWindowId {
+  const raw = typeof info.rateLimitType === "string" ? info.rateLimitType.toLowerCase() : "";
+  const normalized = raw.replace(/[\s-]+/g, "_");
+  if (normalized.includes("opus")) return "opus_weekly";
+  if (normalized.includes("other") || normalized.includes("sonnet") || normalized.includes("non_opus")) return "weekly";
+  if (normalized.includes("week") || normalized.includes("seven_day") || normalized.includes("7_day")) {
+    return "weekly";
+  }
+  return "five_hour";
+}
+
+function quotaPercentRemaining(info: Record<string, unknown>): number | null {
+  const raw = info.utilization;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  const percentUsed = raw <= 1 ? raw * 100 : raw;
+  return Math.max(0, Math.min(100, 100 - percentUsed));
+}
+
+function quotaResetAt(info: Record<string, unknown>): string | null {
+  const raw = info.resetsAt ?? info.overageResetsAt;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const ms = raw > 1_000_000_000_000 ? raw : raw * 1000;
+    const date = new Date(ms);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  }
+  return null;
+}
+
+function quotaWindowStatus(
+  info: Record<string, unknown> | null,
+  percentRemaining: number | null,
+  resetAt: string | null,
+  observedAt: string | null,
+): ProviderQuotaStatus {
+  if (!info || !observedAt) return "unknown";
+  const now = Date.now();
+  const resetMs = resetAt ? Date.parse(resetAt) : Number.NaN;
+  if (Number.isFinite(resetMs) && resetMs < now) return "stale";
+  const observedMs = Date.parse(observedAt);
+  if (Number.isFinite(observedMs) && now - observedMs > 24 * 60 * 60 * 1000) return "stale";
+  const status = typeof info.status === "string" ? info.status.toLowerCase() : "";
+  if (status.includes("reject") || status.includes("exhaust")) return "exhausted";
+  if (percentRemaining !== null && percentRemaining <= 0) return "exhausted";
+  if (percentRemaining !== null && percentRemaining <= 20) return "low";
+  return "ok";
+}
+
+function quotaSnapshotStatus(windows: ProviderQuotaWindow[]): ProviderQuotaStatus {
+  if (windows.some((window) => window.status === "exhausted")) return "exhausted";
+  if (windows.some((window) => window.status === "low")) return "low";
+  if (windows.some((window) => window.status === "ok")) return "ok";
+  if (windows.some((window) => window.status === "stale")) return "stale";
+  return "unknown";
+}
+
+function providerQuotaEvidenceFromPayload(value: unknown): ProviderQuotaEvidence[] {
+  if (!value || typeof value !== "object") return [];
+  const raw = value as Record<string, unknown>;
+  const rows = Array.isArray(raw.rate_limits) ? raw.rate_limits : [];
+  const out: ProviderQuotaEvidence[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const item = row as Record<string, unknown>;
+    const provider = typeof item.provider === "string" ? quotaProviderFromInfo(item, "anthropic") : null;
+    const rateLimitType = typeof item.rateLimitType === "string" ? item.rateLimitType : "";
+    if (!provider || !rateLimitType) continue;
+    const utilization =
+      typeof item.utilization === "number" && Number.isFinite(item.utilization)
+        ? item.utilization
+        : undefined;
+    out.push({
+      provider,
+      rateLimitType,
+      ...(typeof item.status === "string" ? { status: item.status } : {}),
+      ...(utilization !== undefined ? { utilization } : {}),
+      ...(typeof item.resetsAt === "string" || typeof item.resetsAt === "number" || item.resetsAt === null
+        ? { resetsAt: item.resetsAt }
+        : {}),
+      ...(typeof item.observedAt === "string" ? { observedAt: item.observedAt } : {}),
+    });
+  }
+  return out;
+}
+
+function providerQuotaEvidenceFromSessions(sessions: readonly Session[]): ProviderQuotaEvidence[] {
+  const out: ProviderQuotaEvidence[] = [];
+  for (const session of sessions) {
+    const info = session.provider_rate_limit_info;
+    const observedAt = session.provider_rate_limit_observed_at;
+    if (!info || !observedAt) continue;
+    const fallbackProvider = MODE_MENU_ICONS[session.mode];
+    const provider = quotaProviderFromInfo(info, fallbackProvider);
+    const rateLimitType =
+      typeof info.rateLimitType === "string"
+        ? info.rateLimitType
+        : quotaWindowIdFromInfo(info);
+    out.push({
+      provider,
+      rateLimitType,
+      ...(typeof info.status === "string" ? { status: info.status } : {}),
+      ...(typeof info.utilization === "number" && Number.isFinite(info.utilization)
+        ? { utilization: info.utilization }
+        : {}),
+      ...(typeof info.resetsAt === "string" || typeof info.resetsAt === "number"
+        ? { resetsAt: info.resetsAt }
+        : typeof info.overageResetsAt === "string" || typeof info.overageResetsAt === "number"
+          ? { resetsAt: info.overageResetsAt }
+          : {}),
+      observedAt,
+    });
+  }
+  return out;
+}
+
+function buildProviderQuotaSnapshots(
+  sessions: readonly Session[],
+  remoteEvidence: readonly ProviderQuotaEvidence[] = [],
+): Record<Provider, ProviderQuotaSnapshot> {
+  const latest: Partial<Record<Provider, Partial<Record<ProviderQuotaWindowId, {
+    info: Record<string, unknown>;
+    observedAt: string;
+  }>>>> = {};
+  const evidence = [
+    ...providerQuotaEvidenceFromSessions(sessions),
+    ...remoteEvidence,
+  ];
+  for (const row of evidence) {
+    const observedAt = typeof row.observedAt === "string" && row.observedAt ? row.observedAt : new Date().toISOString();
+    const info: Record<string, unknown> = {
+      provider: row.provider,
+      rateLimitType: row.rateLimitType,
+      ...(row.status ? { status: row.status } : {}),
+      ...(typeof row.utilization === "number" ? { utilization: row.utilization } : {}),
+      ...(row.resetsAt !== undefined && row.resetsAt !== null ? { resetsAt: row.resetsAt } : {}),
+    };
+    const provider = row.provider;
+    const windowId = quotaWindowIdFromInfo(info);
+    const current = latest[provider]?.[windowId];
+    if (!current || Date.parse(observedAt) > Date.parse(current.observedAt)) {
+      latest[provider] = {
+        ...(latest[provider] ?? {}),
+        [windowId]: { info, observedAt },
+      };
+    }
+  }
+
+  const out = {} as Record<Provider, ProviderQuotaSnapshot>;
+  for (const provider of PROVIDERS) {
+    const windows = PROVIDER_QUOTA_WINDOW_DEFS[provider].map((def): ProviderQuotaWindow => {
+      const evidence = latest[provider]?.[def.id];
+      const percentRemaining = evidence ? quotaPercentRemaining(evidence.info) : null;
+      const resetAt = evidence ? quotaResetAt(evidence.info) : null;
+      return {
+        ...def,
+        status: quotaWindowStatus(evidence?.info ?? null, percentRemaining, resetAt, evidence?.observedAt ?? null),
+        percentRemaining,
+        resetAt,
+        observedAt: evidence?.observedAt ?? null,
+      };
+    });
+    const observedAt = windows
+      .map((window) => window.observedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
+    out[provider] = {
+      provider,
+      status: quotaSnapshotStatus(windows),
+      observedAt,
+      windows,
+    };
+  }
+  return out;
+}
+
+function providerQuotaSummary(window: ProviderQuotaWindow | undefined): string {
+  if (!window || window.status === "unknown") return "unknown";
+  if (window.status === "stale") return "stale";
+  if (window.percentRemaining === null) {
+    return window.status === "exhausted" ? "exhausted" : "captured";
+  }
+  return `${Math.round(window.percentRemaining)}% left`;
+}
+
+function formatProviderQuotaTimestamp(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  return new Intl.DateTimeFormat([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(new Date(ms));
+}
+
+function providerQuotaResetLabel(window: ProviderQuotaWindow): string {
+  const resetAt = formatProviderQuotaTimestamp(window.resetAt);
+  return resetAt ? `resets ${resetAt}` : "";
+}
+
+function ProviderCapacityStrip({
+  snapshots,
+  selectedProvider,
+}: {
+  snapshots: Record<Provider, ProviderQuotaSnapshot>;
+  selectedProvider: Provider;
+}) {
+  const snapshot = snapshots[selectedProvider];
+  return (
+    <div className={`home-provider-capacity-panel is-${snapshot.status}`} aria-label={`${PROVIDER_LABELS[selectedProvider]} usage remaining`}>
+      <div className="home-provider-capacity-head">
+        <span>Capacity</span>
+        <span>
+          {snapshot.observedAt ? `Last captured ${formatProviderQuotaTimestamp(snapshot.observedAt)}` : "No recent capture"}
+        </span>
+      </div>
+      <div className="home-provider-capacity-rows">
+        {snapshot.windows.map((window) => (
+          <div className={`home-provider-capacity-row is-${window.status}`} key={window.id}>
+            <span className="home-provider-capacity-label">{window.label}</span>
+            <span className="home-provider-capacity-meter" aria-hidden="true">
+              <span
+                style={{ width: `${window.percentRemaining ?? 0}%` }}
+              />
+            </span>
+            <span className="home-provider-capacity-value">
+              {providerQuotaSummary(window)}
+              {providerQuotaResetLabel(window) ? ` · ${providerQuotaResetLabel(window)}` : ""}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function RunSettingsPanel({
@@ -12786,6 +13114,7 @@ function ChatPane({
         question_set?: number;
         answered?: boolean;
         pages?: unknown;
+        total_event_count?: number;
       };
       if (
         typeof body.page === "number" &&
@@ -12794,6 +13123,10 @@ function ChatPane({
         const info: TurnActivityPageInfo = {
           page: body.page,
           pageCount: body.page_count,
+          totalEventCount:
+            typeof body.total_event_count === "number"
+              ? body.total_event_count
+              : undefined,
           kind: typeof body.page_kind === "string" ? body.page_kind : undefined,
           questionCount:
             typeof body.question_count === "number"
@@ -12817,6 +13150,7 @@ function ChatPane({
             existing &&
             existing.page === info.page &&
             existing.pageCount === info.pageCount &&
+            existing.totalEventCount === info.totalEventCount &&
             existing.kind === info.kind &&
             existing.questionCount === info.questionCount &&
             existing.questionIndex === info.questionIndex &&
@@ -17969,6 +18303,11 @@ function AuthenticatedApp() {
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
   const [appConfigLoaded, setAppConfigLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const [providerQuotaEvidence, setProviderQuotaEvidence] = useState<ProviderQuotaEvidence[]>([]);
+  const providerQuotaSnapshots = useMemo(
+    () => buildProviderQuotaSnapshots(sessions, providerQuotaEvidence),
+    [providerQuotaEvidence, sessions],
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
@@ -17989,7 +18328,7 @@ function AuthenticatedApp() {
       void authedFetch("/api/auth/prefs", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ run_prefs: prefs }),
+        body: JSON.stringify({ run_prefs: durableRunPrefs(prefs) }),
       }).catch(() => {
         // Best-effort — localStorage is the source of truth on this
         // device; failed sync just means other devices won't see the
@@ -18000,9 +18339,12 @@ function AuthenticatedApp() {
   function setRunPref<K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) {
     setRunPrefs((p) => {
       const next = { ...p, [key]: value };
-      persistRunPrefs(next);
+      if (isDurableRunPref(key)) {
+        persistRunPrefs(next);
+      }
       return next;
     });
+    if (!isDurableRunPref(key)) return;
     try {
       localStorage.setItem(RUN_PREF_PREFIX + String(key), String(value));
     } catch {
@@ -19231,6 +19573,31 @@ function AuthenticatedApp() {
     void refresh();
   }, [user, effectiveSessionScope]);
 
+  useEffect(() => {
+    if (!user) {
+      setProviderQuotaEvidence([]);
+      return;
+    }
+    let cancelled = false;
+    let timer: number | null = null;
+    const load = async () => {
+      try {
+        const res = await authedFetch("/api/provider-quotas");
+        if (!res.ok) throw new Error(`provider quotas failed: ${res.status}`);
+        const payload = await res.json();
+        if (!cancelled) setProviderQuotaEvidence(providerQuotaEvidenceFromPayload(payload));
+      } catch {
+        if (!cancelled) setProviderQuotaEvidence([]);
+      }
+    };
+    void load();
+    timer = window.setInterval(() => void load(), 2 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearInterval(timer);
+    };
+  }, [user]);
+
   // Keep the refs that the SSE reducer reads in sync with the latest
   // committed state. This lets the SSE useEffect close over a stable
   // user identity instead of every render's state, avoiding constant
@@ -19960,9 +20327,7 @@ function AuthenticatedApp() {
           ...(homeBugLabels.length > 0 ? { bug_labels: homeBugLabels } : {}),
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(requestedName ? { name: requestedName } : {}),
-          ...(sessionModel || sessionEffort
-            ? { model: sessionModel, effort: sessionEffort }
-            : {}),
+          ...(sessionModel || sessionEffort ? { model: sessionModel, effort: sessionEffort } : {}),
           ...(initialTurnPayload ? { initial_turn: initialTurnPayload } : {}),
         }),
       });
@@ -20143,6 +20508,7 @@ function AuthenticatedApp() {
         // to show up in the picker without a full SPA reload.
         setAllRepos({ status: "idle", repos: [] });
       }
+      setHomeBugLabels([]);
     } catch (e) {
       setError(String(e));
     } finally {
@@ -21025,24 +21391,47 @@ function AuthenticatedApp() {
                               defaultInteraction,
                             );
                             const selected = provider === selectedProvider;
+                            const quota = providerQuotaSnapshots[provider];
+                            const fiveHour = quota.windows.find(
+                              (window) => window.id === "five_hour",
+                            );
+                            const weekly = quota.windows.find(
+                              (window) => window.id === "weekly",
+                            );
                             return (
                               <button
                                 key={provider}
-                                className={`home-choice${selected ? " is-selected" : ""}`}
+                                className={`home-choice home-provider-choice is-${quota.status}${selected ? " is-selected" : ""}`}
                                 onClick={() => setDefaultProvider(provider)}
                                 disabled={busy}
                                 aria-pressed={selected}
                                 title={MODE_LABELS[mode]}
                               >
-                                <ProviderIcon
-                                  provider={provider}
-                                  className="home-choice-icon"
-                                />
-                                <span>{PROVIDER_LABELS[provider]}</span>
+                                <span className="home-provider-choice-main">
+                                  <ProviderIcon
+                                    provider={provider}
+                                    className="home-choice-icon"
+                                  />
+                                  <span>{PROVIDER_LABELS[provider]}</span>
+                                </span>
+                                <span className="home-provider-choice-usage">
+                                  <span>
+                                    {fiveHour?.shortLabel ?? "5h"}{" "}
+                                    {providerQuotaSummary(fiveHour)}
+                                  </span>
+                                  <span>
+                                    {weekly?.shortLabel ?? "Week"}{" "}
+                                    {providerQuotaSummary(weekly)}
+                                  </span>
+                                </span>
                               </button>
                             );
                           })}
                         </div>
+                        <ProviderCapacityStrip
+                          snapshots={providerQuotaSnapshots}
+                          selectedProvider={selectedProvider}
+                        />
                         <div
                           className="home-choice-grid"
                           role="group"

@@ -516,6 +516,9 @@ func transcriptRowFromEntry(entry map[string]any) (transcriptRowRecord, bool) {
 	if id == "" || kind == "" || orderKey == "" {
 		return transcriptRowRecord{}, false
 	}
+	if isFoldableStartupSessionStatusRow(entry) {
+		return transcriptRowRecord{}, false
+	}
 	startOrderKey := orderKey
 	endOrderKey := orderKey
 	if kind == "turn_activity" {
@@ -540,6 +543,28 @@ func transcriptRowFromEntry(entry map[string]any) (transcriptRowRecord, bool) {
 		EndOrderKey:   endOrderKey,
 		SourceEventID: transcriptRowString(entry, "sourceEventId"),
 	}, true
+}
+
+func isFoldableStartupSessionStatusRow(entry map[string]any) bool {
+	if transcriptRowString(entry, "kind") != "message" ||
+		transcriptRowString(entry, "role") != "system" {
+		return false
+	}
+	status := transcriptRowString(entry, "sessionStatus")
+	if status == "" {
+		text := transcriptRowString(entry, "text")
+		if text == "Session is loading." {
+			status = "loading"
+		} else if text == "Session is ready." {
+			status = "ready"
+		}
+	}
+	if status != "loading" && status != "ready" {
+		return false
+	}
+	id := transcriptRowString(entry, "id")
+	sourceEventID := transcriptRowString(entry, "sourceEventId")
+	return !strings.Contains(id, ":provider:") && !strings.Contains(sourceEventID, ":provider:")
 }
 
 func transcriptRowString(entry map[string]any, key string) string {

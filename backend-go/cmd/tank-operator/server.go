@@ -207,6 +207,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.Handle("GET /metrics", promhttp.Handler())
 	mux.HandleFunc("GET /api/config", s.handleConfig)
+	mux.HandleFunc("GET /api/provider-quotas", s.handleProviderQuotas)
 	mux.HandleFunc("GET /api/cluster-health", s.handleClusterHealth)
 	mux.HandleFunc("GET /api/design/selection/latest", s.handleGetLatestDesignSelection)
 	mux.HandleFunc("POST /api/design/selection", s.handlePostDesignSelection)

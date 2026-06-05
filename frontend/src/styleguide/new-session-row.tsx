@@ -52,14 +52,48 @@ export function StyleguideNewSessionRow() {
                     <span className="home-panel-meta">Claude GUI</span>
                   </div>
                   <div className="home-choice-grid" role="group" aria-label="provider">
-                    <button className="home-choice is-selected" type="button" aria-pressed="true" title="Claude GUI">
-                      <ProviderIcon provider="anthropic" className="home-choice-icon" />
-                      <span>Claude</span>
+                    <button className="home-choice home-provider-choice is-low is-selected" type="button" aria-pressed="true" title="Claude GUI">
+                      <span className="home-provider-choice-main">
+                        <ProviderIcon provider="anthropic" className="home-choice-icon" />
+                        <span>Claude</span>
+                      </span>
+                      <span className="home-provider-choice-usage">
+                        <span>5h 18% left</span>
+                        <span>Week 64% left</span>
+                      </span>
                     </button>
-                    <button className="home-choice" type="button" aria-pressed="false" title="Codex GUI">
-                      <ProviderIcon provider="codex" className="home-choice-icon" />
-                      <span>Codex</span>
+                    <button className="home-choice home-provider-choice is-unknown" type="button" aria-pressed="false" title="Codex GUI">
+                      <span className="home-provider-choice-main">
+                        <ProviderIcon provider="codex" className="home-choice-icon" />
+                        <span>Codex</span>
+                      </span>
+                      <span className="home-provider-choice-usage">
+                        <span>5h unknown</span>
+                        <span>Week unknown</span>
+                      </span>
                     </button>
+                  </div>
+                  <div className="home-provider-capacity-panel is-low" aria-label="Claude usage remaining">
+                    <div className="home-provider-capacity-head">
+                      <span>Capacity</span>
+                      <span>Last captured 14:20:00</span>
+                    </div>
+                    <div className="home-provider-capacity-rows">
+                      <div className="home-provider-capacity-row is-low">
+                        <span className="home-provider-capacity-label">5-hour window</span>
+                        <span className="home-provider-capacity-meter" aria-hidden="true">
+                          <span style={{ width: "18%" }} />
+                        </span>
+                        <span className="home-provider-capacity-value">18% left · resets Jun 5, 2026, 5:00 PM UTC</span>
+                      </div>
+                      <div className="home-provider-capacity-row is-ok">
+                        <span className="home-provider-capacity-label">Weekly</span>
+                        <span className="home-provider-capacity-meter" aria-hidden="true">
+                          <span style={{ width: "64%" }} />
+                        </span>
+                        <span className="home-provider-capacity-value">64% left</span>
+                      </div>
+                    </div>
                   </div>
                   <div className="home-choice-grid" role="group" aria-label="interaction">
                     <button className="home-choice is-selected" type="button" aria-pressed="true">
