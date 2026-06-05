@@ -219,19 +219,20 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	// back to "scheduled" after this turn finishes. No-op when nothing is pending.
 	s.cancelPendingWakesForSession(r.Context(), sessionID)
 	resp, status, detail := s.enqueueSDKTurn(r.Context(), owner, sessionID, sdkTurnRequest{
-		ClientNonce:        body.ClientNonce,
-		RequireNonce:       true,
-		Prompt:             body.Prompt,
-		DisplayText:        body.DisplayText,
-		DisplayAttachments: body.DisplayAttachments,
-		Model:              body.Model,
-		Effort:             body.Effort,
-		PermissionMode:     body.PermissionMode,
-		SkillName:          body.SkillName,
-		FollowUp:           body.FollowUp,
-		OmitUserMessage:    body.ExistingUserMessage,
-		OriginSessionID:    body.OriginSessionID,
-		AuthorKind:         authorKindForUser(user),
+		ClientNonce:                body.ClientNonce,
+		RequireNonce:               true,
+		Prompt:                     body.Prompt,
+		DisplayText:                body.DisplayText,
+		DisplayAttachments:         body.DisplayAttachments,
+		Model:                      body.Model,
+		Effort:                     body.Effort,
+		PermissionMode:             body.PermissionMode,
+		SkillName:                  body.SkillName,
+		FollowUp:                   body.FollowUp,
+		OmitUserMessage:            body.ExistingUserMessage,
+		RequireExistingUserMessage: body.ExistingUserMessage,
+		OriginSessionID:            body.OriginSessionID,
+		AuthorKind:                 authorKindForUser(user),
 	})
 	if detail != "" {
 		writeError(w, status, detail)
@@ -824,20 +825,22 @@ func turnAwaitingQuestionTarget(events []map[string]any, timelineID, providerIte
 }
 
 type sdkTurnRequest struct {
-	ClientNonce        string
-	RequireNonce       bool
-	Prompt             string
-	DisplayText        string
-	DisplayAttachments []conversation.UserMessageAttachment
-	Model              string
-	Effort             string
-	PermissionMode     string
-	SkillName          string
-	FollowUp           bool
-	Source             string
-	AllowBeforeReady   bool
-	OmitUserMessage    bool
-	SessionMode        string
+	ClientNonce                string
+	RequireNonce               bool
+	Prompt                     string
+	DisplayText                string
+	DisplayAttachments         []conversation.UserMessageAttachment
+	Model                      string
+	Effort                     string
+	PermissionMode             string
+	SkillName                  string
+	FollowUp                   bool
+	Source                     string
+	SourceTaskID               string
+	AllowBeforeReady           bool
+	OmitUserMessage            bool
+	RequireExistingUserMessage bool
+	SessionMode                string
 	// Display, when non-nil, is used verbatim as the user_message.created
 	// payload.display; empty for normal turns (derived from SkillName/text).
 	Display   map[string]any
@@ -1049,12 +1052,13 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	if err != nil {
 		return nil, http.StatusBadRequest, err.Error()
 	}
-	if req.OmitUserMessage {
+	if req.RequireExistingUserMessage {
 		if status, detail := s.requireExistingUserMessage(ctx, sessionID, turnID); status != 0 {
 			return nil, status, detail
 		}
 	}
 	retimeTurnBoundaryEvents(events, req.OrderBase)
+	stampTurnSubmittedSource(events, sdkTurnSource(req.Source), req.SourceTaskID, prompt)
 	if req.OmitUserMessage {
 		events = omitUserMessageEvents(events)
 	}
@@ -1130,10 +1134,12 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 
 func sdkTurnSource(source string) string {
 	switch strings.TrimSpace(source) {
-	case "schedule-wakeup":
-		return "schedule-wakeup"
-	case "background-task":
-		return "background-task"
+	case string(conversation.TurnSubmittedSourceScheduleWakeup):
+		return string(conversation.TurnSubmittedSourceScheduleWakeup)
+	case string(conversation.TurnSubmittedSourceBackgroundTask):
+		return string(conversation.TurnSubmittedSourceBackgroundTask)
+	case string(conversation.TurnSubmittedSourceLaunchDispatch):
+		return string(conversation.TurnSubmittedSourceLaunchDispatch)
 	default:
 		return "sdk"
 	}
@@ -1162,6 +1168,33 @@ func omitUserMessageEvents(events []map[string]any) []map[string]any {
 		out = append(out, event)
 	}
 	return out
+}
+
+func stampTurnSubmittedSource(events []map[string]any, source, taskID, prompt string) {
+	source = strings.TrimSpace(source)
+	taskID = strings.TrimSpace(taskID)
+	if source == "" || source == "sdk" {
+		return
+	}
+	for _, event := range events {
+		if event["type"] != string(conversation.EventTurnSubmitted) {
+			continue
+		}
+		payload, _ := event["payload"].(map[string]any)
+		if payload == nil {
+			payload = map[string]any{}
+			event["payload"] = payload
+		}
+		payload["source"] = source
+		if taskID != "" {
+			payload["task_id"] = taskID
+		}
+		if source == string(conversation.TurnSubmittedSourceBackgroundTask) {
+			if prompt := strings.TrimSpace(prompt); prompt != "" {
+				payload["prompt"] = prompt
+			}
+		}
+	}
 }
 
 func retimeTurnBoundaryEvents(events []map[string]any, base time.Time) {

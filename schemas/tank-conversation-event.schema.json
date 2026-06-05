@@ -343,7 +343,16 @@
       "additionalProperties": true,
       "required": ["status"],
       "properties": {
-        "status": { "$ref": "#/$defs/nonEmptyString" }
+        "status": { "$ref": "#/$defs/nonEmptyString" },
+        "source": {
+          "description": "Optional payload-level provenance for backend-originated self-submit paths. The turn.submitted envelope source remains tank.",
+          "enum": ["schedule-wakeup", "background-task", "launch-dispatch"]
+        },
+        "prompt": {
+          "description": "Optional backend-owned prompt text for self-submit paths whose user-facing message is not persisted as a main-transcript user_message.created row. Background-task wake projection uses this as a turn-only system-user message in Turn activity.",
+          "$ref": "#/$defs/nonEmptyString"
+        },
+        "task_id": { "$ref": "#/$defs/nonEmptyString" }
       }
     },
     "finalAnswer": {

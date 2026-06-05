@@ -99,17 +99,23 @@ func TestFireBackgroundTaskWakeUsesDurableTurnBoundary(t *testing.T) {
 		t.Fatalf("command = %+v", cmd)
 	}
 	events := app.sessionEvents.(*recordingSessionEventStore).upserts
-	if len(events) != 2 {
-		t.Fatalf("boundary upserts = %d, want 2", len(events))
+	if len(events) != 1 {
+		t.Fatalf("boundary upserts = %d, want 1", len(events))
 	}
-	if got, _ := events[0]["type"].(string); got != "user_message.created" {
-		t.Fatalf("first event type = %q", got)
+	if got, _ := events[0]["type"].(string); got != "turn.submitted" {
+		t.Fatalf("event type = %q, want turn.submitted", got)
 	}
-	if got, _ := events[1]["type"].(string); got != "turn.submitted" {
-		t.Fatalf("second event type = %q", got)
+	payload, _ := events[0]["payload"].(map[string]any)
+	if got, _ := payload["source"].(string); got != "background-task" {
+		t.Fatalf("turn.submitted payload.source = %q, want background-task", got)
 	}
-	if got, _ := events[0]["author_kind"].(string); got != "system" {
-		t.Fatalf("author_kind = %q, want system", got)
+	if got, _ := payload["prompt"].(string); got != row.Prompt {
+		t.Fatalf("turn.submitted payload.prompt = %q, want wake prompt", got)
+	}
+	for _, event := range events {
+		if got, _ := event["type"].(string); got == "user_message.created" {
+			t.Fatalf("background-task wake prompt leaked into main transcript event: %#v", event)
+		}
 	}
 }
 
@@ -154,6 +160,9 @@ func TestFireBackgroundTaskWakeFailsInactiveSessionDurably(t *testing.T) {
 func TestSdkTurnSourceIncludesBackgroundTask(t *testing.T) {
 	if got := sdkTurnSource("background-task"); got != "background-task" {
 		t.Fatalf("sdkTurnSource(background-task) = %q, want background-task", got)
+	}
+	if got := sdkTurnSource("launch-dispatch"); got != "launch-dispatch" {
+		t.Fatalf("sdkTurnSource(launch-dispatch) = %q, want launch-dispatch", got)
 	}
 	if got := sdkTurnSource("something-else"); got != "sdk" {
 		t.Fatalf("sdkTurnSource(something-else) = %q, want sdk", got)

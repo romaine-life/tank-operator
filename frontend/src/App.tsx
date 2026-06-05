@@ -407,6 +407,13 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // session's system identity for these instead of the human owner's
   // Gravatar. originSessionId takes precedence when both are present.
   authorKind?: string;
+  // Server-projected rows that belong only to the Turns activity surface.
+  // Background wake prompts intentionally use role=user + authorKind=system so
+  // the renderer shows the existing system-user identity without surfacing the
+  // row in the main transcript.
+  turnOnly?: boolean;
+  wakePrompt?: boolean;
+  backendTurnId?: string;
   // metaKind specializes a meta-kind row into a distinguishable transcript
   // surface without growing the shared `kind` enum (which comes from the
   // sandbox-agent SDK). renderItem branches on metaKind before falling
@@ -5200,6 +5207,13 @@ function isUserMessageEntry(entry: TranscriptEntry): boolean {
   return entry.kind === "message" && entry.role === "user";
 }
 
+function isTurnActivityUserMessageEntry(entry: TranscriptEntry): boolean {
+  return (
+    isUserMessageEntry(entry) &&
+    (entry.turnOnly === true || entry.wakePrompt === true)
+  );
+}
+
 function turnThinkingGroup(
   turnId: string,
   shell?: TranscriptEntry,
@@ -9405,7 +9419,8 @@ function buildTurnViewItems(
       shells.set(turnId, entry);
       return;
     }
-    if (isUserMessageEntry(entry)) return;
+    if (isUserMessageEntry(entry) && !isTurnActivityUserMessageEntry(entry))
+      return;
     const bucket = rawEntries.get(turnId) ?? [];
     bucket.push(entry);
     rawEntries.set(turnId, bucket);
@@ -10163,7 +10178,9 @@ function RunTurnActivityScreen({
   const detailEntries = useMemo(
     () =>
       (selected?.entries ?? []).filter(
-        (entry) => !isTurnActivityEntry(entry) && !isUserMessageEntry(entry),
+        (entry) =>
+          !isTurnActivityEntry(entry) &&
+          (!isUserMessageEntry(entry) || isTurnActivityUserMessageEntry(entry)),
       ),
     [selected?.entries],
   );

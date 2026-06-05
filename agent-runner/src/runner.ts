@@ -1999,7 +1999,7 @@ export class Runner {
   ): Promise<void> {
     const terminal = claudeTerminalBackgroundTask(event);
     if (!terminal) return;
-    if (this.activeTurn) return;
+    if (this.activeTurn && !this.activeTurn.terminalEmitted) return;
     if (this.firedBackgroundTaskWakes.has(terminal.taskID)) return;
     this.firedBackgroundTaskWakes.add(terminal.taskID);
     try {

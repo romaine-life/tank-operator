@@ -197,6 +197,65 @@ Codex-specific notes:
   manual/auto trigger or pre-token metadata on these surfaces, so the runner
   defaults `payload.trigger` to `auto`.
 
+## Background Wake Continuation Projection
+
+Status: active
+
+Intent:
+Treat a `run_in_background` wake as a continuation mechanic inside the user's
+larger simulated turn, not as a new standalone chat exchange. The wake prompt
+and wake activity are useful audit data for the Turns view, but they should not
+trick the user into reading operational noise as settled conversation. The main
+transcript remains quiet until the resumed agent reaches a true final answer.
+
+Affected contracts:
+- Transcript
+- Tank Conversation Protocol
+
+Contract impact:
+- The background-task wake fire path omits the synthetic wake prompt from
+  `user_message.created`; it persists the text on the `turn.submitted`
+  boundary as `payload.prompt` and publishes the runner command with
+  `source=background-task`.
+- `turn.submitted` stays schema-valid (`source=tank`) and carries
+  `payload.source=background-task` so the server projection can recognize the
+  continuation without weakening the event envelope.
+- Background wake turn-activity shells are suppressed from the settled main
+  transcript, while their activity bodies fold into the originating turn in the
+  Turns view.
+- The background wake `turn.submitted.payload.prompt` projects as the same
+  prominent system-user message the user previously saw in the main transcript,
+  but only inside Turn activity. It is not replaced by a generic tool/meta row.
+- The turn that parked on a still-running background task is also suppressed
+  from the settled main transcript: its provisional assistant prose and
+  background-task row stay in Turn activity until the background-wake
+  continuation produces the user-final response.
+- A final assistant answer from the resumed turn can still be promoted into the
+  main transcript, but only through the normal
+  `turn.completed.payload.final_answer.timeline_ids` marker. The promoted row is
+  attributed to the originating user-visible turn and retains the wake backend
+  turn id for audit/debug detail.
+
+Evidence:
+- Walkthrough: `docs/features/transcript/background-wake-turn-flow.html`
+  records the intended main-transcript, Turns-view, backend-boundary, and
+  rejected-shape projections for background wake continuations.
+- Backend fire path: `backend-go/cmd/tank-operator/background_task_wakes_test.go`
+  (`TestFireBackgroundTaskWakeUsesDurableTurnBoundary`) proves the wake writes
+  `turn.submitted` only, with `payload.source=background-task` and
+  `payload.prompt` carrying the system-user wake text.
+- Projection: `backend-go/cmd/tank-operator/transcript_projection_test.go`
+  (`TestProjectTranscriptEventsKeepsBackgroundTaskWakeMechanicsOutOfMainTranscript`
+  `TestProjectTranscriptEventsPromotesFinalAnswerFromBackgroundTaskWake`, and
+  `TestProjectTranscriptEventsHidesBackgroundContinuationTurnFromMainTranscript`)
+  proves wake mechanics and provisional parking-turn prose stay out of the main
+  transcript while true final-answer promotion still works and stays owned by the
+  originating user-visible turn.
+- Turn detail: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
+  (`TestHandleSessionTurnActivityIncludesBackgroundWakeContinuation`) proves the
+  parent Turn activity payload includes both the background/timer row and the
+  resumed wake final message.
+
 ## Session Lifecycle In Turn Activity
 
 Status: active

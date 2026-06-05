@@ -10131,12 +10131,26 @@ textarea.run-files-viewer-editor:focus {
   grid-row: 1;
 }
 
-.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"] {
+.run-turn-view-body [data-slot="message"][data-owner="activity"] {
   grid-template-columns: 2.625rem minmax(0, 1fr);
+  max-width: 100%;
 }
 
-.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"] .run-transcript-message-content {
+.run-turn-view-body [data-slot="message"][data-owner="activity"] .run-transcript-message-content {
   grid-column: 2;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.run-turn-activity-body [data-slot="message"][data-owner="activity"] {
+  grid-template-columns: 2rem minmax(0, 1fr);
+  max-width: 100%;
+}
+
+.run-turn-activity-body [data-slot="message"][data-owner="activity"] .run-transcript-message-content {
+  grid-column: 2;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .run-transcript-message-text {

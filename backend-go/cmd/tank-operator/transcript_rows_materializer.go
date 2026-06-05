@@ -128,6 +128,9 @@ func (m transcriptRowsMaterializer) RefreshEvent(ctx context.Context, event map[
 	if err != nil {
 		return err
 	}
+	if turnEventsContainBackgroundWake(turnEvents) {
+		return m.refreshSession(ctx, sessionID)
+	}
 	projection := projectTranscriptEvents(turnEvents)
 	recordTranscriptProjectionInvariantViolations(sessionID, turnID, turnEvents, projection.Entries)
 	if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
@@ -157,12 +160,24 @@ func (m transcriptRowsMaterializer) refreshEventTx(
 	if err != nil {
 		return err
 	}
+	if turnEventsContainBackgroundWake(turnEvents) {
+		return m.backfillSessionTx(ctx, tx, events, rows, sessionID)
+	}
 	projection := projectTranscriptEvents(turnEvents)
 	recordTranscriptProjectionInvariantViolations(sessionID, turnID, turnEvents, projection.Entries)
 	if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
 	return rows.ReplaceForTurnTx(ctx, tx, sessionID, turnID, projection.Entries)
+}
+
+func turnEventsContainBackgroundWake(events []map[string]any) bool {
+	for _, event := range events {
+		if isBackgroundTaskWakeTurnEvent(event) {
+			return true
+		}
+	}
+	return false
 }
 
 func (m transcriptRowsMaterializer) EnsureSession(ctx context.Context, sessionID string) error {

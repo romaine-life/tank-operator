@@ -1,0 +1,757 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Background Wake Turn Flow</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d0f12;
+      --panel: #15191f;
+      --panel-2: #101419;
+      --border: #2b333d;
+      --text: #e8edf2;
+      --muted: #9ca8b5;
+      --accent: #68c3d4;
+      --good: #7bd88f;
+      --warn: #e0bf6a;
+      --system: #9be7c8;
+      --code: #0b0e12;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system,
+        BlinkMacSystemFont, "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      background: #090b0e;
+      padding: 16px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: #18202a;
+      color: var(--text);
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    button:hover {
+      border-color: #51606f;
+      background: #202a35;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    .step-index {
+      min-width: 88px;
+      text-align: center;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    nav {
+      border-right: 1px solid var(--border);
+      background: #0a0d11;
+      padding: 14px;
+      overflow: auto;
+    }
+
+    .step-tab {
+      width: 100%;
+      min-height: 40px;
+      text-align: left;
+      margin-bottom: 8px;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .step-tab.active {
+      color: var(--text);
+      border-color: var(--accent);
+      background: #102129;
+    }
+
+    .content {
+      padding: 22px;
+      overflow: auto;
+    }
+
+    .summary {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 18px;
+      max-width: 1100px;
+    }
+
+    .summary h2 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .summary p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 920px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      align-items: start;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 8px;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .panel h3 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--muted);
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--border);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .panel-body {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .entity {
+      border: 1px solid #28313b;
+      background: #11161d;
+      border-radius: 6px;
+      padding: 10px;
+      min-width: 0;
+    }
+
+    .entity.active {
+      border-color: var(--accent);
+      background: #102029;
+    }
+
+    .entity.done,
+    .entity.final {
+      border-color: var(--good);
+      background: #102016;
+    }
+
+    .entity.waiting {
+      border-color: var(--warn);
+      background: #221d12;
+    }
+
+    .entity.system {
+      border-color: var(--system);
+      background: #10201c;
+    }
+
+    .label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .badge {
+      border: 1px solid #394654;
+      border-radius: 999px;
+      padding: 1px 7px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .badge.good {
+      color: var(--good);
+      border-color: #34643d;
+    }
+
+    .badge.warn {
+      color: var(--warn);
+      border-color: #64552b;
+    }
+
+    .badge.system {
+      color: var(--system);
+      border-color: #34735c;
+    }
+
+    pre {
+      margin: 0;
+      padding: 10px;
+      overflow: auto;
+      border-radius: 6px;
+      background: var(--code);
+      color: #dbe6ee;
+      border: 1px solid #252d36;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas,
+        "Liberation Mono", monospace;
+      white-space: pre-wrap;
+    }
+
+    .note {
+      border-left: 3px solid var(--accent);
+      background: #101820;
+      padding: 10px 12px;
+      color: var(--muted);
+      max-width: 1100px;
+      margin-top: 14px;
+      border-radius: 0 6px 6px 0;
+    }
+
+    .empty {
+      color: var(--muted);
+      border: 1px dashed #35414d;
+      border-radius: 6px;
+      padding: 12px;
+      text-align: center;
+    }
+
+    @media (max-width: 1100px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      nav {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .step-tab {
+        min-width: 220px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>Background Wake: Backend Turns, Main Transcript, Turns View</h1>
+      <div class="controls">
+        <button id="prev" type="button">Previous</button>
+        <span id="stepIndex" class="step-index"></span>
+        <button id="next" type="button">Next</button>
+      </div>
+    </header>
+    <main>
+      <nav id="nav"></nav>
+      <section class="content">
+        <div class="summary">
+          <h2 id="title"></h2>
+          <p id="description"></p>
+        </div>
+        <div class="grid">
+          <section class="panel">
+            <h3>backendTurns[]</h3>
+            <div id="backendTurns" class="panel-body"></div>
+          </section>
+          <section class="panel">
+            <h3>backgroundTasks[]</h3>
+            <div id="backgroundTasks" class="panel-body"></div>
+          </section>
+          <section class="panel">
+            <h3>mainTranscriptRows[]</h3>
+            <div id="mainRows" class="panel-body"></div>
+          </section>
+          <section class="panel">
+            <h3>turnActivityRowsByTurn</h3>
+            <div id="activityRows" class="panel-body"></div>
+          </section>
+        </div>
+        <div id="note" class="note"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const wakePrompt =
+      "A background task you started earlier has finished while this session was idle, so it could not notify you mid-turn.\n\nTask id: task-ci\nFinal status: completed\nSummary: CI passed\n\nReview the task's output and continue from the result.";
+
+    const steps = [
+      {
+        title: "1. User starts one visible exchange",
+        description:
+          "A normal user turn starts. The main transcript gets the human-authored row and the Turn activity gets the durable submission boundary.",
+        backendTurns: [
+          {
+            id: "turn_1",
+            turnNumber: 1,
+            source: "sdk",
+            status: "active",
+          },
+        ],
+        backgroundTasks: [],
+        mainRows: [
+          {
+            kind: "user",
+            ownerTurn: "turn_1",
+            text: "Run CI and tell me when it passes.",
+          },
+        ],
+        activityRows: {
+          turn_1: [
+            {
+              kind: "turn.submitted",
+              source: "sdk",
+              text: "User submitted the request.",
+            },
+          ],
+        },
+        note:
+          "From the user's point of view, this is the one visible exchange that should remain coherent until the final answer arrives.",
+      },
+      {
+        title: "2. Agent parks on a background task",
+        description:
+          "The agent starts a background task and says it will wait. That waiting prose is activity, not the settled answer in the main transcript.",
+        backendTurns: [
+          {
+            id: "turn_1",
+            turnNumber: 1,
+            source: "sdk",
+            status: "completed",
+          },
+        ],
+        backgroundTasks: [
+          {
+            taskId: "task-ci",
+            ownerTurn: "turn_1",
+            status: "running",
+            summary: "CI check is running.",
+          },
+        ],
+        mainRows: [
+          {
+            kind: "user",
+            ownerTurn: "turn_1",
+            text: "Run CI and tell me when it passes.",
+          },
+        ],
+        activityRows: {
+          turn_1: [
+            {
+              kind: "turn.submitted",
+              source: "sdk",
+              text: "User submitted the request.",
+            },
+            {
+              kind: "background_task",
+              taskId: "task-ci",
+              status: "running",
+              text: "CI check is running.",
+            },
+            {
+              kind: "assistant activity",
+              text: "I will wait for CI and report back when it finishes.",
+            },
+          ],
+        },
+        note:
+          "The backend turn can complete while the user-visible exchange is still waiting on continuation mechanics.",
+      },
+      {
+        title: "3. Background task finishes",
+        description:
+          "The task result is now durable. The user still should not see a new chat turn just because the wake machinery has work to do.",
+        backendTurns: [
+          {
+            id: "turn_1",
+            turnNumber: 1,
+            source: "sdk",
+            status: "completed",
+          },
+        ],
+        backgroundTasks: [
+          {
+            taskId: "task-ci",
+            ownerTurn: "turn_1",
+            status: "completed",
+            summary: "CI passed.",
+          },
+        ],
+        mainRows: [
+          {
+            kind: "user",
+            ownerTurn: "turn_1",
+            text: "Run CI and tell me when it passes.",
+          },
+        ],
+        activityRows: {
+          turn_1: [
+            {
+              kind: "turn.submitted",
+              source: "sdk",
+              text: "User submitted the request.",
+            },
+            {
+              kind: "background_task",
+              taskId: "task-ci",
+              status: "completed",
+              text: "CI passed.",
+            },
+            {
+              kind: "assistant activity",
+              text: "I will wait for CI and report back when it finishes.",
+            },
+          ],
+        },
+        note:
+          "At this point there is new evidence for the Turn activity column, but no new main transcript row.",
+      },
+      {
+        title: "4. System-user wake prompt is injected",
+        description:
+          "The existing wake prompt remains prominent, but it moves from the main transcript into the originating Turn activity.",
+        backendTurns: [
+          {
+            id: "turn_1",
+            turnNumber: 1,
+            source: "sdk",
+            status: "completed",
+          },
+          {
+            id: "turn_bgtask-task-ci",
+            source: "background-task",
+            status: "active",
+            taskId: "task-ci",
+            parentVisibleTurn: "turn_1",
+          },
+        ],
+        backgroundTasks: [
+          {
+            taskId: "task-ci",
+            ownerTurn: "turn_1",
+            status: "completed",
+            summary: "CI passed.",
+          },
+        ],
+        mainRows: [
+          {
+            kind: "user",
+            ownerTurn: "turn_1",
+            text: "Run CI and tell me when it passes.",
+          },
+        ],
+        activityRows: {
+          turn_1: [
+            {
+              kind: "turn.submitted",
+              source: "sdk",
+              text: "User submitted the request.",
+            },
+            {
+              kind: "background_task",
+              taskId: "task-ci",
+              status: "completed",
+              text: "CI passed.",
+            },
+            {
+              kind: "assistant activity",
+              text: "I will wait for CI and report back when it finishes.",
+            },
+            {
+              kind: "message",
+              role: "user",
+              authorKind: "system",
+              turnOnly: true,
+              wakePrompt: true,
+              ownerTurn: "turn_1",
+              backendTurnId: "turn_bgtask-task-ci",
+              text: wakePrompt,
+            },
+          ],
+        },
+        note:
+          "This is the key move: the wake prompt is still the system-user message, but it is turn-only and owned by Turn 1.",
+      },
+      {
+        title: "5. Agent resumes and gives the final answer",
+        description:
+          "Only the true resumed final answer enters the main transcript. It is projected as part of the original user-visible Turn while retaining backend wake provenance.",
+        backendTurns: [
+          {
+            id: "turn_1",
+            turnNumber: 1,
+            source: "sdk",
+            status: "completed",
+          },
+          {
+            id: "turn_bgtask-task-ci",
+            source: "background-task",
+            status: "completed",
+            taskId: "task-ci",
+            parentVisibleTurn: "turn_1",
+            finalAnswerTimelineIds: ["msg_final"],
+          },
+        ],
+        backgroundTasks: [
+          {
+            taskId: "task-ci",
+            ownerTurn: "turn_1",
+            status: "completed",
+            summary: "CI passed.",
+          },
+        ],
+        mainRows: [
+          {
+            kind: "user",
+            ownerTurn: "turn_1",
+            text: "Run CI and tell me when it passes.",
+          },
+          {
+            kind: "assistant",
+            id: "msg_final",
+            ownerTurn: "turn_1",
+            backendTurnId: "turn_bgtask-task-ci",
+            text: "CI passed. The branch is ready.",
+          },
+        ],
+        activityRows: {
+          turn_1: [
+            {
+              kind: "turn.submitted",
+              source: "sdk",
+              text: "User submitted the request.",
+            },
+            {
+              kind: "background_task",
+              taskId: "task-ci",
+              status: "completed",
+              text: "CI passed.",
+            },
+            {
+              kind: "assistant activity",
+              text: "I will wait for CI and report back when it finishes.",
+            },
+            {
+              kind: "message",
+              role: "user",
+              authorKind: "system",
+              turnOnly: true,
+              wakePrompt: true,
+              ownerTurn: "turn_1",
+              backendTurnId: "turn_bgtask-task-ci",
+              text: wakePrompt,
+            },
+            {
+              kind: "message",
+              role: "assistant",
+              ownerTurn: "turn_1",
+              backendTurnId: "turn_bgtask-task-ci",
+              finalAnswer: true,
+              text: "CI passed. The branch is ready.",
+            },
+          ],
+        },
+        note:
+          "The main transcript now has the straightforward back-and-forth: user request, final answer. The Turns view carries the wake mechanics.",
+      },
+    ];
+
+    let current = 0;
+
+    const nav = document.getElementById("nav");
+    const title = document.getElementById("title");
+    const description = document.getElementById("description");
+    const backendTurnsEl = document.getElementById("backendTurns");
+    const backgroundTasksEl = document.getElementById("backgroundTasks");
+    const mainRowsEl = document.getElementById("mainRows");
+    const activityRowsEl = document.getElementById("activityRows");
+    const note = document.getElementById("note");
+    const stepIndex = document.getElementById("stepIndex");
+    const prev = document.getElementById("prev");
+    const next = document.getElementById("next");
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function badge(text, cls = "") {
+      return `<span class="badge ${cls}">${escapeHtml(text)}</span>`;
+    }
+
+    function statusClass(value) {
+      if (value === "completed") return "good";
+      if (value === "running" || value === "active") return "warn";
+      if (value === "system") return "system";
+      return "";
+    }
+
+    function entityClass(entity) {
+      if (entity.wakePrompt || entity.authorKind === "system") return "system";
+      if (entity.finalAnswer || entity.kind === "assistant") return "final";
+      if (entity.status === "completed") return "done";
+      if (entity.status === "running" || entity.status === "active")
+        return "waiting";
+      return "";
+    }
+
+    function renderEntity(entity, label) {
+      const kind = entity.kind ?? entity.source ?? entity.status ?? "entity";
+      const status = entity.status ?? entity.role ?? entity.authorKind ?? "";
+      const badges = [
+        kind ? badge(kind, statusClass(kind)) : "",
+        status ? badge(status, statusClass(status)) : "",
+      ].join("");
+      return `
+        <div class="entity ${entityClass(entity)}">
+          <div class="label">
+            <span>${escapeHtml(label)}</span>
+            <span>${badges}</span>
+          </div>
+          <pre>${escapeHtml(JSON.stringify(entity, null, 2))}</pre>
+        </div>
+      `;
+    }
+
+    function renderList(target, rows, emptyLabel) {
+      if (!rows || !rows.length) {
+        target.innerHTML = `<div class="empty">${escapeHtml(emptyLabel)}</div>`;
+        return;
+      }
+      target.innerHTML = rows
+        .map((row, index) => renderEntity(row, `row ${index + 1}`))
+        .join("");
+    }
+
+    function renderActivity(groups) {
+      const turnIds = Object.keys(groups);
+      if (!turnIds.length) {
+        activityRowsEl.innerHTML = `<div class="empty">No Turn activity rows</div>`;
+        return;
+      }
+      activityRowsEl.innerHTML = turnIds
+        .map((turnId) => {
+          const rows = groups[turnId]
+            .map((row, index) => renderEntity(row, `${turnId} / row ${index + 1}`))
+            .join("");
+          return `<div><div class="label">${badge(turnId)}</div>${rows}</div>`;
+        })
+        .join("");
+    }
+
+    function renderNav() {
+      nav.innerHTML = steps
+        .map(
+          (step, index) => `
+        <button class="step-tab ${index === current ? "active" : ""}" type="button" data-step="${index}">
+          ${escapeHtml(step.title)}
+        </button>
+      `,
+        )
+        .join("");
+      nav.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+          current = Number(button.dataset.step);
+          render();
+        });
+      });
+    }
+
+    function render() {
+      const step = steps[current];
+      title.textContent = step.title;
+      description.textContent = step.description;
+      stepIndex.textContent = `${current + 1} / ${steps.length}`;
+      prev.disabled = current === 0;
+      next.disabled = current === steps.length - 1;
+      note.textContent = step.note;
+      renderNav();
+      renderList(backendTurnsEl, step.backendTurns, "No backend turns");
+      renderList(backgroundTasksEl, step.backgroundTasks, "No background tasks");
+      renderList(mainRowsEl, step.mainRows, "No main transcript rows");
+      renderActivity(step.activityRows);
+    }
+
+    prev.addEventListener("click", () => {
+      current = Math.max(0, current - 1);
+      render();
+    });
+
+    next.addEventListener("click", () => {
+      current = Math.min(steps.length - 1, current + 1);
+      render();
+    });
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowLeft") prev.click();
+      if (event.key === "ArrowRight") next.click();
+    });
+
+    render();
+  </script>
+</body>
+</html>

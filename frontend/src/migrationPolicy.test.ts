@@ -29,6 +29,7 @@ const sessionListDebugPageSource = readSource("./SessionListDebugPage.tsx");
 const sessionListDebugCaptureControlsSource = readSource(
   "./SessionListDebugCaptureControls.tsx",
 );
+const turnActivityCacheSource = readSource("./turnActivityCache.ts");
 const turnActivityStateSource = readSource("./turnActivityState.ts");
 const sessionAvatarsSource = readSource("./sessionAvatars.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
@@ -357,6 +358,35 @@ test("AskUserQuestion questions are the assistant message and the answer form is
   );
 });
 
+test("background wake prompts stay hidden from chat but visible in Turns activity", () => {
+  assert.equal(appSource.includes("turnOnly?: boolean"), true);
+  assert.equal(appSource.includes("wakePrompt?: boolean"), true);
+  assert.equal(
+    appSource.includes("function isTurnActivityUserMessageEntry"),
+    true,
+  );
+  assert.equal(
+    appSource.includes("entry.turnOnly === true || entry.wakePrompt === true"),
+    true,
+  );
+  assert.equal(
+    appSource.includes(
+      "if (isUserMessageEntry(entry) && !isTurnActivityUserMessageEntry(entry))",
+    ),
+    true,
+  );
+  assert.equal(
+    appSource.includes(
+      "(!isUserMessageEntry(entry) || isTurnActivityUserMessageEntry(entry))",
+    ),
+    true,
+  );
+  assert.equal(
+    turnActivityCacheSource.includes("isTurnActivityUserMessageEntry"),
+    true,
+  );
+});
+
 test("transcript meta status lines are attributed to the session system identity", () => {
   // "Stopped" / "Turn stopped by user.", "Turn failed" + provider error,
   // and "Stop requested" are not authored by the human owner or the
@@ -675,7 +705,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(indexCssSource.includes(".run-turn-view"), true);
   assert.equal(
     indexCssSource.includes(
-      '.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"]',
+      '.run-turn-view-body [data-slot="message"][data-owner="activity"]',
     ),
     true,
   );

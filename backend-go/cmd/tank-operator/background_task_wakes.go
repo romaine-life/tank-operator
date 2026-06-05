@@ -224,12 +224,14 @@ func (s *appServer) fireBackgroundTaskWake(ctx context.Context, row pgstore.Back
 		return nil
 	}
 	resp, status, detail := s.enqueueSDKTurn(ctx, row.OwnerEmail, row.SessionID, sdkTurnRequest{
-		ClientNonce:  row.ClientNonce,
-		RequireNonce: true,
-		Prompt:       row.Prompt,
-		Source:       "background-task",
-		CreatedAt:    now,
-		AuthorKind:   string(conversation.AuthorKindSystem),
+		ClientNonce:     row.ClientNonce,
+		RequireNonce:    true,
+		Prompt:          row.Prompt,
+		Source:          "background-task",
+		SourceTaskID:    row.TaskID,
+		CreatedAt:       now,
+		OmitUserMessage: true,
+		AuthorKind:      string(conversation.AuthorKindSystem),
 	})
 	if status != 0 {
 		reason := fmt.Sprintf("enqueue_failed:%d:%s", status, strings.TrimSpace(detail))

@@ -86,6 +86,23 @@ answer; it must not visibly move a rendered row from one surface to the other.
   carries an explicit durable final-answer marker. The server projection uses
   `turn.completed.payload.final_answer.timeline_ids` as the only final-answer
   source; it must not infer finality from a trailing assistant message/run.
+- Background-task wake turns are continuation mechanics, not standalone chat
+  turns. The backend must not persist the wake prompt as a main-transcript
+  `user_message.created` row; it carries the text on the backend-owned
+  `turn.submitted.payload.prompt` so the server projection can render the same
+  `authorKind=system` user-side message inside Turn activity. The projection
+  must keep the wake turn's activity shell out of the settled transcript. Wake
+  activity remains inspectable in the Turns view as part of the originating turn,
+  not as a second user-visible turn. If the wake-chain reaches a true final answer, that
+  assistant prose may enter the main transcript only through the same explicit
+  `turn.completed.payload.final_answer.timeline_ids` promotion path as any other
+  successful turn, and the projected row is owned by the originating turn while
+  retaining the wake backend turn id for audit/debug detail.
+- A completed SDK turn that leaves a background task running is not a
+  user-final assistant response. Its assistant prose, background-task row, and
+  activity shell remain Turn activity material; the main transcript keeps the
+  user's message open until the background-wake continuation reaches a true
+  final answer or otherwise terminates.
 - Failed, interrupted, and otherwise non-successful turns do not have a final
   assistant answer. Their non-user activity stays in Turn activity, with terminal
   context surfaced by the Turn activity disclosure row and the terminal meta
@@ -211,6 +228,15 @@ answer; it must not visibly move a rendered row from one surface to the other.
 - A completed turn may show the final assistant prose in the main transcript
   while also retaining a log copy in Turn activity, without counting it as two
   transcript messages.
+- A background-task wake continuation writes no durable main-transcript user
+  message, renders no wake activity shell in the main transcript, folds the
+  system-user wake prompt into the originating turn in the Turns view, and still
+  promotes a true final answer when the successful terminal event names its
+  final-answer item IDs.
+- A turn whose background task outlives its own `turn.completed` does not promote
+  that turn's assistant final-answer item into the main transcript. The item is
+  compacted into Turn activity alongside the background-task row; a later
+  background-wake turn may promote the actual final assistant answer.
 - Failed or interrupted turns keep their non-user rows in Turn activity and show
   only the user message plus terminal context in the main transcript unless a
   later successful `turn.completed` with explicit final-answer ids wins the race.

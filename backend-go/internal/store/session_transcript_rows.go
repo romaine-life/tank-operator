@@ -16,11 +16,10 @@ import (
 
 const transcriptRowCursorSeparator = "\x1f"
 
-// Bumped 6 -> 7 so every session re-backfills its transcript rows after the
-// startup-status cutover. Direct session.status loading/ready rows seeded by
-// the old database trigger are retired; the server projection folds those
-// durable events into the owning turn's Turn activity instead.
-const transcriptRowBackfillVersion = 7
+// Bumped 7 -> 8 so every session re-backfills transcript rows after
+// background-task wake continuations became owned by the originating
+// user-visible turn instead of the backend wake turn.
+const transcriptRowBackfillVersion = 9
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error

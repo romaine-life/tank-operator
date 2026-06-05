@@ -52,6 +52,17 @@ const (
 	SourceCodex  Source = "codex"
 )
 
+// TurnSubmittedSource is an optional payload-level provenance marker for
+// backend-originated self-submit paths. The event envelope source remains
+// SourceTank for turn.submitted events.
+type TurnSubmittedSource string
+
+const (
+	TurnSubmittedSourceScheduleWakeup TurnSubmittedSource = "schedule-wakeup"
+	TurnSubmittedSourceBackgroundTask TurnSubmittedSource = "background-task"
+	TurnSubmittedSourceLaunchDispatch TurnSubmittedSource = "launch-dispatch"
+)
+
 type Visibility string
 
 const (
@@ -192,7 +203,7 @@ func validateEventMap(event map[string]any) error {
 		if Actor(stringField(event, "actor")) != ActorRunner || Source(stringField(event, "source")) != SourceTank {
 			return fmt.Errorf("turn.submitted must be actor=runner source=tank")
 		}
-		return requirePayloadString(event, "status")
+		return validateTurnSubmittedPayload(event)
 	case EventTurnClaimed, EventTurnStarted, EventTurnFailed, EventTurnInterrupted:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
@@ -434,6 +445,20 @@ func requirePayloadString(event map[string]any, key string) error {
 	}
 	if stringField(payload, key) == "" {
 		return fmt.Errorf("payload.%s is required for %s", key, stringField(event, "type"))
+	}
+	return nil
+}
+
+func validateTurnSubmittedPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	if stringField(payload, "status") == "" {
+		return fmt.Errorf("payload.status is required for %s", stringField(event, "type"))
+	}
+	if source := stringField(payload, "source"); source != "" && !validTurnSubmittedSource(TurnSubmittedSource(source)) {
+		return fmt.Errorf("payload.source %q is not valid for %s", source, stringField(event, "type"))
 	}
 	return nil
 }
@@ -771,6 +796,17 @@ func validActor(actor Actor) bool {
 func validSource(source Source) bool {
 	switch source {
 	case SourceTank, SourceClaude, SourceCodex:
+		return true
+	default:
+		return false
+	}
+}
+
+func validTurnSubmittedSource(source TurnSubmittedSource) bool {
+	switch source {
+	case TurnSubmittedSourceScheduleWakeup,
+		TurnSubmittedSourceBackgroundTask,
+		TurnSubmittedSourceLaunchDispatch:
 		return true
 	default:
 		return false

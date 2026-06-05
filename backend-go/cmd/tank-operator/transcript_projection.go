@@ -6,6 +6,9 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
 type transcriptProjection struct {
@@ -28,23 +31,28 @@ type projectedEntryItem struct {
 }
 
 type projectionState struct {
-	messages           []projectedEntryItem
-	items              []*projectionItem
-	itemIndex          map[string]int
-	backgroundTasks    []*projectionBackgroundTask
-	backgroundIndex    map[string]int
-	interruptRequests  []projectedEntryItem
-	contextCompactions []projectedEntryItem
-	turnProgress       []projectedEntryItem
-	turnUsages         map[string]turnUsageProjection
-	turnTerminals      map[string]turnTerminalProjection
-	awaitingInputs     []projectionAwaitingInput
-	awaitingInputTools []projectedEntryItem
-	answeredQuestions  map[string]projectionAnsweredInput
-	runStatus          string
-	activeTurnID       string
-	activeItemID       string
-	needsInput         bool
+	messages              []projectedEntryItem
+	items                 []*projectionItem
+	itemIndex             map[string]int
+	backgroundTasks       []*projectionBackgroundTask
+	backgroundIndex       map[string]int
+	interruptRequests     []projectedEntryItem
+	contextCompactions    []projectedEntryItem
+	wakePrompts           []projectedEntryItem
+	turnProgress          []projectedEntryItem
+	turnUsages            map[string]turnUsageProjection
+	turnTerminals         map[string]turnTerminalProjection
+	backgroundWakeTurns   map[string]bool
+	backgroundWakeTaskIDs map[string]string
+	continuationTurns     map[string]bool
+	backgroundWakeParents map[string]string
+	awaitingInputs        []projectionAwaitingInput
+	awaitingInputTools    []projectedEntryItem
+	answeredQuestions     map[string]projectionAnsweredInput
+	runStatus             string
+	activeTurnID          string
+	activeItemID          string
+	needsInput            bool
 }
 
 type projectionItem struct {
@@ -66,29 +74,30 @@ type projectionItem struct {
 }
 
 type projectionBackgroundTask struct {
-	ID             string
-	TaskID         string
-	TurnID         string
-	ProviderItemID string
-	ToolUseID      string
-	Status         string
-	Summary        string
-	Description    string
-	LastToolName   string
-	Command        string
-	CWD            string
-	ProcessID      string
-	Output         string
-	ExitCode       any
-	DurationMS     any
-	RawItem        any
-	Error          any
-	OrderKey       string
-	SourceEventID  string
-	CreatedAt      string
-	StartedAt      string
-	UpdatedAt      string
-	CompletedAt    string
+	ID                string
+	TaskID            string
+	TurnID            string
+	ProviderItemID    string
+	ToolUseID         string
+	Status            string
+	Summary           string
+	Description       string
+	LastToolName      string
+	Command           string
+	CWD               string
+	ProcessID         string
+	Output            string
+	ExitCode          any
+	DurationMS        any
+	RawItem           any
+	Error             any
+	OrderKey          string
+	SourceEventID     string
+	CreatedAt         string
+	StartedAt         string
+	UpdatedAt         string
+	CompletedAt       string
+	CompletedOrderKey string
 }
 
 type turnTerminalProjection struct {
@@ -141,11 +150,13 @@ type projectionAnsweredInput struct {
 
 func newProjectionState() projectionState {
 	return projectionState{
-		itemIndex:       map[string]int{},
-		backgroundIndex: map[string]int{},
-		turnUsages:      map[string]turnUsageProjection{},
-		turnTerminals:   map[string]turnTerminalProjection{},
-		runStatus:       "ready",
+		itemIndex:             map[string]int{},
+		backgroundIndex:       map[string]int{},
+		turnUsages:            map[string]turnUsageProjection{},
+		turnTerminals:         map[string]turnTerminalProjection{},
+		backgroundWakeTurns:   map[string]bool{},
+		backgroundWakeTaskIDs: map[string]string{},
+		runStatus:             "ready",
 	}
 }
 
@@ -154,10 +165,13 @@ func projectTranscriptEvents(events []map[string]any) transcriptProjection {
 	for _, event := range orderedTranscriptEvents(events) {
 		state.apply(event)
 	}
+	state.continuationTurns = state.backgroundTaskContinuationTurns()
+	state.backgroundWakeParents = state.backgroundTaskWakeParentTurns()
 	flat := state.projectFlatEntries()
 	assignSessionStatusOwnership(flat)
 	flat = dropOrphanSessionLifecycle(flat)
-	projection := compactProjectedTranscript(flat, state.activeTurnID, state.runStatus, state.turnTerminals)
+	projection := compactProjectedTranscript(flat, state.activeTurnID, state.runStatus, state.turnTerminals, state.backgroundWakeTurns, state.continuationTurns)
+	projection = foldBackgroundWakeContinuationActivities(projection, state.backgroundWakeParents)
 	projection.Entries = filterMainTranscriptQuestionTurnRows(projection.Entries)
 	return projection
 }
@@ -200,9 +214,17 @@ func (s *projectionState) apply(event map[string]any) {
 	case "assistant_message.created":
 		s.applyAssistantMessage(event)
 	case "turn.submitted":
-		if _, terminal := s.turnTerminals[transcriptString(event, "turn_id")]; !terminal {
+		turnID := transcriptString(event, "turn_id")
+		if isBackgroundTaskWakeTurnEvent(event) {
+			s.backgroundWakeTurns[turnID] = true
+			if taskID := transcriptPayloadString(event, "task_id"); taskID != "" {
+				s.backgroundWakeTaskIDs[turnID] = taskID
+			}
+			s.applyBackgroundWakePrompt(event)
+		}
+		if _, terminal := s.turnTerminals[turnID]; !terminal {
 			s.runStatus = "submitted"
-			s.activeTurnID = transcriptString(event, "turn_id")
+			s.activeTurnID = turnID
 			s.needsInput = false
 		}
 		s.applyTurnProgress(event, "submitted")
@@ -402,6 +424,7 @@ func (s *projectionState) applyTurnProgress(event map[string]any, status string)
 	}
 	title := "Turn queued"
 	detail := "Waiting for the session runner."
+	metaKind := "turn_progress"
 	switch status {
 	case "claimed":
 		title = "Turn accepted"
@@ -413,7 +436,7 @@ func (s *projectionState) applyTurnProgress(event map[string]any, status string)
 	entry := map[string]any{
 		"id":       transcriptString(event, "event_id"),
 		"kind":     "meta",
-		"metaKind": "turn_progress",
+		"metaKind": metaKind,
 		"turnId":   turnID,
 		"meta": map[string]any{
 			"title":    title,
@@ -470,6 +493,33 @@ func (s *projectionState) applySessionStatus(event map[string]any) {
 		entry:    entry,
 		orderKey: transcriptString(event, "order_key"),
 		index:    len(s.messages),
+	})
+}
+
+func (s *projectionState) applyBackgroundWakePrompt(event map[string]any) {
+	turnID := transcriptString(event, "turn_id")
+	text := strings.TrimSpace(transcriptPayloadString(event, "prompt"))
+	if turnID == "" || text == "" {
+		return
+	}
+	entry := map[string]any{
+		"id":            transcriptString(event, "event_id") + ":wake_prompt",
+		"kind":          "message",
+		"role":          "user",
+		"authorKind":    string(conversation.AuthorKindSystem),
+		"turnId":        turnID,
+		"clientNonce":   transcriptString(event, "client_nonce"),
+		"text":          text,
+		"time":          transcriptString(event, "created_at"),
+		"sourceEventId": transcriptString(event, "event_id"),
+		"orderKey":      transcriptString(event, "order_key"),
+		"turnOnly":      true,
+		"wakePrompt":    true,
+	}
+	s.wakePrompts = append(s.wakePrompts, projectedEntryItem{
+		entry:    entry,
+		orderKey: transcriptString(event, "order_key"),
+		index:    len(s.wakePrompts),
 	})
 }
 
@@ -795,35 +845,37 @@ func (s *projectionState) upsertBackgroundTask(event map[string]any, status stri
 	}
 	command := transcriptPayloadString(event, "command")
 	task := &projectionBackgroundTask{
-		ID:             id,
-		TaskID:         taskID,
-		TurnID:         turnID,
-		ProviderItemID: projectionFirstNonEmpty(transcriptString(event, "provider_item_id"), existingBackgroundString(existing, "ProviderItemID")),
-		ToolUseID:      projectionFirstNonEmpty(transcriptPayloadString(event, "tool_use_id"), existingBackgroundString(existing, "ToolUseID")),
-		Status:         nextStatus,
-		Summary:        projectionFirstNonEmpty(transcriptPayloadString(event, "summary"), command, existingBackgroundString(existing, "Summary")),
-		Description:    projectionFirstNonEmpty(transcriptPayloadString(event, "description"), existingBackgroundString(existing, "Description")),
-		LastToolName:   projectionFirstNonEmpty(transcriptPayloadString(event, "last_tool_name"), existingBackgroundString(existing, "LastToolName")),
-		Command:        projectionFirstNonEmpty(command, existingBackgroundString(existing, "Command")),
-		CWD:            projectionFirstNonEmpty(transcriptPayloadString(event, "cwd"), existingBackgroundString(existing, "CWD")),
-		ProcessID:      projectionFirstNonEmpty(transcriptPayloadString(event, "process_id"), transcriptPayloadString(event, "processId"), existingBackgroundString(existing, "ProcessID")),
-		Output:         projectionFirstNonEmpty(transcriptPayloadString(event, "output"), existingBackgroundString(existing, "Output")),
-		ExitCode:       firstNonNil(transcriptPayloadValue(event, "exit_code"), transcriptPayloadValue(event, "exitCode"), existingBackgroundAny(existing, "ExitCode")),
-		DurationMS:     firstNonNil(transcriptPayloadValue(event, "duration_ms"), transcriptPayloadValue(event, "durationMs"), existingBackgroundAny(existing, "DurationMS")),
-		RawItem:        firstNonNil(transcriptPayloadValue(event, "raw_item"), existingBackgroundAny(existing, "RawItem")),
-		Error:          firstNonNil(transcriptPayloadValue(event, "error"), existingBackgroundAny(existing, "Error")),
-		OrderKey:       projectionFirstNonEmpty(existingBackgroundString(existing, "OrderKey"), transcriptString(event, "order_key")),
-		SourceEventID:  transcriptString(event, "event_id"),
-		CreatedAt:      projectionFirstNonEmpty(existingBackgroundString(existing, "CreatedAt"), transcriptString(event, "created_at")),
-		StartedAt:      projectionFirstNonEmpty(existingBackgroundString(existing, "StartedAt"), existingBackgroundString(existing, "CreatedAt"), transcriptString(event, "created_at")),
-		UpdatedAt:      projectionFirstNonEmpty(transcriptString(event, "created_at"), existingBackgroundString(existing, "UpdatedAt")),
-		CompletedAt:    existingBackgroundString(existing, "CompletedAt"),
+		ID:                id,
+		TaskID:            taskID,
+		TurnID:            turnID,
+		ProviderItemID:    projectionFirstNonEmpty(transcriptString(event, "provider_item_id"), existingBackgroundString(existing, "ProviderItemID")),
+		ToolUseID:         projectionFirstNonEmpty(transcriptPayloadString(event, "tool_use_id"), existingBackgroundString(existing, "ToolUseID")),
+		Status:            nextStatus,
+		Summary:           projectionFirstNonEmpty(transcriptPayloadString(event, "summary"), command, existingBackgroundString(existing, "Summary")),
+		Description:       projectionFirstNonEmpty(transcriptPayloadString(event, "description"), existingBackgroundString(existing, "Description")),
+		LastToolName:      projectionFirstNonEmpty(transcriptPayloadString(event, "last_tool_name"), existingBackgroundString(existing, "LastToolName")),
+		Command:           projectionFirstNonEmpty(command, existingBackgroundString(existing, "Command")),
+		CWD:               projectionFirstNonEmpty(transcriptPayloadString(event, "cwd"), existingBackgroundString(existing, "CWD")),
+		ProcessID:         projectionFirstNonEmpty(transcriptPayloadString(event, "process_id"), transcriptPayloadString(event, "processId"), existingBackgroundString(existing, "ProcessID")),
+		Output:            projectionFirstNonEmpty(transcriptPayloadString(event, "output"), existingBackgroundString(existing, "Output")),
+		ExitCode:          firstNonNil(transcriptPayloadValue(event, "exit_code"), transcriptPayloadValue(event, "exitCode"), existingBackgroundAny(existing, "ExitCode")),
+		DurationMS:        firstNonNil(transcriptPayloadValue(event, "duration_ms"), transcriptPayloadValue(event, "durationMs"), existingBackgroundAny(existing, "DurationMS")),
+		RawItem:           firstNonNil(transcriptPayloadValue(event, "raw_item"), existingBackgroundAny(existing, "RawItem")),
+		Error:             firstNonNil(transcriptPayloadValue(event, "error"), existingBackgroundAny(existing, "Error")),
+		OrderKey:          projectionFirstNonEmpty(existingBackgroundString(existing, "OrderKey"), transcriptString(event, "order_key")),
+		SourceEventID:     transcriptString(event, "event_id"),
+		CreatedAt:         projectionFirstNonEmpty(existingBackgroundString(existing, "CreatedAt"), transcriptString(event, "created_at")),
+		StartedAt:         projectionFirstNonEmpty(existingBackgroundString(existing, "StartedAt"), existingBackgroundString(existing, "CreatedAt"), transcriptString(event, "created_at")),
+		UpdatedAt:         projectionFirstNonEmpty(transcriptString(event, "created_at"), existingBackgroundString(existing, "UpdatedAt")),
+		CompletedAt:       existingBackgroundString(existing, "CompletedAt"),
+		CompletedOrderKey: existingBackgroundString(existing, "CompletedOrderKey"),
 	}
 	if transcriptString(event, "type") == "shell_task.started" {
 		task.StartedAt = transcriptString(event, "created_at")
 	}
 	if isTerminalProjectionBackgroundStatus(nextStatus) {
 		task.CompletedAt = projectionFirstNonEmpty(existingBackgroundString(existing, "CompletedAt"), transcriptString(event, "created_at"))
+		task.CompletedOrderKey = projectionFirstNonEmpty(existingBackgroundString(existing, "CompletedOrderKey"), transcriptString(event, "order_key"))
 	}
 	if exists {
 		s.backgroundTasks[existingIdx] = task
@@ -834,7 +886,7 @@ func (s *projectionState) upsertBackgroundTask(event map[string]any, status stri
 }
 
 func (s *projectionState) projectFlatEntries() []map[string]any {
-	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.turnUsages)+len(s.turnTerminals)+len(s.awaitingInputTools))
+	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.wakePrompts)+len(s.turnUsages)+len(s.turnTerminals)+len(s.awaitingInputTools))
 	items = append(items, s.messages...)
 	baseIndex := len(items)
 	backgroundProviderIDs := s.backgroundProviderItemIDs()
@@ -870,6 +922,11 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 		items = append(items, notice)
 	}
 	baseIndex += len(s.contextCompactions)
+	for idx, prompt := range s.wakePrompts {
+		prompt.index = baseIndex + idx
+		items = append(items, prompt)
+	}
+	baseIndex += len(s.wakePrompts)
 	for idx, progress := range s.turnProgress {
 		progress.index = baseIndex + idx
 		items = append(items, progress)
@@ -965,6 +1022,72 @@ func (s *projectionState) backgroundProviderItemIDs() map[string]bool {
 		}
 	}
 	return out
+}
+
+func (s *projectionState) backgroundTaskContinuationTurns() map[string]bool {
+	out := map[string]bool{}
+	for _, task := range s.backgroundTasks {
+		if task == nil || task.TurnID == "" {
+			continue
+		}
+		terminal, ok := s.turnTerminals[task.TurnID]
+		if !ok || terminal.Status != "completed" {
+			continue
+		}
+		if task.CompletedOrderKey == "" || task.CompletedOrderKey > terminal.OrderKey {
+			out[task.TurnID] = true
+		}
+	}
+	return out
+}
+
+func (s *projectionState) backgroundTaskWakeParentTurns() map[string]string {
+	return backgroundTaskWakeParentTurnsFromTasks(s.backgroundTasks, s.backgroundWakeTurns, s.backgroundWakeTaskIDs)
+}
+
+func backgroundTaskWakeParentTurnsFromTasks(tasks []*projectionBackgroundTask, backgroundWakeTurns map[string]bool, backgroundWakeTaskIDs map[string]string) map[string]string {
+	taskParents := map[string]string{}
+	wakeTurnParents := map[string]string{}
+	for _, task := range tasks {
+		if task == nil || task.TaskID == "" || task.TurnID == "" {
+			continue
+		}
+		taskParents[task.TaskID] = task.TurnID
+		wakeTurnID := conversation.TurnIDForClientNonce(pgstore.BackgroundTaskWakeClientNonce(task.TaskID))
+		if wakeTurnID != "" {
+			wakeTurnParents[wakeTurnID] = task.TurnID
+		}
+	}
+	out := map[string]string{}
+	for wakeTurnID := range backgroundWakeTurns {
+		parent := wakeTurnParents[wakeTurnID]
+		taskID := backgroundWakeTaskIDs[wakeTurnID]
+		if taskID != "" {
+			parent = taskParents[taskID]
+		} else if parent == "" {
+			parent = taskParents[backgroundWakeTaskIDFromTurnID(wakeTurnID)]
+		}
+		if parent == "" || parent == wakeTurnID {
+			continue
+		}
+		out[wakeTurnID] = parent
+	}
+	return out
+}
+
+func backgroundWakeParentTurnsFromEvents(events []map[string]any) map[string]string {
+	state := newProjectionState()
+	for _, event := range orderedTranscriptEvents(events) {
+		state.apply(event)
+	}
+	return state.backgroundTaskWakeParentTurns()
+}
+
+func backgroundWakeTaskIDFromTurnID(turnID string) string {
+	if !strings.HasPrefix(turnID, "turn_bgtask-") {
+		return ""
+	}
+	return strings.TrimPrefix(turnID, "turn_bgtask-")
 }
 
 func projectProjectionItem(item *projectionItem) map[string]any {
@@ -1124,7 +1247,7 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 	return out
 }
 
-func compactProjectedTranscript(entries []map[string]any, activeTurnID string, runStatus string, terminals map[string]turnTerminalProjection) transcriptProjection {
+func compactProjectedTranscript(entries []map[string]any, activeTurnID string, runStatus string, terminals map[string]turnTerminalProjection, backgroundWakeTurns map[string]bool, continuationTurns map[string]bool) transcriptProjection {
 	handoffActivities := awaitingInputHandoffProjectedActivities(entries, terminals)
 	for _, activity := range handoffActivities {
 		if activity.TurnID == activeTurnID {
@@ -1132,7 +1255,7 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 			break
 		}
 	}
-	activities := append(terminalProjectedActivities(entries, terminals), handoffActivities...)
+	activities := append(terminalProjectedActivities(entries, terminals, backgroundWakeTurns, continuationTurns), handoffActivities...)
 	activities = append(activities, activeProjectedActivities(entries, activeTurnID, runStatus)...)
 	bodies := map[string]turnActivityBody{}
 	for _, activity := range activities {
@@ -1168,6 +1291,9 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 	out := make([]map[string]any, 0, len(entries))
 	for idx, entry := range entries {
 		if activity, ok := activityByInsertIndex[idx]; ok {
+			if backgroundWakeTurns[activity.TurnID] || continuationTurns[activity.TurnID] {
+				continue
+			}
 			shellOrderKey := transcriptMapString(activity.Summary, "startOrderKey")
 			shellStartedAt := transcriptMapString(activity.Summary, "startedAt")
 			if umKey := turnUserMessageOrderKey(entries, activity.TurnID); umKey != "" && shellOrderKey <= umKey {
@@ -1213,7 +1339,100 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 	return transcriptProjection{Entries: out, ActivityBodies: bodies}
 }
 
-func terminalProjectedActivities(entries []map[string]any, terminals map[string]turnTerminalProjection) []turnActivityBody {
+func foldBackgroundWakeContinuationActivities(projection transcriptProjection, wakeParents map[string]string) transcriptProjection {
+	if len(wakeParents) == 0 {
+		return projection
+	}
+	out := projection
+	out.Entries = reassignBackgroundWakeProjectedEntries(projection.Entries, wakeParents)
+	out.ActivityBodies = mergeBackgroundWakeActivityBodies(projection.ActivityBodies, wakeParents)
+	return out
+}
+
+func reassignBackgroundWakeProjectedEntries(entries []map[string]any, wakeParents map[string]string) []map[string]any {
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		turnID := transcriptMapString(entry, "turnId")
+		parent := wakeParents[turnID]
+		if parent == "" {
+			out = append(out, entry)
+			continue
+		}
+		next := cloneAnyMap(entry)
+		next["turnId"] = parent
+		next["backendTurnId"] = turnID
+		out = append(out, next)
+	}
+	return out
+}
+
+func mergeBackgroundWakeActivityBodies(bodies map[string]turnActivityBody, wakeParents map[string]string) map[string]turnActivityBody {
+	if len(bodies) == 0 {
+		return bodies
+	}
+	out := make(map[string]turnActivityBody, len(bodies))
+	for turnID, body := range bodies {
+		out[turnID] = body
+	}
+	for wakeTurnID, parentTurnID := range wakeParents {
+		wakeBody, ok := out[wakeTurnID]
+		if !ok || parentTurnID == "" {
+			continue
+		}
+		parentBody, ok := out[parentTurnID]
+		if !ok {
+			wakeBody = reassignTurnActivityBody(wakeBody, parentTurnID, wakeTurnID)
+			out[parentTurnID] = wakeBody
+			delete(out, wakeTurnID)
+			continue
+		}
+		mergedEntries := append([]map[string]any{}, parentBody.Entries...)
+		mergedEntries = append(mergedEntries, reassignBackgroundWakeProjectedEntries(wakeBody.Entries, map[string]string{wakeTurnID: parentTurnID})...)
+		compactedEntries := compactedEntriesForIDs(mergedEntries, append(parentBody.CompactedEntryIDs, wakeBody.CompactedEntryIDs...))
+		merged := makeTurnActivityBody(parentTurnID, parentBody.Status, mergedEntries, compactedEntries, transcriptMapBool(parentBody.Summary, "active"))
+		if parentBody.Status == "needs_input" {
+			merged.Status = parentBody.Status
+			merged.Summary["status"] = parentBody.Status
+		}
+		out[parentTurnID] = merged
+		delete(out, wakeTurnID)
+	}
+	return out
+}
+
+func reassignTurnActivityBody(body turnActivityBody, parentTurnID, wakeTurnID string) turnActivityBody {
+	entries := reassignBackgroundWakeProjectedEntries(body.Entries, map[string]string{wakeTurnID: parentTurnID})
+	compacted := compactedEntriesForIDs(entries, body.CompactedEntryIDs)
+	return makeTurnActivityBody(parentTurnID, body.Status, entries, compacted, transcriptMapBool(body.Summary, "active"))
+}
+
+func compactedEntriesForIDs(entries []map[string]any, ids []string) []map[string]any {
+	if len(ids) == 0 {
+		return nil
+	}
+	want := map[string]bool{}
+	for _, id := range ids {
+		if id != "" {
+			want[id] = true
+		}
+	}
+	out := make([]map[string]any, 0, len(want))
+	for _, entry := range entries {
+		if want[transcriptMapString(entry, "id")] {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func isBackgroundTaskWakeTurnEvent(event map[string]any) bool {
+	if transcriptString(event, "type") != string(conversation.EventTurnSubmitted) {
+		return false
+	}
+	return transcriptPayloadString(event, "source") == string(conversation.TurnSubmittedSourceBackgroundTask)
+}
+
+func terminalProjectedActivities(entries []map[string]any, terminals map[string]turnTerminalProjection, backgroundWakeTurns map[string]bool, continuationTurns map[string]bool) []turnActivityBody {
 	turnIndexes := map[string][]int{}
 	turnOrder := []string{}
 	for idx, entry := range entries {
@@ -1247,12 +1466,13 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 		var activityEntries []map[string]any
 		for _, idx := range indexes {
 			entry := entries[idx]
-			if isProjectedUserMessage(entry) || isProjectionTerminalMetaEntry(entry, terminal) ||
+			if (isProjectedUserMessage(entry) && !isProjectionWakePrompt(entry)) ||
+				(!backgroundWakeTurns[turnID] && isProjectionTerminalMetaEntry(entry, terminal)) ||
 				isProjectionTurnProgress(entry) {
 				continue
 			}
 			activityEntries = append(activityEntries, entry)
-			if !finalIndexes[idx] && !isProjectionAwaitingInputEntry(entry) {
+			if (!finalIndexes[idx] || continuationTurns[turnID]) && !isProjectionAwaitingInputEntry(entry) {
 				compacted = append(compacted, entry)
 			}
 		}
@@ -1318,7 +1538,7 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string, ru
 	for _, entry := range entries {
 		if transcriptMapString(entry, "turnId") != activeTurnID ||
 			transcriptMapString(entry, "turnTerminalStatus") != "" ||
-			isProjectedUserMessage(entry) {
+			(isProjectedUserMessage(entry) && !isProjectionWakePrompt(entry)) {
 			continue
 		}
 		if isProjectionTurnProgress(entry) {
@@ -1603,6 +1823,10 @@ func projectedEntryIndex(entries []map[string]any, target map[string]any) int {
 
 func isProjectedUserMessage(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "message" && transcriptMapString(entry, "role") == "user"
+}
+
+func isProjectionWakePrompt(entry map[string]any) bool {
+	return transcriptMapBool(entry, "wakePrompt")
 }
 
 func isProjectionTurnProgress(entry map[string]any) bool {
@@ -2134,6 +2358,14 @@ func transcriptMapString(record map[string]any, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(text)
+}
+
+func transcriptMapBool(record map[string]any, key string) bool {
+	if record == nil {
+		return false
+	}
+	value, _ := record[key].(bool)
+	return value
 }
 
 func transcriptAnyMap(value any) map[string]any {

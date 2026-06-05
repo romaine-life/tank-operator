@@ -194,6 +194,64 @@ func TestTranscriptRowsMaterializerStoresProjectedRowsForTurn(t *testing.T) {
 	}
 }
 
+func TestTranscriptRowsMaterializerRefreshesWholeSessionForBackgroundWakeTurn(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "Run CI and tell me when it passes.",
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("task-started", "003", "shell_task.started", "tool", "claude", "turn-1", "turn-1:task:ci", map[string]any{
+			"task_id": "task-ci",
+			"status":  "running",
+			"summary": "CI check",
+		}),
+		projectionTestEvent("waiting-final", "004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:waiting", map[string]any{
+			"kind": "message",
+			"text": "I will wait for CI and check back when it finishes.",
+		}),
+		projectionTestEvent("turn-terminal", "005", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:waiting")),
+		projectionTestEvent("task-exited", "006", "shell_task.exited", "tool", "claude", "turn-1", "turn-1:task:ci", map[string]any{
+			"task_id": "task-ci",
+			"status":  "completed",
+			"summary": "CI passed",
+		}),
+		projectionTestEvent("wake-submitted", "007", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{"status": "submitted", "source": "background-task", "task_id": "task-ci", "prompt": "A background task you started earlier has finished."}),
+		projectionTestEvent("wake-final", "008", "item.completed", "assistant", "claude", "turn_bgtask-task-ci", "turn_bgtask-task-ci:item:final", map[string]any{
+			"kind": "message",
+			"text": "CI passed. The branch is ready.",
+		}),
+		projectionTestEvent("wake-terminal", "009", "turn.completed", "runner", "claude", "turn_bgtask-task-ci", "", projectionFinalAnswerPayload("turn_bgtask-task-ci:item:final")),
+	}
+	eventStore := fakeSessionEventStore{
+		pages: map[string]store.SessionEventPage{
+			"": {Events: events, FoundOldest: true, FoundNewest: true},
+		},
+	}
+	rowStore := &recordingTranscriptRowsStore{}
+	materializer := transcriptRowsMaterializer{events: eventStore, rows: rowStore}
+
+	if err := materializer.RefreshEvent(context.Background(), events[len(events)-1]); err != nil {
+		t.Fatalf("RefreshEvent: %v", err)
+	}
+
+	if rowStore.turnID != "" {
+		t.Fatalf("ReplaceForTurn should not be used for wake turns, got turnID=%q entries=%#v", rowStore.turnID, rowStore.entries)
+	}
+	if rowStore.sessionID != "63" {
+		t.Fatalf("sessionID = %q, want full-session replacement for wake turn", rowStore.sessionID)
+	}
+	if got, want := len(rowStore.sessionEntries), 2; got != want {
+		t.Fatalf("session entries = %d, want user + resumed final: %#v", got, rowStore.sessionEntries)
+	}
+	final := rowStore.sessionEntries[1]
+	if got, want := transcriptMapString(final, "turnId"), "turn-1"; got != want {
+		t.Fatalf("final turnId = %q, want parent: %#v", got, final)
+	}
+	if got, want := transcriptMapString(final, "backendTurnId"), "turn_bgtask-task-ci"; got != want {
+		t.Fatalf("final backendTurnId = %q, want wake turn: %#v", got, final)
+	}
+}
+
 func TestTranscriptRowsMaterializerInputAnsweredRefreshesAssistantQuestionRow(t *testing.T) {
 	questionTimelineID := "turn-question:item:toolu_ask"
 	events := []map[string]any{
