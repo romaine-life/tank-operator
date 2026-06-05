@@ -185,6 +185,35 @@ export function buildSessionRouteUrl(
   return url.toString();
 }
 
+export function isBackgroundTaskWakeTimelineId(timelineId: string | null | undefined): boolean {
+  return /^turn_bgtask-[^:]+(?::|$)/.test((timelineId ?? "").trim());
+}
+
+export function turnIdFromTimelineId(timelineId: string | null | undefined): string | null {
+  const trimmed = (timelineId ?? "").trim();
+  if (!trimmed) return null;
+  const turnId = trimmed.split(":", 1)[0]?.trim() ?? "";
+  return turnId || null;
+}
+
+export function buildMessageRouteUrl(
+  currentHref: string,
+  sessionId: string,
+  entryId: string,
+  shareToken?: string | null,
+): string {
+  const url = new URL(currentHref);
+  url.pathname = isBackgroundTaskWakeTimelineId(entryId)
+    ? `/sessions/${encodeURIComponent(sessionId)}/turns`
+    : "/";
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("session", sessionId);
+  url.searchParams.set("message", entryId);
+  if (shareToken?.trim()) url.searchParams.set("share", shareToken.trim());
+  return url.toString();
+}
+
 export function buildHomeRouteUrl(
   currentHref: string,
   _tab: HomeRouteTab = "chat",

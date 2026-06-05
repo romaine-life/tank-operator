@@ -4,10 +4,13 @@ import test from "node:test";
 import {
   buildAppRouteUrl,
   buildHomeRouteUrl,
+  buildMessageRouteUrl,
   buildSessionRouteUrl,
+  isBackgroundTaskWakeTimelineId,
   readAppRouteFromPathname,
   readHomeRouteFromPathname,
   readSessionRouteFromPathname,
+  turnIdFromTimelineId,
 } from "./appRoutes";
 
 test("session routes parse only session-scoped pages", () => {
@@ -122,6 +125,21 @@ test("session route urls broadcast only session-owned pages", () => {
   assert.equal(
     buildSessionRouteUrl(current, "s 1", "session-data"),
     "https://tank.example.test/sessions/s%201/session-data",
+  );
+});
+
+test("background task wake message urls stay on the turns page", () => {
+  const current = "https://tank.example.test/sessions/old?session=old#ignored";
+  assert.equal(isBackgroundTaskWakeTimelineId("turn_bgtask-bju9inw2l:user"), true);
+  assert.equal(isBackgroundTaskWakeTimelineId("turn-1:user"), false);
+  assert.equal(turnIdFromTimelineId("turn_bgtask-bju9inw2l:user"), "turn_bgtask-bju9inw2l");
+  assert.equal(
+    buildMessageRouteUrl(current, "580", "turn_bgtask-bju9inw2l:user", "share-token"),
+    "https://tank.example.test/sessions/580/turns?session=580&message=turn_bgtask-bju9inw2l%3Auser&share=share-token",
+  );
+  assert.equal(
+    buildMessageRouteUrl(current, "580", "turn-1:item:msg-1"),
+    "https://tank.example.test/?session=580&message=turn-1%3Aitem%3Amsg-1",
   );
 });
 

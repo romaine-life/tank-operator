@@ -105,6 +105,39 @@ func TestHandleCreateMessageLinkShareMintsBearerURLForOwnedTimelineTarget(t *tes
 	}
 }
 
+func TestHandleCreateMessageLinkShareKeepsBackgroundTaskWakeOnTurnsPage(t *testing.T) {
+	shares := &fakeMessageLinkShareStore{}
+	rows := &fakeSessionTranscriptRowStore{
+		resolveTimeline: map[string]string{
+			"turn_bgtask-bju9inw2l:user": store.EncodeTranscriptRowCursor("order-001\x1fturn_bgtask-bju9inw2l:user"),
+		},
+	}
+	app := messageLinkShareTestApp(t, shares, rows, fakeSessionEventStore{})
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/63/message-links", strings.NewReader(`{"timeline_id":"turn_bgtask-bju9inw2l:user"}`))
+	req.Host = "tank.example.test"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, otherUser, auth.RoleUser))
+	req.SetPathValue("session_id", "63")
+	rec := httptest.NewRecorder()
+
+	app.handleCreateMessageLinkShare(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	browserURL, _ := body["browser_url"].(string)
+	if !strings.Contains(browserURL, "https://tank.example.test/sessions/63/turns?") ||
+		!strings.Contains(browserURL, "session=63") ||
+		!strings.Contains(browserURL, "message=turn_bgtask-bju9inw2l%3Auser") ||
+		!strings.Contains(browserURL, "share="+shares.created.Token) {
+		t.Fatalf("browser_url = %q", browserURL)
+	}
+}
+
 func TestHandlePublicMessageLinkTimelineReadsThroughShareToken(t *testing.T) {
 	token := "share-token"
 	shares := &fakeMessageLinkShareStore{shares: map[string]pgstore.MessageLinkShare{

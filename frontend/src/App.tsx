@@ -54,10 +54,13 @@ import { WorkspaceShell } from "./WorkspaceShell";
 import {
   buildAppRouteUrl,
   buildHomeRouteUrl,
+  buildMessageRouteUrl,
   buildSessionRouteUrl,
+  isBackgroundTaskWakeTimelineId,
   readAppRouteFromPathname,
   readHomeRouteFromPathname,
   readSessionRouteFromPathname,
+  turnIdFromTimelineId,
   type AdminView,
   type AppRoute,
   type AppRouteTab,
@@ -1617,14 +1620,7 @@ function sessionUrl(id: string): string {
 // existing ?session= contract so URLs compose cleanly when an agent
 // or human pastes one as a shareable pointer.
 function messageUrl(sessionId: string, entryId: string, shareToken?: string | null): string {
-  const url = new URL(window.location.href);
-  url.pathname = "/";
-  url.search = "";
-  url.hash = "";
-  url.searchParams.set("session", sessionId);
-  url.searchParams.set("message", entryId);
-  if (shareToken?.trim()) url.searchParams.set("share", shareToken.trim());
-  return url.toString();
+  return buildMessageRouteUrl(window.location.href, sessionId, entryId, shareToken);
 }
 
 function readInitialMessageId(): string | null {
@@ -10613,8 +10609,14 @@ function ChatPane({
   const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
   const initialRunRoute =
     initialSessionRoute?.sessionId === session.id ? initialSessionRoute : null;
+  const initialBackgroundTaskWakeTarget = isBackgroundTaskWakeTimelineId(pendingScrollMessageId);
+  const initialBackgroundTaskWakeTurnId = initialBackgroundTaskWakeTarget
+    ? turnIdFromTimelineId(pendingScrollMessageId)
+    : null;
   const [activeTab, setActiveTab] = useState<RunTab>(
-    initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat",
+    initialBackgroundTaskWakeTarget
+      ? "turns"
+      : initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat",
   );
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
     initialAppRoute?.tab === "settings" ? initialAppRoute.settingsTab : "preferences",
@@ -10622,7 +10624,9 @@ function ChatPane({
   const [adminView, setAdminView] = useState<AdminView>(
     initialAppRoute?.tab === "settings" ? initialAppRoute.adminView : "controls",
   );
-  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
+  const [selectedTurnId, setSelectedTurnId] = useState<string | null>(
+    initialBackgroundTaskWakeTurnId,
+  );
   // The route now carries a durable per-session turn NUMBER, not a turn_id. It
   // is resolved to a turn_id server-side (or from the loaded window) into
   // selectedTurnId; until then it stays pending so the URL isn't overwritten.
@@ -10640,7 +10644,19 @@ function ChatPane({
       : false,
   );
   const [pendingTurnViewRouteAnchor, setPendingTurnViewRouteAnchor] =
-    useState<TurnViewScrollAnchor | null>(initialRunRoute?.tab === "turns" ? "bottom" : null);
+    useState<TurnViewScrollAnchor | null>(
+      initialRunRoute?.tab === "turns" || initialBackgroundTaskWakeTarget ? "bottom" : null,
+    );
+  useEffect(() => {
+    if (!isBackgroundTaskWakeTimelineId(effectivePendingScrollMessageId)) return;
+    const targetTurnId = turnIdFromTimelineId(effectivePendingScrollMessageId);
+    if (!targetTurnId) return;
+    if (activeTab !== "turns") setActiveTab("turns");
+    if (selectedTurnId !== targetTurnId) setSelectedTurnId(targetTurnId);
+    if (routeTurnUnavailable) setRouteTurnUnavailable(false);
+    setPendingRouteTurnNumber(null);
+    setPendingTurnViewRouteAnchor((current) => current ?? "bottom");
+  }, [activeTab, effectivePendingScrollMessageId, routeTurnUnavailable, selectedTurnId]);
   const [backgroundView, setBackgroundView] = useState<BackgroundView>("shells");
   const [selectedBackgroundId, setSelectedBackgroundId] = useState<string | null>(null);
   const [scheduledWakeupEntries, setScheduledWakeupEntries] = useState<TranscriptEntry[]>([]);
@@ -14025,6 +14041,17 @@ function ChatPane({
         if (next !== window.location.href) window.history.replaceState({}, "", next);
       }
       setPendingTranscriptMessageId(trimmedEntryId);
+      if (isBackgroundTaskWakeTimelineId(trimmedEntryId)) {
+        const targetTurnId = turnIdFromTimelineId(trimmedEntryId);
+        if (targetTurnId) {
+          setPendingRouteTurnNumber(null);
+          setRouteTurnUnavailable(false);
+          setSelectedTurnId(targetTurnId);
+          setPendingTurnViewRouteAnchor((current) => current ?? "bottom");
+        }
+        setActiveTab("turns");
+        return;
+      }
       setActiveTab("chat");
     },
     [publicView, session.id],
