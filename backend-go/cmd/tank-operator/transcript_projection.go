@@ -286,10 +286,9 @@ func (s *projectionState) apply(event map[string]any) {
 		s.applyAwaitingInputInvocation(event)
 	case "turn.input_answered":
 		s.applyInputAnswered(event)
-		if turnID := transcriptString(event, "turn_id"); turnID != "" {
-			s.activeTurnID = turnID
-		}
-		s.runStatus = "streaming"
+		s.applyTurnTerminal(event, "answered")
+		s.runStatus = "ready"
+		s.activeTurnID = ""
 		s.needsInput = false
 		s.activeItemID = ""
 	}

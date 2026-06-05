@@ -788,6 +788,16 @@ func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.
 	if awaitingMessage["answered"] != true {
 		t.Errorf("assistant awaitingInput.answered = %v, want true", awaitingMessage["answered"])
 	}
+	body, ok := projection.ActivityBodies["turn-2"]
+	if !ok {
+		t.Fatalf("missing question turn activity body: %#v", projection.ActivityBodies)
+	}
+	if body.Status != "answered" {
+		t.Fatalf("question turn status = %q, want answered", body.Status)
+	}
+	if body.Summary["active"] == true {
+		t.Fatalf("question turn activity stayed active after answer: %#v", body.Summary)
+	}
 	for _, body := range projection.ActivityBodies {
 		for _, entry := range body.Entries {
 			if entry["metaKind"] != "awaiting_input" {

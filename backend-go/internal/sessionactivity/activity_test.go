@@ -77,6 +77,23 @@ func TestDeriveActivitySummaryAwaitingInputSetsNeedsInput(t *testing.T) {
 	}
 }
 
+func TestDeriveActivitySummaryInputAnsweredClosesQuestionTurn(t *testing.T) {
+	got := DeriveActivitySummary(nil, []map[string]any{
+		{"type": "turn.submitted", "turn_id": "turn-question", "order_key": "1"},
+		{"type": "turn.awaiting_input", "turn_id": "turn-question", "order_key": "2"},
+		{"type": "turn.input_answered", "turn_id": "turn-question", "order_key": "3"},
+	}, 0, false)
+	if got.Status != "ready" {
+		t.Fatalf("status = %q, want ready after turn.input_answered", got.Status)
+	}
+	if got.ActiveTurnID != nil {
+		t.Fatalf("active turn id = %#v, want nil after turn.input_answered", got.ActiveTurnID)
+	}
+	if got.NeedsInput {
+		t.Fatal("NeedsInput stayed true after turn.input_answered")
+	}
+}
+
 func TestDeriveActivitySummaryFailedFromPodOverridesStatus(t *testing.T) {
 	prior := &ActivitySummary{Status: "ready"}
 	got := DeriveActivitySummary(prior, nil, 0, true)

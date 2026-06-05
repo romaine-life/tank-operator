@@ -167,10 +167,8 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 			out.NeedsInput = true
 			out.Failed = false
 		case "turn.input_answered":
-			if id := optionalStringField(event, "turn_id"); id != nil {
-				out.ActiveTurnID = id
-			}
-			out.Status = "streaming"
+			out.ActiveTurnID = nil
+			out.Status = "ready"
 			out.NeedsInput = false
 			out.Failed = false
 		}
