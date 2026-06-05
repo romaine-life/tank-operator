@@ -262,6 +262,39 @@ func TestMigrationsPersistSessionStatusEvents(t *testing.T) {
 	}
 }
 
+func TestMigrationsRetireStartupStatusTranscriptRows(t *testing.T) {
+	migration0127 := ""
+	for _, m := range schemaMigrations {
+		if m.ID == "0127" {
+			migration0127 = m.SQL
+			break
+		}
+	}
+	if migration0127 == "" {
+		t.Fatal("migration 0127 not found")
+	}
+	for _, want := range []string{
+		"IF trim(p_status_key) IN ('loading', 'ready') THEN",
+		"DELETE FROM session_transcript_rows",
+		"source_event_id = v_event_id",
+		"se.event_type = 'session.status'",
+		"coalesce(se.payload -> 'payload' ->> 'status', '') IN ('loading', 'ready')",
+		"coalesce(se.payload ->> 'timeline_id', '') NOT LIKE '%:provider:%'",
+	} {
+		if !strings.Contains(migration0127, want) {
+			t.Fatalf("schema migrations missing startup-status retirement guard %q", want)
+		}
+	}
+	retireIndex := strings.LastIndex(migration0127, `IF trim(p_status_key) IN ('loading', 'ready') THEN`)
+	failedInsertIndex := strings.LastIndex(migration0127, "INSERT INTO session_transcript_rows")
+	if retireIndex < 0 || failedInsertIndex < 0 {
+		t.Fatal("expected startup retirement branch and failed-banner insert")
+	}
+	if retireIndex > failedInsertIndex {
+		t.Fatal("startup loading/ready must return before the failed-banner transcript insert")
+	}
+}
+
 // TestMigrationsAllocateDurableTurnNumbers pins the durable turn-number model:
 // the session_turns table, the per-session counter, the idempotent allocation
 // function, and the AFTER INSERT trigger that numbers every turn. The
