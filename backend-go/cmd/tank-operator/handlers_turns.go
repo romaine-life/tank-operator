@@ -1000,19 +1000,28 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		// are already durable above; emit a turn.command_failed marker
 		// keyed to the same turn_id so the SPA renders the stranded
 		// submission as failed instead of perpetually "submitted."
-		failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
-			SessionID:         sessionID,
-			SessionStorageKey: storageKey,
-			Email:             email,
-			TurnID:            turnID,
-			ClientNonce:       clientNonce,
-			Runtime:           provider,
-			Reason:            "publish_submit_turn_failed: " + err.Error(),
-			Now:               time.Now().UTC(),
-		})
-		if writeErr := s.persistBackendEvent(ctx, storageKey, failedEvent); writeErr != nil {
-			slog.Warn("persist turn.command_failed",
-				"session_id", sessionID, "turn_id", turnID, "error", writeErr)
+		//
+		// Exception: for a self-resume turn (a ScheduleWakeup timer or a
+		// background-task wake), the wake fire path owns the away-tagged
+		// turn.command_failed so the session rings the broke-while-you-were-away
+		// summon. Writing the generic marker here would collide on the
+		// deterministic event_id and win the dedup, dropping the away tag — so
+		// skip it and let resolveFailedWake stamp the away reason.
+		if !isSelfResumeTurnSource(req.Source) {
+			failedEvent := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
+				SessionID:         sessionID,
+				SessionStorageKey: storageKey,
+				Email:             email,
+				TurnID:            turnID,
+				ClientNonce:       clientNonce,
+				Runtime:           provider,
+				Reason:            "publish_submit_turn_failed: " + err.Error(),
+				Now:               time.Now().UTC(),
+			})
+			if writeErr := s.persistBackendEvent(ctx, storageKey, failedEvent); writeErr != nil {
+				slog.Warn("persist turn.command_failed",
+					"session_id", sessionID, "turn_id", turnID, "error", writeErr)
+			}
 		}
 		return nil, http.StatusInternalServerError, "publish turn: " + err.Error()
 	}

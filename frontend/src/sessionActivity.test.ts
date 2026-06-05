@@ -23,6 +23,7 @@ function summary(
     unread_count: 0,
     needs_input: status === "needs_input",
     failed: status === "error",
+    away_error: false,
     active_turn_id: null,
     updated_at: null,
     ...patch,
@@ -374,12 +375,37 @@ test("shouldRingForActivityTransition: no prior -> scheduled does NOT ring", () 
   );
 });
 
-test("shouldRingForActivityTransition: scheduled -> ready rings (chain truly ended)", () => {
-  // The wake fired, the agent finished, nothing is pending — the real "your
-  // turn" moment, so the bell fires exactly once at the end of the chain.
+test("shouldRingForActivityTransition: scheduled -> ready does NOT ring (cancel/clear)", () => {
+  // A direct scheduled -> ready means the timer was cancelled or the user took
+  // over the session — not the genuine end-of-chain hand-off, which arrives as
+  // streaming -> ready when the woken turn finishes. Don't summon for the cancel.
   assert.equal(
     shouldRingForActivityTransition(summary("scheduled"), summary("ready")),
+    false,
+  );
+});
+
+test("shouldRingForActivityTransition: away-error rings (broken self-resume)", () => {
+  // A scheduled/background continuation the orchestrator could not fire while
+  // the session was alive — the agent broke while you were away — rings the
+  // same bell as a normal hand-off, even though ordinary errors stay silent.
+  assert.equal(
+    shouldRingForActivityTransition(summary("scheduled"), summary("error", { away_error: true })),
     true,
+  );
+  assert.equal(
+    shouldRingForActivityTransition(summary("streaming"), summary("error", { away_error: true })),
+    true,
+  );
+});
+
+test("shouldRingForActivityTransition: away-error does not re-ring when already error", () => {
+  assert.equal(
+    shouldRingForActivityTransition(
+      summary("error", { away_error: true }),
+      summary("error", { away_error: true }),
+    ),
+    false,
   );
 });
 

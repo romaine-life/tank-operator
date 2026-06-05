@@ -16,6 +16,7 @@ export interface SessionActivitySummary {
   unread_count: number;
   needs_input: boolean;
   failed: boolean;
+  away_error: boolean;
   active_turn_id: string | null;
   updated_at: string | null;
 }
@@ -84,6 +85,7 @@ export function normalizeSessionActivity(value: unknown): SessionActivitySummary
     unread_count: nonNegativeInt(value.unread_count),
     needs_input: value.needs_input === true,
     failed: value.failed === true,
+    away_error: value.away_error === true,
     active_turn_id: nullableStringField(value, "active_turn_id"),
     updated_at: nullableStringField(value, "updated_at"),
   };
@@ -184,6 +186,14 @@ export function shouldRingForActivityTransition(
   prior: SessionActivitySummary | undefined,
   next: SessionActivitySummary,
 ): boolean {
+  // A broken self-resume — a ScheduleWakeup timer or background-task wake the
+  // orchestrator could not fire while the session was alive — is an away-error:
+  // the agent broke while you were not driving, so it rings the same "you're
+  // needed" bell as a normal hand-off. A normal watched error (a turn you
+  // submitted that failed) does not ring; don't re-ring if already in error.
+  if (next.status === "error" && next.away_error) {
+    return prior?.status !== "error";
+  }
   const isUserTurn = (status: ConversationActivityStatus | undefined): boolean =>
     status === "ready" || status === "needs_input";
   if (!isUserTurn(next.status)) return false;
@@ -191,6 +201,12 @@ export function shouldRingForActivityTransition(
   // Don't ring on stop-then-ready: the user just pressed Stop and the agent
   // winding back to ready is the expected consequence, not a new signal.
   if (prior && (prior.status === "stopping" || prior.status === "stopped")) {
+    return false;
+  }
+  // A direct scheduled -> ready is a cancel/clear (you took over the session or
+  // cancelled the timer), never the genuine end-of-chain hand-off — that one
+  // arrives as streaming -> ready when the woken turn finishes.
+  if (prior?.status === "scheduled" && next.status === "ready") {
     return false;
   }
   return true;

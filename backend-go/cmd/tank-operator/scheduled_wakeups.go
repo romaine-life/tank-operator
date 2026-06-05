@@ -12,6 +12,8 @@ import (
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionactivity"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 const (
@@ -255,7 +257,64 @@ func (s *appServer) failScheduledWakeup(ctx context.Context, row pgstore.Schedul
 		return err
 	}
 	recordScheduledWakeupFire(provider, scheduledWakeupFireFailureLabel(reason))
+	// Resolve the session out of the non-summoning "scheduled" status. A fire
+	// attempt that bounced while the session was alive (enqueue_failed) is an
+	// away-error: emit a durable, away-tagged terminal so the activity fold lands
+	// error+away_error and the SPA rings the same summon a normal hand-off gets —
+	// the agent's self-scheduled continuation broke while the user was away.
+	// session_not_found / session_not_active mean the session is gone or dying,
+	// so its own lifecycle owns visibility; just recompute so it leaves
+	// "scheduled" without an away ring.
+	s.resolveFailedWake(ctx, row.OwnerEmail, row.SessionID,
+		conversation.TurnIDForClientNonce(row.ClientNonce), row.ClientNonce, provider,
+		strings.HasPrefix(reason, "enqueue_failed"), sessionactivity.AwayErrorReasonScheduledWakeup)
 	return errors.New(reason)
+}
+
+// resolveFailedWake takes a session out of the non-summoning "scheduled" status
+// after a wake fire attempt failed. When ring is true (session alive, command
+// bounced) it persists a durable, away-tagged turn.command_failed so the
+// activity fold lands error+away_error and the SPA rings the turn-complete
+// summon. It always recomputes the activity summary so the would-be
+// "scheduled"/"ready" state resolves even when no terminal is emitted. Shared by
+// the scheduled-wakeup and background-task-wake fire paths.
+func (s *appServer) resolveFailedWake(ctx context.Context, owner, sessionID, turnID, clientNonce, runtime string, ring bool, awayReason string) {
+	if ring {
+		storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
+		event := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
+			SessionID:         sessionID,
+			SessionStorageKey: storageKey,
+			Email:             owner,
+			TurnID:            turnID,
+			ClientNonce:       clientNonce,
+			Runtime:           runtime,
+			Reason:            awayReason,
+			Now:               time.Now().UTC(),
+		})
+		if err := s.persistBackendEvent(ctx, storageKey, event); err != nil {
+			slog.Warn("failed wake away-error persist failed", "session_id", sessionID, "error", err)
+		}
+	}
+	if s.activityRefresher != nil {
+		if err := s.activityRefresher.RefreshSessionActivity(ctx, owner, s.sessionScope, sessionID); err != nil {
+			slog.Warn("failed wake activity refresh failed", "session_id", sessionID, "error", err)
+		}
+	}
+}
+
+// isSelfResumeTurnSource reports whether a submitted turn is the orchestrator
+// resuming the agent on its own (a ScheduleWakeup timer or a background-task
+// wake) rather than a user or launch submission. For these the wake fire path
+// owns the away-tagged turn.command_failed on a publish failure, so
+// enqueueSDKTurn skips its generic marker to avoid a colliding deterministic
+// event_id (see resolveFailedWake / enqueueSDKTurn).
+func isSelfResumeTurnSource(source string) bool {
+	switch strings.TrimSpace(source) {
+	case "schedule-wakeup", "background-task":
+		return true
+	default:
+		return false
+	}
 }
 
 func scheduledWakeupFireFailureLabel(reason string) string {
