@@ -55,17 +55,19 @@ test("active session composer keeps dashes while transcript usage is loading", (
 });
 
 test("composer renders a durable compaction metric from the session row", () => {
-  // A third metric, labeled cmp, rendered only when the session has compacted.
+  // A third metric, labeled cmp, renders whenever the session row supplies the
+  // durable count, including the zero state before the first compaction.
   assert.match(appSource, /className="run-cost-estimate-metric run-cost-estimate-metric-compactions"/);
   assert.match(appSource, /className="run-cost-estimate-label">cmp</);
-  assert.match(appSource, /\{safeCompactions > 0 && \(/);
+  assert.match(appSource, /\{hasCompactionMetric && \(/);
+  assert.match(appSource, /const hasCompactionMetric = typeof compactionCount === "number" && Number\.isFinite\(compactionCount\)/);
   // Sourced from the durable row field, never inferred from loaded transcript
   // entries — the same durable model as the window denominator.
   assert.match(appSource, /compactionCount: sessionCompactionCount,/);
   assert.match(appSource, /const sessionCompactionCount =[\s\S]*session\.compaction_count/);
   // The chip widens via a modifier instead of squeezing the ctx fraction.
-  assert.match(appSource, /has-compactions/);
-  assert.match(cssSource, /\.run-cost-estimate\.has-compactions\s*\{/);
+  assert.match(appSource, /has-compaction-metric/);
+  assert.match(cssSource, /\.run-cost-estimate\.has-compaction-metric\s*\{/);
   assert.match(cssSource, /\.run-cost-estimate-metric-compactions\s*\{/);
 });
 
