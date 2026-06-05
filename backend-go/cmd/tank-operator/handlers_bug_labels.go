@@ -62,13 +62,22 @@ func (s *appServer) handleSetSessionBugLabel(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	var body struct {
-		Name *string `json:"name"`
+		Name  *string   `json:"name"`
+		Names *[]string `json:"names"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
 		return
 	}
-	info, err := s.mgr.SetBugLabel(r.Context(), user.OwnerEmail(), sessionID, body.Name)
+	var (
+		info sessions.Info
+		err  error
+	)
+	if body.Names != nil {
+		info, err = s.mgr.SetBugLabels(r.Context(), user.OwnerEmail(), sessionID, *body.Names)
+	} else {
+		info, err = s.mgr.SetBugLabel(r.Context(), user.OwnerEmail(), sessionID, body.Name)
+	}
 	switch {
 	case err == nil:
 		writeJSON(w, http.StatusOK, info)

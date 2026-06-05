@@ -517,6 +517,14 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		createdAt = &s
 	}
 
+	bugLabels := opts.BugLabels
+	if len(bugLabels) == 0 && opts.BugLabel != nil {
+		bugLabels = []*sessionmodel.SessionBugLabel{opts.BugLabel}
+	}
+	bugLabel := opts.BugLabel
+	if bugLabel == nil && len(bugLabels) > 0 {
+		bugLabel = bugLabels[0]
+	}
 	info := Info{
 		ID:             sessionID,
 		PodName:        &podName,
@@ -528,7 +536,8 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		Name:           name,
 		Repos:          repos,
 		Capabilities:   capabilities,
-		BugLabel:       opts.BugLabel,
+		BugLabel:       bugLabel,
+		BugLabels:      bugLabels,
 		Model:          model,
 		Effort:         effort,
 		AgentAvatarID:  assignment.AgentAvatarID,
@@ -639,18 +648,46 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 	return m.GetByOwner(ctx, owner, sessionID)
 }
 
+const maxBugLabelsPerSession = 5
+
 // SetBugLabel attaches or clears the optional Tank-native bug label for a
 // session. It is registry-only state, so no pod annotation is patched.
 func (m *Manager) SetBugLabel(ctx context.Context, owner, sessionID string, labelName *string) (Info, error) {
-	label, err := sessionmodel.NormalizeBugLabelName(labelName)
-	if err != nil {
-		return Info{}, err
+	if labelName == nil {
+		return m.SetBugLabels(ctx, owner, sessionID, nil)
+	}
+	return m.SetBugLabels(ctx, owner, sessionID, []string{*labelName})
+}
+
+// SetBugLabels replaces the Tank-native bug labels for a session.
+func (m *Manager) SetBugLabels(ctx context.Context, owner, sessionID string, labelNames []string) (Info, error) {
+	if len(labelNames) > maxBugLabelsPerSession {
+		return Info{}, fmt.Errorf("too many bug labels: %d > %d", len(labelNames), maxBugLabelsPerSession)
+	}
+	labels := make([]*sessionmodel.SessionBugLabel, 0, len(labelNames))
+	seen := map[string]struct{}{}
+	for i := range labelNames {
+		label, err := sessionmodel.NormalizeBugLabelName(&labelNames[i])
+		if err != nil {
+			return Info{}, err
+		}
+		if label == nil {
+			continue
+		}
+		if _, ok := seen[label.Slug]; ok {
+			continue
+		}
+		seen[label.Slug] = struct{}{}
+		labels = append(labels, label)
+	}
+	if len(labels) > maxBugLabelsPerSession {
+		return Info{}, fmt.Errorf("too many bug labels: %d > %d", len(labels), maxBugLabelsPerSession)
 	}
 	if _, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err != nil {
 		return Info{}, err
 	}
 	if m.registry != nil {
-		if regErr := m.registry.SetBugLabel(ctx, owner, sessionID, label); regErr != nil {
+		if regErr := m.registry.SetBugLabels(ctx, owner, sessionID, labels); regErr != nil {
 			return Info{}, regErr
 		}
 	}

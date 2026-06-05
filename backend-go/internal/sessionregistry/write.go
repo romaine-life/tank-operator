@@ -427,18 +427,29 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			sessions.row_version,
 			bug_labels.id,
 			bug_labels.name,
-			bug_labels.slug
+			bug_labels.slug,
+			COALESCE(bug_labels.labels_json, '[]'::jsonb)
 		FROM sessions
 		LEFT JOIN LATERAL (
-			SELECT bug_labels.id, bug_labels.name, bug_labels.slug
+			SELECT
+				(array_agg(bug_labels.id ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC))[1] AS id,
+				(array_agg(bug_labels.name ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC))[1] AS name,
+				(array_agg(bug_labels.slug ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC))[1] AS slug,
+				jsonb_agg(
+					jsonb_build_object(
+						'id', bug_labels.id,
+						'name', bug_labels.name,
+						'slug', bug_labels.slug,
+						'display_name', 'bug: ' || bug_labels.name
+					)
+					ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC
+				) AS labels_json
 			FROM session_bug_labels
 			JOIN bug_labels
 				ON bug_labels.id = session_bug_labels.bug_label_id
 			WHERE session_bug_labels.owner_email = sessions.email
 			  AND session_bug_labels.session_scope = sessions.session_scope
 			  AND session_bug_labels.session_id = sessions.session_id
-			ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC
-			LIMIT 1
 		) bug_labels ON true
 		WHERE sessions.email = $1 AND sessions.session_scope = $2 AND sessions.session_id = $3
 	`
@@ -458,6 +469,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		sidebarPosition, rowVersion                           int64
 		bugLabelID                                            sql.NullInt64
 		bugLabelName, bugLabelSlug                            sql.NullString
+		bugLabelsRaw                                          []byte
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
 		&mode, &podName, &name, &visible,
@@ -475,6 +487,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&bugLabelID,
 		&bugLabelName,
 		&bugLabelSlug,
+		&bugLabelsRaw,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return sessionmodel.SessionRecord{}, false, nil
@@ -521,6 +534,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		SidebarPosition:                sidebarPosition,
 		RowVersion:                     rowVersion,
 		BugLabel:                       bugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug),
+		BugLabels:                      bugLabelsFromJSON(bugLabelsRaw),
 	}
 	return record, true, nil
 }

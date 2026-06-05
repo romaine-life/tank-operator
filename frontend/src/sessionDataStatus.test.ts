@@ -51,3 +51,17 @@ test("buildSessionDataStatusRows surfaces repo clone issues", () => {
   assert.equal(repo?.tone, "danger");
   assert.equal(repo?.detail, "1/2 repo clone issue");
 });
+
+test("buildSessionDataStatusRows summarizes multiple bug labels", () => {
+  const rows = buildSessionDataStatusRows({
+    bug_labels: [
+      { display_name: "bug: checkout" },
+      { display_name: "bug: transcript" },
+    ],
+  });
+
+  const bugReport = rows.find((row) => row.id === "bug_report");
+  assert.equal(bugReport?.status, "2 linked");
+  assert.equal(bugReport?.detail, "bug: checkout, bug: transcript");
+  assert.equal(bugReport?.tone, "info");
+});

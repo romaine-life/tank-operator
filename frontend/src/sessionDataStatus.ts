@@ -35,6 +35,10 @@ interface SessionDataStatusInput {
     display_name?: string;
     name?: string;
   } | null;
+  bug_labels?: Array<{
+    display_name?: string;
+    name?: string;
+  }> | null;
   runtime_context_window_tokens?: number;
   runtime_context_window_source?: string;
   runtime_context_window_observed_at?: string | null;
@@ -49,9 +53,16 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
   const compactions = nonNegativeInteger(session.compaction_count);
   const contextWindow = nonNegativeInteger(session.runtime_context_window_tokens);
   const contextSource = trimOptionalString(session.runtime_context_window_source);
+  const bugLabels = Array.isArray(session.bug_labels)
+    ? session.bug_labels
+        .map((label) => trimOptionalString(label?.display_name) ?? trimOptionalString(label?.name))
+        .filter((label): label is string => Boolean(label))
+    : [];
   const bugLabel =
+    bugLabels[0] ??
     trimOptionalString(session.bug_label?.display_name) ??
     trimOptionalString(session.bug_label?.name);
+  const bugCount = bugLabels.length || (bugLabel ? 1 : 0);
 
   return [
     {
@@ -89,9 +100,9 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
     {
       id: "bug_report",
       label: "Bug report",
-      status: bugLabel ? "Linked" : "None",
-      detail: bugLabel ?? "No bug report label",
-      tone: bugLabel ? "info" : "muted",
+      status: bugCount > 1 ? `${bugCount} linked` : bugLabel ? "Linked" : "None",
+      detail: bugCount > 1 ? bugLabels.join(", ") : bugLabel ?? "No bug report label",
+      tone: bugCount > 0 ? "info" : "muted",
     },
     linkedRepoStatus(repos, session.clone_state ?? null),
   ];
