@@ -965,7 +965,11 @@ deterministic command id lets a retry republish the same reply.
 `answers` is `Record<questionText, answerLabel[]>` — always an array so single-
 and multi-select share one shape. `annotations` is optional
 `Record<questionText, { preview?, notes? }>` carrying free-text the user
-attached. The question page's answered state is derived durably — the projection
+attached. A free-form-only answer uses the synthetic label `Other` to keep the
+answer map non-empty, but runners deliver the attached `notes` to the provider
+instead of the synthetic label. When the user selects a real option and also
+adds notes, runners deliver both the selected label and the notes. The question
+page's answered state is derived durably — the projection
 marks it answered by finding a later `turn.input_answered` event whose
 `payload.question_timeline_id` matches the question — never from browser-local
 optimism.

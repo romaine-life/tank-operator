@@ -263,6 +263,13 @@ All metric names are prefixed `tank_`. The full namespace:
   terminal. A regression signature for usage observability is a Claude
   turn (`mode="claude"`) with assistant messages but zero `snapshot`
   increments; compare against `tank_runner_turn_duration_seconds_count`.
+  `tank_runner_input_reply_answer_shape_total{shape}` counts AskUserQuestion
+  `input_reply` answers at the runner/provider boundary after durable
+  annotations have been applied. `shape` is a closed set:
+  `selection_only`, `free_form_only`, `selection_with_notes`, `empty`.
+  This localizes "typed answer text disappeared" reports between durable
+  persistence (`turn.input_answered.payload.annotations`) and provider
+  delivery without per-session labels.
 - `tank_session_runtime_config_update_total` - pod-side runner reports of
   the model/effort actually applied to the provider runtime. Labels:
   `provider` (`claude`, `codex`, `unknown`) and bounded `result`.

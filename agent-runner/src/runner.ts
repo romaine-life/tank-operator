@@ -62,6 +62,7 @@ import {
   backgroundTaskWakeTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
+  inputReplyAnswerShapeTotal,
   interruptOutcomeTotal,
   natsPublishFailureTotal,
   optionsOverrideIgnoredTotal,
@@ -354,10 +355,28 @@ function answersForClaudeInput(
   for (const [question, labels] of Object.entries(answers ?? {})) {
     const cleanLabels = labels.map((label) => String(label).trim()).filter(Boolean);
     const note = String(annotations?.[question]?.notes ?? "").trim();
-    const value = cleanLabels.length > 0 ? cleanLabels.join(", ") : note;
+    const semanticLabels = note
+      ? cleanLabels.filter((label) => label.toLowerCase() !== "other")
+      : cleanLabels;
+    inputReplyAnswerShapeTotal.labels(inputReplyAnswerShape(semanticLabels, note)).inc();
+    const value =
+      semanticLabels.length > 0 && note
+        ? `${semanticLabels.join(", ")}\n\n${note}`
+        : semanticLabels.length > 0
+          ? semanticLabels.join(", ")
+          : note;
     if (value) out[question] = value;
   }
   return out;
+}
+
+type InputReplyAnswerShape = "selection_only" | "free_form_only" | "selection_with_notes" | "empty";
+
+function inputReplyAnswerShape(labels: string[], note: string): InputReplyAnswerShape {
+  if (labels.length > 0 && note) return "selection_with_notes";
+  if (note) return "free_form_only";
+  if (labels.length > 0) return "selection_only";
+  return "empty";
 }
 
 export interface PendingTurn {

@@ -591,8 +591,58 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
   });
   const result = await resultPromise;
   assert.equal(result.behavior, "allow");
-  assert.deepEqual(result.updatedInput?.answers, { "Which auth method?": "OAuth" });
+  assert.deepEqual(result.updatedInput?.answers, { "Which auth method?": "OAuth\n\nmatches the IdP" });
   assert.ok(completedRecord, "input_reply command should be acked after resolving the tool");
+});
+
+test("canUseTool delivers free-form Other text to Claude instead of synthetic label", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    canUseTool: (
+      toolName: string,
+      input: unknown,
+      ctx: { toolUseID?: string },
+    ) => Promise<{ behavior: string; updatedInput?: { answers?: Record<string, string> } }>;
+    acceptInputReply: (record: unknown) => Promise<void>;
+    activeTurn: unknown;
+    publishTerminalWithRetry: (event: TankConversationEvent) => Promise<boolean>;
+    markCommandTerminal: (turn: unknown, outcome: string) => Promise<void>;
+    commandBus: { markCompleted: (record: unknown) => Promise<void>; markFailed: (record: unknown) => Promise<void> };
+  };
+
+  runner.publishTerminalWithRetry = async () => true;
+  runner.markCommandTerminal = async () => {};
+  runner.commandBus = {
+    async markCompleted() {},
+    async markFailed() {
+      assert.fail("input_reply should resolve the pending AskUserQuestion");
+    },
+  };
+  runner.activeTurn = {
+    turnID: "turn-active",
+    clientNonce: "turn-active",
+    terminalEmitted: false,
+    commandRecord: {},
+  };
+
+  const resultPromise = runner.canUseTool(
+    "AskUserQuestion",
+    { questions: [{ question: "Proceed?", allowFreeForm: true, options: [{ label: "Yes" }] }] },
+    { toolUseID: "toolu_ask" },
+  );
+  await new Promise((resolve) => setImmediate(resolve));
+
+  await runner.acceptInputReply({
+    type: "input_reply",
+    target_turn_id: "turn-active",
+    target_timeline_id: "turn-active:item:toolu_ask",
+    target_provider_item_id: "toolu_ask",
+    answers: { "Proceed?": ["Other"] },
+    annotations: { "Proceed?": { notes: "Use the dedicated test database." } },
+  });
+
+  const result = await resultPromise;
+  assert.equal(result.behavior, "allow");
+  assert.deepEqual(result.updatedInput?.answers, { "Proceed?": "Use the dedicated test database." });
 });
 
 test("acceptInputReply redelivers when the provider callback is not recreated yet", async () => {

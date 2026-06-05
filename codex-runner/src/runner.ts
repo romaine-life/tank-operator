@@ -61,6 +61,7 @@ import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
   commandsConsumedTotal,
   eventTruncatedTotal,
+  inputReplyAnswerShapeTotal,
   interruptOutcomeTotal,
   natsPublishFailureTotal,
   providerErrorTotal,
@@ -110,13 +111,29 @@ function inputReplyKey(turnID: string, timelineID: string, providerItemID: strin
 
 function answersForCodexInput(
   answers: Record<string, string[]> | undefined,
+  annotations: Record<string, { notes?: string }> | undefined,
 ): Record<string, { answers: string[] }> {
   const out: Record<string, { answers: string[] }> = {};
   for (const [question, labels] of Object.entries(answers ?? {})) {
     const clean = labels.map((label) => String(label).trim()).filter(Boolean);
-    if (clean.length > 0) out[question] = { answers: clean };
+    const note = String(annotations?.[question]?.notes ?? "").trim();
+    const semanticAnswers = note
+      ? clean.filter((label) => label.toLowerCase() !== "other")
+      : clean;
+    inputReplyAnswerShapeTotal.labels(inputReplyAnswerShape(semanticAnswers, note)).inc();
+    if (note) semanticAnswers.push(note);
+    if (semanticAnswers.length > 0) out[question] = { answers: semanticAnswers };
   }
   return out;
+}
+
+type InputReplyAnswerShape = "selection_only" | "free_form_only" | "selection_with_notes" | "empty";
+
+function inputReplyAnswerShape(labels: string[], note: string): InputReplyAnswerShape {
+  if (labels.length > 0 && note) return "selection_with_notes";
+  if (note) return "free_form_only";
+  if (labels.length > 0) return "selection_only";
+  return "empty";
 }
 
 // AsyncQueue — one writer, one consumer. Session commands push; the
@@ -776,7 +793,7 @@ export class Runner {
       return;
     }
     this.pendingInputReplies.delete(key);
-    pending.resolve({ answers: answersForCodexInput(record.answers) });
+    pending.resolve({ answers: answersForCodexInput(record.answers, record.annotations) });
     await this.commandBus.markCompleted(record);
   }
 
