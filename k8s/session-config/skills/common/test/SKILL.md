@@ -5,13 +5,9 @@ description: Reserve and use a Glimmung test environment for validating the curr
 
 # /test
 
-This skill is invoked when you have finished writing code, and it is time to
-test it in a Glimmung environment.
+This skill is invoked to add a test surface for the issue being discussed. If it is invoked prior to code being written, this is your signal to make the code changes. If the code is already written, move to the next step.
 
-Starting test means any rollout workflow marker for this session is no longer
-active. Tank keeps the test and rollout workflow states mutually exclusive in
-the durable session row; the test environment pill means the test workflow has
-started, not that a Glimmung slot still physically exists.
+Starting test means any rollout workflow marker for this session is no longer active. Tank keeps the test and rollout workflow states mutually exclusive in the durable session row; the test environment pill means the test workflow has started, not that a Glimmung slot still physically exists.
 
 The invocation may include extra text after `/test` or `$test`. Treat that text as the user's immediate test request or issue context, and carry it into the environment setup plan. It is possible the start of the entire conversation is an invocation of the test skill and an issue statement.
 

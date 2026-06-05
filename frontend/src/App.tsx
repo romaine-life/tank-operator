@@ -4005,6 +4005,21 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
+const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>(["initialMessageMode"]);
+
+function isDurableRunPref(key: keyof RunPrefs): boolean {
+  return !EPHEMERAL_RUN_PREF_KEYS.has(key);
+}
+
+function durableRunPrefs(prefs: RunPrefs): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(prefs) as (keyof RunPrefs)[]) {
+    if (!isDurableRunPref(key)) continue;
+    out[key] = prefs[key];
+  }
+  return out;
+}
+
 const CHAT_FONT_SCALE_MIN = 0.8;
 const CHAT_FONT_SCALE_MAX = 2.0;
 const CHAT_FONT_SCALE_STEP = 0.1;
@@ -4088,14 +4103,11 @@ function pickAllowedPrefId(raw: string | null, options: { id: string }[], fallba
   return options.some((opt) => opt.id === trimmed) ? trimmed : fallback;
 }
 
-function pickInitialMessageMode(raw: string | null, fallback: InitialMessageMode): InitialMessageMode {
-  return pickAllowedPrefId(raw, INITIAL_MESSAGE_MODE_OPTIONS, fallback) as InitialMessageMode;
-}
-
 function loadRunPrefs(): RunPrefs {
   const out = { ...DEFAULT_RUN_PREFS };
   try {
     for (const key of Object.keys(out) as (keyof RunPrefs)[]) {
+      if (!isDurableRunPref(key)) continue;
       const raw = localStorage.getItem(RUN_PREF_PREFIX + key);
       if (key === "chatFontScale") {
         if (raw != null) out[key] = clampChatFontScale(Number(raw));
@@ -4109,10 +4121,8 @@ function loadRunPrefs(): RunPrefs {
         out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
       } else if (key === "codexEffort") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
-      } else if (key === "initialMessageMode") {
-        out[key] = pickInitialMessageMode(raw, DEFAULT_INITIAL_MESSAGE_MODE);
       } else if (raw === "true" || raw === "false") {
-        out[key] = raw === "true";
+        (out as unknown as Record<string, unknown>)[key] = raw === "true";
       }
     }
   } catch {
@@ -4130,6 +4140,7 @@ type SetRunPref = <K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) => void
 function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): RunPrefs {
   const out: RunPrefs = { ...prev };
   for (const key of Object.keys(prev) as (keyof RunPrefs)[]) {
+    if (!isDurableRunPref(key)) continue;
     const raw = server[key];
     if (raw === undefined) continue;
     if (key === "chatFontScale") {
@@ -4151,10 +4162,6 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
     } else if (key === "codexEffort") {
       if (typeof raw === "string") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, prev.codexEffort);
-      }
-    } else if (key === "initialMessageMode") {
-      if (typeof raw === "string") {
-        out[key] = pickInitialMessageMode(raw, prev.initialMessageMode);
       }
     } else if (typeof raw === "boolean") {
       (out as unknown as Record<string, unknown>)[key] = raw;
@@ -15980,7 +15987,7 @@ function AuthenticatedApp() {
       void authedFetch("/api/auth/prefs", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ run_prefs: prefs }),
+        body: JSON.stringify({ run_prefs: durableRunPrefs(prefs) }),
       }).catch(() => {
         // Best-effort — localStorage is the source of truth on this
         // device; failed sync just means other devices won't see the
@@ -15991,9 +15998,12 @@ function AuthenticatedApp() {
   function setRunPref<K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) {
     setRunPrefs((p) => {
       const next = { ...p, [key]: value };
-      persistRunPrefs(next);
+      if (isDurableRunPref(key)) {
+        persistRunPrefs(next);
+      }
       return next;
     });
+    if (!isDurableRunPref(key)) return;
     try {
       localStorage.setItem(RUN_PREF_PREFIX + String(key), String(value));
     } catch {
