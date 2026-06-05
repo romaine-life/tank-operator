@@ -60,12 +60,37 @@ test("RunPrefs persists provider model and effort across page reloads", () => {
   assert.match(appSource, /claudeEffort:\s*string;/);
   assert.match(appSource, /codexModelId:\s*string;/);
   assert.match(appSource, /codexEffort:\s*string;/);
-  assert.match(appSource, /initialMessageMode:\s*InitialMessageMode;/);
   assert.match(appSource, /claudeModelId:\s*DEFAULT_CLAUDE_MODEL_ID/);
   assert.match(appSource, /claudeEffort:\s*DEFAULT_CLAUDE_EFFORT_ID/);
   assert.match(appSource, /codexModelId:\s*DEFAULT_CODEX_MODEL_ID/);
   assert.match(appSource, /codexEffort:\s*DEFAULT_CODEX_EFFORT_ID/);
+});
+
+test("initialMessageMode is an ephemeral run preference that resets to direct on fresh loads", () => {
+  assert.match(appSource, /initialMessageMode:\s*InitialMessageMode;/);
   assert.match(appSource, /initialMessageMode:\s*DEFAULT_INITIAL_MESSAGE_MODE/);
+  assert.match(
+    appSource,
+    /const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\(\["initialMessageMode"\]\);/,
+  );
+  assert.match(
+    appSource,
+    /function durableRunPrefs\(prefs: RunPrefs\): Record<string, unknown> \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;/,
+  );
+  assert.match(
+    appSource,
+    /function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}localStorage\.getItem/,
+  );
+  assert.match(
+    appSource,
+    /function mergeServerRunPrefs\(prev: RunPrefs, server: Record<string, unknown>\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}const raw = server\[key\];/,
+  );
+  assert.match(appSource, /JSON\.stringify\(\{ run_prefs: durableRunPrefs\(prefs\) \}\)/);
+  assert.match(
+    appSource,
+    /if \(isDurableRunPref\(key\)\) \{[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\}[\s\S]{0,120}if \(!isDurableRunPref\(key\)\) return;[\s\S]{0,120}localStorage\.setItem/,
+  );
+  assert.doesNotMatch(appSource, /pickInitialMessageMode\(raw/);
 });
 
 test("loadRunPrefs filters localStorage-loaded model/effort through the allowlist", () => {
@@ -91,9 +116,9 @@ test("loadRunPrefs filters localStorage-loaded model/effort through the allowlis
     appSource,
     /key === "codexEffort"[\s\S]{0,300}pickAllowedPrefId\(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID\)/,
   );
-  assert.match(
+  assert.doesNotMatch(
     appSource,
-    /key === "initialMessageMode"[\s\S]{0,300}pickInitialMessageMode\(raw, DEFAULT_INITIAL_MESSAGE_MODE\)/,
+    /key === "initialMessageMode"[\s\S]{0,300}localStorage\.getItem/,
   );
 });
 
