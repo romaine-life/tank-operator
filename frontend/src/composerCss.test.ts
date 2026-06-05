@@ -156,4 +156,26 @@ test("turn view transcript rows share the same avatar gutter", () => {
 
   const ownedActivityRule = cssRule('.run-transcript [data-slot="message"][data-owner="activity"]');
   assert.match(ownedActivityRule, /padding-left:\s*0;/);
+
+  const turnViewActivityRule = cssRule('.run-turn-view-body [data-slot="message"][data-owner="activity"]');
+  assert.match(turnViewActivityRule, /grid-template-columns:\s*2\.625rem\s+minmax\(0,\s*1fr\);/);
+  assert.match(turnViewActivityRule, /max-width:\s*100%;/);
+
+  const turnViewActivityContentRule = cssRule(
+    '.run-turn-view-body [data-slot="message"][data-owner="activity"] .run-transcript-message-content',
+  );
+  assert.match(turnViewActivityContentRule, /grid-column:\s*2;/);
+  assert.match(turnViewActivityContentRule, /min-width:\s*0;/);
+  assert.match(turnViewActivityContentRule, /max-width:\s*100%;/);
+
+  const inlineActivityRule = cssRule('.run-turn-activity-body [data-slot="message"][data-owner="activity"]');
+  assert.match(inlineActivityRule, /grid-template-columns:\s*2rem\s+minmax\(0,\s*1fr\);/);
+  assert.match(inlineActivityRule, /max-width:\s*100%;/);
+
+  const inlineActivityContentRule = cssRule(
+    '.run-turn-activity-body [data-slot="message"][data-owner="activity"] .run-transcript-message-content',
+  );
+  assert.match(inlineActivityContentRule, /grid-column:\s*2;/);
+  assert.match(inlineActivityContentRule, /min-width:\s*0;/);
+  assert.match(inlineActivityContentRule, /max-width:\s*100%;/);
 });

@@ -705,7 +705,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(indexCssSource.includes(".run-turn-view"), true);
   assert.equal(
     indexCssSource.includes(
-      '.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"]',
+      '.run-turn-view-body [data-slot="message"][data-owner="activity"]',
     ),
     true,
   );
