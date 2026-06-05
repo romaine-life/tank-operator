@@ -9,26 +9,55 @@ import {
   turnUsagePayload,
 } from "./usage.js";
 
-test("parseGeminiResultStats reads the CLI stats.models token shape", () => {
+test("parseGeminiResultStats reads the real gemini-cli 0.44.1 flat shape", () => {
+  // Captured live from `gemini -o stream-json` in a slot.
   const usage = parseGeminiResultStats({
     type: "result",
-    subtype: "success",
+    status: "success",
     stats: {
+      total_tokens: 10326,
+      input_tokens: 10029,
+      output_tokens: 48,
+      cached: 7504,
+      input: 2525,
+      duration_ms: 3221,
+      tool_calls: 0,
       models: {
-        "gemini-3.5-flash": {
-          api: { totalRequests: 2 },
-          tokens: { prompt: 1200, candidates: 300, cached: 100, total: 1500 },
-        },
+        "gemini-3.1-flash-lite": { total_tokens: 1016, input_tokens: 897, output_tokens: 36, cached: 0 },
+        "gemini-3-flash-preview": { total_tokens: 9310, input_tokens: 9132, output_tokens: 12, cached: 7504 },
       },
     },
   });
   assert.ok(usage);
-  assert.equal(usage?.model, "gemini-3.5-flash");
-  assert.equal(usage?.inputTokens, 1200);
-  assert.equal(usage?.outputTokens, 300);
-  assert.equal(usage?.cachedTokens, 100);
-  assert.equal(usage?.totalTokens, 1500);
+  // Turn-level totals come from stats, not summed per-model.
+  assert.equal(usage?.totalTokens, 10326);
+  assert.equal(usage?.inputTokens, 10029);
+  assert.equal(usage?.outputTokens, 48);
+  assert.equal(usage?.cachedTokens, 7504);
+  // Named after the dominant model; one request per model entry.
+  assert.equal(usage?.model, "gemini-3-flash-preview");
   assert.equal(usage?.requests, 2);
+});
+
+test("parseGeminiResultStats tolerates the older nested tokens shape", () => {
+  const usage = parseGeminiResultStats({
+    type: "result",
+    stats: {
+      models: {
+        "gemini-3.5-flash": {
+          tokens: { prompt: 1200, candidates: 300, cached: 100, total: 1500 },
+        },
+      },
+      total_tokens: 1500,
+      input_tokens: 1200,
+      output_tokens: 300,
+      cached: 100,
+    },
+  });
+  assert.ok(usage);
+  assert.equal(usage?.model, "gemini-3.5-flash");
+  assert.equal(usage?.totalTokens, 1500);
+  assert.equal(usage?.requests, 1);
 });
 
 test("parseGeminiResultStats falls back to genai usageMetadata", () => {

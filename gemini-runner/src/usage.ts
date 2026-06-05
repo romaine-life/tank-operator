@@ -33,68 +33,69 @@ function num(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-// Parse the gemini CLI `-o stream-json` terminal `result` event. The CLI has
-// shipped two shapes across versions; handle both rather than pinning one:
-//   A) { stats: { models: { "<model>": { api: { totalRequests },
-//                                        tokens: { prompt, candidates, cached, total } } } } }
-//   B) genai-style { usageMetadata: { promptTokenCount, candidatesTokenCount,
-//                                      cachedContentTokenCount, totalTokenCount } }
-// Returns null when no usage is present (e.g. an interrupted turn) so callers
-// can skip emission rather than publish a zero-usage event.
+// Parse the gemini CLI `-o stream-json` terminal `result` event. Validated
+// against gemini-cli 0.44.1 in a live slot, whose shape is:
+//   { type: "result", status: "success", stats: {
+//       total_tokens, input_tokens, output_tokens, cached, input, duration_ms,
+//       tool_calls,
+//       models: { "<model>": { total_tokens, input_tokens, output_tokens, cached, input } } } }
+// We prefer the turn-level totals on `stats`, name the turn after the model
+// that produced the most tokens, and count one request per model entry (a turn
+// can fan out to a router model + a main model). Also tolerated, for version
+// drift: a nested per-model `tokens:{prompt,candidates,total}` object and the
+// genai `usageMetadata:{promptTokenCount,...}` shape. Returns null when no
+// usage is present (e.g. an interrupted turn) so callers skip emission rather
+// than publish a zero-usage event.
 export function parseGeminiResultStats(result: unknown): GeminiTurnUsage | null {
   if (!result || typeof result !== "object") return null;
   const root = result as Record<string, any>;
+  const stats = (root.stats ?? root) as Record<string, any>;
 
-  const stats = root.stats ?? root;
+  // Pick the dominant model + count per-model requests from the breakdown.
+  let model = String(root.model ?? "");
+  let requests = 0;
   const models = stats?.models;
   if (models && typeof models === "object") {
-    let model = "";
-    let inputTokens = 0;
-    let outputTokens = 0;
-    let cachedTokens = 0;
-    let totalTokens = 0;
-    let requests = 0;
+    let best = -1;
     for (const [name, raw] of Object.entries<any>(models)) {
-      if (!model) model = name;
-      const tokens = raw?.tokens ?? {};
-      const prompt = num(tokens.prompt);
-      const candidates = num(tokens.candidates);
-      inputTokens += prompt;
-      outputTokens += candidates;
-      cachedTokens += num(tokens.cached);
-      totalTokens += num(tokens.total) || prompt + candidates;
-      requests += num(raw?.api?.totalRequests);
+      requests += 1;
+      const t = num(raw?.total_tokens) || num(raw?.tokens?.total);
+      if (t > best) {
+        best = t;
+        model = name;
+      }
     }
-    if (totalTokens === 0 && requests === 0) return null;
-    return {
-      model,
-      inputTokens,
-      outputTokens,
-      cachedTokens,
-      totalTokens,
-      requests: requests || 1,
-    };
   }
 
-  const meta = root.usageMetadata ?? root.usage;
-  if (meta && typeof meta === "object") {
-    const inputTokens = num(meta.promptTokenCount ?? meta.prompt_tokens ?? meta.input_tokens);
-    const outputTokens = num(
-      meta.candidatesTokenCount ?? meta.completion_tokens ?? meta.output_tokens,
-    );
-    const cachedTokens = num(meta.cachedContentTokenCount ?? meta.cached_tokens);
-    const totalTokens = num(meta.totalTokenCount ?? meta.total_tokens) || inputTokens + outputTokens;
-    if (totalTokens === 0) return null;
-    return {
-      model: String(root.model ?? ""),
-      inputTokens,
-      outputTokens,
-      cachedTokens,
-      totalTokens,
-      requests: 1,
-    };
+  // Turn-level totals: flat fields (current CLI) → nested tokens (older) →
+  // genai usageMetadata (SDK path).
+  const inputTokens = num(stats?.input_tokens ?? stats?.tokens?.prompt);
+  const outputTokens = num(stats?.output_tokens ?? stats?.tokens?.candidates);
+  const cachedTokens = num(stats?.cached ?? stats?.tokens?.cached);
+  let totalTokens =
+    num(stats?.total_tokens ?? stats?.tokens?.total) || inputTokens + outputTokens;
+
+  if (totalTokens === 0) {
+    const meta = (root.usageMetadata ?? root.usage) as Record<string, any> | undefined;
+    if (meta && typeof meta === "object") {
+      const i = num(meta.promptTokenCount ?? meta.prompt_tokens ?? meta.input_tokens);
+      const o = num(meta.candidatesTokenCount ?? meta.completion_tokens ?? meta.output_tokens);
+      const c = num(meta.cachedContentTokenCount ?? meta.cached_tokens);
+      const t = num(meta.totalTokenCount ?? meta.total_tokens) || i + o;
+      if (t === 0) return null;
+      return { model, inputTokens: i, outputTokens: o, cachedTokens: c, totalTokens: t, requests: 1 };
+    }
+    return null;
   }
-  return null;
+
+  return {
+    model,
+    inputTokens,
+    outputTokens,
+    cachedTokens,
+    totalTokens,
+    requests: requests || 1,
+  };
 }
 
 // The durable `turn.usage` payload. Mirrors the field vocabulary the SPA's
