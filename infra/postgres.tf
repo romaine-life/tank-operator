@@ -6,8 +6,8 @@
 # expects of a durable history store — indexed queries, real backups via PITR,
 # point-in-time recovery — without paying Cosmos's per-RU write costs.
 #
-# Sized for hobby/portfolio scale: B1ms (1 vCore burstable, 2 GiB RAM), single
-# AZ, no HA tier. ~$15/mo flat vs ~$73/mo Cosmos serverless at current write
+# Sized for hobby/portfolio scale: B2s (2 vCores burstable, 4 GiB RAM), single
+# AZ, no HA tier. ~$30/mo flat vs ~$73/mo Cosmos serverless at current write
 # volume.
 #
 # Auth: both password and AAD enabled at the server level. The orchestrator
@@ -41,7 +41,7 @@ resource "azurerm_postgresql_flexible_server" "tank_operator" {
   location = "westus3"
 
   version    = "16"
-  sku_name   = "B_Standard_B1ms"
+  sku_name   = "B_Standard_B2s"
   storage_mb = 32768
   zone       = "1"
 
