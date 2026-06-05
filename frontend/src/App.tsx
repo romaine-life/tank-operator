@@ -289,6 +289,7 @@ import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrou
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
+const StaticPageView = lazy(() => import("./StaticPageView"));
 const CliProcessTerminal = lazy(() =>
   import("./CliProcessTerminal").then((module) => ({
     default: module.CliProcessTerminal,
@@ -3478,7 +3479,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
+type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help" | "static";
 type BackgroundView = "shells" | "scheduled" | "control" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
 
@@ -9743,6 +9744,10 @@ function ChatPane({
   const [filesError, setFilesError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [selectedFileLine, setSelectedFileLine] = useState<number | null>(null);
+  // Path of the HTML file currently rendered full-page in the "static" tab
+  // (the sandboxed-iframe page view). Captured at click time so the render is
+  // stable even if the files browser selection later changes.
+  const [staticPagePath, setStaticPagePath] = useState<string | null>(null);
   const [fileContentLoading, setFileContentLoading] = useState(false);
   const [fileRawImageUrl, setFileRawImageUrl] = useState<string | null>(null);
   const [fileRawImageLoading, setFileRawImageLoading] = useState(false);
@@ -13810,6 +13815,19 @@ function ChatPane({
                         {selectedFileLine ? `:${selectedFileLine}` : ""}
                       </span>
                       <div className="run-files-viewer-actions">
+                        {/\.html?$/i.test(selectedFile.path) && (
+                          <button
+                            type="button"
+                            className="run-files-viewer-btn"
+                            title="Render this HTML file as a sandboxed page"
+                            onClick={() => {
+                              setStaticPagePath(selectedFile.path);
+                              setActiveTab("static");
+                            }}
+                          >
+                            Open as page
+                          </button>
+                        )}
                         {fileDraft != null && fileDraft !== selectedFile.text && (
                           <>
                             <button
@@ -13998,6 +14016,25 @@ function ChatPane({
           />
         ) : activeTab === "help" ? (
           <RunHelpScreen />
+        ) : activeTab === "static" ? (
+          staticPagePath ? (
+            <Suspense fallback={(
+              <div className="run-files-status">
+                <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                <span>Loading…</span>
+              </div>
+            )}>
+              <StaticPageView
+                sessionId={session.id}
+                path={staticPagePath}
+                onClose={() => setActiveTab("files")}
+              />
+            </Suspense>
+          ) : (
+            <div className="run-empty run-transcript-state" role="status">
+              <span>No page selected.</span>
+            </div>
+          )
         ) : timelineBootstrap.status === "error" ? (
           <div className="run-empty run-transcript-state" role="alert">
             <strong>Conversation failed to load</strong>

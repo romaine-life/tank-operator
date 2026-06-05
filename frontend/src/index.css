@@ -7420,6 +7420,122 @@ textarea.run-files-viewer-editor:focus {
   cursor: default;
 }
 
+/* ── Static page view ──────────────────────────────────────────────────────
+   Full-page render of an agent-authored HTML file (usually an LLM-generated
+   diagram). The chrome bar is trusted Tank UI; the iframe below it is a
+   sandboxed, opaque-origin frame — see StaticPageView.tsx. */
+.run-static-page {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: var(--bg-base, #0a0a0a);
+}
+
+.run-static-page-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.45rem 0.85rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+  font-size: var(--text-xs);
+  flex: 0 0 auto;
+}
+
+.run-static-page-bar-left {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.run-static-page-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.1rem 0.45rem;
+  border-radius: 0.35rem;
+  background: #2563eb;
+  color: #fff;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex: 0 0 auto;
+}
+
+.run-static-page-title {
+  font-family: var(--font-mono);
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+
+.run-static-page-sub {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 0 1 auto;
+}
+
+.run-static-page-bar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex: 0 0 auto;
+}
+
+.run-static-page-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.25rem 0.6rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: transparent;
+  color: var(--text-body);
+  font-family: var(--font-primary);
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: background var(--motion-fast, 100ms) ease;
+}
+
+.run-static-page-btn:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.run-static-page-restore {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  z-index: 2;
+  padding: 0.2rem 0.5rem;
+  border-radius: 0.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  background: rgba(10, 10, 10, 0.85);
+  color: var(--text-body);
+  font-size: 0.68rem;
+  cursor: pointer;
+}
+
+.run-static-page-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+}
+
+.run-static-page-frame {
+  flex: 1 1 auto;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
 /* SSE connectivity pill — rendered beside the session title when the live
    event stream is user-visibly degraded (slow reconnect / connection_lost /
    resyncing). It lives in the absolute title chrome so transient reconnects
