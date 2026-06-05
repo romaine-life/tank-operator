@@ -686,6 +686,7 @@ interface Session {
   clone_state?: Record<string, unknown> | null;
   capabilities: string[];
   bug_label?: SessionBugLabel | null;
+  bug_labels?: SessionBugLabel[];
   model?: string;
   effort?: string;
   runtime_model?: string;
@@ -1160,6 +1161,13 @@ function normalizeBugLabel(value: unknown): SessionBugLabel | null {
   };
 }
 
+function normalizeBugLabels(value: unknown): SessionBugLabel[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => normalizeBugLabel(entry))
+    .filter((label): label is SessionBugLabel => Boolean(label));
+}
+
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -1200,7 +1208,9 @@ function normalizeSession(session: Session): Session {
   next.capabilities = Array.isArray(session.capabilities)
     ? session.capabilities.filter((entry): entry is string => typeof entry === "string")
     : [];
-  next.bug_label = normalizeBugLabel(session.bug_label);
+  const bugLabels = normalizeBugLabels(session.bug_labels);
+  next.bug_labels = bugLabels;
+  next.bug_label = normalizeBugLabel(session.bug_label) ?? bugLabels[0] ?? null;
   next.model = typeof session.model === "string" ? session.model : "";
   next.effort = typeof session.effort === "string" ? session.effort : "";
   next.runtime_model = typeof session.runtime_model === "string" ? session.runtime_model : "";
@@ -1987,12 +1997,29 @@ type BugLabelSuggestion = SessionBugLabel & {
   session_count?: number;
 };
 
+function bugLabelNameKey(name: string): string {
+  const trimmed = name.trim().replace(/\s+/g, " ");
+  const withoutPrefix = trimmed.replace(/^bug:\s*/i, "");
+  return withoutPrefix.toLocaleLowerCase();
+}
+
+function addBugLabelName(labels: string[], name: string): string[] {
+  const trimmed = name.trim();
+  if (!trimmed) return labels;
+  const key = bugLabelNameKey(trimmed);
+  if (labels.some((label) => bugLabelNameKey(label) === key)) return labels;
+  return [...labels, trimmed];
+}
+
 function BugLabelPicker({
   value,
   activeSlug,
+  selectedLabels,
+  activeSlugs,
   disabled,
   requestPath,
   onSave,
+  onSaveLabels,
   allowClear = true,
   wrapperClassName = "",
   triggerClassName,
@@ -2001,9 +2028,12 @@ function BugLabelPicker({
 }: {
   value: string;
   activeSlug?: string | null;
+  selectedLabels?: string[];
+  activeSlugs?: string[];
   disabled?: boolean;
   requestPath: (path: string) => string;
   onSave: (name: string | null) => Promise<void> | void;
+  onSaveLabels?: (names: string[]) => Promise<void> | void;
   allowClear?: boolean;
   wrapperClassName?: string;
   triggerClassName?: string;
@@ -2019,7 +2049,7 @@ function BugLabelPicker({
 
   useEffect(() => {
     if (!open) return;
-    setDraft(value);
+    setDraft(onSaveLabels ? "" : value);
     setError("");
     let cancelled = false;
     setLoading(true);
@@ -2057,12 +2087,24 @@ function BugLabelPicker({
     };
   }, [open, requestPath, value]);
 
+  const multi = Boolean(onSaveLabels);
+  const currentLabels = multi ? selectedLabels ?? [] : value ? [value] : [];
+  const activeSlugSet = new Set(
+    (activeSlugs && activeSlugs.length > 0 ? activeSlugs : activeSlug ? [activeSlug] : [])
+      .filter((slug): slug is string => Boolean(slug)),
+  );
   const currentLabel = value;
-  const title = currentLabel ? `Bug label: ${currentLabel}` : "Set bug label";
+  const currentLabelCount = currentLabels.length;
+  const title =
+    currentLabelCount > 1
+      ? `${currentLabelCount} bug labels`
+      : currentLabelCount === 1
+        ? `Bug label: ${currentLabels[0]}`
+        : "Set bug label";
   const normalizedDraft = draft.trim();
   const triggerClasses = triggerClassName
-    ? `${triggerClassName}${currentLabel ? " is-active" : ""}`
-    : `run-composer-icon-btn run-bug-label-trigger${currentLabel ? " is-active" : ""}`;
+    ? `${triggerClassName}${currentLabelCount > 0 ? " is-active" : ""}`
+    : `run-composer-icon-btn run-bug-label-trigger${currentLabelCount > 0 ? " is-active" : ""}`;
   const save = async (name: string | null) => {
     setSaving(true);
     setError("");
@@ -2075,6 +2117,42 @@ function BugLabelPicker({
       setSaving(false);
     }
   };
+  const saveLabels = async (names: string[], close = false) => {
+    if (!onSaveLabels) return;
+    setSaving(true);
+    setError("");
+    try {
+      await onSaveLabels(names);
+      setDraft("");
+      if (close) setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+  const saveDraft = () => {
+    if (!multi) {
+      void save(normalizedDraft || null);
+      return;
+    }
+    if (!normalizedDraft) return;
+    const next = addBugLabelName(currentLabels, normalizedDraft);
+    void saveLabels(next);
+  };
+  const toggleLabel = (label: BugLabelSuggestion) => {
+    if (!multi) {
+      void save(label.display_name);
+      return;
+    }
+    const key = bugLabelNameKey(label.display_name);
+    const isActive = activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === key);
+    const next = isActive
+      ? currentLabels.filter((name) => bugLabelNameKey(name) !== key)
+      : addBugLabelName(currentLabels, label.display_name);
+    void saveLabels(next);
+  };
+  const draftAlreadySelected = currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(normalizedDraft));
 
   return (
     <span className={`run-bug-label-picker${wrapperClassName ? ` ${wrapperClassName}` : ""}`}>
@@ -2095,7 +2173,7 @@ function BugLabelPicker({
             className="run-bug-label-form"
             onSubmit={(event) => {
               event.preventDefault();
-              void save(normalizedDraft || null);
+              saveDraft();
             }}
           >
             <input
@@ -2105,8 +2183,11 @@ function BugLabelPicker({
               autoFocus
               maxLength={90}
             />
-            <button type="submit" disabled={saving || normalizedDraft === currentLabel}>
-              Save
+            <button
+              type="submit"
+              disabled={saving || (multi ? !normalizedDraft || draftAlreadySelected : normalizedDraft === currentLabel)}
+            >
+              {multi ? "Add" : "Save"}
             </button>
           </form>
           {error && <div className="run-bug-label-error">{error}</div>}
@@ -2116,8 +2197,8 @@ function BugLabelPicker({
               <button
                 key={label.slug}
                 type="button"
-                className={`run-bug-label-option${label.slug === activeSlug ? " is-active" : ""}`}
-                onClick={() => void save(label.display_name)}
+                className={`run-bug-label-option${activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(label.display_name)) ? " is-active" : ""}`}
+                onClick={() => toggleLabel(label)}
               >
                 <span>{label.display_name}</span>
                 {typeof label.session_count === "number" && (
@@ -2129,11 +2210,17 @@ function BugLabelPicker({
               <div className="run-bug-label-empty">No labels</div>
             )}
           </div>
-          {allowClear && currentLabel && (
+          {allowClear && currentLabelCount > 0 && (
             <button
               type="button"
               className="run-bug-label-clear"
-              onClick={() => void save(null)}
+              onClick={() => {
+                if (multi) {
+                  void saveLabels([], true);
+                } else {
+                  void save(null);
+                }
+              }}
               disabled={saving}
             >
               Clear
@@ -6513,16 +6600,25 @@ function SessionDataScreen({
   session,
   requestPath,
   onBugLabelSave,
+  onBugLabelsSave,
   readOnly,
 }: {
   rows: SessionDataStatusRow[];
   session: Session;
   requestPath: (path: string) => string;
   onBugLabelSave: (name: string | null) => Promise<void>;
+  onBugLabelsSave: (names: string[]) => Promise<void>;
   readOnly?: boolean;
 }) {
   const activeCount = rows.filter((row) => row.tone !== "muted").length;
-  const bugLabel = session.bug_label?.display_name ?? session.bug_label?.name ?? "";
+  const bugLabels =
+    session.bug_labels && session.bug_labels.length > 0
+      ? session.bug_labels
+      : session.bug_label
+        ? [session.bug_label]
+        : [];
+  const bugLabelNames = bugLabels.map((label) => label.display_name ?? label.name).filter(Boolean);
+  const bugLabel = bugLabelNames[0] ?? "";
   return (
     <div className="run-session-data-screen">
       <section className="run-session-data-section" aria-labelledby="run-session-data-title">
@@ -6563,8 +6659,11 @@ function SessionDataScreen({
                 row={row}
                 session={session}
                 bugLabel={bugLabel}
+                bugLabels={bugLabels}
+                bugLabelNames={bugLabelNames}
                 requestPath={requestPath}
                 onBugLabelSave={onBugLabelSave}
+                onBugLabelsSave={onBugLabelsSave}
                 readOnly={readOnly}
               />
             </div>
@@ -6579,15 +6678,21 @@ function SessionDataCardDetails({
   row,
   session,
   bugLabel,
+  bugLabels,
+  bugLabelNames,
   requestPath,
   onBugLabelSave,
+  onBugLabelsSave,
   readOnly,
 }: {
   row: SessionDataStatusRow;
   session: Session;
   bugLabel: string;
+  bugLabels: SessionBugLabel[];
+  bugLabelNames: string[];
   requestPath: (path: string) => string;
   onBugLabelSave: (name: string | null) => Promise<void>;
+  onBugLabelsSave: (names: string[]) => Promise<void>;
   readOnly?: boolean;
 }) {
   switch (row.id) {
@@ -6633,13 +6738,16 @@ function SessionDataCardDetails({
           <BugLabelPicker
             value={bugLabel}
             activeSlug={session.bug_label?.slug}
+            selectedLabels={bugLabelNames}
+            activeSlugs={bugLabels.map((label) => label.slug)}
             disabled={readOnly}
             requestPath={requestPath}
             onSave={onBugLabelSave}
+            onSaveLabels={onBugLabelsSave}
             wrapperClassName="run-session-data-bug-picker"
             triggerClassName="run-session-data-action"
             iconClassName="run-session-data-action-icon"
-            triggerContent={<span>{bugLabel ? "Change bug" : "Attach bug"}</span>}
+            triggerContent={<span>{bugLabelNames.length > 0 ? "Change bugs" : "Attach bug"}</span>}
           />
           {readOnly && (
             <span className="run-session-data-readonly">Read-only session</span>
@@ -13435,7 +13543,33 @@ function ChatPane({
       throw new Error(detail);
     }
     const updated: Session = normalizeSession(await res.json());
-    onSessionPatch(session.id, { bug_label: updated.bug_label ?? null });
+    onSessionPatch(session.id, {
+      bug_label: updated.bug_label ?? null,
+      bug_labels: updated.bug_labels ?? [],
+    });
+  }
+
+  async function saveSessionBugLabels(names: string[]): Promise<void> {
+    const res = await authedFetch(scopedSessionPathForPane(`/api/sessions/${session.id}/bug-label`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ names }),
+    });
+    if (!res.ok) {
+      let detail = `bug label update failed: ${res.status}`;
+      try {
+        const body = await res.json();
+        if (typeof body?.detail === "string") detail = body.detail;
+      } catch {
+        // Keep the status-only detail when the response is not JSON.
+      }
+      throw new Error(detail);
+    }
+    const updated: Session = normalizeSession(await res.json());
+    onSessionPatch(session.id, {
+      bug_label: updated.bug_label ?? null,
+      bug_labels: updated.bug_labels ?? [],
+    });
   }
 
   function startTestSkill() {
@@ -15068,6 +15202,7 @@ function ChatPane({
             session={session}
             requestPath={scopedSessionPathForPane}
             onBugLabelSave={saveSessionBugLabel}
+            onBugLabelsSave={saveSessionBugLabels}
             readOnly={readOnly}
           />
         ) : activeTab === "settings" ? (
@@ -16779,7 +16914,8 @@ function AuthenticatedApp() {
       repos: Array.isArray(row.repos) ? row.repos : [],
       clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
       capabilities: Array.isArray(row.capabilities) ? row.capabilities : [],
-      bug_label: row.bug_label ?? null,
+      bug_label: row.bug_label ?? row.bug_labels?.[0] ?? null,
+      bug_labels: row.bug_labels ?? [],
       model: row.model ?? "",
       effort: row.effort ?? "",
       runtime_model: row.runtime_model ?? "",
@@ -16826,6 +16962,7 @@ function AuthenticatedApp() {
       clone_state: raw.clone_state ?? undefined,
       capabilities: Array.isArray(raw.capabilities) ? raw.capabilities.map(String) : [],
       bug_label: normalizeBugLabel(raw.bug_label),
+      bug_labels: normalizeBugLabels(raw.bug_labels),
       model: typeof raw.model === "string" ? raw.model : undefined,
       effort: typeof raw.effort === "string" ? raw.effort : undefined,
       runtime_model: typeof raw.runtime_model === "string" ? raw.runtime_model : undefined,

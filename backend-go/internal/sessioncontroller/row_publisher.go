@@ -140,25 +140,26 @@ type rowWireShape struct {
 	// sessions/sessions.go → Info). Repos is non-nil-on-the-wire so
 	// the SPA never has to special-case "absent vs. empty"; clone
 	// state is omitted until the repo-cloner init container writes back.
-	Repos                          []string                      `json:"repos"`
-	CloneState                     map[string]any                `json:"clone_state,omitempty"`
-	Capabilities                   []string                      `json:"capabilities"`
-	BugLabel                       *sessionmodel.SessionBugLabel `json:"bug_label,omitempty"`
-	Model                          string                        `json:"model,omitempty"`
-	Effort                         string                        `json:"effort,omitempty"`
-	RuntimeModel                   string                        `json:"runtime_model,omitempty"`
-	RuntimeEffort                  string                        `json:"runtime_effort,omitempty"`
-	RuntimeConfiguredAt            string                        `json:"runtime_configured_at,omitempty"`
-	RuntimeContextWindowTokens     int64                         `json:"runtime_context_window_tokens,omitempty"`
-	RuntimeContextWindowSource     string                        `json:"runtime_context_window_source,omitempty"`
-	RuntimeContextWindowObservedAt string                        `json:"runtime_context_window_observed_at,omitempty"`
-	ProviderRateLimitInfo          map[string]any                `json:"provider_rate_limit_info,omitempty"`
-	ProviderRateLimitObservedAt    string                        `json:"provider_rate_limit_observed_at,omitempty"`
-	CompactionCount                int64                         `json:"compaction_count,omitempty"`
-	AgentAvatarID                  string                        `json:"agent_avatar_id,omitempty"`
-	SystemAvatarID                 string                        `json:"system_avatar_id,omitempty"`
-	SidebarPosition                int64                         `json:"sidebar_position"`
-	RowVersion                     int64                         `json:"row_version"`
+	Repos                          []string                        `json:"repos"`
+	CloneState                     map[string]any                  `json:"clone_state,omitempty"`
+	Capabilities                   []string                        `json:"capabilities"`
+	BugLabel                       *sessionmodel.SessionBugLabel   `json:"bug_label,omitempty"`
+	BugLabels                      []*sessionmodel.SessionBugLabel `json:"bug_labels,omitempty"`
+	Model                          string                          `json:"model,omitempty"`
+	Effort                         string                          `json:"effort,omitempty"`
+	RuntimeModel                   string                          `json:"runtime_model,omitempty"`
+	RuntimeEffort                  string                          `json:"runtime_effort,omitempty"`
+	RuntimeConfiguredAt            string                          `json:"runtime_configured_at,omitempty"`
+	RuntimeContextWindowTokens     int64                           `json:"runtime_context_window_tokens,omitempty"`
+	RuntimeContextWindowSource     string                          `json:"runtime_context_window_source,omitempty"`
+	RuntimeContextWindowObservedAt string                          `json:"runtime_context_window_observed_at,omitempty"`
+	ProviderRateLimitInfo          map[string]any                  `json:"provider_rate_limit_info,omitempty"`
+	ProviderRateLimitObservedAt    string                          `json:"provider_rate_limit_observed_at,omitempty"`
+	CompactionCount                int64                           `json:"compaction_count,omitempty"`
+	AgentAvatarID                  string                          `json:"agent_avatar_id,omitempty"`
+	SystemAvatarID                 string                          `json:"system_avatar_id,omitempty"`
+	SidebarPosition                int64                           `json:"sidebar_position"`
+	RowVersion                     int64                           `json:"row_version"`
 }
 
 // MarshalRowUpdate produces the JSON wire payload for a single row.
@@ -201,6 +202,7 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			CloneState:                     record.CloneState,
 			Capabilities:                   capabilities,
 			BugLabel:                       record.BugLabel,
+			BugLabels:                      record.BugLabels,
 			Model:                          record.Model,
 			Effort:                         record.Effort,
 			RuntimeModel:                   record.RuntimeModel,

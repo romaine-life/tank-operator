@@ -84,6 +84,7 @@ export interface SessionRow {
   clone_state?: Record<string, unknown>;
   capabilities: string[];
   bug_label?: SessionBugLabel | null;
+  bug_labels?: SessionBugLabel[];
   model?: string;
   effort?: string;
   runtime_model?: string;
@@ -526,6 +527,7 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
           )
         : [],
       bug_label: normalizeSessionBugLabel(rowRaw.bug_label),
+      bug_labels: normalizeSessionBugLabels(rowRaw.bug_labels),
       model: stringField(rowRaw, "model") ?? undefined,
       effort: stringField(rowRaw, "effort") ?? undefined,
       runtime_model: stringField(rowRaw, "runtime_model") ?? undefined,
@@ -572,6 +574,13 @@ function normalizeSessionBugLabel(value: unknown): SessionBugLabel | null {
     slug,
     display_name: displayName,
   };
+}
+
+function normalizeSessionBugLabels(value: unknown): SessionBugLabel[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => normalizeSessionBugLabel(entry))
+    .filter((label): label is SessionBugLabel => Boolean(label));
 }
 
 function stringField(value: Record<string, unknown>, key: string): string | null {

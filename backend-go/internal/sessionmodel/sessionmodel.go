@@ -126,10 +126,11 @@ type SessionRecord struct {
 	// the default pod surface. Values are normalized through
 	// NormalizeSessionCapabilities before Manager.Create writes the row.
 	Capabilities []string
-	// BugLabel is the optional Tank-native bug bucket attached by the user.
-	// It is independent of GitHub issues: one loose label per session for
-	// reports and quick cross-PR lookup.
-	BugLabel *SessionBugLabel
+	// BugLabel is the most recent Tank-native bug bucket attached by the user.
+	// BugLabels carries the full set when a session is linked to multiple bug
+	// buckets. BugLabel remains populated for older clients that read one label.
+	BugLabel  *SessionBugLabel
+	BugLabels []*SessionBugLabel
 
 	// Model/Effort are the session-owned run configuration accepted at
 	// create time. Runners consume these values through submit_turn

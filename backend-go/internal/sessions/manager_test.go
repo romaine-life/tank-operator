@@ -267,6 +267,48 @@ func TestManagerCreateAttachesBugLabel(t *testing.T) {
 	}
 }
 
+func TestManagerCreateAttachesMultipleBugLabels(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	registry := &managerTestRegistry{
+		avatarAssignment: sessionmodel.SessionAvatarAssignment{
+			AgentAvatarID:  "agent-1",
+			SystemAvatarID: "system-1",
+		},
+	}
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, registry, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			SessionImage:      "claude-image",
+			CodexSessionImage: "codex-image",
+		},
+	})
+
+	labels := []*sessionmodel.SessionBugLabel{
+		{Name: "Slow checkout", Slug: "slow-checkout", DisplayName: "bug: Slow checkout"},
+		{Name: "Transcript", Slug: "transcript", DisplayName: "bug: Transcript"},
+	}
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner:     "nelson@romaine.life",
+		Mode:      sessionmodel.ClaudeGUIMode,
+		BugLabels: labels,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.BugLabel == nil || info.BugLabel.Slug != "slow-checkout" {
+		t.Fatalf("created bug_label = %#v, want first plural label", info.BugLabel)
+	}
+	if got := len(info.BugLabels); got != 2 {
+		t.Fatalf("created bug_labels len = %d, want 2", got)
+	}
+	record, ok, err := registry.Get(context.Background(), "nelson@romaine.life", info.ID)
+	if err != nil || !ok {
+		t.Fatalf("registry get ok=%v err=%v", ok, err)
+	}
+	if got := len(record.BugLabels); got != 2 {
+		t.Fatalf("registry bug labels len = %d, want 2", got)
+	}
+}
+
 func TestManagerCreateThreadsSpireLensCapabilityIntoPodManifest(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, nil, nil, ManagerOptions{
@@ -616,6 +658,9 @@ func (r *managerTestRegistry) Upsert(_ context.Context, record sessionmodel.Sess
 			if record.BugLabel == nil {
 				record.BugLabel = existing.BugLabel
 			}
+			if len(record.BugLabels) == 0 {
+				record.BugLabels = existing.BugLabels
+			}
 			r.records[i] = record
 			return nil
 		}
@@ -641,8 +686,10 @@ func (r *managerTestRegistry) SetBugLabels(_ context.Context, email, sessionID s
 		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
 			if len(labels) > 0 {
 				r.records[i].BugLabel = labels[0]
+				r.records[i].BugLabels = labels
 			} else {
 				r.records[i].BugLabel = nil
+				r.records[i].BugLabels = nil
 			}
 			return nil
 		}

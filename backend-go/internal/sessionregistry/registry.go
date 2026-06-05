@@ -78,18 +78,29 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			sessions.row_version,
 			bug_labels.id,
 			bug_labels.name,
-			bug_labels.slug
+			bug_labels.slug,
+			COALESCE(bug_labels.labels_json, '[]'::jsonb)
 		FROM sessions
 		LEFT JOIN LATERAL (
-			SELECT bug_labels.id, bug_labels.name, bug_labels.slug
+			SELECT
+				(array_agg(bug_labels.id ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC))[1] AS id,
+				(array_agg(bug_labels.name ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC))[1] AS name,
+				(array_agg(bug_labels.slug ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC))[1] AS slug,
+				jsonb_agg(
+					jsonb_build_object(
+						'id', bug_labels.id,
+						'name', bug_labels.name,
+						'slug', bug_labels.slug,
+						'display_name', 'bug: ' || bug_labels.name
+					)
+					ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC
+				) AS labels_json
 			FROM session_bug_labels
 			JOIN bug_labels
 				ON bug_labels.id = session_bug_labels.bug_label_id
 			WHERE session_bug_labels.owner_email = sessions.email
 			  AND session_bug_labels.session_scope = sessions.session_scope
 			  AND session_bug_labels.session_id = sessions.session_id
-			ORDER BY session_bug_labels.attached_at DESC, bug_labels.id DESC
-			LIMIT 1
 		) bug_labels ON true
 		WHERE sessions.email = $1 AND sessions.session_scope = $2
 		ORDER BY sessions.sidebar_position DESC, sessions.created_at DESC, sessions.session_id DESC
@@ -118,6 +129,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			sidebarPosition, rowVersion                                 int64
 			bugLabelID                                                  sql.NullInt64
 			bugLabelName, bugLabelSlug                                  sql.NullString
+			bugLabelsRaw                                                []byte
 		)
 		if err := rows.Scan(
 			&sessionID, &mode, &podName, &name, &visible,
@@ -135,6 +147,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&bugLabelID,
 			&bugLabelName,
 			&bugLabelSlug,
+			&bugLabelsRaw,
 		); err != nil {
 			return nil, err
 		}
@@ -177,9 +190,34 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			SidebarPosition:                sidebarPosition,
 			RowVersion:                     rowVersion,
 			BugLabel:                       bugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug),
+			BugLabels:                      bugLabelsFromJSON(bugLabelsRaw),
 		})
 	}
 	return records, rows.Err()
+}
+
+func bugLabelsFromJSON(raw []byte) []*sessionmodel.SessionBugLabel {
+	if len(raw) == 0 {
+		return nil
+	}
+	var labels []*sessionmodel.SessionBugLabel
+	if err := json.Unmarshal(raw, &labels); err != nil {
+		return nil
+	}
+	out := labels[:0]
+	for _, label := range labels {
+		if label == nil || strings.TrimSpace(label.Name) == "" || strings.TrimSpace(label.Slug) == "" {
+			continue
+		}
+		if strings.TrimSpace(label.DisplayName) == "" {
+			label.DisplayName = "bug: " + strings.TrimSpace(label.Name)
+		}
+		out = append(out, label)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func bugLabelFromScan(id sql.NullInt64, name, slug sql.NullString) *sessionmodel.SessionBugLabel {

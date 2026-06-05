@@ -4927,6 +4927,7 @@ button:disabled {
   right: auto;
   bottom: auto;
   left: 0;
+  width: min(36rem, calc(100vw - 2rem));
 }
 
 .run-session-data-readonly,
@@ -7201,7 +7202,7 @@ button:disabled {
   position: absolute;
   right: 0;
   bottom: calc(100% + 0.5rem);
-  width: min(20rem, calc(100vw - 2rem));
+  width: min(30rem, calc(100vw - 2rem));
   padding: 0.65rem;
   border: 1px solid rgba(148, 163, 184, 0.22);
   border-radius: 0.5rem;

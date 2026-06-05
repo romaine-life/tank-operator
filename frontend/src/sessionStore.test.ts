@@ -195,6 +195,20 @@ test("rename row updates keep assigned avatar ids", () => {
         slug: "slow-checkout",
         display_name: "bug: Slow checkout",
       },
+      bug_labels: [
+        {
+          id: 4,
+          name: "Slow checkout",
+          slug: "slow-checkout",
+          display_name: "bug: Slow checkout",
+        },
+        {
+          id: 5,
+          name: "Transcript",
+          slug: "transcript",
+          display_name: "bug: Transcript",
+        },
+      ],
       agent_avatar_id: "jp1-malcolm",
       system_avatar_id: "system-logo",
       sidebar_position: 1,
@@ -209,6 +223,10 @@ test("rename row updates keep assigned avatar ids", () => {
   assert.equal(updated.name, "renamed session");
   assert.deepEqual(updated.capabilities, ["spirelens_mcp"]);
   assert.equal(updated.bug_label?.display_name, "bug: Slow checkout");
+  assert.deepEqual(updated.bug_labels?.map((label) => label.display_name), [
+    "bug: Slow checkout",
+    "bug: Transcript",
+  ]);
   assert.equal(updated.agent_avatar_id, "jp1-malcolm");
   assert.equal(updated.system_avatar_id, "system-logo");
 });

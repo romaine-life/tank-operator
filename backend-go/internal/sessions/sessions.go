@@ -58,8 +58,10 @@ type Info struct {
 	// Capabilities is the durable per-session capability list selected at
 	// create time. Empty means the default pod surface.
 	Capabilities []string `json:"capabilities"`
-	// BugLabel is the optional Tank-native bug bucket attached by the user.
-	BugLabel *sessionmodel.SessionBugLabel `json:"bug_label,omitempty"`
+	// BugLabel is the most recent Tank-native bug bucket attached by the user.
+	// BugLabels carries the full current selection for multi-label sessions.
+	BugLabel  *sessionmodel.SessionBugLabel   `json:"bug_label,omitempty"`
+	BugLabels []*sessionmodel.SessionBugLabel `json:"bug_labels,omitempty"`
 	// RowVersion is the per-(owner, scope) monotonic cursor each
 	// sessions row carries (docs/session-list-redesign.md Phase 1).
 	// The SPA's SessionStore reads this to seed its EventSource
@@ -253,6 +255,14 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 	if scope == "" {
 		scope = "default"
 	}
+	bugLabels := record.BugLabels
+	if len(bugLabels) == 0 && record.BugLabel != nil {
+		bugLabels = []*sessionmodel.SessionBugLabel{record.BugLabel}
+	}
+	bugLabel := record.BugLabel
+	if bugLabel == nil && len(bugLabels) > 0 {
+		bugLabel = bugLabels[0]
+	}
 	info := Info{
 		ID:                             record.ID,
 		SessionScope:                   scope,
@@ -269,7 +279,8 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		Repos:                          repos,
 		CloneState:                     record.CloneState,
 		Capabilities:                   capabilities,
-		BugLabel:                       record.BugLabel,
+		BugLabel:                       bugLabel,
+		BugLabels:                      bugLabels,
 		RowVersion:                     record.RowVersion,
 		SidebarPosition:                record.SidebarPosition,
 		Model:                          record.Model,
