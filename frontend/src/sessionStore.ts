@@ -61,11 +61,11 @@ export interface SessionRow {
   mode: string;
   session_scope: string;
   pod_name?: string;
-  name?: string | null;
-  // Server-computed session title, always present on the wire. The trimmed
-  // user `name` when set, else a backend-derived short id slug. The SPA
-  // renders this verbatim rather than deriving a local fallback.
-  display_name: string;
+  // Server-canonical session title, always present (non-null) on the wire.
+  // The trimmed user-set name when set, else a backend-derived short id
+  // slug. The SPA renders this verbatim rather than deriving a local
+  // fallback; provenance is deliberately not modeled on the row.
+  name: string;
   visible: boolean;
   status: string;
   requested_at?: string;
@@ -488,11 +488,11 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
   const id = stringField(rowRaw, "id");
   const owner = stringField(rowRaw, "owner");
   const sessionScope = stringField(rowRaw, "session_scope");
-  // display_name is a required server field on every row-update frame; a
-  // frame missing it is a contract violation, so drop it like any other
-  // malformed frame rather than locally re-deriving a title fallback.
-  const displayName = stringField(rowRaw, "display_name");
-  if (!id || !owner || !sessionScope || !displayName) return null;
+  // name is the server-canonical title and a required server field on every
+  // row-update frame; a frame missing it is a contract violation, so drop it
+  // like any other malformed frame rather than locally re-deriving a fallback.
+  const name = stringField(rowRaw, "name");
+  if (!id || !owner || !sessionScope || !name) return null;
   const visible = rowRaw.visible === true;
   const rowVersion = numberField(rowRaw, "row_version");
   const sidebarPosition = numberField(rowRaw, "sidebar_position");
@@ -505,8 +505,7 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       mode: stringField(rowRaw, "mode") ?? "",
       session_scope: sessionScope,
       pod_name: stringField(rowRaw, "pod_name") ?? undefined,
-      name: nullableStringField(rowRaw, "name"),
-      display_name: displayName,
+      name,
       visible,
       status: stringField(rowRaw, "status") ?? "Pending",
       requested_at: stringField(rowRaw, "requested_at") ?? undefined,
@@ -596,12 +595,6 @@ function normalizeSessionBugLabels(value: unknown): SessionBugLabel[] {
 function stringField(value: Record<string, unknown>, key: string): string | null {
   const field = value[key];
   return typeof field === "string" && field ? field : null;
-}
-
-function nullableStringField(value: Record<string, unknown>, key: string): string | null {
-  const field = value[key];
-  if (typeof field === "string") return field;
-  return null;
 }
 
 function numberField(value: Record<string, unknown>, key: string): number | null {

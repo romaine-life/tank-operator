@@ -17,7 +17,7 @@ function row(id: string, overrides: Partial<SessionRow> = {}): SessionRow {
     owner: "u@example.com",
     mode: "claude_gui",
     session_scope: "default",
-    display_name: id,
+    name: id,
     visible: true,
     status: "Active",
     repos: [],
@@ -186,7 +186,6 @@ test("rename row updates keep assigned avatar ids", () => {
       mode: "codex_gui",
       session_scope: "default",
       name: "renamed session",
-      display_name: "renamed session",
       visible: true,
       status: "Active",
       repos: [],
@@ -293,7 +292,7 @@ test("applySnapshot preserves tombstones the server did not contradict", () => {
 });
 
 // TestNormalizeSessionRowUpdate pins the wire-shape parse. session_scope,
-// row_version, id, and display_name are all required; anything missing → null
+// row_version, id, and name are all required; anything missing → null
 // (handler logs + drops). No defaulting silently.
 test("normalizeSessionRowUpdate rejects malformed payloads", () => {
   assert.equal(normalizeSessionRowUpdate(null), null);
@@ -324,7 +323,7 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
       },
     }),
     null,
-    "missing display_name must be rejected (server-canonical title is required)",
+    "missing name must be rejected (server-canonical title is required)",
   );
   const good = normalizeSessionRowUpdate({
     cursor: "1",
@@ -332,7 +331,7 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
       id: "8",
       owner: "u@example.com",
       session_scope: "default",
-      display_name: "session-8",
+      name: "session-8",
       visible: true,
       status: "Active",
       model: "gpt-5.5",
@@ -348,7 +347,7 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
   });
   assert.ok(good, "valid payload must parse");
   assert.equal(good!.row.id, "8");
-  assert.equal(good!.row.display_name, "session-8");
+  assert.equal(good!.row.name, "session-8");
   assert.equal(good!.row.model, "gpt-5.5");
   assert.equal(good!.row.effort, "xhigh");
   assert.equal(good!.row.runtime_model, "gpt-5.5");
