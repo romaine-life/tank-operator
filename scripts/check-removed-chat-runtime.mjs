@@ -41,6 +41,11 @@ const ignoredRelativePaths = new Set([
   // UI-mirror"). This is documentation, not live code — the guard is
   // there to block reintroduction in implementation files.
   "docs/tank-conversation-protocol.md",
+  // The agent-runners capability ledger documents the Gemini re-add by naming
+  // the surfaces that stayed retired (gemini_config / gemini_test /
+  // gemini-api-proxy) in prose — a doc-of-deletion, not live code. The guard
+  // below blocks live reintroduction of those symbols; this file explains them.
+  "docs/features/agent-runners/capabilities.md",
   "backend-go/cmd/tank-operator/server_static_test.go",
   "frontend/src/migrationPolicy.test.ts",
   // The observability test asserts /debug/vars returns 404 (the negative
