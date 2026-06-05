@@ -56,6 +56,9 @@ session:
   # every push to main via a `[skip ci]` follow-up commit.
   image: romainecr.azurecr.io/claude-container:claude-8e79df6ae73c9f6cf5cae214839c2a8ca1b2b97465b65074364adc60c0ee4c3e
   codexImage: romainecr.azurecr.io/codex-container:codex-3ebc460046fb3f2b4bad323365fbe64724b5a3c1043e5fde9ba1f087bf5ec2d0
+  # Placeholder tag; session-images-build.yml computes the fingerprint and
+  # rewrites this on the first push to main that touches gemini-runner/**.
+  geminiImage: romainecr.azurecr.io/gemini-container:gemini-placeholder
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -305,6 +308,12 @@ externalSecret:
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
     kvKey: codex-credentials
+  # Proxyless Gemini (Google Code Assist) OAuth credential. Unlike Claude/Codex
+  # there is no in-cluster proxy: the gemini_gui session pod mounts this Secret
+  # directly at /etc/gemini-credentials/oauth_creds.json. The ExternalSecret
+  # syncs it from this KV key into the sessions namespace.
+  geminiCredentials:
+    testKvKey: gemini-credentials-test
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

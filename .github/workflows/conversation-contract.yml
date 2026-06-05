@@ -61,6 +61,9 @@ jobs:
       - name: Install codex-runner dependencies
         run: npm ci --prefix codex-runner
 
+      - name: Install gemini-runner dependencies
+        run: npm ci --prefix gemini-runner
+
       - name: Check schema drift
         run: node scripts/check-tank-conversation-contract.mjs
 
@@ -76,6 +79,11 @@ jobs:
         run: |
           npm run build --prefix codex-runner
           npm test --prefix codex-runner
+
+      - name: Test gemini-runner contract
+        run: |
+          npm run build --prefix gemini-runner
+          npm test --prefix gemini-runner
 
       - name: Test Go conversation contract
         working-directory: backend-go

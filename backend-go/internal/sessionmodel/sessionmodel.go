@@ -29,6 +29,12 @@ const (
 	CodexGUIMode          = "codex_gui"
 	CodexExecGUIMode      = "codex_exec_gui"
 	CodexAppServerMode    = "codex_app_server"
+	// GeminiGUIMode is the single, proxyless Gemini GUI chat mode. The pod
+	// mounts the real Google OAuth (Code Assist) credential directly and the
+	// gemini-runner drives the gemini CLI without an in-cluster proxy — the
+	// "gemini test" shape that stayed healthy under load, now the only Gemini
+	// option.
+	GeminiGUIMode         = "gemini_gui"
 	DefaultSessionMode    = ClaudeGUIMode
 	MaxNameLength         = 80
 	SessionsNamespace     = "tank-operator-sessions"
@@ -51,6 +57,7 @@ const (
 	MCPAuthProxyMetricsPort = 9990
 	AgentRunnerMetricsPort  = 9095
 	CodexRunnerMetricsPort  = 9096
+	GeminiRunnerMetricsPort = 9097
 	// No DefaultSessionImage constants. The Helm chart owns image tags
 	// (k8s/values.yaml's session.* keys are bumped per-commit to
 	// fingerprinted tags by .github/workflows/claude-container-build.yml),
@@ -77,6 +84,7 @@ var (
 		CodexGUIMode:       {},
 		CodexExecGUIMode:   {},
 		CodexAppServerMode: {},
+		GeminiGUIMode:      {},
 	}
 
 	sessionCapabilities = map[string]struct{}{
@@ -197,6 +205,7 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"},
 	{"agent-runner-launch.sh", "/opt/tank/agent-runner-launch.sh"},
 	{"codex-runner-launch.sh", "/opt/tank/codex-runner-launch.sh"},
+	{"gemini-runner-launch.sh", "/opt/tank/gemini-runner-launch.sh"},
 	{"repo-cloner.sh", "/opt/tank/repo-cloner.sh"},
 	{"session-pod-bootstrap.sh", "/opt/tank/session-pod-bootstrap.sh"},
 }
@@ -209,11 +218,15 @@ var noClaudeHijackModes = map[string]bool{
 	CodexGUIMode:       true,
 	CodexExecGUIMode:   true,
 	CodexAppServerMode: true,
+	// Proxyless Gemini talks to Google directly with the mounted OAuth
+	// credential; it must not get the Claude OAuth-gateway host aliases.
+	GeminiGUIMode: true,
 }
 
 type ManifestOptions struct {
 	SessionImage            string
 	CodexSessionImage       string
+	GeminiSessionImage      string
 	SessionsNamespace       string
 	SessionScope            string
 	SessionServiceAccount   string
@@ -229,6 +242,9 @@ type ManifestOptions struct {
 	OAuthGatewayCAConfigMap string
 	// Secret name for GitHub App credentials (envFrom on claude container).
 	GitHubAppSecret string
+	// Secret name holding the proxyless Gemini OAuth credential, mounted into
+	// gemini_gui pods at /etc/gemini-credentials/oauth_creds.json.
+	GeminiCredentialsTestSecret string
 	// SDK runners use NATS JetStream for durable command/event delivery.
 	NATSURL        string
 	NATSStream     string
@@ -467,6 +483,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	if IsCodexMode(mode) {
 		sessionImage = opts.CodexSessionImage
 	}
+	if mode == GeminiGUIMode {
+		sessionImage = opts.GeminiSessionImage
+	}
 
 	// Build configmap volume mounts for both containers.
 	spireLensMCPEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilitySpireLensMCP)
@@ -568,7 +587,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Codex GUI modes use codex-runner. Both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
 	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
-	wantSDKRunner := wantAgentRunner || wantCodexRunner
+	wantGeminiRunner := mode == GeminiGUIMode
+	wantSDKRunner := wantAgentRunner || wantCodexRunner || wantGeminiRunner
 	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
 			"name":     "workspace",
@@ -677,6 +697,31 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				"configMap": map[string]any{"name": opts.OAuthGatewayCAConfigMap},
 			})
 		}
+	}
+
+	// Proxyless Gemini: mount the real Google OAuth (Code Assist) credential
+	// directly into the pod. The session bootstrap and the gemini CLI read it
+	// from /etc/gemini-credentials/oauth_creds.json; there is no in-cluster
+	// proxy in the path. optional:true so a pod still boots if the Secret is
+	// absent (the runner then surfaces an auth error rather than crashlooping).
+	if mode == GeminiGUIMode {
+		secretName := opts.GeminiCredentialsTestSecret
+		if secretName == "" {
+			secretName = "gemini-credentials-test"
+		}
+		volumes = append(volumes, map[string]any{
+			"name": "gemini-credentials-test",
+			"secret": map[string]any{
+				"secretName": secretName,
+				"optional":   true,
+			},
+		})
+		claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+			"name":      "gemini-credentials-test",
+			"mountPath": "/etc/gemini-credentials/oauth_creds.json",
+			"subPath":   "oauth_creds.json",
+			"readOnly":  true,
+		})
 	}
 
 	// envFrom on the claude container. GitHub App is used for git auth.
@@ -994,6 +1039,101 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			codexRunnerContainer["envFrom"] = envFrom
 		}
 		containers = append(containers, codexRunnerContainer)
+	}
+
+	// Gemini-runner sidecar. Proxyless sibling of codex-runner: same workspace
+	// mount and session-bus command/event contract, the gemini CLI underneath.
+	// Auth is the real Google OAuth credential mounted directly at
+	// /etc/gemini-credentials/oauth_creds.json — no in-cluster proxy.
+	if wantGeminiRunner {
+		runnerVolumeMounts := append([]any{}, configMounts...)
+		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+			"name":      "workspace",
+			"mountPath": "/workspace",
+		})
+		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+			"name":      "tank-operator-sa-token",
+			"mountPath": "/var/run/secrets/tank-operator",
+			"readOnly":  true,
+		})
+		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+			"name":      "auth-romaine-sa-token",
+			"mountPath": "/var/run/secrets/auth.romaine.life",
+			"readOnly":  true,
+		})
+		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+			"name":      "gemini-credentials-test",
+			"mountPath": "/etc/gemini-credentials/oauth_creds.json",
+			"subPath":   "oauth_creds.json",
+			"readOnly":  true,
+		})
+		geminiRunnerEnv := []any{
+			map[string]any{
+				"name": "SESSION_ID",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{
+						"fieldPath": "metadata.labels['tank-operator/session-id']",
+					},
+				},
+			},
+			map[string]any{"name": "TANK_SESSION_STORAGE_KEY", "value": storageKey},
+			map[string]any{
+				"name": "POD_OWNER_EMAIL",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{
+						"fieldPath": "metadata.annotations['tank-operator/owner-email']",
+					},
+				},
+			},
+			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
+			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
+			map[string]any{
+				"name": "NATS_TOKEN",
+				"valueFrom": map[string]any{
+					"secretKeyRef": map[string]any{
+						"name": opts.NATSAuthSecret,
+						"key":  "token",
+					},
+				},
+			},
+			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
+			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
+		}
+		geminiRunnerEnv = append(geminiRunnerEnv, map[string]any{
+			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(GeminiRunnerMetricsPort),
+		})
+		if opts.HotSwapAgentRunner {
+			volumes = append(volumes, map[string]any{
+				"name":     "gemini-runner-hot",
+				"emptyDir": map[string]any{},
+			})
+			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+				"name":      "gemini-runner-hot",
+				"mountPath": "/var/run/gemini-runner-hot",
+			})
+			geminiRunnerEnv = append(geminiRunnerEnv,
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_CHILD", "value": "/app/gemini-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_HOT_ARTIFACT", "value": "/var/run/gemini-runner-hot/gemini-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_RESTART_ENABLED", "value": "true"},
+			)
+		}
+		geminiRunnerContainer := map[string]any{
+			"name":            "gemini-runner",
+			"image":           sessionImage,
+			"imagePullPolicy": "Always",
+			"command":         []any{"bash", "/opt/tank/gemini-runner-launch.sh"},
+			"env":             geminiRunnerEnv,
+			"volumeMounts":    runnerVolumeMounts,
+			"ports": []any{
+				map[string]any{"name": "runner-metrics", "containerPort": GeminiRunnerMetricsPort},
+			},
+			"resources": codexRunnerResources(),
+		}
+		if len(envFrom) > 0 {
+			geminiRunnerContainer["envFrom"] = envFrom
+		}
+		containers = append(containers, geminiRunnerContainer)
 	}
 
 	spec := map[string]any{

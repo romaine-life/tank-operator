@@ -140,6 +140,27 @@ notification_condition = "always"
 notification_method = "bel"
 TOML
     ;;
+  gemini_gui)
+    # Proxyless Gemini: select oauth-personal and copy the mounted Google
+    # OAuth credential into place before the in-browser CLI shell (or the
+    # gemini-runner) reads it. The runner's launch shim does the same; this
+    # mirror makes the terminal surface work too.
+    mkdir -p "$HOME/.gemini"
+    cat > "$HOME/.gemini/settings.json" <<'JSON'
+{
+  "security": {
+    "auth": {
+      "selectedType": "oauth-personal"
+    }
+  }
+}
+JSON
+    chmod 600 "$HOME/.gemini/settings.json"
+    if [ -f /etc/gemini-credentials/oauth_creds.json ]; then
+      cp /etc/gemini-credentials/oauth_creds.json "$HOME/.gemini/oauth_creds.json"
+      chmod 600 "$HOME/.gemini/oauth_creds.json"
+    fi
+    ;;
   config)
     # Minimal seeds for the claude credentials-refresh wizard. The
     # save-credentials button later reads $HOME/.claude/.credentials.json

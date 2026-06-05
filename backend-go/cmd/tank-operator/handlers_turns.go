@@ -1212,6 +1212,8 @@ func sdkProviderForMode(mode string) (string, bool) {
 		return "codex", true
 	case sessionmodel.CodexAppServerMode:
 		return "codex", true
+	case sessionmodel.GeminiGUIMode:
+		return "gemini", true
 	default:
 		return "", false
 	}

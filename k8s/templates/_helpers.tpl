@@ -113,6 +113,14 @@ claude-code-credentials
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-codex-credentials" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.codexCredentials.secretName }}{{- end -}}
 {{- end -}}
 
+{{- define "tank-operator.geminiCredentialsTestSecret" -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-gemini-credentials-test" (include "tank-operator.slotName" .) }}{{- else -}}gemini-credentials-test{{- end -}}
+{{- end -}}
+
+{{- define "tank-operator.geminiCredentialsTestKvKey" -}}
+{{- default "gemini-credentials-test" .Values.externalSecret.geminiCredentials.testKvKey -}}
+{{- end -}}
+
 {{- define "tank-operator.claudeCredentialsSecret" -}}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-claude-code-credentials" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.claudeCredentials.secretName }}{{- end -}}
 {{- end -}}

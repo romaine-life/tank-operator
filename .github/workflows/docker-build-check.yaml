@@ -57,7 +57,7 @@ jobs:
             cache-ref: romainecr.azurecr.io/claude-container-build-cache:claude
             image-repo: claude-container
             fingerprint-image: claude
-            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared
+            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner gemini-runner runner-shared
           - name: session-agent-codex
             file: claude-container/Dockerfile
             context: .
@@ -65,7 +65,15 @@ jobs:
             cache-ref: romainecr.azurecr.io/codex-container-build-cache:codex
             image-repo: codex-container
             fingerprint-image: codex
-            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared
+            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner gemini-runner runner-shared
+          - name: session-agent-gemini
+            file: claude-container/Dockerfile
+            context: .
+            build_args: TANK_AGENT=gemini
+            cache-ref: romainecr.azurecr.io/gemini-container-build-cache:gemini
+            image-repo: gemini-container
+            fingerprint-image: gemini
+            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner gemini-runner runner-shared
           # Standalone mcp-auth-proxy image for sibling consumers
           # (nelsong6/hermes today). Built from the same package source
           # Tank session pods bake inline, but published as its own

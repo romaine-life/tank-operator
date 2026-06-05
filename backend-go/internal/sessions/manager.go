@@ -198,6 +198,13 @@ func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.Man
 	if m.imageOverrides == nil || m.scope == "" || m.scope == defaultSessionScope {
 		return
 	}
+	// The override store only carries claude/codex branch images. Gemini
+	// sessions boot the chart-pinned GeminiSessionImage; skip rather than
+	// mislabel a claude override onto a gemini pod (whose manifest reads
+	// GeminiSessionImage, not SessionImage).
+	if mode == sessionmodel.GeminiGUIMode {
+		return
+	}
 	claudeImage, codexImage, ok, err := m.imageOverrides.Get(ctx, m.scope)
 	if err != nil {
 		slog.Warn("session image override lookup failed; using pinned image",

@@ -95,6 +95,10 @@ func validateEffort(provider string, v string) string {
 	allowed := allowedClaudeEfforts
 	if provider == "codex" {
 		allowed = allowedCodexEfforts
+	} else if provider == "gemini" {
+		// Gemini has no effort knob; the gemini CLI ignores it. An empty
+		// allowlist means any supplied effort normalizes to "".
+		allowed = map[string]struct{}{}
 	}
 	if _, ok := allowed[v]; ok {
 		return v

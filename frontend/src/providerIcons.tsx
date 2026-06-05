@@ -1,5 +1,5 @@
 type ProviderIconProps = {
-  provider: "anthropic" | "codex" | "pi";
+  provider: "anthropic" | "codex" | "pi" | "gemini";
   className?: string;
 };
 
@@ -16,6 +16,12 @@ const ICONS: Record<
     viewBox: "0 0 24 24",
     fill: "currentColor",
     path: "M4 5h9.2c2.9 0 5 1.9 5 4.7s-2.1 4.7-5 4.7H8.4V20H4V5Zm4.4 6h4.2c.8 0 1.3-.5 1.3-1.3s-.5-1.3-1.3-1.3H8.4V11ZM17.4 14.9h2.9V20h-2.9v-5.1Z",
+  },
+  // Gemini "spark" glyph — a four-point star, Google's Gemini mark.
+  gemini: {
+    viewBox: "0 0 24 24",
+    fill: "hsl(217, 89%, 61%)",
+    path: "M12 2c0 5.522-4.478 10-10 10 5.522 0 10 4.478 10 10 0-5.522 4.478-10 10-10-5.522 0-10-4.478-10-10z",
   },
 };
 

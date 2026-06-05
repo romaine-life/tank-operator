@@ -47,11 +47,6 @@ const ignoredRelativePaths = new Set([
   // confirmation that the route is gone). Excluded so the migration
   // guard doesn't fire on its own enforcement.
   "backend-go/cmd/tank-operator/observability_test.go",
-  // Negative tests that assert the retired Gemini modes no longer have
-  // workspace/repo support. The guard below blocks live-code reintroduction.
-  "backend-go/cmd/tank-operator/handlers_repos_test.go",
-  "frontend/src/repos.test.ts",
-  "frontend/src/sessionWorkspace.test.ts",
   // The session-list redesign plan names the retired packages as
   // migration targets — it is documentation of the deletion, not a
   // resurrection. Same exemption shape as docs/tank-conversation-protocol.md.
@@ -835,38 +830,24 @@ const blocked = [
     name: "retired Hermes bridge metrics",
     pattern: /\btank_hermes_[a-z0-9_]+\b/,
   },
-  // Gemini retirement: removed because its billing system is not usable for
-  // Tank's hosted-session economics. Block every live path that could recreate
-  // the provider surface: session modes, runner package/artifact names,
-  // Helm/API-proxy resources, credential env/secret names, Google model/API
-  // hosts, frontend provider labels, and npm packages.
+  // Gemini re-add (single proxyless mode): Gemini came back as ONE mode,
+  // gemini_gui, the proxyless "gemini test" shape that stayed healthy under
+  // load. The proxied variant and its extra modes were deliberately NOT
+  // restored — the proxy was the part that fell over with many concurrent
+  // sessions. Block only the surfaces we chose to leave retired so a future
+  // refactor can't quietly rebuild the parallel proxied path:
+  //   - gemini_config / gemini_test session modes (collapsed into gemini_gui),
+  //   - the gemini-api-proxy Envoy/ext_proc deployment + its Helm wiring.
+  // NOT blocked (these are now live): gemini_gui, gemini-runner, GEMINI_* env,
+  // gemini-credentials-test, the 'gemini' provider source, the gemini CLI npm
+  // package, and the Google API hosts the proxyless CLI talks to directly.
   {
-    name: "retired Gemini session mode",
-    pattern: /\bgemini_(?:gui|config|test)\b/,
-  },
-  {
-    name: "retired Gemini runner path",
-    pattern: /\bgemini-runner\b|\bgemini_runner\b/,
+    name: "retired proxied Gemini session modes",
+    pattern: /\bgemini_(?:config|test)\b/,
   },
   {
     name: "retired Gemini API proxy resource",
     pattern: /\bgemini-api-proxy\b|\bgeminiApiProxy\b/,
-  },
-  {
-    name: "retired Gemini credential wiring",
-    pattern: /\bGEMINI_[A-Z0-9_]+\b|\bgemini-credentials\b|\bgeminiCredentials\b/,
-  },
-  {
-    name: "retired Gemini provider source",
-    pattern: /["']gemini["']|["']Gemini["']/,
-  },
-  {
-    name: "retired Gemini Google API host",
-    pattern: /\bgenerativelanguage\.googleapis\.com\b|\bcloudcode-pa\.googleapis\.com\b|\baiplatform\.googleapis\.com\b/,
-  },
-  {
-    name: "retired Gemini npm package",
-    pattern: /@google\/(?:genai|gemini-cli)\b/,
   },
   // Pi agent retirement: block reintroduction of the Pi runtime modes,
   // image tags, and build settings.

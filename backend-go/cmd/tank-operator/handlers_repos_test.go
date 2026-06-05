@@ -212,9 +212,7 @@ func TestSessionModeSupportsRepos(t *testing.T) {
 		sessionmodel.ClaudeCLIMode:      false,
 		sessionmodel.CodexCLIMode:       false,
 		sessionmodel.CodexConfigMode:    false,
-		"gemini_gui":                    false,
-		"gemini_test":                   false,
-		"gemini_config":                 false,
+		sessionmodel.GeminiGUIMode:      true,
 		sessionmodel.APIKeyMode:         false,
 		sessionmodel.ConfigMode:         false,
 		"":                              true, // normalizes to ClaudeGUIMode (DefaultSessionMode)

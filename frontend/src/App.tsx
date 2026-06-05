@@ -337,12 +337,13 @@ type SessionMode =
   | "codex_gui"
   | "codex_exec_gui"
   | "codex_app_server"
-  | "codex_config";
+  | "codex_config"
+  | "gemini_gui";
 type DefaultSessionMode = Extract<
   SessionMode,
-  "claude_cli" | "claude_gui" | "codex_cli" | "codex_gui" | "codex_exec_gui"
+  "claude_cli" | "claude_gui" | "codex_cli" | "codex_gui" | "codex_exec_gui" | "gemini_gui"
 >;
-type Provider = "anthropic" | "codex";
+type Provider = "anthropic" | "codex" | "gemini";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 // TurnActivityPageInfo (the per-turn /activity page directory) and the rule for
@@ -759,6 +760,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "Codex Legacy",
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
+  gemini_gui: "Gemini GUI",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -773,6 +775,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
+  gemini_gui: "gemini-gui",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -782,6 +785,7 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
+  gemini_gui: "gemini",
 };
 
 const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
@@ -794,6 +798,7 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   codex_exec_gui: "codex",
   codex_app_server: "codex",
   codex_config: "codex",
+  gemini_gui: "gemini",
 };
 
 const PROVIDER_INTERACTION_MODES: Record<
@@ -802,6 +807,8 @@ const PROVIDER_INTERACTION_MODES: Record<
 > = {
   anthropic: { gui: "claude_gui", cli: "claude_cli" },
   codex: { gui: "codex_gui", cli: "codex_cli" },
+  // Proxyless Gemini ships GUI-only; there is no Gemini CLI/config surface.
+  gemini: { gui: "gemini_gui", cli: null },
 };
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
@@ -819,9 +826,10 @@ const PROVIDER_CONFIG_MODES: Partial<Record<Provider, SessionMode>> = {
 const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
   codex: "Codex",
+  gemini: "Gemini",
 };
 
-type ProviderQuotaWindowId = "five_hour" | "weekly" | "opus_weekly";
+type ProviderQuotaWindowId = "five_hour" | "weekly" | "opus_weekly" | "daily";
 type ProviderQuotaStatus = "ok" | "low" | "exhausted" | "stale" | "unknown";
 
 interface ProviderQuotaWindow {
@@ -859,6 +867,10 @@ const PROVIDER_QUOTA_WINDOW_DEFS: Record<Provider, Array<Pick<ProviderQuotaWindo
     { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
     { id: "weekly", label: "Weekly", shortLabel: "Week" },
   ],
+  // Proxyless Gemini (Google Code Assist) bills on a daily request budget, not
+  // Claude's 5h/weekly subscription windows. The gemini-runner reports a
+  // gemini:daily snapshot per turn so this surfaces "usage ending" the same way.
+  gemini: [{ id: "daily", label: "Daily", shortLabel: "Day" }],
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -871,6 +883,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_exec_gui: "Fallback GUI for legacy codex exec transport",
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
+  gemini_gui: "GUI chat pane for the proxyless Gemini CLI",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -1408,12 +1421,14 @@ const CHAT_MODES = new Set<SessionMode>([
   "codex_gui",
   "codex_exec_gui",
   "codex_app_server",
+  "gemini_gui",
 ]);
 const SDK_CHAT_MODES = new Set<SessionMode>([
   "claude_gui",
   "codex_gui",
   "codex_exec_gui",
   "codex_app_server",
+  "gemini_gui",
 ]);
 const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>(SDK_CHAT_MODES);
 const SDK_TIMELINE_TAIL_ROWS = 24;
@@ -1427,12 +1442,13 @@ const GUI_ROLLOUT_MODES = new Set<SessionMode>([
   "codex_gui",
   "codex_exec_gui",
   "codex_app_server",
+  "gemini_gui",
 ]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
-const PROVIDERS: Provider[] = ["anthropic", "codex"];
+const PROVIDERS: Provider[] = ["anthropic", "codex", "gemini"];
 
 function defaultModeFor(
   provider: Provider,
@@ -4546,6 +4562,10 @@ const CODEX_MODELS: ModelOption[] = [
   { id: "gpt-5.3-codex", label: "Codex · GPT-5.3 Codex" },
   { id: "gpt-5.3-codex-spark", label: "Codex · GPT-5.3 Codex Spark" },
 ];
+const GEMINI_MODELS: ModelOption[] = [
+  { id: "gemini-3.5-flash", label: "Gemini · 3.5 Flash" },
+  { id: "gemini-3.1-pro", label: "Gemini · 3.1 Pro" },
+];
 // Extended-thinking effort levels exposed by the Claude Agent SDK
 // (EffortLevel union). The ids are the wire values; the labels carry
 // the cost guidance so users picking xhigh/max know what they're
@@ -4575,6 +4595,7 @@ const CODEX_EFFORTS: EffortOption[] = [
 ];
 const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 const DEFAULT_CODEX_EFFORT_ID = "xhigh";
+const DEFAULT_GEMINI_MODEL_ID = "gemini-3.5-flash";
 
 function modelOptionsForMode(mode: SessionMode): ModelOption[] {
   if (mode === "claude_gui") return CLAUDE_MODELS;
@@ -4585,6 +4606,7 @@ function modelOptionsForMode(mode: SessionMode): ModelOption[] {
   ) {
     return CODEX_MODELS;
   }
+  if (mode === "gemini_gui") return GEMINI_MODELS;
   return [];
 }
 
@@ -4652,6 +4674,7 @@ interface RunPrefs {
   claudeEffort: string;
   codexModelId: string;
   codexEffort: string;
+  geminiModelId: string;
   initialMessageMode: InitialMessageMode;
 }
 
@@ -4670,6 +4693,7 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
   codexModelId: DEFAULT_CODEX_MODEL_ID,
   codexEffort: DEFAULT_CODEX_EFFORT_ID,
+  geminiModelId: DEFAULT_GEMINI_MODEL_ID,
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
@@ -4793,6 +4817,8 @@ function loadRunPrefs(): RunPrefs {
         out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
       } else if (key === "codexEffort") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
+      } else if (key === "geminiModelId") {
+        out[key] = pickAllowedPrefId(raw, GEMINI_MODELS, DEFAULT_GEMINI_MODEL_ID);
       } else if (raw === "true" || raw === "false") {
         (out as unknown as Record<string, unknown>)[key] = raw === "true";
       }
@@ -4837,6 +4863,10 @@ function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): R
     } else if (key === "codexEffort") {
       if (typeof raw === "string") {
         out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, prev.codexEffort);
+      }
+    } else if (key === "geminiModelId") {
+      if (typeof raw === "string") {
+        out[key] = pickAllowedPrefId(raw, GEMINI_MODELS, prev.geminiModelId);
       }
     } else if (typeof raw === "boolean") {
       (out as unknown as Record<string, unknown>)[key] = raw;
@@ -11454,12 +11484,14 @@ function quotaProviderFromInfo(info: Record<string, unknown>, fallback: Provider
   const raw = typeof info.provider === "string" ? info.provider.toLowerCase() : "";
   if (raw.includes("codex") || raw.includes("openai")) return "codex";
   if (raw.includes("claude") || raw.includes("anthropic")) return "anthropic";
+  if (raw.includes("gemini") || raw.includes("google")) return "gemini";
   return fallback;
 }
 
 function quotaWindowIdFromInfo(info: Record<string, unknown>): ProviderQuotaWindowId {
   const raw = typeof info.rateLimitType === "string" ? info.rateLimitType.toLowerCase() : "";
   const normalized = raw.replace(/[\s-]+/g, "_");
+  if (normalized.includes("daily")) return "daily";
   if (normalized.includes("opus")) return "opus_weekly";
   if (normalized.includes("other") || normalized.includes("sonnet") || normalized.includes("non_opus")) return "weekly";
   if (normalized.includes("week") || normalized.includes("seven_day") || normalized.includes("7_day")) {
@@ -20853,7 +20885,9 @@ function AuthenticatedApp() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : [];
+        : selectedProvider === "gemini"
+          ? GEMINI_MODELS
+          : [];
   const homeModelApplies =
     defaultInteraction === "gui" && homeModelOptions.length > 0;
   const selectedHomeModelId =
@@ -20861,7 +20895,9 @@ function AuthenticatedApp() {
       ? runPrefs.claudeModelId
       : selectedProvider === "codex"
         ? runPrefs.codexModelId
-        : "";
+        : selectedProvider === "gemini"
+          ? runPrefs.geminiModelId
+          : "";
   const selectedHomeEffortId =
     selectedProvider === "anthropic"
       ? runPrefs.claudeEffort
@@ -21545,6 +21581,8 @@ function AuthenticatedApp() {
                                         setRunPref("claudeModelId", model.id);
                                       } else if (selectedProvider === "codex") {
                                         setRunPref("codexModelId", model.id);
+                                      } else if (selectedProvider === "gemini") {
+                                        setRunPref("geminiModelId", model.id);
                                       }
                                     }}
                                     aria-pressed={selected}

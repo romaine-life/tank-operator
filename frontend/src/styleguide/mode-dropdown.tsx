@@ -34,6 +34,10 @@ export function StyleguideModeDropdown() {
                 <ProviderIcon provider="codex" className="home-choice-icon" />
                 <span>Codex</span>
               </button>
+              <button className="home-choice" type="button" aria-pressed="false" title="Gemini GUI">
+                <ProviderIcon provider="gemini" className="home-choice-icon" />
+                <span>Gemini</span>
+              </button>
             </div>
             <div className="home-panel-head home-panel-subhead">
               <h3>Interaction</h3>

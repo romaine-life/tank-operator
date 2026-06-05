@@ -756,6 +756,92 @@ func TestPodManifestProdLeavesCodexRunnerUnchanged(t *testing.T) {
 	}
 }
 
+// TestPodManifestGeminiUsesMountedCredentialsWithoutProxy pins the proxyless
+// Gemini contract: gemini_gui pods stamp the Gemini image, mount the real
+// OAuth credential at /etc/gemini-credentials/oauth_creds.json on both the
+// claude (terminal/bootstrap) and gemini-runner containers, and carry NO
+// OAuth-gateway CA / host-alias injection (there is no in-cluster proxy).
+func TestPodManifestGeminiUsesMountedCredentialsWithoutProxy(t *testing.T) {
+	manifest := PodManifest("12", "nelson@romaine.life", GeminiGUIMode, ManifestOptions{
+		SessionImage:                "claude-image",
+		GeminiSessionImage:          "gemini-image",
+		OAuthGatewayCAConfigMap:     "claude-oauth-ca",
+		GeminiCredentialsTestSecret: "gemini-test-secret",
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	assertNoHostAliases(t, spec)
+	volumes := spec["volumes"].([]any)
+	assertSecretVolume(t, volumes, "gemini-credentials-test", "gemini-test-secret")
+	assertNoVolume(t, volumes, "oauth-gateway-ca")
+
+	containers := spec["containers"].([]any)
+	claude := findContainer(t, containers, "claude")
+	if got, want := claude["image"], "gemini-image"; got != want {
+		t.Fatalf("claude image = %v, want %q", got, want)
+	}
+	claudeEnv := containerEnv(claude)
+	if _, present := claudeEnv["NODE_EXTRA_CA_CERTS"]; present {
+		t.Fatalf("claude NODE_EXTRA_CA_CERTS present for gemini_gui: %v", claudeEnv["NODE_EXTRA_CA_CERTS"])
+	}
+	assertConfigMapMountSubPath(t, claude, "/etc/gemini-credentials/oauth_creds.json", "oauth_creds.json")
+	assertVolumeMount(t, claude, "gemini-credentials-test")
+
+	geminiRunner := findContainer(t, containers, "gemini-runner")
+	if got, want := geminiRunner["image"], "gemini-image"; got != want {
+		t.Fatalf("runner image = %v, want %q", got, want)
+	}
+	runnerEnv := containerEnv(geminiRunner)
+	if _, present := runnerEnv["NODE_EXTRA_CA_CERTS"]; present {
+		t.Fatalf("runner NODE_EXTRA_CA_CERTS present for gemini_gui: %v", runnerEnv["NODE_EXTRA_CA_CERTS"])
+	}
+	assertConfigMapMountSubPath(t, geminiRunner, "/etc/gemini-credentials/oauth_creds.json", "oauth_creds.json")
+	assertVolumeMount(t, geminiRunner, "gemini-credentials-test")
+}
+
+// TestPodManifestSlotModeAttachesGeminiRunnerHotSwap pins the gemini-runner
+// test-slot hot-swap wiring (the hot emptyDir + supervisor env) so the
+// session-pod hot-swap migration guard stays satisfied for the Gemini runner.
+func TestPodManifestSlotModeAttachesGeminiRunnerHotSwap(t *testing.T) {
+	manifest := PodManifest("63", "user@example.com", GeminiGUIMode, ManifestOptions{
+		SessionImage:       "claude-image",
+		CodexSessionImage:  "codex-image",
+		GeminiSessionImage: "gemini-image",
+		HotSwapAgentRunner: true,
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	volumes := spec["volumes"].([]any)
+	assertVolume(t, volumes, "gemini-runner-hot")
+
+	containers := spec["containers"].([]any)
+	runner := findContainer(t, containers, "gemini-runner")
+	assertVolumeMount(t, runner, "gemini-runner-hot")
+
+	mounts := runner["volumeMounts"].([]any)
+	var hotMountPath string
+	for _, m := range mounts {
+		mm := m.(map[string]any)
+		if mm["name"] == "gemini-runner-hot" {
+			hotMountPath, _ = mm["mountPath"].(string)
+		}
+	}
+	if hotMountPath != "/var/run/gemini-runner-hot" {
+		t.Fatalf("gemini-runner-hot mountPath = %q, want /var/run/gemini-runner-hot", hotMountPath)
+	}
+
+	env := containerEnv(runner)
+	if got, want := env["GLIMMUNG_SUPERVISOR_CHILD"], "/app/gemini-runner-launch-binary.sh"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_CHILD = %v, want %q", got, want)
+	}
+	if got, want := env["GLIMMUNG_SUPERVISOR_HOT_ARTIFACT"], "/var/run/gemini-runner-hot/gemini-runner-launch-binary.sh"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_HOT_ARTIFACT = %v, want %q", got, want)
+	}
+	if got, want := env["GLIMMUNG_SUPERVISOR_RESTART_ENABLED"], "true"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_RESTART_ENABLED = %v, want %q", got, want)
+	}
+}
+
 func findContainer(t *testing.T, containers []any, name string) map[string]any {
 	t.Helper()
 	for _, item := range containers {

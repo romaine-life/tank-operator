@@ -72,6 +72,15 @@ export function StyleguideNewSessionRow() {
                         <span>Week unknown</span>
                       </span>
                     </button>
+                    <button className="home-choice home-provider-choice is-unknown" type="button" aria-pressed="false" title="Gemini GUI">
+                      <span className="home-provider-choice-main">
+                        <ProviderIcon provider="gemini" className="home-choice-icon" />
+                        <span>Gemini</span>
+                      </span>
+                      <span className="home-provider-choice-usage">
+                        <span>Day unknown</span>
+                      </span>
+                    </button>
                   </div>
                   <div className="home-provider-capacity-panel is-low" aria-label="Claude usage remaining">
                     <div className="home-provider-capacity-head">

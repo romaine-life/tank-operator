@@ -24,7 +24,7 @@ export interface UserSubmissionArgs {
   text: string;
   message: unknown;
   attachments?: UserMessageAttachmentDisplay[];
-  runtime: "claude" | "codex";
+  runtime: "claude" | "codex" | "gemini";
   skillName?: string;
   now?: string;
 }
@@ -43,7 +43,7 @@ export interface TurnEventArgs {
   sessionID: string;
   turnID: string;
   clientNonce?: string;
-  source: "claude" | "codex";
+  source: "claude" | "codex" | "gemini";
   type:
     | "turn.started"
     | "turn.claimed"
@@ -75,7 +75,7 @@ export interface AskUserQuestionHandoffEventArgs {
   sessionID: string;
   askingTurnID: string;
   askingClientNonce: string;
-  source: "claude" | "codex";
+  source: "claude" | "codex" | "gemini";
   providerItemID: string;
   providerTimelineID: string;
   questions: unknown[];
@@ -98,7 +98,7 @@ export function askUserQuestionHandoffEvents(
 export interface ItemEventArgs {
   sessionID: string;
   turnID: string;
-  source: "claude" | "codex";
+  source: "claude" | "codex" | "gemini";
   type: "item.started" | "item.completed" | "item.failed";
   providerItemID: string;
   parentID?: string;
@@ -112,7 +112,7 @@ export function itemEvent(args: ItemEventArgs): TankConversationEvent;
 export interface ShellTaskEventArgs {
   sessionID: string;
   turnID: string;
-  source: "claude" | "codex";
+  source: "claude" | "codex" | "gemini";
   type: "shell_task.started" | "shell_task.updated" | "shell_task.exited";
   taskID: string;
   status: string;
@@ -127,7 +127,7 @@ export function shellTaskEvent(args: ShellTaskEventArgs): TankConversationEvent;
 export interface ContextCompactedEventArgs {
   sessionID: string;
   turnID: string;
-  source: "claude" | "codex";
+  source: "claude" | "codex" | "gemini";
   trigger: "auto" | "manual";
   preTokens?: number;
   providerEventID?: string;

@@ -199,6 +199,17 @@ Project metadata for Glimmung:
       "container": "codex-runner",
       "pod_selector": "tank-operator/session-id,tank-operator/mode in (codex_gui,codex_exec_gui,codex_app_server)",
       "builder_image": "node:20-alpine"
+    },
+    "gemini_runner": {
+      "enabled": true,
+      "strategy": "supervisor",
+      "build_command": "cd gemini-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/gemini-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/gemini-runner-hot/runner-shared/|g' {} +",
+      "source": "gemini-runner/hot",
+      "target": "/var/run/gemini-runner-hot",
+      "restart": "SIGHUP",
+      "container": "gemini-runner",
+      "pod_selector": "tank-operator/session-id,tank-operator/mode=gemini_gui",
+      "builder_image": "node:20-alpine"
     }
   }
 }

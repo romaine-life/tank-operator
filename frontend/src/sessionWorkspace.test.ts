@@ -13,7 +13,7 @@ test("workspace file support is limited to pod-backed GUI modes", () => {
   assert.equal(sessionModeSupportsWorkspaceFiles("codex_gui"), true);
   assert.equal(sessionModeSupportsWorkspaceFiles("codex_exec_gui"), true);
   assert.equal(sessionModeSupportsWorkspaceFiles("codex_app_server"), true);
-  assert.equal(sessionModeSupportsWorkspaceFiles("gemini_gui"), false);
+  assert.equal(sessionModeSupportsWorkspaceFiles("gemini_gui"), true);
   assert.equal(sessionModeSupportsWorkspaceFiles("claude_cli"), false);
 });
 

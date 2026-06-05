@@ -3,6 +3,7 @@ export const WORKSPACE_FILE_MODES: ReadonlySet<string> = new Set([
   "codex_gui",
   "codex_exec_gui",
   "codex_app_server",
+  "gemini_gui",
 ]);
 
 export interface SessionWorkspaceState {
