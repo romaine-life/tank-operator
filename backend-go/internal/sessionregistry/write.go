@@ -456,7 +456,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 	var (
 		mode, podName, requestedAt, createdAt, updatedAt      string
 		status, readyAt, terminatingAt                        string
-		name                                                  *string
+		name                                                  string
 		visible                                               bool
 		activitySummary, testState, rolloutState, cloneState  []byte
 		providerRateLimitInfo                                 []byte

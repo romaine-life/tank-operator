@@ -33,7 +33,7 @@ func TestListReadsEverythingFromTheRegistryRow(t *testing.T) {
 			Email:           "nelson@romaine.life",
 			Mode:            sessionmodel.CodexGUIMode,
 			PodName:         "session-12",
-			Name:            stringPtr("Workbench"),
+			Name:            "Workbench",
 			Visible:         true,
 			RequestedAt:     "2026-05-11T00:00:00+00:00",
 			CreatedAt:       "2026-05-11T00:00:01+00:00",
@@ -60,8 +60,8 @@ func TestListReadsEverythingFromTheRegistryRow(t *testing.T) {
 	if session.ID != "12" || session.Status != "Active" || session.Mode != sessionmodel.CodexGUIMode {
 		t.Fatalf("session = %#v", session)
 	}
-	if session.Name == nil || *session.Name != "Workbench" {
-		t.Fatalf("name = %#v, want Workbench", session.Name)
+	if session.Name != "Workbench" {
+		t.Fatalf("name = %q, want Workbench", session.Name)
 	}
 	if session.PodName == nil || *session.PodName != "session-12" {
 		t.Fatalf("pod name = %#v, want session-12", session.PodName)
@@ -171,18 +171,21 @@ func TestGetRejectsWrongOwner(t *testing.T) {
 	}
 }
 
-// TestInfoJSONAlwaysCarriesDisplayName pins that the snapshot Info wire
-// shape exposes an always-present display_name. A nil-name session must
-// still serialize a non-empty derived label (short id from the pod
-// name) so unnamed sessions render identically across every surface.
-func TestInfoJSONAlwaysCarriesDisplayName(t *testing.T) {
+// TestInfoJSONCarriesNonNullNameAndDisplayName pins the name/display_name
+// inversion: name is NON-NULL on the snapshot wire. An "unnamed" session
+// carries the canonical default the migration backfills (the short id from
+// the pod name), and display_name — kept on the wire this stage for
+// already-deployed clients — equals that name.
+func TestInfoJSONCarriesNonNullNameAndDisplayName(t *testing.T) {
 	registry := registryRecords{
 		{
 			ID:      "622",
 			Email:   "nelson@romaine.life",
 			Mode:    sessionmodel.ClaudeGUIMode,
 			PodName: "session-622",
-			Name:    nil,
+			// The durable row is NON-NULL post-migration: an unnamed session
+			// holds the backfilled short id derived from the pod name.
+			Name:    "622",
 			Visible: true,
 			Status:  "Active",
 		},
@@ -195,11 +198,11 @@ func TestInfoJSONAlwaysCarriesDisplayName(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("session count = %d, want 1", len(got))
 	}
-	if got[0].Name != nil {
-		t.Fatalf("name = %#v, want nil for this fixture", got[0].Name)
+	if got[0].Name != "622" {
+		t.Fatalf("name = %q, want %q (non-null default)", got[0].Name, "622")
 	}
 	if got[0].DisplayName != "622" {
-		t.Fatalf("display name = %q, want %q (derived from pod name)", got[0].DisplayName, "622")
+		t.Fatalf("display name = %q, want %q (equals name)", got[0].DisplayName, "622")
 	}
 
 	raw, err := json.Marshal(got[0])
@@ -207,17 +210,17 @@ func TestInfoJSONAlwaysCarriesDisplayName(t *testing.T) {
 		t.Fatal(err)
 	}
 	var decoded struct {
-		Name        *string `json:"name"`
-		DisplayName string  `json:"display_name"`
+		Name        string `json:"name"`
+		DisplayName string `json:"display_name"`
 	}
 	if err := json.Unmarshal(raw, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Name != nil {
-		t.Fatalf("serialized name = %#v, want null (name stays nullable)", decoded.Name)
+	if decoded.Name != "622" {
+		t.Fatalf("serialized name = %q, want non-empty %q (name is non-null now)", decoded.Name, "622")
 	}
 	if decoded.DisplayName != "622" {
-		t.Fatalf("serialized display_name = %q, want non-empty %q for a nil-name session", decoded.DisplayName, "622")
+		t.Fatalf("serialized display_name = %q, want %q (equals name)", decoded.DisplayName, "622")
 	}
 }
 

@@ -85,12 +85,16 @@ var (
 )
 
 type SessionRecord struct {
-	ID          string
-	Email       string
-	Mode        string
-	Scope       string
-	PodName     string
-	Name        *string
+	ID      string
+	Email   string
+	Mode    string
+	Scope   string
+	PodName string
+	// Name is the session's human-facing title. It is always present
+	// (NON-NULL): Manager.Create assigns the canonical SessionDisplayName
+	// default when the user supplies none, and SetName reassigns that
+	// default when cleared. The durable sessions.name column is NOT NULL.
+	Name        string
 	Visible     bool
 	RequestedAt string
 	CreatedAt   string

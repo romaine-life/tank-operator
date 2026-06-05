@@ -185,7 +185,7 @@ func fetchSessionRowByID(ctx context.Context, pool pgxQuerier, owner, scope, ses
 	`
 	var (
 		mode, podName, recStatus, recUpdatedAt string
-		recName                                *string
+		recName                                string
 		recVisible                             bool
 		activity                               []byte
 		recSessionID                           string

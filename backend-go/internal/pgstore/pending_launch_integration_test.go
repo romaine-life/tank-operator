@@ -66,9 +66,9 @@ func insertSessionRow(t *testing.T, ctx context.Context, pool *pgxpool.Pool, own
 	now := time.Now().UTC()
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO sessions (
-			email, session_scope, session_id, mode, pod_name, visible,
+			email, session_scope, session_id, mode, pod_name, name, visible,
 			requested_at, created_at, updated_at, status
-		) VALUES ($1, $2, $3, $4, $5, true, $6, $6, $6, 'Pending')
+		) VALUES ($1, $2, $3, $4, $5, $3, true, $6, $6, $6, 'Pending')
 	`, owner, scope, sessionID, sessionmodel.ClaudeGUIMode, "session-"+sessionID, now); err != nil {
 		t.Fatalf("insert session row: %v", err)
 	}

@@ -397,7 +397,12 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	}
 	model := opts.Model
 	effort := opts.Effort
-	name := sessionmodel.NormalizeName(opts.Name)
+	// normalizedName is the optional user-supplied title (nil/empty when the
+	// user gave none). storedName is the resolved NON-NULL value persisted on
+	// the row/Info — assigned the canonical SessionDisplayName default below
+	// once the session id (and thus pod name) is known. The pod annotation is
+	// stamped with storedName too so degraded pod-only reads match the row.
+	normalizedName := sessionmodel.NormalizeName(opts.Name)
 
 	// Lazy re-resolution for first-install ordering.
 	if m.oauthGatewayIP == "" {
@@ -415,6 +420,13 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		return Info{}, err
 	}
 
+	// Resolve the stored name to NON-NULL: the user's title when supplied,
+	// else the canonical SessionDisplayName default (short id derived from
+	// the pod name). storedName is what lands on the durable row, the pod
+	// annotation, and the Info.
+	podName := "session-" + sessionID
+	storedName := sessionmodel.SessionDisplayName(normalizedName, podName, sessionID)
+
 	contextJSON := ""
 	if glimmungContext != nil {
 		b, _ := json.Marshal(glimmungContext)
@@ -427,7 +439,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
-	manifestOpts.Name = name
+	manifestOpts.Name = &storedName
 	manifestOpts.Capabilities = capabilities
 	m.applyImageOverride(ctx, &manifestOpts, mode)
 
@@ -454,8 +466,8 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	// the SPA which adds it optimistically; the next snapshot finds it.
 	//
 	// On pod-create failure after the registry write succeeds, we mark
-	// the row visible=false so the snapshot stops returning it.
-	podName := "session-" + sessionID
+	// the row visible=false so the snapshot stops returning it. podName is
+	// resolved above (alongside storedName).
 	assignment, reserved, err := m.reserveSessionAvatars(ctx, owner, sessionID)
 	if err != nil {
 		return Info{}, err
@@ -471,7 +483,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			Scope:          m.manifestOpts.SessionScope,
 			PodName:        podName,
 			Visible:        true,
-			Name:           name,
+			Name:           storedName,
 			RequestedAt:    requestedAt,
 			UpdatedAt:      requestedAt,
 			Repos:          repos,
@@ -526,15 +538,17 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		bugLabel = bugLabels[0]
 	}
 	info := Info{
-		ID:             sessionID,
-		PodName:        &podName,
-		Owner:          owner,
-		Status:         "Pending",
-		Mode:           mode,
-		RequestedAt:    &requestedAt,
-		CreatedAt:      createdAt,
-		Name:           name,
-		DisplayName:    sessionmodel.SessionDisplayName(name, podName, sessionID),
+		ID:          sessionID,
+		PodName:     &podName,
+		Owner:       owner,
+		Status:      "Pending",
+		Mode:        mode,
+		RequestedAt: &requestedAt,
+		CreatedAt:   createdAt,
+		Name:        storedName,
+		// display_name stays on the wire for already-deployed clients; it now
+		// equals the always-present name. A later stage deletes it.
+		DisplayName:    storedName,
 		Repos:          repos,
 		Capabilities:   capabilities,
 		BugLabel:       bugLabel,
@@ -555,7 +569,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			Scope:          m.manifestOpts.SessionScope,
 			PodName:        podName,
 			Visible:        true,
-			Name:           name,
+			Name:           storedName,
 			RequestedAt:    requestedAt,
 			CreatedAt:      *createdAt,
 			UpdatedAt:      requestedAt,
@@ -609,18 +623,19 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 	return nil
 }
 
-// SetName updates the display name annotation on the pod and registry.
+// SetName updates the session name on the pod annotation and registry. Name
+// is NON-NULL: clearing (nil/empty input) no longer stores null — it reassigns
+// the canonical SessionDisplayName default (the short id derived from the pod
+// name), the same value Create assigns to an unnamed session.
 func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *string) (Info, error) {
 	normalized := sessionmodel.NormalizeName(name)
-	annotationValue := ""
-	if normalized != nil {
-		annotationValue = *normalized
-	}
+	podName := "session-" + sessionID
+	resolvedName := sessionmodel.SessionDisplayName(normalized, podName, sessionID)
 
 	patch := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]any{
-				"tank-operator/display-name": annotationValue,
+				"tank-operator/display-name": resolvedName,
 			},
 		},
 	}
@@ -636,7 +651,8 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 	}
 
 	if m.registry != nil {
-		if regErr := m.registry.SetName(ctx, owner, sessionID, normalized); regErr != nil {
+		// Persist the resolved NON-NULL name; clearing writes the default, not null.
+		if regErr := m.registry.SetName(ctx, owner, sessionID, &resolvedName); regErr != nil {
 			slog.Warn("set-name registry update failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}

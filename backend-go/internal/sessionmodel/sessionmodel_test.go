@@ -506,7 +506,7 @@ func TestManifestFixture(t *testing.T) {
 		Mode:        ClaudeCLIMode,
 		Scope:       "default",
 		PodName:     "session-12",
-		Name:        &name,
+		Name:        name,
 		Visible:     true,
 		RequestedAt: "2026-05-11T00:00:00+00:00",
 		CreatedAt:   "2026-05-11T00:00:01+00:00",

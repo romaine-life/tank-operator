@@ -116,7 +116,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 		var (
 			sessionID, mode, podName, requestedAt, createdAt, updatedAt string
 			status, readyAt, terminatingAt                              string
-			name                                                        *string
+			name                                                        string
 			visible                                                     bool
 			activitySummary, testState, rolloutState, cloneState        []byte
 			providerRateLimitInfo                                       []byte
