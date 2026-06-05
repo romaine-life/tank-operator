@@ -42,10 +42,9 @@ type BugLabelSummary = {
 type SessionSummary = {
   owner: string;
   session_id: string;
-  name: string;
   // Server-canonical title (same derivation as the live session wire). Always
-  // present; render this rather than re-deriving a fallback from name/id.
-  display_name: string;
+  // present; render this rather than re-deriving a fallback from id.
+  name: string;
   mode: string;
   repos: string[];
   bug_label?: BugLabel | null;
@@ -443,7 +442,7 @@ export function SessionRepoReport({
                 <tr key={`${session.owner}:${session.session_id}`}>
                   <td>
                     <span className="session-repo-report-session-name">
-                      {session.display_name}
+                      {session.name}
                     </span>
                     <span className="session-repo-report-muted">{session.mode}</span>
                   </td>

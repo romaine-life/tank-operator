@@ -1088,7 +1088,9 @@ test("session rows do not fall back to client-hashed avatar identity", () => {
     /getSystemAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(runtimeSystemAvatars, assignedAvatarId\);/,
   );
   assert.equal(appSource.includes("session-avatar-missing"), true);
-  assert.equal(appSource.includes("display_name_source"), true);
+  // `name` is always non-null now, so the SPA no longer models title
+  // provenance: sessionListDebugRow does not emit a display_name_source.
+  assert.equal(appSource.includes("display_name_source"), false);
 });
 
 test("home splash test action seeds the first turn as a skill invocation", () => {
