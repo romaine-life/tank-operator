@@ -43,6 +43,7 @@ import {
   type TankConversationEvent,
 } from "../../runner-shared/conversation.js";
 import {
+  askUserQuestionHandoffEvents,
   itemTimelineID,
   stampTankEvent,
   turnEvent,
@@ -110,7 +111,9 @@ export async function dispatch(
     stamped as unknown as Record<string, unknown>,
   );
   if (sizeGuard.truncated) {
-    const severity = sizeGuard.payloadDropped ? "payload-dropped" : "strings-truncated";
+    const severity = sizeGuard.payloadDropped
+      ? "payload-dropped"
+      : "strings-truncated";
     eventTruncatedTotal.labels(stamped.type, severity).inc();
     console.warn(
       "session bus event truncated:",
@@ -185,7 +188,11 @@ export function classifyProviderFailure(message: string): ProviderFailureClass {
     return "thinking_block_modified";
   }
   if (m.includes("overloaded")) return "overloaded";
-  if (m.includes("rate limit") || m.includes("rate_limit") || m.includes(" 429")) {
+  if (
+    m.includes("rate limit") ||
+    m.includes("rate_limit") ||
+    m.includes(" 429")
+  ) {
     return "rate_limit";
   }
   if (
@@ -248,7 +255,8 @@ export function logUnhandledSdkMessage(message: SDKMessage): void {
     // system/init is session-setup metadata; system/compact_boundary is now
     // mapped by the Claude adapter to context.compacted. Both are explicitly
     // ignored here so they don't inflate the unmapped-drop counter.
-    (type === "system" && (subtype === "init" || subtype === "compact_boundary"))
+    (type === "system" &&
+      (subtype === "init" || subtype === "compact_boundary"))
   ) {
     return;
   }
@@ -287,7 +295,9 @@ const CLAUDE_RATE_LIMIT_INFO_KEYS = [
   "session_id",
 ] as const;
 
-export function claudeRateLimitInfo(message: ClaudeProviderEvent): Record<string, unknown> | null {
+export function claudeRateLimitInfo(
+  message: ClaudeProviderEvent,
+): Record<string, unknown> | null {
   const raw = message.rate_limit_info;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
     return null;
@@ -316,7 +326,14 @@ export function claudeRateLimitInfo(message: ClaudeProviderEvent): Record<string
 
 function claudeRateLimitError(message: ClaudeProviderEvent): string {
   const parts = ["Claude provider emitted rate_limit_event"];
-  for (const key of ["message", "error", "summary", "description", "retry_after_ms", "retry_after_seconds"]) {
+  for (const key of [
+    "message",
+    "error",
+    "summary",
+    "description",
+    "retry_after_ms",
+    "retry_after_seconds",
+  ]) {
     const value = message[key];
     if (typeof value === "string" && value.trim()) {
       parts.push(`${key}=${value.trim()}`);
@@ -326,9 +343,19 @@ function claudeRateLimitError(message: ClaudeProviderEvent): string {
   }
   const rateLimitInfo = claudeRateLimitInfo(message);
   if (rateLimitInfo) {
-    for (const key of ["status", "rateLimitType", "resetsAt", "overageStatus", "overageResetsAt"]) {
+    for (const key of [
+      "status",
+      "rateLimitType",
+      "resetsAt",
+      "overageStatus",
+      "overageResetsAt",
+    ]) {
       const value = rateLimitInfo[key];
-      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+      if (
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean"
+      ) {
         parts.push(`${key}=${value}`);
       }
     }
@@ -340,10 +367,17 @@ function redactSdkStderrLine(line: string): string {
   return line
     .replace(/\bsk-ant-[A-Za-z0-9_-]+/g, "[redacted-api-key]")
     .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
-    .replace(/("?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)"?\s*[:=]\s*)("[^"]+"|[^\s,;]+)/gi, "$1[redacted]");
+    .replace(
+      /("?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)"?\s*[:=]\s*)("[^"]+"|[^\s,;]+)/gi,
+      "$1[redacted]",
+    );
 }
 
-function inputReplyKey(turnID: string, timelineID: string, providerItemID: string): string {
+function inputReplyKey(
+  turnID: string,
+  timelineID: string,
+  providerItemID: string,
+): string {
   return `${turnID}\x1f${timelineID}\x1f${providerItemID}`;
 }
 
@@ -353,12 +387,16 @@ function answersForClaudeInput(
 ): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [question, labels] of Object.entries(answers ?? {})) {
-    const cleanLabels = labels.map((label) => String(label).trim()).filter(Boolean);
+    const cleanLabels = labels
+      .map((label) => String(label).trim())
+      .filter(Boolean);
     const note = String(annotations?.[question]?.notes ?? "").trim();
     const semanticLabels = note
       ? cleanLabels.filter((label) => label.toLowerCase() !== "other")
       : cleanLabels;
-    inputReplyAnswerShapeTotal.labels(inputReplyAnswerShape(semanticLabels, note)).inc();
+    inputReplyAnswerShapeTotal
+      .labels(inputReplyAnswerShape(semanticLabels, note))
+      .inc();
     const value =
       semanticLabels.length > 0 && note
         ? `${semanticLabels.join(", ")}\n\n${note}`
@@ -370,9 +408,16 @@ function answersForClaudeInput(
   return out;
 }
 
-type InputReplyAnswerShape = "selection_only" | "free_form_only" | "selection_with_notes" | "empty";
+type InputReplyAnswerShape =
+  | "selection_only"
+  | "free_form_only"
+  | "selection_with_notes"
+  | "empty";
 
-function inputReplyAnswerShape(labels: string[], note: string): InputReplyAnswerShape {
+function inputReplyAnswerShape(
+  labels: string[],
+  note: string,
+): InputReplyAnswerShape {
   if (labels.length > 0 && note) return "selection_with_notes";
   if (note) return "free_form_only";
   if (labels.length > 0) return "selection_only";
@@ -532,7 +577,10 @@ const STOP_BACKGROUND_GRACE_MS = parsePositiveEnvInt(
   250,
 );
 
-function parsePositiveEnvInt(value: string | undefined, fallback: number): number {
+function parsePositiveEnvInt(
+  value: string | undefined,
+  fallback: number,
+): number {
   const parsed = Number.parseInt((value ?? "").trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
@@ -554,7 +602,10 @@ export class Runner {
   // Keep the owning turn by task_id and by originating tool_use_id so those
   // late frames still land on the durable session transcript.
   private readonly backgroundTaskTurns = new Map<string, ClaudeTurnContext>();
-  private readonly backgroundToolUseTurns = new Map<string, ClaudeTurnContext>();
+  private readonly backgroundToolUseTurns = new Map<
+    string,
+    ClaudeTurnContext
+  >();
   // Task ids we've already registered a background-task wake for this process,
   // so a repeated terminal frame for the same task does not re-POST. The
   // backend Register is idempotent (ON CONFLICT wake_id), so this Set is a
@@ -773,7 +824,9 @@ export class Runner {
   // positive integer.
   private maybeReportContextWindow(message: SDKMessage): void {
     if (this.reportedContextWindowTokens !== null) return;
-    const result = message as { modelUsage?: Record<string, { contextWindow?: number }> };
+    const result = message as {
+      modelUsage?: Record<string, { contextWindow?: number }>;
+    };
     const window = pickContextWindowFromModelUsage(result.modelUsage);
     if (window === null) return;
     this.reportedContextWindowTokens = window;
@@ -803,7 +856,10 @@ export class Runner {
       this.maybeReportContextWindow(message);
     }
     const activeTurn = await this.ensureActiveTurn(providerEvent);
-    if (activeTurn?.terminalEmitted && !isClaudeTaskLifecycleMessage(providerEvent)) {
+    if (
+      activeTurn?.terminalEmitted &&
+      !isClaudeTaskLifecycleMessage(providerEvent)
+    ) {
       if (providerEvent.type === "result" && this.activeTurn === activeTurn) {
         this.activeTurn = null;
       }
@@ -818,16 +874,21 @@ export class Runner {
       logUnhandledSdkMessage(message);
       return;
     }
-    const adapterTurn = this.turnContextForProviderEvent(providerEvent, activeTurn);
+    const adapterTurn = this.turnContextForProviderEvent(
+      providerEvent,
+      activeTurn,
+    );
     if (isClaudeTaskLifecycleMessage(providerEvent) && !adapterTurn) {
       const { taskID, toolUseID } = claudeTaskIdentifiers(providerEvent);
-      console.log(JSON.stringify({
-        msg: "sdk_task_lifecycle_unbound",
-        type: providerEvent.type,
-        subtype: providerEvent.subtype,
-        task_id: taskID,
-        tool_use_id: toolUseID,
-      }));
+      console.log(
+        JSON.stringify({
+          msg: "sdk_task_lifecycle_unbound",
+          type: providerEvent.type,
+          subtype: providerEvent.subtype,
+          task_id: taskID,
+          tool_use_id: toolUseID,
+        }),
+      );
     }
 
     const canonicalEvents = canonicalEventsForClaudeMessage(
@@ -842,7 +903,11 @@ export class Runner {
     for (const event of canonicalEvents) {
       this.rememberClaudeTaskOwner(event, adapterTurn ?? activeTurn);
       const dispatched = await dispatch(this.sink, event);
-      if (event.type === "turn.completed" || event.type === "turn.failed" || event.type === "turn.interrupted") {
+      if (
+        event.type === "turn.completed" ||
+        event.type === "turn.failed" ||
+        event.type === "turn.interrupted"
+      ) {
         if (dispatched && activeTurn) {
           activeTurn.terminalEmitted = true;
           if (activeTurn.commandRecord) {
@@ -870,7 +935,9 @@ export class Runner {
     providerRateLimitEventTotal.inc();
     const rateLimitInfo = claudeRateLimitInfo(message);
     if (rateLimitInfo) {
-      void reportRuntimeConfig(this.cfg, { providerRateLimitInfo: rateLimitInfo }).catch((err) => {
+      void reportRuntimeConfig(this.cfg, {
+        providerRateLimitInfo: rateLimitInfo,
+      }).catch((err) => {
         console.warn("provider rate-limit info report failed:", err);
       });
     }
@@ -894,7 +961,10 @@ export class Runner {
     turn.terminalEmitted = true;
     this.signalStopToSdk();
     await this.markCommandTerminal(turn, "turn.failed").catch((markErr) =>
-      console.error("session command rate-limit terminal mark failed:", markErr),
+      console.error(
+        "session command rate-limit terminal mark failed:",
+        markErr,
+      ),
     );
     if (this.activeTurn === turn) {
       this.activeTurn = null;
@@ -923,8 +993,15 @@ export class Runner {
     turn: ClaudeTurnContext | null,
   ): void {
     if (!turn) return;
-    if (event.type === "item.started" && event.actor === "tool" && event.provider_item_id) {
-      this.backgroundToolUseTurns.set(String(event.provider_item_id), this.snapshotTurnContext(turn));
+    if (
+      event.type === "item.started" &&
+      event.actor === "tool" &&
+      event.provider_item_id
+    ) {
+      this.backgroundToolUseTurns.set(
+        String(event.provider_item_id),
+        this.snapshotTurnContext(turn),
+      );
       return;
     }
     if (
@@ -945,7 +1022,8 @@ export class Runner {
     const toolUseID =
       typeof event.payload?.tool_use_id === "string"
         ? event.payload.tool_use_id
-        : typeof event.provider_item_id === "string" && event.provider_item_id !== taskID
+        : typeof event.provider_item_id === "string" &&
+            event.provider_item_id !== taskID
           ? event.provider_item_id
           : "";
     if (toolUseID) this.backgroundToolUseTurns.set(toolUseID, owner);
@@ -982,7 +1060,9 @@ export class Runner {
       .then((stop) => {
         stopConsumer = stop;
       })
-      .catch((err) => console.error("session bus command consumer crashed:", err));
+      .catch((err) =>
+        console.error("session bus command consumer crashed:", err),
+      );
     return () => {
       void stopConsumer?.();
     };
@@ -1010,10 +1090,14 @@ export class Runner {
           return;
         }
         if (isStopBackgroundTaskCommand(record)) {
-          commandsConsumedTotal.labels("stop_background_task", "unsupported").inc();
+          commandsConsumedTotal
+            .labels("stop_background_task", "unsupported")
+            .inc();
           await this.commandBus.markFailed(
             record,
-            new Error("background task stop is not supported by the Claude runner"),
+            new Error(
+              "background task stop is not supported by the Claude runner",
+            ),
           );
           return;
         }
@@ -1022,14 +1106,18 @@ export class Runner {
         // backend-only command type a runner doesn't recognise will
         // never start working on retry.
         commandsConsumedTotal.labels("control_unknown", "dropped").inc();
-        console.warn("session bus control consumer: unknown command type",
-          { type: record.type, command_id: record.id });
+        console.warn("session bus control consumer: unknown command type", {
+          type: record.type,
+          command_id: record.id,
+        });
         await this.commandBus.markCompleted(record);
       }, signal)
       .then((stop) => {
         stopConsumer = stop;
       })
-      .catch((err) => console.error("session bus control consumer crashed:", err));
+      .catch((err) =>
+        console.error("session bus control consumer crashed:", err),
+      );
     return () => {
       void stopConsumer?.();
     };
@@ -1041,7 +1129,10 @@ export class Runner {
     const prompt = String(record.prompt ?? "").trim();
     if (!prompt) {
       commandsConsumedTotal.labels("submit_turn", "invalid").inc();
-      await this.commandBus.markFailed(record, new Error("submit command missing prompt"));
+      await this.commandBus.markFailed(
+        record,
+        new Error("submit command missing prompt"),
+      );
       return;
     }
     if (await this.finalizeCommandIfAlreadyTerminal(record, clientNonce)) {
@@ -1052,14 +1143,19 @@ export class Runner {
       commandsConsumedTotal.labels("submit_turn", "attempts_exceeded").inc();
       await this.failCommandRecord(
         record,
-        new Error(`session command exceeded ${record.attempt_count ?? "unknown"} claim attempts`),
+        new Error(
+          `session command exceeded ${record.attempt_count ?? "unknown"} claim attempts`,
+        ),
       );
       return;
     }
     const pendingTurn = this.acceptTurn(prompt, clientNonce, record);
     if (!pendingTurn) {
       commandsConsumedTotal.labels("submit_turn", "invalid").inc();
-      await this.commandBus.markFailed(record, new Error("session command was not accepted"));
+      await this.commandBus.markFailed(
+        record,
+        new Error("session command was not accepted"),
+      );
       return;
     }
     // Drain any pre-arrived interrupts whose target matches this turn.
@@ -1087,10 +1183,14 @@ export class Runner {
     // lifetime, even though we won't actually feed THIS turn into the
     // SDK below.
     this.ensureSdkQuery(record);
-    pendingTurn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(record);
+    pendingTurn.stopCommandHeartbeat =
+      this.commandBus.startCommandHeartbeat(record);
     this.pendingTurns.push(pendingTurn);
     await this.publishTurnClaimed(pendingTurn);
-    if (pendingTurn.interruptOnStart && pendingTurn.interruptOnStart.length > 0) {
+    if (
+      pendingTurn.interruptOnStart &&
+      pendingTurn.interruptOnStart.length > 0
+    ) {
       // The SDK is never fed this turn. Emit turn.interrupted
       // synthetically for each buffered interrupt record (typically
       // one; double-Stop is rare but possible) so each interrupt_turn
@@ -1126,7 +1226,9 @@ export class Runner {
   // path here closes both.
   private async acceptInterrupt(record: SessionCommandRecord): Promise<void> {
     commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
-    const targetKey = String(record.target_turn_id ?? record.client_nonce ?? "").trim();
+    const targetKey = String(
+      record.target_turn_id ?? record.client_nonce ?? "",
+    ).trim();
     if (!targetKey) {
       // Backend bug — the /interrupt handler MUST send target_turn_id
       // (it copies the URL path value into both target_turn_id and
@@ -1135,7 +1237,9 @@ export class Runner {
       interruptOutcomeTotal.labels("invalid_target").inc();
       await this.commandBus.markFailed(
         record,
-        new Error("interrupt_turn missing both target_turn_id and client_nonce"),
+        new Error(
+          "interrupt_turn missing both target_turn_id and client_nonce",
+        ),
       );
       return;
     }
@@ -1171,7 +1275,10 @@ export class Runner {
   // keeps the message un-acked so a runner crash redelivers it; only
   // applyInterruptToTurn or expireBufferedInterrupt take ownership of
   // the ack.
-  private bufferInterrupt(record: SessionCommandRecord, targetKey: string): void {
+  private bufferInterrupt(
+    record: SessionCommandRecord,
+    targetKey: string,
+  ): void {
     interruptOutcomeTotal.labels("buffered").inc();
     const stopHeartbeat = this.commandBus.startCommandHeartbeat(record);
     const orphanTimer = setTimeout(() => {
@@ -1218,8 +1325,12 @@ export class Runner {
     return drained;
   }
 
-  private async expireBufferedInterrupt(record: SessionCommandRecord): Promise<void> {
-    const idx = this.pendingInterrupts.findIndex((buf) => buf.record === record);
+  private async expireBufferedInterrupt(
+    record: SessionCommandRecord,
+  ): Promise<void> {
+    const idx = this.pendingInterrupts.findIndex(
+      (buf) => buf.record === record,
+    );
     if (idx < 0) return; // already drained by a submit_turn
     const buf = this.pendingInterrupts[idx]!;
     this.pendingInterrupts.splice(idx, 1);
@@ -1304,7 +1415,11 @@ export class Runner {
         await this.markCommandTerminal(turn, "turn.interrupted");
       }
       interruptOutcomeTotal
-        .labels(reason === "client_interrupt_before_start" ? "terminated_pre_sdk" : "terminated_via_sdk")
+        .labels(
+          reason === "client_interrupt_before_start"
+            ? "terminated_pre_sdk"
+            : "terminated_via_sdk",
+        )
         .inc();
       await this.commandBus.markCompleted(record);
       return;
@@ -1354,17 +1469,25 @@ export class Runner {
         const interruptPromise = sdkQuery.interrupt();
         void interruptPromise.catch((err) => {
           providerErrorTotal.labels("interrupt").inc();
-          console.error("sdkQuery.interrupt() failed after Stop terminal was emitted:", err);
+          console.error(
+            "sdkQuery.interrupt() failed after Stop terminal was emitted:",
+            err,
+          );
         });
       } catch (err) {
         providerErrorTotal.labels("interrupt").inc();
-        console.error("sdkQuery.interrupt() failed; continuing with durable Stop terminal:", err);
+        console.error(
+          "sdkQuery.interrupt() failed; continuing with durable Stop terminal:",
+          err,
+        );
       }
     };
 
-    const backgroundTasks = (sdkQuery as Query & {
-      backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
-    }).backgroundTasks;
+    const backgroundTasks = (
+      sdkQuery as Query & {
+        backgroundTasks?: (toolUseId?: string) => Promise<boolean>;
+      }
+    ).backgroundTasks;
     if (typeof backgroundTasks !== "function") {
       providerControlTotal.labels("background_tasks", "unsupported").inc();
       sendInterrupt("without_background_api");
@@ -1381,29 +1504,41 @@ export class Runner {
 
     try {
       const backgroundPromise = backgroundTasks.call(sdkQuery);
-      void backgroundPromise.then((backgrounded) => {
-        clearTimeout(timer);
-        providerControlTotal
-          .labels("background_tasks", backgrounded ? "backgrounded" : "none")
-          .inc();
-        sendInterrupt(backgrounded ? "after_background" : "no_foreground_tasks");
-      }).catch((err) => {
-        clearTimeout(timer);
-        providerControlTotal.labels("background_tasks", "failed").inc();
-        providerErrorTotal.labels("background_tasks").inc();
-        console.error("sdkQuery.backgroundTasks() failed before Stop interrupt:", err);
-        sendInterrupt("background_failed");
-      });
+      void backgroundPromise
+        .then((backgrounded) => {
+          clearTimeout(timer);
+          providerControlTotal
+            .labels("background_tasks", backgrounded ? "backgrounded" : "none")
+            .inc();
+          sendInterrupt(
+            backgrounded ? "after_background" : "no_foreground_tasks",
+          );
+        })
+        .catch((err) => {
+          clearTimeout(timer);
+          providerControlTotal.labels("background_tasks", "failed").inc();
+          providerErrorTotal.labels("background_tasks").inc();
+          console.error(
+            "sdkQuery.backgroundTasks() failed before Stop interrupt:",
+            err,
+          );
+          sendInterrupt("background_failed");
+        });
     } catch (err) {
       clearTimeout(timer);
       providerControlTotal.labels("background_tasks", "failed").inc();
       providerErrorTotal.labels("background_tasks").inc();
-      console.error("sdkQuery.backgroundTasks() failed before Stop interrupt:", err);
+      console.error(
+        "sdkQuery.backgroundTasks() failed before Stop interrupt:",
+        err,
+      );
       sendInterrupt("background_failed");
     }
   }
 
-  private async publishTerminalWithRetry(event: TankConversationEvent): Promise<boolean> {
+  private async publishTerminalWithRetry(
+    event: TankConversationEvent,
+  ): Promise<boolean> {
     for (let attempt = 0; attempt < TERMINAL_PUBLISH_ATTEMPTS; attempt++) {
       if (attempt > 0) {
         // Exponential backoff. JetStream client-side publish failures
@@ -1426,15 +1561,23 @@ export class Runner {
   // input_reply control command arrives for the same question-set target. The
   // submit command remains in flight so runner restarts can recreate the
   // callback before the user answers.
-  private readonly canUseTool: CanUseTool = (toolName, input, { toolUseID }) => {
+  private readonly canUseTool: CanUseTool = (
+    toolName,
+    input,
+    { toolUseID },
+  ) => {
     if (toolName !== "AskUserQuestion") {
-      return Promise.resolve({ behavior: "allow", updatedInput: input } satisfies PermissionResult);
+      return Promise.resolve({
+        behavior: "allow",
+        updatedInput: input,
+      } satisfies PermissionResult);
     }
     const turn = this.activeTurn;
     if (!toolUseID || !turn) {
       return Promise.resolve({
         behavior: "deny",
-        message: "AskUserQuestion cannot pause the turn (missing tool_use_id or active turn)",
+        message:
+          "AskUserQuestion cannot pause the turn (missing tool_use_id or active turn)",
       } satisfies PermissionResult);
     }
     const questions = claudeQuestionsToTankShape(input);
@@ -1453,25 +1596,36 @@ export class Runner {
     input: unknown,
   ): Promise<PermissionResult> {
     if (turn.terminalEmitted) {
-      return { behavior: "deny", message: "Turn already ended before AskUserQuestion could pause." };
+      return {
+        behavior: "deny",
+        message: "Turn already ended before AskUserQuestion could pause.",
+      };
     }
     const timelineID = itemTimelineID(turn.turnID, providerItemID);
+    const handoff = askUserQuestionHandoffEvents({
+      sessionID: this.cfg.sessionId,
+      askingTurnID: turn.turnID,
+      askingClientNonce: turn.clientNonce,
+      source: "claude",
+      providerItemID,
+      providerTimelineID: timelineID,
+      questions: questions as unknown[],
+    });
     const replyKey = inputReplyKey(turn.turnID, timelineID, providerItemID);
     const waitForReply = new Promise<PermissionResult>((resolve) => {
-      this.pendingInputReplies.set(replyKey, { turn, providerItemID, timelineID, input, resolve });
+      this.pendingInputReplies.set(replyKey, {
+        turn,
+        providerItemID,
+        timelineID,
+        input,
+        resolve,
+      });
     });
-    const published = await this.publishTerminalWithRetry(
-      turnEvent({
-        sessionID: this.cfg.sessionId,
-        turnID: turn.turnID,
-        clientNonce: turn.clientNonce,
-        source: "claude",
-        type: "turn.awaiting_input",
-        questions,
-        awaitingProviderItemID: providerItemID,
-        awaitingTimelineID: timelineID,
-      }),
-    );
+    const published =
+      (await dispatch(this.sink, handoff.invocation)) &&
+      (await dispatch(this.sink, handoff.questionMessage)) &&
+      (await dispatch(this.sink, handoff.questionSubmitted)) &&
+      (await this.publishTerminalWithRetry(handoff.awaitingInput));
     if (published) return waitForReply;
     this.pendingInputReplies.delete(replyKey);
     const fallback = await this.publishTerminalWithRetry(
@@ -1490,15 +1644,25 @@ export class Runner {
         await this.markCommandTerminal(turn, "turn.failed");
       }
     }
-    return { behavior: "deny", message: "Failed to persist AskUserQuestion pause.", interrupt: true };
+    return {
+      behavior: "deny",
+      message: "Failed to persist AskUserQuestion pause.",
+      interrupt: true,
+    };
   }
 
   private async acceptInputReply(record: SessionCommandRecord): Promise<void> {
     commandsConsumedTotal.labels("input_reply", "accepted").inc();
     const targetTurnID = String(record.target_turn_id ?? "").trim();
     const targetTimelineID = String(record.target_timeline_id ?? "").trim();
-    const targetProviderItemID = String(record.target_provider_item_id ?? "").trim();
-    const key = inputReplyKey(targetTurnID, targetTimelineID, targetProviderItemID);
+    const targetProviderItemID = String(
+      record.target_provider_item_id ?? "",
+    ).trim();
+    const key = inputReplyKey(
+      targetTurnID,
+      targetTimelineID,
+      targetProviderItemID,
+    );
     const pending = this.pendingInputReplies.get(key);
     if (!pending) {
       // Runner restart/race: the durable answer can arrive before the redelivered
@@ -1510,7 +1674,10 @@ export class Runner {
     }
     if (pending.turn.terminalEmitted) {
       commandsConsumedTotal.labels("input_reply", "not_found").inc();
-      await this.commandBus.markFailed(record, new Error("input_reply target is not awaiting input"));
+      await this.commandBus.markFailed(
+        record,
+        new Error("input_reply target is not awaiting input"),
+      );
       return;
     }
     this.pendingInputReplies.delete(key);
@@ -1518,14 +1685,19 @@ export class Runner {
     pending.resolve({
       behavior: "allow",
       updatedInput: {
-        ...(typeof pending.input === "object" && pending.input !== null ? pending.input : {}),
+        ...(typeof pending.input === "object" && pending.input !== null
+          ? pending.input
+          : {}),
         answers: answersForClaudeInput(record.answers, record.annotations),
       },
     } satisfies PermissionResult);
     await this.commandBus.markCompleted(record);
   }
 
-  private async rotateTurnForInputReply(turn: PendingTurn, record: SessionCommandRecord): Promise<void> {
+  private async rotateTurnForInputReply(
+    turn: PendingTurn,
+    record: SessionCommandRecord,
+  ): Promise<void> {
     const continuationClientNonce = normalizeClientNonce(record.client_nonce);
     if (!continuationClientNonce) {
       throw new Error("input_reply missing continuation client_nonce");
@@ -1580,13 +1752,22 @@ export class Runner {
     };
   }
 
-  private async ensureActiveTurn(event: ClaudeProviderEvent): Promise<PendingTurn | null> {
-    if (!this.activeTurn && this.pendingTurns.length > 0 && startsClaudeTurn(event)) {
+  private async ensureActiveTurn(
+    event: ClaudeProviderEvent,
+  ): Promise<PendingTurn | null> {
+    if (
+      !this.activeTurn &&
+      this.pendingTurns.length > 0 &&
+      startsClaudeTurn(event)
+    ) {
       this.activeTurn = this.pendingTurns.shift() ?? null;
       if (this.activeTurn && !this.activeTurn.started) {
         this.activeTurn.started = true;
         recordTurnStart(this.activeTurn.turnID);
-        recordTurnPreStartLatency("claimed_to_started", this.activeTurn.claimedAtMs);
+        recordTurnPreStartLatency(
+          "claimed_to_started",
+          this.activeTurn.claimedAtMs,
+        );
         await dispatch(
           this.sink,
           turnEvent({
@@ -1617,7 +1798,11 @@ export class Runner {
     );
     if (!dispatched) return;
     turn.claimedAtMs = claimedAtMs;
-    recordTurnPreStartLatency("command_created_to_claimed", turn.commandCreatedAtMs, claimedAtMs);
+    recordTurnPreStartLatency(
+      "command_created_to_claimed",
+      turn.commandCreatedAtMs,
+      claimedAtMs,
+    );
   }
 
   // interruptActiveTurn is now only used by the runner-shutdown path
@@ -1663,13 +1848,24 @@ export class Runner {
     return "interrupted";
   }
 
-  private turnMatchesTarget(turn: Pick<PendingTurn, "turnID" | "clientNonce">, targetTurnID = ""): boolean {
-    return !targetTurnID || targetTurnID === turn.turnID || targetTurnID === turn.clientNonce;
+  private turnMatchesTarget(
+    turn: Pick<PendingTurn, "turnID" | "clientNonce">,
+    targetTurnID = "",
+  ): boolean {
+    return (
+      !targetTurnID ||
+      targetTurnID === turn.turnID ||
+      targetTurnID === turn.clientNonce
+    );
   }
 
   private async markCommandTerminal(
     turn: PendingTurn,
-    type: "turn.completed" | "turn.failed" | "turn.interrupted" | "turn.awaiting_input",
+    type:
+      | "turn.completed"
+      | "turn.failed"
+      | "turn.interrupted"
+      | "turn.awaiting_input",
   ): Promise<void> {
     const outcome =
       type === "turn.completed"
@@ -1718,11 +1914,19 @@ export class Runner {
       turn.terminalEmitted = true;
     }
     await this.markCommandTerminal(turn, "turn.failed").catch((markErr) =>
-      console.error("session command failure mark failed:", markErr, "original:", err),
+      console.error(
+        "session command failure mark failed:",
+        markErr,
+        "original:",
+        err,
+      ),
     );
   }
 
-  private async registerWakeup(req: WakeupRequest, scheduledTurnID: string): Promise<void> {
+  private async registerWakeup(
+    req: WakeupRequest,
+    scheduledTurnID: string,
+  ): Promise<void> {
     try {
       const registered = await registerScheduledWakeup(this.cfg, {
         delayMs: req.delayMs,
@@ -1747,7 +1951,9 @@ export class Runner {
   // bound shell_task.exited in-turn and can act on it — only an idle terminal
   // needs a wake. The backend Register is idempotent, so the worst case of the
   // idle race (a pending turn about to start) is one harmless extra wake.
-  private async maybeRegisterBackgroundTaskWake(event: ClaudeProviderEvent): Promise<void> {
+  private async maybeRegisterBackgroundTaskWake(
+    event: ClaudeProviderEvent,
+  ): Promise<void> {
     const terminal = claudeTerminalBackgroundTask(event);
     if (!terminal) return;
     if (this.activeTurn) return;
@@ -1755,7 +1961,9 @@ export class Runner {
     this.firedBackgroundTaskWakes.add(terminal.taskID);
     try {
       const registered = await registerBackgroundTaskWake(this.cfg, terminal);
-      backgroundTaskWakeTotal.labels(registered ? "registered" : "disabled").inc();
+      backgroundTaskWakeTotal
+        .labels(registered ? "registered" : "disabled")
+        .inc();
     } catch (err) {
       backgroundTaskWakeTotal.labels("failed").inc();
       console.error("background task wake register failed:", err);
@@ -1766,20 +1974,30 @@ export class Runner {
     record: SessionCommandRecord,
     clientNonce: string,
   ): Promise<boolean> {
-    const terminal = await this.sink.findTurnTerminal(turnIDForClientNonce(clientNonce));
+    const terminal = await this.sink.findTurnTerminal(
+      turnIDForClientNonce(clientNonce),
+    );
     if (!terminal) return false;
     await this.commandBus.markCompleted(record);
     return true;
   }
 
-  private async failCommandRecord(record: SessionCommandRecord, err: unknown): Promise<void> {
+  private async failCommandRecord(
+    record: SessionCommandRecord,
+    err: unknown,
+  ): Promise<void> {
     const prompt = String(record.prompt ?? "").trim();
-    const pendingTurn = this.acceptTurn(prompt, commandClientNonce(record), record);
+    const pendingTurn = this.acceptTurn(
+      prompt,
+      commandClientNonce(record),
+      record,
+    );
     if (!pendingTurn) {
       await this.commandBus.markFailed(record, err);
       return;
     }
-    pendingTurn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(record);
+    pendingTurn.stopCommandHeartbeat =
+      this.commandBus.startCommandHeartbeat(record);
     const dispatched = await dispatch(
       this.sink,
       turnEvent({

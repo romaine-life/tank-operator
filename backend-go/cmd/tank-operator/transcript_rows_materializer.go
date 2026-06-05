@@ -382,28 +382,35 @@ func (m transcriptRowsMaterializer) turnNumbersForSession(ctx context.Context, s
 	return numbers, true
 }
 
-// stampTurnNumbers sets turnNumber on every turn_activity shell from the
-// durable session_turns map. A shell whose turn_id has no number is the
-// materialization-time analogue of the allocation invariant: it is recorded on
-// the missing-number counter rather than failing the projection, so the
-// durable transcript still renders while the regression is alerted on.
+// stampTurnNumbers sets turnNumber on every turn-tagged transcript row from
+// the durable session_turns map. Turn activity shells are the primary consumer,
+// but assistant AskUserQuestion messages also need the number for their linked
+// question turn without rendering a separate question-only shell in the main
+// transcript.
 func stampTurnNumbers(sessionID string, numbers map[string]int64, entries []map[string]any) {
 	for _, entry := range entries {
-		if transcriptMapString(entry, "kind") != "turn_activity" {
-			continue
-		}
 		turnID := transcriptMapString(entry, "turnId")
 		if turnID == "" {
 			continue
 		}
 		if number, ok := numbers[turnID]; ok {
 			entry["turnNumber"] = number
-			continue
 		}
-		recordTurnNumberMissing("materialize")
-		slog.Warn("durable turn number missing for materialized shell",
-			"session_id", sessionID,
-			"turn_id", turnID,
-		)
+		if awaiting, _ := entry["awaitingInput"].(map[string]any); awaiting != nil {
+			if questionTurnID := transcriptMapString(awaiting, "questionTurnId"); questionTurnID != "" {
+				if number, ok := numbers[questionTurnID]; ok {
+					awaiting["questionTurnNumber"] = number
+				}
+			}
+		}
+		if transcriptMapString(entry, "kind") == "turn_activity" {
+			if _, ok := numbers[turnID]; !ok {
+				recordTurnNumberMissing("materialize")
+				slog.Warn("durable turn number missing for materialized shell",
+					"session_id", sessionID,
+					"turn_id", turnID,
+				)
+			}
+		}
 	}
 }

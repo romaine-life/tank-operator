@@ -22,6 +22,7 @@ export interface ConversationMessageEntry extends ConversationEntryBase {
   role: "user" | "assistant" | "system";
   text: string;
   display?: UserMessageDisplay;
+  awaitingInput?: Record<string, unknown>;
   attachments?: MessageAttachmentDisplay[];
   // Set when a user-role message was posted by a sibling tank-operator
   // session via the mcp-tank-operator handoff path. The renderer uses
@@ -127,101 +128,122 @@ export function projectConversationState(
   state: ConversationReducerState,
 ): ConversationProjection {
   const backgroundProviderItemIds = backgroundTaskProviderItemIds(state);
-  const entries = annotateTurnTerminals(orderProjectedEntries([
-    ...state.messages.flatMap((message, index) => {
-      const text = message.text.trim();
-      if (!text) return [];
-      // Session-startup notices (Session is loading./ready.) are turn noise that
-      // the authoritative server projection folds into the owning turn's Turn
-      // activity; they are not main-transcript messages. Provider credential
-      // banners (":provider:" timeline, severity error, or carrying an action —
-      // including the recovery "back online" ready) stay. Mirrors the server's
-      // applySessionStatus marker in transcript_projection.go.
-      if (
-        message.role === "system" &&
-        message.severity !== "error" &&
-        !message.action &&
-        !message.id.includes(":provider:")
-      ) {
-        return [];
-      }
-      return [
-        {
-          index,
-          orderKey: message.orderKey,
-          entry: {
-            id: message.id,
-            kind: "message" as const,
-            role: message.role,
-	            text,
-	            display: message.display,
-	            attachments: message.attachments,
-	            turnId: message.turnId,
-            clientNonce: message.clientNonce,
-            time: message.createdAt ?? "",
-            sourceEventId: message.sourceEventId,
+  const entries = annotateTurnTerminals(
+    orderProjectedEntries([
+      ...state.messages.flatMap((message, index) => {
+        const text = message.text.trim();
+        if (!text) return [];
+        // Session-startup notices (Session is loading./ready.) are turn noise that
+        // the authoritative server projection folds into the owning turn's Turn
+        // activity; they are not main-transcript messages. Provider credential
+        // banners (":provider:" timeline, severity error, or carrying an action —
+        // including the recovery "back online" ready) stay. Mirrors the server's
+        // applySessionStatus marker in transcript_projection.go.
+        if (
+          message.role === "system" &&
+          message.severity !== "error" &&
+          !message.action &&
+          !message.id.includes(":provider:")
+        ) {
+          return [];
+        }
+        return [
+          {
+            index,
             orderKey: message.orderKey,
-            ...(message.originSessionId ? { originSessionId: message.originSessionId } : {}),
-            ...(message.authorKind ? { authorKind: message.authorKind } : {}),
-            ...(message.severity ? { severity: message.severity } : {}),
-            ...(message.action ? { action: message.action } : {}),
+            entry: {
+              id: message.id,
+              kind: "message" as const,
+              role: message.role,
+              text,
+              display: message.display,
+              awaitingInput: message.awaitingInput,
+              attachments: message.attachments,
+              turnId: message.turnId,
+              clientNonce: message.clientNonce,
+              time: message.createdAt ?? "",
+              sourceEventId: message.sourceEventId,
+              orderKey: message.orderKey,
+              ...(message.originSessionId
+                ? { originSessionId: message.originSessionId }
+                : {}),
+              ...(message.authorKind ? { authorKind: message.authorKind } : {}),
+              ...(message.severity ? { severity: message.severity } : {}),
+              ...(message.action ? { action: message.action } : {}),
+            },
           },
-        },
-      ];
-    }),
-    ...state.items.flatMap((item, index) => {
-      if (item.providerItemId && backgroundProviderItemIds.has(item.providerItemId)) {
-        return [];
-      }
-      const entry = projectItem(item);
-      if (!entry) return [];
-      const baseIndex = state.messages.length + index;
-      const projected: Array<{ index: number; orderKey?: string; entry: ConversationViewEntry }> = [
-        { index: baseIndex, orderKey: item.orderKey, entry },
-      ];
-      return projected;
-    }),
-    ...state.backgroundTasks.map((task, index) => {
-      const entry = projectBackgroundTask(task);
-      return {
-        index: state.messages.length + state.items.length + index,
-        orderKey: task.orderKey,
-        entry,
-      };
-    }),
-    ...state.interruptRequests.map((request, index) => ({
-      index: state.messages.length + state.items.length + state.backgroundTasks.length + index,
-      orderKey: request.orderKey,
-      entry: {
-        id: request.id,
-        kind: "meta" as const,
-        meta: {
-          title: "Stop requested",
-          detail: "Terminating the active turn.",
-          severity: "info" as const,
-        },
-        turnId: request.turnId,
-        clientNonce: request.clientNonce,
-        time: request.time,
-        sourceEventId: request.id,
+        ];
+      }),
+      ...state.items.flatMap((item, index) => {
+        if (
+          item.providerItemId &&
+          backgroundProviderItemIds.has(item.providerItemId)
+        ) {
+          return [];
+        }
+        const entry = projectItem(item);
+        if (!entry) return [];
+        const baseIndex = state.messages.length + index;
+        const projected: Array<{
+          index: number;
+          orderKey?: string;
+          entry: ConversationViewEntry;
+        }> = [{ index: baseIndex, orderKey: item.orderKey, entry }];
+        return projected;
+      }),
+      ...state.backgroundTasks.map((task, index) => {
+        const entry = projectBackgroundTask(task);
+        return {
+          index: state.messages.length + state.items.length + index,
+          orderKey: task.orderKey,
+          entry,
+        };
+      }),
+      ...state.interruptRequests.map((request, index) => ({
+        index:
+          state.messages.length +
+          state.items.length +
+          state.backgroundTasks.length +
+          index,
         orderKey: request.orderKey,
-      },
-    })),
-    // Per-turn terminal failures and interruptions become durable transcript
-    // meta lines, replacing the floating run-status pill. turn.completed
-    // emits no meta entry — successful completion speaks through the
-    // assistant bubble itself.
-    ...turnTerminalMetaEntries(state),
-  ]), state.turnTerminals);
+        entry: {
+          id: request.id,
+          kind: "meta" as const,
+          meta: {
+            title: "Stop requested",
+            detail: "Terminating the active turn.",
+            severity: "info" as const,
+          },
+          turnId: request.turnId,
+          clientNonce: request.clientNonce,
+          time: request.time,
+          sourceEventId: request.id,
+          orderKey: request.orderKey,
+        },
+      })),
+      // Per-turn terminal failures and interruptions become durable transcript
+      // meta lines, replacing the floating run-status pill. turn.completed
+      // emits no meta entry — successful completion speaks through the
+      // assistant bubble itself.
+      ...turnTerminalMetaEntries(state),
+    ]),
+    state.turnTerminals,
+  );
 
   const activeItem = activeToolItem(state);
-  const backgroundTasks = annotateTurnTerminals(orderProjectedEntries(
-    state.backgroundTasks.map((task, index) => ({
-      index,
-      orderKey: task.orderKey,
-      entry: projectBackgroundTask(task),
-    })),
-  ), state.turnTerminals).filter((entry): entry is ConversationBackgroundTaskEntry => entry.kind === "background_task");
+  const backgroundTasks = annotateTurnTerminals(
+    orderProjectedEntries(
+      state.backgroundTasks.map((task, index) => ({
+        index,
+        orderKey: task.orderKey,
+        entry: projectBackgroundTask(task),
+      })),
+    ),
+    state.turnTerminals,
+  ).filter(
+    (entry): entry is ConversationBackgroundTaskEntry =>
+      entry.kind === "background_task",
+  );
   return {
     entries,
     backgroundTasks,
@@ -323,7 +345,9 @@ function projectItem(item: ConversationItem): ConversationViewEntry | null {
   };
 }
 
-function projectBackgroundTask(task: ConversationBackgroundTask): ConversationBackgroundTaskEntry {
+function projectBackgroundTask(
+  task: ConversationBackgroundTask,
+): ConversationBackgroundTaskEntry {
   return {
     id: task.id,
     kind: "background_task",
@@ -353,7 +377,11 @@ function projectBackgroundTask(task: ConversationBackgroundTask): ConversationBa
 }
 
 function orderProjectedEntries(
-  items: Array<{ entry: ConversationViewEntry; orderKey?: string; index: number }>,
+  items: Array<{
+    entry: ConversationViewEntry;
+    orderKey?: string;
+    index: number;
+  }>,
 ): ConversationViewEntry[] {
   return [...items]
     .sort((a, b) => {
@@ -383,20 +411,28 @@ function annotateTurnTerminals(
 
 function turnTerminalMetaEntries(
   state: ConversationReducerState,
-): Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> {
+): Array<{
+  index: number;
+  orderKey: string | undefined;
+  entry: ConversationViewEntry;
+}> {
   const baseIndex =
     state.messages.length +
     state.items.length +
     state.backgroundTasks.length +
     state.interruptRequests.length;
-  const out: Array<{ index: number; orderKey: string | undefined; entry: ConversationViewEntry }> = [];
+  const out: Array<{
+    index: number;
+    orderKey: string | undefined;
+    entry: ConversationViewEntry;
+  }> = [];
   let offset = 0;
   for (const terminal of Object.values(state.turnTerminals)) {
     if (terminal.status === "completed") continue;
     const isFailed = terminal.status === "failed";
     const title = isFailed ? "Turn failed" : "Stopped";
     const detail = isFailed
-      ? terminal.detail ?? "The provider returned an error."
+      ? (terminal.detail ?? "The provider returned an error.")
       : "Turn stopped by user.";
     out.push({
       index: baseIndex + offset,
@@ -421,7 +457,10 @@ function turnTerminalMetaEntries(
   return out;
 }
 
-function compareNullableString(a: string | undefined, b: string | undefined): number {
+function compareNullableString(
+  a: string | undefined,
+  b: string | undefined,
+): number {
   if (a && b) return a.localeCompare(b);
   if (a) return -1;
   if (b) return 1;
@@ -449,7 +488,9 @@ function isToolLikeItem(item: ConversationItem): boolean {
   );
 }
 
-function activeToolItem(state: ConversationReducerState): ConversationItem | null {
+function activeToolItem(
+  state: ConversationReducerState,
+): ConversationItem | null {
   const backgroundProviderItemIds = backgroundTaskProviderItemIds(state);
   const active = state.activeItemId
     ? state.items.find((item) => item.id === state.activeItemId)
@@ -475,7 +516,9 @@ function activeToolItem(state: ConversationReducerState): ConversationItem | nul
   return null;
 }
 
-function backgroundTaskProviderItemIds(state: ConversationReducerState): Set<string> {
+function backgroundTaskProviderItemIds(
+  state: ConversationReducerState,
+): Set<string> {
   const ids = new Set<string>();
   for (const task of state.backgroundTasks) {
     if (task.providerItemId) ids.add(task.providerItemId);
@@ -488,14 +531,18 @@ function isBackgroundProviderItem(
   item: ConversationItem,
   backgroundProviderItemIds: Set<string>,
 ): boolean {
-  return Boolean(item.providerItemId && backgroundProviderItemIds.has(item.providerItemId));
+  return Boolean(
+    item.providerItemId && backgroundProviderItemIds.has(item.providerItemId),
+  );
 }
 
 function isRunningItem(item: ConversationItem): boolean {
   return item.status === "started";
 }
 
-function toolDisplay(item: ConversationItem): Pick<
+function toolDisplay(
+  item: ConversationItem,
+): Pick<
   ConversationToolEntry,
   "toolName" | "toolKind" | "toolServer" | "toolAction"
 > {
@@ -535,7 +582,9 @@ function toolDisplay(item: ConversationItem): Pick<
   }
   return {
     toolName: name,
-    ...(item.kind === "command_execution" || name === "Bash" ? { toolKind: "shell" as const } : {}),
+    ...(item.kind === "command_execution" || name === "Bash"
+      ? { toolKind: "shell" as const }
+      : {}),
   };
 }
 
@@ -567,12 +616,18 @@ function toolStatus(item: ConversationItem): string {
   return item.status;
 }
 
-function stringPayload(item: ConversationItem, key: string): string | undefined {
+function stringPayload(
+  item: ConversationItem,
+  key: string,
+): string | undefined {
   const value = item.payload?.[key];
   return typeof value === "string" ? value : undefined;
 }
 
-function recordPayload(item: ConversationItem, key: string): Record<string, unknown> | undefined {
+function recordPayload(
+  item: ConversationItem,
+  key: string,
+): Record<string, unknown> | undefined {
   const value = item.payload?.[key];
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)

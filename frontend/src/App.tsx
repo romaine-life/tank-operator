@@ -1,4 +1,17 @@
-import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useReducer, useRef, useState, useSyncExternalStore } from "react";
+import {
+  createContext,
+  lazy,
+  Suspense,
+  useCallback,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useReducer,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import type {
   AnchorHTMLAttributes,
   ClipboardEvent as ReactClipboardEvent,
@@ -105,7 +118,6 @@ import {
   LinkIcon,
   ListChecksIcon,
   Loader2Icon,
-  MessageSquareOffIcon,
   MessageSquareIcon,
   MinusIcon,
   MonitorIcon,
@@ -125,7 +137,13 @@ import {
   XIcon,
   type LucideIcon,
 } from "lucide-react";
-import { authedEventSource, authedFetch, bootstrapAuth, logout, startLogin } from "./auth";
+import {
+  authedEventSource,
+  authedFetch,
+  bootstrapAuth,
+  logout,
+  startLogin,
+} from "./auth";
 import {
   createSilenceWatchdog,
   logSessionEventStreamEvent,
@@ -181,9 +199,7 @@ import {
   type ControlActionStatus,
 } from "./controlActions";
 import { requiresGitHubOnboarding, type SessionRole } from "./authPolicy";
-import {
-  type ConversationBackgroundTaskStatus,
-} from "./conversationReducer";
+import { type ConversationBackgroundTaskStatus } from "./conversationReducer";
 import { McpIcon } from "./McpIcon";
 import { RepoPicker } from "./components/RepoPicker";
 import {
@@ -213,7 +229,6 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
-import { needsInputAnnouncementState } from "./needsInputAnnouncement";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -255,10 +270,7 @@ import {
   noteTankEvent,
   setActiveSessionMode,
 } from "./longTaskTelemetry";
-import {
-  useRelativeMinutes,
-  useRelativeSeconds,
-} from "./timeService";
+import { useRelativeMinutes, useRelativeSeconds } from "./timeService";
 import {
   clusterHealthHeadline,
   clusterHealthIssueText,
@@ -321,11 +333,7 @@ type SessionMode =
   | "codex_config";
 type DefaultSessionMode = Extract<
   SessionMode,
-  | "claude_cli"
-  | "claude_gui"
-  | "codex_cli"
-  | "codex_gui"
-  | "codex_exec_gui"
+  "claude_cli" | "claude_gui" | "codex_cli" | "codex_gui" | "codex_exec_gui"
 >;
 type Provider = "anthropic" | "codex";
 type SessionInteraction = "gui" | "cli";
@@ -404,8 +412,11 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // references the question.
   awaitingInput?: {
     askingTurnId: string;
+    questionTurnId?: string;
+    questionTurnNumber?: number;
     providerItemId: string;
     timelineId: string;
+    providerTimelineId?: string;
     questions: unknown[];
     questionCount: number;
     questionIndex?: number;
@@ -480,7 +491,11 @@ type SdkHistoryRefreshSource =
   // User-initiated force-pull of the durable tail via the R shortcut.
   | "keyboard-refresh";
 type ScrollToLatestBehavior = "auto" | "smooth";
-type ScrollToLatestReason = SdkHistoryRefreshSource | "submit" | "manual" | "keyboard";
+type ScrollToLatestReason =
+  | SdkHistoryRefreshSource
+  | "submit"
+  | "manual"
+  | "keyboard";
 type ScrollToLatestRequest = {
   signal: number;
   behavior: ScrollToLatestBehavior;
@@ -488,7 +503,13 @@ type ScrollToLatestRequest = {
   enabled: boolean;
 };
 type SkillStateName = "test" | "rollout";
-type InitialMessageMode = "direct" | "diagnose" | "bug_report" | "quality_gaps" | "go_long" | "test";
+type InitialMessageMode =
+  | "direct"
+  | "diagnose"
+  | "bug_report"
+  | "quality_gaps"
+  | "go_long"
+  | "test";
 type HomeTab = HomeRouteTab | AppRouteTab;
 
 type ForkSessionRequest = {
@@ -817,7 +838,9 @@ const DEMO_AGENT_AVATAR_IDS = [
 ];
 
 function demoAgentAvatarID(index: number): string {
-  return DEMO_AGENT_AVATAR_IDS[Math.abs(index - 1) % DEMO_AGENT_AVATAR_IDS.length]!;
+  return DEMO_AGENT_AVATAR_IDS[
+    Math.abs(index - 1) % DEMO_AGENT_AVATAR_IDS.length
+  ]!;
 }
 
 const DEMO_BASE_SESSIONS: Session[] = [
@@ -827,7 +850,9 @@ const DEMO_BASE_SESSIONS: Session[] = [
     owner: "preview",
     status: "Active",
     mode: "claude_gui",
-    requested_at: new Date(Date.now() - 12 * 60 * 1000 - 2 * 1000).toISOString(),
+    requested_at: new Date(
+      Date.now() - 12 * 60 * 1000 - 2 * 1000,
+    ).toISOString(),
     created_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
@@ -841,7 +866,9 @@ const DEMO_BASE_SESSIONS: Session[] = [
     owner: "preview",
     status: "Active",
     mode: "codex_gui",
-    requested_at: new Date(Date.now() - 68 * 60 * 1000 - 4 * 1000).toISOString(),
+    requested_at: new Date(
+      Date.now() - 68 * 60 * 1000 - 4 * 1000,
+    ).toISOString(),
     created_at: new Date(Date.now() - 68 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
@@ -904,15 +931,25 @@ const DEMO_CODEX_LINES = [
   "\x1b[2m  gpt-5.5 default · /workspace\x1b[0m",
 ];
 
-const DEMO_LOGIN_MESSAGE = "You aren't logged in. Click the log in button on the bottom left.";
+const DEMO_LOGIN_MESSAGE =
+  "You aren't logged in. Click the log in button on the bottom left.";
 
 function demoTerminalLines(session: Session, promptText?: string): string[] {
-  const template = session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server"
-    ? DEMO_CODEX_LINES
-    : DEMO_CLAUDE_LINES;
+  const template =
+    session.mode === "codex_cli" ||
+    session.mode === "codex_gui" ||
+    session.mode === "codex_exec_gui" ||
+    session.mode === "codex_app_server"
+      ? DEMO_CODEX_LINES
+      : DEMO_CLAUDE_LINES;
   const lines = [...template];
   if (promptText) {
-    if (session.mode === "codex_cli" || session.mode === "codex_gui" || session.mode === "codex_exec_gui" || session.mode === "codex_app_server") {
+    if (
+      session.mode === "codex_cli" ||
+      session.mode === "codex_gui" ||
+      session.mode === "codex_exec_gui" ||
+      session.mode === "codex_app_server"
+    ) {
       lines[lines.length - 1] = `\x1b[1m›\x1b[0m ${promptText}`;
     } else {
       const promptIndex = lines.findIndex((line) => line.startsWith("❯"));
@@ -929,7 +966,10 @@ function demoTerminalLines(session: Session, promptText?: string): string[] {
   ];
 }
 
-function ansiColorClass(code: number | undefined, prefix: "fg" | "bg"): string | null {
+function ansiColorClass(
+  code: number | undefined,
+  prefix: "fg" | "bg",
+): string | null {
   if (code == null) return null;
   return `ansi-${prefix}-${code}`;
 }
@@ -950,7 +990,10 @@ function ansiStyle(style: AnsiStyle): CSSProperties | undefined {
 }
 
 function applyAnsiCodes(style: AnsiStyle, rawCodes: string): AnsiStyle {
-  const codes = rawCodes === "" ? [0] : rawCodes.split(";").map((code) => Number(code || "0"));
+  const codes =
+    rawCodes === ""
+      ? [0]
+      : rawCodes.split(";").map((code) => Number(code || "0"));
   let next = { ...style };
   for (let i = 0; i < codes.length; i += 1) {
     const code = codes[i];
@@ -987,7 +1030,10 @@ function ansiSegments(line: string): AnsiSegment[] {
   let match: RegExpExecArray | null;
   while ((match = re.exec(line)) != null) {
     if (match.index > pos) {
-      segments.push({ text: line.slice(pos, match.index), style: { ...style } });
+      segments.push({
+        text: line.slice(pos, match.index),
+        style: { ...style },
+      });
     }
     style = applyAnsiCodes(style, match[1]);
     pos = re.lastIndex;
@@ -1008,9 +1054,15 @@ function AnsiLine({ line }: { line: string }) {
           segment.style.inverse ? "ansi-inverse" : "",
           ansiColorClass(segment.style.fg, "fg") ?? "",
           ansiColorClass(segment.style.bg, "bg") ?? "",
-        ].filter(Boolean).join(" ");
+        ]
+          .filter(Boolean)
+          .join(" ");
         return (
-          <span key={index} className={classes || undefined} style={ansiStyle(segment.style)}>
+          <span
+            key={index}
+            className={classes || undefined}
+            style={ansiStyle(segment.style)}
+          >
             {segment.text}
           </span>
         );
@@ -1021,8 +1073,9 @@ function AnsiLine({ line }: { line: string }) {
 
 function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
-  const label = mode === "codex_cli" || mode === "codex_gui" || mode === "codex_exec_gui"
-    ? "Codex"
+  const label =
+    mode === "codex_cli" || mode === "codex_gui" || mode === "codex_exec_gui"
+      ? "Codex"
       : "Claude Code";
   return {
     id: `${provider}-preview-${index}`,
@@ -1059,7 +1112,9 @@ function normalizeSessionMode(value: string | null): string | null {
   return value;
 }
 
-function isDefaultSessionMode(value: string | null): value is DefaultSessionMode {
+function isDefaultSessionMode(
+  value: string | null,
+): value is DefaultSessionMode {
   return (
     value === "claude_cli" ||
     value === "claude_gui" ||
@@ -1071,7 +1126,9 @@ function isDefaultSessionMode(value: string | null): value is DefaultSessionMode
 
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
-    const stored = normalizeSessionMode(localStorage.getItem(DEFAULT_SESSION_MODE_KEY));
+    const stored = normalizeSessionMode(
+      localStorage.getItem(DEFAULT_SESSION_MODE_KEY),
+    );
     if (stored === "codex_app_server") return "codex_gui";
     if (isDefaultSessionMode(stored)) return stored;
   } catch {
@@ -1115,7 +1172,10 @@ function readSessionInteraction(id: string): SessionInteraction | null {
   return null;
 }
 
-function writeSessionInteraction(id: string, interaction: SessionInteraction): void {
+function writeSessionInteraction(
+  id: string,
+  interaction: SessionInteraction,
+): void {
   try {
     localStorage.setItem(SESSION_INTERACTION_KEY_PREFIX + id, interaction);
   } catch {}
@@ -1132,7 +1192,10 @@ interface PinnedReposResponse {
   updated_at?: string;
 }
 
-function stringArraysEqual(a: readonly string[], b: readonly string[]): boolean {
+function stringArraysEqual(
+  a: readonly string[],
+  b: readonly string[],
+): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i += 1) {
     if (a[i] !== b[i]) return false;
@@ -1152,7 +1215,10 @@ function normalizeBugLabel(value: unknown): SessionBugLabel | null {
         ? `bug: ${name}`
         : "";
   if (!name || !slug || !displayName) return null;
-  const id = typeof record.id === "number" && Number.isFinite(record.id) ? record.id : undefined;
+  const id =
+    typeof record.id === "number" && Number.isFinite(record.id)
+      ? record.id
+      : undefined;
   return {
     ...(id !== undefined ? { id } : {}),
     name,
@@ -1172,7 +1238,9 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function normalizeProviderRateLimitInfo(value: unknown): Record<string, unknown> | null {
+function normalizeProviderRateLimitInfo(
+  value: unknown,
+): Record<string, unknown> | null {
   if (!isPlainRecord(value)) return null;
   const out: Record<string, unknown> = {};
   for (const [key, raw] of Object.entries(value)) {
@@ -1206,17 +1274,23 @@ function normalizeSession(session: Session): Session {
   next.repos = Array.isArray(session.repos) ? session.repos : [];
   next.clone_state = session.clone_state ?? null;
   next.capabilities = Array.isArray(session.capabilities)
-    ? session.capabilities.filter((entry): entry is string => typeof entry === "string")
+    ? session.capabilities.filter(
+        (entry): entry is string => typeof entry === "string",
+      )
     : [];
   const bugLabels = normalizeBugLabels(session.bug_labels);
   next.bug_labels = bugLabels;
   next.bug_label = normalizeBugLabel(session.bug_label) ?? bugLabels[0] ?? null;
   next.model = typeof session.model === "string" ? session.model : "";
   next.effort = typeof session.effort === "string" ? session.effort : "";
-  next.runtime_model = typeof session.runtime_model === "string" ? session.runtime_model : "";
-  next.runtime_effort = typeof session.runtime_effort === "string" ? session.runtime_effort : "";
+  next.runtime_model =
+    typeof session.runtime_model === "string" ? session.runtime_model : "";
+  next.runtime_effort =
+    typeof session.runtime_effort === "string" ? session.runtime_effort : "";
   next.runtime_configured_at =
-    typeof session.runtime_configured_at === "string" ? session.runtime_configured_at : null;
+    typeof session.runtime_configured_at === "string"
+      ? session.runtime_configured_at
+      : null;
   next.runtime_context_window_tokens =
     typeof session.runtime_context_window_tokens === "number" &&
     Number.isFinite(session.runtime_context_window_tokens)
@@ -1235,15 +1309,21 @@ function normalizeSession(session: Session): Session {
     typeof session.runtime_context_window_observed_at === "string"
       ? session.runtime_context_window_observed_at
       : null;
-  next.provider_rate_limit_info = normalizeProviderRateLimitInfo(session.provider_rate_limit_info);
+  next.provider_rate_limit_info = normalizeProviderRateLimitInfo(
+    session.provider_rate_limit_info,
+  );
   next.provider_rate_limit_observed_at =
     typeof session.provider_rate_limit_observed_at === "string"
       ? session.provider_rate_limit_observed_at
       : null;
   next.agent_avatar_id =
-    typeof session.agent_avatar_id === "string" ? session.agent_avatar_id : null;
+    typeof session.agent_avatar_id === "string"
+      ? session.agent_avatar_id
+      : null;
   next.system_avatar_id =
-    typeof session.system_avatar_id === "string" ? session.system_avatar_id : null;
+    typeof session.system_avatar_id === "string"
+      ? session.system_avatar_id
+      : null;
   return next;
 }
 
@@ -1260,7 +1340,11 @@ function orderSessionsByIds(sessions: Session[], order: string[]): Session[] {
   });
 }
 
-function moveSessionId(order: string[], movedId: string, targetId: string): string[] {
+function moveSessionId(
+  order: string[],
+  movedId: string,
+  targetId: string,
+): string[] {
   if (movedId === targetId) return order;
   const fromIndex = order.indexOf(movedId);
   const toIndex = order.indexOf(targetId);
@@ -1275,8 +1359,18 @@ function moveSessionId(order: string[], movedId: string, targetId: string): stri
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
 const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
-const CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
-const SDK_CHAT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
+const CHAT_MODES = new Set<SessionMode>([
+  "claude_gui",
+  "codex_gui",
+  "codex_exec_gui",
+  "codex_app_server",
+]);
+const SDK_CHAT_MODES = new Set<SessionMode>([
+  "claude_gui",
+  "codex_gui",
+  "codex_exec_gui",
+  "codex_app_server",
+]);
 const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>(SDK_CHAT_MODES);
 const SDK_TIMELINE_TAIL_ROWS = 24;
 const SDK_TIMELINE_OLDER_ROWS = 8;
@@ -1284,15 +1378,22 @@ const SDK_TIMELINE_DEEPLINK_ROWS_BEFORE = 12;
 const SDK_TIMELINE_DEEPLINK_ROWS_AFTER = 12;
 const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
 const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>(["claude_gui", "codex_gui", "codex_exec_gui", "codex_app_server"]);
+const GUI_ROLLOUT_MODES = new Set<SessionMode>([
+  "claude_gui",
+  "codex_gui",
+  "codex_exec_gui",
+  "codex_app_server",
+]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
 const PROVIDERS: Provider[] = ["anthropic", "codex"];
 
-
-function defaultModeFor(provider: Provider, interaction: SessionInteraction): DefaultSessionMode {
+function defaultModeFor(
+  provider: Provider,
+  interaction: SessionInteraction,
+): DefaultSessionMode {
   const modes = PROVIDER_INTERACTION_MODES[provider];
   return modes[interaction] ?? modes.gui ?? modes.cli ?? "claude_gui";
 }
@@ -1326,7 +1427,11 @@ function sessionStatusLabel(
   session: Session,
   activity?: SessionActivitySummary,
 ): string {
-  return sessionActivityStatusLabel(session.status, CHAT_MODES.has(session.mode), activity);
+  return sessionActivityStatusLabel(
+    session.status,
+    CHAT_MODES.has(session.mode),
+    activity,
+  );
 }
 
 function errorMessage(error: unknown): string {
@@ -1398,7 +1503,8 @@ function observabilityAttentionStatus(
   if (error) return "warning";
   if (!summary) return null;
   if (summary.status === "critical") return "critical";
-  if (summary.status === "warning" || summary.status === "unknown") return "warning";
+  if (summary.status === "warning" || summary.status === "unknown")
+    return "warning";
   return null;
 }
 
@@ -1441,13 +1547,18 @@ const GLIMMUNG_LAUNCH_CONTEXT_KEY = "tank-glimmung-launch-context";
 const INSTALL_ERROR_HINTS: Record<string, string> = {
   missing_state: "Install link expired before you returned. Try again.",
   invalid_state: "Install link didn't validate. Try again.",
-  missing_installation_id: "GitHub didn't send an installation id. Re-run the install.",
-  install_state_unavailable: "Install tracking is unavailable. Try again later.",
+  missing_installation_id:
+    "GitHub didn't send an installation id. Re-run the install.",
+  install_state_unavailable:
+    "Install tracking is unavailable. Try again later.",
   install_state_failed: "Install tracking failed. Try again.",
-  pending_approval: "Your install needs an org admin's approval. Once they approve, log in again.",
-  session_expired: "Your session expired during install. Sign in again then re-run the install.",
+  pending_approval:
+    "Your install needs an org admin's approval. Once they approve, log in again.",
+  session_expired:
+    "Your session expired during install. Sign in again then re-run the install.",
   session_invalid: "Your session token didn't validate. Sign in again.",
-  email_mismatch: "The signed-in account doesn't match the install link's email.",
+  email_mismatch:
+    "The signed-in account doesn't match the install link's email.",
 };
 
 function readInstallError(): string | null {
@@ -1509,20 +1620,37 @@ type PublicSessionReportRoute = {
   token: string;
 };
 
-function readSessionRouteFromPath(pathname = window.location.pathname): SessionRoute | null {
+function readSessionRouteFromPath(
+  pathname = window.location.pathname,
+): SessionRoute | null {
   return readSessionRouteFromPathname(pathname);
 }
 
-function readHomeRouteFromPath(pathname = window.location.pathname): HomeRoute | null {
+function readHomeRouteFromPath(
+  pathname = window.location.pathname,
+): HomeRoute | null {
   return readHomeRouteFromPathname(pathname);
 }
 
-function readAppRouteFromPath(pathname = window.location.pathname): AppRoute | null {
+function readAppRouteFromPath(
+  pathname = window.location.pathname,
+): AppRoute | null {
   return readAppRouteFromPathname(pathname);
 }
 
-function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null, staticPath?: string | null): string {
-  return buildSessionRouteUrl(window.location.href, id, tab, turnNumber, staticPath);
+function sessionRouteUrl(
+  id: string,
+  tab: SessionRouteTab = "chat",
+  turnNumber?: number | null,
+  staticPath?: string | null,
+): string {
+  return buildSessionRouteUrl(
+    window.location.href,
+    id,
+    tab,
+    turnNumber,
+    staticPath,
+  );
 }
 
 function homeRouteUrl(tab: HomeRouteTab = "chat"): string {
@@ -1562,7 +1690,11 @@ function readInitialPublicSessionReportRoute(): PublicSessionReportRoute | null 
   return { token };
 }
 
-function replaceSessionRoute(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null): void {
+function replaceSessionRoute(
+  id: string,
+  tab: SessionRouteTab = "chat",
+  turnNumber?: number | null,
+): void {
   if (routeHasMessageTarget()) return;
   const next = sessionRouteUrl(id, tab, turnNumber);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
@@ -1616,7 +1748,11 @@ function sessionUrl(id: string): string {
 // session's transcript to the referenced entry. Shape mirrors the
 // existing ?session= contract so URLs compose cleanly when an agent
 // or human pastes one as a shareable pointer.
-function messageUrl(sessionId: string, entryId: string, shareToken?: string | null): string {
+function messageUrl(
+  sessionId: string,
+  entryId: string,
+  shareToken?: string | null,
+): string {
   const url = new URL(window.location.href);
   url.pathname = "/";
   url.search = "";
@@ -1671,9 +1807,12 @@ function sessionListDebugRow(session: Session): SessionListDebugRow {
     mode: session.mode,
     status: session.status,
     visible: true,
-    row_version: typeof session.row_version === "number" ? session.row_version : null,
+    row_version:
+      typeof session.row_version === "number" ? session.row_version : null,
     sidebar_position:
-      typeof session.sidebar_position === "number" ? session.sidebar_position : null,
+      typeof session.sidebar_position === "number"
+        ? session.sidebar_position
+        : null,
     agent_avatar_id: session.agent_avatar_id ?? null,
     system_avatar_id: session.system_avatar_id ?? null,
     rendered_avatar_id: avatar?.id ?? null,
@@ -1685,7 +1824,9 @@ function sessionListDebugRow(session: Session): SessionListDebugRow {
   };
 }
 
-function sessionListDebugRows(sessions: readonly Session[]): SessionListDebugRow[] {
+function sessionListDebugRows(
+  sessions: readonly Session[],
+): SessionListDebugRow[] {
   return sessions.map(sessionListDebugRow);
 }
 
@@ -1756,9 +1897,10 @@ function ComposerCostEstimate({
   title,
 }: ComposerCostEstimateProps) {
   const unavailable = placeholder;
-  const safeAmountUsd = !unavailable && typeof amountUsd === "number" && Number.isFinite(amountUsd)
-    ? Math.max(0, amountUsd)
-    : 0;
+  const safeAmountUsd =
+    !unavailable && typeof amountUsd === "number" && Number.isFinite(amountUsd)
+      ? Math.max(0, amountUsd)
+      : 0;
   const safeTokens = unavailable
     ? null
     : typeof tokens === "number" && Number.isFinite(tokens)
@@ -1769,7 +1911,9 @@ function ComposerCostEstimate({
       ? Math.max(0, Math.floor(contextWindow))
       : 0;
   const safeCompactions =
-    !unavailable && typeof compactionCount === "number" && Number.isFinite(compactionCount)
+    !unavailable &&
+    typeof compactionCount === "number" &&
+    Number.isFinite(compactionCount)
       ? Math.max(0, Math.floor(compactionCount))
       : 0;
   const normalizedScope = scopeLabel.trim() || "session";
@@ -1786,7 +1930,8 @@ function ComposerCostEstimate({
         ? `${formatCompactTokens(safeTokens)}/${formatCompactTokens(safeWindow)}`
         : formatCompactTokens(safeTokens);
   const sentenceScope = `${normalizedScope.charAt(0).toUpperCase()}${normalizedScope.slice(1)}`;
-  const normalizedTokenScope = tokenScopeLabel?.trim() || `${normalizedScope} tokens`;
+  const normalizedTokenScope =
+    tokenScopeLabel?.trim() || `${normalizedScope} tokens`;
   const tokenSentence =
     safeWindow > 0
       ? `${safeTokens?.toLocaleString() ?? 0} of ${safeWindow.toLocaleString()} context tokens`
@@ -1810,7 +1955,9 @@ function ComposerCostEstimate({
       title={title ?? defaultTitle}
     >
       <span className="run-cost-estimate-metric run-cost-estimate-metric-tokens">
-        <span className="run-cost-estimate-value run-cost-estimate-token-count">{tokenLabel}</span>
+        <span className="run-cost-estimate-value run-cost-estimate-token-count">
+          {tokenLabel}
+        </span>
         <span className="run-cost-estimate-label">ctx</span>
       </span>
       {safeCompactions > 0 && (
@@ -1826,7 +1973,9 @@ function ComposerCostEstimate({
       )}
       <span className="run-cost-estimate-divider" aria-hidden="true" />
       <span className="run-cost-estimate-metric run-cost-estimate-metric-cost">
-        <span className="run-cost-estimate-value run-cost-estimate-amount">{label}</span>
+        <span className="run-cost-estimate-value run-cost-estimate-amount">
+          {label}
+        </span>
         <span className="run-cost-estimate-label">usd</span>
       </span>
     </span>
@@ -1924,7 +2073,10 @@ function ComposerToolButtons({
           title="Open test environment in new tab"
         >
           <FlaskConicalIcon className="run-composer-icon" aria-hidden="true" />
-          <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
+          <ExternalLinkIcon
+            className="run-test-ready-icon"
+            aria-hidden="true"
+          />
         </a>
       ) : (
         <button
@@ -1947,8 +2099,14 @@ function ComposerToolButtons({
           aria-label="Open pull request in new tab"
           title="Open pull request in new tab"
         >
-          <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
-          <ExternalLinkIcon className="run-test-ready-icon" aria-hidden="true" />
+          <GitPullRequestIcon
+            className="run-composer-icon"
+            aria-hidden="true"
+          />
+          <ExternalLinkIcon
+            className="run-test-ready-icon"
+            aria-hidden="true"
+          />
         </a>
       ) : (
         <button
@@ -1958,7 +2116,10 @@ function ComposerToolButtons({
           aria-label="Pull request link unavailable"
           title="No pull request linked yet"
         >
-          <GitPullRequestIcon className="run-composer-icon" aria-hidden="true" />
+          <GitPullRequestIcon
+            className="run-composer-icon"
+            aria-hidden="true"
+          />
         </button>
       )}
       {bugLabelControl}
@@ -2060,11 +2221,14 @@ function BugLabelPicker({
       })
       .then((body) => {
         if (cancelled) return;
-        const rawLabels: unknown[] = Array.isArray(body.labels) ? body.labels : [];
+        const rawLabels: unknown[] = Array.isArray(body.labels)
+          ? body.labels
+          : [];
         const next = rawLabels
           .map((raw): BugLabelSuggestion | null => {
             const label = normalizeBugLabel(raw);
-            if (!label || !raw || typeof raw !== "object" || Array.isArray(raw)) return label;
+            if (!label || !raw || typeof raw !== "object" || Array.isArray(raw))
+              return label;
             const count = (raw as Record<string, unknown>).session_count;
             return {
               ...label,
@@ -2077,7 +2241,8 @@ function BugLabelPicker({
         setLabels(next);
       })
       .catch((err) => {
-        if (!cancelled) setError(err instanceof Error ? err.message : String(err));
+        if (!cancelled)
+          setError(err instanceof Error ? err.message : String(err));
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -2088,10 +2253,14 @@ function BugLabelPicker({
   }, [open, requestPath, value]);
 
   const multi = Boolean(onSaveLabels);
-  const currentLabels = multi ? selectedLabels ?? [] : value ? [value] : [];
+  const currentLabels = multi ? (selectedLabels ?? []) : value ? [value] : [];
   const activeSlugSet = new Set(
-    (activeSlugs && activeSlugs.length > 0 ? activeSlugs : activeSlug ? [activeSlug] : [])
-      .filter((slug): slug is string => Boolean(slug)),
+    (activeSlugs && activeSlugs.length > 0
+      ? activeSlugs
+      : activeSlug
+        ? [activeSlug]
+        : []
+    ).filter((slug): slug is string => Boolean(slug)),
   );
   const currentLabel = value;
   const currentLabelCount = currentLabels.length;
@@ -2146,16 +2315,22 @@ function BugLabelPicker({
       return;
     }
     const key = bugLabelNameKey(label.display_name);
-    const isActive = activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === key);
+    const isActive =
+      activeSlugSet.has(label.slug) ||
+      currentLabels.some((name) => bugLabelNameKey(name) === key);
     const next = isActive
       ? currentLabels.filter((name) => bugLabelNameKey(name) !== key)
       : addBugLabelName(currentLabels, label.display_name);
     void saveLabels(next);
   };
-  const draftAlreadySelected = currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(normalizedDraft));
+  const draftAlreadySelected = currentLabels.some(
+    (name) => bugLabelNameKey(name) === bugLabelNameKey(normalizedDraft),
+  );
 
   return (
-    <span className={`run-bug-label-picker${wrapperClassName ? ` ${wrapperClassName}` : ""}`}>
+    <span
+      className={`run-bug-label-picker${wrapperClassName ? ` ${wrapperClassName}` : ""}`}
+    >
       <button
         type="button"
         className={triggerClasses}
@@ -2185,7 +2360,12 @@ function BugLabelPicker({
             />
             <button
               type="submit"
-              disabled={saving || (multi ? !normalizedDraft || draftAlreadySelected : normalizedDraft === currentLabel)}
+              disabled={
+                saving ||
+                (multi
+                  ? !normalizedDraft || draftAlreadySelected
+                  : normalizedDraft === currentLabel)
+              }
             >
               {multi ? "Add" : "Save"}
             </button>
@@ -2193,19 +2373,20 @@ function BugLabelPicker({
           {error && <div className="run-bug-label-error">{error}</div>}
           <div className="run-bug-label-list">
             {loading && <div className="run-bug-label-empty">Loading...</div>}
-            {!loading && labels.map((label) => (
-              <button
-                key={label.slug}
-                type="button"
-                className={`run-bug-label-option${activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(label.display_name)) ? " is-active" : ""}`}
-                onClick={() => toggleLabel(label)}
-              >
-                <span>{label.display_name}</span>
-                {typeof label.session_count === "number" && (
-                  <span>{label.session_count}</span>
-                )}
-              </button>
-            ))}
+            {!loading &&
+              labels.map((label) => (
+                <button
+                  key={label.slug}
+                  type="button"
+                  className={`run-bug-label-option${activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(label.display_name)) ? " is-active" : ""}`}
+                  onClick={() => toggleLabel(label)}
+                >
+                  <span>{label.display_name}</span>
+                  {typeof label.session_count === "number" && (
+                    <span>{label.session_count}</span>
+                  )}
+                </button>
+              ))}
             {!loading && labels.length === 0 && (
               <div className="run-bug-label-empty">No labels</div>
             )}
@@ -2233,14 +2414,19 @@ function BugLabelPicker({
 }
 
 function sessionSkillStateClass(session: Session): string {
-  const currentSkill = currentSessionSkillState(session.test_state, session.rollout_state);
+  const currentSkill = currentSessionSkillState(
+    session.test_state,
+    session.rollout_state,
+  );
   if (currentSkill === "test") return " is-skill-test";
   if (currentSkill === "rollout") return " is-skill-rollout";
   return "";
 }
 
 function sessionBootStartMs(session: Session): number {
-  const requestedMs = session.requested_at ? Date.parse(session.requested_at) : NaN;
+  const requestedMs = session.requested_at
+    ? Date.parse(session.requested_at)
+    : NaN;
   if (Number.isFinite(requestedMs)) return requestedMs;
   const createdMs = session.created_at ? Date.parse(session.created_at) : NaN;
   return Number.isFinite(createdMs) ? createdMs : NaN;
@@ -2268,7 +2454,9 @@ function SessionStats({ session }: { session: Session }) {
   // makes its getSnapshot return null — useSyncExternalStore then
   // dedupes and no re-render fires.
   const liveBootStart =
-    bootFinalMs === null && session.status === "Pending" && Number.isFinite(bootStartMs)
+    bootFinalMs === null &&
+    session.status === "Pending" &&
+    Number.isFinite(bootStartMs)
       ? bootStartMs
       : null;
   const liveBootSeconds = useRelativeSeconds(liveBootStart);
@@ -2289,7 +2477,9 @@ function SessionStats({ session }: { session: Session }) {
     runtimeStartedAt !== null && runtimeMinutes !== null
       ? formatRuntime(runtimeMinutes * 60_000)
       : null;
-  const runtimeTitle = runtimeLabel ? `running ${runtimeLabel}` : "runtime unknown";
+  const runtimeTitle = runtimeLabel
+    ? `running ${runtimeLabel}`
+    : "runtime unknown";
 
   if (!bootLabel && !runtimeLabel) return null;
   return (
@@ -2301,7 +2491,11 @@ function SessionStats({ session }: { session: Session }) {
         </span>
       )}
       {runtimeLabel && (
-        <span className="session-stat" title={runtimeTitle} aria-label={runtimeTitle}>
+        <span
+          className="session-stat"
+          title={runtimeTitle}
+          aria-label={runtimeTitle}
+        >
           <span aria-hidden="true">↑</span>
           <span>{runtimeLabel}</span>
         </span>
@@ -2339,7 +2533,10 @@ function readGlimmungLaunchContext(): GlimmungLaunchContext | null {
     validation_url: params.get("validation_url"),
   };
   try {
-    window.sessionStorage.setItem(GLIMMUNG_LAUNCH_CONTEXT_KEY, JSON.stringify(context));
+    window.sessionStorage.setItem(
+      GLIMMUNG_LAUNCH_CONTEXT_KEY,
+      JSON.stringify(context),
+    );
   } catch {
     // Storage may be unavailable in hardened/private browser contexts.
   }
@@ -2379,9 +2576,15 @@ function clearGlimmungLaunchContext(): void {
 // at the granularity each label actually renders at.
 const HOME_DEFAULT_SESSION_TITLE = "New session";
 
-function normalizedHomeTitleNameFrom(value: string, fromDefault: boolean): string | null {
+function normalizedHomeTitleNameFrom(
+  value: string,
+  fromDefault: boolean,
+): string | null {
   const trimmed = value.trim();
-  if (fromDefault && (trimmed === "" || trimmed === HOME_DEFAULT_SESSION_TITLE)) {
+  if (
+    fromDefault &&
+    (trimmed === "" || trimmed === HOME_DEFAULT_SESSION_TITLE)
+  ) {
     return null;
   }
   return trimmed === "" ? null : trimmed;
@@ -2392,7 +2595,8 @@ function WorkspaceTitleSpacer() {
 }
 
 function altArrowSessionDirection(event: KeyboardEvent): -1 | 1 | null {
-  if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey) return null;
+  if (!event.altKey || event.shiftKey || event.ctrlKey || event.metaKey)
+    return null;
   if (event.key === "ArrowUp") return -1;
   if (event.key === "ArrowDown") return 1;
   return null;
@@ -2405,7 +2609,8 @@ function isSessionShortcutEditableTarget(_target: EventTarget | null): boolean {
 function isTextEntryShortcutTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return false;
   const editable = target.closest("[contenteditable]");
-  if (editable && editable.getAttribute("contenteditable") !== "false") return true;
+  if (editable && editable.getAttribute("contenteditable") !== "false")
+    return true;
   const field = target.closest("input, textarea, select");
   if (!field) return false;
   if (field instanceof HTMLInputElement) {
@@ -2441,21 +2646,32 @@ function adjacentSessionId(
   const selectable = sessions.filter((session) => !excludedIds.has(session.id));
   if (selectable.length === 0) return null;
 
-  const currentIndex = currentId == null
-    ? -1
-    : selectable.findIndex((session) => session.id === currentId);
+  const currentIndex =
+    currentId == null
+      ? -1
+      : selectable.findIndex((session) => session.id === currentId);
   if (currentIndex < 0) {
-    return direction > 0 ? selectable[0].id : selectable[selectable.length - 1].id;
+    return direction > 0
+      ? selectable[0].id
+      : selectable[selectable.length - 1].id;
   }
 
-  const nextIndex = (currentIndex + direction + selectable.length) % selectable.length;
+  const nextIndex =
+    (currentIndex + direction + selectable.length) % selectable.length;
   return selectable[nextIndex].id;
 }
 
 function IconPlus() {
   return (
-    <svg viewBox="0 0 16 16" width="16" height="16" fill="none"
-         stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <svg
+      viewBox="0 0 16 16"
+      width="16"
+      height="16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    >
       <line x1="8" y1="3.5" x2="8" y2="12.5" />
       <line x1="3.5" y1="8" x2="12.5" y2="8" />
     </svg>
@@ -2538,8 +2754,15 @@ function IconKebab() {
 
 function IconClose() {
   return (
-    <svg viewBox="0 0 16 16" width="14" height="14" fill="none"
-         stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+    >
       <line x1="4" y1="4" x2="12" y2="12" />
       <line x1="12" y1="4" x2="4" y2="12" />
     </svg>
@@ -2548,8 +2771,16 @@ function IconClose() {
 
 function IconExternal() {
   return (
-    <svg viewBox="0 0 16 16" width="12" height="12" fill="none"
-         stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+    <svg
+      viewBox="0 0 16 16"
+      width="12"
+      height="12"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.6"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    >
       <path d="M10 3h3v3" />
       <path d="M13 3 8 8" />
       <path d="M11.5 9V13H3V4.5h4" />
@@ -2559,13 +2790,21 @@ function IconExternal() {
 
 function IconGithub() {
   return (
-    <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true">
+    <svg
+      viewBox="0 0 24 24"
+      width="13"
+      height="13"
+      fill="currentColor"
+      aria-hidden="true"
+    >
       <path d="M12 .5C5.7.5.7 5.6.7 11.9c0 5 3.3 9.3 7.8 10.8.6.1.8-.3.8-.6v-2c-3.2.7-3.9-1.4-3.9-1.4-.5-1.3-1.3-1.7-1.3-1.7-1-.7.1-.7.1-.7 1.1.1 1.7 1.2 1.7 1.2 1 .1.6 2.4 4 .7.1-.7.4-1.2.7-1.5-2.5-.3-5.2-1.3-5.2-5.6 0-1.2.4-2.3 1.2-3.1-.1-.3-.5-1.5.1-3.1 0 0 .9-.3 3.1 1.2.9-.3 1.8-.4 2.8-.4s1.9.1 2.8.4c2.1-1.5 3.1-1.2 3.1-1.2.6 1.6.2 2.8.1 3.1.7.8 1.2 1.9 1.2 3.1 0 4.3-2.6 5.3-5.2 5.6.4.3.8 1 .8 2.1V22c0 .3.2.7.8.6 4.6-1.5 7.8-5.8 7.8-10.8C23.3 5.6 18.3.5 12 .5Z" />
     </svg>
   );
 }
 
-function sessionInteractionForSession(session: Session): SessionInteraction | null {
+function sessionInteractionForSession(
+  session: Session,
+): SessionInteraction | null {
   const stored = readSessionInteraction(session.id);
   if (stored) return stored;
   if (CHAT_MODES.has(session.mode)) return "gui";
@@ -2585,7 +2824,13 @@ function InteractionIcon({
   return <Icon className={className} aria-hidden="true" />;
 }
 
-function ModeChip({ mode, interaction }: { mode: SessionMode; interaction?: SessionInteraction | null }) {
+function ModeChip({
+  mode,
+  interaction,
+}: {
+  mode: SessionMode;
+  interaction?: SessionInteraction | null;
+}) {
   const icon = MODE_CHIP_ICONS[mode];
   const label = MODE_CHIP_LABELS[mode] ?? mode;
   const interactionLabel = interaction ? INTERACTION_LABELS[interaction] : null;
@@ -2607,7 +2852,10 @@ function ModeChip({ mode, interaction }: { mode: SessionMode; interaction?: Sess
             title={interactionLabel ?? undefined}
             aria-label={interactionLabel ?? undefined}
           >
-            <InteractionIcon interaction={interaction} className="mode-interaction-icon" />
+            <InteractionIcon
+              interaction={interaction}
+              className="mode-interaction-icon"
+            />
           </span>
         )}
       </>
@@ -2680,7 +2928,11 @@ function largerProfileAvatarURL(raw: string): string {
 function Avatar({ user }: { user: SessionUser }) {
   const [failed, setFailed] = useState(false);
   if (failed || !user.avatar_url) {
-    return <span className="avatar" aria-hidden="true">{initials(user)}</span>;
+    return (
+      <span className="avatar" aria-hidden="true">
+        {initials(user)}
+      </span>
+    );
   }
   const openPreview = (
     event:
@@ -2715,7 +2967,9 @@ function Avatar({ user }: { user: SessionUser }) {
 function MissingSessionAvatarIcon({ className }: { className?: string }) {
   return (
     <span
-      className={["session-avatar-missing", className].filter(Boolean).join(" ")}
+      className={["session-avatar-missing", className]
+        .filter(Boolean)
+        .join(" ")}
       title="avatar assignment missing"
       aria-label="avatar assignment missing"
     >
@@ -2781,7 +3035,9 @@ function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
     void load();
   }, [load]);
 
-  const status: ClusterHealthStatus = error ? "unknown" : health?.status ?? "unknown";
+  const status: ClusterHealthStatus = error
+    ? "unknown"
+    : (health?.status ?? "unknown");
   const headline = error ? "Cluster unknown" : clusterHealthHeadline(health);
   const issue = error || clusterHealthIssueText(health);
   const nodes = health?.nodes;
@@ -2831,14 +3087,22 @@ function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
               <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
             </dd>
           </div>
-          <div className="cluster-health-metric" title="Ready Tank session pods">
+          <div
+            className="cluster-health-metric"
+            title="Ready Tank session pods"
+          >
             <dt>Sessions</dt>
             <dd>
               <SquareTerminalIcon aria-hidden="true" />
-              <span>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</span>
+              <span>
+                {sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}
+              </span>
             </dd>
           </div>
-          <div className="cluster-health-metric" title="Reachable NATS monitors">
+          <div
+            className="cluster-health-metric"
+            title="Reachable NATS monitors"
+          >
             <dt>NATS</dt>
             <dd>
               <ActivityIcon aria-hidden="true" />
@@ -2858,7 +3122,9 @@ function OnboardingWall({
   user: SessionUser;
   onLogout: () => Promise<void>;
 }) {
-  const [installError, setInstallError] = useState<string | null>(readInstallError);
+  const [installError, setInstallError] = useState<string | null>(
+    readInstallError,
+  );
 
   function dismissError() {
     setInstallError(null);
@@ -2870,15 +3136,23 @@ function OnboardingWall({
       <div className="welcome-inner onboarding">
         <h2 className="welcome-title">Connect GitHub</h2>
         <p className="welcome-sub">
-          tank-operator needs the <code>tank-operator</code> GitHub App installed on your account so
-          your sessions can read and write your repos via mcp-github.
+          tank-operator needs the <code>tank-operator</code> GitHub App
+          installed on your account so your sessions can read and write your
+          repos via mcp-github.
         </p>
         {installError && (
-          <pre className="error onboarding-error" onClick={dismissError} title="dismiss">
+          <pre
+            className="error onboarding-error"
+            onClick={dismissError}
+            title="dismiss"
+          >
             {INSTALL_ERROR_HINTS[installError] ?? installError}
           </pre>
         )}
-        <a className="btn-primary onboarding-cta" href="/api/github/install/url">
+        <a
+          className="btn-primary onboarding-cta"
+          href="/api/github/install/url"
+        >
           Install GitHub App
         </a>
         <p className="onboarding-meta">
@@ -2893,16 +3167,33 @@ function OnboardingWall({
 }
 
 function DemoLanding() {
-  const [demoSessions, setDemoSessions] = useState<Session[]>(DEMO_BASE_SESSIONS);
-  const [activeDemoSession, setActiveDemoSession] = useState<string | null>(null);
-  const [selectedProvider, setSelectedProvider] = useState<Provider>("anthropic");
-  const [demoInteraction, setDemoInteraction] = useState<SessionInteraction>("cli");
-  const [demoClaudeModelId, setDemoClaudeModelId] = useState(DEFAULT_CLAUDE_MODEL_ID);
-  const [demoClaudeEffortId, setDemoClaudeEffortId] = useState(DEFAULT_CLAUDE_EFFORT_ID);
-  const [demoCodexModelId, setDemoCodexModelId] = useState(DEFAULT_CODEX_MODEL_ID);
-  const [demoCodexEffortId, setDemoCodexEffortId] = useState(DEFAULT_CODEX_EFFORT_ID);
-  const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(DEMO_BASE_SESSIONS.length);
-  const [demoPromptMessages, setDemoPromptMessages] = useState<Record<string, string>>({});
+  const [demoSessions, setDemoSessions] =
+    useState<Session[]>(DEMO_BASE_SESSIONS);
+  const [activeDemoSession, setActiveDemoSession] = useState<string | null>(
+    null,
+  );
+  const [selectedProvider, setSelectedProvider] =
+    useState<Provider>("anthropic");
+  const [demoInteraction, setDemoInteraction] =
+    useState<SessionInteraction>("cli");
+  const [demoClaudeModelId, setDemoClaudeModelId] = useState(
+    DEFAULT_CLAUDE_MODEL_ID,
+  );
+  const [demoClaudeEffortId, setDemoClaudeEffortId] = useState(
+    DEFAULT_CLAUDE_EFFORT_ID,
+  );
+  const [demoCodexModelId, setDemoCodexModelId] = useState(
+    DEFAULT_CODEX_MODEL_ID,
+  );
+  const [demoCodexEffortId, setDemoCodexEffortId] = useState(
+    DEFAULT_CODEX_EFFORT_ID,
+  );
+  const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(
+    DEMO_BASE_SESSIONS.length,
+  );
+  const [demoPromptMessages, setDemoPromptMessages] = useState<
+    Record<string, string>
+  >({});
   const demoBodyRef = useRef<HTMLElement | null>(null);
   const demoComposerWrapRef = useRef<HTMLDivElement | null>(null);
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? null;
@@ -2914,7 +3205,8 @@ function DemoLanding() {
       : selectedProvider === "codex"
         ? CODEX_MODELS
         : [];
-  const demoModelApplies = demoInteraction === "gui" && demoModelOptions.length > 0;
+  const demoModelApplies =
+    demoInteraction === "gui" && demoModelOptions.length > 0;
   const selectedDemoModelId =
     selectedProvider === "anthropic"
       ? demoClaudeModelId
@@ -2928,21 +3220,31 @@ function DemoLanding() {
   useEffect(() => {
     const cycleTabs = (event: KeyboardEvent) => {
       const direction = altArrowSessionDirection(event);
-      if (!activeDemoSession || direction == null || isSessionShortcutEditableTarget(event.target)) return;
-      const nextId = adjacentSessionId(demoSessions, activeDemoSession, direction);
+      if (
+        !activeDemoSession ||
+        direction == null ||
+        isSessionShortcutEditableTarget(event.target)
+      )
+        return;
+      const nextId = adjacentSessionId(
+        demoSessions,
+        activeDemoSession,
+        direction,
+      );
       if (nextId == null) return;
       event.preventDefault();
       event.stopPropagation();
       setActiveDemoSession(nextId);
     };
     window.addEventListener("keydown", cycleTabs, { capture: true });
-    return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", cycleTabs, { capture: true });
   }, [demoSessions, activeDemoSession]);
 
   const focusDemoComposerTextarea = useCallback((): boolean => {
-    const textarea = demoComposerWrapRef.current?.querySelector("textarea") as
-      | HTMLTextAreaElement
-      | null;
+    const textarea = demoComposerWrapRef.current?.querySelector(
+      "textarea",
+    ) as HTMLTextAreaElement | null;
     if (!textarea) return false;
     textarea.focus();
     const cursor = textarea.value.length;
@@ -2970,9 +3272,9 @@ function DemoLanding() {
       ) {
         return;
       }
-      const textarea = demoComposerWrapRef.current?.querySelector("textarea") as
-        | HTMLTextAreaElement
-        | null;
+      const textarea = demoComposerWrapRef.current?.querySelector(
+        "textarea",
+      ) as HTMLTextAreaElement | null;
       const body = demoBodyRef.current;
       if (!textarea || !body) return;
       if (event.target === textarea) {
@@ -2986,7 +3288,8 @@ function DemoLanding() {
       event.stopImmediatePropagation();
     };
     window.addEventListener("keydown", toggleDemoFocus, { capture: true });
-    return () => window.removeEventListener("keydown", toggleDemoFocus, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", toggleDemoFocus, { capture: true });
   }, [activeDemoSession, focusDemoComposerTextarea, focusDemoSetupSection]);
 
   function setDemoProvider(provider: Provider) {
@@ -3024,12 +3327,22 @@ function DemoLanding() {
     }
   }
 
-  function handleDemoTerminalKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+  function handleDemoTerminalKeyDown(
+    event: ReactKeyboardEvent<HTMLDivElement>,
+  ) {
     if (!selected) return;
-    if (event.key !== "Tab" && !event.metaKey && !event.ctrlKey && !event.altKey) {
+    if (
+      event.key !== "Tab" &&
+      !event.metaKey &&
+      !event.ctrlKey &&
+      !event.altKey
+    ) {
       event.preventDefault();
     }
-    setDemoPromptMessages((prev) => ({ ...prev, [selected.id]: DEMO_LOGIN_MESSAGE }));
+    setDemoPromptMessages((prev) => ({
+      ...prev,
+      [selected.id]: DEMO_LOGIN_MESSAGE,
+    }));
   }
 
   return (
@@ -3056,7 +3369,9 @@ function DemoLanding() {
               aria-label="New session"
               title="new session"
             >
-              <span className="row-icon"><IconPlus /></span>
+              <span className="row-icon">
+                <IconPlus />
+              </span>
             </button>
           </div>
           <ul className="sessions">
@@ -3070,10 +3385,18 @@ function DemoLanding() {
                   className={isActive ? "is-open" : ""}
                   onClick={() => setActiveDemoSession(s.id)}
                 >
-                  <SessionAvatarIcon avatar={avatar} className="session-avatar" />
+                  <SessionAvatarIcon
+                    avatar={avatar}
+                    className="session-avatar"
+                  />
                   <div className="session-row-top">
-                    <button className="session-open" onClick={() => setActiveDemoSession(s.id)}>
-                      <span className="session-id">{sessionDisplayName(s)}</span>
+                    <button
+                      className="session-open"
+                      onClick={() => setActiveDemoSession(s.id)}
+                    >
+                      <span className="session-id">
+                        {sessionDisplayName(s)}
+                      </span>
                     </button>
                     <button
                       className="session-delete"
@@ -3093,17 +3416,27 @@ function DemoLanding() {
                       title={s.status}
                       aria-label={`status: ${s.status}`}
                     />
-                    <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
+                    <ModeChip
+                      mode={s.mode}
+                      interaction={sessionInteractionForSession(s)}
+                    />
                     <SessionStats session={s} />
                     {s.mode === "claude_cli" && (
-                      <span className="session-action session-remote is-icon" title="remote control">
+                      <span
+                        className="session-action session-remote is-icon"
+                        title="remote control"
+                      >
                         <IconExternal />
                       </span>
                     )}
                     {ROLLOUT_MODES.has(s.mode) && (
                       <span
                         className="session-action session-rollout is-icon"
-                        title={CODEX_ROLLOUT_MODES.has(s.mode) ? "type $rollout into this Codex session" : "type /rollout into this Claude session"}
+                        title={
+                          CODEX_ROLLOUT_MODES.has(s.mode)
+                            ? "type $rollout into this Codex session"
+                            : "type /rollout into this Claude session"
+                        }
                       >
                         <TankIcon className="session-action-tank-icon" />
                       </span>
@@ -3116,7 +3449,12 @@ function DemoLanding() {
         </div>
 
         <div className="sidebar-footer">
-          <button className="profile demo-profile demo-sign-in" onClick={() => { startLogin(); }}>
+          <button
+            className="profile demo-profile demo-sign-in"
+            onClick={() => {
+              startLogin();
+            }}
+          >
             <span className="profile-text">
               <span className="profile-name">sign in</span>
             </span>
@@ -3128,28 +3466,44 @@ function DemoLanding() {
         ref={demoBodyRef}
         className="workspace demo-workspace"
         tabIndex={-1}
-        aria-label={activeDemoSession == null ? "New session setup" : "Transcript preview"}
+        aria-label={
+          activeDemoSession == null ? "New session setup" : "Transcript preview"
+        }
       >
         {activeDemoSession == null ? (
           <div className="home">
             <div className="home-inner">
               <section className="home-hero" aria-labelledby="demo-home-title">
                 <div>
-                  <h2 id="demo-home-title" className="home-title">What do you want to build?</h2>
+                  <h2 id="demo-home-title" className="home-title">
+                    What do you want to build?
+                  </h2>
                   <p className="home-sub">
                     Type below to start a session with the selected runtime.
                   </p>
                 </div>
-                <span className="home-count">{demoSessions.length} preview session{demoSessions.length === 1 ? "" : "s"}</span>
+                <span className="home-count">
+                  {demoSessions.length} preview session
+                  {demoSessions.length === 1 ? "" : "s"}
+                </span>
               </section>
 
               <div className="home-grid">
-                <section className="home-panel" aria-labelledby="demo-home-start-title">
+                <section
+                  className="home-panel"
+                  aria-labelledby="demo-home-start-title"
+                >
                   <div className="home-panel-head">
                     <h3 id="demo-home-start-title">Configuration</h3>
-                    <span className="home-panel-meta">{MODE_LABELS[selectedMode]}</span>
+                    <span className="home-panel-meta">
+                      {MODE_LABELS[selectedMode]}
+                    </span>
                   </div>
-                  <div className="home-choice-grid" role="group" aria-label="provider">
+                  <div
+                    className="home-choice-grid"
+                    role="group"
+                    aria-label="provider"
+                  >
                     {PROVIDERS.map((provider) => {
                       const mode = defaultModeFor(provider, demoInteraction);
                       const providerSelected = provider === selectedProvider;
@@ -3161,17 +3515,27 @@ function DemoLanding() {
                           aria-pressed={providerSelected}
                           title={MODE_LABELS[mode]}
                         >
-                          <ProviderIcon provider={provider} className="home-choice-icon" />
+                          <ProviderIcon
+                            provider={provider}
+                            className="home-choice-icon"
+                          />
                           <span>{PROVIDER_LABELS[provider]}</span>
                         </button>
                       );
                     })}
                   </div>
-                  <div className="home-choice-grid" role="group" aria-label="interaction">
+                  <div
+                    className="home-choice-grid"
+                    role="group"
+                    aria-label="interaction"
+                  >
                     {INTERACTION_OPTIONS.map((interaction) => {
                       const unavailable =
-                        PROVIDER_INTERACTION_MODES[selectedProvider][interaction] == null;
-                      const interactionSelected = demoInteraction === interaction && !unavailable;
+                        PROVIDER_INTERACTION_MODES[selectedProvider][
+                          interaction
+                        ] == null;
+                      const interactionSelected =
+                        demoInteraction === interaction && !unavailable;
                       return (
                         <button
                           key={interaction}
@@ -3179,9 +3543,16 @@ function DemoLanding() {
                           onClick={() => setDemoInteraction(interaction)}
                           disabled={unavailable}
                           aria-pressed={interactionSelected}
-                          title={unavailable ? "not available for this provider" : INTERACTION_LABELS[interaction]}
+                          title={
+                            unavailable
+                              ? "not available for this provider"
+                              : INTERACTION_LABELS[interaction]
+                          }
                         >
-                          <InteractionIcon interaction={interaction} className="home-choice-icon" />
+                          <InteractionIcon
+                            interaction={interaction}
+                            className="home-choice-icon"
+                          />
                           <span>{INTERACTION_LABELS[interaction]}</span>
                         </button>
                       );
@@ -3193,48 +3564,80 @@ function DemoLanding() {
                         <h3>Model</h3>
                         <span className="home-panel-meta">
                           {selectedProvider === "anthropic"
-                            ? CLAUDE_EFFORTS.find((effort) => effort.id === demoClaudeEffortId)?.label
+                            ? CLAUDE_EFFORTS.find(
+                                (effort) => effort.id === demoClaudeEffortId,
+                              )?.label
                             : selectedProvider === "codex"
-                              ? CODEX_EFFORTS.find((effort) => effort.id === demoCodexEffortId)?.label
+                              ? CODEX_EFFORTS.find(
+                                  (effort) => effort.id === demoCodexEffortId,
+                                )?.label
                               : ""}
                         </span>
                       </div>
-                      <div className="home-model-list" role="group" aria-label="model">
+                      <div
+                        className="home-model-list"
+                        role="group"
+                        aria-label="model"
+                      >
                         {demoModelOptions.map((model) => {
-                          const modelSelected = model.id === selectedDemoModelId;
+                          const modelSelected =
+                            model.id === selectedDemoModelId;
                           return (
                             <button
                               key={model.id}
                               className={`home-model${modelSelected ? " is-selected" : ""}`}
                               onClick={() => {
-                                if (selectedProvider === "anthropic") setDemoClaudeModelId(model.id);
-                                if (selectedProvider === "codex") setDemoCodexModelId(model.id);
+                                if (selectedProvider === "anthropic")
+                                  setDemoClaudeModelId(model.id);
+                                if (selectedProvider === "codex")
+                                  setDemoCodexModelId(model.id);
                               }}
                               aria-pressed={modelSelected}
                             >
-                              <span className="home-model-title">{model.label}</span>
+                              <span className="home-model-title">
+                                {model.label}
+                              </span>
                             </button>
                           );
                         })}
                       </div>
-                      {(selectedProvider === "anthropic" || selectedProvider === "codex") && (
-                        <div className="home-effort-grid" role="group" aria-label="effort">
-                          {(selectedProvider === "anthropic" ? CLAUDE_EFFORTS : CODEX_EFFORTS).map((effort) => {
+                      {(selectedProvider === "anthropic" ||
+                        selectedProvider === "codex") && (
+                        <div
+                          className="home-effort-grid"
+                          role="group"
+                          aria-label="effort"
+                        >
+                          {(selectedProvider === "anthropic"
+                            ? CLAUDE_EFFORTS
+                            : CODEX_EFFORTS
+                          ).map((effort) => {
                             const effortSelected =
-                              effort.id === (selectedProvider === "anthropic" ? demoClaudeEffortId : demoCodexEffortId);
+                              effort.id ===
+                              (selectedProvider === "anthropic"
+                                ? demoClaudeEffortId
+                                : demoCodexEffortId);
                             return (
                               <button
                                 key={effort.id}
                                 className={`home-model home-effort${effortSelected ? " is-selected" : ""}`}
                                 onClick={() => {
-                                  if (selectedProvider === "anthropic") setDemoClaudeEffortId(effort.id);
-                                  if (selectedProvider === "codex") setDemoCodexEffortId(effort.id);
+                                  if (selectedProvider === "anthropic")
+                                    setDemoClaudeEffortId(effort.id);
+                                  if (selectedProvider === "codex")
+                                    setDemoCodexEffortId(effort.id);
                                 }}
                                 aria-pressed={effortSelected}
                                 title={effort.hint}
                               >
-                                <span className="home-model-title">{effort.label}</span>
-                                {effort.hint && <span className="home-model-sub">{effort.hint}</span>}
+                                <span className="home-model-title">
+                                  {effort.label}
+                                </span>
+                                {effort.hint && (
+                                  <span className="home-model-sub">
+                                    {effort.hint}
+                                  </span>
+                                )}
                               </button>
                             );
                           })}
@@ -3244,24 +3647,39 @@ function DemoLanding() {
                   )}
                 </section>
 
-                <section className="home-panel home-panel-actions" aria-labelledby="demo-home-actions-title">
+                <section
+                  className="home-panel home-panel-actions"
+                  aria-labelledby="demo-home-actions-title"
+                >
                   <div className="home-panel-head">
                     <h3 id="demo-home-actions-title">Setup</h3>
                   </div>
                   <div className="home-quick-actions">
-                    <button className="home-quick-action" onClick={() => createPreviewSession("api_key")}>
+                    <button
+                      className="home-quick-action"
+                      onClick={() => createPreviewSession("api_key")}
+                    >
                       <IconKey className="home-quick-icon" />
                       <span className="home-quick-main">
                         <span className="home-quick-title">API key</span>
-                        <span className="home-quick-sub">{MODE_HINTS["api_key"]}</span>
+                        <span className="home-quick-sub">
+                          {MODE_HINTS["api_key"]}
+                        </span>
                       </span>
                     </button>
                     {configMode && (
-                      <button className="home-quick-action" onClick={() => createPreviewSession(configMode)}>
+                      <button
+                        className="home-quick-action"
+                        onClick={() => createPreviewSession(configMode)}
+                      >
                         <IconWrench className="home-quick-icon" />
                         <span className="home-quick-main">
-                          <span className="home-quick-title">{MODE_LABELS[configMode]}</span>
-                          <span className="home-quick-sub">{MODE_HINTS[configMode]}</span>
+                          <span className="home-quick-title">
+                            {MODE_LABELS[configMode]}
+                          </span>
+                          <span className="home-quick-sub">
+                            {MODE_HINTS[configMode]}
+                          </span>
                         </span>
                       </button>
                     )}
@@ -3285,7 +3703,10 @@ function DemoLanding() {
                   hideHint
                   toolButtons={
                     <ComposerToolButtons
-                      attach={{ disabled: true, title: "Sign in to attach files" }}
+                      attach={{
+                        disabled: true,
+                        title: "Sign in to attach files",
+                      }}
                       cost={{
                         amountUsd: 0,
                         tokens: 0,
@@ -3386,17 +3807,28 @@ function skillTrigger(providerIsClaude: boolean, name: string): string {
   return `${providerIsClaude ? "/" : "$"}${name}`;
 }
 
-function composeSkillPrompt(mode: SessionMode, name: SkillStateName, text: string): string {
+function composeSkillPrompt(
+  mode: SessionMode,
+  name: SkillStateName,
+  text: string,
+): string {
   const trigger = skillTrigger(MODE_MENU_ICONS[mode] === "anthropic", name);
   const trimmed = text.trim();
   return trimmed ? `${trigger}\n\n${trimmed}` : trigger;
 }
 
-function composeLaunchUserPrompt(text: string, attachments: { label?: string; name: string }[]): string {
+function composeLaunchUserPrompt(
+  text: string,
+  attachments: { label?: string; name: string }[],
+): string {
   return composeAttachmentDisplayText(text, attachments);
 }
 
-function attachmentDisplayTitle(attachment: { errorMsg?: string; label?: string; name: string }): string {
+function attachmentDisplayTitle(attachment: {
+  errorMsg?: string;
+  label?: string;
+  name: string;
+}): string {
   if (attachment.errorMsg) return attachment.errorMsg;
   const label = attachment.label || attachment.name;
   return label === attachment.name ? label : `${label} (${attachment.name})`;
@@ -3407,34 +3839,56 @@ function attachmentDisplayTitle(attachment: { errorMsg?: string; label?: string;
 // is editable against main without a frontend rebuild); the baked-in
 // DEFAULT_INITIAL_MODE_*_DIRECTIVE consts are the offline fallback when the
 // fetch is empty or fails. Mirrors forkSessionPromptTemplate().
-async function initialMessageModeDirective(mode: InitialMessageMode): Promise<string> {
+async function initialMessageModeDirective(
+  mode: InitialMessageMode,
+): Promise<string> {
   if (mode === "direct") return "";
   const config = await fetchAppPublicConfig();
   const [served, fallback] = ((): [string | undefined, string] => {
     switch (mode) {
       case "diagnose":
-        return [config.initial_mode_diagnose_directive, DEFAULT_INITIAL_MODE_DIAGNOSE_DIRECTIVE];
+        return [
+          config.initial_mode_diagnose_directive,
+          DEFAULT_INITIAL_MODE_DIAGNOSE_DIRECTIVE,
+        ];
       case "bug_report":
-        return [config.initial_mode_bug_report_directive, DEFAULT_INITIAL_MODE_BUG_REPORT_DIRECTIVE];
+        return [
+          config.initial_mode_bug_report_directive,
+          DEFAULT_INITIAL_MODE_BUG_REPORT_DIRECTIVE,
+        ];
       case "quality_gaps":
-        return [config.initial_mode_quality_gaps_directive, DEFAULT_INITIAL_MODE_QUALITY_GAPS_DIRECTIVE];
+        return [
+          config.initial_mode_quality_gaps_directive,
+          DEFAULT_INITIAL_MODE_QUALITY_GAPS_DIRECTIVE,
+        ];
       case "go_long":
-        return [config.initial_mode_go_long_directive, DEFAULT_INITIAL_MODE_GO_LONG_DIRECTIVE];
+        return [
+          config.initial_mode_go_long_directive,
+          DEFAULT_INITIAL_MODE_GO_LONG_DIRECTIVE,
+        ];
       case "test":
-        return [config.initial_mode_test_directive, DEFAULT_INITIAL_MODE_TEST_DIRECTIVE];
+        return [
+          config.initial_mode_test_directive,
+          DEFAULT_INITIAL_MODE_TEST_DIRECTIVE,
+        ];
     }
   })();
   return typeof served === "string" && served.trim() ? served.trim() : fallback;
 }
 
-async function composeInitialMessageModePrompt(mode: InitialMessageMode, text: string): Promise<string> {
+async function composeInitialMessageModePrompt(
+  mode: InitialMessageMode,
+  text: string,
+): Promise<string> {
   const trimmed = text.trim();
   const directive = await initialMessageModeDirective(mode);
   if (!directive) return trimmed;
   return trimmed ? `${directive}\n\n${trimmed}` : directive;
 }
 
-function initialMessageModeSkillName(mode: InitialMessageMode): SkillStateName | undefined {
+function initialMessageModeSkillName(
+  mode: InitialMessageMode,
+): SkillStateName | undefined {
   return mode === "test" ? "test" : undefined;
 }
 
@@ -3467,7 +3921,10 @@ function appendSkillInvocation(
   ];
 }
 
-function advanceTimelineCursor(current: string | null, next: string | null): string | null {
+function advanceTimelineCursor(
+  current: string | null,
+  next: string | null,
+): string | null {
   if (!next) return current;
   if (!current || next > current) return next;
   return current;
@@ -3481,7 +3938,9 @@ function isProviderAbortMessage(message: unknown): boolean {
   return typeof message === "string" && /operation was aborted/i.test(message);
 }
 
-function transcriptEntryTerminalResult(entry: TranscriptEntry): SdkTerminalResult | null {
+function transcriptEntryTerminalResult(
+  entry: TranscriptEntry,
+): SdkTerminalResult | null {
   if (entry.turnTerminalStatus === "completed") return { status: "done" };
   if (entry.turnTerminalStatus === "interrupted") return { status: "stopped" };
   if (entry.turnTerminalStatus === "failed") {
@@ -3500,10 +3959,17 @@ function terminalResultForTurn(
   if (!trimmedTurnId) return null;
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
-    if (entry.turnId !== trimmedTurnId && entry.activity?.turnId !== trimmedTurnId) continue;
+    if (
+      entry.turnId !== trimmedTurnId &&
+      entry.activity?.turnId !== trimmedTurnId
+    )
+      continue;
     const terminal = transcriptEntryTerminalResult(entry);
     if (terminal) return terminal;
-    if (entry.kind === "turn_activity" && entry.activity?.status === "completed") {
+    if (
+      entry.kind === "turn_activity" &&
+      entry.activity?.status === "completed"
+    ) {
       return { status: "done" };
     }
   }
@@ -3538,11 +4004,7 @@ interface ToolVisualConfig {
 }
 
 function isToolSearchEntry(entry: TranscriptEntry): boolean {
-  const normalized = [
-    entry.toolServer,
-    entry.toolAction,
-    entry.toolName,
-  ]
+  const normalized = [entry.toolServer, entry.toolAction, entry.toolName]
     .filter((part): part is string => typeof part === "string")
     .join(" ")
     .toLowerCase()
@@ -3559,69 +4021,171 @@ function isWebToolName(name: string): boolean {
 function getToolVisualConfig(entry: TranscriptEntry): ToolVisualConfig {
   const name = entry.toolName ?? "";
   if (isToolSearchEntry(entry)) {
-    return { Icon: SearchIcon, colorClass: "tool-color-search", tooltip: "Search tool call" };
+    return {
+      Icon: SearchIcon,
+      colorClass: "tool-color-search",
+      tooltip: "Search tool call",
+    };
   }
   if (entry.toolKind === "mcp") {
-    return { Icon: McpIcon, colorClass: "tool-color-mcp", tooltip: "MCP connector tool call" };
+    return {
+      Icon: McpIcon,
+      colorClass: "tool-color-mcp",
+      tooltip: "MCP connector tool call",
+    };
   }
   if (entry.toolKind === "shell") {
-    return { Icon: SquareTerminalIcon, colorClass: "tool-color-bash", tooltip: "Shell command tool call" };
+    return {
+      Icon: SquareTerminalIcon,
+      colorClass: "tool-color-bash",
+      tooltip: "Shell command tool call",
+    };
   }
-  if (name === "Bash" || name === "command" || name.toLowerCase().includes("bash")) {
-    return { Icon: SquareTerminalIcon, colorClass: "tool-color-bash", tooltip: "Shell command tool call" };
+  if (
+    name === "Bash" ||
+    name === "command" ||
+    name.toLowerCase().includes("bash")
+  ) {
+    return {
+      Icon: SquareTerminalIcon,
+      colorClass: "tool-color-bash",
+      tooltip: "Shell command tool call",
+    };
   }
   if (name === "Read") {
-    return { Icon: FileTextIcon, colorClass: "tool-color-read", tooltip: "File read tool call" };
+    return {
+      Icon: FileTextIcon,
+      colorClass: "tool-color-read",
+      tooltip: "File read tool call",
+    };
   }
-  if (name === "Write" || name === "Edit" || name === "MultiEdit" || name === "ApplyPatch") {
-    return { Icon: SquarePenIcon, colorClass: "tool-color-edit", tooltip: "File edit tool call" };
+  if (
+    name === "Write" ||
+    name === "Edit" ||
+    name === "MultiEdit" ||
+    name === "ApplyPatch"
+  ) {
+    return {
+      Icon: SquarePenIcon,
+      colorClass: "tool-color-edit",
+      tooltip: "File edit tool call",
+    };
   }
   if (name === "file change") {
-    return { Icon: FileDiffIcon, colorClass: "tool-color-edit", tooltip: "File change" };
+    return {
+      Icon: FileDiffIcon,
+      colorClass: "tool-color-edit",
+      tooltip: "File change",
+    };
   }
   if (name === "Glob" || name === "Grep") {
-    return { Icon: SearchIcon, colorClass: "tool-color-search", tooltip: "Search tool call" };
+    return {
+      Icon: SearchIcon,
+      colorClass: "tool-color-search",
+      tooltip: "Search tool call",
+    };
   }
   if (name === "TodoWrite" || name === "Todo") {
-    return { Icon: ListChecksIcon, colorClass: "tool-color-todo", tooltip: "Todo list tool call" };
+    return {
+      Icon: ListChecksIcon,
+      colorClass: "tool-color-todo",
+      tooltip: "Todo list tool call",
+    };
   }
-  if (name === "Task" || name === "Agent" || name === "TaskOutput" || name === "TaskStop") {
-    return { Icon: BotIcon, colorClass: "tool-color-task", tooltip: "Agent task tool call" };
+  if (
+    name === "Task" ||
+    name === "Agent" ||
+    name === "TaskOutput" ||
+    name === "TaskStop"
+  ) {
+    return {
+      Icon: BotIcon,
+      colorClass: "tool-color-task",
+      tooltip: "Agent task tool call",
+    };
   }
   if (isScheduleWakeupToolName(name)) {
-    return { Icon: TimerIcon, colorClass: "tool-color-plan", tooltip: "Scheduled wakeup tool call" };
+    return {
+      Icon: TimerIcon,
+      colorClass: "tool-color-plan",
+      tooltip: "Scheduled wakeup tool call",
+    };
   }
   if (name === "ExitPlanMode" || name === "EnterPlanMode") {
-    return { Icon: ClipboardListIcon, colorClass: "tool-color-plan", tooltip: "Planning mode tool call" };
+    return {
+      Icon: ClipboardListIcon,
+      colorClass: "tool-color-plan",
+      tooltip: "Planning mode tool call",
+    };
   }
   if (isWebToolName(name)) {
-    return { Icon: GlobeIcon, colorClass: "tool-color-search", tooltip: "Web tool call" };
+    return {
+      Icon: GlobeIcon,
+      colorClass: "tool-color-search",
+      tooltip: "Web tool call",
+    };
   }
   if (name === "Monitor") {
-    return { Icon: MonitorIcon, colorClass: "tool-color-bash", tooltip: "Monitor tool call" };
+    return {
+      Icon: MonitorIcon,
+      colorClass: "tool-color-bash",
+      tooltip: "Monitor tool call",
+    };
   }
   if (name === "AskUserQuestion") {
-    return { Icon: MessageSquareIcon, colorClass: "tool-color-todo", tooltip: "User question tool call" };
+    return {
+      Icon: MessageSquareIcon,
+      colorClass: "tool-color-todo",
+      tooltip: "User question tool call",
+    };
   }
   if (name === "RemoteTrigger") {
-    return { Icon: PlayIcon, colorClass: "tool-color-plan", tooltip: "Remote trigger tool call" };
+    return {
+      Icon: PlayIcon,
+      colorClass: "tool-color-plan",
+      tooltip: "Remote trigger tool call",
+    };
   }
   if (name === "NotebookEdit") {
-    return { Icon: NotebookPenIcon, colorClass: "tool-color-edit", tooltip: "Notebook edit tool call" };
+    return {
+      Icon: NotebookPenIcon,
+      colorClass: "tool-color-edit",
+      tooltip: "Notebook edit tool call",
+    };
   }
   if (name === "EnterWorktree" || name === "ExitWorktree") {
-    return { Icon: GitBranchIcon, colorClass: "tool-color-plan", tooltip: "Worktree tool call" };
+    return {
+      Icon: GitBranchIcon,
+      colorClass: "tool-color-plan",
+      tooltip: "Worktree tool call",
+    };
   }
   if (name === "CronCreate" || name === "CronDelete" || name === "CronList") {
-    return { Icon: CalendarIcon, colorClass: "tool-color-plan", tooltip: "Cron schedule tool call" };
+    return {
+      Icon: CalendarIcon,
+      colorClass: "tool-color-plan",
+      tooltip: "Cron schedule tool call",
+    };
   }
   if (name === "PushNotification") {
-    return { Icon: BellIcon, colorClass: "tool-color-todo", tooltip: "Push notification tool call" };
+    return {
+      Icon: BellIcon,
+      colorClass: "tool-color-todo",
+      tooltip: "Push notification tool call",
+    };
   }
   if (name.toLowerCase().includes("mcp")) {
-    return { Icon: McpIcon, colorClass: "tool-color-mcp", tooltip: "MCP connector tool call" };
+    return {
+      Icon: McpIcon,
+      colorClass: "tool-color-mcp",
+      tooltip: "MCP connector tool call",
+    };
   }
-  return { Icon: WrenchIcon, colorClass: "tool-color-default", tooltip: "Tool call" };
+  return {
+    Icon: WrenchIcon,
+    colorClass: "tool-color-default",
+    tooltip: "Tool call",
+  };
 }
 
 function normalizeToolState(status: string | undefined): string {
@@ -3635,10 +4199,18 @@ function normalizeToolState(status: string | undefined): string {
   ) {
     return "running";
   }
-  if (normalized === "done" || normalized === "success" || normalized === "succeeded") {
+  if (
+    normalized === "done" ||
+    normalized === "success" ||
+    normalized === "succeeded"
+  ) {
     return "completed";
   }
-  if (normalized === "warned" || normalized === "warning" || normalized === "result_failed") {
+  if (
+    normalized === "warned" ||
+    normalized === "warning" ||
+    normalized === "result_failed"
+  ) {
     return "failed";
   }
   return normalized;
@@ -3649,13 +4221,24 @@ function isAskUserQuestionTool(entry: TranscriptEntry): boolean {
 }
 
 function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
-  return isAskUserQuestionTool(entry) && normalizeToolState(entry.toolStatus) === "running";
+  return (
+    isAskUserQuestionTool(entry) &&
+    normalizeToolState(entry.toolStatus) === "running"
+  );
 }
 
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "turns" | "background" | "files" | "session-data" | "settings" | "help" | "static";
+type RunTab =
+  | "chat"
+  | "turns"
+  | "background"
+  | "files"
+  | "session-data"
+  | "settings"
+  | "help"
+  | "static";
 type BackgroundView = "shells" | "scheduled" | "control" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
 
@@ -3769,7 +4352,10 @@ function isImagePath(path: string): boolean {
   return IMAGE_EXTS.has(ext);
 }
 
-function latestContextTokens(entries: TranscriptEntry[], contextWindow: number): number {
+function latestContextTokens(
+  entries: TranscriptEntry[],
+  contextWindow: number,
+): number {
   for (let i = entries.length - 1; i >= 0; i -= 1) {
     const entry = entries[i];
     if (!entry) continue;
@@ -3846,7 +4432,11 @@ function findMentionContext(
 /** Loose fuzzy filter — substring match against the path's lowercased
  *  full string OR basename. Order is: basename matches first, then full
  *  path. Capped to keep the menu tractable. */
-function filterMentionPaths(paths: string[], query: string, limit = 30): string[] {
+function filterMentionPaths(
+  paths: string[],
+  query: string,
+  limit = 30,
+): string[] {
   if (!query) return paths.slice(0, limit);
   const q = query.toLowerCase();
   const basenameMatches: string[] = [];
@@ -3861,11 +4451,16 @@ function filterMentionPaths(paths: string[], query: string, limit = 30): string[
   return [...basenameMatches, ...fullMatches].slice(0, limit);
 }
 
-function filterSlashCommands(commands: SlashCommand[], query: string): SlashCommand[] {
+function filterSlashCommands(
+  commands: SlashCommand[],
+  query: string,
+): SlashCommand[] {
   if (!query) return commands;
   const q = query.toLowerCase();
   return commands.filter(
-    (c) => c.name.slice(1).toLowerCase().includes(q) || c.desc.toLowerCase().includes(q),
+    (c) =>
+      c.name.slice(1).toLowerCase().includes(q) ||
+      c.desc.toLowerCase().includes(q),
   );
 }
 
@@ -3928,7 +4523,11 @@ const DEFAULT_CODEX_EFFORT_ID = "xhigh";
 
 function modelOptionsForMode(mode: SessionMode): ModelOption[] {
   if (mode === "claude_gui") return CLAUDE_MODELS;
-  if (mode === "codex_gui" || mode === "codex_exec_gui" || mode === "codex_app_server") {
+  if (
+    mode === "codex_gui" ||
+    mode === "codex_exec_gui" ||
+    mode === "codex_app_server"
+  ) {
     return CODEX_MODELS;
   }
   return [];
@@ -3936,7 +4535,11 @@ function modelOptionsForMode(mode: SessionMode): ModelOption[] {
 
 function effortOptionsForMode(mode: SessionMode): EffortOption[] {
   if (mode === "claude_gui") return CLAUDE_EFFORTS;
-  if (mode === "codex_gui" || mode === "codex_exec_gui" || mode === "codex_app_server") {
+  if (
+    mode === "codex_gui" ||
+    mode === "codex_exec_gui" ||
+    mode === "codex_app_server"
+  ) {
     return CODEX_EFFORTS;
   }
   return [];
@@ -3945,13 +4548,19 @@ function effortOptionsForMode(mode: SessionMode): EffortOption[] {
 function modelDisplayLabel(mode: SessionMode, modelId: string): string {
   const trimmed = modelId.trim();
   if (!trimmed) return "";
-  return modelOptionsForMode(mode).find((option) => option.id === trimmed)?.label ?? trimmed;
+  return (
+    modelOptionsForMode(mode).find((option) => option.id === trimmed)?.label ??
+    trimmed
+  );
 }
 
 function effortDisplayLabel(mode: SessionMode, effortId: string): string {
   const trimmed = effortId.trim();
   if (!trimmed) return "";
-  return effortOptionsForMode(mode).find((option) => option.id === trimmed)?.label ?? trimmed;
+  return (
+    effortOptionsForMode(mode).find((option) => option.id === trimmed)?.label ??
+    trimmed
+  );
 }
 
 // Per-user run-pane preferences. localStorage-backed, shared across all
@@ -4085,15 +4694,26 @@ function clampTurnCompleteSoundVolume(value: number): number {
 // candidate only when the option set contains it keeps the SPA in
 // lockstep with backend-go's allowedClaudeEfforts without re-listing
 // the values here. Empty / unknown → caller's fallback.
-function pickAllowedPrefId(raw: string | null, options: { id: string }[], fallback: string): string {
+function pickAllowedPrefId(
+  raw: string | null,
+  options: { id: string }[],
+  fallback: string,
+): string {
   if (raw == null) return fallback;
   const trimmed = raw.trim();
   if (!trimmed) return fallback;
   return options.some((opt) => opt.id === trimmed) ? trimmed : fallback;
 }
 
-function pickInitialMessageMode(raw: string | null, fallback: InitialMessageMode): InitialMessageMode {
-  return pickAllowedPrefId(raw, INITIAL_MESSAGE_MODE_OPTIONS, fallback) as InitialMessageMode;
+function pickInitialMessageMode(
+  raw: string | null,
+  fallback: InitialMessageMode,
+): InitialMessageMode {
+  return pickAllowedPrefId(
+    raw,
+    INITIAL_MESSAGE_MODE_OPTIONS,
+    fallback,
+  ) as InitialMessageMode;
 }
 
 function loadRunPrefs(): RunPrefs {
@@ -4106,13 +4726,25 @@ function loadRunPrefs(): RunPrefs {
       } else if (key === "turnCompleteSoundVolume") {
         if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
       } else if (key === "claudeModelId") {
-        out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID);
+        out[key] = pickAllowedPrefId(
+          raw,
+          CLAUDE_MODELS,
+          DEFAULT_CLAUDE_MODEL_ID,
+        );
       } else if (key === "claudeEffort") {
-        out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID);
+        out[key] = pickAllowedPrefId(
+          raw,
+          CLAUDE_EFFORTS,
+          DEFAULT_CLAUDE_EFFORT_ID,
+        );
       } else if (key === "codexModelId") {
         out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
       } else if (key === "codexEffort") {
-        out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
+        out[key] = pickAllowedPrefId(
+          raw,
+          CODEX_EFFORTS,
+          DEFAULT_CODEX_EFFORT_ID,
+        );
       } else if (key === "initialMessageMode") {
         out[key] = pickInitialMessageMode(raw, DEFAULT_INITIAL_MESSAGE_MODE);
       } else if (raw === "true" || raw === "false") {
@@ -4125,13 +4757,19 @@ function loadRunPrefs(): RunPrefs {
   return out;
 }
 
-type SetRunPref = <K extends keyof RunPrefs>(key: K, value: RunPrefs[K]) => void;
+type SetRunPref = <K extends keyof RunPrefs>(
+  key: K,
+  value: RunPrefs[K],
+) => void;
 
 // Phase E: type-narrow the opaque server-side run_prefs blob into the
 // SPA's RunPrefs shape. Unknown keys are dropped (a future SPA may have
 // written them); unknown values for known keys are ignored (defensive
 // against type drift).
-function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): RunPrefs {
+function mergeServerRunPrefs(
+  prev: RunPrefs,
+  server: Record<string, unknown>,
+): RunPrefs {
   const out: RunPrefs = { ...prev };
   for (const key of Object.keys(prev) as (keyof RunPrefs)[]) {
     const raw = server[key];
@@ -4270,20 +4908,26 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
   );
 }
 
-function transcriptRowsFromTimelineBody(body: TranscriptTimelineBody): TranscriptEntry[] {
+function transcriptRowsFromTimelineBody(
+  body: TranscriptTimelineBody,
+): TranscriptEntry[] {
   if (!Array.isArray(body.rows)) {
     throw new Error("timeline response missing server transcript rows");
   }
   return normalizeProjectedTranscriptEntries(body.rows);
 }
 
-function normalizeProjectedTranscriptEntries(entries: unknown[]): TranscriptEntry[] {
+function normalizeProjectedTranscriptEntries(
+  entries: unknown[],
+): TranscriptEntry[] {
   return entries
     .map(normalizeProjectedTranscriptEntry)
     .filter((entry): entry is TranscriptEntry => entry !== null);
 }
 
-function normalizeProjectedTranscriptEntry(raw: unknown): TranscriptEntry | null {
+function normalizeProjectedTranscriptEntry(
+  raw: unknown,
+): TranscriptEntry | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const record = raw as Record<string, unknown>;
   const kind = typeof record.kind === "string" ? record.kind : "";
@@ -4315,11 +4959,15 @@ function normalizeProjectedTranscriptEntry(raw: unknown): TranscriptEntry | null
     ...record,
     id,
     kind,
-    ...(kind === "message" ? { attachments: normalizeMessageAttachments(record.attachments) } : {}),
+    ...(kind === "message"
+      ? { attachments: normalizeMessageAttachments(record.attachments) }
+      : {}),
   } as TranscriptEntry;
 }
 
-function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undefined {
+function normalizeTurnActivitySummary(
+  raw: unknown,
+): TurnActivitySummary | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const record = raw as Record<string, unknown>;
   return {
@@ -4348,11 +4996,15 @@ function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undef
 
 function normalizeStringArray(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined;
-  const out = raw.filter((entry): entry is string => typeof entry === "string" && entry.length > 0);
+  const out = raw.filter(
+    (entry): entry is string => typeof entry === "string" && entry.length > 0,
+  );
   return out.length > 0 ? out : undefined;
 }
 
-function normalizeMessageAttachments(raw: unknown): MessageAttachmentDisplay[] | undefined {
+function normalizeMessageAttachments(
+  raw: unknown,
+): MessageAttachmentDisplay[] | undefined {
   if (!Array.isArray(raw)) return undefined;
   const out = raw
     .map((item): MessageAttachmentDisplay | null => {
@@ -4363,11 +5015,14 @@ function normalizeMessageAttachments(raw: unknown): MessageAttachmentDisplay[] |
       if (!label && !name) return null;
       const kind = record.kind === "image" ? "image" : "file";
       const path = typeof record.path === "string" ? record.path.trim() : "";
-      const absPath = typeof record.absPath === "string" ? record.absPath.trim() : "";
-      const previewUrl = typeof record.previewUrl === "string" ? record.previewUrl.trim() : "";
-      const size = typeof record.size === "number" && Number.isFinite(record.size)
-        ? record.size
-        : undefined;
+      const absPath =
+        typeof record.absPath === "string" ? record.absPath.trim() : "";
+      const previewUrl =
+        typeof record.previewUrl === "string" ? record.previewUrl.trim() : "";
+      const size =
+        typeof record.size === "number" && Number.isFinite(record.size)
+          ? record.size
+          : undefined;
       return {
         label: label || name,
         name: name || label,
@@ -4382,14 +5037,22 @@ function normalizeMessageAttachments(raw: unknown): MessageAttachmentDisplay[] |
   return out.length > 0 ? out : undefined;
 }
 
-function stringRecordValue(record: Record<string, unknown>, key: string): string | undefined {
+function stringRecordValue(
+  record: Record<string, unknown>,
+  key: string,
+): string | undefined {
   const value = record[key];
   return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
-function numericRecordValue(record: Record<string, unknown>, key: string): number | undefined {
+function numericRecordValue(
+  record: Record<string, unknown>,
+  key: string,
+): number | undefined {
   const value = record[key];
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value)
+    ? value
+    : undefined;
 }
 
 // Transcript merge/dedup helpers live in ./transcriptMerge (extracted for unit tests).
@@ -4418,10 +5081,21 @@ function mergeProjectedTranscriptWindows(
 // avatar / tool styling continues to apply.
 
 type EntryGroup =
-  | { kind: "message" | "reasoning" | "meta" | "background_task"; entry: TranscriptEntry }
+  | {
+      kind: "message" | "reasoning" | "meta" | "background_task";
+      entry: TranscriptEntry;
+    }
   | { kind: "message_group"; entries: TranscriptEntry[] }
   | { kind: "tools"; entries: TranscriptEntry[] }
-  | { kind: "thinking"; id: string; turnId: string; shell?: TranscriptEntry; startedAt?: string; lastActivityAt?: string; orderKey?: string }
+  | {
+      kind: "thinking";
+      id: string;
+      turnId: string;
+      shell?: TranscriptEntry;
+      startedAt?: string;
+      lastActivityAt?: string;
+      orderKey?: string;
+    }
   | {
       kind: "activity";
       id: string;
@@ -4469,10 +5143,14 @@ function isAbsorbableSystemMessage(entry: TranscriptEntry): boolean {
   return (!messageKind || messageKind === "message") && !action;
 }
 
-function lastSystemMessageGroupEntry(group: EntryGroup | undefined): TranscriptEntry | null {
+function lastSystemMessageGroupEntry(
+  group: EntryGroup | undefined,
+): TranscriptEntry | null {
   if (!group) return null;
-  if (group.kind === "message" && isAbsorbableSystemMessage(group.entry)) return group.entry;
-  if (group.kind === "message_group") return group.entries[group.entries.length - 1] ?? null;
+  if (group.kind === "message" && isAbsorbableSystemMessage(group.entry))
+    return group.entry;
+  if (group.kind === "message_group")
+    return group.entries[group.entries.length - 1] ?? null;
   return null;
 }
 
@@ -4480,7 +5158,10 @@ function isUserMessageEntry(entry: TranscriptEntry): boolean {
   return entry.kind === "message" && entry.role === "user";
 }
 
-function turnThinkingGroup(turnId: string, shell?: TranscriptEntry): Extract<EntryGroup, { kind: "thinking" }> {
+function turnThinkingGroup(
+  turnId: string,
+  shell?: TranscriptEntry,
+): Extract<EntryGroup, { kind: "thinking" }> {
   // Prefer the projected TurnActivitySummary.startedAt: that is the durable
   // turn-start order key derived from the first event in the turn and stays
   // constant across re-projections. The shell entry's own `time` field gets
@@ -4537,14 +5218,19 @@ function pushTranscriptEntryGroup(
       if (last.kind === "message_group") {
         last.entries = [...last.entries, entry];
       } else if (last.kind === "message") {
-        groups[lastIndex] = { kind: "message_group", entries: [last.entry, entry] };
+        groups[lastIndex] = {
+          kind: "message_group",
+          entries: [last.entry, entry],
+        };
       }
       return;
     }
   }
   if (entry.kind === "message") groups.push({ kind: "message", entry });
-  else if (entry.kind === "reasoning") groups.push({ kind: "reasoning", entry });
-  else if (entry.kind === "background_task") groups.push({ kind: "background_task", entry });
+  else if (entry.kind === "reasoning")
+    groups.push({ kind: "reasoning", entry });
+  else if (entry.kind === "background_task")
+    groups.push({ kind: "background_task", entry });
   else groups.push({ kind: "meta", entry });
 }
 
@@ -4569,14 +5255,17 @@ function createTurnActivityEntryGroup(
     id: entry.id,
     turnId,
     entries,
-    compactedEntryIds: entry.activityIds ?? entry.activity?.compactedEntryIds ?? [],
+    compactedEntryIds:
+      entry.activityIds ?? entry.activity?.compactedEntryIds ?? [],
     active: turnActivityGroupIsActive(entry.activity, turnId, activeTurnId),
     shell: entry,
     loaded: Boolean(activityEntriesByTurn[turnId]),
   };
 }
 
-function turnActivityGroupNeedsInput(group: Extract<EntryGroup, { kind: "activity" }>): boolean {
+function turnActivityGroupNeedsInput(
+  group: Extract<EntryGroup, { kind: "activity" }>,
+): boolean {
   return group.shell?.activity?.status === "needs_input";
 }
 
@@ -4589,7 +5278,9 @@ function flushTranscriptToolBucket(
   bucket.entries = [];
 }
 
-function groupFlatTranscriptEntries(entries: TranscriptEntry[]): FlatEntryGroup[] {
+function groupFlatTranscriptEntries(
+  entries: TranscriptEntry[],
+): FlatEntryGroup[] {
   const groups: FlatEntryGroup[] = [];
   const bucket = { entries: [] as TranscriptEntry[] };
   for (const e of entries) {
@@ -4605,7 +5296,9 @@ function entryGroupIncludesTurn(group: EntryGroup, turnId: string): boolean {
     return group.turnId === turnId;
   }
   if (group.kind === "tools" || group.kind === "message_group") {
-    return group.entries.some((entry) => transcriptEntryTurnId(entry) === turnId);
+    return group.entries.some(
+      (entry) => transcriptEntryTurnId(entry) === turnId,
+    );
   }
   return transcriptEntryTurnId(group.entry) === turnId;
 }
@@ -4686,14 +5379,20 @@ function groupTranscriptEntries(
   const activityHiddenEntryIds = new Set<string>();
   if (hasProjectedTurnActivity) {
     const insertedThinkingTurnIds = new Set<string>();
-    const pendingThinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[] = [];
+    const pendingThinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[] =
+      [];
     const pendingThinkingFallbackIndexes = new Map<string, number>();
     for (const entry of entries) {
       if (isTurnActivityEntry(entry)) {
         flushTranscriptToolBucket(groups, bucket);
-        const group = createTurnActivityEntryGroup(entry, activityEntriesByTurn, activeTurnId);
+        const group = createTurnActivityEntryGroup(
+          entry,
+          activityEntriesByTurn,
+          activeTurnId,
+        );
         if (group) {
-          for (const id of group.compactedEntryIds) activityHiddenEntryIds.add(id);
+          for (const id of group.compactedEntryIds)
+            activityHiddenEntryIds.add(id);
           const needsInput = turnActivityGroupNeedsInput(group);
           if (
             group.active &&
@@ -4757,12 +5456,19 @@ function chatScrollGroupSnapshot(
     } else if (group.kind === "activity") {
       activityGroups += 1;
       if (group.active) activeActivityGroups += 1;
-      if (group.shell && turnActivityShellIsDurablyActive(group.shell.activity)) {
+      if (
+        group.shell &&
+        turnActivityShellIsDurablyActive(group.shell.activity)
+      ) {
         durableActiveActivityGroups += 1;
       }
       activityEntries += group.entries.length;
-      toolEntries += group.entries.filter((entry) => entry.kind === "tool").length;
-      backgroundTasks += group.entries.filter((entry) => entry.kind === "background_task").length;
+      toolEntries += group.entries.filter(
+        (entry) => entry.kind === "tool",
+      ).length;
+      backgroundTasks += group.entries.filter(
+        (entry) => entry.kind === "background_task",
+      ).length;
     } else {
       meta += 1;
     }
@@ -4795,12 +5501,19 @@ function chatScrollGroupSnapshot(
     turnActivityShells,
     durableActiveTurnActivityShells,
     firstGroupKey: groups[0] ? entryGroupKey(groups[0]) : "",
-    lastGroupKey: groups.length > 0 ? entryGroupKey(groups[groups.length - 1]!) : "",
+    lastGroupKey:
+      groups.length > 0 ? entryGroupKey(groups[groups.length - 1]!) : "",
   };
 }
 
-function chatScrollEntrySnapshot(entries: TranscriptEntry[]): Record<string, unknown> {
-  return chatScrollGroupSnapshot(groupTranscriptEntries(entries), entries.length, entries);
+function chatScrollEntrySnapshot(
+  entries: TranscriptEntry[],
+): Record<string, unknown> {
+  return chatScrollGroupSnapshot(
+    groupTranscriptEntries(entries),
+    entries.length,
+    entries,
+  );
 }
 
 function chatScrollSnapshotNumber(
@@ -4928,7 +5641,8 @@ function toolTimingTitle(
   const start = formatToolFullTime(startedAt);
   const end = formatToolFullTime(completedAt);
   if (!start && !end && !running) return undefined;
-  if (running) return start ? `Started ${start}; still running` : "Still running";
+  if (running)
+    return start ? `Started ${start}; still running` : "Still running";
   if (start && end) return `Started ${start}; ended ${end}`;
   if (start) return `Started ${start}`;
   return end ? `Ended ${end}` : undefined;
@@ -4992,7 +5706,10 @@ function computeLineDiff(
   );
   for (let i = m - 1; i >= 0; i--) {
     for (let j = n - 1; j >= 0; j--) {
-      dp[i][j] = a[i] === b[j] ? dp[i + 1][j + 1] + 1 : Math.max(dp[i + 1][j], dp[i][j + 1]);
+      dp[i][j] =
+        a[i] === b[j]
+          ? dp[i + 1][j + 1] + 1
+          : Math.max(dp[i + 1][j], dp[i][j + 1]);
     }
   }
   const out: { kind: "ctx" | "del" | "add"; text: string }[] = [];
@@ -5020,14 +5737,24 @@ type QuoteStyle = "fence" | "blockquote";
 
 function quoteMessageText(text: string, style: QuoteStyle): string {
   if (style === "blockquote") {
-    return text.split("\n").map((line) => (line.length > 0 ? `> ${line}` : ">")).join("\n");
+    return text
+      .split("\n")
+      .map((line) => (line.length > 0 ? `> ${line}` : ">"))
+      .join("\n");
   }
-  const longestBacktickRun = Math.max(2, ...Array.from(text.matchAll(/`+/g), (match) => match[0].length));
+  const longestBacktickRun = Math.max(
+    2,
+    ...Array.from(text.matchAll(/`+/g), (match) => match[0].length),
+  );
   const fence = "`".repeat(longestBacktickRun + 1);
   return `${fence}\n${text}\n${fence}`;
 }
 
-function replaceAllLiteral(input: string, search: string, replacement: string): string {
+function replaceAllLiteral(
+  input: string,
+  search: string,
+  replacement: string,
+): string {
   return input.split(search).join(replacement);
 }
 
@@ -5046,10 +5773,14 @@ async function fetchAppPublicConfig(): Promise<AppPublicConfig> {
 async function forkSessionPromptTemplate(): Promise<string> {
   const config = await fetchAppPublicConfig();
   const template = config.fork_session_prompt_template;
-  return typeof template === "string" && template.trim() ? template : DEFAULT_FORK_SESSION_PROMPT_TEMPLATE;
+  return typeof template === "string" && template.trim()
+    ? template
+    : DEFAULT_FORK_SESSION_PROMPT_TEMPLATE;
 }
 
-async function buildForkSessionPrompt(request: ForkSessionRequest): Promise<string> {
+async function buildForkSessionPrompt(
+  request: ForkSessionRequest,
+): Promise<string> {
   const sourceName = sessionDisplayName(request.sourceSession);
   const payload = {
     source_session_id: request.sourceSession.id,
@@ -5062,7 +5793,11 @@ async function buildForkSessionPrompt(request: ForkSessionRequest): Promise<stri
   };
   const template = await forkSessionPromptTemplate();
   return replaceAllLiteral(
-    replaceAllLiteral(template, "{{forked_message}}", quoteMessageText(request.forkedEntry.text ?? "", "fence")),
+    replaceAllLiteral(
+      template,
+      "{{forked_message}}",
+      quoteMessageText(request.forkedEntry.text ?? "", "fence"),
+    ),
     "{{source_session_json}}",
     JSON.stringify(payload, null, 2),
   );
@@ -5114,7 +5849,9 @@ function LinkButton({
     <button
       type="button"
       className="run-msg-action run-msg-link"
-      title={status === "error" ? "Could not copy link" : "Copy link to message"}
+      title={
+        status === "error" ? "Could not copy link" : "Copy link to message"
+      }
       aria-label={status === "copied" ? "Link copied" : "Copy link to message"}
       onClick={async (e) => {
         e.stopPropagation();
@@ -5158,7 +5895,14 @@ function TurnViewButton({
         aria-label={label}
         onClick={(e) => {
           e.stopPropagation();
-          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          if (
+            e.button !== 0 ||
+            e.metaKey ||
+            e.ctrlKey ||
+            e.shiftKey ||
+            e.altKey
+          )
+            return;
           e.preventDefault();
           openTurn();
         }}
@@ -5202,7 +5946,14 @@ function TranscriptViewButton({
         aria-label={label}
         onClick={(e) => {
           e.stopPropagation();
-          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          if (
+            e.button !== 0 ||
+            e.metaKey ||
+            e.ctrlKey ||
+            e.shiftKey ||
+            e.altKey
+          )
+            return;
           e.preventDefault();
           onOpenTranscriptMessage(entryId);
         }}
@@ -5240,7 +5991,9 @@ function ForkButton({
       type="button"
       className="run-msg-action run-msg-fork"
       title={forking ? "Forking" : "Fork session"}
-      aria-label={forking ? "Forking session" : "Fork session from this message"}
+      aria-label={
+        forking ? "Forking session" : "Fork session from this message"
+      }
       disabled={forking}
       onClick={async (e) => {
         e.stopPropagation();
@@ -5271,7 +6024,8 @@ function QuoteButton({
   style: QuoteStyle;
   onQuote: (text: string, style: QuoteStyle) => void;
 }) {
-  const title = style === "blockquote" ? "Quote as blockquote" : "Quote as code block";
+  const title =
+    style === "blockquote" ? "Quote as blockquote" : "Quote as code block";
   const Icon = style === "blockquote" ? TextQuoteIcon : Code2Icon;
   return (
     <button
@@ -5308,14 +6062,27 @@ function hasLinkTargets(text: string): boolean {
   return splitLinksInText(text).some((segment) => segment.kind !== "text");
 }
 
-function PreWithLinks({ children, className }: { children: string; className?: string }) {
-  if (!hasLinkTargets(children)) return <pre className={className}>{children}</pre>;
-  return <pre className={className}>{linkedTextNodes(children, "run-markdown-code-link")}</pre>;
+function PreWithLinks({
+  children,
+  className,
+}: {
+  children: string;
+  className?: string;
+}) {
+  if (!hasLinkTargets(children))
+    return <pre className={className}>{children}</pre>;
+  return (
+    <pre className={className}>
+      {linkedTextNodes(children, "run-markdown-code-link")}
+    </pre>
+  );
 }
 
 function textFromCodeChildren(children: ReactNode): string {
-  if (Array.isArray(children)) return children.map(textFromCodeChildren).join("");
-  if (typeof children === "string" || typeof children === "number") return String(children);
+  if (Array.isArray(children))
+    return children.map(textFromCodeChildren).join("");
+  if (typeof children === "string" || typeof children === "number")
+    return String(children);
   return "";
 }
 
@@ -5323,20 +6090,29 @@ type RunMarkdownInlineCodeProps = ComponentProps<"code"> & {
   node?: unknown;
 };
 
-function RunMarkdownInlineCode({ children, className, node: _node, ...props }: RunMarkdownInlineCodeProps) {
+function RunMarkdownInlineCode({
+  children,
+  className,
+  node: _node,
+  ...props
+}: RunMarkdownInlineCodeProps) {
   const code = textFromCodeChildren(children);
   return (
-    <code className={`run-markdown-inline-code${className ? ` ${className}` : ""}`} {...props}>
-      {hasLinkTargets(code) ? linkedTextNodes(code, "run-markdown-code-link") : children}
+    <code
+      className={`run-markdown-inline-code${className ? ` ${className}` : ""}`}
+      {...props}
+    >
+      {hasLinkTargets(code)
+        ? linkedTextNodes(code, "run-markdown-code-link")
+        : children}
     </code>
   );
 }
 
 function RunMarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
   const { openWorkspacePath } = useContext(RunContext);
-  const workspaceTarget = typeof props.href === "string"
-    ? workspacePathFromHref(props.href)
-    : null;
+  const workspaceTarget =
+    typeof props.href === "string" ? workspacePathFromHref(props.href) : null;
   return (
     <a
       {...props}
@@ -5361,7 +6137,10 @@ const STREAMDOWN_DARK_THEME: [string, string] = ["github-dark", "github-dark"];
 
 function domAnchorForLinkSegment(
   doc: Document,
-  segment: Exclude<ReturnType<typeof splitLinksInText>[number], { kind: "text" }>,
+  segment: Exclude<
+    ReturnType<typeof splitLinksInText>[number],
+    { kind: "text" }
+  >,
   text = segment.text,
 ): HTMLAnchorElement {
   const anchor = doc.createElement("a");
@@ -5382,18 +6161,14 @@ function codeTextNodes(code: HTMLElement): Text[] {
   const view = doc.defaultView;
   if (!view) return [];
   const textNodes: Text[] = [];
-  const walker = doc.createTreeWalker(
-    code,
-    view.NodeFilter.SHOW_TEXT,
-    {
-      acceptNode(node) {
-        const parent = node.parentElement;
-        if (!parent || !node.nodeValue) return view.NodeFilter.FILTER_REJECT;
-        if (parent.closest("a, button")) return view.NodeFilter.FILTER_REJECT;
-        return view.NodeFilter.FILTER_ACCEPT;
-      },
+  const walker = doc.createTreeWalker(code, view.NodeFilter.SHOW_TEXT, {
+    acceptNode(node) {
+      const parent = node.parentElement;
+      if (!parent || !node.nodeValue) return view.NodeFilter.FILTER_REJECT;
+      if (parent.closest("a, button")) return view.NodeFilter.FILTER_REJECT;
+      return view.NodeFilter.FILTER_ACCEPT;
     },
-  );
+  });
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     textNodes.push(node as Text);
   }
@@ -5404,19 +6179,34 @@ function wrapTextNodeRange(
   node: Text,
   start: number,
   end: number,
-  segment: Exclude<ReturnType<typeof splitLinksInText>[number], { kind: "text" }>,
+  segment: Exclude<
+    ReturnType<typeof splitLinksInText>[number],
+    { kind: "text" }
+  >,
 ) {
-  if (!node.parentNode || start < 0 || end > node.length || start >= end) return;
+  if (!node.parentNode || start < 0 || end > node.length || start >= end)
+    return;
   let target = node;
   if (end < target.length) target.splitText(end);
   if (start > 0) target = target.splitText(start);
-  target.replaceWith(domAnchorForLinkSegment(target.ownerDocument, segment, target.nodeValue ?? ""));
+  target.replaceWith(
+    domAnchorForLinkSegment(
+      target.ownerDocument,
+      segment,
+      target.nodeValue ?? "",
+    ),
+  );
 }
 
 function linkifyCodeElement(code: HTMLElement) {
   const nodes = codeTextNodes(code);
   if (nodes.length === 0) return;
-  const pieces: Array<{ node: Text; nodeIndex: number; start: number; end: number }> = [];
+  const pieces: Array<{
+    node: Text;
+    nodeIndex: number;
+    start: number;
+    end: number;
+  }> = [];
   let fullText = "";
   for (const [nodeIndex, node] of nodes.entries()) {
     const start = fullText.length;
@@ -5429,7 +6219,10 @@ function linkifyCodeElement(code: HTMLElement) {
     nodeIndex: number;
     start: number;
     end: number;
-    segment: Exclude<ReturnType<typeof splitLinksInText>[number], { kind: "text" }>;
+    segment: Exclude<
+      ReturnType<typeof splitLinksInText>[number],
+      { kind: "text" }
+    >;
   }> = [];
   let cursor = 0;
   for (const segment of splitLinksInText(fullText)) {
@@ -5454,12 +6247,19 @@ function linkifyCodeElement(code: HTMLElement) {
   operations
     .sort((a, b) => b.nodeIndex - a.nodeIndex || b.start - a.start)
     .forEach((operation) => {
-      wrapTextNodeRange(operation.node, operation.start, operation.end, operation.segment);
+      wrapTextNodeRange(
+        operation.node,
+        operation.start,
+        operation.end,
+        operation.segment,
+      );
     });
 }
 
 function linkifyRenderedCodeBlockText(root: HTMLElement) {
-  const codeElements = root.querySelectorAll<HTMLElement>('[data-streamdown="code-block-body"] code');
+  const codeElements = root.querySelectorAll<HTMLElement>(
+    '[data-streamdown="code-block-body"] code',
+  );
   for (const code of codeElements) {
     if (hasLinkTargets(code.textContent ?? "")) linkifyCodeElement(code);
   }
@@ -5468,7 +6268,10 @@ function linkifyRenderedCodeBlockText(root: HTMLElement) {
 function RunMarkdown({ children }: { children: string }) {
   const { openWorkspacePath } = useContext(RunContext);
   const rootRef = useRef<HTMLDivElement | null>(null);
-  const linkedChildren = useMemo(() => linkTextTargetsInMarkdown(children), [children]);
+  const linkedChildren = useMemo(
+    () => linkTextTargetsInMarkdown(children),
+    [children],
+  );
 
   useEffect(() => {
     const root = rootRef.current;
@@ -5494,11 +6297,16 @@ function RunMarkdown({ children }: { children: string }) {
       ref={rootRef}
       className="run-markdown"
       onClick={(event) => {
-        const target = event.target instanceof Element
-          ? event.target.closest<HTMLAnchorElement>('a[data-run-workspace-link="true"]')
-          : null;
+        const target =
+          event.target instanceof Element
+            ? event.target.closest<HTMLAnchorElement>(
+                'a[data-run-workspace-link="true"]',
+              )
+            : null;
         if (!target) return;
-        const workspaceTarget = workspacePathFromHref(target.getAttribute("href") ?? "");
+        const workspaceTarget = workspacePathFromHref(
+          target.getAttribute("href") ?? "",
+        );
         if (!workspaceTarget) return;
         event.preventDefault();
         openWorkspacePath(workspaceTarget);
@@ -5533,18 +6341,26 @@ function RunPlainText({ children }: { children: string }) {
   );
 }
 
-function attachmentWorkspaceTarget(attachment: MessageAttachmentDisplay): WorkspacePathTarget | null {
-  return normalizeWorkspacePathTarget(attachment.path || attachment.absPath || "");
+function attachmentWorkspaceTarget(
+  attachment: MessageAttachmentDisplay,
+): WorkspacePathTarget | null {
+  return normalizeWorkspacePathTarget(
+    attachment.path || attachment.absPath || "",
+  );
 }
 
 function attachmentTitle(attachment: MessageAttachmentDisplay): string {
   const bits = [attachment.label];
-  if (attachment.name && attachment.name !== attachment.label) bits.push(attachment.name);
-  if (typeof attachment.size === "number") bits.push(humanFileSize(attachment.size));
+  if (attachment.name && attachment.name !== attachment.label)
+    bits.push(attachment.name);
+  if (typeof attachment.size === "number")
+    bits.push(humanFileSize(attachment.size));
   return bits.join(" · ");
 }
 
-function attachmentPayloadsForApi(attachments: readonly MessageAttachmentDisplay[]) {
+function attachmentPayloadsForApi(
+  attachments: readonly MessageAttachmentDisplay[],
+) {
   return attachments.map((attachment) => ({
     label: attachment.label,
     name: attachment.name,
@@ -5628,7 +6444,9 @@ function RunMessageAttachments({
           <>
             <AttachmentPreview attachment={attachment} sessionId={sessionId} />
             <span className="run-message-attachment-meta">
-              <span className="run-message-attachment-name">{attachment.label}</span>
+              <span className="run-message-attachment-name">
+                {attachment.label}
+              </span>
               {typeof attachment.size === "number" && (
                 <span className="run-message-attachment-size">
                   {humanFileSize(attachment.size)}
@@ -5701,7 +6519,9 @@ const RunContext = createContext<{
   askUserQuestionDrafts: Record<string, AskUserQuestionDraft | undefined>;
   setAskUserQuestionDraft: (
     key: string,
-    updater: (previous: AskUserQuestionDraft | undefined) => AskUserQuestionDraft,
+    updater: (
+      previous: AskUserQuestionDraft | undefined,
+    ) => AskUserQuestionDraft,
   ) => void;
   createMessageLink: (sessionId: string, entryId: string) => Promise<string>;
   user: SessionUser | null;
@@ -5710,7 +6530,8 @@ const RunContext = createContext<{
   submitAnswer: async () => {},
   askUserQuestionDrafts: {},
   setAskUserQuestionDraft: () => {},
-  createMessageLink: async (sessionId, entryId) => messageUrl(sessionId, entryId),
+  createMessageLink: async (sessionId, entryId) =>
+    messageUrl(sessionId, entryId),
   user: null,
 });
 
@@ -5752,7 +6573,11 @@ function RunMessageBubble({
   isAvatarContinuation?: boolean;
 }) {
   const variant =
-    entry.role === "user" ? "user" : entry.role === "system" ? "system" : "assistant";
+    entry.role === "user"
+      ? "user"
+      : entry.role === "system"
+        ? "system"
+        : "assistant";
   const { user } = useContext(RunContext);
   const entryText = entry.text ?? "";
   const messageKind = (entry as Record<string, unknown>).messageKind;
@@ -5778,18 +6603,23 @@ function RunMessageBubble({
     | { label?: unknown; href?: unknown }
     | undefined;
   const messageActionLabel =
-    messageAction && typeof messageAction.label === "string" && messageAction.label.length > 0
+    messageAction &&
+    typeof messageAction.label === "string" &&
+    messageAction.label.length > 0
       ? messageAction.label
       : undefined;
   const messageActionHref =
-    messageAction && typeof messageAction.href === "string" && messageAction.href.length > 0
+    messageAction &&
+    typeof messageAction.href === "string" &&
+    messageAction.href.length > 0
       ? messageAction.href
       : undefined;
-  const isSkillAction = messageKind === "skill-action" || durableSkillDisplay !== null;
+  const isSkillAction =
+    messageKind === "skill-action" || durableSkillDisplay !== null;
   const skillSupplementalText =
     typeof (entry as Record<string, unknown>).skillSupplementalText === "string"
       ? ((entry as Record<string, unknown>).skillSupplementalText as string)
-      : durableSkillDisplay?.supplemental_text ?? "";
+      : (durableSkillDisplay?.supplemental_text ?? "");
   const skillActionIcon =
     skillName === "test"
       ? FlaskConicalIcon
@@ -5803,11 +6633,20 @@ function RunMessageBubble({
       ? splitLegacyAttachmentDisplayText(text)
       : null;
   const visibleText = legacyAttachmentParts?.text ?? text;
-  const visibleAttachments = explicitAttachments.length > 0
-    ? explicitAttachments
-    : legacyAttachmentParts?.attachments ?? [];
+  const awaitingInput = entry.awaitingInput;
+  const questionTurnId = awaitingInput?.questionTurnId || "";
+  const openQuestionTurn = (): void => {
+    if (!questionTurnId) return;
+    onOpenTurn?.(questionTurnId, { anchor: "top", resetPage: true });
+  };
+  const visibleAttachments =
+    explicitAttachments.length > 0
+      ? explicitAttachments
+      : (legacyAttachmentParts?.attachments ?? []);
   const time = formatMessageTime(entry.time);
-  const durationMs = (entry as Record<string, unknown>).durationMs as number | undefined;
+  const durationMs = (entry as Record<string, unknown>).durationMs as
+    | number
+    | undefined;
   const alwaysVisible = showTimestamps || showDuration;
   return (
     <div
@@ -5816,7 +6655,9 @@ function RunMessageBubble({
       data-variant={variant}
       data-role={variant}
       data-kind={isSkillAction ? "skill-action" : "message"}
-      data-skill={isSkillAction && typeof skillName === "string" ? skillName : undefined}
+      data-skill={
+        isSkillAction && typeof skillName === "string" ? skillName : undefined
+      }
       data-severity={variant === "system" ? messageSeverity : undefined}
       data-message-id={canonicalMessage ? entry.id : undefined}
       data-activity-entry-id={canonicalMessage ? undefined : entry.id}
@@ -5824,15 +6665,23 @@ function RunMessageBubble({
       data-continuation={isAvatarContinuation ? "true" : undefined}
       data-highlight={highlighted ? "true" : undefined}
     >
-      {variant === "assistant" && showAssistantAvatar && !isAvatarContinuation && (
-        <span className="run-msg-ai-avatar" aria-hidden="true">
-          <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
-        </span>
-      )}
+      {variant === "assistant" &&
+        showAssistantAvatar &&
+        !isAvatarContinuation && (
+          <span className="run-msg-ai-avatar" aria-hidden="true">
+            <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+          </span>
+        )}
       {variant === "system" && !isAvatarContinuation && (
-        <span className="run-msg-system-avatar" aria-hidden={systemAvatar ? undefined : "true"}>
+        <span
+          className="run-msg-system-avatar"
+          aria-hidden={systemAvatar ? undefined : "true"}
+        >
           {systemAvatar ? (
-            <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
+            <AgentAvatarIcon
+              avatar={systemAvatar}
+              className="run-msg-ai-icon"
+            />
           ) : (
             <BotIcon size={16} strokeWidth={2.1} />
           )}
@@ -5846,7 +6695,11 @@ function RunMessageBubble({
           {isSkillAction ? (
             <span className="run-skill-action">
               <span className="run-skill-action-text">
-                <SkillActionIcon size={15} strokeWidth={2.2} aria-hidden="true" />
+                <SkillActionIcon
+                  size={15}
+                  strokeWidth={2.2}
+                  aria-hidden="true"
+                />
                 <span>{text}</span>
               </span>
               {skillSupplementalText && (
@@ -5855,12 +6708,10 @@ function RunMessageBubble({
                 </span>
               )}
             </span>
+          ) : variant === "user" ? (
+            <RunPlainText>{visibleText}</RunPlainText>
           ) : (
-            variant === "user" ? (
-              <RunPlainText>{visibleText}</RunPlainText>
-            ) : (
-              <RunMarkdown>{visibleText}</RunMarkdown>
-            )
+            <RunMarkdown>{visibleText}</RunMarkdown>
           )}
           {variant === "system" && messageActionLabel && messageActionHref && (
             <a
@@ -5872,6 +6723,18 @@ function RunMessageBubble({
               {messageActionLabel}
             </a>
           )}
+          {variant === "assistant" &&
+            awaitingInput &&
+            questionTurnId &&
+            onOpenTurn && (
+              <button
+                type="button"
+                className="run-msg-question-action"
+                onClick={openQuestionTurn}
+              >
+                {awaitingInput.answered ? "View questions" : "Answer in Turns"}
+              </button>
+            )}
         </div>
         {variant === "user" && visibleAttachments.length > 0 && (
           <RunMessageAttachments
@@ -5883,9 +6746,16 @@ function RunMessageBubble({
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
         >
-          {canonicalMessage && variant === "assistant" && entry.turnId && onOpenTurn && (
-            <TurnViewButton turnId={entry.turnId} href={turnHref} onOpenTurn={onOpenTurn} />
-          )}
+          {canonicalMessage &&
+            variant === "assistant" &&
+            entry.turnId &&
+            onOpenTurn && (
+              <TurnViewButton
+                turnId={entry.turnId}
+                href={turnHref}
+                onOpenTurn={onOpenTurn}
+              />
+            )}
           {!canonicalMessage && onOpenTranscriptMessage && (
             <TranscriptViewButton
               entryId={entry.id}
@@ -5900,8 +6770,16 @@ function RunMessageBubble({
             <>
               {onQuote && (
                 <>
-                  <QuoteButton text={visibleText} style="fence" onQuote={onQuote} />
-                  <QuoteButton text={visibleText} style="blockquote" onQuote={onQuote} />
+                  <QuoteButton
+                    text={visibleText}
+                    style="fence"
+                    onQuote={onQuote}
+                  />
+                  <QuoteButton
+                    text={visibleText}
+                    style="blockquote"
+                    onQuote={onQuote}
+                  />
                 </>
               )}
               <CopyButton text={visibleText} />
@@ -5918,55 +6796,58 @@ function RunMessageBubble({
               </span>
             )}
             {showTimestamps && time && (
-              <span className="run-msg-timing-row">
-                {time}
-              </span>
+              <span className="run-msg-timing-row">{time}</span>
             )}
           </div>
         </div>
       </div>
-      {variant === "user" && !isAvatarContinuation && (() => {
-        // Cross-session handoff: a sibling tank-operator session posted
-        // this turn via mcp-tank-operator. Only render a session avatar
-        // when the durable message/session data names one; otherwise use
-        // the explicit missing-avatar glyph instead of inventing a local
-        // identity from the origin id.
-        const originId = entry.originSessionId;
-        if (originId) {
-          return (
-            <span
-              className="run-msg-avatar"
-              data-origin-session-id={originId}
-            >
-              <SessionAvatarIcon
-                avatar={getSessionAvatarByID(null)}
-                className="run-msg-ai-icon"
-              />
+      {variant === "user" &&
+        !isAvatarContinuation &&
+        (() => {
+          // Cross-session handoff: a sibling tank-operator session posted
+          // this turn via mcp-tank-operator. Only render a session avatar
+          // when the durable message/session data names one; otherwise use
+          // the explicit missing-avatar glyph instead of inventing a local
+          // identity from the origin id.
+          const originId = entry.originSessionId;
+          if (originId) {
+            return (
+              <span
+                className="run-msg-avatar"
+                data-origin-session-id={originId}
+              >
+                <SessionAvatarIcon
+                  avatar={getSessionAvatarByID(null)}
+                  className="run-msg-ai-icon"
+                />
+              </span>
+            );
+          }
+          // Bot-authored turn (auth.romaine.life bot token). Attribute it to
+          // the session's system identity rather than borrowing the human
+          // owner's Gravatar. Mirrors the system-message avatar (the
+          // configured system avatar, BotIcon fallback) so automation reads
+          // as the system user that launches the session.
+          if (entry.authorKind === "system") {
+            return (
+              <span className="run-msg-avatar" data-author-kind="system">
+                {systemAvatar ? (
+                  <AgentAvatarIcon
+                    avatar={systemAvatar}
+                    className="run-msg-ai-icon"
+                  />
+                ) : (
+                  <BotIcon size={16} strokeWidth={2.1} />
+                )}
+              </span>
+            );
+          }
+          return user ? (
+            <span className="run-msg-avatar">
+              <Avatar user={user} />
             </span>
-          );
-        }
-        // Bot-authored turn (auth.romaine.life bot token). Attribute it to
-        // the session's system identity rather than borrowing the human
-        // owner's Gravatar. Mirrors the system-message avatar (the
-        // configured system avatar, BotIcon fallback) so automation reads
-        // as the system user that launches the session.
-        if (entry.authorKind === "system") {
-          return (
-            <span className="run-msg-avatar" data-author-kind="system">
-              {systemAvatar ? (
-                <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
-              ) : (
-                <BotIcon size={16} strokeWidth={2.1} />
-              )}
-            </span>
-          );
-        }
-        return user ? (
-          <span className="run-msg-avatar">
-            <Avatar user={user} />
-          </span>
-        ) : null;
-      })()}
+          ) : null;
+        })()}
     </div>
   );
 }
@@ -5992,14 +6873,20 @@ function RunSystemMessageGroupBubble({
       data-kind="system-group"
       data-highlight={highlighted ? "true" : undefined}
     >
-      <span className="run-msg-system-avatar" aria-hidden={systemAvatar ? undefined : "true"}>
+      <span
+        className="run-msg-system-avatar"
+        aria-hidden={systemAvatar ? undefined : "true"}
+      >
         {systemAvatar ? (
           <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
         ) : (
           <BotIcon size={16} strokeWidth={2.1} />
         )}
       </span>
-      <div className="run-transcript-message-content" data-slot="message-content">
+      <div
+        className="run-transcript-message-content"
+        data-slot="message-content"
+      >
         <div className="run-transcript-system-group">
           {entries.map((entry) => {
             const time = formatMessageTime(entry.time);
@@ -6008,9 +6895,14 @@ function RunSystemMessageGroupBubble({
                 key={entry.id}
                 className="run-transcript-system-group-item"
                 data-message-id={entry.id}
-                data-highlight={highlightedEntryId === entry.id ? "true" : undefined}
+                data-highlight={
+                  highlightedEntryId === entry.id ? "true" : undefined
+                }
               >
-                <div className="run-transcript-message-text" data-slot="message-text">
+                <div
+                  className="run-transcript-message-text"
+                  data-slot="message-text"
+                >
                   <RunMarkdown>{entry.text ?? ""}</RunMarkdown>
                 </div>
                 {showTimestamps && time && (
@@ -6044,7 +6936,11 @@ function RunReasoningBlock({
       <summary className="run-reasoning-summary">
         <BrainIcon size={14} aria-hidden="true" />
         <span>Reasoning</span>
-        <ChevronDownIcon size={12} className="run-reasoning-chevron" aria-hidden="true" />
+        <ChevronDownIcon
+          size={12}
+          className="run-reasoning-chevron"
+          aria-hidden="true"
+        />
       </summary>
       <div className="run-reasoning-body">
         <RunMarkdown>{text}</RunMarkdown>
@@ -6104,7 +7000,10 @@ function RunMetaBlock({
           <BotIcon size={16} strokeWidth={2.1} />
         )}
       </span>
-      <div className="run-transcript-message-content" data-slot="message-content">
+      <div
+        className="run-transcript-message-content"
+        data-slot="message-content"
+      >
         <div className={`run-meta${isError ? " run-meta-error" : ""}`}>
           <span className="run-meta-icon">
             {isError ? (
@@ -6160,7 +7059,9 @@ function isDetachedShellCandidateEntry(entry: TranscriptEntry): boolean {
   );
 }
 
-function backgroundTaskStatusLabel(status: ConversationBackgroundTaskStatus | undefined): string {
+function backgroundTaskStatusLabel(
+  status: ConversationBackgroundTaskStatus | undefined,
+): string {
   switch (status) {
     case "completed":
       return "completed";
@@ -6202,7 +7103,8 @@ function backgroundActivityKindLabel(entry: TranscriptEntry): string {
 }
 
 function backgroundActivityTitle(entry: TranscriptEntry): string {
-  if (isScheduledWakeupEntry(entry)) return entry.taskSummary ?? "Scheduled continuation";
+  if (isScheduledWakeupEntry(entry))
+    return entry.taskSummary ?? "Scheduled continuation";
   if (isControlActionEntry(entry)) return entry.taskSummary ?? "Control action";
   if (isBackgroundTaskEntry(entry)) return backgroundTaskTitle(entry);
   return shellInvocationCommand(entry) ?? "Shell command";
@@ -6212,7 +7114,9 @@ function backgroundActivitySubtitle(entry: TranscriptEntry): string {
   if (isControlActionEntry(entry)) {
     const parts = [
       entry.controlActionRepo,
-      entry.controlActionPrNumber == null ? "" : `#${entry.controlActionPrNumber}`,
+      entry.controlActionPrNumber == null
+        ? ""
+        : `#${entry.controlActionPrNumber}`,
       entry.controlActionTarget,
     ].filter(Boolean);
     return parts.join(" ") || "privileged action";
@@ -6225,9 +7129,12 @@ function backgroundActivitySubtitle(entry: TranscriptEntry): string {
     ].filter(Boolean);
     return parts.join(" · ") || "scheduled continuation";
   }
-  if (isBackgroundTaskEntry(entry)) return backgroundTaskSubtitle(entry) || "managed background task";
+  if (isBackgroundTaskEntry(entry))
+    return backgroundTaskSubtitle(entry) || "managed background task";
   const parts = [
-    entry.toolName && entry.toolInput && entry.toolName !== entry.toolInput ? entry.toolName : "",
+    entry.toolName && entry.toolInput && entry.toolName !== entry.toolInput
+      ? entry.toolName
+      : "",
     entry.providerItemId ? `item ${entry.providerItemId}` : "",
   ].filter(Boolean);
   return parts.join(" · ") || "active shell invocation";
@@ -6235,8 +7142,10 @@ function backgroundActivitySubtitle(entry: TranscriptEntry): string {
 
 function backgroundActivityStatusLabel(entry: TranscriptEntry): string {
   if (isDetachedShellCandidateEntry(entry)) return "untracked";
-  if (isControlActionEntry(entry)) return controlActionStatusLabel(entry.controlActionStatus ?? "started");
-  if (isScheduledWakeupEntry(entry)) return scheduledWakeupStatusLabel(entry.wakeupStatus ?? "scheduled");
+  if (isControlActionEntry(entry))
+    return controlActionStatusLabel(entry.controlActionStatus ?? "started");
+  if (isScheduledWakeupEntry(entry))
+    return scheduledWakeupStatusLabel(entry.wakeupStatus ?? "scheduled");
   return isBackgroundTaskEntry(entry)
     ? backgroundTaskStatusLabel(entry.taskStatus)
     : normalizeToolState(entry.toolStatus);
@@ -6247,7 +7156,8 @@ function canStopBackgroundActivity(
   codexBackgroundStopAvailable: boolean,
 ): boolean {
   if (isDetachedShellCandidateEntry(entry)) return false;
-  if (isRunningShellInvocationEntry(entry)) return Boolean(entry.turnId?.trim());
+  if (isRunningShellInvocationEntry(entry))
+    return Boolean(entry.turnId?.trim());
   if (isControlActionEntry(entry)) return false;
   if (isScheduledWakeupEntry(entry)) return false;
   return (
@@ -6272,7 +7182,9 @@ function backgroundStopTitle(entry: TranscriptEntry): string {
 function backgroundActivityCommand(entry: TranscriptEntry): string | undefined {
   if (isControlActionEntry(entry)) return entry.controlActionTarget;
   if (isScheduledWakeupEntry(entry)) return entry.wakeupPrompt;
-  return isBackgroundTaskEntry(entry) ? entry.taskCommand : shellInvocationCommand(entry);
+  return isBackgroundTaskEntry(entry)
+    ? entry.taskCommand
+    : shellInvocationCommand(entry);
 }
 
 function backgroundActivityOutput(entry: TranscriptEntry): string | undefined {
@@ -6289,14 +7201,20 @@ function backgroundActivityOutput(entry: TranscriptEntry): string | undefined {
   return isBackgroundTaskEntry(entry) ? entry.taskOutput : entry.toolOutput;
 }
 
-function backgroundActivityStartedAt(entry: TranscriptEntry): string | undefined {
-  if (isScheduledWakeupEntry(entry)) return entry.wakeupScheduledAt ?? entry.startedAt;
-  return isBackgroundTaskEntry(entry) ? entry.startedAt : entry.startedAt ?? entry.time;
+function backgroundActivityStartedAt(
+  entry: TranscriptEntry,
+): string | undefined {
+  if (isScheduledWakeupEntry(entry))
+    return entry.wakeupScheduledAt ?? entry.startedAt;
+  return isBackgroundTaskEntry(entry)
+    ? entry.startedAt
+    : (entry.startedAt ?? entry.time);
 }
 
 function backgroundActivityState(entry: TranscriptEntry): string {
   if (isDetachedShellCandidateEntry(entry)) return "unknown";
-  if (isControlActionEntry(entry)) return entry.controlActionStatus ?? "started";
+  if (isControlActionEntry(entry))
+    return entry.controlActionStatus ?? "started";
   if (isScheduledWakeupEntry(entry)) return entry.wakeupStatus ?? "scheduled";
   if (isBackgroundTaskEntry(entry)) return entry.taskStatus ?? "unknown";
   return "running";
@@ -6304,7 +7222,11 @@ function backgroundActivityState(entry: TranscriptEntry): string {
 
 function shellInvocationCommand(entry: TranscriptEntry): string | undefined {
   const input = tryParseJson(entry.toolInput);
-  if (isJsonObject(input) && typeof input.command === "string" && input.command) {
+  if (
+    isJsonObject(input) &&
+    typeof input.command === "string" &&
+    input.command
+  ) {
     return input.command;
   }
   return entry.toolInput ?? entry.toolName;
@@ -6316,11 +7238,17 @@ function detachedShellLaunchReason(entry: TranscriptEntry): string | undefined {
   if (/\bnohup\b/i.test(command)) return "nohup";
   if (/\bdisown\b/i.test(command)) return "disown";
   if (/\bsetsid\b/i.test(command)) return "setsid";
-  if (/\btmux\b[\s\S]{0,80}\b(?:new|new-session)\b[\s\S]{0,80}(?:\s-d\b|\s-detached\b)/i.test(command)) {
+  if (
+    /\btmux\b[\s\S]{0,80}\b(?:new|new-session)\b[\s\S]{0,80}(?:\s-d\b|\s-detached\b)/i.test(
+      command,
+    )
+  ) {
     return "tmux detached session";
   }
-  if (/\bscreen\b[\s\S]{0,80}\s-dm/i.test(command)) return "screen detached session";
-  if (/&\s*(?:echo|printf)\b[\s\S]{0,40}\$!/.test(command)) return "background child PID";
+  if (/\bscreen\b[\s\S]{0,80}\s-dm/i.test(command))
+    return "screen detached session";
+  if (/&\s*(?:echo|printf)\b[\s\S]{0,40}\$!/.test(command))
+    return "background child PID";
   if (/[^\s&]\s&\s*(?:$|[;)])/.test(command)) return "background child";
   return undefined;
 }
@@ -6348,7 +7276,10 @@ function RunBackgroundTaskBlock({
   const running = isBackgroundTaskRunning(entry);
   const label = backgroundTaskStatusLabel(entry.taskStatus);
   const summary = backgroundTaskTitle(entry);
-  const detail = entry.taskDescription && entry.taskDescription !== summary ? entry.taskDescription : "";
+  const detail =
+    entry.taskDescription && entry.taskDescription !== summary
+      ? entry.taskDescription
+      : "";
   const errorText = entry.taskError == null ? "" : shortJson(entry.taskError);
   return (
     <button
@@ -6382,9 +7313,15 @@ function RunBackgroundTaskBlock({
           <div className="run-background-task-detail">
             {detail && <span>{detail}</span>}
             {(entry.taskProcessId ?? entry.taskId) && (
-              <span>{entry.taskProcessId ? `process ${entry.taskProcessId}` : `task ${entry.taskId}`}</span>
+              <span>
+                {entry.taskProcessId
+                  ? `process ${entry.taskProcessId}`
+                  : `task ${entry.taskId}`}
+              </span>
             )}
-            {errorText && <span className="run-background-task-error">{errorText}</span>}
+            {errorText && (
+              <span className="run-background-task-error">{errorText}</span>
+            )}
           </div>
         )}
       </div>
@@ -6397,7 +7334,9 @@ function TurnsTab({
   count = 0,
   hasActiveTurn = false,
   disabled = false,
-  title = disabled ? "Turns are available once the agent has turn activity" : "Turns",
+  title = disabled
+    ? "Turns are available once the agent has turn activity"
+    : "Turns",
   onOpen,
 }: {
   active: boolean;
@@ -6549,7 +7488,10 @@ function RunHeaderOverflowMenu({
           onSelect={sessionData.onOpen}
           title={sessionData.title}
         >
-          <ClipboardListIcon className="run-tab-more-item-icon" aria-hidden="true" />
+          <ClipboardListIcon
+            className="run-tab-more-item-icon"
+            aria-hidden="true"
+          />
           <span>Session data</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator className="run-tab-more-separator" />
@@ -6617,16 +7559,28 @@ function SessionDataScreen({
       : session.bug_label
         ? [session.bug_label]
         : [];
-  const bugLabelNames = bugLabels.map((label) => label.display_name ?? label.name).filter(Boolean);
+  const bugLabelNames = bugLabels
+    .map((label) => label.display_name ?? label.name)
+    .filter(Boolean);
   const bugLabel = bugLabelNames[0] ?? "";
   return (
     <div className="run-session-data-screen">
-      <section className="run-session-data-section" aria-labelledby="run-session-data-title">
+      <section
+        className="run-session-data-section"
+        aria-labelledby="run-session-data-title"
+      >
         <div className="run-session-data-page-head">
-          <h2 className="run-session-data-title" id="run-session-data-title">Session data</h2>
-          <span className="run-session-data-summary">{activeCount}/{rows.length} active</span>
+          <h2 className="run-session-data-title" id="run-session-data-title">
+            Session data
+          </h2>
+          <span className="run-session-data-summary">
+            {activeCount}/{rows.length} active
+          </span>
         </div>
-        <div className="run-session-data-page-list" aria-label="Session data status">
+        <div
+          className="run-session-data-page-list"
+          aria-label="Session data status"
+        >
           {rows.map((row) => (
             <div
               key={row.id}
@@ -6637,8 +7591,12 @@ function SessionDataScreen({
                   <SessionDataIcon id={row.id} />
                 </span>
                 <span className="run-session-data-card-main">
-                  <span className="run-session-data-card-label">{row.label}</span>
-                  <span className="run-session-data-card-detail">{row.detail}</span>
+                  <span className="run-session-data-card-label">
+                    {row.label}
+                  </span>
+                  <span className="run-session-data-card-detail">
+                    {row.detail}
+                  </span>
                 </span>
                 {row.href ? (
                   <a
@@ -6652,7 +7610,9 @@ function SessionDataScreen({
                     <ExternalLinkIcon aria-hidden="true" />
                   </a>
                 ) : (
-                  <span className="run-session-data-card-status">{row.status}</span>
+                  <span className="run-session-data-card-status">
+                    {row.status}
+                  </span>
                 )}
               </div>
               <SessionDataCardDetails
@@ -6700,8 +7660,18 @@ function SessionDataCardDetails({
       return (
         <SessionDataFacts
           facts={[
-            ["Slot", session.test_state?.slot_index != null ? String(session.test_state.slot_index) : "Not assigned"],
-            ["URL", session.test_state?.url ? session.test_state.url : "No test environment URL"],
+            [
+              "Slot",
+              session.test_state?.slot_index != null
+                ? String(session.test_state.slot_index)
+                : "Not assigned",
+            ],
+            [
+              "URL",
+              session.test_state?.url
+                ? session.test_state.url
+                : "No test environment URL",
+            ],
           ]}
         />
       );
@@ -6709,10 +7679,23 @@ function SessionDataCardDetails({
       return (
         <SessionDataFacts
           facts={[
-            ["Compactions", String(Math.max(0, Math.floor(session.compaction_count ?? 0)))],
-            ["Window", session.runtime_context_window_tokens ? formatCompactTokens(session.runtime_context_window_tokens) : "Not reported"],
+            [
+              "Compactions",
+              String(Math.max(0, Math.floor(session.compaction_count ?? 0))),
+            ],
+            [
+              "Window",
+              session.runtime_context_window_tokens
+                ? formatCompactTokens(session.runtime_context_window_tokens)
+                : "Not reported",
+            ],
             ["Source", session.runtime_context_window_source || "Not reported"],
-            ["Observed", formatToolFullTime(session.runtime_context_window_observed_at ?? undefined) || "Not observed"],
+            [
+              "Observed",
+              formatToolFullTime(
+                session.runtime_context_window_observed_at ?? undefined,
+              ) || "Not observed",
+            ],
           ]}
         />
       );
@@ -6720,7 +7703,12 @@ function SessionDataCardDetails({
       return (
         <SessionDataFacts
           facts={[
-            ["State", session.rollout_state?.active ? "Release workflow in progress" : "No active rollout"],
+            [
+              "State",
+              session.rollout_state?.active
+                ? "Release workflow in progress"
+                : "No active rollout",
+            ],
           ]}
         />
       );
@@ -6728,7 +7716,12 @@ function SessionDataCardDetails({
       return (
         <SessionDataFacts
           facts={[
-            ["Link", session.test_state?.pull_request_url ? row.detail : "No pull request linked"],
+            [
+              "Link",
+              session.test_state?.pull_request_url
+                ? row.detail
+                : "No pull request linked",
+            ],
           ]}
         />
       );
@@ -6747,7 +7740,11 @@ function SessionDataCardDetails({
             wrapperClassName="run-session-data-bug-picker"
             triggerClassName="run-session-data-action"
             iconClassName="run-session-data-action-icon"
-            triggerContent={<span>{bugLabelNames.length > 0 ? "Change bugs" : "Attach bug"}</span>}
+            triggerContent={
+              <span>
+                {bugLabelNames.length > 0 ? "Change bugs" : "Attach bug"}
+              </span>
+            }
           />
           {readOnly && (
             <span className="run-session-data-readonly">Read-only session</span>
@@ -6785,10 +7782,18 @@ function SessionDataRepoList({
   cloneState: Record<string, unknown> | null;
 }) {
   if (repos.length === 0) {
-    return <div className="run-session-data-empty">No repositories are linked to this session.</div>;
+    return (
+      <div className="run-session-data-empty">
+        No repositories are linked to this session.
+      </div>
+    );
   }
   return (
-    <div className="run-session-data-repo-list" role="list" aria-label="Linked repositories">
+    <div
+      className="run-session-data-repo-list"
+      role="list"
+      aria-label="Linked repositories"
+    >
       {repos.map((repo) => {
         const clone = sessionDataCloneDisplay(cloneState?.[repo]);
         return (
@@ -6813,29 +7818,46 @@ function SessionDataRepoList({
   );
 }
 
-function sessionDataCloneDisplay(value: unknown): { label: string; tone: StatusTone } {
+function sessionDataCloneDisplay(value: unknown): {
+  label: string;
+  tone: StatusTone;
+} {
   if (value === undefined) return { label: "Selected", tone: "info" };
   const text = sessionDataCloneText(value);
-  if (/\b(error|failed|failure|fatal|denied|unauthorized|timeout)\b/i.test(text)) {
+  if (
+    /\b(error|failed|failure|fatal|denied|unauthorized|timeout)\b/i.test(text)
+  ) {
     return { label: "Clone issue", tone: "danger" };
   }
   if (/\b(pending|running|cloning|checkout|queued|starting)\b/i.test(text)) {
     return { label: "Syncing", tone: "warning" };
   }
-  if (/\b(ok|ready|done|success|succeeded|complete|completed|cloned)\b/i.test(text)) {
+  if (
+    /\b(ok|ready|done|success|succeeded|complete|completed|cloned)\b/i.test(
+      text,
+    )
+  ) {
     return { label: "Ready", tone: "good" };
   }
-  return text.trim() ? { label: "Checking", tone: "warning" } : { label: "Selected", tone: "info" };
+  return text.trim()
+    ? { label: "Checking", tone: "warning" }
+    : { label: "Selected", tone: "info" };
 }
 
 function sessionDataCloneText(value: unknown): string {
   if (value == null) return "";
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
     return String(value);
   }
   if (Array.isArray(value)) return value.map(sessionDataCloneText).join(" ");
   if (typeof value === "object") {
-    return Object.values(value as Record<string, unknown>).map(sessionDataCloneText).join(" ");
+    return Object.values(value as Record<string, unknown>)
+      .map(sessionDataCloneText)
+      .join(" ");
   }
   return "";
 }
@@ -6879,27 +7901,38 @@ function BackgroundScreen({
   canStopEntry: (entry: TranscriptEntry) => boolean;
   onStop: (entry: TranscriptEntry) => void;
 }) {
-  const displayEntries = view === "scheduled"
-    ? scheduledEntries
-    : view === "control"
-      ? controlEntries
-    : view === "shells"
-      ? shellEntries
-      : detachedEntries;
+  const displayEntries =
+    view === "scheduled"
+      ? scheduledEntries
+      : view === "control"
+        ? controlEntries
+        : view === "shells"
+          ? shellEntries
+          : detachedEntries;
   const managedTaskCount = shellEntries.filter(isBackgroundTaskEntry).length;
-  const shellInvocationCount = shellEntries.filter(isRunningShellInvocationEntry).length;
+  const shellInvocationCount = shellEntries.filter(
+    isRunningShellInvocationEntry,
+  ).length;
   const selected =
     displayEntries.find((entry) => entry.id === selectedId) ??
     displayEntries[0] ??
     null;
-  const listLabel = view === "scheduled" ? "Scheduled" : view === "control" ? "Control" : view === "shells" ? "Active" : "Detected";
-  const emptyText = view === "scheduled"
-    ? "No scheduled continuations."
-    : view === "control"
-      ? "No control actions."
-    : view === "shells"
-      ? "No active shells."
-      : "No detached process candidates.";
+  const listLabel =
+    view === "scheduled"
+      ? "Scheduled"
+      : view === "control"
+        ? "Control"
+        : view === "shells"
+          ? "Active"
+          : "Detected";
+  const emptyText =
+    view === "scheduled"
+      ? "No scheduled continuations."
+      : view === "control"
+        ? "No control actions."
+        : view === "shells"
+          ? "No active shells."
+          : "No detached process candidates.";
   const selectedStopAvailable = selected ? canStopEntry(selected) : false;
   return (
     <div className="run-shell-tasks-page">
@@ -6908,13 +7941,20 @@ function BackgroundScreen({
           <span>{listLabel}</span>
           <span>{displayEntries.length}</span>
         </div>
-        <div className="run-background-breakdown" aria-label="Background activity types">
+        <div
+          className="run-background-breakdown"
+          aria-label="Background activity types"
+        >
           <span>Tasks {managedTaskCount}</span>
           <span>Shell {shellInvocationCount}</span>
           <span>Scheduled {scheduledEntries.length}</span>
           <span>Control {controlEntries.length}</span>
         </div>
-        <div className="run-background-tabs" role="tablist" aria-label="Background views">
+        <div
+          className="run-background-tabs"
+          role="tablist"
+          aria-label="Background views"
+        >
           <button
             type="button"
             className={`run-background-tab${view === "shells" ? " run-background-tab-active" : ""}`}
@@ -6969,8 +8009,12 @@ function BackgroundScreen({
             >
               <span className="run-shell-task-row-dot" aria-hidden="true" />
               <span className="run-shell-task-row-main">
-                <span className="run-shell-task-row-title">{backgroundActivityTitle(entry)}</span>
-                <span className="run-shell-task-row-sub">{backgroundActivitySubtitle(entry)}</span>
+                <span className="run-shell-task-row-title">
+                  {backgroundActivityTitle(entry)}
+                </span>
+                <span className="run-shell-task-row-sub">
+                  {backgroundActivitySubtitle(entry)}
+                </span>
               </span>
               <span className="run-shell-task-row-status">
                 {backgroundActivityStatusLabel(entry)}
@@ -7023,53 +8067,113 @@ function BackgroundScreen({
               </div>
             </div>
             <div className="run-shell-task-meta">
-              <BackgroundMeta label="Type" value={backgroundActivityKindLabel(selected)} />
+              <BackgroundMeta
+                label="Type"
+                value={backgroundActivityKindLabel(selected)}
+              />
               {isControlActionEntry(selected) ? (
                 <>
                   <BackgroundMeta label="Invocation" value={selected.taskId} />
-                  <BackgroundMeta label="Tool" value={selected.controlActionTool} />
-                  <BackgroundMeta label="Action" value={selected.controlActionAction} />
-                  <BackgroundMeta label="Repo" value={selected.controlActionRepo} />
-                  <BackgroundMeta label="PR" value={selected.controlActionPrNumber == null ? undefined : `#${selected.controlActionPrNumber}`} />
-                  <BackgroundMeta label="SHA" value={selected.controlActionSha} />
+                  <BackgroundMeta
+                    label="Tool"
+                    value={selected.controlActionTool}
+                  />
+                  <BackgroundMeta
+                    label="Action"
+                    value={selected.controlActionAction}
+                  />
+                  <BackgroundMeta
+                    label="Repo"
+                    value={selected.controlActionRepo}
+                  />
+                  <BackgroundMeta
+                    label="PR"
+                    value={
+                      selected.controlActionPrNumber == null
+                        ? undefined
+                        : `#${selected.controlActionPrNumber}`
+                    }
+                  />
+                  <BackgroundMeta
+                    label="SHA"
+                    value={selected.controlActionSha}
+                  />
                 </>
               ) : isScheduledWakeupEntry(selected) ? (
                 <>
                   <BackgroundMeta label="Wakeup" value={selected.taskId} />
-                  <BackgroundMeta label="Item" value={selected.providerItemId} />
-                  <BackgroundMeta label="Created turn" value={selected.turnId} />
-                  <BackgroundMeta label="Fired turn" value={selected.wakeupFiredTurnId} />
-                  <BackgroundMeta label="Due" value={formatToolFullTime(selected.wakeupDueAt)} />
-                  <BackgroundMeta label="Attempts" value={selected.wakeupAttemptCount} />
+                  <BackgroundMeta
+                    label="Item"
+                    value={selected.providerItemId}
+                  />
+                  <BackgroundMeta
+                    label="Created turn"
+                    value={selected.turnId}
+                  />
+                  <BackgroundMeta
+                    label="Fired turn"
+                    value={selected.wakeupFiredTurnId}
+                  />
+                  <BackgroundMeta
+                    label="Due"
+                    value={formatToolFullTime(selected.wakeupDueAt)}
+                  />
+                  <BackgroundMeta
+                    label="Attempts"
+                    value={selected.wakeupAttemptCount}
+                  />
                 </>
               ) : isBackgroundTaskEntry(selected) ? (
                 <>
                   <BackgroundMeta label="Task" value={selected.taskId} />
-                  <BackgroundMeta label="Process" value={selected.taskProcessId} />
+                  <BackgroundMeta
+                    label="Process"
+                    value={selected.taskProcessId}
+                  />
                   <BackgroundMeta label="Cwd" value={selected.taskCwd} />
                 </>
               ) : isDetachedShellCandidateEntry(selected) ? (
                 <>
-                  <BackgroundMeta label="PID" value={detachedShellPid(selected)} />
-                  <BackgroundMeta label="Reason" value={detachedShellLaunchReason(selected)} />
-                  <BackgroundMeta label="Item" value={selected.providerItemId} />
+                  <BackgroundMeta
+                    label="PID"
+                    value={detachedShellPid(selected)}
+                  />
+                  <BackgroundMeta
+                    label="Reason"
+                    value={detachedShellLaunchReason(selected)}
+                  />
+                  <BackgroundMeta
+                    label="Item"
+                    value={selected.providerItemId}
+                  />
                 </>
               ) : (
                 <BackgroundMeta label="Item" value={selected.providerItemId} />
               )}
-              <BackgroundMeta label="Started" value={formatToolFullTime(backgroundActivityStartedAt(selected))} />
+              <BackgroundMeta
+                label="Started"
+                value={formatToolFullTime(
+                  backgroundActivityStartedAt(selected),
+                )}
+              />
               <BackgroundMeta
                 label="Duration"
-                value={selected.taskDurationMs == null ? undefined : formatTurnDuration(selected.taskDurationMs)}
+                value={
+                  selected.taskDurationMs == null
+                    ? undefined
+                    : formatTurnDuration(selected.taskDurationMs)
+                }
               />
               <BackgroundMeta label="Exit" value={selected.taskExitCode} />
             </div>
             {backgroundActivityCommand(selected) && (
               <div className="run-shell-task-section">
                 <div className="run-shell-task-section-label">
-                {isScheduledWakeupEntry(selected) ? "Prompt" : "Command"}
+                  {isScheduledWakeupEntry(selected) ? "Prompt" : "Command"}
                 </div>
-                <pre className="run-shell-task-code">{backgroundActivityCommand(selected)}</pre>
+                <pre className="run-shell-task-code">
+                  {backgroundActivityCommand(selected)}
+                </pre>
               </div>
             )}
             <div className="run-shell-task-section run-shell-task-section-output">
@@ -7082,8 +8186,8 @@ function BackgroundScreen({
                   : isControlActionEntry(selected)
                     ? "Waiting for terminal audit event."
                     : isScheduledWakeupEntry(selected)
-                    ? "Waiting for due time."
-                    : "No output yet."}
+                      ? "Waiting for due time."
+                      : "No output yet."}
               </pre>
             </div>
             {isBackgroundTaskEntry(selected) && selected.taskError != null && (
@@ -7142,15 +8246,20 @@ interface AskUserQuestion {
   secret: boolean;
 }
 
-function parseAskUserQuestions(input: Record<string, unknown> | null): AskUserQuestion[] {
+function parseAskUserQuestions(
+  input: Record<string, unknown> | null,
+): AskUserQuestion[] {
   if (!Array.isArray(input?.questions)) return [];
   return (input.questions as Array<Record<string, unknown>>).map((q) => {
     const rawOptions = Array.isArray(q.options) ? q.options : [];
-    const options = (rawOptions as Array<Record<string, unknown>>).map((opt) => ({
-      label: String(opt.label ?? ""),
-      description: typeof opt.description === "string" ? opt.description : undefined,
-      preview: typeof opt.preview === "string" ? opt.preview : undefined,
-    }));
+    const options = (rawOptions as Array<Record<string, unknown>>).map(
+      (opt) => ({
+        label: String(opt.label ?? ""),
+        description:
+          typeof opt.description === "string" ? opt.description : undefined,
+        preview: typeof opt.preview === "string" ? opt.preview : undefined,
+      }),
+    );
     return {
       question: String(q.question ?? ""),
       header: typeof q.header === "string" && q.header ? q.header : undefined,
@@ -7173,18 +8282,17 @@ function RunAwaitingInputCard({
   entry: TranscriptEntry;
   questionNavigation?: QuestionPageNavigation;
 }) {
-  const {
-    submitAnswer,
-    askUserQuestionDrafts,
-    setAskUserQuestionDraft,
-  } = useContext(RunContext);
+  const { submitAnswer, askUserQuestionDrafts, setAskUserQuestionDraft } =
+    useContext(RunContext);
   // The card is driven by the durable turn.awaiting_input handoff projected
   // into Turn activity. Submitting records the answer and creates a normal
   // Tank-visible continuation turn while the provider callback resumes through
   // a control-plane input_reply.
   const aw = entry.awaitingInput;
   const draftKey = aw?.timelineId || entry.id;
-  const draft = draftKey ? askUserQuestionDrafts[draftKey] ?? emptyAskUserQuestionDraft() : emptyAskUserQuestionDraft();
+  const draft = draftKey
+    ? (askUserQuestionDrafts[draftKey] ?? emptyAskUserQuestionDraft())
+    : emptyAskUserQuestionDraft();
   // Per-question selections (multi-select carries an array; single-select
   // is a single-element array or empty). Submission converts to the wire
   // shape `Record<questionText, string[]>` so single + multi share a
@@ -7198,9 +8306,13 @@ function RunAwaitingInputCard({
   // (awaitingInput.answered flips).
   const submittedSnapshot = draft.submittedSnapshot;
 
-  const questions = parseAskUserQuestions(aw ? { questions: aw.questions } : null);
+  const questions = parseAskUserQuestions(
+    aw ? { questions: aw.questions } : null,
+  );
   const visibleQuestionIndex =
-    aw?.questionIndex && aw.questionIndex >= 1 && aw.questionIndex <= questions.length
+    aw?.questionIndex &&
+    aw.questionIndex >= 1 &&
+    aw.questionIndex <= questions.length
       ? aw.questionIndex - 1
       : null;
   const visibleQuestions =
@@ -7210,9 +8322,13 @@ function RunAwaitingInputCard({
         ? [questions[visibleQuestionIndex]]
         : [];
 
-  function updateDraft(updater: (previous: AskUserQuestionDraft) => AskUserQuestionDraft): void {
+  function updateDraft(
+    updater: (previous: AskUserQuestionDraft) => AskUserQuestionDraft,
+  ): void {
     if (!draftKey) return;
-    setAskUserQuestionDraft(draftKey, (previous) => updater(previous ?? emptyAskUserQuestionDraft()));
+    setAskUserQuestionDraft(draftKey, (previous) =>
+      updater(previous ?? emptyAskUserQuestionDraft()),
+    );
   }
 
   // answered is durable: the server sets awaitingInput.answered=true once a
@@ -7252,7 +8368,8 @@ function RunAwaitingInputCard({
   // is true, and submit accepts text without an option pick.
   function questionHasResponse(q: AskUserQuestion): boolean {
     if ((selections[q.question]?.length ?? 0) > 0) return true;
-    if (q.allowFreeForm && (notes[q.question]?.trim().length ?? 0) > 0) return true;
+    if (q.allowFreeForm && (notes[q.question]?.trim().length ?? 0) > 0)
+      return true;
     return false;
   }
   const isReady =
@@ -7261,8 +8378,12 @@ function RunAwaitingInputCard({
     questions.length > 0 &&
     questions.every((q) => questionHasResponse(q));
   const visibleQuestion =
-    visibleQuestionIndex == null ? null : questions[visibleQuestionIndex] ?? null;
-  const visibleQuestionAnswered = visibleQuestion ? questionHasResponse(visibleQuestion) : false;
+    visibleQuestionIndex == null
+      ? null
+      : (questions[visibleQuestionIndex] ?? null);
+  const visibleQuestionAnswered = visibleQuestion
+    ? questionHasResponse(visibleQuestion)
+    : false;
   const hasNextQuestion = Boolean(questionNavigation?.nextPage);
   const hasPreviousQuestion = Boolean(questionNavigation?.previousPage);
 
@@ -7296,10 +8417,13 @@ function RunAwaitingInputCard({
   async function submit(): Promise<void> {
     if (submitting || answered || !isReady) return;
     const answers: Record<string, string[]> = {};
-    const annotations: Record<string, { preview?: string; notes?: string }> = {};
+    const annotations: Record<string, { preview?: string; notes?: string }> =
+      {};
     for (const q of questions) {
       const labels = selections[q.question] ?? [];
-      const notesText = q.allowFreeForm ? notes[q.question]?.trim() ?? "" : "";
+      const notesText = q.allowFreeForm
+        ? (notes[q.question]?.trim() ?? "")
+        : "";
       // The wire shape requires `answers[question]` to be a non-empty
       // string array. When the user only typed free-form text, we
       // synthesize a single "Other" label so the answers map stays valid;
@@ -7313,7 +8437,9 @@ function RunAwaitingInputCard({
       } else {
         continue;
       }
-      const preview = q.options.find((opt) => labels.includes(opt.label))?.preview;
+      const preview = q.options.find((opt) =>
+        labels.includes(opt.label),
+      )?.preview;
       const ann: { preview?: string; notes?: string } = {};
       if (preview) ann.preview = preview;
       if (notesText) ann.notes = notesText;
@@ -7323,10 +8449,13 @@ function RunAwaitingInputCard({
     // truth until the durable answer event lands (awaitingInput.answered).
     setSubmitting(true);
     setReplyError(null);
-    updateDraft((draft) => ({ ...draft, submittedSnapshot: { answers, annotations } }));
+    updateDraft((draft) => ({
+      ...draft,
+      submittedSnapshot: { answers, annotations },
+    }));
     try {
       if (!aw) throw new Error("awaiting-input target is not available");
-      await submitAnswer(aw.askingTurnId, {
+      await submitAnswer(aw.questionTurnId || entry.turnId || aw.askingTurnId, {
         providerItemId: aw.providerItemId,
         timelineId: aw.timelineId,
         answers,
@@ -7342,7 +8471,8 @@ function RunAwaitingInputCard({
 
   // confirmingSubmit = "just submitted, the durable answer event hasn't landed
   // yet" vs answered (awaitingInput.answered is true). Drives the status copy.
-  const confirmingSubmit = submittedSnapshot !== null && !(aw?.answered ?? false);
+  const confirmingSubmit =
+    submittedSnapshot !== null && !(aw?.answered ?? false);
 
   if (!aw || questions.length === 0) return null;
 
@@ -7426,9 +8556,13 @@ function RunAwaitingInputCard({
                           : "○"}
                     </span>
                     <span className="run-tool-ask-option-body">
-                      <span className="run-tool-ask-option-label">{opt.label}</span>
+                      <span className="run-tool-ask-option-label">
+                        {opt.label}
+                      </span>
                       {opt.description && (
-                        <span className="run-tool-ask-option-desc">{opt.description}</span>
+                        <span className="run-tool-ask-option-desc">
+                          {opt.description}
+                        </span>
                       )}
                       {opt.preview && selected && (
                         <span
@@ -7445,7 +8579,9 @@ function RunAwaitingInputCard({
             {answered && answeredNote && (
               <div className="run-tool-ask-notes-readonly">
                 <span className="run-tool-ask-notes-readonly-label">Notes</span>
-                <p className="run-tool-ask-notes-readonly-text">{answeredNote}</p>
+                <p className="run-tool-ask-notes-readonly-text">
+                  {answeredNote}
+                </p>
               </div>
             )}
             {showFreeForm && (
@@ -7472,7 +8608,9 @@ function RunAwaitingInputCard({
                       ? "Type your answer…"
                       : "Add a free-form reply or extra context…"
                   }
-                  {...(q.secret ? { spellCheck: false, autoComplete: "off" } : {})}
+                  {...(q.secret
+                    ? { spellCheck: false, autoComplete: "off" }
+                    : {})}
                 />
               </label>
             )}
@@ -7486,7 +8624,12 @@ function RunAwaitingInputCard({
               type="button"
               className="run-tool-ask-submit run-tool-ask-secondary-action"
               disabled={submitting}
-              onClick={() => questionNavigation?.previousPage && questionNavigation.onSelectPage?.(questionNavigation.previousPage)}
+              onClick={() =>
+                questionNavigation?.previousPage &&
+                questionNavigation.onSelectPage?.(
+                  questionNavigation.previousPage,
+                )
+              }
             >
               Previous question
             </button>
@@ -7496,7 +8639,10 @@ function RunAwaitingInputCard({
               type="button"
               className="run-tool-ask-submit"
               disabled={submitting || !visibleQuestionAnswered}
-              onClick={() => questionNavigation?.nextPage && questionNavigation.onSelectPage?.(questionNavigation.nextPage)}
+              onClick={() =>
+                questionNavigation?.nextPage &&
+                questionNavigation.onSelectPage?.(questionNavigation.nextPage)
+              }
             >
               Next question
             </button>
@@ -7512,121 +8658,15 @@ function RunAwaitingInputCard({
                 : undefined
             }
           >
-            {submitting ? "Sending…" : questions.length > 1 ? "Submit answers" : "Submit answer"}
+            {submitting
+              ? "Sending…"
+              : questions.length > 1
+                ? "Submit answers"
+                : "Submit answer"}
           </button>
         </div>
       )}
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
-    </div>
-  );
-}
-
-// RunNeedsInputAnnouncement paints turn.awaiting_input as the agent's
-// conversational handoff: execution is paused, but the assistant has stopped
-// speaking and the user owns the next input surface in Turns.
-function RunNeedsInputAnnouncement({
-  entry,
-  avatar,
-  onOpenTurn,
-  showTimestamps,
-}: {
-  entry: TranscriptEntry;
-  avatar: AgentAvatar | null;
-  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
-  showTimestamps: boolean;
-}) {
-  const awaitingInput = entry.awaitingInput;
-  const answered = awaitingInput?.answered ?? false;
-  const summary = entry.meta?.detail ?? "";
-  const state = needsInputAnnouncementState({
-    answered,
-    turnTerminalStatus: entry.turnTerminalStatus,
-  });
-  const title =
-    state === "settled"
-      ? "Input no longer needed"
-      : entry.meta?.title ?? (state === "answered" ? "Input answered" : "I need your input");
-  const targetTurnId = awaitingInput?.askingTurnId ?? entry.turnId ?? "";
-  const handleOpen = (): void => {
-    if (!targetTurnId) return;
-    onOpenTurn?.(targetTurnId, { anchor: "top", resetPage: true });
-  };
-  const navigable = Boolean(targetTurnId && onOpenTurn);
-  const ctaLabel = state === "waiting" ? "Answer in Turns" : "View in Turns";
-  const content = (
-    <>
-      <span className="run-needs-input-announcement-icon" aria-hidden="true">
-        {state === "answered" ? (
-          <CheckIcon size={14} aria-hidden="true" />
-        ) : state === "settled" ? (
-          <MessageSquareOffIcon size={14} aria-hidden="true" />
-        ) : (
-          <MessageSquareIcon size={14} aria-hidden="true" />
-        )}
-      </span>
-      <span className="run-needs-input-announcement-copy" data-slot="message-text">
-        <span className="run-needs-input-announcement-title">{title}</span>
-        {summary && (
-          <span className="run-needs-input-announcement-detail">{summary}</span>
-        )}
-      </span>
-      {navigable && (
-        <span className="run-needs-input-announcement-cta" aria-hidden="true">
-          {ctaLabel}
-        </span>
-      )}
-    </>
-  );
-  return (
-    <div
-      className="run-transcript-message"
-      data-slot="message"
-      data-variant="assistant"
-      data-role="assistant"
-      data-kind="needs-input-announcement"
-      data-message-id={entry.id}
-    >
-      <span className="run-msg-ai-avatar" aria-hidden="true">
-        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
-      </span>
-      <div className="run-needs-input-announcement-body">
-        {navigable ? (
-          <button
-            type="button"
-            className={`run-needs-input-announcement${
-              state === "answered" ? " run-needs-input-announcement-answered" : ""
-            }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
-            onClick={handleOpen}
-            data-slot="message-content"
-            data-state={state}
-            data-answered={answered ? "true" : "false"}
-            data-clickable="true"
-            aria-label={state === "waiting" ? "Answer the question in Turns" : "View the question in Turns"}
-          >
-            {content}
-          </button>
-        ) : (
-          <div
-            className={`run-needs-input-announcement${
-              state === "answered" ? " run-needs-input-announcement-answered" : ""
-            }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
-            data-slot="message-content"
-            data-state={state}
-            data-answered={answered ? "true" : "false"}
-            role="group"
-            aria-label={title}
-          >
-            {content}
-          </div>
-        )}
-        {showTimestamps && entry.time && (
-          <div className="run-msg-footer" data-always-visible="">
-            <div className="run-msg-timings">
-              <span className="run-msg-timing-row">{formatMessageTime(entry.time)}</span>
-            </div>
-          </div>
-        )}
-      </div>
     </div>
   );
 }
@@ -7642,7 +8682,7 @@ function ToolDiffBody({
   // Edit: old_string + new_string. Write: content (treat as full add).
   // MultiEdit: edits[]. ApplyPatch: patches/diff text.
   let blocks: { kind: "ctx" | "del" | "add"; text: string }[] = [];
-  if ((entry.toolName === "Edit") && input) {
+  if (entry.toolName === "Edit" && input) {
     blocks = computeLineDiff(
       String(input.old_string ?? ""),
       String(input.new_string ?? ""),
@@ -7698,7 +8738,11 @@ function ToolTodoBody({ input }: { input: Record<string, unknown> | null }) {
         return (
           <li key={i} className={`run-tool-todo run-tool-todo-${status}`}>
             <span className="run-tool-todo-marker" aria-hidden="true">
-              {status === "completed" ? "✓" : status === "in_progress" ? "→" : "○"}
+              {status === "completed"
+                ? "✓"
+                : status === "in_progress"
+                  ? "→"
+                  : "○"}
             </span>
             <span className="run-tool-todo-text">{content}</span>
           </li>
@@ -7723,7 +8767,9 @@ function ToolBashBody({
       {entry.toolOutput && (
         <>
           <div className="run-tool-section-title">output</div>
-          <PreWithLinks className="run-tool-bash-out">{entry.toolOutput}</PreWithLinks>
+          <PreWithLinks className="run-tool-bash-out">
+            {entry.toolOutput}
+          </PreWithLinks>
         </>
       )}
     </div>
@@ -7767,7 +8813,9 @@ function ToolDefaultBody({
       {entry.toolOutput && (
         <>
           <div className="run-tool-section-title">output</div>
-          <PreWithLinks className="run-tool-default-pre">{entry.toolOutput}</PreWithLinks>
+          <PreWithLinks className="run-tool-default-pre">
+            {entry.toolOutput}
+          </PreWithLinks>
         </>
       )}
     </div>
@@ -7799,10 +8847,7 @@ function RunToolItem({
         className="run-transcript-tool-connector"
         data-slot="tool-item-connector"
       >
-        <div
-          className="run-transcript-tool-dot"
-          data-slot="tool-item-dot"
-        />
+        <div className="run-transcript-tool-dot" data-slot="tool-item-dot" />
       </div>
       <div className="run-transcript-tool-content">
         <button
@@ -7818,7 +8863,10 @@ function RunToolItem({
             title={cfg.tooltip}
             aria-label={cfg.tooltip}
           >
-            <span className={`run-tool-icon-glyph ${cfg.colorClass}`} aria-hidden="true">
+            <span
+              className={`run-tool-icon-glyph ${cfg.colorClass}`}
+              aria-hidden="true"
+            >
               <cfg.Icon size={14} strokeWidth={2} />
             </span>
           </span>
@@ -7893,7 +8941,9 @@ function RunToolGroup({
           entry={entry}
           showTimestamps={showTimestamps}
           expanded={toolItemExpanded(entry, autoExpand, toolExpansionOverrides)}
-          onExpandedChange={(expanded) => onToolExpandedChange(entry.id, expanded)}
+          onExpandedChange={(expanded) =>
+            onToolExpandedChange(entry.id, expanded)
+          }
         />
       </div>
     );
@@ -7901,9 +8951,12 @@ function RunToolGroup({
   const runningCount = entries.filter(
     (e) => normalizeToolState(e.toolStatus) === "running",
   ).length;
-  const pendingAskUserCount = entries.filter(isPendingAskUserQuestionTool).length;
+  const pendingAskUserCount = entries.filter(
+    isPendingAskUserQuestionTool,
+  ).length;
   const errorCount = entries.filter(
-    (e) => (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
+    (e) =>
+      (e.toolStatus ?? "") === "failed" || (e.toolStatus ?? "") === "error",
   ).length;
   const summaryParts = [`${entries.length} tool calls`];
   if (runningCount > 0) {
@@ -7917,7 +8970,9 @@ function RunToolGroup({
   }
   const summary = summaryParts.join(" · ");
   const groupStartedAt = entries.find((entry) => entry.startedAt || entry.time);
-  const groupCompletedAt = [...entries].reverse().find((entry) => entry.completedAt);
+  const groupCompletedAt = [...entries]
+    .reverse()
+    .find((entry) => entry.completedAt);
   return (
     <div
       className="run-transcript-tools"
@@ -7935,11 +8990,7 @@ function RunToolGroup({
           title="Tool usage summary"
           aria-label="Tool usage summary"
         >
-          <WrenchIcon
-            size={14}
-            strokeWidth={2}
-            aria-hidden="true"
-          />
+          <WrenchIcon size={14} strokeWidth={2} aria-hidden="true" />
         </span>
         <span className="run-transcript-tools-label">{summary}</span>
         {showTimestamps && (
@@ -7972,7 +9023,9 @@ function RunToolGroup({
               entry={e}
               showTimestamps={showTimestamps}
               expanded={toolItemExpanded(e, autoExpand, toolExpansionOverrides)}
-              onExpandedChange={(expanded) => onToolExpandedChange(e.id, expanded)}
+              onExpandedChange={(expanded) =>
+                onToolExpandedChange(e.id, expanded)
+              }
             />
           ))}
         </div>
@@ -7981,7 +9034,10 @@ function RunToolGroup({
   );
 }
 
-function toolItemDefaultExpanded(entry: TranscriptEntry, autoExpand: boolean): boolean {
+function toolItemDefaultExpanded(
+  entry: TranscriptEntry,
+  autoExpand: boolean,
+): boolean {
   return autoExpand || isPendingAskUserQuestionTool(entry);
 }
 
@@ -8005,7 +9061,11 @@ function toolGroupDefaultOpen(
   );
 }
 
-function plural(count: number, singular: string, pluralLabel = `${singular}s`): string {
+function plural(
+  count: number,
+  singular: string,
+  pluralLabel = `${singular}s`,
+): string {
   return `${count} ${count === 1 ? singular : pluralLabel}`;
 }
 
@@ -8014,13 +9074,20 @@ function turnActivitySummary(entries: TranscriptEntry[]): string {
   const noteCount = entries.filter(
     (entry) => entry.kind === "message" && entry.role === "assistant",
   ).length;
-  const reasoningCount = entries.filter((entry) => entry.kind === "reasoning").length;
-  const taskCount = entries.filter((entry) => entry.kind === "background_task").length;
-  const questionCount = entries.filter((entry) => entry.metaKind === "awaiting_input").length;
+  const reasoningCount = entries.filter(
+    (entry) => entry.kind === "reasoning",
+  ).length;
+  const taskCount = entries.filter(
+    (entry) => entry.kind === "background_task",
+  ).length;
+  const questionCount = entries.filter(
+    (entry) => entry.metaKind === "awaiting_input",
+  ).length;
   const errorCount = entries.filter(
     (entry) =>
       (entry.kind === "tool" &&
-        ((entry.toolStatus ?? "") === "failed" || (entry.toolStatus ?? "") === "error")) ||
+        ((entry.toolStatus ?? "") === "failed" ||
+          (entry.toolStatus ?? "") === "error")) ||
       (entry.kind === "background_task" && entry.taskStatus === "failed") ||
       (entry.kind === "meta" && entry.meta?.severity === "error"),
   ).length;
@@ -8031,7 +9098,9 @@ function turnActivitySummary(entries: TranscriptEntry[]): string {
   if (noteCount > 0) parts.push(plural(noteCount, "progress note"));
   if (reasoningCount > 0) parts.push(plural(reasoningCount, "reasoning block"));
   if (errorCount > 0) parts.push(plural(errorCount, "error", "errors"));
-  return parts.length > 0 ? parts.join(" / ") : plural(entries.length, "update");
+  return parts.length > 0
+    ? parts.join(" / ")
+    : plural(entries.length, "update");
 }
 
 // Shared page-selector control for a turn's activity, used by BOTH the inline
@@ -8076,11 +9145,15 @@ function TurnActivityPager({
   );
 }
 
-function turnActivityShellSummary(summary: TurnActivitySummary | undefined): string {
+function turnActivityShellSummary(
+  summary: TurnActivitySummary | undefined,
+): string {
   if (!summary) return "Activity";
   const parts: string[] = [];
-  if ((summary.toolCount ?? 0) > 0) parts.push(plural(summary.toolCount ?? 0, "tool call"));
-  if ((summary.questionCount ?? 0) > 0) parts.push(plural(summary.questionCount ?? 0, "question"));
+  if ((summary.toolCount ?? 0) > 0)
+    parts.push(plural(summary.toolCount ?? 0, "tool call"));
+  if ((summary.questionCount ?? 0) > 0)
+    parts.push(plural(summary.questionCount ?? 0, "question"));
   if ((summary.backgroundTaskCount ?? 0) > 0) {
     parts.push(plural(summary.backgroundTaskCount ?? 0, "background task"));
   }
@@ -8090,12 +9163,15 @@ function turnActivityShellSummary(summary: TurnActivitySummary | undefined): str
   if ((summary.reasoningCount ?? 0) > 0) {
     parts.push(plural(summary.reasoningCount ?? 0, "reasoning block"));
   }
-  if ((summary.errorCount ?? 0) > 0) parts.push(plural(summary.errorCount ?? 0, "error", "errors"));
+  if ((summary.errorCount ?? 0) > 0)
+    parts.push(plural(summary.errorCount ?? 0, "error", "errors"));
   const childCount = summary.childCount ?? 0;
   return parts.length > 0 ? parts.join(" / ") : plural(childCount, "update");
 }
 
-function normalizeTurnActivityPageDirectory(input: unknown): TurnActivityPageDirectoryItem[] {
+function normalizeTurnActivityPageDirectory(
+  input: unknown,
+): TurnActivityPageDirectoryItem[] {
   if (!Array.isArray(input)) return [];
   const pages: TurnActivityPageDirectoryItem[] = [];
   for (const raw of input) {
@@ -8106,11 +9182,15 @@ function normalizeTurnActivityPageDirectory(input: unknown): TurnActivityPageDir
     pages.push({
       number,
       kind: typeof item.kind === "string" ? item.kind : undefined,
-      eventCount: typeof item.eventCount === "number" ? item.eventCount : undefined,
+      eventCount:
+        typeof item.eventCount === "number" ? item.eventCount : undefined,
       sealed: typeof item.sealed === "boolean" ? item.sealed : undefined,
-      questionCount: typeof item.questionCount === "number" ? item.questionCount : undefined,
-      questionIndex: typeof item.questionIndex === "number" ? item.questionIndex : undefined,
-      questionSet: typeof item.questionSet === "number" ? item.questionSet : undefined,
+      questionCount:
+        typeof item.questionCount === "number" ? item.questionCount : undefined,
+      questionIndex:
+        typeof item.questionIndex === "number" ? item.questionIndex : undefined,
+      questionSet:
+        typeof item.questionSet === "number" ? item.questionSet : undefined,
       answered: typeof item.answered === "boolean" ? item.answered : undefined,
     });
   }
@@ -8151,7 +9231,9 @@ function TurnActivityPageOptionLabel({
   return (
     <span className="run-turn-view-page-option">
       <span className="run-turn-view-page-option-index">{parts.pageLabel}</span>
-      <span className="run-turn-view-page-option-label">{parts.semanticLabel}</span>
+      <span className="run-turn-view-page-option-label">
+        {parts.semanticLabel}
+      </span>
     </span>
   );
 }
@@ -8181,11 +9263,21 @@ function turnEntryTimestamp(entry: TranscriptEntry): string | undefined {
   return entry.startedAt ?? entry.time ?? entry.completedAt ?? entry.updatedAt;
 }
 
-function turnEntryLastActivityTimestamp(entry: TranscriptEntry): string | undefined {
-  return entry.completedAt ?? entry.updatedAt ?? entry.turnTerminalAt ?? entry.time ?? entry.startedAt;
+function turnEntryLastActivityTimestamp(
+  entry: TranscriptEntry,
+): string | undefined {
+  return (
+    entry.completedAt ??
+    entry.updatedAt ??
+    entry.turnTerminalAt ??
+    entry.time ??
+    entry.startedAt
+  );
 }
 
-function latestTurnActivityTimestamp(entries: TranscriptEntry[]): string | undefined {
+function latestTurnActivityTimestamp(
+  entries: TranscriptEntry[],
+): string | undefined {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const timestamp = turnEntryLastActivityTimestamp(entries[index]!);
     if (timestamp) return timestamp;
@@ -8245,6 +9337,17 @@ function buildTurnViewItems(
     const bucket = rawEntries.get(turnId) ?? [];
     bucket.push(entry);
     rawEntries.set(turnId, bucket);
+    const questionTurnId = entry.awaitingInput?.questionTurnId?.trim() ?? "";
+    if (questionTurnId && !order.has(questionTurnId)) {
+      order.set(questionTurnId, index + 0.01);
+      const questionBucket = rawEntries.get(questionTurnId) ?? [];
+      questionBucket.push({
+        ...entry,
+        turnId: questionTurnId,
+        turnNumber: entry.awaitingInput?.questionTurnNumber,
+      });
+      rawEntries.set(questionTurnId, questionBucket);
+    }
   });
   for (const loadedEntries of Object.values(activityEntriesByTurn)) {
     for (const entry of loadedEntries ?? []) addCostRow(entry);
@@ -8257,10 +9360,19 @@ function buildTurnViewItems(
     .sort((a, b) => a[1] - b[1])
     .map(([turnId]) => {
       const shell = shells.get(turnId);
+      const rawTurnEntries = rawEntries.get(turnId) ?? [];
       const turnNumber =
-        typeof shell?.turnNumber === "number" ? shell.turnNumber : null;
+        typeof shell?.turnNumber === "number"
+          ? shell.turnNumber
+          : typeof rawTurnEntries.find(
+                (entry) => typeof entry.turnNumber === "number",
+              )?.turnNumber === "number"
+            ? rawTurnEntries.find(
+                (entry) => typeof entry.turnNumber === "number",
+              )!.turnNumber!
+            : null;
       const loadedEntries = activityEntriesByTurn[turnId];
-      const turnEntries = loadedEntries ?? rawEntries.get(turnId) ?? [];
+      const turnEntries = loadedEntries ?? rawTurnEntries;
       const shellSummary = shell?.activity;
       const startedAt =
         shellSummary?.startedAt ??
@@ -8268,9 +9380,21 @@ function buildTurnViewItems(
         turnEntries.find((entry) => turnEntryTimestamp(entry))?.time;
       const completedAt =
         shellSummary?.completedAt ??
-        [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.completedAt ??
-        [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.turnTerminalAt ??
-        [...turnEntries].reverse().find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time)?.time;
+        [...turnEntries]
+          .reverse()
+          .find(
+            (entry) => entry.completedAt || entry.turnTerminalAt || entry.time,
+          )?.completedAt ??
+        [...turnEntries]
+          .reverse()
+          .find(
+            (entry) => entry.completedAt || entry.turnTerminalAt || entry.time,
+          )?.turnTerminalAt ??
+        [...turnEntries]
+          .reverse()
+          .find(
+            (entry) => entry.completedAt || entry.turnTerminalAt || entry.time,
+          )?.time;
       const lastActivityAt = turnActivityLastActivityAt(shell, turnEntries);
       const costRows = Array.from(costRowsByTurn.get(turnId)?.values() ?? []);
       return {
@@ -8282,7 +9406,9 @@ function buildTurnViewItems(
         // neutral label rather than an array index, which is not a stable
         // identity and is blocked from reintroduction by the migration guard.
         label: turnNumber != null ? `Turn ${turnNumber}` : "Current turn",
-        summary: shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(turnEntries),
+        summary: shell
+          ? turnActivityShellSummary(shellSummary)
+          : turnActivitySummary(turnEntries),
         entries: turnEntries,
         shell,
         active:
@@ -8290,7 +9416,11 @@ function buildTurnViewItems(
           (turnId === active && shellSummary?.status !== "needs_input"),
         loaded: Boolean(loadedEntries),
         costEstimate: estimateTurnCost(costRows, modelId, turnId),
-        contextTokens: estimateTurnContextTokens(costRows, contextWindow, turnId),
+        contextTokens: estimateTurnContextTokens(
+          costRows,
+          contextWindow,
+          turnId,
+        ),
         startedAt,
         completedAt,
         lastActivityAt,
@@ -8383,7 +9513,10 @@ function readPersistedTurnThinkingStart(cacheKey: string): number | null {
   }
 }
 
-function writePersistedTurnThinkingStart(cacheKey: string, value: number): void {
+function writePersistedTurnThinkingStart(
+  cacheKey: string,
+  value: number,
+): void {
   if (typeof window === "undefined" || !window.sessionStorage) return;
   try {
     window.sessionStorage.setItem(cacheKey, String(value));
@@ -8510,7 +9643,9 @@ function RunTurnThinkingLastActivity({
 }) {
   const now = useTurnThinkingNow();
   const activityMs = parseOptionalTimestampMs(lastActivityAt);
-  const value = formatThinkingLastActivity(activityMs === null ? null : now - activityMs);
+  const value = formatThinkingLastActivity(
+    activityMs === null ? null : now - activityMs,
+  );
   const fullTime = lastActivityAt ? formatToolFullTime(lastActivityAt) : "";
   return (
     <span
@@ -8518,7 +9653,11 @@ function RunTurnThinkingLastActivity({
       aria-live="off"
       data-design-element="thinking-last-activity"
       data-turn-id={turnId}
-      title={fullTime ? `Last activity ${fullTime}` : "Waiting for first projected activity"}
+      title={
+        fullTime
+          ? `Last activity ${fullTime}`
+          : "Waiting for first projected activity"
+      }
     >
       {value}
     </span>
@@ -8557,14 +9696,19 @@ function RunTurnThinkingBubble({
         onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}
       >
         <span className="run-turn-thinking-lines">
-          <span className="run-turn-thinking-label run-turn-thinking-shimmer">Thinking...</span>
+          <span className="run-turn-thinking-label run-turn-thinking-shimmer">
+            Thinking...
+          </span>
           <span className="run-turn-thinking-meta-row">
             <span className="run-turn-thinking-meta-label">Runtime</span>
             <RunTurnThinkingDuration userKey={userKey} turnId={turnId} />
           </span>
           <span className="run-turn-thinking-meta-row">
             <span className="run-turn-thinking-meta-label">Last activity</span>
-            <RunTurnThinkingLastActivity lastActivityAt={lastActivityAt} turnId={turnId} />
+            <RunTurnThinkingLastActivity
+              lastActivityAt={lastActivityAt}
+              turnId={turnId}
+            />
           </span>
         </span>
       </button>
@@ -8632,18 +9776,22 @@ function RunTurnActivityGroup({
     [group.compactedEntryIds],
   );
   const childGroups = useMemo(
-    () => groupFlatTranscriptEntries(
-      group.entries.filter((entry) => !ownedAssistantEntryIds.has(entry.id)),
-    ),
+    () =>
+      groupFlatTranscriptEntries(
+        group.entries.filter((entry) => !ownedAssistantEntryIds.has(entry.id)),
+      ),
     [group.entries, ownedAssistantEntryIds],
   );
-  const startedAt = group.entries.find((entry) => entry.startedAt || entry.time);
+  const startedAt = group.entries.find(
+    (entry) => entry.startedAt || entry.time,
+  );
   const completedAt = [...group.entries]
     .reverse()
     .find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time);
   const shellSummary = group.shell?.activity;
   const needsInput = shellSummary?.status === "needs_input";
-  const questionCount = shellSummary?.questionCount ?? pageInfo?.questionCount ?? 0;
+  const questionCount =
+    shellSummary?.questionCount ?? pageInfo?.questionCount ?? 0;
   // Always-present pager state: a single-page turn renders a disabled
   // "page 1 of 1" rather than vanishing, so the affordance never looks absent.
   const pagerState = turnActivityPagerState(pageInfo);
@@ -8652,7 +9800,9 @@ function RunTurnActivityGroup({
       className="run-turn-activity"
       data-state={open ? "open" : "closed"}
       data-active={group.active === true ? "true" : undefined}
-      data-inline-response={ownedAssistantEntries.length > 0 ? "true" : undefined}
+      data-inline-response={
+        ownedAssistantEntries.length > 0 ? "true" : undefined
+      }
     >
       <span className="run-turn-activity-avatar" aria-hidden="true">
         <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
@@ -8667,8 +9817,12 @@ function RunTurnActivityGroup({
           >
             <span
               className="run-turn-activity-icon"
-              title={needsInput ? "Agent needs input" : "Condensed turn activity"}
-              aria-label={needsInput ? "Agent needs input" : "Condensed turn activity"}
+              title={
+                needsInput ? "Agent needs input" : "Condensed turn activity"
+              }
+              aria-label={
+                needsInput ? "Agent needs input" : "Condensed turn activity"
+              }
             >
               <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
             </span>
@@ -8684,7 +9838,11 @@ function RunTurnActivityGroup({
             </span>
             {showTimestamps && (
               <ToolTiming
-                startedAt={shellSummary?.startedAt ?? startedAt?.startedAt ?? startedAt?.time}
+                startedAt={
+                  shellSummary?.startedAt ??
+                  startedAt?.startedAt ??
+                  startedAt?.time
+                }
                 completedAt={
                   shellSummary?.completedAt ??
                   completedAt?.completedAt ??
@@ -8706,7 +9864,9 @@ function RunTurnActivityGroup({
             <button
               type="button"
               className="run-turn-activity-action"
-              onClick={() => onOpenTurn(group.turnId, { anchor: "top", resetPage: true })}
+              onClick={() =>
+                onOpenTurn(group.turnId, { anchor: "top", resetPage: true })
+              }
             >
               Answer questions
             </button>
@@ -8714,109 +9874,126 @@ function RunTurnActivityGroup({
           {open && (
             <div className="run-turn-activity-body">
               {onSelectPage && (
-                <TurnActivityPager pagerState={pagerState} onSelectPage={onSelectPage} />
+                <TurnActivityPager
+                  pagerState={pagerState}
+                  onSelectPage={onSelectPage}
+                />
               )}
               {group.shell && !group.loaded ? (
-                <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
-                  <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-                  <span>{loading ? "Loading activity..." : "Activity details unavailable."}</span>
+                <div
+                  className="run-shell-loading run-turn-activity-loading"
+                  role="status"
+                  aria-live="polite"
+                >
+                  <Loader2Icon
+                    size={14}
+                    className="run-spin"
+                    aria-hidden="true"
+                  />
+                  <span>
+                    {loading
+                      ? "Loading activity..."
+                      : "Activity details unavailable."}
+                  </span>
                 </div>
-              ) : childGroups.map((child, childIndex) => {
-                if (child.kind === "tools") {
-                  const childGroupKey = toolGroupStateKey(child.entries);
-                  return (
-                    <RunToolGroup
-                      key={childGroupKey}
-                      entries={child.entries}
-                      autoExpand={autoExpandTools}
-                      showTimestamps={showTimestamps}
-                      open={
-                        toolGroupOpenOverrides[childGroupKey] ??
-                        toolGroupDefaultOpen(
-                          child.entries,
-                          autoExpandTools,
-                          toolExpansionOverrides,
-                        )
-                      }
-                      onOpenChange={(nextOpen) =>
-                        onToolGroupOpenChange(childGroupKey, nextOpen)
-                      }
-                      toolExpansionOverrides={toolExpansionOverrides}
-                      onToolExpandedChange={onToolExpandedChange}
-                    />
-                  );
-                }
-                if (child.kind === "reasoning") {
-                  return (
-                    <RunReasoningBlock
-                      key={child.entry.id}
-                      entry={child.entry}
-                      showThinking={showThinking}
-                    />
-                  );
-                }
-                if (child.kind === "meta") {
-                  if (child.entry.metaKind === "awaiting_input") {
+              ) : (
+                childGroups.map((child, childIndex) => {
+                  if (child.kind === "tools") {
+                    const childGroupKey = toolGroupStateKey(child.entries);
                     return (
-                      <RunNeedsInputAnnouncement
+                      <RunToolGroup
+                        key={childGroupKey}
+                        entries={child.entries}
+                        autoExpand={autoExpandTools}
+                        showTimestamps={showTimestamps}
+                        open={
+                          toolGroupOpenOverrides[childGroupKey] ??
+                          toolGroupDefaultOpen(
+                            child.entries,
+                            autoExpandTools,
+                            toolExpansionOverrides,
+                          )
+                        }
+                        onOpenChange={(nextOpen) =>
+                          onToolGroupOpenChange(childGroupKey, nextOpen)
+                        }
+                        toolExpansionOverrides={toolExpansionOverrides}
+                        onToolExpandedChange={onToolExpandedChange}
+                      />
+                    );
+                  }
+                  if (child.kind === "reasoning") {
+                    return (
+                      <RunReasoningBlock
                         key={child.entry.id}
                         entry={child.entry}
-                        avatar={avatar}
-                        onOpenTurn={onOpenTurn}
+                        showThinking={showThinking}
+                      />
+                    );
+                  }
+                  if (child.kind === "meta") {
+                    if (child.entry.metaKind === "awaiting_input") {
+                      return (
+                        <RunAwaitingInputCard
+                          key={child.entry.id}
+                          entry={child.entry}
+                        />
+                      );
+                    }
+                    if (child.entry.metaKind === "turn_usage") return null;
+                    return (
+                      <RunMetaBlock
+                        key={child.entry.id}
+                        entry={child.entry}
+                        systemAvatar={systemAvatar}
+                      />
+                    );
+                  }
+                  if (child.kind === "background_task") {
+                    return (
+                      <RunBackgroundTaskBlock
+                        key={child.entry.id}
+                        entry={child.entry}
+                        showTimestamps={showTimestamps}
+                        onOpenTask={onOpenBackgroundTask}
+                      />
+                    );
+                  }
+                  if (child.kind === "message_group") {
+                    return (
+                      <RunSystemMessageGroupBubble
+                        key={entryGroupKey(child)}
+                        entries={child.entries}
+                        systemAvatar={systemAvatar}
+                        highlightedEntryId={highlightedEntryId}
                         showTimestamps={showTimestamps}
                       />
                     );
                   }
-                  if (child.entry.metaKind === "turn_usage") return null;
+                  if (child.kind === "thinking") return null;
                   return (
-                    <RunMetaBlock
+                    <RunMessageBubble
                       key={child.entry.id}
                       entry={child.entry}
+                      avatar={avatar}
                       systemAvatar={systemAvatar}
-                    />
-                  );
-                }
-                if (child.kind === "background_task") {
-                  return (
-                    <RunBackgroundTaskBlock
-                      key={child.entry.id}
-                      entry={child.entry}
+                      sessionId={sessionId}
+                      highlighted={
+                        compactedEntryIds.has(child.entry.id) &&
+                        highlightedEntryId === child.entry.id
+                      }
                       showTimestamps={showTimestamps}
-                      onOpenTask={onOpenBackgroundTask}
+                      showDuration={showDuration}
+                      onQuote={onQuote}
+                      canonicalMessage={false}
+                      isAvatarContinuation={isMessageAvatarContinuation(
+                        childGroups,
+                        childIndex,
+                      )}
                     />
                   );
-                }
-                if (child.kind === "message_group") {
-                  return (
-                    <RunSystemMessageGroupBubble
-                      key={entryGroupKey(child)}
-                      entries={child.entries}
-                      systemAvatar={systemAvatar}
-                      highlightedEntryId={highlightedEntryId}
-                      showTimestamps={showTimestamps}
-                    />
-                  );
-                }
-                if (child.kind === "thinking") return null;
-                return (
-                  <RunMessageBubble
-                    key={child.entry.id}
-                    entry={child.entry}
-                    avatar={avatar}
-                    systemAvatar={systemAvatar}
-                    sessionId={sessionId}
-                    highlighted={
-                      compactedEntryIds.has(child.entry.id) &&
-                      highlightedEntryId === child.entry.id
-                    }
-                    showTimestamps={showTimestamps}
-                    showDuration={showDuration}
-                    onQuote={onQuote}
-                    canonicalMessage={false}
-                    isAvatarContinuation={isMessageAvatarContinuation(childGroups, childIndex)}
-                  />
-                );
-              })}
+                })
+              )}
             </div>
           )}
         </div>
@@ -8877,7 +10054,10 @@ function RunTurnActivityScreen({
   // matching prop on RunMessages for the rationale.
   userKey: string;
   loadingActivityTurns: Record<string, boolean | undefined>;
-  activityRefreshProblemsByTurn: Record<string, ActivityRefreshProblem | undefined>;
+  activityRefreshProblemsByTurn: Record<
+    string,
+    ActivityRefreshProblem | undefined
+  >;
   onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   transcriptHrefForEntry?: (entry: TranscriptEntry) => string | undefined;
@@ -8887,8 +10067,14 @@ function RunTurnActivityScreen({
   turnActivityPageInfo?: Record<string, TurnActivityPageInfo | undefined>;
   onActivitySelectPage?: (turnId: string, page: number) => void;
 }) {
-  const selected = turns.find((turn) => turn.turnId === selectedTurnId) ?? turns[turns.length - 1] ?? null;
-  const selectedPageInfo = selected && turnActivityPageInfo ? turnActivityPageInfo[selected.turnId] : undefined;
+  const selected =
+    turns.find((turn) => turn.turnId === selectedTurnId) ??
+    turns[turns.length - 1] ??
+    null;
+  const selectedPageInfo =
+    selected && turnActivityPageInfo
+      ? turnActivityPageInfo[selected.turnId]
+      : undefined;
   // Same always-present pager as the inline chat disclosure, for the surface a
   // user actually inspects turns from. Without it, a turn over the page limit
   // shows only its last page here (the endpoint default) with no way back.
@@ -8904,42 +10090,63 @@ function RunTurnActivityScreen({
     () => groupFlatTranscriptEntries(detailEntries),
     [detailEntries],
   );
-  const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<Record<string, boolean>>({});
-  const [toolExpansionOverrides, setToolExpansionOverrides] = useState<Record<string, boolean>>({});
+  const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<
+    Record<string, boolean>
+  >({});
+  const [toolExpansionOverrides, setToolExpansionOverrides] = useState<
+    Record<string, boolean>
+  >({});
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const consumedScrollRequestRef = useRef(0);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
-    setToolGroupOpenOverrides((prev) => (
-      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
-    ));
+    setToolGroupOpenOverrides((prev) =>
+      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
+    );
   }, []);
   const setToolExpanded = useCallback((entryId: string, expanded: boolean) => {
-    setToolExpansionOverrides((prev) => (
-      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded }
-    ));
+    setToolExpansionOverrides((prev) =>
+      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded },
+    );
   }, []);
-  const loading = selected ? loadingActivityTurns[selected.turnId] === true : false;
-  const refreshProblem = selected ? activityRefreshProblemsByTurn[selected.turnId] : undefined;
-  const showRefreshProblemOnly = Boolean(refreshProblem) && detailGroups.length === 0;
-  const selectedPageDirectoryItem = selectedPageInfo?.pages?.find((page) => page.number === pagerState.page);
-  const selectedPageOptionParts = turnActivityPageOptionParts(pagerState.page, selectedPageDirectoryItem);
-  const questionPageNavigation = useMemo<QuestionPageNavigation | undefined>(() => {
-    if (!selectedPageInfo || selectedPageInfo.kind !== "question_set") return undefined;
+  const loading = selected
+    ? loadingActivityTurns[selected.turnId] === true
+    : false;
+  const refreshProblem = selected
+    ? activityRefreshProblemsByTurn[selected.turnId]
+    : undefined;
+  const showRefreshProblemOnly =
+    Boolean(refreshProblem) && detailGroups.length === 0;
+  const selectedPageDirectoryItem = selectedPageInfo?.pages?.find(
+    (page) => page.number === pagerState.page,
+  );
+  const selectedPageOptionParts = turnActivityPageOptionParts(
+    pagerState.page,
+    selectedPageDirectoryItem,
+  );
+  const questionPageNavigation = useMemo<
+    QuestionPageNavigation | undefined
+  >(() => {
+    if (!selectedPageInfo || selectedPageInfo.kind !== "question_set")
+      return undefined;
     const directory = selectedPageInfo.pages ?? [];
     const sameSetPages = directory
-      .filter((page) =>
-        page.kind === "question_set" &&
-        (selectedPageInfo.questionSet
-          ? page.questionSet === selectedPageInfo.questionSet
-          : true),
+      .filter(
+        (page) =>
+          page.kind === "question_set" &&
+          (selectedPageInfo.questionSet
+            ? page.questionSet === selectedPageInfo.questionSet
+            : true),
       )
       .sort((a, b) => {
         const ai = a.questionIndex ?? a.number;
         const bi = b.questionIndex ?? b.number;
         return ai - bi;
       });
-    const currentIndex = sameSetPages.findIndex((page) => page.number === selectedPageInfo.page);
-    const previousPage = currentIndex > 0 ? sameSetPages[currentIndex - 1]?.number : undefined;
+    const currentIndex = sameSetPages.findIndex(
+      (page) => page.number === selectedPageInfo.page,
+    );
+    const previousPage =
+      currentIndex > 0 ? sameSetPages[currentIndex - 1]?.number : undefined;
     const nextPage =
       currentIndex >= 0 && currentIndex < sameSetPages.length - 1
         ? sameSetPages[currentIndex + 1]?.number
@@ -8985,7 +10192,11 @@ function RunTurnActivityScreen({
           showTimestamps={showTimestamps}
           open={
             toolGroupOpenOverrides[groupKey] ??
-            toolGroupDefaultOpen(group.entries, autoExpandTools, toolExpansionOverrides)
+            toolGroupDefaultOpen(
+              group.entries,
+              autoExpandTools,
+              toolExpansionOverrides,
+            )
           }
           onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
           toolExpansionOverrides={toolExpansionOverrides}
@@ -8994,7 +10205,13 @@ function RunTurnActivityScreen({
       );
     }
     if (group.kind === "reasoning") {
-      return <RunReasoningBlock key={group.entry.id} entry={group.entry} showThinking={showThinking} />;
+      return (
+        <RunReasoningBlock
+          key={group.entry.id}
+          entry={group.entry}
+          showThinking={showThinking}
+        />
+      );
     }
     if (group.kind === "meta") {
       if (group.entry.metaKind === "awaiting_input") {
@@ -9006,7 +10223,8 @@ function RunTurnActivityScreen({
               questionPageNavigation && selected && onActivitySelectPage
                 ? {
                     ...questionPageNavigation,
-                    onSelectPage: (page) => onActivitySelectPage(selected.turnId, page),
+                    onSelectPage: (page) =>
+                      onActivitySelectPage(selected.turnId, page),
                   }
                 : questionPageNavigation
             }
@@ -9059,7 +10277,10 @@ function RunTurnActivityScreen({
         showAssistantAvatar
         transcriptHref={transcriptHrefForEntry?.(group.entry)}
         onOpenTranscriptMessage={onOpenTranscriptMessage}
-        isAvatarContinuation={isMessageAvatarContinuation(detailGroups, groupIndex)}
+        isAvatarContinuation={isMessageAvatarContinuation(
+          detailGroups,
+          groupIndex,
+        )}
       />
     );
   };
@@ -9092,22 +10313,28 @@ function RunTurnActivityScreen({
                 position="popper"
                 align="end"
               >
-                {Array.from({ length: pagerState.pageCount }, (_, index) => index + 1).map(
-                  (pageNumber) => {
-                    const directoryItem = selectedPageInfo?.pages?.find((page) => page.number === pageNumber);
-                    const optionParts = turnActivityPageOptionParts(pageNumber, directoryItem);
-                    return (
-                      <SelectItem
-                        key={pageNumber}
-                        value={String(pageNumber)}
-                        textValue={optionParts.textValue}
-                        className="run-turn-view-select-item run-turn-view-page-select-item"
-                      >
-                        <TurnActivityPageOptionLabel parts={optionParts} />
-                      </SelectItem>
-                    );
-                  },
-                )}
+                {Array.from(
+                  { length: pagerState.pageCount },
+                  (_, index) => index + 1,
+                ).map((pageNumber) => {
+                  const directoryItem = selectedPageInfo?.pages?.find(
+                    (page) => page.number === pageNumber,
+                  );
+                  const optionParts = turnActivityPageOptionParts(
+                    pageNumber,
+                    directoryItem,
+                  );
+                  return (
+                    <SelectItem
+                      key={pageNumber}
+                      value={String(pageNumber)}
+                      textValue={optionParts.textValue}
+                      className="run-turn-view-select-item run-turn-view-page-select-item"
+                    >
+                      <TurnActivityPageOptionLabel parts={optionParts} />
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
           )}
@@ -9134,7 +10361,8 @@ function RunTurnActivityScreen({
                   value={turn.turnId}
                   className="run-turn-view-select-item"
                 >
-                  {turn.label}{turn.active ? " (running)" : ""}
+                  {turn.label}
+                  {turn.active ? " (running)" : ""}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -9145,11 +10373,19 @@ function RunTurnActivityScreen({
         <>
           <div className="run-turn-view-summary">
             <span data-active={selected.active ? "true" : undefined}>
-              {selected.active ? (selected.shell?.activity?.status === "needs_input" ? "needs input" : "running") : "complete"}
+              {selected.active
+                ? selected.shell?.activity?.status === "needs_input"
+                  ? "needs input"
+                  : "running"
+                : "complete"}
             </span>
             <span>{selected.summary}</span>
-            {selected.startedAt && <span>{formatToolFullTime(selected.startedAt)}</span>}
-            {selected.completedAt && !selected.active && <span>{formatToolFullTime(selected.completedAt)}</span>}
+            {selected.startedAt && (
+              <span>{formatToolFullTime(selected.startedAt)}</span>
+            )}
+            {selected.completedAt && !selected.active && (
+              <span>{formatToolFullTime(selected.completedAt)}</span>
+            )}
             {selected.costEstimate && (
               <ComposerCostEstimate
                 amountUsd={selected.costEstimate.amountUsd}
@@ -9165,16 +10401,18 @@ function RunTurnActivityScreen({
               data-answered={selectedPageInfo.answered ? "true" : "false"}
             >
               <span className="run-turn-question-page-title">
-                {selectedPageInfo.questionCount && selectedPageInfo.questionCount > 1
+                {selectedPageInfo.questionCount &&
+                selectedPageInfo.questionCount > 1
                   ? "Questions"
                   : "Question"}
               </span>
               <span className="run-turn-question-page-count">
-                {selectedPageInfo.questionIndex && selectedPageInfo.questionCount
+                {selectedPageInfo.questionIndex &&
+                selectedPageInfo.questionCount
                   ? `Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}`
                   : selectedPageInfo.questionCount
-                  ? plural(selectedPageInfo.questionCount, "question")
-                  : "Question"}
+                    ? plural(selectedPageInfo.questionCount, "question")
+                    : "Question"}
               </span>
             </div>
           )}
@@ -9188,7 +10426,8 @@ function RunTurnActivityScreen({
               <div className="run-turn-view-alert" role="alert">
                 <AlertCircleIcon size={14} strokeWidth={2} aria-hidden="true" />
                 <span>
-                  {refreshProblem.kind === "live-refresh" && detailGroups.length > 0
+                  {refreshProblem.kind === "live-refresh" &&
+                  detailGroups.length > 0
                     ? "Activity refresh failed; showing last loaded details."
                     : "Activity details failed to load."}
                 </span>
@@ -9203,21 +10442,45 @@ function RunTurnActivityScreen({
               </div>
             ) : null}
             {loading && detailGroups.length === 0 ? (
-              <div className="run-shell-loading run-turn-view-loading" role="status" aria-live="polite">
-                <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+              <div
+                className="run-shell-loading run-turn-view-loading"
+                role="status"
+                aria-live="polite"
+              >
+                <Loader2Icon
+                  size={14}
+                  className="run-spin"
+                  aria-hidden="true"
+                />
                 <span>Loading activity...</span>
               </div>
-            ) : showRefreshProblemOnly ? null : selected.active && detailGroups.length === 0 ? (
-              <div className="run-turn-view-thinking" aria-label="Turn is running">
+            ) : showRefreshProblemOnly ? null : selected.active &&
+              detailGroups.length === 0 ? (
+              <div
+                className="run-turn-view-thinking"
+                aria-label="Turn is running"
+              >
                 <span className="run-turn-thinking-lines">
-                  <span className="run-turn-thinking-label run-turn-thinking-shimmer">Thinking...</span>
-                  <span className="run-turn-thinking-meta-row">
-                    <span className="run-turn-thinking-meta-label">Runtime</span>
-                    <RunTurnThinkingDuration userKey={userKey} turnId={selected.turnId} />
+                  <span className="run-turn-thinking-label run-turn-thinking-shimmer">
+                    Thinking...
                   </span>
                   <span className="run-turn-thinking-meta-row">
-                    <span className="run-turn-thinking-meta-label">Last activity</span>
-                    <RunTurnThinkingLastActivity lastActivityAt={selected.lastActivityAt} turnId={selected.turnId} />
+                    <span className="run-turn-thinking-meta-label">
+                      Runtime
+                    </span>
+                    <RunTurnThinkingDuration
+                      userKey={userKey}
+                      turnId={selected.turnId}
+                    />
+                  </span>
+                  <span className="run-turn-thinking-meta-row">
+                    <span className="run-turn-thinking-meta-label">
+                      Last activity
+                    </span>
+                    <RunTurnThinkingLastActivity
+                      lastActivityAt={selected.lastActivityAt}
+                      turnId={selected.turnId}
+                    />
                   </span>
                 </span>
               </div>
@@ -9247,7 +10510,9 @@ function selectionIntersectsTranscriptMessageText(
   selection: Selection,
   transcriptRoot: Element,
 ): boolean {
-  const messageTextNodes = transcriptRoot.querySelectorAll('[data-slot="message-text"]');
+  const messageTextNodes = transcriptRoot.querySelectorAll(
+    '[data-slot="message-text"]',
+  );
   for (let rangeIndex = 0; rangeIndex < selection.rangeCount; rangeIndex += 1) {
     const range = selection.getRangeAt(rangeIndex);
     for (const node of messageTextNodes) {
@@ -9264,7 +10529,8 @@ function handleTranscriptCopy(e: ReactClipboardEvent<HTMLElement>): void {
   if (!selectedText) return;
   const normalizedText = normalizeTranscriptCopyText(selectedText);
   if (normalizedText === selectedText) return;
-  if (!selectionIntersectsTranscriptMessageText(selection, e.currentTarget)) return;
+  if (!selectionIntersectsTranscriptMessageText(selection, e.currentTarget))
+    return;
   e.clipboardData.setData("text/plain", normalizedText);
   e.preventDefault();
 }
@@ -9371,7 +10637,13 @@ export function RunMessages({
   onActivitySelectPage?: (turnId: string, page: number) => void;
 }) {
   const groups = useMemo(
-    () => groupTranscriptEntries(entries, condenseCompletedTurns, activeTurnId, activityEntriesByTurn),
+    () =>
+      groupTranscriptEntries(
+        entries,
+        condenseCompletedTurns,
+        activeTurnId,
+        activityEntriesByTurn,
+      ),
     [activeTurnId, activityEntriesByTurn, condenseCompletedTurns, entries],
   );
   const turnNumberByTurnId = useMemo(() => {
@@ -9379,7 +10651,12 @@ export function RunMessages({
     for (const entry of entries) {
       const turnId = transcriptEntryTurnId(entry);
       const turnNumber = entry.turnNumber;
-      if (!turnId || typeof turnNumber !== "number" || !Number.isSafeInteger(turnNumber) || turnNumber < 1) {
+      if (
+        !turnId ||
+        typeof turnNumber !== "number" ||
+        !Number.isSafeInteger(turnNumber) ||
+        turnNumber < 1
+      ) {
         continue;
       }
       numbers.set(turnId, turnNumber);
@@ -9391,38 +10668,48 @@ export function RunMessages({
   const thinkingInvariantRef = useRef<string>("");
   // Keep disclosure choices above virtualized row components so streaming
   // events and offscreen remounts do not reset expanded tool details.
-  const [activityOpenOverrides, setActivityOpenOverrides] = useState<Record<string, boolean>>({});
-  const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<Record<string, boolean>>({});
-  const [toolExpansionOverrides, setToolExpansionOverrides] = useState<Record<string, boolean>>({});
+  const [activityOpenOverrides, setActivityOpenOverrides] = useState<
+    Record<string, boolean>
+  >({});
+  const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<
+    Record<string, boolean>
+  >({});
+  const [toolExpansionOverrides, setToolExpansionOverrides] = useState<
+    Record<string, boolean>
+  >({});
   // Highlighted entry is the bubble that should pulse after a deep-link
   // scroll. We clear it on a timer so re-renders during streaming don't
   // re-trigger the animation on entries the user is just reading.
-  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(null);
+  const [highlightedEntryId, setHighlightedEntryId] = useState<string | null>(
+    null,
+  );
   // Track which message id we've already handled so we don't re-scroll
   // every time entries change during streaming.
   const consumedScrollIdRef = useRef<string | null>(null);
   const consumedScrollToLatestSignalRef = useRef(0);
   const consumedScrollToOldestSignalRef = useRef(0);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
-    setToolGroupOpenOverrides((prev) => (
-      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
-    ));
+    setToolGroupOpenOverrides((prev) =>
+      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
+    );
   }, []);
   const setToolExpanded = useCallback((entryId: string, expanded: boolean) => {
-    setToolExpansionOverrides((prev) => (
-      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded }
-    ));
+    setToolExpansionOverrides((prev) =>
+      prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded },
+    );
   }, []);
   const setActivityOpen = useCallback((groupKey: string, open: boolean) => {
-    setActivityOpenOverrides((prev) => (
-      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
-    ));
+    setActivityOpenOverrides((prev) =>
+      prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
+    );
   }, []);
   const turnHrefForEntry = useCallback(
     (entry: TranscriptEntry): string | undefined => {
       if (!turnLinksEnabled || !entry.turnId) return undefined;
       const turnNumber = turnNumberByTurnId.get(entry.turnId);
-      return turnNumber == null ? undefined : sessionRouteUrl(sessionId, "turns", turnNumber);
+      return turnNumber == null
+        ? undefined
+        : sessionRouteUrl(sessionId, "turns", turnNumber);
     },
     [sessionId, turnLinksEnabled, turnNumberByTurnId],
   );
@@ -9476,9 +10763,9 @@ export function RunMessages({
       }
       if (g.kind === "activity") {
         const compactedContains = g.compactedEntryIds.includes(target);
-        const visibleAssistantContains = turnActivityOwnedAssistantEntries(g).some(
-          (entry) => entry.id === target,
-        );
+        const visibleAssistantContains = turnActivityOwnedAssistantEntries(
+          g,
+        ).some((entry) => entry.id === target);
         if (compactedContains) {
           activityGroupKey = entryGroupKey(g);
           if (g.shell) onActivityOpen?.(g.turnId);
@@ -9497,7 +10784,8 @@ export function RunMessages({
         return compactedContains || visibleAssistantContains;
       }
       if (g.kind === "thinking") return false;
-      if (g.kind === "message_group") return g.entries.some((entry) => entry.id === target);
+      if (g.kind === "message_group")
+        return g.entries.some((entry) => entry.id === target);
       return g.entry.id === target;
     });
     if (groupIndex < 0) return; // entry not yet loaded; try again on next entries change
@@ -9515,7 +10803,11 @@ export function RunMessages({
       // align: "center" puts the bubble in the middle of the viewport
       // so the user can see surrounding context, not just the bubble
       // wedged against the top edge.
-      handle.scrollToIndex({ index: groupIndex, align: "center", behavior: "smooth" });
+      handle.scrollToIndex({
+        index: groupIndex,
+        align: "center",
+        behavior: "smooth",
+      });
     }
     onScrollConsumed?.();
     const timer = window.setTimeout(() => {
@@ -9552,7 +10844,14 @@ export function RunMessages({
       align: "start",
       behavior: "auto",
     });
-  }, [entries.length, groups, scrollParent, sessionId, sessionMode, telemetrySurface]);
+  }, [
+    entries.length,
+    groups,
+    scrollParent,
+    sessionId,
+    sessionMode,
+    telemetrySurface,
+  ]);
   useEffect(() => {
     logChatScrollGroups("virtuoso-window", groups, entries.length, {
       surface: telemetrySurface,
@@ -9561,10 +10860,18 @@ export function RunMessages({
       initialTopMostItemIndex: Math.max(groups.length - 1, 0),
       ...chatScrollElementSnapshot(scrollParent),
     });
-  }, [entries.length, groups, scrollParent, sessionId, sessionMode, telemetrySurface]);
+  }, [
+    entries.length,
+    groups,
+    scrollParent,
+    sessionId,
+    sessionMode,
+    telemetrySurface,
+  ]);
   useLayoutEffect(() => {
     if (!scrollToLatestSignal || groups.length === 0) return;
-    if (consumedScrollToLatestSignalRef.current === scrollToLatestSignal) return;
+    if (consumedScrollToLatestSignalRef.current === scrollToLatestSignal)
+      return;
     consumedScrollToLatestSignalRef.current = scrollToLatestSignal;
     logChatScrollGroups("scroll-to-latest", groups, entries.length, {
       surface: telemetrySurface,
@@ -9595,7 +10902,8 @@ export function RunMessages({
   ]);
   useEffect(() => {
     if (!scrollToOldestSignal || groups.length === 0) return;
-    if (consumedScrollToOldestSignalRef.current === scrollToOldestSignal) return;
+    if (consumedScrollToOldestSignalRef.current === scrollToOldestSignal)
+      return;
     consumedScrollToOldestSignalRef.current = scrollToOldestSignal;
     logChatScrollGroups("scroll-to-oldest", groups, entries.length, {
       surface: telemetrySurface,
@@ -9609,7 +10917,15 @@ export function RunMessages({
       align: "start",
       behavior: "smooth",
     });
-  }, [entries.length, groups, scrollParent, scrollToOldestSignal, sessionId, sessionMode, telemetrySurface]);
+  }, [
+    entries.length,
+    groups,
+    scrollParent,
+    scrollToOldestSignal,
+    sessionId,
+    sessionMode,
+    telemetrySurface,
+  ]);
   // computeItemKey stabilizes Virtuoso's per-item identity across renders.
   // Tool groups have no single id, so the first child id identifies the
   // group while later tool entries append during a streaming turn.
@@ -9628,7 +10944,11 @@ export function RunMessages({
             showTimestamps={showTimestamps}
             open={
               toolGroupOpenOverrides[groupKey] ??
-              toolGroupDefaultOpen(g.entries, autoExpandTools, toolExpansionOverrides)
+              toolGroupDefaultOpen(
+                g.entries,
+                autoExpandTools,
+                toolExpansionOverrides,
+              )
             }
             onOpenChange={(open) => setToolGroupOpen(groupKey, open)}
             toolExpansionOverrides={toolExpansionOverrides}
@@ -9637,18 +10957,13 @@ export function RunMessages({
         );
       }
       if (g.kind === "reasoning") {
-        return <RunReasoningBlock entry={g.entry} showThinking={showThinking} />;
+        return (
+          <RunReasoningBlock entry={g.entry} showThinking={showThinking} />
+        );
       }
       if (g.kind === "meta") {
         if (g.entry.metaKind === "awaiting_input") {
-          return (
-            <RunNeedsInputAnnouncement
-              entry={g.entry}
-              avatar={avatar}
-              onOpenTurn={onOpenTurn}
-              showTimestamps={showTimestamps}
-            />
-          );
+          return null;
         }
         if (g.entry.metaKind === "turn_usage") {
           return null;
@@ -9773,7 +11088,15 @@ export function RunMessages({
       ...chatScrollElementSnapshot(scrollParent),
     });
     onStartReached?.();
-  }, [entries.length, groups, onStartReached, scrollParent, sessionId, sessionMode, telemetrySurface]);
+  }, [
+    entries.length,
+    groups,
+    onStartReached,
+    scrollParent,
+    sessionId,
+    sessionMode,
+    telemetrySurface,
+  ]);
   const handleAtBottomChange = useCallback(
     (atBottom: boolean) => {
       logChatScrollGroups("at-bottom-change", groups, entries.length, {
@@ -9785,7 +11108,15 @@ export function RunMessages({
       });
       onAtBottomChange?.(atBottom);
     },
-    [entries.length, groups, onAtBottomChange, scrollParent, sessionId, sessionMode, telemetrySurface],
+    [
+      entries.length,
+      groups,
+      onAtBottomChange,
+      scrollParent,
+      sessionId,
+      sessionMode,
+      telemetrySurface,
+    ],
   );
   // followOutput is gated on the durable navigation mode, not on a
   // hardcoded "smooth" or a DOM at-bottom heuristic:
@@ -9829,7 +11160,10 @@ export function RunMessages({
       // Virtuoso resolves this after it measures row heights, so a caught-up
       // session lands at the true live tail in one step instead of landing
       // short and then correcting. The Math.max safeguards empty arrays.
-      initialTopMostItemIndex={{ index: Math.max(groups.length - 1, 0), align: "end" }}
+      initialTopMostItemIndex={{
+        index: Math.max(groups.length - 1, 0),
+        align: "end",
+      }}
     />
   );
 }
@@ -9842,9 +11176,11 @@ function AdminObservabilityPanel({
   onRefresh: () => void;
 }) {
   const summary = state.summary;
-  const status = state.error ? "unknown" : summary?.status ?? "unknown";
+  const status = state.error ? "unknown" : (summary?.status ?? "unknown");
   const tankAlerts =
-    summary?.alerts.items.filter((alert) => alert.name.startsWith("Tank")).slice(0, 5) ?? [];
+    summary?.alerts.items
+      .filter((alert) => alert.name.startsWith("Tank"))
+      .slice(0, 5) ?? [];
   const httpRoutes = summary?.http_5xx.routes.slice(0, 5) ?? [];
   const links = summary?.debug_links ?? [];
 
@@ -9863,13 +11199,26 @@ function AdminObservabilityPanel({
           aria-label="Refresh observability"
           title="Refresh"
         >
-          <RotateCcwIcon className={state.loading ? "cluster-health-spin" : undefined} aria-hidden="true" />
+          <RotateCcwIcon
+            className={state.loading ? "cluster-health-spin" : undefined}
+            aria-hidden="true"
+          />
         </button>
       </div>
       <div className="run-settings-observability-summary">
-        <span className={`run-settings-observability-status is-${status}`}>{status}</span>
-        <span>{summary ? `${summary.alerts.tank_firing_total} Tank alerts` : "alerts unavailable"}</span>
-        <span>{summary ? `${formatMetricCount(summary.http_5xx.total)} 5xx / ${summary.http_5xx.window}` : "5xx unavailable"}</span>
+        <span className={`run-settings-observability-status is-${status}`}>
+          {status}
+        </span>
+        <span>
+          {summary
+            ? `${summary.alerts.tank_firing_total} Tank alerts`
+            : "alerts unavailable"}
+        </span>
+        <span>
+          {summary
+            ? `${formatMetricCount(summary.http_5xx.total)} 5xx / ${summary.http_5xx.window}`
+            : "5xx unavailable"}
+        </span>
       </div>
       {state.error ? (
         <div className="run-settings-observability-note" role="status">
@@ -9877,17 +11226,31 @@ function AdminObservabilityPanel({
         </div>
       ) : summary?.errors?.length ? (
         <div className="run-settings-observability-note" role="status">
-          {summary.errors.map((err) => `${err.surface}: ${err.detail}`).join("; ")}
+          {summary.errors
+            .map((err) => `${err.surface}: ${err.detail}`)
+            .join("; ")}
         </div>
       ) : null}
       <div className="run-settings-observability-grid">
         <div className="run-settings-observability-list">
-          <span className="run-settings-observability-kicker">Firing Tank alerts</span>
+          <span className="run-settings-observability-kicker">
+            Firing Tank alerts
+          </span>
           {tankAlerts.length > 0 ? (
             tankAlerts.map((alert) => (
-              <div key={`${alert.name}-${alert.namespace ?? ""}-${alert.route ?? ""}`} className="run-settings-observability-row">
-                <span className={`run-settings-observability-chip is-${alert.severity}`}>{alert.severity}</span>
-                <span className="run-settings-observability-text" title={alert.runbook || alert.description || alert.name}>
+              <div
+                key={`${alert.name}-${alert.namespace ?? ""}-${alert.route ?? ""}`}
+                className="run-settings-observability-row"
+              >
+                <span
+                  className={`run-settings-observability-chip is-${alert.severity}`}
+                >
+                  {alert.severity}
+                </span>
+                <span
+                  className="run-settings-observability-text"
+                  title={alert.runbook || alert.description || alert.name}
+                >
                   {alert.name}
                 </span>
               </div>
@@ -9897,12 +11260,21 @@ function AdminObservabilityPanel({
           )}
         </div>
         <div className="run-settings-observability-list">
-          <span className="run-settings-observability-kicker">Recent 5xx routes</span>
+          <span className="run-settings-observability-kicker">
+            Recent 5xx routes
+          </span>
           {httpRoutes.length > 0 ? (
             httpRoutes.map((route) => (
               <div key={route.route} className="run-settings-observability-row">
-                <span className="run-settings-observability-chip">{formatMetricCount(route.count)}</span>
-                <span className="run-settings-observability-text" title={route.route}>{route.route}</span>
+                <span className="run-settings-observability-chip">
+                  {formatMetricCount(route.count)}
+                </span>
+                <span
+                  className="run-settings-observability-text"
+                  title={route.route}
+                >
+                  {route.route}
+                </span>
               </div>
             ))
           ) : (
@@ -9978,20 +11350,24 @@ function formatProviderRateLimitValue(key: string, value: unknown): string {
   if (typeof value === "string") {
     if (key === "resetsAt" || key === "overageResetsAt") {
       const parsed = Date.parse(value);
-      if (Number.isFinite(parsed)) return formatToolFullTime(new Date(parsed).toISOString());
+      if (Number.isFinite(parsed))
+        return formatToolFullTime(new Date(parsed).toISOString());
     }
     return value;
   }
   return "";
 }
 
-function providerRateLimitRows(session?: Session): Array<{ key: string; label: string; value: string }> {
+function providerRateLimitRows(
+  session?: Session,
+): Array<{ key: string; label: string; value: string }> {
   const info = session?.provider_rate_limit_info;
   if (!info) return [];
   const rows: Array<{ key: string; label: string; value: string }> = [];
   for (const key of PROVIDER_RATE_LIMIT_ORDER) {
     const value = formatProviderRateLimitValue(key, info[key]);
-    if (value) rows.push({ key, label: PROVIDER_RATE_LIMIT_LABELS[key] ?? key, value });
+    if (value)
+      rows.push({ key, label: PROVIDER_RATE_LIMIT_LABELS[key] ?? key, value });
   }
   return rows;
 }
@@ -10025,10 +11401,17 @@ function RunSettingsPanel({
   adminControls?: AdminSettingsControls;
   settingsTab?: SettingsTab;
   adminView?: AdminView;
-  onSettingsRouteChange?: (settingsTab: SettingsTab, adminView: AdminView) => void;
+  onSettingsRouteChange?: (
+    settingsTab: SettingsTab,
+    adminView: AdminView,
+  ) => void;
 }) {
-  const [settingsTab, setLocalSettingsTab] = useState<SettingsTab>(routedSettingsTab ?? "preferences");
-  const [adminView, setLocalAdminView] = useState<AdminView>(routedAdminView ?? "controls");
+  const [settingsTab, setLocalSettingsTab] = useState<SettingsTab>(
+    routedSettingsTab ?? "preferences",
+  );
+  const [adminView, setLocalAdminView] = useState<AdminView>(
+    routedAdminView ?? "controls",
+  );
   useEffect(() => {
     if (!routedSettingsTab) return;
     setLocalSettingsTab(routedSettingsTab);
@@ -10059,7 +11442,9 @@ function RunSettingsPanel({
   const settingsScreenClassName =
     settingsTab === "admin" &&
     showAdminTab &&
-    (adminView === "avatars" || adminView === "report" || adminView === "observability")
+    (adminView === "avatars" ||
+      adminView === "report" ||
+      adminView === "observability")
       ? "run-settings-screen run-settings-screen-wide"
       : "run-settings-screen";
   const adminObservabilityAttention = observabilityAttentionStatus(
@@ -10071,7 +11456,11 @@ function RunSettingsPanel({
   return (
     <div className={settingsScreenClassName}>
       {showAdminTab && (
-        <div className="run-settings-tabs" role="tablist" aria-label="Settings sections">
+        <div
+          className="run-settings-tabs"
+          role="tablist"
+          aria-label="Settings sections"
+        >
           <button
             type="button"
             className={`run-settings-tab${settingsTab === "preferences" ? " is-active" : ""}`}
@@ -10114,7 +11503,9 @@ function RunSettingsPanel({
                 <h2 className="run-settings-title">Avatar editor</h2>
               </div>
             </section>
-            <AdminAvatarManager onCatalogChanged={adminControls.onAvatarCatalogChanged} />
+            <AdminAvatarManager
+              onCatalogChanged={adminControls.onAvatarCatalogChanged}
+            />
           </>
         ) : adminView === "report" ? (
           <>
@@ -10155,286 +11546,326 @@ function RunSettingsPanel({
           </>
         ) : (
           <>
-          <section className="run-settings-section">
-            <h2 className="run-settings-title">Admin Controls</h2>
-            <button
-              type="button"
-              className="run-settings-link"
-              onClick={() => setSettingsRoute("admin", "observability")}
-            >
-              <span className="run-settings-link-label">
-                <ActivityIcon className="run-settings-link-icon" aria-hidden="true" />
-                <span>Observability</span>
-                {adminObservabilityAttention ? (
-                  <span
-                    className={`run-settings-tab-alert is-${adminObservabilityAttention}`}
-                    aria-hidden="true"
-                  />
-                ) : null}
-              </span>
-              <span className="run-settings-scope-value">
-                {adminControls.observability.summary?.status ??
-                  (adminControls.observability.error ? "error" : "Open")}
-              </span>
-            </button>
-            <button
-              type="button"
-              className="run-settings-link"
-              onClick={() => setSettingsRoute("admin", "report")}
-            >
-              <span className="run-settings-link-label">
-                <GitBranchIcon className="run-settings-link-icon" aria-hidden="true" />
-                <span>Session repo report</span>
-              </span>
-              <span className="run-settings-scope-value">
-                Draft
-              </span>
-            </button>
-            <button
-              type="button"
-              className="run-settings-link"
-              onClick={() => setSettingsRoute("admin", "avatars")}
-            >
-              <span className="run-settings-link-label">
-                <ImageIcon className="run-settings-link-icon" aria-hidden="true" />
-                <span>Avatar editor</span>
-              </span>
-              <span className="run-settings-scope-value">
-                Manage
-              </span>
-            </button>
-            <a
-              className="run-settings-link"
-              href="/_styleguide"
-              target="_blank"
-              rel="noreferrer"
-            >
-              <span className="run-settings-link-label">
-                <ExternalLinkIcon className="run-settings-link-icon" aria-hidden="true" />
-                <span>Design portfolio</span>
-              </span>
-              <span className="run-settings-scope-value">
-                Open
-              </span>
-            </a>
-            {adminControls.canViewProdSessions && (
+            <section className="run-settings-section">
+              <h2 className="run-settings-title">Admin Controls</h2>
               <button
                 type="button"
-                className="run-settings-toggle"
-                onClick={() =>
-                  adminControls.onViewingProdSessionsChange(
-                    !adminControls.viewingProdSessions,
-                  )
-                }
-                aria-pressed={adminControls.viewingProdSessions}
-              >
-                <span>Prod sessions</span>
-                <span className="run-settings-scope-value">
-                  {adminControls.viewingProdSessions
-                    ? adminControls.prodScope
-                    : adminControls.currentScope}
-                </span>
-                {adminControls.viewingProdSessions && (
-                  <CheckIcon className="run-settings-check" aria-hidden="true" />
-                )}
-              </button>
-            )}
-            <div className="run-settings-diagnostics">
-              <div className="run-settings-diagnostics-head">
-                <span className="run-settings-link-label">
-                  <ClipboardListIcon className="run-settings-link-icon" aria-hidden="true" />
-                  <span>Session-list diagnostics</span>
-                </span>
-              </div>
-              <SessionListDebugCaptureControls source="SettingsAdmin" />
-            </div>
-            {rateLimitRows.length > 0 && (
-              <div className="run-settings-rate-limit">
-                <div className="run-settings-diagnostics-head">
-                  <span className="run-settings-link-label">
-                    <TimerIcon className="run-settings-link-icon" aria-hidden="true" />
-                    <span>Rate limit info</span>
-                  </span>
-                  {session?.provider_rate_limit_observed_at && (
-                    <span className="run-settings-scope-value">
-                      {formatToolFullTime(session.provider_rate_limit_observed_at)}
-                    </span>
-                  )}
-                </div>
-                <div className="run-settings-rate-limit-grid">
-                  {rateLimitRows.map((row) => (
-                    <div className="run-settings-rate-limit-row" key={row.key}>
-                      <span>{row.label}</span>
-                      <span>{row.value}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </section>
-          <section className="run-settings-section">
-            <h2 className="run-settings-title">Useful files</h2>
-            {ADMIN_REFERENCE_LINKS.map((link) => (
-              <a
-                key={link.id}
                 className="run-settings-link"
-                href={link.href}
+                onClick={() => setSettingsRoute("admin", "observability")}
+              >
+                <span className="run-settings-link-label">
+                  <ActivityIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Observability</span>
+                  {adminObservabilityAttention ? (
+                    <span
+                      className={`run-settings-tab-alert is-${adminObservabilityAttention}`}
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                </span>
+                <span className="run-settings-scope-value">
+                  {adminControls.observability.summary?.status ??
+                    (adminControls.observability.error ? "error" : "Open")}
+                </span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "report")}
+              >
+                <span className="run-settings-link-label">
+                  <GitBranchIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Session repo report</span>
+                </span>
+                <span className="run-settings-scope-value">Draft</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "avatars")}
+              >
+                <span className="run-settings-link-label">
+                  <ImageIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Avatar editor</span>
+                </span>
+                <span className="run-settings-scope-value">Manage</span>
+              </button>
+              <a
+                className="run-settings-link"
+                href="/_styleguide"
                 target="_blank"
                 rel="noreferrer"
-                title={link.description}
               >
                 <span className="run-settings-link-label">
-                  <FileTextIcon className="run-settings-link-icon" aria-hidden="true" />
-                  <span>{link.label}</span>
+                  <ExternalLinkIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Design portfolio</span>
                 </span>
                 <span className="run-settings-scope-value">Open</span>
               </a>
-            ))}
-          </section>
+              {adminControls.canViewProdSessions && (
+                <button
+                  type="button"
+                  className="run-settings-toggle"
+                  onClick={() =>
+                    adminControls.onViewingProdSessionsChange(
+                      !adminControls.viewingProdSessions,
+                    )
+                  }
+                  aria-pressed={adminControls.viewingProdSessions}
+                >
+                  <span>Prod sessions</span>
+                  <span className="run-settings-scope-value">
+                    {adminControls.viewingProdSessions
+                      ? adminControls.prodScope
+                      : adminControls.currentScope}
+                  </span>
+                  {adminControls.viewingProdSessions && (
+                    <CheckIcon
+                      className="run-settings-check"
+                      aria-hidden="true"
+                    />
+                  )}
+                </button>
+              )}
+              <div className="run-settings-diagnostics">
+                <div className="run-settings-diagnostics-head">
+                  <span className="run-settings-link-label">
+                    <ClipboardListIcon
+                      className="run-settings-link-icon"
+                      aria-hidden="true"
+                    />
+                    <span>Session-list diagnostics</span>
+                  </span>
+                </div>
+                <SessionListDebugCaptureControls source="SettingsAdmin" />
+              </div>
+              {rateLimitRows.length > 0 && (
+                <div className="run-settings-rate-limit">
+                  <div className="run-settings-diagnostics-head">
+                    <span className="run-settings-link-label">
+                      <TimerIcon
+                        className="run-settings-link-icon"
+                        aria-hidden="true"
+                      />
+                      <span>Rate limit info</span>
+                    </span>
+                    {session?.provider_rate_limit_observed_at && (
+                      <span className="run-settings-scope-value">
+                        {formatToolFullTime(
+                          session.provider_rate_limit_observed_at,
+                        )}
+                      </span>
+                    )}
+                  </div>
+                  <div className="run-settings-rate-limit-grid">
+                    {rateLimitRows.map((row) => (
+                      <div
+                        className="run-settings-rate-limit-row"
+                        key={row.key}
+                      >
+                        <span>{row.label}</span>
+                        <span>{row.value}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </section>
+            <section className="run-settings-section">
+              <h2 className="run-settings-title">Useful files</h2>
+              {ADMIN_REFERENCE_LINKS.map((link) => (
+                <a
+                  key={link.id}
+                  className="run-settings-link"
+                  href={link.href}
+                  target="_blank"
+                  rel="noreferrer"
+                  title={link.description}
+                >
+                  <span className="run-settings-link-label">
+                    <FileTextIcon
+                      className="run-settings-link-icon"
+                      aria-hidden="true"
+                    />
+                    <span>{link.label}</span>
+                  </span>
+                  <span className="run-settings-scope-value">Open</span>
+                </a>
+              ))}
+            </section>
           </>
         )
       ) : (
         <>
-        <section className="run-settings-section">
-        <h2 className="run-settings-title">Composer</h2>
-        <button
-          type="button"
-          className="run-settings-toggle"
-          onClick={() => setRunPref("sendByCtrlEnter", !runPrefs.sendByCtrlEnter)}
-          aria-pressed={runPrefs.sendByCtrlEnter}
-        >
-          <span>Send with Cmd/Ctrl+Enter</span>
-          {runPrefs.sendByCtrlEnter && (
-            <CheckIcon className="run-settings-check" aria-hidden="true" />
-          )}
-        </button>
-      </section>
-      <section className="run-settings-section">
-        <h2 className="run-settings-title">Sound</h2>
-        <button
-          type="button"
-          className="run-settings-toggle"
-          onClick={() => setRunPref("turnCompleteSound", !runPrefs.turnCompleteSound)}
-          aria-pressed={runPrefs.turnCompleteSound}
-        >
-          <span>Turn complete sound</span>
-          {runPrefs.turnCompleteSound && (
-            <CheckIcon className="run-settings-check" aria-hidden="true" />
-          )}
-        </button>
-        <div className="run-settings-panel-row run-settings-sound-row">
-          <label className="run-settings-label" htmlFor={soundControlId}>
-            Volume
-          </label>
-          <div className="run-settings-sound-controls">
-            <input
-              id={soundControlId}
-              className="run-settings-volume-slider"
-              type="range"
-              min={TURN_COMPLETE_SOUND_VOLUME_MIN}
-              max={TURN_COMPLETE_SOUND_VOLUME_MAX}
-              step={TURN_COMPLETE_SOUND_VOLUME_STEP}
-              value={runPrefs.turnCompleteSoundVolume}
-              disabled={!runPrefs.turnCompleteSound}
-              onChange={(event) =>
-                setTurnCompleteSoundVolume(Number(event.currentTarget.value))
+          <section className="run-settings-section">
+            <h2 className="run-settings-title">Composer</h2>
+            <button
+              type="button"
+              className="run-settings-toggle"
+              onClick={() =>
+                setRunPref("sendByCtrlEnter", !runPrefs.sendByCtrlEnter)
               }
-              aria-label="Turn complete sound volume"
-            />
-            <span className="run-settings-volume-value" aria-live="polite">
-              {turnCompleteSoundVolumePct}%
-            </span>
+              aria-pressed={runPrefs.sendByCtrlEnter}
+            >
+              <span>Send with Cmd/Ctrl+Enter</span>
+              {runPrefs.sendByCtrlEnter && (
+                <CheckIcon className="run-settings-check" aria-hidden="true" />
+              )}
+            </button>
+          </section>
+          <section className="run-settings-section">
+            <h2 className="run-settings-title">Sound</h2>
             <button
               type="button"
-              className="run-settings-test-btn"
+              className="run-settings-toggle"
+              onClick={() =>
+                setRunPref("turnCompleteSound", !runPrefs.turnCompleteSound)
+              }
+              aria-pressed={runPrefs.turnCompleteSound}
+            >
+              <span>Turn complete sound</span>
+              {runPrefs.turnCompleteSound && (
+                <CheckIcon className="run-settings-check" aria-hidden="true" />
+              )}
+            </button>
+            <div className="run-settings-panel-row run-settings-sound-row">
+              <label className="run-settings-label" htmlFor={soundControlId}>
+                Volume
+              </label>
+              <div className="run-settings-sound-controls">
+                <input
+                  id={soundControlId}
+                  className="run-settings-volume-slider"
+                  type="range"
+                  min={TURN_COMPLETE_SOUND_VOLUME_MIN}
+                  max={TURN_COMPLETE_SOUND_VOLUME_MAX}
+                  step={TURN_COMPLETE_SOUND_VOLUME_STEP}
+                  value={runPrefs.turnCompleteSoundVolume}
+                  disabled={!runPrefs.turnCompleteSound}
+                  onChange={(event) =>
+                    setTurnCompleteSoundVolume(
+                      Number(event.currentTarget.value),
+                    )
+                  }
+                  aria-label="Turn complete sound volume"
+                />
+                <span className="run-settings-volume-value" aria-live="polite">
+                  {turnCompleteSoundVolumePct}%
+                </span>
+                <button
+                  type="button"
+                  className="run-settings-test-btn"
+                  disabled={!runPrefs.turnCompleteSound}
+                  onClick={playTurnCompleteSound}
+                >
+                  <PlayIcon aria-hidden="true" />
+                  <span>Test</span>
+                </button>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="run-settings-toggle"
+              onClick={() =>
+                setRunPref(
+                  "turnCompleteSoundOnVisible",
+                  !runPrefs.turnCompleteSoundOnVisible,
+                )
+              }
+              aria-pressed={runPrefs.turnCompleteSoundOnVisible}
               disabled={!runPrefs.turnCompleteSound}
-              onClick={playTurnCompleteSound}
             >
-              <PlayIcon aria-hidden="true" />
-              <span>Test</span>
+              <span>Ping on open chats</span>
+              {runPrefs.turnCompleteSoundOnVisible && (
+                <CheckIcon className="run-settings-check" aria-hidden="true" />
+              )}
             </button>
-          </div>
-        </div>
-        <button
-          type="button"
-          className="run-settings-toggle"
-          onClick={() =>
-            setRunPref(
-              "turnCompleteSoundOnVisible",
-              !runPrefs.turnCompleteSoundOnVisible,
-            )
-          }
-          aria-pressed={runPrefs.turnCompleteSoundOnVisible}
-          disabled={!runPrefs.turnCompleteSound}
-        >
-          <span>Ping on open chats</span>
-          {runPrefs.turnCompleteSoundOnVisible && (
-            <CheckIcon className="run-settings-check" aria-hidden="true" />
-          )}
-        </button>
-      </section>
-      <section className="run-settings-section">
-        <h2 className="run-settings-title">Transcript</h2>
-        <div className="run-settings-panel-row">
-          <span className="run-settings-label">Text zoom</span>
-          <span className="run-settings-zoom-controls">
-            <button
-              type="button"
-              className="run-settings-zoom-btn"
-              onClick={() => setPaneFontScale(paneFontScale - CHAT_FONT_SCALE_STEP)}
-              disabled={paneFontScale <= CHAT_FONT_SCALE_MIN}
-              aria-label="Decrease pane text size"
-              title="Decrease text size"
-            >
-              <MinusIcon aria-hidden="true" />
-            </button>
-            <span className="run-settings-zoom-value" aria-live="polite">
-              {paneFontScalePct}%
-            </span>
-            <button
-              type="button"
-              className="run-settings-zoom-btn"
-              onClick={() => setPaneFontScale(paneFontScale + CHAT_FONT_SCALE_STEP)}
-              disabled={paneFontScale >= CHAT_FONT_SCALE_MAX}
-              aria-label="Increase pane text size"
-              title="Increase text size"
-            >
-              <PlusIcon aria-hidden="true" />
-            </button>
-            <button
-              type="button"
-              className="run-settings-zoom-btn"
-              onClick={() => setPaneFontScale(DEFAULT_RUN_PREFS.chatFontScale)}
-              disabled={paneFontScale === DEFAULT_RUN_PREFS.chatFontScale}
-              aria-label="Reset pane text size"
-              title="Reset text size"
-            >
-              <RotateCcwIcon aria-hidden="true" />
-            </button>
-          </span>
-        </div>
-        {([
-          ["showThinking", "Show reasoning"],
-          ["condenseCompletedTurns", "Condense finished turns"],
-          ["autoExpandTools", "Auto-expand tools"],
-          ["showTimestamps", "Show timestamps"],
-          ["showDuration", "Show duration"],
-        ] as const).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            className="run-settings-toggle"
-            onClick={() => setRunPref(key, !runPrefs[key])}
-            aria-pressed={runPrefs[key]}
-          >
-            <span>{label}</span>
-            {runPrefs[key] && (
-              <CheckIcon className="run-settings-check" aria-hidden="true" />
-            )}
-          </button>
-        ))}
-      </section>
-      </>
+          </section>
+          <section className="run-settings-section">
+            <h2 className="run-settings-title">Transcript</h2>
+            <div className="run-settings-panel-row">
+              <span className="run-settings-label">Text zoom</span>
+              <span className="run-settings-zoom-controls">
+                <button
+                  type="button"
+                  className="run-settings-zoom-btn"
+                  onClick={() =>
+                    setPaneFontScale(paneFontScale - CHAT_FONT_SCALE_STEP)
+                  }
+                  disabled={paneFontScale <= CHAT_FONT_SCALE_MIN}
+                  aria-label="Decrease pane text size"
+                  title="Decrease text size"
+                >
+                  <MinusIcon aria-hidden="true" />
+                </button>
+                <span className="run-settings-zoom-value" aria-live="polite">
+                  {paneFontScalePct}%
+                </span>
+                <button
+                  type="button"
+                  className="run-settings-zoom-btn"
+                  onClick={() =>
+                    setPaneFontScale(paneFontScale + CHAT_FONT_SCALE_STEP)
+                  }
+                  disabled={paneFontScale >= CHAT_FONT_SCALE_MAX}
+                  aria-label="Increase pane text size"
+                  title="Increase text size"
+                >
+                  <PlusIcon aria-hidden="true" />
+                </button>
+                <button
+                  type="button"
+                  className="run-settings-zoom-btn"
+                  onClick={() =>
+                    setPaneFontScale(DEFAULT_RUN_PREFS.chatFontScale)
+                  }
+                  disabled={paneFontScale === DEFAULT_RUN_PREFS.chatFontScale}
+                  aria-label="Reset pane text size"
+                  title="Reset text size"
+                >
+                  <RotateCcwIcon aria-hidden="true" />
+                </button>
+              </span>
+            </div>
+            {(
+              [
+                ["showThinking", "Show reasoning"],
+                ["condenseCompletedTurns", "Condense finished turns"],
+                ["autoExpandTools", "Auto-expand tools"],
+                ["showTimestamps", "Show timestamps"],
+                ["showDuration", "Show duration"],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                className="run-settings-toggle"
+                onClick={() => setRunPref(key, !runPrefs[key])}
+                aria-pressed={runPrefs[key]}
+              >
+                <span>{label}</span>
+                {runPrefs[key] && (
+                  <CheckIcon
+                    className="run-settings-check"
+                    aria-hidden="true"
+                  />
+                )}
+              </button>
+            ))}
+          </section>
+        </>
       )}
     </div>
   );
@@ -10482,8 +11913,13 @@ function RunHelpScreen() {
           </div>
         </div>
       </section>
-      <section className="run-help-section" aria-labelledby="run-help-sidebar-status-title">
-        <h2 className="run-help-title" id="run-help-sidebar-status-title">Sidebar Status</h2>
+      <section
+        className="run-help-section"
+        aria-labelledby="run-help-sidebar-status-title"
+      >
+        <h2 className="run-help-title" id="run-help-sidebar-status-title">
+          Sidebar Status
+        </h2>
         <div className="run-help-status-list">
           {SESSION_ACTIVITY_STATUS_LEGEND.map((item) => (
             <div className="run-help-status-row" key={item.key}>
@@ -10567,27 +12003,38 @@ function ChatPane({
   sidebarTranscriptOpenRequest?: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
-  const [activityEntriesByTurn, setActivityEntriesByTurn] =
-    useState<Record<string, TranscriptEntry[] | undefined>>({});
-  const activityEntriesByTurnRef = useRef<Record<string, TranscriptEntry[] | undefined>>({});
+  const [activityEntriesByTurn, setActivityEntriesByTurn] = useState<
+    Record<string, TranscriptEntry[] | undefined>
+  >({});
+  const activityEntriesByTurnRef = useRef<
+    Record<string, TranscriptEntry[] | undefined>
+  >({});
   activityEntriesByTurnRef.current = activityEntriesByTurn;
   // Per-turn page directory from the /activity endpoint, plus the page the
   // reader has selected (default: undefined → the endpoint returns the last
   // page). selectedTurnPageRef is the source of truth the fetch reads so a
   // live refresh re-fetches the page being viewed, not always the tail.
-  const [turnActivityPageInfo, setTurnActivityPageInfo] =
-    useState<Record<string, TurnActivityPageInfo | undefined>>({});
+  const [turnActivityPageInfo, setTurnActivityPageInfo] = useState<
+    Record<string, TurnActivityPageInfo | undefined>
+  >({});
   const selectedTurnPageRef = useRef<Record<string, number>>({});
   const activityLiveRefreshTimersRef = useRef<Map<string, number>>(new Map());
   const activityLiveRefreshInFlightRef = useRef<Set<string>>(new Set());
-  const activityLiveRefreshPendingCursorRef = useRef<Map<string, string>>(new Map());
-  const activityLiveRefreshLastRequestedCursorRef = useRef<Map<string, string>>(new Map());
+  const activityLiveRefreshPendingCursorRef = useRef<Map<string, string>>(
+    new Map(),
+  );
+  const activityLiveRefreshLastRequestedCursorRef = useRef<Map<string, string>>(
+    new Map(),
+  );
   const activityLiveRefreshAttemptsRef = useRef<Map<string, number>>(new Map());
-  const [loadingActivityTurns, setLoadingActivityTurns] =
-    useState<Record<string, boolean | undefined>>({});
+  const [loadingActivityTurns, setLoadingActivityTurns] = useState<
+    Record<string, boolean | undefined>
+  >({});
   const [activityRefreshProblemsByTurn, setActivityRefreshProblemsByTurn] =
     useState<Record<string, ActivityRefreshProblem | undefined>>({});
-  const [renderedActiveTurnId, setRenderedActiveTurnId] = useState<string | null>(null);
+  const [renderedActiveTurnId, setRenderedActiveTurnId] = useState<
+    string | null
+  >(null);
   const sdkServerEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkServerProjectedEntriesRef = useRef<TranscriptEntry[]>([]);
   const sdkRealtimeEntriesRef = useRef<TranscriptEntry[]>([]);
@@ -10604,20 +12051,27 @@ function ChatPane({
     initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat",
   );
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
-    initialAppRoute?.tab === "settings" ? initialAppRoute.settingsTab : "preferences",
+    initialAppRoute?.tab === "settings"
+      ? initialAppRoute.settingsTab
+      : "preferences",
   );
   const [adminView, setAdminView] = useState<AdminView>(
-    initialAppRoute?.tab === "settings" ? initialAppRoute.adminView : "controls",
+    initialAppRoute?.tab === "settings"
+      ? initialAppRoute.adminView
+      : "controls",
   );
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
   // The route now carries a durable per-session turn NUMBER, not a turn_id. It
   // is resolved to a turn_id server-side (or from the loaded window) into
   // selectedTurnId; until then it stays pending so the URL isn't overwritten.
-  const [pendingRouteTurnNumber, setPendingRouteTurnNumber] = useState<number | null>(
-    initialRunRoute?.tab === "turns" ? initialRunRoute.turnNumber : null,
-  );
-  const [pendingTranscriptMessageId, setPendingTranscriptMessageId] = useState<string | null>(null);
-  const effectivePendingScrollMessageId = pendingTranscriptMessageId ?? pendingScrollMessageId;
+  const [pendingRouteTurnNumber, setPendingRouteTurnNumber] = useState<
+    number | null
+  >(initialRunRoute?.tab === "turns" ? initialRunRoute.turnNumber : null);
+  const [pendingTranscriptMessageId, setPendingTranscriptMessageId] = useState<
+    string | null
+  >(null);
+  const effectivePendingScrollMessageId =
+    pendingTranscriptMessageId ?? pendingScrollMessageId;
   // A present-but-unresolvable turn segment (a bad number, or a bookmarked
   // retired turn_<uuid>) routes to an explicit unavailable-target state rather
   // than silently falling back to the latest turn.
@@ -10627,13 +12081,26 @@ function ChatPane({
       : false,
   );
   const [pendingTurnViewRouteAnchor, setPendingTurnViewRouteAnchor] =
-    useState<TurnViewScrollAnchor | null>(initialRunRoute?.tab === "turns" ? "bottom" : null);
-  const [backgroundView, setBackgroundView] = useState<BackgroundView>("shells");
-  const [selectedBackgroundId, setSelectedBackgroundId] = useState<string | null>(null);
-  const [scheduledWakeupEntries, setScheduledWakeupEntries] = useState<TranscriptEntry[]>([]);
-  const [controlActionEntries, setControlActionEntries] = useState<TranscriptEntry[]>([]);
-  const [testState, setTestState] = useState<TestState | null>(session.test_state ?? null);
-  const [rolloutState, setRolloutState] = useState<RolloutState | null>(session.rollout_state ?? null);
+    useState<TurnViewScrollAnchor | null>(
+      initialRunRoute?.tab === "turns" ? "bottom" : null,
+    );
+  const [backgroundView, setBackgroundView] =
+    useState<BackgroundView>("shells");
+  const [selectedBackgroundId, setSelectedBackgroundId] = useState<
+    string | null
+  >(null);
+  const [scheduledWakeupEntries, setScheduledWakeupEntries] = useState<
+    TranscriptEntry[]
+  >([]);
+  const [controlActionEntries, setControlActionEntries] = useState<
+    TranscriptEntry[]
+  >([]);
+  const [testState, setTestState] = useState<TestState | null>(
+    session.test_state ?? null,
+  );
+  const [rolloutState, setRolloutState] = useState<RolloutState | null>(
+    session.rollout_state ?? null,
+  );
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
   const ready = sessionContainerAvailable(session);
@@ -10642,23 +12109,29 @@ function ChatPane({
     [sessionScope],
   );
   const publicShareTokenValue = publicShareToken?.trim() ?? "";
-  const timelineRequestPathForPane = useCallback((targetSessionId: string, query: string) => {
-    if (publicView && publicShareTokenValue) {
-      return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/timeline${query ? `?${query}` : ""}`;
-    }
-    return scopedSessionPathForPane(
-      `/api/sessions/${encodeURIComponent(targetSessionId)}/timeline${query ? `?${query}` : ""}`,
-    );
-  }, [publicShareTokenValue, publicView, scopedSessionPathForPane]);
-  const turnActivityRequestPathForPane = useCallback((turnId: string, page?: number) => {
-    const query = page && page > 0 ? `?page=${page}` : "";
-    if (publicView && publicShareTokenValue) {
-      return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/turns/${encodeURIComponent(turnId)}/activity${query}`;
-    }
-    return scopedSessionPathForPane(
-      `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnId)}/activity${query}`,
-    );
-  }, [publicShareTokenValue, publicView, scopedSessionPathForPane, session.id]);
+  const timelineRequestPathForPane = useCallback(
+    (targetSessionId: string, query: string) => {
+      if (publicView && publicShareTokenValue) {
+        return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/timeline${query ? `?${query}` : ""}`;
+      }
+      return scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(targetSessionId)}/timeline${query ? `?${query}` : ""}`,
+      );
+    },
+    [publicShareTokenValue, publicView, scopedSessionPathForPane],
+  );
+  const turnActivityRequestPathForPane = useCallback(
+    (turnId: string, page?: number) => {
+      const query = page && page > 0 ? `?page=${page}` : "";
+      if (publicView && publicShareTokenValue) {
+        return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/turns/${encodeURIComponent(turnId)}/activity${query}`;
+      }
+      return scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/turns/${encodeURIComponent(turnId)}/activity${query}`,
+      );
+    },
+    [publicShareTokenValue, publicView, scopedSessionPathForPane, session.id],
+  );
   const fetchPaneResource = useCallback(
     (input: RequestInfo, init?: RequestInit) =>
       publicView ? fetch(input, init) : authedFetch(input, init),
@@ -10670,12 +12143,18 @@ function ChatPane({
       return;
     }
     const res = await fetchPaneResource(
-      scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(session.id)}/scheduled-wakeups`),
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/scheduled-wakeups`,
+      ),
     );
     if (!res.ok) return;
-    const body = (await res.json()) as { scheduled_wakeups?: ScheduledWakeupRow[] };
+    const body = (await res.json()) as {
+      scheduled_wakeups?: ScheduledWakeupRow[];
+    };
     setScheduledWakeupEntries(
-      scheduledWakeupRowsToEntries(body.scheduled_wakeups ?? []) as TranscriptEntry[],
+      scheduledWakeupRowsToEntries(
+        body.scheduled_wakeups ?? [],
+      ) as TranscriptEntry[],
     );
   }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
   const fetchControlActionEntries = useCallback(async () => {
@@ -10684,7 +12163,9 @@ function ChatPane({
       return;
     }
     const res = await fetchPaneResource(
-      scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(session.id)}/control-actions`),
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/control-actions`,
+      ),
     );
     if (!res.ok) return;
     const body = (await res.json()) as ControlActionRow[];
@@ -10692,8 +12173,10 @@ function ChatPane({
       controlActionRowsToEntries(body) as TranscriptEntry[],
     );
   }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
-  const supportsFileAttachments = !readOnly && !publicView && sessionModeSupportsWorkspaceFiles(session.mode);
-  const filesAvailable = !readOnly && !publicView && sessionFilesAvailable(session);
+  const supportsFileAttachments =
+    !readOnly && !publicView && sessionModeSupportsWorkspaceFiles(session.mode);
+  const filesAvailable =
+    !readOnly && !publicView && sessionFilesAvailable(session);
   const filesTabTitle = sessionFilesTabTitle(session);
   const adminObservabilityAttention = observabilityAttentionStatus(
     adminControls?.observability.summary ?? null,
@@ -10707,7 +12190,9 @@ function ChatPane({
   // prefs are only the fallback for older rows that do not have it.
   const configuredModelId = (session.model ?? "").trim();
   const configuredEffortId = (session.effort ?? "").trim();
-  const hasConfiguredSessionRunConfig = Boolean(configuredModelId || configuredEffortId);
+  const hasConfiguredSessionRunConfig = Boolean(
+    configuredModelId || configuredEffortId,
+  );
   const modelOptions = modelOptionsForMode(session.mode);
   const effortOptions = effortOptionsForMode(session.mode);
   const preferredModelId = isClaude
@@ -10731,11 +12216,15 @@ function ChatPane({
       ? DEFAULT_CODEX_EFFORT_ID
       : "";
   const initialModelId = hasConfiguredSessionRunConfig
-    ? (configuredModelId || fallbackModelId)
-    : (modelOptions.some((opt) => opt.id === preferredModelId) ? preferredModelId : fallbackModelId);
+    ? configuredModelId || fallbackModelId
+    : modelOptions.some((opt) => opt.id === preferredModelId)
+      ? preferredModelId
+      : fallbackModelId;
   const initialEffortId = hasConfiguredSessionRunConfig
-    ? (configuredEffortId || fallbackEffortId)
-    : (effortOptions.some((opt) => opt.id === preferredEffortId) ? preferredEffortId : fallbackEffortId);
+    ? configuredEffortId || fallbackEffortId
+    : effortOptions.some((opt) => opt.id === preferredEffortId)
+      ? preferredEffortId
+      : fallbackEffortId;
   const [selectedModelId] = useState<string>(initialModelId);
   const [selectedEffortId] = useState<string>(initialEffortId);
   const runtimeContextWindowTokens =
@@ -10761,7 +12250,8 @@ function ChatPane({
   const [slashQuery, setSlashQuery] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
 
-  const [slashCommands, setSlashCommands] = useState<SlashCommand[]>(SLASH_COMMANDS);
+  const [slashCommands, setSlashCommands] =
+    useState<SlashCommand[]>(SLASH_COMMANDS);
   const [mcpOpen, setMcpOpen] = useState(false);
   // @filename mention palette state. paths is lazily loaded from
   // /api/sessions/{id}/files/walk on first `@` keystroke.
@@ -10789,7 +12279,9 @@ function ChatPane({
   const [fileContentLoading, setFileContentLoading] = useState(false);
   const [fileRawImageUrl, setFileRawImageUrl] = useState<string | null>(null);
   const [fileRawImageLoading, setFileRawImageLoading] = useState(false);
-  const [fileRawImageError, setFileRawImageError] = useState<string | null>(null);
+  const [fileRawImageError, setFileRawImageError] = useState<string | null>(
+    null,
+  );
   // Edit-mode bookkeeping for the file viewer.
   const [fileDraft, setFileDraft] = useState<string | null>(null);
   const [fileSaving, setFileSaving] = useState(false);
@@ -10835,7 +12327,9 @@ function ChatPane({
   };
   const paneFontScale = runPrefs.chatFontScale;
   const paneFontScalePct = Math.round(paneFontScale * 100);
-  const turnCompleteSoundVolumePct = Math.round(runPrefs.turnCompleteSoundVolume * 100);
+  const turnCompleteSoundVolumePct = Math.round(
+    runPrefs.turnCompleteSoundVolume * 100,
+  );
   const setPaneFontScale = setChatFontScale;
   const chatFontScaleStyle = {
     "--run-chat-font-scale": runPrefs.chatFontScale,
@@ -10854,18 +12348,27 @@ function ChatPane({
   // `null` on first render and the prop wouldn't reactively update when
   // the ref hydrated. State + callback ref forces a re-render once <main>
   // mounts so Virtuoso receives the element on the next pass.
-  const [transcriptScrollEl, setTranscriptScrollEl] = useState<HTMLElement | null>(null);
-  const transcriptScrollCallbackRef = useCallback((node: HTMLElement | null) => {
-    setTranscriptScrollEl(node);
-    logChatScrollEvent(node ? "scroll-parent-mounted" : "scroll-parent-unmounted", {
-      surface: "session",
-      sessionId: session.id,
-      sessionMode: session.mode,
-      ...chatScrollElementSnapshot(node),
-    });
-  }, [session.id, session.mode]);
+  const [transcriptScrollEl, setTranscriptScrollEl] =
+    useState<HTMLElement | null>(null);
+  const transcriptScrollCallbackRef = useCallback(
+    (node: HTMLElement | null) => {
+      setTranscriptScrollEl(node);
+      logChatScrollEvent(
+        node ? "scroll-parent-mounted" : "scroll-parent-unmounted",
+        {
+          surface: "session",
+          sessionId: session.id,
+          sessionMode: session.mode,
+          ...chatScrollElementSnapshot(node),
+        },
+      );
+    },
+    [session.id, session.mode],
+  );
   const focusComposerTextarea = useCallback((): boolean => {
-    const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+    const textarea = composerWrapRef.current?.querySelector(
+      "textarea",
+    ) as HTMLTextAreaElement | null;
     if (!textarea) return false;
     textarea.focus();
     const cursor = textarea.value.length;
@@ -10896,7 +12399,9 @@ function ChatPane({
   const sdkFoundNewestRef = useRef(false);
   const sdkLoadingOlderRef = useRef(false);
   const sdkTimelineRequestSeqRef = useRef(0);
-  const sdkTranscriptKeyboardNavInFlightRef = useRef<"oldest" | "newest" | null>(null);
+  const sdkTranscriptKeyboardNavInFlightRef = useRef<
+    "oldest" | "newest" | null
+  >(null);
   // Dedupes overlapping R-refresh force-pulls (held key / rapid presses) so a
   // single user-visible refresh never fans out into a timeline-request storm.
   const keyboardRefreshInFlightRef = useRef(false);
@@ -10905,10 +12410,13 @@ function ChatPane({
   // plain "Refreshed" pill in the connection-pill slot for a moment. The timer
   // ref lets a rapid second press restart (not stack) the display window.
   const [refreshFlashActive, setRefreshFlashActive] = useState(false);
-  const refreshFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const refreshFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const triggerRefreshFlash = useCallback(() => {
     setRefreshFlashActive(true);
-    if (refreshFlashTimerRef.current) clearTimeout(refreshFlashTimerRef.current);
+    if (refreshFlashTimerRef.current)
+      clearTimeout(refreshFlashTimerRef.current);
     refreshFlashTimerRef.current = setTimeout(() => {
       setRefreshFlashActive(false);
       refreshFlashTimerRef.current = null;
@@ -10916,7 +12424,8 @@ function ChatPane({
   }, []);
   useEffect(
     () => () => {
-      if (refreshFlashTimerRef.current) clearTimeout(refreshFlashTimerRef.current);
+      if (refreshFlashTimerRef.current)
+        clearTimeout(refreshFlashTimerRef.current);
     },
     [],
   );
@@ -11018,7 +12527,10 @@ function ChatPane({
       prefix,
     ].join("-");
   }
-  function markLocalEntries(localEntries: TranscriptEntry[], nonce: string): TranscriptEntry[] {
+  function markLocalEntries(
+    localEntries: TranscriptEntry[],
+    nonce: string,
+  ): TranscriptEntry[] {
     return localEntries.map((entry, index) => ({
       ...entry,
       transcriptSource: "realtime",
@@ -11027,19 +12539,26 @@ function ChatPane({
       orderKey: entry.orderKey ?? `${localOrderKey(nonce)}-${index}`,
     }));
   }
-  function applySdkAssistantDurations(entries: TranscriptEntry[]): TranscriptEntry[] {
+  function applySdkAssistantDurations(
+    entries: TranscriptEntry[],
+  ): TranscriptEntry[] {
     if (sdkAssistantDurationsRef.current.size === 0) return entries;
     return entries.map((entry) => {
       if (entry.kind !== "message" || entry.role !== "assistant") return entry;
       const durationMs = sdkAssistantDurationsRef.current.get(entry.id);
-      return durationMs == null ? entry : ({ ...entry, durationMs } as TranscriptEntry);
+      return durationMs == null
+        ? entry
+        : ({ ...entry, durationMs } as TranscriptEntry);
     });
   }
   function syncSdkRenderedEntries(): void {
     sdkServerEntriesRef.current = applySdkAssistantDurations(
       sdkServerProjectedEntriesRef.current,
     );
-    const latestUsageTokens = latestContextTokens(sdkServerEntriesRef.current, runtimeContextWindowTokens);
+    const latestUsageTokens = latestContextTokens(
+      sdkServerEntriesRef.current,
+      runtimeContextWindowTokens,
+    );
     if (latestUsageTokens > 0) setTokensUsed(latestUsageTokens);
     sdkRealtimeEntriesRef.current = pruneRealtimeEntries(
       sdkServerEntriesRef.current,
@@ -11050,12 +12569,18 @@ function ChatPane({
       sdkRealtimeEntriesRef.current,
     );
     setEntries((prev) =>
-      transcriptComparable(prev) === transcriptComparable(merged) ? prev : merged,
+      transcriptComparable(prev) === transcriptComparable(merged)
+        ? prev
+        : merged,
     );
     scheduleSdkReadStateUpdate();
   }
   function applySdkActivitySummaryToUi(rawActivity: unknown): void {
-    if (!rawActivity || typeof rawActivity !== "object" || Array.isArray(rawActivity)) {
+    if (
+      !rawActivity ||
+      typeof rawActivity !== "object" ||
+      Array.isArray(rawActivity)
+    ) {
       return;
     }
     const activity = normalizeSessionActivity({
@@ -11070,7 +12595,9 @@ function ChatPane({
       activity.status === "needs_input" ||
       activity.status === "stopping";
     setRenderedActiveTurnId(sdkActive ? activity.active_turn_id : null);
-    activeInterruptTargetRef.current = sdkActive ? activity.active_turn_id : null;
+    activeInterruptTargetRef.current = sdkActive
+      ? activity.active_turn_id
+      : null;
     if (sdkActive) {
       setRunStatus(activity.status === "stopping" ? "stopping" : "running");
       setRunning(true);
@@ -11111,7 +12638,9 @@ function ChatPane({
       return;
     }
     if (inactiveTurns.size === 0) return;
-    setRenderedActiveTurnId((prev) => (prev && inactiveTurns.has(prev) ? null : prev));
+    setRenderedActiveTurnId((prev) =>
+      prev && inactiveTurns.has(prev) ? null : prev,
+    );
     if (
       activeInterruptTargetRef.current &&
       inactiveTurns.has(activeInterruptTargetRef.current)
@@ -11152,7 +12681,10 @@ function ChatPane({
   // structured-log payload. Cardinality stays inside the existing
   // chat-scroll allowlist.
   function dispatchNavigationMode(reason: NavigationModeReason): void {
-    const transition = transitionNavigationMode(navigationModeRef.current, reason);
+    const transition = transitionNavigationMode(
+      navigationModeRef.current,
+      reason,
+    );
     if (transition.changed) {
       navigationModeRef.current = transition.to;
       setNavigationMode(transition.to);
@@ -11197,12 +12729,13 @@ function ChatPane({
     );
   }
   const clearTurnViewScrollRequest = useCallback((signal: number): void => {
-    setTurnViewScrollRequest((prev) =>
-      prev?.signal === signal ? null : prev,
-    );
+    setTurnViewScrollRequest((prev) => (prev?.signal === signal ? null : prev));
   }, []);
   function cachedTurnActivityIsLoaded(turnId: string): boolean {
-    return Object.prototype.hasOwnProperty.call(activityEntriesByTurnRef.current, turnId);
+    return Object.prototype.hasOwnProperty.call(
+      activityEntriesByTurnRef.current,
+      turnId,
+    );
   }
   function activityRefreshRetryDelayMs(attempts: number): number {
     const exponent = Math.max(0, attempts - 1);
@@ -11236,77 +12769,95 @@ function ChatPane({
     activityLiveRefreshLastRequestedCursorRef.current.clear();
     activityLiveRefreshAttemptsRef.current.clear();
   }
-  const fetchTurnActivityEntries = useCallback(async (
-    trimmedTurnId: string,
-  ): Promise<TranscriptEntry[]> => {
-    const selectedPage = selectedTurnPageRef.current[trimmedTurnId];
-    const res = await fetchPaneResource(
-      turnActivityRequestPathForPane(trimmedTurnId, selectedPage),
-    );
-    if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
-    const body = (await res.json()) as {
-      entries?: unknown[];
-      page?: number;
-      page_count?: number;
-      page_kind?: string;
-      question_count?: number;
-      question_index?: number;
-      question_set?: number;
-      answered?: boolean;
-      pages?: unknown;
-    };
-    if (typeof body.page === "number" && typeof body.page_count === "number") {
-      const info: TurnActivityPageInfo = {
-        page: body.page,
-        pageCount: body.page_count,
-        kind: typeof body.page_kind === "string" ? body.page_kind : undefined,
-        questionCount: typeof body.question_count === "number" ? body.question_count : undefined,
-        questionIndex: typeof body.question_index === "number" ? body.question_index : undefined,
-        questionSet: typeof body.question_set === "number" ? body.question_set : undefined,
-        answered: typeof body.answered === "boolean" ? body.answered : undefined,
-        pages: normalizeTurnActivityPageDirectory(body.pages),
+  const fetchTurnActivityEntries = useCallback(
+    async (trimmedTurnId: string): Promise<TranscriptEntry[]> => {
+      const selectedPage = selectedTurnPageRef.current[trimmedTurnId];
+      const res = await fetchPaneResource(
+        turnActivityRequestPathForPane(trimmedTurnId, selectedPage),
+      );
+      if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
+      const body = (await res.json()) as {
+        entries?: unknown[];
+        page?: number;
+        page_count?: number;
+        page_kind?: string;
+        question_count?: number;
+        question_index?: number;
+        question_set?: number;
+        answered?: boolean;
+        pages?: unknown;
       };
-      setTurnActivityPageInfo((prev) => {
-        const existing = prev[trimmedTurnId];
-        if (
-          existing &&
-          existing.page === info.page &&
-          existing.pageCount === info.pageCount &&
-          existing.kind === info.kind &&
-          existing.questionCount === info.questionCount &&
-          existing.questionIndex === info.questionIndex &&
-          existing.questionSet === info.questionSet &&
-          existing.answered === info.answered &&
-          JSON.stringify(existing.pages ?? []) === JSON.stringify(info.pages ?? [])
-        ) {
-          return prev;
-        }
-        return { ...prev, [trimmedTurnId]: info };
-      });
-    }
-    return normalizeProjectedTranscriptEntries(
-      Array.isArray(body.entries) ? body.entries : [],
-    );
-  }, [fetchPaneResource, turnActivityRequestPathForPane]);
-  const selectTurnActivityPage = useCallback((turnId: string, page: number) => {
-    const trimmedTurnId = turnId.trim();
-    if (!trimmedTurnId) return;
-    selectedTurnPageRef.current = {
-      ...selectedTurnPageRef.current,
-      [trimmedTurnId]: page,
-    };
-    void fetchTurnActivityEntries(trimmedTurnId)
-      .then((loaded) => {
-        setActivityEntriesByTurn((prev) => {
-          const next = { ...prev, [trimmedTurnId]: loaded };
-          activityEntriesByTurnRef.current = next;
-          return next;
+      if (
+        typeof body.page === "number" &&
+        typeof body.page_count === "number"
+      ) {
+        const info: TurnActivityPageInfo = {
+          page: body.page,
+          pageCount: body.page_count,
+          kind: typeof body.page_kind === "string" ? body.page_kind : undefined,
+          questionCount:
+            typeof body.question_count === "number"
+              ? body.question_count
+              : undefined,
+          questionIndex:
+            typeof body.question_index === "number"
+              ? body.question_index
+              : undefined,
+          questionSet:
+            typeof body.question_set === "number"
+              ? body.question_set
+              : undefined,
+          answered:
+            typeof body.answered === "boolean" ? body.answered : undefined,
+          pages: normalizeTurnActivityPageDirectory(body.pages),
+        };
+        setTurnActivityPageInfo((prev) => {
+          const existing = prev[trimmedTurnId];
+          if (
+            existing &&
+            existing.page === info.page &&
+            existing.pageCount === info.pageCount &&
+            existing.kind === info.kind &&
+            existing.questionCount === info.questionCount &&
+            existing.questionIndex === info.questionIndex &&
+            existing.questionSet === info.questionSet &&
+            existing.answered === info.answered &&
+            JSON.stringify(existing.pages ?? []) ===
+              JSON.stringify(info.pages ?? [])
+          ) {
+            return prev;
+          }
+          return { ...prev, [trimmedTurnId]: info };
         });
-      })
-      .catch(() => {
-        /* page switch failures fall back to the loaded page; live refresh retries */
-      });
-  }, [fetchTurnActivityEntries]);
+      }
+      return normalizeProjectedTranscriptEntries(
+        Array.isArray(body.entries) ? body.entries : [],
+      );
+    },
+    [fetchPaneResource, turnActivityRequestPathForPane],
+  );
+  const selectTurnActivityPage = useCallback(
+    (turnId: string, page: number) => {
+      const trimmedTurnId = turnId.trim();
+      if (!trimmedTurnId) return;
+      selectedTurnPageRef.current = {
+        ...selectedTurnPageRef.current,
+        [trimmedTurnId]: page,
+      };
+      void fetchTurnActivityEntries(trimmedTurnId)
+        .then((loaded) => {
+          setActivityEntriesByTurn((prev) => {
+            const next = { ...prev, [trimmedTurnId]: loaded };
+            activityEntriesByTurnRef.current = next;
+            return next;
+          });
+        })
+        .catch(() => {
+          /* page switch failures fall back to the loaded page; live refresh retries */
+        });
+    },
+    [fetchTurnActivityEntries],
+  );
   function silentlyRefreshCachedTurnActivity(turnId: string): void {
     if (activityLiveRefreshInFlightRef.current.has(turnId)) return;
     if (!cachedTurnActivityIsLoaded(turnId)) {
@@ -11318,7 +12869,8 @@ function ChatPane({
     activityLiveRefreshInFlightRef.current.add(turnId);
     void fetchTurnActivityEntries(turnId)
       .then((loaded) => {
-        const hadRetryAttempts = activityLiveRefreshAttemptsRef.current.has(turnId);
+        const hadRetryAttempts =
+          activityLiveRefreshAttemptsRef.current.has(turnId);
         activityLiveRefreshAttemptsRef.current.delete(turnId);
         clearActivityRefreshProblem(turnId);
         if (hadRetryAttempts) {
@@ -11334,12 +12886,16 @@ function ChatPane({
         });
       })
       .catch(() => {
-        const attempts = (activityLiveRefreshAttemptsRef.current.get(turnId) ?? 0) + 1;
+        const attempts =
+          (activityLiveRefreshAttemptsRef.current.get(turnId) ?? 0) + 1;
         activityLiveRefreshAttemptsRef.current.set(turnId, attempts);
         logSessionEventStreamEvent("turn_activity_refresh_failed", {
           sessionMode: session.mode,
         });
-        if (attempts < TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS && cachedTurnActivityIsLoaded(turnId)) {
+        if (
+          attempts < TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS &&
+          cachedTurnActivityIsLoaded(turnId)
+        ) {
           const existing = activityLiveRefreshTimersRef.current.get(turnId);
           if (existing !== undefined) window.clearTimeout(existing);
           const timer = window.setTimeout(() => {
@@ -11378,13 +12934,15 @@ function ChatPane({
       rows,
     );
     for (const [turnId, cursor] of requests) {
-      const previous = activityLiveRefreshLastRequestedCursorRef.current.get(turnId) ?? "";
+      const previous =
+        activityLiveRefreshLastRequestedCursorRef.current.get(turnId) ?? "";
       if (previous && cursor && cursor <= previous) continue;
       if (cursor) {
         activityLiveRefreshLastRequestedCursorRef.current.set(turnId, cursor);
         activityLiveRefreshAttemptsRef.current.delete(turnId);
       }
-      const pending = activityLiveRefreshPendingCursorRef.current.get(turnId) ?? "";
+      const pending =
+        activityLiveRefreshPendingCursorRef.current.get(turnId) ?? "";
       if (!pending || (cursor && cursor > pending)) {
         activityLiveRefreshPendingCursorRef.current.set(turnId, cursor);
       }
@@ -11488,8 +13046,13 @@ function ChatPane({
     if (navigationModeRef.current !== "live-tail") return;
     const cursor = sdkTimelineCursorRef.current;
     if (!cursor) return;
-    if (sdkLastReadSentRef.current && cursor <= sdkLastReadSentRef.current) return;
-    if (sdkReadStateInFlightRef.current && cursor <= sdkReadStateInFlightRef.current) return;
+    if (sdkLastReadSentRef.current && cursor <= sdkLastReadSentRef.current)
+      return;
+    if (
+      sdkReadStateInFlightRef.current &&
+      cursor <= sdkReadStateInFlightRef.current
+    )
+      return;
     if (sdkReadStateTimerRef.current !== null) {
       window.clearTimeout(sdkReadStateTimerRef.current);
     }
@@ -11505,11 +13068,14 @@ function ChatPane({
     if (navigationModeRef.current !== "live-tail") return;
     const cursor = sdkTimelineCursorRef.current;
     if (!cursor) return;
-    if (sdkLastReadSentRef.current && cursor <= sdkLastReadSentRef.current) return;
+    if (sdkLastReadSentRef.current && cursor <= sdkLastReadSentRef.current)
+      return;
     sdkReadStateInFlightRef.current = cursor;
     try {
       const res = await authedFetch(
-        scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(session.id)}/read-state`),
+        scopedSessionPathForPane(
+          `/api/sessions/${encodeURIComponent(session.id)}/read-state`,
+        ),
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -11545,7 +13111,10 @@ function ChatPane({
       }
     }
   }
-  function applySdkTranscriptRows(rows: TranscriptEntry[], orderKey: string): void {
+  function applySdkTranscriptRows(
+    rows: TranscriptEntry[],
+    orderKey: string,
+  ): void {
     const cursor = orderKey.trim();
     if (cursor) {
       sdkTimelineCursorRef.current = advanceTimelineCursor(
@@ -11640,7 +13209,9 @@ function ChatPane({
     return `queued-${session.id}-${queuedMessageSeqRef.current}`;
   }
 
-  const slashFiltered = slashOpen ? filterSlashCommands(slashCommands, slashQuery) : [];
+  const slashFiltered = slashOpen
+    ? filterSlashCommands(slashCommands, slashQuery)
+    : [];
   const mentionFiltered =
     mentionOpen && mentionPaths
       ? filterMentionPaths(mentionPaths, mentionQuery)
@@ -11699,7 +13270,8 @@ function ChatPane({
   }, [session.id, visible]);
 
   useEffect(() => {
-    if (publicView || readOnly || !visible || session.status !== "Active") return;
+    if (publicView || readOnly || !visible || session.status !== "Active")
+      return;
     const touch = () => {
       void authedFetch(`/api/sessions/${session.id}/touch`, {
         method: "POST",
@@ -11709,7 +13281,6 @@ function ChatPane({
     const interval = window.setInterval(touch, 30_000);
     return () => window.clearInterval(interval);
   }, [publicView, readOnly, session.id, session.status, visible]);
-
 
   // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
@@ -11723,16 +13294,19 @@ function ChatPane({
         nextMessage.displayAttachments,
       );
     }
-  // startRun is intentionally omitted — it's redefined each render, and
-  // useEffect's closure gives us the fresh version when deps actually change.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // startRun is intentionally omitted — it's redefined each render, and
+    // useEffect's closure gives us the fresh version when deps actually change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [running, queuedMessages]);
 
   useEffect(() => {
     const run = currentRunRef.current;
     if (!run || !running || queuedMessages.length === 0) return;
     if (queuedFollowupBlockedReportedRef.current === run.id) return;
-    const terminal = terminalResultForTurn(sdkServerProjectedEntriesRef.current, run.turnId);
+    const terminal = terminalResultForTurn(
+      sdkServerProjectedEntriesRef.current,
+      run.turnId,
+    );
     if (!terminal) return;
     queuedFollowupBlockedReportedRef.current = run.id;
     logSessionEventStreamEvent("queued_followup_blocked_after_terminal", {
@@ -11755,7 +13329,10 @@ function ChatPane({
     reduceTimelineBootstrap,
     session.id,
     (initialSessionId) =>
-      initialTimelineBootstrapState(initialSessionId, sdkWindowEpochRef.current),
+      initialTimelineBootstrapState(
+        initialSessionId,
+        sdkWindowEpochRef.current,
+      ),
   );
   const historyBootstrapped = timelineBootstrap.status === "ready";
   const applyCurrentSessionRoute = useCallback(() => {
@@ -11781,7 +13358,9 @@ function ChatPane({
     if (route.tab === "turns") {
       setActiveTab("turns");
       setPendingRouteTurnNumber(route.turnNumber);
-      setRouteTurnUnavailable(route.turnSegmentPresent && route.turnNumber == null);
+      setRouteTurnUnavailable(
+        route.turnSegmentPresent && route.turnNumber == null,
+      );
       setPendingTurnViewRouteAnchor("bottom");
       return;
     }
@@ -11809,7 +13388,8 @@ function ChatPane({
     if (publicView) return;
     if (!visible) return;
     window.addEventListener("popstate", applyCurrentSessionRoute);
-    return () => window.removeEventListener("popstate", applyCurrentSessionRoute);
+    return () =>
+      window.removeEventListener("popstate", applyCurrentSessionRoute);
   }, [applyCurrentSessionRoute, publicView, visible]);
   useEffect(() => {
     if (publicView) return;
@@ -11853,7 +13433,9 @@ function ChatPane({
     const refreshEpoch = sdkWindowEpochRef.current;
     const startedAt = performance.now();
     const requestId = nextSdkTimelineRequestId(source);
-    const previousSnapshot = chatScrollEntrySnapshot(sdkServerProjectedEntriesRef.current);
+    const previousSnapshot = chatScrollEntrySnapshot(
+      sdkServerProjectedEntriesRef.current,
+    );
     const load = async (): Promise<SdkHistoryRefreshResult> => {
       const targetTimelineId = effectivePendingScrollMessageId?.trim() ?? "";
       const params = new URLSearchParams();
@@ -11998,7 +13580,7 @@ function ChatPane({
       return {
         replayed: projectedEntries.length > 0,
         terminal: run
-          ? terminalResultForTurn(projectedEntries, run.turnId) ?? undefined
+          ? (terminalResultForTurn(projectedEntries, run.turnId) ?? undefined)
           : undefined,
       };
     };
@@ -12021,7 +13603,9 @@ function ChatPane({
     setSdkLoadingOlder(true);
     const requestId = nextSdkTimelineRequestId("older");
     const beforeCursor = sdkOldestLoadedCursorRef.current;
-    const previousSnapshot = chatScrollEntrySnapshot(sdkServerProjectedEntriesRef.current);
+    const previousSnapshot = chatScrollEntrySnapshot(
+      sdkServerProjectedEntriesRef.current,
+    );
     if (!beforeCursor) {
       logChatScrollEvent("older-missing-cursor", {
         surface: "session",
@@ -12087,7 +13671,9 @@ function ChatPane({
       try {
         projectedOlderEntries = transcriptRowsFromTimelineBody(body);
       } catch (err) {
-        setSdkOlderError(`Could not load earlier messages: ${String((err as Error).message ?? err)}`);
+        setSdkOlderError(
+          `Could not load earlier messages: ${String((err as Error).message ?? err)}`,
+        );
         return;
       }
       const nextProjectedEntries = mergeProjectedTranscriptWindows(
@@ -12112,7 +13698,10 @@ function ChatPane({
         sdkFoundOldestRef.current = true;
         setSdkFoundOldest(true);
       }
-      const delta = chatScrollEntryDelta(previousSnapshot, nextProjectedEntries);
+      const delta = chatScrollEntryDelta(
+        previousSnapshot,
+        nextProjectedEntries,
+      );
       logChatScrollEntries("older-loaded", nextProjectedEntries, {
         surface: "session",
         sessionId: refreshSessionId,
@@ -12161,7 +13750,9 @@ function ChatPane({
     });
     const startedAt = performance.now();
     const requestId = nextSdkTimelineRequestId(source);
-    const previousSnapshot = chatScrollEntrySnapshot(sdkServerProjectedEntriesRef.current);
+    const previousSnapshot = chatScrollEntrySnapshot(
+      sdkServerProjectedEntriesRef.current,
+    );
     logChatScrollEvent("timeline-request", {
       surface: "session",
       sessionId: refreshSessionId,
@@ -12244,7 +13835,9 @@ function ChatPane({
     });
     const startedAt = performance.now();
     const requestId = nextSdkTimelineRequestId(source);
-    const previousSnapshot = chatScrollEntrySnapshot(sdkServerProjectedEntriesRef.current);
+    const previousSnapshot = chatScrollEntrySnapshot(
+      sdkServerProjectedEntriesRef.current,
+    );
     logChatScrollEvent("timeline-request", {
       surface: "session",
       sessionId: refreshSessionId,
@@ -12369,10 +13962,7 @@ function ChatPane({
       sessionId: refreshSessionId,
       epoch: refreshEpoch,
     });
-    const refresh = refreshSdkRunHistoryResult(
-      clearRealtime,
-      source,
-    )
+    const refresh = refreshSdkRunHistoryResult(clearRealtime, source)
       .then((result) => {
         if (sessionIdRef.current !== refreshSessionId) return;
         if (sdkWindowEpochRef.current !== refreshEpoch) return;
@@ -12410,10 +14000,16 @@ function ChatPane({
         }
       });
     historyRefreshRef.current = refresh;
-  // refreshSdkRunHistoryResult/finalizeSdkRun close over current refs and
-  // should not resubscribe an in-flight bootstrap.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.id, session.mode, timelineBootstrap.epoch, timelineBootstrap.status, visible]);
+    // refreshSdkRunHistoryResult/finalizeSdkRun close over current refs and
+    // should not resubscribe an in-flight bootstrap.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    session.id,
+    session.mode,
+    timelineBootstrap.epoch,
+    timelineBootstrap.status,
+    visible,
+  ]);
 
   useEffect(() => {
     if (activeTab !== "files" || filesAvailable) return;
@@ -12454,7 +14050,13 @@ function ChatPane({
 
   // Selected-file content fetch.
   useEffect(() => {
-    if (!filesAvailable || !selectedFile || selectedFile.text || selectedFile.binary) return;
+    if (
+      !filesAvailable ||
+      !selectedFile ||
+      selectedFile.text ||
+      selectedFile.binary
+    )
+      return;
     // text empty + not binary == placeholder created by openFile; load it.
     let cancelled = false;
     setFileContentLoading(true);
@@ -12485,7 +14087,11 @@ function ChatPane({
     setFileRawImageUrl(null);
     setFileRawImageError(null);
     setFileRawImageLoading(false);
-    if (!filesAvailable || !selectedFile?.binary || !isImagePath(selectedFile.path)) {
+    if (
+      !filesAvailable ||
+      !selectedFile?.binary ||
+      !isImagePath(selectedFile.path)
+    ) {
       return () => undefined;
     }
     setFileRawImageLoading(true);
@@ -12559,10 +14165,15 @@ function ChatPane({
         const byName = new Map<string, SlashCommand>();
         for (const command of SLASH_COMMANDS) byName.set(command.name, command);
         for (const skill of body.entries ?? []) {
-          const normalizedName = skill.name.startsWith("/") ? skill.name : `/${skill.name}`;
+          const normalizedName = skill.name.startsWith("/")
+            ? skill.name
+            : `/${skill.name}`;
           byName.set(normalizedName, {
             name: normalizedName,
-            desc: skill.description || skill.body_preview || `${skill.source} skill`,
+            desc:
+              skill.description ||
+              skill.body_preview ||
+              `${skill.source} skill`,
           });
         }
         setSlashCommands([...byName.values()]);
@@ -12586,7 +14197,13 @@ function ChatPane({
       return;
     }
     // Trigger content fetch by setting a placeholder.
-    setSelectedFile({ path: next, size: 0, truncated: false, text: "", binary: false });
+    setSelectedFile({
+      path: next,
+      size: 0,
+      truncated: false,
+      text: "",
+      binary: false,
+    });
     setSelectedFileLine(null);
     setFileDraft(null);
     setFileSaveError(null);
@@ -12594,13 +14211,20 @@ function ChatPane({
 
   function openWorkspacePath(target: WorkspacePathTarget | string) {
     if (!filesAvailable) return;
-    const normalized = typeof target === "string"
-      ? normalizeWorkspacePathTarget(target)
-      : target;
+    const normalized =
+      typeof target === "string"
+        ? normalizeWorkspacePathTarget(target)
+        : target;
     if (!normalized) return;
     setActiveTab("files");
     setFilesPath(parentFilesPath(normalized.path));
-    setSelectedFile({ path: normalized.path, size: 0, truncated: false, text: "", binary: false });
+    setSelectedFile({
+      path: normalized.path,
+      size: 0,
+      truncated: false,
+      text: "",
+      binary: false,
+    });
     setSelectedFileLine(normalized.line);
     setFileDraft(null);
     setFileSaveError(null);
@@ -12746,10 +14370,10 @@ function ChatPane({
     setQueuedMessages([]);
     setRunStatus("idle");
     setRunning(false);
-  // resetSdkTimelineBootstrapState intentionally closes over current session
-  // state; this layout reset must run exactly once for each session id before
-  // passive timeline bootstrap effects can start.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // resetSdkTimelineBootstrapState intentionally closes over current session
+    // state; this layout reset must run exactly once for each session id before
+    // passive timeline bootstrap effects can start.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session.id]);
 
   // sendByCtrlEnter — when on, plain Enter inserts a newline and only
@@ -12797,7 +14421,9 @@ function ChatPane({
       ) {
         return;
       }
-      const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+      const textarea = composerWrapRef.current?.querySelector(
+        "textarea",
+      ) as HTMLTextAreaElement | null;
       if (!textarea) return;
       if (e.target === textarea) {
         if (!focusTranscriptSection()) return;
@@ -12949,7 +14575,11 @@ function ChatPane({
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape" && !slashOpen && !mentionOpen && !mcpOpen) {
         if (activeTab === "turns") return;
-        if (e.target instanceof Element && e.target.closest(".run-header-name-input")) return;
+        if (
+          e.target instanceof Element &&
+          e.target.closest(".run-header-name-input")
+        )
+          return;
         e.preventDefault();
         cancelRun();
       }
@@ -13061,7 +14691,9 @@ function ChatPane({
         if (!filtered.length) return;
         e.preventDefault();
         e.stopPropagation();
-        applySlashCommand(filtered[Math.min(slashIndex, filtered.length - 1)].name);
+        applySlashCommand(
+          filtered[Math.min(slashIndex, filtered.length - 1)].name,
+        );
         slashManualOpenRef.current = false;
         setSlashOpen(false);
       } else if (e.key === "Escape") {
@@ -13085,7 +14717,9 @@ function ChatPane({
       if (e.key === "ArrowDown" && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
-        setMentionIndex((i) => (filtered.length ? (i + 1) % filtered.length : 0));
+        setMentionIndex((i) =>
+          filtered.length ? (i + 1) % filtered.length : 0,
+        );
       } else if (e.key === "ArrowUp" && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
@@ -13168,7 +14802,8 @@ function ChatPane({
 
   function appendQuotedMessage(text: string, style: QuoteStyle) {
     const quoted = quoteMessageText(text, style);
-    const next = composerText.trim().length > 0 ? `${composerText}\n\n${quoted}` : quoted;
+    const next =
+      composerText.trim().length > 0 ? `${composerText}\n\n${quoted}` : quoted;
     setComposerValue(next);
   }
 
@@ -13196,7 +14831,10 @@ function ChatPane({
     ta.focus();
   }
 
-  function setActiveTool(toolName: string | null, toolUseId: string | null = null) {
+  function setActiveTool(
+    toolName: string | null,
+    toolUseId: string | null = null,
+  ) {
     if (isScheduleWakeupToolName(toolName ?? undefined)) {
       scheduledWakeupRef.current = true;
     }
@@ -13215,7 +14853,9 @@ function ChatPane({
     setSlashQuery("");
     setSlashIndex(0);
     setSlashOpen(true);
-    const ta = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+    const ta = composerWrapRef.current?.querySelector(
+      "textarea",
+    ) as HTMLTextAreaElement | null;
     ta?.focus();
   }
 
@@ -13234,7 +14874,13 @@ function ChatPane({
       const id = nextEntryId("sdk-interrupt-error");
       appendSdkRealtimeEntries(
         markLocalEntries(
-          appendMeta([], id, "Stop failed", "No active turn is available to stop.", "error"),
+          appendMeta(
+            [],
+            id,
+            "Stop failed",
+            "No active turn is available to stop.",
+            "error",
+          ),
           id,
         ),
       );
@@ -13250,7 +14896,13 @@ function ChatPane({
       const id = nextEntryId("sdk-interrupt-error");
       appendSdkRealtimeEntries(
         markLocalEntries(
-          appendMeta([], id, "Stop failed", err instanceof Error ? err.message : String(err), "error"),
+          appendMeta(
+            [],
+            id,
+            "Stop failed",
+            err instanceof Error ? err.message : String(err),
+            "error",
+          ),
           id,
         ),
       );
@@ -13284,13 +14936,18 @@ function ChatPane({
       !Array.isArray(body) &&
       (body as { status?: unknown }).status === "already_terminal"
     ) {
-      const terminalType = (body as { target_terminal_type?: unknown }).target_terminal_type;
+      const terminalType = (body as { target_terminal_type?: unknown })
+        .target_terminal_type;
       currentRunRef.current = null;
       activeInterruptTargetRef.current = null;
       setRenderedActiveTurnId(null);
       setActiveTool(null);
       setRunning(false);
-      setRunStatus(terminalType === "turn.failed" || terminalType === "turn.command_failed" ? "error" : "done");
+      setRunStatus(
+        terminalType === "turn.failed" || terminalType === "turn.command_failed"
+          ? "error"
+          : "done",
+      );
       void refreshSdkRunHistory(true, "terminal-refresh");
     }
   }
@@ -13327,14 +14984,22 @@ function ChatPane({
     }
   }
 
-  async function requestBackgroundTaskStop(entry: TranscriptEntry): Promise<void> {
+  async function requestBackgroundTaskStop(
+    entry: TranscriptEntry,
+  ): Promise<void> {
     try {
       await stopBackgroundTask(entry);
     } catch (err) {
       const id = nextEntryId("background-stop-error");
       appendSdkRealtimeEntries(
         markLocalEntries(
-          appendMeta([], id, "Stop failed", err instanceof Error ? err.message : String(err), "error"),
+          appendMeta(
+            [],
+            id,
+            "Stop failed",
+            err instanceof Error ? err.message : String(err),
+            "error",
+          ),
           id,
         ),
       );
@@ -13349,7 +15014,13 @@ function ChatPane({
         const id = nextEntryId("background-stop-error");
         appendSdkRealtimeEntries(
           markLocalEntries(
-            appendMeta([], id, "Stop failed", "No active turn is available to stop.", "error"),
+            appendMeta(
+              [],
+              id,
+              "Stop failed",
+              "No active turn is available to stop.",
+              "error",
+            ),
             id,
           ),
         );
@@ -13377,11 +15048,7 @@ function ChatPane({
     const submitDecision = decideFollowupSubmit({
       running,
       durableRunStatus:
-        runStatus === "stopping"
-          ? "stopping"
-          : running
-            ? "streaming"
-            : "ready",
+        runStatus === "stopping" ? "stopping" : running ? "streaming" : "ready",
       hasLocalRun: run !== null,
       localRunHasDurableTerminal: terminal !== null,
     });
@@ -13409,18 +15076,30 @@ function ChatPane({
       } else {
         currentRunRef.current = null;
         setRunning(false);
-        setRunStatus((prev) => (prev === "running" || prev === "stopping" ? "done" : prev));
+        setRunStatus((prev) =>
+          prev === "running" || prev === "stopping" ? "done" : prev,
+        );
         setSdkConnectionState("idle");
       }
     }
-    startRun(composed.prompt, composed.displayText, undefined, composed.displayAttachments);
+    startRun(
+      composed.prompt,
+      composed.displayText,
+      undefined,
+      composed.displayAttachments,
+    );
   }
 
-  function composePromptWithAttachments(trimmed: string): ComposedAttachmentPrompt | null {
+  function composePromptWithAttachments(
+    trimmed: string,
+  ): ComposedAttachmentPrompt | null {
     const ready = attachments.filter((a) => a.status === "ready");
     const stillUploading = attachments.some((a) => a.status === "uploading");
     if (stillUploading) return null;
-    const prompt = composeAttachmentPathText(trimmed, ready.map((a) => a.absPath));
+    const prompt = composeAttachmentPathText(
+      trimmed,
+      ready.map((a) => a.absPath),
+    );
     const displayText = composeAttachmentDisplayText(trimmed, ready);
     const displayAttachments = messageAttachmentDisplays(ready);
     // Clear attachment state once they've been baked into the run (or queue).
@@ -13437,18 +15116,27 @@ function ChatPane({
     const displayText = skillInvocationTitle(skillName);
     const trigger = skillTrigger(isClaude, skillName);
     const trimmedPrompt = promptText.trim();
-    const skillPrompt = trimmedPrompt ? `${trigger}\n\n${trimmedPrompt}` : trigger;
+    const skillPrompt = trimmedPrompt
+      ? `${trigger}\n\n${trimmedPrompt}`
+      : trigger;
     if (running) {
       setQueuedMessages((prev) => [
         ...prev,
-        { id: nextQueuedMessageId(), text: skillPrompt, displayText, skillName },
+        {
+          id: nextQueuedMessageId(),
+          text: skillPrompt,
+          displayText,
+          skillName,
+        },
       ]);
       return;
     }
     startRun(skillPrompt, displayText, skillName);
   }
 
-  async function enqueueSdkTurn(run: NonNullable<typeof currentRunRef.current>): Promise<void> {
+  async function enqueueSdkTurn(
+    run: NonNullable<typeof currentRunRef.current>,
+  ): Promise<void> {
     const res = await authedFetch(`/api/sessions/${session.id}/turns`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -13459,7 +15147,11 @@ function ChatPane({
           ? { display_text: run.displayText }
           : {}),
         ...(!run.skillName && run.displayAttachments.length > 0
-          ? { display_attachments: attachmentPayloadsForApi(run.displayAttachments) }
+          ? {
+              display_attachments: attachmentPayloadsForApi(
+                run.displayAttachments,
+              ),
+            }
           : {}),
         model: run.model,
         // effort is forwarded only when set — the backend's
@@ -13483,7 +15175,9 @@ function ChatPane({
       }
       throw new Error(detail);
     }
-    const body = (await res.json().catch(() => null)) as { turn_id?: unknown } | null;
+    const body = (await res.json().catch(() => null)) as {
+      turn_id?: unknown;
+    } | null;
     if (typeof body?.turn_id === "string" && body.turn_id.trim()) {
       run.turnId = body.turn_id.trim();
     }
@@ -13528,11 +15222,14 @@ function ChatPane({
   }
 
   async function saveSessionBugLabel(name: string | null): Promise<void> {
-    const res = await authedFetch(scopedSessionPathForPane(`/api/sessions/${session.id}/bug-label`), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
-    });
+    const res = await authedFetch(
+      scopedSessionPathForPane(`/api/sessions/${session.id}/bug-label`),
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      },
+    );
     if (!res.ok) {
       let detail = `bug label update failed: ${res.status}`;
       try {
@@ -13551,11 +15248,14 @@ function ChatPane({
   }
 
   async function saveSessionBugLabels(names: string[]): Promise<void> {
-    const res = await authedFetch(scopedSessionPathForPane(`/api/sessions/${session.id}/bug-label`), {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ names }),
-    });
+    const res = await authedFetch(
+      scopedSessionPathForPane(`/api/sessions/${session.id}/bug-label`),
+      {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ names }),
+      },
+    );
     if (!res.ok) {
       let detail = `bug label update failed: ${res.status}`;
       try {
@@ -13581,7 +15281,13 @@ function ChatPane({
     setComposerValue("");
     void markTestState({ active: true }).catch((e) => {
       setEntries((prev) =>
-        appendMeta(prev, nextEntryId("test-state-error"), "test state update failed", String(e), "error"),
+        appendMeta(
+          prev,
+          nextEntryId("test-state-error"),
+          "test state update failed",
+          String(e),
+          "error",
+        ),
       );
     });
     submitSkillInvocation("test", composed.prompt);
@@ -13591,7 +15297,13 @@ function ChatPane({
     if (session.status !== "Active") return;
     void markRolloutState({ active: true }).catch((e) => {
       setEntries((prev) =>
-        appendMeta(prev, nextEntryId("rollout-state-error"), "rollout state update failed", String(e), "error"),
+        appendMeta(
+          prev,
+          nextEntryId("rollout-state-error"),
+          "rollout state update failed",
+          String(e),
+          "error",
+        ),
       );
     });
     submitSkillInvocation("rollout");
@@ -13628,7 +15340,12 @@ function ChatPane({
     if (skillName) {
       appendSdkRealtimeEntries(
         markLocalEntries(
-          appendSkillInvocation([], skillName, stripSkillTrigger(skillName, trimmed), optimisticTime),
+          appendSkillInvocation(
+            [],
+            skillName,
+            stripSkillTrigger(skillName, trimmed),
+            optimisticTime,
+          ),
           run.id,
         ),
       );
@@ -13669,7 +15386,13 @@ function ChatPane({
         const id = nextEntryId("sdk-submit-error");
         appendSdkRealtimeEntries(
           markLocalEntries(
-            appendMeta([], id, "Submit failed", err instanceof Error ? err.message : String(err), "error"),
+            appendMeta(
+              [],
+              id,
+              "Submit failed",
+              err instanceof Error ? err.message : String(err),
+              "error",
+            ),
             id,
           ),
         );
@@ -13710,7 +15433,10 @@ function ChatPane({
     setRunning(false);
     setSdkConnectionState("idle");
     if (options.refreshHistory ?? false) {
-      void refreshSdkRunHistory(options.clearRealtime ?? false, "terminal-refresh");
+      void refreshSdkRunHistory(
+        options.clearRealtime ?? false,
+        "terminal-refresh",
+      );
     }
   }
 
@@ -13742,12 +15468,16 @@ function ChatPane({
     let source: EventSource;
     try {
       source = await authedEventSource(
-        scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(session.id)}/events${query ? `?${query}` : ""}`),
+        scopedSessionPathForPane(
+          `/api/sessions/${encodeURIComponent(session.id)}/events${query ? `?${query}` : ""}`,
+        ),
         { stream: "session-events", sessionId: session.id, sessionScope },
       );
     } catch {
       setSdkConnectionState("connection_lost");
-      logSessionEventStreamEvent("reconnect_scheduled", { sessionMode: session.mode });
+      logSessionEventStreamEvent("reconnect_scheduled", {
+        sessionMode: session.mode,
+      });
       scheduleSdkEventStreamReconnect();
       return null;
     }
@@ -13797,10 +15527,13 @@ function ChatPane({
     });
     source.addEventListener("resync_required", () => {
       source.close();
-      if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
+      if (sdkEventSourceRef.current === source)
+        sdkEventSourceRef.current = null;
       setSdkConnectionState("resyncing");
       sdkTimelineCursorRef.current = null;
-      logSessionEventStreamEvent("resync_required", { sessionMode: session.mode });
+      logSessionEventStreamEvent("resync_required", {
+        sessionMode: session.mode,
+      });
       void refreshSdkRunHistoryResult(true, "resync").finally(() => {
         if (sessionIdRef.current !== session.id) return;
         sdkEventSourceRef.current?.close();
@@ -13810,14 +15543,16 @@ function ChatPane({
     });
     source.addEventListener("stream-error", () => {
       source.close();
-      if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
+      if (sdkEventSourceRef.current === source)
+        sdkEventSourceRef.current = null;
       setSdkConnectionState("connection_lost");
       logSessionEventStreamEvent("stream_error", { sessionMode: session.mode });
       scheduleSdkEventStreamReconnect();
     });
     source.onerror = () => {
       source.close();
-      if (sdkEventSourceRef.current === source) sdkEventSourceRef.current = null;
+      if (sdkEventSourceRef.current === source)
+        sdkEventSourceRef.current = null;
       setSdkConnectionState("connection_lost");
       logSessionEventStreamEvent("closed_error", { sessionMode: session.mode });
       scheduleSdkEventStreamReconnect();
@@ -13827,7 +15562,8 @@ function ChatPane({
 
   useEffect(() => {
     if (publicView) return;
-    if (!visible || !CHAT_MODES.has(session.mode) || !historyBootstrapped) return;
+    if (!visible || !CHAT_MODES.has(session.mode) || !historyBootstrapped)
+      return;
     // Long-task correlation: switching active sessions triggers a
     // reducer reset + transcript bootstrap + scroll rewire. Attribute
     // any block in that window to the switch via sinceSessionSwitchMs,
@@ -13851,12 +15587,21 @@ function ChatPane({
       if (silenceWatchdogRef.current) {
         silenceWatchdogRef.current.stop();
         silenceWatchdogRef.current = null;
-        logSessionEventStreamEvent("closed_unmount", { sessionMode: session.mode });
+        logSessionEventStreamEvent("closed_unmount", {
+          sessionMode: session.mode,
+        });
       }
     };
-  // openSdkEventStream closes over the current session cursor and reducer state.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [historyBootstrapped, publicView, visible, session.id, session.mode, sessionScope]);
+    // openSdkEventStream closes over the current session cursor and reducer state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    historyBootstrapped,
+    publicView,
+    visible,
+    session.id,
+    session.mode,
+    sessionScope,
+  ]);
 
   const submitStatus =
     runStatus === "running" || runStatus === "stopping"
@@ -13928,7 +15673,12 @@ function ChatPane({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [fetchControlActionEntries, fetchScheduledWakeupEntries, publicView, visible]);
+  }, [
+    fetchControlActionEntries,
+    fetchScheduledWakeupEntries,
+    publicView,
+    visible,
+  ]);
   const backgroundTaskEntries = useMemo(
     () => renderedEntries.filter(isBackgroundTaskEntry),
     [renderedEntries],
@@ -13959,27 +15709,43 @@ function ChatPane({
       ...activeBackgroundEntries,
       ...detachedShellEntries,
     ],
-    [activeBackgroundEntries, controlActionEntries, detachedShellEntries, scheduledWakeupEntries],
+    [
+      activeBackgroundEntries,
+      controlActionEntries,
+      detachedShellEntries,
+      scheduledWakeupEntries,
+    ],
   );
   const appliedModelId = (session.runtime_model ?? "").trim();
   const modelForCostEstimate = appliedModelId || selectedModelId;
   const contextWindow = runtimeContextWindowTokens;
   const turnViewItems = useMemo(
-    () => buildTurnViewItems(
-      renderedEntries,
-      renderedActiveTurnId,
+    () =>
+      buildTurnViewItems(
+        renderedEntries,
+        renderedActiveTurnId,
+        activityEntriesByTurn,
+        modelForCostEstimate,
+        contextWindow,
+      ),
+    [
       activityEntriesByTurn,
-      modelForCostEstimate,
       contextWindow,
-    ),
-    [activityEntriesByTurn, contextWindow, modelForCostEstimate, renderedActiveTurnId, renderedEntries],
+      modelForCostEstimate,
+      renderedActiveTurnId,
+      renderedEntries,
+    ],
   );
   const turnsAvailable = turnViewItems.length > 0;
-  const activeTurnViewId = turnViewItems.find((turn) => turn.active)?.turnId ?? null;
+  const activeTurnViewId =
+    turnViewItems.find((turn) => turn.active)?.turnId ?? null;
   const latestTurnId = turnViewItems[turnViewItems.length - 1]?.turnId ?? null;
   const selectedTurnExists =
-    selectedTurnId != null && turnViewItems.some((turn) => turn.turnId === selectedTurnId);
-  const effectiveSelectedTurnId = selectedTurnExists ? selectedTurnId : latestTurnId;
+    selectedTurnId != null &&
+    turnViewItems.some((turn) => turn.turnId === selectedTurnId);
+  const effectiveSelectedTurnId = selectedTurnExists
+    ? selectedTurnId
+    : latestTurnId;
   const routedSelectedTurnId =
     activeTab === "turns" ? effectiveSelectedTurnId : null;
   // The URL carries the durable per-session turn number. While a route number
@@ -13988,10 +15754,10 @@ function ChatPane({
   const routedSelectedTurnNumber =
     activeTab === "turns"
       ? (pendingRouteTurnNumber ??
-          (routedSelectedTurnId != null
-            ? (turnViewItems.find((turn) => turn.turnId === routedSelectedTurnId)?.turnNumber ??
-              null)
-            : null))
+        (routedSelectedTurnId != null
+          ? (turnViewItems.find((turn) => turn.turnId === routedSelectedTurnId)
+              ?.turnNumber ?? null)
+          : null))
       : null;
   const transcriptHrefForEntry = useCallback(
     (entry: TranscriptEntry): string | undefined => {
@@ -14009,7 +15775,8 @@ function ChatPane({
       if (!trimmedEntryId) return;
       if (!publicView) {
         const next = messageUrl(session.id, trimmedEntryId);
-        if (next !== window.location.href) window.history.replaceState({}, "", next);
+        if (next !== window.location.href)
+          window.history.replaceState({}, "", next);
       }
       setPendingTranscriptMessageId(trimmedEntryId);
       setActiveTab("chat");
@@ -14024,39 +15791,42 @@ function ChatPane({
     }
     onScrollConsumed?.();
   }, [onScrollConsumed, pendingTranscriptMessageId]);
-  const ensureTurnActivityLoaded = useCallback((
-    turnId: string,
-    options?: { force?: boolean },
-  ) => {
-    const trimmedTurnId = turnId.trim();
-    if (!trimmedTurnId) return;
-    // `force` re-pulls even when activity is already cached. The R refresh uses
-    // it so a turn whose live activity silently lagged is reconciled in place,
-    // mirroring the main transcript's durable tail force-pull. Without force we
-    // keep the cache short-circuit so opening a turn never re-fetches.
-    if (!options?.force && activityEntriesByTurn[trimmedTurnId]) return;
-    if (loadingActivityTurns[trimmedTurnId]) return;
-    setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
-    clearActivityRefreshProblem(trimmedTurnId);
-    void fetchTurnActivityEntries(trimmedTurnId)
-      .then((loaded) => {
-        activityLiveRefreshAttemptsRef.current.delete(trimmedTurnId);
-        setActivityEntriesByTurn((prev) => {
-          const next = { ...prev, [trimmedTurnId]: loaded };
-          activityEntriesByTurnRef.current = next;
-          return next;
+  const ensureTurnActivityLoaded = useCallback(
+    (turnId: string, options?: { force?: boolean }) => {
+      const trimmedTurnId = turnId.trim();
+      if (!trimmedTurnId) return;
+      // `force` re-pulls even when activity is already cached. The R refresh uses
+      // it so a turn whose live activity silently lagged is reconciled in place,
+      // mirroring the main transcript's durable tail force-pull. Without force we
+      // keep the cache short-circuit so opening a turn never re-fetches.
+      if (!options?.force && activityEntriesByTurn[trimmedTurnId]) return;
+      if (loadingActivityTurns[trimmedTurnId]) return;
+      setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
+      clearActivityRefreshProblem(trimmedTurnId);
+      void fetchTurnActivityEntries(trimmedTurnId)
+        .then((loaded) => {
+          activityLiveRefreshAttemptsRef.current.delete(trimmedTurnId);
+          setActivityEntriesByTurn((prev) => {
+            const next = { ...prev, [trimmedTurnId]: loaded };
+            activityEntriesByTurnRef.current = next;
+            return next;
+          });
+        })
+        .catch(() => {
+          markActivityRefreshProblem(trimmedTurnId, {
+            kind: "load",
+            attempts: 1,
+          });
+        })
+        .finally(() => {
+          setLoadingActivityTurns((prev) => ({
+            ...prev,
+            [trimmedTurnId]: false,
+          }));
         });
-      })
-      .catch(() => {
-        markActivityRefreshProblem(trimmedTurnId, {
-          kind: "load",
-          attempts: 1,
-        });
-      })
-      .finally(() => {
-        setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: false }));
-      });
-  }, [activityEntriesByTurn, fetchTurnActivityEntries, loadingActivityTurns]);
+    },
+    [activityEntriesByTurn, fetchTurnActivityEntries, loadingActivityTurns],
+  );
   // Cold-load deep links carry a number that isn't in the loaded window. Resolve
   // it server-side from durable session_turns (not from render state, per the
   // transcript-navigation contract). Deduped via the ref so the async resolve
@@ -14094,7 +15864,13 @@ function ChatPane({
         resolvingRouteTurnNumberRef.current = null;
       }
     },
-    [ensureTurnActivityLoaded, fetchPaneResource, publicView, scopedSessionPathForPane, session.id],
+    [
+      ensureTurnActivityLoaded,
+      fetchPaneResource,
+      publicView,
+      scopedSessionPathForPane,
+      session.id,
+    ],
   );
   // Observe the unavailable-target render once per transition into it, on the
   // bounded session-event client-events channel (per the transcript-navigation
@@ -14114,11 +15890,14 @@ function ChatPane({
   }, [routeTurnUnavailable, session.mode]);
   useEffect(() => {
     if (turnViewItems.length === 0) {
-      if (historyBootstrapped && selectedTurnId !== null) setSelectedTurnId(null);
+      if (historyBootstrapped && selectedTurnId !== null)
+        setSelectedTurnId(null);
       return;
     }
     if (pendingRouteTurnNumber != null) {
-      const match = turnViewItems.find((turn) => turn.turnNumber === pendingRouteTurnNumber);
+      const match = turnViewItems.find(
+        (turn) => turn.turnNumber === pendingRouteTurnNumber,
+      );
       if (match) {
         if (selectedTurnId !== match.turnId) setSelectedTurnId(match.turnId);
         setRouteTurnUnavailable(false);
@@ -14132,7 +15911,8 @@ function ChatPane({
       }
       return;
     }
-    if (!routeTurnUnavailable && !selectedTurnExists && latestTurnId) setSelectedTurnId(latestTurnId);
+    if (!routeTurnUnavailable && !selectedTurnExists && latestTurnId)
+      setSelectedTurnId(latestTurnId);
   }, [
     historyBootstrapped,
     latestTurnId,
@@ -14169,7 +15949,17 @@ function ChatPane({
     } else {
       replaceSessionRoute(session.id, "chat");
     }
-  }, [activeTab, adminView, effectivePendingScrollMessageId, publicView, routeTurnUnavailable, routedSelectedTurnNumber, session.id, settingsTab, visible]);
+  }, [
+    activeTab,
+    adminView,
+    effectivePendingScrollMessageId,
+    publicView,
+    routeTurnUnavailable,
+    routedSelectedTurnNumber,
+    session.id,
+    settingsTab,
+    visible,
+  ]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -14187,31 +15977,48 @@ function ChatPane({
       signal: turnViewScrollRequestSeqRef.current,
     });
     setPendingTurnViewRouteAnchor(null);
-  }, [activeTab, effectiveSelectedTurnId, pendingRouteTurnNumber, pendingTurnViewRouteAnchor]);
-  const openTurnPage = useCallback((turnId?: string, options?: TurnPageOpenOptions) => {
-    const target = turnId?.trim() || activeTurnViewId || effectiveSelectedTurnId || latestTurnId;
-    if (target) {
-      setPendingRouteTurnNumber(null);
-      setRouteTurnUnavailable(false);
-      setPendingTurnViewRouteAnchor(null);
-      if (options?.resetPage) {
-        const nextSelectedPages = { ...selectedTurnPageRef.current };
-        delete nextSelectedPages[target];
-        selectedTurnPageRef.current = nextSelectedPages;
+  }, [
+    activeTab,
+    effectiveSelectedTurnId,
+    pendingRouteTurnNumber,
+    pendingTurnViewRouteAnchor,
+  ]);
+  const openTurnPage = useCallback(
+    (turnId?: string, options?: TurnPageOpenOptions) => {
+      const target =
+        turnId?.trim() ||
+        activeTurnViewId ||
+        effectiveSelectedTurnId ||
+        latestTurnId;
+      if (target) {
+        setPendingRouteTurnNumber(null);
+        setRouteTurnUnavailable(false);
+        setPendingTurnViewRouteAnchor(null);
+        if (options?.resetPage) {
+          const nextSelectedPages = { ...selectedTurnPageRef.current };
+          delete nextSelectedPages[target];
+          selectedTurnPageRef.current = nextSelectedPages;
+        }
+        setSelectedTurnId(target);
+        ensureTurnActivityLoaded(target, { force: options?.resetPage });
+        if (options?.anchor) {
+          turnViewScrollRequestSeqRef.current += 1;
+          setTurnViewScrollRequest({
+            turnId: target,
+            anchor: options.anchor,
+            signal: turnViewScrollRequestSeqRef.current,
+          });
+        }
       }
-      setSelectedTurnId(target);
-      ensureTurnActivityLoaded(target, { force: options?.resetPage });
-      if (options?.anchor) {
-        turnViewScrollRequestSeqRef.current += 1;
-        setTurnViewScrollRequest({
-          turnId: target,
-          anchor: options.anchor,
-          signal: turnViewScrollRequestSeqRef.current,
-        });
-      }
-    }
       setActiveTab("turns");
-  }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
+    },
+    [
+      activeTurnViewId,
+      effectiveSelectedTurnId,
+      ensureTurnActivityLoaded,
+      latestTurnId,
+    ],
+  );
 
   // T opens the turn-detail view from the focused transcript; Escape returns
   // from Turns to the transcript. The T side uses the same "highlighted
@@ -14406,56 +16213,74 @@ function ChatPane({
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
   const canStopBackgroundEntry = useCallback(
     (entry: TranscriptEntry) =>
-      !publicView && !readOnly && canStopBackgroundActivity(entry, codexBackgroundStopAvailable),
+      !publicView &&
+      !readOnly &&
+      canStopBackgroundActivity(entry, codexBackgroundStopAvailable),
     [codexBackgroundStopAvailable, publicView, readOnly],
   );
-  const openBackgroundPage = useCallback((entry?: TranscriptEntry) => {
-    if (publicView) return;
-    if (entry?.id) setSelectedBackgroundId(entry.id);
-    setBackgroundView(
-      entry && isControlActionEntry(entry)
-        ? "control"
-      : entry && isScheduledWakeupEntry(entry)
-        ? "scheduled"
-        : entry && isDetachedShellCandidateEntry(entry)
-        ? "detached"
-        : activeBackgroundEntries.length === 0 && controlActionEntries.length > 0
+  const openBackgroundPage = useCallback(
+    (entry?: TranscriptEntry) => {
+      if (publicView) return;
+      if (entry?.id) setSelectedBackgroundId(entry.id);
+      setBackgroundView(
+        entry && isControlActionEntry(entry)
           ? "control"
-        : activeBackgroundEntries.length === 0 && activeScheduledWakeupEntries.length > 0
-          ? "scheduled"
-        : activeBackgroundEntries.length === 0 && detachedShellEntries.length > 0
-          ? "detached"
-          : "shells",
-    );
-    setActiveTab("background");
-  }, [activeBackgroundEntries.length, activeScheduledWakeupEntries.length, controlActionEntries.length, detachedShellEntries.length, publicView]);
+          : entry && isScheduledWakeupEntry(entry)
+            ? "scheduled"
+            : entry && isDetachedShellCandidateEntry(entry)
+              ? "detached"
+              : activeBackgroundEntries.length === 0 &&
+                  controlActionEntries.length > 0
+                ? "control"
+                : activeBackgroundEntries.length === 0 &&
+                    activeScheduledWakeupEntries.length > 0
+                  ? "scheduled"
+                  : activeBackgroundEntries.length === 0 &&
+                      detachedShellEntries.length > 0
+                    ? "detached"
+                    : "shells",
+      );
+      setActiveTab("background");
+    },
+    [
+      activeBackgroundEntries.length,
+      activeScheduledWakeupEntries.length,
+      controlActionEntries.length,
+      detachedShellEntries.length,
+      publicView,
+    ],
+  );
   const currentSkillState = currentSessionSkillState(testState, rolloutState);
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
   const pullRequestURL = testState?.pull_request_url?.trim() || "";
   const sessionDataRows = useMemo(
-    () => buildSessionDataStatusRows({
-      ...session,
-      test_state: testState,
-      rollout_state: rolloutState,
-    }),
+    () =>
+      buildSessionDataStatusRows({
+        ...session,
+        test_state: testState,
+        rollout_state: rolloutState,
+      }),
     [session, testState, rolloutState],
   );
   const appliedEffortId = (session.runtime_effort ?? "").trim();
   const hasAppliedRuntimeConfig = Boolean(session.runtime_configured_at);
   const configuredModelLabel =
     modelDisplayLabel(session.mode, selectedModelId) || "model not selected";
-  const configuredEffortLabel = effortDisplayLabel(session.mode, selectedEffortId);
+  const configuredEffortLabel = effortDisplayLabel(
+    session.mode,
+    selectedEffortId,
+  );
   const modelChipLabel = hasAppliedRuntimeConfig
-    ? (modelDisplayLabel(session.mode, appliedModelId) || configuredModelLabel)
+    ? modelDisplayLabel(session.mode, appliedModelId) || configuredModelLabel
     : "Model pending";
   const effortChipLabel = hasAppliedRuntimeConfig
     ? effortDisplayLabel(session.mode, appliedEffortId)
     : "";
   const modelChipTitle = hasAppliedRuntimeConfig
-    ? (appliedModelId
+    ? appliedModelId
       ? `Runtime applied: ${modelChipLabel}${effortChipLabel ? ` / ${effortChipLabel}` : ""}`
-      : `Runtime did not report a model. Selected: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`)
+      : `Runtime did not report a model. Selected: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`
     : `Waiting for runner report. Intended: ${configuredModelLabel}${configuredEffortLabel ? ` / ${configuredEffortLabel}` : ""}`;
   const sessionCostEstimate = useMemo(
     () => estimateTranscriptCost(entries, modelForCostEstimate),
@@ -14463,11 +16288,13 @@ function ChatPane({
   );
   const sessionUsageLoading =
     CHAT_MODES.has(session.mode) &&
-    (timelineBootstrap.status === "idle" || timelineBootstrap.status === "loading");
+    (timelineBootstrap.status === "idle" ||
+      timelineBootstrap.status === "loading");
 
   useEffect(() => {
     if (publicView) return;
-    if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready) return;
+    if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready)
+      return;
     const activeElement = document.activeElement;
     if (
       activeElement &&
@@ -14493,7 +16320,8 @@ function ChatPane({
 
   useEffect(() => {
     if (publicView) return;
-    if (!visible || activeTab !== "chat" || !pendingComposerFocusRef.current) return;
+    if (!visible || activeTab !== "chat" || !pendingComposerFocusRef.current)
+      return;
     pendingComposerFocusRef.current = false;
     requestAnimationFrame(() => {
       focusComposerTextarea();
@@ -14508,16 +16336,34 @@ function ChatPane({
     }
     if (
       !selectedBackgroundId ||
-      !backgroundLedgerEntries.some((entry) => entry.id === selectedBackgroundId)
+      !backgroundLedgerEntries.some(
+        (entry) => entry.id === selectedBackgroundId,
+      )
     ) {
       setSelectedBackgroundId(
         backgroundView === "scheduled"
-          ? scheduledWakeupEntries[0]?.id ?? activeBackgroundEntries[0]?.id ?? controlActionEntries[0]?.id ?? detachedShellEntries[0]?.id ?? null
+          ? (scheduledWakeupEntries[0]?.id ??
+              activeBackgroundEntries[0]?.id ??
+              controlActionEntries[0]?.id ??
+              detachedShellEntries[0]?.id ??
+              null)
           : backgroundView === "control"
-            ? controlActionEntries[0]?.id ?? activeBackgroundEntries[0]?.id ?? scheduledWakeupEntries[0]?.id ?? detachedShellEntries[0]?.id ?? null
-          : backgroundView === "detached"
-            ? detachedShellEntries[0]?.id ?? activeBackgroundEntries[0]?.id ?? controlActionEntries[0]?.id ?? scheduledWakeupEntries[0]?.id ?? null
-            : activeBackgroundEntries[0]?.id ?? controlActionEntries[0]?.id ?? scheduledWakeupEntries[0]?.id ?? detachedShellEntries[0]?.id ?? null,
+            ? (controlActionEntries[0]?.id ??
+              activeBackgroundEntries[0]?.id ??
+              scheduledWakeupEntries[0]?.id ??
+              detachedShellEntries[0]?.id ??
+              null)
+            : backgroundView === "detached"
+              ? (detachedShellEntries[0]?.id ??
+                activeBackgroundEntries[0]?.id ??
+                controlActionEntries[0]?.id ??
+                scheduledWakeupEntries[0]?.id ??
+                null)
+              : (activeBackgroundEntries[0]?.id ??
+                controlActionEntries[0]?.id ??
+                scheduledWakeupEntries[0]?.id ??
+                detachedShellEntries[0]?.id ??
+                null),
       );
     }
   }, [
@@ -14548,7 +16394,9 @@ function ChatPane({
       ) {
         return;
       }
-      const textarea = composerWrapRef.current?.querySelector("textarea") as HTMLTextAreaElement | null;
+      const textarea = composerWrapRef.current?.querySelector(
+        "textarea",
+      ) as HTMLTextAreaElement | null;
       if (textarea && e.target === textarea) return;
 
       e.preventDefault();
@@ -14589,18 +16437,25 @@ function ChatPane({
     return () => onRefreshFlashChange(session.id, null);
   }, [onRefreshFlashChange, session.id, visibleRefreshFlash]);
 
-  const [askUserQuestionDrafts, setAskUserQuestionDrafts] = useState<Record<string, AskUserQuestionDraft | undefined>>({});
-  const setAskUserQuestionDraft = useCallback((
-    key: string,
-    updater: (previous: AskUserQuestionDraft | undefined) => AskUserQuestionDraft,
-  ) => {
-    const trimmed = key.trim();
-    if (!trimmed) return;
-    setAskUserQuestionDrafts((previous) => ({
-      ...previous,
-      [trimmed]: updater(previous[trimmed]),
-    }));
-  }, []);
+  const [askUserQuestionDrafts, setAskUserQuestionDrafts] = useState<
+    Record<string, AskUserQuestionDraft | undefined>
+  >({});
+  const setAskUserQuestionDraft = useCallback(
+    (
+      key: string,
+      updater: (
+        previous: AskUserQuestionDraft | undefined,
+      ) => AskUserQuestionDraft,
+    ) => {
+      const trimmed = key.trim();
+      if (!trimmed) return;
+      setAskUserQuestionDrafts((previous) => ({
+        ...previous,
+        [trimmed]: updater(previous[trimmed]),
+      }));
+    },
+    [],
+  );
 
   async function submitAnswer(
     askingTurnId: string,
@@ -14649,16 +16504,21 @@ function ChatPane({
     if (tab === "files" && !filesAvailable) return;
     setActiveTab((current) => (current === tab ? "chat" : tab));
   };
-  const setSettingsRoute = useCallback((nextSettingsTab: SettingsTab, nextAdminView: AdminView) => {
-    setSettingsTab(nextSettingsTab);
-    setAdminView(nextAdminView);
-    setActiveTab("settings");
-  }, []);
+  const setSettingsRoute = useCallback(
+    (nextSettingsTab: SettingsTab, nextAdminView: AdminView) => {
+      setSettingsTab(nextSettingsTab);
+      setAdminView(nextAdminView);
+      setActiveTab("settings");
+    },
+    [],
+  );
   const retryTimelineBootstrap = () => {
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
     timelineBootstrapClearRealtimeRef.current = false;
-    timelineBootstrapScrollToLatestRef.current = !Boolean(effectivePendingScrollMessageId?.trim());
+    timelineBootstrapScrollToLatestRef.current = !Boolean(
+      effectivePendingScrollMessageId?.trim(),
+    );
     clearScrollToLatestRequest();
     dispatchTimelineBootstrap({
       type: "reset",
@@ -14666,28 +16526,38 @@ function ChatPane({
       epoch: sdkWindowEpochRef.current,
     });
   };
-  const createMessageLink = useCallback(async (targetSessionId: string, entryId: string) => {
-    if (publicView && publicShareTokenValue) {
-      return messageUrl(targetSessionId, entryId, publicShareTokenValue);
-    }
-    const res = await authedFetch(
-      scopedSessionPathForPane(`/api/sessions/${encodeURIComponent(targetSessionId)}/message-links`),
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ timeline_id: entryId }),
-      },
-    );
-    if (!res.ok) {
-      const body = (await res.json().catch(() => null)) as { detail?: unknown } | null;
-      const detail = typeof body?.detail === "string" ? body.detail : `link request failed: ${res.status}`;
-      throw new Error(detail);
-    }
-    const body = (await res.json()) as { browser_url?: unknown };
-    return typeof body.browser_url === "string" && body.browser_url
-      ? body.browser_url
-      : messageUrl(targetSessionId, entryId);
-  }, [publicShareTokenValue, publicView, scopedSessionPathForPane]);
+  const createMessageLink = useCallback(
+    async (targetSessionId: string, entryId: string) => {
+      if (publicView && publicShareTokenValue) {
+        return messageUrl(targetSessionId, entryId, publicShareTokenValue);
+      }
+      const res = await authedFetch(
+        scopedSessionPathForPane(
+          `/api/sessions/${encodeURIComponent(targetSessionId)}/message-links`,
+        ),
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ timeline_id: entryId }),
+        },
+      );
+      if (!res.ok) {
+        const body = (await res.json().catch(() => null)) as {
+          detail?: unknown;
+        } | null;
+        const detail =
+          typeof body?.detail === "string"
+            ? body.detail
+            : `link request failed: ${res.status}`;
+        throw new Error(detail);
+      }
+      const body = (await res.json()) as { browser_url?: unknown };
+      return typeof body.browser_url === "string" && body.browser_url
+        ? body.browser_url
+        : messageUrl(targetSessionId, entryId);
+    },
+    [publicShareTokenValue, publicView, scopedSessionPathForPane],
+  );
 
   return (
     <RunContext.Provider
@@ -14704,1001 +16574,1156 @@ function ChatPane({
         user,
       }}
     >
-    <WorkspaceShell
-      className={publicView ? "run-panel-public-share" : undefined}
-      style={chatFontScaleStyle}
-      bodyClassName={`run-main-${runStatus}`}
-      bodyRef={transcriptScrollCallbackRef}
-      bodyAriaLabel={activeTab === "chat" ? "Transcript" : "Workspace panel"}
-      composerVisible={activeTab === "chat" && !publicView}
-      composerWrapRef={composerWrapRef}
-      composerWrapStyle={chatFontScaleStyle}
-      composerWrapClassName={dragActive ? "run-composer-wrap-drag" : ""}
-      onComposerWrapDragOver={(e) => {
-        if (!supportsFileAttachments) return;
-        e.preventDefault();
-        if (!dragActive) setDragActive(true);
-      }}
-      onComposerWrapDragLeave={(e) => {
-        if (e.currentTarget === e.target) setDragActive(false);
-      }}
-      onComposerWrapDrop={(e) => {
-        if (!supportsFileAttachments) return;
-        e.preventDefault();
-        setDragActive(false);
-        handleAttachmentFiles(e.dataTransfer?.files ?? null);
-      }}
-      onComposerWrapPaste={(e) => {
-        if (!supportsFileAttachments) return;
-        const items = e.clipboardData?.items;
-        if (!items) return;
-        const fs: File[] = [];
-        for (const it of Array.from(items)) {
-          if (it.kind === "file") {
-            const f = it.getAsFile();
-            if (f) fs.push(f);
-          }
-        }
-        if (fs.length > 0) {
+      <WorkspaceShell
+        className={publicView ? "run-panel-public-share" : undefined}
+        style={chatFontScaleStyle}
+        bodyClassName={`run-main-${runStatus}`}
+        bodyRef={transcriptScrollCallbackRef}
+        bodyAriaLabel={activeTab === "chat" ? "Transcript" : "Workspace panel"}
+        composerVisible={activeTab === "chat" && !publicView}
+        composerWrapRef={composerWrapRef}
+        composerWrapStyle={chatFontScaleStyle}
+        composerWrapClassName={dragActive ? "run-composer-wrap-drag" : ""}
+        onComposerWrapDragOver={(e) => {
+          if (!supportsFileAttachments) return;
           e.preventDefault();
-          for (const f of fs) void uploadAttachment(f);
-        }
-      }}
-      title={<WorkspaceTitleSpacer />}
-      tabs={(<>
-          {activeTab !== "chat" && (
-            <button
-              type="button"
-              className="run-tab run-tab-back"
-              onClick={() => setActiveTab("chat")}
-              aria-label="Back to chat"
-              title="Back to chat"
-            >
-              <ArrowLeftIcon
-                className="run-tab-icon"
-                strokeWidth={2.2}
-                aria-hidden="true"
-              />
-              <span>Back</span>
-            </button>
-          )}
-          {publicView && (
-            <TurnsTab
-              active={activeTab === "turns"}
-              count={turnViewItems.length}
-              hasActiveTurn={turnViewItems.some((turn) => turn.active)}
-              disabled={!turnsAvailable}
-              title={turnsAvailable ? "Turns" : "Turns are available once the agent has turn activity"}
-              onOpen={() => {
-                if (activeTab === "turns") setActiveTab("chat");
-                else openTurnPage(undefined, { anchor: "bottom" });
-              }}
-            />
-          )}
-          {!publicView && (
-            <RunHeaderOverflowMenu
-              triggerActive={activeTab !== "chat"}
-              triggerAttention={adminObservabilityAttention}
-              turns={{
-                active: activeTab === "turns",
-                count: turnViewItems.length,
-                countActive: turnViewItems.some((turn) => turn.active),
-                disabled: !turnsAvailable,
-                title: turnsAvailable ? "Turns" : "Turns are available once the agent has turn activity",
-                onOpen: () => {
-                  if (activeTab === "turns") setActiveTab("chat");
-                  else openTurnPage(undefined, { anchor: "bottom" });
-                },
-              }}
-              background={{
-                active: activeTab === "background",
-                count: backgroundLedgerEntries.length,
-                disabled: false,
-                title: "Background",
-                onOpen: () => {
-                  if (activeTab === "background") setActiveTab("chat");
-                  else openBackgroundPage();
-                },
-              }}
-              files={{
-                active: activeTab === "files",
-                disabled: !filesAvailable,
-                title: filesTabTitle,
-                onOpen: () => toggleRunTab("files"),
-              }}
-              sessionData={{
-                active: activeTab === "session-data",
-                disabled: false,
-                title: "Session data",
-                onOpen: () => toggleRunTab("session-data"),
-              }}
-              settingsActive={activeTab === "settings"}
-              helpActive={activeTab === "help"}
-              onSettings={() => toggleRunTab("settings")}
-              onHelp={() => toggleRunTab("help")}
-            />
-          )}
-      </>)}
-      body={(<>
-        {activeTab === "files" ? (
-          <div className="run-files">
-            <div className="run-files-breadcrumb">
+          if (!dragActive) setDragActive(true);
+        }}
+        onComposerWrapDragLeave={(e) => {
+          if (e.currentTarget === e.target) setDragActive(false);
+        }}
+        onComposerWrapDrop={(e) => {
+          if (!supportsFileAttachments) return;
+          e.preventDefault();
+          setDragActive(false);
+          handleAttachmentFiles(e.dataTransfer?.files ?? null);
+        }}
+        onComposerWrapPaste={(e) => {
+          if (!supportsFileAttachments) return;
+          const items = e.clipboardData?.items;
+          if (!items) return;
+          const fs: File[] = [];
+          for (const it of Array.from(items)) {
+            if (it.kind === "file") {
+              const f = it.getAsFile();
+              if (f) fs.push(f);
+            }
+          }
+          if (fs.length > 0) {
+            e.preventDefault();
+            for (const f of fs) void uploadAttachment(f);
+          }
+        }}
+        title={<WorkspaceTitleSpacer />}
+        tabs={
+          <>
+            {activeTab !== "chat" && (
               <button
                 type="button"
-                className="run-files-crumb"
-                onClick={() => {
-                  setFilesPath("");
-                  setSelectedFile(null);
-                  setSelectedFileLine(null);
-                }}
+                className="run-tab run-tab-back"
+                onClick={() => setActiveTab("chat")}
+                aria-label="Back to chat"
+                title="Back to chat"
               >
-                /workspace
+                <ArrowLeftIcon
+                  className="run-tab-icon"
+                  strokeWidth={2.2}
+                  aria-hidden="true"
+                />
+                <span>Back</span>
               </button>
-              {(selectedFile?.path ?? filesPath)
-                .split("/")
-                .filter(Boolean)
-                .map((seg, i, arr) => {
-                  const target = arr.slice(0, i + 1).join("/");
-                  const selectedFileCrumb = selectedFile?.path === target;
-                  return (
-                    <span key={target} className="run-files-crumb-wrap">
-                      <span className="run-files-crumb-sep">/</span>
-                      <button
-                        type="button"
-                        className={`run-files-crumb${selectedFileCrumb ? " run-files-crumb-current" : ""}`}
-                        aria-current={selectedFileCrumb ? "page" : undefined}
-                        onClick={() => {
-                          if (selectedFileCrumb) return;
-                          setFilesPath(target);
-                          setSelectedFile(null);
-                          setSelectedFileLine(null);
-                        }}
-                      >
-                        {seg}
-                      </button>
-                    </span>
-                  );
-                })}
-            </div>
-            <div className="run-files-body">
-              <div className="run-files-list">
-                {filesPath && (
+            )}
+            {publicView && (
+              <TurnsTab
+                active={activeTab === "turns"}
+                count={turnViewItems.length}
+                hasActiveTurn={turnViewItems.some((turn) => turn.active)}
+                disabled={!turnsAvailable}
+                title={
+                  turnsAvailable
+                    ? "Turns"
+                    : "Turns are available once the agent has turn activity"
+                }
+                onOpen={() => {
+                  if (activeTab === "turns") setActiveTab("chat");
+                  else openTurnPage(undefined, { anchor: "bottom" });
+                }}
+              />
+            )}
+            {!publicView && (
+              <RunHeaderOverflowMenu
+                triggerActive={activeTab !== "chat"}
+                triggerAttention={adminObservabilityAttention}
+                turns={{
+                  active: activeTab === "turns",
+                  count: turnViewItems.length,
+                  countActive: turnViewItems.some((turn) => turn.active),
+                  disabled: !turnsAvailable,
+                  title: turnsAvailable
+                    ? "Turns"
+                    : "Turns are available once the agent has turn activity",
+                  onOpen: () => {
+                    if (activeTab === "turns") setActiveTab("chat");
+                    else openTurnPage(undefined, { anchor: "bottom" });
+                  },
+                }}
+                background={{
+                  active: activeTab === "background",
+                  count: backgroundLedgerEntries.length,
+                  disabled: false,
+                  title: "Background",
+                  onOpen: () => {
+                    if (activeTab === "background") setActiveTab("chat");
+                    else openBackgroundPage();
+                  },
+                }}
+                files={{
+                  active: activeTab === "files",
+                  disabled: !filesAvailable,
+                  title: filesTabTitle,
+                  onOpen: () => toggleRunTab("files"),
+                }}
+                sessionData={{
+                  active: activeTab === "session-data",
+                  disabled: false,
+                  title: "Session data",
+                  onOpen: () => toggleRunTab("session-data"),
+                }}
+                settingsActive={activeTab === "settings"}
+                helpActive={activeTab === "help"}
+                onSettings={() => toggleRunTab("settings")}
+                onHelp={() => toggleRunTab("help")}
+              />
+            )}
+          </>
+        }
+        body={
+          <>
+            {activeTab === "files" ? (
+              <div className="run-files">
+                <div className="run-files-breadcrumb">
                   <button
                     type="button"
-                    className="run-files-row"
+                    className="run-files-crumb"
                     onClick={() => {
-                      setFilesPath(parentFilesPath(filesPath));
+                      setFilesPath("");
                       setSelectedFile(null);
                       setSelectedFileLine(null);
                     }}
                   >
-                    <ArrowUpFromLineIcon size={14} className="run-files-row-icon" aria-hidden="true" />
-                    <span className="run-files-row-name">..</span>
+                    /workspace
                   </button>
-                )}
-                {filesLoading && (
-                  <div className="run-files-status">
-                    <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-                    <span>Loading…</span>
-                  </div>
-                )}
-                {filesError && (
-                  <div className="run-files-status run-files-error">
-                    {filesError}
-                  </div>
-                )}
-                {!filesLoading &&
-                  !filesError &&
-                  filesEntries &&
-                  filesEntries.map((e) => {
-                    const Icon =
-                      e.type === "dir" ? FolderIcon : FileIcon;
-                    return (
-                      <div
-                        key={e.name}
-                        className={`run-files-row${
-                          selectedFile?.path === joinFilesPath(filesPath, e.name)
-                            ? " run-files-row-active"
-                            : ""
-                        }`}
-                      >
-                        <button
-                          type="button"
-                          className="run-files-row-main"
-                          onClick={() => openFileEntry(e.name, e.type)}
-                        >
-                          <Icon
-                            size={14}
-                            className={`run-files-row-icon run-files-row-${e.type}`}
-                            aria-hidden="true"
-                          />
-                          <span className="run-files-row-name">{e.name}</span>
-                        </button>
-                        {e.github_url ? (
-                          <a
-                            className="run-files-row-link"
-                            href={e.github_url}
-                            target="_blank"
-                            rel="noreferrer"
-                            title={`Open ${e.name} on GitHub`}
-                            aria-label={`Open ${e.name} on GitHub`}
-                          >
-                            <IconGithub />
-                            <ExternalLinkIcon size={11} aria-hidden="true" />
-                          </a>
-                        ) : e.type === "file" ? (
-                          <span className="run-files-row-size">
-                            {humanFileSize(e.size)}
-                          </span>
-                        ) : (
-                          <span aria-hidden="true" />
-                        )}
-                      </div>
-                    );
-                  })}
-                {!filesLoading &&
-                  !filesError &&
-                  filesEntries &&
-                  filesEntries.length === 0 &&
-                  !filesPath && (
-                    <div className="run-files-status">empty workspace</div>
-                  )}
-              </div>
-              <div className="run-files-viewer">
-                {!selectedFile ? (
-                  <div className="run-files-empty">
-                    <FolderOpenIcon size={28} aria-hidden="true" />
-                    <span>Select a file to preview</span>
-                  </div>
-                ) : fileContentLoading ? (
-                  <div className="run-files-status">
-                    <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-                    <span>Loading…</span>
-                  </div>
-                ) : selectedFile.binary && isImagePath(selectedFile.path) ? (
-                  fileRawImageLoading ? (
-                    <div className="run-files-viewer-image-wrap">
-                      <div className="run-files-status">
-                        <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-                        <span>Loading image...</span>
-                      </div>
-                    </div>
-                  ) : fileRawImageError ? (
-                    <div className="run-files-viewer-image-wrap">
-                      <div className="run-files-status">
-                        <AlertCircleIcon size={14} aria-hidden="true" />
-                        <span>Image preview failed.</span>
-                      </div>
-                    </div>
-                  ) : fileRawImageUrl ? (
-                    <Suspense fallback={(
-                      <div className="run-files-viewer-image-wrap">
-                        <div className="run-files-status">
-                          <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-                          <span>Loading image...</span>
-                        </div>
-                      </div>
-                    )}>
-                      <FileImageViewer
-                        src={fileRawImageUrl}
-                        alt={selectedFile.path}
-                      />
-                    </Suspense>
-                  ) : (
-                    <div className="run-files-viewer-image-wrap" />
-                  )
-                ) : selectedFile.binary ? (
-                  <div className="run-files-status">
-                    <FileIcon size={14} aria-hidden="true" />
-                    <span>
-                      Binary file ({humanFileSize(selectedFile.size)}) — preview
-                      not available.
-                    </span>
-                  </div>
-                ) : (
-                  <>
-                    <div className="run-files-viewer-header">
-                      <span className="run-files-viewer-path">
-                        {selectedFile.path}
-                        {selectedFileLine ? `:${selectedFileLine}` : ""}
-                      </span>
-                      <div className="run-files-viewer-actions">
-                        {/\.html?$/i.test(selectedFile.path) && (
+                  {(selectedFile?.path ?? filesPath)
+                    .split("/")
+                    .filter(Boolean)
+                    .map((seg, i, arr) => {
+                      const target = arr.slice(0, i + 1).join("/");
+                      const selectedFileCrumb = selectedFile?.path === target;
+                      return (
+                        <span key={target} className="run-files-crumb-wrap">
+                          <span className="run-files-crumb-sep">/</span>
                           <button
                             type="button"
-                            className="run-files-viewer-btn"
-                            title="Render this HTML file as a sandboxed page"
+                            className={`run-files-crumb${selectedFileCrumb ? " run-files-crumb-current" : ""}`}
+                            aria-current={
+                              selectedFileCrumb ? "page" : undefined
+                            }
                             onClick={() => {
-                              setStaticPagePath(selectedFile.path);
-                              setActiveTab("static");
-                              replaceSessionStaticRoute(session.id, selectedFile.path);
+                              if (selectedFileCrumb) return;
+                              setFilesPath(target);
+                              setSelectedFile(null);
+                              setSelectedFileLine(null);
                             }}
                           >
-                            Open as page
+                            {seg}
                           </button>
-                        )}
-                        {fileDraft != null && fileDraft !== selectedFile.text && (
-                          <>
-                            <button
-                              type="button"
-                              className="run-files-viewer-btn"
-                              disabled={fileSaving}
-                              onClick={() => {
-                                setFileDraft(null);
-                                setFileSaveError(null);
-                              }}
-                            >
-                              Reset
-                            </button>
-                            <button
-                              type="button"
-                              className="run-files-viewer-btn run-files-viewer-btn-primary"
-                              disabled={fileSaving}
-                              onClick={() => void saveFileDraft()}
-                            >
-                              {fileSaving ? "Saving…" : "Save"}
-                            </button>
-                          </>
-                        )}
-                        <span className="run-files-viewer-meta">
-                          {humanFileSize(selectedFile.size)}
-                          {selectedFile.truncated && " · truncated"}
                         </span>
-                      </div>
-                    </div>
-                    {fileSaveError && (
-                      <div className="run-files-status run-files-error">
-                        {fileSaveError}
+                      );
+                    })}
+                </div>
+                <div className="run-files-body">
+                  <div className="run-files-list">
+                    {filesPath && (
+                      <button
+                        type="button"
+                        className="run-files-row"
+                        onClick={() => {
+                          setFilesPath(parentFilesPath(filesPath));
+                          setSelectedFile(null);
+                          setSelectedFileLine(null);
+                        }}
+                      >
+                        <ArrowUpFromLineIcon
+                          size={14}
+                          className="run-files-row-icon"
+                          aria-hidden="true"
+                        />
+                        <span className="run-files-row-name">..</span>
+                      </button>
+                    )}
+                    {filesLoading && (
+                      <div className="run-files-status">
+                        <Loader2Icon
+                          size={14}
+                          className="run-spin"
+                          aria-hidden="true"
+                        />
+                        <span>Loading…</span>
                       </div>
                     )}
-                    {/* Editable when not truncated. Truncated reads aren't
+                    {filesError && (
+                      <div className="run-files-status run-files-error">
+                        {filesError}
+                      </div>
+                    )}
+                    {!filesLoading &&
+                      !filesError &&
+                      filesEntries &&
+                      filesEntries.map((e) => {
+                        const Icon = e.type === "dir" ? FolderIcon : FileIcon;
+                        return (
+                          <div
+                            key={e.name}
+                            className={`run-files-row${
+                              selectedFile?.path ===
+                              joinFilesPath(filesPath, e.name)
+                                ? " run-files-row-active"
+                                : ""
+                            }`}
+                          >
+                            <button
+                              type="button"
+                              className="run-files-row-main"
+                              onClick={() => openFileEntry(e.name, e.type)}
+                            >
+                              <Icon
+                                size={14}
+                                className={`run-files-row-icon run-files-row-${e.type}`}
+                                aria-hidden="true"
+                              />
+                              <span className="run-files-row-name">
+                                {e.name}
+                              </span>
+                            </button>
+                            {e.github_url ? (
+                              <a
+                                className="run-files-row-link"
+                                href={e.github_url}
+                                target="_blank"
+                                rel="noreferrer"
+                                title={`Open ${e.name} on GitHub`}
+                                aria-label={`Open ${e.name} on GitHub`}
+                              >
+                                <IconGithub />
+                                <ExternalLinkIcon
+                                  size={11}
+                                  aria-hidden="true"
+                                />
+                              </a>
+                            ) : e.type === "file" ? (
+                              <span className="run-files-row-size">
+                                {humanFileSize(e.size)}
+                              </span>
+                            ) : (
+                              <span aria-hidden="true" />
+                            )}
+                          </div>
+                        );
+                      })}
+                    {!filesLoading &&
+                      !filesError &&
+                      filesEntries &&
+                      filesEntries.length === 0 &&
+                      !filesPath && (
+                        <div className="run-files-status">empty workspace</div>
+                      )}
+                  </div>
+                  <div className="run-files-viewer">
+                    {!selectedFile ? (
+                      <div className="run-files-empty">
+                        <FolderOpenIcon size={28} aria-hidden="true" />
+                        <span>Select a file to preview</span>
+                      </div>
+                    ) : fileContentLoading ? (
+                      <div className="run-files-status">
+                        <Loader2Icon
+                          size={14}
+                          className="run-spin"
+                          aria-hidden="true"
+                        />
+                        <span>Loading…</span>
+                      </div>
+                    ) : selectedFile.binary &&
+                      isImagePath(selectedFile.path) ? (
+                      fileRawImageLoading ? (
+                        <div className="run-files-viewer-image-wrap">
+                          <div className="run-files-status">
+                            <Loader2Icon
+                              size={14}
+                              className="run-spin"
+                              aria-hidden="true"
+                            />
+                            <span>Loading image...</span>
+                          </div>
+                        </div>
+                      ) : fileRawImageError ? (
+                        <div className="run-files-viewer-image-wrap">
+                          <div className="run-files-status">
+                            <AlertCircleIcon size={14} aria-hidden="true" />
+                            <span>Image preview failed.</span>
+                          </div>
+                        </div>
+                      ) : fileRawImageUrl ? (
+                        <Suspense
+                          fallback={
+                            <div className="run-files-viewer-image-wrap">
+                              <div className="run-files-status">
+                                <Loader2Icon
+                                  size={14}
+                                  className="run-spin"
+                                  aria-hidden="true"
+                                />
+                                <span>Loading image...</span>
+                              </div>
+                            </div>
+                          }
+                        >
+                          <FileImageViewer
+                            src={fileRawImageUrl}
+                            alt={selectedFile.path}
+                          />
+                        </Suspense>
+                      ) : (
+                        <div className="run-files-viewer-image-wrap" />
+                      )
+                    ) : selectedFile.binary ? (
+                      <div className="run-files-status">
+                        <FileIcon size={14} aria-hidden="true" />
+                        <span>
+                          Binary file ({humanFileSize(selectedFile.size)}) —
+                          preview not available.
+                        </span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="run-files-viewer-header">
+                          <span className="run-files-viewer-path">
+                            {selectedFile.path}
+                            {selectedFileLine ? `:${selectedFileLine}` : ""}
+                          </span>
+                          <div className="run-files-viewer-actions">
+                            {/\.html?$/i.test(selectedFile.path) && (
+                              <button
+                                type="button"
+                                className="run-files-viewer-btn"
+                                title="Render this HTML file as a sandboxed page"
+                                onClick={() => {
+                                  setStaticPagePath(selectedFile.path);
+                                  setActiveTab("static");
+                                  replaceSessionStaticRoute(
+                                    session.id,
+                                    selectedFile.path,
+                                  );
+                                }}
+                              >
+                                Open as page
+                              </button>
+                            )}
+                            {fileDraft != null &&
+                              fileDraft !== selectedFile.text && (
+                                <>
+                                  <button
+                                    type="button"
+                                    className="run-files-viewer-btn"
+                                    disabled={fileSaving}
+                                    onClick={() => {
+                                      setFileDraft(null);
+                                      setFileSaveError(null);
+                                    }}
+                                  >
+                                    Reset
+                                  </button>
+                                  <button
+                                    type="button"
+                                    className="run-files-viewer-btn run-files-viewer-btn-primary"
+                                    disabled={fileSaving}
+                                    onClick={() => void saveFileDraft()}
+                                  >
+                                    {fileSaving ? "Saving…" : "Save"}
+                                  </button>
+                                </>
+                              )}
+                            <span className="run-files-viewer-meta">
+                              {humanFileSize(selectedFile.size)}
+                              {selectedFile.truncated && " · truncated"}
+                            </span>
+                          </div>
+                        </div>
+                        {fileSaveError && (
+                          <div className="run-files-status run-files-error">
+                            {fileSaveError}
+                          </div>
+                        )}
+                        {/* Editable when not truncated. Truncated reads aren't
                         safe to overwrite — would silently destroy the
                         unread tail. Read-only CodeMirror view when the
                         user hasn't started editing yet (fileDraft==null);
                         switches to editable CodeMirror on first focus. */}
-                    {selectedFile.truncated ? (
-                      <div className="run-files-viewer-content run-files-viewer-codemirror">
-                        <Suspense fallback={(
-                          <div className="run-files-status">
-                            <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-                            <span>Loading…</span>
+                        {selectedFile.truncated ? (
+                          <div className="run-files-viewer-content run-files-viewer-codemirror">
+                            <Suspense
+                              fallback={
+                                <div className="run-files-status">
+                                  <Loader2Icon
+                                    size={14}
+                                    className="run-spin"
+                                    aria-hidden="true"
+                                  />
+                                  <span>Loading…</span>
+                                </div>
+                              }
+                            >
+                              <FileCodeViewer
+                                editable={false}
+                                path={selectedFile.path}
+                                targetLine={selectedFileLine}
+                                value={selectedFile.text}
+                              />
+                            </Suspense>
                           </div>
-                        )}>
-                          <FileCodeViewer
-                            editable={false}
-                            path={selectedFile.path}
-                            targetLine={selectedFileLine}
-                            value={selectedFile.text}
-                          />
-                        </Suspense>
-                      </div>
-                    ) : fileDraft == null ? (
-                      <div
-                        className="run-files-viewer-content run-files-viewer-codemirror run-files-viewer-readonly"
-                        onClick={() => setFileDraft(selectedFile.text)}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault();
-                            setFileDraft(selectedFile.text);
-                          }
-                        }}
-                        title="Click to edit"
-                      >
-                        <Suspense fallback={(
-                          <div className="run-files-status">
-                            <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-                            <span>Loading…</span>
+                        ) : fileDraft == null ? (
+                          <div
+                            className="run-files-viewer-content run-files-viewer-codemirror run-files-viewer-readonly"
+                            onClick={() => setFileDraft(selectedFile.text)}
+                            role="button"
+                            tabIndex={0}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                setFileDraft(selectedFile.text);
+                              }
+                            }}
+                            title="Click to edit"
+                          >
+                            <Suspense
+                              fallback={
+                                <div className="run-files-status">
+                                  <Loader2Icon
+                                    size={14}
+                                    className="run-spin"
+                                    aria-hidden="true"
+                                  />
+                                  <span>Loading…</span>
+                                </div>
+                              }
+                            >
+                              <FileCodeViewer
+                                editable={false}
+                                path={selectedFile.path}
+                                targetLine={selectedFileLine}
+                                value={selectedFile.text}
+                              />
+                            </Suspense>
                           </div>
-                        )}>
-                          <FileCodeViewer
-                            editable={false}
-                            path={selectedFile.path}
-                            targetLine={selectedFileLine}
-                            value={selectedFile.text}
-                          />
-                        </Suspense>
-                      </div>
-                    ) : (
-                      <div className="run-files-viewer-content run-files-viewer-codemirror">
-                        <Suspense fallback={(
-                          <div className="run-files-status">
-                            <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-                            <span>Loading…</span>
+                        ) : (
+                          <div className="run-files-viewer-content run-files-viewer-codemirror">
+                            <Suspense
+                              fallback={
+                                <div className="run-files-status">
+                                  <Loader2Icon
+                                    size={14}
+                                    className="run-spin"
+                                    aria-hidden="true"
+                                  />
+                                  <span>Loading…</span>
+                                </div>
+                              }
+                            >
+                              <FileCodeViewer
+                                editable
+                                onChange={setFileDraft}
+                                path={selectedFile.path}
+                                targetLine={selectedFileLine}
+                                value={fileDraft}
+                              />
+                            </Suspense>
                           </div>
-                        )}>
-                          <FileCodeViewer
-                            editable
-                            onChange={setFileDraft}
-                            path={selectedFile.path}
-                            targetLine={selectedFileLine}
-                            value={fileDraft}
-                          />
-                        </Suspense>
-                      </div>
+                        )}
+                      </>
                     )}
-                  </>
-                )}
-              </div>
-            </div>
-          </div>
-        ) : activeTab === "turns" ? (
-          routeTurnUnavailable ? (
-            <div className="run-turn-view" aria-label="Turn view">
-              <div className="run-turn-view-body run-transcript run-transcript-claude">
-                <div className="run-turn-view-alert" role="alert">
-                  <span>This turn isn’t available in this session.</span>
-                  <button
-                    type="button"
-                    className="btn-secondary run-turn-view-alert-action"
-                    onClick={() => {
-                      setRouteTurnUnavailable(false);
-                      if (latestTurnId) {
-                        setSelectedTurnId(latestTurnId);
-                        ensureTurnActivityLoaded(latestTurnId);
-                      }
-                    }}
-                  >
-                    Go to the latest turn
-                  </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ) : (
-          <RunTurnActivityScreen
-            turns={turnViewItems}
-            selectedTurnId={effectiveSelectedTurnId}
-            onSelectTurn={(turnId) => {
-              setPendingRouteTurnNumber(null);
-              const selectedTurn = turnViewItems.find((turn) => turn.turnId === turnId);
-              const resetPage = selectedTurn?.shell?.activity?.status === "needs_input";
-              if (resetPage) {
-                const nextSelectedPages = { ...selectedTurnPageRef.current };
-                delete nextSelectedPages[turnId];
-                selectedTurnPageRef.current = nextSelectedPages;
-              }
-              setSelectedTurnId(turnId);
-              ensureTurnActivityLoaded(turnId, { force: resetPage });
-            }}
-            avatar={sessionAvatar}
-            systemAvatar={systemAvatar}
-            sessionId={session.id}
-            showThinking={runPrefs.showThinking}
-            autoExpandTools={runPrefs.autoExpandTools}
-            showTimestamps={runPrefs.showTimestamps}
-            showDuration={runPrefs.showDuration}
-            userKey={user?.sub ?? user?.email ?? "anon"}
-            loadingActivityTurns={loadingActivityTurns}
-            activityRefreshProblemsByTurn={activityRefreshProblemsByTurn}
-            onRetryActivityRefresh={(turnId) => {
-              ensureTurnActivityLoaded(turnId, { force: true });
-            }}
-            onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
-            transcriptHrefForEntry={transcriptHrefForEntry}
-            onOpenTranscriptMessage={openTranscriptMessage}
-            scrollRequest={turnViewScrollRequest}
-            onScrollRequestConsumed={clearTurnViewScrollRequest}
-            turnActivityPageInfo={turnActivityPageInfo}
-            onActivitySelectPage={selectTurnActivityPage}
-          />
-          )
-        ) : activeTab === "background" ? (
-          <BackgroundScreen
-            shellEntries={activeBackgroundEntries}
-            scheduledEntries={scheduledWakeupEntries}
-            controlEntries={controlActionEntries}
-            detachedEntries={detachedShellEntries}
-            view={backgroundView}
-            onViewChange={setBackgroundView}
-            selectedId={selectedBackgroundId}
-            onSelect={setSelectedBackgroundId}
-            canStopEntry={canStopBackgroundEntry}
-            onStop={stopBackgroundActivity}
-          />
-        ) : activeTab === "session-data" ? (
-          <SessionDataScreen
-            rows={sessionDataRows}
-            session={session}
-            requestPath={scopedSessionPathForPane}
-            onBugLabelSave={saveSessionBugLabel}
-            onBugLabelsSave={saveSessionBugLabels}
-            readOnly={readOnly}
-          />
-        ) : activeTab === "settings" ? (
-          <RunSettingsPanel
-            session={session}
-            runPrefs={runPrefs}
-            setRunPref={setRunPref}
-            soundControlId={`turn-sound-volume-${session.id}`}
-            turnCompleteSoundVolumePct={turnCompleteSoundVolumePct}
-            setTurnCompleteSoundVolume={setTurnCompleteSoundVolume}
-            playTurnCompleteSound={playTurnCompleteSound}
-            paneFontScale={paneFontScale}
-            paneFontScalePct={paneFontScalePct}
-            setPaneFontScale={setPaneFontScale}
-            adminControls={adminControls}
-            settingsTab={settingsTab}
-            adminView={adminView}
-            onSettingsRouteChange={setSettingsRoute}
-          />
-        ) : activeTab === "help" ? (
-          <RunHelpScreen />
-        ) : activeTab === "static" ? (
-          staticPagePath ? (
-            <Suspense fallback={(
-              <div className="run-files-status">
-                <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
-                <span>Loading…</span>
-              </div>
-            )}>
-              <StaticPageView
-                sessionId={session.id}
-                path={staticPagePath}
-                onClose={() => {
-                  setActiveTab("files");
-                  replaceSessionTranscriptRoute(session.id);
-                }}
+            ) : activeTab === "turns" ? (
+              routeTurnUnavailable ? (
+                <div className="run-turn-view" aria-label="Turn view">
+                  <div className="run-turn-view-body run-transcript run-transcript-claude">
+                    <div className="run-turn-view-alert" role="alert">
+                      <span>This turn isn’t available in this session.</span>
+                      <button
+                        type="button"
+                        className="btn-secondary run-turn-view-alert-action"
+                        onClick={() => {
+                          setRouteTurnUnavailable(false);
+                          if (latestTurnId) {
+                            setSelectedTurnId(latestTurnId);
+                            ensureTurnActivityLoaded(latestTurnId);
+                          }
+                        }}
+                      >
+                        Go to the latest turn
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <RunTurnActivityScreen
+                  turns={turnViewItems}
+                  selectedTurnId={effectiveSelectedTurnId}
+                  onSelectTurn={(turnId) => {
+                    setPendingRouteTurnNumber(null);
+                    const selectedTurn = turnViewItems.find(
+                      (turn) => turn.turnId === turnId,
+                    );
+                    const resetPage =
+                      selectedTurn?.shell?.activity?.status === "needs_input";
+                    if (resetPage) {
+                      const nextSelectedPages = {
+                        ...selectedTurnPageRef.current,
+                      };
+                      delete nextSelectedPages[turnId];
+                      selectedTurnPageRef.current = nextSelectedPages;
+                    }
+                    setSelectedTurnId(turnId);
+                    ensureTurnActivityLoaded(turnId, { force: resetPage });
+                  }}
+                  avatar={sessionAvatar}
+                  systemAvatar={systemAvatar}
+                  sessionId={session.id}
+                  showThinking={runPrefs.showThinking}
+                  autoExpandTools={runPrefs.autoExpandTools}
+                  showTimestamps={runPrefs.showTimestamps}
+                  showDuration={runPrefs.showDuration}
+                  userKey={user?.sub ?? user?.email ?? "anon"}
+                  loadingActivityTurns={loadingActivityTurns}
+                  activityRefreshProblemsByTurn={activityRefreshProblemsByTurn}
+                  onRetryActivityRefresh={(turnId) => {
+                    ensureTurnActivityLoaded(turnId, { force: true });
+                  }}
+                  onOpenBackgroundTask={
+                    publicView ? undefined : openBackgroundPage
+                  }
+                  transcriptHrefForEntry={transcriptHrefForEntry}
+                  onOpenTranscriptMessage={openTranscriptMessage}
+                  scrollRequest={turnViewScrollRequest}
+                  onScrollRequestConsumed={clearTurnViewScrollRequest}
+                  turnActivityPageInfo={turnActivityPageInfo}
+                  onActivitySelectPage={selectTurnActivityPage}
+                />
+              )
+            ) : activeTab === "background" ? (
+              <BackgroundScreen
+                shellEntries={activeBackgroundEntries}
+                scheduledEntries={scheduledWakeupEntries}
+                controlEntries={controlActionEntries}
+                detachedEntries={detachedShellEntries}
+                view={backgroundView}
+                onViewChange={setBackgroundView}
+                selectedId={selectedBackgroundId}
+                onSelect={setSelectedBackgroundId}
+                canStopEntry={canStopBackgroundEntry}
+                onStop={stopBackgroundActivity}
               />
-            </Suspense>
-          ) : (
-            <div className="run-empty run-transcript-state" role="status">
-              <span>No page selected.</span>
-            </div>
-          )
-        ) : timelineBootstrap.status === "error" ? (
-          <div className="run-empty run-transcript-state" role="alert">
-            <strong>Conversation failed to load</strong>
-            <span>{timelineBootstrap.error ?? "Timeline bootstrap failed."}</span>
-            <button
-              type="button"
-              className="btn-secondary"
-              onClick={retryTimelineBootstrap}
-            >
-              Retry
-            </button>
-          </div>
-        ) : renderedEntries.length === 0 && timelineBootstrap.status !== "ready" ? (
-          <div className="run-shell-loading" role="status" aria-live="polite">
-            <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
-            <span>Loading conversation...</span>
-          </div>
-        ) : renderedEntries.length === 0 ? (
-          <div className="run-empty run-transcript-state" role="status">
-            <span>No messages yet.</span>
-          </div>
-        ) : (
-          <>
-            {/* Top-of-transcript pagination surface. Auto-load still fires via
+            ) : activeTab === "session-data" ? (
+              <SessionDataScreen
+                rows={sessionDataRows}
+                session={session}
+                requestPath={scopedSessionPathForPane}
+                onBugLabelSave={saveSessionBugLabel}
+                onBugLabelsSave={saveSessionBugLabels}
+                readOnly={readOnly}
+              />
+            ) : activeTab === "settings" ? (
+              <RunSettingsPanel
+                session={session}
+                runPrefs={runPrefs}
+                setRunPref={setRunPref}
+                soundControlId={`turn-sound-volume-${session.id}`}
+                turnCompleteSoundVolumePct={turnCompleteSoundVolumePct}
+                setTurnCompleteSoundVolume={setTurnCompleteSoundVolume}
+                playTurnCompleteSound={playTurnCompleteSound}
+                paneFontScale={paneFontScale}
+                paneFontScalePct={paneFontScalePct}
+                setPaneFontScale={setPaneFontScale}
+                adminControls={adminControls}
+                settingsTab={settingsTab}
+                adminView={adminView}
+                onSettingsRouteChange={setSettingsRoute}
+              />
+            ) : activeTab === "help" ? (
+              <RunHelpScreen />
+            ) : activeTab === "static" ? (
+              staticPagePath ? (
+                <Suspense
+                  fallback={
+                    <div className="run-files-status">
+                      <Loader2Icon
+                        size={14}
+                        className="run-spin"
+                        aria-hidden="true"
+                      />
+                      <span>Loading…</span>
+                    </div>
+                  }
+                >
+                  <StaticPageView
+                    sessionId={session.id}
+                    path={staticPagePath}
+                    onClose={() => {
+                      setActiveTab("files");
+                      replaceSessionTranscriptRoute(session.id);
+                    }}
+                  />
+                </Suspense>
+              ) : (
+                <div className="run-empty run-transcript-state" role="status">
+                  <span>No page selected.</span>
+                </div>
+              )
+            ) : timelineBootstrap.status === "error" ? (
+              <div className="run-empty run-transcript-state" role="alert">
+                <strong>Conversation failed to load</strong>
+                <span>
+                  {timelineBootstrap.error ?? "Timeline bootstrap failed."}
+                </span>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={retryTimelineBootstrap}
+                >
+                  Retry
+                </button>
+              </div>
+            ) : renderedEntries.length === 0 &&
+              timelineBootstrap.status !== "ready" ? (
+              <div
+                className="run-shell-loading"
+                role="status"
+                aria-live="polite"
+              >
+                <Loader2Icon
+                  size={18}
+                  className="run-spin"
+                  aria-hidden="true"
+                />
+                <span>Loading conversation...</span>
+              </div>
+            ) : renderedEntries.length === 0 ? (
+              <div className="run-empty run-transcript-state" role="status">
+                <span>No messages yet.</span>
+              </div>
+            ) : (
+              <>
+                {/* Top-of-transcript pagination surface. Auto-load still fires via
                 Virtuoso's startReached, and the explicit button keeps older
                 history reachable if the virtualized edge callback misses.
                 Keep the load button mounted while loading: replacing the
                 focused button with status text makes browsers drop focus and
                 can yank the transcript toward the live tail. */}
-            {sdkOlderError ? (
-              <div className="run-transcript-load-error" role="alert">
-                <span>{sdkOlderError}</span>
-                <button
-                  type="button"
-                  className="run-transcript-load-older"
-                  onClick={() => {
-                    if (!sdkLoadingOlder) void loadSdkOlderEvents();
+                {sdkOlderError ? (
+                  <div className="run-transcript-load-error" role="alert">
+                    <span>{sdkOlderError}</span>
+                    <button
+                      type="button"
+                      className="run-transcript-load-older"
+                      onClick={() => {
+                        if (!sdkLoadingOlder) void loadSdkOlderEvents();
+                      }}
+                      aria-disabled={sdkLoadingOlder || undefined}
+                      aria-busy={sdkLoadingOlder || undefined}
+                    >
+                      {sdkLoadingOlder ? "Loading earlier messages…" : "Retry"}
+                    </button>
+                  </div>
+                ) : !sdkFoundOldest && renderedEntries.length > 0 ? (
+                  <button
+                    type="button"
+                    className="run-transcript-load-older"
+                    onClick={() => {
+                      if (!sdkLoadingOlder) void loadSdkOlderEvents();
+                    }}
+                    aria-disabled={sdkLoadingOlder || undefined}
+                    aria-busy={sdkLoadingOlder || undefined}
+                    aria-live="polite"
+                  >
+                    {sdkLoadingOlder
+                      ? "Loading earlier messages…"
+                      : "Load earlier messages"}
+                  </button>
+                ) : null}
+                <RunMessages
+                  entries={renderedEntries}
+                  avatar={sessionAvatar}
+                  systemAvatar={systemAvatar}
+                  sessionId={session.id}
+                  sessionMode={session.mode}
+                  pendingScrollMessageId={effectivePendingScrollMessageId}
+                  onScrollConsumed={handleTranscriptScrollConsumed}
+                  showThinking={runPrefs.showThinking}
+                  autoExpandTools={runPrefs.autoExpandTools}
+                  condenseCompletedTurns={runPrefs.condenseCompletedTurns}
+                  activeTurnId={renderedActiveTurnId}
+                  showTimestamps={runPrefs.showTimestamps}
+                  showDuration={runPrefs.showDuration}
+                  userKey={user?.sub ?? user?.email ?? "anon"}
+                  onQuote={readOnly ? undefined : appendQuotedMessage}
+                  onFork={
+                    readOnly
+                      ? undefined
+                      : (forkedEntry) =>
+                          onForkMessage({
+                            sourceSession: session,
+                            forkedEntry,
+                            model: isClaude || isCodex ? selectedModelId : "",
+                            // Fork inherits the source pane's effort pick so the
+                            // forked pod boots with the same reasoning depth the
+                            // user had been working at.
+                            effort: isClaude || isCodex ? selectedEffortId : "",
+                          })
+                  }
+                  onOpenBackgroundTask={
+                    publicView ? undefined : openBackgroundPage
+                  }
+                  onOpenTurn={openTurnPage}
+                  turnLinksEnabled={!publicView}
+                  scrollParent={transcriptScrollEl}
+                  onStartReached={() => {
+                    void loadSdkOlderEvents();
                   }}
-                  aria-disabled={sdkLoadingOlder || undefined}
-                  aria-busy={sdkLoadingOlder || undefined}
-                >
-                  {sdkLoadingOlder ? "Loading earlier messages…" : "Retry"}
-                </button>
-              </div>
-            ) : !sdkFoundOldest && renderedEntries.length > 0 ? (
-              <button
-                type="button"
-                className="run-transcript-load-older"
-                onClick={() => {
-                  if (!sdkLoadingOlder) void loadSdkOlderEvents();
-                }}
-                aria-disabled={sdkLoadingOlder || undefined}
-                aria-busy={sdkLoadingOlder || undefined}
-                aria-live="polite"
-              >
-                {sdkLoadingOlder ? "Loading earlier messages…" : "Load earlier messages"}
-              </button>
-            ) : null}
-            <RunMessages
-              entries={renderedEntries}
-              avatar={sessionAvatar}
-              systemAvatar={systemAvatar}
-              sessionId={session.id}
-              sessionMode={session.mode}
-              pendingScrollMessageId={effectivePendingScrollMessageId}
-              onScrollConsumed={handleTranscriptScrollConsumed}
-              showThinking={runPrefs.showThinking}
-              autoExpandTools={runPrefs.autoExpandTools}
-              condenseCompletedTurns={runPrefs.condenseCompletedTurns}
-              activeTurnId={renderedActiveTurnId}
-              showTimestamps={runPrefs.showTimestamps}
-              showDuration={runPrefs.showDuration}
-              userKey={user?.sub ?? user?.email ?? "anon"}
-              onQuote={readOnly ? undefined : appendQuotedMessage}
-              onFork={
-                readOnly
-                  ? undefined
-                  : (forkedEntry) =>
-                      onForkMessage({
-                        sourceSession: session,
-                        forkedEntry,
-                        model:
-                          isClaude || isCodex ? selectedModelId : "",
-                        // Fork inherits the source pane's effort pick so the
-                        // forked pod boots with the same reasoning depth the
-                        // user had been working at.
-                        effort: isClaude || isCodex ? selectedEffortId : "",
-                      })
-              }
-              onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
-              onOpenTurn={openTurnPage}
-              turnLinksEnabled={!publicView}
-              scrollParent={transcriptScrollEl}
-              onStartReached={() => {
-                void loadSdkOlderEvents();
-              }}
-              onAtBottomChange={handleSdkAtBottomChange}
-              followLiveTail={navigationMode === "live-tail"}
-              scrollToLatestSignal={
-                scrollToLatestRequest.enabled ? scrollToLatestRequest.signal : 0
-              }
-              scrollToLatestBehavior={scrollToLatestRequest.behavior}
-              scrollToLatestReason={scrollToLatestRequest.reason}
-              onScrollToLatestConsumed={clearScrollToLatestRequest}
-              scrollToOldestSignal={scrollToOldestSignal}
-              activityEntriesByTurn={activityEntriesByTurn}
-              loadingActivityTurns={loadingActivityTurns}
-              onActivityOpen={ensureTurnActivityLoaded}
-              turnActivityPageInfo={turnActivityPageInfo}
-              onActivitySelectPage={selectTurnActivityPage}
-            />
+                  onAtBottomChange={handleSdkAtBottomChange}
+                  followLiveTail={navigationMode === "live-tail"}
+                  scrollToLatestSignal={
+                    scrollToLatestRequest.enabled
+                      ? scrollToLatestRequest.signal
+                      : 0
+                  }
+                  scrollToLatestBehavior={scrollToLatestRequest.behavior}
+                  scrollToLatestReason={scrollToLatestRequest.reason}
+                  onScrollToLatestConsumed={clearScrollToLatestRequest}
+                  scrollToOldestSignal={scrollToOldestSignal}
+                  activityEntriesByTurn={activityEntriesByTurn}
+                  loadingActivityTurns={loadingActivityTurns}
+                  onActivityOpen={ensureTurnActivityLoaded}
+                  turnActivityPageInfo={turnActivityPageInfo}
+                  onActivitySelectPage={selectTurnActivityPage}
+                />
+              </>
+            )}
           </>
-        )}
-      </>)}
-      floatingBetweenBodyAndComposer={activeTab === "chat" ? (<>
-      {/* Non-intrusive edge glows for transcript overflow. These keep the
+        }
+        floatingBetweenBodyAndComposer={
+          activeTab === "chat" ? (
+            <>
+              {/* Non-intrusive edge glows for transcript overflow. These keep the
           explicit jump actions while avoiding floating arrow buttons over
           avatars or message content while the navigation-mode signal is
           still being hardened. */}
-      {activeTab === "chat" && renderedEntries.length > 0 && !sdkFoundOldest && navigationMode === "historical-anchor" && (
-        <button
-          type="button"
-          className="run-transcript-edge-cue run-transcript-edge-cue-top"
-          onClick={() => {
-            const reachOldest = async () => {
-              dispatchNavigationMode("up-button");
-              await jumpSdkToOldest("button");
-              setScrollToOldestSignal((value) => value + 1);
-            };
-            void reachOldest();
-          }}
-          aria-label="Scroll to beginning of conversation"
-          title="Scroll to beginning of conversation"
-        >
-          <span className="run-transcript-edge-cue-rail" aria-hidden="true" />
-        </button>
-      )}
-
-      {/* The tail cue is deliberately just an edge glow. The aria-label
-          carries the exact pending count, but the visible UI stays quiet. */}
-      {activeTab === "chat" && renderedEntries.length > 0 && (
-        <button
-          type="button"
-          className={`run-transcript-edge-cue run-transcript-edge-cue-bottom${
-            navigationMode === "historical-anchor" || !sdkFoundNewest ? "" : " run-transcript-edge-cue-hidden"
-          }${sdkPendingTailCount > 0 ? " run-transcript-edge-cue-pending" : ""}`}
-          onClick={() => {
-            const reachNewest = async () => {
-              dispatchNavigationMode("down-button");
-              await jumpSdkToLatest("button");
-              requestScrollToLatest("smooth", "manual");
-            };
-            void reachNewest();
-          }}
-          aria-label={
-            sdkPendingTailCount > 0
-              ? `${sdkPendingTailCount} new messages below`
-              : "Scroll to latest"
-          }
-          title={
-            sdkPendingTailCount > 0
-              ? `${sdkPendingTailCount} new messages below`
-              : "Scroll to latest"
-          }
-        >
-          <span className="run-transcript-edge-cue-rail" aria-hidden="true" />
-        </button>
-      )}
-
-      </>) : null}
-      composerAbove={(<>
-          {dragActive && (
-            <div className="run-composer-drop-overlay" aria-hidden="true">
-              Drop to attach
-            </div>
-          )}
-          {attachments.length > 0 && (
-            <div className="run-composer-attachments">
-              {attachments.map((a) => (
-                <div
-                  key={a.id}
-                  className={`run-composer-chip run-composer-chip-${a.status}`}
-                  title={attachmentDisplayTitle(a)}
-                >
-                  {a.previewUrl ? (
-                    <img
-                      className="run-composer-chip-thumb"
-                      src={a.previewUrl}
-                      alt=""
-                      aria-hidden="true"
-                    />
-                  ) : (
-                    <FileIcon size={14} aria-hidden="true" />
-                  )}
-                  <span className="run-composer-chip-name">{a.label}</span>
-                  {a.status === "uploading" && (
-                    <Loader2Icon size={12} className="run-spin" aria-hidden="true" />
-                  )}
+              {activeTab === "chat" &&
+                renderedEntries.length > 0 &&
+                !sdkFoundOldest &&
+                navigationMode === "historical-anchor" && (
                   <button
                     type="button"
-                    className="run-composer-chip-remove"
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      removeAttachment(a.id);
+                    className="run-transcript-edge-cue run-transcript-edge-cue-top"
+                    onClick={() => {
+                      const reachOldest = async () => {
+                        dispatchNavigationMode("up-button");
+                        await jumpSdkToOldest("button");
+                        setScrollToOldestSignal((value) => value + 1);
+                      };
+                      void reachOldest();
                     }}
-                    aria-label={`Remove ${a.label}`}
+                    aria-label="Scroll to beginning of conversation"
+                    title="Scroll to beginning of conversation"
                   >
-                    <XIcon size={11} aria-hidden="true" />
+                    <span
+                      className="run-transcript-edge-cue-rail"
+                      aria-hidden="true"
+                    />
                   </button>
-                </div>
-              ))}
-            </div>
-          )}
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            style={{ display: "none" }}
-            onChange={(e) => {
-              handleAttachmentFiles(e.target.files);
-              // Reset so the same file can be reselected later.
-              e.target.value = "";
-            }}
-          />
-          {/* Slash-command palette — opens above the composer when the
-              user types `/` at a word boundary. Includes built-ins and
-              SKILL.md entries discovered from the active session pod. */}
-          {slashOpen && slashFiltered.length > 0 && (
-            <div className="run-slash-palette" role="listbox" aria-label="Slash commands">
-              <div className="run-slash-palette-label">Slash commands</div>
-              {slashFiltered.map((cmd, i) => (
+                )}
+
+              {/* The tail cue is deliberately just an edge glow. The aria-label
+          carries the exact pending count, but the visible UI stays quiet. */}
+              {activeTab === "chat" && renderedEntries.length > 0 && (
                 <button
-                  key={cmd.name}
                   type="button"
-                  role="option"
-                  aria-selected={i === slashIndex}
-                  className={`run-slash-item${i === slashIndex ? " run-slash-item-active" : ""}`}
-                  onMouseDown={(e) => {
-                    // mousedown not click — click would fire after blur of
-                    // the textarea, which closes the palette via the
-                    // input handler.
-                    e.preventDefault();
-                    applySlashCommand(cmd.name);
-                    slashManualOpenRef.current = false;
-                    setSlashOpen(false);
+                  className={`run-transcript-edge-cue run-transcript-edge-cue-bottom${
+                    navigationMode === "historical-anchor" || !sdkFoundNewest
+                      ? ""
+                      : " run-transcript-edge-cue-hidden"
+                  }${sdkPendingTailCount > 0 ? " run-transcript-edge-cue-pending" : ""}`}
+                  onClick={() => {
+                    const reachNewest = async () => {
+                      dispatchNavigationMode("down-button");
+                      await jumpSdkToLatest("button");
+                      requestScrollToLatest("smooth", "manual");
+                    };
+                    void reachNewest();
                   }}
-                  onMouseEnter={() => setSlashIndex(i)}
+                  aria-label={
+                    sdkPendingTailCount > 0
+                      ? `${sdkPendingTailCount} new messages below`
+                      : "Scroll to latest"
+                  }
+                  title={
+                    sdkPendingTailCount > 0
+                      ? `${sdkPendingTailCount} new messages below`
+                      : "Scroll to latest"
+                  }
                 >
-                  <span className="run-slash-name">{cmd.name}</span>
-                  <span className="run-slash-desc">{cmd.desc}</span>
+                  <span
+                    className="run-transcript-edge-cue-rail"
+                    aria-hidden="true"
+                  />
                 </button>
-              ))}
-            </div>
-          )}
-          {mentionOpen && (
-            <div className="run-slash-palette" role="listbox" aria-label="File mentions">
-              <div className="run-slash-palette-label">
-                {mentionPaths == null ? "Loading files…" : "Files (@)"}
+              )}
+            </>
+          ) : null
+        }
+        composerAbove={
+          <>
+            {dragActive && (
+              <div className="run-composer-drop-overlay" aria-hidden="true">
+                Drop to attach
               </div>
-              {mentionPaths != null && mentionFiltered.length === 0 && (
-                <div className="run-slash-empty">no matches</div>
-              )}
-              {mentionFiltered.map((p, i) => (
-                <button
-                  key={p}
-                  type="button"
-                  role="option"
-                  aria-selected={i === mentionIndex}
-                  className={`run-slash-item${i === mentionIndex ? " run-slash-item-active" : ""}`}
-                  onMouseDown={(e) => {
-                    e.preventDefault();
-                    applyMentionPath(p);
-                    setMentionOpen(false);
-                  }}
-                  onMouseEnter={() => setMentionIndex(i)}
-                >
-                  <span className="run-slash-name run-mention-path">
-                    {p.split("/").pop()}
-                  </span>
-                  <span className="run-slash-desc run-mention-dir">{p}</span>
-                </button>
-              ))}
-            </div>
-          )}
-          {mcpOpen && (
-            <div className="run-slash-palette run-mcp-palette" role="listbox" aria-label="MCP servers">
-              <div className="run-slash-palette-label">MCP servers</div>
-              {mcpLoading && (
-                <div className="run-slash-empty">
-                  <Loader2Icon className="run-spin" size={13} aria-hidden="true" />
-                  loading
-                </div>
-              )}
-              {mcpError && (
-                <div className="run-slash-empty run-mcp-error">{mcpError}</div>
-              )}
-              {!mcpLoading && !mcpError && mcpServers && mcpServers.length === 0 && (
-                <div className="run-slash-empty">no MCP servers</div>
-              )}
-              {!mcpLoading && !mcpError && mcpServers?.map((server) => (
-                <div className="run-mcp-menu-item" role="option" aria-selected={false} key={server.name}>
-                  <span className="run-mcp-menu-top">
-                    <span className="run-slash-name">{server.name}</span>
-                    <span className="run-mcp-menu-transport">{server.transport}</span>
-                  </span>
-                  <span className="run-slash-desc run-mcp-menu-target">
-                    {server.target || server.source}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-          {queuedMessages.length > 0 && (
-            <div className="run-queued-followups" aria-live="polite">
-              <div className="run-queued-followups-head">
-                <span>Queued follow-up inputs</span>
-                <span>{queuedMessages.length}</span>
-              </div>
-              <div className="run-queued-followups-list">
-                {queuedMessages.map((message, index) => (
-                  <div className="run-queued-followup" key={message.id}>
-                    <div className="run-queued-followup-index">
-                      {index + 1}
-                    </div>
-                    <div
-                      className="run-queued-followup-text"
-                      title={message.displayText ?? message.text}
-                    >
-                      {message.displayText ?? message.text}
-                    </div>
+            )}
+            {attachments.length > 0 && (
+              <div className="run-composer-attachments">
+                {attachments.map((a) => (
+                  <div
+                    key={a.id}
+                    className={`run-composer-chip run-composer-chip-${a.status}`}
+                    title={attachmentDisplayTitle(a)}
+                  >
+                    {a.previewUrl ? (
+                      <img
+                        className="run-composer-chip-thumb"
+                        src={a.previewUrl}
+                        alt=""
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <FileIcon size={14} aria-hidden="true" />
+                    )}
+                    <span className="run-composer-chip-name">{a.label}</span>
+                    {a.status === "uploading" && (
+                      <Loader2Icon
+                        size={12}
+                        className="run-spin"
+                        aria-hidden="true"
+                      />
+                    )}
                     <button
                       type="button"
-                      className="run-queued-followup-action"
-                      aria-label="Edit queued follow-up"
-                      title="Edit queued follow-up"
+                      className="run-composer-chip-remove"
                       onMouseDown={(e) => {
                         e.preventDefault();
-                        setQueuedMessages((prev) =>
-                          prev.filter((item) => item.id !== message.id),
-                        );
-                        setComposerValue(message.text);
+                        removeAttachment(a.id);
                       }}
+                      aria-label={`Remove ${a.label}`}
                     >
-                      <SquarePenIcon size={13} aria-hidden="true" />
-                    </button>
-                    <button
-                      type="button"
-                      className="run-queued-followup-action"
-                      aria-label="Remove queued follow-up"
-                      title="Remove queued follow-up"
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        setQueuedMessages((prev) =>
-                          prev.filter((item) => item.id !== message.id),
-                        );
-                      }}
-                    >
-                      <XIcon size={13} aria-hidden="true" />
+                      <XIcon size={11} aria-hidden="true" />
                     </button>
                   </div>
                 ))}
               </div>
-            </div>
-          )}
-      </>)}
-      composer={(
-        <ChatComposer
-          className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
-          placeholder={RUN_COMPOSER_PLACEHOLDER}
-          onSubmit={(args) => {
-            if (readOnly) return;
-            handleSubmit({ text: args.text, files: [] });
-          }}
-          sendByCtrlEnter={runPrefs.sendByCtrlEnter}
-          hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
-          hideHint
-          disabled={readOnly}
-          canSubmit={!readOnly && ready}
-          submitStatus={submitStatus}
-          onStop={cancelRun}
-          isStopping={runStatus === "stopping"}
-          onTextChange={setComposerText}
-          toolButtons={
-            <ComposerToolButtons
-              attach={{
-                title: supportsFileAttachments
-                  ? "Attach files"
-                  : "File attachments require a session workspace",
-                onClick: () => fileInputRef.current?.click(),
-                disabled: !supportsFileAttachments,
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              style={{ display: "none" }}
+              onChange={(e) => {
+                handleAttachmentFiles(e.target.files);
+                // Reset so the same file can be reselected later.
+                e.target.value = "";
               }}
-              cost={{
-                amountUsd: sessionCostEstimate?.amountUsd ?? null,
-                tokens: tokensUsed,
-                contextWindow: runtimeContextWindowTokens,
-                compactionCount: sessionCompactionCount,
-                tokenScopeLabel: "current context tokens",
-                placeholder: sessionUsageLoading,
-              }}
-              rollout={{
-                visible: GUI_ROLLOUT_MODES.has(session.mode),
-                active: rolloutActionActive,
-                onClick: startGuiRollout,
-                disabled: !ready,
-                title: isClaude ? "Use /rollout in this run" : "Use $rollout in this run",
-              }}
-              test={{
-                active: testActionActive,
-                readyUrl: testState?.active ? testState.url?.trim() : "",
-                onReadyClick: () => {
-                  if (testState) void markTestState({ ...testState, active: true });
-                },
-                onClick: startTestSkill,
-                disabled: !ready,
-                title: testState?.active ? "Test skill is active" : "Use the test skill",
-              }}
-              pullRequest={{ url: pullRequestURL }}
-              slash={{
-                title: "Show slash commands",
-                count: slashCommands.length,
-                onMouseDown: (e) => {
-                  e.preventDefault();
-                  openSlashCommandMenu();
-                },
-              }}
-              mcp={{
-                title: "Show MCP servers",
-                count: mcpServers?.length ?? 0,
-                onMouseDown: (e) => {
-                  e.preventDefault();
-                  setSlashOpen(false);
-                  setMentionOpen(false);
-                  setMcpOpen((open) => !open);
-                },
-              }}
-              modelChip={(isClaude || isCodex) ? (
-                <span
-                  className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
-                  title={modelChipTitle}
-                  aria-label={modelChipTitle}
-                >
-                  <BrainIcon className="run-model-chip-icon" aria-hidden="true" />
-                  <span className="run-model-chip-label">{modelChipLabel}</span>
-                  {effortChipLabel && (
-                    <span className="run-model-chip-effort">{effortChipLabel}</span>
-                  )}
-                </span>
-              ) : null}
             />
-          }
-        />
-      )}
-    />
+            {/* Slash-command palette — opens above the composer when the
+              user types `/` at a word boundary. Includes built-ins and
+              SKILL.md entries discovered from the active session pod. */}
+            {slashOpen && slashFiltered.length > 0 && (
+              <div
+                className="run-slash-palette"
+                role="listbox"
+                aria-label="Slash commands"
+              >
+                <div className="run-slash-palette-label">Slash commands</div>
+                {slashFiltered.map((cmd, i) => (
+                  <button
+                    key={cmd.name}
+                    type="button"
+                    role="option"
+                    aria-selected={i === slashIndex}
+                    className={`run-slash-item${i === slashIndex ? " run-slash-item-active" : ""}`}
+                    onMouseDown={(e) => {
+                      // mousedown not click — click would fire after blur of
+                      // the textarea, which closes the palette via the
+                      // input handler.
+                      e.preventDefault();
+                      applySlashCommand(cmd.name);
+                      slashManualOpenRef.current = false;
+                      setSlashOpen(false);
+                    }}
+                    onMouseEnter={() => setSlashIndex(i)}
+                  >
+                    <span className="run-slash-name">{cmd.name}</span>
+                    <span className="run-slash-desc">{cmd.desc}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {mentionOpen && (
+              <div
+                className="run-slash-palette"
+                role="listbox"
+                aria-label="File mentions"
+              >
+                <div className="run-slash-palette-label">
+                  {mentionPaths == null ? "Loading files…" : "Files (@)"}
+                </div>
+                {mentionPaths != null && mentionFiltered.length === 0 && (
+                  <div className="run-slash-empty">no matches</div>
+                )}
+                {mentionFiltered.map((p, i) => (
+                  <button
+                    key={p}
+                    type="button"
+                    role="option"
+                    aria-selected={i === mentionIndex}
+                    className={`run-slash-item${i === mentionIndex ? " run-slash-item-active" : ""}`}
+                    onMouseDown={(e) => {
+                      e.preventDefault();
+                      applyMentionPath(p);
+                      setMentionOpen(false);
+                    }}
+                    onMouseEnter={() => setMentionIndex(i)}
+                  >
+                    <span className="run-slash-name run-mention-path">
+                      {p.split("/").pop()}
+                    </span>
+                    <span className="run-slash-desc run-mention-dir">{p}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+            {mcpOpen && (
+              <div
+                className="run-slash-palette run-mcp-palette"
+                role="listbox"
+                aria-label="MCP servers"
+              >
+                <div className="run-slash-palette-label">MCP servers</div>
+                {mcpLoading && (
+                  <div className="run-slash-empty">
+                    <Loader2Icon
+                      className="run-spin"
+                      size={13}
+                      aria-hidden="true"
+                    />
+                    loading
+                  </div>
+                )}
+                {mcpError && (
+                  <div className="run-slash-empty run-mcp-error">
+                    {mcpError}
+                  </div>
+                )}
+                {!mcpLoading &&
+                  !mcpError &&
+                  mcpServers &&
+                  mcpServers.length === 0 && (
+                    <div className="run-slash-empty">no MCP servers</div>
+                  )}
+                {!mcpLoading &&
+                  !mcpError &&
+                  mcpServers?.map((server) => (
+                    <div
+                      className="run-mcp-menu-item"
+                      role="option"
+                      aria-selected={false}
+                      key={server.name}
+                    >
+                      <span className="run-mcp-menu-top">
+                        <span className="run-slash-name">{server.name}</span>
+                        <span className="run-mcp-menu-transport">
+                          {server.transport}
+                        </span>
+                      </span>
+                      <span className="run-slash-desc run-mcp-menu-target">
+                        {server.target || server.source}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            )}
+            {queuedMessages.length > 0 && (
+              <div className="run-queued-followups" aria-live="polite">
+                <div className="run-queued-followups-head">
+                  <span>Queued follow-up inputs</span>
+                  <span>{queuedMessages.length}</span>
+                </div>
+                <div className="run-queued-followups-list">
+                  {queuedMessages.map((message, index) => (
+                    <div className="run-queued-followup" key={message.id}>
+                      <div className="run-queued-followup-index">
+                        {index + 1}
+                      </div>
+                      <div
+                        className="run-queued-followup-text"
+                        title={message.displayText ?? message.text}
+                      >
+                        {message.displayText ?? message.text}
+                      </div>
+                      <button
+                        type="button"
+                        className="run-queued-followup-action"
+                        aria-label="Edit queued follow-up"
+                        title="Edit queued follow-up"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setQueuedMessages((prev) =>
+                            prev.filter((item) => item.id !== message.id),
+                          );
+                          setComposerValue(message.text);
+                        }}
+                      >
+                        <SquarePenIcon size={13} aria-hidden="true" />
+                      </button>
+                      <button
+                        type="button"
+                        className="run-queued-followup-action"
+                        aria-label="Remove queued follow-up"
+                        title="Remove queued follow-up"
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          setQueuedMessages((prev) =>
+                            prev.filter((item) => item.id !== message.id),
+                          );
+                        }}
+                      >
+                        <XIcon size={13} aria-hidden="true" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
+        }
+        composer={
+          <ChatComposer
+            className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
+            placeholder={RUN_COMPOSER_PLACEHOLDER}
+            onSubmit={(args) => {
+              if (readOnly) return;
+              handleSubmit({ text: args.text, files: [] });
+            }}
+            sendByCtrlEnter={runPrefs.sendByCtrlEnter}
+            hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
+            hideHint
+            disabled={readOnly}
+            canSubmit={!readOnly && ready}
+            submitStatus={submitStatus}
+            onStop={cancelRun}
+            isStopping={runStatus === "stopping"}
+            onTextChange={setComposerText}
+            toolButtons={
+              <ComposerToolButtons
+                attach={{
+                  title: supportsFileAttachments
+                    ? "Attach files"
+                    : "File attachments require a session workspace",
+                  onClick: () => fileInputRef.current?.click(),
+                  disabled: !supportsFileAttachments,
+                }}
+                cost={{
+                  amountUsd: sessionCostEstimate?.amountUsd ?? null,
+                  tokens: tokensUsed,
+                  contextWindow: runtimeContextWindowTokens,
+                  compactionCount: sessionCompactionCount,
+                  tokenScopeLabel: "current context tokens",
+                  placeholder: sessionUsageLoading,
+                }}
+                rollout={{
+                  visible: GUI_ROLLOUT_MODES.has(session.mode),
+                  active: rolloutActionActive,
+                  onClick: startGuiRollout,
+                  disabled: !ready,
+                  title: isClaude
+                    ? "Use /rollout in this run"
+                    : "Use $rollout in this run",
+                }}
+                test={{
+                  active: testActionActive,
+                  readyUrl: testState?.active ? testState.url?.trim() : "",
+                  onReadyClick: () => {
+                    if (testState)
+                      void markTestState({ ...testState, active: true });
+                  },
+                  onClick: startTestSkill,
+                  disabled: !ready,
+                  title: testState?.active
+                    ? "Test skill is active"
+                    : "Use the test skill",
+                }}
+                pullRequest={{ url: pullRequestURL }}
+                slash={{
+                  title: "Show slash commands",
+                  count: slashCommands.length,
+                  onMouseDown: (e) => {
+                    e.preventDefault();
+                    openSlashCommandMenu();
+                  },
+                }}
+                mcp={{
+                  title: "Show MCP servers",
+                  count: mcpServers?.length ?? 0,
+                  onMouseDown: (e) => {
+                    e.preventDefault();
+                    setSlashOpen(false);
+                    setMentionOpen(false);
+                    setMcpOpen((open) => !open);
+                  },
+                }}
+                modelChip={
+                  isClaude || isCodex ? (
+                    <span
+                      className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
+                      title={modelChipTitle}
+                      aria-label={modelChipTitle}
+                    >
+                      <BrainIcon
+                        className="run-model-chip-icon"
+                        aria-hidden="true"
+                      />
+                      <span className="run-model-chip-label">
+                        {modelChipLabel}
+                      </span>
+                      {effortChipLabel && (
+                        <span className="run-model-chip-effort">
+                          {effortChipLabel}
+                        </span>
+                      )}
+                    </span>
+                  ) : null
+                }
+              />
+            }
+          />
+        }
+      />
     </RunContext.Provider>
   );
 }
@@ -15729,9 +17754,10 @@ function publicMessageLinkUserFromResponse(value: unknown): SessionUser {
   if (!value || typeof value !== "object") return PUBLIC_MESSAGE_LINK_USER;
   const raw = value as Record<string, unknown>;
   const avatarURL = typeof raw.avatar_url === "string" ? raw.avatar_url : "";
-  const name = typeof raw.name === "string" && raw.name.trim()
-    ? raw.name.trim()
-    : PUBLIC_MESSAGE_LINK_USER.name;
+  const name =
+    typeof raw.name === "string" && raw.name.trim()
+      ? raw.name.trim()
+      : PUBLIC_MESSAGE_LINK_USER.name;
   return {
     ...PUBLIC_MESSAGE_LINK_USER,
     name,
@@ -15741,10 +17767,12 @@ function publicMessageLinkUserFromResponse(value: unknown): SessionUser {
 
 function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
   const [session, setSession] = useState<Session | null>(null);
-  const [publicUser, setPublicUser] = useState<SessionUser>(PUBLIC_MESSAGE_LINK_USER);
-  const [pendingScrollMessageId, setPendingScrollMessageId] = useState<string | null>(
-    route.messageId,
+  const [publicUser, setPublicUser] = useState<SessionUser>(
+    PUBLIC_MESSAGE_LINK_USER,
   );
+  const [pendingScrollMessageId, setPendingScrollMessageId] = useState<
+    string | null
+  >(route.messageId);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [avatarCatalogVersion, setAvatarCatalogVersion] = useState(0);
@@ -15761,7 +17789,9 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
     setPublicUser(PUBLIC_MESSAGE_LINK_USER);
     void fetch(`/api/public/message-links/${encodeURIComponent(route.token)}`)
       .then(async (res) => {
-        const body = (await res.json().catch(() => ({}))) as PublicMessageLinkResponse;
+        const body = (await res
+          .json()
+          .catch(() => ({}))) as PublicMessageLinkResponse;
         if (!res.ok) {
           const detail =
             typeof body.detail === "string" && body.detail
@@ -15812,7 +17842,11 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
   }, [route.token]);
 
   if (loading) {
-    return <div className="boot-state"><span className="boot-text">loading…</span></div>;
+    return (
+      <div className="boot-state">
+        <span className="boot-text">loading…</span>
+      </div>
+    );
   }
 
   if (error || !session) {
@@ -15826,7 +17860,9 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
   if (!CHAT_MODES.has(session.mode)) {
     return (
       <div className="boot-state">
-        <pre className="error">public message links are only available for chat transcripts</pre>
+        <pre className="error">
+          public message links are only available for chat transcripts
+        </pre>
       </div>
     );
   }
@@ -15865,7 +17901,11 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
   );
 }
 
-function PublicSessionReportApp({ route }: { route: PublicSessionReportRoute }) {
+function PublicSessionReportApp({
+  route,
+}: {
+  route: PublicSessionReportRoute;
+}) {
   return (
     <div className="shell public-report-shell">
       <main className="public-report-workspace">
@@ -15875,7 +17915,13 @@ function PublicSessionReportApp({ route }: { route: PublicSessionReportRoute }) 
   );
 }
 
-function CliSession({ session, visible }: { session: Session; visible: boolean }) {
+function CliSession({
+  session,
+  visible,
+}: {
+  session: Session;
+  visible: boolean;
+}) {
   // The sidebar already shows the session title, mode badge, and status —
   // a duplicate header inside the pane is wasted vertical space and made
   // the un-sized provider icon render at intrinsic SVG dimensions
@@ -15887,7 +17933,11 @@ function CliSession({ session, visible }: { session: Session; visible: boolean }
           <Suspense
             fallback={
               <div className="run-shell-loading">
-                <Loader2Icon size={18} className="run-spin" aria-hidden="true" />
+                <Loader2Icon
+                  size={18}
+                  className="run-spin"
+                  aria-hidden="true"
+                />
                 <span>loading CLI...</span>
               </div>
             }
@@ -16079,14 +18129,18 @@ function AuthenticatedApp() {
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
   const [sessionTranscriptOpenRequests, setSessionTranscriptOpenRequests] =
     useState<Record<string, number>>({});
-  const [sessionActivities, setSessionActivities] = useState<Record<string, SessionActivitySummary>>({});
+  const [sessionActivities, setSessionActivities] = useState<
+    Record<string, SessionActivitySummary>
+  >({});
   // Refs mirror the latest sessions + activities state so the SSE event
   // reducer (which closes over the user-keyed useEffect) can read the
   // current value without forcing a resubscribe on every render. The
   // reducer mutates the canonical state via setState; the refs are
   // updated by the effects below.
   const sessionsRef = useRef<Session[]>([]);
-  const sessionActivitiesRef = useRef<Record<string, SessionActivitySummary>>({});
+  const sessionActivitiesRef = useRef<Record<string, SessionActivitySummary>>(
+    {},
+  );
   // sessionStoreRef holds the client-side reconciler for the sidebar
   // (docs/session-list-redesign.md Phase 3). It owns the row cache,
   // the tombstone set, and the cursor. React state (sessions /
@@ -16107,8 +18161,12 @@ function AuthenticatedApp() {
   const [defaultInteraction, setDefaultInteraction] =
     useState<SessionInteraction>(readDefaultInteraction);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [draggingSessionId, setDraggingSessionId] = useState<string | null>(null);
-  const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(null);
+  const [draggingSessionId, setDraggingSessionId] = useState<string | null>(
+    null,
+  );
+  const [dragOverSessionId, setDragOverSessionId] = useState<string | null>(
+    null,
+  );
   const [defaultSessionMode, setDefaultSessionMode] =
     useState<DefaultSessionMode>(readDefaultSessionMode);
   const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
@@ -16117,10 +18175,14 @@ function AuthenticatedApp() {
     initialAppRoute?.tab ?? initialHomeRoute?.tab ?? "chat",
   );
   const [homeSettingsTab, setHomeSettingsTab] = useState<SettingsTab>(
-    initialAppRoute?.tab === "settings" ? initialAppRoute.settingsTab : "preferences",
+    initialAppRoute?.tab === "settings"
+      ? initialAppRoute.settingsTab
+      : "preferences",
   );
   const [homeAdminView, setHomeAdminView] = useState<AdminView>(
-    initialAppRoute?.tab === "settings" ? initialAppRoute.adminView : "controls",
+    initialAppRoute?.tab === "settings"
+      ? initialAppRoute.adminView
+      : "controls",
   );
   const [sessionViewScopeOverride, setSessionViewScopeOverride] = useState(
     readInitialSessionViewScopeOverride,
@@ -16132,9 +18194,12 @@ function AuthenticatedApp() {
   const homeEditingTitleRef = useRef(false);
   const homeEditingDefaultTitleRef = useRef(false);
   const homeTitleClosingRef = useRef(false);
-  const [pendingCreateTitleSessionId, setPendingCreateTitleSessionId] = useState<string | null>(null);
+  const [pendingCreateTitleSessionId, setPendingCreateTitleSessionId] =
+    useState<string | null>(null);
   const pendingCreateTitleSessionIdRef = useRef<string | null>(null);
-  const [editingSessionTitleId, setEditingSessionTitleId] = useState<string | null>(null);
+  const [editingSessionTitleId, setEditingSessionTitleId] = useState<
+    string | null
+  >(null);
   const [editingSessionTitleValue, setEditingSessionTitleValue] = useState("");
   const editingSessionTitleValueRef = useRef("");
   const editingSessionTitleFromFallbackRef = useRef(false);
@@ -16148,7 +18213,9 @@ function AuthenticatedApp() {
   // the seed turn the same way the in-chat composer appends them via
   // `composePromptWithAttachments`. Cleared once the seed turn is submitted
   // (or on the next createSession call).
-  const [homeAttachments, setHomeAttachments] = useState<HomePendingAttachment[]>([]);
+  const [homeAttachments, setHomeAttachments] = useState<
+    HomePendingAttachment[]
+  >([]);
   const homeFileInputRef = useRef<HTMLInputElement | null>(null);
   const addHomeAttachments = useCallback((files: FileList | File[] | null) => {
     if (!files) return;
@@ -16176,9 +18243,9 @@ function AuthenticatedApp() {
     });
   }, []);
   const focusHomeComposerTextarea = useCallback((): boolean => {
-    const textarea = homeComposerWrapRef.current?.querySelector("textarea") as
-      | HTMLTextAreaElement
-      | null;
+    const textarea = homeComposerWrapRef.current?.querySelector(
+      "textarea",
+    ) as HTMLTextAreaElement | null;
     if (!textarea || textarea.disabled) return false;
     textarea.focus();
     const cursor = textarea.value.length;
@@ -16218,10 +18285,14 @@ function AuthenticatedApp() {
   //
   // "All repos" is sourced from /api/github/repos; the manual text
   // input remains the escape hatch when enumeration fails or lags.
-  const [selectedRepos, setSelectedRepos] = useState<string[]>(readHomeSelectedRepos);
+  const [selectedRepos, setSelectedRepos] = useState<string[]>(
+    readHomeSelectedRepos,
+  );
   const [pinnedRepos, setPinnedRepos] = useState<string[]>([]);
   const [recentRepos, setRecentRepos] = useState<string[]>([]);
-  const [dismissedRecentRepos, setDismissedRecentRepos] = useState<string[]>(readHomeDismissedRecentRepos);
+  const [dismissedRecentRepos, setDismissedRecentRepos] = useState<string[]>(
+    readHomeDismissedRecentRepos,
+  );
   const [pinnedReposSaving, setPinnedReposSaving] = useState(false);
   const pinnedReposRefreshInFlightRef = useRef(false);
   const pinnedReposSnapshotVersionRef = useRef("");
@@ -16233,7 +18304,9 @@ function AuthenticatedApp() {
   const [homeSpireLensMcpEnabled, setHomeSpireLensMcpEnabled] = useState(false);
   const visibleRecentRepos = useMemo(() => {
     if (dismissedRecentRepos.length === 0) return recentRepos;
-    const dismissed = new Set(dismissedRecentRepos.map((slug) => slug.toLowerCase()));
+    const dismissed = new Set(
+      dismissedRecentRepos.map((slug) => slug.toLowerCase()),
+    );
     return recentRepos.filter((slug) => !dismissed.has(slug.toLowerCase()));
   }, [dismissedRecentRepos, recentRepos]);
   const recentRepoShortcuts = useMemo(
@@ -16252,54 +18325,69 @@ function AuthenticatedApp() {
   }>({ status: "idle", repos: [] });
   // Freshly-created chat sessions should land in the composer once the
   // session is ready. The title can still be renamed explicitly via F2.
-  const [autoFocusComposerSessionId, setAutoFocusComposerSessionId] = useState<string | null>(
-    null,
-  );
+  const [autoFocusComposerSessionId, setAutoFocusComposerSessionId] = useState<
+    string | null
+  >(null);
   const initialSessionId = useRef<string | null>(readInitialSessionId());
   // ?message=<entry.id> deep link, captured once at boot. We keep it in
   // state (not a ref) so React re-renders the matching ChatPane with
   // the prop populated; that pane consumes it via onScrollConsumed,
   // which clears state + URL param so back/forward navigation doesn't
   // re-scroll.
-  const [pendingScrollMessageId, setPendingScrollMessageId] = useState<string | null>(
-    readInitialMessageId,
-  );
+  const [pendingScrollMessageId, setPendingScrollMessageId] = useState<
+    string | null
+  >(readInitialMessageId);
   const consumePendingScroll = useCallback(() => {
     setPendingScrollMessageId(null);
     clearInitialMessageId();
   }, []);
-  const [sessionConnectionLabels, setSessionConnectionLabels] = useState<Record<string, string | undefined>>({});
-  const updateSessionConnectionLabel = useCallback((id: string, label: string | null) => {
-    setSessionConnectionLabels((prev) => {
-      if (prev[id] === (label ?? undefined)) return prev;
-      const next = { ...prev };
-      if (label) next[id] = label;
-      else delete next[id];
-      return next;
-    });
-  }, []);
+  const [sessionConnectionLabels, setSessionConnectionLabels] = useState<
+    Record<string, string | undefined>
+  >({});
+  const updateSessionConnectionLabel = useCallback(
+    (id: string, label: string | null) => {
+      setSessionConnectionLabels((prev) => {
+        if (prev[id] === (label ?? undefined)) return prev;
+        const next = { ...prev };
+        if (label) next[id] = label;
+        else delete next[id];
+        return next;
+      });
+    },
+    [],
+  );
   // Transient per-session "Refreshed" confirmation, mirrored from the active
   // ChatPane and rendered alongside the connection pill.
-  const [sessionRefreshFlashes, setSessionRefreshFlashes] = useState<Record<string, string | undefined>>({});
-  const updateSessionRefreshFlash = useCallback((id: string, label: string | null) => {
-    setSessionRefreshFlashes((prev) => {
-      if (prev[id] === (label ?? undefined)) return prev;
-      const next = { ...prev };
-      if (label) next[id] = label;
-      else delete next[id];
-      return next;
-    });
-  }, []);
-  const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
-    readGlimmungLaunchContext()
+  const [sessionRefreshFlashes, setSessionRefreshFlashes] = useState<
+    Record<string, string | undefined>
+  >({});
+  const updateSessionRefreshFlash = useCallback(
+    (id: string, label: string | null) => {
+      setSessionRefreshFlashes((prev) => {
+        if (prev[id] === (label ?? undefined)) return prev;
+        const next = { ...prev };
+        if (label) next[id] = label;
+        else delete next[id];
+        return next;
+      });
+    },
+    [],
   );
-  const currentSessionScope = normalizeSessionScopeValue(appConfig.session_scope);
+  const glimmungLaunchContext = useRef<GlimmungLaunchContext | null>(
+    readGlimmungLaunchContext(),
+  );
+  const currentSessionScope = normalizeSessionScopeValue(
+    appConfig.session_scope,
+  );
   const spireLensMcpAvailable = appConfig.spirelens_mcp_available === "true";
   const hasAdminAccess = userIsAdmin(user);
   const [adminObservabilitySummary, setAdminObservabilitySummary] =
     useState<AdminObservabilitySummary | null>(null);
-  const [adminObservabilityLoading, setAdminObservabilityLoading] = useState(false);
-  const [adminObservabilityError, setAdminObservabilityError] = useState<string | null>(null);
+  const [adminObservabilityLoading, setAdminObservabilityLoading] =
+    useState(false);
+  const [adminObservabilityError, setAdminObservabilityError] = useState<
+    string | null
+  >(null);
   const refreshAdminObservability = useCallback(async () => {
     if (!hasAdminAccess) return;
     setAdminObservabilityLoading(true);
@@ -16308,7 +18396,7 @@ function AuthenticatedApp() {
       if (!res.ok) {
         throw new Error(`observability summary returned ${res.status}`);
       }
-      const body = await res.json() as AdminObservabilitySummary;
+      const body = (await res.json()) as AdminObservabilitySummary;
       setAdminObservabilitySummary(body);
       setAdminObservabilityError(null);
     } catch (err) {
@@ -16340,33 +18428,33 @@ function AuthenticatedApp() {
     canViewProdSessions && effectiveSessionScope === PROD_SESSION_SCOPE;
   const readOnlySessionView = effectiveSessionScope !== currentSessionScope;
   const scopedSessionPath = useCallback(
-    (path: string) => appendQueryParam(path, "session_scope", effectiveSessionScope),
+    (path: string) =>
+      appendQueryParam(path, "session_scope", effectiveSessionScope),
     [effectiveSessionScope],
   );
   const localSessionPath = useCallback((path: string) => path, []);
-  const adminSettingsControls =
-    hasAdminAccess
-      ? {
-          visible: true,
-          canViewProdSessions,
-          viewingProdSessions,
-          currentScope: currentSessionScope,
-          prodScope: PROD_SESSION_SCOPE,
-          reportScope: effectiveSessionScope,
-          observability: {
-            summary: adminObservabilitySummary,
-            loading: adminObservabilityLoading,
-            error: adminObservabilityError,
-          },
-          onRefreshObservability: refreshAdminObservability,
-          onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
-          onViewingProdSessionsChange: (value: boolean) => {
-            const next = value ? PROD_SESSION_SCOPE : "";
-            setSessionViewScopeOverride(next);
-            writeSessionViewScopePreference(next);
-          },
-        }
-      : undefined;
+  const adminSettingsControls = hasAdminAccess
+    ? {
+        visible: true,
+        canViewProdSessions,
+        viewingProdSessions,
+        currentScope: currentSessionScope,
+        prodScope: PROD_SESSION_SCOPE,
+        reportScope: effectiveSessionScope,
+        observability: {
+          summary: adminObservabilitySummary,
+          loading: adminObservabilityLoading,
+          error: adminObservabilityError,
+        },
+        onRefreshObservability: refreshAdminObservability,
+        onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
+        onViewingProdSessionsChange: (value: boolean) => {
+          const next = value ? PROD_SESSION_SCOPE : "";
+          setSessionViewScopeOverride(next);
+          writeSessionViewScopePreference(next);
+        },
+      }
+    : undefined;
   const adminObservabilityAttention = observabilityAttentionStatus(
     adminSettingsControls?.observability.summary ?? null,
     adminSettingsControls?.observability.error ?? null,
@@ -16457,7 +18545,8 @@ function AuthenticatedApp() {
         const pendingInstallState = readPendingGitHubInstallState();
         if (u && pendingInstallState) {
           try {
-            const installedUser = await completeGitHubInstall(pendingInstallState);
+            const installedUser =
+              await completeGitHubInstall(pendingInstallState);
             clearPendingGitHubInstallState();
             setUser(installedUser);
           } catch (e) {
@@ -16509,25 +18598,30 @@ function AuthenticatedApp() {
     }
   }, []);
 
-  const applyPinnedReposSnapshot = useCallback((rawRepos: unknown, rawUpdatedAt?: unknown) => {
-    if (!Array.isArray(rawRepos)) return;
-    const updatedAt = typeof rawUpdatedAt === "string" ? rawUpdatedAt : "";
-    const currentVersion = pinnedReposSnapshotVersionRef.current;
-    if (updatedAt) {
-      if (currentVersion && updatedAt < currentVersion) return;
-      pinnedReposSnapshotVersionRef.current = updatedAt;
-    } else if (currentVersion) {
-      return;
-    }
-    const serverPins = pinnedRepoSlugs(rawRepos.map(String));
-    setPinnedRepos((prev) => (stringArraysEqual(prev, serverPins) ? prev : serverPins));
-    setUser((prev) => {
-      if (!prev) return prev;
-      const current = pinnedRepoSlugs(prev.pinned_repos ?? []);
-      if (stringArraysEqual(current, serverPins)) return prev;
-      return { ...prev, pinned_repos: serverPins };
-    });
-  }, []);
+  const applyPinnedReposSnapshot = useCallback(
+    (rawRepos: unknown, rawUpdatedAt?: unknown) => {
+      if (!Array.isArray(rawRepos)) return;
+      const updatedAt = typeof rawUpdatedAt === "string" ? rawUpdatedAt : "";
+      const currentVersion = pinnedReposSnapshotVersionRef.current;
+      if (updatedAt) {
+        if (currentVersion && updatedAt < currentVersion) return;
+        pinnedReposSnapshotVersionRef.current = updatedAt;
+      } else if (currentVersion) {
+        return;
+      }
+      const serverPins = pinnedRepoSlugs(rawRepos.map(String));
+      setPinnedRepos((prev) =>
+        stringArraysEqual(prev, serverPins) ? prev : serverPins,
+      );
+      setUser((prev) => {
+        if (!prev) return prev;
+        const current = pinnedRepoSlugs(prev.pinned_repos ?? []);
+        if (stringArraysEqual(current, serverPins)) return prev;
+        return { ...prev, pinned_repos: serverPins };
+      });
+    },
+    [],
+  );
 
   const refreshPinnedRepos = useCallback(async () => {
     if (pinnedReposRefreshInFlightRef.current) return;
@@ -16640,9 +18734,12 @@ function AuthenticatedApp() {
       if (cancelled) return;
       let nextSource: EventSource;
       try {
-        nextSource = await authedEventSource("/api/github/pinned-repos/events", {
-          stream: "pinned-repos",
-        });
+        nextSource = await authedEventSource(
+          "/api/github/pinned-repos/events",
+          {
+            stream: "pinned-repos",
+          },
+        );
       } catch {
         if (cancelled) return;
         reopenTimer = window.setTimeout(() => void open(), 1000);
@@ -16657,7 +18754,9 @@ function AuthenticatedApp() {
         const message = event as MessageEvent;
         let parsed: Partial<PinnedReposResponse> | null = null;
         try {
-          parsed = JSON.parse(String(message.data)) as Partial<PinnedReposResponse>;
+          parsed = JSON.parse(
+            String(message.data),
+          ) as Partial<PinnedReposResponse>;
         } catch {
           return;
         }
@@ -16716,7 +18815,9 @@ function AuthenticatedApp() {
     const name = rawName?.trim() ?? "";
     if (!name) return;
     setHomeBugLabels((prev) => {
-      if (prev.some((existing) => existing.toLowerCase() === name.toLowerCase())) {
+      if (
+        prev.some((existing) => existing.toLowerCase() === name.toLowerCase())
+      ) {
         return prev;
       }
       return [...prev, name].slice(0, 5);
@@ -16727,16 +18828,19 @@ function AuthenticatedApp() {
     setHomeBugLabels((prev) => prev.filter((existing) => existing !== name));
   }, []);
 
-  const addSelectedRepo = useCallback((rawSlug: string) => {
-    const result = addRepoSlug(selectedRepos, rawSlug);
-    if (result.ok) {
-      setSelectedRepos(result.next);
-      setRepoInput("");
-      setRepoError(null);
-    } else {
-      setRepoError(result.error);
-    }
-  }, [selectedRepos]);
+  const addSelectedRepo = useCallback(
+    (rawSlug: string) => {
+      const result = addRepoSlug(selectedRepos, rawSlug);
+      if (result.ok) {
+        setSelectedRepos(result.next);
+        setRepoInput("");
+        setRepoError(null);
+      } else {
+        setRepoError(result.error);
+      }
+    },
+    [selectedRepos],
+  );
 
   const dismissRecentRepo = useCallback((rawSlug: string) => {
     const slug = rawSlug.trim();
@@ -16748,41 +18852,52 @@ function AuthenticatedApp() {
       );
     }
     setRecentRepos((prev) =>
-      prev.filter((slug) => slug.toLowerCase() !== rawSlug.trim().toLowerCase()),
+      prev.filter(
+        (slug) => slug.toLowerCase() !== rawSlug.trim().toLowerCase(),
+      ),
     );
     setRepoError(null);
   }, []);
 
-  const togglePinnedRepo = useCallback((slug: string) => {
-    if (pinnedReposSaving) return;
-    const current = pinnedRepoSlugs(pinnedRepos);
-    const next = isRepoPinned(current, slug)
-      ? unpinRepoSlug(current, slug)
-      : pinRepoSlug(current, slug);
-    setPinnedReposSaving(true);
-    setRepoError(null);
-    void authedFetch("/api/github/pinned-repos", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ repos: next }),
-    })
-      .then(async (res) => {
-        const body = (await res.json().catch(() => ({}))) as Partial<PinnedReposResponse> & {
-          detail?: string;
-        };
-        if (!res.ok) {
-          throw new Error(typeof body.detail === "string" ? body.detail : `pin update failed: ${res.status}`);
-        }
-        applyPinnedReposSnapshot(body.repos, body.updated_at);
+  const togglePinnedRepo = useCallback(
+    (slug: string) => {
+      if (pinnedReposSaving) return;
+      const current = pinnedRepoSlugs(pinnedRepos);
+      const next = isRepoPinned(current, slug)
+        ? unpinRepoSlug(current, slug)
+        : pinRepoSlug(current, slug);
+      setPinnedReposSaving(true);
+      setRepoError(null);
+      void authedFetch("/api/github/pinned-repos", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ repos: next }),
       })
-      .catch((e) => {
-        setRepoError(errorMessage(e));
-        setRepoPickerOpen(true);
-      })
-      .finally(() => {
-        setPinnedReposSaving(false);
-      });
-  }, [pinnedRepos, pinnedReposSaving, applyPinnedReposSnapshot]);
+        .then(async (res) => {
+          const body = (await res
+            .json()
+            .catch(() => ({}))) as Partial<PinnedReposResponse> & {
+            detail?: string;
+          };
+          if (!res.ok) {
+            throw new Error(
+              typeof body.detail === "string"
+                ? body.detail
+                : `pin update failed: ${res.status}`,
+            );
+          }
+          applyPinnedReposSnapshot(body.repos, body.updated_at);
+        })
+        .catch((e) => {
+          setRepoError(errorMessage(e));
+          setRepoPickerOpen(true);
+        })
+        .finally(() => {
+          setPinnedReposSaving(false);
+        });
+    },
+    [pinnedRepos, pinnedReposSaving, applyPinnedReposSnapshot],
+  );
 
   // Drag-and-drop / keyboard reorder of the durable pin list. The pinned_repos
   // text[] order IS the pin order (and the splash shortcut order), so a reorder
@@ -16807,7 +18922,9 @@ function AuthenticatedApp() {
         body: JSON.stringify({ repos: next }),
       })
         .then(async (res) => {
-          const body = (await res.json().catch(() => ({}))) as Partial<PinnedReposResponse> & {
+          const body = (await res
+            .json()
+            .catch(() => ({}))) as Partial<PinnedReposResponse> & {
             detail?: string;
           };
           if (!res.ok) {
@@ -16857,9 +18974,13 @@ function AuthenticatedApp() {
       event.stopPropagation();
       addSelectedRepo(slug);
     };
-    window.addEventListener("keydown", selectRecentRepoByNumber, { capture: true });
+    window.addEventListener("keydown", selectRecentRepoByNumber, {
+      capture: true,
+    });
     return () => {
-      window.removeEventListener("keydown", selectRecentRepoByNumber, { capture: true });
+      window.removeEventListener("keydown", selectRecentRepoByNumber, {
+        capture: true,
+      });
     };
   }, [
     active,
@@ -16912,7 +19033,8 @@ function AuthenticatedApp() {
       sidebar_position: row.sidebar_position,
       activity: undefined, // activities live in the parallel sessionActivities map
       repos: Array.isArray(row.repos) ? row.repos : [],
-      clone_state: (row.clone_state as Record<string, unknown> | undefined) ?? null,
+      clone_state:
+        (row.clone_state as Record<string, unknown> | undefined) ?? null,
       capabilities: Array.isArray(row.capabilities) ? row.capabilities : [],
       bug_label: row.bug_label ?? row.bug_labels?.[0] ?? null,
       bug_labels: row.bug_labels ?? [],
@@ -16923,9 +19045,13 @@ function AuthenticatedApp() {
       runtime_configured_at: row.runtime_configured_at ?? null,
       runtime_context_window_tokens: row.runtime_context_window_tokens ?? 0,
       runtime_context_window_source: row.runtime_context_window_source ?? "",
-      runtime_context_window_observed_at: row.runtime_context_window_observed_at ?? null,
-      provider_rate_limit_info: normalizeProviderRateLimitInfo(row.provider_rate_limit_info),
-      provider_rate_limit_observed_at: row.provider_rate_limit_observed_at ?? null,
+      runtime_context_window_observed_at:
+        row.runtime_context_window_observed_at ?? null,
+      provider_rate_limit_info: normalizeProviderRateLimitInfo(
+        row.provider_rate_limit_info,
+      ),
+      provider_rate_limit_observed_at:
+        row.provider_rate_limit_observed_at ?? null,
       compaction_count: row.compaction_count ?? 0,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
@@ -16960,15 +19086,21 @@ function AuthenticatedApp() {
       rollout_state: raw.rollout_state ?? undefined,
       repos: Array.isArray(raw.repos) ? raw.repos.map(String) : [],
       clone_state: raw.clone_state ?? undefined,
-      capabilities: Array.isArray(raw.capabilities) ? raw.capabilities.map(String) : [],
+      capabilities: Array.isArray(raw.capabilities)
+        ? raw.capabilities.map(String)
+        : [],
       bug_label: normalizeBugLabel(raw.bug_label),
       bug_labels: normalizeBugLabels(raw.bug_labels),
       model: typeof raw.model === "string" ? raw.model : undefined,
       effort: typeof raw.effort === "string" ? raw.effort : undefined,
-      runtime_model: typeof raw.runtime_model === "string" ? raw.runtime_model : undefined,
-      runtime_effort: typeof raw.runtime_effort === "string" ? raw.runtime_effort : undefined,
+      runtime_model:
+        typeof raw.runtime_model === "string" ? raw.runtime_model : undefined,
+      runtime_effort:
+        typeof raw.runtime_effort === "string" ? raw.runtime_effort : undefined,
       runtime_configured_at:
-        typeof raw.runtime_configured_at === "string" ? raw.runtime_configured_at : undefined,
+        typeof raw.runtime_configured_at === "string"
+          ? raw.runtime_configured_at
+          : undefined,
       runtime_context_window_tokens:
         typeof raw.runtime_context_window_tokens === "number" &&
         Number.isFinite(raw.runtime_context_window_tokens)
@@ -16982,19 +19114,26 @@ function AuthenticatedApp() {
         typeof raw.runtime_context_window_observed_at === "string"
           ? raw.runtime_context_window_observed_at
           : undefined,
-      provider_rate_limit_info: normalizeProviderRateLimitInfo(raw.provider_rate_limit_info) ?? undefined,
+      provider_rate_limit_info:
+        normalizeProviderRateLimitInfo(raw.provider_rate_limit_info) ??
+        undefined,
       provider_rate_limit_observed_at:
         typeof raw.provider_rate_limit_observed_at === "string"
           ? raw.provider_rate_limit_observed_at
           : undefined,
       compaction_count:
-        typeof raw.compaction_count === "number" && Number.isFinite(raw.compaction_count)
+        typeof raw.compaction_count === "number" &&
+        Number.isFinite(raw.compaction_count)
           ? Math.max(0, Math.floor(raw.compaction_count))
           : undefined,
       agent_avatar_id:
-        typeof raw.agent_avatar_id === "string" ? raw.agent_avatar_id : undefined,
+        typeof raw.agent_avatar_id === "string"
+          ? raw.agent_avatar_id
+          : undefined,
       system_avatar_id:
-        typeof raw.system_avatar_id === "string" ? raw.system_avatar_id : undefined,
+        typeof raw.system_avatar_id === "string"
+          ? raw.system_avatar_id
+          : undefined,
       sidebar_position: sidebarPosition,
       row_version: rowVersion,
     };
@@ -17027,7 +19166,9 @@ function AuthenticatedApp() {
         sessionCount: listed.length,
         source: "initial",
       });
-      const sessionsFromStore = sessionStoreRef.current.list().map(rowToSession);
+      const sessionsFromStore = sessionStoreRef.current
+        .list()
+        .map(rowToSession);
       setSessions(sessionsFromStore);
       const nextActivities: Record<string, SessionActivitySummary> = {};
       for (const row of sessionStoreRef.current.list()) {
@@ -17053,7 +19194,8 @@ function AuthenticatedApp() {
         listed
           .map((session): [string, string | null] => [
             session.id,
-            sessionStoreRef.current.activityForRender(session.id)?.last_order_key ?? null,
+            sessionStoreRef.current.activityForRender(session.id)
+              ?.last_order_key ?? null,
           ])
           .filter((entry): entry is [string, string] => entry[1] !== null),
       );
@@ -17265,10 +19407,19 @@ function AuthenticatedApp() {
         ) {
           const priorRing = lastSoundedOrderKeyRef.current.get(payload.row.id);
           const alreadyRepresented =
-            priorRing != null && !orderKeyAfter(nextActivity.last_order_key, priorRing);
+            priorRing != null &&
+            !orderKeyAfter(nextActivity.last_order_key, priorRing);
           if (!alreadyRepresented) {
-            lastSoundedOrderKeyRef.current.set(payload.row.id, nextActivity.last_order_key);
-            if (shouldRingForActivityTransition(priorActivity ?? undefined, nextActivity)) {
+            lastSoundedOrderKeyRef.current.set(
+              payload.row.id,
+              nextActivity.last_order_key,
+            );
+            if (
+              shouldRingForActivityTransition(
+                priorActivity ?? undefined,
+                nextActivity,
+              )
+            ) {
               const isVisible = activeRef.current === payload.row.id;
               const suppressForVisible =
                 isVisible && !runPrefsRef.current.turnCompleteSoundOnVisible;
@@ -17297,7 +19448,10 @@ function AuthenticatedApp() {
         } catch {
           parsed = undefined;
         }
-        logSessionListStreamSignal({ signal: "resync_required", detail: parsed });
+        logSessionListStreamSignal({
+          signal: "resync_required",
+          detail: parsed,
+        });
         cursorRef.current = null;
         // Drop the snapshot-applied flag so the SSE replay that
         // follows refresh() can't ring for transitions that happened
@@ -17346,7 +19500,10 @@ function AuthenticatedApp() {
   }, [user, effectiveSessionScope, scopedSessionPath]);
 
   useEffect(() => {
-    if (active && (!sessions.some((s) => s.id === active) || closingIds.has(active))) {
+    if (
+      active &&
+      (!sessions.some((s) => s.id === active) || closingIds.has(active))
+    ) {
       const selectable = sessions.filter((s) => !closingIds.has(s.id));
       const nextActive = selectable[selectable.length - 1]?.id ?? null;
       recordSessionListDebugEvent({
@@ -17364,7 +19521,8 @@ function AuthenticatedApp() {
       let changed = false;
       const next = new Set<string>();
       prev.forEach((id) => {
-        if (sessions.some((s) => s.id === id) && !closingIds.has(id)) next.add(id);
+        if (sessions.some((s) => s.id === id) && !closingIds.has(id))
+          next.add(id);
         else changed = true;
       });
       return changed ? next : prev;
@@ -17418,7 +19576,8 @@ function AuthenticatedApp() {
       pendingHomeComposerFocusRef.current = false;
       return;
     }
-    if (homeActiveTab !== "chat" || !pendingHomeComposerFocusRef.current) return;
+    if (homeActiveTab !== "chat" || !pendingHomeComposerFocusRef.current)
+      return;
     pendingHomeComposerFocusRef.current = false;
     requestAnimationFrame(() => {
       focusHomeComposerTextarea();
@@ -17439,9 +19598,9 @@ function AuthenticatedApp() {
       ) {
         return;
       }
-      const textarea = homeComposerWrapRef.current?.querySelector("textarea") as
-        | HTMLTextAreaElement
-        | null;
+      const textarea = homeComposerWrapRef.current?.querySelector(
+        "textarea",
+      ) as HTMLTextAreaElement | null;
       const body = homeBodyRef.current;
       if (!textarea || !body) return;
       if (event.target === textarea) {
@@ -17455,7 +19614,8 @@ function AuthenticatedApp() {
       event.stopImmediatePropagation();
     };
     window.addEventListener("keydown", toggleHomeFocus, { capture: true });
-    return () => window.removeEventListener("keydown", toggleHomeFocus, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", toggleHomeFocus, { capture: true });
   }, [active, focusHomeComposerTextarea, focusHomeSetupSection, homeActiveTab]);
 
   useEffect(() => {
@@ -17471,9 +19631,9 @@ function AuthenticatedApp() {
       ) {
         return;
       }
-      const textarea = homeComposerWrapRef.current?.querySelector("textarea") as
-        | HTMLTextAreaElement
-        | null;
+      const textarea = homeComposerWrapRef.current?.querySelector(
+        "textarea",
+      ) as HTMLTextAreaElement | null;
       if (textarea && event.target === textarea) return;
       if (isTextEntryShortcutTarget(event.target)) return;
 
@@ -17490,7 +19650,10 @@ function AuthenticatedApp() {
       });
     };
     window.addEventListener("keydown", focusHomeComposer, { capture: true });
-    return () => window.removeEventListener("keydown", focusHomeComposer, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", focusHomeComposer, {
+        capture: true,
+      });
   }, [active, focusHomeComposerTextarea, homeActiveTab]);
 
   useEffect(() => {
@@ -17512,27 +19675,41 @@ function AuthenticatedApp() {
       goHome();
     };
     window.addEventListener("keydown", openNewSessionPage, { capture: true });
-    return () => window.removeEventListener("keydown", openNewSessionPage, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", openNewSessionPage, {
+        capture: true,
+      });
   }, [active, homeActiveTab]);
 
   useEffect(() => {
     const cycleTabs = (event: KeyboardEvent) => {
       const direction = altArrowSessionDirection(event);
-      if (direction == null || isSessionShortcutEditableTarget(event.target)) return;
+      if (direction == null || isSessionShortcutEditableTarget(event.target))
+        return;
       const nextId = adjacentSessionId(sessions, active, direction, closingIds);
       if (nextId == null) return;
       event.preventDefault();
       event.stopPropagation();
       setActive(nextId);
-      setMounted((prev) => (prev.has(nextId) ? prev : new Set(prev).add(nextId)));
+      setMounted((prev) =>
+        prev.has(nextId) ? prev : new Set(prev).add(nextId),
+      );
     };
     window.addEventListener("keydown", cycleTabs, { capture: true });
-    return () => window.removeEventListener("keydown", cycleTabs, { capture: true });
+    return () =>
+      window.removeEventListener("keydown", cycleTabs, { capture: true });
   }, [sessions, active, closingIds]);
 
   useEffect(() => {
     const renameHighlightedSession = (event: KeyboardEvent) => {
-      if (event.key !== "F2" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+      if (
+        event.key !== "F2" ||
+        event.altKey ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.shiftKey
+      )
+        return;
       const targetId = shortcutSessionId(event.target) ?? active;
       if (!targetId) {
         if (active == null) {
@@ -17553,8 +19730,13 @@ function AuthenticatedApp() {
       setAutoFocusComposerSessionId(null);
       beginSessionTitleEdit(session);
     };
-    window.addEventListener("keydown", renameHighlightedSession, { capture: true });
-    return () => window.removeEventListener("keydown", renameHighlightedSession, { capture: true });
+    window.addEventListener("keydown", renameHighlightedSession, {
+      capture: true,
+    });
+    return () =>
+      window.removeEventListener("keydown", renameHighlightedSession, {
+        capture: true,
+      });
   }, [sessions, active, closingIds, readOnlySessionView]);
 
   function activate(id: string) {
@@ -17627,7 +19809,8 @@ function AuthenticatedApp() {
   function dropSession(id: string, event: ReactDragEvent<HTMLLIElement>) {
     event.preventDefault();
     if (readOnlySessionView) return;
-    const movedId = event.dataTransfer.getData("text/plain") || draggingSessionId;
+    const movedId =
+      event.dataTransfer.getData("text/plain") || draggingSessionId;
     setDraggingSessionId(null);
     setDragOverSessionId(null);
     if (!movedId || movedId === id || !user) return;
@@ -17657,7 +19840,9 @@ function AuthenticatedApp() {
       detail: { state },
     });
     setSessions((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, test_state: state, rollout_state: null } : s)),
+      prev.map((s) =>
+        s.id === id ? { ...s, test_state: state, rollout_state: null } : s,
+      ),
     );
     const res = await authedFetch(`/api/sessions/${id}/test-state`, {
       method: "POST",
@@ -17698,16 +19883,25 @@ function AuthenticatedApp() {
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
     const bugLabel = homeBugLabels[0]?.trim() ?? "";
-    const capabilities = spireLensMcpAvailable && homeSpireLensMcpEnabled ? ["spirelens_mcp"] : [];
+    const capabilities =
+      spireLensMcpAvailable && homeSpireLensMcpEnabled ? ["spirelens_mcp"] : [];
     const requestedName = normalizedHomeTitleNameFrom(
       homeSessionNameRef.current,
       homeEditingDefaultTitleRef.current,
     );
-    const requestedInitialSkillName = initialSkillName ?? initialMessageModeSkillName(initialMessageMode);
-    const seedPrompt = await composeInitialMessageModePrompt(initialMessageMode, initialPrompt?.trim() ?? "");
-    const pendingHomeAttachments = sessionModeSupportsWorkspaceFiles(mode) ? [...homeAttachments] : [];
+    const requestedInitialSkillName =
+      initialSkillName ?? initialMessageModeSkillName(initialMessageMode);
+    const seedPrompt = await composeInitialMessageModePrompt(
+      initialMessageMode,
+      initialPrompt?.trim() ?? "",
+    );
+    const pendingHomeAttachments = sessionModeSupportsWorkspaceFiles(mode)
+      ? [...homeAttachments]
+      : [];
     const seedTurnRequested =
-      (seedPrompt || pendingHomeAttachments.length > 0 || requestedInitialSkillName) &&
+      (seedPrompt ||
+        pendingHomeAttachments.length > 0 ||
+        requestedInitialSkillName) &&
       CHAT_MODES.has(mode);
     const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
     const seedModel =
@@ -17723,10 +19917,18 @@ function AuthenticatedApp() {
     const seedInitialTurnAtCreate =
       seedTurnRequested && CREATE_TIME_INITIAL_TURN_MODES.has(mode);
     const seedTurnDeferredAtCreate =
-      seedInitialTurnAtCreate && SDK_CHAT_MODES.has(mode) && pendingHomeAttachments.length > 0;
-    const seedTurnSubmittedAtCreate = seedInitialTurnAtCreate && !seedTurnDeferredAtCreate;
-    const launchDisplayAttachments = messageAttachmentDisplays(pendingHomeAttachments);
-    const launchUserPrompt = composeLaunchUserPrompt(seedPrompt, pendingHomeAttachments);
+      seedInitialTurnAtCreate &&
+      SDK_CHAT_MODES.has(mode) &&
+      pendingHomeAttachments.length > 0;
+    const seedTurnSubmittedAtCreate =
+      seedInitialTurnAtCreate && !seedTurnDeferredAtCreate;
+    const launchDisplayAttachments = messageAttachmentDisplays(
+      pendingHomeAttachments,
+    );
+    const launchUserPrompt = composeLaunchUserPrompt(
+      seedPrompt,
+      pendingHomeAttachments,
+    );
     const createTimeTurnPrompt = requestedInitialSkillName
       ? composeSkillPrompt(mode, requestedInitialSkillName, launchUserPrompt)
       : launchUserPrompt;
@@ -17735,10 +19937,16 @@ function AuthenticatedApp() {
           client_nonce: seedClientNonce,
           prompt: createTimeTurnPrompt,
           ...(launchDisplayAttachments.length > 0
-            ? { display_attachments: attachmentPayloadsForApi(launchDisplayAttachments) }
+            ? {
+                display_attachments: attachmentPayloadsForApi(
+                  launchDisplayAttachments,
+                ),
+              }
             : {}),
           ...(seedTurnDeferredAtCreate ? { deferred: true } : {}),
-          ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
+          ...(requestedInitialSkillName
+            ? { skill_name: requestedInitialSkillName }
+            : {}),
         }
       : undefined;
     try {
@@ -17752,7 +19960,9 @@ function AuthenticatedApp() {
           ...(homeBugLabels.length > 0 ? { bug_labels: homeBugLabels } : {}),
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(requestedName ? { name: requestedName } : {}),
-          ...(sessionModel || sessionEffort ? { model: sessionModel, effort: sessionEffort } : {}),
+          ...(sessionModel || sessionEffort
+            ? { model: sessionModel, effort: sessionEffort }
+            : {}),
           ...(initialTurnPayload ? { initial_turn: initialTurnPayload } : {}),
         }),
       });
@@ -17852,7 +20062,9 @@ function AuthenticatedApp() {
                 `/api/sessions/${created.id}/launch-attachments/${i}?client_nonce=${encodeURIComponent(seedClientNonce)}&name=${encodeURIComponent(att.name)}`,
                 {
                   method: "PUT",
-                  headers: { "Content-Type": att.file.type || "application/octet-stream" },
+                  headers: {
+                    "Content-Type": att.file.type || "application/octet-stream",
+                  },
                   body: att.file,
                 },
               );
@@ -17881,20 +20093,27 @@ function AuthenticatedApp() {
               row: sessionListDebugRow(readySession),
               rows: sessionListDebugRows(sessionsRef.current),
             });
-            setSessions((prev) => prev.map((s) => (s.id === created.id ? readySession : s)));
+            setSessions((prev) =>
+              prev.map((s) => (s.id === created.id ? readySession : s)),
+            );
             const turnPrompt = requestedInitialSkillName
               ? composeSkillPrompt(mode, requestedInitialSkillName, seedPrompt)
               : seedPrompt;
-            const turnRes = await authedFetch(`/api/sessions/${created.id}/turns`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                client_nonce: seedClientNonce,
-                prompt: turnPrompt,
-                ...(requestedInitialSkillName ? { skill_name: requestedInitialSkillName } : {}),
-                follow_up: false,
-              }),
-            });
+            const turnRes = await authedFetch(
+              `/api/sessions/${created.id}/turns`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  client_nonce: seedClientNonce,
+                  prompt: turnPrompt,
+                  ...(requestedInitialSkillName
+                    ? { skill_name: requestedInitialSkillName }
+                    : {}),
+                  follow_up: false,
+                }),
+              },
+            );
             if (!turnRes.ok) {
               let detail = `seed turn failed: ${turnRes.status}`;
               try {
@@ -17934,7 +20153,10 @@ function AuthenticatedApp() {
   async function forkSessionFromMessage(request: ForkSessionRequest) {
     const mode = request.sourceSession.mode;
     const prompt = await buildForkSessionPrompt(request);
-    const name = `fork: ${sessionDisplayName(request.sourceSession)}`.slice(0, 80);
+    const name = `fork: ${sessionDisplayName(request.sourceSession)}`.slice(
+      0,
+      80,
+    );
     setBusy(true);
     setSidebarCollapsed(false);
     setError(null);
@@ -18056,7 +20278,10 @@ function AuthenticatedApp() {
     if (homeTitleClosingRef.current) return;
     homeTitleClosingRef.current = true;
     const fromDefault = homeEditingDefaultTitleRef.current;
-    const nextName = normalizedHomeTitleNameFrom(homeSessionNameRef.current, fromDefault);
+    const nextName = normalizedHomeTitleNameFrom(
+      homeSessionNameRef.current,
+      fromDefault,
+    );
     const pendingSessionId = pendingCreateTitleSessionIdRef.current;
     homeEditingDefaultTitleRef.current = false;
     homeEditingTitleRef.current = false;
@@ -18115,7 +20340,10 @@ function AuthenticatedApp() {
     void renameSession(sessionID, nextName);
   }
 
-  async function patchSessionName(id: string, nextName: string | null): Promise<Session> {
+  async function patchSessionName(
+    id: string,
+    nextName: string | null,
+  ): Promise<Session> {
     const res = await authedFetch(`/api/sessions/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -18137,7 +20365,9 @@ function AuthenticatedApp() {
         detail: { next_name: nextName },
       });
       setSessions((prev) =>
-        prev.map((s) => (s.id === id ? { ...s, name: updated.name ?? null } : s))
+        prev.map((s) =>
+          s.id === id ? { ...s, name: updated.name ?? null } : s,
+        ),
       );
     } catch (e) {
       setError(String(e));
@@ -18153,7 +20383,7 @@ function AuthenticatedApp() {
       detail: { patch_keys: Object.keys(patch) },
     });
     setSessions((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, ...patch } : s))
+      prev.map((s) => (s.id === id ? { ...s, ...patch } : s)),
     );
   }
 
@@ -18178,14 +20408,18 @@ function AuthenticatedApp() {
     setActive((prev) => {
       if (prev !== id) return prev;
       const idx = sessions.findIndex((s) => s.id === id);
-      const selectable = sessions.filter((s) => s.id !== id && !closingIds.has(s.id));
+      const selectable = sessions.filter(
+        (s) => s.id !== id && !closingIds.has(s.id),
+      );
       if (selectable.length === 0) return null;
       return sessions[idx + 1]?.id && !closingIds.has(sessions[idx + 1].id)
         ? sessions[idx + 1].id
         : selectable[selectable.length - 1].id;
     });
     try {
-      const res = await authedFetch(`/api/sessions/${id}`, { method: "DELETE" });
+      const res = await authedFetch(`/api/sessions/${id}`, {
+        method: "DELETE",
+      });
       if (!res.ok) throw new Error(`delete failed: ${res.status}`);
       await refresh();
     } catch (e) {
@@ -18221,13 +20455,19 @@ function AuthenticatedApp() {
     return (
       <div className="boot-state">
         <pre className="error">auth error: {authError}</pre>
-        <button className="btn-secondary" onClick={() => location.reload()}>retry</button>
+        <button className="btn-secondary" onClick={() => location.reload()}>
+          retry
+        </button>
       </div>
     );
   }
 
   if (!booted) {
-    return <div className="boot-state"><span className="boot-text">loading…</span></div>;
+    return (
+      <div className="boot-state">
+        <span className="boot-text">loading…</span>
+      </div>
+    );
   }
 
   if (!user) {
@@ -18249,7 +20489,8 @@ function AuthenticatedApp() {
       : selectedProvider === "codex"
         ? CODEX_MODELS
         : [];
-  const homeModelApplies = defaultInteraction === "gui" && homeModelOptions.length > 0;
+  const homeModelApplies =
+    defaultInteraction === "gui" && homeModelOptions.length > 0;
   const selectedHomeModelId =
     selectedProvider === "anthropic"
       ? runPrefs.claudeModelId
@@ -18263,25 +20504,28 @@ function AuthenticatedApp() {
         ? runPrefs.codexEffort
         : DEFAULT_CLAUDE_EFFORT_ID;
   const selectedInitialMessageMode =
-    INITIAL_MESSAGE_MODE_OPTIONS.find((option) => option.id === runPrefs.initialMessageMode) ??
-    INITIAL_MESSAGE_MODE_OPTIONS[0];
+    INITIAL_MESSAGE_MODE_OPTIONS.find(
+      (option) => option.id === runPrefs.initialMessageMode,
+    ) ?? INITIAL_MESSAGE_MODE_OPTIONS[0];
   const homeSessionTitle = homeSessionName.trim() || HOME_DEFAULT_SESSION_TITLE;
-  const activeWorkspaceSession = active == null
-    ? null
-    : sessions.find((session) => session.id === active) ?? null;
+  const activeWorkspaceSession =
+    active == null
+      ? null
+      : (sessions.find((session) => session.id === active) ?? null);
   const activeConnectionLabel =
     activeWorkspaceSession == null
       ? null
-      : sessionConnectionLabels[activeWorkspaceSession.id] ?? null;
+      : (sessionConnectionLabels[activeWorkspaceSession.id] ?? null);
   const activeRefreshFlash =
     activeWorkspaceSession == null
       ? null
-      : sessionRefreshFlashes[activeWorkspaceSession.id] ?? null;
+      : (sessionRefreshFlashes[activeWorkspaceSession.id] ?? null);
   const useHomeTitleChrome =
     active == null || homeEditingTitle || pendingCreateTitleSessionId != null;
   const showWorkspaceTitleChrome =
     useHomeTitleChrome ||
-    (activeWorkspaceSession != null && CHAT_MODES.has(activeWorkspaceSession.mode));
+    (activeWorkspaceSession != null &&
+      CHAT_MODES.has(activeWorkspaceSession.mode));
   const workspaceTitleChrome = showWorkspaceTitleChrome ? (
     <div className="workspace-title-overlay">
       {(useHomeTitleChrome
@@ -18385,11 +20629,7 @@ function AuthenticatedApp() {
         )
       ) : null}
       {!useHomeTitleChrome && activeConnectionLabel && (
-        <span
-          className="run-connection-pill"
-          role="status"
-          aria-live="polite"
-        >
+        <span className="run-connection-pill" role="status" aria-live="polite">
           <span className="run-connection-label">{activeConnectionLabel}</span>
         </span>
       )}
@@ -18399,14 +20639,18 @@ function AuthenticatedApp() {
           role="status"
           aria-live="polite"
         >
-          <span className="run-connection-label run-refresh-label">{activeRefreshFlash}</span>
+          <span className="run-connection-label run-refresh-label">
+            {activeRefreshFlash}
+          </span>
         </span>
       )}
     </div>
   ) : null;
   const paneFontScale = runPrefs.chatFontScale;
   const paneFontScalePct = Math.round(paneFontScale * 100);
-  const turnCompleteSoundVolumePct = Math.round(runPrefs.turnCompleteSoundVolume * 100);
+  const turnCompleteSoundVolumePct = Math.round(
+    runPrefs.turnCompleteSoundVolume * 100,
+  );
 
   return (
     <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
@@ -18426,7 +20670,9 @@ function AuthenticatedApp() {
               className="sidebar-collapse"
               onClick={() => setSidebarCollapsed((v) => !v)}
               title={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
-              aria-label={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+              aria-label={
+                sidebarCollapsed ? "expand sidebar" : "collapse sidebar"
+              }
               aria-pressed={sidebarCollapsed}
             >
               <IconPanelToggle collapsed={sidebarCollapsed} />
@@ -18445,7 +20691,9 @@ function AuthenticatedApp() {
               aria-label="New session"
               title="new session"
             >
-              <span className="row-icon"><IconPlus /></span>
+              <span className="row-icon">
+                <IconPlus />
+              </span>
             </button>
           </div>
           <ul className="sessions">
@@ -18453,76 +20701,116 @@ function AuthenticatedApp() {
               <li className="sessions-empty">no sessions</li>
             ) : (
               sessions.map((s) => {
-              const isLive = s.status === "Active";
-              const isClosing = closingIds.has(s.id);
-              const isActive = active === s.id && !isClosing;
-              const avatar = getSessionAvatarByID(s.agent_avatar_id);
-              const statusDotClass = sessionStatusDotClass(s, sessionActivities[s.id]);
-              const statusLabel = sessionStatusLabel(s, sessionActivities[s.id]);
-              const skillStateClass = sessionSkillStateClass(s);
-              return (
-                <li
-                  key={s.id}
-                  data-session-id={s.id}
-                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
-                  draggable={!isClosing && !readOnlySessionView}
-                  onDragStart={(e) => dragSessionStart(s.id, e)}
-                  onDragOver={(e) => dragSessionOver(s.id, e)}
-                  onDrop={(e) => dropSession(s.id, e)}
-                  onDragEnd={dragSessionEnd}
-                  onClick={isClosing ? undefined : (e) => openSession(s.id, e)}
-                  title={sidebarCollapsed ? `${sessionDisplayName(s)} (${statusLabel})` : undefined}
-                >
-                  <SessionAvatarIcon avatar={avatar} className="session-avatar" />
-                  <div className="session-row-top">
-                    {/* Session name is now a read-only label here; rename
+                const isLive = s.status === "Active";
+                const isClosing = closingIds.has(s.id);
+                const isActive = active === s.id && !isClosing;
+                const avatar = getSessionAvatarByID(s.agent_avatar_id);
+                const statusDotClass = sessionStatusDotClass(
+                  s,
+                  sessionActivities[s.id],
+                );
+                const statusLabel = sessionStatusLabel(
+                  s,
+                  sessionActivities[s.id],
+                );
+                const skillStateClass = sessionSkillStateClass(s);
+                return (
+                  <li
+                    key={s.id}
+                    data-session-id={s.id}
+                    className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                    draggable={!isClosing && !readOnlySessionView}
+                    onDragStart={(e) => dragSessionStart(s.id, e)}
+                    onDragOver={(e) => dragSessionOver(s.id, e)}
+                    onDrop={(e) => dropSession(s.id, e)}
+                    onDragEnd={dragSessionEnd}
+                    onClick={
+                      isClosing ? undefined : (e) => openSession(s.id, e)
+                    }
+                    title={
+                      sidebarCollapsed
+                        ? `${sessionDisplayName(s)} (${statusLabel})`
+                        : undefined
+                    }
+                  >
+                    <SessionAvatarIcon
+                      avatar={avatar}
+                      className="session-avatar"
+                    />
+                    <div className="session-row-top">
+                      {/* Session name is now a read-only label here; rename
                         lives in the chat-pane header (see ChatPane's
                         run-header-title). This avoids the prior
                         sidebar-inline-edit input that opened on a row click
                         and lost typed characters whenever the pod-state
                         re-render or refresh fired underneath it. */}
-                    <span
-                      className="session-open"
-                      title={isClosing ? "session is closing" : defaultSessionName(s)}
-                    >
-                      <span className="session-id">{sessionDisplayName(s)}</span>
-                    </span>
-                    <button
-                      className="session-delete"
-                      onClick={(e) => { e.stopPropagation(); deleteSession(s.id); }}
-                      disabled={isClosing || readOnlySessionView}
-                      title={isClosing ? "closing session" : "delete session"}
-                      aria-label={isClosing ? "closing session" : "delete session"}
-                    >
-                      {isClosing ? <span className="session-delete-spinner" /> : <IconClose />}
-                    </button>
-                  </div>
-                  <div className="session-row-bottom">
-                    <span
-                      className={statusDotClass}
-                      title={statusLabel}
-                      aria-label={`status: ${statusLabel}`}
-                    />
-                    <ModeChip mode={s.mode} interaction={sessionInteractionForSession(s)} />
-                    <SessionStats session={s} />
-                    {isClosing && <span className="session-closing-chip">closing</span>}
-                    {CONFIG_MODES.has(s.mode) && (
-                      <button
-                        className="session-action"
-                        onClick={(e) => { e.stopPropagation(); saveCredentials(s.id); }}
-                        disabled={busy || !isLive || isClosing || readOnlySessionView}
+                      <span
+                        className="session-open"
                         title={
-                          s.mode === "codex_config"
-                            ? "capture ~/.codex/auth.json from this pod and write it to KV"
-                            : "capture ~/.claude/.credentials.json from this pod and write it to KV"
+                          isClosing
+                            ? "session is closing"
+                            : defaultSessionName(s)
                         }
                       >
-                        save
+                        <span className="session-id">
+                          {sessionDisplayName(s)}
+                        </span>
+                      </span>
+                      <button
+                        className="session-delete"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteSession(s.id);
+                        }}
+                        disabled={isClosing || readOnlySessionView}
+                        title={isClosing ? "closing session" : "delete session"}
+                        aria-label={
+                          isClosing ? "closing session" : "delete session"
+                        }
+                      >
+                        {isClosing ? (
+                          <span className="session-delete-spinner" />
+                        ) : (
+                          <IconClose />
+                        )}
                       </button>
-                    )}
-                  </div>
-                </li>
-              );
+                    </div>
+                    <div className="session-row-bottom">
+                      <span
+                        className={statusDotClass}
+                        title={statusLabel}
+                        aria-label={`status: ${statusLabel}`}
+                      />
+                      <ModeChip
+                        mode={s.mode}
+                        interaction={sessionInteractionForSession(s)}
+                      />
+                      <SessionStats session={s} />
+                      {isClosing && (
+                        <span className="session-closing-chip">closing</span>
+                      )}
+                      {CONFIG_MODES.has(s.mode) && (
+                        <button
+                          className="session-action"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            saveCredentials(s.id);
+                          }}
+                          disabled={
+                            busy || !isLive || isClosing || readOnlySessionView
+                          }
+                          title={
+                            s.mode === "codex_config"
+                              ? "capture ~/.codex/auth.json from this pod and write it to KV"
+                              : "capture ~/.claude/.credentials.json from this pod and write it to KV"
+                          }
+                        >
+                          save
+                        </button>
+                      )}
+                    </div>
+                  </li>
+                );
               })
             )}
           </ul>
@@ -18540,7 +20828,9 @@ function AuthenticatedApp() {
             <span className="profile-text">
               <span className="profile-name">{user.name || user.email}</span>
             </span>
-            <span className="profile-kebab"><IconKebab /></span>
+            <span className="profile-kebab">
+              <IconKebab />
+            </span>
           </button>
           {profileMenuOpen && (
             <ul className="dropdown dropdown-profile" role="menu">
@@ -18566,74 +20856,85 @@ function AuthenticatedApp() {
           // about-to-be-created session can be named before launch.
           <WorkspaceShell
             className="run-panel-home"
-            bodyClassName={homeActiveTab === "chat" ? "run-main-home" : undefined}
+            bodyClassName={
+              homeActiveTab === "chat" ? "run-main-home" : undefined
+            }
             bodyRef={homeBodyRef}
-            bodyAriaLabel={homeActiveTab === "chat" ? "New session setup" : "Workspace panel"}
+            bodyAriaLabel={
+              homeActiveTab === "chat" ? "New session setup" : "Workspace panel"
+            }
             title={<WorkspaceTitleSpacer />}
-            tabs={(<>
-              {homeActiveTab !== "chat" && (
-                <button
-                  type="button"
-                  className="run-tab run-tab-back"
-                  onClick={() => setHomeActiveTab("chat")}
-                  aria-label="Back to chat"
-                  title="Back to chat"
-                >
-                  <ArrowLeftIcon
-                    className="run-tab-icon"
-                    strokeWidth={2.2}
-                    aria-hidden="true"
-                  />
-                  <span>Back</span>
-                </button>
-              )}
-              <RunHeaderOverflowMenu
-                triggerActive={homeActiveTab !== "chat"}
-                triggerAttention={adminObservabilityAttention}
-                turns={{
-                  active: false,
-                  disabled: true,
-                  title: "Turns are available once the agent has turn activity",
-                  onOpen: () => undefined,
-                }}
-                background={{
-                  active: false,
-                  count: 0,
-                  disabled: true,
-                  title: "Background activity is available once the session starts",
-                  onOpen: () => undefined,
-                }}
-                files={{
-                  active: false,
-                  disabled: true,
-                  title: "Files are available once the session starts",
-                  onOpen: () => undefined,
-                }}
-                sessionData={{
-                  active: false,
-                  disabled: true,
-                  title: "Session data is available once the session starts",
-                  onOpen: () => undefined,
-                }}
-                settingsActive={homeActiveTab === "settings"}
-                helpActive={homeActiveTab === "help"}
-                onSettings={() =>
-                  setHomeActiveTab((current) =>
-                    current === "settings" ? "chat" : "settings"
-                  )
-                }
-                onHelp={() =>
-                  setHomeActiveTab((current) =>
-                    current === "help" ? "chat" : "help"
-                  )
-                }
-              />
-            </>)}
+            tabs={
+              <>
+                {homeActiveTab !== "chat" && (
+                  <button
+                    type="button"
+                    className="run-tab run-tab-back"
+                    onClick={() => setHomeActiveTab("chat")}
+                    aria-label="Back to chat"
+                    title="Back to chat"
+                  >
+                    <ArrowLeftIcon
+                      className="run-tab-icon"
+                      strokeWidth={2.2}
+                      aria-hidden="true"
+                    />
+                    <span>Back</span>
+                  </button>
+                )}
+                <RunHeaderOverflowMenu
+                  triggerActive={homeActiveTab !== "chat"}
+                  triggerAttention={adminObservabilityAttention}
+                  turns={{
+                    active: false,
+                    disabled: true,
+                    title:
+                      "Turns are available once the agent has turn activity",
+                    onOpen: () => undefined,
+                  }}
+                  background={{
+                    active: false,
+                    count: 0,
+                    disabled: true,
+                    title:
+                      "Background activity is available once the session starts",
+                    onOpen: () => undefined,
+                  }}
+                  files={{
+                    active: false,
+                    disabled: true,
+                    title: "Files are available once the session starts",
+                    onOpen: () => undefined,
+                  }}
+                  sessionData={{
+                    active: false,
+                    disabled: true,
+                    title: "Session data is available once the session starts",
+                    onOpen: () => undefined,
+                  }}
+                  settingsActive={homeActiveTab === "settings"}
+                  helpActive={homeActiveTab === "help"}
+                  onSettings={() =>
+                    setHomeActiveTab((current) =>
+                      current === "settings" ? "chat" : "settings",
+                    )
+                  }
+                  onHelp={() =>
+                    setHomeActiveTab((current) =>
+                      current === "help" ? "chat" : "help",
+                    )
+                  }
+                />
+              </>
+            }
             composerVisible={homeActiveTab === "chat"}
             composerWrapRef={homeComposerWrapRef}
-            composerWrapClassName={homeDragActive ? "run-composer-wrap-drag" : ""}
+            composerWrapClassName={
+              homeDragActive ? "run-composer-wrap-drag" : ""
+            }
             onComposerWrapDragOver={(e) => {
-              if (!sessionModeSupportsWorkspaceFiles(defaultSessionMode)) return;
+              if (!sessionModeSupportsWorkspaceFiles(defaultSessionMode))
+                return;
               e.preventDefault();
               if (!homeDragActive) setHomeDragActive(true);
             }}
@@ -18641,13 +20942,15 @@ function AuthenticatedApp() {
               if (e.currentTarget === e.target) setHomeDragActive(false);
             }}
             onComposerWrapDrop={(e) => {
-              if (!sessionModeSupportsWorkspaceFiles(defaultSessionMode)) return;
+              if (!sessionModeSupportsWorkspaceFiles(defaultSessionMode))
+                return;
               e.preventDefault();
               setHomeDragActive(false);
               addHomeAttachments(e.dataTransfer?.files ?? null);
             }}
             onComposerWrapPaste={(e) => {
-              if (!sessionModeSupportsWorkspaceFiles(defaultSessionMode)) return;
+              if (!sessionModeSupportsWorkspaceFiles(defaultSessionMode))
+                return;
               const items = e.clipboardData?.items;
               if (!items) return;
               const fs: File[] = [];
@@ -18682,322 +20985,433 @@ function AuthenticatedApp() {
               ) : homeActiveTab === "help" ? (
                 <RunHelpScreen />
               ) : (
-              <>
-                <div className="home-inner">
-                <section className="home-hero" aria-labelledby="home-title">
-                  <div>
-                    <h2 id="home-title" className="home-title">What do you want to build?</h2>
-                    <p className="home-sub">
-                      Type below to start a session with the selected runtime.
-                    </p>
-                  </div>
-                  <span className="home-count">{sessions.length} session{sessions.length === 1 ? "" : "s"}</span>
-                </section>
+                <>
+                  <div className="home-inner">
+                    <section className="home-hero" aria-labelledby="home-title">
+                      <div>
+                        <h2 id="home-title" className="home-title">
+                          What do you want to build?
+                        </h2>
+                        <p className="home-sub">
+                          Type below to start a session with the selected
+                          runtime.
+                        </p>
+                      </div>
+                      <span className="home-count">
+                        {sessions.length} session
+                        {sessions.length === 1 ? "" : "s"}
+                      </span>
+                    </section>
 
-                <div className="home-grid">
-                <section className="home-panel" aria-labelledby="home-start-title">
-                  <div className="home-panel-head">
-                    <h3 id="home-start-title">Configuration</h3>
-                    <span className="home-panel-meta">{MODE_LABELS[defaultSessionMode]}</span>
-                  </div>
-                  <div className="home-choice-grid" role="group" aria-label="provider">
-                    {PROVIDERS.map((provider) => {
-                      const mode = defaultModeFor(provider, defaultInteraction);
-                      const selected = provider === selectedProvider;
-                      return (
-                        <button
-                          key={provider}
-                          className={`home-choice${selected ? " is-selected" : ""}`}
-                          onClick={() => setDefaultProvider(provider)}
-                          disabled={busy}
-                          aria-pressed={selected}
-                          title={MODE_LABELS[mode]}
-                        >
-                          <ProviderIcon provider={provider} className="home-choice-icon" />
-                          <span>{PROVIDER_LABELS[provider]}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="home-choice-grid" role="group" aria-label="interaction">
-                    {INTERACTION_OPTIONS.map((interaction) => {
-                      const unavailable =
-                        PROVIDER_INTERACTION_MODES[selectedProvider][interaction] == null;
-                      const selected = defaultInteraction === interaction && !unavailable;
-                      return (
-                        <button
-                          key={interaction}
-                          className={`home-choice${selected ? " is-selected" : ""}`}
-                          onClick={() => selectDefaultInteraction(interaction)}
-                          disabled={busy || unavailable}
-                          aria-pressed={selected}
-                          title={unavailable ? "not available for this provider" : INTERACTION_LABELS[interaction]}
-                        >
-                          <InteractionIcon interaction={interaction} className="home-choice-icon" />
-                          <span>{INTERACTION_LABELS[interaction]}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  <div className="home-panel-head home-panel-subhead">
-                    <h3>Initial message</h3>
-                    <span className="home-panel-meta">{selectedInitialMessageMode.label}</span>
-                  </div>
-                  <div className="home-initial-grid" role="group" aria-label="initial message type">
-                    {INITIAL_MESSAGE_MODE_OPTIONS.map((option) => {
-                      const selected = option.id === runPrefs.initialMessageMode;
-                      const InitialIcon = option.icon;
-                      return (
-                        <button
-                          key={option.id}
-                          className={`home-model home-initial-option${selected ? " is-selected" : ""}`}
-                          onClick={() => setRunPref("initialMessageMode", option.id)}
-                          disabled={busy}
-                          aria-pressed={selected}
-                          title={option.hint}
-                        >
-                          <InitialIcon className="home-initial-icon" aria-hidden="true" />
-                          <span className="home-initial-main">
-                            <span className="home-model-title">{option.label}</span>
-                            <span className="home-model-sub">{option.hint}</span>
+                    <div className="home-grid">
+                      <section
+                        className="home-panel"
+                        aria-labelledby="home-start-title"
+                      >
+                        <div className="home-panel-head">
+                          <h3 id="home-start-title">Configuration</h3>
+                          <span className="home-panel-meta">
+                            {MODE_LABELS[defaultSessionMode]}
                           </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  {homeModelApplies && (
-                    <>
-                      <div className="home-panel-head home-panel-subhead">
-                        <h3>Model</h3>
-                        <span className="home-panel-meta">
-                          {selectedProvider === "anthropic"
-                            ? CLAUDE_EFFORTS.find((effort) => effort.id === selectedHomeEffortId)?.label
-                            : selectedProvider === "codex"
-                              ? CODEX_EFFORTS.find((effort) => effort.id === selectedHomeEffortId)?.label
-                              : ""}
-                        </span>
-                      </div>
-                      <div className="home-model-list" role="group" aria-label="model">
-                        {homeModelOptions.map((model) => {
-                          const selected = model.id === selectedHomeModelId;
-                          return (
-                            <button
-                              key={model.id}
-                              className={`home-model${selected ? " is-selected" : ""}`}
-                              onClick={() => {
-                                if (selectedProvider === "anthropic") {
-                                  setRunPref("claudeModelId", model.id);
-                                } else if (selectedProvider === "codex") {
-                                  setRunPref("codexModelId", model.id);
-                                }
-                              }}
-                              aria-pressed={selected}
-                            >
-                              <span className="home-model-title">{model.label}</span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                      {(selectedProvider === "anthropic" || selectedProvider === "codex") && (
-                        <div className="home-effort-grid" role="group" aria-label="effort">
-                          {(selectedProvider === "anthropic" ? CLAUDE_EFFORTS : CODEX_EFFORTS).map((effort) => {
-                            const selected = effort.id === selectedHomeEffortId;
+                        </div>
+                        <div
+                          className="home-choice-grid"
+                          role="group"
+                          aria-label="provider"
+                        >
+                          {PROVIDERS.map((provider) => {
+                            const mode = defaultModeFor(
+                              provider,
+                              defaultInteraction,
+                            );
+                            const selected = provider === selectedProvider;
                             return (
                               <button
-                                key={effort.id}
-                                className={`home-model home-effort${selected ? " is-selected" : ""}`}
-                                onClick={() => {
-                                  if (selectedProvider === "anthropic") {
-                                    setRunPref("claudeEffort", effort.id);
-                                  } else if (selectedProvider === "codex") {
-                                    setRunPref("codexEffort", effort.id);
-                                  }
-                                }}
+                                key={provider}
+                                className={`home-choice${selected ? " is-selected" : ""}`}
+                                onClick={() => setDefaultProvider(provider)}
+                                disabled={busy}
                                 aria-pressed={selected}
-                                title={effort.hint}
+                                title={MODE_LABELS[mode]}
                               >
-                                <span className="home-model-title">{effort.label}</span>
-                                {effort.hint && <span className="home-model-sub">{effort.hint}</span>}
+                                <ProviderIcon
+                                  provider={provider}
+                                  className="home-choice-icon"
+                                />
+                                <span>{PROVIDER_LABELS[provider]}</span>
                               </button>
                             );
                           })}
                         </div>
-                      )}
-                    </>
-                  )}
-                </section>
+                        <div
+                          className="home-choice-grid"
+                          role="group"
+                          aria-label="interaction"
+                        >
+                          {INTERACTION_OPTIONS.map((interaction) => {
+                            const unavailable =
+                              PROVIDER_INTERACTION_MODES[selectedProvider][
+                                interaction
+                              ] == null;
+                            const selected =
+                              defaultInteraction === interaction &&
+                              !unavailable;
+                            return (
+                              <button
+                                key={interaction}
+                                className={`home-choice${selected ? " is-selected" : ""}`}
+                                onClick={() =>
+                                  selectDefaultInteraction(interaction)
+                                }
+                                disabled={busy || unavailable}
+                                aria-pressed={selected}
+                                title={
+                                  unavailable
+                                    ? "not available for this provider"
+                                    : INTERACTION_LABELS[interaction]
+                                }
+                              >
+                                <InteractionIcon
+                                  interaction={interaction}
+                                  className="home-choice-icon"
+                                />
+                                <span>{INTERACTION_LABELS[interaction]}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        <div className="home-panel-head home-panel-subhead">
+                          <h3>Initial message</h3>
+                          <span className="home-panel-meta">
+                            {selectedInitialMessageMode.label}
+                          </span>
+                        </div>
+                        <div
+                          className="home-initial-grid"
+                          role="group"
+                          aria-label="initial message type"
+                        >
+                          {INITIAL_MESSAGE_MODE_OPTIONS.map((option) => {
+                            const selected =
+                              option.id === runPrefs.initialMessageMode;
+                            const InitialIcon = option.icon;
+                            return (
+                              <button
+                                key={option.id}
+                                className={`home-model home-initial-option${selected ? " is-selected" : ""}`}
+                                onClick={() =>
+                                  setRunPref("initialMessageMode", option.id)
+                                }
+                                disabled={busy}
+                                aria-pressed={selected}
+                                title={option.hint}
+                              >
+                                <InitialIcon
+                                  className="home-initial-icon"
+                                  aria-hidden="true"
+                                />
+                                <span className="home-initial-main">
+                                  <span className="home-model-title">
+                                    {option.label}
+                                  </span>
+                                  <span className="home-model-sub">
+                                    {option.hint}
+                                  </span>
+                                </span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {homeModelApplies && (
+                          <>
+                            <div className="home-panel-head home-panel-subhead">
+                              <h3>Model</h3>
+                              <span className="home-panel-meta">
+                                {selectedProvider === "anthropic"
+                                  ? CLAUDE_EFFORTS.find(
+                                      (effort) =>
+                                        effort.id === selectedHomeEffortId,
+                                    )?.label
+                                  : selectedProvider === "codex"
+                                    ? CODEX_EFFORTS.find(
+                                        (effort) =>
+                                          effort.id === selectedHomeEffortId,
+                                      )?.label
+                                    : ""}
+                              </span>
+                            </div>
+                            <div
+                              className="home-model-list"
+                              role="group"
+                              aria-label="model"
+                            >
+                              {homeModelOptions.map((model) => {
+                                const selected =
+                                  model.id === selectedHomeModelId;
+                                return (
+                                  <button
+                                    key={model.id}
+                                    className={`home-model${selected ? " is-selected" : ""}`}
+                                    onClick={() => {
+                                      if (selectedProvider === "anthropic") {
+                                        setRunPref("claudeModelId", model.id);
+                                      } else if (selectedProvider === "codex") {
+                                        setRunPref("codexModelId", model.id);
+                                      }
+                                    }}
+                                    aria-pressed={selected}
+                                  >
+                                    <span className="home-model-title">
+                                      {model.label}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {(selectedProvider === "anthropic" ||
+                              selectedProvider === "codex") && (
+                              <div
+                                className="home-effort-grid"
+                                role="group"
+                                aria-label="effort"
+                              >
+                                {(selectedProvider === "anthropic"
+                                  ? CLAUDE_EFFORTS
+                                  : CODEX_EFFORTS
+                                ).map((effort) => {
+                                  const selected =
+                                    effort.id === selectedHomeEffortId;
+                                  return (
+                                    <button
+                                      key={effort.id}
+                                      className={`home-model home-effort${selected ? " is-selected" : ""}`}
+                                      onClick={() => {
+                                        if (selectedProvider === "anthropic") {
+                                          setRunPref("claudeEffort", effort.id);
+                                        } else if (
+                                          selectedProvider === "codex"
+                                        ) {
+                                          setRunPref("codexEffort", effort.id);
+                                        }
+                                      }}
+                                      aria-pressed={selected}
+                                      title={effort.hint}
+                                    >
+                                      <span className="home-model-title">
+                                        {effort.label}
+                                      </span>
+                                      {effort.hint && (
+                                        <span className="home-model-sub">
+                                          {effort.hint}
+                                        </span>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </section>
 
-                <section className="home-panel home-panel-actions" aria-labelledby="home-actions-title">
-                  <div className="home-panel-head">
-                    <h3 id="home-actions-title">Setup</h3>
-                  </div>
-                  <div className="home-quick-actions">
-                    <button
-                      className="home-quick-action"
-                      onClick={() => createSession("api_key")}
-                      disabled={busy}
-                    >
-                      <IconKey className="home-quick-icon" />
-                      <span className="home-quick-main">
-                        <span className="home-quick-title">API key</span>
-                        <span className="home-quick-sub">{MODE_HINTS["api_key"]}</span>
-                      </span>
-                    </button>
-                    {configMode && (
-                      <button
-                        className="home-quick-action"
-                        onClick={() => createSession(configMode)}
-                        disabled={busy}
+                      <section
+                        className="home-panel home-panel-actions"
+                        aria-labelledby="home-actions-title"
                       >
-                        <IconWrench className="home-quick-icon" />
-                        <span className="home-quick-main">
-                          <span className="home-quick-title">{MODE_LABELS[configMode]}</span>
-                          <span className="home-quick-sub">{MODE_HINTS[configMode]}</span>
-                        </span>
-                      </button>
-                    )}
-                  </div>
-                  {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
-                    <RepoPicker
-                      selected={selectedRepos}
-                      pinned={pinnedRepos}
-                      recent={visibleRecentRepos}
-                      allRepos={allRepos}
-                      onLoadAllRepos={loadAllRepos}
-                      open={repoPickerOpen}
-                      input={repoInput}
-                      error={repoError}
-                      busy={busy || pinnedReposSaving}
-                      onToggleOpen={() => {
-                        setRepoPickerOpen((prev) => !prev);
-                        setRepoError(null);
-                      }}
-                      onClose={() => {
-                        setRepoPickerOpen(false);
-                        setRepoError(null);
-                      }}
-                      onInputChange={(v) => {
-                        setRepoInput(v);
-                        setRepoError(null);
-                      }}
-                      onAdd={addSelectedRepo}
-                      onAddShortcut={addSelectedRepo}
-                      onTogglePin={togglePinnedRepo}
-                      onReorderPin={reorderPinnedRepo}
-                      onRemove={(slug) => {
-                        setSelectedRepos((prev) => removeRepoSlug(prev, slug));
-                        setRepoError(null);
-                      }}
-                      onDismissRecent={dismissRecentRepo}
-                    />
-                  )}
-                  <div className="home-bug-label-row">
-                    <BugLabelPicker
-                      value=""
-                      disabled={busy}
-                      requestPath={localSessionPath}
-                      onSave={addHomeBugLabel}
-                      allowClear={false}
-                    />
-                    <span className="home-bug-label-summary">
-                      {homeBugLabels.length === 0
-                        ? "No bug labels"
-                        : `${homeBugLabels.length} bug label${homeBugLabels.length === 1 ? "" : "s"}`}
-                    </span>
-                  </div>
-                  {homeBugLabels.length > 0 && (
-                    <ul className="home-bug-label-chips" role="list" aria-label="Selected bug labels">
-                      {homeBugLabels.map((label) => (
-                        <li key={label} className="home-bug-label-chip">
-                          <span className="home-bug-label-chip-name">{label}</span>
+                        <div className="home-panel-head">
+                          <h3 id="home-actions-title">Setup</h3>
+                        </div>
+                        <div className="home-quick-actions">
+                          <button
+                            className="home-quick-action"
+                            onClick={() => createSession("api_key")}
+                            disabled={busy}
+                          >
+                            <IconKey className="home-quick-icon" />
+                            <span className="home-quick-main">
+                              <span className="home-quick-title">API key</span>
+                              <span className="home-quick-sub">
+                                {MODE_HINTS["api_key"]}
+                              </span>
+                            </span>
+                          </button>
+                          {configMode && (
+                            <button
+                              className="home-quick-action"
+                              onClick={() => createSession(configMode)}
+                              disabled={busy}
+                            >
+                              <IconWrench className="home-quick-icon" />
+                              <span className="home-quick-main">
+                                <span className="home-quick-title">
+                                  {MODE_LABELS[configMode]}
+                                </span>
+                                <span className="home-quick-sub">
+                                  {MODE_HINTS[configMode]}
+                                </span>
+                              </span>
+                            </button>
+                          )}
+                        </div>
+                        {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
+                          <RepoPicker
+                            selected={selectedRepos}
+                            pinned={pinnedRepos}
+                            recent={visibleRecentRepos}
+                            allRepos={allRepos}
+                            onLoadAllRepos={loadAllRepos}
+                            open={repoPickerOpen}
+                            input={repoInput}
+                            error={repoError}
+                            busy={busy || pinnedReposSaving}
+                            onToggleOpen={() => {
+                              setRepoPickerOpen((prev) => !prev);
+                              setRepoError(null);
+                            }}
+                            onClose={() => {
+                              setRepoPickerOpen(false);
+                              setRepoError(null);
+                            }}
+                            onInputChange={(v) => {
+                              setRepoInput(v);
+                              setRepoError(null);
+                            }}
+                            onAdd={addSelectedRepo}
+                            onAddShortcut={addSelectedRepo}
+                            onTogglePin={togglePinnedRepo}
+                            onReorderPin={reorderPinnedRepo}
+                            onRemove={(slug) => {
+                              setSelectedRepos((prev) =>
+                                removeRepoSlug(prev, slug),
+                              );
+                              setRepoError(null);
+                            }}
+                            onDismissRecent={dismissRecentRepo}
+                          />
+                        )}
+                        <div className="home-bug-label-row">
+                          <BugLabelPicker
+                            value=""
+                            disabled={busy}
+                            requestPath={localSessionPath}
+                            onSave={addHomeBugLabel}
+                            allowClear={false}
+                          />
+                          <span className="home-bug-label-summary">
+                            {homeBugLabels.length === 0
+                              ? "No bug labels"
+                              : `${homeBugLabels.length} bug label${homeBugLabels.length === 1 ? "" : "s"}`}
+                          </span>
+                        </div>
+                        {homeBugLabels.length > 0 && (
+                          <ul
+                            className="home-bug-label-chips"
+                            role="list"
+                            aria-label="Selected bug labels"
+                          >
+                            {homeBugLabels.map((label) => (
+                              <li key={label} className="home-bug-label-chip">
+                                <span className="home-bug-label-chip-name">
+                                  {label}
+                                </span>
+                                <button
+                                  type="button"
+                                  className="home-bug-label-chip-remove"
+                                  onClick={() => removeHomeBugLabel(label)}
+                                  disabled={busy}
+                                  aria-label={`Remove ${label}`}
+                                  title={`Remove ${label}`}
+                                >
+                                  <XIcon size={11} aria-hidden="true" />
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                        {spireLensMcpAvailable && (
                           <button
                             type="button"
-                            className="home-bug-label-chip-remove"
-                            onClick={() => removeHomeBugLabel(label)}
+                            className={`home-quick-action home-capability-action${homeSpireLensMcpEnabled ? " is-selected" : ""}`}
+                            onClick={() =>
+                              setHomeSpireLensMcpEnabled((value) => !value)
+                            }
                             disabled={busy}
-                            aria-label={`Remove ${label}`}
-                            title={`Remove ${label}`}
+                            aria-pressed={homeSpireLensMcpEnabled}
+                            title="Add the SpireLens game-host MCP to this session"
                           >
-                            <XIcon size={11} aria-hidden="true" />
+                            <McpIcon className="home-quick-icon" />
+                            <span className="home-quick-main">
+                              <span className="home-quick-title">
+                                SpireLens MCP
+                              </span>
+                              <span className="home-quick-sub">
+                                Game host tools
+                              </span>
+                            </span>
                           </button>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {spireLensMcpAvailable && (
-                    <button
-                      type="button"
-                      className={`home-quick-action home-capability-action${homeSpireLensMcpEnabled ? " is-selected" : ""}`}
-                      onClick={() => setHomeSpireLensMcpEnabled((value) => !value)}
-                      disabled={busy}
-                      aria-pressed={homeSpireLensMcpEnabled}
-                      title="Add the SpireLens game-host MCP to this session"
-                    >
-                      <McpIcon className="home-quick-icon" />
-                      <span className="home-quick-main">
-                        <span className="home-quick-title">SpireLens MCP</span>
-                        <span className="home-quick-sub">Game host tools</span>
-                      </span>
-                    </button>
-                  )}
-                </section>
-              </div>
-                </div>
-              </>
+                        )}
+                      </section>
+                    </div>
+                  </div>
+                </>
               )
             }
-            composerAbove={(<>
-              {homeDragActive && (
-                <div className="run-composer-drop-overlay" aria-hidden="true">
-                  Drop to attach
-                </div>
-              )}
-              {homeAttachments.length > 0 && (
-                <div className="run-composer-attachments">
-                  {homeAttachments.map((a) => (
-                    <div
-                      key={a.id}
-                      className="run-composer-chip run-composer-chip-ready"
-                      title={attachmentDisplayTitle(a)}
-                    >
-                      {a.previewUrl ? (
-                        <img
-                          className="run-composer-chip-thumb"
-                          src={a.previewUrl}
-                          alt=""
-                          aria-hidden="true"
-                        />
-                      ) : (
-                        <FileIcon size={14} aria-hidden="true" />
-                      )}
-                      <span className="run-composer-chip-name">{a.label}</span>
-                      <button
-                        type="button"
-                        className="run-composer-chip-remove"
-                        onMouseDown={(e) => {
-                          e.preventDefault();
-                          removeHomeAttachment(a.id);
-                        }}
-                        aria-label={`Remove ${a.label}`}
+            composerAbove={
+              <>
+                {homeDragActive && (
+                  <div className="run-composer-drop-overlay" aria-hidden="true">
+                    Drop to attach
+                  </div>
+                )}
+                {homeAttachments.length > 0 && (
+                  <div className="run-composer-attachments">
+                    {homeAttachments.map((a) => (
+                      <div
+                        key={a.id}
+                        className="run-composer-chip run-composer-chip-ready"
+                        title={attachmentDisplayTitle(a)}
                       >
-                        <XIcon size={11} aria-hidden="true" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <input
-                ref={homeFileInputRef}
-                type="file"
-                multiple
-                style={{ display: "none" }}
-                onChange={(e) => {
-                  addHomeAttachments(e.target.files);
-                  e.target.value = "";
-                }}
-              />
-            </>)}
-            composer={(
+                        {a.previewUrl ? (
+                          <img
+                            className="run-composer-chip-thumb"
+                            src={a.previewUrl}
+                            alt=""
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <FileIcon size={14} aria-hidden="true" />
+                        )}
+                        <span className="run-composer-chip-name">
+                          {a.label}
+                        </span>
+                        <button
+                          type="button"
+                          className="run-composer-chip-remove"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            removeHomeAttachment(a.id);
+                          }}
+                          aria-label={`Remove ${a.label}`}
+                        >
+                          <XIcon size={11} aria-hidden="true" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <input
+                  ref={homeFileInputRef}
+                  type="file"
+                  multiple
+                  style={{ display: "none" }}
+                  onChange={(e) => {
+                    addHomeAttachments(e.target.files);
+                    e.target.value = "";
+                  }}
+                />
+              </>
+            }
+            composer={
               <ChatComposer
                 className="run-composer-home run-composer-interactive"
                 placeholder={RUN_COMPOSER_PLACEHOLDER}
@@ -19005,7 +21419,9 @@ function AuthenticatedApp() {
                   const trimmed = text.trim();
                   const initialMode = runPrefs.initialMessageMode;
                   const mode =
-                    trimmed || homeAttachments.length > 0 || initialMode !== "direct"
+                    trimmed ||
+                    homeAttachments.length > 0 ||
+                    initialMode !== "direct"
                       ? chatModeForHomePrompt(defaultSessionMode)
                       : defaultSessionMode;
                   void createSession(
@@ -19023,11 +21439,15 @@ function AuthenticatedApp() {
                 toolButtons={
                   <ComposerToolButtons
                     attach={{
-                      title: sessionModeSupportsWorkspaceFiles(defaultSessionMode)
+                      title: sessionModeSupportsWorkspaceFiles(
+                        defaultSessionMode,
+                      )
                         ? "Attach files for the first turn"
                         : "File attachments require a session workspace",
                       onClick: () => homeFileInputRef.current?.click(),
-                      disabled: busy || !sessionModeSupportsWorkspaceFiles(defaultSessionMode),
+                      disabled:
+                        busy ||
+                        !sessionModeSupportsWorkspaceFiles(defaultSessionMode),
                     }}
                     cost={{
                       amountUsd: 0,
@@ -19053,16 +21473,18 @@ function AuthenticatedApp() {
                     pullRequest={{}}
                     slash={{
                       disabled: true,
-                      title: "Slash commands appear once your session has skills",
+                      title:
+                        "Slash commands appear once your session has skills",
                     }}
                     mcp={{
                       disabled: true,
-                      title: "MCP servers appear once your session is connected",
+                      title:
+                        "MCP servers appear once your session is connected",
                     }}
                   />
                 }
               />
-            )}
+            }
           />
         ) : (
           <div className="terminals">
@@ -19070,11 +21492,7 @@ function AuthenticatedApp() {
               .filter((s) => mounted.has(s.id))
               .map((s) =>
                 CHAT_MODES.has(s.mode) ? (
-                  <div
-                    key={s.id}
-                    className="run-body"
-                    hidden={active !== s.id}
-                  >
+                  <div key={s.id} className="run-body" hidden={active !== s.id}>
                     <ChatPane
                       session={s}
                       visible={active === s.id}
@@ -19092,28 +21510,33 @@ function AuthenticatedApp() {
                       setRunPref={setRunPref}
                       user={user!}
                       autoFocusComposer={autoFocusComposerSessionId === s.id}
-                      onAutoFocusComposerConsumed={() => setAutoFocusComposerSessionId(null)}
+                      onAutoFocusComposerConsumed={() =>
+                        setAutoFocusComposerSessionId(null)
+                      }
                       primeTurnCompleteSound={primeTurnCompleteSound}
                       playTurnCompleteSound={playTurnCompleteSound}
                       adminControls={adminSettingsControls}
                       readOnly={readOnlySessionView}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
-                      sidebarTranscriptOpenRequest={sessionTranscriptOpenRequests[s.id] ?? 0}
+                      sidebarTranscriptOpenRequest={
+                        sessionTranscriptOpenRequests[s.id] ?? 0
+                      }
                     />
                   </div>
                 ) : (
-                  <div
-                    key={s.id}
-                    className="run-body"
-                    hidden={active !== s.id}
-                  >
+                  <div key={s.id} className="run-body" hidden={active !== s.id}>
                     {readOnlySessionView ? (
                       <section className="run-panel">
                         <main className="run-main">
-                          <div className="run-empty run-transcript-state" role="status">
+                          <div
+                            className="run-empty run-transcript-state"
+                            role="status"
+                          >
                             <strong>Read-only session</strong>
-                            <span>Terminal attach is unavailable from this scope.</span>
+                            <span>
+                              Terminal attach is unavailable from this scope.
+                            </span>
                           </div>
                         </main>
                       </section>
@@ -19121,7 +21544,7 @@ function AuthenticatedApp() {
                       <CliSession session={s} visible={active === s.id} />
                     )}
                   </div>
-                )
+                ),
               )}
           </div>
         )}

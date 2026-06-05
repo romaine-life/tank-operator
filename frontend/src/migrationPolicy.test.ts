@@ -3,7 +3,10 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 
 function readSource(path: string): string {
-  return readFileSync(new URL(path, import.meta.url), "utf8").replace(/\r\n/g, "\n");
+  return readFileSync(new URL(path, import.meta.url), "utf8").replace(
+    /\r\n/g,
+    "\n",
+  );
 }
 
 const appSource = readSource("./App.tsx");
@@ -11,30 +14,56 @@ const appRoutesSource = readSource("./appRoutes.ts");
 const authSource = readSource("./auth.ts");
 const conversationReducerSource = readSource("./conversationReducer.ts");
 const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
-const sessionEventStreamTelemetrySource = readSource("./sessionEventStreamTelemetry.ts");
-const sessionConnectionIndicatorSource = readSource("./sessionConnectionIndicator.ts");
+const sessionEventStreamTelemetrySource = readSource(
+  "./sessionEventStreamTelemetry.ts",
+);
+const sessionConnectionIndicatorSource = readSource(
+  "./sessionConnectionIndicator.ts",
+);
 const longChatDebugSource = readSource("./LongChatDebugPage.tsx");
 const sessionListDebugSource = readSource("./sessionListDebug.ts");
-const sessionListDebugRecorderSource = readSource("./sessionListDebugRecorder.ts");
+const sessionListDebugRecorderSource = readSource(
+  "./sessionListDebugRecorder.ts",
+);
 const sessionListDebugPageSource = readSource("./SessionListDebugPage.tsx");
-const sessionListDebugCaptureControlsSource = readSource("./SessionListDebugCaptureControls.tsx");
+const sessionListDebugCaptureControlsSource = readSource(
+  "./SessionListDebugCaptureControls.tsx",
+);
 const turnActivityStateSource = readSource("./turnActivityState.ts");
 const sessionAvatarsSource = readSource("./sessionAvatars.tsx");
 const adminAvatarManagerSource = readSource("./AdminAvatarManager.tsx");
 const mainSource = readSource("./main.tsx");
 const indexCssSource = readSource("./index.css");
 const styleguideIndexSource = readSource("./styleguide/index.tsx");
-const styleguideSessionLauncherSource = readSource("./styleguide/new-session-row.tsx");
-const styleguideRuntimeControlsSource = readSource("./styleguide/mode-dropdown.tsx");
+const styleguideSessionLauncherSource = readSource(
+  "./styleguide/new-session-row.tsx",
+);
+const styleguideRuntimeControlsSource = readSource(
+  "./styleguide/mode-dropdown.tsx",
+);
 const styleguideSessionRowSource = readSource("./styleguide/session-row.tsx");
-const styleguidePortfolioWorkspaceSource = readSource("./styleguide/portfolio-workspace.tsx");
-const styleguidePortfolioTranscriptSource = readSource("./styleguide/portfolio-transcript.tsx");
+const styleguidePortfolioWorkspaceSource = readSource(
+  "./styleguide/portfolio-workspace.tsx",
+);
+const styleguidePortfolioTranscriptSource = readSource(
+  "./styleguide/portfolio-transcript.tsx",
+);
 const styleguideSharedSource = readSource("./styleguide/shared.tsx");
-const sessionConfigMapSource = readSource("../../k8s/templates/session-configmap.yaml");
-const installTankDocsSource = readSource("../../k8s/session-config/install-tank-docs.sh");
-const agentRunnerLaunchSource = readSource("../../k8s/session-config/agent-runner-launch.sh");
-const codexRunnerLaunchSource = readSource("../../k8s/session-config/codex-runner-launch.sh");
-const defaultClaudeSource = readSource("../../k8s/session-config/default-claude.md");
+const sessionConfigMapSource = readSource(
+  "../../k8s/templates/session-configmap.yaml",
+);
+const installTankDocsSource = readSource(
+  "../../k8s/session-config/install-tank-docs.sh",
+);
+const agentRunnerLaunchSource = readSource(
+  "../../k8s/session-config/agent-runner-launch.sh",
+);
+const codexRunnerLaunchSource = readSource(
+  "../../k8s/session-config/codex-runner-launch.sh",
+);
+const defaultClaudeSource = readSource(
+  "../../k8s/session-config/default-claude.md",
+);
 const bundledQualityTimeframesSource = readSource(
   "../../k8s/session-config/docs/quality-timeframes.md",
 );
@@ -52,12 +81,24 @@ const chatScrollMetricsHandlerSource = readSource(
 );
 const appConfigMapSource = readSource("../../k8s/templates/app-configmap.yaml");
 const appDeploymentSource = readSource("../../k8s/templates/deployment.yaml");
-const tankServerGoSource = readSource("../../backend-go/cmd/tank-operator/server.go");
-const initialModeDiagnoseSource = readSource("../../k8s/app-config/initial-mode-diagnose.md");
-const initialModeBugReportSource = readSource("../../k8s/app-config/initial-mode-bug-report.md");
-const initialModeQualityGapsSource = readSource("../../k8s/app-config/initial-mode-quality-gaps.md");
-const initialModeGoLongSource = readSource("../../k8s/app-config/initial-mode-go-long.md");
-const initialModeTestSource = readSource("../../k8s/app-config/initial-mode-test.md");
+const tankServerGoSource = readSource(
+  "../../backend-go/cmd/tank-operator/server.go",
+);
+const initialModeDiagnoseSource = readSource(
+  "../../k8s/app-config/initial-mode-diagnose.md",
+);
+const initialModeBugReportSource = readSource(
+  "../../k8s/app-config/initial-mode-bug-report.md",
+);
+const initialModeQualityGapsSource = readSource(
+  "../../k8s/app-config/initial-mode-quality-gaps.md",
+);
+const initialModeGoLongSource = readSource(
+  "../../k8s/app-config/initial-mode-go-long.md",
+);
+const initialModeTestSource = readSource(
+  "../../k8s/app-config/initial-mode-test.md",
+);
 
 test("session activity is not refreshed by a steady interval", () => {
   assert.equal(appSource.includes("POLL_INTERVAL_MS"), false);
@@ -150,7 +191,9 @@ test("stop control waits for durable turn interruption", () => {
   const cancelRunBody = cancelRunMatch[1]!;
   assert.equal(cancelRunBody.includes("currentRunRef.current = null"), false);
   assert.equal(
-    cancelRunBody.includes('setRunStatus((prev) => (prev === "running" ? "done" : prev))'),
+    cancelRunBody.includes(
+      'setRunStatus((prev) => (prev === "running" ? "done" : prev))',
+    ),
     false,
   );
   // Post-migration: cancelRun does NOT set run status imperatively. The
@@ -207,47 +250,113 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
   assert.equal(appSource.includes("isPendingAskUserQuestionTool"), true);
   assert.equal(appSource.includes("pendingAskUserCount"), true);
   assert.match(appSource, /entries\.some\(isPendingAskUserQuestionTool\)/);
-  assert.match(appSource, /toolGroupDefaultOpen\(g\.entries, autoExpandTools, toolExpansionOverrides\)/);
-  assert.equal(appSource.includes("return autoExpand || isPendingAskUserQuestionTool(entry);"), true);
+  assert.match(
+    appSource,
+    /toolGroupDefaultOpen\(\s*g\.entries,\s*autoExpandTools,\s*toolExpansionOverrides,\s*\)/,
+  );
+  assert.equal(
+    appSource.includes(
+      "return autoExpand || isPendingAskUserQuestionTool(entry);",
+    ),
+    true,
+  );
 });
 
-test("AskUserQuestion handoff row is restored in transcript and answer form is owned by Turns", () => {
-  const messagesMatch = appSource.match(/export function RunMessages\([\s\S]*?\n}\n\nfunction AdminObservabilityPanel/);
+test("AskUserQuestion questions are the assistant message and the answer form is owned by Turns", () => {
+  const messagesMatch = appSource.match(
+    /export function RunMessages\([\s\S]*?\n}\n\nfunction AdminObservabilityPanel/,
+  );
   assert.ok(messagesMatch, "RunMessages source should be present");
   assert.equal(messagesMatch![0].includes("RunAwaitingInputCard"), false);
-  assert.equal(messagesMatch![0].includes("RunNeedsInputAnnouncement"), true);
+  assert.equal(messagesMatch![0].includes("RunNeedsInputAnnouncement"), false);
 
-  const transcriptActivityMatch = appSource.match(/function RunTurnActivityGroup\([\s\S]*?\n}\n\nfunction RunTurnActivityScreen/);
-  assert.ok(transcriptActivityMatch, "RunTurnActivityGroup source should be present");
-  assert.equal(transcriptActivityMatch![0].includes("RunAwaitingInputCard"), false);
-  assert.equal(transcriptActivityMatch![0].includes("RunNeedsInputAnnouncement"), true);
+  const transcriptActivityMatch = appSource.match(
+    /function RunTurnActivityGroup\([\s\S]*?\n}\n\nfunction RunTurnActivityScreen/,
+  );
+  assert.ok(
+    transcriptActivityMatch,
+    "RunTurnActivityGroup source should be present",
+  );
+  assert.equal(
+    transcriptActivityMatch![0].includes("RunAwaitingInputCard"),
+    true,
+  );
+  assert.equal(
+    transcriptActivityMatch![0].includes("RunNeedsInputAnnouncement"),
+    false,
+  );
 
-  const turnScreenMatch = appSource.match(/function RunTurnActivityScreen\([\s\S]*?\n}\n\nfunction rangeIntersectsNode/);
+  const turnScreenMatch = appSource.match(
+    /function RunTurnActivityScreen\([\s\S]*?\n}\n\nfunction rangeIntersectsNode/,
+  );
   assert.ok(turnScreenMatch, "RunTurnActivityScreen source should be present");
   assert.equal(turnScreenMatch![0].includes("RunAwaitingInputCard"), true);
   assert.equal(appSource.includes('kind === "question_set"'), true);
   assert.equal(appSource.includes("resetPage?: boolean"), true);
   assert.equal(appSource.includes("function RunAwaitingInputNotice"), false);
-  assert.equal(appSource.includes("function RunNeedsInputAnnouncement"), true);
-  assert.equal(appSource.includes('data-kind="needs-input-announcement"'), true);
+  assert.equal(appSource.includes("function RunNeedsInputAnnouncement"), false);
+  assert.equal(
+    appSource.includes('data-kind="needs-input-announcement"'),
+    false,
+  );
   assert.equal(appSource.includes("Answer in Turns"), true);
-  assert.equal(appSource.includes('data-clickable="true"'), true);
+  assert.equal(appSource.includes("run-msg-question-action"), true);
   assert.equal(appSource.includes('data-variant="assistant"'), true);
   assert.equal(appSource.includes("<SessionAvatarIcon avatar={avatar}"), true);
-  assert.equal(appSource.includes("onOpenTurn?.(targetTurnId, { anchor: \"top\", resetPage: true })"), true);
-  assert.equal(indexCssSource.includes(".run-needs-input-announcement-copy"), true);
-  assert.equal(appSource.includes('data-page-kind={selectedPageInfo?.kind ?? "activity"}'), true);
-  assert.equal(indexCssSource.includes(".run-turn-view {\n  display: flex;"), true);
-  assert.equal(indexCssSource.includes('.run-turn-view-body[data-page-kind="question_set"]'), true);
+  assert.equal(
+    appSource.includes(
+      'onOpenTurn?.(questionTurnId, { anchor: "top", resetPage: true })',
+    ),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes(".run-needs-input-announcement-copy"),
+    false,
+  );
+  assert.equal(indexCssSource.includes(".run-msg-question-action"), true);
+  assert.equal(
+    appSource.includes('data-page-kind={selectedPageInfo?.kind ?? "activity"}'),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes(".run-turn-view {\n  display: flex;"),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes(
+      '.run-turn-view-body[data-page-kind="question_set"]',
+    ),
+    true,
+  );
   assert.equal(appSource.includes("askUserQuestionDrafts"), true);
-  assert.equal(appSource.includes("questionIndex: typeof body.question_index === \"number\""), true);
-  assert.equal(appSource.includes("questionSet: typeof body.question_set === \"number\""), true);
+  assert.match(
+    appSource,
+    /questionIndex:\s*typeof body\.question_index === "number"/,
+  );
+  assert.match(
+    appSource,
+    /questionSet:\s*typeof body\.question_set === "number"/,
+  );
   assert.equal(appSource.includes("turnActivityPageOptionParts"), true);
-  assert.equal(indexCssSource.includes(".run-turn-view-page-option-index"), true);
+  assert.equal(
+    indexCssSource.includes(".run-turn-view-page-option-index"),
+    true,
+  );
   assert.equal(appSource.includes("Next question"), true);
-  assert.equal(appSource.includes("Question set ${selectedPageInfo.questionSet}"), false);
-  assert.equal(appSource.includes("Answer every question before submit."), true);
-  assert.equal(appSource.includes("Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}"), true);
+  assert.equal(
+    appSource.includes("Question set ${selectedPageInfo.questionSet}"),
+    false,
+  );
+  assert.equal(
+    appSource.includes("Answer every question before submit."),
+    true,
+  );
+  assert.equal(
+    appSource.includes(
+      "Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}",
+    ),
+    true,
+  );
 });
 
 test("transcript meta status lines are attributed to the session system identity", () => {
@@ -261,21 +370,40 @@ test("transcript meta status lines are attributed to the session system identity
   );
   assert.ok(componentMatch, "RunMetaBlock component should be present");
   const componentSource = componentMatch[0]!;
-  assert.equal(componentSource.includes("systemAvatar: AgentAvatar | null"), true);
-  assert.equal(componentSource.includes('className="run-transcript-message"'), true);
+  assert.equal(
+    componentSource.includes("systemAvatar: AgentAvatar | null"),
+    true,
+  );
+  assert.equal(
+    componentSource.includes('className="run-transcript-message"'),
+    true,
+  );
   assert.equal(componentSource.includes('data-variant="system"'), true);
   assert.equal(componentSource.includes('data-kind="meta"'), true);
-  assert.equal(componentSource.includes('className="run-msg-system-avatar"'), true);
-  assert.equal(componentSource.includes("AgentAvatarIcon avatar={systemAvatar}"), true);
+  assert.equal(
+    componentSource.includes('className="run-msg-system-avatar"'),
+    true,
+  );
+  assert.equal(
+    componentSource.includes("AgentAvatarIcon avatar={systemAvatar}"),
+    true,
+  );
   assert.equal(componentSource.includes("<BotIcon"), true);
   // Every call site must pass the resolved session systemAvatar so the
   // attribution holds in the main transcript, the Turns detail view, and
   // compacted history.
   const metaCallSites = appSource.match(/<RunMetaBlock\b/g) ?? [];
   assert.equal(metaCallSites.length >= 3, true);
-  assert.equal(appSource.includes("<RunMetaBlock entry={g.entry} systemAvatar={systemAvatar} />"), true);
   assert.equal(
-    indexCssSource.includes('[data-slot="message"][data-kind="meta"] .run-transcript-message-content'),
+    appSource.includes(
+      "<RunMetaBlock entry={g.entry} systemAvatar={systemAvatar} />",
+    ),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes(
+      '[data-slot="message"][data-kind="meta"] .run-transcript-message-content',
+    ),
     true,
   );
 });
@@ -290,7 +418,10 @@ test("AskUserQuestion placeholder 'Answer questions?' never leaks into App sourc
 
 test("chat history bootstrap is tail-first and not browser-position based", () => {
   assert.equal(appSource.includes('params.set("anchor", "newest")'), true);
-  assert.equal(appSource.includes('params.set("timeline_id", targetTimelineId)'), true);
+  assert.equal(
+    appSource.includes('params.set("timeline_id", targetTimelineId)'),
+    true,
+  );
   assert.equal(appSource.includes("first_unread"), false);
   assert.equal(appSource.includes("tank.transcript.position"), false);
   assert.equal(appSource.includes("readSdkTranscriptPosition"), false);
@@ -303,12 +434,20 @@ test("historical transcript bootstrap requires server-projected turn activity", 
     appSource.includes("timeline response missing server transcript rows"),
     true,
   );
-  assert.equal(appSource.includes("replaceSdkServerRows(projectedEntries"), true);
+  assert.equal(
+    appSource.includes("replaceSdkServerRows(projectedEntries"),
+    true,
+  );
   assert.equal(appSource.includes("body.events"), false);
   assert.equal(appSource.includes("before_order_key"), false);
   assert.equal(appSource.includes("min_transcript_entries"), false);
   assert.equal(appSource.includes("SDK_TIMELINE_TAIL_EVENT_LIMIT"), false);
-  assert.equal(appSource.includes("turnActivityRequestPathForPane(trimmedTurnId, selectedPage)"), true);
+  assert.equal(
+    appSource.includes(
+      "turnActivityRequestPathForPane(trimmedTurnId, selectedPage)",
+    ),
+    true,
+  );
   assert.match(
     appSource,
     /\/api\/public\/message-links\/\$\{encodeURIComponent\(publicShareTokenValue\)\}\/turns\/\$\{encodeURIComponent\(turnId\)\}\/activity/,
@@ -321,41 +460,96 @@ test("public message links render a read-only unauthenticated transcript shell",
   assert.equal(appSource.includes("function PublicMessageLinkApp"), true);
   assert.equal(appSource.includes("/api/public/message-links/"), true);
   assert.equal(appSource.includes("publicShareToken={route.token}"), true);
-  assert.equal(appSource.includes('composerVisible={activeTab === "chat" && !publicView}'), true);
+  assert.equal(
+    appSource.includes('composerVisible={activeTab === "chat" && !publicView}'),
+    true,
+  );
   assert.equal(appSource.includes("{!publicView && ("), true);
   assert.equal(indexCssSource.includes(".shell.public-share-shell"), true);
-  assert.equal(indexCssSource.includes("grid-template-columns: minmax(0, 1fr);"), true);
+  assert.equal(
+    indexCssSource.includes("grid-template-columns: minmax(0, 1fr);"),
+    true,
+  );
 });
 
 test("server-projected active turn activity shells own thinking row active state", () => {
   assert.equal(
-    turnActivityStateSource.includes('summary?.active === true || summary?.status === "active"'),
+    turnActivityStateSource.includes(
+      'summary?.active === true || summary?.status === "active"',
+    ),
     true,
   );
-  assert.equal(appSource.includes("turnActivityGroupIsActive(entry.activity, turnId, activeTurnId)"), true);
-  assert.equal(appSource.includes("function turnActivityGroupNeedsInput"), true);
-  assert.equal(appSource.includes("function insertActiveTurnTailGroups"), false);
+  assert.equal(
+    appSource.includes(
+      "turnActivityGroupIsActive(entry.activity, turnId, activeTurnId)",
+    ),
+    true,
+  );
+  assert.equal(
+    appSource.includes("function turnActivityGroupNeedsInput"),
+    true,
+  );
+  assert.equal(
+    appSource.includes("function insertActiveTurnTailGroups"),
+    false,
+  );
   assert.equal(appSource.includes("const pendingNeedsInputGroups"), false);
-  assert.equal(appSource.includes("pendingNeedsInputFallbackIndexes.set(group.turnId, groups.length)"), false);
+  assert.equal(
+    appSource.includes(
+      "pendingNeedsInputFallbackIndexes.set(group.turnId, groups.length)",
+    ),
+    false,
+  );
   assert.match(
     appSource,
     /group\.active &&\s+!needsInput &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/,
   );
   assert.equal(appSource.includes("groups.push(group);"), false);
-  assert.equal(appSource.includes("turnActivityShellIsDurablyActive(group.shell.activity)"), true);
-  assert.equal(appSource.includes("turnActivityShellIsDurablyActive(entry.activity)"), true);
+  assert.equal(
+    appSource.includes(
+      "turnActivityShellIsDurablyActive(group.shell.activity)",
+    ),
+    true,
+  );
+  assert.equal(
+    appSource.includes("turnActivityShellIsDurablyActive(entry.activity)"),
+    true,
+  );
   assert.equal(appSource.includes("durableActiveTurnActivityShells"), true);
-  assert.equal(appSource.includes('logChatScrollEvent("thinking-row-missing"'), true);
-  assert.equal(appSource.includes('active: turnId === (activeTurnId?.trim() ?? "")'), false);
-  assert.equal(appSource.includes('shellSummary?.status !== "needs_input"'), true);
-  assert.equal(turnActivityStateSource.includes('summary?.status === "needs_input"'), true);
-  assert.equal(chatScrollMetricsHandlerSource.includes('"thinking-row-missing"'), true);
+  assert.equal(
+    appSource.includes('logChatScrollEvent("thinking-row-missing"'),
+    true,
+  );
+  assert.equal(
+    appSource.includes('active: turnId === (activeTurnId?.trim() ?? "")'),
+    false,
+  );
+  assert.equal(
+    appSource.includes('shellSummary?.status !== "needs_input"'),
+    true,
+  );
+  assert.equal(
+    turnActivityStateSource.includes('summary?.status === "needs_input"'),
+    true,
+  );
+  assert.equal(
+    chatScrollMetricsHandlerSource.includes('"thinking-row-missing"'),
+    true,
+  );
 });
 
 test("active turn thinking row is placed by durable order key, not a turnId-structural rule", () => {
-  assert.equal(appSource.includes("function insertActiveTurnThinkingGroups"), true);
+  assert.equal(
+    appSource.includes("function insertActiveTurnThinkingGroups"),
+    true,
+  );
   assert.equal(appSource.includes("function entryGroupIncludesTurn"), true);
-  assert.equal(appSource.includes("pendingThinkingFallbackIndexes.set(group.turnId, groups.length)"), true);
+  assert.equal(
+    appSource.includes(
+      "pendingThinkingFallbackIndexes.set(group.turnId, groups.length)",
+    ),
+    true,
+  );
   // The placeholder position is resolved by durable order keys via the pure
   // transcriptThinkingPlacement module — not by "latest turn-tagged group + 1",
   // which stranded the row above untagged session.status notices on a new
@@ -364,59 +558,145 @@ test("active turn thinking row is placed by durable order key, not a turnId-stru
   assert.equal(appSource.includes("turnActivityShellTailOrderKey"), true);
   assert.equal(appSource.includes("function entryGroupOrderKey"), true);
   assert.equal(appSource.includes("latestTurnGroupIndex + 1"), false);
-  assert.equal(appSource.includes("groups.push(turnThinkingGroup(group.turnId, entry));"), false);
+  assert.equal(
+    appSource.includes("groups.push(turnThinkingGroup(group.turnId, entry));"),
+    false,
+  );
 });
 
 test("turn internals move out of the transcript into a turn view", () => {
-  assert.equal(appSource.includes('type RunTab = "chat" | "turns"'), true);
+  assert.match(
+    appSource,
+    /type RunTab =[\s\S]{0,120}"chat"[\s\S]{0,80}"turns"/,
+  );
   assert.equal(appSource.includes("buildTurnViewItems"), true);
-  assert.equal(appSource.includes("const turnsAvailable = turnViewItems.length > 0"), true);
+  assert.match(
+    appSource,
+    /const turnsAvailable\s*=\s*turnViewItems\.length > 0/,
+  );
   assert.equal(appSource.includes("function readSessionRouteFromPath"), true);
-  assert.equal(appRoutesSource.includes('url.pathname = `/sessions/${encodedId}${'), true);
-  assert.equal(appRoutesSource.includes('export type SessionRouteTab = "chat" | "turns" | "static" | "session-data";'), true);
-  assert.equal(appRoutesSource.includes('export type AppRouteTab = "settings" | "help";'), true);
+  assert.equal(
+    appRoutesSource.includes("url.pathname = `/sessions/${encodedId}${"),
+    true,
+  );
+  assert.equal(
+    appRoutesSource.includes(
+      'export type SessionRouteTab = "chat" | "turns" | "static" | "session-data";',
+    ),
+    true,
+  );
+  assert.equal(
+    appRoutesSource.includes('export type AppRouteTab = "settings" | "help";'),
+    true,
+  );
   assert.equal(appRoutesSource.includes("readAppRouteFromPathname"), true);
   assert.equal(appRoutesSource.includes("buildAppRouteUrl"), true);
   assert.equal(appRoutesSource.includes('url.pathname = "/new";'), true);
-  assert.equal(appSource.includes('replaceSessionRoute(session.id, "settings"'), false);
-  assert.equal(appSource.includes('replaceSessionRoute(session.id, "help"'), false);
-  assert.equal(appSource.includes('replaceAppRoute("settings", homeSettingsTab, homeAdminView)'), true);
+  assert.equal(
+    appSource.includes('replaceSessionRoute(session.id, "settings"'),
+    false,
+  );
+  assert.equal(
+    appSource.includes('replaceSessionRoute(session.id, "help"'),
+    false,
+  );
+  assert.equal(
+    appSource.includes(
+      'replaceAppRoute("settings", homeSettingsTab, homeAdminView)',
+    ),
+    true,
+  );
   assert.equal(appSource.includes('replaceAppRoute("help")'), true);
   assert.equal(appSource.includes('setActiveTab("turns")'), true);
-  assert.equal(appSource.includes("replaceSessionRoute(session.id, \"turns\", routedSelectedTurnNumber)"), true);
-  assert.equal(appSource.includes("window.addEventListener(\"popstate\", applyCurrentSessionRoute)"), true);
+  assert.equal(
+    appSource.includes(
+      'replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber)',
+    ),
+    true,
+  );
+  assert.equal(
+    appSource.includes(
+      'window.addEventListener("popstate", applyCurrentSessionRoute)',
+    ),
+    true,
+  );
   assert.equal(appSource.includes("RunTurnActivityScreen"), true);
   assert.equal(appSource.includes("RunTurnThinkingBubble"), true);
   assert.equal(appSource.includes("turnThinkingGroup"), true);
-  assert.equal(appSource.includes("showAssistantAvatar = !ownedByTurnActivity"), true);
+  assert.equal(
+    appSource.includes("showAssistantAvatar = !ownedByTurnActivity"),
+    true,
+  );
   assert.match(appSource, /ownedByTurnActivity\s+showAssistantAvatar/);
-  assert.equal(appSource.includes("createTurnActivityEntryGroup(entry, activityEntriesByTurn, activeTurnId)"), true);
-  assert.equal(appSource.includes("pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn)"), false);
+  assert.match(
+    appSource,
+    /createTurnActivityEntryGroup\(\s*entry,\s*activityEntriesByTurn,\s*activeTurnId,\s*\)/,
+  );
+  assert.equal(
+    appSource.includes(
+      "pushTurnActivityEntryGroup(groups, entry, activityEntriesByTurn)",
+    ),
+    false,
+  );
   assert.equal(appSource.includes('data-kind="turn-thinking"'), true);
   assert.equal(appSource.includes("function TurnsTab"), true);
   assert.equal(appSource.includes("openTurnPage"), true);
   // Turns stays a standalone tab only in the read-only public view, where the
   // overflow menu is not rendered; the normal view folds it into the menu.
-  assert.match(appSource, /<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{!turnsAvailable\}/);
+  assert.match(
+    appSource,
+    /<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{!turnsAvailable\}/,
+  );
   // The pre-session home view exposes Turns through the overflow menu as a
   // disabled, no-op entry until a session exists.
   assert.match(
     appSource,
-    /turns=\{\{\n\s+active: false,\n\s+disabled: true,\n\s+title: "Turns are available once the agent has turn activity",\n\s+onOpen: \(\) => undefined,/,
+    /turns=\{\{\s*active: false,\s*disabled: true,\s*title:\s*"Turns are available once the agent has turn activity",\s*onOpen: \(\) => undefined,/,
   );
-  assert.match(appSource, /if \(activeTab !== "turns" \|\| turnsAvailable\) return;/);
+  assert.match(
+    appSource,
+    /if \(activeTab !== "turns" \|\| turnsAvailable\) return;/,
+  );
   assert.equal(indexCssSource.includes(".run-turn-view"), true);
-  assert.equal(indexCssSource.includes('.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"]'), true);
+  assert.equal(
+    indexCssSource.includes(
+      '.run-turn-view-body [data-slot="message"][data-owner="activity"][data-variant="assistant"]',
+    ),
+    true,
+  );
   assert.equal(indexCssSource.includes(".run-turn-thinking-content"), true);
   assert.equal(indexCssSource.includes(".run-turn-thinking-label"), true);
-  assert.equal(indexCssSource.includes("@keyframes run-thinking-shimmer"), true);
-  assert.equal(indexCssSource.includes("@keyframes run-thinking-dot-bounce"), false);
+  assert.equal(
+    indexCssSource.includes("@keyframes run-thinking-shimmer"),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes("@keyframes run-thinking-dot-bounce"),
+    false,
+  );
   assert.equal(indexCssSource.includes(".run-msg-turn"), true);
-  assert.equal(styleguidePortfolioTranscriptSource.includes("TurnViewSpecimen"), true);
-  assert.equal(styleguidePortfolioTranscriptSource.includes("showAssistantAvatar"), true);
-  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-content"), true);
-  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-label"), true);
-  assert.equal(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-last-activity"), true);
+  assert.equal(
+    styleguidePortfolioTranscriptSource.includes("TurnViewSpecimen"),
+    true,
+  );
+  assert.equal(
+    styleguidePortfolioTranscriptSource.includes("showAssistantAvatar"),
+    true,
+  );
+  assert.equal(
+    styleguidePortfolioTranscriptSource.includes("run-turn-thinking-content"),
+    true,
+  );
+  assert.equal(
+    styleguidePortfolioTranscriptSource.includes("run-turn-thinking-label"),
+    true,
+  );
+  assert.equal(
+    styleguidePortfolioTranscriptSource.includes(
+      "run-turn-thinking-last-activity",
+    ),
+    true,
+  );
 });
 
 test("thinking bubble renders an elapsed-time readout while a turn is live", () => {
@@ -436,9 +716,18 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   assert.equal(appSource.includes("function formatThinkingElapsed"), true);
   assert.equal(appSource.includes("function RunTurnThinkingDuration"), true);
   assert.equal(appSource.includes("function formatThinkingLastActivity"), true);
-  assert.equal(appSource.includes('if (totalSeconds === 0) return "0s";'), true);
-  assert.equal(appSource.includes('if (totalSeconds < 5) return "now";'), false);
-  assert.equal(appSource.includes("function RunTurnThinkingLastActivity"), true);
+  assert.equal(
+    appSource.includes('if (totalSeconds === 0) return "0s";'),
+    true,
+  );
+  assert.equal(
+    appSource.includes('if (totalSeconds < 5) return "now";'),
+    false,
+  );
+  assert.equal(
+    appSource.includes("function RunTurnThinkingLastActivity"),
+    true,
+  );
   assert.equal(appSource.includes("run-turn-thinking-duration"), true);
   assert.equal(appSource.includes("run-turn-thinking-last-activity"), true);
   assert.equal(appSource.includes("lastActivityAt"), true);
@@ -448,11 +737,11 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   );
   assert.match(
     appSource,
-    /<RunTurnThinkingDuration userKey=\{userKey\} turnId=\{selected\.turnId\}/,
+    /<RunTurnThinkingDuration[\s\S]{0,120}userKey=\{userKey\}[\s\S]{0,120}turnId=\{selected\.turnId\}/,
   );
   assert.match(
     appSource,
-    /<RunTurnThinkingLastActivity lastActivityAt=\{selected\.lastActivityAt\} turnId=\{selected\.turnId\}/,
+    /<RunTurnThinkingLastActivity[\s\S]{0,120}lastActivityAt=\{selected\.lastActivityAt\}[\s\S]{0,120}turnId=\{selected\.turnId\}/,
   );
   // No backend timestamp should leak into the timer's anchor — the
   // resolver takes only (userKey, turnId) and never reads a startedAt
@@ -483,21 +772,31 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
     /userKey=\{user\?\.sub \?\? user\?\.email \?\? "anon"\}/,
   );
   assert.equal(indexCssSource.includes(".run-turn-thinking-duration"), true);
-  assert.equal(indexCssSource.includes(".run-turn-thinking-last-activity"), true);
+  assert.equal(
+    indexCssSource.includes(".run-turn-thinking-last-activity"),
+    true,
+  );
   assert.equal(
     styleguidePortfolioTranscriptSource.includes("run-turn-thinking-duration"),
     true,
   );
   assert.equal(
-    styleguidePortfolioTranscriptSource.includes("run-turn-thinking-last-activity"),
+    styleguidePortfolioTranscriptSource.includes(
+      "run-turn-thinking-last-activity",
+    ),
     true,
   );
 });
 
 test("turn view entry points open at the turn bottom", () => {
-  assert.equal(appSource.includes('type TurnViewScrollAnchor = "bottom" | "top"'), true);
   assert.equal(
-    appSource.includes('onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}'),
+    appSource.includes('type TurnViewScrollAnchor = "bottom" | "top"'),
+    true,
+  );
+  assert.equal(
+    appSource.includes(
+      'onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}',
+    ),
     true,
   );
   // AskUserQuestion uses the same turn navigation path, but with resetPage so
@@ -509,9 +808,12 @@ test("turn view entry points open at the turn bottom", () => {
   );
   assert.equal(appSource.includes("function TurnViewButton"), true);
   assert.equal(appSource.includes("function TranscriptViewButton"), true);
-  assert.equal(appSource.includes('href={href}'), true);
-  assert.equal(appSource.includes('sessionRouteUrl(sessionId, "turns", turnNumber)'), true);
-  assert.equal(appSource.includes('turnLinksEnabled={!publicView}'), true);
+  assert.equal(appSource.includes("href={href}"), true);
+  assert.equal(
+    appSource.includes('sessionRouteUrl(sessionId, "turns", turnNumber)'),
+    true,
+  );
+  assert.equal(appSource.includes("turnLinksEnabled={!publicView}"), true);
   assert.equal(appSource.includes("pendingTranscriptMessageId"), true);
   assert.equal(appSource.includes("transcriptHrefForEntry"), true);
   assert.equal(appSource.includes("onOpenTranscriptMessage"), true);
@@ -521,28 +823,46 @@ test("turn view entry points open at the turn bottom", () => {
     true,
   );
   assert.equal(
-    appSource.includes("const [pendingTurnViewRouteAnchor, setPendingTurnViewRouteAnchor]"),
+    appSource.includes(
+      "const [pendingTurnViewRouteAnchor, setPendingTurnViewRouteAnchor]",
+    ),
     true,
   );
-  assert.equal(appSource.includes('setPendingTurnViewRouteAnchor("bottom")'), true);
   assert.equal(
-    appSource.includes("const [turnViewScrollRequest, setTurnViewScrollRequest]"),
+    appSource.includes('setPendingTurnViewRouteAnchor("bottom")'),
     true,
   );
-  assert.equal(appSource.includes("scrollRequest?: TurnViewScrollRequest | null;"), true);
+  assert.equal(
+    appSource.includes(
+      "const [turnViewScrollRequest, setTurnViewScrollRequest]",
+    ),
+    true,
+  );
+  assert.equal(
+    appSource.includes("scrollRequest?: TurnViewScrollRequest | null;"),
+    true,
+  );
   assert.equal(
     appSource.includes("onScrollRequestConsumed?: (signal: number) => void;"),
     true,
   );
-  assert.equal(appSource.includes("scrollRequest={turnViewScrollRequest}"), true);
+  assert.equal(
+    appSource.includes("scrollRequest={turnViewScrollRequest}"),
+    true,
+  );
   assert.equal(
     appSource.includes("onScrollRequestConsumed={clearTurnViewScrollRequest}"),
     true,
   );
   assert.equal(appSource.includes("if (!selected.loaded) return;"), true);
-  assert.equal(appSource.includes("if (loading && detailGroups.length === 0) return;"), true);
   assert.equal(
-    appSource.includes('body.scrollTo({ top: body.scrollHeight, behavior: "auto" });'),
+    appSource.includes("if (loading && detailGroups.length === 0) return;"),
+    true,
+  );
+  assert.equal(
+    appSource.includes(
+      'body.scrollTo({ top: body.scrollHeight, behavior: "auto" });',
+    ),
     true,
   );
 });
@@ -551,7 +871,7 @@ test("chat live stream waits for timeline bootstrap", () => {
   assert.equal(appSource.includes("historyBootstrapped"), true);
   assert.match(
     appSource,
-    /if \(!visible \|\| !CHAT_MODES\.has\(session\.mode\) \|\| !historyBootstrapped\) return;/,
+    /if \([\s\S]{0,120}!visible[\s\S]{0,120}!CHAT_MODES\.has\(session\.mode\)[\s\S]{0,120}!historyBootstrapped[\s\S]{0,120}\)\s*return;/,
   );
 });
 
@@ -559,15 +879,30 @@ test("browser EventSource streams use opaque stream tickets, not bearer query st
   assert.equal(authSource.includes("/api/auth/stream-ticket"), true);
   assert.equal(authSource.includes("stream_ticket"), true);
   assert.equal(authSource.includes("access_token"), false);
-  assert.match(appSource, /authedEventSource\([\s\S]{0,400}stream: "session-events"/);
-  assert.match(appSource, /authedEventSource\([\s\S]{0,400}stream: "session-list"/);
-  assert.match(appSource, /authedEventSource\([\s\S]{0,400}stream: "pinned-repos"/);
+  assert.match(
+    appSource,
+    /authedEventSource\([\s\S]{0,400}stream: "session-events"/,
+  );
+  assert.match(
+    appSource,
+    /authedEventSource\([\s\S]{0,400}stream: "session-list"/,
+  );
+  assert.match(
+    appSource,
+    /authedEventSource\([\s\S]{0,400}stream: "pinned-repos"/,
+  );
 });
 
 test("pinned repo shortcuts converge from the durable profile endpoint", () => {
   assert.match(appSource, /authedFetch\("\/api\/github\/pinned-repos"\)/);
-  assert.match(appSource, /document\.addEventListener\("visibilitychange", refreshWhenVisible\)/);
-  assert.match(appSource, /window\.addEventListener\("focus", refreshOnFocus\)/);
+  assert.match(
+    appSource,
+    /document\.addEventListener\("visibilitychange", refreshWhenVisible\)/,
+  );
+  assert.match(
+    appSource,
+    /window\.addEventListener\("focus", refreshOnFocus\)/,
+  );
   assert.match(appSource, /addEventListener\("pinned-repos"/);
   assert.match(appSource, /pinnedReposSnapshotVersionRef/);
   assert.match(appSource, /updatedAt < currentVersion/);
@@ -580,7 +915,10 @@ test("pin reorder writes through the durable pinned-repos endpoint, not browser-
   // (the failure mode the retired tank.sessionOrder / tank.homePinnedRepos
   // keys represented). The order a user drags into is exactly the array PUT.
   assert.match(appSource, /const reorderPinnedRepo = useCallback\(/);
-  assert.match(appSource, /reorderPinnedRepoSlugs\(current, sourceSlug, targetSlug\)/);
+  assert.match(
+    appSource,
+    /reorderPinnedRepoSlugs\(current, sourceSlug, targetSlug\)/,
+  );
   assert.match(
     appSource,
     /reorderPinnedRepo[\s\S]{0,400}method: "PUT"[\s\S]{0,200}body: JSON\.stringify\(\{ repos: next \}\)/,
@@ -593,7 +931,10 @@ test("pin reorder writes through the durable pinned-repos endpoint, not browser-
 });
 
 test("browser-native protected resources are not loaded with raw API URLs", () => {
-  assert.equal(appSource.includes('src={`/api/sessions/${session.id}/files/raw'), false);
+  assert.equal(
+    appSource.includes("src={`/api/sessions/${session.id}/files/raw"),
+    false,
+  );
   assert.equal(appSource.includes("URL.createObjectURL(blob)"), true);
   assert.match(appSource, /authedFetch\([\s\S]{0,120}\/files\/raw\?path=/);
 });
@@ -617,7 +958,10 @@ test("startup transcript rows come from durable conversation events", () => {
   // `existing_user_message` submit from the tab — must not come back.
   assert.match(appSource, /launch-attachments\//);
   assert.equal(appSource.includes("existing_user_message"), false);
-  assert.match(appSource, /if \(seedTurnRequested && !seedTurnSubmittedAtCreate\) \{/);
+  assert.match(
+    appSource,
+    /if \(seedTurnRequested && !seedTurnSubmittedAtCreate\) \{/,
+  );
   assert.equal(conversationReducerSource.includes('"session.status"'), true);
   assert.match(
     appSource,
@@ -640,7 +984,10 @@ test("sidebar skill-state conflicts are not repaired in the frontend", () => {
   assert.ok(skillStateMatch, "currentSessionSkillState should be present");
   const skillStateBody = skillStateMatch[0]!;
   assert.equal(appSource.includes("mergeMutualSessionSkillState"), false);
-  assert.equal(skillStateBody.includes('if (rolloutActive) return "rollout"'), false);
+  assert.equal(
+    skillStateBody.includes('if (rolloutActive) return "rollout"'),
+    false,
+  );
   assert.equal(skillStateBody.includes('if (testActive) return "test"'), false);
 });
 
@@ -651,19 +998,51 @@ test("session-list debug route keeps client row history visible without devtools
   assert.equal(sessionListDebugSource.includes("sessionStorage"), true);
   assert.equal(sessionListDebugSource.includes("__tankSessionListDebug"), true);
   assert.equal(
-    sessionListDebugSource.includes("/api/client-metrics/session-list-debug-capture"),
+    sessionListDebugSource.includes(
+      "/api/client-metrics/session-list-debug-capture",
+    ),
     true,
   );
-  assert.equal(sessionListDebugSource.includes("captureSessionListDebugSnapshot"), true);
-  assert.equal(sessionListDebugSource.includes(["created", "session", "name"].join("-") + "-mutated"), false);
-  assert.equal(sessionListDebugPageSource.includes("/api/debug/session-list-state"), true);
-  assert.equal(sessionListDebugPageSource.includes("subscribeSessionListDebug"), true);
-  assert.equal(sessionListDebugCaptureControlsSource.includes("Record 2m"), true);
-  assert.equal(sessionListDebugCaptureControlsSource.includes("startSessionListDebugRecording"), true);
-  assert.equal(sessionListDebugRecorderSource.includes("subscribeSessionListDebug"), true);
+  assert.equal(
+    sessionListDebugSource.includes("captureSessionListDebugSnapshot"),
+    true,
+  );
+  assert.equal(
+    sessionListDebugSource.includes(
+      ["created", "session", "name"].join("-") + "-mutated",
+    ),
+    false,
+  );
+  assert.equal(
+    sessionListDebugPageSource.includes("/api/debug/session-list-state"),
+    true,
+  );
+  assert.equal(
+    sessionListDebugPageSource.includes("subscribeSessionListDebug"),
+    true,
+  );
+  assert.equal(
+    sessionListDebugCaptureControlsSource.includes("Record 2m"),
+    true,
+  );
+  assert.equal(
+    sessionListDebugCaptureControlsSource.includes(
+      "startSessionListDebugRecording",
+    ),
+    true,
+  );
+  assert.equal(
+    sessionListDebugRecorderSource.includes("subscribeSessionListDebug"),
+    true,
+  );
   assert.equal(sessionListDebugRecorderSource.includes("event-sample"), true);
   assert.equal(appSource.includes("Session-list diagnostics"), true);
-  assert.equal(appSource.includes('<SessionListDebugCaptureControls source="SettingsAdmin"'), true);
+  assert.equal(
+    appSource.includes(
+      '<SessionListDebugCaptureControls source="SettingsAdmin"',
+    ),
+    true,
+  );
 });
 
 test("session rows do not fall back to client-hashed avatar identity", () => {
@@ -671,8 +1050,14 @@ test("session rows do not fall back to client-hashed avatar identity", () => {
   assert.equal(sessionAvatarsSource.includes("chooseAvatar"), false);
   assert.equal(sessionAvatarsSource.includes("Math.imul"), false);
   assert.equal(sessionAvatarsSource.includes("getSessionAvatar("), false);
-  assert.match(sessionAvatarsSource, /getSessionAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(getAgentAvatarPool\(\), assignedAvatarId\);/);
-  assert.match(sessionAvatarsSource, /getSystemAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(runtimeSystemAvatars, assignedAvatarId\);/);
+  assert.match(
+    sessionAvatarsSource,
+    /getSessionAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(getAgentAvatarPool\(\), assignedAvatarId\);/,
+  );
+  assert.match(
+    sessionAvatarsSource,
+    /getSystemAvatarByID\(assignedAvatarId\?: string \| null\)[\s\S]*?return findAvatarByID\(runtimeSystemAvatars, assignedAvatarId\);/,
+  );
   assert.equal(appSource.includes("session-avatar-missing"), true);
   assert.equal(appSource.includes("display_name_source"), true);
 });
@@ -680,31 +1065,57 @@ test("session rows do not fall back to client-hashed avatar identity", () => {
 test("home splash test action seeds the first turn as a skill invocation", () => {
   assert.equal(appSource.includes("composeSkillPrompt"), true);
   assert.match(appSource, /initialSkillName\?: SkillStateName/);
-  assert.match(appSource, /\.\.\.\(requestedInitialSkillName \? \{ skill_name: requestedInitialSkillName \} : \{\}\)/);
-  assert.match(appSource, /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*"test"/);
+  assert.match(
+    appSource,
+    /\.\.\.\([\s\S]{0,120}requestedInitialSkillName[\s\S]{0,120}\?[\s\S]{0,120}skill_name: requestedInitialSkillName[\s\S]{0,120}: \{\}[\s\S]{0,80}\)/,
+  );
+  assert.match(
+    appSource,
+    /homeComposerText\.trim\(\) \|\| undefined,[\s\S]*"test"/,
+  );
   assert.equal(appSource.includes("Available once your session starts"), false);
 });
 
 test("home splash test action stays disabled on the splash page", () => {
-  assert.match(appSource, /test=\{\{[\s\S]*?disabled: true,[\s\S]*?title: "Available in an active chat session"/);
+  assert.match(
+    appSource,
+    /test=\{\{[\s\S]*?disabled: true,[\s\S]*?title: "Available in an active chat session"/,
+  );
   assert.equal(
-    appSource.includes("disabled={busy || !CHAT_MODES.has(defaultSessionMode)}"),
+    appSource.includes(
+      "disabled={busy || !CHAT_MODES.has(defaultSessionMode)}",
+    ),
     false,
   );
 });
 
 test("pull request composer action persists before a PR URL exists", () => {
   assert.match(appSource, /function ComposerToolButtons\(/);
-  assert.match(appSource, /const pullRequestURL = testState\?\.pull_request_url\?\.trim\(\) \|\| "";/);
-  assert.match(appSource, /pullRequestURL \? \([\s\S]*?href=\{pullRequestURL\}[\s\S]*?\) : \([\s\S]*?disabled[\s\S]*?aria-label="Pull request link unavailable"/);
+  assert.match(
+    appSource,
+    /const pullRequestURL = testState\?\.pull_request_url\?\.trim\(\) \|\| "";/,
+  );
+  assert.match(
+    appSource,
+    /pullRequestURL \? \([\s\S]*?href=\{pullRequestURL\}[\s\S]*?\) : \([\s\S]*?disabled[\s\S]*?aria-label="Pull request link unavailable"/,
+  );
   assert.equal((appSource.match(/pullRequest=\{\{\}\}/g) ?? []).length, 2);
-  assert.equal(appSource.includes("testState?.active && testState.pull_request_url"), false);
+  assert.equal(
+    appSource.includes("testState?.active && testState.pull_request_url"),
+    false,
+  );
 });
 
 test("splash and transcript composers share the same tool button component", () => {
   assert.equal((appSource.match(/<ComposerToolButtons\b/g) ?? []).length, 3);
-  assert.equal(appSource.includes("toolButtons={\n                    <>"), false);
-  assert.equal(appSource.includes("toolButtons={\n                  <>"), false);
+  assert.equal(
+    appSource.includes("toolButtons={\n                    <>"),
+    false,
+  );
+  assert.equal(
+    appSource.includes("toolButtons={\n                  <>"),
+    false,
+  );
   assert.equal(appSource.includes("toolButtons={\n            <>"), false);
 });
 
@@ -718,7 +1129,10 @@ test("avatar editor is embedded in Settings admin, not a standalone app route", 
   assert.equal(adminAvatarManagerSource.includes("bootstrapAuth"), false);
   assert.equal(adminAvatarManagerSource.includes("Back to app"), false);
   assert.equal(appChromeCapabilitiesSource.includes("admin route"), false);
-  assert.equal(appChromeCapabilitiesSource.includes("Settings -> Admin avatar pane"), true);
+  assert.equal(
+    appChromeCapabilitiesSource.includes("Settings -> Admin avatar pane"),
+    true,
+  );
 });
 
 test("settings admin exposes the design portfolio catalog", () => {
@@ -726,38 +1140,115 @@ test("settings admin exposes the design portfolio catalog", () => {
     appSource,
     /href="\/_styleguide"[\s\S]*target="_blank"[\s\S]*Design portfolio/,
   );
-  assert.equal(mainSource.includes('"/_styleguide": () => <StyleguideIndex />'), true);
+  assert.equal(
+    mainSource.includes('"/_styleguide": () => <StyleguideIndex />'),
+    true,
+  );
 });
 
 test("styleguide catalog tracks current home and sidebar surfaces", () => {
   assert.equal(styleguideIndexSource.includes("new session row"), false);
   assert.equal(styleguideIndexSource.includes("mode dropdown"), false);
-  assert.equal(styleguideIndexSource.includes("active / pending / error"), false);
-  assert.equal(styleguideIndexSource.includes("claude / api / config / codex"), false);
+  assert.equal(
+    styleguideIndexSource.includes("active / pending / error"),
+    false,
+  );
+  assert.equal(
+    styleguideIndexSource.includes("claude / api / config / codex"),
+    false,
+  );
   assert.equal(styleguideIndexSource.includes("session launcher"), true);
   assert.equal(styleguideIndexSource.includes("runtime controls"), true);
-  assert.equal(styleguideSessionLauncherSource.includes("home-initial-grid"), true);
+  assert.equal(
+    styleguideSessionLauncherSource.includes("home-initial-grid"),
+    true,
+  );
   assert.equal(styleguideSessionLauncherSource.includes("home-repos"), true);
   assert.equal(styleguideSessionLauncherSource.includes("new-row"), false);
-  assert.equal(styleguideRuntimeControlsSource.includes("home-choice-grid"), true);
-  assert.equal(styleguideRuntimeControlsSource.includes("dropdown-provider"), false);
+  assert.equal(
+    styleguideRuntimeControlsSource.includes("home-choice-grid"),
+    true,
+  );
+  assert.equal(
+    styleguideRuntimeControlsSource.includes("dropdown-provider"),
+    false,
+  );
   assert.equal(styleguideRuntimeControlsSource.includes("new-row"), false);
   assert.equal(styleguidePortfolioWorkspaceSource.includes("new-row"), false);
-  assert.equal(styleguidePortfolioTranscriptSource.includes("input selected"), true);
-  assert.equal(styleguidePortfolioTranscriptSource.includes("styleguide-transcript-surface-active"), true);
-  assert.equal(styleguidePortfolioTranscriptSource.includes("styleguide-composer-surface-active"), true);
-  assert.equal(indexCssSource.includes(".styleguide-transcript-focus-shell"), true);
-  assert.equal(indexCssSource.includes(".run-composer.run-composer-interactive:focus-within"), true);
-  assert.equal(indexCssSource.includes(".run-composer.run-composer-interactive::before"), true);
-  assert.equal(indexCssSource.includes(".run-composer.run-composer-home"), false);
-  assert.equal(indexCssSource.includes(".run-composer.run-composer-runpane"), false);
-  assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:is(:focus, :focus-within),'), true);
-  assert.equal(indexCssSource.includes('.run-main[aria-label="New session setup"]:is(:focus, :focus-within),'), true);
-  assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript::before'), false);
-  assert.equal(indexCssSource.includes('.run-main[aria-label="Transcript"]:focus::before'), false);
-  assert.equal(indexCssSource.includes('.run-main[aria-label="New session setup"]:focus::before'), false);
-  assert.equal(styleguideSessionRowSource.includes("session-activity-chip"), false);
-  assert.equal(styleguideSessionRowSource.includes("mode-interaction-chip"), true);
+  assert.equal(
+    styleguidePortfolioTranscriptSource.includes("input selected"),
+    true,
+  );
+  assert.equal(
+    styleguidePortfolioTranscriptSource.includes(
+      "styleguide-transcript-surface-active",
+    ),
+    true,
+  );
+  assert.equal(
+    styleguidePortfolioTranscriptSource.includes(
+      "styleguide-composer-surface-active",
+    ),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes(".styleguide-transcript-focus-shell"),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes(
+      ".run-composer.run-composer-interactive:focus-within",
+    ),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes(".run-composer.run-composer-interactive::before"),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes(".run-composer.run-composer-home"),
+    false,
+  );
+  assert.equal(
+    indexCssSource.includes(".run-composer.run-composer-runpane"),
+    false,
+  );
+  assert.equal(
+    indexCssSource.includes(
+      '.run-main[aria-label="Transcript"]:is(:focus, :focus-within),',
+    ),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes(
+      '.run-main[aria-label="New session setup"]:is(:focus, :focus-within),',
+    ),
+    true,
+  );
+  assert.equal(
+    indexCssSource.includes(
+      '.run-main[aria-label="Transcript"]:is(:focus, :focus-within) .run-transcript::before',
+    ),
+    false,
+  );
+  assert.equal(
+    indexCssSource.includes('.run-main[aria-label="Transcript"]:focus::before'),
+    false,
+  );
+  assert.equal(
+    indexCssSource.includes(
+      '.run-main[aria-label="New session setup"]:focus::before',
+    ),
+    false,
+  );
+  assert.equal(
+    styleguideSessionRowSource.includes("session-activity-chip"),
+    false,
+  );
+  assert.equal(
+    styleguideSessionRowSource.includes("mode-interaction-chip"),
+    true,
+  );
   assert.equal(styleguideSharedSource.includes("codex_app_server"), true);
   assert.equal(styleguideSharedSource.includes("agent-needs-input"), true);
 });
@@ -771,34 +1262,58 @@ test("files tab is gated until the session container is available", () => {
 });
 
 test("session bug labels are available at create time", () => {
-  assert.equal(appSource.includes("const [homeBugLabels, setHomeBugLabels]"), true);
+  assert.equal(
+    appSource.includes("const [homeBugLabels, setHomeBugLabels]"),
+    true,
+  );
   assert.equal(appSource.includes("bug_label: bugLabel"), true);
   assert.equal(appSource.includes("bug_labels: homeBugLabels"), true);
   assert.equal(appSource.includes("<SessionBugLabelPicker"), false);
   assert.equal(appSource.includes("bugLabelControl={"), false);
-  assert.equal(sessionBarCapabilitiesSource.includes("splash setup panel stages bug labels"), true);
+  assert.equal(
+    sessionBarCapabilitiesSource.includes(
+      "splash setup panel stages bug labels",
+    ),
+    true,
+  );
 });
 
 test("read-only cross-scope sessions keep an explicit composer affordance", () => {
-  assert.match(appSource, /composerVisible=\{activeTab === "chat" && !publicView\}/);
+  assert.match(
+    appSource,
+    /composerVisible=\{activeTab === "chat" && !publicView\}/,
+  );
   assert.equal(
     appSource.includes("Production sessions are read-only in this test slot"),
     false,
   );
   assert.equal(
-    appSource.includes("Read-only production view. Switch back to this slot's sessions in Settings to send messages."),
+    appSource.includes(
+      "Read-only production view. Switch back to this slot's sessions in Settings to send messages.",
+    ),
     false,
   );
-  assert.equal(indexCssSource.includes(".run-composer.run-composer-readonly"), true);
+  assert.equal(
+    indexCssSource.includes(".run-composer.run-composer-readonly"),
+    true,
+  );
 });
 
 test("background page uses stacked full-width sections instead of a side pane", () => {
-  assert.match(indexCssSource, /\.run-shell-tasks-page \{[\s\S]*grid-template-rows: auto minmax\(0, 1fr\);/);
+  assert.match(
+    indexCssSource,
+    /\.run-shell-tasks-page \{[\s\S]*grid-template-rows: auto minmax\(0, 1fr\);/,
+  );
   assert.equal(
-    indexCssSource.includes("grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr)"),
+    indexCssSource.includes(
+      "grid-template-columns: minmax(16rem, 24rem) minmax(0, 1fr)",
+    ),
     false,
   );
-  assert.equal(indexCssSource.includes("border-right: 1px solid var(--border-subtle);"), false);
+  assert.equal(
+    indexCssSource.includes("border-right: 1px solid var(--border-subtle);"),
+    false,
+  );
 });
 
 test("background tab stays discoverable before background entries exist", () => {
@@ -811,12 +1326,12 @@ test("background tab stays discoverable before background entries exist", () => 
   // shows "0" rather than dropping the row.
   assert.match(
     appSource,
-    /background=\{\{\n\s+active: activeTab === "background",\n\s+count: backgroundLedgerEntries\.length,/,
+    /background=\{\{[\s\S]{0,160}active: activeTab === "background"[\s\S]{0,160}count: backgroundLedgerEntries\.length,/,
   );
   // The pre-session home view exposes Background as a disabled, no-op entry.
   assert.match(
     appSource,
-    /background=\{\{\n\s+active: false,\n\s+count: 0,\n\s+disabled: true,\n\s+title: "Background activity is available once the session starts",/,
+    /background=\{\{[\s\S]{0,400}active: false[\s\S]{0,400}count: 0[\s\S]{0,400}disabled: true[\s\S]{0,400}title:[\s\S]{0,120}"Background activity is available once the session starts"/,
   );
 });
 
@@ -829,23 +1344,32 @@ test("background page includes active shell invocations alongside managed tasks"
     appSource,
     /const activeBackgroundEntries = useMemo\([\s\S]*?backgroundTaskEntries\.filter\(isBackgroundTaskRunning\)[\s\S]*?runningShellInvocationEntries/,
   );
-  assert.match(appSource, /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}/);
+  assert.match(
+    appSource,
+    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}/,
+  );
 });
 
 test("background page surfaces scheduled wakeups as first-class continuation state", () => {
-  assert.match(appSource, /type BackgroundView = "shells" \| "scheduled" \| "control" \| "detached"/);
+  assert.match(
+    appSource,
+    /type BackgroundView = "shells" \| "scheduled" \| "control" \| "detached"/,
+  );
   assert.match(
     appSource,
     /function isScheduledWakeupEntry\([\s\S]*?entry\.taskKind === "scheduled_wakeup"/,
   );
-  assert.match(appSource, /<span>Scheduled<\/span>[\s\S]*?<span>\{scheduledEntries\.length\}<\/span>/);
   assert.match(
     appSource,
-    /scheduledWakeupRowsToEntries\(body\.scheduled_wakeups \?\? \[\]\)/,
+    /<span>Scheduled<\/span>[\s\S]*?<span>\{scheduledEntries\.length\}<\/span>/,
   );
   assert.match(
     appSource,
-    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+scheduledEntries=\{scheduledWakeupEntries\}/,
+    /scheduledWakeupRowsToEntries\(\s*body\.scheduled_wakeups \?\? \[\],\s*\)/,
+  );
+  assert.match(
+    appSource,
+    /<BackgroundScreen[\s\S]{0,400}shellEntries=\{activeBackgroundEntries\}[\s\S]{0,400}scheduledEntries=\{scheduledWakeupEntries\}/,
   );
 });
 
@@ -854,14 +1378,14 @@ test("background page surfaces control actions as first-class audit state", () =
     appSource,
     /function isControlActionEntry\([\s\S]*?entry\.taskKind === "control_action"/,
   );
-  assert.match(appSource, /<span>Control<\/span>[\s\S]*?<span>\{controlEntries\.length\}<\/span>/);
   assert.match(
     appSource,
-    /controlActionRowsToEntries\(body\)/,
+    /<span>Control<\/span>[\s\S]*?<span>\{controlEntries\.length\}<\/span>/,
   );
+  assert.match(appSource, /controlActionRowsToEntries\(body\)/);
   assert.match(
     appSource,
-    /<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+scheduledEntries=\{scheduledWakeupEntries\}\n\s+controlEntries=\{controlActionEntries\}/,
+    /<BackgroundScreen[\s\S]{0,160}shellEntries=\{activeBackgroundEntries\}[\s\S]{0,160}scheduledEntries=\{scheduledWakeupEntries\}[\s\S]{0,160}controlEntries=\{controlActionEntries\}/,
   );
 });
 
@@ -886,9 +1410,15 @@ test("background stop controls exclude untracked detached shells", () => {
     appSource,
     /function canStopBackgroundActivity\([\s\S]*?isDetachedShellCandidateEntry\(entry\)\) return false[\s\S]*?isRunningShellInvocationEntry\(entry\)[\s\S]*?isScheduledWakeupEntry\(entry\)\) return false[\s\S]*?isBackgroundTaskEntry\(entry\)[\s\S]*?codexBackgroundStopAvailable/,
   );
-  assert.match(appSource, /<BackgroundScreen[\s\S]*canStopEntry=\{canStopBackgroundEntry\}[\s\S]*onStop=\{stopBackgroundActivity\}/);
+  assert.match(
+    appSource,
+    /<BackgroundScreen[\s\S]*canStopEntry=\{canStopBackgroundEntry\}[\s\S]*onStop=\{stopBackgroundActivity\}/,
+  );
   assert.match(appSource, /className="run-shell-task-stop"/);
-  assert.match(appSource, /\/background-tasks\/\$\{encodeURIComponent\(taskID\)\}\/stop/);
+  assert.match(
+    appSource,
+    /\/background-tasks\/\$\{encodeURIComponent\(taskID\)\}\/stop/,
+  );
 });
 
 test("web search transcript tools use the web glyph", () => {
@@ -898,18 +1428,24 @@ test("web search transcript tools use the web glyph", () => {
   );
   assert.match(
     appSource,
-    /if \(isWebToolName\(name\)\) \{\s+return \{ Icon: GlobeIcon, colorClass: "tool-color-search", tooltip: "Web tool call" \};\s+\}/,
+    /if \(isWebToolName\(name\)\) \{[\s\S]{0,160}return \{[\s\S]{0,80}Icon: GlobeIcon,[\s\S]{0,80}colorClass: "tool-color-search",[\s\S]{0,80}tooltip: "Web tool call"[\s\S]{0,80}\};[\s\S]{0,80}\}/,
   );
 });
 
 test("home splash initial-message modes rewrite the first turn deliberately", () => {
   assert.match(
     appSource,
-    /type InitialMessageMode = "direct" \| "diagnose" \| "bug_report" \| "quality_gaps" \| "go_long" \| "test"/,
+    /type InitialMessageMode =[\s\S]{0,260}\| "direct"[\s\S]{0,80}\| "diagnose"[\s\S]{0,80}\| "bug_report"[\s\S]{0,80}\| "quality_gaps"[\s\S]{0,80}\| "go_long"[\s\S]{0,80}\| "test"/,
   );
   assert.equal(appSource.includes("composeInitialMessageModePrompt"), true);
-  assert.match(appSource, /initialMessageModeSkillName\(mode: InitialMessageMode\): SkillStateName \| undefined/);
-  assert.match(appSource, /initialMode !== "direct"[\s\S]*chatModeForHomePrompt\(defaultSessionMode\)/);
+  assert.match(
+    appSource,
+    /initialMessageModeSkillName\([\s\S]{0,120}mode: InitialMessageMode,[\s\S]{0,120}\): SkillStateName \| undefined/,
+  );
+  assert.match(
+    appSource,
+    /initialMode !== "direct"[\s\S]*chatModeForHomePrompt\(defaultSessionMode\)/,
+  );
 });
 
 test("initial-message directives are sourced from the app-config ConfigMap, not baked into the SPA", () => {
@@ -924,7 +1460,7 @@ test("initial-message directives are sourced from the app-config ConfigMap, not 
   // SPA reads directives from /api/config, with const fallbacks, async.
   assert.match(
     appSource,
-    /async function initialMessageModeDirective\(mode: InitialMessageMode\): Promise<string>/,
+    /async function initialMessageModeDirective\([\s\S]{0,120}mode: InitialMessageMode,[\s\S]{0,120}\): Promise<string>/,
   );
   assert.match(appSource, /await fetchAppPublicConfig\(\)/);
   for (const key of [
@@ -934,32 +1470,85 @@ test("initial-message directives are sourced from the app-config ConfigMap, not 
     "initial_mode_go_long_directive",
     "initial_mode_test_directive",
   ]) {
-    assert.equal(appSource.includes(key), true, `App.tsx missing config key ${key}`);
-    assert.equal(tankServerGoSource.includes(key), true, `server.go missing config key ${key}`);
+    assert.equal(
+      appSource.includes(key),
+      true,
+      `App.tsx missing config key ${key}`,
+    );
+    assert.equal(
+      tankServerGoSource.includes(key),
+      true,
+      `server.go missing config key ${key}`,
+    );
   }
   assert.match(appSource, /await composeInitialMessageModePrompt\(/);
 
   // The old persistent-stance diagnose phrasing must not be reintroduced
   // anywhere — it is the bug this change fixes (agents read it as a
   // never-write-code stance for the whole session, not just turn one).
-  assert.equal(appSource.includes("diagnose issue without writing code"), false);
-  assert.equal(initialModeDiagnoseSource.includes("diagnose issue without writing code"), false);
+  assert.equal(
+    appSource.includes("diagnose issue without writing code"),
+    false,
+  );
+  assert.equal(
+    initialModeDiagnoseSource.includes("diagnose issue without writing code"),
+    false,
+  );
 
   // Reworded diagnose directive scopes the no-code stance to the first turn.
   assert.equal(initialModeDiagnoseSource.includes("first message only"), true);
-  assert.equal(initialModeDiagnoseSource.includes("this first turn only"), true);
+  assert.equal(
+    initialModeDiagnoseSource.includes("this first turn only"),
+    true,
+  );
 
   // Other modes relocated to markdown with their invariants intact.
-  assert.equal(initialModeBugReportSource.includes("Initial message type: bug report"), true);
-  assert.equal(initialModeBugReportSource.includes("docs/diagnostic-discipline*.md"), true);
-  assert.equal(initialModeBugReportSource.includes("Identify the architectural miss"), true);
-  assert.equal(initialModeBugReportSource.includes("Propose the code-change shape"), true);
-  assert.equal(initialModeBugReportSource.includes("Stop and wait for permission"), true);
-  assert.equal(initialModeQualityGapsSource.includes("/workspace/.tank/docs/quality-timeframes.md"), true);
-  assert.equal(initialModeQualityGapsSource.includes("/workspace/.tank/docs/migration-policy.md"), true);
-  assert.equal(initialModeGoLongSource.includes("Initial message type: go long."), true);
-  assert.equal(initialModeGoLongSource.includes("/workspace/.tank/docs/product-inspirations.md"), true);
-  assert.equal(initialModeGoLongSource.includes("Settled decisions stay settled"), true);
+  assert.equal(
+    initialModeBugReportSource.includes("Initial message type: bug report"),
+    true,
+  );
+  assert.equal(
+    initialModeBugReportSource.includes("docs/diagnostic-discipline*.md"),
+    true,
+  );
+  assert.equal(
+    initialModeBugReportSource.includes("Identify the architectural miss"),
+    true,
+  );
+  assert.equal(
+    initialModeBugReportSource.includes("Propose the code-change shape"),
+    true,
+  );
+  assert.equal(
+    initialModeBugReportSource.includes("Stop and wait for permission"),
+    true,
+  );
+  assert.equal(
+    initialModeQualityGapsSource.includes(
+      "/workspace/.tank/docs/quality-timeframes.md",
+    ),
+    true,
+  );
+  assert.equal(
+    initialModeQualityGapsSource.includes(
+      "/workspace/.tank/docs/migration-policy.md",
+    ),
+    true,
+  );
+  assert.equal(
+    initialModeGoLongSource.includes("Initial message type: go long."),
+    true,
+  );
+  assert.equal(
+    initialModeGoLongSource.includes(
+      "/workspace/.tank/docs/product-inspirations.md",
+    ),
+    true,
+  );
+  assert.equal(
+    initialModeGoLongSource.includes("Settled decisions stay settled"),
+    true,
+  );
   assert.equal(initialModeTestSource.includes("run the test skill"), true);
 
   // ConfigMap renders every initial-mode file via .Files.Get.
@@ -985,7 +1574,11 @@ test("initial-message directives are sourced from the app-config ConfigMap, not 
     ["TANK_INITIAL_MODE_GO_LONG_FILE", "initial-mode-go-long.md"],
     ["TANK_INITIAL_MODE_TEST_FILE", "initial-mode-test.md"],
   ]) {
-    assert.equal(appDeploymentSource.includes(envVar), true, `deployment.yaml missing ${envVar}`);
+    assert.equal(
+      appDeploymentSource.includes(envVar),
+      true,
+      `deployment.yaml missing ${envVar}`,
+    );
     assert.equal(
       appDeploymentSource.includes(`/etc/tank-operator/app-config/${file}`),
       true,
@@ -1001,14 +1594,23 @@ test("initial-message directives are sourced from the app-config ConfigMap, not 
 
 test("quality gap policy docs are bundled into session config", () => {
   assert.equal(sessionConfigMapSource.includes("install-tank-docs.sh"), true);
-  assert.equal(sessionConfigMapSource.includes('$.Files.Glob "session-config/docs/**"'), true);
+  assert.equal(
+    sessionConfigMapSource.includes('$.Files.Glob "session-config/docs/**"'),
+    true,
+  );
   assert.equal(sessionConfigMapSource.includes("docs__"), true);
   assert.equal(installTankDocsSource.includes("/workspace/.tank/docs"), true);
   assert.equal(agentRunnerLaunchSource.includes("install-tank-docs.sh"), true);
   assert.equal(codexRunnerLaunchSource.includes("install-tank-docs.sh"), true);
   assert.equal(defaultClaudeSource.includes("/workspace/.tank/docs/"), true);
-  assert.equal(bundledQualityTimeframesSource.includes("# Quality Timeframes"), true);
-  assert.equal(bundledMigrationPolicySource.includes("# Migration Policy"), true);
+  assert.equal(
+    bundledQualityTimeframesSource.includes("# Quality Timeframes"),
+    true,
+  );
+  assert.equal(
+    bundledMigrationPolicySource.includes("# Migration Policy"),
+    true,
+  );
 });
 
 test("workspace title editor survives session creation", () => {
@@ -1017,9 +1619,15 @@ test("workspace title editor survives session creation", () => {
   assert.equal(appSource.includes("WorkspaceTitleSpacer"), true);
   assert.equal(indexCssSource.includes("workspace-title-overlay"), true);
   assert.equal(appSource.includes("requested_name_applied"), false);
-  assert.match(appSource, /\.\.\.\(requestedName \? \{ name: requestedName \} : \{\}\)/);
+  assert.match(
+    appSource,
+    /\.\.\.\(requestedName \? \{ name: requestedName \} : \{\}\)/,
+  );
   assert.equal(appSource.includes("beginSessionTitleEdit(session)"), true);
-  assert.equal(appSource.includes("setAutoFocusComposerSessionId(created.id)"), true);
+  assert.equal(
+    appSource.includes("setAutoFocusComposerSessionId(created.id)"),
+    true,
+  );
 });
 
 test("SSE reconnect status stays out of transcript/composer flow", () => {
@@ -1028,21 +1636,47 @@ test("SSE reconnect status stays out of transcript/composer flow", () => {
   assert.equal(appSource.includes("onConnectionLabelChange"), true);
   assert.equal(appSource.includes("activeConnectionLabel"), true);
   assert.equal(appSource.includes("sessionConnectionIndicatorLabel"), true);
-  assert.equal(sessionConnectionIndicatorSource.includes("CONNECTION_CONNECTING_VISIBLE_AFTER_MS"), true);
-  assert.match(sessionConnectionIndicatorSource, /case "connecting":[\s\S]*delayedConnectingVisible/);
+  assert.equal(
+    sessionConnectionIndicatorSource.includes(
+      "CONNECTION_CONNECTING_VISIBLE_AFTER_MS",
+    ),
+    true,
+  );
+  assert.match(
+    sessionConnectionIndicatorSource,
+    /case "connecting":[\s\S]*delayedConnectingVisible/,
+  );
   assert.equal(indexCssSource.includes(".run-connection-pill"), true);
-  assert.match(indexCssSource, /absolute title chrome[\s\S]*\.run-connection-pill/);
-  assert.match(indexCssSource, /\.workspace-title-overlay \.run-header-name-btn \{[\s\S]*flex: 0 1 auto;[\s\S]*text-align: left;/);
+  assert.match(
+    indexCssSource,
+    /absolute title chrome[\s\S]*\.run-connection-pill/,
+  );
+  assert.match(
+    indexCssSource,
+    /\.workspace-title-overlay \.run-header-name-btn \{[\s\S]*flex: 0 1 auto;[\s\S]*text-align: left;/,
+  );
 });
 
 test("mounted chat reactivation resets local timeline state before bootstrap", () => {
   assert.equal(appSource.includes("visible-reactivation"), true);
   assert.equal(appSource.includes("resetSdkTimelineBootstrapState"), true);
   assert.equal(appSource.includes("reduceTimelineBootstrap"), true);
-  assert.equal(appSource.includes("scrollToLatestOnReady: !hasExplicitTarget"), true);
-  assert.equal(appSource.includes('requestScrollToLatest("auto", source)'), true);
-  assert.match(appSource, /useLayoutEffect\(\(\) => \{\s+sessionIdRef\.current = session\.id;/);
-  assert.match(appSource, /if \(timelineBootstrap\.status !== "idle"\) return;/);
+  assert.equal(
+    appSource.includes("scrollToLatestOnReady: !hasExplicitTarget"),
+    true,
+  );
+  assert.equal(
+    appSource.includes('requestScrollToLatest("auto", source)'),
+    true,
+  );
+  assert.match(
+    appSource,
+    /useLayoutEffect\(\(\) => \{\s+sessionIdRef\.current = session\.id;/,
+  );
+  assert.match(
+    appSource,
+    /if \(timelineBootstrap\.status !== "idle"\) return;/,
+  );
 });
 
 test("live-tail follow is durable-mode gated and never hardcoded smooth", () => {
@@ -1058,21 +1692,24 @@ test("live-tail follow is durable-mode gated and never hardcoded smooth", () => 
   // The hardcoded smooth follow is also blocked from reintroduction by
   // scripts/check-removed-chat-runtime.mjs.
   assert.equal(appSource.includes('followOutput="smooth"'), false);
-  assert.equal(appSource.includes('followOutput={followLiveTail ? "auto" : false}'), true);
-  assert.equal(appSource.includes('followLiveTail={navigationMode === "live-tail"}'), true);
+  assert.match(appSource, /followOutput=\{followLiveTail \? "auto" : false\}/);
+  assert.match(appSource, /followLiveTail=\{navigationMode === "live-tail"\}/);
   // Deterministic single landing: the last group is bottom-aligned on first
   // data application instead of being made the topmost item, so a caught-up
   // session lands at the true tail in one measured step.
   assert.match(
     appSource,
-    /initialTopMostItemIndex=\{\{ index: Math\.max\(groups\.length - 1, 0\), align: "end" \}\}/,
+    /initialTopMostItemIndex=\{\{[\s\S]{0,120}index: Math\.max\(groups\.length - 1, 0\),[\s\S]{0,80}align: "end"[\s\S]{0,80}\}\}/,
   );
 });
 
 test("chat submit explicitly lands at the latest message", () => {
   const startRunMatch = appSource.match(/function startRun\([\s\S]*?\n  \}/);
   assert.ok(startRunMatch, "startRun should be present");
-  assert.equal(startRunMatch[0]!.includes('requestScrollToLatest("auto", "submit")'), true);
+  assert.equal(
+    startRunMatch[0]!.includes('requestScrollToLatest("auto", "submit")'),
+    true,
+  );
 });
 
 test("navigation mode owns live-tail vs historical-anchor explicitly", () => {
@@ -1101,12 +1738,11 @@ test("navigation mode owns live-tail vs historical-anchor explicitly", () => {
   assert.equal(appSource.includes("transcriptVisuallyAtBottom"), false);
   assert.equal(appSource.includes("setUserScrolledUp"), false);
   assert.equal(appSource.includes("sdkAtBottomRef"), false);
+  assert.equal(appSource.includes('from "./navigationMode"'), true);
   assert.equal(
-    appSource.includes('from "./navigationMode"'),
-    true,
-  );
-  assert.equal(
-    appSource.includes("function dispatchNavigationMode(reason: NavigationModeReason)"),
+    appSource.includes(
+      "function dispatchNavigationMode(reason: NavigationModeReason)",
+    ),
     true,
   );
   assert.match(
@@ -1114,11 +1750,16 @@ test("navigation mode owns live-tail vs historical-anchor explicitly", () => {
     /if \(navigationModeRef\.current === "historical-anchor"\) \{[\s\S]{0,400}if \(row\.kind !== "message"\) continue;/,
   );
   const applySdkTranscriptRowsMatch = appSource.match(
-    /function applySdkTranscriptRows\(rows: TranscriptEntry\[], orderKey: string\): void \{[\s\S]*?\n  \}/,
+    /function applySdkTranscriptRows\([\s\S]{0,5000}mergeProjectedTranscriptRowUpdates[\s\S]{0,1400}syncSdkRenderedEntries/,
   );
-  assert.ok(applySdkTranscriptRowsMatch, "applySdkTranscriptRows should be present");
+  assert.ok(
+    applySdkTranscriptRowsMatch,
+    "applySdkTranscriptRows should be present",
+  );
   assert.equal(
-    applySdkTranscriptRowsMatch[0]!.includes("mergeProjectedTranscriptRowUpdates"),
+    applySdkTranscriptRowsMatch[0]!.includes(
+      "mergeProjectedTranscriptRowUpdates",
+    ),
     true,
     "post-cursor SSE rows must merge into the rendered projection",
   );
@@ -1185,14 +1826,29 @@ test("chat back-pagination keeps an explicit access path", () => {
 test("focused transcript Home and End keys resolve durable conversation edges", () => {
   assert.equal(appSource.includes("scrollTranscriptToConversationStart"), true);
   assert.equal(appSource.includes("scrollTranscriptToConversationEnd"), true);
-  assert.match(appSource, /async function scrollTranscriptToConversationStart[\s\S]*?jumpSdkToOldest\("keyboard"\)/);
-  assert.match(appSource, /async function scrollTranscriptToConversationEnd[\s\S]*?jumpSdkToLatest\("keyboard"\)/);
-  assert.match(appSource, /if \(e\.key === "Home"\)[\s\S]*?scrollTranscriptToConversationStart\(\)/);
-  assert.match(appSource, /if \(e\.key === "End"\)[\s\S]*?scrollTranscriptToConversationEnd\(\)/);
+  assert.match(
+    appSource,
+    /async function scrollTranscriptToConversationStart[\s\S]*?jumpSdkToOldest\("keyboard"\)/,
+  );
+  assert.match(
+    appSource,
+    /async function scrollTranscriptToConversationEnd[\s\S]*?jumpSdkToLatest\("keyboard"\)/,
+  );
+  assert.match(
+    appSource,
+    /if \(e\.key === "Home"\)[\s\S]*?scrollTranscriptToConversationStart\(\)/,
+  );
+  assert.match(
+    appSource,
+    /if \(e\.key === "End"\)[\s\S]*?scrollTranscriptToConversationEnd\(\)/,
+  );
   assert.match(appSource, /requestScrollToLatest\("smooth", "keyboard"\)/);
   assert.equal(appSource.includes("transcriptScrollEl.scrollTop = 0"), false);
   assert.equal(appSource.includes("consumedScrollToOldestSignalRef"), true);
-  assert.match(appSource, /consumedScrollToOldestSignalRef\.current === scrollToOldestSignal/);
+  assert.match(
+    appSource,
+    /consumedScrollToOldestSignalRef\.current === scrollToOldestSignal/,
+  );
 });
 
 test("focused Turns page Home and End keys scroll the turn detail to its edges", () => {
@@ -1202,25 +1858,52 @@ test("focused Turns page Home and End keys scroll the turn detail to its edges",
   // (transcriptScrollEl) must be the key event target. transcript-navigation
   // contract — keyboard edge navigation extends to the Turns surface.
   assert.match(appSource, /type TurnViewScrollAnchor = "bottom" \| "top"/);
-  assert.match(appSource, /if \(!visible \|\| activeTab !== "turns" \|\| !transcriptScrollEl\) return;/);
-  assert.match(appSource, /if \(e\.key !== "Home" && e\.key !== "End"\) return;/);
-  assert.match(appSource, /const anchor: TurnViewScrollAnchor = e\.key === "Home" \? "top" : "bottom";/);
-  assert.match(appSource, /setTurnViewScrollRequest\(\{\s*turnId: effectiveSelectedTurnId,\s*anchor,/);
-  assert.match(appSource, /if \(scrollRequest\.anchor === "top"\) \{\s*body\.scrollTo\(\{ top: 0, behavior: "auto" \}\);/);
+  assert.match(
+    appSource,
+    /if \(!visible \|\| activeTab !== "turns" \|\| !transcriptScrollEl\) return;/,
+  );
+  assert.match(
+    appSource,
+    /if \(e\.key !== "Home" && e\.key !== "End"\) return;/,
+  );
+  assert.match(
+    appSource,
+    /const anchor: TurnViewScrollAnchor = e\.key === "Home" \? "top" : "bottom";/,
+  );
+  assert.match(
+    appSource,
+    /setTurnViewScrollRequest\(\{\s*turnId: effectiveSelectedTurnId,\s*anchor,/,
+  );
+  assert.match(
+    appSource,
+    /if \(scrollRequest\.anchor === "top"\) \{\s*body\.scrollTo\(\{ top: 0, behavior: "auto" \}\);/,
+  );
 });
 
 test("focused transcript T opens Turns and Escape returns from Turns", () => {
   assert.equal(appSource.includes("isTranscriptToTurnsShortcut"), true);
   assert.equal(appSource.includes("isTurnsToTranscriptShortcut"), true);
-  assert.match(appSource, /targetIsTranscript: e\.target === transcriptScrollEl/);
+  assert.match(
+    appSource,
+    /targetIsTranscript: e\.target === transcriptScrollEl/,
+  );
   assert.match(appSource, /openTurnPage\(undefined, \{ anchor: "bottom" \}\)/);
   assert.match(appSource, /if \(activeTab === "turns"\) return;/);
-  assert.match(appSource, /setActiveTab\("chat"\);[\s\S]{0,120}focusTranscriptSection\(\);/);
+  assert.match(
+    appSource,
+    /setActiveTab\("chat"\);[\s\S]{0,120}focusTranscriptSection\(\);/,
+  );
 });
 
 test("chat back-pagination keeps the focused load button mounted while loading", () => {
-  assert.equal(appSource.includes("aria-disabled={sdkLoadingOlder || undefined}"), true);
-  assert.equal(appSource.includes("aria-busy={sdkLoadingOlder || undefined}"), true);
+  assert.equal(
+    appSource.includes("aria-disabled={sdkLoadingOlder || undefined}"),
+    true,
+  );
+  assert.equal(
+    appSource.includes("aria-busy={sdkLoadingOlder || undefined}"),
+    true,
+  );
   assert.equal(appSource.includes("run-transcript-load-older-passive"), false);
 });
 
@@ -1230,7 +1913,10 @@ test("workspace scroll container keeps the right scrollbar affordance stable", (
   const runMainCss = runMainMatch[0]!;
   assert.equal(runMainCss.includes("overflow-y: scroll;"), true);
   assert.equal(runMainCss.includes("scrollbar-gutter: stable;"), true);
-  assert.equal(indexCssSource.includes(".run-main::-webkit-scrollbar-track"), true);
+  assert.equal(
+    indexCssSource.includes(".run-main::-webkit-scrollbar-track"),
+    true,
+  );
 });
 
 test("session-event SSE stream emits browser-side observability", () => {
@@ -1239,24 +1925,71 @@ test("session-event SSE stream emits browser-side observability", () => {
   // removes the telemetry hooks, this guard breaks before the
   // diagnostic-only observability metric quietly stops shipping.
   assert.equal(
-    sessionEventStreamTelemetrySource.includes("/api/client-metrics/session-events-stream"),
+    sessionEventStreamTelemetrySource.includes(
+      "/api/client-metrics/session-events-stream",
+    ),
     true,
   );
-  assert.equal(sessionEventStreamTelemetrySource.includes("createSilenceWatchdog"), true);
-  assert.equal(sessionEventStreamTelemetrySource.includes("stream_silent_while_running"), true);
-  assert.equal(sessionEventStreamTelemetrySource.includes("terminal_matched_by_turn_id"), true);
-  assert.equal(sessionEventStreamTelemetrySource.includes("queued_followup_blocked_after_terminal"), true);
-  assert.equal(sessionEventStreamTelemetrySource.includes("stale_running_blocked_submit"), true);
+  assert.equal(
+    sessionEventStreamTelemetrySource.includes("createSilenceWatchdog"),
+    true,
+  );
+  assert.equal(
+    sessionEventStreamTelemetrySource.includes("stream_silent_while_running"),
+    true,
+  );
+  assert.equal(
+    sessionEventStreamTelemetrySource.includes("terminal_matched_by_turn_id"),
+    true,
+  );
+  assert.equal(
+    sessionEventStreamTelemetrySource.includes(
+      "queued_followup_blocked_after_terminal",
+    ),
+    true,
+  );
+  assert.equal(
+    sessionEventStreamTelemetrySource.includes("stale_running_blocked_submit"),
+    true,
+  );
   assert.equal(appSource.includes('logSessionEventStreamEvent("opened"'), true);
-  assert.equal(appSource.includes('logSessionEventStreamEvent("transcript_rows_received"'), true);
-  assert.equal(appSource.includes('logSessionEventStreamEvent("transcript_rows_applied"'), true);
+  assert.equal(
+    appSource.includes('logSessionEventStreamEvent("transcript_rows_received"'),
+    true,
+  );
+  assert.equal(
+    appSource.includes('logSessionEventStreamEvent("transcript_rows_applied"'),
+    true,
+  );
   assert.equal(appSource.includes("terminal_matched_by_turn_id"), true);
-  assert.equal(appSource.includes('logSessionEventStreamEvent("queued_followup_blocked_after_terminal"'), true);
-  assert.equal(appSource.includes('logSessionEventStreamEvent("stale_running_blocked_submit"'), true);
-  assert.equal(appSource.includes('logSessionEventStreamEvent("resync_required"'), true);
-  assert.equal(appSource.includes('logSessionEventStreamEvent("stream_error"'), true);
-  assert.equal(appSource.includes('logSessionEventStreamEvent("closed_error"'), true);
-  assert.equal(appSource.includes('logSessionEventStreamEvent("closed_unmount"'), true);
+  assert.equal(
+    appSource.includes(
+      'logSessionEventStreamEvent("queued_followup_blocked_after_terminal"',
+    ),
+    true,
+  );
+  assert.equal(
+    appSource.includes(
+      'logSessionEventStreamEvent("stale_running_blocked_submit"',
+    ),
+    true,
+  );
+  assert.equal(
+    appSource.includes('logSessionEventStreamEvent("resync_required"'),
+    true,
+  );
+  assert.equal(
+    appSource.includes('logSessionEventStreamEvent("stream_error"'),
+    true,
+  );
+  assert.equal(
+    appSource.includes('logSessionEventStreamEvent("closed_error"'),
+    true,
+  );
+  assert.equal(
+    appSource.includes('logSessionEventStreamEvent("closed_unmount"'),
+    true,
+  );
   assert.equal(appSource.includes("silenceWatchdogRef"), true);
   assert.equal(appSource.includes('addEventListener("transcript-rows"'), true);
   assert.equal(appSource.includes('addEventListener("tank-event"'), false);
@@ -1276,20 +2009,49 @@ test("session-event SSE stream emits browser-side observability", () => {
 });
 
 test("chat scroll diagnostics are prometheus backed", () => {
-  assert.equal(chatScrollTelemetrySource.includes('DEBUG_TOKEN = "chat-scroll"'), true);
-  assert.equal(chatScrollTelemetrySource.includes("isChatScrollDebugEnabled"), true);
-  assert.equal(chatScrollTelemetrySource.includes("/api/client-metrics/chat-scroll"), true);
-  assert.equal(chatScrollTelemetrySource.includes("tank.chatScrollEvents"), false);
+  assert.equal(
+    chatScrollTelemetrySource.includes('DEBUG_TOKEN = "chat-scroll"'),
+    true,
+  );
+  assert.equal(
+    chatScrollTelemetrySource.includes("isChatScrollDebugEnabled"),
+    true,
+  );
+  assert.equal(
+    chatScrollTelemetrySource.includes("/api/client-metrics/chat-scroll"),
+    true,
+  );
+  assert.equal(
+    chatScrollTelemetrySource.includes("tank.chatScrollEvents"),
+    false,
+  );
   assert.equal(appSource.includes("logChatScrollGroups"), true);
   assert.equal(appSource.includes("logChatScrollEntries"), true);
   assert.equal(appSource.includes('"keyboard-edge-navigation"'), true);
   assert.equal(appSource.includes('jumpSdkToOldest("button")'), true);
   assert.equal(appSource.includes('jumpSdkToLatest("button")'), true);
-  assert.equal(chatScrollTelemetrySource.includes("sessionId: metricString(detail.sessionId)"), true);
-  assert.equal(chatScrollTelemetrySource.includes("pagePath: currentPagePath()"), true);
-  assert.equal(chatScrollTelemetrySource.includes("pageSearch: currentPageSearch()"), true);
-  assert.equal(chatScrollMetricsHandlerSource.includes("logChatScrollClientEvent"), true);
-  assert.equal(chatScrollMetricsHandlerSource.includes('"browser chat scroll event"'), true);
+  assert.equal(
+    chatScrollTelemetrySource.includes(
+      "sessionId: metricString(detail.sessionId)",
+    ),
+    true,
+  );
+  assert.equal(
+    chatScrollTelemetrySource.includes("pagePath: currentPagePath()"),
+    true,
+  );
+  assert.equal(
+    chatScrollTelemetrySource.includes("pageSearch: currentPageSearch()"),
+    true,
+  );
+  assert.equal(
+    chatScrollMetricsHandlerSource.includes("logChatScrollClientEvent"),
+    true,
+  );
+  assert.equal(
+    chatScrollMetricsHandlerSource.includes('"browser chat scroll event"'),
+    true,
+  );
   assert.equal(chatScrollMetricsHandlerSource.includes('"session_id"'), true);
   assert.equal(chatScrollMetricsHandlerSource.includes('"page_search"'), true);
 });
@@ -1300,7 +2062,10 @@ test("repo selection stays queryable without sidebar filter UI", () => {
   assert.equal(appSource.includes("repoShortName"), false);
   assert.equal(appSource.includes("filter by repo"), false);
   assert.equal(indexCssSource.includes(".sidebar-filter"), false);
-  assert.equal(sessionBarCapabilitiesSource.includes("sessions.repos text[]"), true);
+  assert.equal(
+    sessionBarCapabilitiesSource.includes("sessions.repos text[]"),
+    true,
+  );
   assert.equal(sessionBarCapabilitiesSource.includes("workspace scans"), true);
   assert.equal(sessionBarCapabilitiesSource.includes("filter input"), false);
 });

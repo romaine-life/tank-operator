@@ -6,15 +6,14 @@
 // tool_result answers, AskUserQuestion-specific user-message display kinds, or
 // a provider callback that permanently owns the Tank-visible turn boundary.
 //
-// NEW model: invoking AskUserQuestion publishes durable `turn.awaiting_input`
-// as the Tank-visible assistant handoff and opens a semantic Turn-activity
-// question-set page. The provider submit command may remain in flight with
-// runner heartbeats so restarts can recreate the callback. Answering records
-// `turn.input_answered` for the question-set state, writes a normal
-// `user_message.created` + `turn.submitted` continuation turn for the visible
-// answer, and delivers the answer to the paused provider callback over the
-// control plane as `input_reply`. When the provider callback resumes, runners
-// rotate subsequent provider events onto the continuation turn.
+// NEW model: invoking AskUserQuestion publishes a runner invocation event plus
+// a distinct derived `assistant_message.created` event on the asking turn. That
+// assistant message is the terminal transcript response and links to a normal
+// numbered question turn whose durable `turn.awaiting_input` owns the question
+// card/pages. Answering records `turn.input_answered` for the question turn,
+// writes a normal `user_message.created` + `turn.submitted` continuation turn
+// for the visible answer, and delivers the answer to the paused provider
+// callback over the control plane as `input_reply`.
 //
 // This guard forbids retired AskUserQuestion surfaces and requires the durable
 // handoff/continuation pieces so neither model can drift back. Fail-on-match is
@@ -24,7 +23,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const repoRoot = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "..",
+);
 
 const ignoredDirs = new Set([
   ".claude",
@@ -42,7 +44,12 @@ const ignoredDirs = new Set([
   "venv",
 ]);
 
-const ignoredFiles = new Set(["package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.sum"]);
+const ignoredFiles = new Set([
+  "package-lock.json",
+  "pnpm-lock.yaml",
+  "yarn.lock",
+  "go.sum",
+]);
 
 const ignoredRelativePaths = new Set([
   "scripts/check-askuserquestion-migration.mjs",
@@ -54,24 +61,74 @@ const ignoredRelativePaths = new Set([
 
 const forbidden = [
   { name: "removed /input-reply HTTP route", pattern: /\/input-reply\b/ },
-  { name: "removed handleInputReplySessionTurn backend handler", pattern: /\bhandleInputReplySessionTurn\b/ },
+  {
+    name: "removed handleInputReplySessionTurn backend handler",
+    pattern: /\bhandleInputReplySessionTurn\b/,
+  },
   { name: "removed frontend sendInputReply", pattern: /\bsendInputReply\b/ },
-  { name: "removed resolvedInputReplies map", pattern: /\bresolvedInputReplies\b/ },
-  { name: "removed markInputReplyCompleted", pattern: /\bmarkInputReplyCompleted\b/ },
-  { name: "removed buildInputReplyMessage synthetic tool_result helper", pattern: /\bbuildInputReplyMessage\b/ },
+  {
+    name: "removed resolvedInputReplies map",
+    pattern: /\bresolvedInputReplies\b/,
+  },
+  {
+    name: "removed markInputReplyCompleted",
+    pattern: /\bmarkInputReplyCompleted\b/,
+  },
+  {
+    name: "removed buildInputReplyMessage synthetic tool_result helper",
+    pattern: /\bbuildInputReplyMessage\b/,
+  },
 
-  { name: "removed tool.approval_requested event type", pattern: /tool\.approval_requested/ },
-  { name: "removed tool.approval_resolved event type", pattern: /tool\.approval_resolved/ },
-  { name: "removed EventApprovalRequested/Resolved Go consts", pattern: /\bEventApproval(Requested|Resolved)\b/ },
+  {
+    name: "removed tool.approval_requested event type",
+    pattern: /tool\.approval_requested/,
+  },
+  {
+    name: "removed tool.approval_resolved event type",
+    pattern: /tool\.approval_resolved/,
+  },
+  {
+    name: "removed EventApprovalRequested/Resolved Go consts",
+    pattern: /\bEventApproval(Requested|Resolved)\b/,
+  },
 
-  { name: "removed needs_input_announcement metaKind/row", pattern: /needs_input_announcement/ },
-  { name: "removed projectNeedsInputAnnouncement projection", pattern: /\bprojectNeedsInputAnnouncement\b/ },
-  { name: "removed isProjectionNeedsInputAnnouncement predicate", pattern: /\bisProjectionNeedsInputAnnouncement\b/ },
+  {
+    name: "removed needs_input_announcement metaKind/row",
+    pattern: /needs_input_announcement/,
+  },
+  {
+    name: "removed projectNeedsInputAnnouncement projection",
+    pattern: /\bprojectNeedsInputAnnouncement\b/,
+  },
+  {
+    name: "removed isProjectionNeedsInputAnnouncement predicate",
+    pattern: /\bisProjectionNeedsInputAnnouncement\b/,
+  },
 
-  { name: "removed ask_user_answer user-message display kind", pattern: /ask_user_answer/ },
-  { name: "removed askUserAnswers transcript decoration", pattern: /\baskUserAnswers\b/ },
-  { name: "removed AskUserAnswerDisplay builder", pattern: /\bAskUserAnswerDisplay\b/ },
-  { name: "removed endTurnAwaitingInput runner method", pattern: /\bendTurnAwaitingInput\b/ },
+  {
+    name: "removed ask_user_answer user-message display kind",
+    pattern: /ask_user_answer/,
+  },
+  {
+    name: "removed askUserAnswers transcript decoration",
+    pattern: /\baskUserAnswers\b/,
+  },
+  {
+    name: "removed AskUserAnswerDisplay builder",
+    pattern: /\bAskUserAnswerDisplay\b/,
+  },
+  {
+    name: "removed endTurnAwaitingInput runner method",
+    pattern: /\bendTurnAwaitingInput\b/,
+  },
+  {
+    name: "removed RunNeedsInputAnnouncement transcript row",
+    pattern: /\bRunNeedsInputAnnouncement\b/,
+  },
+  {
+    name: "removed needs-input announcement CSS",
+    pattern: /run-needs-input-announcement/,
+  },
   {
     name: "removed turn.awaiting_input terminal registration",
     pattern: /func IsTurnTerminalEvent[\s\S]{0,500}EventTurnAwaitingInput/,
@@ -87,6 +144,16 @@ const required = [
     file: "schemas/tank-conversation-event.schema.json",
     name: "turn.awaiting_input event type",
     pattern: /"turn\.awaiting_input"/,
+  },
+  {
+    file: "schemas/tank-conversation-event.schema.json",
+    name: "assistant_message.created event type",
+    pattern: /"assistant_message\.created"/,
+  },
+  {
+    file: "schemas/tank-conversation-event.schema.json",
+    name: "turn.awaiting_input.invocation event type",
+    pattern: /"turn\.awaiting_input\.invocation"/,
   },
   {
     file: "schemas/tank-conversation-event.schema.json",
@@ -178,7 +245,7 @@ const required = [
   {
     file: "agent-runner/src/runner.ts",
     name: "Claude runner counts input_reply answer shape",
-    pattern: /inputReplyAnswerShapeTotal\.labels\(inputReplyAnswerShape/,
+    pattern: /inputReplyAnswerShapeTotal[\s\S]{0,120}\.labels[\s\S]{0,120}inputReplyAnswerShape/,
   },
   {
     file: "agent-runner/src/adapters/claude.ts",
@@ -213,7 +280,7 @@ const required = [
   {
     file: "codex-runner/src/runner.ts",
     name: "Codex runner counts input_reply answer shape",
-    pattern: /inputReplyAnswerShapeTotal\.labels\(inputReplyAnswerShape/,
+    pattern: /inputReplyAnswerShapeTotal[\s\S]{0,120}\.labels[\s\S]{0,120}inputReplyAnswerShape/,
   },
   {
     file: "codex-runner/src/runner.ts",
@@ -223,8 +290,8 @@ const required = [
 
   {
     file: "backend-go/cmd/tank-operator/transcript_projection.go",
-    name: "projection emits the awaiting_input card",
-    pattern: /projectAwaitingInputCard|"awaiting_input"/,
+    name: "projection renders derived assistant question messages",
+    pattern: /applyAssistantMessage[\s\S]{0,1200}awaitingInput/,
   },
   {
     file: "backend-go/cmd/tank-operator/transcript_projection.go",
@@ -238,8 +305,8 @@ const required = [
   },
   {
     file: "frontend/src/App.tsx",
-    name: "RunNeedsInputAnnouncement is the restored transcript question button",
-    pattern: /\bRunNeedsInputAnnouncement\b/,
+    name: "assistant question message carries the answer affordance",
+    pattern: /run-msg-question-action[\s\S]{0,400}Answer in Turns/,
   },
   {
     file: "frontend/src/App.tsx",
@@ -298,13 +365,17 @@ for (const rule of required) {
     text = await fs.readFile(absolutePath, "utf8");
   } catch (err) {
     if (err && err.code === "ENOENT") {
-      failures.push(`REQUIRED   ${rule.file}: anchor file missing (cannot verify "${rule.name}")`);
+      failures.push(
+        `REQUIRED   ${rule.file}: anchor file missing (cannot verify "${rule.name}")`,
+      );
       continue;
     }
     throw err;
   }
   if (!rule.pattern.test(text)) {
-    failures.push(`REQUIRED   ${rule.file}: missing "${rule.name}" (pattern ${rule.pattern})`);
+    failures.push(
+      `REQUIRED   ${rule.file}: missing "${rule.name}" (pattern ${rule.pattern})`,
+    );
   }
 }
 
@@ -312,9 +383,15 @@ if (failures.length > 0) {
   console.error("AskUserQuestion migration guard failed:");
   for (const failure of failures) console.error(`- ${failure}`);
   console.error("");
-  console.error("Each FORBIDDEN entry is a retired AskUserQuestion surface that came back;");
-  console.error("each REQUIRED entry is a piece of the handoff/continuation-turn contract.");
-  console.error("See scripts/check-askuserquestion-migration.mjs and docs/migration-policy.md.");
+  console.error(
+    "Each FORBIDDEN entry is a retired AskUserQuestion surface that came back;",
+  );
+  console.error(
+    "each REQUIRED entry is a piece of the handoff/continuation-turn contract.",
+  );
+  console.error(
+    "See scripts/check-askuserquestion-migration.mjs and docs/migration-policy.md.",
+  );
   process.exit(1);
 }
 

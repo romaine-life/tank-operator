@@ -120,15 +120,17 @@ type turnUsageProjection struct {
 // page renders from this (questions + ids), and "answered" is derived from a
 // later turn.input_answered event targeting the same question set.
 type projectionAwaitingInput struct {
-	AskingTurnID   string
-	ProviderItemID string
-	TimelineID     string
-	Questions      []any
-	QuestionIndex  int
-	QuestionSet    int
-	OrderKey       string
-	Time           string
-	SourceEventID  string
+	AskingTurnID       string
+	QuestionTurnID     string
+	ProviderItemID     string
+	ProviderTimelineID string
+	TimelineID         string
+	Questions          []any
+	QuestionIndex      int
+	QuestionSet        int
+	OrderKey           string
+	Time               string
+	SourceEventID      string
 }
 
 type projectionAnsweredInput struct {
@@ -155,7 +157,9 @@ func projectTranscriptEvents(events []map[string]any) transcriptProjection {
 	flat := state.projectFlatEntries()
 	assignSessionStatusOwnership(flat)
 	flat = dropOrphanSessionLifecycle(flat)
-	return compactProjectedTranscript(flat, state.activeTurnID, state.runStatus, state.turnTerminals)
+	projection := compactProjectedTranscript(flat, state.activeTurnID, state.runStatus, state.turnTerminals)
+	projection.Entries = filterMainTranscriptQuestionTurnRows(projection.Entries)
+	return projection
 }
 
 func orderedTranscriptEvents(events []map[string]any) []map[string]any {
@@ -193,6 +197,8 @@ func (s *projectionState) apply(event map[string]any) {
 	switch transcriptString(event, "type") {
 	case "user_message.created":
 		s.applyUserMessage(event)
+	case "assistant_message.created":
+		s.applyAssistantMessage(event)
 	case "turn.submitted":
 		if _, terminal := s.turnTerminals[transcriptString(event, "turn_id")]; !terminal {
 			s.runStatus = "submitted"
@@ -265,11 +271,16 @@ func (s *projectionState) apply(event map[string]any) {
 	case "turn.awaiting_input":
 		// The agent asked the user a question as the Tank-visible response.
 		// The durable question set owns the Turn question page; the main
-		// transcript keeps the same durable meta row as the assistant handoff.
+		// transcript uses the derived assistant_message.created event as the
+		// terminal assistant response.
 		s.applyAwaitingInput(event)
 		s.runStatus = "needs_input"
 		s.needsInput = true
-		s.activeTurnID = transcriptString(event, "turn_id")
+		if questionTurnID := transcriptPayloadString(event, "question_turn_id"); questionTurnID != "" {
+			s.activeTurnID = questionTurnID
+		} else {
+			s.activeTurnID = transcriptString(event, "turn_id")
+		}
 		s.activeItemID = ""
 	case "turn.awaiting_input.invocation":
 		s.applyAwaitingInputInvocation(event)
@@ -325,6 +336,37 @@ func (s *projectionState) applyUserMessage(event map[string]any) {
 	})
 }
 
+func (s *projectionState) applyAssistantMessage(event map[string]any) {
+	text := transcriptPayloadString(event, "text")
+	if text == "" {
+		text = transcriptPayloadString(event, "message")
+	}
+	if transcriptString(event, "timeline_id") == "" || transcriptString(event, "turn_id") == "" || strings.TrimSpace(text) == "" {
+		return
+	}
+	entry := map[string]any{
+		"id":            transcriptString(event, "timeline_id"),
+		"kind":          "message",
+		"role":          "assistant",
+		"text":          strings.TrimSpace(text),
+		"turnId":        transcriptString(event, "turn_id"),
+		"time":          transcriptString(event, "created_at"),
+		"sourceEventId": transcriptString(event, "event_id"),
+		"orderKey":      transcriptString(event, "order_key"),
+	}
+	if display := transcriptPayloadMap(event, "display"); display != nil {
+		entry["display"] = display
+	}
+	if awaiting := transcriptPayloadMap(event, "awaiting_input"); awaiting != nil {
+		entry["awaitingInput"] = projectionAwaitingInputPayloadFromMap(awaiting, false, projectionAnsweredInput{})
+	}
+	s.messages = append(s.messages, projectedEntryItem{
+		entry:    entry,
+		orderKey: transcriptString(event, "order_key"),
+		index:    len(s.messages),
+	})
+}
+
 func (s *projectionState) applyInputAnswered(event map[string]any) {
 	payload := transcriptPayload(event)
 	timelineID := transcriptMapString(payload, "question_timeline_id")
@@ -338,6 +380,19 @@ func (s *projectionState) applyInputAnswered(event map[string]any) {
 		Answered:    true,
 		Answers:     transcriptAnyMap(payload["answers"]),
 		Annotations: transcriptAnyMap(payload["annotations"]),
+	}
+	for idx := range s.messages {
+		awaiting, _ := s.messages[idx].entry["awaitingInput"].(map[string]any)
+		if transcriptMapString(awaiting, "timelineId") != timelineID {
+			continue
+		}
+		awaiting["answered"] = true
+		if answers := transcriptAnyMap(payload["answers"]); answers != nil {
+			awaiting["answers"] = answers
+		}
+		if annotations := transcriptAnyMap(payload["annotations"]); annotations != nil {
+			awaiting["annotations"] = annotations
+		}
 	}
 }
 
@@ -476,16 +531,19 @@ func (s *projectionState) applyAwaitingInput(event map[string]any) {
 	if len(questions) == 0 {
 		return
 	}
+	payload := transcriptPayload(event)
 	s.awaitingInputs = append(s.awaitingInputs, projectionAwaitingInput{
-		AskingTurnID:   turnID,
-		ProviderItemID: transcriptPayloadString(event, "provider_item_id"),
-		TimelineID:     projectionFirstNonEmpty(transcriptPayloadString(event, "timeline_id"), transcriptString(event, "timeline_id")),
-		Questions:      questions,
-		QuestionIndex:  projectionAwaitingInputQuestionIndex(event),
-		QuestionSet:    projectionAwaitingInputQuestionSet(event),
-		OrderKey:       transcriptString(event, "order_key"),
-		Time:           transcriptString(event, "created_at"),
-		SourceEventID:  transcriptString(event, "event_id"),
+		AskingTurnID:       projectionFirstNonEmpty(transcriptMapString(payload, "asking_turn_id"), turnID),
+		QuestionTurnID:     turnID,
+		ProviderItemID:     transcriptMapString(payload, "provider_item_id"),
+		ProviderTimelineID: transcriptMapString(payload, "provider_timeline_id"),
+		TimelineID:         projectionFirstNonEmpty(transcriptMapString(payload, "timeline_id"), transcriptString(event, "timeline_id")),
+		Questions:          questions,
+		QuestionIndex:      projectionAwaitingInputQuestionIndex(event),
+		QuestionSet:        projectionAwaitingInputQuestionSet(event),
+		OrderKey:           transcriptString(event, "order_key"),
+		Time:               transcriptString(event, "created_at"),
+		SourceEventID:      transcriptString(event, "event_id"),
 	})
 }
 
@@ -1558,49 +1616,38 @@ func isProjectionAwaitingInputEntry(entry map[string]any) bool {
 		transcriptMapString(entry, "metaKind") == "awaiting_input"
 }
 
-// projectAwaitingInputCard projects a turn.awaiting_input pause into the
-// asking turn's activity detail as the question-set payload and into the main
-// transcript as the assistant handoff row. It is anchored at the asking turn's tail
-// (orderKey + "~awaiting_input") so historical replay and live streaming agree
-// on placement. `answered` is derived from a later turn.input_answered event,
-// not a browser-local flag, so a fresh tab opened after the user answered
-// renders the resolved question set.
+// projectAwaitingInputCard projects a question turn's turn.awaiting_input pause
+// into the Turn question page. The main transcript handoff is the separate
+// derived assistant_message.created event. `answered` is derived from a later
+// turn.input_answered event, not a browser-local flag, so a fresh tab opened
+// after the user answered renders the resolved question set.
 func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectionAnsweredInput) map[string]any {
 	summary := awaitingInputSummary(awaiting.Questions)
 	title := "I need your input"
 	answered := answer.Answered
-	if answered {
-		title = "Input answered"
-	}
 	orderKey := awaiting.OrderKey
 	if orderKey != "" {
 		orderKey = orderKey + "~awaiting_input"
 	}
 	anchor := awaiting.TimelineID
 	if anchor == "" {
-		anchor = awaiting.AskingTurnID
+		anchor = awaiting.QuestionTurnID
 	}
-	awaitingInput := map[string]any{
-		"askingTurnId":   awaiting.AskingTurnID,
-		"providerItemId": awaiting.ProviderItemID,
-		"timelineId":     awaiting.TimelineID,
-		"questionCount":  len(awaiting.Questions),
-		"questionIndex":  awaiting.QuestionIndex,
-		"questionSet":    awaiting.QuestionSet,
-		"questions":      awaiting.Questions,
-		"answered":       answered,
-	}
-	if answer.Answers != nil {
-		awaitingInput["answers"] = answer.Answers
-	}
-	if answer.Annotations != nil {
-		awaitingInput["annotations"] = answer.Annotations
-	}
+	awaitingInput := projectionAwaitingInputPayloadFromMap(map[string]any{
+		"asking_turn_id":       awaiting.AskingTurnID,
+		"question_turn_id":     awaiting.QuestionTurnID,
+		"provider_item_id":     awaiting.ProviderItemID,
+		"timeline_id":          awaiting.TimelineID,
+		"provider_timeline_id": awaiting.ProviderTimelineID,
+		"questions":            awaiting.Questions,
+		"question_index":       awaiting.QuestionIndex,
+		"question_set":         awaiting.QuestionSet,
+	}, answered, answer)
 	return map[string]any{
 		"id":             anchor + ":awaiting_input",
 		"kind":           "meta",
 		"metaKind":       "awaiting_input",
-		"turnId":         awaiting.AskingTurnID,
+		"turnId":         awaiting.QuestionTurnID,
 		"providerItemId": awaiting.ProviderItemID,
 		"time":           awaiting.Time,
 		"orderKey":       orderKey,
@@ -1612,6 +1659,33 @@ func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectio
 		},
 		"awaitingInput": awaitingInput,
 	}
+}
+
+func projectionAwaitingInputPayloadFromMap(raw map[string]any, answered bool, answer projectionAnsweredInput) map[string]any {
+	questions, _ := raw["questions"].([]any)
+	out := map[string]any{
+		"askingTurnId":       transcriptMapString(raw, "asking_turn_id"),
+		"questionTurnId":     transcriptMapString(raw, "question_turn_id"),
+		"providerItemId":     transcriptMapString(raw, "provider_item_id"),
+		"timelineId":         transcriptMapString(raw, "timeline_id"),
+		"providerTimelineId": transcriptMapString(raw, "provider_timeline_id"),
+		"questionCount":      len(questions),
+		"questions":          questions,
+		"answered":           answered,
+	}
+	if idx, ok := transcriptNumeric(raw["question_index"]); ok {
+		out["questionIndex"] = int(idx)
+	}
+	if set, ok := transcriptNumeric(raw["question_set"]); ok {
+		out["questionSet"] = int(set)
+	}
+	if answer.Answers != nil {
+		out["answers"] = answer.Answers
+	}
+	if answer.Annotations != nil {
+		out["annotations"] = answer.Annotations
+	}
+	return out
 }
 
 func awaitingInputSummary(questions []any) string {
@@ -1638,6 +1712,50 @@ func awaitingInputSummary(questions []any) string {
 
 func isProjectedAssistantMessage(entry map[string]any) bool {
 	return transcriptMapString(entry, "kind") == "message" && transcriptMapString(entry, "role") == "assistant"
+}
+
+func filterMainTranscriptQuestionTurnRows(entries []map[string]any) []map[string]any {
+	out := entries[:0]
+	for _, entry := range entries {
+		if isProjectionSessionStatus(entry) && transcriptMapString(entry, "sessionStatus") != "failed" {
+			continue
+		}
+		if isProjectionAwaitingInputEntry(entry) {
+			continue
+		}
+		if isProjectionAwaitingInputToolEntry(entry) {
+			continue
+		}
+		if isQuestionOnlyTurnActivityShell(entry) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
+}
+
+func isProjectionAwaitingInputToolEntry(entry map[string]any) bool {
+	return transcriptMapString(entry, "kind") == "tool" &&
+		transcriptMapString(entry, "toolName") == "AskUserQuestion" &&
+		strings.HasSuffix(transcriptMapString(entry, "id"), ":ask_user_question_invocation")
+}
+
+func isQuestionOnlyTurnActivityShell(entry map[string]any) bool {
+	if transcriptMapString(entry, "kind") != "turn_activity" {
+		return false
+	}
+	activity, _ := entry["activity"].(map[string]any)
+	if transcriptMapString(activity, "status") != "needs_input" {
+		return false
+	}
+	ids, _ := entry["activityIds"].([]string)
+	if len(ids) == 0 {
+		if count, ok := transcriptNumeric(activity["questionCount"]); ok && count == 1 {
+			return true
+		}
+		return false
+	}
+	return len(ids) == 1 && strings.Contains(ids[0], ":awaiting_input")
 }
 
 func isProjectionTerminalMetaEntry(entry map[string]any, terminal turnTerminalProjection) bool {

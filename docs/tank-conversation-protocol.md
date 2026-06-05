@@ -318,11 +318,11 @@ projection has two distinct surfaces:
 
 The main transcript is promotion-only. User messages, durable session/system
 notices, terminal meta rows, and explicitly promoted final-answer assistant rows
-belong there. AskUserQuestion's `turn.awaiting_input` meta row also belongs
-there as the `RunNeedsInputAnnouncement` assistant handoff row to the question
-set; the Turn question page owns the interactive answer form for the same
-durable question set. Answering the form writes `turn.input_answered` for the
-question-set state and also writes a normal `user_message.created` plus
+belong there. AskUserQuestion promotes a derived
+`assistant_message.created` question message on the asking turn; that message
+links to the numbered question turn. The Turn question page owns the
+interactive answer form for the same durable question set. Answering the form
+writes `turn.input_answered` for the question-set state and also writes a normal `user_message.created` plus
 `turn.submitted` pair whose client nonce owns the continuation turn. If the
 provider callback resumes from the same underlying harness run, the runner
 rotates subsequent provider events onto that continuation turn. Provider
@@ -935,13 +935,15 @@ questions and publishes durable `turn.awaiting_input`:
 }
 ```
 
-`turn.awaiting_input` is not a turn terminal. The asking turn's `submit_turn`
-stays in flight with runner heartbeats, the run-state becomes `needs_input`,
-and `activeTurnId` remains the asking turn. The turn-page projection renders a
+`turn.awaiting_input` is not a turn terminal. The runner may keep the provider
+callback parked, but Tank UI treats AskUserQuestion as a turn boundary: the
+asking turn records `turn.awaiting_input.invocation` plus a derived
+`assistant_message.created` question message, and the next numbered question
+turn records `turn.awaiting_input`. The run-state becomes `needs_input`, and
+`activeTurnId` is the question turn. The turn-page projection renders a
 semantic `question_set` page (`metaKind: "awaiting_input"`, carrying the
-questions + target ids) anchored at the asking turn's tail. The main transcript
-gets the same durable meta row as the `RunNeedsInputAnnouncement` assistant
-handoff row to the question set.
+questions + target ids) on the question turn. The main transcript gets only the
+derived assistant question message, with an affordance to open the question set.
 
 - **Claude**: the runner's `canUseTool` callback, on AskUserQuestion, publishes
   `turn.awaiting_input` and keeps the permission callback pending. When
