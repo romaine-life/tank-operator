@@ -13,9 +13,16 @@ import (
 )
 
 type conversationSchema struct {
-	Properties map[string]struct {
-		Enum []string `json:"enum"`
-	} `json:"properties"`
+	Properties map[string]conversationSchemaProperty `json:"properties"`
+	Defs       map[string]conversationSchemaDef      `json:"$defs"`
+}
+
+type conversationSchemaDef struct {
+	Properties map[string]conversationSchemaProperty `json:"properties"`
+}
+
+type conversationSchemaProperty struct {
+	Enum []string `json:"enum"`
 }
 
 type conversationFixtures struct {
@@ -57,6 +64,27 @@ func TestContractEnumsMatchSchema(t *testing.T) {
 				t.Fatalf("%s enum drift:\nGo:     %#v\nSchema: %#v", tt.name, actual, expected)
 			}
 		})
+	}
+}
+
+func TestContractTurnSubmittedSourceEnumMatchesSchema(t *testing.T) {
+	schemaBytes, err := os.ReadFile("../../../schemas/tank-conversation-event.schema.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema conversationSchema
+	if err := json.Unmarshal(schemaBytes, &schema); err != nil {
+		t.Fatal(err)
+	}
+
+	statusPayload := schema.Defs["statusPayload"]
+	expected := statusPayload.Properties["source"].Enum
+	if len(expected) == 0 {
+		t.Fatal("schema $defs.statusPayload.properties.source has no enum")
+	}
+	actual := goStringConstants(t, "TurnSubmittedSource")
+	if !reflect.DeepEqual(actual, expected) {
+		t.Fatalf("turn.submitted payload.source enum drift:\nGo:     %#v\nSchema: %#v", actual, expected)
 	}
 }
 
@@ -107,6 +135,54 @@ func TestValidateEventMapAcceptsTurnUsage(t *testing.T) {
 	}
 	if err := ValidateEventMap(event); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestValidateEventMapAcceptsTurnSubmittedPayloadSource(t *testing.T) {
+	for _, source := range goStringConstants(t, "TurnSubmittedSource") {
+		t.Run(source, func(t *testing.T) {
+			event := validTurnSubmittedEvent()
+			event["payload"].(map[string]any)["source"] = source
+			if err := ValidateEventMap(event); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestValidateEventMapRejectsInvalidTurnSubmittedSource(t *testing.T) {
+	tests := []struct {
+		name string
+		edit func(map[string]any)
+		want string
+	}{
+		{
+			name: "invalid payload source",
+			edit: func(event map[string]any) {
+				event["payload"].(map[string]any)["source"] = "background-task-legacy"
+			},
+			want: "payload.source",
+		},
+		{
+			name: "background task cannot be envelope source",
+			edit: func(event map[string]any) {
+				event["source"] = "background-task"
+			},
+			want: "unknown source",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			event := validTurnSubmittedEvent()
+			tt.edit(event)
+			err := ValidateEventMap(event)
+			if err == nil {
+				t.Fatalf("ValidateEventMap succeeded, want error containing %q", tt.want)
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.want)
+			}
+		})
 	}
 }
 
@@ -548,4 +624,22 @@ func cloneMap(input map[string]any) map[string]any {
 		output[key] = value
 	}
 	return output
+}
+
+func validTurnSubmittedEvent() map[string]any {
+	return map[string]any{
+		"event_id":     "turn-1:turn.submitted",
+		"order_key":    "1768179842000-00000002-turn-1:turn.submitted",
+		"session_id":   "63",
+		"turn_id":      "turn-1",
+		"client_nonce": "client-1",
+		"actor":        "runner",
+		"source":       "tank",
+		"type":         "turn.submitted",
+		"created_at":   "2026-05-29T00:00:00.000Z",
+		"visibility":   "durable",
+		"payload": map[string]any{
+			"status": "submitted",
+		},
+	}
 }

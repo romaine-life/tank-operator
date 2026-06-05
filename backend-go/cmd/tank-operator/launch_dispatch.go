@@ -167,17 +167,18 @@ func (s *appServer) dispatchPendingLaunch(ctx context.Context, launch pgstore.Pe
 
 	prompt := composeLaunchDispatchPrompt(launch.SkillName, launch.BasePrompt, absPaths)
 	resp, status, detail := s.enqueueSDKTurn(ctx, launch.OwnerEmail, launch.SessionID, sdkTurnRequest{
-		ClientNonce:      launch.ClientNonce,
-		RequireNonce:     true,
-		Prompt:           prompt,
-		Model:            launch.Model,
-		Effort:           launch.Effort,
-		SkillName:        launch.SkillName,
-		OmitUserMessage:  true, // the launch user_message.created already exists
-		Source:           "launch-dispatch",
-		SessionMode:      info.Mode,
-		AllowBeforeReady: true, // claim already gated on session status = Active
-		CreatedAt:        now,
+		ClientNonce:                launch.ClientNonce,
+		RequireNonce:               true,
+		Prompt:                     prompt,
+		Model:                      launch.Model,
+		Effort:                     launch.Effort,
+		SkillName:                  launch.SkillName,
+		OmitUserMessage:            true, // the launch user_message.created already exists
+		RequireExistingUserMessage: true,
+		Source:                     "launch-dispatch",
+		SessionMode:                info.Mode,
+		AllowBeforeReady:           true, // claim already gated on session status = Active
+		CreatedAt:                  now,
 	})
 	if status != 0 {
 		// 4xx is a permanent rejection (bad prompt/skill, missing launch user
