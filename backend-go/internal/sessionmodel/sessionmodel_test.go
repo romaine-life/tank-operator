@@ -65,6 +65,33 @@ func TestNormalizeName(t *testing.T) {
 	}
 }
 
+func TestSessionDisplayName(t *testing.T) {
+	named := "  My session  "
+	if got, want := SessionDisplayName(&named, "session-622", "622"), "My session"; got != want {
+		t.Fatalf("set name = %q, want %q (returned verbatim, trimmed)", got, want)
+	}
+
+	if got, want := SessionDisplayName(nil, "session-622", "622"), "622"; got != want {
+		t.Fatalf("nil name = %q, want %q (derived from pod name)", got, want)
+	}
+
+	blank := "   "
+	if got, want := SessionDisplayName(&blank, "session-622", "622"), "622"; got != want {
+		t.Fatalf("whitespace name = %q, want %q (falls back to derived short id)", got, want)
+	}
+
+	if got, want := SessionDisplayName(nil, "", "47"), "47"; got != want {
+		t.Fatalf("empty pod name = %q, want %q (derives from session id)", got, want)
+	}
+
+	if got, want := SessionDisplayName(nil, "session-0123456789abcdef", "0123456789abcdef"), "01234567"; got != want {
+		t.Fatalf("long pod-derived id = %q, want %q (truncated to 8 chars after session- strip)", got, want)
+	}
+	if got, want := SessionDisplayName(nil, "", "0123456789abcdef"), "01234567"; got != want {
+		t.Fatalf("long session id = %q, want %q (truncated to 8 chars)", got, want)
+	}
+}
+
 func TestNormalizeSessionCapabilities(t *testing.T) {
 	got, err := NormalizeSessionCapabilities([]string{
 		"  " + SessionCapabilitySpireLensMCP + "  ",

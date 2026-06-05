@@ -534,6 +534,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		RequestedAt:    &requestedAt,
 		CreatedAt:      createdAt,
 		Name:           name,
+		DisplayName:    sessionmodel.SessionDisplayName(name, podName, sessionID),
 		Repos:          repos,
 		Capabilities:   capabilities,
 		BugLabel:       bugLabel,
