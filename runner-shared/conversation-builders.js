@@ -20,7 +20,7 @@ export function itemTimelineID(turnID, providerItemID) {
 }
 
 export function questionClientNonce(askingTurnID, providerTimelineID) {
-  return `question-${stableIDPart(`${askingTurnID}\0${providerTimelineID}`)}`;
+  return `question-${hashIDPart(`${askingTurnID}\0${providerTimelineID}`)}`;
 }
 
 export function questionMessageTimelineID(askingTurnID, providerTimelineID) {
@@ -483,10 +483,17 @@ export function stableIDPart(value) {
   const trimmed = String(value ?? "").trim();
   let safe = trimmed.replace(/[^A-Za-z0-9_.:-]+/g, "-");
   safe = safe.replace(/-+/g, "-").replace(/^-|-$/g, "");
-  const hash = createHash("sha256").update(trimmed).digest("hex").slice(0, 12);
+  const hash = hashIDPart(trimmed);
   if (safe.length >= 6 && safe.length <= 80) return safe;
   if (safe.length > 80) return `${safe.slice(0, 64)}-${hash}`;
   return hash;
+}
+
+function hashIDPart(value) {
+  return createHash("sha256")
+    .update(String(value ?? ""))
+    .digest("hex")
+    .slice(0, 12);
 }
 
 function userMessageDisplay(skillName, text) {

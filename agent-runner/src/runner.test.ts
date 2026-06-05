@@ -18,6 +18,7 @@ import {
   type TankConversationEvent,
 } from "../../runner-shared/conversation.js";
 import {
+  askUserQuestionHandoffEvents,
   stampTankEvent,
   turnEvent,
   userSubmissionEvents,
@@ -146,6 +147,31 @@ test("claudeRateLimitInfo keeps the SDK rate-limit fields admins need", () => {
       uuid: "rate-limit-1",
       session_id: "sdk-session-1",
     },
+  );
+});
+
+test("AskUserQuestion handoff emits a route-safe question turn id", () => {
+  const handoff = askUserQuestionHandoffEvents({
+    sessionID: "63",
+    askingTurnID: "turn_askq-test-1780648459",
+    askingClientNonce: "askq-test-1780648459",
+    source: "claude",
+    providerItemID: "toolu_01CmiCoRsbHCRZwTAT8P2pNZ",
+    providerTimelineID:
+      "turn_askq-test-1780648459:item:toolu_01CmiCoRsbHCRZwTAT8P2pNZ",
+    questions: [
+      { question: "Which cat coat color do you like best?" },
+      { question: "Which cat behavior is your favorite?" },
+    ],
+  });
+
+  assert.match(handoff.questionTurnID, /^[A-Za-z0-9._-]{1,80}$/);
+  assert.equal(handoff.questionTurnID.includes(":"), false);
+  assert.equal(handoff.questionSubmitted.turn_id, handoff.questionTurnID);
+  assert.ok(handoff.awaitingInput.payload);
+  assert.equal(
+    handoff.awaitingInput.payload.question_turn_id,
+    handoff.questionTurnID,
   );
 });
 
