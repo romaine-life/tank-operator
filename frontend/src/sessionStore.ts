@@ -62,6 +62,10 @@ export interface SessionRow {
   session_scope: string;
   pod_name?: string;
   name?: string | null;
+  // Server-computed session title, always present on the wire. The trimmed
+  // user `name` when set, else a backend-derived short id slug. The SPA
+  // renders this verbatim rather than deriving a local fallback.
+  display_name: string;
   visible: boolean;
   status: string;
   requested_at?: string;
@@ -484,7 +488,11 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
   const id = stringField(rowRaw, "id");
   const owner = stringField(rowRaw, "owner");
   const sessionScope = stringField(rowRaw, "session_scope");
-  if (!id || !owner || !sessionScope) return null;
+  // display_name is a required server field on every row-update frame; a
+  // frame missing it is a contract violation, so drop it like any other
+  // malformed frame rather than locally re-deriving a title fallback.
+  const displayName = stringField(rowRaw, "display_name");
+  if (!id || !owner || !sessionScope || !displayName) return null;
   const visible = rowRaw.visible === true;
   const rowVersion = numberField(rowRaw, "row_version");
   const sidebarPosition = numberField(rowRaw, "sidebar_position");
@@ -498,6 +506,7 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       session_scope: sessionScope,
       pod_name: stringField(rowRaw, "pod_name") ?? undefined,
       name: nullableStringField(rowRaw, "name"),
+      display_name: displayName,
       visible,
       status: stringField(rowRaw, "status") ?? "Pending",
       requested_at: stringField(rowRaw, "requested_at") ?? undefined,
