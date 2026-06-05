@@ -1,0 +1,676 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AskUserQuestion Turn Flow</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0d0f12;
+      --panel: #15191f;
+      --panel-2: #101419;
+      --border: #2b333d;
+      --text: #e8edf2;
+      --muted: #9ca8b5;
+      --accent: #68c3d4;
+      --bad: #f08a8a;
+      --good: #7bd88f;
+      --warn: #e0bf6a;
+      --code: #0b0e12;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+    }
+
+    header {
+      border-bottom: 1px solid var(--border);
+      background: #090b0e;
+      padding: 16px 22px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      font-weight: 650;
+      letter-spacing: 0;
+    }
+
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    button {
+      appearance: none;
+      border: 1px solid var(--border);
+      background: #18202a;
+      color: var(--text);
+      min-height: 34px;
+      padding: 0 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font: inherit;
+    }
+
+    button:hover {
+      border-color: #51606f;
+      background: #202a35;
+    }
+
+    button:disabled {
+      opacity: 0.45;
+      cursor: default;
+    }
+
+    .step-index {
+      min-width: 88px;
+      text-align: center;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    nav {
+      border-right: 1px solid var(--border);
+      background: #0a0d11;
+      padding: 14px;
+      overflow: auto;
+    }
+
+    .step-tab {
+      width: 100%;
+      min-height: 40px;
+      text-align: left;
+      margin-bottom: 8px;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .step-tab.active {
+      color: var(--text);
+      border-color: var(--accent);
+      background: #102129;
+    }
+
+    .content {
+      padding: 22px;
+      overflow: auto;
+    }
+
+    .summary {
+      display: grid;
+      gap: 8px;
+      margin-bottom: 18px;
+      max-width: 1100px;
+    }
+
+    .summary h2 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0;
+    }
+
+    .summary p {
+      margin: 0;
+      color: var(--muted);
+      max-width: 920px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 14px;
+      align-items: start;
+    }
+
+    .panel {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      border-radius: 8px;
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .panel h3 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 13px;
+      color: var(--muted);
+      background: var(--panel-2);
+      border-bottom: 1px solid var(--border);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .panel-body {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .turn,
+    .row,
+    .page {
+      border: 1px solid #28313b;
+      background: #11161d;
+      border-radius: 6px;
+      padding: 10px;
+      min-width: 0;
+    }
+
+    .turn.active,
+    .page.active {
+      border-color: var(--accent);
+      background: #102029;
+    }
+
+    .turn.needs-input,
+    .page.question {
+      border-color: var(--warn);
+      background: #221d12;
+    }
+
+    .turn.answered,
+    .turn.done,
+    .page.answered,
+    .page.done,
+    .row.done {
+      border-color: var(--good);
+      background: #102016;
+    }
+
+    .row.assistant-question {
+      border-color: var(--warn);
+    }
+
+    .row.user {
+      border-color: #5b6f91;
+    }
+
+    .label {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 6px;
+      color: var(--muted);
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .badge {
+      border: 1px solid #394654;
+      border-radius: 999px;
+      padding: 1px 7px;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+
+    .badge.bad {
+      color: var(--bad);
+      border-color: #6b3737;
+    }
+
+    .badge.good {
+      color: var(--good);
+      border-color: #34643d;
+    }
+
+    .badge.warn {
+      color: var(--warn);
+      border-color: #64552b;
+    }
+
+    pre {
+      margin: 0;
+      padding: 10px;
+      overflow: auto;
+      border-radius: 6px;
+      background: var(--code);
+      color: #dbe6ee;
+      border: 1px solid #252d36;
+      font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    }
+
+    .note {
+      border-left: 3px solid var(--accent);
+      background: #101820;
+      padding: 10px 12px;
+      color: var(--muted);
+      max-width: 1100px;
+      margin-top: 14px;
+      border-radius: 0 6px 6px 0;
+    }
+
+    .wrong {
+      border-left-color: var(--bad);
+    }
+
+    .empty {
+      color: var(--muted);
+      border: 1px dashed #35414d;
+      border-radius: 6px;
+      padding: 12px;
+      text-align: center;
+    }
+
+    @media (max-width: 1100px) {
+      main {
+        grid-template-columns: 1fr;
+      }
+
+      nav {
+        display: flex;
+        gap: 8px;
+        overflow-x: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .step-tab {
+        min-width: 220px;
+      }
+
+      .grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <header>
+      <h1>AskUserQuestion: Turns, Pages, Main Transcript</h1>
+      <div class="controls">
+        <button id="prev" type="button">Previous</button>
+        <span id="stepIndex" class="step-index"></span>
+        <button id="next" type="button">Next</button>
+      </div>
+    </header>
+    <main>
+      <nav id="nav"></nav>
+      <section class="content">
+        <div class="summary">
+          <h2 id="title"></h2>
+          <p id="description"></p>
+        </div>
+        <div class="grid">
+          <section class="panel">
+            <h3>turns[]</h3>
+            <div id="turns" class="panel-body"></div>
+          </section>
+          <section class="panel">
+            <h3>pagesByTurn</h3>
+            <div id="pages" class="panel-body"></div>
+          </section>
+          <section class="panel">
+            <h3>mainTranscriptRows[]</h3>
+            <div id="rows" class="panel-body"></div>
+          </section>
+          <section class="panel">
+            <h3>liveTailPlaceholders[]</h3>
+            <div id="placeholder" class="panel-body"></div>
+          </section>
+        </div>
+        <div id="note" class="note"></div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const steps = [
+      {
+        title: "1. User submits a prompt",
+        description: "A normal user turn is created. The main transcript gets the durable user message. The turn detail gets an activity page.",
+        turns: [
+          { id: "turn_A", turnNumber: 1, status: "active" },
+        ],
+        pages: {
+          turn_A: [
+            { kind: "activity", status: "active", entries: ["turn.submitted"] },
+          ],
+        },
+        rows: [
+          { kind: "user", turn: "turn_A", text: "post three messages about variables animals..." },
+        ],
+        placeholders: [
+          { id: "ph_1", kind: "thinking", owner: "turn_A", status: "active", text: "Thinking..." },
+        ],
+        note: "The first placeholder is appended when turn_A starts producing assistant-side work.",
+      },
+      {
+        title: "2. Agent emits provisional prose",
+        description: "The assistant says something before the turn has completed. Under the stricter transcript contract, this is activity, not settled transcript.",
+        turns: [
+          { id: "turn_A", turnNumber: 1, status: "active" },
+        ],
+        pages: {
+          turn_A: [
+            { kind: "activity", status: "active", entries: ["turn.submitted", "assistant activity: `cat_count`..."] },
+          ],
+        },
+        rows: [
+          { kind: "user", turn: "turn_A", text: "post three messages about variables animals..." },
+        ],
+        placeholders: [
+          { id: "ph_1", kind: "thinking", owner: "turn_A", status: "active", text: "Thinking..." },
+        ],
+        note: "A normal assistant message should not enter mainTranscriptRows unless a durable promotion fact, such as final_answer.timeline_ids, says it is settled conversation.",
+      },
+      {
+        title: "3. Agent invokes AskUserQuestion",
+        description: "AskUserQuestion ends the assistant-visible output for turn_A and creates turn_Q, a question-only turn. Turn A keeps only its activity page. Each question in the set becomes a page under turn_Q.",
+        turns: [
+          { id: "turn_A", turnNumber: 1, kind: "agent", status: "done" },
+          { id: "turn_Q", turnNumber: 2, kind: "question_only", status: "needs_input" },
+        ],
+        pages: {
+          turn_A: [
+            { kind: "activity", status: "done", entries: ["turn.submitted", "assistant activity: `cat_count`...", "tool: AskUserQuestion invoked", "assistant synthetic question prose: 1. Which animal habitat...?"] },
+          ],
+          turn_Q: [
+            { kind: "question", questionSet: "qset_1", questionIndex: 1, questionCount: 3, status: "pending", entries: ["Habitat?"] },
+            { kind: "question", questionSet: "qset_1", questionIndex: 2, questionCount: 3, status: "pending", entries: ["Behavior?"] },
+            { kind: "question", questionSet: "qset_1", questionIndex: 3, questionCount: 3, status: "pending", entries: ["Favorite group?"] },
+          ],
+        },
+        rows: [
+          { kind: "user", turn: "turn_A", text: "post three messages about variables animals..." },
+          { kind: "assistant-question", turn: "turn_A", text: "1. Which animal habitat sounds most interesting to you?\n2. Which animal behavior should we focus on?\n3. Which animal group do you prefer?" },
+        ],
+        placeholders: [
+          { id: "ph_1", kind: "done", previousKind: "thinking", owner: "turn_A", status: "resolved", text: "Done" },
+          { id: "ph_2", kind: "needs_input", owner: "turn_Q", causedByTurn: "turn_A", questionSet: "qset_1", status: "active", text: "Answer question..." },
+        ],
+        note: "AskUserQuestion resolves the first Thinking placeholder and appends a needs-input placeholder owned by turn_Q. The question-only turn is real and numbered; its pages are question pages only.",
+      },
+      {
+        title: "4. User answers",
+        description: "The question page becomes answered. A normal continuation turn is created for the user's answer.",
+        turns: [
+          { id: "turn_A", turnNumber: 1, status: "answered" },
+          { id: "turn_Q", turnNumber: 2, kind: "question_only", status: "answered" },
+          { id: "turn_B", turnNumber: 3, kind: "agent", status: "active" },
+        ],
+        pages: {
+          turn_A: [
+            { kind: "activity", status: "done", entries: ["turn.submitted", "assistant activity: `cat_count`...", "tool: AskUserQuestion invoked", "assistant synthetic question prose: 1. Which animal habitat...?"] },
+          ],
+          turn_Q: [
+            { kind: "question", questionSet: "qset_1", questionIndex: 1, questionCount: 3, status: "answered", entries: ["Habitat = Forest"] },
+            { kind: "question", questionSet: "qset_1", questionIndex: 2, questionCount: 3, status: "answered", entries: ["Behavior = Migration"] },
+            { kind: "question", questionSet: "qset_1", questionIndex: 3, questionCount: 3, status: "answered", entries: ["Group = Mammals"] },
+          ],
+          turn_B: [
+            { kind: "activity", status: "active", entries: ["turn.submitted from answer continuation"] },
+          ],
+        },
+        rows: [
+          { kind: "user", turn: "turn_A", text: "post three messages about variables animals..." },
+          { kind: "assistant-question", turn: "turn_A", text: "1. Which animal habitat sounds most interesting to you?\n2. Which animal behavior should we focus on?\n3. Which animal group do you prefer?" },
+          { kind: "user", turn: "turn_B", text: "Habitat: Forest\nBehavior: Migration\nGroup: Mammals" },
+        ],
+        placeholders: [
+          { id: "ph_1", kind: "done", previousKind: "thinking", owner: "turn_A", status: "resolved", text: "Done" },
+          { id: "ph_2", kind: "needs_input", owner: "turn_Q", causedByTurn: "turn_A", questionSet: "qset_1", status: "resolved", text: "Answer question..." },
+          { id: "ph_3", kind: "thinking", owner: "turn_B", status: "active", text: "Thinking..." },
+        ],
+        note: "Answering resolves turn_Q's needs-input placeholder, marks the question-only turn answered, creates turn_B, and appends a fresh Thinking placeholder for turn_B.",
+      },
+      {
+        title: "5. Provider resumes after answer",
+        description: "Provider callback mechanics are internal. Tank projects later visible work onto the continuation turn.",
+        turns: [
+          { id: "turn_A", turnNumber: 1, status: "answered" },
+          { id: "turn_Q", turnNumber: 2, kind: "question_only", status: "answered" },
+          { id: "turn_B", turnNumber: 3, kind: "agent", status: "active" },
+        ],
+        pages: {
+          turn_A: [
+            { kind: "activity", status: "done", entries: ["turn.submitted", "assistant activity: `cat_count`...", "tool: AskUserQuestion invoked", "assistant synthetic question prose: 1. Which animal habitat...?"] },
+          ],
+          turn_Q: [
+            { kind: "question", questionSet: "qset_1", questionIndex: 1, questionCount: 3, status: "answered", entries: ["Habitat = Forest"] },
+            { kind: "question", questionSet: "qset_1", questionIndex: 2, questionCount: 3, status: "answered", entries: ["Behavior = Migration"] },
+            { kind: "question", questionSet: "qset_1", questionIndex: 3, questionCount: 3, status: "answered", entries: ["Group = Mammals"] },
+          ],
+          turn_B: [
+            { kind: "activity", status: "active", entries: ["turn.submitted from answer continuation", "assistant activity: `wolf_speed`..."] },
+          ],
+        },
+        rows: [
+          { kind: "user", turn: "turn_A", text: "post three messages about variables animals..." },
+          { kind: "assistant-question", turn: "turn_A", text: "1. Which animal habitat sounds most interesting to you?\n2. Which animal behavior should we focus on?\n3. Which animal group do you prefer?" },
+          { kind: "user", turn: "turn_B", text: "Habitat: Forest\nBehavior: Migration\nGroup: Mammals" },
+        ],
+        placeholders: [
+          { id: "ph_1", kind: "done", previousKind: "thinking", owner: "turn_A", status: "resolved", text: "Done" },
+          { id: "ph_2", kind: "needs_input", owner: "turn_Q", causedByTurn: "turn_A", questionSet: "qset_1", status: "resolved", text: "Answer question..." },
+          { id: "ph_3", kind: "thinking", owner: "turn_B", status: "active", text: "Thinking..." },
+        ],
+        note: "The later assistant prose is still activity unless turn_B completes with an explicit final-answer promotion.",
+      },
+      {
+        title: "6. Wrong current shape",
+        description: "The merged implementation creates a synthetic question turn, which pollutes turn numbering and pages.",
+        wrong: true,
+        turns: [
+          { id: "turn_A", turnNumber: 1, status: "needs_input" },
+          { id: "turn_question_1", turnNumber: 2, status: "needs_input", bad: true },
+        ],
+        pages: {
+          turn_A: [
+            { kind: "activity", status: "paused", entries: ["turn.submitted", "assistant activity: `cat_count`..."] },
+          ],
+          turn_question_1: [
+            { kind: "activity", status: "bad default page", entries: ["AskUserQuestion tool invocation"] },
+            { kind: "question", questionSet: "qset_1", questionIndex: 1, questionCount: 3, status: "pending", entries: ["Habitat?"] },
+            { kind: "question", questionSet: "qset_1", questionIndex: 2, questionCount: 3, status: "pending", entries: ["Behavior?"] },
+            { kind: "question", questionSet: "qset_1", questionIndex: 3, questionCount: 3, status: "pending", entries: ["Favorite group?"] },
+          ],
+        },
+        rows: [
+          { kind: "user", turn: "turn_A", text: "post three messages about variables animals..." },
+          { kind: "assistant-question", turn: "turn_A", text: "1. Which animal habitat sounds most interesting to you?\n2. Which animal behavior should we focus on?\n3. Which animal group do you prefer?" },
+        ],
+        placeholders: [
+          { id: "ph_1", kind: "thinking", owner: "turn_A", status: "active?", text: "Thinking..." },
+          { id: "ph_2_bad", kind: "thinking-confused", owner: "turn_question_1", status: "active?", text: "Question turn also looks active" },
+        ],
+        note: "This is the bug: the question set is treated as a submitted turn. That creates extra numbered turns, pointless tool pages, and bad active/thinking transitions.",
+      },
+    ];
+
+    let current = 0;
+
+    const nav = document.getElementById("nav");
+    const title = document.getElementById("title");
+    const description = document.getElementById("description");
+    const turnsEl = document.getElementById("turns");
+    const pagesEl = document.getElementById("pages");
+    const rowsEl = document.getElementById("rows");
+    const placeholderEl = document.getElementById("placeholder");
+    const note = document.getElementById("note");
+    const stepIndex = document.getElementById("stepIndex");
+    const prev = document.getElementById("prev");
+    const next = document.getElementById("next");
+
+    function badge(text, cls = "") {
+      return `<span class="badge ${cls}">${escapeHtml(text)}</span>`;
+    }
+
+    function escapeHtml(value) {
+      return String(value)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }
+
+    function renderTurns(turns) {
+      if (!turns.length) {
+        turnsEl.innerHTML = `<div class="empty">No turns</div>`;
+        return;
+      }
+      turnsEl.innerHTML = turns.map((turn) => {
+        const statusClass = turn.bad ? "bad" : turn.status === "answered" || turn.status === "done" ? "good" : turn.status === "needs_input" ? "warn" : "";
+        const classes = ["turn", turn.status === "active" ? "active" : "", turn.status === "needs_input" ? "needs-input" : "", turn.status === "answered" ? "answered" : "", turn.status === "done" ? "done" : ""].join(" ");
+        return `
+          <div class="${classes}">
+            <div class="label">
+              <span>${escapeHtml(turn.id)}</span>
+              ${badge(`Turn ${turn.turnNumber}`, turn.bad ? "bad" : "")}
+            </div>
+            <pre>${escapeHtml(JSON.stringify({ id: turn.id, turnNumber: turn.turnNumber, status: turn.status }, null, 2))}</pre>
+            <div style="margin-top:8px">${badge(turn.status, statusClass)}</div>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderPages(pages) {
+      const keys = Object.keys(pages);
+      if (!keys.length) {
+        pagesEl.innerHTML = `<div class="empty">No pages</div>`;
+        return;
+      }
+      pagesEl.innerHTML = keys.map((turnId) => {
+        const pageHtml = pages[turnId].map((page, index) => {
+          const cls = [
+            "page",
+            page.kind === "question" ? "question" : "",
+            page.status === "answered" ? "answered" : "",
+            page.status === "done" ? "done" : "",
+            page.status && page.status.includes("active") ? "active" : "",
+          ].join(" ");
+          return `
+            <div class="${cls}">
+              <div class="label">
+                <span>page ${index + 1}</span>
+                ${badge(page.kind, page.kind === "question" ? "warn" : "")}
+              </div>
+              <pre>${escapeHtml(JSON.stringify(page, null, 2))}</pre>
+            </div>
+          `;
+        }).join("");
+        return `
+          <div>
+            <div class="label">${badge(turnId)}</div>
+            ${pageHtml}
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderRows(rows) {
+      if (!rows.length) {
+        rowsEl.innerHTML = `<div class="empty">No transcript rows</div>`;
+        return;
+      }
+      rowsEl.innerHTML = rows.map((row, index) => {
+        const cls = ["row", row.kind].join(" ");
+        return `
+          <div class="${cls}">
+            <div class="label">
+              <span>row ${index + 1}</span>
+              ${badge(row.kind, row.kind === "assistant-question" ? "warn" : "")}
+            </div>
+            <pre>${escapeHtml(JSON.stringify(row, null, 2))}</pre>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderPlaceholder(placeholders) {
+      if (!placeholders || !placeholders.length) {
+        placeholderEl.innerHTML = `<div class="empty">No live-tail placeholder</div>`;
+        return;
+      }
+      placeholderEl.innerHTML = placeholders.map((placeholder, index) => {
+        const cls = placeholder.kind === "needs_input" ? "warn" : placeholder.kind.includes("confused") ? "bad" : placeholder.status === "resolved" ? "good" : "";
+        return `
+          <div class="row ${placeholder.status === "resolved" ? "done" : ""} ${placeholder.kind === "needs_input" ? "assistant-question" : ""}">
+            <div class="label">
+              <span>placeholder ${index + 1}</span>
+              ${badge(placeholder.kind, cls)}
+            </div>
+            <pre>${escapeHtml(JSON.stringify(placeholder, null, 2))}</pre>
+          </div>
+        `;
+      }).join("");
+    }
+
+    function renderNav() {
+      nav.innerHTML = steps.map((step, index) => `
+        <button class="step-tab ${index === current ? "active" : ""}" type="button" data-step="${index}">
+          ${escapeHtml(step.title)}
+        </button>
+      `).join("");
+      nav.querySelectorAll("button").forEach((button) => {
+        button.addEventListener("click", () => {
+          current = Number(button.dataset.step);
+          render();
+        });
+      });
+    }
+
+    function render() {
+      const step = steps[current];
+      title.textContent = step.title;
+      description.textContent = step.description;
+      stepIndex.textContent = `${current + 1} / ${steps.length}`;
+      prev.disabled = current === 0;
+      next.disabled = current === steps.length - 1;
+      note.textContent = step.note;
+      note.className = `note ${step.wrong ? "wrong" : ""}`;
+      renderNav();
+      renderTurns(step.turns);
+      renderPages(step.pages);
+      renderRows(step.rows);
+      renderPlaceholder(step.placeholders);
+    }
+
+    prev.addEventListener("click", () => {
+      current = Math.max(0, current - 1);
+      render();
+    });
+
+    next.addEventListener("click", () => {
+      current = Math.min(steps.length - 1, current + 1);
+      render();
+    });
+
+    window.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowLeft") prev.click();
+      if (event.key === "ArrowRight") next.click();
+    });
+
+    render();
+  </script>
+</body>
+</html>

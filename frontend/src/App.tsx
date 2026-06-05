@@ -694,8 +694,16 @@ interface Session {
   requested_at: string | null;
   created_at: string | null;
   ready_at: string | null;
-  // User-set friendly name. Null when unset; UI falls back to the id slug.
+  // User-set friendly name. Null when unset. The server's canonical
+  // display_name (below) is what the UI renders; `name` is still on the
+  // wire only so the UI can tell a user-named session ("durable") apart
+  // from a server-derived one ("generated") for styling/rename decisions.
   name: string | null;
+  // Server-computed session title. Always present on the wire (Info
+  // snapshot + row-update SSE): the trimmed user `name` when set, else a
+  // backend-derived short id slug. This is the single source of truth for
+  // the rendered title — the SPA no longer derives a fallback locally.
+  display_name: string;
   test_state?: TestState | null;
   rollout_state?: RolloutState | null;
   // Activity is the chat-derived sidebar indicator block. Backend
@@ -916,6 +924,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     created_at: new Date(Date.now() - 12 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 11.5 * 60 * 1000).toISOString(),
     name: "Claude Code",
+    display_name: "Claude Code",
     repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(1),
@@ -932,6 +941,7 @@ const DEMO_BASE_SESSIONS: Session[] = [
     created_at: new Date(Date.now() - 68 * 60 * 1000).toISOString(),
     ready_at: new Date(Date.now() - 67 * 60 * 1000).toISOString(),
     name: "Codex",
+    display_name: "Codex",
     repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(2),
@@ -1147,6 +1157,7 @@ function createDemoSession(mode: DefaultSessionMode, index: number): Session {
     created_at: new Date().toISOString(),
     ready_at: null,
     name: `${label} ${index}`,
+    display_name: `${label} ${index}`,
     repos: [],
     capabilities: [],
     agent_avatar_id: demoAgentAvatarID(index),
@@ -1325,6 +1336,11 @@ function normalizeSession(session: Session): Session {
   const next = mode === session.mode ? { ...session } : { ...session, mode };
   next.session_scope = normalizeSessionScopeValue(session.session_scope);
   next.activity = activity;
+  // display_name is the server-canonical title and is required on the wire.
+  // Keep the type honest for degraded/hand-rolled Session objects (tests,
+  // demo rows, older snapshots) without re-deriving a client-side slug.
+  next.display_name =
+    typeof session.display_name === "string" ? session.display_name : "";
   // Defend against degraded snapshots (older server, infoFromPod
   // fallback, hand-rolled JSON in tests): repos must always be an
   // array so downstream renderers can `.map` without a guard.
@@ -1835,34 +1851,17 @@ function clearInitialMessageId(): void {
   window.history.replaceState({}, "", url.toString());
 }
 
-function defaultSessionName(session: Pick<Session, "id" | "pod_name">): string {
-  return (session.pod_name ?? session.id).replace(/^session-/, "").slice(0, 8);
-}
-
-type SessionDisplayNameSource = "durable" | "generated";
-
-function sessionDisplayNameParts(session: Session): {
-  value: string;
-  source: SessionDisplayNameSource;
-} {
-  if (session.name != null) {
-    return { value: session.name, source: "durable" };
-  }
-  return { value: defaultSessionName(session), source: "generated" };
-}
-
-function sessionDisplayName(session: Session): string {
-  return sessionDisplayNameParts(session).value;
-}
-
 function sessionListDebugRow(session: Session): SessionListDebugRow {
   const avatar = getSessionAvatarByID(session.agent_avatar_id);
-  const displayName = sessionDisplayNameParts(session);
   return {
     id: session.id,
     name: session.name,
-    display_name: displayName.value,
-    display_name_source: displayName.source,
+    // Title is the server-canonical display_name. The diagnostics surface
+    // still distinguishes a user-named row ("durable") from a server-derived
+    // one ("generated"), now derived from whether `name` is set rather than
+    // from a local title fallback.
+    display_name: session.display_name,
+    display_name_source: session.name != null ? "durable" : "generated",
     pod_name: session.pod_name,
     mode: session.mode,
     status: session.status,
@@ -3460,7 +3459,7 @@ function DemoLanding() {
                       onClick={() => setActiveDemoSession(s.id)}
                     >
                       <span className="session-id">
-                        {sessionDisplayName(s)}
+                        {s.display_name}
                       </span>
                     </button>
                     <button
@@ -5172,6 +5171,7 @@ type EntryGroup =
       kind: "thinking";
       id: string;
       turnId: string;
+      status?: "thinking" | "needs_input";
       shell?: TranscriptEntry;
       startedAt?: string;
       lastActivityAt?: string;
@@ -5242,6 +5242,7 @@ function isUserMessageEntry(entry: TranscriptEntry): boolean {
 function turnThinkingGroup(
   turnId: string,
   shell?: TranscriptEntry,
+  status: "thinking" | "needs_input" = "thinking",
 ): Extract<EntryGroup, { kind: "thinking" }> {
   // Prefer the projected TurnActivitySummary.startedAt: that is the durable
   // turn-start order key derived from the first event in the turn and stays
@@ -5253,8 +5254,12 @@ function turnThinkingGroup(
   // missing them (older fixtures, hand-built test entries).
   return {
     kind: "thinking",
-    id: `turn-thinking-${turnId}`,
+    id:
+      status === "needs_input"
+        ? `turn-needs-input-${turnId}`
+        : `turn-thinking-${turnId}`,
     turnId,
+    status,
     shell,
     startedAt: shell?.activity?.startedAt ?? shell?.startedAt ?? shell?.time,
     lastActivityAt: turnActivityLastActivityAt(shell),
@@ -5348,6 +5353,15 @@ function turnActivityGroupNeedsInput(
   group: Extract<EntryGroup, { kind: "activity" }>,
 ): boolean {
   return group.shell?.activity?.status === "needs_input";
+}
+
+function turnActivityGroupIsNeedsInputTarget(
+  group: Extract<EntryGroup, { kind: "activity" }>,
+  activeTurnId: string | null,
+): boolean {
+  if (!turnActivityGroupNeedsInput(group)) return false;
+  const active = activeTurnId?.trim() ?? "";
+  return active !== "" && group.turnId === active;
 }
 
 function flushTranscriptToolBucket(
@@ -5481,6 +5495,15 @@ function groupTranscriptEntries(
             !insertedThinkingTurnIds.has(group.turnId)
           ) {
             pendingThinkingGroups.push(turnThinkingGroup(group.turnId, entry));
+            pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
+            insertedThinkingTurnIds.add(group.turnId);
+          } else if (
+            turnActivityGroupIsNeedsInputTarget(group, activeTurnId) &&
+            !insertedThinkingTurnIds.has(group.turnId)
+          ) {
+            pendingThinkingGroups.push(
+              turnThinkingGroup(group.turnId, entry, "needs_input"),
+            );
             pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
             insertedThinkingTurnIds.add(group.turnId);
           }
@@ -5862,7 +5885,7 @@ async function forkSessionPromptTemplate(): Promise<string> {
 async function buildForkSessionPrompt(
   request: ForkSessionRequest,
 ): Promise<string> {
-  const sourceName = sessionDisplayName(request.sourceSession);
+  const sourceName = request.sourceSession.display_name;
   const payload = {
     source_session_id: request.sourceSession.id,
     source_session_name: sourceName,
@@ -9297,7 +9320,7 @@ function turnActivityPageOptionParts(
 ): TurnActivityPageOptionParts {
   const pageLabel = `Page ${pageNumber}`;
   let semanticLabel = "Activity";
-  if (directoryItem?.kind === "question_set") {
+  if (directoryItem?.kind === "question") {
     if (directoryItem.questionIndex && directoryItem.questionCount) {
       semanticLabel = `Question ${directoryItem.questionIndex} of ${directoryItem.questionCount}`;
     } else {
@@ -9755,16 +9778,19 @@ function RunTurnThinkingLastActivity({
 function RunTurnThinkingBubble({
   userKey,
   turnId,
+  status = "thinking",
   lastActivityAt,
   avatar,
   onOpenTurn,
 }: {
   userKey: string;
   turnId: string;
+  status?: "thinking" | "needs_input";
   lastActivityAt?: string;
   avatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
+  const needsInput = status === "needs_input";
   return (
     <div
       className="run-transcript-message run-turn-thinking"
@@ -9772,6 +9798,7 @@ function RunTurnThinkingBubble({
       data-variant="assistant"
       data-role="assistant"
       data-kind="turn-thinking"
+      data-status={status}
     >
       <span className="run-msg-ai-avatar" aria-hidden="true">
         <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
@@ -9779,13 +9806,17 @@ function RunTurnThinkingBubble({
       <button
         type="button"
         className="run-transcript-message-content run-turn-thinking-content"
-        title="Open turn"
-        aria-label="Open turn"
-        onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}
+        title={needsInput ? "Answer in Turns" : "Open turn"}
+        aria-label={needsInput ? "Answer in Turns" : "Open turn"}
+        onClick={() =>
+          onOpenTurn?.(turnId, { anchor: needsInput ? "top" : "bottom" })
+        }
       >
         <span className="run-turn-thinking-lines">
-          <span className="run-turn-thinking-label run-turn-thinking-shimmer">
-            Thinking...
+          <span
+            className={`run-turn-thinking-label${needsInput ? "" : " run-turn-thinking-shimmer"}`}
+          >
+            {needsInput ? "Answer requested" : "Thinking..."}
           </span>
           <span className="run-turn-thinking-meta-row">
             <span className="run-turn-thinking-meta-label">Runtime</span>
@@ -10218,13 +10249,13 @@ function RunTurnActivityScreen({
   const questionPageNavigation = useMemo<
     QuestionPageNavigation | undefined
   >(() => {
-    if (!selectedPageInfo || selectedPageInfo.kind !== "question_set")
+    if (!selectedPageInfo || selectedPageInfo.kind !== "question")
       return undefined;
     const directory = selectedPageInfo.pages ?? [];
     const sameSetPages = directory
       .filter(
         (page) =>
-          page.kind === "question_set" &&
+          page.kind === "question" &&
           (selectedPageInfo.questionSet
             ? page.questionSet === selectedPageInfo.questionSet
             : true),
@@ -10502,7 +10533,7 @@ function RunTurnActivityScreen({
               <span>{selectedEventProgress.totalLabel}</span>
             )}
           </div>
-          {selectedPageInfo?.kind === "question_set" && (
+          {selectedPageInfo?.kind === "question" && (
             <div
               className="run-turn-question-page-head"
               data-answered={selectedPageInfo.answered ? "true" : "false"}
@@ -11101,6 +11132,7 @@ export function RunMessages({
           <RunTurnThinkingBubble
             userKey={userKey}
             turnId={g.turnId}
+            status={g.status}
             lastActivityAt={g.lastActivityAt}
             avatar={avatar}
             onOpenTurn={onOpenTurn}
@@ -12980,7 +13012,11 @@ function ChatPane({
       if (!turnId) continue;
       if (row.kind === "turn_activity") {
         const activity = row.activity;
-        if (activity?.active === true || activity?.status === "active") {
+        if (
+          activity?.active === true ||
+          activity?.status === "active" ||
+          activity?.status === "needs_input"
+        ) {
           activeTurnId = turnId;
           continue;
         }
@@ -18575,6 +18611,11 @@ function AuthenticatedApp() {
   const [editingSessionTitleValue, setEditingSessionTitleValue] = useState("");
   const editingSessionTitleValueRef = useRef("");
   const editingSessionTitleFromFallbackRef = useRef(false);
+  // The server-derived title captured at edit-start when the session had no
+  // user name. commit compares the typed value against this so an unchanged
+  // auto-generated title is stored as null (unset) rather than persisted as a
+  // durable name. Captured here instead of re-deriving a slug at commit time.
+  const editingSessionTitleFallbackRef = useRef("");
   const editingSessionTitleClosingRef = useRef(false);
   const homeBodyRef = useRef<HTMLElement | null>(null);
   const homeComposerWrapRef = useRef<HTMLElement | null>(null);
@@ -19400,6 +19441,7 @@ function AuthenticatedApp() {
       created_at: row.created_at ?? null,
       ready_at: row.ready_at ?? null,
       name: row.name ?? null,
+      display_name: row.display_name,
       test_state: (row.test_state as TestState | undefined) ?? null,
       rollout_state: (row.rollout_state as RolloutState | undefined) ?? null,
       sidebar_position: row.sidebar_position,
@@ -19448,6 +19490,10 @@ function AuthenticatedApp() {
       session_scope: normalizeSessionScopeValue(raw.session_scope),
       pod_name: raw.pod_name ?? undefined,
       name: raw.name ?? null,
+      // Server-canonical title. Always present on the snapshot wire; fall
+      // back to the empty string only to keep the type honest for degraded
+      // payloads — there is no client-side slug re-derivation any more.
+      display_name: typeof raw.display_name === "string" ? raw.display_name : "",
       visible: true,
       status: String(raw.status ?? "Pending"),
       requested_at: raw.requested_at ?? undefined,
@@ -20549,10 +20595,7 @@ function AuthenticatedApp() {
   async function forkSessionFromMessage(request: ForkSessionRequest) {
     const mode = request.sourceSession.mode;
     const prompt = await buildForkSessionPrompt(request);
-    const name = `fork: ${sessionDisplayName(request.sourceSession)}`.slice(
-      0,
-      80,
-    );
+    const name = `fork: ${request.sourceSession.display_name}`.slice(0, 80);
     setBusy(true);
     setSidebarCollapsed(false);
     setError(null);
@@ -20700,9 +20743,15 @@ function AuthenticatedApp() {
 
   function beginSessionTitleEdit(session: Session) {
     if (readOnlySessionView) return;
-    editingSessionTitleFromFallbackRef.current = session.name == null;
+    const fromFallback = session.name == null;
+    editingSessionTitleFromFallbackRef.current = fromFallback;
+    // When unnamed, display_name is the server-generated title; remember it so
+    // commit can tell "left the auto title untouched" apart from a real rename.
+    editingSessionTitleFallbackRef.current = fromFallback
+      ? session.display_name
+      : "";
     editingSessionTitleClosingRef.current = false;
-    const value = sessionDisplayName(session);
+    const value = session.display_name;
     editingSessionTitleValueRef.current = value;
     setEditingSessionTitleValue(value);
     setEditingSessionTitleId(session.id);
@@ -20711,6 +20760,7 @@ function AuthenticatedApp() {
   function cancelSessionTitleEdit() {
     editingSessionTitleClosingRef.current = true;
     editingSessionTitleFromFallbackRef.current = false;
+    editingSessionTitleFallbackRef.current = "";
     editingSessionTitleValueRef.current = "";
     setEditingSessionTitleId(null);
     setEditingSessionTitleValue("");
@@ -20721,15 +20771,15 @@ function AuthenticatedApp() {
     const sessionID = editingSessionTitleId;
     if (!sessionID) return;
     editingSessionTitleClosingRef.current = true;
-    const session = sessionsRef.current.find((s) => s.id === sessionID);
     const trimmed = editingSessionTitleValueRef.current.trim();
-    const fallbackName = session ? defaultSessionName(session) : "";
+    const fallbackName = editingSessionTitleFallbackRef.current;
     const nextName =
       trimmed === "" ||
       (editingSessionTitleFromFallbackRef.current && trimmed === fallbackName)
         ? null
         : trimmed;
     editingSessionTitleFromFallbackRef.current = false;
+    editingSessionTitleFallbackRef.current = "";
     editingSessionTitleValueRef.current = "";
     setEditingSessionTitleId(null);
     setEditingSessionTitleValue("");
@@ -21016,15 +21066,13 @@ function AuthenticatedApp() {
             className="run-header-name-btn"
             title={
               readOnlySessionView
-                ? sessionDisplayName(activeWorkspaceSession)
-                : activeWorkspaceSession.name
-                  ? `${defaultSessionName(activeWorkspaceSession)} - click to rename`
-                  : "click to rename"
+                ? activeWorkspaceSession.display_name
+                : "click to rename"
             }
             disabled={readOnlySessionView}
             onClick={() => beginSessionTitleEdit(activeWorkspaceSession)}
           >
-            {sessionDisplayName(activeWorkspaceSession)}
+            {activeWorkspaceSession.display_name}
           </button>
         )
       ) : null}
@@ -21129,7 +21177,7 @@ function AuthenticatedApp() {
                     }
                     title={
                       sidebarCollapsed
-                        ? `${sessionDisplayName(s)} (${statusLabel})`
+                        ? `${s.display_name} (${statusLabel})`
                         : undefined
                     }
                   >
@@ -21147,13 +21195,11 @@ function AuthenticatedApp() {
                       <span
                         className="session-open"
                         title={
-                          isClosing
-                            ? "session is closing"
-                            : defaultSessionName(s)
+                          isClosing ? "session is closing" : s.display_name
                         }
                       >
                         <span className="session-id">
-                          {sessionDisplayName(s)}
+                          {s.display_name}
                         </span>
                       </span>
                       <button
