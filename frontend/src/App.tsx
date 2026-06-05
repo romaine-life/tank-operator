@@ -3573,8 +3573,6 @@ function DemoLanding() {
                       const mode = defaultModeFor(provider, demoInteraction);
                       const providerSelected = provider === selectedProvider;
                       const quota = demoProviderQuotaSnapshots[provider];
-                      const fiveHour = quota.windows.find((window) => window.id === "five_hour");
-                      const weekly = quota.windows.find((window) => window.id === "weekly");
                       return (
                         <button
                           key={provider}
@@ -3588,8 +3586,9 @@ function DemoLanding() {
                             <span>{PROVIDER_LABELS[provider]}</span>
                           </span>
                           <span className="home-provider-choice-usage">
-                            <span>{fiveHour?.shortLabel ?? "5h"} {providerQuotaSummary(fiveHour)}</span>
-                            <span>{weekly?.shortLabel ?? "Week"} {providerQuotaSummary(weekly)}</span>
+                            {quota.windows.map((window) => (
+                              <span key={window.id}>{window.shortLabel} {providerQuotaSummary(window)}</span>
+                            ))}
                           </span>
                         </button>
                       );
@@ -21427,12 +21426,6 @@ function AuthenticatedApp() {
                             );
                             const selected = provider === selectedProvider;
                             const quota = providerQuotaSnapshots[provider];
-                            const fiveHour = quota.windows.find(
-                              (window) => window.id === "five_hour",
-                            );
-                            const weekly = quota.windows.find(
-                              (window) => window.id === "weekly",
-                            );
                             return (
                               <button
                                 key={provider}
@@ -21450,14 +21443,12 @@ function AuthenticatedApp() {
                                   <span>{PROVIDER_LABELS[provider]}</span>
                                 </span>
                                 <span className="home-provider-choice-usage">
-                                  <span>
-                                    {fiveHour?.shortLabel ?? "5h"}{" "}
-                                    {providerQuotaSummary(fiveHour)}
-                                  </span>
-                                  <span>
-                                    {weekly?.shortLabel ?? "Week"}{" "}
-                                    {providerQuotaSummary(weekly)}
-                                  </span>
+                                  {quota.windows.map((window) => (
+                                    <span key={window.id}>
+                                      {window.shortLabel}{" "}
+                                      {providerQuotaSummary(window)}
+                                    </span>
+                                  ))}
                                 </span>
                               </button>
                             );
