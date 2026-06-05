@@ -25,6 +25,7 @@ import {
 import { cachedTurnActivityRefreshRequests } from "./turnActivityCache";
 import {
   turnActivityPagerState,
+  type TurnActivityPageDirectoryItem,
   type TurnActivityPageInfo,
   type TurnActivityPagerState,
 } from "./turnActivityPager";
@@ -74,6 +75,7 @@ import {
   ActivityIcon,
   AlertCircleIcon,
   ArrowLeftIcon,
+  ArrowRightIcon,
   ArrowUpFromLineIcon,
   BellIcon,
   BotIcon,
@@ -103,6 +105,7 @@ import {
   LinkIcon,
   ListChecksIcon,
   Loader2Icon,
+  MessageSquareOffIcon,
   MessageSquareIcon,
   MinusIcon,
   MonitorIcon,
@@ -160,6 +163,12 @@ import {
   type SessionCostEstimate,
 } from "./sessionCostEstimate";
 import {
+  buildSessionDataStatusRows,
+  type StatusTone,
+  type SessionDataStatusId,
+  type SessionDataStatusRow,
+} from "./sessionDataStatus";
+import {
   scheduledWakeupRowsToEntries,
   scheduledWakeupStatusLabel,
   type ScheduledWakeupRow,
@@ -204,6 +213,7 @@ import {
   type MessageAttachmentDisplay,
 } from "./attachmentLabels";
 import { shouldSubmitAskUserFreeFormKey } from "./askUserQuestionKeys";
+import { needsInputAnnouncementState } from "./needsInputAnnouncement";
 import { ProviderIcon } from "./providerIcons";
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -389,7 +399,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // rows it surfaces specially in chat — see transcript_projection.go.
   metaKind?: "awaiting_input" | "turn_usage" | "context_compacted";
   // For `awaiting_input` rows inside Turn activity: the Tank-canonical
-  // questions plus the target ids RunAwaitingInputCard posts to /answer.
+  // questions plus the target ids the Turns question page posts to /answer.
   // `answered` is durable — set once a later turn.input_answered event
   // references the question.
   awaitingInput?: {
@@ -398,6 +408,8 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     timelineId: string;
     questions: unknown[];
     questionCount: number;
+    questionIndex?: number;
+    questionSet?: number;
     answered: boolean;
     answers?: Record<string, string[]>;
     annotations?: Record<string, { preview?: string; notes?: string }>;
@@ -685,6 +697,12 @@ interface Session {
   runtime_context_window_tokens?: number;
   runtime_context_window_source?: string;
   runtime_context_window_observed_at?: string | null;
+  provider_rate_limit_info?: Record<string, unknown> | null;
+  provider_rate_limit_observed_at?: string | null;
+  // Durable count of context.compacted events for this session, projected from
+  // the session_events ledger onto the row. The composer renders it as the
+  // compaction metric; absent/0 means the session has not compacted yet.
+  compaction_count?: number;
   agent_avatar_id?: string | null;
   system_avatar_id?: string | null;
   sidebar_position?: number;
@@ -1142,6 +1160,26 @@ function normalizeBugLabel(value: unknown): SessionBugLabel | null {
   };
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeProviderRateLimitInfo(value: unknown): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) return null;
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      if (trimmed) out[key] = trimmed;
+    } else if (typeof raw === "number" && Number.isFinite(raw)) {
+      out[key] = raw;
+    } else if (typeof raw === "boolean") {
+      out[key] = raw;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
   // The backend includes an activity block on GET /api/sessions
@@ -1174,6 +1212,11 @@ function normalizeSession(session: Session): Session {
     Number.isFinite(session.runtime_context_window_tokens)
       ? Math.max(0, Math.floor(session.runtime_context_window_tokens))
       : 0;
+  next.compaction_count =
+    typeof session.compaction_count === "number" &&
+    Number.isFinite(session.compaction_count)
+      ? Math.max(0, Math.floor(session.compaction_count))
+      : 0;
   next.runtime_context_window_source =
     typeof session.runtime_context_window_source === "string"
       ? session.runtime_context_window_source
@@ -1181,6 +1224,11 @@ function normalizeSession(session: Session): Session {
   next.runtime_context_window_observed_at =
     typeof session.runtime_context_window_observed_at === "string"
       ? session.runtime_context_window_observed_at
+      : null;
+  next.provider_rate_limit_info = normalizeProviderRateLimitInfo(session.provider_rate_limit_info);
+  next.provider_rate_limit_observed_at =
+    typeof session.provider_rate_limit_observed_at === "string"
+      ? session.provider_rate_limit_observed_at
       : null;
   next.agent_avatar_id =
     typeof session.agent_avatar_id === "string" ? session.agent_avatar_id : null;
@@ -1677,6 +1725,10 @@ interface ComposerCostEstimateProps {
   // to the bare used count (or the "--" placeholder). Never a model-assumed
   // default.
   contextWindow?: number;
+  // Durable count of context compactions for the session scope. Rendered as a
+  // third metric only when > 0; sourced from durable row metadata, never
+  // inferred from whatever transcript entries the browser happens to hold.
+  compactionCount?: number | null;
   tokenScopeLabel?: string;
   placeholder?: boolean;
   scopeLabel?: string;
@@ -1687,6 +1739,7 @@ function ComposerCostEstimate({
   amountUsd,
   tokens,
   contextWindow,
+  compactionCount,
   tokenScopeLabel,
   placeholder = false,
   scopeLabel = "session",
@@ -1704,6 +1757,10 @@ function ComposerCostEstimate({
   const safeWindow =
     typeof contextWindow === "number" && Number.isFinite(contextWindow)
       ? Math.max(0, Math.floor(contextWindow))
+      : 0;
+  const safeCompactions =
+    !unavailable && typeof compactionCount === "number" && Number.isFinite(compactionCount)
+      ? Math.max(0, Math.floor(compactionCount))
       : 0;
   const normalizedScope = scopeLabel.trim() || "session";
   const formattedAmount = unavailable
@@ -1724,16 +1781,20 @@ function ComposerCostEstimate({
     safeWindow > 0
       ? `${safeTokens?.toLocaleString() ?? 0} of ${safeWindow.toLocaleString()} context tokens`
       : `${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`;
+  const compactionClause =
+    safeCompactions > 0
+      ? `, ${safeCompactions} context compaction${safeCompactions === 1 ? "" : "s"}`
+      : "";
   const defaultTitle = unavailable
     ? "Cost estimate appears after token usage is available"
-    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${tokenSentence}`;
+    : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${tokenSentence}${compactionClause}`;
   return (
     <span
-      className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}`}
+      className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}${safeCompactions > 0 ? " has-compactions" : ""}`}
       aria-label={
         unavailable
           ? `${sentenceScope} cost estimate unavailable`
-          : `Estimated ${normalizedScope} cost ${label}, ${tokenSentence}`
+          : `Estimated ${normalizedScope} cost ${label}, ${tokenSentence}${compactionClause}`
       }
       aria-disabled={unavailable || undefined}
       title={title ?? defaultTitle}
@@ -1742,6 +1803,17 @@ function ComposerCostEstimate({
         <span className="run-cost-estimate-value run-cost-estimate-token-count">{tokenLabel}</span>
         <span className="run-cost-estimate-label">ctx</span>
       </span>
+      {safeCompactions > 0 && (
+        <>
+          <span className="run-cost-estimate-divider" aria-hidden="true" />
+          <span className="run-cost-estimate-metric run-cost-estimate-metric-compactions">
+            <span className="run-cost-estimate-value run-cost-estimate-compaction-count">
+              {safeCompactions}
+            </span>
+            <span className="run-cost-estimate-label">cmp</span>
+          </span>
+        </>
+      )}
       <span className="run-cost-estimate-divider" aria-hidden="true" />
       <span className="run-cost-estimate-metric run-cost-estimate-metric-cost">
         <span className="run-cost-estimate-value run-cost-estimate-amount">{label}</span>
@@ -1922,6 +1994,10 @@ function BugLabelPicker({
   requestPath,
   onSave,
   allowClear = true,
+  wrapperClassName = "",
+  triggerClassName,
+  iconClassName = "run-composer-icon",
+  triggerContent = null,
 }: {
   value: string;
   activeSlug?: string | null;
@@ -1929,6 +2005,10 @@ function BugLabelPicker({
   requestPath: (path: string) => string;
   onSave: (name: string | null) => Promise<void> | void;
   allowClear?: boolean;
+  wrapperClassName?: string;
+  triggerClassName?: string;
+  iconClassName?: string;
+  triggerContent?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [labels, setLabels] = useState<BugLabelSuggestion[]>([]);
@@ -1980,6 +2060,9 @@ function BugLabelPicker({
   const currentLabel = value;
   const title = currentLabel ? `Bug label: ${currentLabel}` : "Set bug label";
   const normalizedDraft = draft.trim();
+  const triggerClasses = triggerClassName
+    ? `${triggerClassName}${currentLabel ? " is-active" : ""}`
+    : `run-composer-icon-btn run-bug-label-trigger${currentLabel ? " is-active" : ""}`;
   const save = async (name: string | null) => {
     setSaving(true);
     setError("");
@@ -1994,16 +2077,17 @@ function BugLabelPicker({
   };
 
   return (
-    <span className="run-bug-label-picker">
+    <span className={`run-bug-label-picker${wrapperClassName ? ` ${wrapperClassName}` : ""}`}>
       <button
         type="button"
-        className={`run-composer-icon-btn run-bug-label-trigger${currentLabel ? " is-active" : ""}`}
+        className={triggerClasses}
         aria-label={title}
         title={title}
         disabled={disabled}
         onClick={() => setOpen((value) => !value)}
       >
-        <BugIcon className="run-composer-icon" aria-hidden="true" />
+        <BugIcon className={iconClassName} aria-hidden="true" />
+        {triggerContent}
       </button>
       {open && (
         <div className="run-bug-label-popover">
@@ -3484,12 +3568,13 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help" | "static";
+type RunTab = "chat" | "turns" | "background" | "files" | "session-data" | "settings" | "help" | "static";
 type BackgroundView = "shells" | "scheduled" | "control" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
 
 type TurnPageOpenOptions = {
   anchor?: TurnViewScrollAnchor;
+  resetPage?: boolean;
 };
 
 type TurnViewScrollRequest = {
@@ -4404,6 +4489,10 @@ function createTurnActivityEntryGroup(
   };
 }
 
+function turnActivityGroupNeedsInput(group: Extract<EntryGroup, { kind: "activity" }>): boolean {
+  return group.shell?.activity?.status === "needs_input";
+}
+
 function flushTranscriptToolBucket(
   groups: EntryGroup[],
   bucket: { entries: TranscriptEntry[] },
@@ -4518,7 +4607,12 @@ function groupTranscriptEntries(
         const group = createTurnActivityEntryGroup(entry, activityEntriesByTurn, activeTurnId);
         if (group) {
           for (const id of group.compactedEntryIds) activityHiddenEntryIds.add(id);
-          if (group.active && !insertedThinkingTurnIds.has(group.turnId)) {
+          const needsInput = turnActivityGroupNeedsInput(group);
+          if (
+            group.active &&
+            !needsInput &&
+            !insertedThinkingTurnIds.has(group.turnId)
+          ) {
             pendingThinkingGroups.push(turnThinkingGroup(group.turnId, entry));
             pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
             insertedThinkingTurnIds.add(group.turnId);
@@ -4959,23 +5053,89 @@ function LinkButton({
 
 function TurnViewButton({
   turnId,
+  href,
   onOpenTurn,
 }: {
   turnId: string;
+  href?: string;
   onOpenTurn: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
+  const openTurn = () => onOpenTurn(turnId, { anchor: "bottom" });
+  const label = "Open turn in Turns";
+  if (href) {
+    return (
+      <a
+        className="run-msg-action run-msg-turn"
+        href={href}
+        title={label}
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          openTurn();
+        }}
+      >
+        <ArrowRightIcon size={12} aria-hidden="true" />
+      </a>
+    );
+  }
   return (
     <button
       type="button"
       className="run-msg-action run-msg-turn"
-      title="Open turn"
-      aria-label="Open turn"
+      title={label}
+      aria-label={label}
       onClick={(e) => {
         e.stopPropagation();
-        onOpenTurn(turnId, { anchor: "bottom" });
+        openTurn();
       }}
     >
-      <ActivityIcon size={12} aria-hidden="true" />
+      <ArrowRightIcon size={12} aria-hidden="true" />
+    </button>
+  );
+}
+
+function TranscriptViewButton({
+  href,
+  entryId,
+  onOpenTranscriptMessage,
+}: {
+  href?: string;
+  entryId: string;
+  onOpenTranscriptMessage: (entryId: string) => void;
+}) {
+  const label = "Open message in transcript";
+  if (href) {
+    return (
+      <a
+        className="run-msg-action run-msg-transcript"
+        href={href}
+        title={label}
+        aria-label={label}
+        onClick={(e) => {
+          e.stopPropagation();
+          if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+          e.preventDefault();
+          onOpenTranscriptMessage(entryId);
+        }}
+      >
+        <ArrowLeftIcon size={12} aria-hidden="true" />
+      </a>
+    );
+  }
+  return (
+    <button
+      type="button"
+      className="run-msg-action run-msg-transcript"
+      title={label}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpenTranscriptMessage(entryId);
+      }}
+    >
+      <ArrowLeftIcon size={12} aria-hidden="true" />
     </button>
   );
 }
@@ -5428,14 +5588,41 @@ interface AnswerPayload {
   annotations?: Record<string, { preview?: string; notes?: string }>;
 }
 
+interface AskUserQuestionSubmittedSnapshot {
+  answers: Record<string, string[]>;
+  annotations: Record<string, { preview?: string; notes?: string }>;
+}
+
+interface AskUserQuestionDraft {
+  selections: Record<string, string[]>;
+  notes: Record<string, string>;
+  submittedSnapshot: AskUserQuestionSubmittedSnapshot | null;
+}
+
+interface QuestionPageNavigation {
+  questionSet?: number;
+  questionIndex?: number;
+  questionCount?: number;
+  previousPage?: number;
+  nextPage?: number;
+  onSelectPage?: (page: number) => void;
+}
+
 const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   submitAnswer: (askingTurnId: string, payload: AnswerPayload) => Promise<void>;
+  askUserQuestionDrafts: Record<string, AskUserQuestionDraft | undefined>;
+  setAskUserQuestionDraft: (
+    key: string,
+    updater: (previous: AskUserQuestionDraft | undefined) => AskUserQuestionDraft,
+  ) => void;
   createMessageLink: (sessionId: string, entryId: string) => Promise<string>;
   user: SessionUser | null;
 }>({
   openWorkspacePath: () => {},
   submitAnswer: async () => {},
+  askUserQuestionDrafts: {},
+  setAskUserQuestionDraft: () => {},
   createMessageLink: async (sessionId, entryId) => messageUrl(sessionId, entryId),
   user: null,
 });
@@ -5451,6 +5638,9 @@ function RunMessageBubble({
   onQuote,
   onFork,
   onOpenTurn,
+  turnHref,
+  transcriptHref,
+  onOpenTranscriptMessage,
   canonicalMessage = true,
   ownedByTurnActivity = false,
   showAssistantAvatar = !ownedByTurnActivity,
@@ -5466,6 +5656,9 @@ function RunMessageBubble({
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  turnHref?: string;
+  transcriptHref?: string;
+  onOpenTranscriptMessage?: (entryId: string) => void;
   canonicalMessage?: boolean;
   ownedByTurnActivity?: boolean;
   showAssistantAvatar?: boolean;
@@ -5603,8 +5796,15 @@ function RunMessageBubble({
           className="run-msg-footer"
           data-always-visible={alwaysVisible ? "" : undefined}
         >
-          {variant === "assistant" && entry.turnId && onOpenTurn && (
-            <TurnViewButton turnId={entry.turnId} onOpenTurn={onOpenTurn} />
+          {canonicalMessage && variant === "assistant" && entry.turnId && onOpenTurn && (
+            <TurnViewButton turnId={entry.turnId} href={turnHref} onOpenTurn={onOpenTurn} />
+          )}
+          {!canonicalMessage && onOpenTranscriptMessage && (
+            <TranscriptViewButton
+              entryId={entry.id}
+              href={transcriptHref}
+              onOpenTranscriptMessage={onOpenTranscriptMessage}
+            />
           )}
           {canonicalMessage && variant === "assistant" && onFork && (
             <ForkButton entry={entry} onFork={onFork} />
@@ -6167,6 +6367,7 @@ function RunHeaderOverflowMenu({
   turns,
   background,
   files,
+  sessionData,
   settingsActive,
   helpActive,
   onSettings,
@@ -6177,6 +6378,7 @@ function RunHeaderOverflowMenu({
   turns: RunHeaderMenuTabState;
   background: RunHeaderMenuTabState;
   files: RunHeaderMenuTabState;
+  sessionData: RunHeaderMenuTabState;
   settingsActive: boolean;
   helpActive: boolean;
   onSettings: () => void;
@@ -6254,6 +6456,15 @@ function RunHeaderOverflowMenu({
           />
           <span>Files</span>
         </DropdownMenuItem>
+        <DropdownMenuItem
+          className={`run-tab-more-item${sessionData.active ? " is-active" : ""}`}
+          disabled={sessionData.disabled}
+          onSelect={sessionData.onOpen}
+          title={sessionData.title}
+        >
+          <ClipboardListIcon className="run-tab-more-item-icon" aria-hidden="true" />
+          <span>Session data</span>
+        </DropdownMenuItem>
         <DropdownMenuSeparator className="run-tab-more-separator" />
         <DropdownMenuItem
           className={`run-tab-more-item${settingsActive ? " is-active" : ""}`}
@@ -6278,6 +6489,247 @@ function RunHeaderOverflowMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
+  switch (id) {
+    case "test":
+      return <FlaskConicalIcon />;
+    case "context":
+      return <BrainIcon />;
+    case "rollout":
+      return <ArrowUpFromLineIcon />;
+    case "pull_request":
+      return <GitPullRequestIcon />;
+    case "bug_report":
+      return <BugIcon />;
+    case "linked_repo":
+      return <GitBranchIcon />;
+  }
+}
+
+function SessionDataScreen({
+  rows,
+  session,
+  requestPath,
+  onBugLabelSave,
+  readOnly,
+}: {
+  rows: SessionDataStatusRow[];
+  session: Session;
+  requestPath: (path: string) => string;
+  onBugLabelSave: (name: string | null) => Promise<void>;
+  readOnly?: boolean;
+}) {
+  const activeCount = rows.filter((row) => row.tone !== "muted").length;
+  const bugLabel = session.bug_label?.display_name ?? session.bug_label?.name ?? "";
+  return (
+    <div className="run-session-data-screen">
+      <section className="run-session-data-section" aria-labelledby="run-session-data-title">
+        <div className="run-session-data-page-head">
+          <h2 className="run-session-data-title" id="run-session-data-title">Session data</h2>
+          <span className="run-session-data-summary">{activeCount}/{rows.length} active</span>
+        </div>
+        <div className="run-session-data-page-list" aria-label="Session data status">
+          {rows.map((row) => (
+            <div
+              key={row.id}
+              className={`run-session-data-card is-${row.tone}`}
+            >
+              <div className="run-session-data-card-top">
+                <span className="run-session-data-card-icon" aria-hidden="true">
+                  <SessionDataIcon id={row.id} />
+                </span>
+                <span className="run-session-data-card-main">
+                  <span className="run-session-data-card-label">{row.label}</span>
+                  <span className="run-session-data-card-detail">{row.detail}</span>
+                </span>
+                {row.href ? (
+                  <a
+                    className="run-session-data-card-status"
+                    href={row.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={row.href}
+                  >
+                    <span>{row.status}</span>
+                    <ExternalLinkIcon aria-hidden="true" />
+                  </a>
+                ) : (
+                  <span className="run-session-data-card-status">{row.status}</span>
+                )}
+              </div>
+              <SessionDataCardDetails
+                row={row}
+                session={session}
+                bugLabel={bugLabel}
+                requestPath={requestPath}
+                onBugLabelSave={onBugLabelSave}
+                readOnly={readOnly}
+              />
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SessionDataCardDetails({
+  row,
+  session,
+  bugLabel,
+  requestPath,
+  onBugLabelSave,
+  readOnly,
+}: {
+  row: SessionDataStatusRow;
+  session: Session;
+  bugLabel: string;
+  requestPath: (path: string) => string;
+  onBugLabelSave: (name: string | null) => Promise<void>;
+  readOnly?: boolean;
+}) {
+  switch (row.id) {
+    case "test":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Slot", session.test_state?.slot_index != null ? String(session.test_state.slot_index) : "Not assigned"],
+            ["URL", session.test_state?.url ? session.test_state.url : "No test environment URL"],
+          ]}
+        />
+      );
+    case "context":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Compactions", String(Math.max(0, Math.floor(session.compaction_count ?? 0)))],
+            ["Window", session.runtime_context_window_tokens ? formatCompactTokens(session.runtime_context_window_tokens) : "Not reported"],
+            ["Source", session.runtime_context_window_source || "Not reported"],
+            ["Observed", formatToolFullTime(session.runtime_context_window_observed_at ?? undefined) || "Not observed"],
+          ]}
+        />
+      );
+    case "rollout":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["State", session.rollout_state?.active ? "Release workflow in progress" : "No active rollout"],
+          ]}
+        />
+      );
+    case "pull_request":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Link", session.test_state?.pull_request_url ? row.detail : "No pull request linked"],
+          ]}
+        />
+      );
+    case "bug_report":
+      return (
+        <div className="run-session-data-actions">
+          <BugLabelPicker
+            value={bugLabel}
+            activeSlug={session.bug_label?.slug}
+            disabled={readOnly}
+            requestPath={requestPath}
+            onSave={onBugLabelSave}
+            wrapperClassName="run-session-data-bug-picker"
+            triggerClassName="run-session-data-action"
+            iconClassName="run-session-data-action-icon"
+            triggerContent={<span>{bugLabel ? "Change bug" : "Attach bug"}</span>}
+          />
+          {readOnly && (
+            <span className="run-session-data-readonly">Read-only session</span>
+          )}
+        </div>
+      );
+    case "linked_repo":
+      return (
+        <SessionDataRepoList
+          repos={session.repos}
+          cloneState={session.clone_state ?? null}
+        />
+      );
+  }
+}
+
+function SessionDataFacts({ facts }: { facts: Array<[string, string]> }) {
+  return (
+    <dl className="run-session-data-facts">
+      {facts.map(([label, value]) => (
+        <div key={label} className="run-session-data-fact">
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function SessionDataRepoList({
+  repos,
+  cloneState,
+}: {
+  repos: string[];
+  cloneState: Record<string, unknown> | null;
+}) {
+  if (repos.length === 0) {
+    return <div className="run-session-data-empty">No repositories are linked to this session.</div>;
+  }
+  return (
+    <div className="run-session-data-repo-list" role="list" aria-label="Linked repositories">
+      {repos.map((repo) => {
+        const clone = sessionDataCloneDisplay(cloneState?.[repo]);
+        return (
+          <div key={repo} className="run-session-data-repo-row" role="listitem">
+            <a
+              className="run-session-data-repo-link"
+              href={`https://github.com/${repo}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <GitBranchIcon aria-hidden="true" />
+              <span>{repo}</span>
+              <ExternalLinkIcon aria-hidden="true" />
+            </a>
+            <span className={`run-session-data-repo-state is-${clone.tone}`}>
+              {clone.label}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function sessionDataCloneDisplay(value: unknown): { label: string; tone: StatusTone } {
+  if (value === undefined) return { label: "Selected", tone: "info" };
+  const text = sessionDataCloneText(value);
+  if (/\b(error|failed|failure|fatal|denied|unauthorized|timeout)\b/i.test(text)) {
+    return { label: "Clone issue", tone: "danger" };
+  }
+  if (/\b(pending|running|cloning|checkout|queued|starting)\b/i.test(text)) {
+    return { label: "Syncing", tone: "warning" };
+  }
+  if (/\b(ok|ready|done|success|succeeded|complete|completed|cloned)\b/i.test(text)) {
+    return { label: "Ready", tone: "good" };
+  }
+  return text.trim() ? { label: "Checking", tone: "warning" } : { label: "Selected", tone: "info" };
+}
+
+function sessionDataCloneText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) return value.map(sessionDataCloneText).join(" ");
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).map(sessionDataCloneText).join(" ");
+  }
+  return "";
 }
 
 function BackgroundMeta({
@@ -6602,29 +7054,57 @@ function parseAskUserQuestions(input: Record<string, unknown> | null): AskUserQu
   });
 }
 
-function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
-  const { submitAnswer } = useContext(RunContext);
+function emptyAskUserQuestionDraft(): AskUserQuestionDraft {
+  return { selections: {}, notes: {}, submittedSnapshot: null };
+}
+
+function RunAwaitingInputCard({
+  entry,
+  questionNavigation,
+}: {
+  entry: TranscriptEntry;
+  questionNavigation?: QuestionPageNavigation;
+}) {
+  const {
+    submitAnswer,
+    askUserQuestionDrafts,
+    setAskUserQuestionDraft,
+  } = useContext(RunContext);
   // The card is driven by the durable turn.awaiting_input pause projected into
   // Turn activity. Submitting records turn.input_answered and resumes the same
   // provider turn through a control-plane input_reply.
   const aw = entry.awaitingInput;
+  const draftKey = aw?.timelineId || entry.id;
+  const draft = draftKey ? askUserQuestionDrafts[draftKey] ?? emptyAskUserQuestionDraft() : emptyAskUserQuestionDraft();
   // Per-question selections (multi-select carries an array; single-select
   // is a single-element array or empty). Submission converts to the wire
   // shape `Record<questionText, string[]>` so single + multi share a
   // payload.
-  const [selections, setSelections] = useState<Record<string, string[]>>({});
-  const [notes, setNotes] = useState<Record<string, string>>({});
+  const selections = draft.selections;
+  const notes = draft.notes;
   const [submitting, setSubmitting] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
   // submittedSnapshot locks the card the moment the user clicks and keeps
   // their picked options/notes visible until the durable answer event lands
   // (awaitingInput.answered flips).
-  const [submittedSnapshot, setSubmittedSnapshot] = useState<{
-    answers: Record<string, string[]>;
-    annotations: Record<string, { preview?: string; notes?: string }>;
-  } | null>(null);
+  const submittedSnapshot = draft.submittedSnapshot;
 
   const questions = parseAskUserQuestions(aw ? { questions: aw.questions } : null);
+  const visibleQuestionIndex =
+    aw?.questionIndex && aw.questionIndex >= 1 && aw.questionIndex <= questions.length
+      ? aw.questionIndex - 1
+      : null;
+  const visibleQuestions =
+    visibleQuestionIndex == null
+      ? questions
+      : questions[visibleQuestionIndex]
+        ? [questions[visibleQuestionIndex]]
+        : [];
+
+  function updateDraft(updater: (previous: AskUserQuestionDraft) => AskUserQuestionDraft): void {
+    if (!draftKey) return;
+    setAskUserQuestionDraft(draftKey, (previous) => updater(previous ?? emptyAskUserQuestionDraft()));
+  }
 
   // answered is durable: the server sets awaitingInput.answered=true once a
   // later turn.input_answered event references this question, so a fresh tab
@@ -6671,25 +7151,37 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
     !submitting &&
     questions.length > 0 &&
     questions.every((q) => questionHasResponse(q));
+  const visibleQuestion =
+    visibleQuestionIndex == null ? null : questions[visibleQuestionIndex] ?? null;
+  const visibleQuestionAnswered = visibleQuestion ? questionHasResponse(visibleQuestion) : false;
+  const hasNextQuestion = Boolean(questionNavigation?.nextPage);
+  const hasPreviousQuestion = Boolean(questionNavigation?.previousPage);
 
   function toggleSelection(q: AskUserQuestion, label: string): void {
     if (answered || submitting) return;
-    setSelections((prev) => {
+    updateDraft((draft) => {
+      const prev = draft.selections;
       const current = prev[q.question] ?? [];
+      let nextSelections: Record<string, string[]>;
       if (q.multiSelect) {
         const next = current.includes(label)
           ? current.filter((l) => l !== label)
           : [...current, label];
-        return { ...prev, [q.question]: next };
+        nextSelections = { ...prev, [q.question]: next };
+      } else {
+        // Single-select: clicking always selects exactly that label
+        // (re-clicking selected option is a no-op submit affordance).
+        nextSelections = { ...prev, [q.question]: [label] };
       }
-      // Single-select: clicking always selects exactly that label
-      // (re-clicking selected option is a no-op submit affordance).
-      return { ...prev, [q.question]: [label] };
+      return { ...draft, selections: nextSelections };
     });
   }
 
   function setNoteFor(question: string, value: string): void {
-    setNotes((prev) => ({ ...prev, [question]: value }));
+    updateDraft((draft) => ({
+      ...draft,
+      notes: { ...draft.notes, [question]: value },
+    }));
   }
 
   async function submit(): Promise<void> {
@@ -6722,7 +7214,7 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
     // truth until the durable answer event lands (awaitingInput.answered).
     setSubmitting(true);
     setReplyError(null);
-    setSubmittedSnapshot({ answers, annotations });
+    updateDraft((draft) => ({ ...draft, submittedSnapshot: { answers, annotations } }));
     try {
       if (!aw) throw new Error("awaiting-input target is not available");
       await submitAnswer(aw.askingTurnId, {
@@ -6733,7 +7225,7 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
       });
     } catch (err) {
       setReplyError(err instanceof Error ? err.message : String(err));
-      setSubmittedSnapshot(null);
+      updateDraft((draft) => ({ ...draft, submittedSnapshot: null }));
     } finally {
       setSubmitting(false);
     }
@@ -6768,7 +7260,7 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
           </span>
         </div>
       )}
-      {questions.map((q, qi) => {
+      {visibleQuestions.map((q, qi) => {
         const selectedLabels = selectedLabelsFor(q);
         const answeredNote = answeredNoteFor(q.question);
         const liveNote = notes[q.question] ?? "";
@@ -6880,17 +7372,152 @@ function RunAwaitingInputCard({ entry }: { entry: TranscriptEntry }) {
       })}
       {!answered && (
         <div className="run-tool-ask-submit-row">
+          {hasPreviousQuestion && (
+            <button
+              type="button"
+              className="run-tool-ask-submit run-tool-ask-secondary-action"
+              disabled={submitting}
+              onClick={() => questionNavigation?.previousPage && questionNavigation.onSelectPage?.(questionNavigation.previousPage)}
+            >
+              Previous question
+            </button>
+          )}
+          {hasNextQuestion && (
+            <button
+              type="button"
+              className="run-tool-ask-submit"
+              disabled={submitting || !visibleQuestionAnswered}
+              onClick={() => questionNavigation?.nextPage && questionNavigation.onSelectPage?.(questionNavigation.nextPage)}
+            >
+              Next question
+            </button>
+          )}
           <button
             type="button"
-            className="run-tool-ask-submit"
+            className={`run-tool-ask-submit${hasNextQuestion ? " run-tool-ask-secondary-action" : ""}`}
             disabled={!isReady || submitting}
             onClick={() => void submit()}
+            title={
+              !isReady && questions.length > 1
+                ? "Answer every question before submit."
+                : undefined
+            }
           >
-            {submitting ? "Sending…" : "Submit answer"}
+            {submitting ? "Sending…" : questions.length > 1 ? "Submit answers" : "Submit answer"}
           </button>
         </div>
       )}
       {replyError && <p className="run-tool-ask-error">{replyError}</p>}
+    </div>
+  );
+}
+
+// RunNeedsInputAnnouncement paints turn.awaiting_input as the agent's
+// conversational handoff: execution is paused, but the assistant has stopped
+// speaking and the user owns the next input surface in Turns.
+function RunNeedsInputAnnouncement({
+  entry,
+  avatar,
+  onOpenTurn,
+  showTimestamps,
+}: {
+  entry: TranscriptEntry;
+  avatar: AgentAvatar | null;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  showTimestamps: boolean;
+}) {
+  const awaitingInput = entry.awaitingInput;
+  const answered = awaitingInput?.answered ?? false;
+  const summary = entry.meta?.detail ?? "";
+  const state = needsInputAnnouncementState({
+    answered,
+    turnTerminalStatus: entry.turnTerminalStatus,
+  });
+  const title =
+    state === "settled"
+      ? "Input no longer needed"
+      : entry.meta?.title ?? (state === "answered" ? "Input answered" : "I need your input");
+  const targetTurnId = awaitingInput?.askingTurnId ?? entry.turnId ?? "";
+  const handleOpen = (): void => {
+    if (!targetTurnId) return;
+    onOpenTurn?.(targetTurnId, { anchor: "top", resetPage: true });
+  };
+  const navigable = Boolean(targetTurnId && onOpenTurn);
+  const ctaLabel = state === "waiting" ? "Answer in Turns" : "View in Turns";
+  const content = (
+    <>
+      <span className="run-needs-input-announcement-icon" aria-hidden="true">
+        {state === "answered" ? (
+          <CheckIcon size={14} aria-hidden="true" />
+        ) : state === "settled" ? (
+          <MessageSquareOffIcon size={14} aria-hidden="true" />
+        ) : (
+          <MessageSquareIcon size={14} aria-hidden="true" />
+        )}
+      </span>
+      <span className="run-needs-input-announcement-copy" data-slot="message-text">
+        <span className="run-needs-input-announcement-title">{title}</span>
+        {summary && (
+          <span className="run-needs-input-announcement-detail">{summary}</span>
+        )}
+      </span>
+      {navigable && (
+        <span className="run-needs-input-announcement-cta" aria-hidden="true">
+          {ctaLabel}
+        </span>
+      )}
+    </>
+  );
+  return (
+    <div
+      className="run-transcript-message"
+      data-slot="message"
+      data-variant="assistant"
+      data-role="assistant"
+      data-kind="needs-input-announcement"
+      data-message-id={entry.id}
+    >
+      <span className="run-msg-ai-avatar" aria-hidden="true">
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+      </span>
+      <div className="run-needs-input-announcement-body">
+        {navigable ? (
+          <button
+            type="button"
+            className={`run-needs-input-announcement${
+              state === "answered" ? " run-needs-input-announcement-answered" : ""
+            }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
+            onClick={handleOpen}
+            data-slot="message-content"
+            data-state={state}
+            data-answered={answered ? "true" : "false"}
+            data-clickable="true"
+            aria-label={state === "waiting" ? "Answer the question in Turns" : "View the question in Turns"}
+          >
+            {content}
+          </button>
+        ) : (
+          <div
+            className={`run-needs-input-announcement${
+              state === "answered" ? " run-needs-input-announcement-answered" : ""
+            }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
+            data-slot="message-content"
+            data-state={state}
+            data-answered={answered ? "true" : "false"}
+            role="group"
+            aria-label={title}
+          >
+            {content}
+          </div>
+        )}
+        {showTimestamps && entry.time && (
+          <div className="run-msg-footer" data-always-visible="">
+            <div className="run-msg-timings">
+              <span className="run-msg-timing-row">{formatMessageTime(entry.time)}</span>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -7246,7 +7873,7 @@ function RunToolGroup({
 }
 
 function toolItemDefaultExpanded(entry: TranscriptEntry, autoExpand: boolean): boolean {
-  return autoExpand || isAskUserQuestionTool(entry);
+  return autoExpand || isPendingAskUserQuestionTool(entry);
 }
 
 function toolItemExpanded(
@@ -7357,6 +7984,67 @@ function turnActivityShellSummary(summary: TurnActivitySummary | undefined): str
   if ((summary.errorCount ?? 0) > 0) parts.push(plural(summary.errorCount ?? 0, "error", "errors"));
   const childCount = summary.childCount ?? 0;
   return parts.length > 0 ? parts.join(" / ") : plural(childCount, "update");
+}
+
+function normalizeTurnActivityPageDirectory(input: unknown): TurnActivityPageDirectoryItem[] {
+  if (!Array.isArray(input)) return [];
+  const pages: TurnActivityPageDirectoryItem[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+    const item = raw as Record<string, unknown>;
+    const number = typeof item.number === "number" ? item.number : null;
+    if (number == null || !Number.isFinite(number)) continue;
+    pages.push({
+      number,
+      kind: typeof item.kind === "string" ? item.kind : undefined,
+      eventCount: typeof item.eventCount === "number" ? item.eventCount : undefined,
+      sealed: typeof item.sealed === "boolean" ? item.sealed : undefined,
+      questionCount: typeof item.questionCount === "number" ? item.questionCount : undefined,
+      questionIndex: typeof item.questionIndex === "number" ? item.questionIndex : undefined,
+      questionSet: typeof item.questionSet === "number" ? item.questionSet : undefined,
+      answered: typeof item.answered === "boolean" ? item.answered : undefined,
+    });
+  }
+  return pages;
+}
+
+type TurnActivityPageOptionParts = {
+  pageLabel: string;
+  semanticLabel: string;
+  textValue: string;
+};
+
+function turnActivityPageOptionParts(
+  pageNumber: number,
+  directoryItem?: TurnActivityPageDirectoryItem,
+): TurnActivityPageOptionParts {
+  const pageLabel = `Page ${pageNumber}`;
+  let semanticLabel = "Activity";
+  if (directoryItem?.kind === "question_set") {
+    if (directoryItem.questionIndex && directoryItem.questionCount) {
+      semanticLabel = `Question ${directoryItem.questionIndex} of ${directoryItem.questionCount}`;
+    } else {
+      semanticLabel = "Question";
+    }
+  }
+  return {
+    pageLabel,
+    semanticLabel,
+    textValue: `${pageLabel} ${semanticLabel}`,
+  };
+}
+
+function TurnActivityPageOptionLabel({
+  parts,
+}: {
+  parts: TurnActivityPageOptionParts;
+}) {
+  return (
+    <span className="run-turn-view-page-option">
+      <span className="run-turn-view-page-option-index">{parts.pageLabel}</span>
+      <span className="run-turn-view-page-option-label">{parts.semanticLabel}</span>
+    </span>
+  );
 }
 
 type TurnViewItem = {
@@ -7488,7 +8176,9 @@ function buildTurnViewItems(
         summary: shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(turnEntries),
         entries: turnEntries,
         shell,
-        active: turnId === active,
+        active:
+          turnActivityShellIsDurablyActive(shellSummary) ||
+          (turnId === active && shellSummary?.status !== "needs_input"),
         loaded: Boolean(loadedEntries),
         costEstimate: estimateTurnCost(costRows, modelId, turnId),
         contextTokens: estimateTurnContextTokens(costRows, contextWindow, turnId),
@@ -7791,6 +8481,7 @@ function RunTurnActivityGroup({
   highlightedEntryId,
   onQuote,
   onFork,
+  onOpenTurn,
   onOpenBackgroundTask,
   loading,
   pageInfo,
@@ -7813,6 +8504,7 @@ function RunTurnActivityGroup({
   highlightedEntryId: string | null;
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
+  onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   loading?: boolean;
   pageInfo?: TurnActivityPageInfo;
@@ -7841,6 +8533,8 @@ function RunTurnActivityGroup({
     .reverse()
     .find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time);
   const shellSummary = group.shell?.activity;
+  const needsInput = shellSummary?.status === "needs_input";
+  const questionCount = shellSummary?.questionCount ?? pageInfo?.questionCount ?? 0;
   // Always-present pager state: a single-page turn renders a disabled
   // "page 1 of 1" rather than vanishing, so the affordance never looks absent.
   const pagerState = turnActivityPagerState(pageInfo);
@@ -7864,14 +8558,20 @@ function RunTurnActivityGroup({
           >
             <span
               className="run-turn-activity-icon"
-              title="Condensed turn activity"
-              aria-label="Condensed turn activity"
+              title={needsInput ? "Agent needs input" : "Condensed turn activity"}
+              aria-label={needsInput ? "Agent needs input" : "Condensed turn activity"}
             >
               <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
             </span>
-            <span className="run-turn-activity-label">Turn activity</span>
+            <span className="run-turn-activity-label">
+              {needsInput ? "Agent needs input" : "Turn activity"}
+            </span>
             <span className="run-turn-activity-summary">
-              {group.shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(group.entries)}
+              {needsInput && questionCount > 0
+                ? plural(questionCount, "question")
+                : group.shell
+                  ? turnActivityShellSummary(shellSummary)
+                  : turnActivitySummary(group.entries)}
             </span>
             {showTimestamps && (
               <ToolTiming
@@ -7893,6 +8593,15 @@ function RunTurnActivityGroup({
               )}
             </span>
           </button>
+          {needsInput && onOpenTurn && (
+            <button
+              type="button"
+              className="run-turn-activity-action"
+              onClick={() => onOpenTurn(group.turnId, { anchor: "top", resetPage: true })}
+            >
+              Answer questions
+            </button>
+          )}
           {open && (
             <div className="run-turn-activity-body">
               {onSelectPage && (
@@ -7939,7 +8648,15 @@ function RunTurnActivityGroup({
                 }
                 if (child.kind === "meta") {
                   if (child.entry.metaKind === "awaiting_input") {
-                    return <RunAwaitingInputCard key={child.entry.id} entry={child.entry} />;
+                    return (
+                      <RunNeedsInputAnnouncement
+                        key={child.entry.id}
+                        entry={child.entry}
+                        avatar={avatar}
+                        onOpenTurn={onOpenTurn}
+                        showTimestamps={showTimestamps}
+                      />
+                    );
                   }
                   if (child.entry.metaKind === "turn_usage") return null;
                   return (
@@ -8030,6 +8747,8 @@ function RunTurnActivityScreen({
   activityRefreshProblemsByTurn,
   onRetryActivityRefresh,
   onOpenBackgroundTask,
+  transcriptHrefForEntry,
+  onOpenTranscriptMessage,
   scrollRequest,
   onScrollRequestConsumed,
   turnActivityPageInfo,
@@ -8052,18 +8771,19 @@ function RunTurnActivityScreen({
   activityRefreshProblemsByTurn: Record<string, ActivityRefreshProblem | undefined>;
   onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
+  transcriptHrefForEntry?: (entry: TranscriptEntry) => string | undefined;
+  onOpenTranscriptMessage?: (entryId: string) => void;
   scrollRequest?: TurnViewScrollRequest | null;
   onScrollRequestConsumed?: (signal: number) => void;
   turnActivityPageInfo?: Record<string, TurnActivityPageInfo | undefined>;
   onActivitySelectPage?: (turnId: string, page: number) => void;
 }) {
   const selected = turns.find((turn) => turn.turnId === selectedTurnId) ?? turns[turns.length - 1] ?? null;
+  const selectedPageInfo = selected && turnActivityPageInfo ? turnActivityPageInfo[selected.turnId] : undefined;
   // Same always-present pager as the inline chat disclosure, for the surface a
   // user actually inspects turns from. Without it, a turn over the page limit
   // shows only its last page here (the endpoint default) with no way back.
-  const pagerState = turnActivityPagerState(
-    selected && turnActivityPageInfo ? turnActivityPageInfo[selected.turnId] : undefined,
-  );
+  const pagerState = turnActivityPagerState(selectedPageInfo);
   const detailEntries = useMemo(
     () =>
       (selected?.entries ?? []).filter(
@@ -8092,6 +8812,37 @@ function RunTurnActivityScreen({
   const loading = selected ? loadingActivityTurns[selected.turnId] === true : false;
   const refreshProblem = selected ? activityRefreshProblemsByTurn[selected.turnId] : undefined;
   const showRefreshProblemOnly = Boolean(refreshProblem) && detailGroups.length === 0;
+  const selectedPageDirectoryItem = selectedPageInfo?.pages?.find((page) => page.number === pagerState.page);
+  const selectedPageOptionParts = turnActivityPageOptionParts(pagerState.page, selectedPageDirectoryItem);
+  const questionPageNavigation = useMemo<QuestionPageNavigation | undefined>(() => {
+    if (!selectedPageInfo || selectedPageInfo.kind !== "question_set") return undefined;
+    const directory = selectedPageInfo.pages ?? [];
+    const sameSetPages = directory
+      .filter((page) =>
+        page.kind === "question_set" &&
+        (selectedPageInfo.questionSet
+          ? page.questionSet === selectedPageInfo.questionSet
+          : true),
+      )
+      .sort((a, b) => {
+        const ai = a.questionIndex ?? a.number;
+        const bi = b.questionIndex ?? b.number;
+        return ai - bi;
+      });
+    const currentIndex = sameSetPages.findIndex((page) => page.number === selectedPageInfo.page);
+    const previousPage = currentIndex > 0 ? sameSetPages[currentIndex - 1]?.number : undefined;
+    const nextPage =
+      currentIndex >= 0 && currentIndex < sameSetPages.length - 1
+        ? sameSetPages[currentIndex + 1]?.number
+        : undefined;
+    return {
+      questionSet: selectedPageInfo.questionSet,
+      questionIndex: selectedPageInfo.questionIndex,
+      questionCount: selectedPageInfo.questionCount,
+      previousPage,
+      nextPage,
+    };
+  }, [selectedPageInfo]);
   useLayoutEffect(() => {
     if (!scrollRequest || !selected) return;
     if (scrollRequest.turnId !== selected.turnId) return;
@@ -8138,7 +8889,20 @@ function RunTurnActivityScreen({
     }
     if (group.kind === "meta") {
       if (group.entry.metaKind === "awaiting_input") {
-        return <RunAwaitingInputCard key={group.entry.id} entry={group.entry} />;
+        return (
+          <RunAwaitingInputCard
+            key={group.entry.id}
+            entry={group.entry}
+            questionNavigation={
+              questionPageNavigation && selected && onActivitySelectPage
+                ? {
+                    ...questionPageNavigation,
+                    onSelectPage: (page) => onActivitySelectPage(selected.turnId, page),
+                  }
+                : questionPageNavigation
+            }
+          />
+        );
       }
       if (group.entry.metaKind === "turn_usage") return null;
       return (
@@ -8184,6 +8948,8 @@ function RunTurnActivityScreen({
         canonicalMessage={false}
         ownedByTurnActivity
         showAssistantAvatar
+        transcriptHref={transcriptHrefForEntry?.(group.entry)}
+        onOpenTranscriptMessage={onOpenTranscriptMessage}
         isAvatarContinuation={isMessageAvatarContinuation(detailGroups, groupIndex)}
       />
     );
@@ -8210,23 +8976,28 @@ function RunTurnActivityScreen({
                 size="sm"
                 aria-label="Select activity page"
               >
-                <SelectValue />
+                <TurnActivityPageOptionLabel parts={selectedPageOptionParts} />
               </SelectTrigger>
               <SelectContent
-                className="run-turn-view-select-menu"
+                className="run-turn-view-select-menu run-turn-view-page-select-menu"
                 position="popper"
                 align="end"
               >
                 {Array.from({ length: pagerState.pageCount }, (_, index) => index + 1).map(
-                  (pageNumber) => (
-                    <SelectItem
-                      key={pageNumber}
-                      value={String(pageNumber)}
-                      className="run-turn-view-select-item"
-                    >
-                      Page {pageNumber} of {pagerState.pageCount}
-                    </SelectItem>
-                  ),
+                  (pageNumber) => {
+                    const directoryItem = selectedPageInfo?.pages?.find((page) => page.number === pageNumber);
+                    const optionParts = turnActivityPageOptionParts(pageNumber, directoryItem);
+                    return (
+                      <SelectItem
+                        key={pageNumber}
+                        value={String(pageNumber)}
+                        textValue={optionParts.textValue}
+                        className="run-turn-view-select-item run-turn-view-page-select-item"
+                      >
+                        <TurnActivityPageOptionLabel parts={optionParts} />
+                      </SelectItem>
+                    );
+                  },
                 )}
               </SelectContent>
             </Select>
@@ -8279,8 +9050,28 @@ function RunTurnActivityScreen({
               />
             )}
           </div>
+          {selectedPageInfo?.kind === "question_set" && (
+            <div
+              className="run-turn-question-page-head"
+              data-answered={selectedPageInfo.answered ? "true" : "false"}
+            >
+              <span className="run-turn-question-page-title">
+                {selectedPageInfo.questionCount && selectedPageInfo.questionCount > 1
+                  ? "Questions"
+                  : "Question"}
+              </span>
+              <span className="run-turn-question-page-count">
+                {selectedPageInfo.questionIndex && selectedPageInfo.questionCount
+                  ? `Question ${selectedPageInfo.questionIndex} of ${selectedPageInfo.questionCount}`
+                  : selectedPageInfo.questionCount
+                  ? plural(selectedPageInfo.questionCount, "question")
+                  : "Question"}
+              </span>
+            </div>
+          )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
+            data-page-kind={selectedPageInfo?.kind ?? "activity"}
             onCopy={handleTranscriptCopy}
             ref={bodyRef}
           >
@@ -8401,6 +9192,7 @@ export function RunMessages({
   onQuote,
   onFork,
   onOpenTurn,
+  turnLinksEnabled = true,
   onOpenBackgroundTask,
   scrollParent,
   onStartReached,
@@ -8446,6 +9238,7 @@ export function RunMessages({
   onQuote?: (text: string, style: QuoteStyle) => void;
   onFork?: (entry: TranscriptEntry) => Promise<void>;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  turnLinksEnabled?: boolean;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   scrollParent: HTMLElement | null;
   onStartReached?: () => void;
@@ -8472,6 +9265,18 @@ export function RunMessages({
     () => groupTranscriptEntries(entries, condenseCompletedTurns, activeTurnId, activityEntriesByTurn),
     [activeTurnId, activityEntriesByTurn, condenseCompletedTurns, entries],
   );
+  const turnNumberByTurnId = useMemo(() => {
+    const numbers = new Map<string, number>();
+    for (const entry of entries) {
+      const turnId = transcriptEntryTurnId(entry);
+      const turnNumber = entry.turnNumber;
+      if (!turnId || typeof turnNumber !== "number" || !Number.isSafeInteger(turnNumber) || turnNumber < 1) {
+        continue;
+      }
+      numbers.set(turnId, turnNumber);
+    }
+    return numbers;
+  }, [entries]);
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
   const thinkingInvariantRef = useRef<string>("");
@@ -8504,6 +9309,14 @@ export function RunMessages({
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open }
     ));
   }, []);
+  const turnHrefForEntry = useCallback(
+    (entry: TranscriptEntry): string | undefined => {
+      if (!turnLinksEnabled || !entry.turnId) return undefined;
+      const turnNumber = turnNumberByTurnId.get(entry.turnId);
+      return turnNumber == null ? undefined : sessionRouteUrl(sessionId, "turns", turnNumber);
+    },
+    [sessionId, turnLinksEnabled, turnNumberByTurnId],
+  );
   useEffect(() => {
     const snapshot = chatScrollGroupSnapshot(groups, entries.length, entries);
     const durableActiveActivityGroups = chatScrollSnapshotNumber(
@@ -8719,7 +9532,14 @@ export function RunMessages({
       }
       if (g.kind === "meta") {
         if (g.entry.metaKind === "awaiting_input") {
-          return <RunAwaitingInputCard entry={g.entry} />;
+          return (
+            <RunNeedsInputAnnouncement
+              entry={g.entry}
+              avatar={avatar}
+              onOpenTurn={onOpenTurn}
+              showTimestamps={showTimestamps}
+            />
+          );
         }
         if (g.entry.metaKind === "turn_usage") {
           return null;
@@ -8780,6 +9600,7 @@ export function RunMessages({
             highlightedEntryId={highlightedEntryId}
             onQuote={onQuote}
             onFork={onFork}
+            onOpenTurn={onOpenTurn}
             onOpenBackgroundTask={onOpenBackgroundTask}
             loading={loadingActivityTurns[g.turnId] === true}
             pageInfo={turnActivityPageInfo[g.turnId]}
@@ -8803,6 +9624,7 @@ export function RunMessages({
           onQuote={onQuote}
           onFork={onFork}
           onOpenTurn={onOpenTurn}
+          turnHref={turnHrefForEntry(g.entry)}
           isAvatarContinuation={isMessageAvatarContinuation(groups, index)}
         />
       );
@@ -8831,6 +9653,7 @@ export function RunMessages({
       showTimestamps,
       toolExpansionOverrides,
       toolGroupOpenOverrides,
+      turnHrefForEntry,
     ],
   );
   const handleStartReached = useCallback(() => {
@@ -9004,7 +9827,68 @@ function formatMetricCount(value: number): string {
   return value.toFixed(value < 1 ? 2 : 1).replace(/\.0$/, "");
 }
 
+const PROVIDER_RATE_LIMIT_LABELS: Record<string, string> = {
+  provider: "Provider",
+  status: "Status",
+  rateLimitType: "Type",
+  resetsAt: "Resets",
+  utilization: "Utilization",
+  overageStatus: "Overage",
+  overageResetsAt: "Overage reset",
+  overageDisabledReason: "Overage disabled",
+  isUsingOverage: "Using overage",
+  surpassedThreshold: "Threshold",
+  uuid: "Event",
+  session_id: "SDK session",
+};
+
+const PROVIDER_RATE_LIMIT_ORDER = [
+  "provider",
+  "status",
+  "rateLimitType",
+  "resetsAt",
+  "utilization",
+  "overageStatus",
+  "overageResetsAt",
+  "overageDisabledReason",
+  "isUsingOverage",
+  "surpassedThreshold",
+  "uuid",
+  "session_id",
+];
+
+function formatProviderRateLimitValue(key: string, value: unknown): string {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (key === "resetsAt" || key === "overageResetsAt") {
+      const ms = value > 1_000_000_000_000 ? value : value * 1000;
+      return formatToolFullTime(new Date(ms).toISOString());
+    }
+    return formatMetricCount(value);
+  }
+  if (typeof value === "string") {
+    if (key === "resetsAt" || key === "overageResetsAt") {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return formatToolFullTime(new Date(parsed).toISOString());
+    }
+    return value;
+  }
+  return "";
+}
+
+function providerRateLimitRows(session?: Session): Array<{ key: string; label: string; value: string }> {
+  const info = session?.provider_rate_limit_info;
+  if (!info) return [];
+  const rows: Array<{ key: string; label: string; value: string }> = [];
+  for (const key of PROVIDER_RATE_LIMIT_ORDER) {
+    const value = formatProviderRateLimitValue(key, info[key]);
+    if (value) rows.push({ key, label: PROVIDER_RATE_LIMIT_LABELS[key] ?? key, value });
+  }
+  return rows;
+}
+
 function RunSettingsPanel({
+  session,
   runPrefs,
   setRunPref,
   soundControlId,
@@ -9019,6 +9903,7 @@ function RunSettingsPanel({
   adminView: routedAdminView,
   onSettingsRouteChange,
 }: {
+  session?: Session;
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   soundControlId: string;
@@ -9072,6 +9957,7 @@ function RunSettingsPanel({
     adminControls?.observability.summary ?? null,
     adminControls?.observability.error ?? null,
   );
+  const rateLimitRows = providerRateLimitRows(session);
 
   return (
     <div className={settingsScreenClassName}>
@@ -9253,6 +10139,29 @@ function RunSettingsPanel({
               </div>
               <SessionListDebugCaptureControls source="SettingsAdmin" />
             </div>
+            {rateLimitRows.length > 0 && (
+              <div className="run-settings-rate-limit">
+                <div className="run-settings-diagnostics-head">
+                  <span className="run-settings-link-label">
+                    <TimerIcon className="run-settings-link-icon" aria-hidden="true" />
+                    <span>Rate limit info</span>
+                  </span>
+                  {session?.provider_rate_limit_observed_at && (
+                    <span className="run-settings-scope-value">
+                      {formatToolFullTime(session.provider_rate_limit_observed_at)}
+                    </span>
+                  )}
+                </div>
+                <div className="run-settings-rate-limit-grid">
+                  {rateLimitRows.map((row) => (
+                    <div className="run-settings-rate-limit-row" key={row.key}>
+                      <span>{row.label}</span>
+                      <span>{row.value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
           <section className="run-settings-section">
             <h2 className="run-settings-title">Useful files</h2>
@@ -9598,6 +10507,8 @@ function ChatPane({
   const [pendingRouteTurnNumber, setPendingRouteTurnNumber] = useState<number | null>(
     initialRunRoute?.tab === "turns" ? initialRunRoute.turnNumber : null,
   );
+  const [pendingTranscriptMessageId, setPendingTranscriptMessageId] = useState<string | null>(null);
+  const effectivePendingScrollMessageId = pendingTranscriptMessageId ?? pendingScrollMessageId;
   // A present-but-unresolvable turn segment (a bad number, or a bookmarked
   // retired turn_<uuid>) routes to an explicit unavailable-target state rather
   // than silently falling back to the latest turn.
@@ -9723,6 +10634,15 @@ function ChatPane({
     Number.isFinite(session.runtime_context_window_tokens) &&
     session.runtime_context_window_tokens > 0
       ? Math.floor(session.runtime_context_window_tokens)
+      : 0;
+  // Durable per-session compaction count from the session row. Unlike the live
+  // occupancy numerator (which self-resets after a compaction), this is the
+  // cumulative count of compactions and only ever advances.
+  const sessionCompactionCount =
+    typeof session.compaction_count === "number" &&
+    Number.isFinite(session.compaction_count) &&
+    session.compaction_count > 0
+      ? Math.floor(session.compaction_count)
       : 0;
   const [tokensUsed, setTokensUsed] = useState(0);
   const [queuedMessages, setQueuedMessages] = useState<QueuedMessage[]>([]);
@@ -10219,12 +11139,37 @@ function ChatPane({
       entries?: unknown[];
       page?: number;
       page_count?: number;
+      page_kind?: string;
+      question_count?: number;
+      question_index?: number;
+      question_set?: number;
+      answered?: boolean;
+      pages?: unknown;
     };
     if (typeof body.page === "number" && typeof body.page_count === "number") {
-      const info: TurnActivityPageInfo = { page: body.page, pageCount: body.page_count };
+      const info: TurnActivityPageInfo = {
+        page: body.page,
+        pageCount: body.page_count,
+        kind: typeof body.page_kind === "string" ? body.page_kind : undefined,
+        questionCount: typeof body.question_count === "number" ? body.question_count : undefined,
+        questionIndex: typeof body.question_index === "number" ? body.question_index : undefined,
+        questionSet: typeof body.question_set === "number" ? body.question_set : undefined,
+        answered: typeof body.answered === "boolean" ? body.answered : undefined,
+        pages: normalizeTurnActivityPageDirectory(body.pages),
+      };
       setTurnActivityPageInfo((prev) => {
         const existing = prev[trimmedTurnId];
-        if (existing && existing.page === info.page && existing.pageCount === info.pageCount) {
+        if (
+          existing &&
+          existing.page === info.page &&
+          existing.pageCount === info.pageCount &&
+          existing.kind === info.kind &&
+          existing.questionCount === info.questionCount &&
+          existing.questionIndex === info.questionIndex &&
+          existing.questionSet === info.questionSet &&
+          existing.answered === info.answered &&
+          JSON.stringify(existing.pages ?? []) === JSON.stringify(info.pages ?? [])
+        ) {
           return prev;
         }
         return { ...prev, [trimmedTurnId]: info };
@@ -10620,7 +11565,7 @@ function ChatPane({
     }
     if (wasVisible) return;
     if (session.status !== "Active") return;
-    const hasExplicitTarget = Boolean(pendingScrollMessageId?.trim());
+    const hasExplicitTarget = Boolean(effectivePendingScrollMessageId?.trim());
     resetSdkTimelineBootstrapState(
       hasExplicitTarget ? "visible-message-target" : "visible-reactivation",
       {
@@ -10632,7 +11577,7 @@ function ChatPane({
     dispatchNavigationMode(
       hasExplicitTarget ? "session-open-anchored" : "session-open-tail",
     );
-  }, [pendingScrollMessageId, session.id, session.status, visible]);
+  }, [effectivePendingScrollMessageId, session.id, session.status, visible]);
 
   useEffect(() => {
     visibleRef.current = visible;
@@ -10738,6 +11683,12 @@ function ChatPane({
       setPendingTurnViewRouteAnchor(null);
       return;
     }
+    if (route.tab === "session-data") {
+      setActiveTab("session-data");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      return;
+    }
     setActiveTab("chat");
     setPendingRouteTurnNumber(null);
     setPendingTurnViewRouteAnchor(null);
@@ -10795,7 +11746,7 @@ function ChatPane({
     const requestId = nextSdkTimelineRequestId(source);
     const previousSnapshot = chatScrollEntrySnapshot(sdkServerProjectedEntriesRef.current);
     const load = async (): Promise<SdkHistoryRefreshResult> => {
-      const targetTimelineId = pendingScrollMessageId?.trim() ?? "";
+      const targetTimelineId = effectivePendingScrollMessageId?.trim() ?? "";
       const params = new URLSearchParams();
       let anchor = "newest";
       if (targetTimelineId) {
@@ -11678,7 +12629,7 @@ function ChatPane({
     resetSdkTimelineBootstrapState("session-change", {
       source: "history",
       clearRealtime: false,
-      scrollToLatestOnReady: !Boolean(pendingScrollMessageId?.trim()),
+      scrollToLatestOnReady: !Boolean(effectivePendingScrollMessageId?.trim()),
     });
     sdkAssistantDurationsRef.current = new Map();
     currentRunRef.current = null;
@@ -12467,6 +13418,26 @@ function ChatPane({
     onSessionPatch(session.id, { test_state: null, rollout_state: nextState });
   }
 
+  async function saveSessionBugLabel(name: string | null): Promise<void> {
+    const res = await authedFetch(scopedSessionPathForPane(`/api/sessions/${session.id}/bug-label`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      let detail = `bug label update failed: ${res.status}`;
+      try {
+        const body = await res.json();
+        if (typeof body?.detail === "string") detail = body.detail;
+      } catch {
+        // Keep the status-only detail when the response is not JSON.
+      }
+      throw new Error(detail);
+    }
+    const updated: Session = normalizeSession(await res.json());
+    onSessionPatch(session.id, { bug_label: updated.bug_label ?? null });
+  }
+
   function startTestSkill() {
     if (session.status !== "Active") return;
     const promptText = getComposerValue().trim();
@@ -12887,6 +13858,37 @@ function ChatPane({
               null)
             : null))
       : null;
+  const transcriptHrefForEntry = useCallback(
+    (entry: TranscriptEntry): string | undefined => {
+      if (publicView && publicShareTokenValue) {
+        return messageUrl(session.id, entry.id, publicShareTokenValue);
+      }
+      if (publicView) return undefined;
+      return messageUrl(session.id, entry.id);
+    },
+    [publicShareTokenValue, publicView, session.id],
+  );
+  const openTranscriptMessage = useCallback(
+    (entryId: string) => {
+      const trimmedEntryId = entryId.trim();
+      if (!trimmedEntryId) return;
+      if (!publicView) {
+        const next = messageUrl(session.id, trimmedEntryId);
+        if (next !== window.location.href) window.history.replaceState({}, "", next);
+      }
+      setPendingTranscriptMessageId(trimmedEntryId);
+      setActiveTab("chat");
+    },
+    [publicView, session.id],
+  );
+  const handleTranscriptScrollConsumed = useCallback(() => {
+    if (pendingTranscriptMessageId) {
+      setPendingTranscriptMessageId(null);
+      clearInitialMessageId();
+      return;
+    }
+    onScrollConsumed?.();
+  }, [onScrollConsumed, pendingTranscriptMessageId]);
   const ensureTurnActivityLoaded = useCallback((
     turnId: string,
     options?: { force?: boolean },
@@ -13013,7 +14015,7 @@ function ChatPane({
   }, [activeTab, historyBootstrapped, pendingRouteTurnNumber, turnsAvailable]);
   useEffect(() => {
     if (publicView) return;
-    if (!visible || pendingScrollMessageId) return;
+    if (!visible || effectivePendingScrollMessageId) return;
     if (activeTab === "turns") {
       // While showing the unavailable-target state, leave the URL at the
       // requested (unresolvable) turn segment instead of rewriting it to the
@@ -13027,10 +14029,12 @@ function ChatPane({
       replaceAppRoute("settings", settingsTab, adminView);
     } else if (activeTab === "help") {
       replaceAppRoute("help");
+    } else if (activeTab === "session-data") {
+      replaceSessionRoute(session.id, "session-data");
     } else {
       replaceSessionRoute(session.id, "chat");
     }
-  }, [activeTab, adminView, pendingScrollMessageId, publicView, routeTurnUnavailable, routedSelectedTurnNumber, session.id, settingsTab, visible]);
+  }, [activeTab, adminView, effectivePendingScrollMessageId, publicView, routeTurnUnavailable, routedSelectedTurnNumber, session.id, settingsTab, visible]);
   useEffect(() => {
     if (activeTab !== "turns") return;
     if (!effectiveSelectedTurnId) return;
@@ -13055,8 +14059,13 @@ function ChatPane({
       setPendingRouteTurnNumber(null);
       setRouteTurnUnavailable(false);
       setPendingTurnViewRouteAnchor(null);
+      if (options?.resetPage) {
+        const nextSelectedPages = { ...selectedTurnPageRef.current };
+        delete nextSelectedPages[target];
+        selectedTurnPageRef.current = nextSelectedPages;
+      }
       setSelectedTurnId(target);
-      ensureTurnActivityLoaded(target);
+      ensureTurnActivityLoaded(target, { force: options?.resetPage });
       if (options?.anchor) {
         turnViewScrollRequestSeqRef.current += 1;
         setTurnViewScrollRequest({
@@ -13066,7 +14075,7 @@ function ChatPane({
         });
       }
     }
-    setActiveTab("turns");
+      setActiveTab("turns");
   }, [activeTurnViewId, effectiveSelectedTurnId, ensureTurnActivityLoaded, latestTurnId]);
 
   // T opens the turn-detail view from the focused transcript; Escape returns
@@ -13289,6 +14298,14 @@ function ChatPane({
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
   const pullRequestURL = testState?.pull_request_url?.trim() || "";
+  const sessionDataRows = useMemo(
+    () => buildSessionDataStatusRows({
+      ...session,
+      test_state: testState,
+      rollout_state: rolloutState,
+    }),
+    [session, testState, rolloutState],
+  );
   const appliedEffortId = (session.runtime_effort ?? "").trim();
   const hasAppliedRuntimeConfig = Boolean(session.runtime_configured_at);
   const configuredModelLabel =
@@ -13437,6 +14454,19 @@ function ChatPane({
     return () => onRefreshFlashChange(session.id, null);
   }, [onRefreshFlashChange, session.id, visibleRefreshFlash]);
 
+  const [askUserQuestionDrafts, setAskUserQuestionDrafts] = useState<Record<string, AskUserQuestionDraft | undefined>>({});
+  const setAskUserQuestionDraft = useCallback((
+    key: string,
+    updater: (previous: AskUserQuestionDraft | undefined) => AskUserQuestionDraft,
+  ) => {
+    const trimmed = key.trim();
+    if (!trimmed) return;
+    setAskUserQuestionDrafts((previous) => ({
+      ...previous,
+      [trimmed]: updater(previous[trimmed]),
+    }));
+  }, []);
+
   async function submitAnswer(
     askingTurnId: string,
     payload: AnswerPayload,
@@ -13494,7 +14524,7 @@ function ChatPane({
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
     timelineBootstrapClearRealtimeRef.current = false;
-    timelineBootstrapScrollToLatestRef.current = !Boolean(pendingScrollMessageId?.trim());
+    timelineBootstrapScrollToLatestRef.current = !Boolean(effectivePendingScrollMessageId?.trim());
     clearScrollToLatestRequest();
     dispatchTimelineBootstrap({
       type: "reset",
@@ -13534,6 +14564,8 @@ function ChatPane({
               throw new Error("session is read-only");
             }
           : submitAnswer,
+        askUserQuestionDrafts,
+        setAskUserQuestionDraft,
         createMessageLink,
         user,
       }}
@@ -13639,6 +14671,12 @@ function ChatPane({
                 disabled: !filesAvailable,
                 title: filesTabTitle,
                 onOpen: () => toggleRunTab("files"),
+              }}
+              sessionData={{
+                active: activeTab === "session-data",
+                disabled: false,
+                title: "Session data",
+                onOpen: () => toggleRunTab("session-data"),
               }}
               settingsActive={activeTab === "settings"}
               helpActive={activeTab === "help"}
@@ -13979,8 +15017,15 @@ function ChatPane({
             selectedTurnId={effectiveSelectedTurnId}
             onSelectTurn={(turnId) => {
               setPendingRouteTurnNumber(null);
+              const selectedTurn = turnViewItems.find((turn) => turn.turnId === turnId);
+              const resetPage = selectedTurn?.shell?.activity?.status === "needs_input";
+              if (resetPage) {
+                const nextSelectedPages = { ...selectedTurnPageRef.current };
+                delete nextSelectedPages[turnId];
+                selectedTurnPageRef.current = nextSelectedPages;
+              }
               setSelectedTurnId(turnId);
-              ensureTurnActivityLoaded(turnId);
+              ensureTurnActivityLoaded(turnId, { force: resetPage });
             }}
             avatar={sessionAvatar}
             systemAvatar={systemAvatar}
@@ -13996,6 +15041,8 @@ function ChatPane({
               ensureTurnActivityLoaded(turnId, { force: true });
             }}
             onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
+            transcriptHrefForEntry={transcriptHrefForEntry}
+            onOpenTranscriptMessage={openTranscriptMessage}
             scrollRequest={turnViewScrollRequest}
             onScrollRequestConsumed={clearTurnViewScrollRequest}
             turnActivityPageInfo={turnActivityPageInfo}
@@ -14015,8 +15062,17 @@ function ChatPane({
             canStopEntry={canStopBackgroundEntry}
             onStop={stopBackgroundActivity}
           />
+        ) : activeTab === "session-data" ? (
+          <SessionDataScreen
+            rows={sessionDataRows}
+            session={session}
+            requestPath={scopedSessionPathForPane}
+            onBugLabelSave={saveSessionBugLabel}
+            readOnly={readOnly}
+          />
         ) : activeTab === "settings" ? (
           <RunSettingsPanel
+            session={session}
             runPrefs={runPrefs}
             setRunPref={setRunPref}
             soundControlId={`turn-sound-volume-${session.id}`}
@@ -14119,8 +15175,8 @@ function ChatPane({
               systemAvatar={systemAvatar}
               sessionId={session.id}
               sessionMode={session.mode}
-              pendingScrollMessageId={pendingScrollMessageId}
-              onScrollConsumed={onScrollConsumed}
+              pendingScrollMessageId={effectivePendingScrollMessageId}
+              onScrollConsumed={handleTranscriptScrollConsumed}
               showThinking={runPrefs.showThinking}
               autoExpandTools={runPrefs.autoExpandTools}
               condenseCompletedTurns={runPrefs.condenseCompletedTurns}
@@ -14146,6 +15202,7 @@ function ChatPane({
               }
               onOpenBackgroundTask={publicView ? undefined : openBackgroundPage}
               onOpenTurn={openTurnPage}
+              turnLinksEnabled={!publicView}
               scrollParent={transcriptScrollEl}
               onStartReached={() => {
                 void loadSdkOlderEvents();
@@ -14449,6 +15506,7 @@ function ChatPane({
                 amountUsd: sessionCostEstimate?.amountUsd ?? null,
                 tokens: tokensUsed,
                 contextWindow: runtimeContextWindowTokens,
+                compactionCount: sessionCompactionCount,
                 tokenScopeLabel: "current context tokens",
                 placeholder: sessionUsageLoading,
               }}
@@ -15730,6 +16788,9 @@ function AuthenticatedApp() {
       runtime_context_window_tokens: row.runtime_context_window_tokens ?? 0,
       runtime_context_window_source: row.runtime_context_window_source ?? "",
       runtime_context_window_observed_at: row.runtime_context_window_observed_at ?? null,
+      provider_rate_limit_info: normalizeProviderRateLimitInfo(row.provider_rate_limit_info),
+      provider_rate_limit_observed_at: row.provider_rate_limit_observed_at ?? null,
+      compaction_count: row.compaction_count ?? 0,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
       row_version: row.row_version,
@@ -15783,6 +16844,15 @@ function AuthenticatedApp() {
       runtime_context_window_observed_at:
         typeof raw.runtime_context_window_observed_at === "string"
           ? raw.runtime_context_window_observed_at
+          : undefined,
+      provider_rate_limit_info: normalizeProviderRateLimitInfo(raw.provider_rate_limit_info) ?? undefined,
+      provider_rate_limit_observed_at:
+        typeof raw.provider_rate_limit_observed_at === "string"
+          ? raw.provider_rate_limit_observed_at
+          : undefined,
+      compaction_count:
+        typeof raw.compaction_count === "number" && Number.isFinite(raw.compaction_count)
+          ? Math.max(0, Math.floor(raw.compaction_count))
           : undefined,
       agent_avatar_id:
         typeof raw.agent_avatar_id === "string" ? raw.agent_avatar_id : undefined,
@@ -17400,6 +18470,12 @@ function AuthenticatedApp() {
                   active: false,
                   disabled: true,
                   title: "Files are available once the session starts",
+                  onOpen: () => undefined,
+                }}
+                sessionData={{
+                  active: false,
+                  disabled: true,
+                  title: "Session data is available once the session starts",
                   onOpen: () => undefined,
                 }}
                 settingsActive={homeActiveTab === "settings"}

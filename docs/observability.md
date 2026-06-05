@@ -230,6 +230,15 @@ All metric names are prefixed `tank_`. The full namespace:
   `ready` / `error` / `stopped` instead of downgrading the session row
   back to `stopping`. This is the server-side detector for stale
   stop-clicks racing behind terminal turn events.
+- `tank_session_compaction_total{provider,trigger}` — durable context
+  compactions recorded per session by the chat→activity emitter, labeled by
+  `provider` (`claude`, `codex`, `other`) and `trigger` (`auto`, `manual`,
+  `other`). It increments once per newly-observed compaction — the emitter
+  recomputes the durable `sessions.compaction_count` from the `session_events`
+  ledger and dedups at-least-once redelivery — so it is the rate view of how
+  often sessions compact and how much is a manual `/compact` vs. automatic. The
+  exact per-session total is the durable `compaction_count` column the composer
+  renders as its `cmp` metric, not this counter.
 - `tank_runner_*` — pod-side runner counters/histograms. The default
   `mode` label is "claude" or "codex", bound at module import.
   `tank_runner_item_outcome_total{outcome,reason}` counts bounded item

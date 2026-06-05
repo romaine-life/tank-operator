@@ -146,6 +146,17 @@ type SessionRecord struct {
 	RuntimeContextWindowTokens     int64
 	RuntimeContextWindowSource     string
 	RuntimeContextWindowObservedAt string
+	ProviderRateLimitInfo          map[string]any
+	ProviderRateLimitObservedAt    string
+
+	// CompactionCount is the durable count of context.compacted events the
+	// runner has recorded for this session. It is a projection over the
+	// append-only session_events ledger — the chat-activity emitter recomputes
+	// it on each compaction upsert — surfaced on the row so the composer's
+	// compaction metric hydrates from durable row metadata, stable across
+	// reload and identical in a fresh tab (the same model the runtime context
+	// window uses). Monotonic: it only ever advances over a session's life.
+	CompactionCount int64
 
 	// Avatar IDs are assigned by the backend from a durable shuffled deck.
 	// Visible production rows must have an agent avatar id before publication.

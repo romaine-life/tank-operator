@@ -581,10 +581,10 @@ func TestProjectTranscriptEventsKeepsFailedTurnActivityOutOfMainTranscript(t *te
 }
 
 // TestProjectTranscriptEventsPromotesAwaitingInputCard verifies the projection
-// places a turn.awaiting_input pause inside Turn activity as the interactive
-// question card (metaKind "awaiting_input"), anchored at the asking turn's tail,
-// and unanswered until a later turn.input_answered arrives. The main transcript
-// gets only the Turn activity shell.
+// places a turn.awaiting_input pause inside Turn activity as a question-set
+// payload and keeps the same durable meta row in the main transcript as the
+// assistant handoff row. The row is anchored at the asking turn's tail and stays
+// unanswered until a later turn.input_answered arrives.
 func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
@@ -624,19 +624,27 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 		}
 	}
 	if card == nil {
-		t.Fatalf("expected awaiting_input card in activity body, got bodies: %#v", projection.ActivityBodies)
+		t.Fatalf("expected awaiting_input question payload in activity body, got bodies: %#v", projection.ActivityBodies)
 	}
+	var transcriptHandoff map[string]any
 	for _, entry := range projection.Entries {
 		if entry["metaKind"] == "awaiting_input" {
-			t.Fatalf("awaiting_input card leaked into main transcript: %#v", entry)
+			transcriptHandoff = entry
+			break
 		}
+	}
+	if transcriptHandoff == nil {
+		t.Fatalf("expected awaiting_input handoff row in main transcript, got entries: %#v", projection.Entries)
 	}
 	if shell := projection.Entries[1]; shell["kind"] != "turn_activity" {
 		t.Fatalf("main transcript entry = %#v, want turn_activity shell", shell)
 	}
+	if projection.Entries[2]["metaKind"] != "awaiting_input" {
+		t.Fatalf("third transcript entry = %#v, want awaiting_input handoff row", projection.Entries[2])
+	}
 	meta, _ := card["meta"].(map[string]any)
-	if meta["title"] != "Claude is waiting on you" {
-		t.Errorf("card title = %q, want Claude is waiting on you", meta["title"])
+	if meta["title"] != "I need your input" {
+		t.Errorf("card title = %q, want I need your input", meta["title"])
 	}
 	if got := meta["detail"]; got != "Which auth method?" {
 		t.Errorf("card detail = %q, want question text", got)
@@ -655,23 +663,87 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 		t.Errorf("timelineId = %v, want turn-1:item:tool-ask", awaiting["timelineId"])
 	}
 	if awaiting["answered"] != false {
-		t.Errorf("answered = %v, want false for an unanswered card", awaiting["answered"])
+		t.Errorf("answered = %v, want false for an unanswered question set", awaiting["answered"])
 	}
 	if awaiting["questionCount"] != 1 {
 		t.Errorf("questionCount = %v, want 1", awaiting["questionCount"])
 	}
-	// Card orderKey must sort immediately after the asking turn's tail so
+	// Awaiting-input orderKey must sort immediately after the asking turn's tail so
 	// historical replay and live streaming agree on placement.
 	if !strings.HasSuffix(card["orderKey"].(string), "~awaiting_input") {
 		t.Errorf("card orderKey = %q, want suffix ~awaiting_input", card["orderKey"])
 	}
+	if transcriptHandoff["orderKey"] != card["orderKey"] {
+		t.Errorf("transcript handoff orderKey = %q, want activity card orderKey %q", transcriptHandoff["orderKey"], card["orderKey"])
+	}
+}
+
+func TestProjectTranscriptEventsAwaitingInputButtonSortsAfterFoldedStartupStatus(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "invoke the ask question tool",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("loading", "002", "session.status", "system", "tank", "", "session:loading", map[string]any{
+			"status": "loading",
+			"text":   "Session is loading.",
+		}),
+		projectionTestEvent("ready", "003", "session.status", "system", "tank", "", "session:ready", map[string]any{
+			"status": "ready",
+			"text":   "Session is ready.",
+		}),
+		projectionTestEvent("await", "004", "turn.awaiting_input", "runner", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
+			"provider_item_id": "toolu_ask",
+			"timeline_id":      "turn-1:item:tool-ask",
+			"questions": []any{
+				map[string]any{"question": "Which option?", "allowFreeForm": true},
+			},
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 3; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	if projection.Entries[0]["kind"] != "message" {
+		t.Fatalf("first entry = %#v, want user message", projection.Entries[0])
+	}
+	if projection.Entries[1]["kind"] != "turn_activity" {
+		t.Fatalf("second entry = %#v, want turn_activity shell", projection.Entries[1])
+	}
+	if projection.Entries[2]["metaKind"] != "awaiting_input" {
+		t.Fatalf("third entry = %#v, want awaiting_input navigation button row after folded startup status", projection.Entries[2])
+	}
+	activity := projection.Entries[1]["activity"].(map[string]any)
+	if activity["status"] != "needs_input" {
+		t.Fatalf("activity status = %v, want needs_input", activity["status"])
+	}
+	activityIDs, _ := projection.Entries[1]["activityIds"].([]string)
+	for _, id := range activityIDs {
+		if id == projection.Entries[2]["id"] {
+			t.Fatalf("awaiting_input navigation button row was compacted by activity shell: activityIds=%#v", activityIDs)
+		}
+	}
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatal("missing activity body for turn-1")
+	}
+	folded := 0
+	for _, entry := range body.Entries {
+		if isProjectionSessionStatus(entry) {
+			folded++
+		}
+	}
+	if folded != 2 {
+		t.Fatalf("turn-1 folded startup status rows = %d, want 2: %#v", folded, body.Entries)
+	}
 }
 
 // TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent proves the
-// card's "answered" state is derived from durable state — a later
+// question set's "answered" state is derived from durable state — a later
 // turn.input_answered event whose question_timeline_id matches the pause — not a
 // browser-local flag. A fresh tab opened after the user answered renders the
-// resolved card.
+// resolved question set.
 func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
@@ -700,8 +772,8 @@ func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.
 				continue
 			}
 			meta := entry["meta"].(map[string]any)
-			if meta["title"] != "Answered" {
-				t.Errorf("answered card title = %q, want Answered", meta["title"])
+			if meta["title"] != "Input answered" {
+				t.Errorf("answered card title = %q, want Input answered", meta["title"])
 			}
 			awaiting := entry["awaitingInput"].(map[string]any)
 			if awaiting["answered"] != true {
@@ -757,6 +829,160 @@ func TestProjectTranscriptEventsPopulatesActivityBodiesForTurnsWithoutCompactedE
 	}
 	if got, want := len(body.CompactedEntryIDs), 0; got != want {
 		t.Fatalf("compacted ids count = %d, want %d", got, want)
+	}
+}
+
+func TestProjectTranscriptEventsFoldsSessionLifecycleIntoTurn(t *testing.T) {
+	// Create-with-initial-turn race: "Session is loading." lands before the
+	// first turn's user message and "Session is ready." just after. Both are
+	// operational noise that must fold into turn-1's activity body — the noise
+	// bin — never rendering as top-level rows above the user's message.
+	events := []map[string]any{
+		projectionTestEvent("loading", "001", "session.status", "system", "tank", "", "sess:loading",
+			map[string]any{"status": "loading", "text": "Session is loading."}),
+		projectionTestEvent("ready", "002", "session.status", "system", "tank", "", "sess:ready",
+			map[string]any{"status": "ready", "text": "Session is ready."}),
+		projectionTestEvent("u", "003", "user_message.created", "user", "tank", "turn-1", "turn-1:user",
+			map[string]any{"text": "hi", "display": map[string]any{"kind": "plain"}}),
+		projectionTestEvent("started", "004", "turn.started", "runner", "tank", "turn-1", "",
+			map[string]any{"status": "started"}),
+		projectionTestEvent("final", "005", "item.completed", "assistant", "codex", "turn-1", "turn-1:item:msg-1",
+			map[string]any{"kind": "message", "text": "hello"}),
+		projectionTestEvent("terminal", "006", "turn.completed", "runner", "codex", "turn-1", "",
+			projectionFinalAnswerPayload("turn-1:item:msg-1")),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	for _, entry := range projection.Entries {
+		if isProjectionSessionStatus(entry) {
+			t.Fatalf("session lifecycle leaked to conversation altitude: %#v", entry)
+		}
+	}
+	if len(projection.Entries) == 0 || projection.Entries[0]["role"] != "user" {
+		t.Fatalf("first top-level row = %#v, want the user message", projection.Entries)
+	}
+	var userKey, shellKey, shellStartKey string
+	userIdx, shellIdx := -1, -1
+	for i, entry := range projection.Entries {
+		switch {
+		case entry["kind"] == "message" && entry["role"] == "user":
+			userKey, userIdx = transcriptMapString(entry, "orderKey"), i
+		case entry["kind"] == "turn_activity":
+			shellKey, shellIdx = transcriptMapString(entry, "orderKey"), i
+			if act, ok := entry["activity"].(map[string]any); ok {
+				shellStartKey = transcriptMapString(act, "startOrderKey")
+			}
+		}
+	}
+	if shellIdx < 0 {
+		t.Fatalf("expected a turn_activity shell holding the folded lifecycle: %#v", projection.Entries)
+	}
+	// The shell carries folded lifecycle whose order keys predate the message; it
+	// must still sort after the user message — by entry index, by its orderKey,
+	// and by activity.startOrderKey (the field the row store turns into the row
+	// cursor that actually orders the durable transcript).
+	if shellIdx <= userIdx || shellKey <= userKey || shellStartKey <= userKey {
+		t.Fatalf("activity shell must sort after the user message: userKey=%q shellKey=%q startKey=%q (idx %d vs %d)", userKey, shellKey, shellStartKey, userIdx, shellIdx)
+	}
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatalf("missing activity body for turn-1")
+	}
+	folded := 0
+	for _, entry := range body.Entries {
+		if isProjectionSessionStatus(entry) {
+			folded++
+		}
+	}
+	if folded != 2 {
+		t.Fatalf("turn-1 body session lifecycle entries = %d, want 2: %#v", folded, body.Entries)
+	}
+}
+
+func TestProjectTranscriptEventsKeepsFailedSessionBannerPromoted(t *testing.T) {
+	// A session.status:failed banner is a failure we surface: it stays a
+	// top-level row, never folded into a turn's collapsed activity body.
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user",
+			map[string]any{"text": "hi", "display": map[string]any{"kind": "plain"}}),
+		projectionTestEvent("started", "002", "turn.started", "runner", "tank", "turn-1", "",
+			map[string]any{"status": "started"}),
+		projectionTestEvent("failed", "003", "session.status", "system", "tank", "", "sess:failed",
+			map[string]any{"status": "failed", "text": "Session failed to start."}),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	found := false
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "message" && entry["role"] == "system" && entry["severity"] == "error" {
+			found = true
+			if tid, ok := entry["turnId"]; ok && tid != "" {
+				t.Fatalf("failed banner was folded into a turn: %#v", entry)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("failed session banner missing from top-level transcript: %#v", projection.Entries)
+	}
+}
+
+func TestProjectTranscriptEventsKeepsProviderRecoveryBannerPromoted(t *testing.T) {
+	// A provider recovery (session.status:ready on a ".../provider/.../status"
+	// timeline) is a banner, not startup noise — it carries status=ready but must
+	// stay a visible top-level system message, never folded into the active turn.
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user",
+			map[string]any{"text": "hi", "display": map[string]any{"kind": "plain"}}),
+		projectionTestEvent("started", "002", "turn.started", "runner", "tank", "turn-1", "",
+			map[string]any{"status": "started"}),
+		projectionTestEvent("recover", "003", "session.status", "system", "tank", "", "session:63:provider:codex:status",
+			map[string]any{"status": "ready", "text": "Codex sign-in is back online."}),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	found := false
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "message" && entry["role"] == "system" &&
+			transcriptMapString(entry, "text") == "Codex sign-in is back online." {
+			found = true
+			if isProjectionSessionStatus(entry) {
+				t.Fatalf("provider recovery banner was marked foldable: %#v", entry)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("provider recovery banner must stay a top-level system message: %#v", projection.Entries)
+	}
+}
+
+func TestProjectTranscriptEventsDropsOrphanSessionLifecycle(t *testing.T) {
+	// A loading/ready event with no owning turn (a session opened with no message
+	// yet, or the per-event materialization path projecting a lone session.status)
+	// produces no transcript row — happy-path lifecycle only surfaces by folding
+	// into a turn.
+	events := []map[string]any{
+		projectionTestEvent("ready", "001", "session.status", "system", "tank", "", "sess:ready",
+			map[string]any{"status": "ready", "text": "Session is ready."}),
+	}
+	projection := projectTranscriptEvents(events)
+	if len(projection.Entries) != 0 {
+		t.Fatalf("orphan session lifecycle should produce no rows, got: %#v", projection.Entries)
+	}
+}
+
+func TestProjectTranscriptEventsKeepsOrphanFailedBanner(t *testing.T) {
+	// A failed banner with no turn (the freshly-created-session failure backfill)
+	// stays a top-level error row.
+	events := []map[string]any{
+		projectionTestEvent("failed", "001", "session.status", "system", "tank", "", "sess:failed",
+			map[string]any{"status": "failed", "text": "Session failed to start."}),
+	}
+	projection := projectTranscriptEvents(events)
+	if len(projection.Entries) != 1 || projection.Entries[0]["role"] != "system" || projection.Entries[0]["severity"] != "error" {
+		t.Fatalf("orphan failed banner should remain a top-level error row, got: %#v", projection.Entries)
 	}
 }
 

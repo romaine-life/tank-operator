@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
+  claudeRateLimitInfo,
   classifyProviderFailure,
   dispatch,
   logUnhandledSdkMessage,
@@ -112,6 +113,34 @@ test("pickContextWindowFromModelUsage returns null for missing/empty/non-positiv
       "good": { contextWindow: 200000 },
     }),
     200000,
+  );
+});
+
+test("claudeRateLimitInfo keeps the SDK rate-limit fields admins need", () => {
+  assert.deepEqual(
+    claudeRateLimitInfo({
+      type: "rate_limit_event",
+      uuid: "rate-limit-1",
+      session_id: "sdk-session-1",
+      rate_limit_info: {
+        status: "rejected",
+        rateLimitType: "five_hour",
+        resetsAt: 1790000000000,
+        utilization: 1.02,
+        isUsingOverage: false,
+        nested: { ignored: true },
+      },
+    }),
+    {
+      provider: "claude",
+      status: "rejected",
+      rateLimitType: "five_hour",
+      resetsAt: 1790000000000,
+      utilization: 1.02,
+      isUsingOverage: false,
+      uuid: "rate-limit-1",
+      session_id: "sdk-session-1",
+    },
   );
 });
 
@@ -625,13 +654,13 @@ test("canUseTool auto-allows non-AskUserQuestion tools unchanged", async () => {
 // behavior, which would be the user-trust failure.
 test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    launchSdkQuery: (opts: { model?: string; effort?: string }) => unknown;
+    launchSdkQuery: (opts: { model?: string; effort?: string; stderr?: (data: string) => void }) => unknown;
     pinnedModel: string | null;
     pinnedEffort: string | null;
     sdkQuery: unknown;
     ensureSdkQuery: (record: unknown) => void;
   };
-  const captured: { opts: { model?: string; effort?: string } | null } = { opts: null };
+  const captured: { opts: { model?: string; effort?: string; stderr?: (data: string) => void } | null } = { opts: null };
   runner.launchSdkQuery = (opts) => {
     captured.opts = opts;
     return { interrupt: () => {} } as unknown;
@@ -650,6 +679,35 @@ test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
   assert.ok(captured.opts, "launchSdkQuery should have been called");
   assert.equal(captured.opts.model, "claude-haiku-4-5");
   assert.equal(captured.opts.effort, "low");
+  assert.equal(typeof captured.opts.stderr, "function");
+});
+
+test("ensureSdkQuery stderr callback logs redacted Claude SDK stderr", () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    launchSdkQuery: (opts: { stderr?: (data: string) => void }) => unknown;
+    ensureSdkQuery: (record: unknown) => void;
+  };
+  const captured: { opts: { stderr?: (data: string) => void } | null } = { opts: null };
+  runner.launchSdkQuery = (opts) => {
+    captured.opts = opts;
+    return { interrupt: () => {} } as unknown;
+  };
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map(String).join(" "));
+  };
+  try {
+    runner.ensureSdkQuery({ id: "cmd-1", type: "submit_turn" });
+    captured.opts?.stderr?.("API Error: 529 Overloaded with sk-ant-secret\nAuthorization: Bearer very.secret.token\n");
+  } finally {
+    console.warn = originalWarn;
+  }
+
+  assert.equal(warnings.length, 2);
+  assert.match(warnings[0] ?? "", /claude_sdk_stderr/);
+  assert.match(warnings[0] ?? "", /API Error: 529 Overloaded/);
+  assert.doesNotMatch(warnings.join("\n"), /sk-ant-secret|very\.secret\.token/);
 });
 
 test("ensureSdkQuery falls back to DEFAULT_MODEL / DEFAULT_EFFORT on empty first turn", () => {
@@ -1039,6 +1097,11 @@ test("Claude rate_limit_event fails active turn durably instead of stranding the
     type: "rate_limit_event",
     uuid: "rate-limit-1",
     retry_after_ms: 60000,
+    rate_limit_info: {
+      status: "rejected",
+      rateLimitType: "five_hour",
+      resetsAt: 1790000000000,
+    },
   });
   await new Promise((resolve) => setImmediate(resolve));
 
@@ -1051,6 +1114,10 @@ test("Claude rate_limit_event fails active turn durably instead of stranding the
   assert.match(
     (harness.events[0] as { payload?: { error?: string } }).payload?.error ?? "",
     /retry_after_ms=60000/,
+  );
+  assert.match(
+    (harness.events[0] as { payload?: { error?: string } }).payload?.error ?? "",
+    /status=rejected; rateLimitType=five_hour; resetsAt=1790000000000/,
   );
   assert.deepEqual(harness.bus, ["ack"], "submit command must ack after the durable rate-limit terminal");
 });

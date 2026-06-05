@@ -16,12 +16,11 @@ import (
 
 const transcriptRowCursorSeparator = "\x1f"
 
-// Bumped 4 -> 5 so every session re-backfills its transcript rows once and picks
-// up the AskUserQuestion ownership change: the awaiting-input card is turn
-// activity, not a top-level main-transcript row. Without the bump, sessions that
-// already materialized turn.awaiting_input would keep stale main-transcript rows
-// until a new event happened to re-project their turn.
-const transcriptRowBackfillVersion = 5
+// Bumped 6 -> 7 so every session re-backfills its transcript rows after the
+// startup-status cutover. Direct session.status loading/ready rows seeded by
+// the old database trigger are retired; the server projection folds those
+// durable events into the owning turn's Turn activity instead.
+const transcriptRowBackfillVersion = 7
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error

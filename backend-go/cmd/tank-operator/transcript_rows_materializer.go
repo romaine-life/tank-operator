@@ -58,7 +58,39 @@ func readAllTurnEventsTx(ctx context.Context, events transcriptEventsTxStore, tx
 		}
 		cursor = page.NextOrderKey
 	}
-	return all, nil
+	return adoptLeadingSessionLifecycleTx(ctx, events, tx, sessionID, all)
+}
+
+// adoptLeadingSessionLifecycleTx is the in-transaction twin of
+// adoptLeadingSessionLifecycle: it folds the session-startup lifecycle into the
+// first turn's materialization so the durable /timeline rows match the lazy
+// /activity body.
+func adoptLeadingSessionLifecycleTx(ctx context.Context, events transcriptEventsTxStore, tx pgx.Tx, sessionID string, turnEvents []map[string]any) ([]map[string]any, error) {
+	bound := firstEventOrderKey(turnEvents)
+	if bound == "" {
+		return turnEvents, nil
+	}
+	var lifecycle []map[string]any
+	cursor := ""
+	for {
+		page, err := events.ListBySessionTx(ctx, tx, sessionID, store.SessionEventCursor{AfterOrderKey: cursor}, turnPageReadBatch)
+		if err != nil {
+			return nil, err
+		}
+		adopt, stop, prior := scanLeadingLifecycle(page.Events, bound)
+		if prior {
+			return turnEvents, nil
+		}
+		lifecycle = append(lifecycle, adopt...)
+		if stop || page.FoundNewest || len(page.Events) == 0 || page.NextOrderKey == "" || page.NextOrderKey == cursor {
+			break
+		}
+		cursor = page.NextOrderKey
+	}
+	if len(lifecycle) == 0 {
+		return turnEvents, nil
+	}
+	return append(lifecycle, turnEvents...), nil
 }
 
 func (s transcriptMaterializingEventStore) Upsert(ctx context.Context, event map[string]any) error {

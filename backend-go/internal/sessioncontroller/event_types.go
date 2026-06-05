@@ -46,4 +46,11 @@ const (
 	// Chat-derived activity-summary delta written by the
 	// ChatActivityEmitter on each indicator-affecting chat event.
 	EventTypeActivityChanged = "session.activity_changed"
+
+	// Durable compaction-count refresh written by the ChatActivityEmitter
+	// when a context.compacted event advances a session's compaction total.
+	// Like EventTypeActivityChanged this is an in-process descriptor, not a
+	// wire shape; deriveRowColumnChanges maps it to the compaction_count
+	// column. The payload carries the recomputed total under "compaction_count".
+	EventTypeCompactionChanged = "session.compaction_changed"
 )

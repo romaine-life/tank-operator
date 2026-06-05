@@ -76,16 +76,19 @@ type Info struct {
 	// Model/Effort are the durable session-owned run options. Runtime*
 	// fields are written back by the runner after it applies the config
 	// to the provider executable/SDK.
-	Model                          string  `json:"model,omitempty"`
-	Effort                         string  `json:"effort,omitempty"`
-	RuntimeModel                   string  `json:"runtime_model,omitempty"`
-	RuntimeEffort                  string  `json:"runtime_effort,omitempty"`
-	RuntimeConfiguredAt            *string `json:"runtime_configured_at,omitempty"`
-	RuntimeContextWindowTokens     int64   `json:"runtime_context_window_tokens,omitempty"`
-	RuntimeContextWindowSource     string  `json:"runtime_context_window_source,omitempty"`
-	RuntimeContextWindowObservedAt *string `json:"runtime_context_window_observed_at,omitempty"`
-	AgentAvatarID                  string  `json:"agent_avatar_id,omitempty"`
-	SystemAvatarID                 string  `json:"system_avatar_id,omitempty"`
+	Model                          string         `json:"model,omitempty"`
+	Effort                         string         `json:"effort,omitempty"`
+	RuntimeModel                   string         `json:"runtime_model,omitempty"`
+	RuntimeEffort                  string         `json:"runtime_effort,omitempty"`
+	RuntimeConfiguredAt            *string        `json:"runtime_configured_at,omitempty"`
+	RuntimeContextWindowTokens     int64          `json:"runtime_context_window_tokens,omitempty"`
+	RuntimeContextWindowSource     string         `json:"runtime_context_window_source,omitempty"`
+	RuntimeContextWindowObservedAt *string        `json:"runtime_context_window_observed_at,omitempty"`
+	ProviderRateLimitInfo          map[string]any `json:"provider_rate_limit_info,omitempty"`
+	ProviderRateLimitObservedAt    *string        `json:"provider_rate_limit_observed_at,omitempty"`
+	CompactionCount                int64          `json:"compaction_count,omitempty"`
+	AgentAvatarID                  string         `json:"agent_avatar_id,omitempty"`
+	SystemAvatarID                 string         `json:"system_avatar_id,omitempty"`
 }
 
 type Reader struct {
@@ -277,6 +280,9 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		RuntimeContextWindowTokens:     record.RuntimeContextWindowTokens,
 		RuntimeContextWindowSource:     record.RuntimeContextWindowSource,
 		RuntimeContextWindowObservedAt: optionalString(record.RuntimeContextWindowObservedAt),
+		ProviderRateLimitInfo:          record.ProviderRateLimitInfo,
+		ProviderRateLimitObservedAt:    optionalString(record.ProviderRateLimitObservedAt),
+		CompactionCount:                record.CompactionCount,
 		AgentAvatarID:                  record.AgentAvatarID,
 		SystemAvatarID:                 record.SystemAvatarID,
 	}

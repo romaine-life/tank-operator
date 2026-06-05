@@ -131,6 +131,20 @@ export function projectConversationState(
     ...state.messages.flatMap((message, index) => {
       const text = message.text.trim();
       if (!text) return [];
+      // Session-startup notices (Session is loading./ready.) are turn noise that
+      // the authoritative server projection folds into the owning turn's Turn
+      // activity; they are not main-transcript messages. Provider credential
+      // banners (":provider:" timeline, severity error, or carrying an action —
+      // including the recovery "back online" ready) stay. Mirrors the server's
+      // applySessionStatus marker in transcript_projection.go.
+      if (
+        message.role === "system" &&
+        message.severity !== "error" &&
+        !message.action &&
+        !message.id.includes(":provider:")
+      ) {
+        return [];
+      }
       return [
         {
           index,

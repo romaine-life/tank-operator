@@ -43,11 +43,20 @@ yanking the viewport away from a user reading history.
   events inside a collapsed Turn activity row are loaded only through the
   explicit Turn activity endpoint.
 - Turn activity itself paginates. A turn's expansion body is split into pages
-  sealed at `turnPageEventLimit` events; the Turn activity endpoint
-  (`server_turn_activity_v2`) returns the page
-  directory (`page`, `page_count`, `pages[]`) and accepts `?page=N`, defaulting
-  to the last page. The page boundary is a durable `order_key`-range concept, so
-  a selected page is stable across reload and deep links. The shell's
+  sealed at `turnPageEventLimit` events and at semantic AskUserQuestion
+  boundaries; each `turn.awaiting_input` event starts one `question_set` page
+  per question while preserving one durable answer set. Each question page
+  carries the shared `questionSet` number plus its `questionIndex` and
+  `questionCount`, so the UI can label the set and offer previous/next question
+  shortcuts through the existing page selector rather than introducing nested
+  question navigation. The preceding activity page gets a compact
+  AskUserQuestion invocation marker derived from the same durable event, even
+  when that means a marker-only first page. The Turn
+  activity endpoint (`server_turn_activity_v2`) returns the page directory
+  (`page`, `page_count`, `pages[]`) and accepts `?page=N`. A `needs_input` turn
+  defaults to the first unanswered `question_set` page; all other turns default
+  to the latest page. The page boundary is a durable `order_key`-range concept,
+  so a selected page is stable across reload and deep links. The shell's
   active/terminal status is never a function of which page rendered — it is
   folded from the complete turn so a finished long turn can never render as
   perpetually active.
@@ -176,10 +185,14 @@ yanking the viewport away from a user reading history.
   to the latest turn. The retired `turn_<uuid>` public route form and the
   array-position "Turn N" label cannot reappear without failing
   `scripts/check-removed-chat-runtime.mjs`.
+- Opening a pending `needs_input` turn lands on the question-set page, not the
+  last output page. Multiple questions from one AskUserQuestion invocation stay
+  in one answer set but render as adjacent semantic `question_set` pages, and
+  the surrounding activity pages remain reachable through the page selector.
 - The Turns view always shows the dedicated Page dropdown for a selected turn: a
   single-page turn renders it disabled ("Page 1 of 1"); a multi-page turn lists
   Page 1..N and selecting one re-reads that page via `?page=N`. The control is
   not hidden when `page_count` is 1. The pure gate
   `frontend/src/turnActivityPager.ts` (tested in `turnActivityPager.test.ts`)
-  owns the clamped current page, total page count, and disabled state — blocking
+  owns the clamped current page, total page count, and disabled state, blocking
   a regression to a threshold-hidden control.

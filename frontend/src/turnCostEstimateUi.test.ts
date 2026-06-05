@@ -53,3 +53,25 @@ test("active session composer keeps dashes while transcript usage is loading", (
   assert.match(appSource, /const sessionUsageLoading =[\s\S]*timelineBootstrap\.status === "idle"[\s\S]*timelineBootstrap\.status === "loading"/);
   assert.match(appSource, /cost=\{\{[\s\S]*?amountUsd: sessionCostEstimate\?\.amountUsd \?\? null,[\s\S]*?tokens: tokensUsed,[\s\S]*?placeholder: sessionUsageLoading/);
 });
+
+test("composer renders a durable compaction metric from the session row", () => {
+  // A third metric, labeled cmp, rendered only when the session has compacted.
+  assert.match(appSource, /className="run-cost-estimate-metric run-cost-estimate-metric-compactions"/);
+  assert.match(appSource, /className="run-cost-estimate-label">cmp</);
+  assert.match(appSource, /\{safeCompactions > 0 && \(/);
+  // Sourced from the durable row field, never inferred from loaded transcript
+  // entries — the same durable model as the window denominator.
+  assert.match(appSource, /compactionCount: sessionCompactionCount,/);
+  assert.match(appSource, /const sessionCompactionCount =[\s\S]*session\.compaction_count/);
+  // The chip widens via a modifier instead of squeezing the ctx fraction.
+  assert.match(appSource, /has-compactions/);
+  assert.match(cssSource, /\.run-cost-estimate\.has-compactions\s*\{/);
+  assert.match(cssSource, /\.run-cost-estimate-metric-compactions\s*\{/);
+});
+
+test("compaction metric is session-scoped and absent from the per-turn pill", () => {
+  // The per-turn ComposerCostEstimate (turn scope) must not pass a compaction
+  // count — compactions are a session-lifetime fact, not a turn fact.
+  assert.match(appSource, /tokens=\{selected\.contextTokens\}/);
+  assert.doesNotMatch(appSource, /compactionCount=\{selected/);
+});

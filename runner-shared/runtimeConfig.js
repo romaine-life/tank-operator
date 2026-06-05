@@ -25,6 +25,10 @@ export async function reportRuntimeConfig(cfg, payload) {
                 ? Math.max(0, Math.floor(payload.contextWindowTokens))
                 : 0,
             context_window_source: String(payload?.contextWindowSource ?? "").trim(),
+            provider_rate_limit_info:
+                payload?.providerRateLimitInfo && typeof payload.providerRateLimitInfo === "object"
+                    ? payload.providerRateLimitInfo
+                    : undefined,
         }),
     });
     if (!response.ok) {

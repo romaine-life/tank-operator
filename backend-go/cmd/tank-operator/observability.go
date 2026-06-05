@@ -1640,6 +1640,16 @@ var (
 		Name: "tank_session_row_updates_total",
 		Help: "sessions row column updates from RowWriter, labeled by event type and outcome.",
 	}, []string{"type", "outcome"})
+	// sessionCompactionTotal counts durable context.compaction events recorded
+	// per session, labeled by provider (claude, codex, other) and trigger
+	// (auto, manual, other). It increments once per newly-observed compaction —
+	// the chat-activity emitter dedups at-least-once redelivery — so it is the
+	// rate view of how often sessions compact; the exact per-session total is
+	// the durable sessions.compaction_count column the composer renders.
+	sessionCompactionTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_compaction_total",
+		Help: "Durable context-compaction events recorded per session, labeled by provider (claude, codex, other) and trigger (auto, manual, other).",
+	}, []string{"provider", "trigger"})
 )
 
 // recordSessionListStreamError centralizes the sidebar SSE error counter
@@ -1718,6 +1728,10 @@ func (promLifecycleEmitterMetrics) RecordActivityErrorTransition(reason string) 
 
 func (promLifecycleEmitterMetrics) RecordActivityLateInterruptIgnored(status string) {
 	sessionActivityLateInterruptIgnoredTotal.WithLabelValues(sessionActivityStatusLabel(status)).Inc()
+}
+
+func (promLifecycleEmitterMetrics) RecordCompaction(provider, trigger string) {
+	sessionCompactionTotal.WithLabelValues(provider, trigger).Inc()
 }
 
 func sessionActivityStatusLabel(raw string) string {

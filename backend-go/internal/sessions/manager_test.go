@@ -688,6 +688,17 @@ func (r *managerTestRegistry) SetRuntimeContextWindow(_ context.Context, email, 
 	return nil
 }
 
+func (r *managerTestRegistry) SetProviderRateLimitInfo(_ context.Context, email, sessionID string, info map[string]any) error {
+	for i, record := range r.records {
+		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
+			r.records[i].ProviderRateLimitInfo = info
+			r.records[i].ProviderRateLimitObservedAt = "2026-05-21T00:00:00Z"
+			return nil
+		}
+	}
+	return nil
+}
+
 func (r *managerTestRegistry) Reorder(_ context.Context, _ string, orderedIDs []string) ([]string, error) {
 	positions := map[string]int64{}
 	for i, id := range orderedIDs {

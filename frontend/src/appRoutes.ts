@@ -1,6 +1,6 @@
 export type SettingsTab = "preferences" | "admin";
 export type AdminView = "controls" | "avatars" | "report" | "observability";
-export type SessionRouteTab = "chat" | "turns" | "static";
+export type SessionRouteTab = "chat" | "turns" | "static" | "session-data";
 export type HomeRouteTab = "chat";
 export type AppRouteTab = "settings" | "help";
 
@@ -125,6 +125,16 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       ...defaultSettingsRoute,
     };
   }
+  if (parts[2] === "session-data" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "session-data",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      staticPath: null,
+      ...defaultSettingsRoute,
+    };
+  }
   return null;
 }
 
@@ -166,6 +176,8 @@ export function buildSessionRouteUrl(
     suffix = `/turns${turnNumber != null ? `/${turnNumber}` : ""}`;
   } else if (tab === "static" && staticPath) {
     suffix = `/static/${staticPath.split("/").map(encodeURIComponent).join("/")}`;
+  } else if (tab === "session-data") {
+    suffix = "/session-data";
   }
   url.pathname = `/sessions/${encodedId}${suffix}`;
   url.search = "";
