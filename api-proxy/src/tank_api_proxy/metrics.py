@@ -19,7 +19,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
 from aiohttp import web
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
@@ -129,6 +129,7 @@ async def _handle_healthz(_: web.Request) -> web.Response:
 
 
 HealthSnapshotProvider = Callable[[], dict[str, Any]]
+UsageSnapshotProvider = Callable[[], Awaitable[dict[str, Any]]]
 
 
 def _make_health_handler(snapshot: HealthSnapshotProvider) -> Callable[[web.Request], web.Response]:
@@ -161,9 +162,26 @@ def _make_health_handler(snapshot: HealthSnapshotProvider) -> Callable[[web.Requ
     return handler
 
 
+def _make_usage_handler(snapshot: UsageSnapshotProvider) -> Callable[[web.Request], Awaitable[web.Response]]:
+    async def handler(_: web.Request) -> web.Response:
+        try:
+            payload = await snapshot()
+        except Exception:
+            log.exception("usage snapshot failed")
+            return web.Response(status=503, text="usage unavailable")
+        status = 200 if payload.get("status") == "ok" else 502
+        return web.Response(
+            status=status,
+            body=json.dumps(payload),
+            content_type="application/json",
+        )
+    return handler
+
+
 async def start_metrics_server(
     port: int,
     health_snapshot: HealthSnapshotProvider | None = None,
+    usage_snapshot: UsageSnapshotProvider | None = None,
 ) -> web.AppRunner:
     app = web.Application()
     app.router.add_get("/metrics", _handle_metrics)
@@ -175,6 +193,8 @@ async def start_metrics_server(
         # transcript-surfaced banner contract documented on tank-operator's
         # side (docs/features/transcript/contract.md).
         app.router.add_get(f"/health/{PROVIDER}", _make_health_handler(health_snapshot))
+    if usage_snapshot is not None:
+        app.router.add_get(f"/usage/{PROVIDER}", _make_usage_handler(usage_snapshot))
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=port)

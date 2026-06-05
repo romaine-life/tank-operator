@@ -813,6 +813,15 @@ interface ProviderQuotaSnapshot {
   windows: ProviderQuotaWindow[];
 }
 
+interface ProviderQuotaEvidence {
+  provider: Provider;
+  rateLimitType: string;
+  status?: string;
+  utilization?: number;
+  resetsAt?: string | number | null;
+  observedAt?: string | null;
+}
+
 const PROVIDER_QUOTA_WINDOW_DEFS: Record<Provider, Array<Pick<ProviderQuotaWindow, "id" | "label" | "shortLabel">>> = {
   anthropic: [
     { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
@@ -10123,17 +10132,87 @@ function quotaSnapshotStatus(windows: ProviderQuotaWindow[]): ProviderQuotaStatu
   return "unknown";
 }
 
-function buildProviderQuotaSnapshots(sessions: readonly Session[]): Record<Provider, ProviderQuotaSnapshot> {
-  const latest: Partial<Record<Provider, Partial<Record<ProviderQuotaWindowId, {
-    info: Record<string, unknown>;
-    observedAt: string;
-  }>>>> = {};
+function providerQuotaEvidenceFromPayload(value: unknown): ProviderQuotaEvidence[] {
+  if (!value || typeof value !== "object") return [];
+  const raw = value as Record<string, unknown>;
+  const rows = Array.isArray(raw.rate_limits) ? raw.rate_limits : [];
+  const out: ProviderQuotaEvidence[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") continue;
+    const item = row as Record<string, unknown>;
+    const provider = typeof item.provider === "string" ? quotaProviderFromInfo(item, "anthropic") : null;
+    const rateLimitType = typeof item.rateLimitType === "string" ? item.rateLimitType : "";
+    if (!provider || !rateLimitType) continue;
+    const utilization =
+      typeof item.utilization === "number" && Number.isFinite(item.utilization)
+        ? item.utilization
+        : undefined;
+    out.push({
+      provider,
+      rateLimitType,
+      ...(typeof item.status === "string" ? { status: item.status } : {}),
+      ...(utilization !== undefined ? { utilization } : {}),
+      ...(typeof item.resetsAt === "string" || typeof item.resetsAt === "number" || item.resetsAt === null
+        ? { resetsAt: item.resetsAt }
+        : {}),
+      ...(typeof item.observedAt === "string" ? { observedAt: item.observedAt } : {}),
+    });
+  }
+  return out;
+}
+
+function providerQuotaEvidenceFromSessions(sessions: readonly Session[]): ProviderQuotaEvidence[] {
+  const out: ProviderQuotaEvidence[] = [];
   for (const session of sessions) {
     const info = session.provider_rate_limit_info;
     const observedAt = session.provider_rate_limit_observed_at;
     if (!info || !observedAt) continue;
     const fallbackProvider = MODE_MENU_ICONS[session.mode];
     const provider = quotaProviderFromInfo(info, fallbackProvider);
+    const rateLimitType =
+      typeof info.rateLimitType === "string"
+        ? info.rateLimitType
+        : quotaWindowIdFromInfo(info);
+    out.push({
+      provider,
+      rateLimitType,
+      ...(typeof info.status === "string" ? { status: info.status } : {}),
+      ...(typeof info.utilization === "number" && Number.isFinite(info.utilization)
+        ? { utilization: info.utilization }
+        : {}),
+      ...(typeof info.resetsAt === "string" || typeof info.resetsAt === "number"
+        ? { resetsAt: info.resetsAt }
+        : typeof info.overageResetsAt === "string" || typeof info.overageResetsAt === "number"
+          ? { resetsAt: info.overageResetsAt }
+          : {}),
+      observedAt,
+    });
+  }
+  return out;
+}
+
+function buildProviderQuotaSnapshots(
+  sessions: readonly Session[],
+  remoteEvidence: readonly ProviderQuotaEvidence[] = [],
+): Record<Provider, ProviderQuotaSnapshot> {
+  const latest: Partial<Record<Provider, Partial<Record<ProviderQuotaWindowId, {
+    info: Record<string, unknown>;
+    observedAt: string;
+  }>>>> = {};
+  const evidence = [
+    ...providerQuotaEvidenceFromSessions(sessions),
+    ...remoteEvidence,
+  ];
+  for (const row of evidence) {
+    const observedAt = typeof row.observedAt === "string" && row.observedAt ? row.observedAt : new Date().toISOString();
+    const info: Record<string, unknown> = {
+      provider: row.provider,
+      rateLimitType: row.rateLimitType,
+      ...(row.status ? { status: row.status } : {}),
+      ...(typeof row.utilization === "number" ? { utilization: row.utilization } : {}),
+      ...(row.resetsAt !== undefined && row.resetsAt !== null ? { resetsAt: row.resetsAt } : {}),
+    };
+    const provider = row.provider;
     const windowId = quotaWindowIdFromInfo(info);
     const current = latest[provider]?.[windowId];
     if (!current || Date.parse(observedAt) > Date.parse(current.observedAt)) {
@@ -16148,7 +16227,11 @@ function AuthenticatedApp() {
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
   const [appConfigLoaded, setAppConfigLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const providerQuotaSnapshots = useMemo(() => buildProviderQuotaSnapshots(sessions), [sessions]);
+  const [providerQuotaEvidence, setProviderQuotaEvidence] = useState<ProviderQuotaEvidence[]>([]);
+  const providerQuotaSnapshots = useMemo(
+    () => buildProviderQuotaSnapshots(sessions, providerQuotaEvidence),
+    [providerQuotaEvidence, sessions],
+  );
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
@@ -17318,6 +17401,31 @@ function AuthenticatedApp() {
     if (!user) return;
     void refresh();
   }, [user, effectiveSessionScope]);
+
+  useEffect(() => {
+    if (!user) {
+      setProviderQuotaEvidence([]);
+      return;
+    }
+    let cancelled = false;
+    let timer: number | null = null;
+    const load = async () => {
+      try {
+        const res = await authedFetch("/api/provider-quotas");
+        if (!res.ok) throw new Error(`provider quotas failed: ${res.status}`);
+        const payload = await res.json();
+        if (!cancelled) setProviderQuotaEvidence(providerQuotaEvidenceFromPayload(payload));
+      } catch {
+        if (!cancelled) setProviderQuotaEvidence([]);
+      }
+    };
+    void load();
+    timer = window.setInterval(() => void load(), 2 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearInterval(timer);
+    };
+  }, [user]);
 
   // Keep the refs that the SSE reducer reads in sync with the latest
   // committed state. This lets the SSE useEffect close over a stable

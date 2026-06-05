@@ -78,6 +78,19 @@ def codex_config(credentials_file: str) -> ProxyConfig:
     )
 
 
+def claude_config(credentials_file: str) -> ProxyConfig:
+    return ProxyConfig(
+        provider="claude",
+        credentials_file=credentials_file,
+        token_url="https://console.anthropic.com/v1/oauth/token",
+        client_id="9d1c250a-e61b-44d9-88ed-5944d1962f5e",
+        kv_secret_name="claude-code-credentials",
+        account_header="",
+        fedramp_header="",
+        patch_last_refresh=False,
+    )
+
+
 class ServerTests(unittest.TestCase):
     def test_patch_blob_updates_codex_tokens(self) -> None:
         blob = {
@@ -168,6 +181,27 @@ class ServerTests(unittest.TestCase):
 
             self.assertEqual(injector._cached_access, "new-access")
             self.assertEqual(injector._cached_refresh, "new-refresh")
+
+    def test_usage_headers_include_codex_account_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            injector = AuthInjector(codex_config(str(Path(tmp) / "auth.json")))
+            injector._cached_account_id = "acct_123"
+            injector._cached_fedramp = True
+
+            headers = injector._usage_headers("access-token")
+
+            self.assertEqual(headers["Authorization"], "Bearer access-token")
+            self.assertEqual(headers["User-Agent"], "Codex CLI/0.131.0")
+            self.assertEqual(headers["ChatGPT-Account-ID"], "acct_123")
+            self.assertEqual(headers["X-OpenAI-Fedramp"], "true")
+
+    def test_usage_urls_are_provider_specific(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            claude = AuthInjector(claude_config(str(Path(tmp) / "claude.json")))
+            codex = AuthInjector(codex_config(str(Path(tmp) / "codex.json")))
+
+            self.assertIn("anthropic.com/api/oauth/usage", claude._usage_urls()[0])
+            self.assertTrue(any("chatgpt.com" in url for url in codex._usage_urls()))
 
 
 class HealthSnapshotTests(unittest.TestCase):
