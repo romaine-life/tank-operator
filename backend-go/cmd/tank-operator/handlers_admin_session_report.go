@@ -31,16 +31,17 @@ const (
 )
 
 type sessionReportRow struct {
-	Owner     string                        `json:"owner"`
-	SessionID string                        `json:"session_id"`
-	Name      string                        `json:"name"`
-	Mode      string                        `json:"mode"`
-	Repos     []string                      `json:"repos"`
-	BugLabel  *sessionmodel.SessionBugLabel `json:"bug_label,omitempty"`
-	Visible   bool                          `json:"visible"`
-	CreatedAt time.Time                     `json:"created_at"`
-	UpdatedAt time.Time                     `json:"updated_at"`
-	Usage     tokenUsage                    `json:"usage"`
+	Owner       string                        `json:"owner"`
+	SessionID   string                        `json:"session_id"`
+	Name        string                        `json:"name"`
+	DisplayName string                        `json:"display_name"`
+	Mode        string                        `json:"mode"`
+	Repos       []string                      `json:"repos"`
+	BugLabel    *sessionmodel.SessionBugLabel `json:"bug_label,omitempty"`
+	Visible     bool                          `json:"visible"`
+	CreatedAt   time.Time                     `json:"created_at"`
+	UpdatedAt   time.Time                     `json:"updated_at"`
+	Usage       tokenUsage                    `json:"usage"`
 }
 
 type sessionReportRepo struct {
@@ -488,6 +489,12 @@ func fetchSessionReportRows(ctx context.Context, s *appServer, scope string, win
 			return nil, err
 		}
 		row.BugLabel = reportBugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug)
+		// display_name uses the same canonical derivation as the live session
+		// wire (sessionmodel.SessionDisplayName) so the admin report renders a
+		// session's title identically to the sidebar. pod_name is always
+		// "session-"+session_id, so passing the session id yields the identical
+		// slug for unnamed sessions without selecting pod_name here.
+		row.DisplayName = sessionmodel.SessionDisplayName(&row.Name, "", row.SessionID)
 		out = append(out, row)
 	}
 	return out, rows.Err()
