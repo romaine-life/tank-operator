@@ -104,8 +104,19 @@ Two steps:
    scripts/image-fingerprint.sh --image codex --dockerfile claude-container/Dockerfile \
      --context . --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared'
    # build it for the branch (no-op/cache hit if the fingerprint already exists)
-   gh workflow run session-images-build.yml -f git_ref=<branch>
+   mcp__github__.dispatch_workflow(
+     owner="romaine-life",
+     name="tank-operator",
+     workflow="session-images-build.yml",
+     ref="<branch>",
+     inputs={"git_ref":"<branch>"},
+   )
    ```
+
+   From a session, use the GitHub MCP `dispatch_workflow` tool for this step.
+   A token minted by `mint_clone_token(workflows=True)` is for pushing edits to
+   `.github/workflows/*`; it does not grant GitHub Actions workflow dispatch
+   permission.
 
 2. **Point the slot at it.** Set the durable per-scope override on the slot's
    orchestrator (the scope is the slot name, e.g. `tank-operator-slot-1`). New
