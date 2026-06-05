@@ -1621,7 +1621,9 @@ var schemaMigrations = []migration{
 	// any open row-update SSE catch up on the assigned label. One DO block so
 	// the backfill and the NOT NULL flip are one statement; idempotent —
 	// the WHERE no-ops once names exist and SET NOT NULL is a no-op when the
-	// column is already NOT NULL.
+	// column is already NOT NULL. Executes at orchestrator startup via
+	// RunMigrations; the go-backend CI job runs it against a real Postgres
+	// service before merge.
 	{ID: "0134", SQL: `DO $$ BEGIN
 		UPDATE sessions
 		SET name        = left(regexp_replace(coalesce(NULLIF(pod_name, ''), session_id), '^session-', ''), 8),
