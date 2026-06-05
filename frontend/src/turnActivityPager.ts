@@ -22,6 +22,7 @@
 export type TurnActivityPageInfo = {
   page: number;
   pageCount: number;
+  totalEventCount?: number;
   kind?: string;
   questionCount?: number;
   questionIndex?: number;
@@ -62,6 +63,42 @@ export type TurnActivityPagerState = {
   olderPage: number;
   newerPage: number;
 };
+
+export const TURN_ACTIVITY_PAGE_EVENT_LIMIT = 1000;
+
+export type TurnActivityEventProgress = {
+  eventCount: number;
+  limit: number;
+  label: string;
+  totalLabel: string | null;
+};
+
+function formatCompactCount(value: number): string {
+  return String(value);
+}
+
+function normalizedCount(value: number | undefined): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.max(0, Math.floor(value));
+}
+
+export function turnActivityEventProgress(
+  pageInfo: TurnActivityPageInfo | undefined,
+  page: number,
+): TurnActivityEventProgress {
+  const selectedPage = pageInfo?.pages?.find((item) => item.number === page);
+  const eventCount = normalizedCount(selectedPage?.eventCount) ?? 0;
+  const totalEventCount = normalizedCount(pageInfo?.totalEventCount);
+  return {
+    eventCount,
+    limit: TURN_ACTIVITY_PAGE_EVENT_LIMIT,
+    label: `${formatCompactCount(eventCount)}/${formatCompactCount(TURN_ACTIVITY_PAGE_EVENT_LIMIT)} events`,
+    totalLabel:
+      totalEventCount != null && totalEventCount > TURN_ACTIVITY_PAGE_EVENT_LIMIT
+        ? `${formatCompactCount(totalEventCount)} total`
+        : null,
+  };
+}
 
 const HIDDEN: TurnActivityPagerState = {
   visible: false,

@@ -3914,6 +3914,8 @@ button:disabled {
   align-items: center;
   gap: var(--space-2);
   min-width: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .run-turn-view-page-select {
@@ -4024,6 +4026,24 @@ button:disabled {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.run-turn-view-event-progress,
+.run-turn-activity-event-progress,
+.run-turn-activity-total-events {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.run-turn-view-event-progress {
+  flex: 0 0 auto;
+  padding: 0.22rem 0.5rem;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.035);
 }
 
 .run-turn-view-summary {
@@ -8446,6 +8466,7 @@ textarea.run-files-viewer-editor:focus {
   align-items: center;
   justify-content: flex-end;
   gap: var(--space-2);
+  flex-wrap: wrap;
   padding-bottom: var(--space-1);
   font-variant-numeric: tabular-nums;
 }

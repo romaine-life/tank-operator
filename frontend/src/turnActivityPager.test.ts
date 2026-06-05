@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  TURN_ACTIVITY_PAGE_EVENT_LIMIT,
+  turnActivityEventProgress,
   turnActivityPagerState,
   type TurnActivityPageInfo,
 } from "./turnActivityPager.ts";
@@ -92,4 +94,45 @@ test("non-finite inputs are treated as no directory (hidden), never NaN labels",
   assert.equal(turnActivityPagerState(info(Number.NaN, 3)).visible, false);
   assert.equal(turnActivityPagerState(info(1, Number.NaN)).visible, false);
   assert.equal(turnActivityPagerState(info(1, Number.POSITIVE_INFINITY)).visible, false);
+});
+
+test("event progress defaults to an explicit zero of the 1000-event page limit", () => {
+  const progress = turnActivityEventProgress(undefined, 1);
+  assert.equal(progress.eventCount, 0);
+  assert.equal(progress.limit, TURN_ACTIVITY_PAGE_EVENT_LIMIT);
+  assert.equal(progress.label, "0/1000 events");
+  assert.equal(progress.totalLabel, null);
+});
+
+test("event progress reports the selected page count against the page limit", () => {
+  const progress = turnActivityEventProgress(
+    {
+      page: 2,
+      pageCount: 3,
+      totalEventCount: 2375,
+      pages: [
+        { number: 1, eventCount: 1000, sealed: true },
+        { number: 2, eventCount: 1000, sealed: true },
+        { number: 3, eventCount: 375, sealed: false },
+      ],
+    },
+    2,
+  );
+  assert.equal(progress.eventCount, 1000);
+  assert.equal(progress.label, "1000/1000 events");
+  assert.equal(progress.totalLabel, "2375 total");
+});
+
+test("event progress omits the total badge when a turn fits within one page", () => {
+  const progress = turnActivityEventProgress(
+    {
+      page: 1,
+      pageCount: 1,
+      totalEventCount: 42,
+      pages: [{ number: 1, eventCount: 42, sealed: true }],
+    },
+    1,
+  );
+  assert.equal(progress.label, "42/1000 events");
+  assert.equal(progress.totalLabel, null);
 });
