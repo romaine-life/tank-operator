@@ -299,6 +299,7 @@ import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrou
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
+const StaticPageView = lazy(() => import("./StaticPageView"));
 const CliProcessTerminal = lazy(() =>
   import("./CliProcessTerminal").then((module) => ({
     default: module.CliProcessTerminal,
@@ -1510,8 +1511,8 @@ function readAppRouteFromPath(pathname = window.location.pathname): AppRoute | n
   return readAppRouteFromPathname(pathname);
 }
 
-function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null): string {
-  return buildSessionRouteUrl(window.location.href, id, tab, turnNumber);
+function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null, staticPath?: string | null): string {
+  return buildSessionRouteUrl(window.location.href, id, tab, turnNumber, staticPath);
 }
 
 function homeRouteUrl(tab: HomeRouteTab = "chat"): string {
@@ -1559,6 +1560,11 @@ function replaceSessionRoute(id: string, tab: SessionRouteTab = "chat", turnNumb
 
 function replaceSessionTranscriptRoute(id: string): void {
   const next = sessionRouteUrl(id, "chat");
+  if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+function replaceSessionStaticRoute(id: string, staticPath: string): void {
+  const next = sessionRouteUrl(id, "static", null, staticPath);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -3562,7 +3568,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "turns" | "background" | "files" | "session-data" | "settings" | "help";
+type RunTab = "chat" | "turns" | "background" | "files" | "session-data" | "settings" | "help" | "static";
 type BackgroundView = "shells" | "scheduled" | "control" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
 
@@ -10485,7 +10491,9 @@ function ChatPane({
   const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
   const initialRunRoute =
     initialSessionRoute?.sessionId === session.id ? initialSessionRoute : null;
-  const [activeTab, setActiveTab] = useState<RunTab>(initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat");
+  const [activeTab, setActiveTab] = useState<RunTab>(
+    initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat",
+  );
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
     initialAppRoute?.tab === "settings" ? initialAppRoute.settingsTab : "preferences",
   );
@@ -10663,6 +10671,12 @@ function ChatPane({
   const [filesError, setFilesError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [selectedFileLine, setSelectedFileLine] = useState<number | null>(null);
+  // Path of the HTML file currently rendered full-page in the "static" tab
+  // (the sandboxed-iframe page view). Captured at click time so the render is
+  // stable even if the files browser selection later changes.
+  const [staticPagePath, setStaticPagePath] = useState<string | null>(
+    initialRunRoute?.tab === "static" ? initialRunRoute.staticPath : null,
+  );
   const [fileContentLoading, setFileContentLoading] = useState(false);
   const [fileRawImageUrl, setFileRawImageUrl] = useState<string | null>(null);
   const [fileRawImageLoading, setFileRawImageLoading] = useState(false);
@@ -11660,6 +11674,13 @@ function ChatPane({
       setPendingRouteTurnNumber(route.turnNumber);
       setRouteTurnUnavailable(route.turnSegmentPresent && route.turnNumber == null);
       setPendingTurnViewRouteAnchor("bottom");
+      return;
+    }
+    if (route.tab === "static" && route.staticPath) {
+      setStaticPagePath(route.staticPath);
+      setActiveTab("static");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
       return;
     }
     if (route.tab === "session-data") {
@@ -14848,6 +14869,20 @@ function ChatPane({
                         {selectedFileLine ? `:${selectedFileLine}` : ""}
                       </span>
                       <div className="run-files-viewer-actions">
+                        {/\.html?$/i.test(selectedFile.path) && (
+                          <button
+                            type="button"
+                            className="run-files-viewer-btn"
+                            title="Render this HTML file as a sandboxed page"
+                            onClick={() => {
+                              setStaticPagePath(selectedFile.path);
+                              setActiveTab("static");
+                              replaceSessionStaticRoute(session.id, selectedFile.path);
+                            }}
+                          >
+                            Open as page
+                          </button>
+                        )}
                         {fileDraft != null && fileDraft !== selectedFile.text && (
                           <>
                             <button
@@ -15054,6 +15089,28 @@ function ChatPane({
           />
         ) : activeTab === "help" ? (
           <RunHelpScreen />
+        ) : activeTab === "static" ? (
+          staticPagePath ? (
+            <Suspense fallback={(
+              <div className="run-files-status">
+                <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                <span>Loading…</span>
+              </div>
+            )}>
+              <StaticPageView
+                sessionId={session.id}
+                path={staticPagePath}
+                onClose={() => {
+                  setActiveTab("files");
+                  replaceSessionTranscriptRoute(session.id);
+                }}
+              />
+            </Suspense>
+          ) : (
+            <div className="run-empty run-transcript-state" role="status">
+              <span>No page selected.</span>
+            </div>
+          )
         ) : timelineBootstrap.status === "error" ? (
           <div className="run-empty run-transcript-state" role="alert">
             <strong>Conversation failed to load</strong>

@@ -323,6 +323,7 @@ func main() {
 	gitHubInstallStates := buildGitHubInstallStateStore(pgPool)
 	streamAuthTickets := buildStreamAuthTicketStore(pgPool)
 	messageLinkShares := buildMessageLinkShareStore(pgPool)
+	staticPages := buildStaticPageSnapshotStore(pgPool)
 
 	// 11. Start background workers under a process signal context so rolling
 	// updates can drain HTTP cleanly.
@@ -493,6 +494,7 @@ func main() {
 		gitHubInstallStates:      gitHubInstallStates,
 		streamAuthTickets:        streamAuthTickets,
 		messageLinkShares:        messageLinkShares,
+		staticPages:              staticPages,
 		streamRegistry:           sessionstream.NewRegistry(),
 		namespace:                namespace,
 		sessionScope:             sessionScope,
@@ -748,6 +750,14 @@ func buildMessageLinkShareStore(pool *pgxpool.Pool) messageLinkShareStore {
 		return nil
 	}
 	return pgstore.NewMessageLinkShareStore(pool)
+}
+
+func buildStaticPageSnapshotStore(pool *pgxpool.Pool) staticPageSnapshotStore {
+	if pool == nil {
+		slog.Warn("static page snapshot store disabled; POSTGRES_HOST is unset")
+		return nil
+	}
+	return pgstore.NewStaticPageSnapshotStore(pool)
 }
 
 func buildSessionRegistry(pool *pgxpool.Pool, scope string) sessions.SessionRegistry {
