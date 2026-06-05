@@ -116,6 +116,9 @@ func (m transcriptRowsMaterializer) RefreshEvent(ctx context.Context, event map[
 			})
 		}
 	}
+	if transcriptString(event, "type") == "turn.input_answered" {
+		return m.refreshSession(ctx, sessionID)
+	}
 	if turnID == "" {
 		projection := projectTranscriptEvents([]map[string]any{event})
 		recordTranscriptProjectionInvariantViolations(sessionID, "", []map[string]any{event}, projection.Entries)
@@ -146,6 +149,9 @@ func (m transcriptRowsMaterializer) refreshEventTx(
 		projection := projectTranscriptEvents([]map[string]any{event})
 		recordTranscriptProjectionInvariantViolations(sessionID, "", []map[string]any{event}, projection.Entries)
 		return rows.UpsertRowsTx(ctx, tx, sessionID, projection.Entries)
+	}
+	if transcriptString(event, "type") == "turn.input_answered" {
+		return m.backfillSessionTx(ctx, tx, events, rows, sessionID)
 	}
 	turnEvents, err := readAllTurnEventsTx(ctx, events, tx, sessionID, turnID)
 	if err != nil {
@@ -219,6 +225,13 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 	if err != nil || !needed {
 		return false, err
 	}
+	if err := m.refreshSession(ctx, sessionID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m transcriptRowsMaterializer) refreshSession(ctx context.Context, sessionID string) error {
 	var events []map[string]any
 	cursor := ""
 	for {
@@ -226,7 +239,7 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 			AfterOrderKey: cursor,
 		}, 1000)
 		if err != nil {
-			return false, err
+			return err
 		}
 		events = append(events, page.Events...)
 		if page.FoundNewest || len(page.Events) == 0 || page.NextOrderKey == "" || page.NextOrderKey == cursor {
@@ -240,9 +253,9 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
 	if err := m.rows.ReplaceForSession(ctx, sessionID, projection.Entries); err != nil {
-		return false, err
+		return err
 	}
-	return true, nil
+	return nil
 }
 
 func (m transcriptRowsMaterializer) backfillSessionTx(
