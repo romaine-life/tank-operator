@@ -247,9 +247,13 @@ All metric names are prefixed `tank_`. The full namespace:
   counts bounded provider control calls, including Claude foreground-task
   backgrounding before interrupt and the interrupt signal itself.
   `tank_runner_provider_rate_limit_event_total` counts Claude SDK
-  `rate_limit_event` frames; each increment should pair with a durable
-  `turn.failed{reason:"provider_rate_limit"}` so later submitted work does
-  not remain blocked behind an invisible provider wait.
+  `rate_limit_event` frames. `tank_runner_provider_rate_limit_decision_total{decision}`
+  classifies each frame by the bounded runner handling decision:
+  `failed_turn` for primary rejected/exhausted quota frames that emit
+  `turn.failed{reason:"provider_rate_limit"}`, `observed_allowed_active` /
+  `observed_allowed_idle` for primary allowed quota frames recorded as
+  capacity observations, and `terminal_without_active_turn` for terminal
+  frames that arrive with no active turn to fail.
   `tank_runner_turn_pre_start_latency_seconds{stage}` measures the previously
   invisible interval before provider output: `command_created_to_claimed`
   covers JetStream delivery plus runner acceptance, and `claimed_to_started`
