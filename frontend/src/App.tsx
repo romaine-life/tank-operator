@@ -21908,9 +21908,7 @@ function AuthenticatedApp() {
                       readOnly={readOnlySessionView}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
-                      sidebarTranscriptOpenRequest={
-                        sessionTranscriptOpenRequests[s.id] ?? 0
-                      }
+                      sidebarTranscriptOpenRequest={sessionTranscriptOpenRequests[s.id] ?? 0}
                     />
                   </div>
                 ) : (
