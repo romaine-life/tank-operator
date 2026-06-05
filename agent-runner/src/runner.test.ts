@@ -294,6 +294,26 @@ test("maybeRegisterBackgroundTaskWake skips when a turn is active", async () => 
   assert.equal(runner.firedBackgroundTaskWakes.has("task-bound"), false);
 });
 
+test("maybeRegisterBackgroundTaskWake registers when active turn is already terminal", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    activeTurn: unknown;
+    firedBackgroundTaskWakes: Set<string>;
+  };
+  runner.activeTurn = {
+    turnID: "turn-terminal",
+    clientNonce: "turn-terminal",
+    terminalEmitted: true,
+  };
+  await runner.maybeRegisterBackgroundTaskWake({
+    type: "system",
+    subtype: "task_notification",
+    task_id: "task-terminal",
+    status: "completed",
+  });
+  assert.equal(runner.firedBackgroundTaskWakes.has("task-terminal"), true);
+});
+
 test("maybeRegisterBackgroundTaskWake ignores user stops and lifecycle starts", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
