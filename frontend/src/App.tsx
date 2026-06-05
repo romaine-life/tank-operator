@@ -1920,9 +1920,10 @@ interface ComposerCostEstimateProps {
   // to the bare used count (or the "--" placeholder). Never a model-assumed
   // default.
   contextWindow?: number;
-  // Durable count of context compactions for the session scope. Rendered as a
-  // third metric only when > 0; sourced from durable row metadata, never
-  // inferred from whatever transcript entries the browser happens to hold.
+  // Durable count of context compactions for the session scope. Rendered when
+  // session metadata supplies it, including the zero state; sourced from
+  // durable row metadata, never inferred from whatever transcript entries the
+  // browser happens to hold.
   compactionCount?: number | null;
   tokenScopeLabel?: string;
   placeholder?: boolean;
@@ -1954,12 +1955,11 @@ function ComposerCostEstimate({
     typeof contextWindow === "number" && Number.isFinite(contextWindow)
       ? Math.max(0, Math.floor(contextWindow))
       : 0;
-  const safeCompactions =
-    !unavailable &&
-    typeof compactionCount === "number" &&
-    Number.isFinite(compactionCount)
-      ? Math.max(0, Math.floor(compactionCount))
-      : 0;
+  const hasCompactionMetric =
+    typeof compactionCount === "number" && Number.isFinite(compactionCount);
+  const safeCompactions = hasCompactionMetric
+    ? Math.max(0, Math.floor(compactionCount))
+    : 0;
   const normalizedScope = scopeLabel.trim() || "session";
   const formattedAmount = unavailable
     ? "$--"
@@ -1980,19 +1980,18 @@ function ComposerCostEstimate({
     safeWindow > 0
       ? `${safeTokens?.toLocaleString() ?? 0} of ${safeWindow.toLocaleString()} context tokens`
       : `${safeTokens?.toLocaleString() ?? 0} ${normalizedTokenScope}`;
-  const compactionClause =
-    safeCompactions > 0
-      ? `, ${safeCompactions} context compaction${safeCompactions === 1 ? "" : "s"}`
-      : "";
+  const compactionClause = hasCompactionMetric
+    ? `, ${safeCompactions} context compaction${safeCompactions === 1 ? "" : "s"}`
+    : "";
   const defaultTitle = unavailable
-    ? "Cost estimate appears after token usage is available"
+    ? `Cost estimate appears after token usage is available${compactionClause}`
     : `Estimated API-equivalent ${normalizedScope} token cost from provider usage: ${label} / ${tokenSentence}${compactionClause}`;
   return (
     <span
-      className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}${safeCompactions > 0 ? " has-compactions" : ""}`}
+      className={`run-cost-estimate${unavailable ? " is-placeholder" : ""}${hasCompactionMetric ? " has-compaction-metric" : ""}`}
       aria-label={
         unavailable
-          ? `${sentenceScope} cost estimate unavailable`
+          ? `${sentenceScope} cost estimate unavailable${compactionClause}`
           : `Estimated ${normalizedScope} cost ${label}, ${tokenSentence}${compactionClause}`
       }
       aria-disabled={unavailable || undefined}
@@ -2004,7 +2003,7 @@ function ComposerCostEstimate({
         </span>
         <span className="run-cost-estimate-label">ctx</span>
       </span>
-      {safeCompactions > 0 && (
+      {hasCompactionMetric && (
         <>
           <span className="run-cost-estimate-divider" aria-hidden="true" />
           <span className="run-cost-estimate-metric run-cost-estimate-metric-compactions">
@@ -21841,7 +21840,9 @@ function AuthenticatedApp() {
                     cost={{
                       amountUsd: 0,
                       tokens: 0,
-                      title: "Cost estimate appears after usage is available",
+                      compactionCount: 0,
+                      title:
+                        "Cost estimate appears after usage is available, 0 context compactions",
                     }}
                     rollout={{
                       visible: GUI_ROLLOUT_MODES.has(defaultSessionMode),

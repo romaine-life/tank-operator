@@ -83,8 +83,8 @@ test("chat composer cost estimate keeps a fixed-width footprint", () => {
 });
 
 test("composer compaction metric stays compact and widens the chip instead of squeezing ctx", () => {
-  // Base chip footprint is unchanged — the third metric only appears once a
-  // session has compacted, and then the chip widens via the modifier below.
+  // Base chip footprint is unchanged for turn-scope pills without a compaction
+  // metric; the session chip widens via the modifier below even at cmp=0.
   const baseRule = cssRule(".run-cost-estimate");
   assert.match(baseRule, /width:\s*11rem;/);
 
@@ -94,9 +94,9 @@ test("composer compaction metric stays compact and widens the chip instead of sq
   assert.match(compactionMetricRule, /flex:\s*0\s+0\s+auto;/);
 
   // When present, the chip widens to seat the extra metric + divider.
-  const hasCompactionsRule = cssRule(".run-cost-estimate.has-compactions");
-  assert.match(hasCompactionsRule, /width:\s*13\.5rem;/);
-  assert.match(hasCompactionsRule, /flex-basis:\s*13\.5rem;/);
+  const hasCompactionMetricRule = cssRule(".run-cost-estimate.has-compaction-metric");
+  assert.match(hasCompactionMetricRule, /width:\s*13\.5rem;/);
+  assert.match(hasCompactionMetricRule, /flex-basis:\s*13\.5rem;/);
 });
 
 test("run pane keeps the composer inside the viewport at high browser zoom", () => {

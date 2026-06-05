@@ -302,10 +302,14 @@ Contract impact:
   deliberately NOT the source — it cannot see compactions older than its window.
   `context.compacted` stays out of `LifecycleChatEventTypes` (it must not move
   run status); the dedicated full-history count column is the source instead.
-- The composer renders the metric only at session scope and only when > 0; the
-  per-turn pill does not carry it (compaction is a session-lifetime fact, not a
-  turn fact). The chip widens via a `has-compactions` modifier rather than
-  squeezing the `ctx` fraction into an ellipsis.
+- The composer renders the metric in the chat-box cost chip, including the zero
+  state before the first compaction. The pre-session splash composer renders
+  `cmp 0` as an empty/stable value rather than introducing a new metric after a
+  session starts; active sessions replace that placeholder with the durable
+  session-row count. The per-turn pill does not carry it (compaction is a
+  session-lifetime fact, not a turn fact). The chip widens via a
+  compaction-metric modifier rather than squeezing the `ctx` fraction into an
+  ellipsis.
 
 Evidence:
 - Schema: `backend-go/internal/pgstore/migrations.go` migration 0125
