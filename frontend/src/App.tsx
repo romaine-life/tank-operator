@@ -1463,8 +1463,8 @@ function readAppRouteFromPath(pathname = window.location.pathname): AppRoute | n
   return readAppRouteFromPathname(pathname);
 }
 
-function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null): string {
-  return buildSessionRouteUrl(window.location.href, id, tab, turnNumber);
+function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null, staticPath?: string | null): string {
+  return buildSessionRouteUrl(window.location.href, id, tab, turnNumber, staticPath);
 }
 
 function homeRouteUrl(tab: HomeRouteTab = "chat"): string {
@@ -1512,6 +1512,11 @@ function replaceSessionRoute(id: string, tab: SessionRouteTab = "chat", turnNumb
 
 function replaceSessionTranscriptRoute(id: string): void {
   const next = sessionRouteUrl(id, "chat");
+  if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+function replaceSessionStaticRoute(id: string, staticPath: string): void {
+  const next = sessionRouteUrl(id, "static", null, staticPath);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -9577,7 +9582,9 @@ function ChatPane({
   const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
   const initialRunRoute =
     initialSessionRoute?.sessionId === session.id ? initialSessionRoute : null;
-  const [activeTab, setActiveTab] = useState<RunTab>(initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat");
+  const [activeTab, setActiveTab] = useState<RunTab>(
+    initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat",
+  );
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
     initialAppRoute?.tab === "settings" ? initialAppRoute.settingsTab : "preferences",
   );
@@ -9747,7 +9754,9 @@ function ChatPane({
   // Path of the HTML file currently rendered full-page in the "static" tab
   // (the sandboxed-iframe page view). Captured at click time so the render is
   // stable even if the files browser selection later changes.
-  const [staticPagePath, setStaticPagePath] = useState<string | null>(null);
+  const [staticPagePath, setStaticPagePath] = useState<string | null>(
+    initialRunRoute?.tab === "static" ? initialRunRoute.staticPath : null,
+  );
   const [fileContentLoading, setFileContentLoading] = useState(false);
   const [fileRawImageUrl, setFileRawImageUrl] = useState<string | null>(null);
   const [fileRawImageLoading, setFileRawImageLoading] = useState(false);
@@ -10720,6 +10729,13 @@ function ChatPane({
       setPendingRouteTurnNumber(route.turnNumber);
       setRouteTurnUnavailable(route.turnSegmentPresent && route.turnNumber == null);
       setPendingTurnViewRouteAnchor("bottom");
+      return;
+    }
+    if (route.tab === "static" && route.staticPath) {
+      setStaticPagePath(route.staticPath);
+      setActiveTab("static");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
       return;
     }
     setActiveTab("chat");
@@ -13823,6 +13839,7 @@ function ChatPane({
                             onClick={() => {
                               setStaticPagePath(selectedFile.path);
                               setActiveTab("static");
+                              replaceSessionStaticRoute(session.id, selectedFile.path);
                             }}
                           >
                             Open as page
@@ -14027,7 +14044,10 @@ function ChatPane({
               <StaticPageView
                 sessionId={session.id}
                 path={staticPagePath}
-                onClose={() => setActiveTab("files")}
+                onClose={() => {
+                  setActiveTab("files");
+                  replaceSessionTranscriptRoute(session.id);
+                }}
               />
             </Suspense>
           ) : (
