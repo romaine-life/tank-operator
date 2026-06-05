@@ -400,8 +400,8 @@ func TestManagerCreatePersistsInitialDisplayName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Name == nil || *info.Name != "Launch draft" {
-		t.Fatalf("info name = %#v, want normalized initial title", info.Name)
+	if info.Name != "Launch draft" {
+		t.Fatalf("info name = %q, want normalized initial title", info.Name)
 	}
 	pod, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
 	if err != nil {
@@ -413,8 +413,123 @@ func TestManagerCreatePersistsInitialDisplayName(t *testing.T) {
 	if len(registry.records) != 1 {
 		t.Fatalf("registry records = %d, want 1", len(registry.records))
 	}
-	if got := registry.records[0].Name; got == nil || *got != "Launch draft" {
-		t.Fatalf("registry name = %#v, want normalized initial title", got)
+	if got := registry.records[0].Name; got != "Launch draft" {
+		t.Fatalf("registry name = %q, want normalized initial title", got)
+	}
+}
+
+// TestManagerCreateAssignsDefaultNameWhenNoneGiven pins the name/display_name
+// inversion at create: a session created with NO name must still get a
+// NON-NULL, non-empty name — the canonical SessionDisplayName default (the
+// short id derived from the pod name). The pod annotation and the durable row
+// carry the same assigned value, and display_name (kept on the wire this
+// stage) equals it.
+func TestManagerCreateAssignsDefaultNameWhenNoneGiven(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	registry := &managerTestRegistry{
+		nextID: "57",
+		avatarAssignment: sessionmodel.SessionAvatarAssignment{
+			AgentAvatarID:  "agent-57",
+			SystemAvatarID: "system-57",
+		},
+	}
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, registry, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			CodexSessionImage: "codex-image",
+		},
+	})
+
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.CodexGUIMode,
+		// No Name supplied (nil) — the default must be assigned.
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pod name is "session-57"; SessionDisplayName strips "session-" → "57".
+	const wantName = "57"
+	if info.Name != wantName {
+		t.Fatalf("info name = %q, want assigned default %q (non-empty)", info.Name, wantName)
+	}
+	if info.Name == "" {
+		t.Fatal("info name must never be empty after create")
+	}
+	if info.DisplayName != wantName {
+		t.Fatalf("display_name = %q, want %q (equals name)", info.DisplayName, wantName)
+	}
+	pod, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pod.Annotations["tank-operator/display-name"]; got != wantName {
+		t.Fatalf("pod display-name annotation = %q, want assigned default %q", got, wantName)
+	}
+	if len(registry.records) != 1 {
+		t.Fatalf("registry records = %d, want 1", len(registry.records))
+	}
+	if got := registry.records[0].Name; got != wantName {
+		t.Fatalf("registry name = %q, want assigned default %q (non-null)", got, wantName)
+	}
+}
+
+// TestManagerSetNameClearReassignsDefault pins the clear semantics under the
+// inversion: clearing the name (empty input) can no longer store null — it
+// reassigns the canonical SessionDisplayName default. The persisted row and
+// the pod annotation hold the non-null default, not an empty string.
+func TestManagerSetNameClearReassignsDefault(t *testing.T) {
+	pod := sessionPod("88", "nelson@romaine.life", corev1.PodRunning, true)
+	pod.Annotations["tank-operator/display-name"] = "My title"
+	client := fake.NewSimpleClientset(pod)
+	registry := &managerTestRegistry{
+		records: []sessionmodel.SessionRecord{{
+			ID:      "88",
+			Email:   "nelson@romaine.life",
+			Scope:   "default",
+			Mode:    sessionmodel.CodexGUIMode,
+			PodName: "session-88",
+			Status:  "Active",
+			Visible: true,
+			Name:    "My title",
+		}},
+	}
+	mgr := &Manager{client: client, namespace: sessionmodel.SessionsNamespace, registry: registry}
+
+	// Clear with an empty string (NormalizeName → nil).
+	blank := "   "
+	info, err := mgr.SetName(context.Background(), "nelson@romaine.life", "88", &blank)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// pod name is "session-88" → default "88".
+	const wantDefault = "88"
+	if info.Name != wantDefault {
+		t.Fatalf("cleared info name = %q, want reassigned default %q (not empty/null)", info.Name, wantDefault)
+	}
+	if info.Name == "" {
+		t.Fatal("cleared name must reassign the default, never empty")
+	}
+	if info.DisplayName != wantDefault {
+		t.Fatalf("cleared display_name = %q, want %q (equals name)", info.DisplayName, wantDefault)
+	}
+	if got := registry.records[0].Name; got != wantDefault {
+		t.Fatalf("persisted name after clear = %q, want reassigned default %q", got, wantDefault)
+	}
+	updated, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), "session-88", metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := updated.Annotations["tank-operator/display-name"]; got != wantDefault {
+		t.Fatalf("pod annotation after clear = %q, want reassigned default %q (not empty)", got, wantDefault)
+	}
+
+	// Clearing with nil input behaves the same (reassigns the default).
+	infoNil, err := mgr.SetName(context.Background(), "nelson@romaine.life", "88", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if infoNil.Name != wantDefault {
+		t.Fatalf("nil-clear info name = %q, want reassigned default %q", infoNil.Name, wantDefault)
 	}
 }
 
@@ -674,7 +789,19 @@ func (r *managerTestRegistry) ReserveSessionAvatars(_ context.Context, _ string,
 	return r.avatarAssignment, nil
 }
 
-func (r *managerTestRegistry) SetName(context.Context, string, string, *string) error { return nil }
+func (r *managerTestRegistry) SetName(_ context.Context, email, sessionID string, name *string) error {
+	stored := ""
+	if name != nil {
+		stored = *name
+	}
+	for i, record := range r.records {
+		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
+			r.records[i].Name = stored
+			return nil
+		}
+	}
+	return nil
+}
 func (r *managerTestRegistry) SetBugLabel(_ context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error {
 	if label == nil {
 		return r.SetBugLabels(context.Background(), email, sessionID, nil)

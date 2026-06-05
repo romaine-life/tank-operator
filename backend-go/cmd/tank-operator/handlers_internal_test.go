@@ -562,8 +562,8 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
 		t.Fatal(err)
 	}
-	if info.Name == nil || *info.Name != "My Recovery Session" {
-		t.Fatalf("Info.Name = %v, want \"My Recovery Session\" (inline name must set session Name, not RequestedAt)", info.Name)
+	if info.Name != "My Recovery Session" {
+		t.Fatalf("Info.Name = %q, want \"My Recovery Session\" (inline name must set session Name, not RequestedAt)", info.Name)
 	}
 	if info.RequestedAt != nil && *info.RequestedAt == "My Recovery Session" {
 		t.Fatalf("RequestedAt = %q; inline name must never leak into requested_at", *info.RequestedAt)
@@ -572,8 +572,8 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("registry Get ok=%v err=%v", ok, err)
 	}
-	if rec2.Name == nil || *rec2.Name != "My Recovery Session" {
-		t.Fatalf("registry record Name = %v, want \"My Recovery Session\"", rec2.Name)
+	if rec2.Name != "My Recovery Session" {
+		t.Fatalf("registry record Name = %q, want \"My Recovery Session\"", rec2.Name)
 	}
 }
 

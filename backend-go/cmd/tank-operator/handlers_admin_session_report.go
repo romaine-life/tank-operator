@@ -489,12 +489,11 @@ func fetchSessionReportRows(ctx context.Context, s *appServer, scope string, win
 			return nil, err
 		}
 		row.BugLabel = reportBugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug)
-		// display_name uses the same canonical derivation as the live session
-		// wire (sessionmodel.SessionDisplayName) so the admin report renders a
-		// session's title identically to the sidebar. pod_name is always
-		// "session-"+session_id, so passing the session id yields the identical
-		// slug for unnamed sessions without selecting pod_name here.
-		row.DisplayName = sessionmodel.SessionDisplayName(&row.Name, "", row.SessionID)
+		// display_name stays on the wire for already-deployed clients; sessions.name
+		// is NON-NULL now (assigned at create / reassigned on clear), so the report
+		// title simply equals name and matches the sidebar's always-present label.
+		// A later stage deletes display_name.
+		row.DisplayName = row.Name
 		out = append(out, row)
 	}
 	return out, rows.Err()

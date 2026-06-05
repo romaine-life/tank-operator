@@ -1605,6 +1605,31 @@ var schemaMigrations = []migration{
 		ALTER TABLE session_background_task_wakes DROP CONSTRAINT IF EXISTS session_background_task_wakes_status_check;
 		ALTER TABLE session_background_task_wakes ADD CONSTRAINT session_background_task_wakes_status_check CHECK (status IN ('scheduled', 'claiming', 'fired', 'failed', 'cancelled'));
 	END $$`},
+
+	// sessions.name becomes a plain NON-NULL field (stage A of the
+	// name/display_name inversion). Historically name was nullable and the
+	// always-present display_name covered the null case; we invert that so
+	// name is assigned at creation when the user gives none, and a later
+	// stage deletes display_name (display_name stays on the wire this stage,
+	// equal to name). Backfill every unnamed row with the same default
+	// sessionmodel.SessionDisplayName derives — the short id from pod_name
+	// (falling back to session_id) stripped of a leading "session-" and
+	// truncated to 8 chars — then enforce NOT NULL. NULLIF(pod_name, '')
+	// mirrors SessionDisplayName's "podName if set, else id" so an empty
+	// pod_name falls through to session_id; the derived expression can never
+	// yield NULL because session_id is NOT NULL. The row_version bump lets
+	// any open row-update SSE catch up on the assigned label. One DO block so
+	// the backfill and the NOT NULL flip are one statement; idempotent —
+	// the WHERE no-ops once names exist and SET NOT NULL is a no-op when the
+	// column is already NOT NULL.
+	{ID: "0134", SQL: `DO $$ BEGIN
+		UPDATE sessions
+		SET name        = left(regexp_replace(coalesce(NULLIF(pod_name, ''), session_id), '^session-', ''), 8),
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE name IS NULL OR btrim(name) = '';
+		ALTER TABLE sessions ALTER COLUMN name SET NOT NULL;
+	END $$`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

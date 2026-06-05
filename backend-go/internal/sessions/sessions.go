@@ -39,12 +39,15 @@ type Info struct {
 	RequestedAt  *string `json:"requested_at"`
 	CreatedAt    *string `json:"created_at"`
 	ReadyAt      *string `json:"ready_at"`
-	Name         *string `json:"name"`
-	// DisplayName is the always-present human-facing label for the
-	// session, derived from sessionmodel.SessionDisplayName: the
-	// user-set Name when present, else a short id from the pod name
-	// (falling back to the session id). Unlike Name (nullable), this is
-	// never empty, so every surface renders unnamed sessions identically.
+	// Name is the session's human-facing title. As of the name/display_name
+	// inversion it is always present (NON-NULL): created sessions are
+	// assigned the canonical SessionDisplayName default when the user gives
+	// none, and clearing reassigns that default. Never empty in steady state.
+	Name string `json:"name"`
+	// DisplayName is kept on the wire for already-deployed SPA/MCP clients
+	// that still read it; a later stage deletes it. Now that Name is always
+	// present, DisplayName simply equals Name. (Previously it was the
+	// always-present derivation that covered Name's null case.)
 	DisplayName  string         `json:"display_name"`
 	TestState    map[string]any `json:"test_state"`
 	RolloutState map[string]any `json:"rollout_state"`
@@ -270,17 +273,20 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		bugLabel = bugLabels[0]
 	}
 	info := Info{
-		ID:                             record.ID,
-		SessionScope:                   scope,
-		PodName:                        optionalString(record.PodName),
-		Owner:                          owner,
-		Status:                         status,
-		Mode:                           sessionmodel.NormalizeSessionMode(record.Mode),
-		RequestedAt:                    firstString(record.RequestedAt, record.CreatedAt),
-		CreatedAt:                      optionalString(record.CreatedAt),
-		ReadyAt:                        optionalString(record.ReadyAt),
-		Name:                           record.Name,
-		DisplayName:                    sessionmodel.SessionDisplayName(record.Name, record.PodName, record.ID),
+		ID:           record.ID,
+		SessionScope: scope,
+		PodName:      optionalString(record.PodName),
+		Owner:        owner,
+		Status:       status,
+		Mode:         sessionmodel.NormalizeSessionMode(record.Mode),
+		RequestedAt:  firstString(record.RequestedAt, record.CreatedAt),
+		CreatedAt:    optionalString(record.CreatedAt),
+		ReadyAt:      optionalString(record.ReadyAt),
+		Name:         record.Name,
+		// display_name stays on the wire for already-deployed clients; the
+		// row's name is always present now, so it equals name. Later stage
+		// deletes it.
+		DisplayName:                    record.Name,
 		TestState:                      record.TestState,
 		RolloutState:                   record.RolloutState,
 		Repos:                          repos,
@@ -343,7 +349,10 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 	id := sessionIDFromPod(pod)
 	createdAt := timeString(pod.CreationTimestamp.Time)
 	readyAt := readyAt(pod)
-	name := annotationString(pod.Annotations, nameAnnotation)
+	// The pod's display-name annotation may be empty (older pods, or never
+	// set). Resolve to the NON-NULL canonical default so Info.Name is never
+	// empty, matching the registry-row projection.
+	name := sessionmodel.SessionDisplayName(annotationString(pod.Annotations, nameAnnotation), podName, id)
 	scope := strings.TrimSpace(pod.Labels["tank-operator/session-scope"])
 	if scope == "" {
 		scope = "default"
@@ -359,7 +368,9 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		CreatedAt:    createdAt,
 		ReadyAt:      readyAt,
 		Name:         name,
-		DisplayName:  sessionmodel.SessionDisplayName(name, podName, id),
+		// display_name stays on the wire for already-deployed clients; name is
+		// always present now, so it equals name. Later stage deletes it.
+		DisplayName:  name,
 		TestState:    annotationObject(pod.Annotations, testStateAnnotation),
 		RolloutState: annotationObject(pod.Annotations, rolloutStateAnnotation),
 		// Pod-only Info (per-session GET fallback when the registry

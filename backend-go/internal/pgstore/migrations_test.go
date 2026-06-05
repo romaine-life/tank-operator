@@ -453,3 +453,48 @@ func TestMigrationsDropHermesActiveRunPointer(t *testing.T) {
 		t.Fatal("session_events table must exist before hermes terminal index")
 	}
 }
+
+// TestMigrationMakesSessionsNameNonNull pins the name/display_name inversion's
+// stage-A migration: unnamed rows are backfilled with the same canonical
+// default sessionmodel.SessionDisplayName derives (short id from pod_name,
+// falling back to session_id), then the name column is flipped to NOT NULL.
+// The load-bearing invariants are (1) the backfill targets the real column
+// names, (2) the derived expression can never yield NULL — it uses
+// NULLIF(pod_name, ”) so an empty pod_name falls through to the NOT NULL
+// session_id — and (3) the backfill runs before SET NOT NULL so the flip can't
+// fail on a still-null row.
+func TestMigrationMakesSessionsNameNonNull(t *testing.T) {
+	var sql string
+	for _, m := range schemaMigrations {
+		if m.ID == "0134" {
+			sql = m.SQL
+			break
+		}
+	}
+	if sql == "" {
+		t.Fatal("migration 0134 (sessions.name NOT NULL) not found")
+	}
+	for _, want := range []string{
+		// Backfill targets the actual sessions columns verified from the schema.
+		"UPDATE sessions",
+		"left(regexp_replace(coalesce(NULLIF(pod_name, ''), session_id), '^session-', ''), 8)",
+		// Only unnamed/blank rows are backfilled (idempotent on re-run).
+		"WHERE name IS NULL OR btrim(name) = ''",
+		// The NOT NULL flip.
+		"ALTER TABLE sessions ALTER COLUMN name SET NOT NULL",
+		// row_version bump so open row-update SSE catches the assigned label.
+		"nextval('sessions_row_version_seq')",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("migration 0134 missing %q", want)
+		}
+	}
+	if strings.Index(sql, "UPDATE sessions") > strings.Index(sql, "ALTER COLUMN name SET NOT NULL") {
+		t.Fatal("backfill must run before SET NOT NULL so the flip can't fail on a still-null row")
+	}
+	// The sessions table must exist before the column is altered.
+	migrations := joinedMigrationSQL()
+	if strings.Index(migrations, "CREATE TABLE IF NOT EXISTS sessions") > strings.Index(migrations, "ALTER COLUMN name SET NOT NULL") {
+		t.Fatal("sessions table must exist before name is made NOT NULL")
+	}
+}

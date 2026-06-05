@@ -61,21 +61,23 @@ func TestMarshalRowUpdateIncludesDisplayName(t *testing.T) {
 		return decoded.Row.DisplayName
 	}
 
-	name := "Launch draft"
 	if got, want := decodeDisplayName(t, sessionmodel.SessionRecord{
 		ID:      "8",
 		PodName: "session-8",
-		Name:    &name,
+		Name:    "Launch draft",
 	}), "Launch draft"; got != want {
 		t.Fatalf("named row display_name = %q, want %q", got, want)
 	}
 
+	// Name is NON-NULL now: an "unnamed" session carries the canonical
+	// default that Create assigns / the migration backfills (the short id),
+	// and display_name (kept on the wire this stage) equals that name.
 	if got, want := decodeDisplayName(t, sessionmodel.SessionRecord{
 		ID:      "8",
 		PodName: "session-8",
-		Name:    nil,
+		Name:    "8",
 	}), "8"; got != want {
-		t.Fatalf("nil-name row display_name = %q, want %q (derived from pod_name)", got, want)
+		t.Fatalf("default-name row display_name = %q, want %q (equals name)", got, want)
 	}
 }
 
