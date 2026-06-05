@@ -130,6 +130,29 @@ func TestTankMessageLinkJSONWithoutAuthReturnsContract(t *testing.T) {
 	}
 }
 
+func TestTankMessageLinkJSONKeepsBackgroundTaskWakeBrowserURLOnTurnsPage(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/?session=580&message=turn_bgtask-bju9inw2l%3Auser&format=json", nil)
+	req.Host = "tank.example.test"
+	req.Header.Set("X-Forwarded-Proto", "https")
+	res := httptest.NewRecorder()
+
+	(&appServer{}).handleTankMessageLink(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	browserURL, _ := body["browser_url"].(string)
+	if !strings.Contains(browserURL, "https://tank.example.test/sessions/580/turns?") ||
+		!strings.Contains(browserURL, "session=580") ||
+		!strings.Contains(browserURL, "message=turn_bgtask-bju9inw2l%3Auser") {
+		t.Fatalf("browser_url = %q", browserURL)
+	}
+}
+
 func TestTankMessageLinkJSONResolvesInvisibleOwnedSession(t *testing.T) {
 	const timelineID = "turn_1:item:msg_1"
 	targetCursor := "cursor-for-msg-1"

@@ -433,6 +433,10 @@ func publicMessageLinkAvatarResponseFromMeta(token string, meta avatarassets.Met
 }
 
 func publicMessageLinkBrowserURL(r *http.Request, sessionID, timelineID, token string) string {
+	return messageLinkBrowserURL(r, sessionID, timelineID, token)
+}
+
+func messageLinkBrowserURL(r *http.Request, sessionID, timelineID, token string) string {
 	path := "/"
 	if isBackgroundTaskWakeTimelineID(timelineID) {
 		path = "/sessions/" + url.PathEscape(sessionID) + "/turns"
@@ -441,7 +445,9 @@ func publicMessageLinkBrowserURL(r *http.Request, sessionID, timelineID, token s
 	q := url.Values{}
 	q.Set("session", sessionID)
 	q.Set("message", timelineID)
-	q.Set("share", token)
+	if strings.TrimSpace(token) != "" {
+		q.Set("share", token)
+	}
 	u.RawQuery = q.Encode()
 	return absoluteURL(requestOrigin(r), u)
 }

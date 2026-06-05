@@ -52,7 +52,7 @@ func tankMessageLinkContract(r *http.Request) map[string]any {
 	sessionID, timelineID := tankMessageLinkParts(r)
 	shareToken := tankMessageLinkShareToken(r)
 	origin := requestOrigin(r)
-	browserURL := absoluteURL(origin, r.URL)
+	browserURL := messageLinkBrowserURL(r, sessionID, timelineID, shareToken)
 	jsonURL := cloneURL(r.URL)
 	jsonQuery := jsonURL.Query()
 	jsonQuery.Set("format", "json")
