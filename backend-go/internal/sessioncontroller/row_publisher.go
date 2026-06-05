@@ -125,6 +125,7 @@ type rowWireShape struct {
 	Scope           string         `json:"session_scope"`
 	PodName         string         `json:"pod_name,omitempty"`
 	Name            *string        `json:"name,omitempty"`
+	DisplayName     string         `json:"display_name"`
 	Visible         bool           `json:"visible"`
 	Status          string         `json:"status"`
 	RequestedAt     string         `json:"requested_at,omitempty"`
@@ -188,6 +189,7 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			Scope:                          record.Scope,
 			PodName:                        record.PodName,
 			Name:                           record.Name,
+			DisplayName:                    sessionmodel.SessionDisplayName(record.Name, record.PodName, record.ID),
 			Visible:                        record.Visible,
 			Status:                         record.Status,
 			RequestedAt:                    record.RequestedAt,

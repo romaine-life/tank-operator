@@ -30,16 +30,22 @@ var (
 )
 
 type Info struct {
-	ID           string         `json:"id"`
-	SessionScope string         `json:"session_scope,omitempty"`
-	PodName      *string        `json:"pod_name"`
-	Owner        string         `json:"owner"`
-	Status       string         `json:"status"`
-	Mode         string         `json:"mode"`
-	RequestedAt  *string        `json:"requested_at"`
-	CreatedAt    *string        `json:"created_at"`
-	ReadyAt      *string        `json:"ready_at"`
-	Name         *string        `json:"name"`
+	ID           string  `json:"id"`
+	SessionScope string  `json:"session_scope,omitempty"`
+	PodName      *string `json:"pod_name"`
+	Owner        string  `json:"owner"`
+	Status       string  `json:"status"`
+	Mode         string  `json:"mode"`
+	RequestedAt  *string `json:"requested_at"`
+	CreatedAt    *string `json:"created_at"`
+	ReadyAt      *string `json:"ready_at"`
+	Name         *string `json:"name"`
+	// DisplayName is the always-present human-facing label for the
+	// session, derived from sessionmodel.SessionDisplayName: the
+	// user-set Name when present, else a short id from the pod name
+	// (falling back to the session id). Unlike Name (nullable), this is
+	// never empty, so every surface renders unnamed sessions identically.
+	DisplayName  string         `json:"display_name"`
 	TestState    map[string]any `json:"test_state"`
 	RolloutState map[string]any `json:"rollout_state"`
 	// Repos is the "owner/name" slug list the user picked at
@@ -274,6 +280,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		CreatedAt:                      optionalString(record.CreatedAt),
 		ReadyAt:                        optionalString(record.ReadyAt),
 		Name:                           record.Name,
+		DisplayName:                    sessionmodel.SessionDisplayName(record.Name, record.PodName, record.ID),
 		TestState:                      record.TestState,
 		RolloutState:                   record.RolloutState,
 		Repos:                          repos,
@@ -333,6 +340,7 @@ func parseActivitySummary(raw []byte) *sessionactivity.ActivitySummary {
 // the sidebar.
 func infoFromPod(owner string, pod *corev1.Pod) Info {
 	podName := pod.Name
+	id := sessionIDFromPod(pod)
 	createdAt := timeString(pod.CreationTimestamp.Time)
 	readyAt := readyAt(pod)
 	name := annotationString(pod.Annotations, nameAnnotation)
@@ -341,7 +349,7 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		scope = "default"
 	}
 	return Info{
-		ID:           sessionIDFromPod(pod),
+		ID:           id,
 		SessionScope: scope,
 		PodName:      &podName,
 		Owner:        owner,
@@ -351,6 +359,7 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		CreatedAt:    createdAt,
 		ReadyAt:      readyAt,
 		Name:         name,
+		DisplayName:  sessionmodel.SessionDisplayName(name, podName, id),
 		TestState:    annotationObject(pod.Annotations, testStateAnnotation),
 		RolloutState: annotationObject(pod.Annotations, rolloutStateAnnotation),
 		// Pod-only Info (per-session GET fallback when the registry

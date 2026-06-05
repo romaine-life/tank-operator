@@ -2,6 +2,7 @@ package sessioncontroller
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
@@ -40,6 +41,42 @@ func (p *recordingRowPublisher) PublishSessionRowUpdate(_ context.Context, email
 func (p *recordingRowPublisher) PublishSessionEventWake(_ context.Context, storageKey string) error {
 	p.wakes = append(p.wakes, storageKey)
 	return nil
+}
+
+func TestMarshalRowUpdateIncludesDisplayName(t *testing.T) {
+	decodeDisplayName := func(t *testing.T, record sessionmodel.SessionRecord) string {
+		t.Helper()
+		payload, err := MarshalRowUpdate(record)
+		if err != nil {
+			t.Fatalf("MarshalRowUpdate: %v", err)
+		}
+		var decoded struct {
+			Row struct {
+				DisplayName string `json:"display_name"`
+			} `json:"row"`
+		}
+		if err := json.Unmarshal(payload, &decoded); err != nil {
+			t.Fatalf("unmarshal row payload: %v", err)
+		}
+		return decoded.Row.DisplayName
+	}
+
+	name := "Launch draft"
+	if got, want := decodeDisplayName(t, sessionmodel.SessionRecord{
+		ID:      "8",
+		PodName: "session-8",
+		Name:    &name,
+	}), "Launch draft"; got != want {
+		t.Fatalf("named row display_name = %q, want %q", got, want)
+	}
+
+	if got, want := decodeDisplayName(t, sessionmodel.SessionRecord{
+		ID:      "8",
+		PodName: "session-8",
+		Name:    nil,
+	}), "8"; got != want {
+		t.Fatalf("nil-name row display_name = %q, want %q (derived from pod_name)", got, want)
+	}
 }
 
 func TestPublishCurrentRowWakesTranscriptStream(t *testing.T) {
