@@ -12,6 +12,7 @@ import (
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionactivity"
 )
 
 const (
@@ -249,6 +250,9 @@ func (s *appServer) failBackgroundTaskWake(ctx context.Context, row pgstore.Back
 		return err
 	}
 	recordBackgroundTaskWakeFire(provider, backgroundTaskWakeFireFailureLabel(reason))
+	s.resolveFailedWake(ctx, row.OwnerEmail, row.SessionID,
+		conversation.TurnIDForClientNonce(row.ClientNonce), row.ClientNonce, provider,
+		strings.HasPrefix(reason, "enqueue_failed"), sessionactivity.AwayErrorReasonBackgroundTaskWake)
 	return errors.New(reason)
 }
 

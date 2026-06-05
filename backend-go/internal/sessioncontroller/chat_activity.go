@@ -35,6 +35,7 @@ type ChatActivityEmitter struct {
 	ReadStates store.ConversationReadStateStore
 	Registry   SessionToOwnerResolver
 	Rows       RowFetcher
+	Wakes      PendingWakeChecker
 	Metrics    LifecycleEmitterMetrics
 	Scope      string
 }
@@ -44,6 +45,18 @@ type ChatActivityEmitter struct {
 // sessionregistry.Store.
 type SessionToOwnerResolver interface {
 	OwnerForSession(ctx context.Context, scope, sessionID string) (string, error)
+}
+
+// PendingWakeChecker answers whether a session currently has self-scheduled
+// work pending — a registered ScheduleWakeup timer or a run_in_background wake
+// that has not yet fired, failed, or been cancelled. The emitter uses it to
+// fold a would-be-"ready" turn terminal into the non-summoning "scheduled"
+// status: a parked agent is mid-(simulated)-turn, not idle, so it must not
+// paint the "your turn" dot or fire the turn-complete summon. Satisfied by the
+// combined scheduled-wakeup + background-task-wake stores. See
+// docs/scheduled-turn-continuity.md.
+type PendingWakeChecker interface {
+	HasPendingWake(ctx context.Context, scope, sessionID string) (bool, error)
 }
 
 // LifecycleEmitterMetrics keeps the activity-delta emitter observable
@@ -336,6 +349,11 @@ func (e *ChatActivityEmitter) RefreshSessionActivity(ctx context.Context, owner,
 	if resolvedLateInterrupt {
 		metrics.RecordActivityLateInterruptIgnored(next.Status)
 	}
+	next, err = e.applyScheduledWakeOverride(ctx, publicID, next)
+	if err != nil {
+		metrics.RecordActivityFailure()
+		return err
+	}
 	if prior != nil && sessionactivity.ActivitySummariesEqual(*prior, next) {
 		metrics.RecordActivityDelta(false)
 		return nil
@@ -420,4 +438,46 @@ func (e *ChatActivityEmitter) resolveStoppingActivityFromTerminal(
 	summary.ActiveTurnID = nil
 	summary.NeedsInput = false
 	return summary, true, nil
+}
+
+// applyScheduledWakeOverride folds the would-be-"ready" idle state into the
+// non-summoning "scheduled" status when the session has self-scheduled work
+// pending (a ScheduleWakeup timer or a run_in_background wake). A parked agent
+// is mid-(simulated)-turn — it will resume itself on a clock/event — so it must
+// not paint the "your turn" idle dot or fire the turn-complete summon. This is
+// the emitter sibling of resolveStoppingActivityFromTerminal: a post-fold,
+// DB-derived status adjustment.
+//
+// The override only touches the ready<->scheduled boundary. Any active status
+// (submitted/claimed/streaming/needs_input/stopping) and any terminal failure
+// (error/stopped, including a Failed pod, which the fold already applied) take
+// precedence and are returned untouched without querying — keeping the
+// pending-wake lookup lazy. It is bidirectional so a recompute after the wake
+// fires/fails/cancels (pending=false) restores "ready". A nil checker (degraded
+// boot before Postgres) never strands a session in "scheduled". See
+// docs/scheduled-turn-continuity.md.
+func (e *ChatActivityEmitter) applyScheduledWakeOverride(
+	ctx context.Context,
+	publicID string,
+	summary sessionactivity.ActivitySummary,
+) (sessionactivity.ActivitySummary, error) {
+	if summary.Status != "ready" && summary.Status != "scheduled" {
+		return summary, nil
+	}
+	if e.Wakes == nil {
+		if summary.Status == "scheduled" {
+			summary.Status = "ready"
+		}
+		return summary, nil
+	}
+	pending, err := e.Wakes.HasPendingWake(ctx, e.Scope, publicID)
+	if err != nil {
+		return summary, fmt.Errorf("chat-activity emitter: pending-wake check for %q: %w", publicID, err)
+	}
+	if pending && summary.Status == "ready" {
+		summary.Status = "scheduled"
+	} else if !pending && summary.Status == "scheduled" {
+		summary.Status = "ready"
+	}
+	return summary, nil
 }

@@ -4,6 +4,7 @@ export type ConversationActivityStatus =
   | "claimed"
   | "streaming"
   | "needs_input"
+  | "scheduled"
   | "stopping"
   | "stopped"
   | "error";
@@ -15,6 +16,7 @@ export interface SessionActivitySummary {
   unread_count: number;
   needs_input: boolean;
   failed: boolean;
+  away_error: boolean;
   active_turn_id: string | null;
   updated_at: string | null;
 }
@@ -38,6 +40,12 @@ export const SESSION_ACTIVITY_STATUS_LEGEND: SessionActivityLegendItem[] = [
     label: "Submitted / running",
     detail: "The agent has queued or active work.",
     dotStatus: "agent-working",
+  },
+  {
+    key: "scheduled",
+    label: "Scheduled",
+    detail: "The agent parked itself on a timer or background task; it resumes on its own.",
+    dotStatus: "agent-scheduled",
   },
   {
     key: "needs-input",
@@ -77,6 +85,7 @@ export function normalizeSessionActivity(value: unknown): SessionActivitySummary
     unread_count: nonNegativeInt(value.unread_count),
     needs_input: value.needs_input === true,
     failed: value.failed === true,
+    away_error: value.away_error === true,
     active_turn_id: nullableStringField(value, "active_turn_id"),
     updated_at: nullableStringField(value, "updated_at"),
   };
@@ -92,6 +101,10 @@ export function sessionActivityDotStatus(
   if (activity?.needs_input || activity?.status === "needs_input") return "agent-needs-input";
   if (activity?.status === "stopping") return "agent-stopping";
   if (activity?.status === "stopped") return "agent-stopped";
+  // A self-parked agent (pending ScheduleWakeup / background-task wake) is
+  // mid-(simulated)-turn, holding on its own clock — not idle and not your turn.
+  // Distinct calm indicator; never the "waiting for you" treatment.
+  if (activity?.status === "scheduled") return "agent-scheduled";
   if (activity?.status === "submitted" || activity?.status === "claimed" || activity?.status === "streaming") {
     return "agent-working";
   }
@@ -111,6 +124,7 @@ export function sessionActivityStatusLabel(
   if (activity?.status === "streaming") return "Running";
   if (activity?.status === "stopping") return "Stopping";
   if (activity?.status === "stopped") return "Stopped";
+  if (activity?.status === "scheduled") return "Scheduled";
   return "Waiting";
 }
 
@@ -172,6 +186,14 @@ export function shouldRingForActivityTransition(
   prior: SessionActivitySummary | undefined,
   next: SessionActivitySummary,
 ): boolean {
+  // A broken self-resume — a ScheduleWakeup timer or background-task wake the
+  // orchestrator could not fire while the session was alive — is an away-error:
+  // the agent broke while you were not driving, so it rings the same "you're
+  // needed" bell as a normal hand-off. A normal watched error (a turn you
+  // submitted that failed) does not ring; don't re-ring if already in error.
+  if (next.status === "error" && next.away_error) {
+    return prior?.status !== "error";
+  }
   const isUserTurn = (status: ConversationActivityStatus | undefined): boolean =>
     status === "ready" || status === "needs_input";
   if (!isUserTurn(next.status)) return false;
@@ -179,6 +201,12 @@ export function shouldRingForActivityTransition(
   // Don't ring on stop-then-ready: the user just pressed Stop and the agent
   // winding back to ready is the expected consequence, not a new signal.
   if (prior && (prior.status === "stopping" || prior.status === "stopped")) {
+    return false;
+  }
+  // A direct scheduled -> ready is a cancel/clear (you took over the session or
+  // cancelled the timer), never the genuine end-of-chain hand-off — that one
+  // arrives as streaming -> ready when the woken turn finishes.
+  if (prior?.status === "scheduled" && next.status === "ready") {
     return false;
   }
   return true;
@@ -191,6 +219,7 @@ function activityStatus(value: string | null): ConversationActivityStatus | null
     case "claimed":
     case "streaming":
     case "needs_input":
+    case "scheduled":
     case "stopping":
     case "stopped":
     case "error":
