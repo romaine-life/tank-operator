@@ -2,15 +2,21 @@ package main
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
 type fakeBackgroundTaskWakeStore struct {
 	rows            []pgstore.BackgroundTaskWake
+	registerRequest pgstore.RegisterBackgroundTaskWakeRequest
 	firedID         string
 	firedTurn       string
 	failedID        string
@@ -21,8 +27,13 @@ type fakeBackgroundTaskWakeStore struct {
 	cancelReturn    int64
 }
 
-func (f *fakeBackgroundTaskWakeStore) Register(context.Context, pgstore.RegisterBackgroundTaskWakeRequest) (pgstore.BackgroundTaskWake, error) {
-	return pgstore.BackgroundTaskWake{}, nil
+func (f *fakeBackgroundTaskWakeStore) Register(_ context.Context, req pgstore.RegisterBackgroundTaskWakeRequest) (pgstore.BackgroundTaskWake, error) {
+	f.registerRequest = req
+	return pgstore.BackgroundTaskWake{
+		WakeID:      "bgwake_registered",
+		ClientNonce: "bgtask-" + req.TaskID,
+		DueAt:       req.RegisteredAt,
+	}, nil
 }
 
 func (f *fakeBackgroundTaskWakeStore) ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.BackgroundTaskWake, error) {
@@ -110,6 +121,74 @@ func TestFireBackgroundTaskWakeUsesDurableTurnBoundary(t *testing.T) {
 	}
 	if got, _ := events[0]["author_kind"].(string); got != "system" {
 		t.Fatalf("author_kind = %q, want system", got)
+	}
+}
+
+func TestHandleInternalRegisterBackgroundTaskWakeAcceptsSlotScopedSession(t *testing.T) {
+	app := internalSessionRuntimeServer(t, "12")
+	wakes := &fakeBackgroundTaskWakeStore{}
+	app.backgroundTaskWakes = wakes
+	app.mgr = sessions.NewManager(app.k8s, nil, app.namespace, newTestSessionRegistry(sessionmodel.SessionRecord{
+		ID:      "12",
+		Email:   "owner@example.test",
+		Mode:    sessionmodel.ClaudeGUIMode,
+		Scope:   "slot-a",
+		Visible: true,
+		Status:  "Active",
+	}), nil, sessions.ManagerOptions{})
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/12/background-task-wakes", strings.NewReader(`{
+		"task_id":"bg5y9vim7",
+		"status":"completed",
+		"description":"Sleep 3 seconds then print done",
+		"summary":"done",
+		"last_tool_name":"Bash"
+	}`))
+	req.SetPathValue("session_id", "12")
+	req.Header.Set("Authorization", "Bearer session-token")
+	rec := httptest.NewRecorder()
+
+	app.handleInternalRegisterBackgroundTaskWake(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if wakes.registerRequest.SessionScope != "slot-a" || wakes.registerRequest.SessionID != "12" || wakes.registerRequest.OwnerEmail != "owner@example.test" {
+		t.Fatalf("register request identity = %+v", wakes.registerRequest)
+	}
+	if wakes.registerRequest.Provider != "claude" || wakes.registerRequest.TaskID != "bg5y9vim7" {
+		t.Fatalf("register request provider/task = %+v", wakes.registerRequest)
+	}
+}
+
+type erroringBackgroundWakeRegistry struct {
+	*testSessionRegistry
+	err error
+}
+
+func (r erroringBackgroundWakeRegistry) Get(context.Context, string, string) (sessionmodel.SessionRecord, bool, error) {
+	return sessionmodel.SessionRecord{}, false, r.err
+}
+
+func TestHandleInternalRegisterBackgroundTaskWakeReportsLookupErrorsAsServerErrors(t *testing.T) {
+	app := internalSessionRuntimeServer(t, "12")
+	wakes := &fakeBackgroundTaskWakeStore{}
+	app.backgroundTaskWakes = wakes
+	app.mgr = sessions.NewManager(app.k8s, nil, app.namespace, erroringBackgroundWakeRegistry{
+		testSessionRegistry: newTestSessionRegistry(),
+		err:                 errors.New("registry unavailable"),
+	}, nil, sessions.ManagerOptions{})
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/12/background-task-wakes", strings.NewReader(`{"task_id":"bg5y9vim7"}`))
+	req.SetPathValue("session_id", "12")
+	req.Header.Set("Authorization", "Bearer session-token")
+	rec := httptest.NewRecorder()
+
+	app.handleInternalRegisterBackgroundTaskWake(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if wakes.registerRequest.TaskID != "" {
+		t.Fatalf("register should not be called on lookup error: %+v", wakes.registerRequest)
 	}
 }
 

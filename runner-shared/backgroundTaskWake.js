@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { postOperatorInternalJSONWithRetry } from "./operatorInternalRequest.js";
 
 function trimTrailingSlashes(value) {
     return String(value || "").replace(/\/+$/, "");
@@ -19,23 +20,13 @@ export async function registerBackgroundTaskWake(cfg, payload) {
     }
     const token = (await readFile(tokenPath, "utf8")).trim();
     const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/background-task-wakes`;
-    const response = await fetch(url, {
-        method: "POST",
-        headers: {
-            Authorization: `Bearer ${token}`,
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            task_id: String(payload?.taskID ?? ""),
-            status: String(payload?.status ?? ""),
-            description: String(payload?.description ?? ""),
-            summary: String(payload?.summary ?? ""),
-            last_tool_name: String(payload?.lastToolName ?? ""),
-            error: String(payload?.error ?? ""),
-        }),
-    });
-    if (!response.ok) {
-        throw new Error(`background task wake register failed: ${response.status}`);
-    }
+    await postOperatorInternalJSONWithRetry(cfg, url, token, {
+        task_id: String(payload?.taskID ?? ""),
+        status: String(payload?.status ?? ""),
+        description: String(payload?.description ?? ""),
+        summary: String(payload?.summary ?? ""),
+        last_tool_name: String(payload?.lastToolName ?? ""),
+        error: String(payload?.error ?? ""),
+    }, "background task wake register failed");
     return true;
 }

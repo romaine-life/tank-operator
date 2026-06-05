@@ -14,6 +14,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionactivity"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
 const (
@@ -92,6 +93,11 @@ func (s *appServer) handleInternalRegisterScheduledWakeup(w http.ResponseWriter,
 
 	info, err := s.mgr.GetRegisteredByOwner(r.Context(), caller.Email, sessionID)
 	if err != nil {
+		if !errors.Is(err, sessions.ErrNotFound) {
+			recordScheduledWakeupRegister("unknown", "lookup_error")
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		recordScheduledWakeupRegister("unknown", "not_found")
 		writeError(w, http.StatusNotFound, "session not found")
 		return

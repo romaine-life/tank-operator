@@ -13,6 +13,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionactivity"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
 const (
@@ -77,6 +78,11 @@ func (s *appServer) handleInternalRegisterBackgroundTaskWake(w http.ResponseWrit
 
 	info, err := s.mgr.GetRegisteredByOwner(r.Context(), caller.Email, sessionID)
 	if err != nil {
+		if !errors.Is(err, sessions.ErrNotFound) {
+			recordBackgroundTaskWakeRegister("unknown", "lookup_error")
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
 		recordBackgroundTaskWakeRegister("unknown", "not_found")
 		writeError(w, http.StatusNotFound, "session not found")
 		return
