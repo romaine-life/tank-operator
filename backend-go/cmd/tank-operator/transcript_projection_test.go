@@ -647,14 +647,22 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	if card == nil {
 		t.Fatalf("expected awaiting_input question payload in activity body, got bodies: %#v", projection.ActivityBodies)
 	}
-	if got, want := len(projection.Entries), 2; got != want {
-		t.Fatalf("projected entries = %d, want user + assistant question: %#v", got, projection.Entries)
+	if got, want := len(projection.Entries), 3; got != want {
+		t.Fatalf("projected entries = %d, want user + assistant question + question turn shell: %#v", got, projection.Entries)
 	}
 	if projection.Entries[1]["kind"] != "message" || projection.Entries[1]["role"] != "assistant" {
 		t.Fatalf("second transcript entry = %#v, want assistant question message", projection.Entries[1])
 	}
 	if projection.Entries[1]["text"] != "1. Which auth method?" {
 		t.Fatalf("assistant question text = %q", projection.Entries[1]["text"])
+	}
+	shell := projection.Entries[2]
+	if shell["kind"] != "turn_activity" || shell["turnId"] != "turn-2" {
+		t.Fatalf("third transcript entry = %#v, want question turn activity shell", shell)
+	}
+	activity, _ := shell["activity"].(map[string]any)
+	if activity["status"] != "needs_input" {
+		t.Fatalf("question shell status = %v, want needs_input", activity["status"])
 	}
 	meta, _ := card["meta"].(map[string]any)
 	if meta["title"] != "I need your input" {
@@ -726,7 +734,7 @@ func TestProjectTranscriptEventsAwaitingInputButtonSortsAfterFoldedStartupStatus
 	}
 
 	projection := projectTranscriptEvents(events)
-	if got, want := len(projection.Entries), 2; got != want {
+	if got, want := len(projection.Entries), 3; got != want {
 		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
 	}
 	if projection.Entries[0]["kind"] != "message" {
@@ -734,6 +742,9 @@ func TestProjectTranscriptEventsAwaitingInputButtonSortsAfterFoldedStartupStatus
 	}
 	if projection.Entries[1]["role"] != "assistant" {
 		t.Fatalf("second entry = %#v, want assistant question message", projection.Entries[1])
+	}
+	if projection.Entries[2]["kind"] != "turn_activity" || projection.Entries[2]["turnId"] != "turn-2" {
+		t.Fatalf("third entry = %#v, want question turn activity shell", projection.Entries[2])
 	}
 	for _, entry := range projection.Entries {
 		if isProjectionSessionStatus(entry) {
@@ -775,7 +786,7 @@ func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.
 				map[string]any{"question": "Pick one", "allowFreeForm": true},
 			},
 		}),
-		// The question-set answer marker links back to the question's timeline
+		// The answer marker links back to the question's timeline
 		// id; the visible answer text is a separate user submission.
 		projectionTestEvent("ans", "004", "turn.input_answered", "user", "tank", "turn-2", "turn-2:item:tool-ask:answer", map[string]any{
 			"question_timeline_id": "turn-2:item:tool-ask",

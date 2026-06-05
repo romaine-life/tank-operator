@@ -189,10 +189,10 @@ func splitTurnEventsIntoPages(events []map[string]any) [][]map[string]any {
 }
 
 // splitTurnEventsIntoSemanticPages adds one semantic boundary on top of the
-// size threshold: each turn.awaiting_input pause owns a dedicated question-set
-// page. The activity before the question ends, the question page carries the
-// durable pause plus its matching durable answer when present, and later
-// provider work resumes on a normal activity page.
+// size threshold: each turn.awaiting_input pause owns one page per question.
+// The asking turn gets a separate turn.awaiting_input.invocation event; the
+// synthetic question-only turn must not manufacture a tool/activity page before
+// its question pages.
 func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 	ordered := orderedTranscriptEvents(events)
 	if len(ordered) == 0 {
@@ -237,8 +237,17 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 			flushPendingQuestionPages(nil)
 		}
 		if isTurnAwaitingInputEvent(event) {
-			current = append(current, awaitingInputInvocationEvent(event))
-			flush()
+			if isQuestionOnlyAwaitingInputEvent(event) {
+				if turnPageEventsHaveBody(current) {
+					flush()
+				} else {
+					current = nil
+					currentKind = "activity"
+				}
+			} else {
+				current = append(current, awaitingInputInvocationEvent(event))
+				flush()
+			}
 			questionSet += 1
 			pendingQuestionPages = awaitingInputQuestionPages(event, questionSet)
 			pendingQuestionTimelineID = awaitingInputTimelineID(event)
@@ -258,6 +267,32 @@ func isTurnAwaitingInputEvent(event map[string]any) bool {
 	return transcriptString(event, "type") == "turn.awaiting_input"
 }
 
+func isQuestionOnlyAwaitingInputEvent(event map[string]any) bool {
+	if !isTurnAwaitingInputEvent(event) {
+		return false
+	}
+	payload := transcriptPayload(event)
+	turnID := transcriptString(event, "turn_id")
+	questionTurnID := transcriptMapString(payload, "question_turn_id")
+	askingTurnID := transcriptMapString(payload, "asking_turn_id")
+	return turnID != "" &&
+		questionTurnID == turnID &&
+		askingTurnID != "" &&
+		askingTurnID != turnID
+}
+
+func turnPageEventsHaveBody(events []map[string]any) bool {
+	for _, event := range events {
+		switch transcriptString(event, "type") {
+		case "turn.submitted", "turn.claimed", "turn.started", "user_message.created":
+			continue
+		default:
+			return true
+		}
+	}
+	return false
+}
+
 func awaitingInputInvocationEvent(event map[string]any) map[string]any {
 	out := cloneAnyMap(event)
 	out["type"] = "turn.awaiting_input.invocation"
@@ -267,12 +302,12 @@ func awaitingInputInvocationEvent(event map[string]any) map[string]any {
 func awaitingInputQuestionPages(event map[string]any, questionSet int) []turnEventPage {
 	questions := projectionAwaitingInputQuestions(event)
 	if len(questions) == 0 {
-		return []turnEventPage{{Kind: "question_set", Events: []map[string]any{event}, QuestionSet: questionSet}}
+		return []turnEventPage{{Kind: "question", Events: []map[string]any{event}, QuestionSet: questionSet}}
 	}
 	pages := make([]turnEventPage, 0, len(questions))
 	for idx := range questions {
 		pages = append(pages, turnEventPage{
-			Kind:          "question_set",
+			Kind:          "question",
 			Events:        []map[string]any{awaitingInputQuestionPageEvent(event, idx, len(questions), questionSet)},
 			QuestionIndex: idx + 1,
 			QuestionSet:   questionSet,
@@ -385,7 +420,7 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 			"eventCount":    page.EventCount,
 			"sealed":        page.Sealed,
 		}
-		if page.Kind == "question_set" {
+		if page.Kind == "question" {
 			pageInfo["questionCount"] = page.QuestionCount
 			pageInfo["questionIndex"] = page.QuestionIndex
 			pageInfo["questionSet"] = page.QuestionSet
@@ -413,7 +448,7 @@ func defaultTurnActivityPageNumber(projection turnPagesProjection) int {
 	if transcriptMapString(projection.Shell, "status") == "needs_input" {
 		for i := 0; i < len(projection.Pages); i++ {
 			page := projection.Pages[i]
-			if page.Kind == "question_set" && !page.Answered {
+			if page.Kind == "question" && !page.Answered {
 				return page.Number
 			}
 		}

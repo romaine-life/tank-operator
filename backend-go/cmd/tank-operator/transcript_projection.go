@@ -116,9 +116,9 @@ type turnUsageProjection struct {
 }
 
 // projectionAwaitingInput captures a turn.awaiting_input handoff: the agent
-// asked the user a question as the Tank-visible response. The turn question-set
-// page renders from this (questions + ids), and "answered" is derived from a
-// later turn.input_answered event targeting the same question set.
+// asked the user a question as the Tank-visible response. The question-only
+// turn's pages render from this (questions + ids), and "answered" is derived
+// from a later turn.input_answered event targeting the same question set.
 type projectionAwaitingInput struct {
 	AskingTurnID       string
 	QuestionTurnID     string
@@ -1723,9 +1723,6 @@ func filterMainTranscriptQuestionTurnRows(entries []map[string]any) []map[string
 			continue
 		}
 		if isProjectionAwaitingInputToolEntry(entry) {
-			continue
-		}
-		if isQuestionOnlyTurnActivityShell(entry) {
 			continue
 		}
 		out = append(out, entry)

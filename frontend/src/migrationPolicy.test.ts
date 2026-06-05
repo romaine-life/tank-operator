@@ -291,7 +291,7 @@ test("AskUserQuestion questions are the assistant message and the answer form is
   );
   assert.ok(turnScreenMatch, "RunTurnActivityScreen source should be present");
   assert.equal(turnScreenMatch![0].includes("RunAwaitingInputCard"), true);
-  assert.equal(appSource.includes('kind === "question_set"'), true);
+  assert.equal(appSource.includes('kind === "question"'), true);
   assert.equal(appSource.includes("resetPage?: boolean"), true);
   assert.equal(appSource.includes("function RunAwaitingInputNotice"), false);
   assert.equal(appSource.includes("function RunNeedsInputAnnouncement"), false);
@@ -323,9 +323,7 @@ test("AskUserQuestion questions are the assistant message and the answer form is
     true,
   );
   assert.equal(
-    indexCssSource.includes(
-      '.run-turn-view-body[data-page-kind="question_set"]',
-    ),
+    indexCssSource.includes('.run-turn-view-body[data-page-kind="question"]'),
     true,
   );
   assert.equal(appSource.includes("askUserQuestionDrafts"), true);
@@ -490,6 +488,10 @@ test("server-projected active turn activity shells own thinking row active state
     true,
   );
   assert.equal(
+    appSource.includes("function turnActivityGroupIsNeedsInputTarget"),
+    true,
+  );
+  assert.equal(
     appSource.includes("function insertActiveTurnTailGroups"),
     false,
   );
@@ -503,6 +505,18 @@ test("server-projected active turn activity shells own thinking row active state
   assert.match(
     appSource,
     /group\.active &&\s+!needsInput &&\s+!insertedThinkingTurnIds\.has\(group\.turnId\)/,
+  );
+  assert.equal(
+    appSource.includes('turnThinkingGroup(group.turnId, entry, "needs_input")'),
+    true,
+  );
+  assert.equal(appSource.includes("data-status={status}"), true);
+  assert.equal(appSource.includes("Answer requested"), true);
+  assert.equal(
+    indexCssSource.includes(
+      '[data-kind="turn-thinking"][data-status="needs_input"]',
+    ),
+    true,
   );
   assert.equal(appSource.includes("groups.push(group);"), false);
   assert.equal(
@@ -528,6 +542,7 @@ test("server-projected active turn activity shells own thinking row active state
     appSource.includes('shellSummary?.status !== "needs_input"'),
     true,
   );
+  assert.equal(appSource.includes('activity?.status === "needs_input"'), true);
   assert.equal(
     turnActivityStateSource.includes('summary?.status === "needs_input"'),
     true,
@@ -795,12 +810,12 @@ test("turn view entry points open at the turn bottom", () => {
   );
   assert.equal(
     appSource.includes(
-      'onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}',
+      'onOpenTurn?.(turnId, { anchor: needsInput ? "top" : "bottom" })',
     ),
     true,
   );
   // AskUserQuestion uses the same turn navigation path, but with resetPage so
-  // the server default opens the pending question-set page.
+  // the server default opens the pending question page.
   assert.equal(appSource.includes('{ anchor: "top", resetPage: true }'), true);
   assert.equal(
     appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })'),
@@ -970,7 +985,10 @@ test("startup transcript rows come from durable conversation events", () => {
 });
 
 test("browser transcript normalizer rejects startup session status rows", () => {
-  assert.equal(appSource.includes("isFoldableStartupSessionStatusTranscriptRow"), true);
+  assert.equal(
+    appSource.includes("isFoldableStartupSessionStatusTranscriptRow"),
+    true,
+  );
   assert.match(
     appSource,
     /if \(isFoldableStartupSessionStatusTranscriptRow\(record\)\) return null;/,
