@@ -17981,6 +17981,7 @@ function AuthenticatedApp() {
         // to show up in the picker without a full SPA reload.
         setAllRepos({ status: "idle", repos: [] });
       }
+      setHomeBugLabels([]);
     } catch (e) {
       setError(String(e));
     } finally {
