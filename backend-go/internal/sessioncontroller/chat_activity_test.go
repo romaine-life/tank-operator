@@ -387,3 +387,103 @@ func TestDeriveActivitySummaryIgnoresContextCompacted(t *testing.T) {
 		t.Fatalf("failed = %v, want unchanged %v", withCompaction.Failed, base.Failed)
 	}
 }
+
+type fakePendingWakeChecker struct {
+	pending bool
+	err     error
+	calls   int
+}
+
+func (f *fakePendingWakeChecker) HasPendingWake(_ context.Context, _, _ string) (bool, error) {
+	f.calls++
+	return f.pending, f.err
+}
+
+// TestApplyScheduledWakeOverride pins the ready<->scheduled fold: a parked agent
+// (pending self-scheduled work) reads as the non-summoning "scheduled" instead
+// of the summoning "ready", the flip is bidirectional, only the ready/scheduled
+// boundary is touched (active/terminal states pass through without even
+// querying), and a nil checker never strands a session in "scheduled".
+func TestApplyScheduledWakeOverride(t *testing.T) {
+	ctx := context.Background()
+	const sid = "63"
+	cases := []struct {
+		name       string
+		in         string
+		pending    bool
+		nilChecker bool
+		want       string
+		wantCalls  int
+	}{
+		{name: "ready + pending -> scheduled", in: "ready", pending: true, want: "scheduled", wantCalls: 1},
+		{name: "ready + no pending stays ready", in: "ready", pending: false, want: "ready", wantCalls: 1},
+		{name: "scheduled clears to ready when wake gone", in: "scheduled", pending: false, want: "ready", wantCalls: 1},
+		{name: "scheduled stays while wake pending", in: "scheduled", pending: true, want: "scheduled", wantCalls: 1},
+		{name: "streaming untouched, no query", in: "streaming", pending: true, want: "streaming", wantCalls: 0},
+		{name: "error untouched, no query", in: "error", pending: true, want: "error", wantCalls: 0},
+		{name: "needs_input untouched, no query", in: "needs_input", pending: true, want: "needs_input", wantCalls: 0},
+		{name: "nil checker never strands scheduled", in: "scheduled", nilChecker: true, want: "ready", wantCalls: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e := &ChatActivityEmitter{Scope: "default"}
+			checker := &fakePendingWakeChecker{pending: tc.pending}
+			if !tc.nilChecker {
+				e.Wakes = checker
+			}
+			got, err := e.applyScheduledWakeOverride(ctx, sid, sessionactivity.ActivitySummary{Status: tc.in})
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got.Status != tc.want {
+				t.Fatalf("status = %q, want %q", got.Status, tc.want)
+			}
+			if !tc.nilChecker && checker.calls != tc.wantCalls {
+				t.Fatalf("pending-wake queries = %d, want %d", checker.calls, tc.wantCalls)
+			}
+		})
+	}
+}
+
+// TestRefreshSessionActivityFoldsPendingWakeIntoScheduled proves the override is
+// wired into the live emitter path: a session whose durable prior was the
+// summoning "ready" must, with a pending wake, emit a delta to the
+// non-summoning "scheduled" (so the sidebar dot and the turn-complete summon are
+// both suppressed for a self-parked agent).
+func TestRefreshSessionActivityFoldsPendingWakeIntoScheduled(t *testing.T) {
+	emitter := &recordingRowEmitter{}
+	events := &activityEventStore{}
+	priorReady := mustActivityJSON(t, map[string]any{
+		"status":         "ready",
+		"unread_count":   0,
+		"needs_input":    false,
+		"failed":         false,
+		"last_order_key": "002",
+	})
+	checker := &fakePendingWakeChecker{pending: true}
+	e := &ChatActivityEmitter{
+		Writer:     &RowWriter{Emitter: emitter},
+		ChatEvents: events,
+		ReadStates: store.NewStubConversationReadStateStore(),
+		Rows: activityRowFetcher{record: sessionmodel.SessionRecord{
+			Email:           "user@example.com",
+			Scope:           "default",
+			ID:              "63",
+			Status:          "Active",
+			Visible:         true,
+			ActivitySummary: priorReady,
+		}},
+		Wakes: checker,
+		Scope: "default",
+	}
+
+	if err := e.RefreshSessionActivity(context.Background(), "user@example.com", "63"); err != nil {
+		t.Fatal(err)
+	}
+	if checker.calls != 1 {
+		t.Fatalf("pending-wake queries = %d, want 1", checker.calls)
+	}
+	if emitter.calls != 1 {
+		t.Fatalf("row publishes = %d, want 1 (ready->scheduled is a delta)", emitter.calls)
+	}
+}

@@ -235,6 +235,17 @@ A conversation projection has these UI states:
 - `needs_input`: the agent asked the user a question (AskUserQuestion); the
   asking turn is paused at `turn.awaiting_input` and the session is waiting for
   the user's answer, which arrives as `turn.input_answered` on the same turn.
+- `scheduled`: the agent parked itself with pending time-bound work (a
+  `ScheduleWakeup` timer or a `run_in_background` wake). The sibling of
+  `needs_input` — a non-terminal pause-phase of a live (simulated) turn that
+  resumes on the clock/event, not on the user, so it does **not** summon. A turn
+  terminal with a pending wake folds here instead of `ready`; the chat-activity
+  emitter applies it from the durable wake tables (`HasPending`), not from the
+  chat-event stream. It resolves to `streaming` (the wake fired a new turn), to
+  `ready` (cancel or a prompt-mid-sleep take-over — a direct `scheduled -> ready`
+  that does not ring), or to `error` with `away_error=true` (a fire attempt
+  failed while the session was alive — a broken self-resume that rings the
+  summon). See [scheduled-turn-continuity.md](scheduled-turn-continuity.md).
 - `stopping`: a user-initiated stop has landed on the durable ledger; the
   runner has not yet emitted a terminal event.
 - `stopped`: the active turn ended by user interrupt or runner shutdown, not by

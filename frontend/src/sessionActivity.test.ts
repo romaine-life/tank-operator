@@ -23,6 +23,7 @@ function summary(
     unread_count: 0,
     needs_input: status === "needs_input",
     failed: status === "error",
+    away_error: false,
     active_turn_id: null,
     updated_at: null,
     ...patch,
@@ -113,6 +114,7 @@ test("session activity legend mirrors sidebar dot mappings", () => {
   }> = [
     { key: "ready", activity: summary("ready"), dot: "agent-waiting" },
     { key: "running", activity: summary("streaming"), dot: "agent-working" },
+    { key: "scheduled", activity: summary("scheduled"), dot: "agent-scheduled" },
     { key: "needs-input", activity: summary("needs_input"), dot: "agent-needs-input" },
     { key: "stopping", activity: summary("stopping"), dot: "agent-stopping" },
     { key: "stopped", activity: summary("stopped"), dot: "agent-stopped" },
@@ -330,4 +332,109 @@ test("non-chat sessions keep pod lifecycle status", () => {
 
   assert.equal(sessionActivityDotStatus("Pending", false, activity ?? undefined), "pending");
   assert.equal(sessionActivityStatusLabel("Pending", false, activity ?? undefined), "Pending");
+});
+
+test("normalizes scheduled status (not coerced to ready)", () => {
+  const activity = normalizeSessionActivity({
+    session_id: "63",
+    status: "scheduled",
+    unread_count: 0,
+    needs_input: false,
+    failed: false,
+  });
+
+  assert.equal(activity?.status, "scheduled");
+  assert.equal(sessionActivityDotStatus("Active", true, activity ?? undefined), "agent-scheduled");
+  assert.equal(sessionActivityStatusLabel("Active", true, activity ?? undefined), "Scheduled");
+});
+
+// The scheduled status is the sibling of needs_input: both are non-terminal
+// pause-phases of a live (simulated) turn, decoupled from the backend's turn
+// boundaries. They differ only in what resumes them — your input vs the clock —
+// so needs_input summons and scheduled does not. The transitions below pin that
+// the turn-complete bell stays silent while the agent parks itself and fires
+// exactly once when the wake chain truly ends.
+test("shouldRingForActivityTransition: streaming -> scheduled does NOT ring (self-parked agent)", () => {
+  assert.equal(
+    shouldRingForActivityTransition(summary("streaming"), summary("scheduled")),
+    false,
+  );
+});
+
+test("shouldRingForActivityTransition: ready -> scheduled does NOT ring (armed a wake while idle)", () => {
+  assert.equal(
+    shouldRingForActivityTransition(summary("ready"), summary("scheduled")),
+    false,
+  );
+});
+
+test("shouldRingForActivityTransition: no prior -> scheduled does NOT ring", () => {
+  assert.equal(
+    shouldRingForActivityTransition(undefined, summary("scheduled")),
+    false,
+  );
+});
+
+test("shouldRingForActivityTransition: scheduled -> ready does NOT ring (cancel/clear)", () => {
+  // A direct scheduled -> ready means the timer was cancelled or the user took
+  // over the session — not the genuine end-of-chain hand-off, which arrives as
+  // streaming -> ready when the woken turn finishes. Don't summon for the cancel.
+  assert.equal(
+    shouldRingForActivityTransition(summary("scheduled"), summary("ready")),
+    false,
+  );
+});
+
+test("shouldRingForActivityTransition: away-error rings (broken self-resume)", () => {
+  // A scheduled/background continuation the orchestrator could not fire while
+  // the session was alive — the agent broke while you were away — rings the
+  // same bell as a normal hand-off, even though ordinary errors stay silent.
+  assert.equal(
+    shouldRingForActivityTransition(summary("scheduled"), summary("error", { away_error: true })),
+    true,
+  );
+  assert.equal(
+    shouldRingForActivityTransition(summary("streaming"), summary("error", { away_error: true })),
+    true,
+  );
+});
+
+test("shouldRingForActivityTransition: ring user-turn set stays exactly {ready, needs_input} (guard)", () => {
+  // Migration guard: the summon set must not silently grow. A new status (e.g.
+  // scheduled) must NOT join the user-turn set — entering any non-{ready,
+  // needs_input} status from working must stay silent. The one separate ring
+  // path is away_error, pinned by its own tests above.
+  const all: ConversationActivityStatus[] = [
+    "ready",
+    "submitted",
+    "claimed",
+    "streaming",
+    "needs_input",
+    "scheduled",
+    "stopping",
+    "stopped",
+    "error",
+  ];
+  for (const next of all) {
+    const rings = shouldRingForActivityTransition(summary("streaming"), summary(next));
+    const expected = next === "ready" || next === "needs_input";
+    assert.equal(rings, expected, `working -> ${next} should ${expected ? "" : "not "}ring`);
+  }
+});
+
+test("shouldRingForActivityTransition: away-error does not re-ring when already error", () => {
+  assert.equal(
+    shouldRingForActivityTransition(
+      summary("error", { away_error: true }),
+      summary("error", { away_error: true }),
+    ),
+    false,
+  );
+});
+
+test("shouldRingForActivityTransition: scheduled -> needs_input rings (woke and asked you)", () => {
+  assert.equal(
+    shouldRingForActivityTransition(summary("scheduled"), summary("needs_input")),
+    true,
+  );
 });

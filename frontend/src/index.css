@@ -104,6 +104,7 @@
   --status-agent-needs-input: #fb923c;
   --status-agent-stopping: #fbbf24;
   --status-agent-stopped: #71717a;
+  --status-agent-scheduled: #c084fc;
   --status-agent-working: var(--status-agent-running);
   --status-agent-waiting: var(--status-agent-ready);
   --skill-test-fg: #bef264;
@@ -2025,6 +2026,7 @@ button:disabled {
 .status-dot.status-agent-needs-input { background: var(--status-agent-needs-input); }
 .status-dot.status-agent-stopping { background: var(--status-agent-stopping); }
 .status-dot.status-agent-stopped { background: var(--status-agent-stopped); }
+.status-dot.status-agent-scheduled { background: var(--status-agent-scheduled); }
 .status-dot.status-agent-error { background: var(--status-error-fg); }
 
 .mode {

@@ -27,6 +27,7 @@ const (
 	BackgroundTaskWakeClaiming  BackgroundTaskWakeStatus = "claiming"
 	BackgroundTaskWakeFired     BackgroundTaskWakeStatus = "fired"
 	BackgroundTaskWakeFailed    BackgroundTaskWakeStatus = "failed"
+	BackgroundTaskWakeCancelled BackgroundTaskWakeStatus = "cancelled"
 )
 
 type BackgroundTaskWake struct {
@@ -279,6 +280,64 @@ func (s *BackgroundTaskWakeStore) DueCount(ctx context.Context, now time.Time) (
 		  AND due_at <= $2
 	`, s.scope, now.UTC()).Scan(&count)
 	return count, err
+}
+
+// HasPending reports whether the session has a registered background-task wake
+// not yet fired or failed — the agent ended a turn but a run_in_background task
+// it spawned has not re-invoked it. Like ScheduledWakeupStore.HasPending, this
+// is durable authority for the non-summoning "scheduled" activity status
+// (docs/scheduled-turn-continuity.md): the agent is parked waiting on its own
+// background work, so the session is mid-(simulated)-turn, not idle.
+func (s *BackgroundTaskWakeStore) HasPending(ctx context.Context, sessionScope, sessionID string) (bool, error) {
+	if s == nil || s.pool == nil {
+		return false, errors.New("background task wake store unavailable")
+	}
+	sessionScope = strings.TrimSpace(sessionScope)
+	if sessionScope == "" {
+		sessionScope = s.scope
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return false, nil
+	}
+	var pending bool
+	err := s.pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM session_background_task_wakes
+			WHERE session_scope = $1
+			  AND session_id = $2
+			  AND status IN ('scheduled', 'claiming')
+		)
+	`, sessionScope, sessionID).Scan(&pending)
+	return pending, err
+}
+
+// CancelPendingForSession marks every still-pending background-task wake for the
+// session 'cancelled', mirroring ScheduledWakeupStore.CancelPendingForSession:
+// it leaves the wake non-pending without the error semantics of 'failed'. Used
+// by the explicit cancel control and the prompt-mid-sleep take-over. Returns the
+// number cancelled.
+func (s *BackgroundTaskWakeStore) CancelPendingForSession(ctx context.Context, sessionScope, sessionID string) (int64, error) {
+	if s == nil || s.pool == nil {
+		return 0, errors.New("background task wake store unavailable")
+	}
+	sessionScope = strings.TrimSpace(sessionScope)
+	if sessionScope == "" {
+		sessionScope = s.scope
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE session_background_task_wakes
+		SET status = 'cancelled', locked_at = NULL, updated_at = now()
+		WHERE session_scope = $1 AND session_id = $2 AND status IN ('scheduled', 'claiming')
+	`, sessionScope, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 type backgroundTaskWakeScanner interface {

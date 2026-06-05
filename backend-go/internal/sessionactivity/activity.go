@@ -22,6 +22,7 @@ type ActivitySummary struct {
 	ActiveTurnID *string `json:"active_turn_id"`
 	NeedsInput   bool    `json:"needs_input"`
 	Failed       bool    `json:"failed"`
+	AwayError    bool    `json:"away_error"`
 	LastOrderKey *string `json:"last_order_key"`
 	UnreadCount  int     `json:"unread_count"`
 	UpdatedAt    *string `json:"updated_at"`
@@ -130,6 +131,13 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 			out.ActiveTurnID = nil
 			out.NeedsInput = false
 			out.Failed = true
+			// A self-resume continuation (ScheduleWakeup / background-task wake)
+			// that fails to fire is an "away error": the agent broke while the
+			// user was not driving, so the projection marks it for the same
+			// turn-complete summon a normal hand-off gets. Ordinary provider or
+			// user-turn failures are not away errors. See
+			// docs/scheduled-turn-continuity.md "The summon invariant".
+			out.AwayError = isAwayErrorReason(terminalReason(event))
 		case "turn.interrupt_requested":
 			// Stop has been requested but the turn is still mid-flight;
 			// keep ActiveTurnID. A late interrupt after a terminal event is
@@ -174,6 +182,12 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 			out.Status = "error"
 		}
 	}
+	// away_error is meaningful only in the error state; clear it once the session
+	// has moved off error so a later genuine "your turn" is not mislabeled as a
+	// broken self-resume.
+	if out.Status != "error" {
+		out.AwayError = false
+	}
 	return out, stats
 }
 
@@ -191,6 +205,9 @@ func ActivitySummariesEqual(a, b ActivitySummary) bool {
 		return false
 	}
 	if a.Failed != b.Failed {
+		return false
+	}
+	if a.AwayError != b.AwayError {
 		return false
 	}
 	if !stringPtrEqual(a.LastOrderKey, b.LastOrderKey) {
@@ -249,6 +266,36 @@ func canTransitionToStopping(status string) bool {
 	default:
 		return false
 	}
+}
+
+// AwayError reasons are the turn-terminal failure reasons that mean a
+// self-managed continuation broke while the user was not driving the session:
+// a ScheduleWakeup timer or a run_in_background wake the orchestrator failed to
+// fire. The orchestrator stamps one of these on the durable turn.command_failed
+// it emits from the wake fire paths (cmd/tank-operator). They ring the same
+// turn-complete bell as a normal hand-off; ordinary provider/user-turn failures
+// do not. See docs/scheduled-turn-continuity.md "The summon invariant".
+const (
+	AwayErrorReasonScheduledWakeup    = "schedule_wakeup_fire_failed"
+	AwayErrorReasonBackgroundTaskWake = "background_task_wake_fire_failed"
+)
+
+func isAwayErrorReason(reason string) bool {
+	switch strings.TrimSpace(reason) {
+	case AwayErrorReasonScheduledWakeup, AwayErrorReasonBackgroundTaskWake:
+		return true
+	default:
+		return false
+	}
+}
+
+func terminalReason(event map[string]any) string {
+	payload, _ := event["payload"].(map[string]any)
+	if payload == nil {
+		return ""
+	}
+	reason, _ := payload["reason"].(string)
+	return strings.TrimSpace(reason)
 }
 
 func stringField(m map[string]any, key string) string {

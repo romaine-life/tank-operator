@@ -12,11 +12,14 @@ import (
 )
 
 type fakeScheduledWakeupStore struct {
-	rows       []pgstore.ScheduledWakeup
-	firedID    string
-	firedTurn  string
-	failedID   string
-	failReason string
+	rows            []pgstore.ScheduledWakeup
+	firedID         string
+	firedTurn       string
+	failedID        string
+	failReason      string
+	cancelCalls     int
+	cancelSessionID string
+	cancelReturn    int64
 }
 
 func (f *fakeScheduledWakeupStore) Register(context.Context, pgstore.RegisterScheduledWakeupRequest) (pgstore.ScheduledWakeup, error) {
@@ -45,6 +48,33 @@ func (f *fakeScheduledWakeupStore) MarkFailed(_ context.Context, wakeupID, reaso
 
 func (f *fakeScheduledWakeupStore) ScheduledDueCount(context.Context, time.Time) (int, error) {
 	return len(f.rows), nil
+}
+
+func (f *fakeScheduledWakeupStore) CancelPendingForSession(_ context.Context, _, sessionID string) (int64, error) {
+	f.cancelCalls++
+	f.cancelSessionID = sessionID
+	return f.cancelReturn, nil
+}
+
+// TestCancelPendingWakesForSession pins the cancel fan-out used by both the
+// explicit cancel control and the prompt-mid-sleep take-over: it cancels pending
+// scheduled-wakeup and background-task wakes for the session and sums the count.
+func TestCancelPendingWakesForSession(t *testing.T) {
+	sched := &fakeScheduledWakeupStore{cancelReturn: 1}
+	bg := &fakeBackgroundTaskWakeStore{cancelReturn: 2}
+	app := &appServer{scheduledWakeups: sched, backgroundTaskWakes: bg, sessionScope: "default"}
+
+	total := app.cancelPendingWakesForSession(context.Background(), "63")
+
+	if total != 3 {
+		t.Fatalf("total cancelled = %d, want 3", total)
+	}
+	if sched.cancelCalls != 1 || sched.cancelSessionID != "63" {
+		t.Fatalf("scheduled cancel = calls %d session %q, want 1 / 63", sched.cancelCalls, sched.cancelSessionID)
+	}
+	if bg.cancelCalls != 1 || bg.cancelSessionID != "63" {
+		t.Fatalf("background cancel = calls %d session %q, want 1 / 63", bg.cancelCalls, bg.cancelSessionID)
+	}
 }
 
 func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {

@@ -1591,6 +1591,20 @@ var schemaMigrations = []migration{
 	)`},
 	{ID: "0131", SQL: `CREATE INDEX IF NOT EXISTS static_page_snapshots_expires_at
 		ON static_page_snapshots (expires_at)`},
+	// Cancel state for self-scheduled work. A user prompt to a parked session
+	// (prompt-mid-sleep take-over) or the explicit cancel control marks pending
+	// wakes 'cancelled' — a terminal that leaves the wake non-pending without the
+	// error semantics of 'failed' (cancel must not ring or paint red). DO block
+	// so the constraint swap is one statement; idempotent via DROP ... IF EXISTS.
+	// See docs/scheduled-turn-continuity.md.
+	{ID: "0132", SQL: `DO $$ BEGIN
+		ALTER TABLE session_scheduled_wakeups DROP CONSTRAINT IF EXISTS session_scheduled_wakeups_status_check;
+		ALTER TABLE session_scheduled_wakeups ADD CONSTRAINT session_scheduled_wakeups_status_check CHECK (status IN ('scheduled', 'claiming', 'fired', 'failed', 'cancelled'));
+	END $$`},
+	{ID: "0133", SQL: `DO $$ BEGIN
+		ALTER TABLE session_background_task_wakes DROP CONSTRAINT IF EXISTS session_background_task_wakes_status_check;
+		ALTER TABLE session_background_task_wakes ADD CONSTRAINT session_background_task_wakes_status_check CHECK (status IN ('scheduled', 'claiming', 'fired', 'failed', 'cancelled'));
+	END $$`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

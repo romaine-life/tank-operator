@@ -1,6 +1,6 @@
 import type { ConversationBackgroundTaskStatus } from "./conversationReducer";
 
-export type ScheduledWakeupStatus = "scheduled" | "claiming" | "fired" | "failed";
+export type ScheduledWakeupStatus = "scheduled" | "claiming" | "fired" | "failed" | "cancelled";
 
 export type ScheduledWakeupRow = {
   wakeup_id?: string;
@@ -52,6 +52,8 @@ export function normalizeScheduledWakeupStatus(status: string | undefined): Sche
       return "fired";
     case "failed":
       return "failed";
+    case "cancelled":
+      return "cancelled";
     default:
       return "scheduled";
   }
@@ -63,6 +65,8 @@ export function scheduledWakeupTaskStatus(status: ScheduledWakeupStatus): Conver
       return "completed";
     case "failed":
       return "failed";
+    case "cancelled":
+      return "stopped";
     case "claiming":
     case "scheduled":
       return "running";
@@ -77,6 +81,8 @@ export function scheduledWakeupStatusLabel(status: ScheduledWakeupStatus): strin
       return "fired";
     case "failed":
       return "failed";
+    case "cancelled":
+      return "cancelled";
     case "scheduled":
       return "scheduled";
   }
