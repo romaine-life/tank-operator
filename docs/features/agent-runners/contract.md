@@ -107,6 +107,11 @@ the rest of the product reconstruct what happened.
 - A turn that emits assistant messages but no usage snapshot is a backend
   accounting/diagnostic regression signature; `tank_runner_turn_usage_emitted_total{kind}`
   counts `snapshot` vs `terminal` usage emissions so the gap is visible.
+- AskUserQuestion answer delivery is counted at the runner/provider boundary:
+  `tank_runner_input_reply_answer_shape_total{shape}` distinguishes selected
+  labels, free-form-only notes, and selected-labels-plus-notes so a durable
+  `turn.input_answered` row with annotations can be compared against what the
+  runner actually normalized for provider delivery.
 - Background-task wakes are counted on both sides so a regression localizes
   between detection, registration, and firing: the runner's
   `tank_runner_background_task_wake_total{result}` and the orchestrator's

@@ -187,8 +187,8 @@ yanking the viewport away from a user reading history.
   `scripts/check-removed-chat-runtime.mjs`.
 - Opening a pending `needs_input` turn lands on the question-set page, not the
   last output page. Multiple questions from one AskUserQuestion invocation stay
-  on the same page, and the surrounding activity pages remain reachable through
-  the page selector.
+  in one answer set but render as adjacent semantic `question_set` pages, and
+  the surrounding activity pages remain reachable through the page selector.
 - The Turns view always shows the dedicated Page dropdown for a selected turn: a
   single-page turn renders it disabled ("Page 1 of 1"); a multi-page turn lists
   Page 1..N and selecting one re-reads that page via `?page=N`. The control is

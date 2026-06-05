@@ -51,6 +51,7 @@ type appServer struct {
 	gitHubInstallStates gitHubInstallStateStore
 	streamAuthTickets   streamAuthTicketStore
 	messageLinkShares   messageLinkShareStore
+	staticPages         staticPageSnapshotStore
 	// streamRegistry tracks every open /api/sessions/{id}/events SSE
 	// handler so the /api/debug/session-event-streams admin endpoint
 	// can surface per-stream wake/page/emit state for diagnosis.
@@ -148,6 +149,11 @@ type streamAuthTicketStore interface {
 type messageLinkShareStore interface {
 	Create(context.Context, pgstore.MessageLinkShare) error
 	Get(context.Context, string) (pgstore.MessageLinkShare, error)
+}
+
+type staticPageSnapshotStore interface {
+	Upsert(context.Context, pgstore.StaticPageSnapshot) error
+	Get(ctx context.Context, scope, sessionID, relPath string) (pgstore.StaticPageSnapshot, error)
 }
 
 type scheduledWakeupStore interface {
@@ -322,6 +328,8 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/files/walk", s.handleWalkFiles)
 	mux.HandleFunc("POST /api/sessions/{session_id}/files/upload", s.handleUploadFile)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/files/content", s.handleWriteFile)
+	mux.HandleFunc("POST /api/sessions/{session_id}/static-pages", s.handleCaptureStaticPage)
+	mux.HandleFunc("GET /api/sessions/{session_id}/static-pages", s.handleGetStaticPage)
 	// Durable staging for an attachment-backed deferred launch (#865): the
 	// bytes land in Postgres keyed by the launch turn id + ordinal, and the
 	// dispatch reconciler writes them into the pod. Unlike files/upload (which

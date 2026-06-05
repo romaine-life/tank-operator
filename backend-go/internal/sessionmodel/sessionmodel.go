@@ -146,6 +146,8 @@ type SessionRecord struct {
 	RuntimeContextWindowTokens     int64
 	RuntimeContextWindowSource     string
 	RuntimeContextWindowObservedAt string
+	ProviderRateLimitInfo          map[string]any
+	ProviderRateLimitObservedAt    string
 
 	// CompactionCount is the durable count of context.compacted events the
 	// runner has recorded for this session. It is a projection over the

@@ -100,6 +100,8 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			sessions.runtime_context_window_tokens,
 			sessions.runtime_context_window_source,
 			COALESCE(to_char(sessions.runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+			sessions.provider_rate_limit_info,
+			COALESCE(to_char(sessions.provider_rate_limit_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS provider_rate_limit_observed_at,
 			sessions.sidebar_position,
 			sessions.row_version,
 			bug_labels.id,
@@ -134,12 +136,14 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			name                                                        *string
 			visible                                                     bool
 			activitySummary, testState, rolloutState, cloneState        []byte
+			providerRateLimitInfo                                       []byte
 			repos, capabilities                                         []string
 			agentAvatarID, systemAvatarID                               string
 			model, effort                                               string
 			runtimeModel, runtimeEffort, runtimeAt                      string
 			runtimeContextWindowTokens                                  int64
 			runtimeContextWindowSource, runtimeContextWindowAt          string
+			providerRateLimitObservedAt                                 string
 			sidebarPosition, rowVersion                                 int64
 			bugLabelID                                                  sql.NullInt64
 			bugLabelName, bugLabelSlug                                  sql.NullString
@@ -152,6 +156,7 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			&repos, &cloneState, &capabilities, &agentAvatarID, &systemAvatarID,
 			&model, &effort, &runtimeModel, &runtimeEffort, &runtimeAt,
 			&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
+			&providerRateLimitInfo, &providerRateLimitObservedAt,
 			&sidebarPosition,
 			&rowVersion,
 			&bugLabelID,
@@ -193,6 +198,8 @@ func fetchSessionRowsAfter(ctx context.Context, pool *pgxpool.Pool, owner, scope
 			RuntimeContextWindowTokens:     runtimeContextWindowTokens,
 			RuntimeContextWindowSource:     runtimeContextWindowSource,
 			RuntimeContextWindowObservedAt: runtimeContextWindowAt,
+			ProviderRateLimitInfo:          unmarshalJSONBField(providerRateLimitInfo),
+			ProviderRateLimitObservedAt:    providerRateLimitObservedAt,
 			SidebarPosition:                sidebarPosition,
 			RowVersion:                     rowVersion,
 			BugLabel:                       bugLabelFromSessionListScan(bugLabelID, bugLabelName, bugLabelSlug),

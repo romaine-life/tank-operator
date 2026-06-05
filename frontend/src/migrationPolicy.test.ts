@@ -210,7 +210,7 @@ test("pending AskUserQuestion opens collapsed tool groups", () => {
   assert.equal(appSource.includes("return autoExpand || isPendingAskUserQuestionTool(entry);"), true);
 });
 
-test("AskUserQuestion handoff button is restored in transcript and answer form is owned by Turns", () => {
+test("AskUserQuestion handoff row is restored in transcript and answer form is owned by Turns", () => {
   const messagesMatch = appSource.match(/export function RunMessages\([\s\S]*?\n}\n\nfunction AdminObservabilityPanel/);
   assert.ok(messagesMatch, "RunMessages source should be present");
   assert.equal(messagesMatch![0].includes("RunAwaitingInputCard"), false);
@@ -229,7 +229,10 @@ test("AskUserQuestion handoff button is restored in transcript and answer form i
   assert.equal(appSource.includes("function RunAwaitingInputNotice"), false);
   assert.equal(appSource.includes("function RunNeedsInputAnnouncement"), true);
   assert.equal(appSource.includes('data-kind="needs-input-announcement"'), true);
-  assert.equal(appSource.includes("Open in Turns"), true);
+  assert.equal(appSource.includes("Answer in Turns"), true);
+  assert.equal(appSource.includes('data-clickable="true"'), true);
+  assert.equal(appSource.includes('data-variant="assistant"'), true);
+  assert.equal(appSource.includes("<SessionAvatarIcon avatar={avatar}"), true);
   assert.equal(appSource.includes("onOpenTurn?.(targetTurnId, { anchor: \"top\", resetPage: true })"), true);
   assert.equal(indexCssSource.includes(".run-needs-input-announcement-copy"), true);
   assert.equal(appSource.includes('data-page-kind={selectedPageInfo?.kind ?? "activity"}'), true);
@@ -343,7 +346,8 @@ test("server-projected active turn activity shells own thinking row active state
   assert.equal(appSource.includes("durableActiveTurnActivityShells"), true);
   assert.equal(appSource.includes('logChatScrollEvent("thinking-row-missing"'), true);
   assert.equal(appSource.includes('active: turnId === (activeTurnId?.trim() ?? "")'), false);
-  assert.equal(appSource.includes("active: turnId === active,"), true);
+  assert.equal(appSource.includes('shellSummary?.status !== "needs_input"'), true);
+  assert.equal(turnActivityStateSource.includes('summary?.status === "needs_input"'), true);
   assert.equal(chatScrollMetricsHandlerSource.includes('"thinking-row-missing"'), true);
 });
 
@@ -368,7 +372,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes("const turnsAvailable = turnViewItems.length > 0"), true);
   assert.equal(appSource.includes("function readSessionRouteFromPath"), true);
   assert.equal(appRoutesSource.includes('url.pathname = `/sessions/${encodedId}${'), true);
-  assert.equal(appRoutesSource.includes('export type SessionRouteTab = "chat" | "turns";'), true);
+  assert.equal(appRoutesSource.includes('export type SessionRouteTab = "chat" | "turns" | "static" | "session-data";'), true);
   assert.equal(appRoutesSource.includes('export type AppRouteTab = "settings" | "help";'), true);
   assert.equal(appRoutesSource.includes("readAppRouteFromPathname"), true);
   assert.equal(appRoutesSource.includes("buildAppRouteUrl"), true);

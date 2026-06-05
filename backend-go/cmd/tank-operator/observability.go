@@ -613,6 +613,14 @@ var messageLinkShareTotal = promauto.NewCounterVec(
 	[]string{"operation", "result"},
 )
 
+var staticPageTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_static_page_total",
+		Help: "Static-page snapshot capture and read attempts, labeled by bounded operation and result.",
+	},
+	[]string{"operation", "result"},
+)
+
 var controlActionEventTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_control_action_events_total",
@@ -719,6 +727,31 @@ func recordMessageLinkShare(operation, result string) {
 		messageLinkShareOperationLabel(operation),
 		messageLinkShareResultLabel(result),
 	).Inc()
+}
+
+func recordStaticPage(operation, result string) {
+	staticPageTotal.WithLabelValues(
+		staticPageOperationLabel(operation),
+		staticPageResultLabel(result),
+	).Inc()
+}
+
+func staticPageOperationLabel(operation string) string {
+	switch operation {
+	case "capture", "read":
+		return operation
+	default:
+		return "unknown"
+	}
+}
+
+func staticPageResultLabel(result string) string {
+	switch result {
+	case "ok", "bad_request", "denied", "not_found", "pod_unavailable", "exec_error", "store_unavailable", "store_error":
+		return result
+	default:
+		return "other"
+	}
 }
 
 func recordControlActionEvent(sourceService, sourceTool, action, status, result string) {

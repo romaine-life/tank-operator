@@ -163,6 +163,12 @@ import {
   type SessionCostEstimate,
 } from "./sessionCostEstimate";
 import {
+  buildSessionDataStatusRows,
+  type StatusTone,
+  type SessionDataStatusId,
+  type SessionDataStatusRow,
+} from "./sessionDataStatus";
+import {
   scheduledWakeupRowsToEntries,
   scheduledWakeupStatusLabel,
   type ScheduledWakeupRow,
@@ -293,6 +299,7 @@ import { shouldGroupTranscriptMessageWithPrevious } from "./transcriptAuthorGrou
 
 const FileCodeViewer = lazy(() => import("./FileCodeViewer"));
 const FileImageViewer = lazy(() => import("./FileImageViewer"));
+const StaticPageView = lazy(() => import("./StaticPageView"));
 const CliProcessTerminal = lazy(() =>
   import("./CliProcessTerminal").then((module) => ({
     default: module.CliProcessTerminal,
@@ -690,6 +697,8 @@ interface Session {
   runtime_context_window_tokens?: number;
   runtime_context_window_source?: string;
   runtime_context_window_observed_at?: string | null;
+  provider_rate_limit_info?: Record<string, unknown> | null;
+  provider_rate_limit_observed_at?: string | null;
   // Durable count of context.compacted events for this session, projected from
   // the session_events ledger onto the row. The composer renders it as the
   // compaction metric; absent/0 means the session has not compacted yet.
@@ -1151,6 +1160,26 @@ function normalizeBugLabel(value: unknown): SessionBugLabel | null {
   };
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeProviderRateLimitInfo(value: unknown): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) return null;
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      if (trimmed) out[key] = trimmed;
+    } else if (typeof raw === "number" && Number.isFinite(raw)) {
+      out[key] = raw;
+    } else if (typeof raw === "boolean") {
+      out[key] = raw;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
   // The backend includes an activity block on GET /api/sessions
@@ -1195,6 +1224,11 @@ function normalizeSession(session: Session): Session {
   next.runtime_context_window_observed_at =
     typeof session.runtime_context_window_observed_at === "string"
       ? session.runtime_context_window_observed_at
+      : null;
+  next.provider_rate_limit_info = normalizeProviderRateLimitInfo(session.provider_rate_limit_info);
+  next.provider_rate_limit_observed_at =
+    typeof session.provider_rate_limit_observed_at === "string"
+      ? session.provider_rate_limit_observed_at
       : null;
   next.agent_avatar_id =
     typeof session.agent_avatar_id === "string" ? session.agent_avatar_id : null;
@@ -1477,8 +1511,8 @@ function readAppRouteFromPath(pathname = window.location.pathname): AppRoute | n
   return readAppRouteFromPathname(pathname);
 }
 
-function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null): string {
-  return buildSessionRouteUrl(window.location.href, id, tab, turnNumber);
+function sessionRouteUrl(id: string, tab: SessionRouteTab = "chat", turnNumber?: number | null, staticPath?: string | null): string {
+  return buildSessionRouteUrl(window.location.href, id, tab, turnNumber, staticPath);
 }
 
 function homeRouteUrl(tab: HomeRouteTab = "chat"): string {
@@ -1526,6 +1560,11 @@ function replaceSessionRoute(id: string, tab: SessionRouteTab = "chat", turnNumb
 
 function replaceSessionTranscriptRoute(id: string): void {
   const next = sessionRouteUrl(id, "chat");
+  if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+function replaceSessionStaticRoute(id: string, staticPath: string): void {
+  const next = sessionRouteUrl(id, "static", null, staticPath);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -1955,6 +1994,10 @@ function BugLabelPicker({
   requestPath,
   onSave,
   allowClear = true,
+  wrapperClassName = "",
+  triggerClassName,
+  iconClassName = "run-composer-icon",
+  triggerContent = null,
 }: {
   value: string;
   activeSlug?: string | null;
@@ -1962,6 +2005,10 @@ function BugLabelPicker({
   requestPath: (path: string) => string;
   onSave: (name: string | null) => Promise<void> | void;
   allowClear?: boolean;
+  wrapperClassName?: string;
+  triggerClassName?: string;
+  iconClassName?: string;
+  triggerContent?: ReactNode;
 }) {
   const [open, setOpen] = useState(false);
   const [labels, setLabels] = useState<BugLabelSuggestion[]>([]);
@@ -2013,6 +2060,9 @@ function BugLabelPicker({
   const currentLabel = value;
   const title = currentLabel ? `Bug label: ${currentLabel}` : "Set bug label";
   const normalizedDraft = draft.trim();
+  const triggerClasses = triggerClassName
+    ? `${triggerClassName}${currentLabel ? " is-active" : ""}`
+    : `run-composer-icon-btn run-bug-label-trigger${currentLabel ? " is-active" : ""}`;
   const save = async (name: string | null) => {
     setSaving(true);
     setError("");
@@ -2027,16 +2077,17 @@ function BugLabelPicker({
   };
 
   return (
-    <span className="run-bug-label-picker">
+    <span className={`run-bug-label-picker${wrapperClassName ? ` ${wrapperClassName}` : ""}`}>
       <button
         type="button"
-        className={`run-composer-icon-btn run-bug-label-trigger${currentLabel ? " is-active" : ""}`}
+        className={triggerClasses}
         aria-label={title}
         title={title}
         disabled={disabled}
         onClick={() => setOpen((value) => !value)}
       >
-        <BugIcon className="run-composer-icon" aria-hidden="true" />
+        <BugIcon className={iconClassName} aria-hidden="true" />
+        {triggerContent}
       </button>
       {open && (
         <div className="run-bug-label-popover">
@@ -3517,7 +3568,7 @@ function isPendingAskUserQuestionTool(entry: TranscriptEntry): boolean {
 // (formerly: transcriptClassNames slot map for AgentTranscript — gone
 // now that the inline RunMessages renderer owns class names directly.)
 
-type RunTab = "chat" | "turns" | "background" | "files" | "settings" | "help";
+type RunTab = "chat" | "turns" | "background" | "files" | "session-data" | "settings" | "help" | "static";
 type BackgroundView = "shells" | "scheduled" | "control" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
 
@@ -6316,6 +6367,7 @@ function RunHeaderOverflowMenu({
   turns,
   background,
   files,
+  sessionData,
   settingsActive,
   helpActive,
   onSettings,
@@ -6326,6 +6378,7 @@ function RunHeaderOverflowMenu({
   turns: RunHeaderMenuTabState;
   background: RunHeaderMenuTabState;
   files: RunHeaderMenuTabState;
+  sessionData: RunHeaderMenuTabState;
   settingsActive: boolean;
   helpActive: boolean;
   onSettings: () => void;
@@ -6403,6 +6456,15 @@ function RunHeaderOverflowMenu({
           />
           <span>Files</span>
         </DropdownMenuItem>
+        <DropdownMenuItem
+          className={`run-tab-more-item${sessionData.active ? " is-active" : ""}`}
+          disabled={sessionData.disabled}
+          onSelect={sessionData.onOpen}
+          title={sessionData.title}
+        >
+          <ClipboardListIcon className="run-tab-more-item-icon" aria-hidden="true" />
+          <span>Session data</span>
+        </DropdownMenuItem>
         <DropdownMenuSeparator className="run-tab-more-separator" />
         <DropdownMenuItem
           className={`run-tab-more-item${settingsActive ? " is-active" : ""}`}
@@ -6427,6 +6489,247 @@ function RunHeaderOverflowMenu({
       </DropdownMenuContent>
     </DropdownMenu>
   );
+}
+
+function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
+  switch (id) {
+    case "test":
+      return <FlaskConicalIcon />;
+    case "context":
+      return <BrainIcon />;
+    case "rollout":
+      return <ArrowUpFromLineIcon />;
+    case "pull_request":
+      return <GitPullRequestIcon />;
+    case "bug_report":
+      return <BugIcon />;
+    case "linked_repo":
+      return <GitBranchIcon />;
+  }
+}
+
+function SessionDataScreen({
+  rows,
+  session,
+  requestPath,
+  onBugLabelSave,
+  readOnly,
+}: {
+  rows: SessionDataStatusRow[];
+  session: Session;
+  requestPath: (path: string) => string;
+  onBugLabelSave: (name: string | null) => Promise<void>;
+  readOnly?: boolean;
+}) {
+  const activeCount = rows.filter((row) => row.tone !== "muted").length;
+  const bugLabel = session.bug_label?.display_name ?? session.bug_label?.name ?? "";
+  return (
+    <div className="run-session-data-screen">
+      <section className="run-session-data-section" aria-labelledby="run-session-data-title">
+        <div className="run-session-data-page-head">
+          <h2 className="run-session-data-title" id="run-session-data-title">Session data</h2>
+          <span className="run-session-data-summary">{activeCount}/{rows.length} active</span>
+        </div>
+        <div className="run-session-data-page-list" aria-label="Session data status">
+          {rows.map((row) => (
+            <div
+              key={row.id}
+              className={`run-session-data-card is-${row.tone}`}
+            >
+              <div className="run-session-data-card-top">
+                <span className="run-session-data-card-icon" aria-hidden="true">
+                  <SessionDataIcon id={row.id} />
+                </span>
+                <span className="run-session-data-card-main">
+                  <span className="run-session-data-card-label">{row.label}</span>
+                  <span className="run-session-data-card-detail">{row.detail}</span>
+                </span>
+                {row.href ? (
+                  <a
+                    className="run-session-data-card-status"
+                    href={row.href}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={row.href}
+                  >
+                    <span>{row.status}</span>
+                    <ExternalLinkIcon aria-hidden="true" />
+                  </a>
+                ) : (
+                  <span className="run-session-data-card-status">{row.status}</span>
+                )}
+              </div>
+              <SessionDataCardDetails
+                row={row}
+                session={session}
+                bugLabel={bugLabel}
+                requestPath={requestPath}
+                onBugLabelSave={onBugLabelSave}
+                readOnly={readOnly}
+              />
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SessionDataCardDetails({
+  row,
+  session,
+  bugLabel,
+  requestPath,
+  onBugLabelSave,
+  readOnly,
+}: {
+  row: SessionDataStatusRow;
+  session: Session;
+  bugLabel: string;
+  requestPath: (path: string) => string;
+  onBugLabelSave: (name: string | null) => Promise<void>;
+  readOnly?: boolean;
+}) {
+  switch (row.id) {
+    case "test":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Slot", session.test_state?.slot_index != null ? String(session.test_state.slot_index) : "Not assigned"],
+            ["URL", session.test_state?.url ? session.test_state.url : "No test environment URL"],
+          ]}
+        />
+      );
+    case "context":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Compactions", String(Math.max(0, Math.floor(session.compaction_count ?? 0)))],
+            ["Window", session.runtime_context_window_tokens ? formatCompactTokens(session.runtime_context_window_tokens) : "Not reported"],
+            ["Source", session.runtime_context_window_source || "Not reported"],
+            ["Observed", formatToolFullTime(session.runtime_context_window_observed_at ?? undefined) || "Not observed"],
+          ]}
+        />
+      );
+    case "rollout":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["State", session.rollout_state?.active ? "Release workflow in progress" : "No active rollout"],
+          ]}
+        />
+      );
+    case "pull_request":
+      return (
+        <SessionDataFacts
+          facts={[
+            ["Link", session.test_state?.pull_request_url ? row.detail : "No pull request linked"],
+          ]}
+        />
+      );
+    case "bug_report":
+      return (
+        <div className="run-session-data-actions">
+          <BugLabelPicker
+            value={bugLabel}
+            activeSlug={session.bug_label?.slug}
+            disabled={readOnly}
+            requestPath={requestPath}
+            onSave={onBugLabelSave}
+            wrapperClassName="run-session-data-bug-picker"
+            triggerClassName="run-session-data-action"
+            iconClassName="run-session-data-action-icon"
+            triggerContent={<span>{bugLabel ? "Change bug" : "Attach bug"}</span>}
+          />
+          {readOnly && (
+            <span className="run-session-data-readonly">Read-only session</span>
+          )}
+        </div>
+      );
+    case "linked_repo":
+      return (
+        <SessionDataRepoList
+          repos={session.repos}
+          cloneState={session.clone_state ?? null}
+        />
+      );
+  }
+}
+
+function SessionDataFacts({ facts }: { facts: Array<[string, string]> }) {
+  return (
+    <dl className="run-session-data-facts">
+      {facts.map(([label, value]) => (
+        <div key={label} className="run-session-data-fact">
+          <dt>{label}</dt>
+          <dd>{value}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function SessionDataRepoList({
+  repos,
+  cloneState,
+}: {
+  repos: string[];
+  cloneState: Record<string, unknown> | null;
+}) {
+  if (repos.length === 0) {
+    return <div className="run-session-data-empty">No repositories are linked to this session.</div>;
+  }
+  return (
+    <div className="run-session-data-repo-list" role="list" aria-label="Linked repositories">
+      {repos.map((repo) => {
+        const clone = sessionDataCloneDisplay(cloneState?.[repo]);
+        return (
+          <div key={repo} className="run-session-data-repo-row" role="listitem">
+            <a
+              className="run-session-data-repo-link"
+              href={`https://github.com/${repo}`}
+              target="_blank"
+              rel="noreferrer"
+            >
+              <GitBranchIcon aria-hidden="true" />
+              <span>{repo}</span>
+              <ExternalLinkIcon aria-hidden="true" />
+            </a>
+            <span className={`run-session-data-repo-state is-${clone.tone}`}>
+              {clone.label}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function sessionDataCloneDisplay(value: unknown): { label: string; tone: StatusTone } {
+  if (value === undefined) return { label: "Selected", tone: "info" };
+  const text = sessionDataCloneText(value);
+  if (/\b(error|failed|failure|fatal|denied|unauthorized|timeout)\b/i.test(text)) {
+    return { label: "Clone issue", tone: "danger" };
+  }
+  if (/\b(pending|running|cloning|checkout|queued|starting)\b/i.test(text)) {
+    return { label: "Syncing", tone: "warning" };
+  }
+  if (/\b(ok|ready|done|success|succeeded|complete|completed|cloned)\b/i.test(text)) {
+    return { label: "Ready", tone: "good" };
+  }
+  return text.trim() ? { label: "Checking", tone: "warning" } : { label: "Selected", tone: "info" };
+}
+
+function sessionDataCloneText(value: unknown): string {
+  if (value == null) return "";
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  if (Array.isArray(value)) return value.map(sessionDataCloneText).join(" ");
+  if (typeof value === "object") {
+    return Object.values(value as Record<string, unknown>).map(sessionDataCloneText).join(" ");
+  }
+  return "";
 }
 
 function BackgroundMeta({
@@ -7109,18 +7412,17 @@ function RunAwaitingInputCard({
   );
 }
 
-// RunNeedsInputAnnouncement restores the AskUserQuestion handoff button that
-// PR #861 removed. The original row read `entry.announcement`; the current
-// durable source is `entry.awaitingInput`, but the transcript behavior remains
-// the same: tell the user the agent is waiting and provide one click into Turns.
+// RunNeedsInputAnnouncement paints turn.awaiting_input as the agent's
+// conversational handoff: execution is paused, but the assistant has stopped
+// speaking and the user owns the next input surface in Turns.
 function RunNeedsInputAnnouncement({
   entry,
-  systemAvatar,
+  avatar,
   onOpenTurn,
   showTimestamps,
 }: {
   entry: TranscriptEntry;
-  systemAvatar: AgentAvatar | null;
+  avatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
   showTimestamps: boolean;
 }) {
@@ -7133,83 +7435,81 @@ function RunNeedsInputAnnouncement({
   });
   const title =
     state === "settled"
-      ? "No longer waiting"
-      : entry.meta?.title ?? (state === "answered" ? "Answered" : "Claude is waiting on you");
+      ? "Input no longer needed"
+      : entry.meta?.title ?? (state === "answered" ? "Input answered" : "I need your input");
   const targetTurnId = awaitingInput?.askingTurnId ?? entry.turnId ?? "";
   const handleOpen = (): void => {
     if (!targetTurnId) return;
     onOpenTurn?.(targetTurnId, { anchor: "top", resetPage: true });
   };
   const navigable = Boolean(targetTurnId && onOpenTurn);
-  const showPrimaryCta = state === "waiting" && navigable;
-  const showSecondaryCta = state !== "waiting" && navigable;
+  const ctaLabel = state === "waiting" ? "Answer in Turns" : "View in Turns";
+  const content = (
+    <>
+      <span className="run-needs-input-announcement-icon" aria-hidden="true">
+        {state === "answered" ? (
+          <CheckIcon size={14} aria-hidden="true" />
+        ) : state === "settled" ? (
+          <MessageSquareOffIcon size={14} aria-hidden="true" />
+        ) : (
+          <MessageSquareIcon size={14} aria-hidden="true" />
+        )}
+      </span>
+      <span className="run-needs-input-announcement-copy" data-slot="message-text">
+        <span className="run-needs-input-announcement-title">{title}</span>
+        {summary && (
+          <span className="run-needs-input-announcement-detail">{summary}</span>
+        )}
+      </span>
+      {navigable && (
+        <span className="run-needs-input-announcement-cta" aria-hidden="true">
+          {ctaLabel}
+        </span>
+      )}
+    </>
+  );
   return (
     <div
       className="run-transcript-message"
       data-slot="message"
-      data-variant="system"
-      data-role="system"
+      data-variant="assistant"
+      data-role="assistant"
       data-kind="needs-input-announcement"
       data-message-id={entry.id}
     >
-      <span className="run-msg-system-avatar" aria-hidden={systemAvatar ? undefined : "true"}>
-        {systemAvatar ? (
-          <AgentAvatarIcon avatar={systemAvatar} className="run-msg-ai-icon" />
-        ) : (
-          <BotIcon size={16} strokeWidth={2.1} />
-        )}
+      <span className="run-msg-ai-avatar" aria-hidden="true">
+        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
       </span>
       <div className="run-needs-input-announcement-body">
-        <div
-          className={`run-needs-input-announcement${
-            state === "answered" ? " run-needs-input-announcement-answered" : ""
-          }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
-          data-slot="message-content"
-          data-state={state}
-          data-answered={answered ? "true" : "false"}
-          role="group"
-          aria-label={title}
-        >
-          <span className="run-needs-input-announcement-icon" aria-hidden="true">
-            {state === "answered" ? (
-              <CheckIcon size={14} aria-hidden="true" />
-            ) : state === "settled" ? (
-              <MessageSquareOffIcon size={14} aria-hidden="true" />
-            ) : (
-              <MessageSquareIcon size={14} aria-hidden="true" />
-            )}
-          </span>
-          <div className="run-needs-input-announcement-copy" data-slot="message-text">
-            <div className="run-needs-input-announcement-title">{title}</div>
-            {summary && (
-              <p className="run-needs-input-announcement-detail">{summary}</p>
-            )}
+        {navigable ? (
+          <button
+            type="button"
+            className={`run-needs-input-announcement${
+              state === "answered" ? " run-needs-input-announcement-answered" : ""
+            }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
+            onClick={handleOpen}
+            data-slot="message-content"
+            data-state={state}
+            data-answered={answered ? "true" : "false"}
+            data-clickable="true"
+            aria-label={state === "waiting" ? "Answer the question in Turns" : "View the question in Turns"}
+          >
+            {content}
+          </button>
+        ) : (
+          <div
+            className={`run-needs-input-announcement${
+              state === "answered" ? " run-needs-input-announcement-answered" : ""
+            }${state === "settled" ? " run-needs-input-announcement-settled" : ""}`}
+            data-slot="message-content"
+            data-state={state}
+            data-answered={answered ? "true" : "false"}
+            role="group"
+            aria-label={title}
+          >
+            {content}
           </div>
-          {showPrimaryCta && (
-            <button
-              type="button"
-              className="run-needs-input-announcement-cta"
-              onClick={handleOpen}
-              aria-label="Open the question in Turns"
-            >
-              Open in Turns
-            </button>
-          )}
-          {showSecondaryCta && (
-            <button
-              type="button"
-              className="run-needs-input-announcement-cta run-needs-input-announcement-cta-secondary"
-              onClick={handleOpen}
-              aria-label={
-                state === "answered"
-                  ? "View answered question in Turns"
-                  : "View the question in Turns"
-              }
-            >
-              View in Turns
-            </button>
-          )}
-        </div>
+        )}
         {showTimestamps && entry.time && (
           <div className="run-msg-footer" data-always-visible="">
             <div className="run-msg-timings">
@@ -7876,7 +8176,9 @@ function buildTurnViewItems(
         summary: shell ? turnActivityShellSummary(shellSummary) : turnActivitySummary(turnEntries),
         entries: turnEntries,
         shell,
-        active: turnId === active,
+        active:
+          turnActivityShellIsDurablyActive(shellSummary) ||
+          (turnId === active && shellSummary?.status !== "needs_input"),
         loaded: Boolean(loadedEntries),
         costEstimate: estimateTurnCost(costRows, modelId, turnId),
         contextTokens: estimateTurnContextTokens(costRows, contextWindow, turnId),
@@ -8350,7 +8652,7 @@ function RunTurnActivityGroup({
                       <RunNeedsInputAnnouncement
                         key={child.entry.id}
                         entry={child.entry}
-                        systemAvatar={systemAvatar}
+                        avatar={avatar}
                         onOpenTurn={onOpenTurn}
                         showTimestamps={showTimestamps}
                       />
@@ -9233,7 +9535,7 @@ export function RunMessages({
           return (
             <RunNeedsInputAnnouncement
               entry={g.entry}
-              systemAvatar={systemAvatar}
+              avatar={avatar}
               onOpenTurn={onOpenTurn}
               showTimestamps={showTimestamps}
             />
@@ -9525,7 +9827,68 @@ function formatMetricCount(value: number): string {
   return value.toFixed(value < 1 ? 2 : 1).replace(/\.0$/, "");
 }
 
+const PROVIDER_RATE_LIMIT_LABELS: Record<string, string> = {
+  provider: "Provider",
+  status: "Status",
+  rateLimitType: "Type",
+  resetsAt: "Resets",
+  utilization: "Utilization",
+  overageStatus: "Overage",
+  overageResetsAt: "Overage reset",
+  overageDisabledReason: "Overage disabled",
+  isUsingOverage: "Using overage",
+  surpassedThreshold: "Threshold",
+  uuid: "Event",
+  session_id: "SDK session",
+};
+
+const PROVIDER_RATE_LIMIT_ORDER = [
+  "provider",
+  "status",
+  "rateLimitType",
+  "resetsAt",
+  "utilization",
+  "overageStatus",
+  "overageResetsAt",
+  "overageDisabledReason",
+  "isUsingOverage",
+  "surpassedThreshold",
+  "uuid",
+  "session_id",
+];
+
+function formatProviderRateLimitValue(key: string, value: unknown): string {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (key === "resetsAt" || key === "overageResetsAt") {
+      const ms = value > 1_000_000_000_000 ? value : value * 1000;
+      return formatToolFullTime(new Date(ms).toISOString());
+    }
+    return formatMetricCount(value);
+  }
+  if (typeof value === "string") {
+    if (key === "resetsAt" || key === "overageResetsAt") {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return formatToolFullTime(new Date(parsed).toISOString());
+    }
+    return value;
+  }
+  return "";
+}
+
+function providerRateLimitRows(session?: Session): Array<{ key: string; label: string; value: string }> {
+  const info = session?.provider_rate_limit_info;
+  if (!info) return [];
+  const rows: Array<{ key: string; label: string; value: string }> = [];
+  for (const key of PROVIDER_RATE_LIMIT_ORDER) {
+    const value = formatProviderRateLimitValue(key, info[key]);
+    if (value) rows.push({ key, label: PROVIDER_RATE_LIMIT_LABELS[key] ?? key, value });
+  }
+  return rows;
+}
+
 function RunSettingsPanel({
+  session,
   runPrefs,
   setRunPref,
   soundControlId,
@@ -9540,6 +9903,7 @@ function RunSettingsPanel({
   adminView: routedAdminView,
   onSettingsRouteChange,
 }: {
+  session?: Session;
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   soundControlId: string;
@@ -9593,6 +9957,7 @@ function RunSettingsPanel({
     adminControls?.observability.summary ?? null,
     adminControls?.observability.error ?? null,
   );
+  const rateLimitRows = providerRateLimitRows(session);
 
   return (
     <div className={settingsScreenClassName}>
@@ -9774,6 +10139,29 @@ function RunSettingsPanel({
               </div>
               <SessionListDebugCaptureControls source="SettingsAdmin" />
             </div>
+            {rateLimitRows.length > 0 && (
+              <div className="run-settings-rate-limit">
+                <div className="run-settings-diagnostics-head">
+                  <span className="run-settings-link-label">
+                    <TimerIcon className="run-settings-link-icon" aria-hidden="true" />
+                    <span>Rate limit info</span>
+                  </span>
+                  {session?.provider_rate_limit_observed_at && (
+                    <span className="run-settings-scope-value">
+                      {formatToolFullTime(session.provider_rate_limit_observed_at)}
+                    </span>
+                  )}
+                </div>
+                <div className="run-settings-rate-limit-grid">
+                  {rateLimitRows.map((row) => (
+                    <div className="run-settings-rate-limit-row" key={row.key}>
+                      <span>{row.label}</span>
+                      <span>{row.value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
           <section className="run-settings-section">
             <h2 className="run-settings-title">Useful files</h2>
@@ -10103,7 +10491,9 @@ function ChatPane({
   const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
   const initialRunRoute =
     initialSessionRoute?.sessionId === session.id ? initialSessionRoute : null;
-  const [activeTab, setActiveTab] = useState<RunTab>(initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat");
+  const [activeTab, setActiveTab] = useState<RunTab>(
+    initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat",
+  );
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
     initialAppRoute?.tab === "settings" ? initialAppRoute.settingsTab : "preferences",
   );
@@ -10281,6 +10671,12 @@ function ChatPane({
   const [filesError, setFilesError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
   const [selectedFileLine, setSelectedFileLine] = useState<number | null>(null);
+  // Path of the HTML file currently rendered full-page in the "static" tab
+  // (the sandboxed-iframe page view). Captured at click time so the render is
+  // stable even if the files browser selection later changes.
+  const [staticPagePath, setStaticPagePath] = useState<string | null>(
+    initialRunRoute?.tab === "static" ? initialRunRoute.staticPath : null,
+  );
   const [fileContentLoading, setFileContentLoading] = useState(false);
   const [fileRawImageUrl, setFileRawImageUrl] = useState<string | null>(null);
   const [fileRawImageLoading, setFileRawImageLoading] = useState(false);
@@ -11278,6 +11674,19 @@ function ChatPane({
       setPendingRouteTurnNumber(route.turnNumber);
       setRouteTurnUnavailable(route.turnSegmentPresent && route.turnNumber == null);
       setPendingTurnViewRouteAnchor("bottom");
+      return;
+    }
+    if (route.tab === "static" && route.staticPath) {
+      setStaticPagePath(route.staticPath);
+      setActiveTab("static");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      return;
+    }
+    if (route.tab === "session-data") {
+      setActiveTab("session-data");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
       return;
     }
     setActiveTab("chat");
@@ -13009,6 +13418,26 @@ function ChatPane({
     onSessionPatch(session.id, { test_state: null, rollout_state: nextState });
   }
 
+  async function saveSessionBugLabel(name: string | null): Promise<void> {
+    const res = await authedFetch(scopedSessionPathForPane(`/api/sessions/${session.id}/bug-label`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      let detail = `bug label update failed: ${res.status}`;
+      try {
+        const body = await res.json();
+        if (typeof body?.detail === "string") detail = body.detail;
+      } catch {
+        // Keep the status-only detail when the response is not JSON.
+      }
+      throw new Error(detail);
+    }
+    const updated: Session = normalizeSession(await res.json());
+    onSessionPatch(session.id, { bug_label: updated.bug_label ?? null });
+  }
+
   function startTestSkill() {
     if (session.status !== "Active") return;
     const promptText = getComposerValue().trim();
@@ -13600,6 +14029,8 @@ function ChatPane({
       replaceAppRoute("settings", settingsTab, adminView);
     } else if (activeTab === "help") {
       replaceAppRoute("help");
+    } else if (activeTab === "session-data") {
+      replaceSessionRoute(session.id, "session-data");
     } else {
       replaceSessionRoute(session.id, "chat");
     }
@@ -13867,6 +14298,14 @@ function ChatPane({
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
   const pullRequestURL = testState?.pull_request_url?.trim() || "";
+  const sessionDataRows = useMemo(
+    () => buildSessionDataStatusRows({
+      ...session,
+      test_state: testState,
+      rollout_state: rolloutState,
+    }),
+    [session, testState, rolloutState],
+  );
   const appliedEffortId = (session.runtime_effort ?? "").trim();
   const hasAppliedRuntimeConfig = Boolean(session.runtime_configured_at);
   const configuredModelLabel =
@@ -14233,6 +14672,12 @@ function ChatPane({
                 title: filesTabTitle,
                 onOpen: () => toggleRunTab("files"),
               }}
+              sessionData={{
+                active: activeTab === "session-data",
+                disabled: false,
+                title: "Session data",
+                onOpen: () => toggleRunTab("session-data"),
+              }}
               settingsActive={activeTab === "settings"}
               helpActive={activeTab === "help"}
               onSettings={() => toggleRunTab("settings")}
@@ -14424,6 +14869,20 @@ function ChatPane({
                         {selectedFileLine ? `:${selectedFileLine}` : ""}
                       </span>
                       <div className="run-files-viewer-actions">
+                        {/\.html?$/i.test(selectedFile.path) && (
+                          <button
+                            type="button"
+                            className="run-files-viewer-btn"
+                            title="Render this HTML file as a sandboxed page"
+                            onClick={() => {
+                              setStaticPagePath(selectedFile.path);
+                              setActiveTab("static");
+                              replaceSessionStaticRoute(session.id, selectedFile.path);
+                            }}
+                          >
+                            Open as page
+                          </button>
+                        )}
                         {fileDraft != null && fileDraft !== selectedFile.text && (
                           <>
                             <button
@@ -14603,8 +15062,17 @@ function ChatPane({
             canStopEntry={canStopBackgroundEntry}
             onStop={stopBackgroundActivity}
           />
+        ) : activeTab === "session-data" ? (
+          <SessionDataScreen
+            rows={sessionDataRows}
+            session={session}
+            requestPath={scopedSessionPathForPane}
+            onBugLabelSave={saveSessionBugLabel}
+            readOnly={readOnly}
+          />
         ) : activeTab === "settings" ? (
           <RunSettingsPanel
+            session={session}
             runPrefs={runPrefs}
             setRunPref={setRunPref}
             soundControlId={`turn-sound-volume-${session.id}`}
@@ -14621,6 +15089,28 @@ function ChatPane({
           />
         ) : activeTab === "help" ? (
           <RunHelpScreen />
+        ) : activeTab === "static" ? (
+          staticPagePath ? (
+            <Suspense fallback={(
+              <div className="run-files-status">
+                <Loader2Icon size={14} className="run-spin" aria-hidden="true" />
+                <span>Loading…</span>
+              </div>
+            )}>
+              <StaticPageView
+                sessionId={session.id}
+                path={staticPagePath}
+                onClose={() => {
+                  setActiveTab("files");
+                  replaceSessionTranscriptRoute(session.id);
+                }}
+              />
+            </Suspense>
+          ) : (
+            <div className="run-empty run-transcript-state" role="status">
+              <span>No page selected.</span>
+            </div>
+          )
         ) : timelineBootstrap.status === "error" ? (
           <div className="run-empty run-transcript-state" role="alert">
             <strong>Conversation failed to load</strong>
@@ -16298,6 +16788,8 @@ function AuthenticatedApp() {
       runtime_context_window_tokens: row.runtime_context_window_tokens ?? 0,
       runtime_context_window_source: row.runtime_context_window_source ?? "",
       runtime_context_window_observed_at: row.runtime_context_window_observed_at ?? null,
+      provider_rate_limit_info: normalizeProviderRateLimitInfo(row.provider_rate_limit_info),
+      provider_rate_limit_observed_at: row.provider_rate_limit_observed_at ?? null,
       compaction_count: row.compaction_count ?? 0,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
@@ -16352,6 +16844,11 @@ function AuthenticatedApp() {
       runtime_context_window_observed_at:
         typeof raw.runtime_context_window_observed_at === "string"
           ? raw.runtime_context_window_observed_at
+          : undefined,
+      provider_rate_limit_info: normalizeProviderRateLimitInfo(raw.provider_rate_limit_info) ?? undefined,
+      provider_rate_limit_observed_at:
+        typeof raw.provider_rate_limit_observed_at === "string"
+          ? raw.provider_rate_limit_observed_at
           : undefined,
       compaction_count:
         typeof raw.compaction_count === "number" && Number.isFinite(raw.compaction_count)
@@ -17973,6 +18470,12 @@ function AuthenticatedApp() {
                   active: false,
                   disabled: true,
                   title: "Files are available once the session starts",
+                  onOpen: () => undefined,
+                }}
+                sessionData={{
+                  active: false,
+                  disabled: true,
+                  title: "Session data is available once the session starts",
                   onOpen: () => undefined,
                 }}
                 settingsActive={homeActiveTab === "settings"}

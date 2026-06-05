@@ -76,10 +76,11 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 	}
 
 	var body struct {
-		Model               string `json:"model"`
-		Effort              string `json:"effort"`
-		ContextWindowTokens int64  `json:"context_window_tokens"`
-		ContextWindowSource string `json:"context_window_source"`
+		Model                 string         `json:"model"`
+		Effort                string         `json:"effort"`
+		ContextWindowTokens   int64          `json:"context_window_tokens"`
+		ContextWindowSource   string         `json:"context_window_source"`
+		ProviderRateLimitInfo map[string]any `json:"provider_rate_limit_info"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		recordSessionRuntimeConfigUpdate("unknown", "bad_request")
@@ -162,8 +163,63 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 	} else {
 		recordSessionContextWindowReport(provider, body.ContextWindowSource, "ignored")
 	}
+	if rateLimitInfo := sanitizeProviderRateLimitInfo(body.ProviderRateLimitInfo); len(rateLimitInfo) > 0 {
+		updated, err = s.mgr.SetProviderRateLimitInfo(r.Context(), caller.Email, sessionID, rateLimitInfo)
+		if err != nil {
+			if errors.Is(err, sessions.ErrNotFound) {
+				recordSessionRuntimeConfigUpdate(provider, "not_found")
+				writeError(w, http.StatusNotFound, "session not found")
+				return
+			}
+			recordSessionRuntimeConfigUpdate(provider, "update_failed")
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
 	recordSessionRuntimeConfigUpdate(provider, "ok")
 	writeJSON(w, http.StatusOK, updated)
+}
+
+func sanitizeProviderRateLimitInfo(input map[string]any) map[string]any {
+	if len(input) == 0 {
+		return nil
+	}
+	allowed := map[string]struct{}{
+		"provider":              {},
+		"status":                {},
+		"rateLimitType":         {},
+		"resetsAt":              {},
+		"utilization":           {},
+		"overageStatus":         {},
+		"overageResetsAt":       {},
+		"overageDisabledReason": {},
+		"isUsingOverage":        {},
+		"surpassedThreshold":    {},
+		"uuid":                  {},
+		"session_id":            {},
+	}
+	out := make(map[string]any, len(input))
+	for key, value := range input {
+		key = strings.TrimSpace(key)
+		if _, ok := allowed[key]; !ok {
+			continue
+		}
+		switch v := value.(type) {
+		case string:
+			v = strings.TrimSpace(v)
+			if v != "" {
+				if len(v) > 512 {
+					v = v[:512]
+				}
+				out[key] = v
+			}
+		case float64:
+			out[key] = v
+		case bool:
+			out[key] = v
+		}
+	}
+	return out
 }
 
 func (s *appServer) requireInternalSessionPodCaller(w http.ResponseWriter, r *http.Request) (internalSessionPodCaller, bool) {

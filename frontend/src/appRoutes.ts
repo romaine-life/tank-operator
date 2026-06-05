@@ -1,6 +1,6 @@
 export type SettingsTab = "preferences" | "admin";
 export type AdminView = "controls" | "avatars" | "report" | "observability";
-export type SessionRouteTab = "chat" | "turns";
+export type SessionRouteTab = "chat" | "turns" | "static" | "session-data";
 export type HomeRouteTab = "chat";
 export type AppRouteTab = "settings" | "help";
 
@@ -20,6 +20,9 @@ export type SessionRoute = SettingsRoute & {
   // defaulting to the latest turn.
   turnNumber: number | null;
   turnSegmentPresent: boolean;
+  // Workspace-relative path of the HTML file to render full-page in the
+  // sandboxed "static" view. Non-null only when tab === "static".
+  staticPath: string | null;
 };
 
 export type HomeRoute = SettingsRoute & {
@@ -92,6 +95,7 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       tab: "chat",
       turnNumber: null,
       turnSegmentPresent: false,
+      staticPath: null,
       ...defaultSettingsRoute,
     };
   }
@@ -102,6 +106,32 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       tab: "turns",
       turnNumber: parseTurnNumber(segment),
       turnSegmentPresent: segment !== "",
+      staticPath: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "static" && parts.length >= 4) {
+    // Everything after /static/ is the workspace-relative file path. Reject any
+    // `..` segment so a bookmarked link can't escape the workspace (the backend
+    // re-validates with safeWorkspacePath too).
+    const rel = parts.slice(3).join("/");
+    if (!rel || rel.split("/").some((seg) => seg === "..")) return null;
+    return {
+      sessionId: parts[1],
+      tab: "static",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      staticPath: rel,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "session-data" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "session-data",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      staticPath: null,
       ...defaultSettingsRoute,
     };
   }
@@ -137,14 +167,19 @@ export function buildSessionRouteUrl(
   id: string,
   tab: SessionRouteTab = "chat",
   turnNumber?: number | null,
+  staticPath?: string | null,
 ): string {
   const url = new URL(currentHref);
   const encodedId = encodeURIComponent(id);
-  url.pathname = `/sessions/${encodedId}${
-    tab === "turns"
-      ? `/turns${turnNumber != null ? `/${turnNumber}` : ""}`
-      : ""
-  }`;
+  let suffix = "";
+  if (tab === "turns") {
+    suffix = `/turns${turnNumber != null ? `/${turnNumber}` : ""}`;
+  } else if (tab === "static" && staticPath) {
+    suffix = `/static/${staticPath.split("/").map(encodeURIComponent).join("/")}`;
+  } else if (tab === "session-data") {
+    suffix = "/session-data";
+  }
+  url.pathname = `/sessions/${encodedId}${suffix}`;
   url.search = "";
   url.hash = "";
   return url.toString();

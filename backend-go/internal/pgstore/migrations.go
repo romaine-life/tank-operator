@@ -1415,17 +1415,193 @@ var schemaMigrations = []migration{
 	{ID: "0126", SQL: `CREATE INDEX IF NOT EXISTS session_events_context_compacted
 		ON session_events (tank_session_id)
 		WHERE event_type = 'context.compacted'`},
+	// Startup session.status events remain durable session_events, but they are
+	// no longer transcript rows. Migration 0061's trigger function inserted
+	// `Session is loading.` / `Session is ready.` directly into
+	// session_transcript_rows, bypassing the server projection that now folds
+	// those notices into the owning turn's Turn activity. Replace the function
+	// forward, delete the stale direct rows, and leave failed startup banners
+	// promoted because a failed session may never produce a turn event that can
+	// invoke the materializer.
+	{ID: "0127", SQL: `CREATE OR REPLACE FUNCTION tank_upsert_session_status_event(
+		p_email text,
+		p_scope text,
+		p_session_id text,
+		p_status_key text,
+		p_text text,
+		p_session_status text,
+		p_occurred_at timestamptz,
+		p_reason text DEFAULT NULL
+	) RETURNS void
+	LANGUAGE plpgsql
+	AS $$
+	DECLARE
+		v_storage_key text;
+		v_event_id text;
+		v_event_time timestamptz;
+		v_event_iso text;
+		v_order_key text;
+		v_status_sequence text;
+		v_doc jsonb;
+	BEGIN
+		IF trim(coalesce(p_session_id, '')) = ''
+			OR trim(coalesce(p_status_key, '')) = ''
+			OR trim(coalesce(p_text, '')) = '' THEN
+			RETURN;
+		END IF;
+
+		v_event_time := coalesce(p_occurred_at, now());
+		v_storage_key := CASE
+			WHEN trim(coalesce(p_scope, '')) = '' OR trim(p_scope) = 'default' THEN trim(p_session_id)
+			ELSE trim(p_scope) || ':' || trim(p_session_id)
+		END;
+		v_event_id := 'session:' || trim(p_session_id) || ':status:' || trim(p_status_key);
+		v_event_iso := to_char(v_event_time AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"');
+		v_status_sequence := CASE trim(p_status_key)
+			WHEN 'loading' THEN '00000000'
+			WHEN 'ready' THEN '00000001'
+			WHEN 'failed' THEN '00000002'
+			ELSE '00000099'
+		END;
+		v_order_key := lpad((floor(extract(epoch FROM v_event_time) * 1000)::bigint)::text, 13, '0')
+			|| '-' || v_status_sequence || '-' || v_event_id;
+
+		v_doc := jsonb_build_object(
+			'event_id', v_event_id,
+			'uuid', v_event_id,
+			'id', v_event_id,
+			'order_key', v_order_key,
+			'conversation_id', trim(p_session_id),
+			'session_id', trim(p_session_id),
+			'tank_session_id', v_storage_key,
+			'timeline_id', v_event_id,
+			'email', trim(coalesce(p_email, '')),
+			'actor', 'system',
+			'source', 'tank',
+			'type', 'session.status',
+			'created_at', v_event_iso,
+			'written_at', v_event_iso,
+			'producer', jsonb_build_object('name', 'tank-operator'),
+			'visibility', 'durable',
+			'payload', jsonb_strip_nulls(jsonb_build_object(
+				'status', trim(p_status_key),
+				'text', trim(p_text),
+				'session_status', nullif(trim(coalesce(p_session_status, '')), ''),
+				'reason', nullif(trim(coalesce(p_reason, '')), '')
+			))
+		);
+
+		IF trim(coalesce(p_email, '')) = '' THEN
+			v_doc := v_doc - 'email';
+		END IF;
+
+		DELETE FROM session_events AS se
+		WHERE se.tank_session_id = v_storage_key
+		  AND se.event_id = v_event_id
+		  AND se.order_key <> v_order_key;
+
+		INSERT INTO session_events (
+			tank_session_id, order_key, event_id, turn_id, event_type, payload
+		) VALUES (
+			v_storage_key, v_order_key, v_event_id, NULL, 'session.status', v_doc
+		)
+		ON CONFLICT (tank_session_id, order_key) DO UPDATE
+		SET event_id = EXCLUDED.event_id,
+			turn_id = EXCLUDED.turn_id,
+			event_type = EXCLUDED.event_type,
+			payload = EXCLUDED.payload;
+
+		IF trim(p_status_key) IN ('loading', 'ready') THEN
+			DELETE FROM session_transcript_rows
+			WHERE tank_session_id = v_storage_key
+			  AND source_event_id = v_event_id;
+			RETURN;
+		END IF;
+
+		INSERT INTO session_transcript_rows (
+			tank_session_id, row_cursor, row_id, row_kind, turn_id,
+			start_order_key, end_order_key, source_event_id, payload, updated_at
+		) VALUES (
+			v_storage_key,
+			v_order_key || chr(31) || v_event_id,
+			v_event_id,
+			'message',
+			NULL,
+			v_order_key,
+			v_order_key,
+			v_event_id,
+			jsonb_build_object(
+				'id', v_event_id,
+				'kind', 'message',
+				'role', 'system',
+				'text', trim(p_text),
+				'time', v_event_iso,
+				'orderKey', v_order_key,
+				'sourceEventId', v_event_id,
+				'severity', CASE trim(p_status_key)
+					WHEN 'failed' THEN 'error'
+					ELSE 'info'
+				END
+			),
+			now()
+		)
+		ON CONFLICT (tank_session_id, row_id) DO UPDATE
+		SET row_cursor = EXCLUDED.row_cursor,
+			row_kind = EXCLUDED.row_kind,
+			turn_id = EXCLUDED.turn_id,
+			start_order_key = EXCLUDED.start_order_key,
+			end_order_key = EXCLUDED.end_order_key,
+			source_event_id = EXCLUDED.source_event_id,
+			payload = EXCLUDED.payload,
+			updated_at = now();
+	END
+	$$;
+
+	DELETE FROM session_transcript_rows AS tr
+	USING session_events AS se
+	WHERE tr.tank_session_id = se.tank_session_id
+	  AND tr.source_event_id = se.event_id
+	  AND se.event_type = 'session.status'
+	  AND coalesce(se.payload -> 'payload' ->> 'status', '') IN ('loading', 'ready')
+	  AND coalesce(se.payload ->> 'timeline_id', '') NOT LIKE '%:provider:%'`},
+	// Latest provider rate-limit metadata reported by agent-runner. This keeps
+	// the admin UI tied to the provider's own rate_limit_event payload instead
+	// of forcing admins to infer current overage/retry state from transcript
+	// failures alone.
+	{ID: "0128", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS provider_rate_limit_info jsonb`},
+	{ID: "0129", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS provider_rate_limit_observed_at timestamptz`},
+
+	// static_page_snapshots — durable, time-boxed copies of agent-authored HTML
+	// files rendered as sandboxed pages. The session pod is ephemeral; the
+	// snapshot lets a rendered page (and a future shareable link) outlive the
+	// pod for its TTL. Keyed by (scope, session, path); opening a page recaptures.
+	{ID: "0130", SQL: `CREATE TABLE IF NOT EXISTS static_page_snapshots (
+		session_scope   text NOT NULL,
+		session_id      text NOT NULL,
+		rel_path        text NOT NULL,
+		owner_email     text NOT NULL,
+		content_type    text NOT NULL,
+		bytes           bytea NOT NULL,
+		byte_size       integer NOT NULL,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		expires_at      timestamptz NOT NULL,
+		PRIMARY KEY (session_scope, session_id, rel_path)
+	)`},
+	{ID: "0131", SQL: `CREATE INDEX IF NOT EXISTS static_page_snapshots_expires_at
+		ON static_page_snapshots (expires_at)`},
 	// Cancel state for self-scheduled work. A user prompt to a parked session
 	// (prompt-mid-sleep take-over) or the explicit cancel control marks pending
 	// wakes 'cancelled' — a terminal that leaves the wake non-pending without the
 	// error semantics of 'failed' (cancel must not ring or paint red). DO block
 	// so the constraint swap is one statement; idempotent via DROP ... IF EXISTS.
 	// See docs/scheduled-turn-continuity.md.
-	{ID: "0127", SQL: `DO $$ BEGIN
+	{ID: "0132", SQL: `DO $$ BEGIN
 		ALTER TABLE session_scheduled_wakeups DROP CONSTRAINT IF EXISTS session_scheduled_wakeups_status_check;
 		ALTER TABLE session_scheduled_wakeups ADD CONSTRAINT session_scheduled_wakeups_status_check CHECK (status IN ('scheduled', 'claiming', 'fired', 'failed', 'cancelled'));
 	END $$`},
-	{ID: "0128", SQL: `DO $$ BEGIN
+	{ID: "0133", SQL: `DO $$ BEGIN
 		ALTER TABLE session_background_task_wakes DROP CONSTRAINT IF EXISTS session_background_task_wakes_status_check;
 		ALTER TABLE session_background_task_wakes ADD CONSTRAINT session_background_task_wakes_status_check CHECK (status IN ('scheduled', 'claiming', 'fired', 'failed', 'cancelled'));
 	END $$`},

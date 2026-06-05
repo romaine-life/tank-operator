@@ -10,12 +10,13 @@ import {
   readSessionRouteFromPathname,
 } from "./appRoutes";
 
-test("session routes parse only session-scoped chat and turns pages", () => {
+test("session routes parse only session-scoped pages", () => {
   assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1"), {
     sessionId: "s-1",
     tab: "chat",
     turnNumber: null,
     turnSegmentPresent: false,
+    staticPath: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -24,6 +25,7 @@ test("session routes parse only session-scoped chat and turns pages", () => {
     tab: "turns",
     turnNumber: 3,
     turnSegmentPresent: true,
+    staticPath: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -33,6 +35,7 @@ test("session routes parse only session-scoped chat and turns pages", () => {
     tab: "turns",
     turnNumber: null,
     turnSegmentPresent: false,
+    staticPath: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
@@ -45,15 +48,60 @@ test("session routes parse only session-scoped chat and turns pages", () => {
     tab: "turns",
     turnNumber: null,
     turnSegmentPresent: true,
+    staticPath: null,
     settingsTab: "preferences",
     adminView: "controls",
   });
   // Leading-zero / signed / decimal segments are not valid turn numbers.
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/turns/01")?.turnNumber, null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/turns/-1")?.turnNumber, null);
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/session-data"), {
+    sessionId: "s-1",
+    tab: "session-data",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    staticPath: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  assert.equal(readSessionRouteFromPathname("/sessions/s-1/session-data/extra"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/settings"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/settings/admin/observability"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/help"), null);
+});
+
+test("session routes parse the sandboxed static-page subroute", () => {
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/static/diagram.html"), {
+    sessionId: "s-1",
+    tab: "static",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    staticPath: "diagram.html",
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  // Nested workspace paths keep their slashes.
+  assert.equal(
+    readSessionRouteFromPathname("/sessions/s-1/static/out/report.html")?.staticPath,
+    "out/report.html",
+  );
+  // A `..` segment is rejected so the link can't escape the workspace.
+  assert.equal(readSessionRouteFromPathname("/sessions/s-1/static/../etc/passwd"), null);
+  // Bare /static with no path is not a valid target.
+  assert.equal(readSessionRouteFromPathname("/sessions/s-1/static"), null);
+});
+
+test("static page route urls embed the workspace path per segment", () => {
+  const current = "https://tank.example.test/sessions/s-1";
+  assert.equal(
+    buildSessionRouteUrl(current, "s-1", "static", null, "out/report.html"),
+    "https://tank.example.test/sessions/s-1/static/out/report.html",
+  );
+  // Spaces in a segment are percent-encoded; path separators are preserved.
+  assert.equal(
+    buildSessionRouteUrl(current, "s-1", "static", null, "my diagram.html"),
+    "https://tank.example.test/sessions/s-1/static/my%20diagram.html",
+  );
 });
 
 test("session route urls broadcast only session-owned pages", () => {
@@ -70,6 +118,10 @@ test("session route urls broadcast only session-owned pages", () => {
   assert.equal(
     buildSessionRouteUrl(current, "s 1", "turns"),
     "https://tank.example.test/sessions/s%201/turns",
+  );
+  assert.equal(
+    buildSessionRouteUrl(current, "s 1", "session-data"),
+    "https://tank.example.test/sessions/s%201/session-data",
   );
 });
 

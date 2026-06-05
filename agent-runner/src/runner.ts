@@ -62,6 +62,7 @@ import {
   backgroundTaskWakeTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
+  inputReplyAnswerShapeTotal,
   interruptOutcomeTotal,
   natsPublishFailureTotal,
   optionsOverrideIgnoredTotal,
@@ -271,6 +272,48 @@ function isClaudeRateLimitEvent(message: ClaudeProviderEvent): boolean {
   return message.type === "rate_limit_event";
 }
 
+const CLAUDE_RATE_LIMIT_INFO_KEYS = [
+  "provider",
+  "status",
+  "rateLimitType",
+  "resetsAt",
+  "utilization",
+  "overageStatus",
+  "overageResetsAt",
+  "overageDisabledReason",
+  "isUsingOverage",
+  "surpassedThreshold",
+  "uuid",
+  "session_id",
+] as const;
+
+export function claudeRateLimitInfo(message: ClaudeProviderEvent): Record<string, unknown> | null {
+  const raw = message.rate_limit_info;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return null;
+  }
+  const source = raw as Record<string, unknown>;
+  const out: Record<string, unknown> = { provider: "claude" };
+  for (const key of CLAUDE_RATE_LIMIT_INFO_KEYS) {
+    const value = source[key];
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (trimmed) out[key] = trimmed.slice(0, 512);
+    } else if (typeof value === "number" && Number.isFinite(value)) {
+      out[key] = value;
+    } else if (typeof value === "boolean") {
+      out[key] = value;
+    }
+  }
+  if (typeof message.uuid === "string" && message.uuid.trim()) {
+    out.uuid = message.uuid.trim().slice(0, 512);
+  }
+  if (typeof message.session_id === "string" && message.session_id.trim()) {
+    out.session_id = message.session_id.trim().slice(0, 512);
+  }
+  return Object.keys(out).length > 1 ? out : null;
+}
+
 function claudeRateLimitError(message: ClaudeProviderEvent): string {
   const parts = ["Claude provider emitted rate_limit_event"];
   for (const key of ["message", "error", "summary", "description", "retry_after_ms", "retry_after_seconds"]) {
@@ -281,7 +324,23 @@ function claudeRateLimitError(message: ClaudeProviderEvent): string {
       parts.push(`${key}=${value}`);
     }
   }
+  const rateLimitInfo = claudeRateLimitInfo(message);
+  if (rateLimitInfo) {
+    for (const key of ["status", "rateLimitType", "resetsAt", "overageStatus", "overageResetsAt"]) {
+      const value = rateLimitInfo[key];
+      if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+        parts.push(`${key}=${value}`);
+      }
+    }
+  }
   return parts.join("; ");
+}
+
+function redactSdkStderrLine(line: string): string {
+  return line
+    .replace(/\bsk-ant-[A-Za-z0-9_-]+/g, "[redacted-api-key]")
+    .replace(/\bBearer\s+[A-Za-z0-9._~+/=-]+/gi, "Bearer [redacted]")
+    .replace(/("?(?:api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)"?\s*[:=]\s*)("[^"]+"|[^\s,;]+)/gi, "$1[redacted]");
 }
 
 function inputReplyKey(turnID: string, timelineID: string, providerItemID: string): string {
@@ -296,10 +355,28 @@ function answersForClaudeInput(
   for (const [question, labels] of Object.entries(answers ?? {})) {
     const cleanLabels = labels.map((label) => String(label).trim()).filter(Boolean);
     const note = String(annotations?.[question]?.notes ?? "").trim();
-    const value = cleanLabels.length > 0 ? cleanLabels.join(", ") : note;
+    const semanticLabels = note
+      ? cleanLabels.filter((label) => label.toLowerCase() !== "other")
+      : cleanLabels;
+    inputReplyAnswerShapeTotal.labels(inputReplyAnswerShape(semanticLabels, note)).inc();
+    const value =
+      semanticLabels.length > 0 && note
+        ? `${semanticLabels.join(", ")}\n\n${note}`
+        : semanticLabels.length > 0
+          ? semanticLabels.join(", ")
+          : note;
     if (value) out[question] = value;
   }
   return out;
+}
+
+type InputReplyAnswerShape = "selection_only" | "free_form_only" | "selection_with_notes" | "empty";
+
+function inputReplyAnswerShape(labels: string[], note: string): InputReplyAnswerShape {
+  if (labels.length > 0 && note) return "selection_with_notes";
+  if (note) return "free_form_only";
+  if (labels.length > 0) return "selection_only";
+  return "empty";
 }
 
 export interface PendingTurn {
@@ -497,6 +574,7 @@ export class Runner {
   // expect a mid-session switch to take effect.
   private pinnedModel: string | null = null;
   private pinnedEffort: EffortLevel | null = null;
+  private sdkStderrBuffer = "";
   // reportedContextWindowTokens latches the per-turn ModelUsage context
   // window so the runner POSTs it to the orchestrator exactly once per
   // process (the backend is first-observed-wins). Mirrors the codex-runner
@@ -646,6 +724,7 @@ export class Runner {
       // Bare mode would skip CLAUDE.md / skills / hooks; we want those.
       model,
       effort,
+      stderr: (data: string) => this.handleSdkStderr(data),
     };
 
     this.sdkQuery = this.launchSdkQuery(options);
@@ -658,6 +737,25 @@ export class Runner {
     // returns HTTP 401 under the subscription-OAuth proxy, so Claude sessions
     // never got a window from it.
     this.resolveSdkReady();
+  }
+
+  private handleSdkStderr(data: string): void {
+    this.sdkStderrBuffer += String(data ?? "");
+    const lines = this.sdkStderrBuffer.split(/\r?\n/);
+    this.sdkStderrBuffer = lines.pop() ?? "";
+    for (const line of lines) {
+      this.logSdkStderrLine(line);
+    }
+    if (this.sdkStderrBuffer.length > 4096) {
+      this.logSdkStderrLine(this.sdkStderrBuffer);
+      this.sdkStderrBuffer = "";
+    }
+  }
+
+  private logSdkStderrLine(line: string): void {
+    const text = redactSdkStderrLine(line.trim()).slice(0, 2000);
+    if (!text) return;
+    console.warn(JSON.stringify({ msg: "claude_sdk_stderr", text }));
   }
 
   // maybeReportContextWindow reads the model's context window from a Claude
@@ -769,6 +867,12 @@ export class Runner {
     message: ClaudeProviderEvent,
   ): Promise<void> {
     providerRateLimitEventTotal.inc();
+    const rateLimitInfo = claudeRateLimitInfo(message);
+    if (rateLimitInfo) {
+      void reportRuntimeConfig(this.cfg, { providerRateLimitInfo: rateLimitInfo }).catch((err) => {
+        console.warn("provider rate-limit info report failed:", err);
+      });
+    }
     if (turn.terminalEmitted) return;
     const error = claudeRateLimitError(message);
     providerFailureClassTotal.labels("rate_limit").inc();

@@ -583,7 +583,7 @@ func TestProjectTranscriptEventsKeepsFailedTurnActivityOutOfMainTranscript(t *te
 // TestProjectTranscriptEventsPromotesAwaitingInputCard verifies the projection
 // places a turn.awaiting_input pause inside Turn activity as a question-set
 // payload and keeps the same durable meta row in the main transcript as the
-// navigation button row. The row is anchored at the asking turn's tail and stays
+// assistant handoff row. The row is anchored at the asking turn's tail and stays
 // unanswered until a later turn.input_answered arrives.
 func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	events := []map[string]any{
@@ -626,25 +626,25 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	if card == nil {
 		t.Fatalf("expected awaiting_input question payload in activity body, got bodies: %#v", projection.ActivityBodies)
 	}
-	var transcriptButton map[string]any
+	var transcriptHandoff map[string]any
 	for _, entry := range projection.Entries {
 		if entry["metaKind"] == "awaiting_input" {
-			transcriptButton = entry
+			transcriptHandoff = entry
 			break
 		}
 	}
-	if transcriptButton == nil {
-		t.Fatalf("expected awaiting_input navigation button row in main transcript, got entries: %#v", projection.Entries)
+	if transcriptHandoff == nil {
+		t.Fatalf("expected awaiting_input handoff row in main transcript, got entries: %#v", projection.Entries)
 	}
 	if shell := projection.Entries[1]; shell["kind"] != "turn_activity" {
 		t.Fatalf("main transcript entry = %#v, want turn_activity shell", shell)
 	}
 	if projection.Entries[2]["metaKind"] != "awaiting_input" {
-		t.Fatalf("third transcript entry = %#v, want awaiting_input navigation button row", projection.Entries[2])
+		t.Fatalf("third transcript entry = %#v, want awaiting_input handoff row", projection.Entries[2])
 	}
 	meta, _ := card["meta"].(map[string]any)
-	if meta["title"] != "Claude is waiting on you" {
-		t.Errorf("card title = %q, want Claude is waiting on you", meta["title"])
+	if meta["title"] != "I need your input" {
+		t.Errorf("card title = %q, want I need your input", meta["title"])
 	}
 	if got := meta["detail"]; got != "Which auth method?" {
 		t.Errorf("card detail = %q, want question text", got)
@@ -673,60 +673,69 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	if !strings.HasSuffix(card["orderKey"].(string), "~awaiting_input") {
 		t.Errorf("card orderKey = %q, want suffix ~awaiting_input", card["orderKey"])
 	}
-	if transcriptButton["orderKey"] != card["orderKey"] {
-		t.Errorf("transcript button orderKey = %q, want activity card orderKey %q", transcriptButton["orderKey"], card["orderKey"])
+	if transcriptHandoff["orderKey"] != card["orderKey"] {
+		t.Errorf("transcript handoff orderKey = %q, want activity card orderKey %q", transcriptHandoff["orderKey"], card["orderKey"])
 	}
 }
 
-func TestProjectTranscriptEventsAwaitingInputButtonSortsAfterStartupStatus(t *testing.T) {
+func TestProjectTranscriptEventsAwaitingInputButtonSortsAfterFoldedStartupStatus(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
 			"text":    "invoke the ask question tool",
 			"display": map[string]any{"kind": "plain"},
 		}),
 		projectionTestEvent("loading", "002", "session.status", "system", "tank", "", "session:loading", map[string]any{
-			"text": "Session is loading.",
+			"status": "loading",
+			"text":   "Session is loading.",
 		}),
 		projectionTestEvent("ready", "003", "session.status", "system", "tank", "", "session:ready", map[string]any{
-			"text": "Session is ready.",
+			"status": "ready",
+			"text":   "Session is ready.",
 		}),
 		projectionTestEvent("await", "004", "turn.awaiting_input", "runner", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
 			"provider_item_id": "toolu_ask",
 			"timeline_id":      "turn-1:item:tool-ask",
 			"questions": []any{
-				map[string]any{"question": "Which mammal?", "allowFreeForm": true},
+				map[string]any{"question": "Which option?", "allowFreeForm": true},
 			},
 		}),
 	}
 
 	projection := projectTranscriptEvents(events)
-	if got, want := len(projection.Entries), 5; got != want {
+	if got, want := len(projection.Entries), 3; got != want {
 		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
 	}
 	if projection.Entries[0]["kind"] != "message" {
 		t.Fatalf("first entry = %#v, want user message", projection.Entries[0])
 	}
-	if projection.Entries[1]["kind"] != "message" || projection.Entries[1]["role"] != "system" || projection.Entries[1]["text"] != "Session is loading." {
-		t.Fatalf("second entry = %#v, want loading status", projection.Entries[1])
+	if projection.Entries[1]["kind"] != "turn_activity" {
+		t.Fatalf("second entry = %#v, want turn_activity shell", projection.Entries[1])
 	}
-	if projection.Entries[2]["kind"] != "message" || projection.Entries[2]["role"] != "system" || projection.Entries[2]["text"] != "Session is ready." {
-		t.Fatalf("third entry = %#v, want ready status", projection.Entries[2])
+	if projection.Entries[2]["metaKind"] != "awaiting_input" {
+		t.Fatalf("third entry = %#v, want awaiting_input navigation button row after folded startup status", projection.Entries[2])
 	}
-	if projection.Entries[3]["kind"] != "turn_activity" {
-		t.Fatalf("fourth entry = %#v, want turn_activity shell", projection.Entries[3])
-	}
-	if projection.Entries[4]["metaKind"] != "awaiting_input" {
-		t.Fatalf("fifth entry = %#v, want awaiting_input navigation button row after startup status", projection.Entries[4])
-	}
-	activity := projection.Entries[3]["activity"].(map[string]any)
+	activity := projection.Entries[1]["activity"].(map[string]any)
 	if activity["status"] != "needs_input" {
 		t.Fatalf("activity status = %v, want needs_input", activity["status"])
 	}
-	activityIDs, _ := projection.Entries[3]["activityIds"].([]string)
+	activityIDs, _ := projection.Entries[1]["activityIds"].([]string)
 	for _, id := range activityIDs {
-		if id == projection.Entries[4]["id"] {
+		if id == projection.Entries[2]["id"] {
 			t.Fatalf("awaiting_input navigation button row was compacted by activity shell: activityIds=%#v", activityIDs)
 		}
+	}
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatal("missing activity body for turn-1")
+	}
+	folded := 0
+	for _, entry := range body.Entries {
+		if isProjectionSessionStatus(entry) {
+			folded++
+		}
+	}
+	if folded != 2 {
+		t.Fatalf("turn-1 folded startup status rows = %d, want 2: %#v", folded, body.Entries)
 	}
 }
 
@@ -763,8 +772,8 @@ func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.
 				continue
 			}
 			meta := entry["meta"].(map[string]any)
-			if meta["title"] != "Answered" {
-				t.Errorf("answered card title = %q, want Answered", meta["title"])
+			if meta["title"] != "Input answered" {
+				t.Errorf("answered card title = %q, want Input answered", meta["title"])
 			}
 			awaiting := entry["awaitingInput"].(map[string]any)
 			if awaiting["answered"] != true {
