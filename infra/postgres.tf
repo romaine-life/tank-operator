@@ -122,6 +122,12 @@ resource "azurerm_key_vault_secret" "postgres_admin_password" {
   key_vault_id = data.azurerm_key_vault.main.id
 }
 
+resource "azurerm_postgresql_flexible_server_configuration" "max_connections" {
+  name      = "max_connections"
+  server_id = azurerm_postgresql_flexible_server.tank_operator.id
+  value     = "100"
+}
+
 output "postgres_fqdn" {
   value       = azurerm_postgresql_flexible_server.tank_operator.fqdn
   description = "FQDN of the tank-operator Postgres Flexible Server."
