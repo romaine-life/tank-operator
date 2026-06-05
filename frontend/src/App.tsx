@@ -4289,6 +4289,7 @@ function normalizeProjectedTranscriptEntry(raw: unknown): TranscriptEntry | null
   const kind = typeof record.kind === "string" ? record.kind : "";
   const id = typeof record.id === "string" ? record.id : "";
   if (!id) return null;
+  if (isFoldableStartupSessionStatusTranscriptRow(record)) return null;
   if (
     kind !== "message" &&
     kind !== "tool" &&
@@ -4317,6 +4318,19 @@ function normalizeProjectedTranscriptEntry(raw: unknown): TranscriptEntry | null
     kind,
     ...(kind === "message" ? { attachments: normalizeMessageAttachments(record.attachments) } : {}),
   } as TranscriptEntry;
+}
+
+function isFoldableStartupSessionStatusTranscriptRow(record: Record<string, unknown>): boolean {
+  if (record.kind !== "message" || record.role !== "system") return false;
+  const status = typeof record.sessionStatus === "string" ? record.sessionStatus.trim() : "";
+  const text = typeof record.text === "string" ? record.text.trim() : "";
+  const normalizedStatus =
+    status ||
+    (text === "Session is loading." ? "loading" : text === "Session is ready." ? "ready" : "");
+  if (normalizedStatus !== "loading" && normalizedStatus !== "ready") return false;
+  const id = typeof record.id === "string" ? record.id : "";
+  const sourceEventId = typeof record.sourceEventId === "string" ? record.sourceEventId : "";
+  return !id.includes(":provider:") && !sourceEventId.includes(":provider:");
 }
 
 function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undefined {
