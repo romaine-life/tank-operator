@@ -62,6 +62,6 @@ test("buildSessionDataStatusRows summarizes multiple bug labels", () => {
 
   const bugReport = rows.find((row) => row.id === "bug_report");
   assert.equal(bugReport?.status, "2 linked");
-  assert.equal(bugReport?.detail, "bug: checkout, bug: transcript");
+  assert.equal(bugReport?.detail, "checkout, transcript");
   assert.equal(bugReport?.tone, "info");
 });

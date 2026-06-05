@@ -169,6 +169,12 @@ import {
   type SessionDataStatusRow,
 } from "./sessionDataStatus";
 import {
+  addBugLabelName,
+  bugLabelNameKey,
+  filterBugLabelSuggestions,
+  normalizeBugLabelDisplayName,
+} from "./bugLabels";
+import {
   scheduledWakeupRowsToEntries,
   scheduledWakeupStatusLabel,
   type ScheduledWakeupRow,
@@ -1145,12 +1151,9 @@ function normalizeBugLabel(value: unknown): SessionBugLabel | null {
   const record = value as Record<string, unknown>;
   const name = typeof record.name === "string" ? record.name : "";
   const slug = typeof record.slug === "string" ? record.slug : "";
-  const displayName =
-    typeof record.display_name === "string" && record.display_name
-      ? record.display_name
-      : name
-        ? `bug: ${name}`
-        : "";
+  const rawDisplayName =
+    typeof record.display_name === "string" && record.display_name ? record.display_name : name;
+  const displayName = normalizeBugLabelDisplayName(rawDisplayName);
   if (!name || !slug || !displayName) return null;
   const id = typeof record.id === "number" && Number.isFinite(record.id) ? record.id : undefined;
   return {
@@ -1997,20 +2000,6 @@ type BugLabelSuggestion = SessionBugLabel & {
   session_count?: number;
 };
 
-function bugLabelNameKey(name: string): string {
-  const trimmed = name.trim().replace(/\s+/g, " ");
-  const withoutPrefix = trimmed.replace(/^bug:\s*/i, "");
-  return withoutPrefix.toLocaleLowerCase();
-}
-
-function addBugLabelName(labels: string[], name: string): string[] {
-  const trimmed = name.trim();
-  if (!trimmed) return labels;
-  const key = bugLabelNameKey(trimmed);
-  if (labels.some((label) => bugLabelNameKey(label) === key)) return labels;
-  return [...labels, trimmed];
-}
-
 function BugLabelPicker({
   value,
   activeSlug,
@@ -2046,6 +2035,7 @@ function BugLabelPicker({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const pickerRef = useRef<HTMLSpanElement | null>(null);
 
   useEffect(() => {
     if (!open) return;
@@ -2087,6 +2077,21 @@ function BugLabelPicker({
     };
   }, [open, requestPath, value]);
 
+  useEffect(() => {
+    if (!open) return;
+    const closeIfOutside = (event: MouseEvent | TouchEvent) => {
+      const target = event.target;
+      if (target instanceof Node && pickerRef.current?.contains(target)) return;
+      setOpen(false);
+    };
+    document.addEventListener("mousedown", closeIfOutside);
+    document.addEventListener("touchstart", closeIfOutside);
+    return () => {
+      document.removeEventListener("mousedown", closeIfOutside);
+      document.removeEventListener("touchstart", closeIfOutside);
+    };
+  }, [open]);
+
   const multi = Boolean(onSaveLabels);
   const currentLabels = multi ? selectedLabels ?? [] : value ? [value] : [];
   const activeSlugSet = new Set(
@@ -2101,10 +2106,11 @@ function BugLabelPicker({
       : currentLabelCount === 1
         ? `Bug label: ${currentLabels[0]}`
         : "Set bug label";
-  const normalizedDraft = draft.trim();
+  const normalizedDraft = normalizeBugLabelDisplayName(draft);
   const triggerClasses = triggerClassName
     ? `${triggerClassName}${currentLabelCount > 0 ? " is-active" : ""}`
     : `run-composer-icon-btn run-bug-label-trigger${currentLabelCount > 0 ? " is-active" : ""}`;
+  const filteredLabels = filterBugLabelSuggestions(labels, draft);
   const save = async (name: string | null) => {
     setSaving(true);
     setError("");
@@ -2155,7 +2161,10 @@ function BugLabelPicker({
   const draftAlreadySelected = currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(normalizedDraft));
 
   return (
-    <span className={`run-bug-label-picker${wrapperClassName ? ` ${wrapperClassName}` : ""}`}>
+    <span
+      ref={pickerRef}
+      className={`run-bug-label-picker${wrapperClassName ? ` ${wrapperClassName}` : ""}`}
+    >
       <button
         type="button"
         className={triggerClasses}
@@ -2179,7 +2188,7 @@ function BugLabelPicker({
             <input
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
-              placeholder="bug: label"
+              placeholder="Search or add bug"
               autoFocus
               maxLength={90}
             />
@@ -2193,7 +2202,7 @@ function BugLabelPicker({
           {error && <div className="run-bug-label-error">{error}</div>}
           <div className="run-bug-label-list">
             {loading && <div className="run-bug-label-empty">Loading...</div>}
-            {!loading && labels.map((label) => (
+            {!loading && filteredLabels.map((label) => (
               <button
                 key={label.slug}
                 type="button"
@@ -2206,8 +2215,10 @@ function BugLabelPicker({
                 )}
               </button>
             ))}
-            {!loading && labels.length === 0 && (
-              <div className="run-bug-label-empty">No labels</div>
+            {!loading && filteredLabels.length === 0 && (
+              <div className="run-bug-label-empty">
+                {labels.length === 0 ? "No labels" : "No matching labels"}
+              </div>
             )}
           </div>
           {allowClear && currentLabelCount > 0 && (

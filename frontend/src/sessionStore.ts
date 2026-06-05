@@ -41,6 +41,7 @@ import {
   updateSessionListDebugStore,
   type SessionListDebugEvent,
 } from "./sessionListDebug";
+import { normalizeBugLabelDisplayName } from "./bugLabels";
 
 export interface SessionBugLabel {
   id?: number;
@@ -565,7 +566,7 @@ function normalizeSessionBugLabel(value: unknown): SessionBugLabel | null {
   if (!isRecord(value)) return null;
   const name = stringField(value, "name");
   const slug = stringField(value, "slug");
-  const displayName = stringField(value, "display_name") ?? (name ? `bug: ${name}` : null);
+  const displayName = normalizeBugLabelDisplayName(stringField(value, "display_name") ?? name);
   if (!name || !slug || !displayName) return null;
   const id = numberField(value, "id");
   return {

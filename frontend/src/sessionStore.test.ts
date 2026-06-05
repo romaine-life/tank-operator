@@ -222,10 +222,10 @@ test("rename row updates keep assigned avatar ids", () => {
   const [updated] = store.list();
   assert.equal(updated.name, "renamed session");
   assert.deepEqual(updated.capabilities, ["spirelens_mcp"]);
-  assert.equal(updated.bug_label?.display_name, "bug: Slow checkout");
+  assert.equal(updated.bug_label?.display_name, "Slow checkout");
   assert.deepEqual(updated.bug_labels?.map((label) => label.display_name), [
-    "bug: Slow checkout",
-    "bug: Transcript",
+    "Slow checkout",
+    "Transcript",
   ]);
   assert.equal(updated.agent_avatar_id, "jp1-malcolm");
   assert.equal(updated.system_avatar_id, "system-logo");

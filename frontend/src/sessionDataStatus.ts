@@ -1,4 +1,5 @@
 import { formatCompactTokens } from "./sessionCostEstimate";
+import { normalizeBugLabelDisplayName } from "./bugLabels";
 
 export type StatusTone = "good" | "info" | "warning" | "danger" | "muted";
 
@@ -55,13 +56,21 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
   const contextSource = trimOptionalString(session.runtime_context_window_source);
   const bugLabels = Array.isArray(session.bug_labels)
     ? session.bug_labels
-        .map((label) => trimOptionalString(label?.display_name) ?? trimOptionalString(label?.name))
+        .map((label) =>
+          normalizeBugLabelDisplayName(
+            trimOptionalString(label?.display_name) ?? trimOptionalString(label?.name),
+          ),
+        )
         .filter((label): label is string => Boolean(label))
     : [];
   const bugLabel =
     bugLabels[0] ??
-    trimOptionalString(session.bug_label?.display_name) ??
-    trimOptionalString(session.bug_label?.name);
+    trimOptionalString(
+      normalizeBugLabelDisplayName(
+        trimOptionalString(session.bug_label?.display_name) ??
+          trimOptionalString(session.bug_label?.name),
+      ),
+    );
   const bugCount = bugLabels.length || (bugLabel ? 1 : 0);
 
   return [
