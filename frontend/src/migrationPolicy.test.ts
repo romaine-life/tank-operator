@@ -784,6 +784,7 @@ test("session bug labels are available at create time", () => {
   assert.equal(appSource.includes("const [homeBugLabels, setHomeBugLabels]"), true);
   assert.equal(appSource.includes("bug_label: bugLabel"), true);
   assert.equal(appSource.includes("bug_labels: homeBugLabels"), true);
+  assert.equal(appSource.includes("setHomeBugLabels([]);"), true);
   assert.equal(appSource.includes("<SessionBugLabelPicker"), false);
   assert.equal(appSource.includes("bugLabelControl={"), false);
   assert.equal(sessionBarCapabilitiesSource.includes("splash setup panel stages bug labels"), true);
