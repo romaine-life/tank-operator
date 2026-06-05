@@ -514,6 +514,69 @@ func TestRequireServicePrincipal_RejectionPaths(t *testing.T) {
 	})
 }
 
+// TestHandleInternalCreateSessionSetsNameNotRequestedAt pins the fix for the
+// pre-refactor oddity where the service-principal create handler threaded the
+// inline `name` into CreateOptions.RequestedAt (a timestamp field) and never
+// set CreateOptions.Name — so a name passed by spawn_run_session/create_session
+// was dropped (the UI fell back to the short pod id) and would have polluted
+// requested_at. The internal handler must behave like the public one and route
+// `name` into the session's display Name.
+func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestSessionRegistry()
+	k8s := fake.NewSimpleClientset()
+	server := &appServer{
+		verifier:              auth.NewVerifier(jwtKey),
+		k8s:                   k8s,
+		namespace:             "tank-operator-sessions",
+		sessionScope:          "default",
+		sessionServiceAccount: "claude-session",
+	}
+	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{"mode":"claude_gui","name":"My Recovery Session"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.Name == nil || *info.Name != "My Recovery Session" {
+		t.Fatalf("Info.Name = %v, want \"My Recovery Session\" (inline name must set session Name, not RequestedAt)", info.Name)
+	}
+	if info.RequestedAt != nil && *info.RequestedAt == "My Recovery Session" {
+		t.Fatalf("RequestedAt = %q; inline name must never leak into requested_at", *info.RequestedAt)
+	}
+	rec2, ok, err := registry.Get(context.Background(), "owner@example.test", info.ID)
+	if err != nil || !ok {
+		t.Fatalf("registry Get ok=%v err=%v", ok, err)
+	}
+	if rec2.Name == nil || *rec2.Name != "My Recovery Session" {
+		t.Fatalf("registry record Name = %v, want \"My Recovery Session\"", rec2.Name)
+	}
+}
+
 type terminalEventStore struct {
 	store.StubSessionEventStore
 	event map[string]any

@@ -171,6 +171,56 @@ func TestGetRejectsWrongOwner(t *testing.T) {
 	}
 }
 
+// TestInfoJSONAlwaysCarriesDisplayName pins that the snapshot Info wire
+// shape exposes an always-present display_name. A nil-name session must
+// still serialize a non-empty derived label (short id from the pod
+// name) so unnamed sessions render identically across every surface.
+func TestInfoJSONAlwaysCarriesDisplayName(t *testing.T) {
+	registry := registryRecords{
+		{
+			ID:      "622",
+			Email:   "nelson@romaine.life",
+			Mode:    sessionmodel.ClaudeGUIMode,
+			PodName: "session-622",
+			Name:    nil,
+			Visible: true,
+			Status:  "Active",
+		},
+	}
+	reader := NewReaderFull(fake.NewSimpleClientset(), sessionmodel.SessionsNamespace, registry, "default")
+	got, err := reader.List(context.Background(), "nelson@romaine.life")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("session count = %d, want 1", len(got))
+	}
+	if got[0].Name != nil {
+		t.Fatalf("name = %#v, want nil for this fixture", got[0].Name)
+	}
+	if got[0].DisplayName != "622" {
+		t.Fatalf("display name = %q, want %q (derived from pod name)", got[0].DisplayName, "622")
+	}
+
+	raw, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Name        *string `json:"name"`
+		DisplayName string  `json:"display_name"`
+	}
+	if err := json.Unmarshal(raw, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Name != nil {
+		t.Fatalf("serialized name = %#v, want null (name stays nullable)", decoded.Name)
+	}
+	if decoded.DisplayName != "622" {
+		t.Fatalf("serialized display_name = %q, want non-empty %q for a nil-name session", decoded.DisplayName, "622")
+	}
+}
+
 func stringPtr(s string) *string { return &s }
 
 type registryRecords []sessionmodel.SessionRecord

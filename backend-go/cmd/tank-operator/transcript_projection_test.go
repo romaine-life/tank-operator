@@ -593,6 +593,7 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 			"text":    "which?",
 			"display": map[string]any{"kind": "plain"},
 		}),
+		projectionTestEvent("submitted", "001a", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
 		projectionTestEvent("invoke", "002", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
 			"provider_item_id": "toolu_ask",
 			"timeline_id":      "turn-1:item:tool-ask",
@@ -633,6 +634,9 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 				map[string]any{"question": "Which auth method?", "allowFreeForm": true},
 			},
 		}),
+		projectionTestEvent("usage", "005", "turn.usage", "runner", "claude", "turn-1", "", map[string]any{
+			"usage": map[string]any{"input_tokens": 12, "output_tokens": 8},
+		}),
 	}
 	projection := projectTranscriptEvents(events)
 	var card map[string]any
@@ -650,14 +654,30 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	if card == nil {
 		t.Fatalf("expected awaiting_input question payload in activity body, got bodies: %#v", projection.ActivityBodies)
 	}
-	if got, want := len(projection.Entries), 2; got != want {
-		t.Fatalf("projected entries = %d, want user + assistant question: %#v", got, projection.Entries)
+	if got, want := len(projection.Entries), 4; got != want {
+		t.Fatalf("projected entries = %d, want user + asking turn shell + assistant question + question turn shell: %#v", got, projection.Entries)
 	}
-	if projection.Entries[1]["kind"] != "message" || projection.Entries[1]["role"] != "assistant" {
-		t.Fatalf("second transcript entry = %#v, want assistant question message", projection.Entries[1])
+	askingShell := projection.Entries[1]
+	if askingShell["kind"] != "turn_activity" || askingShell["turnId"] != "turn-1" {
+		t.Fatalf("second transcript entry = %#v, want completed asking turn activity shell", askingShell)
 	}
-	if projection.Entries[1]["text"] != "1. Which auth method?" {
-		t.Fatalf("assistant question text = %q", projection.Entries[1]["text"])
+	askingActivity, _ := askingShell["activity"].(map[string]any)
+	if askingActivity["status"] != "completed" || askingActivity["active"] == true {
+		t.Fatalf("asking shell activity = %#v, want completed inactive", askingActivity)
+	}
+	if projection.Entries[2]["kind"] != "message" || projection.Entries[2]["role"] != "assistant" {
+		t.Fatalf("third transcript entry = %#v, want assistant question message", projection.Entries[2])
+	}
+	if projection.Entries[2]["text"] != "1. Which auth method?" {
+		t.Fatalf("assistant question text = %q", projection.Entries[2]["text"])
+	}
+	shell := projection.Entries[3]
+	if shell["kind"] != "turn_activity" || shell["turnId"] != "turn-2" {
+		t.Fatalf("fourth transcript entry = %#v, want question turn activity shell", shell)
+	}
+	activity, _ := shell["activity"].(map[string]any)
+	if activity["status"] != "needs_input" {
+		t.Fatalf("question shell status = %v, want needs_input", activity["status"])
 	}
 	meta, _ := card["meta"].(map[string]any)
 	if meta["title"] != "I need your input" {
@@ -687,6 +707,62 @@ func TestProjectTranscriptEventsPromotesAwaitingInputCard(t *testing.T) {
 	}
 	if awaiting["questionCount"] != 1 {
 		t.Errorf("questionCount = %v, want 1", awaiting["questionCount"])
+	}
+}
+
+func TestProjectTranscriptEventsAskUserQuestionHandoffStopsActiveAskingTurn(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "ask me",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("started", "002", "turn.started", "runner", "tank", "turn-1", "", map[string]any{"status": "started"}),
+		projectionTestEvent("invoke", "003", "turn.awaiting_input.invocation", "runner", "claude", "turn-1", "turn-1:item:tool-ask", map[string]any{
+			"provider_item_id": "toolu_ask",
+			"timeline_id":      "turn-1:item:tool-ask",
+			"questions": []any{
+				map[string]any{"question": "Which animal?", "allowFreeForm": true},
+			},
+		}),
+		projectionTestEvent("msg", "004", "assistant_message.created", "assistant", "claude", "turn-1", "turn-1:assistant_question:ask", map[string]any{
+			"text":    "1. Which animal?",
+			"display": map[string]any{"kind": "ask_user_question"},
+			"awaiting_input": map[string]any{
+				"asking_turn_id":       "turn-1",
+				"question_turn_id":     "turn-2",
+				"provider_item_id":     "toolu_ask",
+				"timeline_id":          "turn-2:item:tool-ask",
+				"provider_timeline_id": "turn-1:item:tool-ask",
+				"questions":            []any{map[string]any{"question": "Which animal?", "allowFreeForm": true}},
+			},
+		}),
+		projectionTestEvent("usage", "005", "turn.usage", "runner", "claude", "turn-1", "", map[string]any{
+			"usage": map[string]any{"input_tokens": 12, "output_tokens": 8},
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 3; got != want {
+		t.Fatalf("projected entries = %d, want user + completed shell + assistant question: %#v", got, projection.Entries)
+	}
+	shell := projection.Entries[1]
+	if shell["kind"] != "turn_activity" || shell["turnId"] != "turn-1" {
+		t.Fatalf("second transcript entry = %#v, want asking turn activity shell", shell)
+	}
+	activity, _ := shell["activity"].(map[string]any)
+	if activity["status"] != "completed" || activity["active"] == true {
+		t.Fatalf("asking shell activity = %#v, want completed inactive", activity)
+	}
+	if projection.Entries[2]["kind"] != "message" || projection.Entries[2]["role"] != "assistant" {
+		t.Fatalf("third transcript entry = %#v, want assistant question message", projection.Entries[2])
+	}
+	if projection.Entries[2]["text"] != "1. Which animal?" {
+		t.Fatalf("assistant question text = %q", projection.Entries[2]["text"])
+	}
+	for _, id := range shell["activityIds"].([]string) {
+		if id == "turn-1:assistant_question:ask" {
+			t.Fatalf("assistant question message was compacted into asking shell: %#v", shell)
+		}
 	}
 }
 
@@ -729,14 +805,24 @@ func TestProjectTranscriptEventsAwaitingInputButtonSortsAfterFoldedStartupStatus
 	}
 
 	projection := projectTranscriptEvents(events)
-	if got, want := len(projection.Entries), 2; got != want {
+	if got, want := len(projection.Entries), 4; got != want {
 		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
 	}
 	if projection.Entries[0]["kind"] != "message" {
 		t.Fatalf("first entry = %#v, want user message", projection.Entries[0])
 	}
-	if projection.Entries[1]["role"] != "assistant" {
-		t.Fatalf("second entry = %#v, want assistant question message", projection.Entries[1])
+	if projection.Entries[1]["kind"] != "turn_activity" || projection.Entries[1]["turnId"] != "turn-1" {
+		t.Fatalf("second entry = %#v, want completed asking turn activity shell", projection.Entries[1])
+	}
+	askingActivity, _ := projection.Entries[1]["activity"].(map[string]any)
+	if askingActivity["status"] != "completed" || askingActivity["active"] == true {
+		t.Fatalf("asking activity = %#v, want completed inactive", askingActivity)
+	}
+	if projection.Entries[2]["role"] != "assistant" {
+		t.Fatalf("third entry = %#v, want assistant question message", projection.Entries[2])
+	}
+	if projection.Entries[3]["kind"] != "turn_activity" || projection.Entries[3]["turnId"] != "turn-2" {
+		t.Fatalf("fourth entry = %#v, want question turn activity shell", projection.Entries[3])
 	}
 	for _, entry := range projection.Entries {
 		if isProjectionSessionStatus(entry) {
@@ -778,7 +864,7 @@ func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.
 				map[string]any{"question": "Pick one", "allowFreeForm": true},
 			},
 		}),
-		// The question-set answer marker links back to the question's timeline
+		// The answer marker links back to the question's timeline
 		// id; the visible answer text is a separate user submission.
 		projectionTestEvent("ans", "004", "turn.input_answered", "user", "tank", "turn-2", "turn-2:item:tool-ask:answer", map[string]any{
 			"question_timeline_id": "turn-2:item:tool-ask",
@@ -787,7 +873,17 @@ func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.
 		}),
 	}
 	projection := projectTranscriptEvents(events)
-	awaitingMessage, _ := projection.Entries[1]["awaitingInput"].(map[string]any)
+	var awaitingMessage map[string]any
+	for _, entry := range projection.Entries {
+		if entry["role"] != "assistant" {
+			continue
+		}
+		awaitingMessage, _ = entry["awaitingInput"].(map[string]any)
+		break
+	}
+	if awaitingMessage == nil {
+		t.Fatalf("missing assistant awaitingInput message: %#v", projection.Entries)
+	}
 	if awaitingMessage["answered"] != true {
 		t.Errorf("assistant awaitingInput.answered = %v, want true", awaitingMessage["answered"])
 	}

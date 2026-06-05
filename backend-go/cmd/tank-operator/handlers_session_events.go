@@ -138,7 +138,7 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 	pages := projectTurnPages(turnID, events)
 	recordTurnActivityPages(len(pages.Pages), pages.TotalEventCount)
 
-	// Default to the pending question-set page when the turn is paused for
+	// Default to the pending question page when the turn is paused for
 	// user input; otherwise default to the latest activity page. The server
 	// owns this choice so fresh tabs and deep links do not reconstruct it from
 	// browser state.
@@ -182,7 +182,7 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		body["entries"] = entries
 		body["sealed"] = current.Sealed
 		body["page_kind"] = current.Kind
-		if current.Kind == "question_set" {
+		if current.Kind == "question" {
 			body["question_count"] = current.QuestionCount
 			body["question_index"] = current.QuestionIndex
 			body["question_set"] = current.QuestionSet

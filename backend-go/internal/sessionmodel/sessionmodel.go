@@ -329,6 +329,28 @@ func OwnerLabel(email string) string {
 	return "u-" + hex.EncodeToString(sum[:])[:16]
 }
 
+// SessionDisplayName is the single source of truth for a session's
+// human-facing label: the user-set name when present, else a short id
+// derived from the pod name (falling back to the session id). Every wire
+// payload (Info, row updates, snapshot) derives display_name from this so
+// unnamed sessions render identically across surfaces.
+func SessionDisplayName(name *string, podName, id string) string {
+	if name != nil {
+		if trimmed := strings.TrimSpace(*name); trimmed != "" {
+			return trimmed
+		}
+	}
+	base := podName
+	if base == "" {
+		base = id
+	}
+	base = strings.TrimPrefix(base, "session-")
+	if len(base) > 8 {
+		base = base[:8]
+	}
+	return base
+}
+
 func NormalizeName(name *string) *string {
 	if name == nil {
 		return nil

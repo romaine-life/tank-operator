@@ -137,7 +137,7 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		Model           string         `json:"model,omitempty"`
 		Effort          string         `json:"effort,omitempty"`
 		GlimmungContext map[string]any `json:"glimmung_context"`
-		Name            string         `json:"name"`
+		Name            *string        `json:"name,omitempty"`
 		Repos           []string       `json:"repos"`
 		Capabilities    []string       `json:"capabilities"`
 	}
@@ -166,17 +166,18 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	// The internal handler historically passes body.Name as the
-	// requestedAt argument — that's a pre-refactor naming oddity
-	// preserved by setting RequestedAt to body.Name here. (Yes, the
-	// field is named "name" but threads into RequestedAt — same as
-	// the prior positional code.) Worth a separate cleanup PR; out
-	// of scope for the repos feature.
+	// Inline `name` sets the session's display title, mirroring the public
+	// create handler (handleCreateSession). This previously misrouted
+	// body.Name into RequestedAt — a pre-refactor naming oddity — so a name
+	// passed by spawn_run_session/create_session never reached the session
+	// row and the UI fell back to the short pod id. RequestedAt is left to
+	// default to now for a fresh service-principal-created session (there is
+	// no initial-turn timing to backdate here).
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
 		Owner:           user.ActorEmail,
 		Mode:            mode,
 		GlimmungContext: body.GlimmungContext,
-		RequestedAt:     body.Name,
+		Name:            body.Name,
 		Repos:           repos,
 		Capabilities:    capabilities,
 		Model:           runConfig.Model,

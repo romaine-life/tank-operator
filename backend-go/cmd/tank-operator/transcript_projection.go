@@ -125,9 +125,9 @@ type turnUsageProjection struct {
 }
 
 // projectionAwaitingInput captures a turn.awaiting_input handoff: the agent
-// asked the user a question as the Tank-visible response. The turn question-set
-// page renders from this (questions + ids), and "answered" is derived from a
-// later turn.input_answered event targeting the same question set.
+// asked the user a question as the Tank-visible response. The question-only
+// turn's pages render from this (questions + ids), and "answered" is derived
+// from a later turn.input_answered event targeting the same question set.
 type projectionAwaitingInput struct {
 	AskingTurnID       string
 	QuestionTurnID     string
@@ -1248,7 +1248,15 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 }
 
 func compactProjectedTranscript(entries []map[string]any, activeTurnID string, runStatus string, terminals map[string]turnTerminalProjection, backgroundWakeTurns map[string]bool, continuationTurns map[string]bool) transcriptProjection {
-	activities := append(terminalProjectedActivities(entries, terminals, backgroundWakeTurns, continuationTurns), activeProjectedActivities(entries, activeTurnID, runStatus)...)
+	handoffActivities := awaitingInputHandoffProjectedActivities(entries, terminals)
+	for _, activity := range handoffActivities {
+		if activity.TurnID == activeTurnID {
+			activeTurnID = ""
+			break
+		}
+	}
+	activities := append(terminalProjectedActivities(entries, terminals, backgroundWakeTurns, continuationTurns), handoffActivities...)
+	activities = append(activities, activeProjectedActivities(entries, activeTurnID, runStatus)...)
 	bodies := map[string]turnActivityBody{}
 	for _, activity := range activities {
 		bodies[activity.TurnID] = activity
@@ -1262,7 +1270,8 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 		insertBefore := projectedActivityInsertIndex(entries, activity)
 		activeProgressOnly := activity.Summary["active"] == true && len(activity.CompactedEntryIDs) == 0 && firstTurnProgressIndex(entries, activity.TurnID) >= 0
 		activeNeedsInput := activity.Summary["active"] == true && activity.Status == "needs_input"
-		if len(activity.CompactedEntryIDs) == 0 && !activeProgressOnly && !activeNeedsInput {
+		awaitingInputHandoff := activity.Summary["awaitingInputHandoff"] == true
+		if len(activity.CompactedEntryIDs) == 0 && !activeProgressOnly && !activeNeedsInput && !awaitingInputHandoff {
 			continue
 		}
 		activityByInsertIndex[insertBefore] = activity
@@ -1471,6 +1480,51 @@ func terminalProjectedActivities(entries []map[string]any, terminals map[string]
 			continue
 		}
 		activities = append(activities, makeTurnActivityBody(turnID, terminal.Status, activityEntries, compacted, false))
+	}
+	return activities
+}
+
+func awaitingInputHandoffProjectedActivities(entries []map[string]any, terminals map[string]turnTerminalProjection) []turnActivityBody {
+	turnIndexes := map[string][]int{}
+	turnOrder := []string{}
+	for idx, entry := range entries {
+		turnID := transcriptMapString(entry, "turnId")
+		if turnID == "" {
+			continue
+		}
+		if _, exists := turnIndexes[turnID]; !exists {
+			turnOrder = append(turnOrder, turnID)
+		}
+		turnIndexes[turnID] = append(turnIndexes[turnID], idx)
+	}
+	var activities []turnActivityBody
+	for _, turnID := range turnOrder {
+		if _, terminal := terminals[turnID]; terminal {
+			continue
+		}
+		indexes := turnIndexes[turnID]
+		finalIndexes := awaitingInputAssistantMessageIndexes(entries, indexes, turnID)
+		if len(finalIndexes) == 0 {
+			continue
+		}
+		var compacted []map[string]any
+		var activityEntries []map[string]any
+		for _, idx := range indexes {
+			entry := entries[idx]
+			if isProjectedUserMessage(entry) || isProjectionTurnProgress(entry) {
+				continue
+			}
+			activityEntries = append(activityEntries, entry)
+			if !finalIndexes[idx] && !isProjectionAwaitingInputEntry(entry) {
+				compacted = append(compacted, entry)
+			}
+		}
+		if len(activityEntries) == 0 {
+			continue
+		}
+		activity := makeTurnActivityBody(turnID, "completed", activityEntries, compacted, false)
+		activity.Summary["awaitingInputHandoff"] = true
+		activities = append(activities, activity)
 	}
 	return activities
 }
@@ -1727,6 +1781,27 @@ func finalAnswerProjectedIndexes(entries []map[string]any, indexes []int, finalA
 	return out
 }
 
+func awaitingInputAssistantMessageIndexes(entries []map[string]any, indexes []int, turnID string) map[int]bool {
+	out := map[int]bool{}
+	for _, idx := range indexes {
+		entry := entries[idx]
+		if !isProjectedAssistantMessage(entry) {
+			continue
+		}
+		awaiting, _ := entry["awaitingInput"].(map[string]any)
+		questionTurnID := transcriptMapString(awaiting, "questionTurnId")
+		if questionTurnID == "" || questionTurnID == turnID {
+			continue
+		}
+		askingTurnID := transcriptMapString(awaiting, "askingTurnId")
+		if askingTurnID != "" && askingTurnID != turnID {
+			continue
+		}
+		out[idx] = true
+	}
+	return out
+}
+
 func turnHasAssistantMessage(entries []map[string]any, indexes []int) bool {
 	for _, idx := range indexes {
 		if isProjectedAssistantMessage(entries[idx]) {
@@ -1947,9 +2022,6 @@ func filterMainTranscriptQuestionTurnRows(entries []map[string]any) []map[string
 			continue
 		}
 		if isProjectionAwaitingInputToolEntry(entry) {
-			continue
-		}
-		if isQuestionOnlyTurnActivityShell(entry) {
 			continue
 		}
 		out = append(out, entry)
