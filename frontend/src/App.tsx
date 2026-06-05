@@ -24,6 +24,7 @@ import {
 } from "./transcriptMerge";
 import { cachedTurnActivityRefreshRequests } from "./turnActivityCache";
 import {
+  turnActivityEventProgress,
   turnActivityPagerState,
   type TurnActivityPageDirectoryItem,
   type TurnActivityPageInfo,
@@ -8062,11 +8063,14 @@ function turnActivitySummary(entries: TranscriptEntry[]): string {
 function TurnActivityPager({
   pagerState,
   onSelectPage,
+  pageInfo,
 }: {
   pagerState: TurnActivityPagerState;
   onSelectPage: (page: number) => void;
+  pageInfo?: TurnActivityPageInfo;
 }) {
   if (!pagerState.visible) return null;
+  const progress = turnActivityEventProgress(pageInfo, pagerState.page);
   return (
     <div
       className="run-turn-activity-pages"
@@ -8083,6 +8087,10 @@ function TurnActivityPager({
         ‹
       </button>
       <span className="run-turn-activity-page-label">{pagerState.label}</span>
+      <span className="run-turn-activity-event-progress">{progress.label}</span>
+      {progress.totalLabel && (
+        <span className="run-turn-activity-total-events">{progress.totalLabel}</span>
+      )}
       <button
         type="button"
         className="run-turn-activity-page-nav"
@@ -8734,7 +8742,11 @@ function RunTurnActivityGroup({
           {open && (
             <div className="run-turn-activity-body">
               {onSelectPage && (
-                <TurnActivityPager pagerState={pagerState} onSelectPage={onSelectPage} />
+                <TurnActivityPager
+                  pagerState={pagerState}
+                  onSelectPage={onSelectPage}
+                  pageInfo={pageInfo}
+                />
               )}
               {group.shell && !group.loaded ? (
                 <div className="run-shell-loading run-turn-activity-loading" role="status" aria-live="polite">
@@ -8943,6 +8955,9 @@ function RunTurnActivityScreen({
   const showRefreshProblemOnly = Boolean(refreshProblem) && detailGroups.length === 0;
   const selectedPageDirectoryItem = selectedPageInfo?.pages?.find((page) => page.number === pagerState.page);
   const selectedPageOptionParts = turnActivityPageOptionParts(pagerState.page, selectedPageDirectoryItem);
+  const selectedEventProgress = selected
+    ? turnActivityEventProgress(selectedPageInfo, pagerState.page)
+    : null;
   const questionPageNavigation = useMemo<QuestionPageNavigation | undefined>(() => {
     if (!selectedPageInfo || selectedPageInfo.kind !== "question_set") return undefined;
     const directory = selectedPageInfo.pages ?? [];
@@ -9131,6 +9146,18 @@ function RunTurnActivityScreen({
               </SelectContent>
             </Select>
           )}
+          {selectedEventProgress && (
+            <span
+              className="run-turn-view-event-progress"
+              title={
+                selectedEventProgress.totalLabel
+                  ? `${selectedEventProgress.label} on this page; ${selectedEventProgress.totalLabel}`
+                  : `${selectedEventProgress.label} on this page`
+              }
+            >
+              {selectedEventProgress.label}
+            </span>
+          )}
           <Select
             value={selected?.turnId ?? ""}
             onValueChange={onSelectTurn}
@@ -9177,6 +9204,9 @@ function RunTurnActivityScreen({
                 tokenScopeLabel="current context tokens"
                 scopeLabel="turn"
               />
+            )}
+            {selectedEventProgress?.totalLabel && (
+              <span>{selectedEventProgress.totalLabel}</span>
             )}
           </div>
           {selectedPageInfo?.kind === "question_set" && (
@@ -11274,11 +11304,13 @@ function ChatPane({
       question_set?: number;
       answered?: boolean;
       pages?: unknown;
+      total_event_count?: number;
     };
     if (typeof body.page === "number" && typeof body.page_count === "number") {
       const info: TurnActivityPageInfo = {
         page: body.page,
         pageCount: body.page_count,
+        totalEventCount: typeof body.total_event_count === "number" ? body.total_event_count : undefined,
         kind: typeof body.page_kind === "string" ? body.page_kind : undefined,
         questionCount: typeof body.question_count === "number" ? body.question_count : undefined,
         questionIndex: typeof body.question_index === "number" ? body.question_index : undefined,
@@ -11292,6 +11324,7 @@ function ChatPane({
           existing &&
           existing.page === info.page &&
           existing.pageCount === info.pageCount &&
+          existing.totalEventCount === info.totalEventCount &&
           existing.kind === info.kind &&
           existing.questionCount === info.questionCount &&
           existing.questionIndex === info.questionIndex &&
