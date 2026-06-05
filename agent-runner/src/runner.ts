@@ -71,6 +71,7 @@ import {
   providerControlTotal,
   providerErrorTotal,
   providerFailureClassTotal,
+  providerRateLimitDecisionTotal,
   providerRateLimitEventTotal,
   recordTurnPreStartLatency,
   recordTurnStart,
@@ -322,6 +323,34 @@ export function claudeRateLimitInfo(
     out.session_id = message.session_id.trim().slice(0, 512);
   }
   return Object.keys(out).length > 1 ? out : null;
+}
+
+function normalizedLimitStatus(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase().replace(/[\s-]+/g, "_") : "";
+}
+
+export function claudeRateLimitEventIsTerminal(message: ClaudeProviderEvent): boolean {
+  const rateLimitInfo = claudeRateLimitInfo(message);
+  const status = normalizedLimitStatus(rateLimitInfo?.status);
+  if (status === "allowed" || status === "ok") {
+    return false;
+  }
+  if (
+    status.includes("reject") ||
+    status.includes("exhaust") ||
+    status.includes("limit") ||
+    status.includes("exceed") ||
+    status.includes("block")
+  ) {
+    return true;
+  }
+  for (const key of ["retry_after_ms", "retry_after_seconds", "message", "error", "summary", "description"]) {
+    const value = message[key];
+    if ((typeof value === "string" && value.trim()) || (typeof value === "number" && Number.isFinite(value))) {
+      return true;
+    }
+  }
+  return !rateLimitInfo;
 }
 
 function claudeRateLimitError(message: ClaudeProviderEvent): string {
@@ -866,11 +895,19 @@ export class Runner {
       return;
     }
     if (isClaudeRateLimitEvent(providerEvent)) {
+      if (!claudeRateLimitEventIsTerminal(providerEvent)) {
+        providerRateLimitEventTotal.inc();
+        providerRateLimitDecisionTotal.labels(activeTurn ? "observed_allowed_active" : "observed_allowed_idle").inc();
+        this.reportProviderRateLimitInfo(providerEvent);
+        return;
+      }
       if (activeTurn) {
         await this.failTurnForProviderRateLimit(activeTurn, providerEvent);
         return;
       }
       providerRateLimitEventTotal.inc();
+      providerRateLimitDecisionTotal.labels("terminal_without_active_turn").inc();
+      this.reportProviderRateLimitInfo(providerEvent);
       logUnhandledSdkMessage(message);
       return;
     }
@@ -928,11 +965,7 @@ export class Runner {
     await this.maybeRegisterBackgroundTaskWake(providerEvent);
   }
 
-  private async failTurnForProviderRateLimit(
-    turn: PendingTurn,
-    message: ClaudeProviderEvent,
-  ): Promise<void> {
-    providerRateLimitEventTotal.inc();
+  private reportProviderRateLimitInfo(message: ClaudeProviderEvent): Record<string, unknown> | null {
     const rateLimitInfo = claudeRateLimitInfo(message);
     if (rateLimitInfo) {
       void reportRuntimeConfig(this.cfg, {
@@ -941,6 +974,16 @@ export class Runner {
         console.warn("provider rate-limit info report failed:", err);
       });
     }
+    return rateLimitInfo;
+  }
+
+  private async failTurnForProviderRateLimit(
+    turn: PendingTurn,
+    message: ClaudeProviderEvent,
+  ): Promise<void> {
+    providerRateLimitEventTotal.inc();
+    providerRateLimitDecisionTotal.labels("failed_turn").inc();
+    this.reportProviderRateLimitInfo(message);
     if (turn.terminalEmitted) return;
     const error = claudeRateLimitError(message);
     providerFailureClassTotal.labels("rate_limit").inc();

@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 import {
+  claudeRateLimitEventIsTerminal,
   claudeRateLimitInfo,
   classifyProviderFailure,
   dispatch,
@@ -172,6 +173,47 @@ test("AskUserQuestion handoff emits a route-safe question turn id", () => {
   assert.equal(
     handoff.awaitingInput.payload.question_turn_id,
     handoff.questionTurnID,
+  );
+});
+
+test("claudeRateLimitEventIsTerminal follows primary quota status, not overage status", () => {
+  assert.equal(
+    claudeRateLimitEventIsTerminal({
+      type: "rate_limit_event",
+      uuid: "rate-limit-allowed-overage-rejected",
+      rate_limit_info: {
+        status: "allowed",
+        rateLimitType: "five_hour",
+        resetsAt: 1780659000,
+        overageStatus: "rejected",
+        overageDisabledReason: "org_level_disabled",
+        isUsingOverage: false,
+      },
+    }),
+    false,
+    "session 618 shape: primary quota allowed means this is informational",
+  );
+  assert.equal(
+    claudeRateLimitEventIsTerminal({
+      type: "rate_limit_event",
+      uuid: "rate-limit-rejected",
+      rate_limit_info: {
+        status: "rejected",
+        rateLimitType: "five_hour",
+        resetsAt: 1790000000000,
+      },
+    }),
+    true,
+    "rejected primary quota still terminates the active turn",
+  );
+  assert.equal(
+    claudeRateLimitEventIsTerminal({
+      type: "rate_limit_event",
+      uuid: "rate-limit-retry",
+      retry_after_ms: 60000,
+    }),
+    true,
+    "unstructured retry/error frames remain terminal so the command queue cannot strand",
   );
 });
 
@@ -1421,6 +1463,43 @@ test("Claude rate_limit_event fails active turn durably instead of stranding the
     ["ack"],
     "submit command must ack after the durable rate-limit terminal",
   );
+});
+
+test("Claude rate_limit_event with allowed primary quota does not fail the active turn", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    handleEvent: (message: unknown) => Promise<void>;
+  };
+  const activeTurn = {
+    turnID: "turn_allowed-overage-rejected",
+    clientNonce: "allowed-overage-rejected",
+    text: "hello",
+    started: true,
+    interrupted: false,
+    terminalEmitted: false,
+    commandRecord: { id: "submit-1", type: "submit_turn" },
+    stopCommandHeartbeat: () => harness.sdkControlCalls.push("stop-heartbeat"),
+  };
+  r.activeTurn = activeTurn;
+
+  await r.handleEvent({
+    type: "rate_limit_event",
+    uuid: "rate-limit-allowed-overage-rejected",
+    rate_limit_info: {
+      status: "allowed",
+      rateLimitType: "five_hour",
+      resetsAt: 1780659000,
+      overageStatus: "rejected",
+      overageDisabledReason: "org_level_disabled",
+      isUsingOverage: false,
+    },
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(harness.events.length, 0, "allowed primary quota is not a durable turn terminal");
+  assert.deepEqual(harness.bus, [], "submit command must stay in flight for the provider turn to continue");
+  assert.equal(r.activeTurn, activeTurn, "the active turn must remain owned by the runner");
 });
 
 test("acceptInterrupt with missing target: fails command explicitly instead of silently acking", async () => {

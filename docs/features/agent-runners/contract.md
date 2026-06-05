@@ -87,10 +87,13 @@ the rest of the product reconstruct what happened.
   provider item IDs.
 - Provider failures must become durable failure events instead of silent
   strandings.
-- Provider rate-limit stream frames are provider failures for Tank's user
-  contract: they must produce durable user-visible state, and absent a
-  provider-owned bounded retry contract they resolve the active turn with
-  `turn.failed{reason:"provider_rate_limit"}`.
+- Provider rate-limit stream frames must be classified by the provider's
+  primary quota status before they affect durable turn state. A primary
+  rejected/exhausted quota resolves the active turn with
+  `turn.failed{reason:"provider_rate_limit"}` so the command queue does not
+  strand. A primary allowed quota is an informational capacity observation,
+  even when overage/extra-usage fields are rejected, and must not create a
+  durable turn terminal.
 
 ## Observability
 
@@ -104,6 +107,9 @@ the rest of the product reconstruct what happened.
   client delivery.
 - Silent strandings, where a requested action has no terminal event, are a
   counted bug class.
+- Provider rate-limit frame handling is counted by decision, so false terminal
+  failures and unhandled terminal frames are visible separately from ordinary
+  rejected primary quota.
 - A turn that emits assistant messages but no usage snapshot is a backend
   accounting/diagnostic regression signature; `tank_runner_turn_usage_emitted_total{kind}`
   counts `snapshot` vs `terminal` usage emissions so the gap is visible.
