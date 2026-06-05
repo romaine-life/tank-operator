@@ -43,12 +43,7 @@ type Info struct {
 	// inversion it is always present (NON-NULL): created sessions are
 	// assigned the canonical SessionDisplayName default when the user gives
 	// none, and clearing reassigns that default. Never empty in steady state.
-	Name string `json:"name"`
-	// DisplayName is kept on the wire for already-deployed SPA/MCP clients
-	// that still read it; a later stage deletes it. Now that Name is always
-	// present, DisplayName simply equals Name. (Previously it was the
-	// always-present derivation that covered Name's null case.)
-	DisplayName  string         `json:"display_name"`
+	Name         string         `json:"name"`
 	TestState    map[string]any `json:"test_state"`
 	RolloutState map[string]any `json:"rollout_state"`
 	// Repos is the "owner/name" slug list the user picked at
@@ -273,20 +268,16 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		bugLabel = bugLabels[0]
 	}
 	info := Info{
-		ID:           record.ID,
-		SessionScope: scope,
-		PodName:      optionalString(record.PodName),
-		Owner:        owner,
-		Status:       status,
-		Mode:         sessionmodel.NormalizeSessionMode(record.Mode),
-		RequestedAt:  firstString(record.RequestedAt, record.CreatedAt),
-		CreatedAt:    optionalString(record.CreatedAt),
-		ReadyAt:      optionalString(record.ReadyAt),
-		Name:         record.Name,
-		// display_name stays on the wire for already-deployed clients; the
-		// row's name is always present now, so it equals name. Later stage
-		// deletes it.
-		DisplayName:                    record.Name,
+		ID:                             record.ID,
+		SessionScope:                   scope,
+		PodName:                        optionalString(record.PodName),
+		Owner:                          owner,
+		Status:                         status,
+		Mode:                           sessionmodel.NormalizeSessionMode(record.Mode),
+		RequestedAt:                    firstString(record.RequestedAt, record.CreatedAt),
+		CreatedAt:                      optionalString(record.CreatedAt),
+		ReadyAt:                        optionalString(record.ReadyAt),
+		Name:                           record.Name,
 		TestState:                      record.TestState,
 		RolloutState:                   record.RolloutState,
 		Repos:                          repos,
@@ -368,9 +359,6 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		CreatedAt:    createdAt,
 		ReadyAt:      readyAt,
 		Name:         name,
-		// display_name stays on the wire for already-deployed clients; name is
-		// always present now, so it equals name. Later stage deletes it.
-		DisplayName:  name,
 		TestState:    annotationObject(pod.Annotations, testStateAnnotation),
 		RolloutState: annotationObject(pod.Annotations, rolloutStateAnnotation),
 		// Pod-only Info (per-session GET fallback when the registry

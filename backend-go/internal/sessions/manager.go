@@ -538,17 +538,14 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		bugLabel = bugLabels[0]
 	}
 	info := Info{
-		ID:          sessionID,
-		PodName:     &podName,
-		Owner:       owner,
-		Status:      "Pending",
-		Mode:        mode,
-		RequestedAt: &requestedAt,
-		CreatedAt:   createdAt,
-		Name:        storedName,
-		// display_name stays on the wire for already-deployed clients; it now
-		// equals the always-present name. A later stage deletes it.
-		DisplayName:    storedName,
+		ID:             sessionID,
+		PodName:        &podName,
+		Owner:          owner,
+		Status:         "Pending",
+		Mode:           mode,
+		RequestedAt:    &requestedAt,
+		CreatedAt:      createdAt,
+		Name:           storedName,
 		Repos:          repos,
 		Capabilities:   capabilities,
 		BugLabel:       bugLabel,
