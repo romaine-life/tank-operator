@@ -83,6 +83,13 @@ export const providerRateLimitEventTotal = new Counter({
   registers: [registry],
 });
 
+export const providerRateLimitDecisionTotal = new Counter({
+  name: "tank_runner_provider_rate_limit_decision_total",
+  help: "Provider SDK rate-limit stream frames classified by the runner into a bounded handling decision.",
+  labelNames: ["decision"],
+  registers: [registry],
+});
+
 export const providerControlTotal = new Counter({
   name: "tank_runner_provider_control_total",
   help: "Provider control-plane calls issued by the runner, such as interrupt and background foreground tasks.",
