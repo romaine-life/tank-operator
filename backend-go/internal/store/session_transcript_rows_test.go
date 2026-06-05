@@ -41,3 +41,30 @@ func TestTranscriptRowFromTurnActivityEntryUsesVisibleRowCursor(t *testing.T) {
 		t.Fatalf("row = %#v", row)
 	}
 }
+
+func TestTranscriptRowFromEntryDropsStartupSessionStatusMessages(t *testing.T) {
+	_, ok := transcriptRowFromEntry(map[string]any{
+		"id":            "session:63:status:loading",
+		"kind":          "message",
+		"role":          "system",
+		"text":          "Session is loading.",
+		"orderKey":      "001",
+		"sourceEventId": "session:63:status:loading",
+	})
+	if ok {
+		t.Fatalf("startup loading row was accepted")
+	}
+
+	_, ok = transcriptRowFromEntry(map[string]any{
+		"id":            "session:63:provider:codex:status",
+		"kind":          "message",
+		"role":          "system",
+		"text":          "Codex sign-in is back online.",
+		"sessionStatus": "ready",
+		"orderKey":      "002",
+		"sourceEventId": "session:63:provider:codex:status",
+	})
+	if !ok {
+		t.Fatalf("provider recovery status row should remain visible")
+	}
+}
