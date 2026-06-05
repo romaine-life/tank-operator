@@ -38,25 +38,27 @@ export default function StaticPageView({
   useEffect(() => {
     let cancelled = false;
     setState({ status: "loading" });
-    // Fetch the full bytes through the authenticated raw endpoint (8 MiB cap),
-    // not the text/content endpoint which truncates at 256 KiB. The bytes
-    // never touch a top-level navigation, so the bearer header rides along on
-    // this fetch exactly like every other file read.
-    void authedFetch(
-      `/api/sessions/${encodeURIComponent(sessionId)}/files/raw?path=${encodeURIComponent(path)}`,
-    )
-      .then(async (res) => {
+    const base = `/api/sessions/${encodeURIComponent(sessionId)}/static-pages?path=${encodeURIComponent(path)}`;
+    // Capture a fresh durable 12h snapshot from the live pod (recapture on open),
+    // and render the returned bytes. If the pod is gone (503/404), fall back to
+    // GET, which serves the existing snapshot — that is what lets the page
+    // outlive the session. The bytes ride an authenticated fetch and go into a
+    // sandboxed srcDoc; no protected URL is ever opened as a top-level document.
+    void (async () => {
+      try {
+        let res = await authedFetch(base, { method: "POST" });
+        if (!res.ok && (res.status === 503 || res.status === 404)) {
+          res = await authedFetch(base, { method: "GET" });
+        }
         if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-        return res.text();
-      })
-      .then((html) => {
-        if (!cancelled) setState({ status: "ready", html });
-      })
-      .catch((err) => {
+        const body = (await res.json()) as { text?: string };
+        if (!cancelled) setState({ status: "ready", html: body.text ?? "" });
+      } catch (err) {
         if (!cancelled) {
           setState({ status: "error", message: String((err as Error)?.message ?? err) });
         }
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };

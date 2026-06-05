@@ -1572,6 +1572,25 @@ var schemaMigrations = []migration{
 		ADD COLUMN IF NOT EXISTS provider_rate_limit_info jsonb`},
 	{ID: "0129", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS provider_rate_limit_observed_at timestamptz`},
+
+	// static_page_snapshots — durable, time-boxed copies of agent-authored HTML
+	// files rendered as sandboxed pages. The session pod is ephemeral; the
+	// snapshot lets a rendered page (and a future shareable link) outlive the
+	// pod for its TTL. Keyed by (scope, session, path); opening a page recaptures.
+	{ID: "0130", SQL: `CREATE TABLE IF NOT EXISTS static_page_snapshots (
+		session_scope   text NOT NULL,
+		session_id      text NOT NULL,
+		rel_path        text NOT NULL,
+		owner_email     text NOT NULL,
+		content_type    text NOT NULL,
+		bytes           bytea NOT NULL,
+		byte_size       integer NOT NULL,
+		created_at      timestamptz NOT NULL DEFAULT now(),
+		expires_at      timestamptz NOT NULL,
+		PRIMARY KEY (session_scope, session_id, rel_path)
+	)`},
+	{ID: "0131", SQL: `CREATE INDEX IF NOT EXISTS static_page_snapshots_expires_at
+		ON static_page_snapshots (expires_at)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
