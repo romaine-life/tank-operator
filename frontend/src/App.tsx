@@ -5142,6 +5142,7 @@ type EntryGroup =
       kind: "thinking";
       id: string;
       turnId: string;
+      status?: "thinking" | "needs_input";
       shell?: TranscriptEntry;
       startedAt?: string;
       lastActivityAt?: string;
@@ -5212,6 +5213,7 @@ function isUserMessageEntry(entry: TranscriptEntry): boolean {
 function turnThinkingGroup(
   turnId: string,
   shell?: TranscriptEntry,
+  status: "thinking" | "needs_input" = "thinking",
 ): Extract<EntryGroup, { kind: "thinking" }> {
   // Prefer the projected TurnActivitySummary.startedAt: that is the durable
   // turn-start order key derived from the first event in the turn and stays
@@ -5223,8 +5225,12 @@ function turnThinkingGroup(
   // missing them (older fixtures, hand-built test entries).
   return {
     kind: "thinking",
-    id: `turn-thinking-${turnId}`,
+    id:
+      status === "needs_input"
+        ? `turn-needs-input-${turnId}`
+        : `turn-thinking-${turnId}`,
     turnId,
+    status,
     shell,
     startedAt: shell?.activity?.startedAt ?? shell?.startedAt ?? shell?.time,
     lastActivityAt: turnActivityLastActivityAt(shell),
@@ -5318,6 +5324,15 @@ function turnActivityGroupNeedsInput(
   group: Extract<EntryGroup, { kind: "activity" }>,
 ): boolean {
   return group.shell?.activity?.status === "needs_input";
+}
+
+function turnActivityGroupIsNeedsInputTarget(
+  group: Extract<EntryGroup, { kind: "activity" }>,
+  activeTurnId: string | null,
+): boolean {
+  if (!turnActivityGroupNeedsInput(group)) return false;
+  const active = activeTurnId?.trim() ?? "";
+  return active !== "" && group.turnId === active;
 }
 
 function flushTranscriptToolBucket(
@@ -5451,6 +5466,15 @@ function groupTranscriptEntries(
             !insertedThinkingTurnIds.has(group.turnId)
           ) {
             pendingThinkingGroups.push(turnThinkingGroup(group.turnId, entry));
+            pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
+            insertedThinkingTurnIds.add(group.turnId);
+          } else if (
+            turnActivityGroupIsNeedsInputTarget(group, activeTurnId) &&
+            !insertedThinkingTurnIds.has(group.turnId)
+          ) {
+            pendingThinkingGroups.push(
+              turnThinkingGroup(group.turnId, entry, "needs_input"),
+            );
             pendingThinkingFallbackIndexes.set(group.turnId, groups.length);
             insertedThinkingTurnIds.add(group.turnId);
           }
@@ -9267,7 +9291,7 @@ function turnActivityPageOptionParts(
 ): TurnActivityPageOptionParts {
   const pageLabel = `Page ${pageNumber}`;
   let semanticLabel = "Activity";
-  if (directoryItem?.kind === "question_set") {
+  if (directoryItem?.kind === "question") {
     if (directoryItem.questionIndex && directoryItem.questionCount) {
       semanticLabel = `Question ${directoryItem.questionIndex} of ${directoryItem.questionCount}`;
     } else {
@@ -9725,16 +9749,19 @@ function RunTurnThinkingLastActivity({
 function RunTurnThinkingBubble({
   userKey,
   turnId,
+  status = "thinking",
   lastActivityAt,
   avatar,
   onOpenTurn,
 }: {
   userKey: string;
   turnId: string;
+  status?: "thinking" | "needs_input";
   lastActivityAt?: string;
   avatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
 }) {
+  const needsInput = status === "needs_input";
   return (
     <div
       className="run-transcript-message run-turn-thinking"
@@ -9742,6 +9769,7 @@ function RunTurnThinkingBubble({
       data-variant="assistant"
       data-role="assistant"
       data-kind="turn-thinking"
+      data-status={status}
     >
       <span className="run-msg-ai-avatar" aria-hidden="true">
         <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
@@ -9749,13 +9777,17 @@ function RunTurnThinkingBubble({
       <button
         type="button"
         className="run-transcript-message-content run-turn-thinking-content"
-        title="Open turn"
-        aria-label="Open turn"
-        onClick={() => onOpenTurn?.(turnId, { anchor: "bottom" })}
+        title={needsInput ? "Answer in Turns" : "Open turn"}
+        aria-label={needsInput ? "Answer in Turns" : "Open turn"}
+        onClick={() =>
+          onOpenTurn?.(turnId, { anchor: needsInput ? "top" : "bottom" })
+        }
       >
         <span className="run-turn-thinking-lines">
-          <span className="run-turn-thinking-label run-turn-thinking-shimmer">
-            Thinking...
+          <span
+            className={`run-turn-thinking-label${needsInput ? "" : " run-turn-thinking-shimmer"}`}
+          >
+            {needsInput ? "Answer requested" : "Thinking..."}
           </span>
           <span className="run-turn-thinking-meta-row">
             <span className="run-turn-thinking-meta-label">Runtime</span>
@@ -10188,13 +10220,13 @@ function RunTurnActivityScreen({
   const questionPageNavigation = useMemo<
     QuestionPageNavigation | undefined
   >(() => {
-    if (!selectedPageInfo || selectedPageInfo.kind !== "question_set")
+    if (!selectedPageInfo || selectedPageInfo.kind !== "question")
       return undefined;
     const directory = selectedPageInfo.pages ?? [];
     const sameSetPages = directory
       .filter(
         (page) =>
-          page.kind === "question_set" &&
+          page.kind === "question" &&
           (selectedPageInfo.questionSet
             ? page.questionSet === selectedPageInfo.questionSet
             : true),
@@ -10472,7 +10504,7 @@ function RunTurnActivityScreen({
               <span>{selectedEventProgress.totalLabel}</span>
             )}
           </div>
-          {selectedPageInfo?.kind === "question_set" && (
+          {selectedPageInfo?.kind === "question" && (
             <div
               className="run-turn-question-page-head"
               data-answered={selectedPageInfo.answered ? "true" : "false"}
@@ -11071,6 +11103,7 @@ export function RunMessages({
           <RunTurnThinkingBubble
             userKey={userKey}
             turnId={g.turnId}
+            status={g.status}
             lastActivityAt={g.lastActivityAt}
             avatar={avatar}
             onOpenTurn={onOpenTurn}
@@ -12948,7 +12981,11 @@ function ChatPane({
       if (!turnId) continue;
       if (row.kind === "turn_activity") {
         const activity = row.activity;
-        if (activity?.active === true || activity?.status === "active") {
+        if (
+          activity?.active === true ||
+          activity?.status === "active" ||
+          activity?.status === "needs_input"
+        ) {
           activeTurnId = turnId;
           continue;
         }

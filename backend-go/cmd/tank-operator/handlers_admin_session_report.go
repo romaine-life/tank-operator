@@ -489,11 +489,14 @@ func fetchSessionReportRows(ctx context.Context, s *appServer, scope string, win
 			return nil, err
 		}
 		row.BugLabel = reportBugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug)
-		// display_name stays on the wire for already-deployed clients; sessions.name
-		// is NON-NULL now (assigned at create / reassigned on clear), so the report
-		// title simply equals name and matches the sidebar's always-present label.
-		// A later stage deletes display_name.
-		row.DisplayName = row.Name
+		// display_name stays on the wire for already-deployed clients. sessions.name
+		// is NON-NULL now (assigned at create / reassigned on clear) and the scan
+		// COALESCEs it to a string, so the canonical SessionDisplayName derivation
+		// here resolves to that always-present name — matching the sidebar's label
+		// and the live row wire. A later stage deletes display_name. pod_name is
+		// always "session-"+session_id, so passing the session id yields the same
+		// slug without selecting pod_name in the query.
+		row.DisplayName = sessionmodel.SessionDisplayName(&row.Name, "", row.SessionID)
 		out = append(out, row)
 	}
 	return out, rows.Err()

@@ -397,9 +397,8 @@ func (m transcriptRowsMaterializer) turnNumbersForSession(ctx context.Context, s
 
 // stampTurnNumbers sets turnNumber on every turn-tagged transcript row from
 // the durable session_turns map. Turn activity shells are the primary consumer,
-// but assistant AskUserQuestion messages also need the number for their linked
-// question turn without rendering a separate question-only shell in the main
-// transcript.
+// and assistant AskUserQuestion messages also need the number for their linked
+// question turn.
 func stampTurnNumbers(sessionID string, numbers map[string]int64, entries []map[string]any) {
 	for _, entry := range entries {
 		turnID := transcriptMapString(entry, "turnId")
