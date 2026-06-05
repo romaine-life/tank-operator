@@ -24,6 +24,13 @@ function isUserMessageEntry(entry: TranscriptEntry): boolean {
   return entry.kind === "message" && entry.role === "user";
 }
 
+function isTurnActivityUserMessageEntry(entry: TranscriptEntry): boolean {
+  return (
+    isUserMessageEntry(entry) &&
+    (entry.turnOnly === true || entry.wakePrompt === true)
+  );
+}
+
 export function cachedTurnActivityRefreshRequests(
   cache: ActivityEntriesByTurn,
   rows: TranscriptEntry[],
@@ -32,7 +39,8 @@ export function cachedTurnActivityRefreshRequests(
   for (const row of rows) {
     const turnId = transcriptEntryTurnId(row);
     if (!turnId || !cachedTurnExists(cache, turnId)) continue;
-    if (isUserMessageEntry(row)) continue;
+    if (isUserMessageEntry(row) && !isTurnActivityUserMessageEntry(row))
+      continue;
     const cursor = transcriptEntryRefreshCursor(row);
     const previous = requests.get(turnId) ?? "";
     if (!previous || (cursor && cursor > previous)) {

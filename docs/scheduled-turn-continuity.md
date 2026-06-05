@@ -86,16 +86,14 @@ path).
    suppressed *for free*; the genuine end-of-chain (`-> ready`) still rings
    exactly once.
 
-2. **The UI/simulated turn is a summon/lifecycle envelope, not a structural
-   merge.** It holds the wake-chain together *for attention* — one continuous
-   "agent working, don't summon" episode — while the backend turns stay durably
-   distinct (own `turn_id` / `turn_number` / transcript entries; each wake is its
-   own comment). The envelope reduces to one durable predicate evaluated at each
-   turn terminal: **does this session have a pending (registered, unfired,
-   uncancelled) wake?** No manual stitching. The chain is *also* durably linkable
-   if structural grouping is ever wanted — `session_scheduled_wakeups` carries
-   `scheduled_turn_id` and `fired_turn_id`, a durable linked list — but the
-   summon feature does not need that walk.
+2. **The user-visible turn spans the wake-chain.** It holds the wake-chain
+   together as one continuous "agent working, don't summon" episode. The backend
+   turns stay durably distinct (own `turn_id` / provider boundary / ledger
+   events), but the transcript and Turns projection attribute wake-continuation
+   output back to the originating turn so the user does not see two agent turns
+   for one simulated turn. The lifecycle envelope still reduces to one durable
+   predicate evaluated at each turn terminal: **does this session have a pending
+   (registered, unfired, uncancelled) wake?**
 
 3. **Nothing enters the main transcript for a sleep.** A sleep is
    intra-(simulated)-turn state; only the simulated turn's true end promotes a

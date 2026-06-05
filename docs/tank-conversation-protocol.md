@@ -708,9 +708,11 @@ session is no longer `Active`; otherwise it writes a normal `turn.submitted`
 boundary event without a synthetic `user_message.created` prompt and publishes
 `submit_turn` with `source=background-task`. The `turn.submitted` event remains
 `source=tank` per the event schema and carries `payload.source=background-task`
-as provenance for the read projection. The wake turn is a continuation
-mechanic inside the simulated turn: its activity shell stays in the Turns view,
-not the settled main transcript. The earlier turn that parked on the still
+as provenance plus `payload.prompt` as the existing system-user wake text for
+Turn activity projection. The wake turn is a continuation mechanic inside the
+simulated turn: its activity shell stays in the Turns view, not the settled main
+transcript, and its wake prompt is folded into the originating Turn activity as
+an `authorKind=system` user-side message. The earlier turn that parked on the still
 running background task is also continuation material: its assistant prose and
 background-task row stay in Turn activity rather than becoming a main transcript
 answer. If the resumed agent reaches a true final answer, that assistant prose

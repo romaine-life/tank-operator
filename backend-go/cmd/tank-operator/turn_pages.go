@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
 
@@ -59,6 +61,59 @@ func readAllTurnEvents(ctx context.Context, eventStore store.SessionEventStore, 
 		cursor = page.NextOrderKey
 	}
 	return adoptLeadingSessionLifecycle(ctx, eventStore, sessionID, all)
+}
+
+// readUserFacingTurnEvents returns the event set for the turn as the user
+// experiences it. A background-task wake is a backend continuation turn, but it
+// belongs in the originating turn's activity detail.
+func readUserFacingTurnEvents(ctx context.Context, eventStore store.SessionEventStore, sessionID, turnID string) ([]map[string]any, error) {
+	events, err := readAllTurnEvents(ctx, eventStore, sessionID, turnID)
+	if err != nil {
+		return nil, err
+	}
+	wakeTurnIDs := backgroundWakeTurnIDsForParentEvents(events, turnID)
+	if len(wakeTurnIDs) == 0 {
+		return events, nil
+	}
+	all := append([]map[string]any{}, events...)
+	for _, wakeTurnID := range wakeTurnIDs {
+		wakeEvents, err := readAllTurnEvents(ctx, eventStore, sessionID, wakeTurnID)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, wakeEvents...)
+	}
+	return orderedTranscriptEvents(all), nil
+}
+
+func backgroundWakeTurnIDsForParentEvents(events []map[string]any, parentTurnID string) []string {
+	if parentTurnID == "" {
+		return nil
+	}
+	state := newProjectionState()
+	for _, event := range orderedTranscriptEvents(events) {
+		state.apply(event)
+	}
+	if !state.backgroundTaskContinuationTurns()[parentTurnID] {
+		return nil
+	}
+	seen := map[string]bool{}
+	var out []string
+	for _, task := range state.backgroundTasks {
+		if task == nil || task.TurnID != parentTurnID || task.TaskID == "" {
+			continue
+		}
+		wakeTurnID := conversation.TurnIDForClientNonce(pgstore.BackgroundTaskWakeClientNonce(task.TaskID))
+		if wakeTurnID == "" {
+			continue
+		}
+		if seen[wakeTurnID] {
+			continue
+		}
+		seen[wakeTurnID] = true
+		out = append(out, wakeTurnID)
+	}
+	return out
 }
 
 // adoptLeadingSessionLifecycle prepends the session-startup lifecycle
@@ -312,8 +367,10 @@ func isTurnInputAnsweredForQuestion(event map[string]any, questionTimelineID str
 // projectPageBodyEntries renders the body rows for one page's events. Unlike
 // the turn shell it does not depend on lifecycle ownership, so a middle page
 // (no turn.submitted, no terminal) still renders its tool/message rows.
-// User-message and turn-progress rows are transcript-level, not page body, and
-// are dropped; the context.compacted marker is kept as the page's seam header.
+// Human user-message and turn-progress rows are transcript-level, not page body,
+// and are dropped. Background-wake prompts are system-user rows carried on
+// turn.submitted for Turn activity only, so they remain page-body entries.
+// The context.compacted marker is kept as the page's seam header.
 func projectPageBodyEntries(events []map[string]any) []map[string]any {
 	state := newProjectionState()
 	for _, event := range orderedTranscriptEvents(events) {
@@ -322,7 +379,7 @@ func projectPageBodyEntries(events []map[string]any) []map[string]any {
 	flat := state.projectFlatEntries()
 	out := make([]map[string]any, 0, len(flat))
 	for _, entry := range flat {
-		if isProjectedUserMessage(entry) || isProjectionTurnProgress(entry) {
+		if (isProjectedUserMessage(entry) && !isProjectionWakePrompt(entry)) || isProjectionTurnProgress(entry) {
 			continue
 		}
 		out = append(out, entry)
@@ -341,6 +398,7 @@ func turnPageStatusIsLive(status string) bool {
 // while page bodies come from each page's own event range.
 func projectTurnPages(turnID string, events []map[string]any) turnPagesProjection {
 	pageSlices := splitTurnEventsIntoSemanticPages(events)
+	wakeParents := backgroundWakeParentTurnsFromEvents(events)
 
 	// Terminal-correct shell from the COMPLETE event set: the full projection
 	// folds the whole turn, so its activity summary always reflects the
@@ -362,7 +420,7 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		// the turn has reached a durable terminal.
 		sealed := number < len(pageSlices) || !live
 		questionSet, questionIndex, questionCount, answered := turnPageQuestionSetState(slice)
-		entries := projectPageBodyEntries(slice.Events)
+		entries := reassignBackgroundWakeProjectedEntries(projectPageBodyEntries(slice.Events), wakeParents)
 		page := turnPage{
 			Number:        number,
 			Kind:          slice.Kind,

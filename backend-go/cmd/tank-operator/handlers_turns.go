@@ -836,6 +836,7 @@ type sdkTurnRequest struct {
 	SkillName                  string
 	FollowUp                   bool
 	Source                     string
+	SourceTaskID               string
 	AllowBeforeReady           bool
 	OmitUserMessage            bool
 	RequireExistingUserMessage bool
@@ -1057,7 +1058,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		}
 	}
 	retimeTurnBoundaryEvents(events, req.OrderBase)
-	stampTurnSubmittedSource(events, sdkTurnSource(req.Source))
+	stampTurnSubmittedSource(events, sdkTurnSource(req.Source), req.SourceTaskID, prompt)
 	if req.OmitUserMessage {
 		events = omitUserMessageEvents(events)
 	}
@@ -1169,8 +1170,9 @@ func omitUserMessageEvents(events []map[string]any) []map[string]any {
 	return out
 }
 
-func stampTurnSubmittedSource(events []map[string]any, source string) {
+func stampTurnSubmittedSource(events []map[string]any, source, taskID, prompt string) {
 	source = strings.TrimSpace(source)
+	taskID = strings.TrimSpace(taskID)
 	if source == "" || source == "sdk" {
 		return
 	}
@@ -1184,6 +1186,14 @@ func stampTurnSubmittedSource(events []map[string]any, source string) {
 			event["payload"] = payload
 		}
 		payload["source"] = source
+		if taskID != "" {
+			payload["task_id"] = taskID
+		}
+		if source == string(conversation.TurnSubmittedSourceBackgroundTask) {
+			if prompt := strings.TrimSpace(prompt); prompt != "" {
+				payload["prompt"] = prompt
+			}
+		}
 	}
 }
 

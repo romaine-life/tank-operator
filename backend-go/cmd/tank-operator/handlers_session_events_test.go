@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
@@ -288,6 +289,104 @@ func TestHandleSessionTurnActivityPaginatesOverLimitTurnWithTerminalShell(t *tes
 	entries, _ := body["entries"].([]any)
 	if len(entries) == 0 {
 		t.Fatalf("last page entries empty, want the tail of the turn")
+	}
+}
+
+func TestHandleSessionTurnActivityIncludesBackgroundWakeContinuation(t *testing.T) {
+	app := adminTestServer(t)
+	app.sessionScope = "default"
+
+	events := []map[string]any{
+		projectionTestEvent("user", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "Run CI and tell me when it passes.",
+		}),
+		projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("task-started", "00000003", "shell_task.started", "tool", "claude", "turn-1", "turn-1:task:ci", map[string]any{
+			"task_id": "task-ci",
+			"status":  "running",
+			"summary": "CI check",
+		}),
+		projectionTestEvent("waiting-final", "00000004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:waiting", map[string]any{
+			"kind": "message",
+			"text": "I will wait for CI and check back when it finishes.",
+		}),
+		projectionTestEvent("turn-terminal", "00000005", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:waiting")),
+		projectionTestEvent("task-exited", "00000006", "shell_task.exited", "tool", "claude", "turn-1", "turn-1:task:ci", map[string]any{
+			"task_id": "task-ci",
+			"status":  "completed",
+			"summary": "CI passed",
+			"output":  "All checks passed.",
+		}),
+		projectionTestEvent("wake-submitted", "00000007", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{"status": "submitted", "source": "background-task", "prompt": "A background task you started earlier has finished."}),
+		projectionTestEvent("wake-final", "00000008", "item.completed", "assistant", "claude", "turn_bgtask-task-ci", "turn_bgtask-task-ci:item:final", map[string]any{
+			"kind": "message",
+			"text": "CI passed. The branch is ready.",
+		}),
+		projectionTestEvent("wake-terminal", "00000009", "turn.completed", "runner", "claude", "turn_bgtask-task-ci", "", projectionFinalAnswerPayload("turn_bgtask-task-ci:item:final")),
+	}
+	app.sessionEvents = fakeSessionEventStore{pages: map[string]store.SessionEventPage{
+		"": {Events: events, FoundOldest: true, FoundNewest: true},
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/turns/turn-1/activity", nil)
+	req.SetPathValue("session_id", "63")
+	req.SetPathValue("turn_id", "turn-1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	app.handleSessionTurnActivity(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	summary, _ := body["summary"].(map[string]any)
+	if got, want := summary["turnId"], "turn-1"; got != want {
+		t.Fatalf("summary.turnId = %#v, want %#v", got, want)
+	}
+	if got, want := summary["backgroundTaskCount"], float64(1); got != want {
+		t.Fatalf("summary.backgroundTaskCount = %#v, want %#v: %#v", got, want, summary)
+	}
+	entries, _ := body["entries"].([]any)
+	foundWakeFinal := false
+	foundWakePrompt := false
+	foundTask := false
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		switch {
+		case entry["kind"] == "background_task":
+			foundTask = true
+		case entry["role"] == "user" && entry["text"] == "A background task you started earlier has finished.":
+			foundWakePrompt = true
+			if got, want := entry["authorKind"], string(conversation.AuthorKindSystem); got != want {
+				t.Fatalf("wake prompt authorKind = %#v, want %#v: %#v", got, want, entry)
+			}
+			if got, want := entry["turnId"], "turn-1"; got != want {
+				t.Fatalf("wake prompt turnId = %#v, want %#v: %#v", got, want, entry)
+			}
+			if got, want := entry["backendTurnId"], "turn_bgtask-task-ci"; got != want {
+				t.Fatalf("wake prompt backendTurnId = %#v, want %#v: %#v", got, want, entry)
+			}
+		case entry["role"] == "assistant" && entry["text"] == "CI passed. The branch is ready.":
+			foundWakeFinal = true
+			if got, want := entry["turnId"], "turn-1"; got != want {
+				t.Fatalf("wake final turnId = %#v, want %#v: %#v", got, want, entry)
+			}
+			if got, want := entry["backendTurnId"], "turn_bgtask-task-ci"; got != want {
+				t.Fatalf("wake final backendTurnId = %#v, want %#v: %#v", got, want, entry)
+			}
+		}
+	}
+	if !foundTask {
+		t.Fatalf("activity entries missing background task/timer row: %#v", entries)
+	}
+	if !foundWakePrompt {
+		t.Fatalf("activity entries missing wake prompt: %#v", entries)
+	}
+	if !foundWakeFinal {
+		t.Fatalf("activity entries missing wake final message: %#v", entries)
 	}
 }
 

@@ -130,7 +130,7 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		return
 	}
 	eventStore := s.sessionEventStoreForScope(sessionScope)
-	events, err := readAllTurnEvents(r.Context(), eventStore, sessionID, turnID)
+	events, err := readUserFacingTurnEvents(r.Context(), eventStore, sessionID, turnID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

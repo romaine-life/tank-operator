@@ -109,6 +109,9 @@ func TestFireBackgroundTaskWakeUsesDurableTurnBoundary(t *testing.T) {
 	if got, _ := payload["source"].(string); got != "background-task" {
 		t.Fatalf("turn.submitted payload.source = %q, want background-task", got)
 	}
+	if got, _ := payload["prompt"].(string); got != row.Prompt {
+		t.Fatalf("turn.submitted payload.prompt = %q, want wake prompt", got)
+	}
 	for _, event := range events {
 		if got, _ := event["type"].(string); got == "user_message.created" {
 			t.Fatalf("background-task wake prompt leaked into main transcript event: %#v", event)

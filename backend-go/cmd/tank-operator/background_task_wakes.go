@@ -228,6 +228,7 @@ func (s *appServer) fireBackgroundTaskWake(ctx context.Context, row pgstore.Back
 		RequireNonce:    true,
 		Prompt:          row.Prompt,
 		Source:          "background-task",
+		SourceTaskID:    row.TaskID,
 		CreatedAt:       now,
 		OmitUserMessage: true,
 		AuthorKind:      string(conversation.AuthorKindSystem),

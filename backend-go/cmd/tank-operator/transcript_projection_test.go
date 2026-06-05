@@ -3,6 +3,9 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
 func TestProjectTranscriptEventsEmitsCollapsedTurnActivityShell(t *testing.T) {
@@ -1025,7 +1028,7 @@ func TestProjectTranscriptEventsKeepsOrphanFailedBanner(t *testing.T) {
 
 func TestProjectTranscriptEventsKeepsBackgroundTaskWakeMechanicsOutOfMainTranscript(t *testing.T) {
 	events := []map[string]any{
-		projectionTestEvent("submitted", "001", "turn.submitted", "runner", "tank", "turn_bgtask-bocpzxcm3", "", map[string]any{"status": "submitted", "source": "background-task"}),
+		projectionTestEvent("submitted", "001", "turn.submitted", "runner", "tank", "turn_bgtask-bocpzxcm3", "", map[string]any{"status": "submitted", "source": "background-task", "prompt": "A background task you started earlier has finished."}),
 		projectionTestEvent("tool", "002", "item.completed", "tool", "claude", "turn_bgtask-bocpzxcm3", "turn_bgtask-bocpzxcm3:item:tool-1", map[string]any{
 			"kind":   "tool_result",
 			"title":  "BashOutput",
@@ -1042,14 +1045,20 @@ func TestProjectTranscriptEventsKeepsBackgroundTaskWakeMechanicsOutOfMainTranscr
 	if !ok {
 		t.Fatalf("background-task wake did not remain available in Turn activity: %#v", projection.ActivityBodies)
 	}
-	if got, want := len(body.Entries), 1; got != want {
+	if got, want := len(body.Entries), 2; got != want {
 		t.Fatalf("activity body entries = %d, want %d: %#v", got, want, body.Entries)
+	}
+	if got := transcriptMapString(body.Entries[0], "text"); got != "A background task you started earlier has finished." {
+		t.Fatalf("first activity entry text = %q, want wake prompt: %#v", got, body.Entries)
+	}
+	if got := transcriptMapString(body.Entries[0], "authorKind"); got != string(conversation.AuthorKindSystem) {
+		t.Fatalf("wake prompt authorKind = %q, want system: %#v", got, body.Entries[0])
 	}
 }
 
 func TestProjectTranscriptEventsPromotesFinalAnswerFromBackgroundTaskWake(t *testing.T) {
 	events := []map[string]any{
-		projectionTestEvent("submitted", "001", "turn.submitted", "runner", "tank", "turn_bgtask-bocpzxcm3", "", map[string]any{"status": "submitted", "source": "background-task"}),
+		projectionTestEvent("submitted", "001", "turn.submitted", "runner", "tank", "turn_bgtask-bocpzxcm3", "", map[string]any{"status": "submitted", "source": "background-task", "prompt": "A background task you started earlier has finished."}),
 		projectionTestEvent("tool", "002", "item.completed", "tool", "claude", "turn_bgtask-bocpzxcm3", "turn_bgtask-bocpzxcm3:item:tool-1", map[string]any{
 			"kind":   "tool_result",
 			"title":  "BashOutput",
@@ -1079,8 +1088,14 @@ func TestProjectTranscriptEventsPromotesFinalAnswerFromBackgroundTaskWake(t *tes
 	if !ok {
 		t.Fatalf("background-task wake did not remain available in Turn activity: %#v", projection.ActivityBodies)
 	}
-	if got, want := len(body.Entries), 2; got != want {
+	if got, want := len(body.Entries), 3; got != want {
 		t.Fatalf("activity body entries = %d, want %d: %#v", got, want, body.Entries)
+	}
+	if got := transcriptMapString(body.Entries[0], "text"); got != "A background task you started earlier has finished." {
+		t.Fatalf("first activity entry text = %q, want wake prompt: %#v", got, body.Entries)
+	}
+	if got := transcriptMapString(body.Entries[0], "authorKind"); got != string(conversation.AuthorKindSystem) {
+		t.Fatalf("wake prompt authorKind = %q, want system: %#v", got, body.Entries[0])
 	}
 }
 
@@ -1107,7 +1122,7 @@ func TestProjectTranscriptEventsHidesBackgroundContinuationTurnFromMainTranscrip
 			"summary": "CI passed",
 			"output":  "All checks passed.",
 		}),
-		projectionTestEvent("wake-submitted", "007", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{"status": "submitted", "source": "background-task"}),
+		projectionTestEvent("wake-submitted", "007", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{"status": "submitted", "source": "background-task", "prompt": "A background task you started earlier has finished."}),
 		projectionTestEvent("wake-final", "008", "item.completed", "assistant", "claude", "turn_bgtask-task-ci", "turn_bgtask-task-ci:item:final", map[string]any{
 			"kind": "message",
 			"text": "CI passed. The branch is ready.",
@@ -1131,9 +1146,18 @@ func TestProjectTranscriptEventsHidesBackgroundContinuationTurnFromMainTranscrip
 	if got := transcriptMapString(projection.Entries[1], "text"); got != "CI passed. The branch is ready." {
 		t.Fatalf("second entry text = %q, want wake final answer", got)
 	}
+	if got, want := transcriptMapString(projection.Entries[1], "turnId"), "turn-1"; got != want {
+		t.Fatalf("wake final projected turnId = %q, want parent %q: %#v", got, want, projection.Entries[1])
+	}
+	if got, want := transcriptMapString(projection.Entries[1], "backendTurnId"), "turn_bgtask-task-ci"; got != want {
+		t.Fatalf("wake final backendTurnId = %q, want wake turn %q: %#v", got, want, projection.Entries[1])
+	}
 	for _, entry := range projection.Entries {
 		text := transcriptMapString(entry, "text")
-		if strings.Contains(text, "wait for CI") || entry["kind"] == "background_task" || entry["kind"] == "turn_activity" {
+		if strings.Contains(text, "wait for CI") ||
+			strings.Contains(text, "background task you started earlier") ||
+			entry["kind"] == "background_task" ||
+			entry["kind"] == "turn_activity" {
 			t.Fatalf("continuation mechanics leaked into main transcript: %#v", entry)
 		}
 	}
@@ -1141,11 +1165,161 @@ func TestProjectTranscriptEventsHidesBackgroundContinuationTurnFromMainTranscrip
 	if !ok {
 		t.Fatalf("continuation turn did not remain available in Turn activity: %#v", projection.ActivityBodies)
 	}
-	if got, want := len(body.Entries), 2; got != want {
+	if got, want := len(body.Entries), 4; got != want {
 		t.Fatalf("continuation activity entries = %d, want %d: %#v", got, want, body.Entries)
 	}
-	if got, want := len(body.CompactedEntryIDs), 2; got != want {
+	if got, want := len(body.CompactedEntryIDs), 3; got != want {
 		t.Fatalf("continuation compacted entries = %d, want %d: %#v", got, want, body.CompactedEntryIDs)
+	}
+	if _, ok := projection.ActivityBodies["turn_bgtask-task-ci"]; ok {
+		t.Fatalf("wake continuation should be folded into parent activity body: %#v", projection.ActivityBodies)
+	}
+	foundWakeFinal := false
+	foundWakePrompt := false
+	for _, entry := range body.Entries {
+		if transcriptMapString(entry, "text") == "A background task you started earlier has finished." {
+			foundWakePrompt = true
+			if got, want := transcriptMapString(entry, "authorKind"), string(conversation.AuthorKindSystem); got != want {
+				t.Fatalf("wake prompt authorKind = %q, want %q: %#v", got, want, entry)
+			}
+			if got, want := transcriptMapString(entry, "turnId"), "turn-1"; got != want {
+				t.Fatalf("wake prompt turnId = %q, want parent %q: %#v", got, want, entry)
+			}
+			if got, want := transcriptMapString(entry, "backendTurnId"), "turn_bgtask-task-ci"; got != want {
+				t.Fatalf("wake prompt backendTurnId = %q, want %q: %#v", got, want, entry)
+			}
+		}
+		if transcriptMapString(entry, "text") == "CI passed. The branch is ready." {
+			foundWakeFinal = true
+			if got, want := transcriptMapString(entry, "turnId"), "turn-1"; got != want {
+				t.Fatalf("wake activity entry turnId = %q, want parent %q: %#v", got, want, entry)
+			}
+		}
+	}
+	if !foundWakeFinal {
+		t.Fatalf("parent activity body missing wake final: %#v", body.Entries)
+	}
+	if !foundWakePrompt {
+		t.Fatalf("parent activity body missing wake prompt: %#v", body.Entries)
+	}
+}
+
+func TestProjectTranscriptEventsFoldsHashedBackgroundWakeTurnIntoParent(t *testing.T) {
+	taskID := "task:ci:with:colon"
+	wakeTurnID := conversation.TurnIDForClientNonce(pgstore.BackgroundTaskWakeClientNonce(taskID))
+	if wakeTurnID == "turn_bgtask-"+taskID {
+		t.Fatalf("test task id should exercise hashed wake nonce, got %q", wakeTurnID)
+	}
+	events := []map[string]any{
+		projectionTestEvent("user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "Run CI and tell me when it passes.",
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("task-started", "003", "shell_task.started", "tool", "claude", "turn-1", "turn-1:task:ci", map[string]any{
+			"task_id": taskID,
+			"status":  "running",
+			"summary": "CI check",
+		}),
+		projectionTestEvent("waiting-final", "004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:waiting", map[string]any{
+			"kind": "message",
+			"text": "I will wait for CI and check back when it finishes.",
+		}),
+		projectionTestEvent("turn-terminal", "005", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:waiting")),
+		projectionTestEvent("task-exited", "006", "shell_task.exited", "tool", "claude", "turn-1", "turn-1:task:ci", map[string]any{
+			"task_id": taskID,
+			"status":  "completed",
+			"summary": "CI passed",
+		}),
+		projectionTestEvent("wake-submitted", "007", "turn.submitted", "runner", "tank", wakeTurnID, "", map[string]any{"status": "submitted", "source": "background-task", "task_id": taskID, "prompt": "A background task you started earlier has finished."}),
+		projectionTestEvent("wake-final", "008", "item.completed", "assistant", "claude", wakeTurnID, wakeTurnID+":item:final", map[string]any{
+			"kind": "message",
+			"text": "CI passed. The branch is ready.",
+		}),
+		projectionTestEvent("wake-terminal", "009", "turn.completed", "runner", "claude", wakeTurnID, "", projectionFinalAnswerPayload(wakeTurnID+":item:final")),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 2; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	if got, want := transcriptMapString(projection.Entries[1], "turnId"), "turn-1"; got != want {
+		t.Fatalf("wake final projected turnId = %q, want parent %q: %#v", got, want, projection.Entries[1])
+	}
+	if got, want := transcriptMapString(projection.Entries[1], "backendTurnId"), wakeTurnID; got != want {
+		t.Fatalf("wake final backendTurnId = %q, want wake turn %q: %#v", got, want, projection.Entries[1])
+	}
+	if _, ok := projection.ActivityBodies[wakeTurnID]; ok {
+		t.Fatalf("hashed wake body should be folded into parent: %#v", projection.ActivityBodies)
+	}
+	if _, ok := projection.ActivityBodies["turn-1"]; !ok {
+		t.Fatalf("parent body missing after hashed wake fold: %#v", projection.ActivityBodies)
+	}
+}
+
+func TestProjectTranscriptEventsHidesFailedBackgroundWakeContinuationFromMainTranscript(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "Run CI and tell me when it passes.",
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("task-started", "003", "shell_task.started", "tool", "claude", "turn-1", "turn-1:task:ci", map[string]any{
+			"task_id": "task-ci",
+			"status":  "running",
+			"summary": "CI check",
+		}),
+		projectionTestEvent("waiting-final", "004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:waiting", map[string]any{
+			"kind": "message",
+			"text": "I will wait for CI and check back when it finishes.",
+		}),
+		projectionTestEvent("turn-terminal", "005", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:waiting")),
+		projectionTestEvent("task-exited", "006", "shell_task.exited", "tool", "claude", "turn-1", "turn-1:task:ci", map[string]any{
+			"task_id": "task-ci",
+			"status":  "completed",
+			"summary": "CI passed",
+		}),
+		projectionTestEvent("wake-submitted", "007", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{"status": "submitted", "source": "background-task", "task_id": "task-ci", "prompt": "A background task you started earlier has finished."}),
+		projectionTestEvent("wake-progress", "008", "item.completed", "assistant", "claude", "turn_bgtask-task-ci", "turn_bgtask-task-ci:item:progress", map[string]any{
+			"kind": "message",
+			"text": "I saw the task output but then hit an error.",
+		}),
+		projectionTestEvent("wake-failed", "009", "turn.failed", "runner", "claude", "turn_bgtask-task-ci", "", map[string]any{
+			"error":  "provider rate limit",
+			"reason": "provider_rate_limit",
+		}),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 1; got != want {
+		t.Fatalf("projected entries = %d, want only original user row: %#v", got, projection.Entries)
+	}
+	if got, want := projection.Entries[0]["role"], "user"; got != want {
+		t.Fatalf("remaining row role = %#v, want %#v: %#v", got, want, projection.Entries[0])
+	}
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatalf("parent activity body missing: %#v", projection.ActivityBodies)
+	}
+	if _, ok := projection.ActivityBodies["turn_bgtask-task-ci"]; ok {
+		t.Fatalf("wake body should fold into parent: %#v", projection.ActivityBodies)
+	}
+	foundWakePrompt := false
+	foundFailedMeta := false
+	for _, entry := range body.Entries {
+		if transcriptMapString(entry, "text") == "A background task you started earlier has finished." {
+			foundWakePrompt = true
+		}
+		if transcriptMapString(entry, "kind") == "meta" && transcriptMapString(transcriptMap(entry, "meta"), "title") == "Turn failed" {
+			foundFailedMeta = true
+			if got, want := transcriptMapString(entry, "turnId"), "turn-1"; got != want {
+				t.Fatalf("failed meta turnId = %q, want parent: %#v", got, entry)
+			}
+			if got, want := transcriptMapString(entry, "backendTurnId"), "turn_bgtask-task-ci"; got != want {
+				t.Fatalf("failed meta backendTurnId = %q, want wake turn: %#v", got, entry)
+			}
+		}
+	}
+	if !foundWakePrompt || !foundFailedMeta {
+		t.Fatalf("parent body missing wake prompt or failed meta: prompt=%v failed=%v entries=%#v", foundWakePrompt, foundFailedMeta, body.Entries)
 	}
 }
 

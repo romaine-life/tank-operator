@@ -77,6 +77,26 @@ test("ignores durable user messages because they are not part of the Turns activ
   assert.equal(requests.size, 0);
 });
 
+test("refreshes cached turn activity for turn-only background wake prompts", () => {
+  const requests = cachedTurnActivityRefreshRequests(
+    { "turn-1": [] },
+    [
+      row({
+        id: "turn-1:wake-prompt",
+        kind: "message",
+        role: "user",
+        authorKind: "system",
+        turnId: "turn-1",
+        turnOnly: true,
+        wakePrompt: true,
+        orderKey: "011",
+      }),
+    ],
+  );
+
+  assert.deepEqual(Array.from(requests.entries()), [["turn-1", "011"]]);
+});
+
 test("treats an empty cached activity body as loaded", () => {
   const requests = cachedTurnActivityRefreshRequests(
     { "turn-1": [] },
