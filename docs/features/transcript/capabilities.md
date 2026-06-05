@@ -230,6 +230,11 @@ Contract impact:
   online" `ready`) and `failed` keep their top-level placement and severity.
 - No new event type, schema, fixture, or runner change — `session.status` events
   are unchanged; only their projection altitude moves.
+- The sessions trigger writes `session.status` loading/ready into the durable
+  `session_events` ledger only; it does not seed `session_transcript_rows` for
+  those startup notices. Direct startup transcript rows from the old trigger are
+  deleted by the forward migration, and the transcript-row projection version is
+  bumped so stale materializations rebuild through the server projection.
 
 Evidence:
 - Projection: `backend-go/cmd/tank-operator/transcript_projection.go`
@@ -241,7 +246,14 @@ Evidence:
 - Tests: `transcript_projection_test.go`
   (`TestProjectTranscriptEventsFoldsSessionLifecycleIntoTurn`,
   `…DropsOrphanSessionLifecycle`, `…KeepsFailedSessionBannerPromoted`,
-  `…KeepsProviderRecoveryBannerPromoted`).
+  `…KeepsProviderRecoveryBannerPromoted`), plus
+  `transcript_rows_backfill_integration_test.go`
+  (`TestTranscriptRowBackfillDoesNotPreserveStartupStatusRows`,
+  `TestFailedSessionStatusStillCreatesTranscriptRow`).
+- Migration guard: `backend-go/internal/pgstore/migrations.go` migration `0127`
+  replaces `tank_upsert_session_status_event` so loading/ready return before the
+  transcript-row insert, deletes stale direct startup rows, and leaves failed
+  startup banners promoted.
 - Client mirror: `frontend/src/conversationProjection.ts` drops startup notices
   to match; `conversationProjection.test.ts` ("session-startup notices are turn
   noise, not main-transcript messages").

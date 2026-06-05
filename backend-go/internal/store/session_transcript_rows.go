@@ -16,13 +16,11 @@ import (
 
 const transcriptRowCursorSeparator = "\x1f"
 
-// Bumped 5 -> 6 so every session re-backfills its transcript rows once and
-// restores AskUserQuestion's durable main-transcript navigation button while
-// keeping the answer form on the Turn question page. Without the bump, sessions
-// that already materialized turn.awaiting_input would keep stale turn_activity
-// shells whose activityIds hide the button row until a new event happened to
-// re-project their turn.
-const transcriptRowBackfillVersion = 6
+// Bumped 6 -> 7 so every session re-backfills its transcript rows after the
+// startup-status cutover. Direct session.status loading/ready rows seeded by
+// the old database trigger are retired; the server projection folds those
+// durable events into the owning turn's Turn activity instead.
+const transcriptRowBackfillVersion = 7
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error
