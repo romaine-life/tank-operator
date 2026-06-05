@@ -888,7 +888,7 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 	baseIndex += len(s.turnUsages)
 	offset = 0
 	for _, terminal := range s.turnTerminals {
-		if terminal.Status == "completed" {
+		if terminal.Status == "completed" || terminal.Status == "answered" {
 			continue
 		}
 		isFailed := terminal.Status == "failed"

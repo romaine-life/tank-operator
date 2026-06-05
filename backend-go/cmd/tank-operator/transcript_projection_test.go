@@ -798,6 +798,11 @@ func TestProjectTranscriptEventsAwaitingInputAnsweredBySameTurnEvent(t *testing.
 	if body.Summary["active"] == true {
 		t.Fatalf("question turn activity stayed active after answer: %#v", body.Summary)
 	}
+	for _, entry := range projection.Entries {
+		if strings.HasPrefix(transcriptMapString(entry, "id"), "turn-terminal:") {
+			t.Fatalf("answered question turn rendered terminal meta row: %#v", entry)
+		}
+	}
 	for _, body := range projection.ActivityBodies {
 		for _, entry := range body.Entries {
 			if entry["metaKind"] != "awaiting_input" {
