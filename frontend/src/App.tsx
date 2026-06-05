@@ -793,6 +793,38 @@ const PROVIDER_LABELS: Record<Provider, string> = {
   codex: "Codex",
 };
 
+type ProviderQuotaWindowId = "five_hour" | "weekly" | "opus_weekly";
+type ProviderQuotaStatus = "ok" | "low" | "exhausted" | "stale" | "unknown";
+
+interface ProviderQuotaWindow {
+  id: ProviderQuotaWindowId;
+  label: string;
+  shortLabel: string;
+  status: ProviderQuotaStatus;
+  percentRemaining: number | null;
+  resetAt: string | null;
+  observedAt: string | null;
+}
+
+interface ProviderQuotaSnapshot {
+  provider: Provider;
+  status: ProviderQuotaStatus;
+  observedAt: string | null;
+  windows: ProviderQuotaWindow[];
+}
+
+const PROVIDER_QUOTA_WINDOW_DEFS: Record<Provider, Array<Pick<ProviderQuotaWindow, "id" | "label" | "shortLabel">>> = {
+  anthropic: [
+    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
+    { id: "weekly", label: "Weekly", shortLabel: "Week" },
+    { id: "opus_weekly", label: "Opus weekly", shortLabel: "Opus" },
+  ],
+  codex: [
+    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
+    { id: "weekly", label: "Weekly", shortLabel: "Week" },
+  ],
+};
+
 const MODE_HINTS: Record<SessionMode, string> = {
   claude_cli: "Uses claude.ai login",
   claude_gui: "GUI chat pane for claude -p output",
@@ -2921,6 +2953,7 @@ function DemoLanding() {
       : selectedProvider === "codex"
         ? demoCodexModelId
         : "";
+  const demoProviderQuotaSnapshots = useMemo(() => buildProviderQuotaSnapshots(demoSessions), [demoSessions]);
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -3153,20 +3186,35 @@ function DemoLanding() {
                     {PROVIDERS.map((provider) => {
                       const mode = defaultModeFor(provider, demoInteraction);
                       const providerSelected = provider === selectedProvider;
+                      const quota = demoProviderQuotaSnapshots[provider];
+                      const fiveHour = quota.windows.find((window) => window.id === "five_hour");
+                      const weekly =
+                        quota.windows.find((window) => window.id === "weekly") ??
+                        quota.windows.find((window) => window.id === "opus_weekly");
                       return (
                         <button
                           key={provider}
-                          className={`home-choice${providerSelected ? " is-selected" : ""}`}
+                          className={`home-choice home-provider-choice is-${quota.status}${providerSelected ? " is-selected" : ""}`}
                           onClick={() => setDemoProvider(provider)}
                           aria-pressed={providerSelected}
                           title={MODE_LABELS[mode]}
                         >
-                          <ProviderIcon provider={provider} className="home-choice-icon" />
-                          <span>{PROVIDER_LABELS[provider]}</span>
+                          <span className="home-provider-choice-main">
+                            <ProviderIcon provider={provider} className="home-choice-icon" />
+                            <span>{PROVIDER_LABELS[provider]}</span>
+                          </span>
+                          <span className="home-provider-choice-usage">
+                            <span>{fiveHour?.shortLabel ?? "5h"} {providerQuotaSummary(fiveHour)}</span>
+                            <span>{weekly?.shortLabel ?? "Week"} {providerQuotaSummary(weekly)}</span>
+                          </span>
                         </button>
                       );
                     })}
                   </div>
+                  <ProviderCapacityStrip
+                    snapshots={demoProviderQuotaSnapshots}
+                    selectedProvider={selectedProvider}
+                  />
                   <div className="home-choice-grid" role="group" aria-label="interaction">
                     {INTERACTION_OPTIONS.map((interaction) => {
                       const unavailable =
@@ -10009,6 +10057,173 @@ function providerRateLimitRows(session?: Session): Array<{ key: string; label: s
   return rows;
 }
 
+function quotaProviderFromInfo(info: Record<string, unknown>, fallback: Provider): Provider {
+  const raw = typeof info.provider === "string" ? info.provider.toLowerCase() : "";
+  if (raw.includes("codex") || raw.includes("openai")) return "codex";
+  if (raw.includes("claude") || raw.includes("anthropic")) return "anthropic";
+  return fallback;
+}
+
+function quotaWindowIdFromInfo(info: Record<string, unknown>): ProviderQuotaWindowId {
+  const raw = typeof info.rateLimitType === "string" ? info.rateLimitType.toLowerCase() : "";
+  const normalized = raw.replace(/[\s-]+/g, "_");
+  if (normalized.includes("opus")) return "opus_weekly";
+  if (normalized.includes("other") || normalized.includes("sonnet") || normalized.includes("non_opus")) return "weekly";
+  if (normalized.includes("week") || normalized.includes("seven_day") || normalized.includes("7_day")) {
+    return "weekly";
+  }
+  return "five_hour";
+}
+
+function quotaPercentRemaining(info: Record<string, unknown>): number | null {
+  const raw = info.utilization;
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return null;
+  const percentUsed = raw <= 1 ? raw * 100 : raw;
+  return Math.max(0, Math.min(100, 100 - percentUsed));
+}
+
+function quotaResetAt(info: Record<string, unknown>): string | null {
+  const raw = info.resetsAt ?? info.overageResetsAt;
+  if (typeof raw === "number" && Number.isFinite(raw)) {
+    const ms = raw > 1_000_000_000_000 ? raw : raw * 1000;
+    const date = new Date(ms);
+    return Number.isFinite(date.getTime()) ? date.toISOString() : null;
+  }
+  if (typeof raw === "string" && raw.trim()) {
+    const ms = Date.parse(raw);
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  }
+  return null;
+}
+
+function quotaWindowStatus(
+  info: Record<string, unknown> | null,
+  percentRemaining: number | null,
+  resetAt: string | null,
+  observedAt: string | null,
+): ProviderQuotaStatus {
+  if (!info || !observedAt) return "unknown";
+  const now = Date.now();
+  const resetMs = resetAt ? Date.parse(resetAt) : Number.NaN;
+  if (Number.isFinite(resetMs) && resetMs < now) return "stale";
+  const observedMs = Date.parse(observedAt);
+  if (Number.isFinite(observedMs) && now - observedMs > 24 * 60 * 60 * 1000) return "stale";
+  const status = typeof info.status === "string" ? info.status.toLowerCase() : "";
+  if (status.includes("reject") || status.includes("exhaust")) return "exhausted";
+  if (percentRemaining !== null && percentRemaining <= 0) return "exhausted";
+  if (percentRemaining !== null && percentRemaining <= 20) return "low";
+  return "ok";
+}
+
+function quotaSnapshotStatus(windows: ProviderQuotaWindow[]): ProviderQuotaStatus {
+  if (windows.some((window) => window.status === "exhausted")) return "exhausted";
+  if (windows.some((window) => window.status === "low")) return "low";
+  if (windows.some((window) => window.status === "ok")) return "ok";
+  if (windows.some((window) => window.status === "stale")) return "stale";
+  return "unknown";
+}
+
+function buildProviderQuotaSnapshots(sessions: readonly Session[]): Record<Provider, ProviderQuotaSnapshot> {
+  const latest: Partial<Record<Provider, Partial<Record<ProviderQuotaWindowId, {
+    info: Record<string, unknown>;
+    observedAt: string;
+  }>>>> = {};
+  for (const session of sessions) {
+    const info = session.provider_rate_limit_info;
+    const observedAt = session.provider_rate_limit_observed_at;
+    if (!info || !observedAt) continue;
+    const fallbackProvider = MODE_MENU_ICONS[session.mode];
+    const provider = quotaProviderFromInfo(info, fallbackProvider);
+    const windowId = quotaWindowIdFromInfo(info);
+    const current = latest[provider]?.[windowId];
+    if (!current || Date.parse(observedAt) > Date.parse(current.observedAt)) {
+      latest[provider] = {
+        ...(latest[provider] ?? {}),
+        [windowId]: { info, observedAt },
+      };
+    }
+  }
+
+  const out = {} as Record<Provider, ProviderQuotaSnapshot>;
+  for (const provider of PROVIDERS) {
+    const windows = PROVIDER_QUOTA_WINDOW_DEFS[provider].map((def): ProviderQuotaWindow => {
+      const evidence = latest[provider]?.[def.id];
+      const percentRemaining = evidence ? quotaPercentRemaining(evidence.info) : null;
+      const resetAt = evidence ? quotaResetAt(evidence.info) : null;
+      return {
+        ...def,
+        status: quotaWindowStatus(evidence?.info ?? null, percentRemaining, resetAt, evidence?.observedAt ?? null),
+        percentRemaining,
+        resetAt,
+        observedAt: evidence?.observedAt ?? null,
+      };
+    });
+    const observedAt = windows
+      .map((window) => window.observedAt)
+      .filter((value): value is string => Boolean(value))
+      .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
+    out[provider] = {
+      provider,
+      status: quotaSnapshotStatus(windows),
+      observedAt,
+      windows,
+    };
+  }
+  return out;
+}
+
+function providerQuotaSummary(window: ProviderQuotaWindow | undefined): string {
+  if (!window || window.status === "unknown") return "unknown";
+  if (window.status === "stale") return "stale";
+  if (window.percentRemaining === null) {
+    return window.status === "exhausted" ? "exhausted" : "captured";
+  }
+  return `${Math.round(window.percentRemaining)}% left`;
+}
+
+function providerQuotaResetLabel(window: ProviderQuotaWindow): string {
+  if (!window.resetAt) return "";
+  const ms = Date.parse(window.resetAt);
+  if (!Number.isFinite(ms)) return "";
+  return `resets ${new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+}
+
+function ProviderCapacityStrip({
+  snapshots,
+  selectedProvider,
+}: {
+  snapshots: Record<Provider, ProviderQuotaSnapshot>;
+  selectedProvider: Provider;
+}) {
+  const snapshot = snapshots[selectedProvider];
+  return (
+    <div className={`home-provider-capacity-panel is-${snapshot.status}`} aria-label={`${PROVIDER_LABELS[selectedProvider]} usage remaining`}>
+      <div className="home-provider-capacity-head">
+        <span>Capacity</span>
+        <span>
+          {snapshot.observedAt ? `Last captured ${formatToolClockTime(snapshot.observedAt)}` : "No recent capture"}
+        </span>
+      </div>
+      <div className="home-provider-capacity-rows">
+        {snapshot.windows.map((window) => (
+          <div className={`home-provider-capacity-row is-${window.status}`} key={window.id}>
+            <span className="home-provider-capacity-label">{window.label}</span>
+            <span className="home-provider-capacity-meter" aria-hidden="true">
+              <span
+                style={{ width: `${window.percentRemaining ?? 0}%` }}
+              />
+            </span>
+            <span className="home-provider-capacity-value">
+              {providerQuotaSummary(window)}
+              {providerQuotaResetLabel(window) ? ` · ${providerQuotaResetLabel(window)}` : ""}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function RunSettingsPanel({
   session,
   runPrefs,
@@ -15933,6 +16148,7 @@ function AuthenticatedApp() {
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
   const [appConfigLoaded, setAppConfigLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
+  const providerQuotaSnapshots = useMemo(() => buildProviderQuotaSnapshots(sessions), [sessions]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
@@ -18718,21 +18934,36 @@ function AuthenticatedApp() {
                     {PROVIDERS.map((provider) => {
                       const mode = defaultModeFor(provider, defaultInteraction);
                       const selected = provider === selectedProvider;
+                      const quota = providerQuotaSnapshots[provider];
+                      const fiveHour = quota.windows.find((window) => window.id === "five_hour");
+                      const weekly =
+                        quota.windows.find((window) => window.id === "weekly") ??
+                        quota.windows.find((window) => window.id === "opus_weekly");
                       return (
                         <button
                           key={provider}
-                          className={`home-choice${selected ? " is-selected" : ""}`}
+                          className={`home-choice home-provider-choice is-${quota.status}${selected ? " is-selected" : ""}`}
                           onClick={() => setDefaultProvider(provider)}
                           disabled={busy}
                           aria-pressed={selected}
                           title={MODE_LABELS[mode]}
                         >
-                          <ProviderIcon provider={provider} className="home-choice-icon" />
-                          <span>{PROVIDER_LABELS[provider]}</span>
+                          <span className="home-provider-choice-main">
+                            <ProviderIcon provider={provider} className="home-choice-icon" />
+                            <span>{PROVIDER_LABELS[provider]}</span>
+                          </span>
+                          <span className="home-provider-choice-usage">
+                            <span>{fiveHour?.shortLabel ?? "5h"} {providerQuotaSummary(fiveHour)}</span>
+                            <span>{weekly?.shortLabel ?? "Week"} {providerQuotaSummary(weekly)}</span>
+                          </span>
                         </button>
                       );
                     })}
                   </div>
+                  <ProviderCapacityStrip
+                    snapshots={providerQuotaSnapshots}
+                    selectedProvider={selectedProvider}
+                  />
                   <div className="home-choice-grid" role="group" aria-label="interaction">
                     {INTERACTION_OPTIONS.map((interaction) => {
                       const unavailable =
