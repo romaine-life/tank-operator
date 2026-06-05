@@ -213,6 +213,10 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	}
 
 	owner := user.OwnerEmail()
+	// Prompt-mid-sleep = take-over: a user turn to a parked (scheduled) session
+	// cancels its pending self-scheduled wake(s), so the session does not fold
+	// back to "scheduled" after this turn finishes. No-op when nothing is pending.
+	s.cancelPendingWakesForSession(r.Context(), sessionID)
 	resp, status, detail := s.enqueueSDKTurn(r.Context(), owner, sessionID, sdkTurnRequest{
 		ClientNonce:        body.ClientNonce,
 		RequireNonce:       true,

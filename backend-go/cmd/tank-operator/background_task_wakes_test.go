@@ -10,12 +10,15 @@ import (
 )
 
 type fakeBackgroundTaskWakeStore struct {
-	rows       []pgstore.BackgroundTaskWake
-	firedID    string
-	firedTurn  string
-	failedID   string
-	failReason string
-	releasedID string
+	rows            []pgstore.BackgroundTaskWake
+	firedID         string
+	firedTurn       string
+	failedID        string
+	failReason      string
+	releasedID      string
+	cancelCalls     int
+	cancelSessionID string
+	cancelReturn    int64
 }
 
 func (f *fakeBackgroundTaskWakeStore) Register(context.Context, pgstore.RegisterBackgroundTaskWakeRequest) (pgstore.BackgroundTaskWake, error) {
@@ -45,6 +48,12 @@ func (f *fakeBackgroundTaskWakeStore) Release(_ context.Context, wakeID string) 
 
 func (f *fakeBackgroundTaskWakeStore) DueCount(context.Context, time.Time) (int, error) {
 	return len(f.rows), nil
+}
+
+func (f *fakeBackgroundTaskWakeStore) CancelPendingForSession(_ context.Context, _, sessionID string) (int64, error) {
+	f.cancelCalls++
+	f.cancelSessionID = sessionID
+	return f.cancelReturn, nil
 }
 
 func backgroundWakeRow() pgstore.BackgroundTaskWake {

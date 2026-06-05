@@ -157,6 +157,7 @@ type scheduledWakeupStore interface {
 	MarkFired(context.Context, string, string) error
 	MarkFailed(context.Context, string, string) error
 	ScheduledDueCount(context.Context, time.Time) (int, error)
+	CancelPendingForSession(context.Context, string, string) (int64, error)
 }
 
 type pendingLaunchStore interface {
@@ -177,6 +178,7 @@ type backgroundTaskWakeStore interface {
 	MarkFailed(context.Context, string, string) error
 	Release(context.Context, string) error
 	DueCount(context.Context, time.Time) (int, error)
+	CancelPendingForSession(context.Context, string, string) (int64, error)
 }
 
 type controlActionStore interface {
@@ -338,6 +340,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleSessionEventStream)
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)
 	mux.HandleFunc("GET /api/sessions/{session_id}/scheduled-wakeups", s.handleListScheduledWakeups)
+	mux.HandleFunc("POST /api/sessions/{session_id}/scheduled-wakeups/cancel", s.handleCancelScheduledWakeups)
 	mux.HandleFunc("GET /api/sessions/{session_id}/control-actions", s.handleListControlActions)
 	mux.HandleFunc("GET /api/sessions/{session_id}/turns/{turn_id}/activity", s.handleSessionTurnActivity)
 	// Durable resolver for the public per-session turn number: the canonical

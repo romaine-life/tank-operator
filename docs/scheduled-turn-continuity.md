@@ -1,6 +1,13 @@
-# Scheduled Turn Continuity (draft)
+# Scheduled Turn Continuity
 
-Status: draft design note. Output of a discussion session; not yet built.
+Status: implemented in PR #906 (branch `scheduled-turn-state`). Built in three
+stages on one branch: (1) the non-summoning `scheduled` status; (2) a broken
+self-resume rings the summon via the durable `away_error` bit; (3) cancel +
+prompt-mid-sleep take-over (a `cancelled` wake state). As-built refinements over
+the original sketch below: the ring keys off the durable `away_error` provenance
+bit (not prior status, which flickers through `scheduled -> submitted -> error`);
+and a direct `scheduled -> ready` is a cancel/clear and does NOT ring — the
+genuine end-of-chain hand-off arrives as `streaming -> ready`.
 Extends [tank-conversation-protocol.md](tank-conversation-protocol.md) (state
 machine, ScheduleWakeup, AskUserQuestion pause/resume) and the
 [transcript](features/transcript/contract.md) and

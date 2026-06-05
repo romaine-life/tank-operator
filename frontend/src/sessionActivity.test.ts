@@ -399,6 +399,29 @@ test("shouldRingForActivityTransition: away-error rings (broken self-resume)", (
   );
 });
 
+test("shouldRingForActivityTransition: ring user-turn set stays exactly {ready, needs_input} (guard)", () => {
+  // Migration guard: the summon set must not silently grow. A new status (e.g.
+  // scheduled) must NOT join the user-turn set — entering any non-{ready,
+  // needs_input} status from working must stay silent. The one separate ring
+  // path is away_error, pinned by its own tests above.
+  const all: ConversationActivityStatus[] = [
+    "ready",
+    "submitted",
+    "claimed",
+    "streaming",
+    "needs_input",
+    "scheduled",
+    "stopping",
+    "stopped",
+    "error",
+  ];
+  for (const next of all) {
+    const rings = shouldRingForActivityTransition(summary("streaming"), summary(next));
+    const expected = next === "ready" || next === "needs_input";
+    assert.equal(rings, expected, `working -> ${next} should ${expected ? "" : "not "}ring`);
+  }
+});
+
 test("shouldRingForActivityTransition: away-error does not re-ring when already error", () => {
   assert.equal(
     shouldRingForActivityTransition(

@@ -21,6 +21,7 @@ const (
 	ScheduledWakeupClaiming  ScheduledWakeupStatus = "claiming"
 	ScheduledWakeupFired     ScheduledWakeupStatus = "fired"
 	ScheduledWakeupFailed    ScheduledWakeupStatus = "failed"
+	ScheduledWakeupCancelled ScheduledWakeupStatus = "cancelled"
 )
 
 type ScheduledWakeup struct {
@@ -301,6 +302,34 @@ func (s *ScheduledWakeupStore) HasPending(ctx context.Context, sessionScope, ses
 		)
 	`, sessionScope, sessionID).Scan(&pending)
 	return pending, err
+}
+
+// CancelPendingForSession marks every still-pending wakeup for the session
+// 'cancelled' — a terminal that leaves the wake non-pending without 'failed”s
+// error semantics (a cancel must not ring or read as an error). Used by the
+// explicit cancel control and the prompt-mid-sleep take-over (a user turn to a
+// parked session). Returns the number cancelled.
+func (s *ScheduledWakeupStore) CancelPendingForSession(ctx context.Context, sessionScope, sessionID string) (int64, error) {
+	if s == nil || s.pool == nil {
+		return 0, errors.New("scheduled wakeup store unavailable")
+	}
+	sessionScope = strings.TrimSpace(sessionScope)
+	if sessionScope == "" {
+		sessionScope = s.scope
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE session_scheduled_wakeups
+		SET status = 'cancelled', locked_at = NULL, updated_at = now()
+		WHERE session_scope = $1 AND session_id = $2 AND status IN ('scheduled', 'claiming')
+	`, sessionScope, sessionID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
 }
 
 type scheduledWakeupScanner interface {
