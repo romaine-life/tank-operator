@@ -310,13 +310,13 @@ const required = [
   },
   {
     file: "frontend/src/App.tsx",
-    name: "question page uses the semantic question_set page kind",
-    pattern: /kind === "question_set"/,
+    name: "question page uses the semantic question page kind",
+    pattern: /kind === "question"/,
   },
   {
     file: "backend-go/cmd/tank-operator/turn_pages.go",
-    name: "turn.awaiting_input creates semantic question_set pages",
-    pattern: /awaitingInputQuestionPages[\s\S]{0,700}Kind:\s*"question_set"/,
+    name: "turn.awaiting_input creates semantic question pages",
+    pattern: /awaitingInputQuestionPages[\s\S]{0,700}Kind:\s*"question"/,
   },
   {
     file: "backend-go/cmd/tank-operator/turn_pages.go",
