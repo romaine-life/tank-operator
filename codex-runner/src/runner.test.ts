@@ -261,6 +261,86 @@ test("codexQuestionsToTankShape tolerates pure free-form (null options) and drop
   );
 });
 
+test("acceptInputReply delivers free-form Other text to codex app-server", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    acceptInputReply: (record: unknown) => Promise<void>;
+    pendingInputReplies: Map<string, { resolve: (value: unknown) => void }>;
+    commandBus: { markCompleted: (record: unknown) => Promise<void>; markFailed: () => Promise<void> };
+  };
+  let resolved: unknown;
+  let completedRecord: unknown;
+  runner.pendingInputReplies = new Map([
+    [
+      "turn-active\x1fturn-active:item:req_ask\x1freq_ask",
+      {
+        resolve(value: unknown) {
+          resolved = value;
+        },
+      },
+    ],
+  ]);
+  runner.commandBus = {
+    async markCompleted(record) {
+      completedRecord = record;
+    },
+    async markFailed() {
+      assert.fail("input_reply should resolve the pending request");
+    },
+  };
+
+  await runner.acceptInputReply({
+    type: "input_reply",
+    target_turn_id: "turn-active",
+    target_timeline_id: "turn-active:item:req_ask",
+    target_provider_item_id: "req_ask",
+    answers: { "Proceed?": ["Other"] },
+    annotations: { "Proceed?": { notes: "Use the dedicated test database." } },
+  });
+
+  assert.deepEqual(resolved, {
+    answers: { "Proceed?": { answers: ["Use the dedicated test database."] } },
+  });
+  assert.ok(completedRecord, "input_reply command should be acked after resolving the request");
+});
+
+test("acceptInputReply keeps selected codex labels and appends free-form context", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    acceptInputReply: (record: unknown) => Promise<void>;
+    pendingInputReplies: Map<string, { resolve: (value: unknown) => void }>;
+    commandBus: { markCompleted: () => Promise<void>; markFailed: () => Promise<void> };
+  };
+  let resolved: unknown;
+  runner.pendingInputReplies = new Map([
+    [
+      "turn-active\x1fturn-active:item:req_ask\x1freq_ask",
+      {
+        resolve(value: unknown) {
+          resolved = value;
+        },
+      },
+    ],
+  ]);
+  runner.commandBus = {
+    async markCompleted() {},
+    async markFailed() {
+      assert.fail("input_reply should resolve the pending request");
+    },
+  };
+
+  await runner.acceptInputReply({
+    type: "input_reply",
+    target_turn_id: "turn-active",
+    target_timeline_id: "turn-active:item:req_ask",
+    target_provider_item_id: "req_ask",
+    answers: { "Proceed?": ["Apply the additive table now"] },
+    annotations: { "Proceed?": { notes: "Use the real migration path." } },
+  });
+
+  assert.deepEqual(resolved, {
+    answers: { "Proceed?": { answers: ["Apply the additive table now", "Use the real migration path."] } },
+  });
+});
+
 test("threadOptionsForCommand forwards first-turn Codex model and effort", () => {
   const opts = threadOptionsForCommand(runnerConfig(), {
     model: "gpt-5.5",

@@ -23,6 +23,13 @@ export const commandsConsumedTotal = new Counter({
   registers: [registry],
 });
 
+export const inputReplyAnswerShapeTotal = new Counter({
+  name: "tank_runner_input_reply_answer_shape_total",
+  help: "AskUserQuestion input_reply answers normalized for provider delivery, bucketed by whether the answer carried selected labels, free-form notes, or both.",
+  labelNames: ["shape"],
+  registers: [registry],
+});
+
 export const turnDurationSeconds = new Histogram({
   name: "tank_runner_turn_duration_seconds",
   help: "End-to-end duration from turn.started to the terminal turn event.",

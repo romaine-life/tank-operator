@@ -156,6 +156,21 @@ const required = [
     pattern: /\bacceptInputReply\b[\s\S]{0,1200}updatedInput[\s\S]{0,400}answers/,
   },
   {
+    file: "agent-runner/src/runner.ts",
+    name: "Claude runner delivers answer annotations to provider",
+    pattern: /answersForClaudeInput\(record\.answers,\s*record\.annotations\)/,
+  },
+  {
+    file: "agent-runner/src/runner.ts",
+    name: "Claude runner treats Other as a synthetic free-form label",
+    pattern: /label\.toLowerCase\(\)\s*!==\s*"other"/,
+  },
+  {
+    file: "agent-runner/src/runner.ts",
+    name: "Claude runner counts input_reply answer shape",
+    pattern: /inputReplyAnswerShapeTotal\.labels\(inputReplyAnswerShape/,
+  },
+  {
     file: "agent-runner/src/adapters/claude.ts",
     name: "Claude adapter normalizes questions via claudeQuestionsToTankShape",
     pattern: /\bclaudeQuestionsToTankShape\b/,
@@ -169,6 +184,21 @@ const required = [
     file: "codex-runner/src/runner.ts",
     name: "Codex runner accepts input_reply",
     pattern: /\bacceptInputReply\b[\s\S]{0,900}answersForCodexInput/,
+  },
+  {
+    file: "codex-runner/src/runner.ts",
+    name: "Codex runner delivers answer annotations to provider",
+    pattern: /answersForCodexInput\(record\.answers,\s*record\.annotations\)/,
+  },
+  {
+    file: "codex-runner/src/runner.ts",
+    name: "Codex runner treats Other as a synthetic free-form label",
+    pattern: /label\.toLowerCase\(\)\s*!==\s*"other"/,
+  },
+  {
+    file: "codex-runner/src/runner.ts",
+    name: "Codex runner counts input_reply answer shape",
+    pattern: /inputReplyAnswerShapeTotal\.labels\(inputReplyAnswerShape/,
   },
   {
     file: "codex-runner/src/runner.ts",
