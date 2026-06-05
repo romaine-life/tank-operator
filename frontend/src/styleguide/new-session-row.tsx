@@ -84,7 +84,7 @@ export function StyleguideNewSessionRow() {
                         <span className="home-provider-capacity-meter" aria-hidden="true">
                           <span style={{ width: "18%" }} />
                         </span>
-                        <span className="home-provider-capacity-value">18% left · resets 5:00 PM</span>
+                        <span className="home-provider-capacity-value">18% left · resets Jun 5, 2026, 5:00 PM UTC</span>
                       </div>
                       <div className="home-provider-capacity-row is-ok">
                         <span className="home-provider-capacity-label">Weekly</span>

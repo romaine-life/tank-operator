@@ -2843,6 +2843,7 @@ button:disabled {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: var(--space-3);
   margin-bottom: var(--space-2);
   color: var(--text-faint);
@@ -2852,6 +2853,11 @@ button:disabled {
 .home-provider-capacity-head span:first-child {
   color: var(--text-secondary);
   font-weight: 600;
+}
+
+.home-provider-capacity-head span:last-child {
+  min-width: 0;
+  text-align: right;
 }
 
 .home-provider-capacity-rows {
@@ -2872,9 +2878,18 @@ button:disabled {
 .home-provider-capacity-label,
 .home-provider-capacity-value {
   min-width: 0;
+}
+
+.home-provider-capacity-label {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.home-provider-capacity-value {
+  justify-self: end;
+  text-align: right;
+  line-height: 1.25;
 }
 
 .home-provider-capacity-meter {

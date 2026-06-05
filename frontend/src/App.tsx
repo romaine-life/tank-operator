@@ -10257,11 +10257,23 @@ function providerQuotaSummary(window: ProviderQuotaWindow | undefined): string {
   return `${Math.round(window.percentRemaining)}% left`;
 }
 
-function providerQuotaResetLabel(window: ProviderQuotaWindow): string {
-  if (!window.resetAt) return "";
-  const ms = Date.parse(window.resetAt);
+function formatProviderQuotaTimestamp(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return "";
-  return `resets ${new Date(ms).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}`;
+  return new Intl.DateTimeFormat([], {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(new Date(ms));
+}
+
+function providerQuotaResetLabel(window: ProviderQuotaWindow): string {
+  const resetAt = formatProviderQuotaTimestamp(window.resetAt);
+  return resetAt ? `resets ${resetAt}` : "";
 }
 
 function ProviderCapacityStrip({
@@ -10277,7 +10289,7 @@ function ProviderCapacityStrip({
       <div className="home-provider-capacity-head">
         <span>Capacity</span>
         <span>
-          {snapshot.observedAt ? `Last captured ${formatToolClockTime(snapshot.observedAt)}` : "No recent capture"}
+          {snapshot.observedAt ? `Last captured ${formatProviderQuotaTimestamp(snapshot.observedAt)}` : "No recent capture"}
         </span>
       </div>
       <div className="home-provider-capacity-rows">
