@@ -18,6 +18,7 @@ import {
   type TankConversationEvent,
 } from "../../runner-shared/conversation.js";
 import {
+  askUserQuestionHandoffEvents,
   stampTankEvent,
   turnEvent,
   userSubmissionEvents,
@@ -50,10 +51,7 @@ test("classifyProviderFailure maps the other known provider failure shapes", () 
     classifyProviderFailure("API Error: 401 authentication_error"),
     "auth",
   );
-  assert.equal(
-    classifyProviderFailure("ECONNRESET socket hang up"),
-    "other",
-  );
+  assert.equal(classifyProviderFailure("ECONNRESET socket hang up"), "other");
 });
 
 test("pickContextWindowFromModelUsage reads contextWindow from a populated entry", () => {
@@ -84,7 +82,9 @@ test("pickContextWindowFromModelUsage returns the max across multiple entries", 
 
 test("pickContextWindowFromModelUsage floors a fractional window", () => {
   assert.equal(
-    pickContextWindowFromModelUsage({ "claude-opus-4-8": { contextWindow: 199999.9 } }),
+    pickContextWindowFromModelUsage({
+      "claude-opus-4-8": { contextWindow: 199999.9 },
+    }),
     199999,
   );
 });
@@ -95,22 +95,28 @@ test("pickContextWindowFromModelUsage returns null for missing/empty/non-positiv
   // every entry's window is missing/zero/negative/non-finite.
   assert.equal(pickContextWindowFromModelUsage(undefined), null);
   assert.equal(pickContextWindowFromModelUsage({}), null);
-  assert.equal(pickContextWindowFromModelUsage({ "m": {} }), null);
-  assert.equal(pickContextWindowFromModelUsage({ "m": { contextWindow: 0 } }), null);
-  assert.equal(pickContextWindowFromModelUsage({ "m": { contextWindow: -5 } }), null);
+  assert.equal(pickContextWindowFromModelUsage({ m: {} }), null);
   assert.equal(
-    pickContextWindowFromModelUsage({ "m": { contextWindow: Number.NaN } }),
+    pickContextWindowFromModelUsage({ m: { contextWindow: 0 } }),
     null,
   );
   assert.equal(
-    pickContextWindowFromModelUsage({ "m": { contextWindow: Infinity } }),
+    pickContextWindowFromModelUsage({ m: { contextWindow: -5 } }),
+    null,
+  );
+  assert.equal(
+    pickContextWindowFromModelUsage({ m: { contextWindow: Number.NaN } }),
+    null,
+  );
+  assert.equal(
+    pickContextWindowFromModelUsage({ m: { contextWindow: Infinity } }),
     null,
   );
   // A mix where only some entries are unusable still yields the best positive.
   assert.equal(
     pickContextWindowFromModelUsage({
-      "bad": { contextWindow: 0 },
-      "good": { contextWindow: 200000 },
+      bad: { contextWindow: 0 },
+      good: { contextWindow: 200000 },
     }),
     200000,
   );
@@ -141,6 +147,31 @@ test("claudeRateLimitInfo keeps the SDK rate-limit fields admins need", () => {
       uuid: "rate-limit-1",
       session_id: "sdk-session-1",
     },
+  );
+});
+
+test("AskUserQuestion handoff emits a route-safe question turn id", () => {
+  const handoff = askUserQuestionHandoffEvents({
+    sessionID: "63",
+    askingTurnID: "turn_askq-test-1780648459",
+    askingClientNonce: "askq-test-1780648459",
+    source: "claude",
+    providerItemID: "toolu_01CmiCoRsbHCRZwTAT8P2pNZ",
+    providerTimelineID:
+      "turn_askq-test-1780648459:item:toolu_01CmiCoRsbHCRZwTAT8P2pNZ",
+    questions: [
+      { question: "Which cat coat color do you like best?" },
+      { question: "Which cat behavior is your favorite?" },
+    ],
+  });
+
+  assert.match(handoff.questionTurnID, /^[A-Za-z0-9._-]{1,80}$/);
+  assert.equal(handoff.questionTurnID.includes(":"), false);
+  assert.equal(handoff.questionSubmitted.turn_id, handoff.questionTurnID);
+  assert.ok(handoff.awaitingInput.payload);
+  assert.equal(
+    handoff.awaitingInput.payload.question_turn_id,
+    handoff.questionTurnID,
   );
 });
 
@@ -206,7 +237,11 @@ test("maybeRegisterBackgroundTaskWake skips when a turn is active", async () => 
     activeTurn: unknown;
     firedBackgroundTaskWakes: Set<string>;
   };
-  runner.activeTurn = { turnID: "turn-active", clientNonce: "turn-active", terminalEmitted: false };
+  runner.activeTurn = {
+    turnID: "turn-active",
+    clientNonce: "turn-active",
+    terminalEmitted: false,
+  };
   await runner.maybeRegisterBackgroundTaskWake({
     type: "system",
     subtype: "task_notification",
@@ -243,15 +278,16 @@ const fixturesPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../schemas/tank-conversation-event.fixtures.json",
 );
-const fixtures: { events: { name: string; event: TankConversationEvent }[] } = JSON.parse(
-  readFileSync(fixturesPath, "utf8"),
-);
+const fixtures: { events: { name: string; event: TankConversationEvent }[] } =
+  JSON.parse(readFileSync(fixturesPath, "utf8"));
 
 test("dispatch publishes a built Tank event and stamps order metadata", async () => {
   const order: Order = [];
   let sinkEvent: TankConversationEvent | undefined;
   const sink = {
-    async upsert(event: TankConversationEvent & { uuid: string; order_key: string }) {
+    async upsert(
+      event: TankConversationEvent & { uuid: string; order_key: string },
+    ) {
       sinkEvent = event;
       order.push("sink");
     },
@@ -281,7 +317,8 @@ test("dispatch refuses to publish events the persister would reject", async () =
     },
   };
   await assert.rejects(
-    () => dispatch(sink, { type: "assistant" } as unknown as TankConversationEvent),
+    () =>
+      dispatch(sink, { type: "assistant" } as unknown as TankConversationEvent),
     /event_id is required/,
   );
   assert.deepEqual(order, []);
@@ -303,7 +340,10 @@ test("dispatch reports failure when the sink throws", async () => {
 
 test("stampTankEvent throws when envelope fields are missing", () => {
   assert.throws(
-    () => stampTankEvent({ type: "user_message.created" } as unknown as TankConversationEvent),
+    () =>
+      stampTankEvent({
+        type: "user_message.created",
+      } as unknown as TankConversationEvent),
     /event_id is required/,
   );
 });
@@ -314,7 +354,9 @@ test("durable Tank fixtures pass the shared filter and dispatch end-to-end", asy
     const sink = makeSink(order);
     const stamped = stampTankEvent(event);
     if (!isDurableTankConversationEvent(stamped)) {
-      assert.fail(`${name}: stamped fixture should satisfy isDurableTankConversationEvent`);
+      assert.fail(
+        `${name}: stamped fixture should satisfy isDurableTankConversationEvent`,
+      );
     }
     const ok = await dispatch(sink, event);
     assert.equal(ok, true, `${name}: dispatch should succeed`);
@@ -331,7 +373,10 @@ test("userSubmissionEvents produces Tank-shape boundary events", () => {
     runtime: "claude",
     now: "2026-05-12T00:00:00.000Z",
   });
-  for (const event of [stampTankEvent(userMessage), stampTankEvent(turnSubmitted)]) {
+  for (const event of [
+    stampTankEvent(userMessage),
+    stampTankEvent(turnSubmitted),
+  ]) {
     assert.equal(isTankConversationEvent(event), true);
   }
 });
@@ -426,8 +471,14 @@ test("logUnhandledSdkMessage logs unknown types even with no identifying fields"
 test("dispatchInterruptIndependentlyOfSubmit: control handler dispatches interrupts without waiting for the data plane", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     commandBus: {
-      startCommandConsumer: (h: (r: unknown) => Promise<void>, s?: AbortSignal) => Promise<() => Promise<void>>;
-      startControlConsumer: (h: (r: unknown) => Promise<void>, s?: AbortSignal) => Promise<() => Promise<void>>;
+      startCommandConsumer: (
+        h: (r: unknown) => Promise<void>,
+        s?: AbortSignal,
+      ) => Promise<() => Promise<void>>;
+      startControlConsumer: (
+        h: (r: unknown) => Promise<void>,
+        s?: AbortSignal,
+      ) => Promise<() => Promise<void>>;
       markCompleted: () => Promise<void>;
     };
     startCommandConsumer: (signal: AbortSignal) => () => void;
@@ -437,7 +488,10 @@ test("dispatchInterruptIndependentlyOfSubmit: control handler dispatches interru
   };
 
   type RecordHandler = (record: unknown) => Promise<void>;
-  const handlers: { data: RecordHandler | null; control: RecordHandler | null } = {
+  const handlers: {
+    data: RecordHandler | null;
+    control: RecordHandler | null;
+  } = {
     data: null,
     control: null,
   };
@@ -472,8 +526,12 @@ test("dispatchInterruptIndependentlyOfSubmit: control handler dispatches interru
 
   const dataFn = handlers.data;
   const controlFn = handlers.control;
-  if (!dataFn) throw new Error("startCommandConsumer should register a data handler");
-  if (!controlFn) throw new Error("startControlConsumer should register a separate control handler");
+  if (!dataFn)
+    throw new Error("startCommandConsumer should register a data handler");
+  if (!controlFn)
+    throw new Error(
+      "startControlConsumer should register a separate control handler",
+    );
   assert.notEqual(
     dataFn,
     controlFn,
@@ -517,10 +575,18 @@ test("acceptCommandTurn emits turn.claimed before provider output", async () => 
     created_at: new Date(Date.now() - 250).toISOString(),
   });
 
-  assert.equal(harness.events.length, 1, "claimed is the only pre-provider durable event");
+  assert.equal(
+    harness.events.length,
+    1,
+    "claimed is the only pre-provider durable event",
+  );
   assert.equal(harness.events[0]!.type, "turn.claimed");
   assert.equal(harness.events[0]!.client_nonce, "client-claimed");
-  assert.deepEqual(harness.bus, [], "submit command is not acked until a terminal event");
+  assert.deepEqual(
+    harness.bus,
+    [],
+    "submit command is not acked until a terminal event",
+  );
 });
 
 // canUseTool is the AskUserQuestion pause point. When the agent invokes
@@ -533,17 +599,33 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
       toolName: string,
       input: unknown,
       ctx: { toolUseID?: string },
-    ) => Promise<{ behavior: string; updatedInput?: { answers?: Record<string, string> } }>;
+    ) => Promise<{
+      behavior: string;
+      updatedInput?: { answers?: Record<string, string> };
+    }>;
     acceptInputReply: (record: unknown) => Promise<void>;
     activeTurn: unknown;
-    publishTerminalWithRetry: (event: TankConversationEvent) => Promise<boolean>;
+    publishTerminalWithRetry: (
+      event: TankConversationEvent,
+    ) => Promise<boolean>;
     markCommandTerminal: (turn: unknown, outcome: string) => Promise<void>;
-    commandBus: { markCompleted: (record: unknown) => Promise<void>; markFailed: (record: unknown) => Promise<void> };
+    rotateTurnForInputReply: (turn: unknown, record: unknown) => Promise<void>;
+    commandBus: {
+      markCompleted: (record: unknown) => Promise<void>;
+      markFailed: (record: unknown) => Promise<void>;
+    };
+    sink: { upsert: (event: TankConversationEvent) => Promise<void> };
   };
 
+  const dispatched: TankConversationEvent[] = [];
   const published: TankConversationEvent[] = [];
   const outcomes: string[] = [];
   let completedRecord: unknown;
+  runner.sink = {
+    async upsert(event) {
+      dispatched.push(event);
+    },
+  };
   runner.publishTerminalWithRetry = async (event) => {
     published.push(event);
     return true;
@@ -559,6 +641,12 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
       assert.fail("input_reply should resolve the pending AskUserQuestion");
     },
   };
+  runner.rotateTurnForInputReply = async (_turn, record) => {
+    assert.equal(
+      (record as { client_nonce?: string }).client_nonce,
+      "answer-continuation",
+    );
+  };
   runner.activeTurn = {
     turnID: "turn-active",
     clientNonce: "turn-active",
@@ -568,21 +656,43 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
 
   const resultPromise = runner.canUseTool(
     "AskUserQuestion",
-    { questions: [{ question: "Which auth method?", options: [{ label: "OAuth" }] }] },
+    {
+      questions: [
+        { question: "Which auth method?", options: [{ label: "OAuth" }] },
+      ],
+    },
     { toolUseID: "toolu_ask" },
   );
   await new Promise((resolve) => setImmediate(resolve));
 
-  // A durable turn.awaiting_input pause carries the question forward.
+  assert.deepEqual(
+    dispatched.map((e) => e.type),
+    [
+      "turn.awaiting_input.invocation",
+      "assistant_message.created",
+      "turn.submitted",
+    ],
+  );
+  const questionMessage = dispatched.find(
+    (e) => e.type === "assistant_message.created",
+  );
+  assert.equal(questionMessage?.turn_id, "turn-active");
+  assert.equal(questionMessage?.actor, "assistant");
+  // A durable turn.awaiting_input pause carries the question turn forward.
   const awaiting = published.find(
     (e) => (e as { type?: string }).type === "turn.awaiting_input",
   );
   assert.ok(awaiting, "expected turn.awaiting_input to be published");
-  assert.equal((awaiting as { turn_id?: string }).turn_id, "turn-active");
-  assert.deepEqual(outcomes, [], "the submit_turn stays in flight while awaiting input");
+  assert.notEqual((awaiting as { turn_id?: string }).turn_id, "turn-active");
+  assert.deepEqual(
+    outcomes,
+    [],
+    "AskUserQuestion is the Tank-visible response, but the provider command stays in flight for callback recovery",
+  );
 
   await runner.acceptInputReply({
     type: "input_reply",
+    client_nonce: "answer-continuation",
     target_turn_id: "turn-active",
     target_timeline_id: "turn-active:item:toolu_ask",
     target_provider_item_id: "toolu_ask",
@@ -591,8 +701,13 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
   });
   const result = await resultPromise;
   assert.equal(result.behavior, "allow");
-  assert.deepEqual(result.updatedInput?.answers, { "Which auth method?": "OAuth\n\nmatches the IdP" });
-  assert.ok(completedRecord, "input_reply command should be acked after resolving the tool");
+  assert.deepEqual(result.updatedInput?.answers, {
+    "Which auth method?": "OAuth\n\nmatches the IdP",
+  });
+  assert.ok(
+    completedRecord,
+    "input_reply command should be acked after resolving the tool",
+  );
 });
 
 test("canUseTool delivers free-form Other text to Claude instead of synthetic label", async () => {
@@ -601,14 +716,27 @@ test("canUseTool delivers free-form Other text to Claude instead of synthetic la
       toolName: string,
       input: unknown,
       ctx: { toolUseID?: string },
-    ) => Promise<{ behavior: string; updatedInput?: { answers?: Record<string, string> } }>;
+    ) => Promise<{
+      behavior: string;
+      updatedInput?: { answers?: Record<string, string> };
+    }>;
     acceptInputReply: (record: unknown) => Promise<void>;
     activeTurn: unknown;
-    publishTerminalWithRetry: (event: TankConversationEvent) => Promise<boolean>;
+    publishTerminalWithRetry: (
+      event: TankConversationEvent,
+    ) => Promise<boolean>;
     markCommandTerminal: (turn: unknown, outcome: string) => Promise<void>;
-    commandBus: { markCompleted: (record: unknown) => Promise<void>; markFailed: (record: unknown) => Promise<void> };
+    rotateTurnForInputReply: (turn: unknown, record: unknown) => Promise<void>;
+    commandBus: {
+      markCompleted: (record: unknown) => Promise<void>;
+      markFailed: (record: unknown) => Promise<void>;
+    };
+    sink: { upsert: (event: TankConversationEvent) => Promise<void> };
   };
 
+  runner.sink = {
+    async upsert() {},
+  };
   runner.publishTerminalWithRetry = async () => true;
   runner.markCommandTerminal = async () => {};
   runner.commandBus = {
@@ -616,6 +744,12 @@ test("canUseTool delivers free-form Other text to Claude instead of synthetic la
     async markFailed() {
       assert.fail("input_reply should resolve the pending AskUserQuestion");
     },
+  };
+  runner.rotateTurnForInputReply = async (_turn, record) => {
+    assert.equal(
+      (record as { client_nonce?: string }).client_nonce,
+      "answer-continuation",
+    );
   };
   runner.activeTurn = {
     turnID: "turn-active",
@@ -626,13 +760,22 @@ test("canUseTool delivers free-form Other text to Claude instead of synthetic la
 
   const resultPromise = runner.canUseTool(
     "AskUserQuestion",
-    { questions: [{ question: "Proceed?", allowFreeForm: true, options: [{ label: "Yes" }] }] },
+    {
+      questions: [
+        {
+          question: "Proceed?",
+          allowFreeForm: true,
+          options: [{ label: "Yes" }],
+        },
+      ],
+    },
     { toolUseID: "toolu_ask" },
   );
   await new Promise((resolve) => setImmediate(resolve));
 
   await runner.acceptInputReply({
     type: "input_reply",
+    client_nonce: "answer-continuation",
     target_turn_id: "turn-active",
     target_timeline_id: "turn-active:item:toolu_ask",
     target_provider_item_id: "toolu_ask",
@@ -642,18 +785,25 @@ test("canUseTool delivers free-form Other text to Claude instead of synthetic la
 
   const result = await resultPromise;
   assert.equal(result.behavior, "allow");
-  assert.deepEqual(result.updatedInput?.answers, { "Proceed?": "Use the dedicated test database." });
+  assert.deepEqual(result.updatedInput?.answers, {
+    "Proceed?": "Use the dedicated test database.",
+  });
 });
 
 test("acceptInputReply redelivers when the provider callback is not recreated yet", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     acceptInputReply: (record: unknown) => Promise<void>;
-    commandBus: { markCompleted: () => Promise<void>; markFailed: () => Promise<void> };
+    commandBus: {
+      markCompleted: () => Promise<void>;
+      markFailed: () => Promise<void>;
+    };
   };
   let nakDelay: number | undefined;
   runner.commandBus = {
     async markCompleted() {
-      assert.fail("early input_reply should not complete without a pending callback");
+      assert.fail(
+        "early input_reply should not complete without a pending callback",
+      );
     },
     async markFailed() {
       assert.fail("early input_reply should redeliver instead of failing");
@@ -683,7 +833,9 @@ test("canUseTool auto-allows non-AskUserQuestion tools unchanged", async () => {
     ) => Promise<{ behavior: string; updatedInput?: unknown }>;
   };
   const input = { command: "ls -la" };
-  const result = await runner.canUseTool("Bash", input, { toolUseID: "toolu_bash" });
+  const result = await runner.canUseTool("Bash", input, {
+    toolUseID: "toolu_bash",
+  });
   assert.equal(result.behavior, "allow");
   assert.equal(result.updatedInput, input);
 });
@@ -704,13 +856,23 @@ test("canUseTool auto-allows non-AskUserQuestion tools unchanged", async () => {
 // behavior, which would be the user-trust failure.
 test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    launchSdkQuery: (opts: { model?: string; effort?: string; stderr?: (data: string) => void }) => unknown;
+    launchSdkQuery: (opts: {
+      model?: string;
+      effort?: string;
+      stderr?: (data: string) => void;
+    }) => unknown;
     pinnedModel: string | null;
     pinnedEffort: string | null;
     sdkQuery: unknown;
     ensureSdkQuery: (record: unknown) => void;
   };
-  const captured: { opts: { model?: string; effort?: string; stderr?: (data: string) => void } | null } = { opts: null };
+  const captured: {
+    opts: {
+      model?: string;
+      effort?: string;
+      stderr?: (data: string) => void;
+    } | null;
+  } = { opts: null };
   runner.launchSdkQuery = (opts) => {
     captured.opts = opts;
     return { interrupt: () => {} } as unknown;
@@ -737,7 +899,9 @@ test("ensureSdkQuery stderr callback logs redacted Claude SDK stderr", () => {
     launchSdkQuery: (opts: { stderr?: (data: string) => void }) => unknown;
     ensureSdkQuery: (record: unknown) => void;
   };
-  const captured: { opts: { stderr?: (data: string) => void } | null } = { opts: null };
+  const captured: { opts: { stderr?: (data: string) => void } | null } = {
+    opts: null,
+  };
   runner.launchSdkQuery = (opts) => {
     captured.opts = opts;
     return { interrupt: () => {} } as unknown;
@@ -749,7 +913,9 @@ test("ensureSdkQuery stderr callback logs redacted Claude SDK stderr", () => {
   };
   try {
     runner.ensureSdkQuery({ id: "cmd-1", type: "submit_turn" });
-    captured.opts?.stderr?.("API Error: 529 Overloaded with sk-ant-secret\nAuthorization: Bearer very.secret.token\n");
+    captured.opts?.stderr?.(
+      "API Error: 529 Overloaded with sk-ant-secret\nAuthorization: Bearer very.secret.token\n",
+    );
   } finally {
     console.warn = originalWarn;
   }
@@ -767,7 +933,9 @@ test("ensureSdkQuery falls back to DEFAULT_MODEL / DEFAULT_EFFORT on empty first
     pinnedEffort: string | null;
     ensureSdkQuery: (record: unknown) => void;
   };
-  const captured: { opts: { model?: string; effort?: string } | null } = { opts: null };
+  const captured: { opts: { model?: string; effort?: string } | null } = {
+    opts: null,
+  };
   runner.launchSdkQuery = (opts) => {
     captured.opts = opts;
     return { interrupt: () => {} } as unknown;
@@ -830,7 +998,10 @@ test("ensureSdkQuery ignores model/effort overrides on subsequent turns", () => 
 
 test("terminal turn failures ack the durable submit command", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    commandBus: { markCompleted: () => Promise<void>; markFailed: () => Promise<void> };
+    commandBus: {
+      markCompleted: () => Promise<void>;
+      markFailed: () => Promise<void>;
+    };
     markCommandTerminal: (turn: unknown, type: string) => Promise<void>;
   };
   const calls: string[] = [];
@@ -919,7 +1090,10 @@ function makeInterruptHarness(runnerCfg = runnerConfig()): {
   } as InterruptTestHarness;
   const runner = new Runner(runnerCfg);
   const internals = runner as unknown as {
-    sink: { upsert: (e: TankConversationEvent) => Promise<void>; findTurnTerminal?: () => Promise<null> };
+    sink: {
+      upsert: (e: TankConversationEvent) => Promise<void>;
+      findTurnTerminal?: () => Promise<null>;
+    };
     commandBus: {
       markCompleted: (r?: unknown) => Promise<void>;
       markFailed: (r?: unknown, err?: unknown) => Promise<void>;
@@ -996,11 +1170,22 @@ test("acceptInterrupt during in-flight turn: foreground tasks are backgrounded b
     ["backgroundTasks", "interrupt"],
     "Stop should ask Claude to background foreground shell work before interrupting the active turn",
   );
-  assert.equal(harness.sdkBackgroundTasks, 1, "foreground Bash/subagent backgrounding must be attempted");
+  assert.equal(
+    harness.sdkBackgroundTasks,
+    1,
+    "foreground Bash/subagent backgrounding must be attempted",
+  );
   assert.equal(harness.sdkInterrupts, 1, "SDK interrupt must be called");
-  assert.equal(harness.events.length, 1, "exactly one durable terminal must be published");
+  assert.equal(
+    harness.events.length,
+    1,
+    "exactly one durable terminal must be published",
+  );
   assert.equal(harness.events[0]!.type, "turn.interrupted");
-  assert.equal((harness.events[0] as { turn_id: string }).turn_id, "turn_abc-123");
+  assert.equal(
+    (harness.events[0] as { turn_id: string }).turn_id,
+    "turn_abc-123",
+  );
   assert.deepEqual(harness.bus, ["ack"], "interrupt command must be acked");
 });
 
@@ -1018,7 +1203,8 @@ test("acceptInterrupt with no matching turn: buffered, applied when submit_turn 
   };
   r.activeTurn = null;
   r.ensureSdkQuery = () => {};
-  (r.sink as { findTurnTerminal: () => Promise<null> }).findTurnTerminal = async () => null;
+  (r.sink as { findTurnTerminal: () => Promise<null> }).findTurnTerminal =
+    async () => null;
   // Spy on userQueue.push to confirm the SDK is never fed.
   const sdkFed: unknown[] = [];
   r.userQueue = {
@@ -1034,9 +1220,21 @@ test("acceptInterrupt with no matching turn: buffered, applied when submit_turn 
     target_turn_id: "abc-123",
     client_nonce: "abc-123",
   });
-  assert.equal(r.pendingInterrupts.length, 1, "interrupt must be buffered (no matching turn yet)");
-  assert.equal(harness.events.length, 0, "no durable terminal yet — waiting for the matching submit_turn");
-  assert.deepEqual(harness.bus, [], "no ack/fail yet — the JetStream record is parked");
+  assert.equal(
+    r.pendingInterrupts.length,
+    1,
+    "interrupt must be buffered (no matching turn yet)",
+  );
+  assert.equal(
+    harness.events.length,
+    0,
+    "no durable terminal yet — waiting for the matching submit_turn",
+  );
+  assert.deepEqual(
+    harness.bus,
+    [],
+    "no ack/fail yet — the JetStream record is parked",
+  );
 
   // Now the matching submit_turn lands.
   await r.acceptCommandTurn({
@@ -1047,11 +1245,29 @@ test("acceptInterrupt with no matching turn: buffered, applied when submit_turn 
     target_turn_id: "abc-123",
   });
 
-  assert.equal(r.pendingInterrupts.length, 0, "buffer must drain on matching submit_turn");
-  assert.equal(harness.sdkInterrupts, 0, "SDK must not be interrupted — it was never fed the prompt");
-  assert.equal(sdkFed.length, 0, "SDK userQueue must not receive the aborted-before-start turn");
-  const terminals = harness.events.filter((event) => event.type === "turn.interrupted");
-  assert.equal(terminals.length, 1, "synthetic turn.interrupted must be published");
+  assert.equal(
+    r.pendingInterrupts.length,
+    0,
+    "buffer must drain on matching submit_turn",
+  );
+  assert.equal(
+    harness.sdkInterrupts,
+    0,
+    "SDK must not be interrupted — it was never fed the prompt",
+  );
+  assert.equal(
+    sdkFed.length,
+    0,
+    "SDK userQueue must not receive the aborted-before-start turn",
+  );
+  const terminals = harness.events.filter(
+    (event) => event.type === "turn.interrupted",
+  );
+  assert.equal(
+    terminals.length,
+    1,
+    "synthetic turn.interrupted must be published",
+  );
   assert.equal(
     (terminals[0] as { payload?: { reason?: string } }).payload?.reason,
     "client_interrupt_before_start",
@@ -1088,15 +1304,31 @@ test("acceptInterrupt with publish failure: durable terminal still lands via fal
     client_nonce: "xyz-9",
   });
 
-  assert.equal(harness.sdkInterrupts, 1, "SDK interrupt must still be called regardless of publish outcome");
-  assert.equal(harness.events.length, 1, "exactly one durable terminal must eventually land");
-  assert.equal(harness.events[0]!.type, "turn.failed", "fallback shape is turn.failed");
+  assert.equal(
+    harness.sdkInterrupts,
+    1,
+    "SDK interrupt must still be called regardless of publish outcome",
+  );
+  assert.equal(
+    harness.events.length,
+    1,
+    "exactly one durable terminal must eventually land",
+  );
+  assert.equal(
+    harness.events[0]!.type,
+    "turn.failed",
+    "fallback shape is turn.failed",
+  );
   assert.equal(
     (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
     "publish_interrupt_failed",
     "fallback reason must name the cause so the post-mortem isn't a mystery",
   );
-  assert.deepEqual(harness.bus, ["fail"], "command bus must be marked failed when the happy terminal didn't land");
+  assert.deepEqual(
+    harness.bus,
+    ["fail"],
+    "command bus must be marked failed when the happy terminal didn't land",
+  );
 });
 
 test("acceptInterrupt when turn already terminal: ack without re-emitting a terminal", async () => {
@@ -1122,8 +1354,16 @@ test("acceptInterrupt when turn already terminal: ack without re-emitting a term
   });
 
   assert.equal(harness.sdkInterrupts, 0, "no SDK call — nothing to interrupt");
-  assert.equal(harness.events.length, 0, "no new terminal — the natural terminal already exists");
-  assert.deepEqual(harness.bus, ["ack"], "interrupt command still acked (it was delivered correctly)");
+  assert.equal(
+    harness.events.length,
+    0,
+    "no new terminal — the natural terminal already exists",
+  );
+  assert.deepEqual(
+    harness.bus,
+    ["ack"],
+    "interrupt command still acked (it was delivered correctly)",
+  );
 });
 
 test("Claude rate_limit_event fails active turn durably instead of stranding the queue", async () => {
@@ -1155,26 +1395,39 @@ test("Claude rate_limit_event fails active turn durably instead of stranding the
   });
   await new Promise((resolve) => setImmediate(resolve));
 
-  assert.equal(harness.events.length, 1, "rate limit must emit exactly one durable terminal");
+  assert.equal(
+    harness.events.length,
+    1,
+    "rate limit must emit exactly one durable terminal",
+  );
   assert.equal(harness.events[0]!.type, "turn.failed");
   assert.equal(
-    (harness.events[0] as { payload?: { reason?: string; error?: string } }).payload?.reason,
+    (harness.events[0] as { payload?: { reason?: string; error?: string } })
+      .payload?.reason,
     "provider_rate_limit",
   );
   assert.match(
-    (harness.events[0] as { payload?: { error?: string } }).payload?.error ?? "",
+    (harness.events[0] as { payload?: { error?: string } }).payload?.error ??
+      "",
     /retry_after_ms=60000/,
   );
   assert.match(
-    (harness.events[0] as { payload?: { error?: string } }).payload?.error ?? "",
+    (harness.events[0] as { payload?: { error?: string } }).payload?.error ??
+      "",
     /status=rejected; rateLimitType=five_hour; resetsAt=1790000000000/,
   );
-  assert.deepEqual(harness.bus, ["ack"], "submit command must ack after the durable rate-limit terminal");
+  assert.deepEqual(
+    harness.bus,
+    ["ack"],
+    "submit command must ack after the durable rate-limit terminal",
+  );
 });
 
 test("acceptInterrupt with missing target: fails command explicitly instead of silently acking", async () => {
   const { runner, harness } = makeInterruptHarness();
-  const r = runner as unknown as { acceptInterrupt: (record: unknown) => Promise<void> };
+  const r = runner as unknown as {
+    acceptInterrupt: (record: unknown) => Promise<void>;
+  };
 
   await r.acceptInterrupt({
     type: "interrupt_turn",
@@ -1183,7 +1436,11 @@ test("acceptInterrupt with missing target: fails command explicitly instead of s
     client_nonce: "",
   });
 
-  assert.deepEqual(harness.bus, ["fail"], "missing target must produce a visible failure, not a silent ack");
+  assert.deepEqual(
+    harness.bus,
+    ["fail"],
+    "missing target must produce a visible failure, not a silent ack",
+  );
   assert.equal(harness.events.length, 0);
 });
 
@@ -1205,7 +1462,11 @@ test("truncateEventIfOversized passes through events under the budget unchanged"
   };
   const result = truncateEventIfOversized(tiny);
   assert.equal(result.truncated, false);
-  assert.equal(result.event, tiny, "should return the same reference when no work is needed");
+  assert.equal(
+    result.event,
+    tiny,
+    "should return the same reference when no work is needed",
+  );
   assert.equal(result.fields.length, 0);
 });
 
@@ -1220,16 +1481,29 @@ test("truncateEventIfOversized replaces oversized string fields with a typed mar
       output: huge,
     },
   };
-  const result = truncateEventIfOversized(event, { maxBytes: 50_000, stringThreshold: 1024 });
+  const result = truncateEventIfOversized(event, {
+    maxBytes: 50_000,
+    stringThreshold: 1024,
+  });
   assert.equal(result.truncated, true);
-  assert.equal(result.payloadDropped, undefined, "envelope should be preserved when string truncation suffices");
-  assert.ok(result.finalBytes <= 50_000, `result must fit under budget; got ${result.finalBytes}`);
+  assert.equal(
+    result.payloadDropped,
+    undefined,
+    "envelope should be preserved when string truncation suffices",
+  );
+  assert.ok(
+    result.finalBytes <= 50_000,
+    `result must fit under budget; got ${result.finalBytes}`,
+  );
   // Original event is not mutated; clone-modify is required for shared
   // event objects.
   assert.equal((event.payload as { output: string }).output.length, 200_000);
   // Truncated string carries the original size + a sha256_16 prefix.
   const truncated = (result.event.payload as { output: string }).output;
-  assert.ok(truncated.startsWith("[truncated: 200000 bytes"), `unexpected marker: ${truncated.slice(0, 80)}`);
+  assert.ok(
+    truncated.startsWith("[truncated: 200000 bytes"),
+    `unexpected marker: ${truncated.slice(0, 80)}`,
+  );
   assert.ok(/sha256_16=[0-9a-f]{16}/.test(truncated));
   // Schema of the field stays a string — downstream renderers reading
   // payload.output don't need to type-check.
@@ -1246,12 +1520,28 @@ test("truncateEventIfOversized drops payload entirely when string truncation can
   for (let i = 0; i < 100; i++) {
     payload[`field_${i}`] = "y".repeat(2_000);
   }
-  const event = { event_id: "e1", type: "item.completed", turn_id: "t1", payload };
-  const result = truncateEventIfOversized(event, { maxBytes: 5_000, stringThreshold: 100_000 });
+  const event = {
+    event_id: "e1",
+    type: "item.completed",
+    turn_id: "t1",
+    payload,
+  };
+  const result = truncateEventIfOversized(event, {
+    maxBytes: 5_000,
+    stringThreshold: 100_000,
+  });
   assert.equal(result.truncated, true);
-  assert.equal(result.payloadDropped, true, "must fall back to payload-dropped when strings alone can't fit");
+  assert.equal(
+    result.payloadDropped,
+    true,
+    "must fall back to payload-dropped when strings alone can't fit",
+  );
   assert.ok(result.finalBytes <= 5_000);
-  assert.equal((result.event.payload as unknown as { __payload_dropped: boolean }).__payload_dropped, true);
+  assert.equal(
+    (result.event.payload as unknown as { __payload_dropped: boolean })
+      .__payload_dropped,
+    true,
+  );
   // Envelope fields stay intact so the durable ledger still records
   // "an event of this type existed for this turn."
   assert.equal(result.event.type, "item.completed");

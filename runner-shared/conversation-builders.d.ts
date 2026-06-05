@@ -8,6 +8,14 @@ import type {
 export function turnIDForClientNonce(clientNonce: string): string;
 export function userTimelineID(turnID: string): string;
 export function itemTimelineID(turnID: string, providerItemID: string): string;
+export function questionClientNonce(
+  askingTurnID: string,
+  providerTimelineID: string,
+): string;
+export function questionMessageTimelineID(
+  askingTurnID: string,
+  providerTimelineID: string,
+): string;
 export function shellTaskTimelineID(turnID: string, taskID: string): string;
 
 export interface UserSubmissionArgs {
@@ -27,7 +35,9 @@ export interface UserSubmissionEvents {
   turnSubmitted: TankConversationEvent;
 }
 
-export function userSubmissionEvents(args: UserSubmissionArgs): UserSubmissionEvents;
+export function userSubmissionEvents(
+  args: UserSubmissionArgs,
+): UserSubmissionEvents;
 
 export interface TurnEventArgs {
   sessionID: string;
@@ -53,10 +63,37 @@ export interface TurnEventArgs {
   questions?: unknown;
   awaitingProviderItemID?: string;
   awaitingTimelineID?: string;
+  awaitingProviderTimelineID?: string;
+  askingTurnID?: string;
+  questionTurnID?: string;
   providerEventID?: string;
 }
 
 export function turnEvent(args: TurnEventArgs): TankConversationEvent;
+
+export interface AskUserQuestionHandoffEventArgs {
+  sessionID: string;
+  askingTurnID: string;
+  askingClientNonce: string;
+  source: "claude" | "codex";
+  providerItemID: string;
+  providerTimelineID: string;
+  questions: unknown[];
+}
+
+export interface AskUserQuestionHandoffEvents {
+  questionClientNonce: string;
+  questionTurnID: string;
+  questionTimelineID: string;
+  questionMessage: TankConversationEvent;
+  invocation: TankConversationEvent;
+  questionSubmitted: TankConversationEvent;
+  awaitingInput: TankConversationEvent;
+}
+
+export function askUserQuestionHandoffEvents(
+  args: AskUserQuestionHandoffEventArgs,
+): AskUserQuestionHandoffEvents;
 
 export interface ItemEventArgs {
   sessionID: string;
@@ -96,9 +133,13 @@ export interface ContextCompactedEventArgs {
   providerEventID?: string;
 }
 
-export function contextCompactedEvent(args: ContextCompactedEventArgs): TankConversationEvent;
+export function contextCompactedEvent(
+  args: ContextCompactedEventArgs,
+): TankConversationEvent;
 
-export function stampTankEvent(event: TankConversationEvent): TankConversationEvent & {
+export function stampTankEvent(
+  event: TankConversationEvent,
+): TankConversationEvent & {
   uuid: string;
   order_key: string;
   sequence: number;

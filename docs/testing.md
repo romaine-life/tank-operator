@@ -83,6 +83,21 @@ is live, `is_admin` carries Tank's local admin-power decision, and the
 inspector now plumbs localStorage through, so the real auth path is always
 available.
 
+## PR CI and ACR proof images
+
+Open a draft PR early when validating branch work. The PR is not only a review
+surface: `.github/workflows/docker-build-check.yaml` is the normal image-build
+gate for branches. For normal same-repo PRs it logs into ACR, computes each
+repo-owned image fingerprint, reuses an existing proof image when present, and
+pushes the missing proof image to ACR.
+
+That proof-image path is separate from hot-swap and session-image repointing:
+
+- Use hot-swap for the fast inner loop against already-running slot pods.
+- Use PR CI proof images to prove buildability and prime ACR for merge/deploy.
+- Use `session-images-build.yml` when newly-created Tank session pods must boot
+  branch `claude-container` / `codex-container` images.
+
 ## Making new slot sessions inherit a change (session-image repoint)
 
 `apply_test_slot_hot_swap` patches the runner code in **already-running**
@@ -104,8 +119,19 @@ Two steps:
    scripts/image-fingerprint.sh --image codex --dockerfile claude-container/Dockerfile \
      --context . --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared'
    # build it for the branch (no-op/cache hit if the fingerprint already exists)
-   gh workflow run session-images-build.yml -f git_ref=<branch>
+   mcp__github__.dispatch_workflow(
+     owner="romaine-life",
+     name="tank-operator",
+     workflow="session-images-build.yml",
+     ref="<branch>",
+     inputs={"git_ref":"<branch>"},
+   )
    ```
+
+   From a session, use the GitHub MCP `dispatch_workflow` tool for this step.
+   A token minted by `mint_clone_token(workflows=True)` is for pushing edits to
+   `.github/workflows/*`; it does not grant GitHub Actions workflow dispatch
+   permission.
 
 2. **Point the slot at it.** Set the durable per-scope override on the slot's
    orchestrator (the scope is the slot name, e.g. `tank-operator-slot-1`). New

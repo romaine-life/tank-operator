@@ -1,4 +1,7 @@
-import type { TankConversationEvent, UserMessageDisplay } from "../../runner-shared/conversation.js";
+import type {
+  TankConversationEvent,
+  UserMessageDisplay,
+} from "../../runner-shared/conversation.js";
 import type { MessageAttachmentDisplay } from "./attachmentLabels";
 
 export type ConversationRunStatus =
@@ -11,7 +14,10 @@ export type ConversationRunStatus =
   | "error";
 
 export type ConversationItemStatus = "started" | "completed" | "failed";
-export type ConversationTurnTerminalStatus = "completed" | "failed" | "interrupted";
+export type ConversationTurnTerminalStatus =
+  | "completed"
+  | "failed"
+  | "interrupted";
 export type ConversationBackgroundTaskStatus =
   | "running"
   | "completed"
@@ -53,6 +59,7 @@ export interface ConversationMessage {
   // their durable payload; the renderer surfaces it as a button on the
   // system-role message bubble.
   action?: { label: string; href: string };
+  awaitingInput?: Record<string, unknown>;
 }
 
 export interface ConversationItem {
@@ -186,6 +193,8 @@ export function conversationReducer(
   switch (event.type) {
     case "user_message.created":
       return applyUserMessage(next, event);
+    case "assistant_message.created":
+      return applyAssistantMessage(next, event);
     case "turn.submitted":
       if (event.turn_id && next.turnTerminals[event.turn_id]) return next;
       return {
@@ -276,9 +285,9 @@ export function conversationReducer(
       // (handled above) so it is not a parallel transcript path.
       return next;
     case "turn.awaiting_input":
-      // The agent asked the user a question and paused the same active turn.
-      // The answer resumes this turn; final terminal events still own
-      // completion/failure/interruption.
+      // The agent asked the user a question as the Tank-visible response.
+      // The answer marker clears needs_input; the answer text itself arrives
+      // as a normal user_message.created + turn.submitted continuation turn.
       return {
         ...next,
         runStatus: "needs_input",
@@ -290,7 +299,7 @@ export function conversationReducer(
       };
     case "turn.input_answered":
       return {
-        ...next,
+        ...applyInputAnswered(next, event),
         runStatus: "streaming",
         activeTurnId: event.turn_id ?? next.activeTurnId,
         activeItemId: null,
@@ -304,7 +313,12 @@ export function conversationReducer(
       return upsertItem(next, event, "started");
     case "item.completed":
       return upsertItem(
-        { ...next, activeItemId: matchingActiveItem(next, event) ? null : next.activeItemId },
+        {
+          ...next,
+          activeItemId: matchingActiveItem(next, event)
+            ? null
+            : next.activeItemId,
+        },
         event,
         completedItemStatus(event),
       );
@@ -321,7 +335,9 @@ export function conversationReducer(
       return upsertItem(
         {
           ...next,
-          activeItemId: matchingActiveItem(next, event) ? null : next.activeItemId,
+          activeItemId: matchingActiveItem(next, event)
+            ? null
+            : next.activeItemId,
         },
         event,
         "failed",
@@ -331,8 +347,13 @@ export function conversationReducer(
     case "shell_task.updated":
       return upsertBackgroundTask(next, event, backgroundTaskStatus(event));
     case "shell_task.exited":
-      return upsertBackgroundTask(next, event, backgroundTaskTerminalStatus(event));
+      return upsertBackgroundTask(
+        next,
+        event,
+        backgroundTaskTerminalStatus(event),
+      );
   }
+  return next;
 }
 
 export function reduceConversationEvents(
@@ -348,7 +369,8 @@ function applyTurnTerminal(
   status: ConversationTurnTerminalStatus,
 ): ConversationReducerState {
   if (!event.turn_id) return state;
-  const detail = status === "failed" ? errorText(event) ?? undefined : undefined;
+  const detail =
+    status === "failed" ? (errorText(event) ?? undefined) : undefined;
   return {
     ...state,
     turnTerminals: {
@@ -360,7 +382,9 @@ function applyTurnTerminal(
         orderKey: event.order_key,
         time: event.created_at,
         sourceEventId: event.event_id,
-        ...(event.payload?.usage !== undefined ? { usage: event.payload.usage } : {}),
+        ...(event.payload?.usage !== undefined
+          ? { usage: event.payload.usage }
+          : {}),
         ...(event.payload?.usage_observation !== undefined
           ? { usageObservation: event.payload.usage_observation }
           : {}),
@@ -378,16 +402,19 @@ function applyTurnUsage(
   if (!event.turn_id || usage === undefined || usage === null) return state;
   const terminal = state.turnTerminals[event.turn_id];
   const terminalSeen = terminal !== undefined;
-  const terminalHasUsage = terminal?.usage !== undefined && terminal.usage !== null;
+  const terminalHasUsage =
+    terminal?.usage !== undefined && terminal.usage !== null;
   const runStatus =
-    !terminalSeen && (state.runStatus === "ready" || state.runStatus === "submitted")
+    !terminalSeen &&
+    (state.runStatus === "ready" || state.runStatus === "submitted")
       ? "streaming"
       : state.runStatus;
   const existing = state.turnUsages[event.turn_id];
   const turnUsage: ConversationTurnUsage = existing
     ? {
         ...existing,
-        endOrderKey: event.order_key ?? existing.endOrderKey ?? existing.orderKey,
+        endOrderKey:
+          event.order_key ?? existing.endOrderKey ?? existing.orderKey,
         updatedAt: event.created_at || existing.updatedAt || existing.time,
         usage,
         ...(event.payload?.usage_observation !== undefined
@@ -409,7 +436,9 @@ function applyTurnUsage(
   return {
     ...state,
     runStatus,
-    activeTurnId: terminalSeen ? state.activeTurnId : state.activeTurnId ?? event.turn_id,
+    activeTurnId: terminalSeen
+      ? state.activeTurnId
+      : (state.activeTurnId ?? event.turn_id),
     turnUsages: {
       ...state.turnUsages,
       [event.turn_id]: turnUsage,
@@ -444,26 +473,58 @@ function applyInterruptRequested(
   };
 }
 
+function applyAssistantMessage(
+  state: ConversationReducerState,
+  event: TankConversationEvent,
+): ConversationReducerState {
+  const text =
+    stringPayload(event, "text") ?? stringPayload(event, "message") ?? "";
+  if (!event.timeline_id || !event.turn_id || !text) return state;
+  const awaitingInput = payloadRecord(event, "awaiting_input");
+  const message: ConversationMessage = {
+    id: event.timeline_id,
+    role: "assistant",
+    text,
+    turnId: event.turn_id,
+    orderKey: event.order_key,
+    sourceEventId: event.event_id,
+    createdAt: event.created_at,
+    display: assistantMessageDisplay(event),
+    ...(awaitingInput
+      ? { awaitingInput: normalizeAwaitingInputForMessage(awaitingInput) }
+      : {}),
+  };
+  return {
+    ...state,
+    messages: [...state.messages, message],
+  };
+}
+
 function applyUserMessage(
   state: ConversationReducerState,
   event: TankConversationEvent,
 ): ConversationReducerState {
-  if (event.client_nonce && state.seenClientNonces.includes(event.client_nonce)) {
+  if (
+    event.client_nonce &&
+    state.seenClientNonces.includes(event.client_nonce)
+  ) {
     return state;
   }
-  const text = stringPayload(event, "text") ?? stringPayload(event, "message") ?? "";
-  if (!event.timeline_id || !event.turn_id || !event.client_nonce || !text) return state;
+  const text =
+    stringPayload(event, "text") ?? stringPayload(event, "message") ?? "";
+  if (!event.timeline_id || !event.turn_id || !event.client_nonce || !text)
+    return state;
   const originSessionId = stringTopLevel(event, "origin_session_id");
   const authorKind = stringTopLevel(event, "author_kind");
   const message: ConversationMessage = {
     id: event.timeline_id,
     role: "user",
-	    text,
-	    turnId: event.turn_id,
-	    clientNonce: event.client_nonce,
-	    display: userMessageDisplay(event),
-	    attachments: userMessageAttachments(event),
-	    orderKey: event.order_key,
+    text,
+    turnId: event.turn_id,
+    clientNonce: event.client_nonce,
+    display: userMessageDisplay(event),
+    attachments: userMessageAttachments(event),
+    orderKey: event.order_key,
     sourceEventId: event.event_id,
     createdAt: event.created_at,
     ...(originSessionId ? { originSessionId } : {}),
@@ -475,6 +536,67 @@ function applyUserMessage(
       ? [...state.seenClientNonces, event.client_nonce]
       : state.seenClientNonces,
     messages: [...state.messages, message],
+  };
+}
+
+function assistantMessageDisplay(
+  event: TankConversationEvent,
+): UserMessageDisplay | undefined {
+  const display = payloadRecord(event, "display");
+  if (!display) return undefined;
+  if (display.kind === "plain") return { kind: "plain" };
+  if (display.kind === "ask_user_question")
+    return display as UserMessageDisplay;
+  return undefined;
+}
+
+function normalizeAwaitingInputForMessage(
+  raw: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    askingTurnId:
+      typeof raw.asking_turn_id === "string" ? raw.asking_turn_id : "",
+    questionTurnId:
+      typeof raw.question_turn_id === "string" ? raw.question_turn_id : "",
+    providerItemId:
+      typeof raw.provider_item_id === "string" ? raw.provider_item_id : "",
+    timelineId: typeof raw.timeline_id === "string" ? raw.timeline_id : "",
+    providerTimelineId:
+      typeof raw.provider_timeline_id === "string"
+        ? raw.provider_timeline_id
+        : "",
+    questions: Array.isArray(raw.questions) ? raw.questions : [],
+    questionCount: Array.isArray(raw.questions) ? raw.questions.length : 0,
+    answered: false,
+  };
+}
+
+function applyInputAnswered(
+  state: ConversationReducerState,
+  event: TankConversationEvent,
+): ConversationReducerState {
+  const payload = event.payload;
+  if (!isRecord(payload)) return state;
+  const questionTimelineId = payload.question_timeline_id;
+  if (typeof questionTimelineId !== "string" || !questionTimelineId)
+    return state;
+  return {
+    ...state,
+    messages: state.messages.map((message) => {
+      if (message.awaitingInput?.timelineId !== questionTimelineId)
+        return message;
+      return {
+        ...message,
+        awaitingInput: {
+          ...message.awaitingInput,
+          answered: true,
+          ...(isRecord(payload.answers) ? { answers: payload.answers } : {}),
+          ...(isRecord(payload.annotations)
+            ? { annotations: payload.annotations }
+            : {}),
+        },
+      };
+    }),
   };
 }
 
@@ -503,7 +625,9 @@ function applySessionStatusMessage(
   // the stale failed banner in the rendered transcript. Other
   // session.status messages (loading / ready boot notices) keep their
   // own unique timeline_ids and never collide here.
-  const existingIndex = state.messages.findIndex((m) => m.id === event.timeline_id);
+  const existingIndex = state.messages.findIndex(
+    (m) => m.id === event.timeline_id,
+  );
   if (existingIndex >= 0) {
     const next = [...state.messages];
     next[existingIndex] = message;
@@ -524,11 +648,27 @@ function sessionStatusAction(
   if (!raw || typeof raw !== "object") return undefined;
   const label = (raw as { label?: unknown }).label;
   const href = (raw as { href?: unknown }).href;
-  if (typeof label === "string" && label.length > 0 &&
-      typeof href === "string" && href.length > 0) {
+  if (
+    typeof label === "string" &&
+    label.length > 0 &&
+    typeof href === "string" &&
+    href.length > 0
+  ) {
     return { label, href };
   }
   return undefined;
+}
+
+function payloadRecord(
+  event: TankConversationEvent,
+  key: string,
+): Record<string, unknown> | undefined {
+  const value = event.payload?.[key];
+  return isRecord(value) ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 function upsertItem(
@@ -551,29 +691,42 @@ function upsertItem(
   const item: ConversationItem = {
     id,
     turnId: event.turn_id,
-    parentId: preserveTerminal ? existing.parentId ?? event.parent_id : event.parent_id,
+    parentId: preserveTerminal
+      ? (existing.parentId ?? event.parent_id)
+      : event.parent_id,
     providerItemId: preserveTerminal
-      ? existing.providerItemId ?? event.provider_item_id
+      ? (existing.providerItemId ?? event.provider_item_id)
       : event.provider_item_id,
-    actor: preserveTerminal ? existing.actor : event.actor === "user" ? "runner" : event.actor,
+    actor: preserveTerminal
+      ? existing.actor
+      : event.actor === "user"
+        ? "runner"
+        : event.actor,
     kind: preserveTerminal
       ? existing.kind
-      : stringPayload(event, "kind") ?? existing?.kind ?? defaultItemKind(event),
+      : (stringPayload(event, "kind") ??
+        existing?.kind ??
+        defaultItemKind(event)),
     status: resolvedStatus,
     title: preserveTerminal
-      ? existing.title ?? stringPayload(event, "title")
-      : stringPayload(event, "title") ?? existing?.title,
-    text: preserveTerminal ? existing.text ?? text : text ?? existing?.text,
+      ? (existing.title ?? stringPayload(event, "title"))
+      : (stringPayload(event, "title") ?? existing?.title),
+    text: preserveTerminal ? (existing.text ?? text) : (text ?? existing?.text),
     payload,
-    orderKey: preserveTerminal ? existing.orderKey ?? event.order_key : event.order_key ?? existing?.orderKey,
+    orderKey: preserveTerminal
+      ? (existing.orderKey ?? event.order_key)
+      : (event.order_key ?? existing?.orderKey),
     sourceEventId: preserveTerminal ? existing.sourceEventId : event.event_id,
-    createdAt: preserveTerminal ? existing.createdAt || event.created_at : event.created_at || existing?.createdAt,
-    startedAt: status === "started" && !preserveTerminal
-      ? event.created_at
-      : existing?.startedAt ?? existing?.createdAt ?? event.created_at,
+    createdAt: preserveTerminal
+      ? existing.createdAt || event.created_at
+      : event.created_at || existing?.createdAt,
+    startedAt:
+      status === "started" && !preserveTerminal
+        ? event.created_at
+        : (existing?.startedAt ?? existing?.createdAt ?? event.created_at),
     completedAt: isResolvedTerminalStatus
       ? preserveTerminal
-        ? existing.completedAt ?? existing.createdAt ?? event.created_at
+        ? (existing.completedAt ?? existing.createdAt ?? event.created_at)
         : event.created_at
       : existing?.completedAt,
   };
@@ -584,7 +737,11 @@ function upsertItem(
     ...state,
     items,
     activeItemId:
-      resolvedStatus === "started" ? id : state.activeItemId === id ? null : state.activeItemId,
+      resolvedStatus === "started"
+        ? id
+        : state.activeItemId === id
+          ? null
+          : state.activeItemId,
   };
 }
 
@@ -595,10 +752,16 @@ function upsertBackgroundTask(
 ): ConversationReducerState {
   const taskId = backgroundTaskId(event);
   if (!taskId || !event.timeline_id || !event.turn_id) return state;
-  const existing = state.backgroundTasks.find((task) => task.id === event.timeline_id);
-  const existingTerminal = existing ? isTerminalBackgroundTaskStatus(existing.status) : false;
+  const existing = state.backgroundTasks.find(
+    (task) => task.id === event.timeline_id,
+  );
+  const existingTerminal = existing
+    ? isTerminalBackgroundTaskStatus(existing.status)
+    : false;
   const nextStatus =
-    existing && existingTerminal && status === "running" ? existing.status : status;
+    existing && existingTerminal && status === "running"
+      ? existing.status
+      : status;
   const toolUseId = stringPayload(event, "tool_use_id");
   const command = stringPayload(event, "command");
   const task: ConversationBackgroundTask = {
@@ -610,7 +773,8 @@ function upsertBackgroundTask(
     status: nextStatus,
     summary: stringPayload(event, "summary") ?? command ?? existing?.summary,
     description: stringPayload(event, "description") ?? existing?.description,
-    lastToolName: stringPayload(event, "last_tool_name") ?? existing?.lastToolName,
+    lastToolName:
+      stringPayload(event, "last_tool_name") ?? existing?.lastToolName,
     command: command ?? existing?.command,
     cwd: stringPayload(event, "cwd") ?? existing?.cwd,
     processId:
@@ -634,14 +798,16 @@ function upsertBackgroundTask(
     startedAt:
       event.type === "shell_task.started"
         ? event.created_at
-        : existing?.startedAt ?? existing?.createdAt ?? event.created_at,
+        : (existing?.startedAt ?? existing?.createdAt ?? event.created_at),
     updatedAt: event.created_at || existing?.updatedAt,
     completedAt: isTerminalBackgroundTaskStatus(nextStatus)
-      ? existing?.completedAt ?? event.created_at
+      ? (existing?.completedAt ?? event.created_at)
       : existing?.completedAt,
   };
   const backgroundTasks = existing
-    ? state.backgroundTasks.map((candidate) => (candidate.id === task.id ? task : candidate))
+    ? state.backgroundTasks.map((candidate) =>
+        candidate.id === task.id ? task : candidate,
+      )
     : [...state.backgroundTasks, task];
   return {
     ...state,
@@ -654,16 +820,22 @@ function backgroundTaskId(event: TankConversationEvent): string | undefined {
   return stringPayload(event, "task_id");
 }
 
-function backgroundTaskStatus(event: TankConversationEvent): ConversationBackgroundTaskStatus {
+function backgroundTaskStatus(
+  event: TankConversationEvent,
+): ConversationBackgroundTaskStatus {
   return normalizeBackgroundTaskStatus(stringPayload(event, "status"));
 }
 
-function backgroundTaskTerminalStatus(event: TankConversationEvent): ConversationBackgroundTaskStatus {
+function backgroundTaskTerminalStatus(
+  event: TankConversationEvent,
+): ConversationBackgroundTaskStatus {
   const status = normalizeBackgroundTaskStatus(stringPayload(event, "status"));
   return status === "running" || status === "unknown" ? "completed" : status;
 }
 
-function normalizeBackgroundTaskStatus(status: string | undefined): ConversationBackgroundTaskStatus {
+function normalizeBackgroundTaskStatus(
+  status: string | undefined,
+): ConversationBackgroundTaskStatus {
   switch ((status ?? "").toLowerCase()) {
     case "running":
     case "started":
@@ -690,7 +862,9 @@ function normalizeBackgroundTaskStatus(status: string | undefined): Conversation
   }
 }
 
-function isTerminalBackgroundTaskStatus(status: ConversationBackgroundTaskStatus): boolean {
+function isTerminalBackgroundTaskStatus(
+  status: ConversationBackgroundTaskStatus,
+): boolean {
   return status === "completed" || status === "failed" || status === "stopped";
 }
 
@@ -711,31 +885,47 @@ function defaultItemKind(event: TankConversationEvent): string {
   return event.actor;
 }
 
-function stringPayload(event: TankConversationEvent, key: string): string | undefined {
+function stringPayload(
+  event: TankConversationEvent,
+  key: string,
+): string | undefined {
   const value = event.payload?.[key];
   return typeof value === "string" ? value : undefined;
 }
 
-function numericPayload(event: TankConversationEvent, key: string): number | undefined {
+function numericPayload(
+  event: TankConversationEvent,
+  key: string,
+): number | undefined {
   const value = event.payload?.[key];
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value)) return Number(value);
+  if (typeof value === "string" && /^-?\d+(\.\d+)?$/.test(value))
+    return Number(value);
   return undefined;
 }
 
-function completedItemStatus(event: TankConversationEvent): ConversationItemStatus {
+function completedItemStatus(
+  event: TankConversationEvent,
+): ConversationItemStatus {
   const outcome = event.payload?.outcome;
   if (outcome && typeof outcome === "object" && !Array.isArray(outcome)) {
-    return (outcome as { kind?: unknown }).kind === "result_failed" ? "failed" : "completed";
+    return (outcome as { kind?: unknown }).kind === "result_failed"
+      ? "failed"
+      : "completed";
   }
-  return nonzeroExitCode(event.payload?.exit_code) || nonzeroExitCode(rawPayload(event)?.exit_code)
+  return nonzeroExitCode(event.payload?.exit_code) ||
+    nonzeroExitCode(rawPayload(event)?.exit_code)
     ? "failed"
     : "completed";
 }
 
-function rawPayload(event: TankConversationEvent): Record<string, unknown> | undefined {
+function rawPayload(
+  event: TankConversationEvent,
+): Record<string, unknown> | undefined {
   const raw = event.payload?.raw_item;
-  return raw && typeof raw === "object" && !Array.isArray(raw) ? raw as Record<string, unknown> : undefined;
+  return raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : undefined;
 }
 
 function isCodexUserMessageEchoEvent(event: TankConversationEvent): boolean {
@@ -761,7 +951,8 @@ function isUserMessageEchoKind(value: unknown): boolean {
 
 function nonzeroExitCode(value: unknown): boolean {
   if (typeof value === "number" && Number.isInteger(value)) return value !== 0;
-  if (typeof value === "string" && /^-?\d+$/.test(value)) return Number(value) !== 0;
+  if (typeof value === "string" && /^-?\d+$/.test(value))
+    return Number(value) !== 0;
   return false;
 }
 
@@ -770,16 +961,22 @@ function nonzeroExitCode(value: unknown): boolean {
 // than inside `payload`, mirroring how `email` and `tank_session_id` are
 // stamped server-side. The TankConversationEvent type has
 // `[key: string]: unknown` so the lookup is well-typed.
-function stringTopLevel(event: TankConversationEvent, key: string): string | undefined {
+function stringTopLevel(
+  event: TankConversationEvent,
+  key: string,
+): string | undefined {
   const value = (event as Record<string, unknown>)[key];
   if (typeof value !== "string") return undefined;
   const trimmed = value.trim();
   return trimmed ? trimmed : undefined;
 }
 
-function userMessageDisplay(event: TankConversationEvent): UserMessageDisplay | undefined {
+function userMessageDisplay(
+  event: TankConversationEvent,
+): UserMessageDisplay | undefined {
   const display = event.payload?.display;
-  if (!display || typeof display !== "object" || Array.isArray(display)) return undefined;
+  if (!display || typeof display !== "object" || Array.isArray(display))
+    return undefined;
   const record = display as Record<string, unknown>;
   if (record.kind === "plain") return { kind: "plain" };
   if (record.kind !== "skill_invocation") return undefined;
@@ -799,7 +996,9 @@ function userMessageDisplay(event: TankConversationEvent): UserMessageDisplay | 
   };
 }
 
-function userMessageAttachments(event: TankConversationEvent): MessageAttachmentDisplay[] | undefined {
+function userMessageAttachments(
+  event: TankConversationEvent,
+): MessageAttachmentDisplay[] | undefined {
   const raw = event.payload?.attachments;
   if (!Array.isArray(raw)) return undefined;
   const attachments = raw
@@ -810,14 +1009,16 @@ function userMessageAttachments(event: TankConversationEvent): MessageAttachment
       const name = typeof record.name === "string" ? record.name.trim() : "";
       if (!label && !name) return null;
       const path = typeof record.path === "string" ? record.path.trim() : "";
-      const absPath = typeof record.absPath === "string"
-        ? record.absPath.trim()
-        : typeof record.abs_path === "string"
-          ? record.abs_path.trim()
-          : "";
-      const size = typeof record.size === "number" && Number.isFinite(record.size)
-        ? record.size
-        : undefined;
+      const absPath =
+        typeof record.absPath === "string"
+          ? record.absPath.trim()
+          : typeof record.abs_path === "string"
+            ? record.abs_path.trim()
+            : "";
+      const size =
+        typeof record.size === "number" && Number.isFinite(record.size)
+          ? record.size
+          : undefined;
       return {
         label: label || name,
         name: name || label,

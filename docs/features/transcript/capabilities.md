@@ -302,10 +302,13 @@ Contract impact:
   deliberately NOT the source — it cannot see compactions older than its window.
   `context.compacted` stays out of `LifecycleChatEventTypes` (it must not move
   run status); the dedicated full-history count column is the source instead.
-- The composer renders the metric only at session scope, including the zero
-  state before the first compaction; the per-turn pill does not carry it
-  (compaction is a session-lifetime fact, not a turn fact). The chip widens via
-  a compaction-metric modifier rather than squeezing the `ctx` fraction into an
+- The composer renders the metric in the chat-box cost chip, including the zero
+  state before the first compaction. The pre-session splash composer renders
+  `cmp 0` as an empty/stable value rather than introducing a new metric after a
+  session starts; active sessions replace that placeholder with the durable
+  session-row count. The per-turn pill does not carry it (compaction is a
+  session-lifetime fact, not a turn fact). The chip widens via a
+  compaction-metric modifier rather than squeezing the `ctx` fraction into an
   ellipsis.
 
 Evidence:
@@ -412,30 +415,32 @@ Evidence:
 Status: active
 
 Intent:
-When the in-pod agent invokes AskUserQuestion, the active turn pauses with a
-durable `turn.awaiting_input` event carrying the Tank-canonical questions. The
-turn-activity page projection records a compact AskUserQuestion invocation
-marker on the preceding activity page, then opens one semantic `question_set`
-page per question in the set. Those adjacent pages carry the same
+When the in-pod agent invokes AskUserQuestion, the asking turn records a
+durable `turn.awaiting_input.invocation` event and a derived
+`assistant_message.created` question message. That assistant message is the
+terminal main-transcript response for the asking turn. A separate normal
+numbered question turn then records durable `turn.awaiting_input` carrying the
+Tank-canonical questions. The turn-activity page projection records a compact
+AskUserQuestion invocation marker on the preceding activity page, then opens
+one semantic `question_set` page per question in the set. Those adjacent pages carry the same
 `questionSet` number and individual `questionIndex`/`questionCount` metadata,
 letting the Turns UI label the set and provide previous/next question shortcuts
 without creating a third navigation system. If the agent asks immediately, that
 first activity page is marker-only by design: it preserves the ledger handoff
 without squeezing the question UI into activity history. The main transcript
-renders the durable `awaiting_input` meta row as an assistant handoff message
-(`RunNeedsInputAnnouncement`, originally restored after PR #861) so the user
-sees the agent's summary/question at the same conversation level as a normal
-final answer. The whole row navigates to the question set in Turns. The
+renders the derived assistant question message so the user sees the agent's
+question at the same conversation level as a normal final answer. That message
+links to the question set in Turns. The
 interactive answer form is owned by the Turns question page, which reflects
 durable state rather than local React optimism, so a fresh tab renders the same
 question set and defaults to it while the turn is still waiting for input.
 
-Answering resumes the same turn:
-- The user's selection posts to `POST /turns/{askingTurnId}/answer`, which
+Answering resumes the provider callback and starts the next visible turn:
+- The user's selection posts to `POST /turns/{questionTurnId}/answer`, which
   persists durable `turn.input_answered` and publishes an `input_reply`
   control-plane command to the paused runner.
-- The asking turn remains active while awaiting input; Stop can still interrupt
-  that turn because `activeTurnId` is preserved.
+- The question turn is the active needs-input turn in Tank UI. The provider
+  callback may still be parked under the asking turn inside the runner harness.
 
 Each question page has two states:
 - waiting — unanswered. The page surfaces one question from the set, with its
@@ -453,10 +458,10 @@ Affected contracts:
 
 Contract impact:
 - The question page is a Turn activity projection of durable
-  `turn.awaiting_input`; it is not a second ledger. The same durable
-  `awaiting_input` meta row appears in the main transcript as the assistant
-  handoff and navigation target to the question set, never as a synthetic user
-  message or synthetic turn.
+  `turn.awaiting_input`; it is not a second ledger. The main transcript uses
+  the derived `assistant_message.created` question message as the assistant
+  handoff and navigation target to the question set, never a standalone
+  question-button row.
 - The preceding activity page receives a compact `AskUserQuestion` tool marker
   derived from the same durable `turn.awaiting_input` event. It is an audit
   marker for the invocation, not the answer surface and not a dependency on
@@ -472,8 +477,8 @@ Contract impact:
 - `answered` is derived from a durable fact (a later `turn.input_answered` event
   whose `payload.question_timeline_id` matches), never a local "I submitted"
   flag, so historical replay matches live.
-- The answer is part of the same durable turn — copy links, unread counts, and
-  latest-message state do not point at a synthetic user-message turn.
+- The answer is a normal user message in the next durable turn, while
+  `turn.input_answered` settles the question turn's card state.
 
 Evidence:
 - Backend: `backend-go/cmd/tank-operator/turn_pages_test.go` proves
@@ -482,9 +487,9 @@ Evidence:
   seals an answered set before resumed activity.
 - Backend API: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
   proves an unanswered `needs_input` turn defaults to the question page.
-- Frontend: `frontend/src/migrationPolicy.test.ts` proves transcript renderers
-  use the `RunNeedsInputAnnouncement` handoff row while
-  `RunAwaitingInputCard` is owned by `RunTurnActivityScreen`.
+- Frontend: `frontend/src/migrationPolicy.test.ts` proves the main transcript
+  uses the assistant question message affordance while `RunAwaitingInputCard`
+  is owned by Turns.
 - Migration guard: `scripts/check-askuserquestion-migration.mjs` requires the
   semantic page path and same-turn `/answer` path.
 

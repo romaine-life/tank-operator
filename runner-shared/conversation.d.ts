@@ -1,4 +1,10 @@
-export const TANK_ACTORS: readonly ["user", "assistant", "system", "tool", "runner"];
+export const TANK_ACTORS: readonly [
+  "user",
+  "assistant",
+  "system",
+  "tool",
+  "runner",
+];
 export type TankActor = (typeof TANK_ACTORS)[number];
 
 export const TANK_EVENT_SOURCES: readonly ["tank", "claude", "codex"];
@@ -9,6 +15,7 @@ export type TankVisibility = (typeof TANK_VISIBILITIES)[number];
 
 export const TANK_EVENT_TYPES: readonly [
   "user_message.created",
+  "assistant_message.created",
   "turn.submitted",
   "turn.claimed",
   "turn.started",
@@ -28,6 +35,7 @@ export const TANK_EVENT_TYPES: readonly [
   "shell_task.updated",
   "shell_task.exited",
   "turn.awaiting_input",
+  "turn.awaiting_input.invocation",
 ];
 export type TankEventType = (typeof TANK_EVENT_TYPES)[number];
 
@@ -40,7 +48,8 @@ export interface TankProducerMetadata {
 
 export type UserMessageDisplay =
   | { kind: "plain" }
-  | { kind: "skill_invocation"; skill_name: string; supplemental_text?: string };
+  | { kind: "skill_invocation"; skill_name: string; supplemental_text?: string }
+  | { kind: "ask_user_question" };
 
 export interface UserMessageAttachmentDisplay {
   label: string;
@@ -55,7 +64,10 @@ export type TankItemOutcome =
   | { kind: "ok" }
   | {
       kind: "result_failed";
-      reason: "claude_tool_result_is_error" | "codex_item_status_failed" | "exit_code";
+      reason:
+        | "claude_tool_result_is_error"
+        | "codex_item_status_failed"
+        | "exit_code";
       code?: string | number;
     }
   | { kind: "execution_failed"; reason: "provider_item_error" };
@@ -91,7 +103,11 @@ export interface TankConversationEvent<
   [key: string]: unknown;
 }
 
-export function isTankConversationEvent(event: unknown): event is TankConversationEvent;
-export function isDurableTankConversationEvent(event: unknown): event is TankConversationEvent;
+export function isTankConversationEvent(
+  event: unknown,
+): event is TankConversationEvent;
+export function isDurableTankConversationEvent(
+  event: unknown,
+): event is TankConversationEvent;
 
 export function normalizeClientNonce(value: unknown): string | null;

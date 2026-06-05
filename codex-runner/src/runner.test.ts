@@ -264,6 +264,7 @@ test("codexQuestionsToTankShape tolerates pure free-form (null options) and drop
 test("acceptInputReply delivers free-form Other text to codex app-server", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     acceptInputReply: (record: unknown) => Promise<void>;
+    rotateTurnForInputReply: (turn: unknown, record: unknown) => Promise<void>;
     pendingInputReplies: Map<string, { resolve: (value: unknown) => void }>;
     commandBus: { markCompleted: (record: unknown) => Promise<void>; markFailed: () => Promise<void> };
   };
@@ -287,9 +288,13 @@ test("acceptInputReply delivers free-form Other text to codex app-server", async
       assert.fail("input_reply should resolve the pending request");
     },
   };
+  runner.rotateTurnForInputReply = async (_turn, record) => {
+    assert.equal((record as { client_nonce?: string }).client_nonce, "answer-continuation");
+  };
 
   await runner.acceptInputReply({
     type: "input_reply",
+    client_nonce: "answer-continuation",
     target_turn_id: "turn-active",
     target_timeline_id: "turn-active:item:req_ask",
     target_provider_item_id: "req_ask",
@@ -306,6 +311,7 @@ test("acceptInputReply delivers free-form Other text to codex app-server", async
 test("acceptInputReply keeps selected codex labels and appends free-form context", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
     acceptInputReply: (record: unknown) => Promise<void>;
+    rotateTurnForInputReply: (turn: unknown, record: unknown) => Promise<void>;
     pendingInputReplies: Map<string, { resolve: (value: unknown) => void }>;
     commandBus: { markCompleted: () => Promise<void>; markFailed: () => Promise<void> };
   };
@@ -326,9 +332,13 @@ test("acceptInputReply keeps selected codex labels and appends free-form context
       assert.fail("input_reply should resolve the pending request");
     },
   };
+  runner.rotateTurnForInputReply = async (_turn, record) => {
+    assert.equal((record as { client_nonce?: string }).client_nonce, "answer-continuation");
+  };
 
   await runner.acceptInputReply({
     type: "input_reply",
+    client_nonce: "answer-continuation",
     target_turn_id: "turn-active",
     target_timeline_id: "turn-active:item:req_ask",
     target_provider_item_id: "req_ask",

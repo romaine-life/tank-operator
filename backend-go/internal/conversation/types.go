@@ -61,26 +61,28 @@ const (
 type EventType string
 
 const (
-	EventUserMessageCreated     EventType = "user_message.created"
-	EventTurnSubmitted          EventType = "turn.submitted"
-	EventTurnClaimed            EventType = "turn.claimed"
-	EventTurnStarted            EventType = "turn.started"
-	EventTurnUsage              EventType = "turn.usage"
-	EventTurnCompleted          EventType = "turn.completed"
-	EventTurnFailed             EventType = "turn.failed"
-	EventTurnCommandFailed      EventType = "turn.command_failed"
-	EventTurnInterruptRequested EventType = "turn.interrupt_requested"
-	EventTurnInterrupted        EventType = "turn.interrupted"
-	EventTurnInputAnswered      EventType = "turn.input_answered"
-	EventContextCompacted       EventType = "context.compacted"
-	EventSessionStatus          EventType = "session.status"
-	EventItemStarted            EventType = "item.started"
-	EventItemCompleted          EventType = "item.completed"
-	EventItemFailed             EventType = "item.failed"
-	EventShellTaskStarted       EventType = "shell_task.started"
-	EventShellTaskUpdated       EventType = "shell_task.updated"
-	EventShellTaskExited        EventType = "shell_task.exited"
-	EventTurnAwaitingInput      EventType = "turn.awaiting_input"
+	EventUserMessageCreated          EventType = "user_message.created"
+	EventAssistantMessageCreated     EventType = "assistant_message.created"
+	EventTurnSubmitted               EventType = "turn.submitted"
+	EventTurnClaimed                 EventType = "turn.claimed"
+	EventTurnStarted                 EventType = "turn.started"
+	EventTurnUsage                   EventType = "turn.usage"
+	EventTurnCompleted               EventType = "turn.completed"
+	EventTurnFailed                  EventType = "turn.failed"
+	EventTurnCommandFailed           EventType = "turn.command_failed"
+	EventTurnInterruptRequested      EventType = "turn.interrupt_requested"
+	EventTurnInterrupted             EventType = "turn.interrupted"
+	EventTurnInputAnswered           EventType = "turn.input_answered"
+	EventContextCompacted            EventType = "context.compacted"
+	EventSessionStatus               EventType = "session.status"
+	EventItemStarted                 EventType = "item.started"
+	EventItemCompleted               EventType = "item.completed"
+	EventItemFailed                  EventType = "item.failed"
+	EventShellTaskStarted            EventType = "shell_task.started"
+	EventShellTaskUpdated            EventType = "shell_task.updated"
+	EventShellTaskExited             EventType = "shell_task.exited"
+	EventTurnAwaitingInput           EventType = "turn.awaiting_input"
+	EventTurnAwaitingInputInvocation EventType = "turn.awaiting_input.invocation"
 )
 
 type ProducerMetadata struct {
@@ -181,6 +183,8 @@ func validateEventMap(event map[string]any) error {
 	switch eventType {
 	case EventUserMessageCreated:
 		return validateUserMessageCreated(event)
+	case EventAssistantMessageCreated:
+		return validateAssistantMessageCreated(event)
 	case EventTurnSubmitted:
 		if err := requireFields(event, "turn_id", "client_nonce"); err != nil {
 			return err
@@ -275,6 +279,14 @@ func validateEventMap(event map[string]any) error {
 			return fmt.Errorf("%s must be actor=runner", eventType)
 		}
 		return validateAwaitingInputPayload(event)
+	case EventTurnAwaitingInputInvocation:
+		if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorRunner {
+			return fmt.Errorf("%s must be actor=runner", eventType)
+		}
+		return validateAwaitingInputPayload(event)
 	}
 	return nil
 }
@@ -317,6 +329,41 @@ func validateUserMessageCreated(event map[string]any) error {
 	default:
 		return fmt.Errorf("payload.display.kind must be plain or skill_invocation")
 	}
+}
+
+func validateAssistantMessageCreated(event map[string]any) error {
+	if err := requireFields(event, "turn_id", "timeline_id"); err != nil {
+		return err
+	}
+	if Actor(stringField(event, "actor")) != ActorAssistant {
+		return fmt.Errorf("assistant_message.created must be actor=assistant")
+	}
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	if stringField(payload, "text") == "" {
+		return fmt.Errorf("payload.text is required")
+	}
+	display, ok := payload["display"].(map[string]any)
+	if !ok {
+		return fmt.Errorf("payload.display is required")
+	}
+	switch stringField(display, "kind") {
+	case "plain", "ask_user_question":
+	default:
+		return fmt.Errorf("payload.display.kind must be plain or ask_user_question")
+	}
+	if raw, ok := payload["awaiting_input"]; ok {
+		awaiting, ok := raw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("payload.awaiting_input must be an object")
+		}
+		if _, err := awaitingInputQuestions(awaiting); err != nil {
+			return fmt.Errorf("payload.awaiting_input.%w", err)
+		}
+	}
+	return nil
 }
 
 func validateUserMessageAttachments(raw any) error {
@@ -771,6 +818,7 @@ func IsTurnTerminalEvent(eventType EventType) bool {
 func validEventType(eventType EventType) bool {
 	switch eventType {
 	case EventUserMessageCreated,
+		EventAssistantMessageCreated,
 		EventTurnSubmitted,
 		EventTurnClaimed,
 		EventTurnStarted,
@@ -789,7 +837,8 @@ func validEventType(eventType EventType) bool {
 		EventShellTaskStarted,
 		EventShellTaskUpdated,
 		EventShellTaskExited,
-		EventTurnAwaitingInput:
+		EventTurnAwaitingInput,
+		EventTurnAwaitingInputInvocation:
 		return true
 	default:
 		return false

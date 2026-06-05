@@ -60,7 +60,10 @@ test("composer renders a durable compaction metric from the session row", () => 
   assert.match(appSource, /className="run-cost-estimate-metric run-cost-estimate-metric-compactions"/);
   assert.match(appSource, /className="run-cost-estimate-label">cmp</);
   assert.match(appSource, /\{hasCompactionMetric && \(/);
-  assert.match(appSource, /const hasCompactionMetric = typeof compactionCount === "number" && Number\.isFinite\(compactionCount\)/);
+  assert.match(
+    appSource,
+    /const hasCompactionMetric =\s*typeof compactionCount === "number" && Number\.isFinite\(compactionCount\)/,
+  );
   // Sourced from the durable row field, never inferred from loaded transcript
   // entries — the same durable model as the window denominator.
   assert.match(appSource, /compactionCount: sessionCompactionCount,/);
@@ -69,6 +72,17 @@ test("composer renders a durable compaction metric from the session row", () => 
   assert.match(appSource, /has-compaction-metric/);
   assert.match(cssSource, /\.run-cost-estimate\.has-compaction-metric\s*\{/);
   assert.match(cssSource, /\.run-cost-estimate-metric-compactions\s*\{/);
+});
+
+test("splash composer keeps the compaction metric present at zero", () => {
+  assert.match(
+    appSource,
+    /className="run-composer-home run-composer-interactive"[\s\S]*?cost=\{\{[\s\S]*?amountUsd: 0,[\s\S]*?tokens: 0,[\s\S]*?compactionCount: 0,/,
+  );
+  assert.match(
+    appSource,
+    /Cost estimate appears after usage is available, 0 context compactions/,
+  );
 });
 
 test("compaction metric is session-scoped and absent from the per-turn pill", () => {

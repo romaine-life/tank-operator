@@ -116,6 +116,9 @@ func (m transcriptRowsMaterializer) RefreshEvent(ctx context.Context, event map[
 			})
 		}
 	}
+	if transcriptString(event, "type") == "turn.input_answered" {
+		return m.refreshSession(ctx, sessionID)
+	}
 	if turnID == "" {
 		projection := projectTranscriptEvents([]map[string]any{event})
 		recordTranscriptProjectionInvariantViolations(sessionID, "", []map[string]any{event}, projection.Entries)
@@ -146,6 +149,9 @@ func (m transcriptRowsMaterializer) refreshEventTx(
 		projection := projectTranscriptEvents([]map[string]any{event})
 		recordTranscriptProjectionInvariantViolations(sessionID, "", []map[string]any{event}, projection.Entries)
 		return rows.UpsertRowsTx(ctx, tx, sessionID, projection.Entries)
+	}
+	if transcriptString(event, "type") == "turn.input_answered" {
+		return m.backfillSessionTx(ctx, tx, events, rows, sessionID)
 	}
 	turnEvents, err := readAllTurnEventsTx(ctx, events, tx, sessionID, turnID)
 	if err != nil {
@@ -219,6 +225,13 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 	if err != nil || !needed {
 		return false, err
 	}
+	if err := m.refreshSession(ctx, sessionID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (m transcriptRowsMaterializer) refreshSession(ctx context.Context, sessionID string) error {
 	var events []map[string]any
 	cursor := ""
 	for {
@@ -226,7 +239,7 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 			AfterOrderKey: cursor,
 		}, 1000)
 		if err != nil {
-			return false, err
+			return err
 		}
 		events = append(events, page.Events...)
 		if page.FoundNewest || len(page.Events) == 0 || page.NextOrderKey == "" || page.NextOrderKey == cursor {
@@ -240,9 +253,9 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
 	if err := m.rows.ReplaceForSession(ctx, sessionID, projection.Entries); err != nil {
-		return false, err
+		return err
 	}
-	return true, nil
+	return nil
 }
 
 func (m transcriptRowsMaterializer) backfillSessionTx(
@@ -382,28 +395,35 @@ func (m transcriptRowsMaterializer) turnNumbersForSession(ctx context.Context, s
 	return numbers, true
 }
 
-// stampTurnNumbers sets turnNumber on every turn_activity shell from the
-// durable session_turns map. A shell whose turn_id has no number is the
-// materialization-time analogue of the allocation invariant: it is recorded on
-// the missing-number counter rather than failing the projection, so the
-// durable transcript still renders while the regression is alerted on.
+// stampTurnNumbers sets turnNumber on every turn-tagged transcript row from
+// the durable session_turns map. Turn activity shells are the primary consumer,
+// but assistant AskUserQuestion messages also need the number for their linked
+// question turn without rendering a separate question-only shell in the main
+// transcript.
 func stampTurnNumbers(sessionID string, numbers map[string]int64, entries []map[string]any) {
 	for _, entry := range entries {
-		if transcriptMapString(entry, "kind") != "turn_activity" {
-			continue
-		}
 		turnID := transcriptMapString(entry, "turnId")
 		if turnID == "" {
 			continue
 		}
 		if number, ok := numbers[turnID]; ok {
 			entry["turnNumber"] = number
-			continue
 		}
-		recordTurnNumberMissing("materialize")
-		slog.Warn("durable turn number missing for materialized shell",
-			"session_id", sessionID,
-			"turn_id", turnID,
-		)
+		if awaiting, _ := entry["awaitingInput"].(map[string]any); awaiting != nil {
+			if questionTurnID := transcriptMapString(awaiting, "questionTurnId"); questionTurnID != "" {
+				if number, ok := numbers[questionTurnID]; ok {
+					awaiting["questionTurnNumber"] = number
+				}
+			}
+		}
+		if transcriptMapString(entry, "kind") == "turn_activity" {
+			if _, ok := numbers[turnID]; !ok {
+				recordTurnNumberMissing("materialize")
+				slog.Warn("durable turn number missing for materialized shell",
+					"session_id", sessionID,
+					"turn_id", turnID,
+				)
+			}
+		}
 	}
 }
