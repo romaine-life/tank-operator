@@ -696,6 +696,8 @@ interface Session {
   runtime_context_window_tokens?: number;
   runtime_context_window_source?: string;
   runtime_context_window_observed_at?: string | null;
+  provider_rate_limit_info?: Record<string, unknown> | null;
+  provider_rate_limit_observed_at?: string | null;
   // Durable count of context.compacted events for this session, projected from
   // the session_events ledger onto the row. The composer renders it as the
   // compaction metric; absent/0 means the session has not compacted yet.
@@ -1157,6 +1159,26 @@ function normalizeBugLabel(value: unknown): SessionBugLabel | null {
   };
 }
 
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeProviderRateLimitInfo(value: unknown): Record<string, unknown> | null {
+  if (!isPlainRecord(value)) return null;
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === "string") {
+      const trimmed = raw.trim();
+      if (trimmed) out[key] = trimmed;
+    } else if (typeof raw === "number" && Number.isFinite(raw)) {
+      out[key] = raw;
+    } else if (typeof raw === "boolean") {
+      out[key] = raw;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
   // The backend includes an activity block on GET /api/sessions
@@ -1201,6 +1223,11 @@ function normalizeSession(session: Session): Session {
   next.runtime_context_window_observed_at =
     typeof session.runtime_context_window_observed_at === "string"
       ? session.runtime_context_window_observed_at
+      : null;
+  next.provider_rate_limit_info = normalizeProviderRateLimitInfo(session.provider_rate_limit_info);
+  next.provider_rate_limit_observed_at =
+    typeof session.provider_rate_limit_observed_at === "string"
+      ? session.provider_rate_limit_observed_at
       : null;
   next.agent_avatar_id =
     typeof session.agent_avatar_id === "string" ? session.agent_avatar_id : null;
@@ -9794,7 +9821,68 @@ function formatMetricCount(value: number): string {
   return value.toFixed(value < 1 ? 2 : 1).replace(/\.0$/, "");
 }
 
+const PROVIDER_RATE_LIMIT_LABELS: Record<string, string> = {
+  provider: "Provider",
+  status: "Status",
+  rateLimitType: "Type",
+  resetsAt: "Resets",
+  utilization: "Utilization",
+  overageStatus: "Overage",
+  overageResetsAt: "Overage reset",
+  overageDisabledReason: "Overage disabled",
+  isUsingOverage: "Using overage",
+  surpassedThreshold: "Threshold",
+  uuid: "Event",
+  session_id: "SDK session",
+};
+
+const PROVIDER_RATE_LIMIT_ORDER = [
+  "provider",
+  "status",
+  "rateLimitType",
+  "resetsAt",
+  "utilization",
+  "overageStatus",
+  "overageResetsAt",
+  "overageDisabledReason",
+  "isUsingOverage",
+  "surpassedThreshold",
+  "uuid",
+  "session_id",
+];
+
+function formatProviderRateLimitValue(key: string, value: unknown): string {
+  if (typeof value === "boolean") return value ? "yes" : "no";
+  if (typeof value === "number" && Number.isFinite(value)) {
+    if (key === "resetsAt" || key === "overageResetsAt") {
+      const ms = value > 1_000_000_000_000 ? value : value * 1000;
+      return formatToolFullTime(new Date(ms).toISOString());
+    }
+    return formatMetricCount(value);
+  }
+  if (typeof value === "string") {
+    if (key === "resetsAt" || key === "overageResetsAt") {
+      const parsed = Date.parse(value);
+      if (Number.isFinite(parsed)) return formatToolFullTime(new Date(parsed).toISOString());
+    }
+    return value;
+  }
+  return "";
+}
+
+function providerRateLimitRows(session?: Session): Array<{ key: string; label: string; value: string }> {
+  const info = session?.provider_rate_limit_info;
+  if (!info) return [];
+  const rows: Array<{ key: string; label: string; value: string }> = [];
+  for (const key of PROVIDER_RATE_LIMIT_ORDER) {
+    const value = formatProviderRateLimitValue(key, info[key]);
+    if (value) rows.push({ key, label: PROVIDER_RATE_LIMIT_LABELS[key] ?? key, value });
+  }
+  return rows;
+}
+
 function RunSettingsPanel({
+  session,
   runPrefs,
   setRunPref,
   soundControlId,
@@ -9809,6 +9897,7 @@ function RunSettingsPanel({
   adminView: routedAdminView,
   onSettingsRouteChange,
 }: {
+  session?: Session;
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
   soundControlId: string;
@@ -9862,6 +9951,7 @@ function RunSettingsPanel({
     adminControls?.observability.summary ?? null,
     adminControls?.observability.error ?? null,
   );
+  const rateLimitRows = providerRateLimitRows(session);
 
   return (
     <div className={settingsScreenClassName}>
@@ -10043,6 +10133,29 @@ function RunSettingsPanel({
               </div>
               <SessionListDebugCaptureControls source="SettingsAdmin" />
             </div>
+            {rateLimitRows.length > 0 && (
+              <div className="run-settings-rate-limit">
+                <div className="run-settings-diagnostics-head">
+                  <span className="run-settings-link-label">
+                    <TimerIcon className="run-settings-link-icon" aria-hidden="true" />
+                    <span>Rate limit info</span>
+                  </span>
+                  {session?.provider_rate_limit_observed_at && (
+                    <span className="run-settings-scope-value">
+                      {formatToolFullTime(session.provider_rate_limit_observed_at)}
+                    </span>
+                  )}
+                </div>
+                <div className="run-settings-rate-limit-grid">
+                  {rateLimitRows.map((row) => (
+                    <div className="run-settings-rate-limit-row" key={row.key}>
+                      <span>{row.label}</span>
+                      <span>{row.value}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
           </section>
           <section className="run-settings-section">
             <h2 className="run-settings-title">Useful files</h2>
@@ -14924,6 +15037,7 @@ function ChatPane({
           />
         ) : activeTab === "settings" ? (
           <RunSettingsPanel
+            session={session}
             runPrefs={runPrefs}
             setRunPref={setRunPref}
             soundControlId={`turn-sound-volume-${session.id}`}
@@ -16617,6 +16731,8 @@ function AuthenticatedApp() {
       runtime_context_window_tokens: row.runtime_context_window_tokens ?? 0,
       runtime_context_window_source: row.runtime_context_window_source ?? "",
       runtime_context_window_observed_at: row.runtime_context_window_observed_at ?? null,
+      provider_rate_limit_info: normalizeProviderRateLimitInfo(row.provider_rate_limit_info),
+      provider_rate_limit_observed_at: row.provider_rate_limit_observed_at ?? null,
       compaction_count: row.compaction_count ?? 0,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
@@ -16671,6 +16787,11 @@ function AuthenticatedApp() {
       runtime_context_window_observed_at:
         typeof raw.runtime_context_window_observed_at === "string"
           ? raw.runtime_context_window_observed_at
+          : undefined,
+      provider_rate_limit_info: normalizeProviderRateLimitInfo(raw.provider_rate_limit_info) ?? undefined,
+      provider_rate_limit_observed_at:
+        typeof raw.provider_rate_limit_observed_at === "string"
+          ? raw.provider_rate_limit_observed_at
           : undefined,
       compaction_count:
         typeof raw.compaction_count === "number" && Number.isFinite(raw.compaction_count)

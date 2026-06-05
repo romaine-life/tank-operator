@@ -197,6 +197,31 @@ func (s *Store) SetRuntimeContextWindow(ctx context.Context, email, sessionID st
 	return err
 }
 
+// SetProviderRateLimitInfo stores the latest sanitized provider rate-limit
+// payload observed by the session runner. Unlike the context window, this is
+// latest-observed-wins so an admin can see the current rejected/overage shape.
+func (s *Store) SetProviderRateLimitInfo(ctx context.Context, email, sessionID string, info map[string]any) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	sessionID = strings.TrimSpace(sessionID)
+	if normalized == "" || sessionID == "" || len(info) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(info)
+	if err != nil {
+		return fmt.Errorf("sessionregistry: marshal provider rate-limit info: %w", err)
+	}
+	const q = `
+		UPDATE sessions
+		SET provider_rate_limit_info        = $4,
+			provider_rate_limit_observed_at = now(),
+			updated_at                      = now(),
+			row_version                     = nextval('sessions_row_version_seq')
+		WHERE email = $1 AND session_scope = $2 AND session_id = $3
+	`
+	_, err = s.pool.Exec(ctx, q, normalized, s.scope, sessionID, raw)
+	return err
+}
+
 // SetName updates the display name. Missing-session is a no-op
 // (matches the previous Cosmos impl, which swallowed not-found there).
 // Bumps row_version so the per-row update cursor advances.
@@ -393,6 +418,8 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			sessions.runtime_context_window_tokens,
 			sessions.runtime_context_window_source,
 			COALESCE(to_char(sessions.runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+			sessions.provider_rate_limit_info,
+			COALESCE(to_char(sessions.provider_rate_limit_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS provider_rate_limit_observed_at,
 			sessions.compaction_count,
 			COALESCE(sessions.agent_avatar_id, ''),
 			COALESCE(sessions.system_avatar_id, ''),
@@ -421,9 +448,11 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		name                                                  *string
 		visible                                               bool
 		activitySummary, testState, rolloutState, cloneState  []byte
+		providerRateLimitInfo                                 []byte
 		repos, capabilities                                   []string
 		model, effort, runtimeModel, runtimeEffort, runtimeAt string
 		runtimeContextWindowSource, runtimeContextWindowAt    string
+		providerRateLimitObservedAt                           string
 		agentAvatarID, systemAvatarID                         string
 		runtimeContextWindowTokens, compactionCount           int64
 		sidebarPosition, rowVersion                           int64
@@ -438,6 +467,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&repos, &cloneState, &capabilities, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
 		&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
+		&providerRateLimitInfo, &providerRateLimitObservedAt,
 		&compactionCount,
 		&agentAvatarID, &systemAvatarID,
 		&sidebarPosition,
@@ -483,6 +513,8 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		RuntimeContextWindowTokens:     runtimeContextWindowTokens,
 		RuntimeContextWindowSource:     runtimeContextWindowSource,
 		RuntimeContextWindowObservedAt: runtimeContextWindowAt,
+		ProviderRateLimitInfo:          unmarshalJSONB(providerRateLimitInfo),
+		ProviderRateLimitObservedAt:    providerRateLimitObservedAt,
 		CompactionCount:                compactionCount,
 		AgentAvatarID:                  agentAvatarID,
 		SystemAvatarID:                 systemAvatarID,

@@ -180,6 +180,18 @@ func TestRuntimeContextWindowColumnsHaveForwardRepairMigrations(t *testing.T) {
 	}
 }
 
+func TestProviderRateLimitColumnsExist(t *testing.T) {
+	migrations := joinedMigrationSQL()
+	for _, want := range []string{
+		"ADD COLUMN IF NOT EXISTS provider_rate_limit_info jsonb",
+		"ADD COLUMN IF NOT EXISTS provider_rate_limit_observed_at timestamptz",
+	} {
+		if !strings.Contains(migrations, want) {
+			t.Fatalf("schema migrations missing %q", want)
+		}
+	}
+}
+
 func TestRuntimeRepoDiscoveryColumnIsDroppedAfterApplied0078(t *testing.T) {
 	migrations := joinedMigrationSQL()
 	addIndex := strings.Index(migrations, "ADD COLUMN IF NOT EXISTS discovered_repos")

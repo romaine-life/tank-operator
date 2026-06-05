@@ -766,6 +766,10 @@ type runtimeContextWindowRegistry interface {
 	SetRuntimeContextWindow(ctx context.Context, email, sessionID string, tokens int64, source string) error
 }
 
+type providerRateLimitRegistry interface {
+	SetProviderRateLimitInfo(ctx context.Context, email, sessionID string, info map[string]any) error
+}
+
 type sessionAvatarReserver interface {
 	ReserveSessionAvatars(ctx context.Context, owner, sessionID string) (sessionmodel.SessionAvatarAssignment, error)
 }
@@ -825,6 +829,20 @@ func (m *Manager) SetRuntimeContextWindow(ctx context.Context, owner, sessionID 
 		return Info{}, ErrNotFound
 	}
 	if err := registry.SetRuntimeContextWindow(ctx, owner, sessionID, tokens, source); err != nil {
+		return Info{}, err
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetRegisteredByOwner(ctx, owner, sessionID)
+}
+
+// SetProviderRateLimitInfo records provider-specific rate-limit metadata
+// reported by the session runner and publishes the updated session row.
+func (m *Manager) SetProviderRateLimitInfo(ctx context.Context, owner, sessionID string, info map[string]any) (Info, error) {
+	registry, ok := m.registry.(providerRateLimitRegistry)
+	if !ok {
+		return Info{}, ErrNotFound
+	}
+	if err := registry.SetProviderRateLimitInfo(ctx, owner, sessionID, info); err != nil {
 		return Info{}, err
 	}
 	m.publishRow(ctx, owner, sessionID)
