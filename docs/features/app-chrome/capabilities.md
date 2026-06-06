@@ -265,3 +265,56 @@ Evidence:
   duplicate ids/hrefs.
 - PRs changing the list should keep that test green and update this entry if the
   set's intent changes.
+
+## Mobile Session Triage (Compact Shell)
+
+Status: active
+
+Intent:
+Make the session product usable on a phone for *triage* — list sessions, read a
+transcript, send a turn, answer an AskUserQuestion, and stop a run — without
+reproducing the desktop multi-pane operator console. At <= BP_COMPACT (768px)
+the persistent 260px sidebar moves into an off-canvas navigation drawer, a
+compact top bar carries the drawer trigger plus current-session context, and the
+work pane takes the full width.
+
+Affected contracts:
+- App Chrome
+- Session Bar / Transcript Navigation, because the drawer is the compact entry
+  point to session switching and the run-pane chrome reflows beneath the top bar
+- Session Lifecycle, because session rows still surface live pod/turn status in
+  the drawer and top bar
+
+Contract impact:
+- Compact vs. desktop shell is browser UI state derived from one source
+  (`useViewport()` over `frontend/src/breakpoints.ts`), not durable product
+  state; it resets on reload by design and never overrides server-owned
+  session/auth state.
+- The sidebar has a single source of truth: the same `sidebarBody` fragment
+  renders inline on desktop and inside the drawer on compact. No parallel mobile
+  scaffold, no duplicate session-list implementation.
+- The drawer is a vetted radix Dialog (focus trap, scroll lock, Escape, outside
+  dismiss, aria-modal). It closes on every navigation and when the viewport grows
+  back to desktop, so it cannot strand focus or scroll-lock — satisfying the App
+  Chrome rule that chrome "open/close predictably, preserve focus."
+- Touch parity for triage-critical affordances: the session delete/close control
+  is visible (not hover-only) in the drawer; reorder-by-drag is a deliberate
+  desktop-only enhancement and the row is non-draggable on compact, so there is
+  no dead gesture on touch. The persisted order is still honored on mobile.
+- Genuinely desktop-only surfaces (terminal attach, the drag/crop avatar editor)
+  render an honest `DesktopOnly` "open on a larger screen" card on compact rather
+  than a broken surface. This is a stated product boundary, not a fallback path.
+
+Evidence:
+- `frontend/src/breakpoints.test.ts` pins the canonical breakpoints and the
+  derived media queries so JS and CSS cannot drift.
+- `frontend/src/useViewport.test.ts` proves the matchMedia adapter (modern +
+  legacy listener APIs; SSR/no-matchMedia defaults to the desktop shell).
+- `frontend/src/mobileShell.test.ts` pins the compact shell CSS (single column +
+  top-bar row), the BP_COMPACT/CSS alignment, the drawer/top-bar/desktop-only
+  wiring, the non-draggable-on-compact invariant, and the visible delete
+  affordance.
+- Owed before "done" by docs/quality-timeframes.md: real-device validation (iOS
+  Safari + Android Chrome) of the sign-in bounce, drawer focus/scroll-lock
+  behavior, and the keyboard-aware composer at 390/768px. This is named scope,
+  not optional robustness.

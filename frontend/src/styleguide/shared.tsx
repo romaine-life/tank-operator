@@ -266,29 +266,6 @@ export function IconWrench({ className }: { className?: string }) {
   );
 }
 
-export function IconKey({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 16 16"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      focusable="false"
-      aria-hidden="true"
-    >
-      <circle cx="5.25" cy="8" r="2.6" />
-      <path d="M7.85 8h5.15" />
-      <path d="M11 8v2" />
-      <path d="M13 8v2.2" />
-    </svg>
-  );
-}
-
 export function IconChevronDown({ className }: { className?: string }) {
   return (
     <svg

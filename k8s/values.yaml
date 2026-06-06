@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-1b1ad1ef6b5dbfa489e0771941982c478c1e9763ce7e19cdc1331dcffb2b4632"
+  tag: "app-1f3a944212add0db110ac6a91ef62e2aa204b916aee893ba980f07eb3fc58c9a"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -20,7 +20,6 @@ testEnv:
   wildcardListenerSetName: tank-operator-wildcard
   wildcardListenerSetNamespace: tank-operator
   sessionsGatewayIP: 172.179.163.96
-  claudeCredentialsKvKey: claude-code-credentials
 
 staticOverride:
   enabled: true
@@ -139,7 +138,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-a481beea6746ddafa3c092eb3d2582a5595bb95db28b87c0194b80d32189a70d"
+    tag: "api-proxy-b393184f862bae5df8199122046060cbb7a34bac23aea077f732efb82d9767e5"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   serviceAccount: claude-api-proxy
@@ -267,23 +266,6 @@ externalSecret:
   storeName: romaine-kv
   storeKind: ClusterSecretStore
   refreshInterval: 1h
-  # Env vars the session container needs at startup. Session pods envFrom this
-  # Secret. The MCP server list is mounted from the session.configMap
-  # ConfigMap. Those MCP servers run in-cluster and read their own
-  # credentials from KV via per-server
-  # ExternalSecrets, NOT from this Secret.
-  #
-  # The block is named `githubApp` and the K8s Secret is `github-app-creds`
-  # from an earlier chart shape that carried the GitHub App private key, until
-  # the App credentials moved to the mcp-github Deployment's own ExternalSecret
-  # in the standalone mcp-github chart. Session pods never read
-  # the App credentials directly; mcp-github mints installation tokens itself
-  # and authenticates session-pod to mcp-github via Tank session attestations.
-  githubApp:
-    secretName: github-app-creds
-    keys:
-      - envVar: ANTHROPIC_API_KEY
-        kvKey: anthropic-api-key
   # Claude Code subscription credentials. Lives ONLY in the orchestrator
   # namespace; session pods cannot read this Secret. KV is the source of
   # truth: the orchestrator's in-process rotation writes to KV, ESO
@@ -294,11 +276,6 @@ externalSecret:
   claudeCredentials:
     secretName: claude-code-credentials
     secretKey: claude-code-credentials
-    # Optional Key Vault secret name override. When empty, production uses
-    # the historical `claude-code-credentials` name and validation slots use
-    # `<orchestrator-namespace>-claude-code-credentials`, so each test env
-    # gets its own refresh-token chain.
-    kvKey: ""
   # OpenAI Codex subscription credentials. The primary Secret lives in the
   # ORCHESTRATOR namespace and is mounted by codex-api-proxy. Codex CLI/GUI
   # session launchers write a placeholder chatgptAuthTokens auth.json and
@@ -309,7 +286,6 @@ externalSecret:
     # Key inside the K8s Secret. The proxy mounts this as
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
-    kvKey: codex-credentials
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

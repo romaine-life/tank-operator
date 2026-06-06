@@ -63,8 +63,6 @@ spec:
               value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
             - name: TANK_OPERATOR_INTERNAL_URL
               value: {{ include "tank-operator.internalURL" . | quote }}
-            - name: GITHUB_APP_SECRET
-              value: {{ include "tank-operator.githubAppSecret" . | quote }}
             - name: CODEX_CREDENTIALS_SECRET
               value: {{ include "tank-operator.codexCredentialsSecret" . | quote }}
 
@@ -139,6 +137,10 @@ spec:
               value: {{ .Values.credentialRefresher.keyVaultUrl | quote }}
             - name: CLAUDE_CREDENTIALS_KV_KEY
               value: {{ include "tank-operator.claudeCredentialsKvKey" . | quote }}
+            - name: CODEX_CREDENTIALS_KV_KEY
+              value: {{ include "tank-operator.codexCredentialsKvKey" . | quote }}
+            - name: ANTIGRAVITY_CREDENTIALS_KV_KEY
+              value: {{ include "tank-operator.antigravityCredentialsKvKey" . | quote }}
             - name: AZURE_FEDERATED_TOKEN_FILE
               value: /var/run/secrets/azure/tokens/azure-identity-token
             - name: AZURE_AUTHORITY_HOST

@@ -10935,3 +10935,174 @@ textarea.run-files-viewer-editor:focus {
     grid-template-columns: 1fr;
   }
 }
+
+/* ===========================================================================
+   Compact / mobile shell  (<= BP_COMPACT = 768px; see src/breakpoints.ts)
+   ---------------------------------------------------------------------------
+   tank-operator is a desktop-first operator console. On a phone we do not
+   reproduce the multi-pane console; we support session *triage* — list, read,
+   reply, answer, stop. The 260px sidebar moves into an off-canvas drawer
+   (radix Dialog via components/ui/sheet.tsx), a top bar exposes the drawer
+   trigger plus the current session context, and the work pane takes the full
+   width. Genuinely desktop-only surfaces (terminal, avatar editor) render an
+   honest DesktopOnly card instead. Class wiring lives in App.tsx's shell
+   render; the JS breakpoint that toggles `shell-compact` is useViewport().
+   =========================================================================== */
+
+/* Single column: top-bar row (auto) over work-pane row (1fr). The off-canvas
+   drawer is portaled out of this grid, so it claims no column/row. */
+.shell.shell-compact {
+  grid-template-columns: 1fr;
+  grid-template-rows: auto 1fr;
+  transition: none;
+}
+
+.shell-compact .workspace {
+  min-height: 0;
+}
+
+/* --- Compact top bar ----------------------------------------------------- */
+.mobile-topbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: calc(3rem + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) var(--space-2) 0;
+  flex-shrink: 0;
+  background: var(--bg-sidebar);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.mobile-topbar-nav {
+  width: 2.5rem;
+  height: 2.5rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-radius: var(--radius-md);
+  color: var(--text-muted);
+}
+
+.mobile-topbar-nav:hover,
+.mobile-topbar-nav:active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
+.mobile-topbar-context {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 2.5rem;
+  padding: 0 var(--space-1);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  text-align: left;
+}
+
+.mobile-topbar-brand {
+  font-family: var(--font-primary);
+  font-weight: 500;
+  font-size: var(--text-base);
+}
+
+.mobile-topbar-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-base);
+}
+
+.mobile-topbar-avatar {
+  width: 1.25rem;
+  height: 1.25rem;
+  flex-shrink: 0;
+}
+
+/* --- Off-canvas session drawer ------------------------------------------ */
+/* SheetContent positions a fixed full-height left panel; the inner .sidebar
+   carries the existing chrome. Width tracks the desktop sidebar but caps to the
+   viewport on the narrowest phones. */
+.nav-sheet {
+  width: min(var(--sidebar-width), 86vw);
+  max-width: 22rem;
+}
+
+.sidebar-in-drawer {
+  width: 100%;
+  height: 100%;
+  /* Opaque over the scrim — the desktop sidebar background is translucent. The
+     scrim itself separates the drawer from the work pane, so no edge border is
+     needed (and a `border-right: ...var(--border-subtle)` would trip the
+     retired-side-pane migration guard in migrationPolicy.test.ts). */
+  background: var(--gray-950);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* On touch the session row's delete affordance must not hide behind hover.
+   product-inspirations.md: "click-to-pin ... hover-only state loses
+   information." Keep it visible with a real tap target inside the drawer. */
+.sidebar-in-drawer .session-delete {
+  color: var(--text-muted);
+  width: 2rem;
+  height: 2rem;
+}
+
+.sidebar-in-drawer .session-delete:disabled {
+  color: var(--text-faint);
+}
+
+/* --- Desktop-only boundary card ----------------------------------------- */
+.desktop-only {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  padding: var(--space-6) var(--space-5);
+}
+
+.desktop-only-inner {
+  max-width: 22rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.desktop-only-title {
+  font-family: var(--font-primary);
+  font-size: var(--text-base);
+  color: var(--text-primary);
+  margin: 0;
+}
+
+.desktop-only-body {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* --- Compact run-pane tuning --------------------------------------------- */
+@media (max-width: 768px) {
+  /* The session-name editor is a fixed 16rem on the desktop header; let it use
+     the full row so it cannot overflow a phone-width pane. */
+  .run-header-name-input {
+    width: 100%;
+    max-width: none;
+  }
+
+  /* Tabs scroll horizontally rather than stacking into a tall block. */
+  .run-tabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .run-tabs::-webkit-scrollbar {
+    display: none;
+  }
+}

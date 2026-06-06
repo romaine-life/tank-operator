@@ -80,10 +80,13 @@ with a non-placeholder Authorization (e.g. claude-code worker_jwt for
 
 The refresh_token has four physical residences and three transitions:
 
-1. **Azure Key Vault** (`romaine-kv` vault, secrets `claude-code-credentials`
-   and `codex-credentials`) — source of truth across deployments and restarts.
-   Provisioned by `infra/keyvault.tf`; only the proxy's UAMI and the
-   credentials-refresher UAMI have write access.
+1. **Azure Key Vault** (`romaine-kv` vault). Production uses the historical
+   `claude-code-credentials` and `codex-credentials` secrets. Validation slots
+   use slot-owned secrets named `<slotName>-claude-code-credentials` and
+   `<slotName>-codex-credentials`. Each secret is the source of truth for one
+   refresh-token chain across that deployment's restarts. Provisioned by
+   `infra/keyvault.tf`; only the proxy's UAMI and the credentials-refresher
+   UAMI have write access.
 
 2. **K8s Secret** in the orchestrator namespace, mirrored from KV by the
    ExternalSecret resource declared in `k8s/templates/externalsecret-*.yaml`
@@ -215,13 +218,14 @@ for a new pair. Possible causes, ordered by likelihood:
    from file" then immediate `refresh_token_reused`. Recovery: run the
    wizard.
 
-2. **External client consumed the chain.** A different deployment with
-   write access to the same KV secret (a test-slot api-proxy spinning up
-   for a glimmung run, for example) rotated and either wrote back to KV
-   stale or failed to write back. Tell from logs: the production proxy
-   never logged a successful rotation, but the KV version history shows a
-   write the production proxy didn't make. Recovery: run the wizard;
-   investigate the other deployment.
+2. **External client consumed the chain.** A different deployment or
+   break-glass process with write access to the same KV secret rotated and
+   either wrote back to KV stale or failed to write back. Test slots must not
+   share production credential KV secrets; a rendered slot that points at
+   `claude-code-credentials` or `codex-credentials` is invalid. Tell from logs:
+   the production proxy never logged a successful rotation, but the KV version
+   history shows a write the production proxy didn't make. Recovery: run the
+   wizard; investigate the other writer.
 
 3. **Provider-side invalidation.** Account-level revocation, security
    action, or maintenance event at the provider side. Tell from logs:
@@ -304,28 +308,25 @@ Log lines to grep for in `kubectl -n tank-operator logs codex-api-proxy-* -c ext
 For grafana, the boards loaded from `k8s/templates/grafana-dashboards/`
 include an "api-proxy" panel showing the above counters as rates.
 
-## Multi-deployment hazard (slots)
+## Slot credential ownership
 
-Test slot deployments (`tank-operator-slot-1` through `-6`) declare their
-own ExternalSecret mirroring the **same** KV secret. When a slot is scaled
-up (e.g. by a glimmung test run), the slot's own codex-api-proxy reads
-from its own copy of the K8s Secret and can attempt to refresh.
+Every live proxy deployment owns exactly one refresh-token chain. Production
+owns `claude-code-credentials` and `codex-credentials`. A validation slot owns
+`<slotName>-claude-code-credentials` and `<slotName>-codex-credentials`.
 
-If both production and slot proxies are simultaneously refreshing the
-same chain, the second one to call `/oauth/token` will get
-`refresh_token_reused` because the first one already swapped the pair.
-Today the deployments are still single-replica each and slots are scaled
-to 0 in steady state, so this is a latent issue rather than a live one.
+Slots are intentionally prod-shaped: each slot runs its own api-proxy
+deployments, ExternalSecrets, K8s Secrets, and config-mode save path. The
+credential wizard must be run once per slot/provider to seed those slot-owned
+KV secrets. Copying a production OAuth blob into a slot secret is invalid
+because it duplicates the same single-use refresh token into two independent
+refresh coordinators.
 
-The proper fix (deferred) is to either:
-- Make refresh exclusively the production proxy's responsibility (slot
-  proxies read tokens from KV but never call `/oauth/token`), or
-- Coordinate refresh across deployments via a shared advisory lock in KV
-  or a dedicated credentials-refresher Job.
-
-Until then, the operational rule is: do not run a slot codex-api-proxy
-concurrently with production having an active codex session. The slot's
-infra can spin without codex sessions; only the codex path is at risk.
+The chart and `scripts/check-test-slot-provider-credentials.sh` guard this
+contract. Hot slot renders must set `CLAUDE_CREDENTIALS_KV_KEY` and
+`CODEX_CREDENTIALS_KV_KEY` to slot-owned names; warm slot renders must mirror
+the same slot-owned KV keys through ExternalSecret. The proxy and
+save-credentials handler fail fast when the credential KV env is absent rather
+than choosing a production default.
 
 ## Where to look when investigating
 
