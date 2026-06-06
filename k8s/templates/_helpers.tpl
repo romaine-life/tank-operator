@@ -22,7 +22,7 @@ codex-credentials
 {{- end -}}
 
 {{- define "tank-operator.antigravityCredentialsKvKey" -}}
-{{- if eq .Values.namespaces.orchestrator "tank-operator" -}}
+{{- if or (eq .Values.namespaces.orchestrator "tank-operator") (eq (include "tank-operator.isTestEnv" .) "true") -}}
 antigravity-credentials
 {{- else -}}
 {{ printf "%s-antigravity-credentials" .Values.namespaces.orchestrator }}

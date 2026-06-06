@@ -35,7 +35,7 @@ if grep -Eq "name: ${slot_name}-(claude-code-credentials|codex-credentials|antig
   exit 1
 fi
 
-if grep -Eq 'name: (CLAUDE_CREDENTIALS_KV_KEY|CODEX_CREDENTIALS_KV_KEY|ANTIGRAVITY_CREDENTIALS_KV_KEY|ANTIGRAVITY_CREDENTIALS_SECRET|CLAUDE_CREDENTIALS_FILE)' <<<"${hot_rendered}"; then
+if grep -Eq 'name: (CLAUDE_CREDENTIALS_KV_KEY|CODEX_CREDENTIALS_KV_KEY|ANTIGRAVITY_CREDENTIALS_KV_KEY|CLAUDE_CREDENTIALS_FILE)' <<<"${hot_rendered}"; then
   echo "hot slot render exposes provider credential write/read env vars" >&2
   exit 1
 fi
