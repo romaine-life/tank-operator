@@ -43,3 +43,49 @@ Evidence:
   `tank_background_task_wake_register_total`,
   `tank_background_task_wake_fire_total`, `tank_background_task_wakes_due`.
 - Durable schema: migrations 0121–0124 (`session_background_task_wakes`).
+
+## Provider rate-limit retry-stall terminal
+
+Status: in progress
+
+Intent:
+When the Claude SDK's internal HTTP retry loop keeps getting `rate_limit` (429)
+from the provider and never converges, it emits only `system/api_retry` /
+`status` / `thinking_tokens` frames and never surfaces a terminal
+`rate_limit_event`. Before this, those frames fell through to
+`logUnhandledSdkMessage`, so the turn sat `claimed` with no `turn.started`, no
+output, and no terminal — the user saw dead air indefinitely. Originating
+incident: session 638 ("abmience runs") on 2026-06-06 sat wedged 35+ minutes
+across three turns while sibling sessions on the same shared account streamed
+normally. The runner now classifies the retry storm and, after a bounded
+no-progress window, resolves the in-flight turn with the same durable
+`turn.failed{reason:"provider_rate_limit"}` terminal a rejected quota would.
+
+Affected contracts:
+- Agent Runners
+
+Contract impact:
+- Converts a silent stranding — a counted bug class — into exactly one durable
+  terminal so the command queue drains ("Provider failures must become durable
+  failure events instead of silent strandings").
+- Distinct from the terminal `rate_limit_event` path: the new
+  `decision="retry_stall_failed"` keeps "the SDK never surfaced a terminal
+  frame" separable from an ordinary rejected primary quota
+  ("rate-limit frame handling is counted by decision").
+- Bounded by `SESSION_PROVIDER_RETRY_STALL_MS` (default 240s); real provider
+  progress (`turn.started` or a mapped canonical event) resets the window, while
+  `status`/`thinking_tokens` heartbeats do not (they are part of the stuck
+  cycle), so a slow-but-progressing turn is never falsely failed.
+- Non-`rate_limit` retries (`overloaded`/`api_error`) are observed but never
+  forced to a terminal — the SDK recovers from those on its own.
+- Runner-scoped: it catches the case where api_retry frames keep arriving. The
+  case where the SDK (or runner) goes fully silent and cannot emit its own
+  terminal is the orchestrator-side stall detector (session-lifecycle, Stage 2).
+
+Evidence:
+- Runner: `agent-runner/src/runner.test.ts` (rate_limit stall → one durable
+  terminal + ack + released turn; progress resets the window; `overloaded`
+  observed-not-failed); `classifyApiRetryError` unit behavior.
+- Metrics: `tank_runner_provider_api_retry_total{error}` and
+  `tank_runner_provider_rate_limit_decision_total{decision="retry_stall_failed"}`.
+- Docs: `docs/observability.md` runner-metrics taxonomy.

@@ -85,8 +85,26 @@ export const providerRateLimitEventTotal = new Counter({
 
 export const providerRateLimitDecisionTotal = new Counter({
   name: "tank_runner_provider_rate_limit_decision_total",
-  help: "Provider SDK rate-limit stream frames classified by the runner into a bounded handling decision.",
+  help: "Provider SDK rate-limit stream frames classified by the runner into a bounded handling decision: failed_turn, observed_allowed_active, observed_allowed_idle, terminal_without_active_turn, retry_stall_failed.",
   labelNames: ["decision"],
+  registers: [registry],
+});
+
+// providerApiRetryTotal counts the Claude SDK's `system/api_retry` frames —
+// the SDK's *internal* HTTP-retry signal, distinct from the terminal
+// `rate_limit_event` quota frame. These used to fall through to
+// logUnhandledSdkMessage (unmappedProviderEventTotal), so a session wedged in
+// an unbounded 429 retry loop produced no rate-limit-specific signal and no
+// durable terminal — the silent stranding that left session 638 "claimed" for
+// 35+ minutes with the user seeing dead air (2026-06-06). The bounded `error`
+// label (rate_limit | overloaded | api_error | other) names which retry is
+// firing. A sustained `rate_limit` storm with no turn progress is forced to a
+// durable turn.failed{reason:provider_rate_limit} terminal, counted as
+// decision="retry_stall_failed" on providerRateLimitDecisionTotal.
+export const providerApiRetryTotal = new Counter({
+  name: "tank_runner_provider_api_retry_total",
+  help: "Claude SDK system/api_retry frames (the SDK's internal HTTP-retry signal) classified by bounded error (rate_limit|overloaded|api_error|other). A sustained error=rate_limit storm with no turn progress is the silent-stranding signature; the runner forces it to a durable terminal (providerRateLimitDecisionTotal{decision=retry_stall_failed}).",
+  labelNames: ["error"],
   registers: [registry],
 });
 
