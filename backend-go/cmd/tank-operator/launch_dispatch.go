@@ -165,7 +165,11 @@ func (s *appServer) dispatchPendingLaunch(ctx context.Context, launch pgstore.Pe
 		absPaths = append(absPaths, absPath)
 	}
 
-	prompt := composeLaunchDispatchPrompt(launch.SkillName, launch.BasePrompt, absPaths)
+	runtime := strings.TrimSpace(launch.Runtime)
+	if strings.TrimSpace(launch.SkillName) != "" && !isLaunchSkillRuntime(runtime) {
+		return true, fmt.Errorf("skill launch runtime is invalid")
+	}
+	prompt := composeLaunchDispatchPrompt(runtime, launch.SkillName, launch.BasePrompt, absPaths)
 	resp, status, detail := s.enqueueSDKTurn(ctx, launch.OwnerEmail, launch.SessionID, sdkTurnRequest{
 		ClientNonce:                launch.ClientNonce,
 		RequireNonce:               true,
@@ -233,7 +237,7 @@ func (s *appServer) failPendingLaunch(ctx context.Context, launch pgstore.Pendin
 // "Attachments:" list (matching the protocol doc's prompt shape), and the skill
 // trigger prefix when the launch invoked a skill. The result satisfies
 // promptMatchesSkillTrigger so enqueueSDKTurn accepts it.
-func composeLaunchDispatchPrompt(skillName, basePrompt string, absPaths []string) string {
+func composeLaunchDispatchPrompt(runtime, skillName, basePrompt string, absPaths []string) string {
 	body := strings.TrimSpace(basePrompt)
 	if len(absPaths) > 0 {
 		var b strings.Builder
@@ -252,11 +256,23 @@ func composeLaunchDispatchPrompt(skillName, basePrompt string, absPaths []string
 	if skillName == "" {
 		return body
 	}
-	trigger := skillPromptTrigger("claude", skillName)
+	trigger := skillPromptTrigger(strings.TrimSpace(runtime), skillName)
+	if promptMatchesSkillTrigger(strings.TrimSpace(runtime), skillName, body) {
+		return body
+	}
 	if body == "" {
 		return trigger
 	}
 	return trigger + "\n\n" + body
+}
+
+func isLaunchSkillRuntime(runtime string) bool {
+	switch strings.TrimSpace(runtime) {
+	case "claude", "codex":
+		return true
+	default:
+		return false
+	}
 }
 
 // launchAttachmentAbsPath builds the deterministic, workspace-safe absolute
