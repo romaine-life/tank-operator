@@ -4187,6 +4187,54 @@ button:disabled {
   background: rgba(255, 255, 255, 0.035);
 }
 
+/* Turns view nav clusters: a first/prev/next/last stepper wrapping the
+   page dropdown and the turn dropdown, so stepping one turn (or page) at a time
+   and jumping to the ends is a single click instead of opening the dropdown.
+   The « ‹ › » glyphs match the inline per-turn pager; the buttons match the
+   height/treatment of the adjacent .run-turn-view-select so the row reads as one
+   control group. */
+.run-turn-view-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.run-turn-view-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  min-width: 1.75rem;
+  height: 2rem;
+  padding: 0 0.3rem;
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-base);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.run-turn-view-nav-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: var(--text-primary);
+}
+
+.run-turn-view-nav-btn:focus-visible {
+  outline: none;
+  border-color: rgba(147, 197, 253, 0.8);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.16);
+}
+
+.run-turn-view-nav-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .run-turn-view-summary {
   display: flex;
   align-items: center;

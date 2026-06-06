@@ -43,6 +43,7 @@ import {
   type TurnActivityPageInfo,
   type TurnActivityPagerState,
 } from "./turnActivityPager";
+import { turnViewTurnNavigation } from "./turnViewNavigation";
 import { shouldAutoDefaultToTurns } from "./autoTurnsDefault";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
@@ -10240,6 +10241,14 @@ function RunTurnActivityScreen({
   // user actually inspects turns from. Without it, a turn over the page limit
   // shows only its last page here (the endpoint default) with no way back.
   const pagerState = turnActivityPagerState(selectedPageInfo);
+  // Turn-level stepper (first / prev / next / last) beside the turn dropdown.
+  // Anchored on the effective selected turn so it matches the rendered turn even
+  // when selectedTurnId is null/stale (the view falls back to the latest turn).
+  const turnIds = useMemo(() => turns.map((turn) => turn.turnId), [turns]);
+  const turnNav = useMemo(
+    () => turnViewTurnNavigation(turnIds, selected?.turnId ?? null),
+    [turnIds, selected?.turnId],
+  );
   const detailEntries = useMemo(
     () =>
       (selected?.entries ?? []).filter(
@@ -10481,49 +10490,103 @@ function RunTurnActivityScreen({
         </div>
         <div className="run-turn-view-controls">
           {selected && onActivitySelectPage && (
-            <Select
-              value={String(pagerState.page)}
-              onValueChange={(value) =>
-                onActivitySelectPage(selected.turnId, Number(value))
-              }
-              disabled={pagerState.pageCount <= 1}
+            <div
+              className="run-turn-view-nav run-turn-view-page-nav"
+              role="group"
+              aria-label="Activity page navigation"
             >
-              <SelectTrigger
-                className="run-turn-view-select run-turn-view-page-select"
-                size="sm"
-                aria-label="Select activity page"
+              <button
+                type="button"
+                className="run-turn-view-nav-btn"
+                onClick={() =>
+                  onActivitySelectPage(selected.turnId, pagerState.firstPage)
+                }
+                disabled={!pagerState.canPageFirst}
+                aria-label="First activity page"
+                title="First page"
               >
-                <TurnActivityPageOptionLabel parts={selectedPageOptionParts} />
-              </SelectTrigger>
-              <SelectContent
-                className="run-turn-view-select-menu run-turn-view-page-select-menu"
-                position="popper"
-                align="end"
+                «
+              </button>
+              <button
+                type="button"
+                className="run-turn-view-nav-btn"
+                onClick={() =>
+                  onActivitySelectPage(selected.turnId, pagerState.olderPage)
+                }
+                disabled={!pagerState.canPageOlder}
+                aria-label="Previous activity page"
+                title="Previous page"
               >
-                {Array.from(
-                  { length: pagerState.pageCount },
-                  (_, index) => index + 1,
-                ).map((pageNumber) => {
-                  const directoryItem = selectedPageInfo?.pages?.find(
-                    (page) => page.number === pageNumber,
-                  );
-                  const optionParts = turnActivityPageOptionParts(
-                    pageNumber,
-                    directoryItem,
-                  );
-                  return (
-                    <SelectItem
-                      key={pageNumber}
-                      value={String(pageNumber)}
-                      textValue={optionParts.textValue}
-                      className="run-turn-view-select-item run-turn-view-page-select-item"
-                    >
-                      <TurnActivityPageOptionLabel parts={optionParts} />
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
+                ‹
+              </button>
+              <Select
+                value={String(pagerState.page)}
+                onValueChange={(value) =>
+                  onActivitySelectPage(selected.turnId, Number(value))
+                }
+                disabled={pagerState.pageCount <= 1}
+              >
+                <SelectTrigger
+                  className="run-turn-view-select run-turn-view-page-select"
+                  size="sm"
+                  aria-label="Select activity page"
+                >
+                  <TurnActivityPageOptionLabel parts={selectedPageOptionParts} />
+                </SelectTrigger>
+                <SelectContent
+                  className="run-turn-view-select-menu run-turn-view-page-select-menu"
+                  position="popper"
+                  align="end"
+                >
+                  {Array.from(
+                    { length: pagerState.pageCount },
+                    (_, index) => index + 1,
+                  ).map((pageNumber) => {
+                    const directoryItem = selectedPageInfo?.pages?.find(
+                      (page) => page.number === pageNumber,
+                    );
+                    const optionParts = turnActivityPageOptionParts(
+                      pageNumber,
+                      directoryItem,
+                    );
+                    return (
+                      <SelectItem
+                        key={pageNumber}
+                        value={String(pageNumber)}
+                        textValue={optionParts.textValue}
+                        className="run-turn-view-select-item run-turn-view-page-select-item"
+                      >
+                        <TurnActivityPageOptionLabel parts={optionParts} />
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <button
+                type="button"
+                className="run-turn-view-nav-btn"
+                onClick={() =>
+                  onActivitySelectPage(selected.turnId, pagerState.newerPage)
+                }
+                disabled={!pagerState.canPageNewer}
+                aria-label="Next activity page"
+                title="Next page"
+              >
+                ›
+              </button>
+              <button
+                type="button"
+                className="run-turn-view-nav-btn"
+                onClick={() =>
+                  onActivitySelectPage(selected.turnId, pagerState.lastPage)
+                }
+                disabled={!pagerState.canPageLast}
+                aria-label="Last activity page"
+                title="Last page"
+              >
+                »
+              </button>
+            </div>
           )}
           {selectedEventProgress && (
             <span
@@ -10537,35 +10600,89 @@ function RunTurnActivityScreen({
               {selectedEventProgress.label}
             </span>
           )}
-          <Select
-            value={selected?.turnId ?? ""}
-            onValueChange={onSelectTurn}
-            disabled={turns.length === 0}
+          <div
+            className="run-turn-view-nav run-turn-view-turn-nav"
+            role="group"
+            aria-label="Turn navigation"
           >
-            <SelectTrigger
-              className="run-turn-view-select"
-              size="sm"
-              aria-label="Select turn"
+            <button
+              type="button"
+              className="run-turn-view-nav-btn"
+              onClick={() =>
+                turnNav.firstTurnId && onSelectTurn(turnNav.firstTurnId)
+              }
+              disabled={!turnNav.canFirst}
+              aria-label="First turn"
+              title="First turn"
             >
-              <SelectValue placeholder="No turns" />
-            </SelectTrigger>
-            <SelectContent
-              className="run-turn-view-select-menu"
-              position="popper"
-              align="end"
+              «
+            </button>
+            <button
+              type="button"
+              className="run-turn-view-nav-btn"
+              onClick={() =>
+                turnNav.prevTurnId && onSelectTurn(turnNav.prevTurnId)
+              }
+              disabled={!turnNav.canPrev}
+              aria-label="Previous turn"
+              title="Previous turn"
             >
-              {turns.map((turn) => (
-                <SelectItem
-                  key={turn.turnId}
-                  value={turn.turnId}
-                  className="run-turn-view-select-item"
-                >
-                  {turn.label}
-                  {turn.active ? " (running)" : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              ‹
+            </button>
+            <Select
+              value={selected?.turnId ?? ""}
+              onValueChange={onSelectTurn}
+              disabled={turns.length === 0}
+            >
+              <SelectTrigger
+                className="run-turn-view-select"
+                size="sm"
+                aria-label="Select turn"
+              >
+                <SelectValue placeholder="No turns" />
+              </SelectTrigger>
+              <SelectContent
+                className="run-turn-view-select-menu"
+                position="popper"
+                align="end"
+              >
+                {turns.map((turn) => (
+                  <SelectItem
+                    key={turn.turnId}
+                    value={turn.turnId}
+                    className="run-turn-view-select-item"
+                  >
+                    {turn.label}
+                    {turn.active ? " (running)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <button
+              type="button"
+              className="run-turn-view-nav-btn"
+              onClick={() =>
+                turnNav.nextTurnId && onSelectTurn(turnNav.nextTurnId)
+              }
+              disabled={!turnNav.canNext}
+              aria-label="Next turn"
+              title="Next turn"
+            >
+              ›
+            </button>
+            <button
+              type="button"
+              className="run-turn-view-nav-btn"
+              onClick={() =>
+                turnNav.lastTurnId && onSelectTurn(turnNav.lastTurnId)
+              }
+              disabled={!turnNav.canLast}
+              aria-label="Last turn"
+              title="Last turn"
+            >
+              »
+            </button>
+          </div>
         </div>
       </div>
       {selected ? (
