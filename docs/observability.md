@@ -211,6 +211,37 @@ All metric names are prefixed `tank_`. The full namespace:
   lifecycle is closed, so silent-stranding does not fire, but an
   already-open browser tab cannot correlate the terminal to its local
   run latch and may keep follow-up input queued until refresh.
+- `tank_sessions_stuck_in_progress` — the session-lifecycle
+  observability surface for the wedged/crashed-runner stall. A
+  last-pass gauge of sessions whose durable
+  `sessions.activity_summary.status` is `submitted`/`claimed`
+  (accepted, no provider progress) and whose `activity_summary`
+  `updated_at` is older than the stall threshold (default 10m,
+  deliberately above the runner's 240s `PROVIDER_RETRY_STALL_MS`
+  terminal). It is the orchestrator-side complement to the runner's
+  `api_retry{rate_limit}` terminal: the runner force-fails its own turn
+  on a bounded retry storm, but a fully-wedged or crashed runner emits
+  nothing and cannot fail its own turn, so the only durable footprint is
+  this no-terminal `submitted`/`claimed` row. Steady state is 0. The
+  sampler runs every 60s in `internal/stuckturns.Sampler`; per-session
+  detail (session_id, stuck_seconds, provider rate-limit state) rides
+  the per-session `slog.Warn` line and the
+  `GET /api/debug/stuck-turns` endpoint, never a metric label, per the
+  cardinality rules. Drives the `TankSessionStuckInProgress` alert,
+  which is per-session and durable-state-based — the localizing
+  complement to the aggregate, rate-based `TankTurnSilentStranding`.
+- `tank_stuck_turn_sample_errors_total{reason}` — stuck-turn sampler
+  pass errors. Bounded `reason`: `list` (the durable query failed),
+  collapsing anything else to `other`. A nonzero rate means the
+  detector itself is blind (the gauge is not being refreshed), so the
+  absence of `TankSessionStuckInProgress` cannot be trusted.
+- `tank_admin_debug_stuck_turns_reads_total{result}` — admin reads of
+  `GET /api/debug/stuck-turns` (the per-session localizer for the
+  stuck-turn story). Bounded `result` labels: `ok`, `empty`,
+  `forbidden`, `store_error`, `not_configured`. Pair with the
+  `TankSessionStuckInProgress` alert: when the gauge is nonzero, the
+  runbook points operators here for the session_ids + stuck_seconds +
+  provider rate-limit state of the wedged turns.
 - `tank_turn_interrupt_request_total` — counter of stop requests posted
   to `/interrupt`. Single label `outcome` with bounded values:
   `persisted`, `already_terminal`, `terminal_lookup_failed`,
@@ -561,6 +592,61 @@ the caller. Emits a structured `slog` line per call
 `/metrics`. `result` labels: `ok`, `empty`, `bad_request`,
 `forbidden`, `store_error`, `not_configured`.
 
+## Stuck turn debug surface
+
+`GET /api/debug/stuck-turns` (admin-only) lists the turns the
+orchestrator-side detector has flagged as durably accepted but
+unprogressed: sessions whose `sessions.activity_summary.status` is
+`submitted`/`claimed` and whose `activity_summary.updated_at` is older
+than the threshold, with no terminal event resolving the turn. It is
+the per-session localizer for the stuck-turn observability story: when
+the `TankSessionStuckInProgress` gauge is nonzero, the alert runbook
+directs the operator here to enumerate the wedged turns without
+kubectl.
+
+A row here means the runner did NOT fail the turn itself — it is the
+orchestrator-side complement to the runner's `api_retry` rate-limit
+terminal (`PROVIDER_RETRY_STALL_MS`, 240s). The default threshold
+(600s) sits above the runner's 240s terminal so a turn the runner-side
+terminal would have resolved never appears here; only the genuine wedge
+(fully-wedged/crashed runner, or a stall class the runner cannot see)
+does.
+
+Query params:
+
+- `threshold_seconds` — accepted-but-unprogressed age cutoff. Defaults
+  to `600`, clamped to `[60, 86400]`.
+- `limit` — max rows returned. Defaults to `100`, clamped to
+  `[1, 500]`.
+- `session_scope` — defaults to this orchestrator's scope.
+
+Response fields:
+
+- `scope`, `threshold_seconds`, `count` — echo the resolved query and
+  the number of stuck turns.
+- `stuck_turns[]` — one object per wedged turn:
+  - `session_id` — public session id (allowed here and in the slog
+    line, never as a metric label).
+  - `mode` — the session mode (e.g. `claude_gui`).
+  - `activity_status` — `submitted` or `claimed`.
+  - `active_turn_id` — the durably claimed turn, `""` if absent.
+  - `stuck_seconds` — how long it has been accepted-but-unprogressed,
+    computed from `activity_summary.updated_at`.
+  - `provider_rate_limit_status` — the last provider rate-limit status
+    the runner reported on this session (`provider_rate_limit_info`),
+    `""` if none. A throttled value distinguishes "wedged on upstream
+    rate limits" from "wedged for another reason."
+  - `provider_rate_limit_observed_at` — RFC3339-Z timestamp of that
+    observation, `""` if none.
+
+To localize a listed session, read its agent-runner logs and its
+`session_events` ledger. The endpoint never mutates state. Emits a
+structured `slog` line per call (`caller_email`, `session_scope`,
+`threshold_seconds`, `count`) and increments
+`tank_admin_debug_stuck_turns_reads_total{result}` at `/metrics`.
+`result` labels: `ok`, `empty`, `forbidden`, `store_error`,
+`not_configured`.
+
 ## Control Action Audit Surface
 
 Privileged cross-system effects initiated from session pods through MCP
@@ -744,6 +830,23 @@ declares one rule group per subsystem:
   gauge) on the orchestrator. `TankBackgroundTaskWakeFireFailing` pages when a
   registered wake errors on fire — a silent stranding the Agent Runners contract
   counts.
+- **Stuck turn (wedged/crashed runner)**: `TankSessionStuckInProgress`
+  fires (`tank_sessions_stuck_in_progress > 0` for 5m) when a turn was
+  durably `claimed`/`submitted` but produced no `turn.started`/terminal
+  for longer than the stall threshold (10m, above the runner's 240s
+  `PROVIDER_RETRY_STALL_MS` terminal). It is per-session and
+  durable-state-based — the localizing complement to the aggregate,
+  rate-based `TankTurnSilentStranding`. The runner force-fails its own
+  turn on a bounded `api_retry{rate_limit}` storm, so a nonzero gauge
+  means the runner did NOT fail it: a fully-wedged or crashed runner
+  that can emit nothing, or a stall class the runner cannot see. The
+  runbook localizes with `GET /api/debug/stuck-turns` (session_ids +
+  stuck_seconds + provider rate-limit state), then reads that session's
+  agent-runner logs and `session_events`. The detector lives in
+  `internal/stuckturns.Sampler` (60s pass against the durable
+  `sessions` table). If `tank_stuck_turn_sample_errors_total{reason}` is
+  nonzero, the detector is blind and the absence of this alert cannot be
+  trusted.
 - **Session spawn**: any single-spawn outlier above 60s in the trailing
   hour. Backed by recording rules
   `tank:session_pod_spawn_seconds:p50_24h`,
