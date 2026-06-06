@@ -1,3 +1,4 @@
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 {{- /*
 Anthropic API proxy: Envoy in front of api.anthropic.com plus a small
 ext_proc gRPC sidecar that injects the current real OAuth Authorization
@@ -617,3 +618,4 @@ spec:
             optional: true
 {{- end }}
 ---
+{{- end }}

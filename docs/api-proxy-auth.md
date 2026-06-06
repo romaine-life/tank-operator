@@ -81,12 +81,12 @@ with a non-placeholder Authorization (e.g. claude-code worker_jwt for
 The refresh_token has four physical residences and three transitions:
 
 1. **Azure Key Vault** (`romaine-kv` vault). Production uses the historical
-   `claude-code-credentials` and `codex-credentials` secrets. Validation slots
-   use slot-owned secrets named `<slotName>-claude-code-credentials` and
-   `<slotName>-codex-credentials`. Each secret is the source of truth for one
-   refresh-token chain across that deployment's restarts. Provisioned by
-   `infra/keyvault.tf`; only the proxy's UAMI and the credentials-refresher
-   UAMI have write access.
+   `claude-code-credentials` and `codex-credentials` secrets. Each secret is
+   the source of truth for one refresh-token chain across the production proxy
+   deployment's restarts. Validation slots do not own provider credential KV
+   secrets; their session pods route through the production proxy services
+   instead of running independent refreshers. Provisioned by `infra/keyvault.tf`;
+   only the proxy's UAMI and the credentials-refresher UAMI have write access.
 
 2. **K8s Secret** in the orchestrator namespace, mirrored from KV by the
    ExternalSecret resource declared in `k8s/templates/externalsecret-*.yaml`
@@ -218,14 +218,14 @@ for a new pair. Possible causes, ordered by likelihood:
    from file" then immediate `refresh_token_reused`. Recovery: run the
    wizard.
 
-2. **External client consumed the chain.** A different deployment or
-   break-glass process with write access to the same KV secret rotated and
-   either wrote back to KV stale or failed to write back. Test slots must not
-   share production credential KV secrets; a rendered slot that points at
-   `claude-code-credentials` or `codex-credentials` is invalid. Tell from logs:
-   the production proxy never logged a successful rotation, but the KV version
-   history shows a write the production proxy didn't make. Recovery: run the
-   wizard; investigate the other writer.
+2. **External client consumed the chain.** A break-glass process or unapproved
+   deployment with write access to the same KV secret rotated and either wrote
+   back to KV stale or failed to write back. Test slots must not render
+   provider credential KV keys or credential ExternalSecrets at all; they share
+   credentials by routing traffic through the production proxy authority. Tell
+   from logs: the production proxy never logged a successful rotation, but the
+   KV version history shows a write the production proxy didn't make. Recovery:
+   run the wizard; investigate the other writer.
 
 3. **Provider-side invalidation.** Account-level revocation, security
    action, or maintenance event at the provider side. Tell from logs:
@@ -310,23 +310,33 @@ include an "api-proxy" panel showing the above counters as rates.
 
 ## Slot credential ownership
 
-Every live proxy deployment owns exactly one refresh-token chain. Production
-owns `claude-code-credentials` and `codex-credentials`. A validation slot owns
-`<slotName>-claude-code-credentials` and `<slotName>-codex-credentials`.
+Every refresh-token chain has exactly one live credential authority. Production
+owns the Claude and Codex authorities: the production api-proxy deployments,
+the production credential ExternalSecrets, and the production KV secrets
+`claude-code-credentials` and `codex-credentials`.
 
-Slots are intentionally prod-shaped: each slot runs its own api-proxy
-deployments, ExternalSecrets, K8s Secrets, and config-mode save path. The
-credential wizard must be run once per slot/provider to seed those slot-owned
-KV secrets. Copying a production OAuth blob into a slot secret is invalid
-because it duplicates the same single-use refresh token into two independent
-refresh coordinators.
+Validation slots share those credentials by routing provider traffic to the
+production services:
+
+- `CLAUDE_API_PROXY_HOST=claude-api-proxy.tank-operator.svc.cluster.local`
+- `CODEX_API_PROXY_HOST=codex-api-proxy.tank-operator.svc.cluster.local`
+- `CLAUDE_OAUTH_GATEWAY_HOST=claude-oauth-gateway.tank-operator.svc.cluster.local`
+
+Slot session pods still receive only placeholder provider credentials. They
+trust the production proxy TLS leaf because the slot warm render reflects the
+production `claude-oauth-ca` public cert into the slot sessions namespace as
+the same `claude-oauth-ca` ConfigMap mounted by session pods.
+
+Slots do **not** render api-proxy deployments, provider credential
+ExternalSecrets, provider credential K8s Secrets, or `*_CREDENTIALS_KV_KEY`
+env vars on the orchestrator. That makes the save-credentials path fail closed
+in slots with "`<env> not configured`" instead of giving a config-mode slot a
+way to overwrite production's credential KV secrets.
 
 The chart and `scripts/check-test-slot-provider-credentials.sh` guard this
-contract. Hot slot renders must set `CLAUDE_CREDENTIALS_KV_KEY` and
-`CODEX_CREDENTIALS_KV_KEY` to slot-owned names; warm slot renders must mirror
-the same slot-owned KV keys through ExternalSecret. The proxy and
-save-credentials handler fail fast when the credential KV env is absent rather
-than choosing a production default.
+contract. A slot render that reintroduces a slot-local provider proxy, a
+slot-owned provider credential KV key, a provider credential Secret mount, or a
+credential write env var is invalid.
 
 ## Where to look when investigating
 
