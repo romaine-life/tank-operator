@@ -164,6 +164,7 @@ import {
   navigationModeTelemetryEvent,
   transitionNavigationMode,
 } from "./navigationMode";
+import { resolveComposerFocusShortcut } from "./composerFocusShortcut";
 import { isTranscriptRefreshShortcut } from "./transcriptRefreshShortcut";
 import {
   isTranscriptToTurnsShortcut,
@@ -17006,32 +17007,35 @@ function ChatPane({
     scheduledWakeupEntries,
   ]);
 
-  // `/` is a "return to prompt" shortcut when focus is anywhere except the
-  // composer textarea. Once the textarea is focused, `/` keeps its normal
-  // typing behavior and opens the slash-command palette through input events.
+  // `/` is a "jump to the prompt" shortcut when focus is anywhere except the
+  // composer textarea. The turns view renders the same composer as the chat
+  // transcript, so `/` focuses it in place there rather than navigating back to
+  // the main transcript; tabs without an in-page composer switch to chat first.
+  // Once the textarea is focused, `/` keeps its normal typing behavior and opens
+  // the slash-command palette through input events.
   useEffect(() => {
     if (publicView) return;
     if (!visible) return;
     const onKey = (e: KeyboardEvent) => {
-      if (
-        e.key !== "/" ||
-        e.altKey ||
-        e.ctrlKey ||
-        e.metaKey ||
-        e.shiftKey ||
-        e.isComposing
-      ) {
-        return;
-      }
       const textarea = composerWrapRef.current?.querySelector(
         "textarea",
       ) as HTMLTextAreaElement | null;
-      if (textarea && e.target === textarea) return;
+      const action = resolveComposerFocusShortcut({
+        key: e.key,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
+        targetIsComposer: !!textarea && e.target === textarea,
+        activeTab,
+      });
+      if (action === "ignore") return;
 
       e.preventDefault();
       e.stopPropagation();
-      pendingComposerFocusRef.current = true;
-      if (activeTab !== "chat") {
+      if (action === "switch-to-chat") {
+        pendingComposerFocusRef.current = true;
         setActiveTab("chat");
         return;
       }
