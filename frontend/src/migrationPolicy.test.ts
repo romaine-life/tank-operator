@@ -399,6 +399,35 @@ test("Turns view renders server-projected turn context outside paged activity", 
   );
 });
 
+test("collapsed Turns prompt context stays a minimal one-line entry, not hidden", () => {
+  // Collapsing the prompt must NOT remove the body outright. Instead the
+  // RunMessageBubble renders in compact mode: the avatar stays at full size
+  // and the text collapses to a single ellipsis-truncated line. This pins the
+  // wiring (compact follows the collapsed flag) and the compact renderer so a
+  // future refactor can't silently revert to hiding the prompt.
+  assert.equal(appSource.includes("compact?: boolean;"), true);
+  assert.equal(
+    appSource.includes("compact={selectedTurnContextCollapsed}"),
+    true,
+  );
+  assert.equal(appSource.includes("run-msg-compact-text"), true);
+  // The old "hide the whole bubble when collapsed" gate must be gone.
+  assert.equal(
+    appSource.includes("{!selectedTurnContextCollapsed && ("),
+    false,
+  );
+  // CSS: the compact line truncates with an ellipsis and keeps the avatar via
+  // vertical centering on the compact message grid.
+  assert.match(
+    indexCssSource,
+    /\.run-msg-compact-text\s*\{[^}]*text-overflow:\s*ellipsis/,
+  );
+  assert.equal(
+    indexCssSource.includes('.run-transcript-message[data-compact="true"]'),
+    true,
+  );
+});
+
 test("transcript meta status lines are attributed to the session system identity", () => {
   // "Stopped" / "Turn stopped by user.", "Turn failed" + provider error,
   // and "Stop requested" are not authored by the human owner or the
