@@ -57,6 +57,8 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
@@ -4297,6 +4299,7 @@ type TurnViewScrollRequest = {
   signal: number;
 };
 type RunSubmitSurface = "chat" | "turns";
+type SessionOpenTarget = "chat" | "turns";
 
 /** A file the user picked / dropped / pasted on the home composer before
  *  a session pod exists. The `file` is kept on the object so it can be
@@ -7588,6 +7591,100 @@ function RunHeaderOverflowMenu({
         >
           <InfoIcon className="run-tab-more-item-icon" aria-hidden="true" />
           <span>Help</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
+function SessionTabMenu({
+  session,
+  isClosing,
+  readOnly,
+  openTarget,
+  onOpenTargetChange,
+  onClose,
+}: {
+  session: Session;
+  isClosing: boolean;
+  readOnly: boolean;
+  openTarget: SessionOpenTarget;
+  onOpenTargetChange: (target: SessionOpenTarget) => void;
+  onClose: () => void;
+}) {
+  if (isClosing) {
+    return (
+      <button
+        type="button"
+        className="session-delete"
+        disabled
+        title="closing session"
+        aria-label="closing session"
+      >
+        <span className="session-delete-spinner" />
+      </button>
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <button
+          type="button"
+          className="session-delete session-tab-menu-trigger"
+          disabled={readOnly}
+          title="session options"
+          aria-label={`${session.name} options`}
+          onClick={(e) => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
+        >
+          <IconKebab />
+        </button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent
+        align="end"
+        side="right"
+        sideOffset={8}
+        className="run-tab-more-menu session-tab-menu"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <DropdownMenuRadioGroup
+          value={openTarget}
+          onValueChange={(value) => {
+            if (value === "chat" || value === "turns") {
+              onOpenTargetChange(value);
+            }
+          }}
+        >
+          <DropdownMenuRadioItem
+            value="chat"
+            className="run-tab-more-item session-tab-menu-radio"
+          >
+            <MessageSquareIcon
+              className="run-tab-more-item-icon"
+              aria-hidden="true"
+            />
+            <span>Main transcript</span>
+          </DropdownMenuRadioItem>
+          <DropdownMenuRadioItem
+            value="turns"
+            className="run-tab-more-item session-tab-menu-radio"
+          >
+            <ListChecksIcon
+              className="run-tab-more-item-icon"
+              aria-hidden="true"
+            />
+            <span>Turns view</span>
+          </DropdownMenuRadioItem>
+        </DropdownMenuRadioGroup>
+        <DropdownMenuSeparator className="run-tab-more-separator" />
+        <DropdownMenuItem
+          className="run-tab-more-item"
+          variant="destructive"
+          onSelect={onClose}
+        >
+          <IconClose />
+          <span>Close session</span>
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>
@@ -12406,6 +12503,7 @@ function ChatPane({
   sessionScope,
   avatarCatalogVersion,
   sidebarTranscriptOpenRequest = 0,
+  sidebarTurnsOpenRequest = 0,
 }: {
   session: Session;
   visible: boolean;
@@ -12442,6 +12540,7 @@ function ChatPane({
   sessionScope: string;
   avatarCatalogVersion: number;
   sidebarTranscriptOpenRequest?: number;
+  sidebarTurnsOpenRequest?: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [activityEntriesByTurn, setActivityEntriesByTurn] = useState<
@@ -13884,6 +13983,21 @@ function ChatPane({
     setMcpOpen(false);
     replaceSessionTranscriptRoute(session.id);
   }, [publicView, session.id, sidebarTranscriptOpenRequest, visible]);
+  useEffect(() => {
+    if (publicView) return;
+    if (!visible || sidebarTurnsOpenRequest === 0) return;
+    setPendingRouteTurnNumber(null);
+    setRouteTurnUnavailable(false);
+    setPendingTurnViewRouteAnchor("bottom");
+    setSelectedTurnId(null);
+    setSelectedTurnNumberAnchor(null);
+    slashManualOpenRef.current = false;
+    setSlashOpen(false);
+    setMentionOpen(false);
+    setMcpOpen(false);
+    setActiveTab("turns");
+    replaceSessionRoute(session.id, "turns");
+  }, [publicView, session.id, sidebarTurnsOpenRequest, visible]);
 
   // History replay and live tail both hit the server-owned transcript-row read
   // model. Raw Tank item events stay behind the Turn activity detail endpoint
@@ -18716,6 +18830,12 @@ function AuthenticatedApp() {
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
   const [sessionTranscriptOpenRequests, setSessionTranscriptOpenRequests] =
     useState<Record<string, number>>({});
+  const [sessionTurnsOpenRequests, setSessionTurnsOpenRequests] = useState<
+    Record<string, number>
+  >({});
+  const [sessionOpenTargets, setSessionOpenTargets] = useState<
+    Record<string, SessionOpenTarget>
+  >({});
   const [sessionActivities, setSessionActivities] = useState<
     Record<string, SessionActivitySummary>
   >({});
@@ -20377,6 +20497,27 @@ function AuthenticatedApp() {
     }));
   }
 
+  function requestSessionTurnsOpen(id: string) {
+    setSessionTurnsOpenRequests((prev) => ({
+      ...prev,
+      [id]: (prev[id] ?? 0) + 1,
+    }));
+  }
+
+  function sessionOpenTarget(id: string): SessionOpenTarget {
+    return sessionOpenTargets[id] ?? "chat";
+  }
+
+  function setSessionOpenTarget(id: string, target: SessionOpenTarget) {
+    setSessionOpenTargets((prev) => ({ ...prev, [id]: target }));
+    if (active !== id) return;
+    if (target === "turns") {
+      requestSessionTurnsOpen(id);
+    } else {
+      requestSessionTranscriptOpen(id);
+    }
+  }
+
   function goHome() {
     setNavDrawerOpen(false);
     replaceHomeRoute("chat");
@@ -20385,15 +20526,25 @@ function AuthenticatedApp() {
   }
 
   function openSession(id: string, e: ReactMouseEvent) {
+    const target = sessionOpenTarget(id);
     if (e.ctrlKey || e.metaKey) {
-      window.open(sessionUrl(id), "_blank", "noopener,noreferrer");
+      window.open(
+        target === "turns" ? sessionRouteUrl(id, "turns") : sessionUrl(id),
+        "_blank",
+        "noopener,noreferrer",
+      );
       return;
     }
     // A tap on a session row is a navigation; close the compact nav drawer so
     // the chosen session's pane is what the user lands on.
     setNavDrawerOpen(false);
-    requestSessionTranscriptOpen(id);
-    replaceSessionTranscriptRoute(id);
+    if (target === "turns") {
+      requestSessionTurnsOpen(id);
+      replaceSessionRoute(id, "turns");
+    } else {
+      requestSessionTranscriptOpen(id);
+      replaceSessionTranscriptRoute(id);
+    }
     activate(id);
   }
 
@@ -21373,24 +21524,16 @@ function AuthenticatedApp() {
                           {s.name}
                         </span>
                       </span>
-                      <button
-                        className="session-delete"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          deleteSession(s.id);
-                        }}
-                        disabled={isClosing || readOnlySessionView}
-                        title={isClosing ? "closing session" : "delete session"}
-                        aria-label={
-                          isClosing ? "closing session" : "delete session"
+                      <SessionTabMenu
+                        session={s}
+                        isClosing={isClosing}
+                        readOnly={readOnlySessionView}
+                        openTarget={sessionOpenTarget(s.id)}
+                        onOpenTargetChange={(target) =>
+                          setSessionOpenTarget(s.id, target)
                         }
-                      >
-                        {isClosing ? (
-                          <span className="session-delete-spinner" />
-                        ) : (
-                          <IconClose />
-                        )}
-                      </button>
+                        onClose={() => deleteSession(s.id)}
+                      />
                     </div>
                     <div className="session-row-bottom">
                       <span
@@ -22238,6 +22381,7 @@ function AuthenticatedApp() {
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
                       sidebarTranscriptOpenRequest={sessionTranscriptOpenRequests[s.id] ?? 0}
+                      sidebarTurnsOpenRequest={sessionTurnsOpenRequests[s.id] ?? 0}
                     />
                   </div>
                 ) : (

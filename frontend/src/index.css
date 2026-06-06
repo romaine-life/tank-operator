@@ -1911,6 +1911,11 @@ button:disabled {
   color: var(--text-primary);
 }
 
+.session-tab-menu-trigger svg {
+  width: 14px;
+  height: 14px;
+}
+
 .session-delete:disabled {
   cursor: default;
   color: var(--text-muted);
@@ -3913,6 +3918,11 @@ button:disabled {
   box-shadow: var(--shadow-dropdown);
 }
 
+.session-tab-menu {
+  width: 12.5rem;
+  min-width: 12.5rem;
+}
+
 .run-tab-more-item {
   min-height: 2.25rem;
   padding: 0.42rem 0.5rem;
@@ -3948,6 +3958,10 @@ button:disabled {
 
 .run-tab-more-item-count {
   margin-left: auto;
+}
+
+.session-tab-menu-radio {
+  padding-right: 1.8rem;
 }
 
 .run-tab-more-separator {
