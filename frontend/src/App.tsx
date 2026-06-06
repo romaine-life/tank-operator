@@ -355,11 +355,9 @@ type DefaultSessionMode = Extract<
   | "codex_exec_gui"
   | "antigravity_gui"
 >;
-// "antigravity" (Gemini-Ultra via `agy`) exists for label/icon resolution of
-// the antigravity_config credential-mint mode. It is intentionally NOT in the
-// PROVIDERS picker array yet: the runnable gui/cli surface + usage quotas land
-// with the antigravity_gui runner. Until then it has no interaction modes and
-// no quota windows.
+// "antigravity" is Gemini-Ultra via `agy`. It participates in the same GUI chat
+// provider contract as Claude/Codex; only CLI and model/effort controls are
+// absent until the runner exposes equivalent choices.
 type Provider = "anthropic" | "codex" | "antigravity";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
@@ -1215,7 +1213,8 @@ function isDefaultSessionMode(
     value === "claude_gui" ||
     value === "codex_cli" ||
     value === "codex_gui" ||
-    value === "codex_exec_gui"
+    value === "codex_exec_gui" ||
+    value === "antigravity_gui"
   );
 }
 
@@ -1465,12 +1464,14 @@ const CHAT_MODES = new Set<SessionMode>([
   "codex_gui",
   "codex_exec_gui",
   "codex_app_server",
+  "antigravity_gui",
 ]);
 const SDK_CHAT_MODES = new Set<SessionMode>([
   "claude_gui",
   "codex_gui",
   "codex_exec_gui",
   "codex_app_server",
+  "antigravity_gui",
 ]);
 const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>(SDK_CHAT_MODES);
 const SDK_TIMELINE_TAIL_ROWS = 24;
@@ -1484,6 +1485,7 @@ const GUI_ROLLOUT_MODES = new Set<SessionMode>([
   "codex_gui",
   "codex_exec_gui",
   "codex_app_server",
+  "antigravity_gui",
 ]);
 const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
