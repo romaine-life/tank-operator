@@ -63,6 +63,8 @@ spec:
               value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
             - name: TANK_OPERATOR_INTERNAL_URL
               value: {{ include "tank-operator.internalURL" . | quote }}
+            - name: ANTIGRAVITY_CREDENTIALS_SECRET
+              value: {{ .Values.session.antigravityCredentialsSecret | default "antigravity-credentials" | quote }}
 
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}

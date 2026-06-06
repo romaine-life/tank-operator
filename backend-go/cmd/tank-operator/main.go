@@ -294,6 +294,7 @@ func main() {
 			SessionImage:                   sessionImage,
 			CodexSessionImage:              codexSessionImage,
 			AntigravitySessionImage:        antigravitySessionImage,
+			AntigravityCredentialsSecret:   os.Getenv("ANTIGRAVITY_CREDENTIALS_SECRET"),
 			SessionScope:                   sessionScope,
 			TankOperatorInternalURL:        tankOperatorInternalURL,
 			NATSURL:                        envDefault("NATS_URL", ""),

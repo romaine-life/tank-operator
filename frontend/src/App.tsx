@@ -229,6 +229,24 @@ import {
   unpinRepoSlug,
 } from "./repos";
 import {
+  CHAT_MODES,
+  CODEX_ROLLOUT_MODES,
+  CONFIG_MODES,
+  CREATE_TIME_INITIAL_TURN_MODES,
+  GUI_ROLLOUT_MODES,
+  MODE_PROVIDERS,
+  PROVIDER_CONFIG_MODES,
+  PROVIDER_INTERACTION_MODES,
+  PROVIDERS,
+  ROLLOUT_MODES,
+  SDK_CHAT_MODES,
+  isDefaultSessionMode,
+  type DefaultSessionMode,
+  type Provider,
+  type SessionInteraction,
+  type SessionMode,
+} from "./sessionModes";
+import {
   readHomeDismissedRecentRepos,
   readHomeSelectedRepos,
   writeHomeDismissedRecentRepos,
@@ -335,28 +353,6 @@ const TURN_ACTIVITY_LIVE_REFRESH_DELAY_MS = 120;
 const TURN_ACTIVITY_LIVE_REFRESH_RETRY_DELAY_MS = 1_500;
 const TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS = 3;
 
-type SessionMode =
-  | "api_key"
-  | "claude_cli"
-  | "claude_gui"
-  | "config"
-  | "codex_cli"
-  | "codex_gui"
-  | "codex_exec_gui"
-  | "codex_app_server"
-  | "codex_config"
-  | "antigravity_config";
-type DefaultSessionMode = Extract<
-  SessionMode,
-  "claude_cli" | "claude_gui" | "codex_cli" | "codex_gui" | "codex_exec_gui"
->;
-// "antigravity" (Gemini-Ultra via `agy`) exists for label/icon resolution of
-// the antigravity_config credential-mint mode. It is intentionally NOT in the
-// PROVIDERS picker array yet: the runnable gui/cli surface + usage quotas land
-// with the antigravity_gui runner. Until then it has no interaction modes and
-// no quota windows.
-type Provider = "anthropic" | "codex" | "antigravity";
-type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 // TurnActivityPageInfo (the per-turn /activity page directory) and the rule for
 // turning it into a rendered pager live in ./turnActivityPager.
@@ -792,6 +788,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   antigravity_config: "Antigravity config",
+  antigravity_gui: "Antigravity GUI",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -807,6 +804,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   antigravity_config: "agy-cfg",
+  antigravity_gui: "agy-gui",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -816,34 +814,10 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
+  antigravity_gui: "antigravity",
 };
 
-const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
-  api_key: "anthropic",
-  claude_cli: "anthropic",
-  claude_gui: "anthropic",
-  config: "anthropic",
-  codex_cli: "codex",
-  codex_gui: "codex",
-  codex_exec_gui: "codex",
-  codex_app_server: "codex",
-  codex_config: "codex",
-  // Resolves the antigravity_config row's provider for label lookups. Never
-  // rendered as a ProviderIcon (config modes use the text chip in ModeChip), so
-  // it needs no icon asset.
-  antigravity_config: "antigravity",
-};
-
-const PROVIDER_INTERACTION_MODES: Record<
-  Provider,
-  Partial<Record<SessionInteraction, DefaultSessionMode | null>>
-> = {
-  anthropic: { gui: "claude_gui", cli: "claude_cli" },
-  codex: { gui: "codex_gui", cli: "codex_cli" },
-  // No runnable interaction surface yet — antigravity_config is credential-mint
-  // only; gui/cli arrive with the antigravity-runner.
-  antigravity: {},
-};
+const MODE_MENU_ICONS: Record<SessionMode, Provider> = MODE_PROVIDERS;
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
   gui: "gui",
@@ -851,12 +825,6 @@ const INTERACTION_LABELS: Record<SessionInteraction, string> = {
 };
 
 const INTERACTION_OPTIONS: SessionInteraction[] = ["gui", "cli"];
-
-const PROVIDER_CONFIG_MODES: Partial<Record<Provider, SessionMode>> = {
-  anthropic: "config",
-  codex: "codex_config",
-  antigravity: "antigravity_config",
-};
 
 const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
@@ -917,6 +885,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   antigravity_config: "agy login (paste code) · seeds KV for Antigravity",
+  antigravity_gui: "GUI chat pane for Gemini-Ultra (agy)",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -1205,18 +1174,6 @@ function normalizeSessionMode(value: string | null): string | null {
   return value;
 }
 
-function isDefaultSessionMode(
-  value: string | null,
-): value is DefaultSessionMode {
-  return (
-    value === "claude_cli" ||
-    value === "claude_gui" ||
-    value === "codex_cli" ||
-    value === "codex_gui" ||
-    value === "codex_exec_gui"
-  );
-}
-
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
     const stored = normalizeSessionMode(
@@ -1450,44 +1407,10 @@ function moveSessionId(
   return next;
 }
 
-// Modes whose pods carry harvestable credentials — the "save" button
-// surfaces on session rows in these modes. Kept as a Set so adding a third
-// future config mode doesn't grow an OR chain.
-const CONFIG_MODES = new Set<SessionMode>([
-  "config",
-  "codex_config",
-  "antigravity_config",
-]);
-const CHAT_MODES = new Set<SessionMode>([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-]);
-const SDK_CHAT_MODES = new Set<SessionMode>([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-]);
-const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>(SDK_CHAT_MODES);
 const SDK_TIMELINE_TAIL_ROWS = 24;
 const SDK_TIMELINE_OLDER_ROWS = 8;
 const SDK_TIMELINE_DEEPLINK_ROWS_BEFORE = 12;
 const SDK_TIMELINE_DEEPLINK_ROWS_AFTER = 12;
-const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
-const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-]);
-const ROLLOUT_MODES = new Set<SessionMode>([
-  ...CLAUDE_ROLLOUT_MODES,
-  ...CODEX_ROLLOUT_MODES,
-]);
-const PROVIDERS: Provider[] = ["anthropic", "codex"];
 
 function defaultModeFor(
   provider: Provider,

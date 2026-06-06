@@ -13,6 +13,10 @@
 // what server rightfully refuses), so the values are documented as
 // load-bearing on both sides.
 
+import { REPO_SUPPORTED_MODES, type SessionMode } from "./sessionModes";
+
+export { REPO_SUPPORTED_MODES } from "./sessionModes";
+
 export const MAX_REPOS_PER_SESSION = 5;
 export const MAX_PINNED_REPOS = 64;
 export const RECENT_REPO_PREVIEW_LIMIT = 4;
@@ -20,28 +24,12 @@ export const RECENT_REPO_PREVIEW_LIMIT = 4;
 export const REPO_SLUG_PATTERN =
   /^[A-Za-z0-9][A-Za-z0-9-]{0,38}\/[A-Za-z0-9._-]{1,100}$/;
 
-// REPO_SUPPORTED_MODES is the set of session modes whose pods
-// provision a /workspace emptyDir (sessionmodel.PodManifest's
-// wantSDKRunner path). Other modes have nowhere to clone into; the
-// backend rejects a non-empty repos[] for them.
-//
-// The element type is `string` here rather than the SPA's local
-// `SessionMode` union to keep this module decoupled from App.tsx;
-// callers pass the mode string they already have. Same shape lives
-// on the backend as sessionModeSupportsRepos.
-export const REPO_SUPPORTED_MODES: ReadonlySet<string> = new Set<string>([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-]);
-
 export function isValidRepoSlug(value: string): boolean {
   return REPO_SLUG_PATTERN.test(value.trim());
 }
 
 export function modeSupportsRepos(mode: string): boolean {
-  return REPO_SUPPORTED_MODES.has(mode);
+  return REPO_SUPPORTED_MODES.has(mode as SessionMode);
 }
 
 export function normalizeRepoSlugs(

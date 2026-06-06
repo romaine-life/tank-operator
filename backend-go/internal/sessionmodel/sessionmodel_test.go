@@ -311,6 +311,52 @@ func TestPodManifestAntigravityConfigUsesGlibcImageWithoutSidecar(t *testing.T) 
 	}
 }
 
+func TestPodManifestAntigravityGUIRunnerSidecarAndCredMount(t *testing.T) {
+	manifest := PodManifest("88", "nelson@romaine.life", AntigravityGUIMode, ManifestOptions{
+		SessionImage:                 "claude-image",
+		CodexSessionImage:            "codex-image",
+		AntigravitySessionImage:      "antigravity-image",
+		AntigravityCredentialsSecret: "antigravity-credentials",
+		NATSAuthSecret:               "tank-nats-auth",
+	})
+
+	if got, want := manifest["metadata"].(map[string]any)["labels"].(map[string]any)["tank-operator/mode"], AntigravityGUIMode; got != want {
+		t.Fatalf("mode label = %v, want %q", got, want)
+	}
+
+	spec := manifest["spec"].(map[string]any)
+	containers := spec["containers"].([]any)
+	// GUI pod shape: mcp-auth-proxy sidecar + claude (sandbox-agent terminal) +
+	// antigravity-runner. All three run the glibc antigravity image.
+	if got, want := len(containers), 3; got != want {
+		t.Fatalf("container count = %d, want %d (mcp-auth-proxy + claude + antigravity-runner)", got, want)
+	}
+	claude := findContainer(t, containers, "claude")
+	if got, want := claude["image"], "antigravity-image"; got != want {
+		t.Fatalf("claude image = %v, want %q", got, want)
+	}
+	proxy := findContainer(t, containers, "mcp-auth-proxy")
+	if got, want := proxy["image"], "antigravity-image"; got != want {
+		t.Fatalf("mcp-auth-proxy image = %v, want %q (the gui image bakes mcp-auth-proxy)", got, want)
+	}
+	runner := findContainer(t, containers, "antigravity-runner")
+	if got, want := runner["image"], "antigravity-image"; got != want {
+		t.Fatalf("antigravity-runner image = %v, want %q", got, want)
+	}
+	cmd := runner["command"].([]any)
+	if got, want := cmd[len(cmd)-1], "/opt/tank/antigravity-runner-launch.sh"; got != want {
+		t.Fatalf("runner launch = %v, want %q", got, want)
+	}
+	ports := runner["ports"].([]any)
+	if got, want := ports[0].(map[string]any)["containerPort"], AntigravityRunnerMetricsPort; got != want {
+		t.Fatalf("runner metrics port = %v, want %d", got, want)
+	}
+	// The runner mounts the KV-synced OAuth credential.
+	assertVolume(t, spec["volumes"].([]any), "antigravity-cred")
+	assertVolumeMount(t, runner, "antigravity-cred")
+	assertVolumeMount(t, runner, "tank-operator-sa-token")
+}
+
 func TestPodManifestDisplayNameAnnotation(t *testing.T) {
 	name := "  Launch draft  "
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
