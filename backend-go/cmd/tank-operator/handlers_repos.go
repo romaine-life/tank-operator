@@ -80,7 +80,8 @@ func sessionModeSupportsRepos(mode string) bool {
 	case sessionmodel.ClaudeGUIMode,
 		sessionmodel.CodexGUIMode,
 		sessionmodel.CodexExecGUIMode,
-		sessionmodel.CodexAppServerMode:
+		sessionmodel.CodexAppServerMode,
+		sessionmodel.AntigravityGUIMode:
 		return true
 	default:
 		return false

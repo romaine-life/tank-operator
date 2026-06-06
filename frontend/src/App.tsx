@@ -344,10 +344,16 @@ type SessionMode =
   | "codex_exec_gui"
   | "codex_app_server"
   | "codex_config"
-  | "antigravity_config";
+  | "antigravity_config"
+  | "antigravity_gui";
 type DefaultSessionMode = Extract<
   SessionMode,
-  "claude_cli" | "claude_gui" | "codex_cli" | "codex_gui" | "codex_exec_gui"
+  | "claude_cli"
+  | "claude_gui"
+  | "codex_cli"
+  | "codex_gui"
+  | "codex_exec_gui"
+  | "antigravity_gui"
 >;
 // "antigravity" (Gemini-Ultra via `agy`) exists for label/icon resolution of
 // the antigravity_config credential-mint mode. It is intentionally NOT in the
@@ -784,6 +790,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   antigravity_config: "Antigravity config",
+  antigravity_gui: "Antigravity GUI",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -799,6 +806,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   antigravity_config: "agy-cfg",
+  antigravity_gui: "agy-gui",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -808,6 +816,7 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
+  antigravity_gui: "antigravity",
 };
 
 const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
@@ -824,6 +833,7 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   // rendered as a ProviderIcon (config modes use the text chip in ModeChip), so
   // it needs no icon asset.
   antigravity_config: "antigravity",
+  antigravity_gui: "antigravity",
 };
 
 const PROVIDER_INTERACTION_MODES: Record<
@@ -832,9 +842,8 @@ const PROVIDER_INTERACTION_MODES: Record<
 > = {
   anthropic: { gui: "claude_gui", cli: "claude_cli" },
   codex: { gui: "codex_gui", cli: "codex_cli" },
-  // No runnable interaction surface yet — antigravity_config is credential-mint
-  // only; gui/cli arrive with the antigravity-runner.
-  antigravity: {},
+  // GUI chat via the antigravity-runner (Gemini-Ultra). No cli surface today.
+  antigravity: { gui: "antigravity_gui" },
 };
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
@@ -909,6 +918,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   antigravity_config: "agy login (paste code) · seeds KV for Antigravity",
+  antigravity_gui: "GUI chat pane for Gemini-Ultra (agy)",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -1479,7 +1489,7 @@ const ROLLOUT_MODES = new Set<SessionMode>([
   ...CLAUDE_ROLLOUT_MODES,
   ...CODEX_ROLLOUT_MODES,
 ]);
-const PROVIDERS: Provider[] = ["anthropic", "codex"];
+const PROVIDERS: Provider[] = ["anthropic", "codex", "antigravity"];
 
 function defaultModeFor(
   provider: Provider,

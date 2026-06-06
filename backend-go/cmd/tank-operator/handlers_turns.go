@@ -1262,6 +1262,8 @@ func sdkProviderForMode(mode string) (string, bool) {
 		return "codex", true
 	case sessionmodel.CodexAppServerMode:
 		return "codex", true
+	case sessionmodel.AntigravityGUIMode:
+		return "antigravity", true
 	default:
 		return "", false
 	}
