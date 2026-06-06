@@ -252,8 +252,20 @@ All metric names are prefixed `tank_`. The full namespace:
   `failed_turn` for primary rejected/exhausted quota frames that emit
   `turn.failed{reason:"provider_rate_limit"}`, `observed_allowed_active` /
   `observed_allowed_idle` for primary allowed quota frames recorded as
-  capacity observations, and `terminal_without_active_turn` for terminal
-  frames that arrive with no active turn to fail.
+  capacity observations, `terminal_without_active_turn` for terminal
+  frames that arrive with no active turn to fail, and `retry_stall_failed`
+  for a turn the runner force-failed after a sustained Claude SDK
+  `system/api_retry{error:"rate_limit"}` storm produced no progress and the
+  SDK never surfaced a terminal `rate_limit_event` (the silent-stranding
+  class that wedged session 638 on 2026-06-06).
+  `tank_runner_provider_api_retry_total{error}` counts those SDK internal
+  HTTP-retry frames by bounded `error` (`rate_limit` | `overloaded` |
+  `api_error` | `other`); a `rate_limit` storm with no turn progress is the
+  signature, and it now resolves to a durable terminal instead of vanishing
+  into `tank_runner_unmapped_provider_event_total`. The pre-start half of the
+  stall (the runner is wedged and cannot emit its own terminal) is covered by
+  the orchestrator-side detector in the session-lifecycle observability
+  surface, not here.
   `tank_runner_turn_pre_start_latency_seconds{stage}` measures the previously
   invisible interval before provider output: `command_created_to_claimed`
   covers JetStream delivery plus runner acceptance, and `claimed_to_started`
