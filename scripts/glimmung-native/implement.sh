@@ -157,7 +157,7 @@ spec:
                 '}' \
                 > "\$HOME/.claude/.credentials.json"
               chmod 600 "\$HOME/.claude/.credentials.json"
-              printf '%s\n' '{"theme":"dark","permissions":{"defaultMode":"bypassPermissions"},"skipDangerousModePermissionPrompt":true}' > "\$HOME/.claude/settings.json"
+              printf '%s\n' '{"theme":"dark","permissions":{"defaultMode":"bypassPermissions","allow":["Edit","Write","MultiEdit","NotebookEdit","Bash(go:*)","Bash(gofmt:*)","Bash(npm:*)","Bash(npx:*)","Bash(node:*)","Bash(git:*)","Bash(python3:*)","Bash(rg:*)","Bash(ls:*)","Bash(mkdir:*)","Bash(rm:*)","Bash(cp:*)","Bash(mv:*)"]},"skipDangerousModePermissionPrompt":true}' > "\$HOME/.claude/settings.json"
               printf '%s\n' \
                 '{' \
                 '  "hasCompletedOnboarding": true,' \
