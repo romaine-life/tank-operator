@@ -322,6 +322,13 @@ All metric names are prefixed `tank_`. The full namespace:
   `provider` (`claude`, `codex`, `unknown`) and bounded `result`.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
   label: `provider` ("claude" or "codex"), bound from `PROXY_PROVIDER`.
+  `tank_api_proxy_upstream_status_total{provider,status_class}` buckets every
+  upstream response; `tank_api_proxy_upstream_401_total` and
+  `tank_api_proxy_upstream_429_total` are the two named signatures — 401 is the
+  refresh-storm, 429 is the shared account's usage cap being exhausted (the
+  upstream cause of the rate-limit-stall class the runner's
+  `provider_rate_limit` terminal and the `tank_sessions_stuck_in_progress`
+  detector handle downstream).
 - `tank_mcp_auth_proxy_*` — sidecar counters/histograms. Label
   `mcp_server` is bounded by the LISTENERS table in `server.py`.
 - `tank_schema_migration*` — startup schema-migration engine
@@ -816,7 +823,11 @@ declares one rule group per subsystem:
   for the architecture they protect.
 - **NATS**: disconnect storm (>6/min for 5m).
 - **api-proxy**: upstream 401 rate (refresh-storm signature), refresh
-  failures (any non-success result).
+  failures (any non-success result), and sustained upstream 429s
+  (`TankApiProxyRateLimited` — the shared provider account's usage cap is
+  exhausted; the upstream-cause view of the rate-limit-stall class, paired
+  downstream with the runner's `provider_rate_limit` terminal and
+  `TankSessionStuckInProgress`).
 - **mcp-auth-proxy**: SA token read failures, MCP upstream 5xx rate.
 - **Runners**: provider error rate, durable scheduled wakeup registration
   outcomes, and backend due-wakeup backlog. Pending, fired, and failed

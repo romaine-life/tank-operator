@@ -285,6 +285,13 @@ metrics on `:9100/metrics`. Key counters:
 - `tank_api_proxy_upstream_status_total{status}` — provider response
   codes seen on Envoy's data-plane side (chatgpt.com or api.anthropic.com).
   Elevated `401` means injected tokens are getting rejected.
+- `tank_api_proxy_upstream_429_total{provider}` — upstream 429 rate-limit
+  responses on injected requests. A sustained rate is the shared account's
+  usage cap being exhausted (alert: `TankApiProxyRateLimited`). This is the
+  upstream cause of the rate-limit-stall class; pod-side runners convert a
+  stuck `api_retry{rate_limit}` storm into a durable
+  `turn.failed{reason:"provider_rate_limit"}` and the orchestrator's
+  `TankSessionStuckInProgress` catches any that wedge.
 - `tank_api_proxy_ext_proc_request_total{result}` — `passthrough`,
   `injected`, `missing_token`. `missing_token` means
   `_get_access_token` returned `"missing"` because cache was empty;
@@ -307,6 +314,36 @@ Log lines to grep for in `kubectl -n tank-operator logs codex-api-proxy-* -c ext
 
 For grafana, the boards loaded from `k8s/templates/grafana-dashboards/`
 include an "api-proxy" panel showing the above counters as rates.
+
+## Per-session attribution (dependency-gated)
+
+The proxy sees every model call but cannot today say *which Tank session*
+caused a given upstream 429, latency spike, or `request-id`. Two facts block
+per-session attribution at this layer:
+
+- The Claude Agent SDK `Options` (agent-runner) exposes no custom-header /
+  fetch hook, so the runner cannot stamp an `x-tank-session-id` (plus owner /
+  turn) header on outbound model requests. Without an inbound identity header
+  the ext_proc has nothing to attribute by.
+- The proxy has no Postgres or session-bus producer, so it cannot itself write
+  a durable per-call ledger keyed by session.
+
+Deliberately NOT done: inferring the session from the downstream pod IP or by
+post-hoc joining the Envoy access log. Pod IPs churn and a log join is the
+"re-scrape of logs" anti-pattern (`docs/product-inspirations.md`); per-session
+resolution must live in a durable ledger, never a metric label or a log grep
+(`docs/observability.md` cardinality rules).
+
+Path forward when the dependency lands: stamp `x-tank-session-id` + hashed
+owner + turn id from the runner, read them in `_on_request_headers`, capture
+the upstream `request-id` and `anthropic-ratelimit-*` headers in
+`_on_response_headers`, and emit a durable per-call record — or have the runner
+emit it from the `rate_limit_event` frame, which already carries the provider
+`session_id`. As a down payment, the Envoy access log's `anthropic_req_id`
+field was corrected to `%RESP(request-id)%` (it had been
+`%RESP(anthropic-request-id)%`, a header the provider never sends, so it logged
+`-` on every line) so the upstream request id is at least captured in logs in
+the meantime.
 
 ## Slot credential ownership
 
