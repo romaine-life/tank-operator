@@ -131,3 +131,33 @@ from it, verify against current production code:
 
 When current code and the old bundle disagree, current code wins unless the user
 explicitly asks to revive an older direction.
+
+## Compact / mobile posture
+
+tank-operator is desktop-first, but the session product is reachable from a phone
+browser (public `tank.romaine.life`, PWA-capable). At and below `BP_COMPACT`
+(768px; `frontend/src/breakpoints.ts`) the chrome shifts from the multi-pane
+console to a single-column **session triage** posture. This extends the
+operator-console voice; it is not a consumer-chat redesign — same dark, dense,
+terse surfaces, just one at a time.
+
+Rules:
+
+- The shell is a single column: a compact top bar (`MobileTopBar`) over the work
+  pane. The 260px sidebar moves into an off-canvas navigation drawer
+  (`frontend/src/components/ui/sheet.tsx`, a radix Dialog) toggled from the top
+  bar. `useViewport()` is the single source of truth for which shell is active.
+- The drawer is the only place the session list lives on compact; it closes on
+  navigation and when the viewport grows back to desktop.
+- Triage is the supported job: list, read, reply, answer AskUserQuestion, stop.
+  Reorder-by-drag stays desktop-only (no dead touch gesture); the session
+  delete/close control is visible on touch rather than hover-revealed.
+- Genuinely desktop-only surfaces — terminal attach and the drag/crop avatar
+  editor — render an honest `DesktopOnly` card on compact instead of a broken
+  surface. Treat that boundary as a product commitment (the app-chrome
+  `mobile-session-triage` capability), not a temporary gate to remove.
+- Safe-area insets and `interactive-widget=resizes-content` (index.html) keep the
+  top bar below the notch and the composer above the on-screen keyboard; the
+  shell height tracks `100dvh`.
+- Canonical breakpoints are 768 (shell -> drawer) and 640 (densest tuning). New
+  compact styling keys off these; do not sprinkle new ad-hoc widths.

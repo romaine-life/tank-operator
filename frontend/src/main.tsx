@@ -19,6 +19,7 @@ import { StyleguidePortfolioOnboarding } from "./styleguide/portfolio-onboarding
 import { StyleguidePortfolioTranscript } from "./styleguide/portfolio-transcript";
 import { StyleguidePortfolioWorkspace } from "./styleguide/portfolio-workspace";
 import { StyleguideRunHeaderTabs } from "./styleguide/run-header-tabs";
+import { StyleguideMobileShell } from "./styleguide/mobile-shell";
 import { StyleguideSessionRow } from "./styleguide/session-row";
 import { StyleguideSpacing } from "./styleguide/spacing";
 import { StyleguideStatusDot } from "./styleguide/status-dot";
@@ -91,6 +92,7 @@ const STYLEGUIDE_ROUTES: Record<string, () => JSX.Element> = {
   "/_styleguide/mcp-icon": () => <StyleguideMcpIcon />,
   "/_styleguide/run-header-tabs": () => <StyleguideRunHeaderTabs />,
   "/_styleguide/session-row": () => <StyleguideSessionRow />,
+  "/_styleguide/mobile-shell": () => <StyleguideMobileShell />,
   "/_styleguide/mode-dropdown": () => <StyleguideModeDropdown />,
   "/_styleguide/welcome-card": () => <StyleguideWelcomeCard />,
   "/_styleguide/error-pill": () => <StyleguideErrorPill />,
