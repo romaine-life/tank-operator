@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-932a2edc9495277d9f9758caf43afb931ddfaf410a59db2bbc287f1ddbc5d79b"
+  tag: "app-98a7754d7e66197247966cbb5945d0e2a770561993a000ca2a1fa2ee1a4f517e"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -119,17 +119,18 @@ sessionsIngress:
     enabled: false
     ttl: 300
 
-# OAuth gateway: the orchestrator pod also serves an HTTPS listener
-# impersonating platform.claude.com (self-signed CA, trusted only by session
-# pods that mount our ca.crt). Session pods get a hostAlias mapping that
-# hostname to the gateway service's ClusterIP.
+# OAuth gateway: production serves the HTTPS listener impersonating
+# platform.claude.com (self-signed CA, trusted only by session pods that mount
+# our ca.crt). Session pods in production and validation slots get a hostAlias
+# mapping that hostname to this production service's ClusterIP.
 oauthGateway:
   serviceHost: claude-oauth-gateway.tank-operator.svc.cluster.local
 
 # Anthropic API proxy: Envoy + ext_proc sidecar in front of api.anthropic.com.
-# Session pods get a hostAlias mapping api.anthropic.com to this service's
-# ClusterIP and the proxy injects the real OAuth Authorization on every
-# request. See k8s/templates/api-proxy.yaml for the design rationale.
+# Session pods in production and validation slots get a hostAlias mapping
+# api.anthropic.com to this production service's ClusterIP and the proxy
+# injects the real OAuth Authorization on every request. See
+# k8s/templates/api-proxy.yaml for the design rationale.
 apiProxy:
   image:
     repository: romainecr.azurecr.io/api-proxy
@@ -148,9 +149,10 @@ apiProxy:
   # orchestrator's, scoped to "read+write the credentials KV secret only".
   kvClientIdKey: claude-api-proxy-mi-client-id
 
-# Codex API proxy: a second Envoy + ext_proc deployment using the same image
-# and UAMI as apiProxy. It fronts chatgpt.com/backend-api/codex and owns the
-# real ChatGPT OAuth refresh chain for Codex sessions.
+# Codex API proxy: a second production Envoy + ext_proc deployment using the
+# same image and UAMI as apiProxy. It fronts chatgpt.com/backend-api/codex and
+# owns the real ChatGPT OAuth refresh chain for Codex sessions in production
+# and validation slots.
 codexApiProxy:
   serviceHost: codex-api-proxy.tank-operator.svc.cluster.local
 
@@ -252,12 +254,12 @@ internalApi:
 # "<provider> sign-in expired" banner. The orchestrator polls
 # codexProxyHealthURL every 30s, debounces sustained failures, writes
 # Layer 1 rows (provider_credential_health), and fans session.status
-# banner events into every active codex_gui session whose transcript
-# would otherwise show only a cryptic "Error" line. Leave
-# codexProxyHealthURL empty to disable the banner — useful in test
-# environments that lack a real Codex sign-in. The re-auth URL is the
-# affordance the SPA renders as a button on the banner; point at the
-# canonical Codex sign-in flow on auth.romaine.life.
+# banner events into every active codex_gui session whose transcript would
+# otherwise show only a cryptic "Error" line. Validation slots route Codex
+# through the same production proxy, so they intentionally poll this same
+# production health URL. The re-auth URL is the affordance the SPA renders as a
+# button on the banner; point at the canonical Codex sign-in flow on
+# auth.romaine.life.
 providerHealth:
   codexProxyHealthURL: "http://codex-api-proxy.tank-operator.svc.cluster.local:9100/health/codex"
   codexReauthURL: "https://auth.romaine.life"
@@ -266,21 +268,21 @@ externalSecret:
   storeName: romaine-kv
   storeKind: ClusterSecretStore
   refreshInterval: 1h
-  # Claude Code subscription credentials. Lives ONLY in the orchestrator
-  # namespace; session pods cannot read this Secret. KV is the source of
-  # truth: the orchestrator's in-process rotation writes to KV, ESO
-  # mirrors KV â†’ this Secret on a 1m interval, and the orchestrator pod
-  # mounts the Secret as a file. Re-seed via the in-app "+ config sub"
-  # flow, or out-of-band by uploading a fresh credentials.json to the
-  # KV secret named below.
+  # Claude Code subscription credentials. Lives ONLY in the production
+  # orchestrator namespace; session pods and validation-slot orchestrators
+  # cannot read this Secret. KV is the source of truth: production
+  # save-credentials writes to KV, ESO mirrors KV → this Secret on a 1m
+  # interval, and the production api-proxy pod mounts the Secret as a file.
+  # Re-seed via the in-app "+ config sub" flow on production, or out-of-band by
+  # uploading a fresh credentials.json to the KV secret named below.
   claudeCredentials:
     secretName: claude-code-credentials
     secretKey: claude-code-credentials
   # OpenAI Codex subscription credentials. The primary Secret lives in the
-  # ORCHESTRATOR namespace and is mounted by codex-api-proxy. Codex CLI/GUI
-  # session launchers write a placeholder chatgptAuthTokens auth.json and
-  # route chatgpt.com through the proxy, which injects/rotates the real
-  # tokens and writes back to KV.
+  # production orchestrator namespace and is mounted by production
+  # codex-api-proxy. Codex CLI/GUI session launchers write a placeholder
+  # chatgptAuthTokens auth.json and route chatgpt.com through the production
+  # proxy, which injects/rotates the real tokens and writes back to KV.
   codexCredentials:
     secretName: codex-credentials
     # Key inside the K8s Secret. The proxy mounts this as

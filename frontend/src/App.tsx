@@ -6630,6 +6630,7 @@ function RunMessageBubble({
   ownedByTurnActivity = false,
   showAssistantAvatar = !ownedByTurnActivity,
   isAvatarContinuation = false,
+  compact = false,
 }: {
   entry: TranscriptEntry;
   avatar: AgentAvatar | null;
@@ -6648,6 +6649,12 @@ function RunMessageBubble({
   ownedByTurnActivity?: boolean;
   showAssistantAvatar?: boolean;
   isAvatarContinuation?: boolean;
+  // Minimal one-line variant: keep the avatar at full size and collapse the
+  // body to a single ellipsis-truncated line. Used by the Turns view when the
+  // prompt context is collapsed so the entry stays recognizable (avatar +
+  // first line) instead of disappearing entirely. Hides the footer,
+  // attachments, and any inline actions.
+  compact?: boolean;
 }) {
   const variant =
     entry.role === "user"
@@ -6725,12 +6732,22 @@ function RunMessageBubble({
     | number
     | undefined;
   const alwaysVisible = showTimestamps || showDuration;
+  // One-line preview for compact mode: flatten whitespace/newlines so the
+  // multi-paragraph prompt collapses into a single line the CSS can truncate
+  // with an ellipsis. Falls back to the skill-action text when there is no
+  // message body.
+  const compactPreviewText = (
+    (visibleText && visibleText.trim().length > 0 ? visibleText : text) ?? ""
+  )
+    .replace(/\s+/g, " ")
+    .trim();
   return (
     <div
       className="run-transcript-message"
       data-slot="message"
       data-variant={variant}
       data-role={variant}
+      data-compact={compact ? "true" : undefined}
       data-kind={isSkillAction ? "skill-action" : "message"}
       data-skill={
         isSkillAction && typeof skillName === "string" ? skillName : undefined
@@ -6769,7 +6786,11 @@ function RunMessageBubble({
         data-slot="message-content"
       >
         <div className="run-transcript-message-text" data-slot="message-text">
-          {isSkillAction ? (
+          {compact ? (
+            <span className="run-msg-compact-text" title={compactPreviewText}>
+              {compactPreviewText}
+            </span>
+          ) : isSkillAction ? (
             <span className="run-skill-action">
               <span className="run-skill-action-text">
                 <SkillActionIcon
@@ -6790,17 +6811,21 @@ function RunMessageBubble({
           ) : (
             <RunMarkdown>{visibleText}</RunMarkdown>
           )}
-          {variant === "system" && messageActionLabel && messageActionHref && (
-            <a
-              className="run-msg-system-action"
-              href={messageActionHref}
-              target="_self"
-              rel="noopener"
-            >
-              {messageActionLabel}
-            </a>
-          )}
-          {variant === "assistant" &&
+          {!compact &&
+            variant === "system" &&
+            messageActionLabel &&
+            messageActionHref && (
+              <a
+                className="run-msg-system-action"
+                href={messageActionHref}
+                target="_self"
+                rel="noopener"
+              >
+                {messageActionLabel}
+              </a>
+            )}
+          {!compact &&
+            variant === "assistant" &&
             awaitingInput &&
             questionTurnId &&
             onOpenTurn && (
@@ -6813,16 +6838,17 @@ function RunMessageBubble({
               </button>
             )}
         </div>
-        {variant === "user" && visibleAttachments.length > 0 && (
+        {!compact && variant === "user" && visibleAttachments.length > 0 && (
           <RunMessageAttachments
             attachments={visibleAttachments}
             sessionId={sessionId}
           />
         )}
-        <div
-          className="run-msg-footer"
-          data-always-visible={alwaysVisible ? "" : undefined}
-        >
+        {!compact && (
+          <div
+            className="run-msg-footer"
+            data-always-visible={alwaysVisible ? "" : undefined}
+          >
           {canonicalMessage &&
             (variant === "assistant" || variant === "user") &&
             entry.turnId &&
@@ -6876,7 +6902,8 @@ function RunMessageBubble({
               <span className="run-msg-timing-row">{time}</span>
             )}
           </div>
-        </div>
+          </div>
+        )}
       </div>
       {variant === "user" &&
         !isAvatarContinuation &&
@@ -10674,23 +10701,24 @@ function RunTurnActivityScreen({
                   )}
                 </button>
               </div>
-              {!selectedTurnContextCollapsed && (
-                <RunMessageBubble
-                  entry={selectedTurnContext}
-                  avatar={avatar}
-                  systemAvatar={systemAvatar}
-                  sessionId={sessionId}
-                  highlighted={false}
-                  showTimestamps={showTimestamps}
-                  showDuration={showDuration}
-                  canonicalMessage={false}
-                  ownedByTurnActivity
-                  transcriptHref={transcriptHrefForEntry?.(
-                    selectedTurnContext,
-                  )}
-                  onOpenTranscriptMessage={onOpenTranscriptMessage}
-                />
-              )}
+              {/* Always render the prompt context. When collapsed we keep a
+                  minimal one-line entry (avatar at full size + ellipsis-
+                  truncated text) instead of hiding the body, so the prompt
+                  stays recognizable in the Turns view. */}
+              <RunMessageBubble
+                entry={selectedTurnContext}
+                avatar={avatar}
+                systemAvatar={systemAvatar}
+                sessionId={sessionId}
+                highlighted={false}
+                showTimestamps={showTimestamps}
+                showDuration={showDuration}
+                canonicalMessage={false}
+                ownedByTurnActivity
+                compact={selectedTurnContextCollapsed}
+                transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
+                onOpenTranscriptMessage={onOpenTranscriptMessage}
+              />
             </div>
           )}
           {selectedPageInfo?.kind === "question" && (

@@ -2,9 +2,9 @@
 set -Eeuo pipefail
 
 slot_name="${1:-tank-operator-slot-2}"
-expected_claude="${slot_name}-claude-code-credentials"
-expected_codex="${slot_name}-codex-credentials"
-expected_antigravity="${slot_name}-antigravity-credentials"
+prod_claude_proxy="claude-api-proxy.tank-operator.svc.cluster.local"
+prod_codex_proxy="codex-api-proxy.tank-operator.svc.cluster.local"
+prod_oauth_gateway="claude-oauth-gateway.tank-operator.svc.cluster.local"
 
 hot_rendered="$(helm template "${slot_name}" k8s \
   --namespace "${slot_name}" \
@@ -25,45 +25,48 @@ if grep -Eq 'name: ANTHROPIC_API_KEY|key: anthropic-api-key|github-app-creds' <<
   exit 1
 fi
 
-if ! grep -Fq "value: \"${expected_claude}\"" <<<"${hot_rendered}"; then
-  echo "hot slot render did not set CLAUDE_CREDENTIALS_KV_KEY to ${expected_claude}" >&2
+if grep -Eq 'app.kubernetes.io/name: (claude-api-proxy|codex-api-proxy)|name: (claude-api-proxy|codex-api-proxy)$|name: tank-api-proxy$' <<<"${combined_rendered}"; then
+  echo "slot render still contains a slot-local provider api-proxy surface" >&2
   exit 1
 fi
 
-if ! grep -Fq "key: ${expected_claude}" <<<"${warm_rendered}"; then
-  echo "warm slot ExternalSecret did not read Claude credentials from KV key ${expected_claude}" >&2
+if grep -Eq "name: ${slot_name}-(claude-code-credentials|codex-credentials)|key: ${slot_name}-(claude-code-credentials|codex-credentials)" <<<"${warm_rendered}"; then
+  echo "warm slot render still declares slot-owned provider credential ExternalSecrets" >&2
   exit 1
 fi
 
-if grep -A1 -F "name: CLAUDE_CREDENTIALS_KV_KEY" <<<"${hot_rendered}" \
-  | grep -Fq 'value: "claude-code-credentials"'; then
-  echo "hot slot render still points a Claude proxy/config env at production claude-code-credentials" >&2
+if grep -Eq 'name: (CLAUDE_CREDENTIALS_KV_KEY|CODEX_CREDENTIALS_KV_KEY|ANTIGRAVITY_CREDENTIALS_KV_KEY|CLAUDE_CREDENTIALS_FILE)' <<<"${hot_rendered}"; then
+  echo "hot slot render exposes provider credential write/read env vars" >&2
   exit 1
 fi
 
-if ! grep -Fq "value: \"${expected_codex}\"" <<<"${hot_rendered}"; then
-  echo "hot slot render did not set CODEX_CREDENTIALS_KV_KEY to ${expected_codex}" >&2
+if grep -Eq 'secretName: (claude-code-credentials|codex-credentials|.*-claude-code-credentials|.*-codex-credentials)' <<<"${hot_rendered}"; then
+  echo "hot slot render still mounts provider credential Secrets" >&2
   exit 1
 fi
 
-if ! grep -Fq "key: ${expected_codex}" <<<"${warm_rendered}"; then
-  echo "warm slot ExternalSecret did not read Codex credentials from KV key ${expected_codex}" >&2
+if ! grep -Fq "value: \"${prod_oauth_gateway}\"" <<<"${hot_rendered}"; then
+  echo "hot slot render did not route CLAUDE_OAUTH_GATEWAY_HOST to ${prod_oauth_gateway}" >&2
   exit 1
 fi
 
-if grep -A1 -F "name: CODEX_CREDENTIALS_KV_KEY" <<<"${hot_rendered}" \
-  | grep -Fq 'value: "codex-credentials"'; then
-  echo "hot slot render still points a Codex proxy/config env at production codex-credentials" >&2
+if ! grep -Fq "value: \"${prod_claude_proxy}\"" <<<"${hot_rendered}"; then
+  echo "hot slot render did not route CLAUDE_API_PROXY_HOST to ${prod_claude_proxy}" >&2
   exit 1
 fi
 
-if ! grep -Fq "value: \"${expected_antigravity}\"" <<<"${hot_rendered}"; then
-  echo "hot slot render did not set ANTIGRAVITY_CREDENTIALS_KV_KEY to ${expected_antigravity}" >&2
+if ! grep -Fq "value: \"${prod_codex_proxy}\"" <<<"${hot_rendered}"; then
+  echo "hot slot render did not route CODEX_API_PROXY_HOST to ${prod_codex_proxy}" >&2
   exit 1
 fi
 
-if grep -A1 -F "name: ANTIGRAVITY_CREDENTIALS_KV_KEY" <<<"${hot_rendered}" \
-  | grep -Fq 'value: "antigravity-credentials"'; then
-  echo "hot slot render still points an Antigravity config env at production antigravity-credentials" >&2
+if ! grep -Fq "name: ${slot_name}-claude-oauth-ca-reflector" <<<"${warm_rendered}"; then
+  echo "warm slot render does not grant a slot-scoped reader for the production proxy CA" >&2
+  exit 1
+fi
+
+if ! grep -Fq "namespace: ${slot_name}-sessions" <<<"${warm_rendered}" \
+  || ! grep -Fq "name: claude-oauth-ca" <<<"${warm_rendered}"; then
+  echo "warm slot render does not reflect the production proxy CA into the slot sessions namespace" >&2
   exit 1
 fi

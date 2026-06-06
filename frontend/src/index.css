@@ -4282,6 +4282,35 @@ button:disabled {
   max-width: 100%;
 }
 
+/* Compact one-line message. The Turns view renders the prompt context this way
+   while it is collapsed: the avatar stays at full size and the body collapses
+   to a single line that ellipsis-truncates to whatever width is left beside
+   the avatar, instead of the prompt disappearing entirely. Expanding (the
+   toggle in .run-turn-view-context-head) restores the full RunMessageBubble. */
+.run-transcript-message[data-compact="true"] {
+  align-items: center;
+  row-gap: 0;
+}
+
+.run-transcript-message[data-compact="true"] .run-transcript-message-content {
+  width: 100%;
+}
+
+.run-transcript-message[data-compact="true"] .run-transcript-message-text {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.run-msg-compact-text {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .run-turn-question-page-head {
   display: flex;
   align-items: baseline;

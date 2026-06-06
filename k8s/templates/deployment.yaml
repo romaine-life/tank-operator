@@ -63,8 +63,6 @@ spec:
               value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
             - name: TANK_OPERATOR_INTERNAL_URL
               value: {{ include "tank-operator.internalURL" . | quote }}
-            - name: CODEX_CREDENTIALS_SECRET
-              value: {{ include "tank-operator.codexCredentialsSecret" . | quote }}
 
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
@@ -115,8 +113,10 @@ spec:
             - name: SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED
               value: "true"
             {{- end }}
+            {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
             - name: CLAUDE_CREDENTIALS_FILE
               value: /etc/claude-credentials/{{ .Values.externalSecret.claudeCredentials.secretKey }}
+            {{- end }}
             - name: CLAUDE_OAUTH_GATEWAY_HOST
               value: {{ include "tank-operator.oauthGatewayHost" . | quote }}
             - name: CLAUDE_API_PROXY_HOST
@@ -135,12 +135,14 @@ spec:
             # the ESO Secret that syncs the UAMI's client_id from KV.
             - name: AZURE_KEYVAULT_URL
               value: {{ .Values.credentialRefresher.keyVaultUrl | quote }}
+            {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
             - name: CLAUDE_CREDENTIALS_KV_KEY
               value: {{ include "tank-operator.claudeCredentialsKvKey" . | quote }}
             - name: CODEX_CREDENTIALS_KV_KEY
               value: {{ include "tank-operator.codexCredentialsKvKey" . | quote }}
             - name: ANTIGRAVITY_CREDENTIALS_KV_KEY
               value: {{ include "tank-operator.antigravityCredentialsKvKey" . | quote }}
+            {{- end }}
             - name: AZURE_FEDERATED_TOKEN_FILE
               value: /var/run/secrets/azure/tokens/azure-identity-token
             - name: AZURE_AUTHORITY_HOST
@@ -233,9 +235,11 @@ spec:
             - name: oauth-gateway-tls
               mountPath: /etc/oauth-gateway-tls
               readOnly: true
+            {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
             - name: claude-credentials
               mountPath: /etc/claude-credentials
               readOnly: true
+            {{- end }}
             - name: app-config
               mountPath: /etc/tank-operator/app-config
               readOnly: true
@@ -294,6 +298,7 @@ spec:
           secret:
             secretName: claude-oauth-leaf
             optional: true  # cert-manager hasn't issued yet on first install
+        {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
         - name: claude-credentials
           secret:
             # ESO-managed; the orchestrator's in-process rotation writes
@@ -302,6 +307,7 @@ spec:
             # synced (or before "+ config sub" has seeded credentials).
             secretName: {{ include "tank-operator.claudeCredentialsSecret" . }}
             optional: true
+        {{- end }}
         - name: app-config
           configMap:
             name: {{ include "tank-operator.appConfigMap" . }}

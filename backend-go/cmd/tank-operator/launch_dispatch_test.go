@@ -12,6 +12,7 @@ import (
 func TestComposeLaunchDispatchPrompt(t *testing.T) {
 	cases := []struct {
 		name      string
+		runtime   string
 		skill     string
 		base      string
 		paths     []string
@@ -19,40 +20,52 @@ func TestComposeLaunchDispatchPrompt(t *testing.T) {
 		skillTurn bool
 	}{
 		{
-			name: "skill with attachments", skill: "test", base: "do it",
+			name: "claude skill with attachments", runtime: "claude", skill: "test", base: "do it",
 			paths:     []string{"/workspace/.attachments/turn_x-0-a.zip", "/workspace/.attachments/turn_x-1-b.png"},
 			want:      "/test\n\ndo it\n\nAttachments:\n- /workspace/.attachments/turn_x-0-a.zip\n- /workspace/.attachments/turn_x-1-b.png",
 			skillTurn: true,
 		},
 		{
-			name: "no skill with attachments", skill: "", base: "compare",
+			name: "codex skill with attachments", runtime: "codex", skill: "test", base: "do it",
+			paths:     []string{"/workspace/.attachments/turn_x-0-a.zip"},
+			want:      "$test\n\ndo it\n\nAttachments:\n- /workspace/.attachments/turn_x-0-a.zip",
+			skillTurn: true,
+		},
+		{
+			name: "codex skill already triggered", runtime: "codex", skill: "test", base: "$test\n\ndo it",
+			paths:     []string{"/workspace/.attachments/turn_x-0-a.zip"},
+			want:      "$test\n\ndo it\n\nAttachments:\n- /workspace/.attachments/turn_x-0-a.zip",
+			skillTurn: true,
+		},
+		{
+			name: "no skill with attachments", runtime: "codex", skill: "", base: "compare",
 			paths: []string{"/workspace/.attachments/turn_x-0-a.png"},
 			want:  "compare\n\nAttachments:\n- /workspace/.attachments/turn_x-0-a.png",
 		},
 		{
-			name: "skill no attachments", skill: "test", base: "go",
+			name: "skill no attachments", runtime: "claude", skill: "test", base: "go",
 			want: "/test\n\ngo", skillTurn: true,
 		},
 		{
-			name: "skill empty base with attachments", skill: "test", base: "",
+			name: "skill empty base with attachments", runtime: "claude", skill: "test", base: "",
 			paths:     []string{"/workspace/.attachments/turn_x-0-a.png"},
 			want:      "/test\n\nAttachments:\n- /workspace/.attachments/turn_x-0-a.png",
 			skillTurn: true,
 		},
 		{
-			name: "skill empty base no attachments", skill: "test", base: "",
+			name: "skill empty base no attachments", runtime: "claude", skill: "test", base: "",
 			want: "/test", skillTurn: true,
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := composeLaunchDispatchPrompt(tc.skill, tc.base, tc.paths)
+			got := composeLaunchDispatchPrompt(tc.runtime, tc.skill, tc.base, tc.paths)
 			if got != tc.want {
 				t.Fatalf("prompt =\n%q\nwant\n%q", got, tc.want)
 			}
 			// Whatever we compose for a skill launch must satisfy the gate
 			// enqueueSDKTurn enforces, or the dispatch would 400.
-			if tc.skillTurn && !promptMatchesSkillTrigger("claude", tc.skill, got) {
+			if tc.skillTurn && !promptMatchesSkillTrigger(tc.runtime, tc.skill, got) {
 				t.Fatalf("composed prompt does not match skill trigger: %q", got)
 			}
 		})
@@ -89,6 +102,45 @@ func TestProcessPendingLaunchesFailsAtAttemptCap(t *testing.T) {
 	}
 	if !sawCommandFailed {
 		t.Fatalf("no turn.command_failed emitted for the stranded launch; upserts=%v", upserts)
+	}
+}
+
+func TestProcessPendingLaunchesFailsSkillLaunchWithoutRuntime(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", "codex_gui", "codex-runner"))
+	app.sessionEvents = &recordingSessionEventStore{}
+	fake := &fakePendingLaunchStore{claimRows: []pgstore.PendingLaunchTurn{{
+		TankSessionID: "64",
+		SessionID:     "64",
+		TurnID:        "turn_missing_runtime",
+		ClientNonce:   "missing-runtime",
+		OwnerEmail:    "user@example.com",
+		SkillName:     "test",
+		BasePrompt:    "$test\n\nrun it",
+	}}}
+	app.pendingLaunch = fake
+
+	if err := app.processPendingLaunches(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("processPendingLaunches: %v", err)
+	}
+	if fake.failedTurn != "turn_missing_runtime" {
+		t.Fatalf("failed turn = %q, want turn_missing_runtime", fake.failedTurn)
+	}
+	if !strings.Contains(fake.failReason, "skill launch runtime is invalid") {
+		t.Fatalf("fail reason = %q, want invalid runtime", fake.failReason)
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	}
+	upserts := app.sessionEvents.(*recordingSessionEventStore).upserts
+	var sawCommandFailed bool
+	for _, ev := range upserts {
+		if ev["type"] == "turn.command_failed" && ev["turn_id"] == "turn_missing_runtime" {
+			sawCommandFailed = true
+		}
+	}
+	if !sawCommandFailed {
+		t.Fatalf("no turn.command_failed emitted for invalid launch runtime; upserts=%v", upserts)
 	}
 }
 

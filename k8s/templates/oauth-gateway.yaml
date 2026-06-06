@@ -10,7 +10,7 @@ inert under steady state. We keep the cert/Service infra so the OAuth
 gateway can have logic put back without re-issuing certs to every session
 pod (NODE_EXTRA_CA_CERTS trust is rooted in the same CA).
 
-Pieces:
+Production pieces:
   - cert-manager Issuer + CA Certificate + CA Issuer + leaf Certificate
     (self-signed CA, then a leaf signed by it for platform.claude.com)
   - ConfigMap reflecting just ca.crt into the sessions namespace so session
@@ -18,16 +18,22 @@ Pieces:
     key stays in tank-operator)
   - ClusterIP Service for platform.claude.com (returns 404 for everything
     now that the FastAPI handlers are gone — that's fine)
-  - ExternalSecret syncing the credentials blob from KV into the
+  - ExternalSecret syncing the credentials blob from KV into the production
     orchestrator namespace, consumed by the api-proxy and the orchestrator's
-    save-credentials path. KV is the source of truth; the api-proxy's
-    ext_proc sidecar writes rotated blobs back to KV and ESO mirrors KV →
-    Secret on a 1m interval.
+    save-credentials path. KV is the source of truth; the api-proxy's ext_proc
+    sidecar writes rotated blobs back to KV and ESO mirrors KV → Secret on a
+    1m interval.
   - ExternalSecret syncing AZURE_CLIENT_ID/AZURE_TENANT_ID for the shared
     UAMI (claude-credentials-refresher; historical name, see infra/credential_refresher.tf).
     Consumed by both the orchestrator (save-credentials harvest → KV) and
     the api-proxy (ext_proc rotated-blob writes → KV).
+
+Validation slots deliberately do not render their own OAuth gateway, provider
+proxies, or credential ExternalSecrets. They route provider traffic through the
+production proxy services and this template only reflects production's public
+CA into the slot sessions namespace so pod-side TLS verification still works.
 */}}
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 apiVersion: cert-manager.io/v1
 kind: Issuer
 metadata:
@@ -78,10 +84,12 @@ spec:
     name: claude-oauth-ca-issuer
     kind: Issuer
 ---
+{{- end }}
 {{- /*
 Reflect ca.crt into the sessions namespace as a ConfigMap so session pods can
 mount it without ever seeing the CA private key. The private key stays in the
-`claude-oauth-ca` Secret in this namespace, which only cert-manager reads.
+`claude-oauth-ca` Secret in the provider-authority namespace, which only
+cert-manager reads.
 
 We do this with a tiny one-off Job because cert-manager doesn't natively
 support cross-namespace cert distribution — the alternatives (reflector
@@ -104,8 +112,8 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: claude-oauth-ca-reflector
-  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  name: {{ include "tank-operator.oauthCAReflectorReadName" . }}
+  namespace: {{ include "tank-operator.providerAuthorityNamespace" . }}
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
@@ -115,8 +123,8 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: claude-oauth-ca-reflector
-  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  name: {{ include "tank-operator.oauthCAReflectorReadName" . }}
+  namespace: {{ include "tank-operator.providerAuthorityNamespace" . }}
 subjects:
   - kind: ServiceAccount
     name: claude-oauth-ca-reflector
@@ -124,7 +132,7 @@ subjects:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: claude-oauth-ca-reflector
+  name: {{ include "tank-operator.oauthCAReflectorReadName" . }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
@@ -186,13 +194,13 @@ spec:
               # Wait for cert-manager to issue the CA — on first install the
               # Secret doesn't exist yet when this Job fires.
               for i in $(seq 1 60); do
-                if kubectl -n {{ include "tank-operator.orchestratorNamespace" . }} get secret claude-oauth-ca -o jsonpath='{.data.ca\.crt}' >/dev/null 2>&1; then
+                if kubectl -n {{ include "tank-operator.providerAuthorityNamespace" . }} get secret claude-oauth-ca -o jsonpath='{.data.ca\.crt}' >/dev/null 2>&1; then
                   break
                 fi
                 echo "waiting for cert-manager to issue claude-oauth-ca... ($i/60)" >&2
                 sleep 5
               done
-              CA=$(kubectl -n {{ include "tank-operator.orchestratorNamespace" . }} get secret claude-oauth-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
+              CA=$(kubectl -n {{ include "tank-operator.providerAuthorityNamespace" . }} get secret claude-oauth-ca -o jsonpath='{.data.ca\.crt}' | base64 -d)
               if [ -z "$CA" ]; then
                 echo "claude-oauth-ca secret never appeared — failing." >&2
                 exit 1
@@ -219,6 +227,7 @@ spec:
               $(printf '%s\n' "$CA" | sed 's/^/    /')
               EOF
 ---
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 apiVersion: v1
 kind: Service
 metadata:
@@ -232,6 +241,8 @@ spec:
       port: 443
       targetPort: 8443
 ---
+{{- end }}
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 {{- /*
 Credentials Secret: KV is the source of truth, ESO mirrors KV → this
 Secret on a short interval (1m) so rotations performed by the api-proxy's
@@ -270,11 +281,14 @@ spec:
         metadataPolicy: None
         nullBytePolicy: Ignore
 ---
+{{- end }}
 {{- /*
 Workload-identity bootstrap Secret for the shared `claude-credentials-refresher`
 UAMI (historical name; see infra/credential_refresher.tf for why it's kept).
-Both the orchestrator (save-credentials → KV write) and the api-proxy's
-ext_proc sidecar (rotated-blob → KV write) authenticate as this UAMI.
+Production uses it for orchestrator save-credentials and api-proxy rotated-blob
+writes. Validation slots still need the tenant/client-id env for the
+orchestrator's other Azure-backed stores, but they do not receive credential KV
+key env vars, so save-credentials fails closed there.
 ESO syncs the UAMI's client_id + tenant_id from KV into envFrom-able
 fields so DefaultAzureCredential can mint a federated KV token for either
 caller.
