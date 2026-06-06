@@ -8758,6 +8758,10 @@ textarea.run-files-viewer-editor:focus {
   padding-left: var(--run-transcript-message-inset-left);
 }
 
+.run-turn-activity[data-display="divider"] {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .run-turn-activity-avatar {
   grid-column: 1;
   grid-row: 1;
@@ -8777,6 +8781,70 @@ textarea.run-files-viewer-editor:focus {
   width: 100%;
   min-width: 0;
   max-width: 100%;
+}
+
+.run-turn-activity[data-display="divider"] .run-turn-activity-stack {
+  grid-column: 1;
+}
+
+.run-turn-activity-divider {
+  appearance: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.38rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.1rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-faint);
+  font: inherit;
+  cursor: pointer;
+}
+
+.run-turn-activity-divider-line {
+  height: 1px;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.run-turn-activity-divider-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.55rem;
+  height: 1.55rem;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 999px;
+  background: var(--bg-app);
+  color: var(--text-faint);
+  transition:
+    border-color var(--motion-fast) ease,
+    background var(--motion-fast) ease,
+    color var(--motion-fast) ease;
+}
+
+.run-turn-activity-divider:hover .run-turn-activity-divider-line,
+.run-turn-activity-divider:focus-visible .run-turn-activity-divider-line {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.run-turn-activity-divider:hover .run-turn-activity-divider-toggle,
+.run-turn-activity-divider:focus-visible .run-turn-activity-divider-toggle {
+  border-color: rgba(255, 255, 255, 0.22);
+  background: rgba(255, 255, 255, 0.055);
+  color: var(--text-primary);
+}
+
+.run-turn-activity-divider:focus-visible {
+  outline: 2px solid rgba(185, 210, 251, 0.32);
+  outline-offset: 2px;
+  border-radius: 999px;
+}
+
+.run-turn-view-activity-divider {
+  flex: 0 0 auto;
 }
 
 .run-turn-activity-content {
