@@ -723,6 +723,11 @@ test("turn internals move out of the transcript into a turn view", () => {
   );
   assert.equal(indexCssSource.includes(".run-turn-thinking-content"), true);
   assert.equal(indexCssSource.includes(".run-turn-thinking-label"), true);
+  assert.equal(indexCssSource.includes(".run-turn-view-context-toggle"), true);
+  assert.equal(
+    indexCssSource.includes('.run-turn-view-context[data-collapsed="true"]'),
+    true,
+  );
   assert.equal(
     indexCssSource.includes("@keyframes run-thinking-shimmer"),
     true,
@@ -861,6 +866,10 @@ test("turn view entry points open at the turn bottom", () => {
   assert.equal(appSource.includes('{ anchor: "top", resetPage: true }'), true);
   assert.equal(
     appSource.includes('onOpenTurn(turnId, { anchor: "bottom" })'),
+    true,
+  );
+  assert.equal(
+    appSource.includes('(variant === "assistant" || variant === "user")'),
     true,
   );
   assert.equal(appSource.includes("function TurnViewButton"), true);
