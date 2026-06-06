@@ -84,6 +84,12 @@ COPY --from=antigravity-runner-build /src/antigravity-runner/node_modules /opt/a
 COPY --from=antigravity-runner-build /src/antigravity-runner/package.json /opt/antigravity-runner/package.json
 COPY runner-shared /opt/runner-shared
 
+# Baked antigravity-runner launch script — self-contained, no session-ConfigMap
+# coupling. Copies the read-only KV credential into agy's writable data dir,
+# then execs the runner. World-readable so the non-root runner can run it.
+COPY k8s/session-config/antigravity-runner-launch.sh /opt/tank/antigravity-runner-launch.sh
+RUN chmod 0755 /opt/tank/antigravity-runner-launch.sh
+
 # Session dirs + non-root user. node:20-bookworm-slim already ships a `node`
 # user at uid/gid 1000 (same as the Alpine images). agy stores its auth + state
 # under ~/.gemini/antigravity-cli/ (it creates the subdir itself on first run);

@@ -215,7 +215,6 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"},
 	{"agent-runner-launch.sh", "/opt/tank/agent-runner-launch.sh"},
 	{"codex-runner-launch.sh", "/opt/tank/codex-runner-launch.sh"},
-	{"antigravity-runner-launch.sh", "/opt/tank/antigravity-runner-launch.sh"},
 	{"repo-cloner.sh", "/opt/tank/repo-cloner.sh"},
 	{"session-pod-bootstrap.sh", "/opt/tank/session-pod-bootstrap.sh"},
 }
@@ -1034,12 +1033,15 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// launch script copies it into agy's writable data dir before exec'ing the
 	// runner, because agy refreshes the access token in place.
 	if wantAntigravityRunner {
-		runnerVolumeMounts := append([]any{}, configMounts...)
-		runnerVolumeMounts = append(runnerVolumeMounts,
+		// The runner is self-contained: it drives agy + the session bus and
+		// needs no session ConfigMap (no Tank mcp.json — agy owns its MCP). Its
+		// launch script is baked into the antigravity image at /opt/tank, so the
+		// pod has no ConfigMap-launch-script coupling.
+		runnerVolumeMounts := []any{
 			map[string]any{"name": "workspace", "mountPath": "/workspace"},
 			map[string]any{"name": "tank-operator-sa-token", "mountPath": "/var/run/secrets/tank-operator", "readOnly": true},
 			map[string]any{"name": "auth-romaine-sa-token", "mountPath": "/var/run/secrets/auth.romaine.life", "readOnly": true},
-		)
+		}
 		if opts.AntigravityCredentialsSecret != "" {
 			volumes = append(volumes, map[string]any{
 				"name": "antigravity-cred",
