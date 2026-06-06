@@ -41,7 +41,8 @@ type CollapsedActivityOption = {
   label: string;
   meta: string;
   detail?: string;
-  variant: "current" | "final-aware" | "minimal" | "status";
+  variant: "current" | "final-aware" | "minimal" | "status" | "separator";
+  state?: "running" | "complete";
 };
 
 const HIGHLIGHT_TARGETS: { id: HighlightTarget; label: string }[] = [
@@ -63,6 +64,22 @@ const ACTIVE_SURFACES: { id: ActiveSurface; label: string }[] = [
 ];
 
 const COLLAPSED_ACTIVITY_OPTIONS: CollapsedActivityOption[] = [
+  {
+    id: "separator-running",
+    label: "Turn activity is hidden while the agent works",
+    meta: "3 tools / 2 notes",
+    detail: "running",
+    variant: "separator",
+    state: "running",
+  },
+  {
+    id: "separator-complete",
+    label: "Show activity behind this response",
+    meta: "3 tools / 2 notes",
+    detail: "complete",
+    variant: "separator",
+    state: "complete",
+  },
   {
     id: "current",
     label: "Turn activity",
@@ -314,6 +331,36 @@ function CollapsedActivityOptionRow({
   option: CollapsedActivityOption;
 }) {
   const isMinimal = option.variant === "minimal";
+  if (option.variant === "separator") {
+    return (
+      <button
+        type="button"
+        className="styleguide-collapsed-activity-separator"
+        aria-expanded={false}
+        data-state={option.state}
+        data-design-component="CollapsedTurnActivitySeparator"
+        data-design-state={option.id}
+        data-inspectable
+      >
+        <span className="styleguide-collapsed-activity-separator-line" aria-hidden="true" />
+        <span className="styleguide-collapsed-activity-separator-pill">
+          <ChevronRightIcon size={13} aria-hidden="true" />
+          <span className="styleguide-collapsed-activity-separator-text">
+            {option.label}
+          </span>
+          <span className="styleguide-collapsed-activity-separator-meta">
+            {option.meta}
+          </span>
+          {option.detail && (
+            <span className="styleguide-collapsed-activity-separator-state">
+              {option.detail}
+            </span>
+          )}
+        </span>
+        <span className="styleguide-collapsed-activity-separator-line" aria-hidden="true" />
+      </button>
+    );
+  }
   return (
     <button
       type="button"
@@ -362,8 +409,8 @@ function CollapsedActivityOptionsSpecimen() {
         <span className="run-turn-view-event-progress">final answer visible</span>
       </div>
       <div className="run-turn-view-summary">
-        <span>complete</span>
-        <span>final response arrived</span>
+        <span>running or complete</span>
+        <span>activity can collapse before the final response</span>
         <span>19:10:26</span>
       </div>
       <div className="styleguide-collapsed-activity-options">
@@ -636,8 +683,9 @@ export function StyleguidePortfolioTranscript() {
             collapsed final-turn activity options
           </h2>
           <p style={{ ...captionStyle, margin: 0, maxWidth: "74ch" }}>
-            Four static directions for replacing the expanded activity noise with
-            a single expandable row once the final assistant response is present.
+            Static directions for replacing the expanded activity noise with a
+            single expandable affordance. The separator options show the same
+            compaction working before and after the final response.
           </p>
           <CollapsedActivityOptionsSpecimen />
         </section>
