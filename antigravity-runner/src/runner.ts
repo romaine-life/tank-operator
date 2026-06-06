@@ -186,7 +186,11 @@ export class Runner {
         return;
       }
       const model = String(rec.model ?? "").trim() || this.cfg.defaultModel;
-      void this.reportRuntime(model);
+      // When no explicit model is configured, agy selects the Antigravity
+      // default internally. Record a bounded applied-runtime fact without
+      // changing provider invocation by passing a new --model flag.
+      const runtimeModel = model || "antigravity-default";
+      void this.reportRuntime(runtimeModel);
 
       const result = await this.driver.runTurn(
         {

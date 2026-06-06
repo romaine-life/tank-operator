@@ -12,7 +12,10 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
 
-const branchCodexImg = "romainecr.azurecr.io/codex-container:codex-BRANCHTEST"
+const (
+	branchCodexImg       = "romainecr.azurecr.io/codex-container:codex-BRANCHTEST"
+	branchAntigravityImg = "romainecr.azurecr.io/antigravity-container:antigravity-BRANCHTEST"
+)
 
 type fakeImageOverrideStore struct {
 	rows map[string]pgstore.SessionImageOverride
@@ -76,6 +79,29 @@ func TestSetSessionImageOverride_HappyPath(t *testing.T) {
 	got := store.rows["tank-operator-slot-1"]
 	if got.CodexImage != branchCodexImg || got.GitRef != "feat/x" {
 		t.Fatalf("stored override = %+v", got)
+	}
+}
+
+func TestSetSessionImageOverride_AntigravityImage(t *testing.T) {
+	app, store := imageOverrideTestServer(t, true)
+	req, rec := putOverrideReq(t, "tank-operator-slot-1", serviceToken(t), map[string]string{
+		"antigravity_image": branchAntigravityImg,
+		"git_ref":           "feat/antigravity",
+	})
+	app.handleInternalSetSessionImageOverride(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	got := store.rows["tank-operator-slot-1"]
+	if got.AntigravityImage != branchAntigravityImg || got.GitRef != "feat/antigravity" {
+		t.Fatalf("stored override = %+v", got)
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if body["antigravity_image"] != branchAntigravityImg {
+		t.Fatalf("response antigravity_image = %v, want %q", body["antigravity_image"], branchAntigravityImg)
 	}
 }
 

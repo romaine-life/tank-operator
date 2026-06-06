@@ -68,9 +68,9 @@ Contract impact:
   read or apply it.
 - A lookup failure falls back to the pinned image rather than failing session
   creation.
-- The override is durable (survives orchestrator rollout) and lives in shared
-  Postgres keyed by scope, so a slot override can never bleed into prod or
-  another slot.
+- The override is durable (survives orchestrator rollout), covers Claude,
+  Codex, and Antigravity session images, and lives in shared Postgres keyed by
+  scope, so a slot override can never bleed into prod or another slot.
 
 Evidence:
 - `backend-go/internal/sessions/manager_image_override_test.go` covers

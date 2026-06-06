@@ -1,7 +1,6 @@
 install_tank_docs() {
-  local config_dir="${INSTALL_TANK_DOCS_CONFIG_DIR:-/opt/tank/session-config}"
-  local dest_root="${INSTALL_TANK_DOCS_DEST_ROOT:-/workspace/.tank/docs}"
-  local bundled_file base rel dest_path
+  config_dir="${INSTALL_TANK_DOCS_CONFIG_DIR:-/opt/tank/session-config}"
+  dest_root="${INSTALL_TANK_DOCS_DEST_ROOT:-/workspace/.tank/docs}"
 
   [ -d "$config_dir" ] || return 0
   mkdir -p "$dest_root"
@@ -10,7 +9,7 @@ install_tank_docs() {
     [ -e "$bundled_file" ] || continue
     base="$(basename "$bundled_file")"
     rel="${base#docs__}"
-    rel="${rel//__/\/}"
+    rel="$(printf '%s' "$rel" | sed 's#__#/#g')"
     dest_path="$dest_root/$rel"
     mkdir -p "$(dirname "$dest_path")"
     cp "$bundled_file" "$dest_path"

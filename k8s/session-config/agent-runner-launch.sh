@@ -81,7 +81,7 @@ configure_claude
 # Materialize Tank-provided policy docs into /workspace so first-turn
 # directives can reference stable paths independent of cloned repos.
 if [ -f /opt/tank/session-config/install-tank-docs.sh ]; then
-  sh /opt/tank/session-config/install-tank-docs.sh || true
+  sh /opt/tank/session-config/install-tank-docs.sh
 fi
 
 # Optional: install tank-flavored skills into the agent's home dir.
