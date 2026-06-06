@@ -70,6 +70,7 @@ import { WorkspaceShell } from "./WorkspaceShell";
 import { useViewport } from "./useViewport";
 import { MobileTopBar } from "./MobileTopBar";
 import { DesktopOnly } from "./DesktopOnly";
+import { KEYBOARD_SHORTCUTS } from "./keyboardShortcuts";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
   buildAppRouteUrl,
@@ -12619,23 +12620,12 @@ function RunHelpScreen() {
       <section className="run-help-section">
         <h2 className="run-help-title">Keyboard</h2>
         <div className="run-help-list">
-          <div className="run-help-row">
-            <span className="run-help-key">R</span>
-            <span>
-              Refresh the transcript — force-pull any durable messages that
-              haven&apos;t been delivered yet. Works on the chat transcript and
-              the Turns page; click the transcript (or press Tab) to focus it
-              first.
-            </span>
-          </div>
-          <div className="run-help-row">
-            <span className="run-help-key">Home / End</span>
-            <span>Jump to the start or the live tail of the conversation.</span>
-          </div>
-          <div className="run-help-row">
-            <span className="run-help-key">Tab</span>
-            <span>Move focus between the composer and the transcript.</span>
-          </div>
+          {KEYBOARD_SHORTCUTS.map((shortcut) => (
+            <div className="run-help-row" key={shortcut.id}>
+              <span className="run-help-key">{shortcut.keys}</span>
+              <span>{shortcut.description}</span>
+            </div>
+          ))}
         </div>
       </section>
       <section
