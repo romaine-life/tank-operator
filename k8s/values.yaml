@@ -56,6 +56,11 @@ session:
   # every push to main via a `[skip ci]` follow-up commit.
   image: romainecr.azurecr.io/claude-container:claude-114e856fa5489cf8cab61a2693ce213754ebf5e71cb2cea71807ee95c07662dc
   codexImage: romainecr.azurecr.io/codex-container:codex-5357e367c779e978e729c9611128d160f0beb6462dc1f33639947443a0a9a4e6
+  # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
+  # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
+  # antigravity_config credential-mint mode. session-images-build.yml rewrites
+  # this tag suffix on every push to main, same as image/codexImage above.
+  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-368dcce26c3a87586662956f542c9ad8d96bb03ee5db36258bef8bb403110c18
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
