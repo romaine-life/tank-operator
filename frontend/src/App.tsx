@@ -21708,6 +21708,29 @@ function AuthenticatedApp() {
                               </span>
                             </button>
                           )}
+                          {/* Antigravity is login-only for now (no runnable
+                              gui/cli surface yet), so it gets a standalone
+                              credential-mint action rather than a provider
+                              tile. Folds into the provider picker once the
+                              antigravity-runner lands. */}
+                          <button
+                            className="home-quick-action"
+                            onClick={() => createSession("antigravity_config")}
+                            disabled={busy}
+                          >
+                            <ProviderIcon
+                              provider="antigravity"
+                              className="home-quick-icon"
+                            />
+                            <span className="home-quick-main">
+                              <span className="home-quick-title">
+                                {MODE_LABELS["antigravity_config"]}
+                              </span>
+                              <span className="home-quick-sub">
+                                {MODE_HINTS["antigravity_config"]}
+                              </span>
+                            </span>
+                          </button>
                         </div>
                         {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
                           <RepoPicker
