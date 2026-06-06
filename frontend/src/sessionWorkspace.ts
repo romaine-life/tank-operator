@@ -1,10 +1,6 @@
-export const WORKSPACE_FILE_MODES: ReadonlySet<string> = new Set([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-  "antigravity_gui",
-]);
+import { WORKSPACE_FILE_MODES, type SessionMode } from "./sessionModes";
+
+export { WORKSPACE_FILE_MODES } from "./sessionModes";
 
 export interface SessionWorkspaceState {
   mode: string;
@@ -14,7 +10,7 @@ export interface SessionWorkspaceState {
 }
 
 export function sessionModeSupportsWorkspaceFiles(mode: string): boolean {
-  return WORKSPACE_FILE_MODES.has(mode);
+  return WORKSPACE_FILE_MODES.has(mode as SessionMode);
 }
 
 export function sessionContainerAvailable(session: SessionWorkspaceState): boolean {
