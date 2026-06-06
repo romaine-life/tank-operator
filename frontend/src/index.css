@@ -4418,23 +4418,6 @@ button:disabled {
   padding: 0 0.55rem;
 }
 
-.run-turn-view-thinking {
-  display: inline-grid;
-  align-items: center;
-  justify-items: start;
-  width: fit-content;
-  min-width: 10rem;
-  min-height: 4.65rem;
-  border-radius: 0.875rem;
-  border: 1px solid rgba(255, 255, 255, 0.06);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
-  font-size: var(--text-sm);
-  letter-spacing: 0;
-  padding: 0.56rem 0.78rem;
-}
-
 .run-shell-tasks-list {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
