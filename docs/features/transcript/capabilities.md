@@ -93,10 +93,15 @@ Contract impact:
   bounded prefix. The terminal is the last event of a long turn and can never be
   a casualty of a body window.
 - The expansion body paginates: a turn splits into pages sealed at
-  `turnPageEventLimit` (1000) events. The endpoint (`server_turn_activity_v2`)
+  `turnPageEventLimit` (1000) events. The endpoint (`server_turn_activity_v3`)
   returns the page directory and defaults to the last page; `?page=N` selects
   another. Page boundaries are durable `order_key` ranges, so a selected page is
   stable across reload and deep links.
+- The same endpoint returns `turn_context`, a server-projected copy of the
+  initiating durable user message when the turn has one. The dedicated Turns
+  view renders that context above the paged body so a numbered turn route stays
+  oriented on every page; the prompt is not duplicated into `entries`, and
+  canonical message actions remain owned by the main transcript row.
 - The page navigator is an always-present affordance, not a threshold-gated
   control. It lives in the dedicated Turns view (`RunTurnActivityScreen`, the
   surface users open to inspect a turn) as a **Page dropdown** beside the turn

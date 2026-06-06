@@ -2,7 +2,7 @@
 //
 // A long agent turn splits its activity body into pages sealed at the
 // per-turn event threshold (see backend `turnPageEventLimit`). The per-turn
-// /activity endpoint (`server_turn_activity_v2`) returns the page directory
+// /activity endpoint (`server_turn_activity_v3`) returns the page directory
 // (`page`, `page_count`, `pages[]`) and defaults to the last page.
 //
 // This module owns the single rule for how that directory becomes a rendered

@@ -349,7 +349,7 @@ prefix. A turn that accumulates many events — most commonly one that crosses a
 `context.compacted` boundary and keeps running — must still report its durable
 terminal: the terminal is the last event, and a bounded oldest-first per-turn
 read used to drop it, leaving a finished turn rendered as perpetually active.
-The turn activity endpoint (`server_turn_activity_v2`) therefore **paginates**
+The turn activity endpoint (`server_turn_activity_v3`) therefore **paginates**
 the expansion body: a turn splits into pages sealed at `turnPageEventLimit`
 events and at AskUserQuestion boundaries. A `turn.awaiting_input` event starts
 a sequence of semantic `question_set` pages, one per question in that tool
@@ -368,6 +368,11 @@ and to the **last** page otherwise (`?page=N` selects another); the Turns view a
 shows a page selector (disabled at a single-page boundary) and lets the reader
 move between sealed activity pages and question pages. Sealing is a durable
 `order_key`-range concept so deep links and reloads are stable. The
+endpoint also returns `turn_context`, a server-projected copy of the initiating
+durable user message when the turn has one. This context is not an activity
+page entry; it gives `/sessions/{id}/turns/{n}` an orienting prompt header on
+every selected page while the canonical message remains the main transcript row.
+The
 `tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}`
 counter and `TankTurnActiveWithDurableTerminal` alert guard against a regression
 to a window that can't see the terminal.

@@ -4194,6 +4194,22 @@ button:disabled {
   color: #bfdbfe;
 }
 
+.run-turn-view-context {
+  padding: 0 var(--space-3) var(--space-2);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.run-turn-view-context [data-slot="message"][data-owner="activity"] {
+  grid-template-columns: 2.625rem minmax(0, 1fr);
+  max-width: 100%;
+}
+
+.run-turn-view-context [data-slot="message"][data-owner="activity"] .run-transcript-message-content {
+  grid-column: 2;
+  min-width: 0;
+  max-width: 100%;
+}
+
 .run-turn-question-page-head {
   display: flex;
   align-items: baseline;

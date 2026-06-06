@@ -155,12 +155,17 @@ answer; it must not visibly move a rendered row from one surface to the other.
   whose details are already loaded must invalidate that cache and re-read
   `/turns/{id}/activity`; the browser must not synthesize child activity rows
   from the live shell.
+- The dedicated Turns view renders the turn's initiating user message, when the
+  turn has one, as server-projected turn context above the paged activity body.
+  This context is sourced from durable `user_message.created` and is not an
+  activity child row, so it stays visible while the reader moves between
+  activity pages.
 - Turn activity may show a log copy of assistant prose, including prose that
   later becomes the final answer, but that copy is not a second settled
   transcript message.
 - Copy links, unread counts, latest-message state, and fork-from-message actions
   must target the settled transcript projection, not duplicate activity-log
-  copies.
+  copies or the Turns view's context copy of the initiating user message.
 
 ## Failure And Recovery
 
@@ -225,6 +230,10 @@ answer; it must not visibly move a rendered row from one surface to the other.
   `/turns/{id}/activity` without refresh; repeated refresh failures surface a
   retryable Turns detail error and `tank_session_event_client_events_total`
   labels for the failure.
+- Opening a numbered turn route (`/sessions/{id}/turns/{n}`) renders the
+  initiating user message at the top of the Turns view from the server
+  projection. Switching activity pages keeps that same context visible and does
+  not duplicate the human user message inside the activity page body.
 - A completed turn may show the final assistant prose in the main transcript
   while also retaining a log copy in Turn activity, without counting it as two
   transcript messages.

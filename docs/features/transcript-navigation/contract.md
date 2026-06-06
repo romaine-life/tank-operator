@@ -52,14 +52,17 @@ yanking the viewport away from a user reading history.
   question navigation. The preceding activity page gets a compact
   AskUserQuestion invocation marker derived from the same durable event, even
   when that means a marker-only first page. The Turn
-  activity endpoint (`server_turn_activity_v2`) returns the page directory
+  activity endpoint (`server_turn_activity_v3`) returns the page directory
   (`page`, `page_count`, `pages[]`) and accepts `?page=N`. A `needs_input` turn
   defaults to the first unanswered `question_set` page; all other turns default
   to the latest page. The page boundary is a durable `order_key`-range concept,
   so a selected page is stable across reload and deep links. The shell's
   active/terminal status is never a function of which page rendered — it is
   folded from the complete turn so a finished long turn can never render as
-  perpetually active.
+  perpetually active. The same response carries a separate `turn_context`
+  projection for the initiating durable user message when one exists; the
+  context is outside the page body so numbered turn routes remain oriented on
+  every selected page.
 - Copied message links may name rendered timeline IDs, but the server must
   translate them to durable cursors.
 - `sessions.visible` owns sidebar/list membership only. Soft-deleting a session
@@ -111,6 +114,10 @@ yanking the viewport away from a user reading history.
   nothing to navigate to. (The Turns view reads the page-defaulted `/activity`
   endpoint, so without this control a long turn would show only its last page
   there with no way back.)
+- The Turns view shows the selected turn's server-projected initiating message
+  above the activity page body when that turn has a human `user_message.created`
+  event. It must not rediscover that message from the loaded transcript window
+  or treat it as a paged activity entry.
 
 ## Failure And Recovery
 
@@ -196,3 +203,6 @@ yanking the viewport away from a user reading history.
   `frontend/src/turnActivityPager.ts` (tested in `turnActivityPager.test.ts`)
   owns the clamped current page, total page count, and disabled state, blocking
   a regression to a threshold-hidden control.
+- Opening any available numbered turn route shows the initiating user message
+  above the activity page body when the turn has one, and page changes keep that
+  context visible without duplicating it in `entries`.
