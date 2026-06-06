@@ -8878,6 +8878,8 @@ textarea.run-files-viewer-editor:focus {
 
 .run-turn-view-activity-divider {
   flex: 0 0 auto;
+  margin-top: calc(-1 * var(--space-3) - 11px);
+  margin-bottom: calc(var(--space-3) + 11px);
 }
 
 .run-turn-activity-content {
