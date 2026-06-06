@@ -755,6 +755,46 @@ func (s *appServer) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleSetOpenTarget persists the durable per-session sidebar open-target
+// preference (” / 'chat' / 'turns'). ” clears the pin so the frontend's
+// auto-default applies; 'chat'/'turns' pin the main transcript or the Turns
+// view across reloads. Registry-only UI state — no pod annotation patch.
+func (s *appServer) handleSetOpenTarget(w http.ResponseWriter, r *http.Request) {
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "missing session_id")
+		return
+	}
+	var body struct {
+		OpenTarget string `json:"open_target"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	target := strings.TrimSpace(body.OpenTarget)
+	switch target {
+	case "", "chat", "turns":
+	default:
+		writeError(w, http.StatusBadRequest, "invalid open_target")
+		return
+	}
+	owner := user.OwnerEmail()
+	info, err := s.mgr.SetOpenTarget(r.Context(), owner, sessionID, target)
+	switch {
+	case err == nil:
+		writeJSON(w, http.StatusOK, info)
+	case errors.Is(err, sessions.ErrNotFound), errors.Is(err, sessions.ErrNotOwned):
+		writeError(w, http.StatusNotFound, "session not found")
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	}
+}
+
 // handleSetTestState sets the test state annotation.
 func (s *appServer) handleSetTestState(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)

@@ -194,13 +194,15 @@ func (f activityRowFetcher) Get(_ context.Context, _, _ string) (sessionmodel.Se
 }
 
 type activityEventStore struct {
-	unread          int
-	afterOrderKey   string
-	lifecycleEvents []map[string]any
-	terminalTurns   map[string]map[string]any
-	terminalLookups int
-	compactions     int64
-	compactionScans int
+	unread           int
+	afterOrderKey    string
+	lifecycleEvents  []map[string]any
+	terminalTurns    map[string]map[string]any
+	terminalLookups  int
+	compactions      int64
+	compactionScans  int
+	userMessages     int64
+	userMessageScans int
 }
 
 func (s *activityEventStore) Upsert(_ context.Context, _ map[string]any) error {
@@ -251,6 +253,11 @@ func (s *activityEventStore) UnreadOutputCount(_ context.Context, _ string, afte
 func (s *activityEventStore) CountContextCompactions(_ context.Context, _ string) (int64, error) {
 	s.compactionScans++
 	return s.compactions, nil
+}
+
+func (s *activityEventStore) CountUserMessages(_ context.Context, _ string) (int64, error) {
+	s.userMessageScans++
+	return s.userMessages, nil
 }
 
 func mustActivityJSON(t *testing.T, value map[string]any) []byte {
@@ -354,6 +361,69 @@ func TestEmitChatActivityDeltaDeduplicatesRedeliveredCompaction(t *testing.T) {
 	}
 	if metrics.calls != 0 {
 		t.Fatalf("RecordCompaction calls = %d, want 0 on redelivery", metrics.calls)
+	}
+}
+
+func userMessageEmitter(emitter *recordingRowEmitter, events *activityEventStore, priorCount int64) *ChatActivityEmitter {
+	return &ChatActivityEmitter{
+		Writer:     &RowWriter{Emitter: emitter},
+		ChatEvents: events,
+		ReadStates: store.NewStubConversationReadStateStore(),
+		Registry:   staticOwnerResolver{owner: "user@example.com"},
+		Rows: activityRowFetcher{record: sessionmodel.SessionRecord{
+			ID:               "63",
+			Email:            "user@example.com",
+			Scope:            "default",
+			UserMessageCount: priorCount,
+		}},
+		Scope: "default",
+	}
+}
+
+func userMessageCreatedEvent() map[string]any {
+	return map[string]any{
+		"type":       "user_message.created",
+		"session_id": "63",
+	}
+}
+
+// TestEmitChatActivityDeltaRecordsAdvancingUserMessage proves a
+// user_message.created event whose recomputed total exceeds the durable prior
+// writes + publishes the row, and takes the dedicated user-message-count branch
+// rather than the activity-summary unread path.
+func TestEmitChatActivityDeltaRecordsAdvancingUserMessage(t *testing.T) {
+	emitter := &recordingRowEmitter{}
+	events := &activityEventStore{userMessages: 8}
+	e := userMessageEmitter(emitter, events, 7)
+
+	if err := e.EmitChatActivityDelta(context.Background(), userMessageCreatedEvent()); err != nil {
+		t.Fatal(err)
+	}
+	if events.userMessageScans != 1 {
+		t.Fatalf("CountUserMessages calls = %d, want 1", events.userMessageScans)
+	}
+	if emitter.calls != 1 {
+		t.Fatalf("row publishes = %d, want 1 (advancing user-message count must write+publish)", emitter.calls)
+	}
+	if events.afterOrderKey != "" {
+		t.Fatalf("activity unread path ran (afterOrderKey=%q); user-message count must not touch the activity summary", events.afterOrderKey)
+	}
+}
+
+// TestEmitChatActivityDeltaDeduplicatesRedeliveredUserMessage proves an
+// at-least-once redelivery — the recomputed total equals the durable prior — is
+// a no-op: no row publish, keeping redelivered user_message.created events off
+// the row-version cursor.
+func TestEmitChatActivityDeltaDeduplicatesRedeliveredUserMessage(t *testing.T) {
+	emitter := &recordingRowEmitter{}
+	events := &activityEventStore{userMessages: 7}
+	e := userMessageEmitter(emitter, events, 7)
+
+	if err := e.EmitChatActivityDelta(context.Background(), userMessageCreatedEvent()); err != nil {
+		t.Fatal(err)
+	}
+	if emitter.calls != 0 {
+		t.Fatalf("row publishes = %d, want 0 (redelivered user_message.created at the same total must be a no-op)", emitter.calls)
 	}
 }
 

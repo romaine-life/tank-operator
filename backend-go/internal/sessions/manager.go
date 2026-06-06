@@ -52,6 +52,7 @@ type SessionRegistry interface {
 	NextSessionID(ctx context.Context) (string, error)
 	Upsert(ctx context.Context, record sessionmodel.SessionRecord) error
 	SetName(ctx context.Context, email, sessionID string, name *string) error
+	SetOpenTarget(ctx context.Context, email, sessionID, target string) error
 	SetBugLabel(ctx context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error
 	SetBugLabels(ctx context.Context, email, sessionID string, labels []*sessionmodel.SessionBugLabel) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
@@ -651,6 +652,26 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 		// Persist the resolved NON-NULL name; clearing writes the default, not null.
 		if regErr := m.registry.SetName(ctx, owner, sessionID, &resolvedName); regErr != nil {
 			slog.Warn("set-name registry update failed",
+				"session_id", sessionID, "owner", owner, "error", regErr)
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil {
+		return registered, nil
+	}
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// SetOpenTarget persists the durable per-session sidebar open-target preference
+// (” / 'chat' / 'turns'). Like SetBugLabel it is registry-only UI state, so no
+// pod annotation is patched. Validation lives in the HTTP handler; the manager
+// just persists the value, publishes the updated row, and returns the refreshed
+// Info the same way SetName's tail does.
+func (m *Manager) SetOpenTarget(ctx context.Context, owner, sessionID, target string) (Info, error) {
+	if m.registry != nil {
+		if regErr := m.registry.SetOpenTarget(ctx, owner, sessionID, target); regErr != nil {
+			slog.Warn("set-open-target registry update failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
 	}
