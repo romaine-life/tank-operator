@@ -1,5 +1,5 @@
 type ProviderIconProps = {
-  provider: "anthropic" | "codex" | "pi";
+  provider: "anthropic" | "codex" | "pi" | "antigravity";
   className?: string;
 };
 
@@ -16,6 +16,12 @@ const ICONS: Record<
     viewBox: "0 0 24 24",
     fill: "currentColor",
     path: "M4 5h9.2c2.9 0 5 1.9 5 4.7s-2.1 4.7-5 4.7H8.4V20H4V5Zm4.4 6h4.2c.8 0 1.3-.5 1.3-1.3s-.5-1.3-1.3-1.3H8.4V11ZM17.4 14.9h2.9V20h-2.9v-5.1Z",
+  },
+  // Antigravity / Gemini-Ultra: a four-point sparkle, the Gemini brand mark.
+  antigravity: {
+    viewBox: "0 0 24 24",
+    fill: "hsl(223, 77%, 58%)",
+    path: "M12 1c.4 5.2 5.8 10.6 11 11-5.2.4-10.6 5.8-11 11-.4-5.2-5.8-10.6-11-11 5.2-.4 10.6-5.8 11-11Z",
   },
 };
 

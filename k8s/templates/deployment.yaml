@@ -53,6 +53,8 @@ spec:
               value: {{ .Values.session.image | quote }}
             - name: CODEX_SESSION_IMAGE
               value: {{ .Values.session.codexImage | quote }}
+            - name: ANTIGRAVITY_SESSION_IMAGE
+              value: {{ .Values.session.antigravityImage | quote }}
             - name: SESSION_SERVICE_ACCOUNT
               value: {{ include "tank-operator.sessionServiceAccount" . | quote }}
             - name: SESSION_CONFIGMAP

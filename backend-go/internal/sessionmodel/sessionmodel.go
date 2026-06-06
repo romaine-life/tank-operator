@@ -20,15 +20,21 @@ import (
 var jsonUnmarshal = json.Unmarshal
 
 const (
-	APIKeyMode            = "api_key"
-	ClaudeCLIMode         = "claude_cli"
-	ClaudeGUIMode         = "claude_gui"
-	ConfigMode            = "config"
-	CodexConfigMode       = "codex_config"
-	CodexCLIMode          = "codex_cli"
-	CodexGUIMode          = "codex_gui"
-	CodexExecGUIMode      = "codex_exec_gui"
-	CodexAppServerMode    = "codex_app_server"
+	APIKeyMode         = "api_key"
+	ClaudeCLIMode      = "claude_cli"
+	ClaudeGUIMode      = "claude_gui"
+	ConfigMode         = "config"
+	CodexConfigMode    = "codex_config"
+	CodexCLIMode       = "codex_cli"
+	CodexGUIMode       = "codex_gui"
+	CodexExecGUIMode   = "codex_exec_gui"
+	CodexAppServerMode = "codex_app_server"
+	// AntigravityConfigMode is the credential-mint terminal mode for
+	// Antigravity (Gemini-Ultra via Google's Antigravity CLI). The user runs
+	// `agy` in the terminal, completes the Google/Ultra login, and the
+	// save-credentials harvest writes the resulting OAuth token file to KV.
+	// Runs on the glibc antigravity-container image (agy + sandbox-agent).
+	AntigravityConfigMode = "antigravity_config"
 	DefaultSessionMode    = ClaudeGUIMode
 	MaxNameLength         = 80
 	SessionsNamespace     = "tank-operator-sessions"
@@ -68,15 +74,16 @@ var (
 	ErrSessionOrderConflict = errors.New("session order conflict")
 
 	sessionModes = map[string]struct{}{
-		APIKeyMode:         {},
-		ClaudeCLIMode:      {},
-		ClaudeGUIMode:      {},
-		ConfigMode:         {},
-		CodexConfigMode:    {},
-		CodexCLIMode:       {},
-		CodexGUIMode:       {},
-		CodexExecGUIMode:   {},
-		CodexAppServerMode: {},
+		APIKeyMode:            {},
+		ClaudeCLIMode:         {},
+		ClaudeGUIMode:         {},
+		ConfigMode:            {},
+		CodexConfigMode:       {},
+		CodexCLIMode:          {},
+		CodexGUIMode:          {},
+		CodexExecGUIMode:      {},
+		CodexAppServerMode:    {},
+		AntigravityConfigMode: {},
 	}
 
 	sessionCapabilities = map[string]struct{}{
@@ -213,11 +220,14 @@ var noClaudeHijackModes = map[string]bool{
 	CodexGUIMode:       true,
 	CodexExecGUIMode:   true,
 	CodexAppServerMode: true,
+	// Antigravity talks to Google directly; no Claude OAuth-gateway aliases.
+	AntigravityConfigMode: true,
 }
 
 type ManifestOptions struct {
 	SessionImage            string
 	CodexSessionImage       string
+	AntigravitySessionImage string
 	SessionsNamespace       string
 	SessionScope            string
 	SessionServiceAccount   string
@@ -468,6 +478,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	argoTrackingID := opts.ArgoCDTrackingApp + ":/Pod:" + opts.SessionsNamespace + "/" + podName
 
 	sessionImage := opts.SessionImage
+	if mode == AntigravityConfigMode {
+		sessionImage = opts.AntigravitySessionImage
+	}
 	if IsCodexMode(mode) {
 		sessionImage = opts.CodexSessionImage
 	}
@@ -746,25 +759,31 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		)
 	}
 
-	containers := []any{
-		map[string]any{
-			"name":            "mcp-auth-proxy",
-			"image":           sessionImage,
-			"imagePullPolicy": "Always",
-			"command":         []any{"mcp-auth-proxy"},
-			"env":             mcpProxyEnv,
-			// The metrics port is exposed as a named container port so the
-			// k8s/templates/podmonitor-sessions.yaml PodMonitor can scrape
-			// it by name without hard-coding numbers. Listens on 0.0.0.0;
-			// the proxy's MCP listeners stay on 127.0.0.1.
-			"ports": []any{
-				map[string]any{"name": "metrics", "containerPort": MCPAuthProxyMetricsPort},
-			},
-			"volumeMounts": mcpProxyVolumeMounts,
-			"resources":    mcpAuthProxyResources(),
+	mcpAuthProxyContainer := map[string]any{
+		"name":            "mcp-auth-proxy",
+		"image":           sessionImage,
+		"imagePullPolicy": "Always",
+		"command":         []any{"mcp-auth-proxy"},
+		"env":             mcpProxyEnv,
+		// The metrics port is exposed as a named container port so the
+		// k8s/templates/podmonitor-sessions.yaml PodMonitor can scrape
+		// it by name without hard-coding numbers. Listens on 0.0.0.0;
+		// the proxy's MCP listeners stay on 127.0.0.1.
+		"ports": []any{
+			map[string]any{"name": "metrics", "containerPort": MCPAuthProxyMetricsPort},
 		},
-		claudeContainer,
+		"volumeMounts": mcpProxyVolumeMounts,
+		"resources":    mcpAuthProxyResources(),
 	}
+	containers := []any{}
+	// The glibc antigravity-container image does not bake the (Python)
+	// mcp-auth-proxy binary, and the antigravity_config credential-mint mode
+	// is a terminal login that needs no MCP gateway. Skip the sidecar there;
+	// antigravity_gui will bake mcp-auth-proxy into its image and restore it.
+	if mode != AntigravityConfigMode {
+		containers = append(containers, mcpAuthProxyContainer)
+	}
+	containers = append(containers, claudeContainer)
 
 	// SDK agent-runner sidecar - claude_gui only. Shares /workspace
 	// with the claude container via the emptyDir above so the agent's
