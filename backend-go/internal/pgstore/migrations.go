@@ -1632,6 +1632,24 @@ var schemaMigrations = []migration{
 		WHERE name IS NULL OR btrim(name) = '';
 		ALTER TABLE sessions ALTER COLUMN name SET NOT NULL;
 	END $$`},
+
+	// user_message_count: durable per-session count of user_message.created
+	// events (one per human back-and-forth). Backs the frontend's
+	// auto-default-to-Turns sidebar gate (frontend/src/autoTurnsDefault.ts) —
+	// once a session crosses the threshold, opening it from the sidebar lands on
+	// the latest turn instead of a long main transcript. Mirrors compaction_count
+	// (0125/0126): the chat-activity emitter recomputes it with a bounded COUNT
+	// over the partial index below on each user_message.created upsert
+	// (recompute-and-compare, so an at-least-once redelivery is a no-op rather
+	// than a double-count). The index is keyed on (tank_session_id) for the
+	// per-session count — distinct from the (created_at)-keyed
+	// session_events_user_message_created_at index (0102) that the time-windowed
+	// stranded-launch sweep uses.
+	{ID: "0135", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS user_message_count bigint NOT NULL DEFAULT 0`},
+	{ID: "0136", SQL: `CREATE INDEX IF NOT EXISTS session_events_user_message_by_session
+		ON session_events (tank_session_id)
+		WHERE event_type = 'user_message.created'`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

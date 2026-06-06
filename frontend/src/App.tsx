@@ -43,6 +43,7 @@ import {
   type TurnActivityPageInfo,
   type TurnActivityPagerState,
 } from "./turnActivityPager";
+import { shouldAutoDefaultToTurns } from "./autoTurnsDefault";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer } from "./ChatComposer";
@@ -756,6 +757,10 @@ interface Session {
   // the session_events ledger onto the row. The composer renders it as the
   // compaction metric; absent/0 means the session has not compacted yet.
   compaction_count?: number;
+  // Durable count of user_message.created events (one per human back-and-forth),
+  // projected from the session_events ledger onto the row. Drives the
+  // auto-default-to-Turns sidebar gate; absent/0 means too few exchanges yet.
+  user_message_count?: number;
   agent_avatar_id?: string | null;
   system_avatar_id?: string | null;
   sidebar_position?: number;
@@ -19764,6 +19769,7 @@ function AuthenticatedApp() {
       provider_rate_limit_observed_at:
         row.provider_rate_limit_observed_at ?? null,
       compaction_count: row.compaction_count ?? 0,
+      user_message_count: row.user_message_count ?? 0,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
       row_version: row.row_version,
@@ -19839,6 +19845,11 @@ function AuthenticatedApp() {
         typeof raw.compaction_count === "number" &&
         Number.isFinite(raw.compaction_count)
           ? Math.max(0, Math.floor(raw.compaction_count))
+          : undefined,
+      user_message_count:
+        typeof raw.user_message_count === "number" &&
+        Number.isFinite(raw.user_message_count)
+          ? Math.max(0, Math.floor(raw.user_message_count))
           : undefined,
       agent_avatar_id:
         typeof raw.agent_avatar_id === "string"
@@ -20505,7 +20516,20 @@ function AuthenticatedApp() {
   }
 
   function sessionOpenTarget(id: string): SessionOpenTarget {
-    return sessionOpenTargets[id] ?? "chat";
+    // A manual choice from the session tab menu (sessionOpenTargets, written
+    // only by setSessionOpenTarget) always wins. Otherwise auto-default a
+    // substantial session to the Turns view: past a handful of real
+    // back-and-forths, landing on the latest turn beats landing in a long main
+    // transcript. The signal is the durable per-session user_message_count
+    // carried on the row; the threshold gate lives in autoTurnsDefault.ts. This
+    // only changes where a *click* lands; it never moves an already-open pane.
+    const manual = sessionOpenTargets[id];
+    if (manual) return manual;
+    const session = sessions.find((s) => s.id === id);
+    if (session && shouldAutoDefaultToTurns(session.user_message_count)) {
+      return "turns";
+    }
+    return "chat";
   }
 
   function setSessionOpenTarget(id: string, target: SessionOpenTarget) {

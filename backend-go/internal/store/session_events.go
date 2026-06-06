@@ -63,6 +63,15 @@ type SessionEventStore interface {
 	// Bounded and indexed by the session_events_context_compacted partial index
 	// so it stays cheap regardless of total ledger size.
 	CountContextCompactions(ctx context.Context, tankSessionID string) (int64, error)
+	// CountUserMessages returns the total number of durable user_message.created
+	// events recorded for a session across its whole history — one per human
+	// back-and-forth submission. It backs the frontend auto-default-to-Turns
+	// sidebar gate and is recomputed by the chat-activity emitter on each
+	// user_message.created upsert. Bounded and indexed by the
+	// session_events_user_message_by_session partial index so it stays cheap
+	// regardless of total ledger size. Background-task wake continuations do not
+	// write user_message.created, so they are correctly excluded.
+	CountUserMessages(ctx context.Context, tankSessionID string) (int64, error)
 	// FindStrandedLaunchTurns returns deferred-launch turns that were durably
 	// recorded (a lone user_message.created) but never dispatched: their
 	// turn_id carries no other event of any kind. This is the cross-session
@@ -678,6 +687,32 @@ func (s *postgresSessionEventStore) CountContextCompactions(ctx context.Context,
 	return n, nil
 }
 
+// CountUserMessages counts every durable user_message.created event for a
+// session — one per human back-and-forth. Served by the
+// session_events_user_message_by_session partial index
+// (event_type = 'user_message.created'), so it is an indexed range scan over
+// only user-message rows, bounded regardless of how large the session's ledger
+// has grown. The chat-activity emitter calls this on each user_message.created
+// upsert to refresh the durable sessions.user_message_count projection; because
+// it counts an append-only ledger, the result is monotonic and a redelivered
+// event recomputes the same value. Background-task wake continuations carry
+// their prompt on turn.submitted, not user_message.created, so they are excluded
+// here exactly as the "user back-and-forth" semantics require.
+func (s *postgresSessionEventStore) CountUserMessages(ctx context.Context, tankSessionID string) (int64, error) {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	const q = `
+		SELECT count(*)
+		FROM session_events
+		WHERE tank_session_id = $1
+			AND event_type = 'user_message.created'
+	`
+	var n int64
+	if err := s.pool.QueryRow(ctx, q, storageKey).Scan(&n); err != nil {
+		return 0, err
+	}
+	return n, nil
+}
+
 // sessionEventPageFromAscendingScan packages a forward-walk page. The caller
 // passed an ascending slice with one extra row (`limit + 1`) when `HasMore`
 // is true. FoundOldest is true when the page starts at the very head of the
@@ -796,6 +831,10 @@ func (StubSessionEventStore) UnreadOutputCount(_ context.Context, _, _ string) (
 }
 
 func (StubSessionEventStore) CountContextCompactions(_ context.Context, _ string) (int64, error) {
+	return 0, nil
+}
+
+func (StubSessionEventStore) CountUserMessages(_ context.Context, _ string) (int64, error) {
 	return 0, nil
 }
 

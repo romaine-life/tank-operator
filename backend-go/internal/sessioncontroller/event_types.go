@@ -53,4 +53,11 @@ const (
 	// wire shape; deriveRowColumnChanges maps it to the compaction_count
 	// column. The payload carries the recomputed total under "compaction_count".
 	EventTypeCompactionChanged = "session.compaction_changed"
+
+	// Durable user-message-count refresh written by the ChatActivityEmitter when
+	// a user_message.created event advances a session's back-and-forth total.
+	// Like EventTypeCompactionChanged this is an in-process descriptor, not a
+	// wire shape; deriveRowColumnChanges maps it to the user_message_count
+	// column. The payload carries the recomputed total under "user_message_count".
+	EventTypeUserMessageCountChanged = "session.user_message_count_changed"
 )

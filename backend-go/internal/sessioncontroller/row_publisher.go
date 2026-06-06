@@ -157,6 +157,7 @@ type rowWireShape struct {
 	ProviderRateLimitInfo          map[string]any                  `json:"provider_rate_limit_info,omitempty"`
 	ProviderRateLimitObservedAt    string                          `json:"provider_rate_limit_observed_at,omitempty"`
 	CompactionCount                int64                           `json:"compaction_count,omitempty"`
+	UserMessageCount               int64                           `json:"user_message_count,omitempty"`
 	AgentAvatarID                  string                          `json:"agent_avatar_id,omitempty"`
 	SystemAvatarID                 string                          `json:"system_avatar_id,omitempty"`
 	SidebarPosition                int64                           `json:"sidebar_position"`
@@ -215,6 +216,7 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			ProviderRateLimitInfo:          record.ProviderRateLimitInfo,
 			ProviderRateLimitObservedAt:    record.ProviderRateLimitObservedAt,
 			CompactionCount:                record.CompactionCount,
+			UserMessageCount:               record.UserMessageCount,
 			AgentAvatarID:                  record.AgentAvatarID,
 			SystemAvatarID:                 record.SystemAvatarID,
 			SidebarPosition:                record.SidebarPosition,

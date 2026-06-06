@@ -102,6 +102,15 @@ func (noopLifecycleEmitterMetrics) RecordCompaction(_, _ string)                
 // on a dedicated branch that refreshes the durable compaction count.
 const contextCompactedEventType = "context.compacted"
 
+// userMessageCreatedEventType is the durable Tank event written once per human
+// back-and-forth submission. Like context.compacted it is intentionally NOT in
+// sessionactivity.LifecycleChatEventTypes (it must not perturb run status,
+// active turn, or unread state), so the emitter handles it on a dedicated branch
+// that refreshes the durable per-session user-message count. Background-task
+// wake continuations carry their prompt on turn.submitted, not
+// user_message.created, so they never advance this count.
+const userMessageCreatedEventType = "user_message.created"
+
 // activityErrorReason picks the label for
 // LifecycleEmitterMetrics.RecordActivityErrorTransition. Pod-state
 // failures take precedence (a Failed pod is the most-severe cause and
@@ -142,7 +151,8 @@ func (e *ChatActivityEmitter) EmitChatActivityDelta(ctx context.Context, event m
 	}
 	eventType, _ := event["type"].(string)
 	isCompaction := eventType == contextCompactedEventType
-	if !isCompaction && !sessionactivity.IsLifecycleChatEventType(eventType) {
+	isUserMessage := eventType == userMessageCreatedEventType
+	if !isCompaction && !isUserMessage && !sessionactivity.IsLifecycleChatEventType(eventType) {
 		return nil
 	}
 	storageKey, _ := event["tank_session_id"].(string)
@@ -169,6 +179,9 @@ func (e *ChatActivityEmitter) EmitChatActivityDelta(ctx context.Context, event m
 	}
 	if isCompaction {
 		return e.refreshCompactionCount(ctx, owner, publicID, event)
+	}
+	if isUserMessage {
+		return e.refreshUserMessageCount(ctx, owner, publicID)
 	}
 	return e.RefreshSessionActivity(ctx, owner, publicID)
 }
@@ -230,6 +243,69 @@ func (e *ChatActivityEmitter) refreshCompactionCount(ctx context.Context, owner,
 	metrics.RecordCompaction(compactionProviderLabel(event), compactionTriggerLabel(event))
 	if outcome == TransitionPublishFailed {
 		slog.Warn("chat-activity emitter: compaction row committed but publish failed",
+			"session_id", publicID,
+			"owner", owner,
+			"scope", e.Scope,
+		)
+	}
+	return nil
+}
+
+// refreshUserMessageCount recomputes the durable per-session user-message count
+// (one per human back-and-forth) from the append-only session_events ledger and
+// writes it onto the sessions row when it advances. user_message.created is
+// delivered at-least-once; recompute-and-compare makes a redelivery a no-op — no
+// row_version churn and no rewrite. The exact per-session total always lives in
+// the durable user_message_count column, which the frontend's
+// auto-default-to-Turns sidebar gate reads. Mirrors refreshCompactionCount but
+// emits no metric: the durable column is the observable, and a per-message
+// counter would be high-churn / low-signal.
+func (e *ChatActivityEmitter) refreshUserMessageCount(ctx context.Context, owner, publicID string) error {
+	metrics := e.Metrics
+	if metrics == nil {
+		metrics = noopLifecycleEmitterMetrics{}
+	}
+	if e.ChatEvents == nil || e.Writer == nil {
+		return nil
+	}
+	count, err := e.ChatEvents.CountUserMessages(ctx, publicID)
+	if err != nil {
+		metrics.RecordActivityFailure()
+		return fmt.Errorf("chat-activity emitter: count user messages for %q: %w", publicID, err)
+	}
+	// Compare against the durable prior so an at-least-once redelivery that
+	// recomputes the same total neither bumps row_version nor rewrites the row.
+	// A missing row means the session was deleted mid-flight.
+	prior := int64(-1)
+	if e.Rows != nil {
+		record, ok, rErr := e.Rows.Get(ctx, owner, publicID)
+		if rErr != nil {
+			metrics.RecordActivityFailure()
+			return fmt.Errorf("chat-activity emitter: read row for user-message count %q: %w", publicID, rErr)
+		}
+		if !ok {
+			return nil
+		}
+		prior = record.UserMessageCount
+	}
+	if prior >= 0 && count <= prior {
+		return nil
+	}
+	transition := Event{
+		Email:        owner,
+		SessionScope: e.Scope,
+		SessionID:    publicID,
+		Type:         EventTypeUserMessageCountChanged,
+		Payload:      map[string]any{"user_message_count": count},
+		OccurredAt:   time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	outcome, err := e.Writer.RecordTransition(ctx, transition)
+	if err != nil {
+		metrics.RecordActivityFailure()
+		return fmt.Errorf("chat-activity emitter: record user-message-count transition for %q: %w", publicID, err)
+	}
+	if outcome == TransitionPublishFailed {
+		slog.Warn("chat-activity emitter: user-message-count row committed but publish failed",
 			"session_id", publicID,
 			"owner", owner,
 			"scope", e.Scope,

@@ -107,6 +107,11 @@ export interface SessionRow {
   // row from the session_events ledger. Powers the composer's compaction metric;
   // stable across reload and identical in a fresh tab, like the window above.
   compaction_count?: number;
+  // Durable per-session count of user_message.created events — one per human
+  // back-and-forth — projected onto the row from the session_events ledger.
+  // Powers the auto-default-to-Turns sidebar gate (autoTurnsDefault.ts); stable
+  // across reload and identical in a fresh tab, like compaction_count above.
+  user_message_count?: number;
   agent_avatar_id?: string;
   system_avatar_id?: string;
   // Durable user-facing order for the sidebar. Larger values render
@@ -556,6 +561,8 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       provider_rate_limit_observed_at:
         stringField(rowRaw, "provider_rate_limit_observed_at") ?? undefined,
       compaction_count: nonNegativeNumberField(rowRaw, "compaction_count") ?? undefined,
+      user_message_count:
+        nonNegativeNumberField(rowRaw, "user_message_count") ?? undefined,
       agent_avatar_id: stringField(rowRaw, "agent_avatar_id") ?? undefined,
       system_avatar_id: stringField(rowRaw, "system_avatar_id") ?? undefined,
       sidebar_position: sidebarPosition,

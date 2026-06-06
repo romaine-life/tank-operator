@@ -169,6 +169,17 @@ type SessionRecord struct {
 	// window uses). Monotonic: it only ever advances over a session's life.
 	CompactionCount int64
 
+	// UserMessageCount is the durable count of user_message.created events the
+	// session has recorded — one per human back-and-forth submission. Like
+	// CompactionCount it is a projection over the append-only session_events
+	// ledger (the chat-activity emitter recomputes it on each
+	// user_message.created upsert), surfaced on the row so the frontend's
+	// auto-default-to-Turns sidebar gate hydrates from durable row metadata,
+	// stable across reload and identical in a fresh tab. Monotonic: it only ever
+	// advances. Background-task wake continuations carry their prompt on
+	// turn.submitted, not user_message.created, so they are excluded.
+	UserMessageCount int64
+
 	// Avatar IDs are assigned by the backend from a durable shuffled deck.
 	// Visible production rows must have an agent avatar id before publication.
 	// Empty values are legacy/incomplete state; clients render them as missing
