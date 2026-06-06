@@ -3834,6 +3834,24 @@ button:disabled {
   user-select: none;
 }
 
+/* Session-data inline rename: the visible (non-keyboard) path for renaming,
+   landing point of the breadcrumb name crumb. F2 still renames in the title. */
+.run-session-data-name-input {
+  font: inherit;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.5rem;
+  min-width: 12rem;
+  max-width: 100%;
+}
+.run-session-data-name-error {
+  color: var(--text-danger, #f87171);
+  font-size: var(--text-sm);
+  margin-top: 0.35rem;
+}
+
 .run-header-name-input {
   background: transparent;
   border: 1px solid var(--gray-700);

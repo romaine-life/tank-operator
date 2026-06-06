@@ -7815,12 +7815,108 @@ function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
   }
 }
 
+function SessionNameCard({
+  name,
+  onRename,
+  readOnly,
+}: {
+  name: string;
+  onRename?: (next: string) => Promise<void>;
+  readOnly?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const begin = () => {
+    setValue(name);
+    setError(null);
+    setEditing(true);
+  };
+  const cancel = () => {
+    setEditing(false);
+    setError(null);
+  };
+  const commit = async () => {
+    const trimmed = value.trim();
+    if (!onRename || trimmed.length === 0 || trimmed === name.trim()) {
+      cancel();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await onRename(trimmed);
+      setEditing(false);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="run-session-data-card is-name">
+      <div className="run-session-data-card-top">
+        <span className="run-session-data-card-main">
+          <span className="run-session-data-card-label">Name</span>
+          {editing ? (
+            <input
+              className="run-session-data-name-input"
+              aria-label="Session name"
+              autoFocus
+              value={value}
+              disabled={busy}
+              maxLength={80}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void commit();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancel();
+                }
+              }}
+              onBlur={() => void commit()}
+            />
+          ) : (
+            <span className="run-session-data-card-detail">{name}</span>
+          )}
+        </span>
+        {readOnly ? (
+          <span className="run-session-data-readonly">Read-only session</span>
+        ) : editing ? (
+          <button
+            type="button"
+            className="run-session-data-action"
+            disabled={busy}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void commit()}
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={begin}
+          >
+            Rename
+          </button>
+        )}
+      </div>
+      {error && <div className="run-session-data-name-error">{error}</div>}
+    </div>
+  );
+}
+
 function SessionDataScreen({
   rows,
   session,
   requestPath,
   onBugLabelSave,
   onBugLabelsSave,
+  onRename,
   readOnly,
 }: {
   rows: SessionDataStatusRow[];
@@ -7828,6 +7924,7 @@ function SessionDataScreen({
   requestPath: (path: string) => string;
   onBugLabelSave: (name: string | null) => Promise<void>;
   onBugLabelsSave: (names: string[]) => Promise<void>;
+  onRename?: (next: string) => Promise<void>;
   readOnly?: boolean;
 }) {
   const activeCount = rows.filter((row) => row.tone !== "muted").length;
@@ -7855,6 +7952,11 @@ function SessionDataScreen({
             {activeCount}/{rows.length} active
           </span>
         </div>
+        <SessionNameCard
+          name={session.name}
+          onRename={onRename}
+          readOnly={readOnly}
+        />
         <div
           className="run-session-data-page-list"
           aria-label="Session data status"
@@ -17988,6 +18090,24 @@ function ChatPane({
                 requestPath={scopedSessionPathForPane}
                 onBugLabelSave={saveSessionBugLabel}
                 onBugLabelsSave={saveSessionBugLabels}
+                onRename={
+                  readOnly
+                    ? undefined
+                    : async (next) => {
+                        const res = await authedFetch(
+                          `/api/sessions/${session.id}`,
+                          {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ name: next }),
+                          },
+                        );
+                        if (!res.ok)
+                          throw new Error(`rename failed: ${res.status}`);
+                        const updated = normalizeSession(await res.json());
+                        onSessionPatch(session.id, { name: updated.name });
+                      }
+                }
                 readOnly={readOnly}
               />
             ) : activeTab === "settings" ? (
