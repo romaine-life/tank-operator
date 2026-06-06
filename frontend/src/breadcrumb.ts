@@ -1,0 +1,108 @@
+import { buildSessionRouteUrl, type SessionRouteTab } from "./appRoutes";
+
+// One breadcrumb segment AFTER the session-name crumb. The name crumb (which
+// links to the session-data root) is owned by the title chrome; this module owns
+// the section/turn/page trail so the derivation can be unit-tested without a DOM.
+export type BreadcrumbCrumb = {
+  key: string;
+  label: string;
+  // Navigation target, or null for a structural, non-navigable label
+  // ("pages", "files") — see also `current`.
+  href: string | null;
+  // The current location's leaf: rendered as a non-interactive marker even when
+  // it has a conceptual href, so a crumb never links to where you already are.
+  current: boolean;
+};
+
+// The in-session location the trail reflects, bubbled up from the visible pane.
+export type BreadcrumbLocation = {
+  tab: string;
+  turnNumber: number | null;
+  pageNumber: number | null;
+  staticPath: string | null;
+  turnUnavailable: boolean;
+};
+
+// Pure derivation of the breadcrumb trail for a given location. Climb-only:
+// ancestors are links, the leaf is `current`. Returns [] for the session-data
+// root (the name crumb is its own leaf) and for app-level / not-yet-routed tabs.
+export function breadcrumbTrail(
+  sessionId: string,
+  location: BreadcrumbLocation,
+  currentHref: string,
+): BreadcrumbCrumb[] {
+  const url = (
+    tab: SessionRouteTab,
+    turnNumber: number | null,
+    pageNumber: number | null,
+    staticPath: string | null,
+  ) =>
+    buildSessionRouteUrl(
+      currentHref,
+      sessionId,
+      tab,
+      turnNumber,
+      staticPath,
+      pageNumber,
+    );
+
+  if (location.tab === "chat") {
+    return [
+      {
+        key: "section",
+        label: "main transcript",
+        href: url("chat", null, null, null),
+        current: true,
+      },
+    ];
+  }
+
+  if (location.tab === "turns") {
+    const section: BreadcrumbCrumb = {
+      key: "section",
+      label: "turns",
+      href: url("turns", null, null, null),
+      current: false,
+    };
+    if (location.turnUnavailable) {
+      return [
+        section,
+        { key: "turn", label: "unavailable", href: null, current: true },
+      ];
+    }
+    const hasPage = location.pageNumber != null;
+    const crumbs: BreadcrumbCrumb[] = [
+      section,
+      {
+        key: "turn",
+        label: location.turnNumber != null ? String(location.turnNumber) : "current",
+        href: url("turns", location.turnNumber, null, null),
+        current: !hasPage,
+      },
+    ];
+    if (hasPage) {
+      crumbs.push({ key: "pages", label: "pages", href: null, current: false });
+      crumbs.push({
+        key: "page",
+        label: String(location.pageNumber),
+        href: url("turns", location.turnNumber, location.pageNumber, null),
+        current: true,
+      });
+    }
+    return crumbs;
+  }
+
+  if (location.tab === "static" && location.staticPath) {
+    return [
+      { key: "files", label: "files", href: null, current: false },
+      {
+        key: "path",
+        label: location.staticPath,
+        href: url("static", null, null, location.staticPath),
+        current: true,
+      },
+    ];
+  }
+
+  return [];
+}

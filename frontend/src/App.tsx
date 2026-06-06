@@ -71,6 +71,7 @@ import { useViewport } from "./useViewport";
 import { MobileTopBar } from "./MobileTopBar";
 import { DesktopOnly } from "./DesktopOnly";
 import { KEYBOARD_SHORTCUTS } from "./keyboardShortcuts";
+import { breadcrumbTrail } from "./breadcrumb";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
   buildAppRouteUrl,
@@ -1839,25 +1840,7 @@ function BreadcrumbSep() {
   );
 }
 
-function BreadcrumbLink({
-  href,
-  label,
-  current,
-}: {
-  href: string;
-  label: string;
-  current?: boolean;
-}) {
-  if (current) {
-    return (
-      <span
-        className="workspace-crumb workspace-crumb-current"
-        aria-current="page"
-      >
-        {label}
-      </span>
-    );
-  }
+function BreadcrumbLink({ href, label }: { href: string; label: string }) {
   return (
     <a
       className="workspace-crumb"
@@ -1885,96 +1868,33 @@ function WorkspaceBreadcrumbTrail({
   sessionId: string;
   location: SessionLocation;
 }) {
-  const url = (
-    tab: SessionRouteTab,
-    turnNumber: number | null,
-    pageNumber: number | null,
-    staticPath: string | null,
-  ) =>
-    buildSessionRouteUrl(
-      window.location.href,
-      sessionId,
-      tab,
-      turnNumber,
-      staticPath,
-      pageNumber,
-    );
-  if (location.tab === "chat") {
-    return (
-      <>
-        <BreadcrumbSep />
-        <BreadcrumbLink
-          href={url("chat", null, null, null)}
-          label="main transcript"
-          current
-        />
-      </>
-    );
-  }
-  if (location.tab === "turns") {
-    if (location.turnUnavailable) {
-      return (
-        <>
-          <BreadcrumbSep />
-          <BreadcrumbLink href={url("turns", null, null, null)} label="turns" />
-          <BreadcrumbSep />
-          <span
-            className="workspace-crumb workspace-crumb-current"
-            aria-current="page"
-          >
-            unavailable
+  // Logic lives in the pure, unit-tested breadcrumbTrail; this only maps the
+  // derived crumbs to chrome (link / current marker / structural label).
+  return (
+    <>
+      {breadcrumbTrail(sessionId, location, window.location.href).map(
+        (crumb) => (
+          <span className="workspace-crumb-group" key={crumb.key}>
+            <BreadcrumbSep />
+            {crumb.current ? (
+              <span
+                className="workspace-crumb workspace-crumb-current"
+                aria-current="page"
+              >
+                {crumb.label}
+              </span>
+            ) : crumb.href ? (
+              <BreadcrumbLink href={crumb.href} label={crumb.label} />
+            ) : (
+              <span className="workspace-crumb workspace-crumb-label">
+                {crumb.label}
+              </span>
+            )}
           </span>
-        </>
-      );
-    }
-    const turnLabel =
-      location.turnNumber != null ? String(location.turnNumber) : "current";
-    const hasPage = location.pageNumber != null;
-    return (
-      <>
-        <BreadcrumbSep />
-        <BreadcrumbLink href={url("turns", null, null, null)} label="turns" />
-        <BreadcrumbSep />
-        <BreadcrumbLink
-          href={url("turns", location.turnNumber, null, null)}
-          label={turnLabel}
-          current={!hasPage}
-        />
-        {hasPage && (
-          <>
-            <BreadcrumbSep />
-            <span className="workspace-crumb workspace-crumb-label">pages</span>
-            <BreadcrumbSep />
-            <BreadcrumbLink
-              href={url(
-                "turns",
-                location.turnNumber,
-                location.pageNumber,
-                null,
-              )}
-              label={String(location.pageNumber)}
-              current
-            />
-          </>
-        )}
-      </>
-    );
-  }
-  if (location.tab === "static" && location.staticPath) {
-    return (
-      <>
-        <BreadcrumbSep />
-        <span className="workspace-crumb workspace-crumb-label">files</span>
-        <BreadcrumbSep />
-        <BreadcrumbLink
-          href={url("static", null, null, location.staticPath)}
-          label={location.staticPath}
-          current
-        />
-      </>
-    );
-  }
-  return null;
+        ),
+      )}
+    </>
+  );
 }
 
 function readInitialSessionId(): string | null {
