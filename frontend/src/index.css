@@ -4304,15 +4304,29 @@ button:disabled {
   align-items: center;
   gap: 0.38rem;
   min-width: 0;
-  padding: 0.1rem 0;
+  min-height: 22px;
+  padding: 0;
+  position: relative;
+  isolation: isolate;
 }
 
-.collapsed-turn-activity-divider::after,
+.collapsed-turn-activity-divider::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: calc(50% - 0.5px);
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.105);
+  pointer-events: none;
+}
+
 .collapsed-turn-activity-divider-line {
   height: 1px;
   min-width: 0;
-  background: rgba(255, 255, 255, 0.055);
-  content: "";
+  background: transparent;
+  visibility: hidden;
 }
 
 .collapsed-turn-activity-toggle {
@@ -4320,13 +4334,15 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.55rem;
-  height: 1.55rem;
+  width: 22px;
+  height: 22px;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 999px;
   background: var(--bg-base);
   color: var(--text-faint);
   cursor: pointer;
+  position: relative;
+  z-index: 1;
   transition:
     border-color var(--motion-fast) ease,
     background var(--motion-fast) ease,
@@ -8802,7 +8818,22 @@ textarea.run-files-viewer-editor:focus {
   gap: 0.38rem;
   width: 100%;
   min-width: 0;
-  padding: 0.1rem 0;
+  min-height: 22px;
+  padding: 0;
+  position: relative;
+  isolation: isolate;
+}
+
+.run-turn-activity-divider::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: calc(50% - 0.5px);
+  right: 0;
+  left: 0;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.105);
+  pointer-events: none;
 }
 
 .run-turn-activity-divider-toggle {
@@ -8810,8 +8841,8 @@ textarea.run-files-viewer-editor:focus {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 1.55rem;
-  height: 1.55rem;
+  width: 22px;
+  height: 22px;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 999px;
   background: var(--bg-app);
@@ -8820,6 +8851,8 @@ textarea.run-files-viewer-editor:focus {
   flex-shrink: 0;
   line-height: 1;
   padding: 0;
+  position: relative;
+  z-index: 1;
   transition:
     border-color var(--motion-fast) ease,
     background var(--motion-fast) ease,
@@ -8841,7 +8874,8 @@ textarea.run-files-viewer-editor:focus {
 .run-turn-activity-divider-line {
   height: 1px;
   min-width: 0;
-  background: rgba(255, 255, 255, 0.055);
+  background: transparent;
+  visibility: hidden;
 }
 
 .run-turn-activity-divider-toggle:hover,
