@@ -237,7 +237,7 @@ func (s *appServer) fireBackgroundTaskWake(ctx context.Context, row pgstore.Back
 		reason := fmt.Sprintf("enqueue_failed:%d:%s", status, strings.TrimSpace(detail))
 		return s.failBackgroundTaskWake(ctx, row, provider, reason)
 	}
-	turnID := strings.TrimSpace(resp["turn_id"])
+	turnID := turnIDFromEnqueueResponse(resp)
 	if err := s.backgroundTaskWakes.MarkFired(ctx, row.WakeID, turnID); err != nil {
 		recordBackgroundTaskWakeFire(provider, "store_error")
 		return err

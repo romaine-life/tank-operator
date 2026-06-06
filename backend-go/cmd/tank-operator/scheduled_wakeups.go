@@ -295,7 +295,7 @@ func (s *appServer) fireScheduledWakeup(ctx context.Context, row pgstore.Schedul
 		reason := fmt.Sprintf("enqueue_failed:%d:%s", status, strings.TrimSpace(detail))
 		return s.failScheduledWakeup(ctx, row, provider, reason)
 	}
-	turnID := strings.TrimSpace(resp["turn_id"])
+	turnID := turnIDFromEnqueueResponse(resp)
 	if err := s.scheduledWakeups.MarkFired(ctx, row.WakeupID, turnID); err != nil {
 		recordScheduledWakeupFire(provider, "store_error")
 		return err

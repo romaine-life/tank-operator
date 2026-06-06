@@ -160,6 +160,13 @@ answer; it must not visibly move a rendered row from one surface to the other.
   This context is sourced from durable `user_message.created` and is not an
   activity child row, so it stays visible while the reader moves between
   activity pages.
+- The authenticated Turns view is a chat-capable continuation surface. Its
+  composer uses the same `POST /api/sessions/{session_id}/turns` durable
+  boundary as the main transcript composer; it does not create a second submit
+  route or browser-local turn ledger. The submit response carries the durable
+  `turn_id` and, when Postgres turn numbering is active, `turn_number`; the
+  browser selects and routes the new Turns detail from that durable identity
+  while waiting for the server-projected row to arrive.
 - Turn activity may show a log copy of assistant prose, including prose that
   later becomes the final answer, but that copy is not a second settled
   transcript message.
@@ -234,6 +241,11 @@ answer; it must not visibly move a rendered row from one surface to the other.
   initiating user message at the top of the Turns view from the server
   projection. Switching activity pages keeps that same context visible and does
   not duplicate the human user message inside the activity page body.
+- Submitting from the authenticated Turns view writes the normal durable
+  `user_message.created` / `turn.submitted` boundary, keeps public message-link
+  views read-only, routes the browser to `/sessions/{id}/turns/{n}` when the
+  response includes a durable number, and does not infer that number from the
+  loaded transcript window.
 - A completed turn may show the final assistant prose in the main transcript
   while also retaining a log copy in Turn activity, without counting it as two
   transcript messages.

@@ -38,7 +38,8 @@ Evidence:
   + order-preserving backfill), `SessionTurnStore` + `GET /turns/{n}` resolver,
   transcript projection stamping, pgstore integration tests (allocation
   idempotency + backfill ordering), resolver handler tests (200/404/400),
-  `tank_turn_number_resolve_total` / `tank_turn_number_missing_total` +
+  `tank_turn_number_resolve_total` / `tank_turn_number_missing_total`
+  (`phase="materialize"` and `phase="submit_response"`) +
   `TankTurnNumberMissing` alert.
 - Frontend (turn-number route cutover PR): `appRoutes` number param + tests
   (numeric round-trip + non-numeric → unavailable), `App.tsx` cold-load

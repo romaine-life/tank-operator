@@ -167,7 +167,10 @@ yanking the viewport away from a user reading history.
   `tank_turn_number_missing_total{phase}` and the `TankTurnNumberMissing` alert,
   which fire if a `turn_activity` shell is ever projected for a turn that has no
   `session_turns` row while numbering is active (allocation trigger regressed or
-  an event bypassed it).
+  an event bypassed it). The same counter uses `phase="submit_response"` when a
+  freshly accepted `/turns` response cannot include the durable number, so Turns
+  composer routing gaps localize to the submit boundary instead of the later
+  transcript projection.
 
 ## Acceptance Checks
 

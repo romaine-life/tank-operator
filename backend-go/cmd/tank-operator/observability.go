@@ -2024,6 +2024,8 @@ func turnNumberMissingPhaseLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
 	case "materialize":
 		return "materialize"
+	case "submit_response":
+		return "submit_response"
 	default:
 		return "unknown"
 	}

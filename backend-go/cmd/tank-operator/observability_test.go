@@ -41,6 +41,19 @@ func TestMetricsEndpointServesPrometheus(t *testing.T) {
 	}
 }
 
+func TestTurnNumberMissingPhaseLabels(t *testing.T) {
+	cases := map[string]string{
+		"materialize":     "materialize",
+		"submit_response": "submit_response",
+		"other":           "unknown",
+	}
+	for raw, want := range cases {
+		if got := turnNumberMissingPhaseLabel(raw); got != want {
+			t.Fatalf("turnNumberMissingPhaseLabel(%q) = %q, want %q", raw, got, want)
+		}
+	}
+}
+
 // TestServerErrorLogsContext asserts the middleware emits a structured
 // slog.Error with method, route, status, and the response body's `detail`
 // field when a handler returns 5xx. This is the property that fixed the
