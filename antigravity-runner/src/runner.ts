@@ -1,0 +1,343 @@
+// Long-lived Antigravity runner — drives agy (Gemini-Ultra) for one session
+// pod's lifetime and publishes canonical Tank conversation events. Sibling of
+// codex-runner/src/runner.ts with a subprocess inner loop instead of an SDK:
+// pull a submit_turn off the data plane, run one agy turn (the driver tails
+// agy's structured transcript and feeds the adapter), publish a durable
+// terminal, ack. Boundary events (user_message.created, turn.submitted) are
+// backend-owned. Raw agy steps never reach the bus.
+//
+// Stop semantics follow the four-outcome contract
+// (docs/tank-conversation-protocol.md → #532): an interrupt arriving during the
+// active turn kills agy and yields turn.interrupted (terminated_via_sdk); one
+// arriving before its submit is buffered and drains to turn.interrupted on
+// arrival (terminated_pre_sdk) or turn.failed{interrupt_orphaned} after a
+// timeout (orphaned). agy runs with --dangerously-skip-permissions in -p mode,
+// so it never pauses for AskUserQuestion; input_reply is acked as a no-op.
+
+import { AntigravityTranscriptAdapter, type AgyStep, type AntigravityTurn } from "./adapters/antigravity.js";
+import { AgyDriver } from "./driver.js";
+import type { Config } from "./config.js";
+import { SessionEventSink } from "./sessionEvents.js";
+import {
+  SessionCommandBus,
+  commandClientNonce,
+  isInputReplyCommand,
+  isInterruptCommand,
+  type SessionCommandRecord,
+} from "./sessionCommands.js";
+import type { TankConversationEvent } from "../../runner-shared/conversation.js";
+import {
+  stampTankEvent,
+  turnEvent,
+  turnIDForClientNonce,
+} from "../../runner-shared/conversation-builders.js";
+import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
+import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
+import {
+  agyStepTotal,
+  commandsConsumedTotal,
+  eventTruncatedTotal,
+  interruptOutcomeTotal,
+  natsPublishFailureTotal,
+  providerErrorTotal,
+  turnDurationSeconds,
+  turnTerminalTotal,
+} from "./metrics.js";
+
+const SOURCE = "antigravity";
+
+function envInt(value: string | undefined, fallback: number): number {
+  const n = Number.parseInt((value ?? "").trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+const INTERRUPT_BUFFER_MS = envInt(process.env.SESSION_INTERRUPT_BUFFER_MS, 30_000);
+const TERMINAL_PUBLISH_ATTEMPTS = envInt(process.env.SESSION_TERMINAL_PUBLISH_ATTEMPTS, 3);
+const TERMINAL_PUBLISH_BACKOFF_MS = envInt(process.env.SESSION_TERMINAL_PUBLISH_BACKOFF_MS, 500);
+
+type SubmitRecord = SessionCommandRecord & {
+  prompt?: string;
+  model?: string;
+  client_nonce?: string;
+  target_turn_id?: string;
+};
+
+class AsyncQueue<T> {
+  private readonly items: T[] = [];
+  private waiter: ((value: T | null) => void) | null = null;
+  private closed = false;
+
+  push(item: T): void {
+    if (this.waiter) {
+      const resolve = this.waiter;
+      this.waiter = null;
+      resolve(item);
+      return;
+    }
+    this.items.push(item);
+  }
+
+  next(signal: AbortSignal): Promise<T | null> {
+    if (this.items.length > 0) return Promise.resolve(this.items.shift() as T);
+    if (this.closed || signal.aborted) return Promise.resolve(null);
+    return new Promise<T | null>((resolve) => {
+      this.waiter = resolve;
+      signal.addEventListener("abort", () => resolve(null), { once: true });
+    });
+  }
+
+  close(): void {
+    this.closed = true;
+    if (this.waiter) {
+      this.waiter(null);
+      this.waiter = null;
+    }
+  }
+}
+
+interface ActiveTurn extends AntigravityTurn {
+  abort: AbortController;
+}
+
+export class Runner {
+  private readonly events: SessionEventSink;
+  private readonly commands: SessionCommandBus;
+  private readonly adapter: AntigravityTranscriptAdapter;
+  private readonly driver: AgyDriver;
+  private readonly queue = new AsyncQueue<SubmitRecord>();
+  private readonly orphanInterrupts = new Map<string, number>();
+  private active: ActiveTurn | null = null;
+  private hasConversation = false;
+  private lastReportedModel = "";
+
+  constructor(private readonly cfg: Config) {
+    this.events = new SessionEventSink(cfg);
+    this.commands = new SessionCommandBus(cfg, SOURCE);
+    this.adapter = new AntigravityTranscriptAdapter(cfg.sessionId);
+    this.driver = new AgyDriver(cfg.agyHome);
+  }
+
+  async run(signal: AbortSignal): Promise<void> {
+    signal.addEventListener("abort", () => {
+      this.queue.close();
+      this.active?.abort.abort();
+    });
+    await this.commands.startControlConsumer(async (rec) => {
+      this.handleControl(rec as SubmitRecord);
+    }, signal);
+    await this.commands.startCommandConsumer(async (rec) => {
+      commandsConsumedTotal.labels("submit_turn").inc();
+      this.queue.push(rec as SubmitRecord);
+    }, signal);
+
+    while (!signal.aborted) {
+      const rec = await this.queue.next(signal);
+      if (!rec) break;
+      await this.handleSubmit(rec, signal);
+    }
+    await this.events.close().catch(() => {});
+  }
+
+  private async handleSubmit(rec: SubmitRecord, signal: AbortSignal): Promise<void> {
+    const clientNonce = commandClientNonce(rec) || rec.client_nonce || "";
+    const turnID = turnIDForClientNonce(clientNonce);
+    const turn: AntigravityTurn = { turnID, clientNonce };
+
+    // Stop clicked before this submit dispatched: never feed the prompt to agy.
+    if (this.orphanInterrupts.delete(clientNonce)) {
+      await this.publishTerminal(this.adapter.interruptTurn(turn));
+      interruptOutcomeTotal.labels("terminated_pre_sdk").inc();
+      rec.ack();
+      return;
+    }
+
+    // Restart dedupe: a turn that already has a durable terminal is done.
+    try {
+      if (await this.events.findTurnTerminal(turnID)) {
+        rec.ack();
+        return;
+      }
+    } catch {
+      // bus lookup failed; proceed — a duplicate terminal dedupes by event_id.
+    }
+
+    const abort = new AbortController();
+    if (signal.aborted) abort.abort();
+    signal.addEventListener("abort", () => abort.abort(), { once: true });
+    this.active = { ...turn, abort };
+    const stopHeartbeat = this.commands.startCommandHeartbeat(rec);
+    const endTimer = turnDurationSeconds.startTimer();
+
+    try {
+      await this.publish(
+        turnEvent({
+          sessionID: this.cfg.sessionId,
+          turnID,
+          clientNonce,
+          source: SOURCE,
+          type: "turn.claimed",
+        }) as TankConversationEvent,
+      );
+
+      const prompt = String(rec.prompt ?? "").trim();
+      if (!prompt) {
+        providerErrorTotal.labels("missing_prompt").inc();
+        await this.publishTerminal(this.adapter.failTurn(turn, "missing_prompt"));
+        return;
+      }
+      const model = String(rec.model ?? "").trim() || this.cfg.defaultModel;
+      void this.reportRuntime(model);
+
+      const result = await this.driver.runTurn(
+        {
+          prompt,
+          model: model || undefined,
+          resume: this.hasConversation,
+          workspace: this.cfg.workspace,
+        },
+        async (step) => {
+          agyStepTotal.labels(stepKind(step)).inc();
+          for (const ev of this.adapter.stepEvents(turn, step)) {
+            await this.publish(ev);
+          }
+        },
+        abort.signal,
+      );
+      this.hasConversation = true;
+
+      if (result.killed || abort.signal.aborted) {
+        await this.publishTerminal(this.adapter.interruptTurn(turn));
+        interruptOutcomeTotal.labels("terminated_via_sdk").inc();
+      } else if (result.exitCode !== 0) {
+        providerErrorTotal.labels("nonzero_exit").inc();
+        await this.publishTerminal(
+          this.adapter.failTurn(turn, agyFailReason(result.exitCode, result.stderr)),
+        );
+      } else {
+        await this.publishTerminal(this.adapter.completeTurn(turn));
+      }
+    } catch (err) {
+      providerErrorTotal.labels("exception").inc();
+      await this.publishTerminal(this.adapter.failTurn(turn, String(err)));
+    } finally {
+      endTimer();
+      stopHeartbeat();
+      this.active = null;
+      rec.ack();
+    }
+  }
+
+  private handleControl(rec: SubmitRecord): void {
+    if (isInterruptCommand(rec)) {
+      this.handleInterrupt(rec);
+      return;
+    }
+    if (isInputReplyCommand(rec)) {
+      // agy -p --dangerously-skip-permissions never pauses for input.
+      commandsConsumedTotal.labels("input_reply").inc();
+      rec.ack();
+      return;
+    }
+    commandsConsumedTotal.labels("other_control").inc();
+    rec.ack();
+  }
+
+  private handleInterrupt(rec: SubmitRecord): void {
+    commandsConsumedTotal.labels("interrupt_turn").inc();
+    interruptOutcomeTotal.labels("buffered").inc();
+    const nonce = commandClientNonce(rec) || rec.client_nonce || "";
+    const targetTurnID = rec.target_turn_id || (nonce ? turnIDForClientNonce(nonce) : "");
+    if (!nonce && !targetTurnID) {
+      interruptOutcomeTotal.labels("invalid_target").inc();
+      rec.ack();
+      return;
+    }
+
+    if (this.active && (this.active.turnID === targetTurnID || this.active.clientNonce === nonce)) {
+      // Active turn: kill agy. handleSubmit publishes turn.interrupted and
+      // counts terminated_via_sdk when the driver returns killed.
+      this.active.abort.abort();
+      this.driver.interrupt();
+      rec.ack();
+      return;
+    }
+
+    // Pre-start: buffer; drain on the matching submit or time out as orphaned.
+    this.orphanInterrupts.set(nonce, Date.now());
+    rec.ack();
+    setTimeout(() => void this.checkOrphan(nonce), INTERRUPT_BUFFER_MS).unref();
+  }
+
+  private async checkOrphan(nonce: string): Promise<void> {
+    if (!this.orphanInterrupts.delete(nonce)) return;
+    const turnID = turnIDForClientNonce(nonce);
+    try {
+      await this.publishTerminal(
+        this.adapter.failTurn({ turnID, clientNonce: nonce }, "interrupt_orphaned"),
+      );
+      interruptOutcomeTotal.labels("orphaned").inc();
+    } catch {
+      interruptOutcomeTotal.labels("publish_failed").inc();
+    }
+  }
+
+  private async publish(event: TankConversationEvent): Promise<void> {
+    const stamped = stampTankEvent(event);
+    const guard = truncateEventIfOversized(stamped);
+    if (guard.truncated) {
+      const severity = guard.reason === "payload-dropped" ? "payload-dropped" : "strings-truncated";
+      eventTruncatedTotal.labels(stamped.type, severity).inc();
+    }
+    try {
+      await this.events.upsert(guard.event);
+    } catch (err) {
+      natsPublishFailureTotal.inc();
+      throw err;
+    }
+  }
+
+  private async publishTerminal(event: TankConversationEvent): Promise<void> {
+    let lastErr: unknown;
+    for (let attempt = 1; attempt <= TERMINAL_PUBLISH_ATTEMPTS; attempt++) {
+      try {
+        await this.publish(event);
+        turnTerminalTotal.labels(event.type).inc();
+        return;
+      } catch (err) {
+        lastErr = err;
+        await sleep(TERMINAL_PUBLISH_BACKOFF_MS * attempt);
+      }
+    }
+    interruptOutcomeTotal.labels("publish_failed").inc();
+    console.error(
+      JSON.stringify({ msg: "terminal publish failed", type: event.type, error: String(lastErr) }),
+    );
+  }
+
+  private async reportRuntime(model: string): Promise<void> {
+    if (model === this.lastReportedModel) return;
+    this.lastReportedModel = model;
+    try {
+      await reportRuntimeConfig(this.cfg, { model, contextWindowSource: "antigravity" });
+    } catch {
+      // best-effort; the composer footer just lacks the applied model
+    }
+  }
+}
+
+function stepKind(step: AgyStep): string {
+  const source = (step.source ?? "").toUpperCase();
+  if (source === "USER_EXPLICIT" || source === "SYSTEM") return "dropped";
+  if (Array.isArray(step.tool_calls) && step.tool_calls.length > 0) return "tool_call";
+  if ((step.type ?? "").toUpperCase() === "PLANNER_RESPONSE") return "message";
+  return "tool_result";
+}
+
+function agyFailReason(exitCode: number | null, stderr: string): string {
+  const tail = stderr.trim().split("\n").slice(-1)[0]?.slice(0, 200) ?? "";
+  return tail ? `agy exit ${exitCode}: ${tail}` : `agy exit ${exitCode}`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
