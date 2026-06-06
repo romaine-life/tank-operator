@@ -1105,6 +1105,26 @@ spec:
             summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot rotate its OAuth refresh chain"
             runbook: "All inbound requests will eventually 401. Inspect ext-proc logs for `refresh failed` / `refresh request crashed`."
 
+        # Sustained upstream 429s = the shared provider account's usage cap is
+        # exhausted. This is the upstream-cause view of the rate-limit-stall
+        # class: pod-side runners convert a stuck rate-limit retry into a
+        # durable turn.failed{reason:provider_rate_limit} (PROVIDER_RETRY_STALL_MS)
+        # and the orchestrator's TankSessionStuckInProgress catches any that
+        # still wedge — this alert says WHY (the account is being throttled),
+        # not just that a turn stalled. Threshold tolerates transient single
+        # 429s the SDK retries through (a real cap-exhaustion sustains a high
+        # 429 count over 15m). Per-session attribution of which session is
+        # consuming the cap is not yet wired (needs an SDK request-header hook;
+        # see docs/api-proxy-auth.md "Per-session attribution").
+        - alert: TankApiProxyRateLimited
+          expr: increase(tank_api_proxy_upstream_429_total[15m]) > 20
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "api-proxy ({{`{{ $labels.provider }}`}}) upstream 429s sustained — provider usage cap likely exhausted"
+            runbook: "The shared provider account is being rate-limited (429s from api.anthropic.com / chatgpt.com). Confirm with the provider usage endpoint and the runner-side tank_runner_provider_api_retry_total{error=\"rate_limit\"} rate. Affected turns resolve to turn.failed{reason:provider_rate_limit} (runner) and any wedged ones surface on TankSessionStuckInProgress + GET /api/debug/stuck-turns. Mitigate by spreading load or raising the account cap; there is currently no per-session attribution of cap consumption (dependency-gated — see docs/api-proxy-auth.md)."
+
     - name: tank-operator.provider-credential-health
       rules:
         # Layer 1 has been "failed" for >5m. The transcript banner is
