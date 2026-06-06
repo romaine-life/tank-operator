@@ -755,10 +755,11 @@ func (s *appServer) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleSetOpenTarget persists the durable per-session sidebar open-target
-// preference (” / 'chat' / 'turns'). ” clears the pin so the frontend's
-// auto-default applies; 'chat'/'turns' pin the main transcript or the Turns
-// view across reloads. Registry-only UI state — no pod annotation patch.
+// handleSetOpenTarget persists the legacy durable per-session sidebar
+// open-target preference ('' / 'chat' / 'turns'). Current frontend builds no
+// longer use it for session-open defaults, but keeping the endpoint preserves
+// compatibility with existing clients and row metadata. Registry-only UI state —
+// no pod annotation patch.
 func (s *appServer) handleSetOpenTarget(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
 	if !ok {

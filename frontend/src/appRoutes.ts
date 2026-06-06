@@ -1,6 +1,6 @@
 export type SettingsTab = "preferences" | "admin";
 export type AdminView = "controls" | "avatars" | "report" | "observability";
-export type SessionRouteTab = "chat" | "turns" | "static" | "session-data";
+export type SessionRouteTab = "turns" | "chat" | "static" | "session-data";
 export type HomeRouteTab = "chat";
 export type AppRouteTab = "settings" | "help";
 
@@ -92,6 +92,16 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
   if (parts.length === 2) {
     return {
       sessionId: parts[1],
+      tab: "turns",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      staticPath: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "transcript" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
       tab: "chat",
       turnNumber: null,
       turnSegmentPresent: false,
@@ -165,7 +175,7 @@ function settingsPath(settingsTab: SettingsTab, adminView: AdminView): string {
 export function buildSessionRouteUrl(
   currentHref: string,
   id: string,
-  tab: SessionRouteTab = "chat",
+  tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
   staticPath?: string | null,
 ): string {
@@ -173,7 +183,9 @@ export function buildSessionRouteUrl(
   const encodedId = encodeURIComponent(id);
   let suffix = "";
   if (tab === "turns") {
-    suffix = `/turns${turnNumber != null ? `/${turnNumber}` : ""}`;
+    suffix = turnNumber != null ? `/turns/${turnNumber}` : "";
+  } else if (tab === "chat") {
+    suffix = "/transcript";
   } else if (tab === "static" && staticPath) {
     suffix = `/static/${staticPath.split("/").map(encodeURIComponent).join("/")}`;
   } else if (tab === "session-data") {

@@ -124,7 +124,7 @@ func TestCountContextCompactionsCountsScopedCompactionRows(t *testing.T) {
 }
 
 // TestCountUserMessagesCountsScopedUserMessageRows is the durable-projection
-// contract for the auto-default-to-Turns signal: CountUserMessages returns
+// contract for sessions.user_message_count metadata: CountUserMessages returns
 // exactly the number of user_message.created events for THIS session and nothing
 // else. It proves (a) only user_message.created rows count — turn/item events do
 // not, (b) the count is session-scoped, and (c) the partial index migration

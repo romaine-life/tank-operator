@@ -667,7 +667,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   );
   assert.equal(
     appRoutesSource.includes(
-      'export type SessionRouteTab = "chat" | "turns" | "static" | "session-data";',
+      'export type SessionRouteTab = "turns" | "chat" | "static" | "session-data";',
     ),
     true,
   );
@@ -700,6 +700,10 @@ test("turn internals move out of the transcript into a turn view", () => {
     ),
     true,
   );
+  assert.match(
+    appSource,
+    /if \(route\.tab === "chat"\) \{[\s\S]{0,160}setActiveTab\("chat"\)/,
+  );
   assert.equal(
     appSource.includes(
       'window.addEventListener("popstate", applyCurrentSessionRoute)',
@@ -731,7 +735,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   // overflow menu is not rendered; the normal view folds it into the menu.
   assert.match(
     appSource,
-    /<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{!turnsAvailable\}/,
+    /<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{false\}/,
   );
   // The pre-session home view exposes Turns through the overflow menu as a
   // disabled, no-op entry until a session exists.
@@ -739,9 +743,10 @@ test("turn internals move out of the transcript into a turn view", () => {
     appSource,
     /turns=\{\{\s*active: false,\s*disabled: true,\s*title:\s*"Turns are available once the agent has turn activity",\s*onOpen: \(\) => undefined,/,
   );
-  assert.match(
-    appSource,
-    /if \(activeTab !== "turns" \|\| turnsAvailable\) return;/,
+  assert.equal(appSource.includes('setActiveTab("chat");'), true);
+  assert.equal(
+    appSource.includes('if (activeTab !== "turns" || turnsAvailable) return;'),
+    false,
   );
   assert.equal(indexCssSource.includes(".run-turn-view"), true);
   assert.equal(
@@ -916,7 +921,7 @@ test("turn view entry points open at the turn bottom", () => {
   assert.equal(appSource.includes("onOpenTranscriptMessage"), true);
   assert.equal(appSource.includes("Open message in transcript"), true);
   assert.equal(
-    appSource.includes('else openTurnPage(undefined, { anchor: "bottom" });'),
+    appSource.includes('openTurnPage(undefined, { anchor: "bottom" });'),
     true,
   );
   assert.equal(

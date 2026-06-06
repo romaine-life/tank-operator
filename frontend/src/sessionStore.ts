@@ -109,13 +109,11 @@ export interface SessionRow {
   compaction_count?: number;
   // Durable per-session count of user_message.created events — one per human
   // back-and-forth — projected onto the row from the session_events ledger.
-  // Powers the auto-default-to-Turns sidebar gate (autoTurnsDefault.ts); stable
-  // across reload and identical in a fresh tab, like compaction_count above.
+  // Kept as row metadata for compatibility and diagnostics; sidebar opens now
+  // always land on Turns.
   user_message_count?: number;
-  // Durable per-session sidebar open-target pin: the manual override for the
-  // auto-default-to-Turns gate, persisted so a deliberate choice survives
-  // reload. "chat"/"turns" = explicit pin; absent ('' on the wire) = unset, so
-  // the gate's auto-default applies.
+  // Legacy durable sidebar open-target pin. The frontend no longer uses it to
+  // decide where a session opens, but still carries valid row values.
   open_target?: "chat" | "turns";
   agent_avatar_id?: string;
   system_avatar_id?: string;

@@ -35,14 +35,11 @@ yanking the viewport away from a user reading history.
   turn_id from render state; the durable `session_turns` row, not the loaded
   transcript window, is the resolver.
 - `sessions.user_message_count` owns the durable per-session count of human
-  back-and-forths (`user_message.created` events) that the sidebar's
-  auto-default-to-Turns decision reads. It is an advance-only projection over the
-  append-only `session_events` ledger (the same model as `compaction_count`),
-  carried on the snapshot and row-update wire; it is never derived from the loaded
-  transcript window. The manual open-target preference set from the session tab
-  options menu is durable (`sessions.open_target`, set via
-  `PUT /api/sessions/{id}/open-target`) and always wins over the auto-default; it
-  is read back from the row so a deliberate pin survives reload and a fresh tab.
+  back-and-forths (`user_message.created` events). It is an advance-only
+  projection over the append-only `session_events` ledger (the same model as
+  `compaction_count`), carried on the snapshot and row-update wire; it is never
+  derived from the loaded transcript window. It is metadata only for navigation:
+  normal session opens land on Turns regardless of count.
 - `session_transcript_row_backfills` owns whether a session's historical
   `session_events` ledger has been projected into transcript rows for the
   current projection version. Status rows alone do not satisfy backfill; stale
@@ -100,12 +97,10 @@ yanking the viewport away from a user reading history.
 
 ## Live Behavior
 
-- Opening a session normally lands at the live tail.
-- Opening a session whose durable user-message count has crossed the
-  auto-default threshold lands in the Turns view (on the latest turn) instead of
-  the main transcript, unless the user has manually set the session's open
-  target. This changes only where a session-open lands; it never moves an
-  already-open viewport, and the Turns view itself still lands at the latest turn.
+- Opening a session normally lands in the Turns view, on the latest turn when one
+  exists and on the empty Turns state for a newly-created session.
+- The main transcript is an explicit fallback/artifact reachable from Session
+  Data at `/sessions/{id}/transcript`; it is no longer the root session view.
 - Opening a copied message link lands on a bounded page around that durable
   message cursor.
 - Manual back-pagination prepends older messages while preserving the user's
