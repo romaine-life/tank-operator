@@ -112,10 +112,6 @@ codex-credentials
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "codex-api-proxy.%s.svc.cluster.local" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.codexApiProxy.serviceHost }}{{- end -}}
 {{- end -}}
 
-{{- define "tank-operator.githubAppSecret" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-github-app-creds" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.githubApp.secretName }}{{- end -}}
-{{- end -}}
-
 {{- define "tank-operator.codexCredentialsSecret" -}}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-codex-credentials" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.codexCredentials.secretName }}{{- end -}}
 {{- end -}}

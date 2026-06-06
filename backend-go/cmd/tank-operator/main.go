@@ -293,7 +293,6 @@ func main() {
 			CodexSessionImage:              codexSessionImage,
 			SessionScope:                   sessionScope,
 			TankOperatorInternalURL:        tankOperatorInternalURL,
-			GitHubAppSecret:                envDefault("GITHUB_APP_SECRET", sessionmodel.DefaultGitHubAppSecret),
 			NATSURL:                        envDefault("NATS_URL", ""),
 			NATSStream:                     envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
 			NATSAuthSecret:                 envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),

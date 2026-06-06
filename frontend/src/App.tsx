@@ -876,7 +876,7 @@ const PROVIDER_QUOTA_WINDOW_DEFS: Record<Provider, Array<Pick<ProviderQuotaWindo
 const MODE_HINTS: Record<SessionMode, string> = {
   claude_cli: "Uses claude.ai login",
   claude_gui: "GUI chat pane for claude -p output",
-  api_key: "Specify an API key fallback",
+  api_key: "Legacy Claude API-key session",
   config: "Log in once · seeds KV for future sessions",
   codex_cli: "Uses ChatGPT login from KV",
   codex_gui: "GUI chat pane for Codex app-server transport",
@@ -2743,29 +2743,6 @@ function IconWrench({ className }: { className?: string }) {
   );
 }
 
-function IconKey({ className }: { className?: string }) {
-  return (
-    <svg
-      className={className}
-      viewBox="0 0 16 16"
-      width="16"
-      height="16"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      focusable="false"
-      aria-hidden="true"
-    >
-      <circle cx="5.25" cy="8" r="2.6" />
-      <path d="M7.85 8h5.15" />
-      <path d="M11 8v2" />
-      <path d="M13 8v2.2" />
-    </svg>
-  );
-}
-
 function IconPanelToggle({ collapsed }: { collapsed: boolean }) {
   return (
     <svg
@@ -3706,18 +3683,6 @@ function DemoLanding() {
                     <h3 id="demo-home-actions-title">Setup</h3>
                   </div>
                   <div className="home-quick-actions">
-                    <button
-                      className="home-quick-action"
-                      onClick={() => createPreviewSession("api_key")}
-                    >
-                      <IconKey className="home-quick-icon" />
-                      <span className="home-quick-main">
-                        <span className="home-quick-title">API key</span>
-                        <span className="home-quick-sub">
-                          {MODE_HINTS["api_key"]}
-                        </span>
-                      </span>
-                    </button>
                     {configMode && (
                       <button
                         className="home-quick-action"
@@ -21705,19 +21670,6 @@ function AuthenticatedApp() {
                           <h3 id="home-actions-title">Setup</h3>
                         </div>
                         <div className="home-quick-actions">
-                          <button
-                            className="home-quick-action"
-                            onClick={() => createSession("api_key")}
-                            disabled={busy}
-                          >
-                            <IconKey className="home-quick-icon" />
-                            <span className="home-quick-main">
-                              <span className="home-quick-title">API key</span>
-                              <span className="home-quick-sub">
-                                {MODE_HINTS["api_key"]}
-                              </span>
-                            </span>
-                          </button>
                           {configMode && (
                             <button
                               className="home-quick-action"

@@ -61,8 +61,6 @@ spec:
               value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
             - name: TANK_OPERATOR_INTERNAL_URL
               value: {{ include "tank-operator.internalURL" . | quote }}
-            - name: GITHUB_APP_SECRET
-              value: {{ include "tank-operator.githubAppSecret" . | quote }}
             - name: CODEX_CREDENTIALS_SECRET
               value: {{ include "tank-operator.codexCredentialsSecret" . | quote }}
 

@@ -59,9 +59,8 @@ const (
 	// pin every session pod to whichever stale image happened to carry
 	// that tag — which is exactly what bricked claude_gui session creation
 	// for the 15h between the Go cutover and the env-var wiring.
-	DefaultGitHubAppSecret = "github-app-creds"
-	DefaultOAuthGatewayCA  = "claude-oauth-ca"
-	SessionConfigDirMount  = "/opt/tank/session-config"
+	DefaultOAuthGatewayCA = "claude-oauth-ca"
+	SessionConfigDirMount = "/opt/tank/session-config"
 )
 
 var (
@@ -231,8 +230,6 @@ type ManifestOptions struct {
 	CodexAPIProxyIP string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
-	// Secret name for GitHub App credentials (envFrom on claude container).
-	GitHubAppSecret string
 	// SDK runners use NATS JetStream for durable command/event delivery.
 	NATSURL        string
 	NATSStream     string
@@ -683,12 +680,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		}
 	}
 
-	// envFrom on the claude container. GitHub App is used for git auth.
-	envFrom := []any{}
-	if opts.GitHubAppSecret != "" {
-		envFrom = append(envFrom, map[string]any{"secretRef": map[string]any{"name": opts.GitHubAppSecret}})
-	}
-
 	claudeContainer := map[string]any{
 		"name":            "claude",
 		"image":           sessionImage,
@@ -704,9 +695,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"env":          env,
 		"volumeMounts": claudeVolumeMounts,
 		"resources":    sandboxAgentResources(),
-	}
-	if len(envFrom) > 0 {
-		claudeContainer["envFrom"] = envFrom
 	}
 
 	mcpProxyVolumeMounts := append([]any{}, configMounts...)
@@ -883,9 +871,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			},
 			"resources": agentRunnerResources(),
 		}
-		if len(envFrom) > 0 {
-			runnerContainer["envFrom"] = envFrom
-		}
 		containers = append(containers, runnerContainer)
 	}
 
@@ -993,9 +978,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "runner-metrics", "containerPort": CodexRunnerMetricsPort},
 			},
 			"resources": codexRunnerResources(),
-		}
-		if len(envFrom) > 0 {
-			codexRunnerContainer["envFrom"] = envFrom
 		}
 		containers = append(containers, codexRunnerContainer)
 	}
@@ -1147,9 +1129,6 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 	}
 	if opts.OAuthGatewayCAConfigMap == "" {
 		opts.OAuthGatewayCAConfigMap = DefaultOAuthGatewayCA
-	}
-	if opts.GitHubAppSecret == "" {
-		opts.GitHubAppSecret = DefaultGitHubAppSecret
 	}
 	if opts.NATSStream == "" {
 		opts.NATSStream = "TANK_SESSION_BUS"

@@ -15,6 +15,15 @@ warm_rendered="$(helm template "${slot_name}" k8s \
   --set "renderMode=warm" \
   --set "testEnv.slotName=${slot_name}")"
 
+combined_rendered="${hot_rendered}
+---
+${warm_rendered}"
+
+if grep -Eq 'name: ANTHROPIC_API_KEY|key: anthropic-api-key|github-app-creds' <<<"${combined_rendered}"; then
+  echo "slot render still contains the removed Anthropic API-key injection path" >&2
+  exit 1
+fi
+
 if ! grep -Fq "value: \"${expected_claude}\"" <<<"${hot_rendered}"; then
   echo "hot slot render did not set CLAUDE_CREDENTIALS_KV_KEY to ${expected_claude}" >&2
   exit 1

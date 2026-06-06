@@ -476,6 +476,25 @@ func TestPodManifestSDKRunnersReceiveSessionBusEnv(t *testing.T) {
 	}
 }
 
+func TestPodManifestDoesNotEnvFromProviderAPIKeySecret(t *testing.T) {
+	for _, mode := range []string{ClaudeCLIMode, ClaudeGUIMode, CodexGUIMode} {
+		t.Run(mode, func(t *testing.T) {
+			manifest := PodManifest("12", "nelson@romaine.life", mode, ManifestOptions{
+				SessionImage:      "claude-image",
+				CodexSessionImage: "codex-image",
+			})
+			spec := manifest["spec"].(map[string]any)
+			containers := spec["containers"].([]any)
+			for _, item := range containers {
+				container := item.(map[string]any)
+				if _, present := container["envFrom"]; present {
+					t.Fatalf("%s has envFrom = %v, want no provider API-key secret injection", container["name"], container["envFrom"])
+				}
+			}
+		})
+	}
+}
+
 func TestManifestFixture(t *testing.T) {
 	fixture := loadFixture(t)
 
