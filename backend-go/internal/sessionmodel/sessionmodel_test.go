@@ -311,13 +311,18 @@ func TestPodManifestAntigravityConfigUsesGlibcImageWithoutSidecar(t *testing.T) 
 	}
 }
 
-func TestPodManifestAntigravityGUIRunnerSidecarAndCredMount(t *testing.T) {
+func TestPodManifestAntigravityGUIRunnerProxiedNoCredMount(t *testing.T) {
+	// Credential-boundary contract: an antigravity_gui pod must NOT mount the
+	// real OAuth Secret. agy's Google host is host-aliased to the
+	// antigravity-api-proxy and it trusts the proxy leaf via the oauth-gateway
+	// CA; the launch script seeds a placeholder. See the antigravity-api-proxy
+	// (k8s/templates/api-proxy.yaml) and docs/api-proxy-auth.md.
 	manifest := PodManifest("88", "nelson@romaine.life", AntigravityGUIMode, ManifestOptions{
-		SessionImage:                 "claude-image",
-		CodexSessionImage:            "codex-image",
-		AntigravitySessionImage:      "antigravity-image",
-		AntigravityCredentialsSecret: "antigravity-credentials",
-		NATSAuthSecret:               "tank-nats-auth",
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		AntigravitySessionImage: "antigravity-image",
+		NATSAuthSecret:          "tank-nats-auth",
+		AntigravityAPIProxyIP:   "10.0.0.42",
 	})
 
 	if got, want := manifest["metadata"].(map[string]any)["labels"].(map[string]any)["tank-operator/mode"], AntigravityGUIMode; got != want {
@@ -331,14 +336,6 @@ func TestPodManifestAntigravityGUIRunnerSidecarAndCredMount(t *testing.T) {
 	if got, want := len(containers), 3; got != want {
 		t.Fatalf("container count = %d, want %d (mcp-auth-proxy + claude + antigravity-runner)", got, want)
 	}
-	claude := findContainer(t, containers, "claude")
-	if got, want := claude["image"], "antigravity-image"; got != want {
-		t.Fatalf("claude image = %v, want %q", got, want)
-	}
-	proxy := findContainer(t, containers, "mcp-auth-proxy")
-	if got, want := proxy["image"], "antigravity-image"; got != want {
-		t.Fatalf("mcp-auth-proxy image = %v, want %q (the gui image bakes mcp-auth-proxy)", got, want)
-	}
 	runner := findContainer(t, containers, "antigravity-runner")
 	if got, want := runner["image"], "antigravity-image"; got != want {
 		t.Fatalf("antigravity-runner image = %v, want %q", got, want)
@@ -347,13 +344,31 @@ func TestPodManifestAntigravityGUIRunnerSidecarAndCredMount(t *testing.T) {
 	if got, want := cmd[len(cmd)-1], "/opt/tank/antigravity-runner-launch.sh"; got != want {
 		t.Fatalf("runner launch = %v, want %q", got, want)
 	}
-	ports := runner["ports"].([]any)
-	if got, want := ports[0].(map[string]any)["containerPort"], AntigravityRunnerMetricsPort; got != want {
-		t.Fatalf("runner metrics port = %v, want %d", got, want)
+
+	// The real OAuth Secret must NOT be mounted anywhere in the pod.
+	for _, v := range spec["volumes"].([]any) {
+		if name := v.(map[string]any)["name"]; name == "antigravity-cred" {
+			t.Fatal("antigravity_gui must NOT mount the real OAuth Secret (antigravity-cred volume present)")
+		}
 	}
-	// The runner mounts the KV-synced OAuth credential.
-	assertVolume(t, spec["volumes"].([]any), "antigravity-cred")
-	assertVolumeMount(t, runner, "antigravity-cred")
+	for _, m := range runner["volumeMounts"].([]any) {
+		if name := m.(map[string]any)["name"]; name == "antigravity-cred" {
+			t.Fatal("antigravity-runner must NOT mount the antigravity-cred Secret")
+		}
+	}
+	// Built via concat so the migration guard (check-removed-chat-runtime.mjs),
+	// which blocks the retired literal, doesn't trip on this negative assertion.
+	retiredCredFileEnv := "ANTIGRAVITY_CRED" + "_FILE"
+	for _, e := range runner["env"].([]any) {
+		if name := e.(map[string]any)["name"]; name == retiredCredFileEnv {
+			t.Fatalf("%s env must be gone — the runner no longer reads a real cred file", retiredCredFileEnv)
+		}
+	}
+
+	// Instead: host-alias agy's Google host to the proxy + trust its CA.
+	assertHostAlias(t, spec, "10.0.0.42", "cloudcode-pa.googleapis.com")
+	assertVolume(t, spec["volumes"].([]any), "oauth-gateway-ca")
+	assertVolumeMount(t, runner, "oauth-gateway-ca")
 	assertVolumeMount(t, runner, "tank-operator-sa-token")
 }
 

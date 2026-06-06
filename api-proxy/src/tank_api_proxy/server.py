@@ -117,6 +117,18 @@ ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token"
 
+# Antigravity (Gemini-Ultra via Google's `agy` CLI) authenticates with a
+# standard Google OAuth2 "consumer" chain. The client_id below is the consumer
+# OAuth client embedded in the public agy binary (a second, enterprise client
+# also ships but is not the consumer flow). Confirmed by refreshing a live
+# consumer refresh_token against Google's token endpoint. The client_secret is
+# an installed-app secret (also embedded in the public binary, hence not
+# confidential) but is sourced from env so it stays out of source control.
+# Unlike the Claude/Codex custom OAuth servers, Google's /token endpoint
+# requires application/x-www-form-urlencoded, not JSON (token_request_form).
+GOOGLE_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
 # The session launchers write this placeholder into
 # ~/.claude/.credentials.json's accessToken (and matching refreshToken).
 # Used as the discriminator for "this is a request that wants OAuth-
@@ -135,6 +147,9 @@ class ProxyConfig:
     account_header: str | None = None
     fedramp_header: str | None = None
     patch_last_refresh: bool = False
+    # When True, POST the token refresh as application/x-www-form-urlencoded
+    # (Google's OAuth2 /token contract) instead of JSON (Claude/Codex).
+    token_request_form: bool = False
 
 
 def _config_from_env() -> ProxyConfig:
@@ -149,6 +164,16 @@ def _config_from_env() -> ProxyConfig:
             account_header="ChatGPT-Account-ID",
             fedramp_header="X-OpenAI-Fedramp",
             patch_last_refresh=True,
+        )
+    if provider == "antigravity":
+        return ProxyConfig(
+            provider="antigravity",
+            credentials_file=_required_env("ANTIGRAVITY_CREDENTIALS_FILE"),
+            token_url=os.environ.get("ANTIGRAVITY_TOKEN_URL", GOOGLE_TOKEN_URL),
+            client_id=os.environ.get("ANTIGRAVITY_CLIENT_ID", GOOGLE_CLIENT_ID),
+            client_secret=_required_env("ANTIGRAVITY_CLIENT_SECRET"),
+            kv_secret_name=_required_env("ANTIGRAVITY_CREDENTIALS_KV_KEY"),
+            token_request_form=True,
         )
     if provider != "claude":
         raise RuntimeError(f"unknown PROXY_PROVIDER={provider!r}")
@@ -191,6 +216,11 @@ def _patch_blob(
     patch_last_refresh: bool = False,
 ) -> dict[str, Any]:
     expires_at_ms = int((time.time() + expires_in) * 1000)
+    expiry_rfc3339 = (
+        datetime.fromtimestamp(time.time() + expires_in, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
     last_refresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     out = json.loads(json.dumps(blob))
 
@@ -206,6 +236,9 @@ def _patch_blob(
                 node[key] = new_id
             elif key in ("expiresAt", "expires_at"):
                 node[key] = expires_at_ms
+            elif key == "expiry":
+                # Google (antigravity) blob: RFC3339 string, not epoch ms.
+                node[key] = expiry_rfc3339
             elif patch_last_refresh and key == "last_refresh":
                 node[key] = last_refresh
             elif isinstance(node[key], dict):
@@ -511,7 +544,9 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
             for k, v in node.items():
                 if k in ("expiresAt", "expires_at") and isinstance(v, int):
                     candidates.append(v)
-                elif k == "last_refresh" and isinstance(v, str):
+                elif k in ("last_refresh", "expiry") and isinstance(v, str):
+                    # last_refresh: Codex auth.json. expiry: Google/antigravity
+                    # RFC3339 access-token expiry.
                     parsed = _iso_ms(v)
                     if parsed is not None:
                         candidates.append(parsed)
@@ -634,11 +669,17 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                     }
                     if self._config.client_secret is not None:
                         payload["client_secret"] = self._config.client_secret
-                    resp = await http.post(
-                        self._config.token_url,
-                        json=payload,
-                        headers={"Content-Type": "application/json"},
-                    )
+                    if self._config.token_request_form:
+                        # Google's OAuth2 /token endpoint requires
+                        # application/x-www-form-urlencoded; httpx sets the
+                        # content-type from data=.
+                        resp = await http.post(self._config.token_url, data=payload)
+                    else:
+                        resp = await http.post(
+                            self._config.token_url,
+                            json=payload,
+                            headers={"Content-Type": "application/json"},
+                        )
             except Exception:
                 log.exception("refresh request crashed; keeping existing tokens")
                 record_refresh("request_failed", time.monotonic() - refresh_start)

@@ -8,6 +8,7 @@ import { noteUserScroll, startLongTaskObserver } from "./longTaskTelemetry";
 import { StyleguideAvatars } from "./styleguide/avatars";
 import { StyleguideBootState } from "./styleguide/boot-state";
 import { StyleguideButtons } from "./styleguide/buttons";
+import { StyleguideCollapsedTurnActivity } from "./styleguide/collapsed-turn-activity";
 import { StyleguideColors } from "./styleguide/colors";
 import { StyleguideErrorPill } from "./styleguide/error-pill";
 import { StyleguideIndex } from "./styleguide/index";
@@ -99,6 +100,7 @@ const STYLEGUIDE_ROUTES: Record<string, () => JSX.Element> = {
   "/_styleguide/portfolio-workspace": () => <StyleguidePortfolioWorkspace />,
   "/_styleguide/portfolio-onboarding": () => <StyleguidePortfolioOnboarding />,
   "/_styleguide/portfolio-transcript": () => <StyleguidePortfolioTranscript />,
+  "/_styleguide/collapsed-turn-activity": () => <StyleguideCollapsedTurnActivity />,
   "/_styleguide/boot-state": () => <StyleguideBootState />,
   "/_styleguide/avatars": () => <StyleguideAvatars />,
 };

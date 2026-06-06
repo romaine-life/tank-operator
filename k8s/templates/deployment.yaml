@@ -63,8 +63,6 @@ spec:
               value: {{ include "tank-operator.sessionRegistryScope" . | quote }}
             - name: TANK_OPERATOR_INTERNAL_URL
               value: {{ include "tank-operator.internalURL" . | quote }}
-            - name: ANTIGRAVITY_CREDENTIALS_SECRET
-              value: {{ .Values.session.antigravityCredentialsSecret | default "antigravity-credentials" | quote }}
 
             - name: IDLE_TIMEOUT_SECONDS
               value: {{ .Values.session.idleTimeoutSeconds | quote }}
@@ -125,6 +123,8 @@ spec:
               value: {{ include "tank-operator.apiProxyHost" . | quote }}
             - name: CODEX_API_PROXY_HOST
               value: {{ include "tank-operator.codexApiProxyHost" . | quote }}
+            - name: ANTIGRAVITY_API_PROXY_HOST
+              value: {{ include "tank-operator.antigravityApiProxyHost" . | quote }}
             # Workload-identity wiring for the orchestrator's KV writes.
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state
