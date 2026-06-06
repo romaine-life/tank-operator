@@ -124,6 +124,10 @@ antigravity-credentials
 {{- .Values.codexApiProxy.serviceHost -}}
 {{- end -}}
 
+{{- define "tank-operator.antigravityApiProxyHost" -}}
+{{- .Values.antigravityApiProxy.serviceHost -}}
+{{- end -}}
+
 {{- define "tank-operator.codexCredentialsSecret" -}}
 {{- .Values.externalSecret.codexCredentials.secretName -}}
 {{- end -}}

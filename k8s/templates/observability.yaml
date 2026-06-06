@@ -39,9 +39,11 @@ spec:
       scrapeTimeout: 10s
 ---
 {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
-# ServiceMonitor: api-proxy deployments (Claude + Codex). Both Services
-# expose the metrics sidecar port; the `provider` label on each metric
-# distinguishes the two at query time.
+# ServiceMonitor: api-proxy deployments (Claude + Codex + Antigravity). All
+# Services expose the metrics sidecar port; the `provider` label on each metric
+# distinguishes them at query time. The provider-generic TankApiProxy* alerts
+# below fire per-provider via {{`{{ $labels.provider }}`}}, so antigravity is
+# covered for refresh-storm / refresh-failure / rate-limit the moment it scrapes.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -54,7 +56,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: [claude-api-proxy, codex-api-proxy]
+        values: [claude-api-proxy, codex-api-proxy, antigravity-api-proxy]
   endpoints:
     - port: metrics
       path: /metrics

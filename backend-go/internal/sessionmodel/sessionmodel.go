@@ -38,8 +38,11 @@ const (
 	// AntigravityGUIMode is the GUI chat mode for Antigravity (Gemini-Ultra).
 	// A pod-side antigravity-runner drives agy and maps its structured
 	// transcript stream onto the Tank conversation protocol. Runs on the glibc
-	// antigravity-container image, mounts the harvested OAuth credential from
-	// KV, and carries the mcp-auth-proxy sidecar like the other GUI modes.
+	// antigravity-container image and carries the mcp-auth-proxy sidecar like
+	// the other GUI modes. agy's OAuth is proxy-owned (the credential-boundary
+	// fix): the pod gets a placeholder + an antigravity-api-proxy host-alias so
+	// the real refresh token never lands on the model-readable filesystem — the
+	// same shape claude_gui / codex_gui use. See docs/api-proxy-auth.md.
 	AntigravityGUIMode    = "antigravity_gui"
 	DefaultSessionMode    = ClaudeGUIMode
 	MaxNameLength         = 80
@@ -237,15 +240,21 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"session-pod-bootstrap.sh", "/opt/tank/session-pod-bootstrap.sh"},
 }
 
-// noClaudeHijackModes are modes that should not receive the OAuth gateway / api proxy host aliases.
+// noClaudeHijackModes are modes that must not receive the *Claude* OAuth
+// gateway / api-proxy host aliases (platform.claude.com, api.anthropic.com).
+// Codex and antigravity_gui are listed here because they route their own
+// provider host through a dedicated proxy via the separate blocks below
+// (codex-api-proxy, antigravity-api-proxy) — they just must not also get
+// Claude's aliases. antigravity_config is the interactive login mode: it must
+// talk to real Google to complete OAuth and have its token harvested, so it
+// gets no proxy hijack at all.
 var noClaudeHijackModes = map[string]bool{
-	ConfigMode:         true,
-	CodexConfigMode:    true,
-	CodexCLIMode:       true,
-	CodexGUIMode:       true,
-	CodexExecGUIMode:   true,
-	CodexAppServerMode: true,
-	// Antigravity talks to Google directly; no Claude OAuth-gateway aliases.
+	ConfigMode:            true,
+	CodexConfigMode:       true,
+	CodexCLIMode:          true,
+	CodexGUIMode:          true,
+	CodexExecGUIMode:      true,
+	CodexAppServerMode:    true,
 	AntigravityConfigMode: true,
 	AntigravityGUIMode:    true,
 }
@@ -254,20 +263,18 @@ type ManifestOptions struct {
 	SessionImage            string
 	CodexSessionImage       string
 	AntigravitySessionImage string
-	// Secret name (ESO-synced from KV) holding the harvested Antigravity OAuth
-	// token, mounted into antigravity_gui runner pods. Empty for other modes.
-	AntigravityCredentialsSecret string
-	SessionsNamespace            string
-	SessionScope                 string
-	SessionServiceAccount        string
-	SessionConfigMap             string
-	ArgoCDTrackingApp            string
-	SandboxAgentPort             int
-	TankOperatorInternalURL      string
+	SessionsNamespace       string
+	SessionScope            string
+	SessionServiceAccount   string
+	SessionConfigMap        string
+	ArgoCDTrackingApp       string
+	SandboxAgentPort        int
+	TankOperatorInternalURL string
 	// Optional: in-cluster Service IPs for host alias injection.
-	OAuthGatewayIP  string
-	APIProxyIP      string
-	CodexAPIProxyIP string
+	OAuthGatewayIP        string
+	APIProxyIP            string
+	CodexAPIProxyIP       string
+	AntigravityAPIProxyIP string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
 	// SDK runners use NATS JetStream for durable command/event delivery.
@@ -736,6 +743,21 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		}
 	}
 
+	// Antigravity API proxy host alias. agy (Gemini-Ultra) is a Go binary that
+	// calls cloudcode-pa.googleapis.com (Google Code Assist) with a Bearer
+	// access token; pointing that host at the antigravity-api-proxy lets the
+	// proxy inject the real token so the agy pod never holds the refresh token.
+	// The CA-trust + placeholder wiring lives in the antigravity-runner block
+	// below (agy runs in that container, so SSL_CERT_FILE belongs there, not on
+	// the sandbox-agent container). Only the GUI mode is hijacked;
+	// antigravity_config must reach real Google to complete the login.
+	if mode == AntigravityGUIMode && opts.AntigravityAPIProxyIP != "" {
+		hostAliases = append(hostAliases, map[string]any{
+			"ip":        opts.AntigravityAPIProxyIP,
+			"hostnames": []any{"cloudcode-pa.googleapis.com"},
+		})
+	}
+
 	claudeContainer := map[string]any{
 		"name":            "claude",
 		"image":           sessionImage,
@@ -1046,10 +1068,16 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 
 	// Antigravity-runner sidecar (antigravity_gui). Drives agy (Gemini-Ultra)
 	// and maps its structured transcript onto the Tank conversation protocol.
-	// Same workspace + session-bus contract as the other runners. The runner
-	// reads the KV-mounted OAuth credential (read-only secret volume); the
-	// launch script copies it into agy's writable data dir before exec'ing the
-	// runner, because agy refreshes the access token in place.
+	// Same workspace + session-bus contract as the other runners.
+	//
+	// Credential boundary: agy NEVER holds the real Google OAuth blob. The
+	// launch script writes a placeholder token (far-future expiry, no refresh
+	// token) into agy's data dir, and agy's cloudcode-pa.googleapis.com traffic
+	// is host-aliased to the antigravity-api-proxy, which injects the real
+	// access token and owns the refresh chain — the same boundary the Claude
+	// and Codex proxies enforce. agy is a Go binary, so it trusts the proxy's
+	// leaf via SSL_CERT_FILE (a system-bundle + oauth-gateway-ca concat built
+	// by the launch script), not NODE_EXTRA_CA_CERTS.
 	if wantAntigravityRunner {
 		// The runner is self-contained: it drives agy + the session bus and
 		// needs no session ConfigMap (no Tank mcp.json — agy owns its MCP). Its
@@ -1060,18 +1088,14 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "tank-operator-sa-token", "mountPath": "/var/run/secrets/tank-operator", "readOnly": true},
 			map[string]any{"name": "auth-romaine-sa-token", "mountPath": "/var/run/secrets/auth.romaine.life", "readOnly": true},
 		}
-		if opts.AntigravityCredentialsSecret != "" {
+		antigravityProxied := opts.AntigravityAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != ""
+		if antigravityProxied {
 			volumes = append(volumes, map[string]any{
-				"name": "antigravity-cred",
-				"secret": map[string]any{
-					"secretName": opts.AntigravityCredentialsSecret,
-					"items": []any{
-						map[string]any{"key": "antigravity-oauth-token", "path": "antigravity-oauth-token"},
-					},
-				},
+				"name":      "oauth-gateway-ca",
+				"configMap": map[string]any{"name": opts.OAuthGatewayCAConfigMap},
 			})
 			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
-				"name": "antigravity-cred", "mountPath": "/var/run/antigravity-cred", "readOnly": true,
+				"name": "oauth-gateway-ca", "mountPath": "/etc/oauth-gateway-ca", "readOnly": true,
 			})
 		}
 		antigravityRunnerEnv := []any{
@@ -1099,8 +1123,14 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
-			map[string]any{"name": "ANTIGRAVITY_CRED_FILE", "value": "/var/run/antigravity-cred/antigravity-oauth-token"},
 			map[string]any{"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(AntigravityRunnerMetricsPort)},
+		}
+		if antigravityProxied {
+			// The launch script concatenates this CA with the system bundle and
+			// exports SSL_CERT_FILE so the Go-based agy trusts the proxy leaf.
+			antigravityRunnerEnv = append(antigravityRunnerEnv,
+				map[string]any{"name": "ANTIGRAVITY_OAUTH_GATEWAY_CA", "value": "/etc/oauth-gateway-ca/ca.crt"},
+			)
 		}
 		antigravityRunnerContainer := map[string]any{
 			"name":            "antigravity-runner",
