@@ -72,7 +72,6 @@ function ActivityDivider({
   const tooltip = expanded ? "Hide agent activity" : "Show agent activity";
   return (
     <div className="collapsed-turn-activity-divider">
-      <span className="collapsed-turn-activity-divider-line" aria-hidden="true" />
       <button
         type="button"
         className="collapsed-turn-activity-toggle"

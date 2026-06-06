@@ -10048,7 +10048,6 @@ function RunTurnActivityGroup({
       <div className="run-turn-activity-stack">
         {useDividerDisclosure ? (
           <div className="run-turn-activity-divider">
-            <span className="run-turn-activity-divider-line" aria-hidden="true" />
             <button
               type="button"
               className="run-turn-activity-divider-toggle"
@@ -10060,7 +10059,6 @@ function RunTurnActivityGroup({
             >
               <ChevronDownIcon size={15} strokeWidth={2.2} />
             </button>
-            <span className="run-turn-activity-divider-line" aria-hidden="true" />
           </div>
         ) : (
           <div className="run-turn-activity-content">
@@ -10823,10 +10821,6 @@ function RunTurnActivityScreen({
           )}
           {selected && showDetailActivityDivider && (
             <div className="run-turn-activity-divider run-turn-view-activity-divider">
-              <span
-                className="run-turn-activity-divider-line"
-                aria-hidden="true"
-              />
               <button
                 type="button"
                 className="run-turn-activity-divider-toggle"
@@ -10855,10 +10849,6 @@ function RunTurnActivityScreen({
                   <ChevronUpIcon size={15} strokeWidth={2.2} />
                 )}
               </button>
-              <span
-                className="run-turn-activity-divider-line"
-                aria-hidden="true"
-              />
             </div>
           )}
           <div

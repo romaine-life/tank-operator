@@ -4299,12 +4299,11 @@ button:disabled {
 }
 
 .collapsed-turn-activity-divider {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: 0.38rem;
+  justify-content: center;
   min-width: 0;
-  min-height: 22px;
+  height: 22px;
   padding: 0;
   position: relative;
   isolation: isolate;
@@ -4318,15 +4317,8 @@ button:disabled {
   right: 0;
   left: 0;
   height: 1px;
-  background: rgba(255, 255, 255, 0.105);
+  background: rgba(255, 255, 255, 0.18);
   pointer-events: none;
-}
-
-.collapsed-turn-activity-divider-line {
-  height: 1px;
-  min-width: 0;
-  background: transparent;
-  visibility: hidden;
 }
 
 .collapsed-turn-activity-toggle {
@@ -4343,6 +4335,7 @@ button:disabled {
   cursor: pointer;
   position: relative;
   z-index: 1;
+  box-shadow: 0 0 0 5px var(--bg-base);
   transition:
     border-color var(--motion-fast) ease,
     background var(--motion-fast) ease,
@@ -8812,13 +8805,12 @@ textarea.run-files-viewer-editor:focus {
 }
 
 .run-turn-activity-divider {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
-  gap: 0.38rem;
+  justify-content: center;
   width: 100%;
   min-width: 0;
-  min-height: 22px;
+  height: 22px;
   padding: 0;
   position: relative;
   isolation: isolate;
@@ -8832,7 +8824,7 @@ textarea.run-files-viewer-editor:focus {
   right: 0;
   left: 0;
   height: 1px;
-  background: rgba(255, 255, 255, 0.105);
+  background: rgba(255, 255, 255, 0.18);
   pointer-events: none;
 }
 
@@ -8853,6 +8845,7 @@ textarea.run-files-viewer-editor:focus {
   padding: 0;
   position: relative;
   z-index: 1;
+  box-shadow: 0 0 0 5px var(--bg-app);
   transition:
     border-color var(--motion-fast) ease,
     background var(--motion-fast) ease,
@@ -8869,13 +8862,6 @@ textarea.run-files-viewer-editor:focus {
 
 .run-turn-activity-divider-toggle[data-direction="up"] svg {
   transform: translateY(1px);
-}
-
-.run-turn-activity-divider-line {
-  height: 1px;
-  min-width: 0;
-  background: transparent;
-  visibility: hidden;
 }
 
 .run-turn-activity-divider-toggle:hover,
