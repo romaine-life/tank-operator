@@ -165,13 +165,14 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		"entries":             []map[string]any{},
 		"compacted_entry_ids": []string{},
 		"summary":             pages.Shell,
+		"turn_context":        pages.TurnContext,
 		"page":                selected,
 		"page_count":          len(pages.Pages),
 		"pages":               directory,
 		"total_event_count":   pages.TotalEventCount,
 		"has_more":            false,
 		"cursor_semantic":     "order_key",
-		"projection":          "server_turn_activity_v2",
+		"projection":          "server_turn_activity_v3",
 	}
 	if selected >= 1 && selected <= len(pages.Pages) {
 		current := pages.Pages[selected-1]

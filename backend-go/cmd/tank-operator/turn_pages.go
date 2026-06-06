@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strings"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
@@ -217,6 +218,7 @@ type turnEventPage struct {
 type turnPagesProjection struct {
 	TurnID          string
 	Shell           map[string]any
+	TurnContext     map[string]any
 	Pages           []turnPage
 	TotalEventCount int
 }
@@ -434,6 +436,7 @@ func turnPageStatusIsLive(status string) bool {
 func projectTurnPages(turnID string, events []map[string]any) turnPagesProjection {
 	pageSlices := splitTurnEventsIntoSemanticPages(events)
 	wakeParents := backgroundWakeParentTurnsFromEvents(events)
+	turnContext := projectTurnContextEntry(turnID, events)
 
 	// Terminal-correct shell from the COMPLETE event set: the full projection
 	// folds the whole turn, so its activity summary always reflects the
@@ -494,9 +497,30 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 	return turnPagesProjection{
 		TurnID:          turnID,
 		Shell:           shell,
+		TurnContext:     turnContext,
 		Pages:           pages,
 		TotalEventCount: len(events),
 	}
+}
+
+func projectTurnContextEntry(turnID string, events []map[string]any) map[string]any {
+	if strings.TrimSpace(turnID) == "" {
+		return nil
+	}
+	for _, event := range orderedTranscriptEvents(events) {
+		if transcriptString(event, "type") != "user_message.created" ||
+			transcriptString(event, "turn_id") != turnID {
+			continue
+		}
+		entry := projectUserMessageEvent(event)
+		if entry == nil {
+			return nil
+		}
+		entry = cloneAnyMap(entry)
+		entry["turnContext"] = true
+		return entry
+	}
+	return nil
 }
 
 func defaultTurnActivityPageNumber(projection turnPagesProjection) int {

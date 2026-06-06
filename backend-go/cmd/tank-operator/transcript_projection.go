@@ -317,12 +317,24 @@ func (s *projectionState) apply(event map[string]any) {
 }
 
 func (s *projectionState) applyUserMessage(event map[string]any) {
+	entry := projectUserMessageEvent(event)
+	if entry == nil {
+		return
+	}
+	s.messages = append(s.messages, projectedEntryItem{
+		entry:    entry,
+		orderKey: transcriptString(event, "order_key"),
+		index:    len(s.messages),
+	})
+}
+
+func projectUserMessageEvent(event map[string]any) map[string]any {
 	text := transcriptPayloadString(event, "text")
 	if text == "" {
 		text = transcriptPayloadString(event, "message")
 	}
 	if transcriptString(event, "timeline_id") == "" || transcriptString(event, "turn_id") == "" || transcriptString(event, "client_nonce") == "" || strings.TrimSpace(text) == "" {
-		return
+		return nil
 	}
 	entry := map[string]any{
 		"id":            transcriptString(event, "timeline_id"),
@@ -350,11 +362,7 @@ func (s *projectionState) applyUserMessage(event map[string]any) {
 	if authorKind := transcriptString(event, "author_kind"); authorKind != "" {
 		entry["authorKind"] = authorKind
 	}
-	s.messages = append(s.messages, projectedEntryItem{
-		entry:    entry,
-		orderKey: transcriptString(event, "order_key"),
-		index:    len(s.messages),
-	})
+	return entry
 }
 
 func (s *projectionState) applyAssistantMessage(event map[string]any) {

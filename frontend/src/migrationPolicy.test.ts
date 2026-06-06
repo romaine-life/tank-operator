@@ -387,6 +387,18 @@ test("background wake prompts stay hidden from chat but visible in Turns activit
   );
 });
 
+test("Turns view renders server-projected turn context outside paged activity", () => {
+  assert.equal(appSource.includes("turn_context?: unknown"), true);
+  assert.equal(appSource.includes("turnActivityContextByTurn"), true);
+  assert.equal(appSource.includes("setTurnActivityContextByTurn"), true);
+  assert.equal(appSource.includes("selectedTurnContext"), true);
+  assert.equal(appSource.includes('aria-label="Turn prompt"'), true);
+  assert.match(
+    appSource,
+    /selectedTurnContext[\s\S]{0,1200}canonicalMessage=\{false\}/,
+  );
+});
+
 test("transcript meta status lines are attributed to the session system identity", () => {
   // "Stopped" / "Turn stopped by user.", "Turn failed" + provider error,
   // and "Stop requested" are not authored by the human owner or the

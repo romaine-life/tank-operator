@@ -163,6 +163,62 @@ func TestHandlePublicMessageLinkTimelineReadsThroughShareToken(t *testing.T) {
 	}
 }
 
+func TestHandlePublicMessageLinkTurnActivityIncludesTurnContext(t *testing.T) {
+	token := "share-token"
+	shares := &fakeMessageLinkShareStore{shares: map[string]pgstore.MessageLinkShare{
+		token: {
+			Token:        token,
+			OwnerEmail:   otherUser,
+			SessionScope: "default",
+			SessionID:    "63",
+			TimelineID:   "turn-1:item:msg-1",
+		},
+	}}
+	events := []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "show this prompt in turns",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("tool", "00000003", "item.completed", "tool", "claude", "turn-1", "turn-1:item:tool", map[string]any{
+			"kind": "tool_result", "name": "Read", "output": "ok",
+		}),
+	}
+	app := messageLinkShareTestApp(t, shares, &fakeSessionTranscriptRowStore{}, fakeSessionEventStore{
+		pages: map[string]store.SessionEventPage{
+			"": {Events: events, FoundOldest: true, FoundNewest: true},
+		},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/api/public/message-links/"+token+"/turns/turn-1/activity", nil)
+	req.SetPathValue("share_token", token)
+	req.SetPathValue("turn_id", "turn-1")
+	rec := httptest.NewRecorder()
+
+	app.handlePublicMessageLinkTurnActivity(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["projection"] != "server_turn_activity_v3" {
+		t.Fatalf("projection = %#v", body["projection"])
+	}
+	context, _ := body["turn_context"].(map[string]any)
+	if got, _ := context["text"].(string); got != "show this prompt in turns" {
+		t.Fatalf("turn_context.text = %q: %#v", got, body["turn_context"])
+	}
+	entries, _ := body["entries"].([]any)
+	for _, raw := range entries {
+		entry, _ := raw.(map[string]any)
+		if entry["kind"] == "message" && entry["role"] == "user" {
+			t.Fatalf("human user message leaked into public activity body: %#v", entries)
+		}
+	}
+}
+
 func TestHandleGetPublicMessageLinkIncludesOwnerAvatarWithoutOwnerEmail(t *testing.T) {
 	token := "share-token"
 	shares := &fakeMessageLinkShareStore{shares: map[string]pgstore.MessageLinkShare{

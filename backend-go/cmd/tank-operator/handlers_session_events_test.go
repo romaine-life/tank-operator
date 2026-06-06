@@ -283,6 +283,10 @@ func TestHandleSessionTurnActivityPaginatesOverLimitTurnWithTerminalShell(t *tes
 	if pageCount < 2 {
 		t.Fatalf("page_count = %v, want >= 2", body["page_count"])
 	}
+	context, _ := body["turn_context"].(map[string]any)
+	if got, _ := context["text"].(string); got != "go" {
+		t.Fatalf("turn_context.text = %q, want go: %#v", got, body["turn_context"])
+	}
 	if page, _ := body["page"].(float64); page != pageCount {
 		t.Fatalf("default page = %v, want last page %v", body["page"], pageCount)
 	}

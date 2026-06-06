@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
@@ -172,28 +173,63 @@ func (s *appServer) handlePublicMessageLinkTurnActivity(w http.ResponseWriter, r
 		writeError(w, http.StatusBadRequest, "turn_id is required")
 		return
 	}
-	events, err := readAllTurnEvents(r.Context(), s.sessionEventStoreForScope(share.SessionScope), share.SessionID, turnID)
+	events, err := readUserFacingTurnEvents(r.Context(), s.sessionEventStoreForScope(share.SessionScope), share.SessionID, turnID)
 	if err != nil {
 		recordMessageLinkShare("resolve", "store_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	projection := projectTranscriptEvents(events)
+	pages := projectTurnPages(turnID, events)
+	selected := defaultTurnActivityPageNumber(pages)
+	if requested := strings.TrimSpace(r.URL.Query().Get("page")); requested != "" {
+		if n, convErr := strconv.Atoi(requested); convErr == nil {
+			selected = n
+		}
+	}
+	if selected < 1 {
+		selected = 1
+	}
+	if selected > len(pages.Pages) {
+		selected = len(pages.Pages)
+	}
+	directory := pages.Shell["pages"]
+	if directory == nil {
+		directory = []map[string]any{}
+	}
 	body := map[string]any{
 		"session_id":          share.SessionID,
 		"turn_id":             turnID,
 		"entries":             []map[string]any{},
 		"compacted_entry_ids": []string{},
-		"summary":             map[string]any{},
+		"summary":             pages.Shell,
+		"turn_context":        pages.TurnContext,
+		"page":                selected,
+		"page_count":          len(pages.Pages),
+		"pages":               directory,
+		"total_event_count":   pages.TotalEventCount,
 		"has_more":            false,
 		"cursor_semantic":     "order_key",
-		"projection":          "server_turn_activity_v1",
+		"projection":          "server_turn_activity_v3",
 		"public":              true,
 	}
-	if activity, ok := projection.ActivityBodies[turnID]; ok {
-		body["entries"] = activity.Entries
-		body["compacted_entry_ids"] = activity.CompactedEntryIDs
-		body["summary"] = activity.Summary
+	if selected >= 1 && selected <= len(pages.Pages) {
+		current := pages.Pages[selected-1]
+		entries := current.Entries
+		if entries == nil {
+			entries = []map[string]any{}
+		}
+		body["entries"] = entries
+		body["sealed"] = current.Sealed
+		body["page_kind"] = current.Kind
+		if current.Kind == "question" {
+			body["question_count"] = current.QuestionCount
+			body["question_index"] = current.QuestionIndex
+			body["question_set"] = current.QuestionSet
+			body["answered"] = current.Answered
+		}
+		body["page_start_order_key"] = current.StartOrderKey
+		body["page_end_order_key"] = current.EndOrderKey
+		body["has_more"] = selected < len(pages.Pages)
 	}
 	recordMessageLinkShare("resolve", "ok")
 	writeJSON(w, http.StatusOK, body)

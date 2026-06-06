@@ -127,6 +127,74 @@ func TestProjectTurnPagesSinglePageLiveTurn(t *testing.T) {
 	}
 }
 
+func TestProjectTurnPagesIncludesUserContextOutsidePageBody(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "diagnose the turn header",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", "00000002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("tool-a", "00000003", "item.started", "tool", "claude", "turn-1", "turn-1:item:a", map[string]any{
+			"kind": "tool", "name": "Read",
+		}),
+	}
+
+	proj := projectTurnPages("turn-1", events)
+	if proj.TurnContext == nil {
+		t.Fatalf("TurnContext = nil, want projected initiating user message")
+	}
+	if got := transcriptMapString(proj.TurnContext, "id"); got != "turn-1:user" {
+		t.Fatalf("TurnContext id = %q, want turn-1:user: %#v", got, proj.TurnContext)
+	}
+	if got := transcriptMapString(proj.TurnContext, "text"); got != "diagnose the turn header" {
+		t.Fatalf("TurnContext text = %q", got)
+	}
+	if proj.TurnContext["turnContext"] != true {
+		t.Fatalf("TurnContext marker = %#v, want true", proj.TurnContext["turnContext"])
+	}
+	if len(proj.Pages) != 1 {
+		t.Fatalf("page count = %d, want 1", len(proj.Pages))
+	}
+	for _, entry := range proj.Pages[0].Entries {
+		if entry["kind"] == "message" && entry["role"] == "user" {
+			t.Fatalf("human user message leaked into activity page body: %#v", proj.Pages[0].Entries)
+		}
+	}
+}
+
+func TestProjectTurnPagesKeepsUserContextAcrossPagedActivity(t *testing.T) {
+	var events []map[string]any
+	seq := 0
+	next := func() string {
+		seq++
+		return fmt.Sprintf("%08d", seq)
+	}
+	events = append(events,
+		projectionTestEvent("u", next(), "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "keep me visible",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", next(), "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+	)
+	for i := 0; i < turnPageEventLimit+1; i++ {
+		events = append(events, projectionTestEvent(
+			fmt.Sprintf("tool-%d", i), next(), "item.completed", "tool", "claude", "turn-1",
+			fmt.Sprintf("turn-1:item:%d", i), map[string]any{"kind": "tool_result", "name": "Read", "output": "x"},
+		))
+	}
+
+	proj := projectTurnPages("turn-1", events)
+	if len(proj.Pages) < 2 {
+		t.Fatalf("page count = %d, want at least 2", len(proj.Pages))
+	}
+	if got := transcriptMapString(proj.TurnContext, "text"); got != "keep me visible" {
+		t.Fatalf("TurnContext text = %q, want keep me visible", got)
+	}
+	if len(proj.Pages[1].Entries) == 0 {
+		t.Fatalf("second page entries empty, want activity")
+	}
+}
+
 func TestProjectTurnPagesAskingTurnKeepsInvocationAndQuestionProseTogether(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

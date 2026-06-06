@@ -9345,6 +9345,11 @@ type ActivityRefreshProblem = {
   attempts: number;
 };
 
+type TurnActivityLoadResult = {
+  entries: TranscriptEntry[];
+  context: TranscriptEntry | null;
+};
+
 function turnEntryTimestamp(entry: TranscriptEntry): string | undefined {
   return entry.startedAt ?? entry.time ?? entry.completedAt ?? entry.updatedAt;
 }
@@ -10134,6 +10139,7 @@ function RunTurnActivityScreen({
   scrollRequest,
   onScrollRequestConsumed,
   turnActivityPageInfo,
+  turnActivityContextByTurn,
   onActivitySelectPage,
 }: {
   turns: TurnViewItem[];
@@ -10161,6 +10167,10 @@ function RunTurnActivityScreen({
   scrollRequest?: TurnViewScrollRequest | null;
   onScrollRequestConsumed?: (signal: number) => void;
   turnActivityPageInfo?: Record<string, TurnActivityPageInfo | undefined>;
+  turnActivityContextByTurn?: Record<
+    string,
+    TranscriptEntry | null | undefined
+  >;
   onActivitySelectPage?: (turnId: string, page: number) => void;
 }) {
   const selected =
@@ -10171,6 +10181,10 @@ function RunTurnActivityScreen({
     selected && turnActivityPageInfo
       ? turnActivityPageInfo[selected.turnId]
       : undefined;
+  const selectedTurnContext =
+    selected && turnActivityContextByTurn
+      ? turnActivityContextByTurn[selected.turnId] ?? null
+      : null;
   // Same always-present pager as the inline chat disclosure, for the surface a
   // user actually inspects turns from. Without it, a turn over the page limit
   // shows only its last page here (the endpoint default) with no way back.
@@ -10511,6 +10525,23 @@ function RunTurnActivityScreen({
               <span>{selectedEventProgress.totalLabel}</span>
             )}
           </div>
+          {selectedTurnContext && (
+            <div className="run-turn-view-context" aria-label="Turn prompt">
+              <RunMessageBubble
+                entry={selectedTurnContext}
+                avatar={avatar}
+                systemAvatar={systemAvatar}
+                sessionId={sessionId}
+                highlighted={false}
+                showTimestamps={showTimestamps}
+                showDuration={showDuration}
+                canonicalMessage={false}
+                ownedByTurnActivity
+                transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
+                onOpenTranscriptMessage={onOpenTranscriptMessage}
+              />
+            </div>
+          )}
           {selectedPageInfo?.kind === "question" && (
             <div
               className="run-turn-question-page-head"
@@ -12372,6 +12403,9 @@ function ChatPane({
   const [activityEntriesByTurn, setActivityEntriesByTurn] = useState<
     Record<string, TranscriptEntry[] | undefined>
   >({});
+  const [turnActivityContextByTurn, setTurnActivityContextByTurn] = useState<
+    Record<string, TranscriptEntry | null | undefined>
+  >({});
   const activityEntriesByTurnRef = useRef<
     Record<string, TranscriptEntry[] | undefined>
   >({});
@@ -13140,7 +13174,7 @@ function ChatPane({
     activityLiveRefreshAttemptsRef.current.clear();
   }
   const fetchTurnActivityEntries = useCallback(
-    async (trimmedTurnId: string): Promise<TranscriptEntry[]> => {
+    async (trimmedTurnId: string): Promise<TurnActivityLoadResult> => {
       const selectedPage = selectedTurnPageRef.current[trimmedTurnId];
       const res = await fetchPaneResource(
         turnActivityRequestPathForPane(trimmedTurnId, selectedPage),
@@ -13157,6 +13191,7 @@ function ChatPane({
         answered?: boolean;
         pages?: unknown;
         total_event_count?: number;
+        turn_context?: unknown;
       };
       if (
         typeof body.page === "number" &&
@@ -13206,9 +13241,13 @@ function ChatPane({
           return { ...prev, [trimmedTurnId]: info };
         });
       }
-      return normalizeProjectedTranscriptEntries(
-        Array.isArray(body.entries) ? body.entries : [],
-      );
+      const context = normalizeProjectedTranscriptEntry(body.turn_context);
+      return {
+        entries: normalizeProjectedTranscriptEntries(
+          Array.isArray(body.entries) ? body.entries : [],
+        ),
+        context,
+      };
     },
     [fetchPaneResource, turnActivityRequestPathForPane],
   );
@@ -13223,10 +13262,14 @@ function ChatPane({
       void fetchTurnActivityEntries(trimmedTurnId)
         .then((loaded) => {
           setActivityEntriesByTurn((prev) => {
-            const next = { ...prev, [trimmedTurnId]: loaded };
+            const next = { ...prev, [trimmedTurnId]: loaded.entries };
             activityEntriesByTurnRef.current = next;
             return next;
           });
+          setTurnActivityContextByTurn((prev) => ({
+            ...prev,
+            [trimmedTurnId]: loaded.context,
+          }));
         })
         .catch(() => {
           /* page switch failures fall back to the loaded page; live refresh retries */
@@ -13256,10 +13299,14 @@ function ChatPane({
         }
         setActivityEntriesByTurn((prev) => {
           if (!Object.prototype.hasOwnProperty.call(prev, turnId)) return prev;
-          const next = { ...prev, [turnId]: loaded };
+          const next = { ...prev, [turnId]: loaded.entries };
           activityEntriesByTurnRef.current = next;
           return next;
         });
+        setTurnActivityContextByTurn((prev) => ({
+          ...prev,
+          [turnId]: loaded.context,
+        }));
       })
       .catch(() => {
         const attempts =
@@ -13379,6 +13426,7 @@ function ChatPane({
     clearActivityLiveRefreshState();
     activityEntriesByTurnRef.current = {};
     setActivityEntriesByTurn({});
+    setTurnActivityContextByTurn({});
     selectedTurnPageRef.current = {};
     setTurnActivityPageInfo({});
     setLoadingActivityTurns({});
@@ -16183,10 +16231,14 @@ function ChatPane({
         .then((loaded) => {
           activityLiveRefreshAttemptsRef.current.delete(trimmedTurnId);
           setActivityEntriesByTurn((prev) => {
-            const next = { ...prev, [trimmedTurnId]: loaded };
+            const next = { ...prev, [trimmedTurnId]: loaded.entries };
             activityEntriesByTurnRef.current = next;
             return next;
           });
+          setTurnActivityContextByTurn((prev) => ({
+            ...prev,
+            [trimmedTurnId]: loaded.context,
+          }));
         })
         .catch(() => {
           markActivityRefreshProblem(trimmedTurnId, {
@@ -17494,6 +17546,7 @@ function ChatPane({
                   scrollRequest={turnViewScrollRequest}
                   onScrollRequestConsumed={clearTurnViewScrollRequest}
                   turnActivityPageInfo={turnActivityPageInfo}
+                  turnActivityContextByTurn={turnActivityContextByTurn}
                   onActivitySelectPage={selectTurnActivityPage}
                 />
               )
