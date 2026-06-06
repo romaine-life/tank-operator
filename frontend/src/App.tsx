@@ -6821,7 +6821,7 @@ function RunMessageBubble({
           data-always-visible={alwaysVisible ? "" : undefined}
         >
           {canonicalMessage &&
-            variant === "assistant" &&
+            (variant === "assistant" || variant === "user") &&
             entry.turnId &&
             onOpenTurn && (
               <TurnViewButton
@@ -10203,8 +10203,14 @@ function RunTurnActivityScreen({
   const [toolExpansionOverrides, setToolExpansionOverrides] = useState<
     Record<string, boolean>
   >({});
+  const [collapsedContextTurnIds, setCollapsedContextTurnIds] = useState<
+    Record<string, boolean>
+  >({});
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const consumedScrollRequestRef = useRef(0);
+  const selectedTurnContextCollapsed = selected
+    ? collapsedContextTurnIds[selected.turnId] === true
+    : false;
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) =>
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
@@ -10520,21 +10526,59 @@ function RunTurnActivityScreen({
               <span>{selectedEventProgress.totalLabel}</span>
             )}
           </div>
-          {selectedTurnContext && (
-            <div className="run-turn-view-context" aria-label="Turn prompt">
-              <RunMessageBubble
-                entry={selectedTurnContext}
-                avatar={avatar}
-                systemAvatar={systemAvatar}
-                sessionId={sessionId}
-                highlighted={false}
-                showTimestamps={showTimestamps}
-                showDuration={showDuration}
-                canonicalMessage={false}
-                ownedByTurnActivity
-                transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
-                onOpenTranscriptMessage={onOpenTranscriptMessage}
-              />
+          {selectedTurnContext && selected && (
+            <div
+              className="run-turn-view-context"
+              aria-label="Turn prompt"
+              data-collapsed={selectedTurnContextCollapsed ? "true" : "false"}
+            >
+              <div className="run-turn-view-context-head">
+                <span className="run-turn-view-context-label">Prompt</span>
+                <button
+                  type="button"
+                  className="run-turn-view-context-toggle"
+                  title={
+                    selectedTurnContextCollapsed
+                      ? "Expand prompt"
+                      : "Collapse prompt"
+                  }
+                  aria-label={
+                    selectedTurnContextCollapsed
+                      ? "Expand prompt"
+                      : "Collapse prompt"
+                  }
+                  aria-expanded={!selectedTurnContextCollapsed}
+                  onClick={() => {
+                    setCollapsedContextTurnIds((prev) => ({
+                      ...prev,
+                      [selected.turnId]: !selectedTurnContextCollapsed,
+                    }));
+                  }}
+                >
+                  {selectedTurnContextCollapsed ? (
+                    <ChevronDownIcon size={14} aria-hidden="true" />
+                  ) : (
+                    <ChevronUpIcon size={14} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+              {!selectedTurnContextCollapsed && (
+                <RunMessageBubble
+                  entry={selectedTurnContext}
+                  avatar={avatar}
+                  systemAvatar={systemAvatar}
+                  sessionId={sessionId}
+                  highlighted={false}
+                  showTimestamps={showTimestamps}
+                  showDuration={showDuration}
+                  canonicalMessage={false}
+                  ownedByTurnActivity
+                  transcriptHref={transcriptHrefForEntry?.(
+                    selectedTurnContext,
+                  )}
+                  onOpenTranscriptMessage={onOpenTranscriptMessage}
+                />
+              )}
             </div>
           )}
           {selectedPageInfo?.kind === "question" && (
