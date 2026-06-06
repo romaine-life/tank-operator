@@ -9,6 +9,38 @@ import (
 	"testing"
 )
 
+func TestInstallTankDocsScriptRunsUnderSh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("docs install script test runs on POSIX only")
+	}
+
+	scriptPath, err := filepath.Abs("../../../k8s/session-config/install-tank-docs.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	configDir := t.TempDir()
+	destRoot := filepath.Join(t.TempDir(), "docs")
+	if err := os.WriteFile(filepath.Join(configDir, "docs__quality-timeframes.md"), []byte("quality"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "docs__nested__migration-policy.md"), []byte("migration"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(os.Environ(),
+		"INSTALL_TANK_DOCS_CONFIG_DIR="+configDir,
+		"INSTALL_TANK_DOCS_DEST_ROOT="+destRoot,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed under sh: %v\noutput:\n%s", err, string(out))
+	}
+
+	assertFileContains(t, filepath.Join(destRoot, "quality-timeframes.md"), "quality")
+	assertFileContains(t, filepath.Join(destRoot, "nested", "migration-policy.md"), "migration")
+}
+
 // TestSessionPodBootstrapScript_PerMode executes the in-pod bootstrap script
 // against each wizard mode in a temp HOME and asserts the right config files
 // land on disk. This is the regression guard the deletion in 650c282 (which
@@ -90,6 +122,17 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func assertFileContains(t *testing.T, path, want string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected file %s missing: %v", path, err)
+	}
+	if !strings.Contains(string(data), want) {
+		t.Fatalf("file %s missing expected content %q\ngot:\n%s", path, want, string(data))
 	}
 }
 

@@ -398,6 +398,9 @@ func TestPodManifestMaterializesTankDocsBeforeSandboxAgent(t *testing.T) {
 	if !strings.Contains(script, "/opt/tank/session-config/install-tank-docs.sh") {
 		t.Fatalf("claude command does not materialize Tank docs: %s", script)
 	}
+	if strings.Contains(script, "install-tank-docs.sh || true") {
+		t.Fatalf("claude command silently ignores required Tank docs install failure: %s", script)
+	}
 	if !strings.Contains(script, "exec $sandbox_agent_cmd server") {
 		t.Fatalf("claude command no longer execs sandbox-agent: %s", script)
 	}

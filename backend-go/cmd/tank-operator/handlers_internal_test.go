@@ -343,6 +343,37 @@ func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
 	}
 }
 
+func TestHandleInternalSessionRuntimeConfigAcceptsAntigravity(t *testing.T) {
+	server := internalSessionRuntimeServer(t, "12")
+	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
+		ID:      "12",
+		Email:   "owner@example.test",
+		Mode:    sessionmodel.AntigravityGUIMode,
+		Visible: true,
+		Status:  "Active",
+	})
+	server.mgr = sessions.NewManager(server.k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+	req := httptest.NewRequest(http.MethodPut, "/api/internal/sessions/12/runtime-config", strings.NewReader(`{
+		"model":"antigravity-default"
+	}`))
+	req.SetPathValue("session_id", "12")
+	req.Header.Set("Authorization", "Bearer session-token")
+	rec := httptest.NewRecorder()
+
+	server.handleInternalSessionRuntimeConfig(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	record, ok, err := registry.Get(context.Background(), "owner@example.test", "12")
+	if err != nil || !ok {
+		t.Fatalf("registry Get ok=%v err=%v", ok, err)
+	}
+	if record.RuntimeModel != "antigravity-default" || record.RuntimeConfiguredAt == "" {
+		t.Fatalf("registry runtime config = %#v", record)
+	}
+}
+
 func TestHandleInternalSessionRuntimeConfigCountsIgnoredWindow(t *testing.T) {
 	server := internalSessionRuntimeServer(t, "12")
 	registry := newTestSessionRegistry(sessionmodel.SessionRecord{

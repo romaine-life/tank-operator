@@ -43,7 +43,7 @@ type SessionImageOverrides interface {
 	// set" (the caller falls back to the configured image). A non-nil error
 	// means the lookup failed; the caller also falls back rather than failing
 	// session creation.
-	Get(ctx context.Context, scope string) (claudeImage, codexImage string, ok bool, err error)
+	Get(ctx context.Context, scope string) (claudeImage, codexImage, antigravityImage string, ok bool, err error)
 }
 
 // SessionRegistry is a write-capable registry interface.
@@ -193,13 +193,13 @@ func resolveIP(host string) string {
 //
 // It is a deliberate no-op when no resolver is wired (production never wires
 // one) or for the production scope, so prod always stamps the configured
-// SESSION_IMAGE / CODEX_SESSION_IMAGE. A lookup error falls back to the pinned
-// image rather than failing session creation.
+// SESSION_IMAGE / CODEX_SESSION_IMAGE / ANTIGRAVITY_SESSION_IMAGE. A lookup
+// error falls back to the pinned image rather than failing session creation.
 func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.ManifestOptions, mode string) {
 	if m.imageOverrides == nil || m.scope == "" || m.scope == defaultSessionScope {
 		return
 	}
-	claudeImage, codexImage, ok, err := m.imageOverrides.Get(ctx, m.scope)
+	claudeImage, codexImage, antigravityImage, ok, err := m.imageOverrides.Get(ctx, m.scope)
 	if err != nil {
 		slog.Warn("session image override lookup failed; using pinned image",
 			"scope", m.scope, "mode", mode, "error", err)
@@ -209,7 +209,12 @@ func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.Man
 		return
 	}
 	kind := ""
-	if sessionmodel.IsCodexMode(mode) {
+	if sessionmodel.IsAntigravityMode(mode) {
+		if antigravityImage != "" {
+			opts.AntigravitySessionImage = antigravityImage
+			kind = "antigravity"
+		}
+	} else if sessionmodel.IsCodexMode(mode) {
 		if codexImage != "" {
 			opts.CodexSessionImage = codexImage
 			kind = "codex"
