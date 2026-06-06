@@ -53,6 +53,8 @@ spec:
               value: {{ .Values.session.image | quote }}
             - name: CODEX_SESSION_IMAGE
               value: {{ .Values.session.codexImage | quote }}
+            - name: ANTIGRAVITY_SESSION_IMAGE
+              value: {{ .Values.session.antigravityImage | quote }}
             - name: SESSION_SERVICE_ACCOUNT
               value: {{ include "tank-operator.sessionServiceAccount" . | quote }}
             - name: SESSION_CONFIGMAP
@@ -137,6 +139,8 @@ spec:
               value: {{ include "tank-operator.claudeCredentialsKvKey" . | quote }}
             - name: CODEX_CREDENTIALS_KV_KEY
               value: {{ include "tank-operator.codexCredentialsKvKey" . | quote }}
+            - name: ANTIGRAVITY_CREDENTIALS_KV_KEY
+              value: {{ include "tank-operator.antigravityCredentialsKvKey" . | quote }}
             - name: AZURE_FEDERATED_TOKEN_FILE
               value: /var/run/secrets/azure/tokens/azure-identity-token
             - name: AZURE_AUTHORITY_HOST

@@ -274,6 +274,43 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	assertVolume(t, volumes, "auth-romaine-sa-token")
 }
 
+func TestPodManifestAntigravityConfigUsesGlibcImageWithoutSidecar(t *testing.T) {
+	manifest := PodManifest("77", "nelson@romaine.life", AntigravityConfigMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		AntigravitySessionImage: "antigravity-image",
+	})
+
+	if got, want := manifest["metadata"].(map[string]any)["labels"].(map[string]any)["tank-operator/mode"], AntigravityConfigMode; got != want {
+		t.Fatalf("mode label = %v, want %q", got, want)
+	}
+
+	spec := manifest["spec"].(map[string]any)
+	containers := spec["containers"].([]any)
+
+	// antigravity_config is a single-container terminal-login pod. The glibc
+	// antigravity image lacks the (Python) mcp-auth-proxy binary, and a
+	// credential-mint login needs neither the MCP gateway sidecar nor an SDK
+	// runner — so the pod is just the `claude` (sandbox-agent terminal)
+	// container. Regression guard for the sidecar-gating branch.
+	if got, want := len(containers), 1; got != want {
+		t.Fatalf("container count = %d, want %d (claude only; no mcp-auth-proxy, no runner)", got, want)
+	}
+	claude := containers[0].(map[string]any)
+	if got, want := claude["name"], "claude"; got != want {
+		t.Fatalf("sole container name = %v, want %q", got, want)
+	}
+	// Stamps the dedicated glibc image, not SessionImage/CodexSessionImage.
+	if got, want := claude["image"], "antigravity-image"; got != want {
+		t.Fatalf("antigravity_config image = %v, want %q (must use AntigravitySessionImage, not the claude/codex image)", got, want)
+	}
+	for _, c := range containers {
+		if name := c.(map[string]any)["name"]; name == "mcp-auth-proxy" {
+			t.Fatal("antigravity_config must not carry the mcp-auth-proxy sidecar — the glibc image has no such binary")
+		}
+	}
+}
+
 func TestPodManifestDisplayNameAnnotation(t *testing.T) {
 	name := "  Launch draft  "
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{

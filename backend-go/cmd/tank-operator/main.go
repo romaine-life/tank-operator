@@ -248,10 +248,12 @@ func main() {
 	// every claude_gui session crashlooped).
 	sessionImage := os.Getenv("SESSION_IMAGE")
 	codexSessionImage := os.Getenv("CODEX_SESSION_IMAGE")
-	if sessionImage == "" || codexSessionImage == "" {
-		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE to fingerprinted tags",
+	antigravitySessionImage := os.Getenv("ANTIGRAVITY_SESSION_IMAGE")
+	if sessionImage == "" || codexSessionImage == "" || antigravitySessionImage == "" {
+		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE / ANTIGRAVITY_SESSION_IMAGE to fingerprinted tags",
 			"SESSION_IMAGE", sessionImage,
 			"CODEX_SESSION_IMAGE", codexSessionImage,
+			"ANTIGRAVITY_SESSION_IMAGE", antigravitySessionImage,
 		)
 		os.Exit(1)
 	}
@@ -291,6 +293,7 @@ func main() {
 			ArgoCDTrackingApp:              envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
 			SessionImage:                   sessionImage,
 			CodexSessionImage:              codexSessionImage,
+			AntigravitySessionImage:        antigravitySessionImage,
 			SessionScope:                   sessionScope,
 			TankOperatorInternalURL:        tankOperatorInternalURL,
 			NATSURL:                        envDefault("NATS_URL", ""),

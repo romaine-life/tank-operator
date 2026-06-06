@@ -4,6 +4,7 @@ set -Eeuo pipefail
 slot_name="${1:-tank-operator-slot-2}"
 expected_claude="${slot_name}-claude-code-credentials"
 expected_codex="${slot_name}-codex-credentials"
+expected_antigravity="${slot_name}-antigravity-credentials"
 
 hot_rendered="$(helm template "${slot_name}" k8s \
   --namespace "${slot_name}" \
@@ -53,5 +54,16 @@ fi
 if grep -A1 -F "name: CODEX_CREDENTIALS_KV_KEY" <<<"${hot_rendered}" \
   | grep -Fq 'value: "codex-credentials"'; then
   echo "hot slot render still points a Codex proxy/config env at production codex-credentials" >&2
+  exit 1
+fi
+
+if ! grep -Fq "value: \"${expected_antigravity}\"" <<<"${hot_rendered}"; then
+  echo "hot slot render did not set ANTIGRAVITY_CREDENTIALS_KV_KEY to ${expected_antigravity}" >&2
+  exit 1
+fi
+
+if grep -A1 -F "name: ANTIGRAVITY_CREDENTIALS_KV_KEY" <<<"${hot_rendered}" \
+  | grep -Fq 'value: "antigravity-credentials"'; then
+  echo "hot slot render still points an Antigravity config env at production antigravity-credentials" >&2
   exit 1
 fi

@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-0ee7773a72cd0c76796c92036fb48e8734dccd43bca1a56bc4c54f2b6bc1077f"
+  tag: "app-1b1ad1ef6b5dbfa489e0771941982c478c1e9763ce7e19cdc1331dcffb2b4632"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -55,6 +55,11 @@ session:
   # every push to main via a `[skip ci]` follow-up commit.
   image: romainecr.azurecr.io/claude-container:claude-114e856fa5489cf8cab61a2693ce213754ebf5e71cb2cea71807ee95c07662dc
   codexImage: romainecr.azurecr.io/codex-container:codex-5357e367c779e978e729c9611128d160f0beb6462dc1f33639947443a0a9a4e6
+  # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
+  # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
+  # antigravity_config credential-mint mode. session-images-build.yml rewrites
+  # this tag suffix on every push to main, same as image/codexImage above.
+  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-f6ef7de7b6a8224df2c0c7dbf814c9c7ffce7ed8b9cb46bc0cbda62833e8b424
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default

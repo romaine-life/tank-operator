@@ -25,6 +25,16 @@ codex-credentials
 {{- end -}}
 {{- end -}}
 
+{{- define "tank-operator.antigravityCredentialsKvKey" -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}
+{{ printf "%s-antigravity-credentials" (include "tank-operator.slotName" .) }}
+{{- else if eq .Values.namespaces.orchestrator "tank-operator" -}}
+antigravity-credentials
+{{- else -}}
+{{ printf "%s-antigravity-credentials" .Values.namespaces.orchestrator }}
+{{- end -}}
+{{- end -}}
+
 {{- define "tank-operator.renderMode" -}}
 {{- $mode := .Values.renderMode | default "normal" -}}
 {{- if not (has $mode (list "normal" "warm" "hot")) -}}
