@@ -10047,20 +10047,20 @@ function RunTurnActivityGroup({
       )}
       <div className="run-turn-activity-stack">
         {useDividerDisclosure ? (
-          <button
-            type="button"
-            className="run-turn-activity-divider"
-            onClick={() => onOpenChange(true)}
-            aria-expanded={false}
-            aria-label="Show agent activity"
-            title="Show agent activity"
-          >
+          <div className="run-turn-activity-divider">
             <span className="run-turn-activity-divider-line" aria-hidden="true" />
-            <span className="run-turn-activity-divider-toggle" aria-hidden="true">
+            <button
+              type="button"
+              className="run-turn-activity-divider-toggle"
+              onClick={() => onOpenChange(true)}
+              aria-expanded={false}
+              aria-label="Show agent activity"
+              title="Show agent activity"
+            >
               <ChevronDownIcon size={15} strokeWidth={2.2} />
-            </span>
+            </button>
             <span className="run-turn-activity-divider-line" aria-hidden="true" />
-          </button>
+          </div>
         ) : (
           <div className="run-turn-activity-content">
             <button
@@ -10821,46 +10821,43 @@ function RunTurnActivityScreen({
             </div>
           )}
           {selected && showDetailActivityDivider && (
-            <button
-              type="button"
-              className="run-turn-activity-divider run-turn-view-activity-divider"
-              onClick={() => {
-                setCollapsedActivityTurnIds((prev) => ({
-                  ...prev,
-                  [selected.turnId]: !detailActivityCollapsed,
-                }));
-              }}
-              aria-expanded={!detailActivityCollapsed}
-              aria-label={
-                detailActivityCollapsed
-                  ? "Show agent activity"
-                  : "Hide agent activity"
-              }
-              title={
-                detailActivityCollapsed
-                  ? "Show agent activity"
-                  : "Hide agent activity"
-              }
-            >
+            <div className="run-turn-activity-divider run-turn-view-activity-divider">
               <span
                 className="run-turn-activity-divider-line"
                 aria-hidden="true"
               />
-              <span
+              <button
+                type="button"
                 className="run-turn-activity-divider-toggle"
-                aria-hidden="true"
+                onClick={() => {
+                  setCollapsedActivityTurnIds((prev) => ({
+                    ...prev,
+                    [selected.turnId]: !detailActivityCollapsed,
+                  }));
+                }}
+                aria-expanded={!detailActivityCollapsed}
+                aria-label={
+                  detailActivityCollapsed
+                    ? "Show agent activity"
+                    : "Hide agent activity"
+                }
+                title={
+                  detailActivityCollapsed
+                    ? "Show agent activity"
+                    : "Hide agent activity"
+                }
               >
                 {detailActivityCollapsed ? (
                   <ChevronDownIcon size={15} strokeWidth={2.2} />
                 ) : (
                   <ChevronUpIcon size={15} strokeWidth={2.2} />
                 )}
-              </span>
+              </button>
               <span
                 className="run-turn-activity-divider-line"
                 aria-hidden="true"
               />
-            </button>
+            </div>
           )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
