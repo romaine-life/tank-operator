@@ -10326,6 +10326,21 @@ function RunTurnActivityScreen({
     : undefined;
   const showRefreshProblemOnly =
     Boolean(refreshProblem) && detailGroups.length === 0;
+  const selectedThinkingStatus =
+    selected?.shell?.activity?.status === "needs_input"
+      ? "needs_input"
+      : "thinking";
+  const selectedThinkingBubble =
+    selected && selected.active ? (
+      <RunTurnThinkingBubble
+        key={`turn-view-thinking-${selected.turnId}`}
+        userKey={userKey}
+        turnId={selected.turnId}
+        status={selectedThinkingStatus}
+        lastActivityAt={selected.lastActivityAt}
+        avatar={avatar}
+      />
+    ) : null;
   const selectedPageDirectoryItem = selectedPageInfo?.pages?.find(
     (page) => page.number === pagerState.page,
   );
@@ -10737,40 +10752,17 @@ function RunTurnActivityScreen({
                 />
                 <span>Loading activity...</span>
               </div>
-            ) : showRefreshProblemOnly ? null : selected.active &&
-              detailGroups.length === 0 ? (
-              <div
-                className="run-turn-view-thinking"
-                aria-label="Turn is running"
-              >
-                <span className="run-turn-thinking-lines">
-                  <span className="run-turn-thinking-label run-turn-thinking-shimmer">
-                    Thinking...
-                  </span>
-                  <span className="run-turn-thinking-meta-row">
-                    <span className="run-turn-thinking-meta-label">
-                      Runtime
-                    </span>
-                    <RunTurnThinkingDuration
-                      userKey={userKey}
-                      turnId={selected.turnId}
-                    />
-                  </span>
-                  <span className="run-turn-thinking-meta-row">
-                    <span className="run-turn-thinking-meta-label">
-                      Last activity
-                    </span>
-                    <RunTurnThinkingLastActivity
-                      lastActivityAt={selected.lastActivityAt}
-                      turnId={selected.turnId}
-                    />
-                  </span>
-                </span>
-              </div>
+            ) : showRefreshProblemOnly ? (
+              selectedThinkingBubble
             ) : detailGroups.length === 0 ? (
-              <div className="run-shell-tasks-empty">No turn activity.</div>
+              selectedThinkingBubble ?? (
+                <div className="run-shell-tasks-empty">No turn activity.</div>
+              )
             ) : (
-              detailGroups.map(renderGroup)
+              <>
+                {selectedThinkingBubble}
+                {detailGroups.map(renderGroup)}
+              </>
             )}
           </div>
         </>
