@@ -16,6 +16,8 @@ test("session routes parse only session-scoped pages", () => {
     tab: "chat",
     turnNumber: null,
     turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
     staticPath: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -25,6 +27,8 @@ test("session routes parse only session-scoped pages", () => {
     tab: "turns",
     turnNumber: 3,
     turnSegmentPresent: true,
+    pageNumber: null,
+    pageSegmentPresent: false,
     staticPath: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -35,6 +39,8 @@ test("session routes parse only session-scoped pages", () => {
     tab: "turns",
     turnNumber: null,
     turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
     staticPath: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -48,6 +54,8 @@ test("session routes parse only session-scoped pages", () => {
     tab: "turns",
     turnNumber: null,
     turnSegmentPresent: true,
+    pageNumber: null,
+    pageSegmentPresent: false,
     staticPath: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -60,6 +68,8 @@ test("session routes parse only session-scoped pages", () => {
     tab: "session-data",
     turnNumber: null,
     turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
     staticPath: null,
     settingsTab: "preferences",
     adminView: "controls",
@@ -76,6 +86,8 @@ test("session routes parse the sandboxed static-page subroute", () => {
     tab: "static",
     turnNumber: null,
     turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
     staticPath: "diagram.html",
     settingsTab: "preferences",
     adminView: "controls",
@@ -122,6 +134,48 @@ test("session route urls broadcast only session-owned pages", () => {
   assert.equal(
     buildSessionRouteUrl(current, "s 1", "session-data"),
     "https://tank.example.test/sessions/s%201/session-data",
+  );
+});
+
+test("turn routes carry an optional page ordinal", () => {
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/turns/3/pages/2"), {
+    sessionId: "s-1",
+    tab: "turns",
+    turnNumber: 3,
+    turnSegmentPresent: true,
+    pageNumber: 2,
+    pageSegmentPresent: true,
+    staticPath: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  // A non-numeric or leading-zero page segment is a present-but-unresolvable
+  // target (pageNumber null, pageSegmentPresent true) — the same discipline as
+  // turn numbers, so a bad page link shows an explicit miss, not page 1.
+  assert.equal(
+    readSessionRouteFromPathname("/sessions/s-1/turns/3/pages/abc")?.pageNumber,
+    null,
+  );
+  assert.equal(
+    readSessionRouteFromPathname("/sessions/s-1/turns/3/pages/abc")?.pageSegmentPresent,
+    true,
+  );
+  assert.equal(
+    readSessionRouteFromPathname("/sessions/s-1/turns/3/pages/01")?.pageNumber,
+    null,
+  );
+  // An unknown subsegment after the turn is rejected, not silently ignored.
+  assert.equal(readSessionRouteFromPathname("/sessions/s-1/turns/3/foo"), null);
+  // Round-trip: a turn + page builds the fully-qualified, shareable page URL.
+  const current = "https://tank.example.test/sessions/s-1";
+  assert.equal(
+    buildSessionRouteUrl(current, "s-1", "turns", 3, null, 2),
+    "https://tank.example.test/sessions/s-1/turns/3/pages/2",
+  );
+  // A page ordinal without a turn never appears — a bare /turns can't pin one.
+  assert.equal(
+    buildSessionRouteUrl(current, "s-1", "turns", null, null, 2),
+    "https://tank.example.test/sessions/s-1/turns",
   );
 });
 
