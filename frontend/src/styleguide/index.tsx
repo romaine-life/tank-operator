@@ -50,6 +50,7 @@ const CATEGORIES: { name: string; entries: { slug: string; label: string; sub: s
       { slug: "portfolio-workspace", label: "portfolio: session workspace", sub: "full shell density" },
       { slug: "portfolio-onboarding", label: "portfolio: onboarding", sub: "first-run wall" },
       { slug: "portfolio-transcript", label: "portfolio: transcript states", sub: "highlight / active / composer" },
+      { slug: "collapsed-turn-activity", label: "collapsed turn activity", sub: "divider chevron" },
       { slug: "mobile-shell", label: "compact shell", sub: "phone top bar + drawer + gate" },
     ],
   },

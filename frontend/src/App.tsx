@@ -5106,6 +5106,13 @@ function messageEntryForAvatarGrouping(
   return group.kind === "message" ? group.entry : null;
 }
 
+function flatEntryGroupEntries(group: FlatEntryGroup): TranscriptEntry[] {
+  if (group.kind === "tools" || group.kind === "message_group")
+    return group.entries;
+  if (group.kind === "thinking") return [];
+  return [group.entry];
+}
+
 function isMessageAvatarContinuation(
   groups: readonly (EntryGroup | FlatEntryGroup)[],
   index: number,
@@ -5175,11 +5182,19 @@ function turnActivityOwnedAssistantEntries(
   group: Extract<EntryGroup, { kind: "activity" }>,
 ): TranscriptEntry[] {
   const compactedEntryIds = new Set(group.compactedEntryIds);
-  return group.entries.filter(
-    (entry) =>
-      entry.kind === "message" &&
-      entry.role === "assistant" &&
-      !compactedEntryIds.has(entry.id),
+  return group.entries.filter((entry) =>
+    isTurnActivityFinalAssistantEntry(entry, compactedEntryIds),
+  );
+}
+
+function isTurnActivityFinalAssistantEntry(
+  entry: TranscriptEntry,
+  compactedEntryIds?: ReadonlySet<string>,
+): boolean {
+  return (
+    entry.kind === "message" &&
+    entry.role === "assistant" &&
+    !compactedEntryIds?.has(entry.id)
   );
 }
 
@@ -9941,6 +9956,7 @@ function RunTurnActivityGroup({
     .find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time);
   const shellSummary = group.shell?.activity;
   const needsInput = shellSummary?.status === "needs_input";
+  const useDividerDisclosure = !open && !needsInput;
   const questionCount =
     shellSummary?.questionCount ?? pageInfo?.questionCount ?? 0;
   // Always-present pager state: a single-page turn renders a disabled
@@ -9950,205 +9966,224 @@ function RunTurnActivityGroup({
     <div
       className="run-turn-activity"
       data-state={open ? "open" : "closed"}
+      data-display={useDividerDisclosure ? "divider" : "panel"}
       data-active={group.active === true ? "true" : undefined}
       data-inline-response={
         ownedAssistantEntries.length > 0 ? "true" : undefined
       }
     >
-      <span className="run-turn-activity-avatar" aria-hidden="true">
-        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
-      </span>
+      {!useDividerDisclosure && (
+        <span className="run-turn-activity-avatar" aria-hidden="true">
+          <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+        </span>
+      )}
       <div className="run-turn-activity-stack">
-        <div className="run-turn-activity-content">
-          <button
-            type="button"
-            className="run-turn-activity-header"
-            onClick={() => onOpenChange(!open)}
-            aria-expanded={open}
-          >
-            <span
-              className="run-turn-activity-icon"
-              title={
-                needsInput ? "Agent needs input" : "Condensed turn activity"
-              }
-              aria-label={
-                needsInput ? "Agent needs input" : "Condensed turn activity"
-              }
-            >
-              <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
-            </span>
-            <span className="run-turn-activity-label">
-              {needsInput ? "Agent needs input" : "Turn activity"}
-            </span>
-            <span className="run-turn-activity-summary">
-              {needsInput && questionCount > 0
-                ? plural(questionCount, "question")
-                : group.shell
-                  ? turnActivityShellSummary(shellSummary)
-                  : turnActivitySummary(group.entries)}
-            </span>
-            {showTimestamps && (
-              <ToolTiming
-                startedAt={
-                  shellSummary?.startedAt ??
-                  startedAt?.startedAt ??
-                  startedAt?.time
-                }
-                completedAt={
-                  shellSummary?.completedAt ??
-                  completedAt?.completedAt ??
-                  completedAt?.turnTerminalAt ??
-                  completedAt?.time
-                }
-                running={group.active === true}
-              />
-            )}
-            <span className="run-turn-activity-chevron">
-              {open ? (
-                <ChevronUpIcon size={14} className="run-chevron-icon" />
-              ) : (
-                <ChevronDownIcon size={14} className="run-chevron-icon" />
-              )}
-            </span>
-          </button>
-          {needsInput && onOpenTurn && (
+        {useDividerDisclosure ? (
+          <div className="run-turn-activity-divider">
             <button
               type="button"
-              className="run-turn-activity-action"
-              onClick={() =>
-                onOpenTurn(group.turnId, { anchor: "top", resetPage: true })
-              }
+              className="run-turn-activity-divider-toggle"
+              data-direction="down"
+              onClick={() => onOpenChange(true)}
+              aria-expanded={false}
+              aria-label="Show agent activity"
+              title="Show agent activity"
             >
-              Answer questions
+              <ChevronDownIcon size={15} strokeWidth={2.2} />
             </button>
-          )}
-          {open && (
-            <div className="run-turn-activity-body">
-              {onSelectPage && (
-                <TurnActivityPager
-                  pagerState={pagerState}
-                  onSelectPage={onSelectPage}
-                  pageInfo={pageInfo}
+          </div>
+        ) : (
+          <div className="run-turn-activity-content">
+            <button
+              type="button"
+              className="run-turn-activity-header"
+              onClick={() => onOpenChange(!open)}
+              aria-expanded={open}
+            >
+              <span
+                className="run-turn-activity-icon"
+                title={
+                  needsInput ? "Agent needs input" : "Condensed turn activity"
+                }
+                aria-label={
+                  needsInput ? "Agent needs input" : "Condensed turn activity"
+                }
+              >
+                <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
+              </span>
+              <span className="run-turn-activity-label">
+                {needsInput ? "Agent needs input" : "Turn activity"}
+              </span>
+              <span className="run-turn-activity-summary">
+                {needsInput && questionCount > 0
+                  ? plural(questionCount, "question")
+                  : group.shell
+                    ? turnActivityShellSummary(shellSummary)
+                    : turnActivitySummary(group.entries)}
+              </span>
+              {showTimestamps && (
+                <ToolTiming
+                  startedAt={
+                    shellSummary?.startedAt ??
+                    startedAt?.startedAt ??
+                    startedAt?.time
+                  }
+                  completedAt={
+                    shellSummary?.completedAt ??
+                    completedAt?.completedAt ??
+                    completedAt?.turnTerminalAt ??
+                    completedAt?.time
+                  }
+                  running={group.active === true}
                 />
               )}
-              {group.shell && !group.loaded ? (
-                <div
-                  className="run-shell-loading run-turn-activity-loading"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <Loader2Icon
-                    size={14}
-                    className="run-spin"
-                    aria-hidden="true"
+              <span className="run-turn-activity-chevron">
+                {open ? (
+                  <ChevronUpIcon size={14} className="run-chevron-icon" />
+                ) : (
+                  <ChevronDownIcon size={14} className="run-chevron-icon" />
+                )}
+              </span>
+            </button>
+            {needsInput && onOpenTurn && (
+              <button
+                type="button"
+                className="run-turn-activity-action"
+                onClick={() =>
+                  onOpenTurn(group.turnId, { anchor: "top", resetPage: true })
+                }
+              >
+                Answer questions
+              </button>
+            )}
+            {open && (
+              <div className="run-turn-activity-body">
+                {onSelectPage && (
+                  <TurnActivityPager
+                    pagerState={pagerState}
+                    onSelectPage={onSelectPage}
+                    pageInfo={pageInfo}
                   />
-                  <span>
-                    {loading
-                      ? "Loading activity..."
-                      : "Activity details unavailable."}
-                  </span>
-                </div>
-              ) : (
-                childGroups.map((child, childIndex) => {
-                  if (child.kind === "tools") {
-                    const childGroupKey = toolGroupStateKey(child.entries);
-                    return (
-                      <RunToolGroup
-                        key={childGroupKey}
-                        entries={child.entries}
-                        autoExpand={autoExpandTools}
-                        showTimestamps={showTimestamps}
-                        open={
-                          toolGroupOpenOverrides[childGroupKey] ??
-                          toolGroupDefaultOpen(
-                            child.entries,
-                            autoExpandTools,
-                            toolExpansionOverrides,
-                          )
-                        }
-                        onOpenChange={(nextOpen) =>
-                          onToolGroupOpenChange(childGroupKey, nextOpen)
-                        }
-                        toolExpansionOverrides={toolExpansionOverrides}
-                        onToolExpandedChange={onToolExpandedChange}
-                      />
-                    );
-                  }
-                  if (child.kind === "reasoning") {
-                    return (
-                      <RunReasoningBlock
-                        key={child.entry.id}
-                        entry={child.entry}
-                        showThinking={showThinking}
-                      />
-                    );
-                  }
-                  if (child.kind === "meta") {
-                    if (child.entry.metaKind === "awaiting_input") {
+                )}
+                {group.shell && !group.loaded ? (
+                  <div
+                    className="run-shell-loading run-turn-activity-loading"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <Loader2Icon
+                      size={14}
+                      className="run-spin"
+                      aria-hidden="true"
+                    />
+                    <span>
+                      {loading
+                        ? "Loading activity..."
+                        : "Activity details unavailable."}
+                    </span>
+                  </div>
+                ) : (
+                  childGroups.map((child, childIndex) => {
+                    if (child.kind === "tools") {
+                      const childGroupKey = toolGroupStateKey(child.entries);
                       return (
-                        <RunAwaitingInputCard
-                          key={child.entry.id}
-                          entry={child.entry}
+                        <RunToolGroup
+                          key={childGroupKey}
+                          entries={child.entries}
+                          autoExpand={autoExpandTools}
+                          showTimestamps={showTimestamps}
+                          open={
+                            toolGroupOpenOverrides[childGroupKey] ??
+                            toolGroupDefaultOpen(
+                              child.entries,
+                              autoExpandTools,
+                              toolExpansionOverrides,
+                            )
+                          }
+                          onOpenChange={(nextOpen) =>
+                            onToolGroupOpenChange(childGroupKey, nextOpen)
+                          }
+                          toolExpansionOverrides={toolExpansionOverrides}
+                          onToolExpandedChange={onToolExpandedChange}
                         />
                       );
                     }
-                    if (child.entry.metaKind === "turn_usage") return null;
-                    return (
-                      <RunMetaBlock
-                        key={child.entry.id}
-                        entry={child.entry}
-                        systemAvatar={systemAvatar}
-                      />
-                    );
-                  }
-                  if (child.kind === "background_task") {
-                    return (
-                      <RunBackgroundTaskBlock
-                        key={child.entry.id}
-                        entry={child.entry}
-                        showTimestamps={showTimestamps}
-                        onOpenTask={onOpenBackgroundTask}
-                      />
-                    );
-                  }
-                  if (child.kind === "message_group") {
-                    return (
-                      <RunSystemMessageGroupBubble
-                        key={entryGroupKey(child)}
-                        entries={child.entries}
-                        systemAvatar={systemAvatar}
-                        highlightedEntryId={highlightedEntryId}
-                        showTimestamps={showTimestamps}
-                      />
-                    );
-                  }
-                  if (child.kind === "thinking") return null;
-                  return (
-                    <RunMessageBubble
-                      key={child.entry.id}
-                      entry={child.entry}
-                      avatar={avatar}
-                      systemAvatar={systemAvatar}
-                      sessionId={sessionId}
-                      highlighted={
-                        compactedEntryIds.has(child.entry.id) &&
-                        highlightedEntryId === child.entry.id
+                    if (child.kind === "reasoning") {
+                      return (
+                        <RunReasoningBlock
+                          key={child.entry.id}
+                          entry={child.entry}
+                          showThinking={showThinking}
+                        />
+                      );
+                    }
+                    if (child.kind === "meta") {
+                      if (child.entry.metaKind === "awaiting_input") {
+                        return (
+                          <RunAwaitingInputCard
+                            key={child.entry.id}
+                            entry={child.entry}
+                          />
+                        );
                       }
-                      showTimestamps={showTimestamps}
-                      showDuration={showDuration}
-                      onQuote={onQuote}
-                      canonicalMessage={false}
-                      isAvatarContinuation={isMessageAvatarContinuation(
-                        childGroups,
-                        childIndex,
-                      )}
-                    />
-                  );
-                })
-              )}
-            </div>
-          )}
-        </div>
+                      if (child.entry.metaKind === "turn_usage") return null;
+                      return (
+                        <RunMetaBlock
+                          key={child.entry.id}
+                          entry={child.entry}
+                          systemAvatar={systemAvatar}
+                        />
+                      );
+                    }
+                    if (child.kind === "background_task") {
+                      return (
+                        <RunBackgroundTaskBlock
+                          key={child.entry.id}
+                          entry={child.entry}
+                          showTimestamps={showTimestamps}
+                          onOpenTask={onOpenBackgroundTask}
+                        />
+                      );
+                    }
+                    if (child.kind === "message_group") {
+                      return (
+                        <RunSystemMessageGroupBubble
+                          key={entryGroupKey(child)}
+                          entries={child.entries}
+                          systemAvatar={systemAvatar}
+                          highlightedEntryId={highlightedEntryId}
+                          showTimestamps={showTimestamps}
+                        />
+                      );
+                    }
+                    if (child.kind === "thinking") return null;
+                    return (
+                      <RunMessageBubble
+                        key={child.entry.id}
+                        entry={child.entry}
+                        avatar={avatar}
+                        systemAvatar={systemAvatar}
+                        sessionId={sessionId}
+                        highlighted={
+                          compactedEntryIds.has(child.entry.id) &&
+                          highlightedEntryId === child.entry.id
+                        }
+                        showTimestamps={showTimestamps}
+                        showDuration={showDuration}
+                        onQuote={onQuote}
+                        canonicalMessage={false}
+                        isAvatarContinuation={isMessageAvatarContinuation(
+                          childGroups,
+                          childIndex,
+                        )}
+                      />
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {ownedAssistantEntries.map((entry) => (
           <RunMessageBubble
             key={entry.id}
@@ -10253,6 +10288,28 @@ function RunTurnActivityScreen({
     () => groupFlatTranscriptEntries(detailEntries),
     [detailEntries],
   );
+  const finalDetailEntryIds = useMemo(() => {
+    const compactedEntryIds = new Set(
+      selected?.shell?.activityIds ??
+        selected?.shell?.activity?.compactedEntryIds ??
+        [],
+    );
+    return new Set(
+      detailEntries
+        .filter((entry) =>
+          isTurnActivityFinalAssistantEntry(entry, compactedEntryIds),
+        )
+        .map((entry) => entry.id),
+    );
+  }, [
+    detailEntries,
+    selected?.shell?.activity?.compactedEntryIds,
+    selected?.shell?.activityIds,
+  ]);
+  const hasFinalDetailResponse = finalDetailEntryIds.size > 0;
+  const hasCollapsibleDetailActivity = detailEntries.some(
+    (entry) => !finalDetailEntryIds.has(entry.id),
+  );
   const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<
     Record<string, boolean>
   >({});
@@ -10262,11 +10319,33 @@ function RunTurnActivityScreen({
   const [collapsedContextTurnIds, setCollapsedContextTurnIds] = useState<
     Record<string, boolean>
   >({});
+  const [collapsedActivityTurnIds, setCollapsedActivityTurnIds] = useState<
+    Record<string, boolean>
+  >({});
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const consumedScrollRequestRef = useRef(0);
+  const finalCollapsedDetailTurnIdsRef = useRef<Set<string>>(new Set());
   const selectedTurnContextCollapsed = selected
     ? collapsedContextTurnIds[selected.turnId] === true
     : false;
+  const showDetailActivityDivider = Boolean(
+    selected &&
+      !selected.active &&
+      hasFinalDetailResponse &&
+      hasCollapsibleDetailActivity,
+  );
+  const detailActivityCollapsed =
+    showDetailActivityDivider &&
+    selected !== null &&
+    collapsedActivityTurnIds[selected.turnId] === true;
+  const renderedDetailGroups = useMemo(() => {
+    if (!detailActivityCollapsed) return detailGroups;
+    return detailGroups.filter((group) =>
+      flatEntryGroupEntries(group).some((entry) =>
+        finalDetailEntryIds.has(entry.id),
+      ),
+    );
+  }, [detailActivityCollapsed, detailGroups, finalDetailEntryIds]);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) =>
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
@@ -10346,6 +10425,19 @@ function RunTurnActivityScreen({
       nextPage,
     };
   }, [selectedPageInfo]);
+  useEffect(() => {
+    if (!selected) return;
+    const turnId = selected.turnId;
+    if (!showDetailActivityDivider) {
+      finalCollapsedDetailTurnIdsRef.current.delete(turnId);
+      return;
+    }
+    if (finalCollapsedDetailTurnIdsRef.current.has(turnId)) return;
+    finalCollapsedDetailTurnIdsRef.current.add(turnId);
+    setCollapsedActivityTurnIds((prev) =>
+      prev[turnId] === true ? prev : { ...prev, [turnId]: true },
+    );
+  }, [selected, showDetailActivityDivider]);
   useLayoutEffect(() => {
     if (!scrollRequest || !selected) return;
     if (scrollRequest.turnId !== selected.turnId) return;
@@ -10465,7 +10557,7 @@ function RunTurnActivityScreen({
         transcriptHref={transcriptHrefForEntry?.(group.entry)}
         onOpenTranscriptMessage={onOpenTranscriptMessage}
         isAvatarContinuation={isMessageAvatarContinuation(
-          detailGroups,
+          renderedDetailGroups,
           groupIndex,
         )}
       />
@@ -10674,6 +10766,38 @@ function RunTurnActivityScreen({
               </span>
             </div>
           )}
+          {selected && showDetailActivityDivider && (
+            <div className="run-turn-activity-divider run-turn-view-activity-divider">
+              <button
+                type="button"
+                className="run-turn-activity-divider-toggle"
+                data-direction={detailActivityCollapsed ? "down" : "up"}
+                onClick={() => {
+                  setCollapsedActivityTurnIds((prev) => ({
+                    ...prev,
+                    [selected.turnId]: !detailActivityCollapsed,
+                  }));
+                }}
+                aria-expanded={!detailActivityCollapsed}
+                aria-label={
+                  detailActivityCollapsed
+                    ? "Show agent activity"
+                    : "Hide agent activity"
+                }
+                title={
+                  detailActivityCollapsed
+                    ? "Show agent activity"
+                    : "Hide agent activity"
+                }
+              >
+                {detailActivityCollapsed ? (
+                  <ChevronDownIcon size={15} strokeWidth={2.2} />
+                ) : (
+                  <ChevronUpIcon size={15} strokeWidth={2.2} />
+                )}
+              </button>
+            </div>
+          )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
             data-page-kind={selectedPageInfo?.kind ?? "activity"}
@@ -10721,7 +10845,7 @@ function RunTurnActivityScreen({
             ) : (
               <>
                 {selectedThinkingBubble}
-                {detailGroups.map(renderGroup)}
+                {renderedDetailGroups.map(renderGroup)}
               </>
             )}
           </div>
@@ -10901,6 +11025,7 @@ export function RunMessages({
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
   const thinkingInvariantRef = useRef<string>("");
+  const finalCollapsedActivityKeysRef = useRef<Set<string>>(new Set());
   // Keep disclosure choices above virtualized row components so streaming
   // events and offscreen remounts do not reset expanded tool details.
   const [activityOpenOverrides, setActivityOpenOverrides] = useState<
@@ -10938,6 +11063,35 @@ export function RunMessages({
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
     );
   }, []);
+  useEffect(() => {
+    setActivityOpenOverrides((prev) => {
+      let next = prev;
+      const liveKeys = new Set<string>();
+      for (const group of groups) {
+        const groupKey = entryGroupKey(group);
+        liveKeys.add(groupKey);
+        if (group.kind !== "activity") continue;
+        const hasFinalResponse =
+          turnActivityOwnedAssistantEntries(group).length > 0;
+        if (!hasFinalResponse) {
+          finalCollapsedActivityKeysRef.current.delete(groupKey);
+          continue;
+        }
+        if (finalCollapsedActivityKeysRef.current.has(groupKey)) continue;
+        finalCollapsedActivityKeysRef.current.add(groupKey);
+        if (prev[groupKey] !== false) {
+          if (next === prev) next = { ...prev };
+          next[groupKey] = false;
+        }
+      }
+      for (const groupKey of finalCollapsedActivityKeysRef.current) {
+        if (!liveKeys.has(groupKey)) {
+          finalCollapsedActivityKeysRef.current.delete(groupKey);
+        }
+      }
+      return next;
+    });
+  }, [groups]);
   const turnHrefForEntry = useCallback(
     (entry: TranscriptEntry): string | undefined => {
       if (!turnLinksEnabled || !entry.turnId) return undefined;
