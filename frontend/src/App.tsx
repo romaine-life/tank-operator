@@ -1820,6 +1820,162 @@ function replaceAppRoute(
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
+// Breadcrumb navigation. A crumb is a real <a href> (cmd/ctrl-click opens a new
+// tab); a plain click pushes the target URL and fires a synthetic popstate,
+// which the visible pane's existing route listener resolves — no per-target
+// signal plumbing, and it works for every routed surface.
+function navigateToSessionRoute(url: string): void {
+  if (url === window.location.href) return;
+  window.history.pushState({}, "", url);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+function BreadcrumbSep() {
+  return (
+    <span className="workspace-crumb-sep" aria-hidden="true">
+      /
+    </span>
+  );
+}
+
+function BreadcrumbLink({
+  href,
+  label,
+  current,
+}: {
+  href: string;
+  label: string;
+  current?: boolean;
+}) {
+  if (current) {
+    return (
+      <span
+        className="workspace-crumb workspace-crumb-current"
+        aria-current="page"
+      >
+        {label}
+      </span>
+    );
+  }
+  return (
+    <a
+      className="workspace-crumb"
+      href={href}
+      onClick={(e) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+          return;
+        e.preventDefault();
+        navigateToSessionRoute(href);
+      }}
+    >
+      {label}
+    </a>
+  );
+}
+
+// The breadcrumb segments AFTER the session-name crumb. Climb-only: the section
+// (and, for Turns, the turn and page) are navigable ancestors; the current leaf
+// is non-interactive. The dedicated in-view turn/page dropdowns stay the
+// pickers. Renders nothing for the session-data root or app-level tabs.
+function WorkspaceBreadcrumbTrail({
+  sessionId,
+  location,
+}: {
+  sessionId: string;
+  location: SessionLocation;
+}) {
+  const url = (
+    tab: SessionRouteTab,
+    turnNumber: number | null,
+    pageNumber: number | null,
+    staticPath: string | null,
+  ) =>
+    buildSessionRouteUrl(
+      window.location.href,
+      sessionId,
+      tab,
+      turnNumber,
+      staticPath,
+      pageNumber,
+    );
+  if (location.tab === "chat") {
+    return (
+      <>
+        <BreadcrumbSep />
+        <BreadcrumbLink
+          href={url("chat", null, null, null)}
+          label="main transcript"
+          current
+        />
+      </>
+    );
+  }
+  if (location.tab === "turns") {
+    if (location.turnUnavailable) {
+      return (
+        <>
+          <BreadcrumbSep />
+          <BreadcrumbLink href={url("turns", null, null, null)} label="turns" />
+          <BreadcrumbSep />
+          <span
+            className="workspace-crumb workspace-crumb-current"
+            aria-current="page"
+          >
+            unavailable
+          </span>
+        </>
+      );
+    }
+    const turnLabel =
+      location.turnNumber != null ? String(location.turnNumber) : "current";
+    const hasPage = location.pageNumber != null;
+    return (
+      <>
+        <BreadcrumbSep />
+        <BreadcrumbLink href={url("turns", null, null, null)} label="turns" />
+        <BreadcrumbSep />
+        <BreadcrumbLink
+          href={url("turns", location.turnNumber, null, null)}
+          label={turnLabel}
+          current={!hasPage}
+        />
+        {hasPage && (
+          <>
+            <BreadcrumbSep />
+            <span className="workspace-crumb workspace-crumb-label">pages</span>
+            <BreadcrumbSep />
+            <BreadcrumbLink
+              href={url(
+                "turns",
+                location.turnNumber,
+                location.pageNumber,
+                null,
+              )}
+              label={String(location.pageNumber)}
+              current
+            />
+          </>
+        )}
+      </>
+    );
+  }
+  if (location.tab === "static" && location.staticPath) {
+    return (
+      <>
+        <BreadcrumbSep />
+        <span className="workspace-crumb workspace-crumb-label">files</span>
+        <BreadcrumbSep />
+        <BreadcrumbLink
+          href={url("static", null, null, location.staticPath)}
+          label={location.staticPath}
+          current
+        />
+      </>
+    );
+  }
+  return null;
+}
+
 function readInitialSessionId(): string | null {
   const route = readSessionRouteFromPath();
   if (route?.sessionId) return route.sessionId;
@@ -12511,11 +12667,23 @@ function RunHelpScreen() {
   );
 }
 
+// The visible pane reports its current in-session location up to the App so the
+// App-level title chrome can render the breadcrumb trail. Mirrors the
+// onConnectionLabelChange bubble-up; null when the pane isn't the visible one.
+type SessionLocation = {
+  tab: string;
+  turnNumber: number | null;
+  pageNumber: number | null;
+  staticPath: string | null;
+  turnUnavailable: boolean;
+};
+
 function ChatPane({
   session,
   visible,
   onSessionPatch,
   onConnectionLabelChange,
+  onLocationChange,
   onRefreshFlashChange,
   onForkMessage,
   pendingScrollMessageId,
@@ -12540,6 +12708,7 @@ function ChatPane({
   visible: boolean;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onConnectionLabelChange: (id: string, label: string | null) => void;
+  onLocationChange: (id: string, location: SessionLocation | null) => void;
   // Transient "Refreshed" confirmation, surfaced in the same title-overlay
   // slot as the connection pill. Bubbled per-session so the parent shows it
   // for the active pane only.
@@ -17170,6 +17339,28 @@ function ChatPane({
     return () => onConnectionLabelChange(session.id, null);
   }, [onConnectionLabelChange, session.id, visibleConnectionLabel]);
 
+  // Bubble the visible pane's in-session location up for the breadcrumb trail.
+  useEffect(() => {
+    if (!visible) return;
+    onLocationChange(session.id, {
+      tab: activeTab,
+      turnNumber: routedSelectedTurnNumber,
+      pageNumber: routedSelectedPageNumber,
+      staticPath: activeTab === "static" ? staticPagePath : null,
+      turnUnavailable: routeTurnUnavailable,
+    });
+    return () => onLocationChange(session.id, null);
+  }, [
+    visible,
+    session.id,
+    onLocationChange,
+    activeTab,
+    routedSelectedTurnNumber,
+    routedSelectedPageNumber,
+    staticPagePath,
+    routeTurnUnavailable,
+  ]);
+
   const visibleRefreshFlash = refreshFlashLabel({
     visible,
     activeTab,
@@ -18623,6 +18814,7 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
               visible
               onSessionPatch={noop}
               onConnectionLabelChange={noop}
+              onLocationChange={noop}
               onRefreshFlashChange={noop}
               onForkMessage={readonlyFork}
               pendingScrollMessageId={pendingScrollMessageId}
@@ -19129,6 +19321,17 @@ function AuthenticatedApp() {
         else delete next[id];
         return next;
       });
+    },
+    [],
+  );
+  // Current in-session location of each visible pane, bubbled up so the
+  // App-level title chrome can render the breadcrumb trail.
+  const [sessionLocations, setSessionLocations] = useState<
+    Record<string, SessionLocation | null>
+  >({});
+  const updateSessionLocation = useCallback(
+    (id: string, location: SessionLocation | null) => {
+      setSessionLocations((prev) => ({ ...prev, [id]: location }));
     },
     [],
   );
@@ -21354,6 +21557,10 @@ function AuthenticatedApp() {
     activeWorkspaceSession == null
       ? null
       : (sessionRefreshFlashes[activeWorkspaceSession.id] ?? null);
+  const activeWorkspaceLocation =
+    activeWorkspaceSession == null
+      ? null
+      : (sessionLocations[activeWorkspaceSession.id] ?? null);
   const useHomeTitleChrome =
     active == null || homeEditingTitle || pendingCreateTitleSessionId != null;
   const showWorkspaceTitleChrome =
@@ -21445,19 +21652,48 @@ function AuthenticatedApp() {
             maxLength={80}
           />
         ) : (
-          <button
-            type="button"
-            className="run-header-name-btn"
-            title={
-              readOnlySessionView
-                ? activeWorkspaceSession.name
-                : "click to rename"
-            }
-            disabled={readOnlySessionView}
-            onClick={() => beginSessionTitleEdit(activeWorkspaceSession)}
-          >
-            {activeWorkspaceSession.name}
-          </button>
+          <>
+            <a
+              className="run-header-name-btn workspace-crumb-name"
+              href={buildSessionRouteUrl(
+                window.location.href,
+                activeWorkspaceSession.id,
+                "session-data",
+              )}
+              title="open session data"
+              aria-current={
+                activeWorkspaceLocation?.tab === "session-data"
+                  ? "page"
+                  : undefined
+              }
+              onClick={(e) => {
+                if (
+                  e.button !== 0 ||
+                  e.metaKey ||
+                  e.ctrlKey ||
+                  e.shiftKey ||
+                  e.altKey
+                )
+                  return;
+                e.preventDefault();
+                navigateToSessionRoute(
+                  buildSessionRouteUrl(
+                    window.location.href,
+                    activeWorkspaceSession.id,
+                    "session-data",
+                  ),
+                );
+              }}
+            >
+              {activeWorkspaceSession.name}
+            </a>
+            {activeWorkspaceLocation && (
+              <WorkspaceBreadcrumbTrail
+                sessionId={activeWorkspaceSession.id}
+                location={activeWorkspaceLocation}
+              />
+            )}
+          </>
         )
       ) : null}
       {!useHomeTitleChrome && activeConnectionLabel && (
@@ -22424,6 +22660,7 @@ function AuthenticatedApp() {
                       visible={active === s.id}
                       onSessionPatch={patchSession}
                       onConnectionLabelChange={updateSessionConnectionLabel}
+                      onLocationChange={updateSessionLocation}
                       onRefreshFlashChange={updateSessionRefreshFlash}
                       onForkMessage={forkSessionFromMessage}
                       pendingScrollMessageId={

@@ -3805,6 +3805,35 @@ button:disabled {
 }
 .run-header-name-btn:hover { color: var(--text-primary); opacity: 0.75; }
 
+/* Breadcrumb trail in the title chrome: muted ancestor crumbs + a primary
+   current leaf, faint slash separators. The name crumb keeps run-header-name-btn
+   sizing and stays prominent; only the trailing segments use .workspace-crumb. */
+.workspace-crumb {
+  font-family: var(--font-primary);
+  font-weight: 400;
+  font-size: var(--text-lg);
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  min-width: 0;
+}
+.workspace-crumb:hover { color: var(--text-primary); opacity: 0.85; }
+.workspace-crumb-current { color: var(--text-primary); cursor: default; }
+.workspace-crumb-label { color: var(--text-muted); cursor: default; }
+.workspace-crumb-current:hover,
+.workspace-crumb-label:hover { opacity: 1; }
+.workspace-crumb-name { cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
+.workspace-crumb-sep {
+  color: var(--text-faint);
+  font-size: var(--text-lg);
+  margin: 0 0.35rem;
+  user-select: none;
+}
+
 .run-header-name-input {
   background: transparent;
   border: 1px solid var(--gray-700);
