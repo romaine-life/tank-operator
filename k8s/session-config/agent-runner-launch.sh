@@ -13,8 +13,15 @@ set -eu
 
 configure_claude() {
   mkdir -p "$HOME/.claude"
+  # permissions.defaultMode=bypassPermissions covers the interactive main agent.
+  # permissions.allow is the parity list for spawned sub-agents: a background
+  # sub-agent does NOT inherit bypassPermissions (it has no channel to answer a
+  # permission prompt), so without an explicit allow-list every Edit/Write/Bash it
+  # attempts is denied and fan-out write/build work silently fails. This allow set
+  # is honored at user scope by sub-agents (verified), letting them edit + run the
+  # dev toolchain in-pod, matching the main agent's posture.
   cat > "$HOME/.claude/settings.json" <<'EOF'
-{"theme":"dark","permissions":{"defaultMode":"bypassPermissions"},"skipDangerousModePermissionPrompt":true}
+{"theme":"dark","permissions":{"defaultMode":"bypassPermissions","allow":["Edit","Write","MultiEdit","NotebookEdit","Bash(go:*)","Bash(gofmt:*)","Bash(npm:*)","Bash(npx:*)","Bash(node:*)","Bash(git:*)","Bash(python3:*)","Bash(rg:*)","Bash(ls:*)","Bash(mkdir:*)","Bash(rm:*)","Bash(cp:*)","Bash(mv:*)"]},"skipDangerousModePermissionPrompt":true}
 EOF
 
   mcp_enabled='[]'
