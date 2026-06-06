@@ -38,6 +38,7 @@ spec:
       interval: {{ .Values.observability.scrapeInterval | default "30s" | quote }}
       scrapeTimeout: 10s
 ---
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 # ServiceMonitor: api-proxy deployments (Claude + Codex). Both Services
 # expose the metrics sidecar port; the `provider` label on each metric
 # distinguishes the two at query time.
@@ -60,6 +61,7 @@ spec:
       interval: {{ .Values.observability.scrapeInterval | default "30s" | quote }}
       scrapeTimeout: 10s
 ---
+{{- end }}
 # PodMonitor: session pods. The PodMonitor scrapes the mcp-auth-proxy
 # sidecar and (for claude_gui / codex_gui sessions) the runner sidecar.
 # Session pods are ephemeral — scrape interval 15s gives the operator a
