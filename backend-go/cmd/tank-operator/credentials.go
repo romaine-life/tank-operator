@@ -33,14 +33,14 @@ func doSaveCredentials(w http.ResponseWriter, r *http.Request, s *appServer, ema
 		kvKeyEnv = "CODEX_CREDENTIALS_KV_KEY"
 		kvDefault = "codex-credentials"
 	case sessionmodel.AntigravityConfigMode:
-		// agy persists the Google OAuth token to a JSON file under its
-		// Codeium/Cascade data dir (keyring-first, file fallback; a headless
-		// session pod has no keyring so it always lands on disk). The exact
-		// filename is constructed at runtime, so locate the JSON blob that
-		// carries the OAuth token keys instead of hard-coding a path. Once a
-		// real login pins the path this tightens to an exact `cat`.
-		execCmd = []string{"sh", "-c",
-			`f=$(find "$HOME/.codeium" "$HOME/.antigravity" "$HOME/.config" -type f -name '*.json' -exec grep -lE '"(access_token|refresh_token|id_token)"' {} + 2>/dev/null | head -1); [ -n "$f" ] && cat "$f"`}
+		// agy writes the completed Google/Ultra OAuth token to a fixed file
+		// after the interactive paste-code login. Path + shape confirmed live
+		// against a real Ultra login: $HOME/.gemini/antigravity-cli/
+		// antigravity-oauth-token, a ~498-byte JSON blob {auth_method, token:{…}}.
+		// Note the directory is .gemini/antigravity-cli (NOT the Codeium/.codeium
+		// heritage the dir layout might suggest) and the file carries no .json
+		// extension.
+		execCmd = []string{"sh", "-c", "cat $HOME/.gemini/antigravity-cli/antigravity-oauth-token"}
 		kvKeyEnv = "ANTIGRAVITY_CREDENTIALS_KV_KEY"
 		kvDefault = "antigravity-credentials"
 	default:

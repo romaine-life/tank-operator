@@ -53,9 +53,9 @@ func cliProcessLaunchForMode(mode string) sandboxProcessCreate {
 		// authorizes with their Ultra Google account, copies the code from
 		// antigravity.google/oauth-callback, and pastes it back. Unlike
 		// `agy -p` (30s auth timeout — too short for a human), the
-		// interactive TTY wait is human-paced. agy then persists the OAuth
-		// token to disk (keyring-first, file fallback; headless pods always
-		// hit the file path), which the save-credentials button harvests.
+		// interactive TTY wait is human-paced. agy then writes the OAuth token
+		// to ~/.gemini/antigravity-cli/antigravity-oauth-token, which the
+		// save-credentials button harvests.
 		base.Args = []string{"-lc", "agy; exec bash"}
 	default:
 		base.Args = []string{"-l"}

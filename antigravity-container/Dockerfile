@@ -53,10 +53,11 @@ RUN curl -fsSL "https://storage.googleapis.com/antigravity-public/antigravity-cl
 # Session dirs + non-root user. node:20-bookworm-slim already ships a `node`
 # user at uid/gid 1000 (same as the Alpine images), so reuse it — claude's
 # bypassPermissions safety check and our fsGroup wiring both expect uid 1000.
-# `.codeium` is where the Antigravity/Cascade auth + state lives (Windsurf
-# heritage); the config-mode harvest reads the OAuth token file from there.
-RUN mkdir -p /workspace /opt/tank /home/node/.codeium /home/node/.antigravity \
-    && chown -R node:node /workspace /home/node/.codeium /home/node/.antigravity
+# agy stores its auth + state under ~/.gemini/antigravity-cli/ (it creates the
+# subdir itself on first run; path confirmed live against a real Ultra login).
+# The config-mode harvest reads the antigravity-oauth-token file from there.
+RUN mkdir -p /workspace /opt/tank /home/node/.gemini \
+    && chown -R node:node /workspace /home/node/.gemini
 
 WORKDIR /workspace
 USER node
