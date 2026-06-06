@@ -122,6 +122,10 @@ jobs:
         if: matrix.name == 'app'
         run: bash scripts/test-glimmung-native-contract.sh
 
+      - name: Check test-slot provider credential isolation
+        if: matrix.name == 'app'
+        run: bash scripts/check-test-slot-provider-credentials.sh tank-operator-slot-2
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 

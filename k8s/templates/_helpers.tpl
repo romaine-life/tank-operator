@@ -1,20 +1,37 @@
 {{/*
 Resolve the Key Vault secret that stores Claude Code OAuth credentials.
 
-Primary production keeps the historical shared name for compatibility.
+Primary production keeps the historical shared name.
 Validation slots default to a namespace-scoped name so each slot has an
-independent refresh-token chain. Set externalSecret.claudeCredentials.kvKey
-to override explicitly.
+independent refresh-token chain.
 */}}
 {{- define "tank-operator.claudeCredentialsKvKey" -}}
-{{- if .Values.externalSecret.claudeCredentials.kvKey -}}
-{{- .Values.externalSecret.claudeCredentials.kvKey -}}
-{{- else if eq (include "tank-operator.isTestEnv" .) "true" -}}
-{{- .Values.testEnv.claudeCredentialsKvKey -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}
+{{ printf "%s-claude-code-credentials" (include "tank-operator.slotName" .) }}
 {{- else if eq .Values.namespaces.orchestrator "tank-operator" -}}
 claude-code-credentials
 {{- else -}}
 {{ printf "%s-claude-code-credentials" .Values.namespaces.orchestrator }}
+{{- end -}}
+{{- end -}}
+
+{{- define "tank-operator.codexCredentialsKvKey" -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}
+{{ printf "%s-codex-credentials" (include "tank-operator.slotName" .) }}
+{{- else if eq .Values.namespaces.orchestrator "tank-operator" -}}
+codex-credentials
+{{- else -}}
+{{ printf "%s-codex-credentials" .Values.namespaces.orchestrator }}
+{{- end -}}
+{{- end -}}
+
+{{- define "tank-operator.antigravityCredentialsKvKey" -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}
+{{ printf "%s-antigravity-credentials" (include "tank-operator.slotName" .) }}
+{{- else if eq .Values.namespaces.orchestrator "tank-operator" -}}
+antigravity-credentials
+{{- else -}}
+{{ printf "%s-antigravity-credentials" .Values.namespaces.orchestrator }}
 {{- end -}}
 {{- end -}}
 
@@ -103,10 +120,6 @@ claude-code-credentials
 
 {{- define "tank-operator.codexApiProxyHost" -}}
 {{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "codex-api-proxy.%s.svc.cluster.local" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.codexApiProxy.serviceHost }}{{- end -}}
-{{- end -}}
-
-{{- define "tank-operator.githubAppSecret" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-github-app-creds" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.githubApp.secretName }}{{- end -}}
 {{- end -}}
 
 {{- define "tank-operator.codexCredentialsSecret" -}}

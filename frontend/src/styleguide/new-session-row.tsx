@@ -12,7 +12,6 @@ import { ProviderIcon } from "../providerIcons";
 import {
   BackLink,
   captionStyle,
-  IconKey,
   IconWrench,
   pageTitleStyle,
   sectionStyle,
@@ -187,13 +186,6 @@ export function StyleguideNewSessionRow() {
                     <h3 id="styleguide-home-actions-title">Setup</h3>
                   </div>
                   <div className="home-quick-actions">
-                    <button className="home-quick-action" type="button">
-                      <IconKey className="home-quick-icon" />
-                      <span className="home-quick-main">
-                        <span className="home-quick-title">API key</span>
-                        <span className="home-quick-sub">Specify an API key fallback</span>
-                      </span>
-                    </button>
                     <button className="home-quick-action" type="button">
                       <IconWrench className="home-quick-icon" />
                       <span className="home-quick-main">

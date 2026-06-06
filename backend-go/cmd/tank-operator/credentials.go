@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/romaine-life/tank-operator/backend-go/internal/keyvault"
@@ -22,16 +23,14 @@ func doSaveCredentials(w http.ResponseWriter, r *http.Request, s *appServer, ema
 	}
 
 	var (
-		execCmd   []string
-		kvKeyEnv  string
-		kvDefault string
+		execCmd  []string
+		kvKeyEnv string
 	)
 
 	switch mode {
 	case sessionmodel.CodexConfigMode:
 		execCmd = []string{"sh", "-c", "cat $HOME/.codex/auth.json"}
 		kvKeyEnv = "CODEX_CREDENTIALS_KV_KEY"
-		kvDefault = "codex-credentials"
 	case sessionmodel.AntigravityConfigMode:
 		// agy writes the completed Google/Ultra OAuth token to a fixed file
 		// after the interactive paste-code login. Path + shape confirmed live
@@ -42,15 +41,17 @@ func doSaveCredentials(w http.ResponseWriter, r *http.Request, s *appServer, ema
 		// extension.
 		execCmd = []string{"sh", "-c", "cat $HOME/.gemini/antigravity-cli/antigravity-oauth-token"}
 		kvKeyEnv = "ANTIGRAVITY_CREDENTIALS_KV_KEY"
-		kvDefault = "antigravity-credentials"
 	default:
 		// claude / config modes
 		execCmd = []string{"sh", "-c", "cat $HOME/.claude/.credentials.json"}
 		kvKeyEnv = "CLAUDE_CREDENTIALS_KV_KEY"
-		kvDefault = "claude-code-credentials"
 	}
 
-	kvSecretName := envDefault(kvKeyEnv, kvDefault)
+	kvSecretName := strings.TrimSpace(os.Getenv(kvKeyEnv))
+	if kvSecretName == "" {
+		writeError(w, http.StatusServiceUnavailable, kvKeyEnv+" not configured")
+		return
+	}
 
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName, execCmd)
 	if err != nil {
