@@ -65,6 +65,10 @@ import { ADMIN_REFERENCE_LINKS } from "./adminReferenceLinks";
 import { SessionListDebugCaptureControls } from "./SessionListDebugCaptureControls";
 import { SessionRepoReport } from "./SessionRepoReport";
 import { WorkspaceShell } from "./WorkspaceShell";
+import { useViewport } from "./useViewport";
+import { MobileTopBar } from "./MobileTopBar";
+import { DesktopOnly } from "./DesktopOnly";
+import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
   buildAppRouteUrl,
   buildHomeRouteUrl,
@@ -11900,9 +11904,14 @@ function RunSettingsPanel({
                 <h2 className="run-settings-title">Avatar editor</h2>
               </div>
             </section>
-            <AdminAvatarManager
-              onCatalogChanged={adminControls.onAvatarCatalogChanged}
-            />
+            <DesktopOnly
+              feature="the avatar editor"
+              detail="avatar cropping uses drag and precise pointer control — open the editor on desktop."
+            >
+              <AdminAvatarManager
+                onCatalogChanged={adminControls.onAvatarCatalogChanged}
+              />
+            </DesktopOnly>
           </>
         ) : adminView === "report" ? (
           <>
@@ -18406,6 +18415,11 @@ function AuthenticatedApp() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState<string | null>(null);
+  const { isCompact } = useViewport();
+  // Off-canvas session drawer, compact viewports only. Per the App Chrome
+  // contract, drawer open/closed is browser UI state — not durable product
+  // state — so it lives in React state and resets on reload by design.
+  const [navDrawerOpen, setNavDrawerOpen] = useState(false);
   const [avatarCatalogVersion, setAvatarCatalogVersion] = useState(0);
   // Per-user run-pane prefs live at app scope so mounted GUI sessions stay in
   // sync immediately, while localStorage keeps them across reloads/windows.
@@ -18533,6 +18547,13 @@ function AuthenticatedApp() {
     }
     window.history.replaceState({}, "", url.toString());
   }, [active]);
+
+  // The drawer only exists on compact viewports; collapse it the moment we grow
+  // back to the desktop shell so a hidden-but-open drawer can't strand focus or
+  // scroll-lock there.
+  useEffect(() => {
+    if (!isCompact) setNavDrawerOpen(false);
+  }, [isCompact]);
 
   useEffect(() => {
     const syncRunPrefs = (event: StorageEvent) => {
@@ -20228,6 +20249,7 @@ function AuthenticatedApp() {
   }
 
   function goHome() {
+    setNavDrawerOpen(false);
     replaceHomeRoute("chat");
     setActive(null);
     setHomeActiveTab("chat");
@@ -20238,6 +20260,9 @@ function AuthenticatedApp() {
       window.open(sessionUrl(id), "_blank", "noopener,noreferrer");
       return;
     }
+    // A tap on a session row is a navigation; close the compact nav drawer so
+    // the chosen session's pane is what the user lands on.
+    setNavDrawerOpen(false);
     requestSessionTranscriptOpen(id);
     replaceSessionTranscriptRoute(id);
     activate(id);
@@ -21114,9 +21139,12 @@ function AuthenticatedApp() {
     runPrefs.turnCompleteSoundVolume * 100,
   );
 
-  return (
-    <div className={`shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-      <aside className={`sidebar${sidebarCollapsed ? " is-collapsed" : ""}`}>
+  // The sidebar contents have exactly one source of truth. On the desktop shell
+  // they render inline as the grid's first column; on a compact viewport the
+  // same fragment is mounted inside the off-canvas drawer (radix Dialog via
+  // components/ui/sheet.tsx). No parallel mobile scaffold.
+  const sidebarBody = (
+    <>
         <div className="sidebar-brand">
           <button
             className={`sidebar-home${active == null ? " is-active" : ""}`}
@@ -21181,7 +21209,7 @@ function AuthenticatedApp() {
                     key={s.id}
                     data-session-id={s.id}
                     className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
-                    draggable={!isClosing && !readOnlySessionView}
+                    draggable={!isClosing && !readOnlySessionView && !isCompact}
                     onDragStart={(e) => dragSessionStart(s.id, e)}
                     onDragOver={(e) => dragSessionOver(s.id, e)}
                     onDrop={(e) => dropSession(s.id, e)}
@@ -21305,7 +21333,71 @@ function AuthenticatedApp() {
             </ul>
           )}
         </div>
-      </aside>
+    </>
+  );
+
+  const activeSessionForChrome =
+    active != null ? sessions.find((s) => s.id === active) ?? null : null;
+
+  return (
+    <div
+      className={[
+        "shell",
+        isCompact ? "shell-compact" : "",
+        !isCompact && sidebarCollapsed ? "sidebar-collapsed" : "",
+      ]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      {isCompact ? (
+        <>
+          <MobileTopBar
+            isHome={active == null}
+            sessionName={activeSessionForChrome?.name}
+            avatar={
+              activeSessionForChrome ? (
+                <SessionAvatarIcon
+                  avatar={getSessionAvatarByID(
+                    activeSessionForChrome.agent_avatar_id,
+                  )}
+                  className="mobile-topbar-avatar"
+                />
+              ) : null
+            }
+            statusDotClass={
+              activeSessionForChrome
+                ? sessionStatusDotClass(
+                    activeSessionForChrome,
+                    sessionActivities[activeSessionForChrome.id],
+                  )
+                : undefined
+            }
+            statusLabel={
+              activeSessionForChrome
+                ? sessionStatusLabel(
+                    activeSessionForChrome,
+                    sessionActivities[activeSessionForChrome.id],
+                  )
+                : undefined
+            }
+            onOpenNav={() => setNavDrawerOpen(true)}
+          />
+          <Sheet open={navDrawerOpen} onOpenChange={setNavDrawerOpen}>
+            <SheetContent
+              side="left"
+              className="nav-sheet"
+              aria-describedby={undefined}
+            >
+              <SheetTitle className="sr-only">Sessions</SheetTitle>
+              <aside className="sidebar sidebar-in-drawer">{sidebarBody}</aside>
+            </SheetContent>
+          </Sheet>
+        </>
+      ) : (
+        <aside className={`sidebar${sidebarCollapsed ? " is-collapsed" : ""}`}>
+          {sidebarBody}
+        </aside>
+      )}
 
       <main className="workspace">
         {workspaceTitleChrome}
@@ -22024,7 +22116,12 @@ function AuthenticatedApp() {
                         </main>
                       </section>
                     ) : (
-                      <CliSession session={s} visible={active === s.id} />
+                      <DesktopOnly
+                        feature="terminal sessions"
+                        detail="terminal attach needs a keyboard and a wider screen — open this session on desktop or tablet."
+                      >
+                        <CliSession session={s} visible={active === s.id} />
+                      </DesktopOnly>
                     )}
                   </div>
                 ),
