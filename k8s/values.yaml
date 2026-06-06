@@ -60,7 +60,7 @@ session:
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-368dcce26c3a87586662956f542c9ad8d96bb03ee5db36258bef8bb403110c18
+  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-f6ef7de7b6a8224df2c0c7dbf814c9c7ffce7ed8b9cb46bc0cbda62833e8b424
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
