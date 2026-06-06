@@ -13989,6 +13989,7 @@ function ChatPane({
     setPendingRouteTurnNumber(null);
     setRouteTurnUnavailable(false);
     setPendingTurnViewRouteAnchor("bottom");
+    setSelectedTurnId(null);
     setSelectedTurnNumberAnchor(null);
     slashManualOpenRef.current = false;
     setSlashOpen(false);

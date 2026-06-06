@@ -21,3 +21,16 @@ test("sidebar session clicks reopen the main transcript", () => {
     "the visible ChatPane should leave side tabs and palettes for the main transcript route",
   );
 });
+
+test("sidebar turns menu opens the latest turn", () => {
+  assert.match(
+    appSource,
+    /sidebarTurnsOpenRequest=\{sessionTurnsOpenRequests\[s\.id\] \?\? 0\}/,
+    "each mounted ChatPane should receive its session turns-open request signal",
+  );
+  assert.match(
+    appSource,
+    /if \(!visible \|\| sidebarTurnsOpenRequest === 0\) return;[\s\S]*?setPendingRouteTurnNumber\(null\);[\s\S]*?setRouteTurnUnavailable\(false\);[\s\S]*?setPendingTurnViewRouteAnchor\("bottom"\);[\s\S]*?setSelectedTurnId\(null\);[\s\S]*?setSelectedTurnNumberAnchor\(null\);[\s\S]*?setActiveTab\("turns"\);[\s\S]*?replaceSessionRoute\(session\.id, "turns"\);/,
+    "the visible ChatPane should clear any prior turn selection so /turns falls back to the latest turn",
+  );
+});
