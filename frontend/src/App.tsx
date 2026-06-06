@@ -10052,6 +10052,7 @@ function RunTurnActivityGroup({
             <button
               type="button"
               className="run-turn-activity-divider-toggle"
+              data-direction="down"
               onClick={() => onOpenChange(true)}
               aria-expanded={false}
               aria-label="Show agent activity"
@@ -10829,6 +10830,7 @@ function RunTurnActivityScreen({
               <button
                 type="button"
                 className="run-turn-activity-divider-toggle"
+                data-direction={detailActivityCollapsed ? "down" : "up"}
                 onClick={() => {
                   setCollapsedActivityTurnIds((prev) => ({
                     ...prev,

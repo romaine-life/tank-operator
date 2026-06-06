@@ -4345,6 +4345,14 @@ button:disabled {
   outline-offset: 2px;
 }
 
+.collapsed-turn-activity-toggle[data-direction="down"] svg {
+  transform: translateY(-1px);
+}
+
+.collapsed-turn-activity-toggle[data-direction="up"] svg {
+  transform: translateY(1px);
+}
+
 .collapsed-turn-mock-activity {
   display: grid;
   gap: 0.45rem;
@@ -8820,6 +8828,14 @@ textarea.run-files-viewer-editor:focus {
 
 .run-turn-activity-divider-toggle svg {
   display: block;
+}
+
+.run-turn-activity-divider-toggle[data-direction="down"] svg {
+  transform: translateY(-1px);
+}
+
+.run-turn-activity-divider-toggle[data-direction="up"] svg {
+  transform: translateY(1px);
 }
 
 .run-turn-activity-divider-line {

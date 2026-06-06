@@ -76,6 +76,7 @@ function ActivityDivider({
       <button
         type="button"
         className="collapsed-turn-activity-toggle"
+        data-direction={expanded ? "up" : "down"}
         aria-label={tooltip}
         aria-expanded={expanded}
         title={tooltip}
