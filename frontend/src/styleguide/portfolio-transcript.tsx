@@ -4,7 +4,6 @@ import {
   ArrowDownIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
-  ChevronRightIcon,
   CopyIcon,
   FlaskConicalIcon,
   ImageIcon,
@@ -36,14 +35,6 @@ import {
 type HighlightTarget = "assistant" | "user" | "activity";
 type ComposerSpecimenState = "ready" | "streaming" | "readonly";
 type ActiveSurface = "transcript" | "composer" | "both";
-type CollapsedActivityOption = {
-  id: string;
-  label: string;
-  meta: string;
-  detail?: string;
-  variant: "current" | "final-aware" | "minimal" | "status" | "separator";
-  state?: "running" | "complete";
-};
 
 const HIGHLIGHT_TARGETS: { id: HighlightTarget; label: string }[] = [
   { id: "assistant", label: "assistant link target" },
@@ -61,51 +52,6 @@ const ACTIVE_SURFACES: { id: ActiveSurface; label: string }[] = [
   { id: "transcript", label: "transcript selected" },
   { id: "composer", label: "input selected" },
   { id: "both", label: "both selected" },
-];
-
-const COLLAPSED_ACTIVITY_OPTIONS: CollapsedActivityOption[] = [
-  {
-    id: "separator-running",
-    label: "Turn activity is hidden while the agent works",
-    meta: "3 tools / 2 notes",
-    detail: "running",
-    variant: "separator",
-    state: "running",
-  },
-  {
-    id: "separator-complete",
-    label: "Show activity behind this response",
-    meta: "3 tools / 2 notes",
-    detail: "complete",
-    variant: "separator",
-    state: "complete",
-  },
-  {
-    id: "current",
-    label: "Turn activity",
-    meta: "3 tool calls / 2 reasoning blocks / 1 progress note",
-    variant: "current",
-  },
-  {
-    id: "final-aware",
-    label: "Activity before final answer",
-    meta: "3 tools / 2 notes",
-    detail: "6m 12s",
-    variant: "final-aware",
-  },
-  {
-    id: "minimal",
-    label: "Turn activity",
-    meta: "3 tools / 2 notes / 1 reasoning",
-    variant: "minimal",
-  },
-  {
-    id: "status",
-    label: "Completed activity",
-    meta: "3 tools / 1 error",
-    detail: "19:04 to 19:10",
-    variant: "status",
-  },
 ];
 
 function TranscriptMessage({
@@ -318,111 +264,6 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
         <TranscriptMessage variant="assistant" highlighted={highlighted} ownedByActivity showAssistantAvatar>
           <p style={{ margin: 0 }}>
             I found the highlight hook and the active turn data attribute.
-          </p>
-        </TranscriptMessage>
-      </div>
-    </div>
-  );
-}
-
-function CollapsedActivityOptionRow({
-  option,
-}: {
-  option: CollapsedActivityOption;
-}) {
-  const isMinimal = option.variant === "minimal";
-  if (option.variant === "separator") {
-    return (
-      <button
-        type="button"
-        className="styleguide-collapsed-activity-separator"
-        aria-expanded={false}
-        data-state={option.state}
-        data-design-component="CollapsedTurnActivitySeparator"
-        data-design-state={option.id}
-        data-inspectable
-      >
-        <span className="styleguide-collapsed-activity-separator-line" aria-hidden="true" />
-        <span className="styleguide-collapsed-activity-separator-pill">
-          <ChevronRightIcon size={13} aria-hidden="true" />
-          <span className="styleguide-collapsed-activity-separator-text">
-            {option.label}
-          </span>
-          <span className="styleguide-collapsed-activity-separator-meta">
-            {option.meta}
-          </span>
-          {option.detail && (
-            <span className="styleguide-collapsed-activity-separator-state">
-              {option.detail}
-            </span>
-          )}
-        </span>
-        <span className="styleguide-collapsed-activity-separator-line" aria-hidden="true" />
-      </button>
-    );
-  }
-  return (
-    <button
-      type="button"
-      className={`styleguide-collapsed-activity-row is-${option.variant}`}
-      aria-expanded={false}
-      data-design-component="CollapsedTurnActivityOption"
-      data-design-state={option.id}
-      data-inspectable
-    >
-      <span className="styleguide-collapsed-activity-rail" aria-hidden="true">
-        {isMinimal ? "turn activity" : <ActivityIcon size={14} strokeWidth={2} />}
-      </span>
-      <span className="styleguide-collapsed-activity-main">
-        <span className="styleguide-collapsed-activity-label">{option.label}</span>
-        {!isMinimal && (
-          <span className="styleguide-collapsed-activity-meta">{option.meta}</span>
-        )}
-      </span>
-      {isMinimal && (
-        <span className="styleguide-collapsed-activity-meta">{option.meta}</span>
-      )}
-      {option.detail && (
-        <span className="styleguide-collapsed-activity-detail">{option.detail}</span>
-      )}
-      <ChevronRightIcon
-        className="styleguide-collapsed-activity-chevron"
-        size={14}
-        aria-hidden="true"
-      />
-    </button>
-  );
-}
-
-function CollapsedActivityOptionsSpecimen() {
-  return (
-    <div
-      className="styleguide-collapsed-activity-specimen"
-      data-design-component="CollapsedTurnActivityOptions"
-      data-inspectable
-    >
-      <div className="run-turn-view-head">
-        <div className="run-turn-view-title">
-          <ActivityIcon size={16} strokeWidth={2.1} aria-hidden="true" />
-          <h2>Turns</h2>
-        </div>
-        <span className="run-turn-view-event-progress">final answer visible</span>
-      </div>
-      <div className="run-turn-view-summary">
-        <span>running or complete</span>
-        <span>activity can collapse before the final response</span>
-        <span>19:10:26</span>
-      </div>
-      <div className="styleguide-collapsed-activity-options">
-        {COLLAPSED_ACTIVITY_OPTIONS.map((option) => (
-          <CollapsedActivityOptionRow key={option.id} option={option} />
-        ))}
-      </div>
-      <div className="run-turn-view-body run-transcript run-transcript-claude">
-        <TranscriptMessage variant="assistant" ownedByActivity showAssistantAvatar>
-          <p style={{ margin: 0 }}>
-            I traced the final turn path and confirmed this is a presentation
-            change in the Turns view.
           </p>
         </TranscriptMessage>
       </div>
@@ -676,18 +517,6 @@ export function StyleguidePortfolioTranscript() {
               />
             </div>
           </div>
-        </section>
-
-        <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
-          <h2 style={{ margin: 0, color: "var(--text-primary)", fontSize: "var(--text-lg)" }}>
-            collapsed final-turn activity options
-          </h2>
-          <p style={{ ...captionStyle, margin: 0, maxWidth: "74ch" }}>
-            Static directions for replacing the expanded activity noise with a
-            single expandable affordance. The separator options show the same
-            compaction working before and after the final response.
-          </p>
-          <CollapsedActivityOptionsSpecimen />
         </section>
 
         <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
