@@ -375,6 +375,18 @@ func (r *testSessionRegistry) Upsert(_ context.Context, record sessionmodel.Sess
 }
 
 func (r *testSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
+func (r *testSessionRegistry) SetOpenTarget(_ context.Context, owner, sessionID, target string) error {
+	if r.records == nil || r.records[owner] == nil {
+		return nil
+	}
+	record, ok := r.records[owner][sessionID]
+	if !ok {
+		return nil
+	}
+	record.OpenTarget = target
+	r.records[owner][sessionID] = record
+	return nil
+}
 func (r *testSessionRegistry) SetBugLabel(_ context.Context, owner, sessionID string, label *sessionmodel.SessionBugLabel) error {
 	if label == nil {
 		return r.SetBugLabels(context.Background(), owner, sessionID, nil)

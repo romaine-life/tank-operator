@@ -761,6 +761,9 @@ interface Session {
   // projected from the session_events ledger onto the row. Drives the
   // auto-default-to-Turns sidebar gate; absent/0 means too few exchanges yet.
   user_message_count?: number;
+  // Durable manual open-target pin ("chat"/"turns") set from the session tab
+  // menu; absent means the user has not pinned and the auto-default applies.
+  open_target?: "chat" | "turns";
   agent_avatar_id?: string | null;
   system_avatar_id?: string | null;
   sidebar_position?: number;
@@ -19770,6 +19773,7 @@ function AuthenticatedApp() {
         row.provider_rate_limit_observed_at ?? null,
       compaction_count: row.compaction_count ?? 0,
       user_message_count: row.user_message_count ?? 0,
+      open_target: row.open_target,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
       row_version: row.row_version,
@@ -19850,6 +19854,10 @@ function AuthenticatedApp() {
         typeof raw.user_message_count === "number" &&
         Number.isFinite(raw.user_message_count)
           ? Math.max(0, Math.floor(raw.user_message_count))
+          : undefined,
+      open_target:
+        raw.open_target === "chat" || raw.open_target === "turns"
+          ? raw.open_target
           : undefined,
       agent_avatar_id:
         typeof raw.agent_avatar_id === "string"
@@ -20516,16 +20524,19 @@ function AuthenticatedApp() {
   }
 
   function sessionOpenTarget(id: string): SessionOpenTarget {
-    // A manual choice from the session tab menu (sessionOpenTargets, written
-    // only by setSessionOpenTarget) always wins. Otherwise auto-default a
-    // substantial session to the Turns view: past a handful of real
-    // back-and-forths, landing on the latest turn beats landing in a long main
-    // transcript. The signal is the durable per-session user_message_count
-    // carried on the row; the threshold gate lives in autoTurnsDefault.ts. This
-    // only changes where a *click* lands; it never moves an already-open pane.
-    const manual = sessionOpenTargets[id];
-    if (manual) return manual;
+    // Precedence: optimistic overlay (this tab's just-clicked choice) > durable
+    // pin on the row (`sessions.open_target`, survives reload) > auto-default for
+    // substantial sessions > main transcript. The overlay is only the in-flight
+    // echo of a click so the menu radio updates instantly; the durable row is the
+    // source of truth across reload and fresh tabs. The auto-default reads the
+    // durable per-session user_message_count; the threshold gate lives in
+    // autoTurnsDefault.ts. This only changes where a *click* lands; it never
+    // moves an already-open pane.
+    const overlay = sessionOpenTargets[id];
+    if (overlay) return overlay;
     const session = sessions.find((s) => s.id === id);
+    const pinned = session?.open_target;
+    if (pinned === "chat" || pinned === "turns") return pinned;
     if (session && shouldAutoDefaultToTurns(session.user_message_count)) {
       return "turns";
     }
@@ -20533,7 +20544,16 @@ function AuthenticatedApp() {
   }
 
   function setSessionOpenTarget(id: string, target: SessionOpenTarget) {
+    // Optimistic overlay for instant menu feedback, then persist durably so the
+    // choice survives reload — the row's open_target becomes the source of truth
+    // once the row-update SSE round-trips. Fire-and-forget: a failed write just
+    // means the pin reverts on reload, which the durable row makes self-healing.
     setSessionOpenTargets((prev) => ({ ...prev, [id]: target }));
+    void authedFetch(`/api/sessions/${id}/open-target`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ open_target: target }),
+    }).catch(() => undefined);
     if (active !== id) return;
     if (target === "turns") {
       requestSessionTurnsOpen(id);

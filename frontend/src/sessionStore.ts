@@ -112,6 +112,11 @@ export interface SessionRow {
   // Powers the auto-default-to-Turns sidebar gate (autoTurnsDefault.ts); stable
   // across reload and identical in a fresh tab, like compaction_count above.
   user_message_count?: number;
+  // Durable per-session sidebar open-target pin: the manual override for the
+  // auto-default-to-Turns gate, persisted so a deliberate choice survives
+  // reload. "chat"/"turns" = explicit pin; absent ('' on the wire) = unset, so
+  // the gate's auto-default applies.
+  open_target?: "chat" | "turns";
   agent_avatar_id?: string;
   system_avatar_id?: string;
   // Durable user-facing order for the sidebar. Larger values render
@@ -563,6 +568,10 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       compaction_count: nonNegativeNumberField(rowRaw, "compaction_count") ?? undefined,
       user_message_count:
         nonNegativeNumberField(rowRaw, "user_message_count") ?? undefined,
+      open_target:
+        rowRaw.open_target === "chat" || rowRaw.open_target === "turns"
+          ? rowRaw.open_target
+          : undefined,
       agent_avatar_id: stringField(rowRaw, "agent_avatar_id") ?? undefined,
       system_avatar_id: stringField(rowRaw, "system_avatar_id") ?? undefined,
       sidebar_position: sidebarPosition,

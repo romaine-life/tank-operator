@@ -94,6 +94,7 @@ type Info struct {
 	ProviderRateLimitObservedAt    *string        `json:"provider_rate_limit_observed_at,omitempty"`
 	CompactionCount                int64          `json:"compaction_count,omitempty"`
 	UserMessageCount               int64          `json:"user_message_count,omitempty"`
+	OpenTarget                     string         `json:"open_target,omitempty"`
 	AgentAvatarID                  string         `json:"agent_avatar_id,omitempty"`
 	SystemAvatarID                 string         `json:"system_avatar_id,omitempty"`
 }
@@ -300,6 +301,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		ProviderRateLimitObservedAt:    optionalString(record.ProviderRateLimitObservedAt),
 		CompactionCount:                record.CompactionCount,
 		UserMessageCount:               record.UserMessageCount,
+		OpenTarget:                     record.OpenTarget,
 		AgentAvatarID:                  record.AgentAvatarID,
 		SystemAvatarID:                 record.SystemAvatarID,
 	}

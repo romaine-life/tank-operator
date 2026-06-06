@@ -89,11 +89,14 @@ Contract impact:
   currently 8) owned by the pure gate `frontend/src/autoTurnsDefault.ts`. It is an
   ergonomics dial, not a failure guard — there is deliberately no attempt to find
   a "magic number."
-- The open-target preference (`sessionOpenTargets`, written only by the session
-  tab options menu) is the manual override and always wins; the auto-default only
-  decides the landing when the user has not chosen. Both are per-tab session
-  state today, consistent with the existing manual toggle; the durable signal is
-  the row count, not the preference.
+- The manual open-target preference always wins; the auto-default only decides
+  the landing when the user has not pinned. The preference is **durable**: a
+  deliberate Main-transcript/Turns pin is persisted to `sessions.open_target`
+  (`PUT /api/sessions/{id}/open-target`, `''`=unset/auto, `'chat'`/`'turns'`=pin)
+  and read back from the row, so it survives reload and a fresh tab. The client
+  keeps a short-lived optimistic overlay only for instant menu feedback; the
+  durable row is the source of truth. The auto-default reads the durable
+  user-message count; neither side reads the loaded transcript window.
 
 Evidence:
 - Backend: migrations `0135` (`sessions.user_message_count` column) and `0136`
@@ -109,3 +112,11 @@ Evidence:
   the threshold and the gate; `sessionStore.ts` carries `user_message_count` on
   the wire; `App.tsx` `sessionOpenTarget()` applies the gate with the manual
   override winning.
+- Durable override: migration `0137` (`sessions.open_target`),
+  `sessionregistry.SetOpenTarget` → `sessions.Manager.SetOpenTarget` →
+  `PUT /api/sessions/{id}/open-target` (`handleSetOpenTarget`, value-validated;
+  `handlers_open_target_test.go` proves 200 round-trip + 400 on invalid), carried
+  on the snapshot + row-update wire by `sessionmodel` / `sessions` Info /
+  `row_publisher` / both `sessionregistry` reads. Frontend `sessionStore.ts` +
+  `App.tsx` `setSessionOpenTarget()` persist via the PUT, and `sessionOpenTarget()`
+  resolves overlay → durable pin → auto-default → main transcript.

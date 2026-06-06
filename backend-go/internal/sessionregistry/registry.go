@@ -73,6 +73,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			COALESCE(to_char(sessions.provider_rate_limit_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS provider_rate_limit_observed_at,
 			sessions.compaction_count,
 			sessions.user_message_count,
+			sessions.open_target,
 			COALESCE(sessions.agent_avatar_id, ''),
 			COALESCE(sessions.system_avatar_id, ''),
 			sessions.sidebar_position,
@@ -125,6 +126,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			model, effort, runtimeModel, runtimeEffort, runtimeAt         string
 			runtimeContextWindowSource, runtimeContextWindowObservedAt    string
 			providerRateLimitObservedAt                                   string
+			openTarget                                                    string
 			agentAvatarID, systemAvatarID                                 string
 			runtimeContextWindowTokens, compactionCount, userMessageCount int64
 			sidebarPosition, rowVersion                                   int64
@@ -143,6 +145,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&providerRateLimitInfo, &providerRateLimitObservedAt,
 			&compactionCount,
 			&userMessageCount,
+			&openTarget,
 			&agentAvatarID, &systemAvatarID,
 			&sidebarPosition,
 			&rowVersion,
@@ -188,6 +191,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			ProviderRateLimitObservedAt:    providerRateLimitObservedAt,
 			CompactionCount:                compactionCount,
 			UserMessageCount:               userMessageCount,
+			OpenTarget:                     openTarget,
 			AgentAvatarID:                  agentAvatarID,
 			SystemAvatarID:                 systemAvatarID,
 			SidebarPosition:                sidebarPosition,

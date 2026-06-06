@@ -180,6 +180,13 @@ type SessionRecord struct {
 	// turn.submitted, not user_message.created, so they are excluded.
 	UserMessageCount int64
 
+	// OpenTarget is the durable per-session sidebar open-target preference.
+	// '' = unset → the frontend auto-default applies; 'chat'/'turns' = an
+	// explicit pin to the main transcript or the Turns view. It is the durable
+	// manual override for the auto-default-to-Turns gate (previously in-memory
+	// only), persisted so the choice survives reload.
+	OpenTarget string
+
 	// Avatar IDs are assigned by the backend from a durable shuffled deck.
 	// Visible production rows must have an agent avatar id before publication.
 	// Empty values are legacy/incomplete state; clients render them as missing

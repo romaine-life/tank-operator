@@ -1650,6 +1650,16 @@ var schemaMigrations = []migration{
 	{ID: "0136", SQL: `CREATE INDEX IF NOT EXISTS session_events_user_message_by_session
 		ON session_events (tank_session_id)
 		WHERE event_type = 'user_message.created'`},
+
+	// open_target: durable per-session sidebar open-target preference
+	// (''/chat/turns); the manual override for the auto-default-to-Turns gate,
+	// persisted so it survives reload (was previously in-memory only). '' = unset
+	// (the frontend then applies its auto-default), 'chat' = pinned to the main
+	// transcript, 'turns' = pinned to the Turns view. Set through
+	// PUT /api/sessions/{session_id}/open-target; rides the session row on the
+	// wire like the other string fields.
+	{ID: "0137", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS open_target text NOT NULL DEFAULT ''`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
