@@ -20,7 +20,6 @@ testEnv:
   wildcardListenerSetName: tank-operator-wildcard
   wildcardListenerSetNamespace: tank-operator
   sessionsGatewayIP: 172.179.163.96
-  claudeCredentialsKvKey: claude-code-credentials
 
 staticOverride:
   enabled: true
@@ -289,11 +288,6 @@ externalSecret:
   claudeCredentials:
     secretName: claude-code-credentials
     secretKey: claude-code-credentials
-    # Optional Key Vault secret name override. When empty, production uses
-    # the historical `claude-code-credentials` name and validation slots use
-    # `<orchestrator-namespace>-claude-code-credentials`, so each test env
-    # gets its own refresh-token chain.
-    kvKey: ""
   # OpenAI Codex subscription credentials. The primary Secret lives in the
   # ORCHESTRATOR namespace and is mounted by codex-api-proxy. Codex CLI/GUI
   # session launchers write a placeholder chatgptAuthTokens auth.json and
@@ -304,7 +298,6 @@ externalSecret:
     # Key inside the K8s Secret. The proxy mounts this as
     # /etc/codex-credentials/auth.json.
     secretKey: auth.json
-    kvKey: codex-credentials
 # Observability templates (ServiceMonitor, PodMonitor, PrometheusRule, Grafana
 # dashboards) ship only when the kube-prometheus-stack operator CRDs are
 # present. Disabled environments render the chart without these resources so

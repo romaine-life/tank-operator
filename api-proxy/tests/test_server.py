@@ -5,6 +5,7 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 
 def install_proto_stubs() -> None:
@@ -53,6 +54,7 @@ from tank_api_proxy.server import (
     AuthInjector,
     ProxyConfig,
     _classify_refresh_failure,
+    _config_from_env,
     _patch_blob,
 )
 
@@ -202,6 +204,56 @@ class ServerTests(unittest.TestCase):
 
             self.assertIn("anthropic.com/api/oauth/usage", claude._usage_urls()[0])
             self.assertTrue(any("chatgpt.com" in url for url in codex._usage_urls()))
+
+
+class ConfigFromEnvTests(unittest.TestCase):
+    def test_missing_provider_env_fails_fast(self) -> None:
+        with patch.dict("os.environ", {}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "PROXY_PROVIDER is required"):
+                _config_from_env()
+
+    def test_unknown_provider_env_fails_fast(self) -> None:
+        with patch.dict("os.environ", {"PROXY_PROVIDER": "gemini"}, clear=True):
+            with self.assertRaisesRegex(RuntimeError, "unknown PROXY_PROVIDER"):
+                _config_from_env()
+
+    def test_codex_requires_explicit_kv_key_env(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "PROXY_PROVIDER": "codex",
+                "CODEX_CREDENTIALS_FILE": "/etc/codex-credentials/auth.json",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "CODEX_CREDENTIALS_KV_KEY is required"):
+                _config_from_env()
+
+    def test_claude_requires_explicit_kv_key_env(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "PROXY_PROVIDER": "claude",
+                "CLAUDE_CREDENTIALS_FILE": "/etc/claude-credentials/claude-code-credentials",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "CLAUDE_CREDENTIALS_KV_KEY is required"):
+                _config_from_env()
+
+    def test_codex_uses_explicit_slot_kv_key(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "PROXY_PROVIDER": "codex",
+                "CODEX_CREDENTIALS_FILE": "/etc/codex-credentials/auth.json",
+                "CODEX_CREDENTIALS_KV_KEY": "tank-operator-slot-2-codex-credentials",
+            },
+            clear=True,
+        ):
+            config = _config_from_env()
+
+        self.assertEqual(config.kv_secret_name, "tank-operator-slot-2-codex-credentials")
 
 
 class HealthSnapshotTests(unittest.TestCase):

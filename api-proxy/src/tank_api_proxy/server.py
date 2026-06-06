@@ -138,31 +138,34 @@ class ProxyConfig:
 
 
 def _config_from_env() -> ProxyConfig:
-    provider = os.environ.get("PROXY_PROVIDER", "claude").strip().lower()
+    provider = _required_env("PROXY_PROVIDER").strip().lower()
     if provider == "codex":
         return ProxyConfig(
             provider="codex",
-            credentials_file=os.environ.get(
-                "CODEX_CREDENTIALS_FILE", "/etc/codex-credentials/auth.json"
-            ),
+            credentials_file=_required_env("CODEX_CREDENTIALS_FILE"),
             token_url=os.environ.get("CODEX_TOKEN_URL", CODEX_TOKEN_URL),
             client_id=os.environ.get("CODEX_CLIENT_ID", CODEX_CLIENT_ID),
-            kv_secret_name=os.environ.get("CODEX_CREDENTIALS_KV_KEY", "codex-credentials"),
+            kv_secret_name=_required_env("CODEX_CREDENTIALS_KV_KEY"),
             account_header="ChatGPT-Account-ID",
             fedramp_header="X-OpenAI-Fedramp",
             patch_last_refresh=True,
         )
-    if provider not in ("", "claude"):
-        log.warning("unknown PROXY_PROVIDER=%r; falling back to claude", provider)
+    if provider != "claude":
+        raise RuntimeError(f"unknown PROXY_PROVIDER={provider!r}")
     return ProxyConfig(
         provider="claude",
-        credentials_file=os.environ.get(
-            "CLAUDE_CREDENTIALS_FILE", "/etc/claude-credentials/credentials.json"
-        ),
+        credentials_file=_required_env("CLAUDE_CREDENTIALS_FILE"),
         token_url=os.environ.get("CLAUDE_TOKEN_URL", ANTHROPIC_TOKEN_URL),
         client_id=os.environ.get("CLAUDE_CLIENT_ID", ANTHROPIC_CLIENT_ID),
-        kv_secret_name=os.environ.get("CLAUDE_CREDENTIALS_KV_KEY", "claude-code-credentials"),
+        kv_secret_name=_required_env("CLAUDE_CREDENTIALS_KV_KEY"),
     )
+
+
+def _required_env(name: str) -> str:
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} is required")
+    return value
 
 
 def _walk_for(blob: Any, names: tuple[str, ...]) -> str | None:
