@@ -35,6 +35,12 @@ const (
 	// save-credentials harvest writes the resulting OAuth token file to KV.
 	// Runs on the glibc antigravity-container image (agy + sandbox-agent).
 	AntigravityConfigMode = "antigravity_config"
+	// AntigravityGUIMode is the GUI chat mode for Antigravity (Gemini-Ultra).
+	// A pod-side antigravity-runner drives agy and maps its structured
+	// transcript stream onto the Tank conversation protocol. Runs on the glibc
+	// antigravity-container image, mounts the harvested OAuth credential from
+	// KV, and carries the mcp-auth-proxy sidecar like the other GUI modes.
+	AntigravityGUIMode    = "antigravity_gui"
 	DefaultSessionMode    = ClaudeGUIMode
 	MaxNameLength         = 80
 	SessionsNamespace     = "tank-operator-sessions"
@@ -54,9 +60,10 @@ const (
 	// "runner-metrics"). Numbers are documented in docs/observability.md;
 	// changing them requires bumping both the values here and the
 	// PodMonitor port-name references.
-	MCPAuthProxyMetricsPort = 9990
-	AgentRunnerMetricsPort  = 9095
-	CodexRunnerMetricsPort  = 9096
+	MCPAuthProxyMetricsPort      = 9990
+	AgentRunnerMetricsPort       = 9095
+	CodexRunnerMetricsPort       = 9096
+	AntigravityRunnerMetricsPort = 9097
 	// No DefaultSessionImage constants. The Helm chart owns image tags
 	// (k8s/values.yaml's session.* keys are bumped per-commit to
 	// fingerprinted tags by .github/workflows/claude-container-build.yml),
@@ -83,6 +90,7 @@ var (
 		CodexExecGUIMode:      {},
 		CodexAppServerMode:    {},
 		AntigravityConfigMode: {},
+		AntigravityGUIMode:    {},
 	}
 
 	sessionCapabilities = map[string]struct{}{
@@ -169,6 +177,24 @@ type SessionRecord struct {
 	// window uses). Monotonic: it only ever advances over a session's life.
 	CompactionCount int64
 
+	// UserMessageCount is the durable count of user_message.created events the
+	// session has recorded — one per human back-and-forth submission. Like
+	// CompactionCount it is a projection over the append-only session_events
+	// ledger (the chat-activity emitter recomputes it on each
+	// user_message.created upsert), surfaced on the row so the frontend's
+	// auto-default-to-Turns sidebar gate hydrates from durable row metadata,
+	// stable across reload and identical in a fresh tab. Monotonic: it only ever
+	// advances. Background-task wake continuations carry their prompt on
+	// turn.submitted, not user_message.created, so they are excluded.
+	UserMessageCount int64
+
+	// OpenTarget is the durable per-session sidebar open-target preference.
+	// '' = unset → the frontend auto-default applies; 'chat'/'turns' = an
+	// explicit pin to the main transcript or the Turns view. It is the durable
+	// manual override for the auto-default-to-Turns gate (previously in-memory
+	// only), persisted so the choice survives reload.
+	OpenTarget string
+
 	// Avatar IDs are assigned by the backend from a durable shuffled deck.
 	// Visible production rows must have an agent avatar id before publication.
 	// Empty values are legacy/incomplete state; clients render them as missing
@@ -221,19 +247,23 @@ var noClaudeHijackModes = map[string]bool{
 	CodexAppServerMode: true,
 	// Antigravity talks to Google directly; no Claude OAuth-gateway aliases.
 	AntigravityConfigMode: true,
+	AntigravityGUIMode:    true,
 }
 
 type ManifestOptions struct {
 	SessionImage            string
 	CodexSessionImage       string
 	AntigravitySessionImage string
-	SessionsNamespace       string
-	SessionScope            string
-	SessionServiceAccount   string
-	SessionConfigMap        string
-	ArgoCDTrackingApp       string
-	SandboxAgentPort        int
-	TankOperatorInternalURL string
+	// Secret name (ESO-synced from KV) holding the harvested Antigravity OAuth
+	// token, mounted into antigravity_gui runner pods. Empty for other modes.
+	AntigravityCredentialsSecret string
+	SessionsNamespace            string
+	SessionScope                 string
+	SessionServiceAccount        string
+	SessionConfigMap             string
+	ArgoCDTrackingApp            string
+	SandboxAgentPort             int
+	TankOperatorInternalURL      string
 	// Optional: in-cluster Service IPs for host alias injection.
 	OAuthGatewayIP  string
 	APIProxyIP      string
@@ -296,6 +326,18 @@ func IsSessionMode(mode string) bool {
 func IsCodexMode(mode string) bool {
 	switch NormalizeSessionMode(mode) {
 	case CodexConfigMode, CodexCLIMode, CodexGUIMode, CodexExecGUIMode, CodexAppServerMode:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsAntigravityMode reports whether a session mode runs the Antigravity agent
+// (agy) and so is stamped with AntigravitySessionImage. Covers both the
+// credential-mint terminal mode and the GUI chat mode.
+func IsAntigravityMode(mode string) bool {
+	switch NormalizeSessionMode(mode) {
+	case AntigravityConfigMode, AntigravityGUIMode:
 		return true
 	default:
 		return false
@@ -475,7 +517,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	argoTrackingID := opts.ArgoCDTrackingApp + ":/Pod:" + opts.SessionsNamespace + "/" + podName
 
 	sessionImage := opts.SessionImage
-	if mode == AntigravityConfigMode {
+	if IsAntigravityMode(mode) {
 		sessionImage = opts.AntigravitySessionImage
 	}
 	if IsCodexMode(mode) {
@@ -582,7 +624,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Codex GUI modes use codex-runner. Both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
 	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
-	wantSDKRunner := wantAgentRunner || wantCodexRunner
+	wantAntigravityRunner := mode == AntigravityGUIMode
+	wantSDKRunner := wantAgentRunner || wantCodexRunner || wantAntigravityRunner
 	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
 			"name":     "workspace",
@@ -699,7 +742,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"imagePullPolicy": "Always",
 		"command": []any{
 			"bash", "-lc",
-			"if [ -f /opt/tank/session-config/install-tank-docs.sh ]; then sh /opt/tank/session-config/install-tank-docs.sh || true; fi; " +
+			"if [ -f /opt/tank/session-config/install-tank-docs.sh ]; then sh /opt/tank/session-config/install-tank-docs.sh; fi; " +
 				"if [ -f /opt/tank/session-pod-bootstrap.sh ]; then bash /opt/tank/session-pod-bootstrap.sh || true; fi; " +
 				"if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; " +
 				"exec $sandbox_agent_cmd server --host 0.0.0.0 --port " + itoa(opts.SandboxAgentPort) + " --no-token --no-telemetry",
@@ -999,6 +1042,79 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"resources": codexRunnerResources(),
 		}
 		containers = append(containers, codexRunnerContainer)
+	}
+
+	// Antigravity-runner sidecar (antigravity_gui). Drives agy (Gemini-Ultra)
+	// and maps its structured transcript onto the Tank conversation protocol.
+	// Same workspace + session-bus contract as the other runners. The runner
+	// reads the KV-mounted OAuth credential (read-only secret volume); the
+	// launch script copies it into agy's writable data dir before exec'ing the
+	// runner, because agy refreshes the access token in place.
+	if wantAntigravityRunner {
+		// The runner is self-contained: it drives agy + the session bus and
+		// needs no session ConfigMap (no Tank mcp.json — agy owns its MCP). Its
+		// launch script is baked into the antigravity image at /opt/tank, so the
+		// pod has no ConfigMap-launch-script coupling.
+		runnerVolumeMounts := []any{
+			map[string]any{"name": "workspace", "mountPath": "/workspace"},
+			map[string]any{"name": "tank-operator-sa-token", "mountPath": "/var/run/secrets/tank-operator", "readOnly": true},
+			map[string]any{"name": "auth-romaine-sa-token", "mountPath": "/var/run/secrets/auth.romaine.life", "readOnly": true},
+		}
+		if opts.AntigravityCredentialsSecret != "" {
+			volumes = append(volumes, map[string]any{
+				"name": "antigravity-cred",
+				"secret": map[string]any{
+					"secretName": opts.AntigravityCredentialsSecret,
+					"items": []any{
+						map[string]any{"key": "antigravity-oauth-token", "path": "antigravity-oauth-token"},
+					},
+				},
+			})
+			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+				"name": "antigravity-cred", "mountPath": "/var/run/antigravity-cred", "readOnly": true,
+			})
+		}
+		antigravityRunnerEnv := []any{
+			map[string]any{
+				"name": "SESSION_ID",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{"fieldPath": "metadata.labels['tank-operator/session-id']"},
+				},
+			},
+			map[string]any{"name": "TANK_SESSION_STORAGE_KEY", "value": storageKey},
+			map[string]any{
+				"name": "POD_OWNER_EMAIL",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{"fieldPath": "metadata.annotations['tank-operator/owner-email']"},
+				},
+			},
+			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
+			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
+			map[string]any{
+				"name": "NATS_TOKEN",
+				"valueFrom": map[string]any{
+					"secretKeyRef": map[string]any{"name": opts.NATSAuthSecret, "key": "token"},
+				},
+			},
+			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
+			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
+			map[string]any{"name": "ANTIGRAVITY_CRED_FILE", "value": "/var/run/antigravity-cred/antigravity-oauth-token"},
+			map[string]any{"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(AntigravityRunnerMetricsPort)},
+		}
+		antigravityRunnerContainer := map[string]any{
+			"name":            "antigravity-runner",
+			"image":           sessionImage,
+			"imagePullPolicy": "Always",
+			"command":         []any{"bash", "/opt/tank/antigravity-runner-launch.sh"},
+			"env":             antigravityRunnerEnv,
+			"volumeMounts":    runnerVolumeMounts,
+			"ports": []any{
+				map[string]any{"name": "runner-metrics", "containerPort": AntigravityRunnerMetricsPort},
+			},
+			"resources": codexRunnerResources(),
+		}
+		containers = append(containers, antigravityRunnerContainer)
 	}
 
 	spec := map[string]any{

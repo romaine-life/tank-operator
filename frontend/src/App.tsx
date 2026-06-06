@@ -43,6 +43,7 @@ import {
   type TurnActivityPageInfo,
   type TurnActivityPagerState,
 } from "./turnActivityPager";
+import { shouldAutoDefaultToTurns } from "./autoTurnsDefault";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer } from "./ChatComposer";
@@ -163,6 +164,7 @@ import {
   navigationModeTelemetryEvent,
   transitionNavigationMode,
 } from "./navigationMode";
+import { resolveComposerFocusShortcut } from "./composerFocusShortcut";
 import { isTranscriptRefreshShortcut } from "./transcriptRefreshShortcut";
 import {
   isTranscriptToTurnsShortcut,
@@ -227,6 +229,24 @@ import {
   removeRepoSlug,
   unpinRepoSlug,
 } from "./repos";
+import {
+  CHAT_MODES,
+  CODEX_ROLLOUT_MODES,
+  CONFIG_MODES,
+  CREATE_TIME_INITIAL_TURN_MODES,
+  GUI_ROLLOUT_MODES,
+  MODE_PROVIDERS,
+  PROVIDER_CONFIG_MODES,
+  PROVIDER_INTERACTION_MODES,
+  PROVIDERS,
+  ROLLOUT_MODES,
+  SDK_CHAT_MODES,
+  isDefaultSessionMode,
+  type DefaultSessionMode,
+  type Provider,
+  type SessionInteraction,
+  type SessionMode,
+} from "./sessionModes";
 import {
   readHomeDismissedRecentRepos,
   readHomeSelectedRepos,
@@ -334,28 +354,6 @@ const TURN_ACTIVITY_LIVE_REFRESH_DELAY_MS = 120;
 const TURN_ACTIVITY_LIVE_REFRESH_RETRY_DELAY_MS = 1_500;
 const TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS = 3;
 
-type SessionMode =
-  | "api_key"
-  | "claude_cli"
-  | "claude_gui"
-  | "config"
-  | "codex_cli"
-  | "codex_gui"
-  | "codex_exec_gui"
-  | "codex_app_server"
-  | "codex_config"
-  | "antigravity_config";
-type DefaultSessionMode = Extract<
-  SessionMode,
-  "claude_cli" | "claude_gui" | "codex_cli" | "codex_gui" | "codex_exec_gui"
->;
-// "antigravity" (Gemini-Ultra via `agy`) exists for label/icon resolution of
-// the antigravity_config credential-mint mode. It is intentionally NOT in the
-// PROVIDERS picker array yet: the runnable gui/cli surface + usage quotas land
-// with the antigravity_gui runner. Until then it has no interaction modes and
-// no quota windows.
-type Provider = "anthropic" | "codex" | "antigravity";
-type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 // TurnActivityPageInfo (the per-turn /activity page directory) and the rule for
 // turning it into a rendered pager live in ./turnActivityPager.
@@ -756,6 +754,13 @@ interface Session {
   // the session_events ledger onto the row. The composer renders it as the
   // compaction metric; absent/0 means the session has not compacted yet.
   compaction_count?: number;
+  // Durable count of user_message.created events (one per human back-and-forth),
+  // projected from the session_events ledger onto the row. Drives the
+  // auto-default-to-Turns sidebar gate; absent/0 means too few exchanges yet.
+  user_message_count?: number;
+  // Durable manual open-target pin ("chat"/"turns") set from the session tab
+  // menu; absent means the user has not pinned and the auto-default applies.
+  open_target?: "chat" | "turns";
   agent_avatar_id?: string | null;
   system_avatar_id?: string | null;
   sidebar_position?: number;
@@ -784,6 +789,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   antigravity_config: "Antigravity config",
+  antigravity_gui: "Antigravity GUI",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -799,6 +805,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   antigravity_config: "agy-cfg",
+  antigravity_gui: "agy-gui",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -808,34 +815,10 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
+  antigravity_gui: "antigravity",
 };
 
-const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
-  api_key: "anthropic",
-  claude_cli: "anthropic",
-  claude_gui: "anthropic",
-  config: "anthropic",
-  codex_cli: "codex",
-  codex_gui: "codex",
-  codex_exec_gui: "codex",
-  codex_app_server: "codex",
-  codex_config: "codex",
-  // Resolves the antigravity_config row's provider for label lookups. Never
-  // rendered as a ProviderIcon (config modes use the text chip in ModeChip), so
-  // it needs no icon asset.
-  antigravity_config: "antigravity",
-};
-
-const PROVIDER_INTERACTION_MODES: Record<
-  Provider,
-  Partial<Record<SessionInteraction, DefaultSessionMode | null>>
-> = {
-  anthropic: { gui: "claude_gui", cli: "claude_cli" },
-  codex: { gui: "codex_gui", cli: "codex_cli" },
-  // No runnable interaction surface yet — antigravity_config is credential-mint
-  // only; gui/cli arrive with the antigravity-runner.
-  antigravity: {},
-};
+const MODE_MENU_ICONS: Record<SessionMode, Provider> = MODE_PROVIDERS;
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
   gui: "gui",
@@ -843,12 +826,6 @@ const INTERACTION_LABELS: Record<SessionInteraction, string> = {
 };
 
 const INTERACTION_OPTIONS: SessionInteraction[] = ["gui", "cli"];
-
-const PROVIDER_CONFIG_MODES: Partial<Record<Provider, SessionMode>> = {
-  anthropic: "config",
-  codex: "codex_config",
-  antigravity: "antigravity_config",
-};
 
 const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
@@ -909,6 +886,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   antigravity_config: "agy login (paste code) · seeds KV for Antigravity",
+  antigravity_gui: "GUI chat pane for Gemini-Ultra (agy)",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -1197,18 +1175,6 @@ function normalizeSessionMode(value: string | null): string | null {
   return value;
 }
 
-function isDefaultSessionMode(
-  value: string | null,
-): value is DefaultSessionMode {
-  return (
-    value === "claude_cli" ||
-    value === "claude_gui" ||
-    value === "codex_cli" ||
-    value === "codex_gui" ||
-    value === "codex_exec_gui"
-  );
-}
-
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
     const stored = normalizeSessionMode(
@@ -1442,44 +1408,10 @@ function moveSessionId(
   return next;
 }
 
-// Modes whose pods carry harvestable credentials — the "save" button
-// surfaces on session rows in these modes. Kept as a Set so adding a third
-// future config mode doesn't grow an OR chain.
-const CONFIG_MODES = new Set<SessionMode>([
-  "config",
-  "codex_config",
-  "antigravity_config",
-]);
-const CHAT_MODES = new Set<SessionMode>([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-]);
-const SDK_CHAT_MODES = new Set<SessionMode>([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-]);
-const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>(SDK_CHAT_MODES);
 const SDK_TIMELINE_TAIL_ROWS = 24;
 const SDK_TIMELINE_OLDER_ROWS = 8;
 const SDK_TIMELINE_DEEPLINK_ROWS_BEFORE = 12;
 const SDK_TIMELINE_DEEPLINK_ROWS_AFTER = 12;
-const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
-const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-]);
-const ROLLOUT_MODES = new Set<SessionMode>([
-  ...CLAUDE_ROLLOUT_MODES,
-  ...CODEX_ROLLOUT_MODES,
-]);
-const PROVIDERS: Provider[] = ["anthropic", "codex"];
 
 function defaultModeFor(
   provider: Provider,
@@ -10432,6 +10364,21 @@ function RunTurnActivityScreen({
     : undefined;
   const showRefreshProblemOnly =
     Boolean(refreshProblem) && detailGroups.length === 0;
+  const selectedThinkingStatus =
+    selected?.shell?.activity?.status === "needs_input"
+      ? "needs_input"
+      : "thinking";
+  const selectedThinkingBubble =
+    selected && selected.active ? (
+      <RunTurnThinkingBubble
+        key={`turn-view-thinking-${selected.turnId}`}
+        userKey={userKey}
+        turnId={selected.turnId}
+        status={selectedThinkingStatus}
+        lastActivityAt={selected.lastActivityAt}
+        avatar={avatar}
+      />
+    ) : null;
   const selectedPageDirectoryItem = selectedPageInfo?.pages?.find(
     (page) => page.number === pagerState.page,
   );
@@ -10889,40 +10836,17 @@ function RunTurnActivityScreen({
                 />
                 <span>Loading activity...</span>
               </div>
-            ) : showRefreshProblemOnly ? null : selected.active &&
-              detailGroups.length === 0 ? (
-              <div
-                className="run-turn-view-thinking"
-                aria-label="Turn is running"
-              >
-                <span className="run-turn-thinking-lines">
-                  <span className="run-turn-thinking-label run-turn-thinking-shimmer">
-                    Thinking...
-                  </span>
-                  <span className="run-turn-thinking-meta-row">
-                    <span className="run-turn-thinking-meta-label">
-                      Runtime
-                    </span>
-                    <RunTurnThinkingDuration
-                      userKey={userKey}
-                      turnId={selected.turnId}
-                    />
-                  </span>
-                  <span className="run-turn-thinking-meta-row">
-                    <span className="run-turn-thinking-meta-label">
-                      Last activity
-                    </span>
-                    <RunTurnThinkingLastActivity
-                      lastActivityAt={selected.lastActivityAt}
-                      turnId={selected.turnId}
-                    />
-                  </span>
-                </span>
-              </div>
+            ) : showRefreshProblemOnly ? (
+              selectedThinkingBubble
             ) : detailGroups.length === 0 ? (
-              <div className="run-shell-tasks-empty">No turn activity.</div>
+              selectedThinkingBubble ?? (
+                <div className="run-shell-tasks-empty">No turn activity.</div>
+              )
             ) : (
-              renderedDetailGroups.map(renderGroup)
+              <>
+                {selectedThinkingBubble}
+                {renderedDetailGroups.map(renderGroup)}
+              </>
             )}
           </div>
         </>
@@ -17237,32 +17161,35 @@ function ChatPane({
     scheduledWakeupEntries,
   ]);
 
-  // `/` is a "return to prompt" shortcut when focus is anywhere except the
-  // composer textarea. Once the textarea is focused, `/` keeps its normal
-  // typing behavior and opens the slash-command palette through input events.
+  // `/` is a "jump to the prompt" shortcut when focus is anywhere except the
+  // composer textarea. The turns view renders the same composer as the chat
+  // transcript, so `/` focuses it in place there rather than navigating back to
+  // the main transcript; tabs without an in-page composer switch to chat first.
+  // Once the textarea is focused, `/` keeps its normal typing behavior and opens
+  // the slash-command palette through input events.
   useEffect(() => {
     if (publicView) return;
     if (!visible) return;
     const onKey = (e: KeyboardEvent) => {
-      if (
-        e.key !== "/" ||
-        e.altKey ||
-        e.ctrlKey ||
-        e.metaKey ||
-        e.shiftKey ||
-        e.isComposing
-      ) {
-        return;
-      }
       const textarea = composerWrapRef.current?.querySelector(
         "textarea",
       ) as HTMLTextAreaElement | null;
-      if (textarea && e.target === textarea) return;
+      const action = resolveComposerFocusShortcut({
+        key: e.key,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
+        targetIsComposer: !!textarea && e.target === textarea,
+        activeTab,
+      });
+      if (action === "ignore") return;
 
       e.preventDefault();
       e.stopPropagation();
-      pendingComposerFocusRef.current = true;
-      if (activeTab !== "chat") {
+      if (action === "switch-to-chat") {
+        pendingComposerFocusRef.current = true;
         setActiveTab("chat");
         return;
       }
@@ -19946,6 +19873,8 @@ function AuthenticatedApp() {
       provider_rate_limit_observed_at:
         row.provider_rate_limit_observed_at ?? null,
       compaction_count: row.compaction_count ?? 0,
+      user_message_count: row.user_message_count ?? 0,
+      open_target: row.open_target,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
       row_version: row.row_version,
@@ -20021,6 +19950,15 @@ function AuthenticatedApp() {
         typeof raw.compaction_count === "number" &&
         Number.isFinite(raw.compaction_count)
           ? Math.max(0, Math.floor(raw.compaction_count))
+          : undefined,
+      user_message_count:
+        typeof raw.user_message_count === "number" &&
+        Number.isFinite(raw.user_message_count)
+          ? Math.max(0, Math.floor(raw.user_message_count))
+          : undefined,
+      open_target:
+        raw.open_target === "chat" || raw.open_target === "turns"
+          ? raw.open_target
           : undefined,
       agent_avatar_id:
         typeof raw.agent_avatar_id === "string"
@@ -20687,11 +20625,36 @@ function AuthenticatedApp() {
   }
 
   function sessionOpenTarget(id: string): SessionOpenTarget {
-    return sessionOpenTargets[id] ?? "chat";
+    // Precedence: optimistic overlay (this tab's just-clicked choice) > durable
+    // pin on the row (`sessions.open_target`, survives reload) > auto-default for
+    // substantial sessions > main transcript. The overlay is only the in-flight
+    // echo of a click so the menu radio updates instantly; the durable row is the
+    // source of truth across reload and fresh tabs. The auto-default reads the
+    // durable per-session user_message_count; the threshold gate lives in
+    // autoTurnsDefault.ts. This only changes where a *click* lands; it never
+    // moves an already-open pane.
+    const overlay = sessionOpenTargets[id];
+    if (overlay) return overlay;
+    const session = sessions.find((s) => s.id === id);
+    const pinned = session?.open_target;
+    if (pinned === "chat" || pinned === "turns") return pinned;
+    if (session && shouldAutoDefaultToTurns(session.user_message_count)) {
+      return "turns";
+    }
+    return "chat";
   }
 
   function setSessionOpenTarget(id: string, target: SessionOpenTarget) {
+    // Optimistic overlay for instant menu feedback, then persist durably so the
+    // choice survives reload — the row's open_target becomes the source of truth
+    // once the row-update SSE round-trips. Fire-and-forget: a failed write just
+    // means the pin reverts on reload, which the durable row makes self-healing.
     setSessionOpenTargets((prev) => ({ ...prev, [id]: target }));
+    void authedFetch(`/api/sessions/${id}/open-target`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ open_target: target }),
+    }).catch(() => undefined);
     if (active !== id) return;
     if (target === "turns") {
       requestSessionTurnsOpen(id);

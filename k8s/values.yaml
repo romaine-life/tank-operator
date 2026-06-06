@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-98a7754d7e66197247966cbb5945d0e2a770561993a000ca2a1fa2ee1a4f517e"
+  tag: "app-7d2521767127697b9b06b37db35a033bf36e275087c34d4fe0308dabe8939878"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -53,13 +53,13 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-114e856fa5489cf8cab61a2693ce213754ebf5e71cb2cea71807ee95c07662dc
-  codexImage: romainecr.azurecr.io/codex-container:codex-5357e367c779e978e729c9611128d160f0beb6462dc1f33639947443a0a9a4e6
+  image: romainecr.azurecr.io/claude-container:claude-56084c7d2ab9eb08232f4a1973bd02a6e7eb563eb6ee6da9e5f97958850781fb
+  codexImage: romainecr.azurecr.io/codex-container:codex-046269a9fb860eff864571e9cdde287d47c020dbb752204b6e21e57a53acb24f
   # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-f6ef7de7b6a8224df2c0c7dbf814c9c7ffce7ed8b9cb46bc0cbda62833e8b424
+  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-7dc17018cae1437591a9470af84e44dcbf725ae34247ea9a1ee0587a08b45be1
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -139,7 +139,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-b393184f862bae5df8199122046060cbb7a34bac23aea077f732efb82d9767e5"
+    tag: "api-proxy-ef9e38de056ccd1a61c50395affbcd4cf1d35504666fbe49fd81cdecaa69025f"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   serviceAccount: claude-api-proxy

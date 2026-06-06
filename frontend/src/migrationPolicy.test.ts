@@ -828,12 +828,14 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   );
   assert.match(
     appSource,
-    /<RunTurnThinkingDuration[\s\S]{0,120}userKey=\{userKey\}[\s\S]{0,120}turnId=\{selected\.turnId\}/,
+    /const selectedThinkingBubble =[\s\S]{0,180}<RunTurnThinkingBubble[\s\S]{0,180}userKey=\{userKey\}[\s\S]{0,80}turnId=\{selected\.turnId\}/,
   );
   assert.match(
     appSource,
-    /<RunTurnThinkingLastActivity[\s\S]{0,120}lastActivityAt=\{selected\.lastActivityAt\}[\s\S]{0,120}turnId=\{selected\.turnId\}/,
+    /const selectedThinkingBubble =[\s\S]{0,260}<RunTurnThinkingBubble[\s\S]{0,220}lastActivityAt=\{selected\.lastActivityAt\}[\s\S]{0,80}avatar=\{avatar\}/,
   );
+  assert.equal(appSource.includes("run-turn-view-thinking"), false);
+  assert.equal(appSource.includes("selectedThinkingBubble}"), true);
   // No backend timestamp should leak into the timer's anchor — the
   // resolver takes only (userKey, turnId) and never reads a startedAt
   // prop. If a future refactor tries to add one back, this assertion

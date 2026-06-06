@@ -98,7 +98,7 @@
     },
     "source": {
       "type": "string",
-      "enum": ["tank", "claude", "codex"]
+      "enum": ["tank", "claude", "codex", "antigravity"]
     },
     "type": {
       "type": "string",
@@ -139,7 +139,7 @@
     "runtime": {
       "description": "Session-events storage runtime stamp.",
       "type": "string",
-      "enum": ["claude", "codex"]
+      "enum": ["claude", "codex", "antigravity"]
     },
     "producer": {
       "type": "object",

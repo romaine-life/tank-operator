@@ -47,3 +47,76 @@ Evidence:
   projection version bump (re-stamps existing shells with `turnNumber`), and
   `scripts/check-removed-chat-runtime.mjs` guards against the retired
   `turn_<uuid>` route and the array-position label.
+
+## Auto-default to Turns view for substantial sessions
+
+Status: shipped
+
+Intent:
+Opening a session from the sidebar normally lands in the main transcript. Once a
+session has accumulated enough real user back-and-forths, that default flips to
+the Turns view (latest turn): past a handful of exchanges the main transcript is
+long enough that landing on the most recent turn beats landing on a transcript
+you have to scroll, and the Turns view is the more direct read of "what happened
+recently." This is the default-switch the session tab options menu (Main
+transcript vs Turns view) made manual; the auto-default removes the need to flip
+it by hand on every long session. It changes only where a *click* lands — it
+never moves an already-open pane — and a manual choice from the tab menu always
+wins.
+
+Affected contracts:
+- Transcript Navigation (primary — where a session open lands)
+- Transcript (the durable per-session `user_message_count` row field)
+
+Contract impact:
+- The signal is a durable per-session count of `user_message.created` events
+  (`sessions.user_message_count`), projected from the append-only
+  `session_events` ledger by the chat-activity emitter — the same
+  recompute-and-compare, advance-only projection model as `compaction_count`. It
+  is NOT derived from the loaded transcript window (which would undercount once
+  old events scroll out and disagree across reload / fresh tab — the
+  local-vs-durable contradiction the Transcript and Transcript Navigation
+  contracts forbid). It rides the snapshot and row-update wire alongside
+  `compaction_count`.
+- The count is "user back-and-forths," not SDK/turn churn: background-task wake
+  continuations carry their prompt on `turn.submitted`, not
+  `user_message.created`, so they never advance it. (Schedule-wakeups do write a
+  `user_message.created` and so count; they are rare and are a genuine
+  user-visible exchange.) Because the ledger is append-only the count is
+  monotonic, so "default to Turns whenever count >= N" is equivalent to "flip
+  once when it crosses N, forever after."
+- The threshold is a single named constant (`AUTO_TURNS_USER_MESSAGE_THRESHOLD`,
+  currently 8) owned by the pure gate `frontend/src/autoTurnsDefault.ts`. It is an
+  ergonomics dial, not a failure guard — there is deliberately no attempt to find
+  a "magic number."
+- The manual open-target preference always wins; the auto-default only decides
+  the landing when the user has not pinned. The preference is **durable**: a
+  deliberate Main-transcript/Turns pin is persisted to `sessions.open_target`
+  (`PUT /api/sessions/{id}/open-target`, `''`=unset/auto, `'chat'`/`'turns'`=pin)
+  and read back from the row, so it survives reload and a fresh tab. The client
+  keeps a short-lived optimistic overlay only for instant menu feedback; the
+  durable row is the source of truth. The auto-default reads the durable
+  user-message count; neither side reads the loaded transcript window.
+
+Evidence:
+- Backend: migrations `0135` (`sessions.user_message_count` column) and `0136`
+  (`session_events_user_message_by_session` partial index);
+  `store.CountUserMessages` + `session_events_compaction_integration_test.go`
+  (`TestCountUserMessagesCountsScopedUserMessageRows`); `chat_activity.go`
+  `refreshUserMessageCount` + `chat_activity_test.go` (advancing-writes /
+  redelivered-no-op); `writer.go` `EventTypeUserMessageCountChanged` →
+  `user_message_count` mapping + `writer_test.go`; the field carried on the row by
+  `sessionmodel`, `sessions` Info, `row_publisher`, and both `sessionregistry`
+  reads.
+- Frontend: `frontend/src/autoTurnsDefault.ts` + `autoTurnsDefault.test.ts` pin
+  the threshold and the gate; `sessionStore.ts` carries `user_message_count` on
+  the wire; `App.tsx` `sessionOpenTarget()` applies the gate with the manual
+  override winning.
+- Durable override: migration `0137` (`sessions.open_target`),
+  `sessionregistry.SetOpenTarget` → `sessions.Manager.SetOpenTarget` →
+  `PUT /api/sessions/{id}/open-target` (`handleSetOpenTarget`, value-validated;
+  `handlers_open_target_test.go` proves 200 round-trip + 400 on invalid), carried
+  on the snapshot + row-update wire by `sessionmodel` / `sessions` Info /
+  `row_publisher` / both `sessionregistry` reads. Frontend `sessionStore.ts` +
+  `App.tsx` `setSessionOpenTarget()` persist via the PUT, and `sessionOpenTarget()`
+  resolves overlay → durable pin → auto-default → main transcript.

@@ -1522,6 +1522,177 @@ test("Claude rate_limit_event with allowed primary quota does not fail the activ
   assert.equal(r.activeTurn, activeTurn, "the active turn must remain owned by the runner");
 });
 
+test("Claude api_retry rate_limit stall fails the turn durably once the no-progress window elapses", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    providerRetryStallMs: number;
+    handleEvent: (message: unknown) => Promise<void>;
+  };
+  // Collapse the no-progress window so the second frame trips it
+  // deterministically without sleeping for the production default.
+  r.providerRetryStallMs = 0;
+  r.activeTurn = {
+    turnID: "turn_retry-stalled",
+    clientNonce: "retry-stalled",
+    text: "hello",
+    // started:false — the 638 pathology: claimed but the SDK never produced
+    // a first frame, only api_retry.
+    started: false,
+    interrupted: false,
+    terminalEmitted: false,
+    commandRecord: { id: "submit-1", type: "submit_turn" },
+    stopCommandHeartbeat: () => harness.sdkControlCalls.push("stop-heartbeat"),
+  };
+
+  // First api_retry arms the stall window; no terminal yet.
+  await r.handleEvent({
+    type: "system",
+    subtype: "api_retry",
+    error: "rate_limit",
+    uuid: "retry-1",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    harness.events.length,
+    0,
+    "a single retry frame must not fail the turn",
+  );
+  assert.deepEqual(
+    harness.bus,
+    [],
+    "command stays in flight while the SDK is still retrying",
+  );
+
+  // Second api_retry, past the (zeroed) window, forces the durable terminal.
+  await r.handleEvent({
+    type: "system",
+    subtype: "api_retry",
+    error: "rate_limit",
+    uuid: "retry-2",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    harness.events.length,
+    1,
+    "a sustained rate-limit retry stall must emit exactly one durable terminal",
+  );
+  assert.equal(harness.events[0]!.type, "turn.failed");
+  assert.equal(
+    (harness.events[0] as { payload?: { reason?: string } }).payload?.reason,
+    "provider_rate_limit",
+  );
+  assert.match(
+    (harness.events[0] as { payload?: { error?: string } }).payload?.error ??
+      "",
+    /retry stall/,
+  );
+  assert.deepEqual(
+    harness.bus,
+    ["ack"],
+    "the submit command must ack after the durable stall terminal",
+  );
+  assert.equal(
+    r.activeTurn,
+    null,
+    "the stalled turn is released after the terminal",
+  );
+});
+
+test("Claude api_retry rate_limit resets after real turn progress so a later isolated retry does not fail the turn", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    providerRetryStall: unknown;
+    providerRetryStallMs: number;
+    resetProviderRetryStall: () => void;
+    handleEvent: (message: unknown) => Promise<void>;
+  };
+  r.providerRetryStallMs = 0;
+  const activeTurn = {
+    turnID: "turn_recovers",
+    clientNonce: "recovers",
+    text: "hello",
+    started: true,
+    interrupted: false,
+    terminalEmitted: false,
+    commandRecord: { id: "submit-1", type: "submit_turn" },
+    stopCommandHeartbeat: () => harness.sdkControlCalls.push("stop-heartbeat"),
+  };
+  r.activeTurn = activeTurn;
+
+  // A retry arms the window...
+  await r.handleEvent({
+    type: "system",
+    subtype: "api_retry",
+    error: "rate_limit",
+    uuid: "retry-1",
+  });
+  assert.notEqual(r.providerRetryStall, null, "the stall window is armed");
+  // ...then the turn makes real progress, which must clear it.
+  r.resetProviderRetryStall();
+  assert.equal(r.providerRetryStall, null, "progress clears the stall window");
+
+  // A later isolated retry only re-arms (count resets to 1); it must not fail.
+  await r.handleEvent({
+    type: "system",
+    subtype: "api_retry",
+    error: "rate_limit",
+    uuid: "retry-2",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(
+    harness.events.length,
+    0,
+    "an isolated retry after progress must re-arm, not immediately fail",
+  );
+  assert.equal(r.activeTurn, activeTurn, "the active turn stays owned");
+});
+
+test("Claude api_retry overloaded is observed but never forces a turn terminal", async () => {
+  const { runner, harness } = makeInterruptHarness();
+  const r = runner as unknown as {
+    activeTurn: unknown;
+    providerRetryStallMs: number;
+    handleEvent: (message: unknown) => Promise<void>;
+  };
+  r.providerRetryStallMs = 0;
+  const activeTurn = {
+    turnID: "turn_overloaded",
+    clientNonce: "overloaded",
+    text: "hello",
+    started: false,
+    interrupted: false,
+    terminalEmitted: false,
+    commandRecord: { id: "submit-1", type: "submit_turn" },
+    stopCommandHeartbeat: () => harness.sdkControlCalls.push("stop-heartbeat"),
+  };
+  r.activeTurn = activeTurn;
+
+  await r.handleEvent({
+    type: "system",
+    subtype: "api_retry",
+    error: "overloaded",
+    uuid: "retry-1",
+  });
+  await r.handleEvent({
+    type: "system",
+    subtype: "api_retry",
+    error: "overloaded",
+    uuid: "retry-2",
+  });
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(
+    harness.events.length,
+    0,
+    "overloaded retries are transient; the SDK recovers and we must not fail the turn",
+  );
+  assert.deepEqual(harness.bus, []);
+  assert.equal(r.activeTurn, activeTurn, "the active turn stays owned by the runner");
+});
+
 test("acceptInterrupt with missing target: fails command explicitly instead of silently acking", async () => {
   const { runner, harness } = makeInterruptHarness();
   const r = runner as unknown as {

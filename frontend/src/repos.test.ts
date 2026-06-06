@@ -54,6 +54,7 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "codex_gui",
     "codex_exec_gui",
     "codex_app_server",
+    "antigravity_gui",
   ]) {
     assert.ok(REPO_SUPPORTED_MODES.has(mode), `${mode} should support repos`);
   }

@@ -141,13 +141,15 @@ Two steps:
    curl -X PUT \
      https://tank-operator-slot-1.tank.dev.romaine.life/api/internal/session-scopes/tank-operator-slot-1/image-override \
      -H "Authorization: Bearer $AUTH_JWT" -H 'Content-Type: application/json' \
-     -d '{"codex_image":"romainecr.azurecr.io/codex-container:codex-<fp>","git_ref":"<branch>"}'
+     -d '{"codex_image":"romainecr.azurecr.io/codex-container:codex-<fp>","antigravity_image":"romainecr.azurecr.io/antigravity-container:antigravity-<fp>","git_ref":"<branch>"}'
    ```
 
    `GET` the same path to see what new sessions will inherit; `DELETE` it to
-   revert to the chart-pinned image. The override is durable (survives the slot
-   orchestrator restarting), refuses the production scope, and is honored only by
-   test-env orchestrators — production sessions are never repointed.
+   revert to the chart-pinned image. `PUT` replaces the scoped override row, so
+   include every image family you want to keep pointed at branch images. The
+   override is durable (survives the slot orchestrator restarting), refuses the
+   production scope, and is honored only by test-env orchestrators — production
+   sessions are never repointed.
 
 The existing `apply_test_slot_hot_swap` remains the fast inner loop for the
 session you are already in; the repoint is what makes *new* sessions match. A

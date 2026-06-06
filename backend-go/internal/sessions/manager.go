@@ -43,7 +43,7 @@ type SessionImageOverrides interface {
 	// set" (the caller falls back to the configured image). A non-nil error
 	// means the lookup failed; the caller also falls back rather than failing
 	// session creation.
-	Get(ctx context.Context, scope string) (claudeImage, codexImage string, ok bool, err error)
+	Get(ctx context.Context, scope string) (claudeImage, codexImage, antigravityImage string, ok bool, err error)
 }
 
 // SessionRegistry is a write-capable registry interface.
@@ -52,6 +52,7 @@ type SessionRegistry interface {
 	NextSessionID(ctx context.Context) (string, error)
 	Upsert(ctx context.Context, record sessionmodel.SessionRecord) error
 	SetName(ctx context.Context, email, sessionID string, name *string) error
+	SetOpenTarget(ctx context.Context, email, sessionID, target string) error
 	SetBugLabel(ctx context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error
 	SetBugLabels(ctx context.Context, email, sessionID string, labels []*sessionmodel.SessionBugLabel) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
@@ -192,13 +193,13 @@ func resolveIP(host string) string {
 //
 // It is a deliberate no-op when no resolver is wired (production never wires
 // one) or for the production scope, so prod always stamps the configured
-// SESSION_IMAGE / CODEX_SESSION_IMAGE. A lookup error falls back to the pinned
-// image rather than failing session creation.
+// SESSION_IMAGE / CODEX_SESSION_IMAGE / ANTIGRAVITY_SESSION_IMAGE. A lookup
+// error falls back to the pinned image rather than failing session creation.
 func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.ManifestOptions, mode string) {
 	if m.imageOverrides == nil || m.scope == "" || m.scope == defaultSessionScope {
 		return
 	}
-	claudeImage, codexImage, ok, err := m.imageOverrides.Get(ctx, m.scope)
+	claudeImage, codexImage, antigravityImage, ok, err := m.imageOverrides.Get(ctx, m.scope)
 	if err != nil {
 		slog.Warn("session image override lookup failed; using pinned image",
 			"scope", m.scope, "mode", mode, "error", err)
@@ -208,7 +209,12 @@ func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.Man
 		return
 	}
 	kind := ""
-	if sessionmodel.IsCodexMode(mode) {
+	if sessionmodel.IsAntigravityMode(mode) {
+		if antigravityImage != "" {
+			opts.AntigravitySessionImage = antigravityImage
+			kind = "antigravity"
+		}
+	} else if sessionmodel.IsCodexMode(mode) {
 		if codexImage != "" {
 			opts.CodexSessionImage = codexImage
 			kind = "codex"
@@ -651,6 +657,26 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 		// Persist the resolved NON-NULL name; clearing writes the default, not null.
 		if regErr := m.registry.SetName(ctx, owner, sessionID, &resolvedName); regErr != nil {
 			slog.Warn("set-name registry update failed",
+				"session_id", sessionID, "owner", owner, "error", regErr)
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil {
+		return registered, nil
+	}
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// SetOpenTarget persists the durable per-session sidebar open-target preference
+// (” / 'chat' / 'turns'). Like SetBugLabel it is registry-only UI state, so no
+// pod annotation is patched. Validation lives in the HTTP handler; the manager
+// just persists the value, publishes the updated row, and returns the refreshed
+// Info the same way SetName's tail does.
+func (m *Manager) SetOpenTarget(ctx context.Context, owner, sessionID, target string) (Info, error) {
+	if m.registry != nil {
+		if regErr := m.registry.SetOpenTarget(ctx, owner, sessionID, target); regErr != nil {
+			slog.Warn("set-open-target registry update failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
 	}

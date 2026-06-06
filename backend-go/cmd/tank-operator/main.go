@@ -37,6 +37,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionstream"
 	"github.com/romaine-life/tank-operator/backend-go/internal/store"
+	"github.com/romaine-life/tank-operator/backend-go/internal/stuckturns"
 )
 
 // buildMCPGitHubClient wires up the mcpgithub client when the
@@ -294,6 +295,7 @@ func main() {
 			SessionImage:                   sessionImage,
 			CodexSessionImage:              codexSessionImage,
 			AntigravitySessionImage:        antigravitySessionImage,
+			AntigravityCredentialsSecret:   os.Getenv("ANTIGRAVITY_CREDENTIALS_SECRET"),
 			SessionScope:                   sessionScope,
 			TankOperatorInternalURL:        tankOperatorInternalURL,
 			NATSURL:                        envDefault("NATS_URL", ""),
@@ -587,6 +589,26 @@ func main() {
 		})
 		if sampler != nil {
 			go sampler.Run(ctx)
+		}
+	}
+
+	// 13.6. Start the stuck-turn detector. It queries the durable
+	// sessions table every 60s for this scope and flags rows durably
+	// accepted (activity_summary.status submitted/claimed) but
+	// unprogressed past the stall threshold (default 10m, above the
+	// runner's 240s PROVIDER_RETRY_STALL_MS terminal) — the
+	// fully-wedged/crashed-runner case the runner cannot self-report. It
+	// drives tank_sessions_stuck_in_progress and feeds the
+	// TankSessionStuckInProgress alert + GET /api/debug/stuck-turns.
+	// Disabled when pgPool is nil (stub mode).
+	if pgPool != nil {
+		stuckSampler := stuckturns.NewSampler(stuckturns.SamplerConfig{
+			Lister:  stuckturns.ListerFromQuery{Pool: pgPool},
+			Metrics: stuckTurnMetricsAdapter{},
+			Scope:   sessionScope,
+		})
+		if stuckSampler != nil {
+			go stuckSampler.Run(ctx)
 		}
 	}
 
@@ -921,6 +943,7 @@ func (r *stubSessionRegistry) Upsert(_ context.Context, _ sessionmodel.SessionRe
 	return nil
 }
 func (r *stubSessionRegistry) SetName(_ context.Context, _, _ string, _ *string) error { return nil }
+func (r *stubSessionRegistry) SetOpenTarget(_ context.Context, _, _, _ string) error   { return nil }
 func (r *stubSessionRegistry) SetBugLabel(_ context.Context, _, _ string, _ *sessionmodel.SessionBugLabel) error {
 	return nil
 }

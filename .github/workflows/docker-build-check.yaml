@@ -76,7 +76,7 @@ jobs:
             cache-ref: romainecr.azurecr.io/antigravity-container-build-cache:antigravity
             image-repo: antigravity-container
             fingerprint-image: antigravity
-            fingerprint-paths: antigravity-container/Dockerfile .dockerignore
+            fingerprint-paths: antigravity-container .dockerignore antigravity-runner runner-shared claude-container/mcp-auth-proxy
           # Standalone mcp-auth-proxy image for sibling consumers
           # (nelsong6/hermes today). Built from the same package source
           # Tank session pods bake inline, but published as its own

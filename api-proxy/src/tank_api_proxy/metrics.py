@@ -51,6 +51,15 @@ upstream_401_total = Counter(
     ["provider"],
 )
 
+upstream_429_total = Counter(
+    "tank_api_proxy_upstream_429_total",
+    "Upstream 429 rate-limit responses on injected requests (the provider "
+    "rate-limit signature). A sustained rate is the shared account's usage "
+    "cap being exhausted; pod-side runners convert a stuck rate-limit retry "
+    "into a durable turn.failed{reason:provider_rate_limit}.",
+    ["provider"],
+)
+
 token_refresh_total = Counter(
     "tank_api_proxy_token_refresh_total",
     "Token refresh attempts against the upstream OAuth endpoint.",
@@ -90,6 +99,8 @@ def record_upstream_status(status: int | None) -> None:
     upstream_status_total.labels(provider=PROVIDER, status_class=bucket).inc()
     if status == 401:
         upstream_401_total.labels(provider=PROVIDER).inc()
+    if status == 429:
+        upstream_429_total.labels(provider=PROVIDER).inc()
 
 
 def record_refresh(result: str, duration_seconds: float | None = None) -> None:

@@ -47,9 +47,10 @@ const (
 type Source string
 
 const (
-	SourceTank   Source = "tank"
-	SourceClaude Source = "claude"
-	SourceCodex  Source = "codex"
+	SourceTank        Source = "tank"
+	SourceClaude      Source = "claude"
+	SourceCodex       Source = "codex"
+	SourceAntigravity Source = "antigravity"
 )
 
 // TurnSubmittedSource is an optional payload-level provenance marker for
@@ -795,7 +796,7 @@ func validActor(actor Actor) bool {
 
 func validSource(source Source) bool {
 	switch source {
-	case SourceTank, SourceClaude, SourceCodex:
+	case SourceTank, SourceClaude, SourceCodex, SourceAntigravity:
 		return true
 	default:
 		return false

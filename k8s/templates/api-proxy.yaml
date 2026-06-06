@@ -145,7 +145,7 @@ data:
                           "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
                           log_format:
                             text_format_source:
-                              inline_string: "[%START_TIME%] %REQ(:METHOD)% %REQ(:PATH)% -> %RESPONSE_CODE% %RESPONSE_FLAGS% rx=%BYTES_RECEIVED% tx=%BYTES_SENT% dur_ms=%DURATION% req_id=%REQ(x-request-id)% anthropic_req_id=%RESP(anthropic-request-id)% retry=%REQ(x-envoy-attempt-count)%\n"
+                              inline_string: "[%START_TIME%] %REQ(:METHOD)% %REQ(:PATH)% -> %RESPONSE_CODE% %RESPONSE_FLAGS% rx=%BYTES_RECEIVED% tx=%BYTES_SENT% dur_ms=%DURATION% req_id=%REQ(x-request-id)% anthropic_req_id=%RESP(request-id)% retry=%REQ(x-envoy-attempt-count)%\n"
                     common_http_protocol_options:
                       idle_timeout: 600s
                     http_filters:
