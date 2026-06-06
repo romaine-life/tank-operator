@@ -308,6 +308,13 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// the runbook directs the operator here for a per-session lag
 	// computation against the durable ledger.
 	mux.HandleFunc("GET /api/debug/conversation-read-state", s.handleDebugConversationReadState)
+	// Admin-only debug surface for orchestrator-detected stuck turns
+	// (durably accepted submitted/claimed with no provider progress past
+	// the stall threshold). Pairs with the TankSessionStuckInProgress
+	// alert: when the gauge is nonzero, the runbook directs the operator
+	// here for the session_ids + stuck_seconds + provider rate-limit
+	// state of the wedged turns.
+	mux.HandleFunc("GET /api/debug/stuck-turns", s.handleDebugStuckTurns)
 	mux.HandleFunc("PUT /api/sessions/order", s.handleReorderSessions)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)

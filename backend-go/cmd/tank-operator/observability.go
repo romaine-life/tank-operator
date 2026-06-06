@@ -286,6 +286,27 @@ var (
 		Help: "Orphan-sweep passes, partitioned by outcome (ok / error). Steady-state expectation: ok dominates; error > 0 means the sweep itself is failing (NATS unreachable, list consumers timing out, etc).",
 	}, []string{"result"})
 
+	// Stuck-turn detector observability. A fully-wedged or crashed
+	// runner emits nothing and cannot fail its own turn, so the turn
+	// sits in sessions.activity_summary.status="claimed"/"submitted"
+	// forever with no terminal. internal/stuckturns.Sampler queries the
+	// durable sessions table every 60s for the orchestrator's local
+	// scope and flags rows accepted-but-unprogressed past the stall
+	// threshold (default 10m, deliberately above the runner's 240s
+	// PROVIDER_RETRY_STALL_MS terminal). The gauge is the alertable
+	// surface; the per-session detail (session_id, stuck_seconds,
+	// provider rate-limit state) rides the slog.Warn line and the
+	// GET /api/debug/stuck-turns endpoint, never a metric label, per the
+	// docs/observability.md cardinality rules.
+	sessionsStuckInProgressGauge = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_sessions_stuck_in_progress",
+		Help: "Sessions whose durable activity_summary is submitted/claimed (accepted, no provider progress) longer than the stall threshold; orchestrator-side complement to the runner's PROVIDER_RETRY_STALL_MS terminal; steady state 0; last-pass snapshot.",
+	})
+	stuckTurnSampleErrorTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_stuck_turn_sample_errors_total",
+		Help: "Stuck-turn sampler pass errors, labeled by bounded reason (list).",
+	}, []string{"reason"})
+
 	// Per-event-type emit counter — the candidate-C stethoscope. When
 	// the server's emit-by-type vs the client's receive-by-type
 	// (tank_session_event_client_received_total, ingested through
@@ -1391,6 +1412,20 @@ var (
 		[]string{"result"},
 	)
 
+	// debugStuckTurnsReadTotal is the volume signal for the admin-only
+	// `GET /api/debug/stuck-turns` surface — the per-session localizer
+	// for the stuck-turn observability story. Pair with the
+	// `TankSessionStuckInProgress` alert: when the alert fires, the
+	// runbook directs the operator here for the session_ids +
+	// stuck_seconds + provider rate-limit state of the wedged turns.
+	debugStuckTurnsReadTotal = promauto.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "tank_admin_debug_stuck_turns_reads_total",
+			Help: "Admin reads of /api/debug/stuck-turns, labeled by bounded result.",
+		},
+		[]string{"result"},
+	)
+
 	// conversationReadCursorStagnantTotal is the durable cross-check
 	// for the transcript navigation latch failure mode. Increments
 	// once per sample pass for every (session_mode, scope) tuple where
@@ -1465,6 +1500,45 @@ func recordDebugConversationReadStateRead(result string) {
 	debugConversationReadStateReadsTotal.WithLabelValues(
 		debugConversationReadStateResultLabel(result),
 	).Inc()
+}
+
+func recordDebugStuckTurnsRead(result string) {
+	debugStuckTurnsReadTotal.WithLabelValues(
+		debugStuckTurnsResultLabel(result),
+	).Inc()
+}
+
+func debugStuckTurnsResultLabel(result string) string {
+	switch result {
+	case "ok", "empty", "forbidden", "store_error", "not_configured":
+		return result
+	default:
+		return "other"
+	}
+}
+
+// stuckTurnMetricsAdapter binds the orchestrator's promauto-registered
+// stuck-turn gauge + sample-error counter to the
+// `stuckturns.Metrics` interface. SetStuckCount writes the last-pass
+// snapshot to the unlabeled gauge; RecordSampleError maps any reason
+// other than the known "list" to "other" so the counter stays bounded.
+type stuckTurnMetricsAdapter struct{}
+
+func (stuckTurnMetricsAdapter) SetStuckCount(n int) {
+	sessionsStuckInProgressGauge.Set(float64(n))
+}
+
+func (stuckTurnMetricsAdapter) RecordSampleError(reason string) {
+	stuckTurnSampleErrorTotal.WithLabelValues(stuckTurnSampleErrorReasonLabel(reason)).Inc()
+}
+
+func stuckTurnSampleErrorReasonLabel(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "list":
+		return "list"
+	default:
+		return "other"
+	}
 }
 
 // conversationReadCursorCounterAdapter binds the orchestrator's

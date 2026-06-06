@@ -730,6 +730,42 @@ spec:
               The submitted line outpacing the terminal lines is the
               direct signature.
 
+        # Per-session, durable-state stuck-turn detector. A fully-wedged
+        # or crashed runner emits nothing and cannot fail its own turn,
+        # so the turn sits in sessions.activity_summary.status =
+        # "claimed"/"submitted" forever with no terminal. The
+        # orchestrator-side sampler (internal/stuckturns) flags such
+        # rows once they are unprogressed past the stall threshold (10m,
+        # above the runner's 240s PROVIDER_RETRY_STALL_MS terminal) and
+        # publishes the count to tank_sessions_stuck_in_progress. This
+        # is per-session and durable-state-based, complementing the
+        # aggregate, rate-based TankTurnSilentStranding above.
+        - alert: TankSessionStuckInProgress
+          expr: tank_sessions_stuck_in_progress > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "a session has been accepted-but-unprogressed (submitted/claimed) past the stall threshold"
+            runbook: |
+              The durable source of truth is sessions.activity_summary in
+              Postgres; this is the orchestrator-side complement to the
+              runner's api_retry rate-limit terminal
+              (PROVIDER_RETRY_STALL_MS, 240s). A nonzero gauge means a
+              turn was durably claimed/submitted but produced no
+              turn.started/terminal for >10m, so the runner did NOT fail
+              it (fully-wedged/crashed runner, or a stall class the runner
+              can't see).
+
+              Localize with GET /api/debug/stuck-turns (lists the
+              session_ids + stuck_seconds + provider_rate_limit_status),
+              then read that session's agent-runner logs and
+              session_events.
+
+              Distinguishes from TankTurnSilentStranding (aggregate
+              submitted-vs-terminal rate) by being per-session and
+              durable-state-based.
+
         # Background-task wake fire failures. A Claude run_in_background task
         # that finishes while the session is idle registers a durable wake in
         # session_background_task_wakes; the orchestrator fire loop turns it
