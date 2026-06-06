@@ -1734,6 +1734,7 @@ function sessionRouteUrl(
   tab: SessionRouteTab = "chat",
   turnNumber?: number | null,
   staticPath?: string | null,
+  pageNumber?: number | null,
 ): string {
   return buildSessionRouteUrl(
     window.location.href,
@@ -1741,6 +1742,7 @@ function sessionRouteUrl(
     tab,
     turnNumber,
     staticPath,
+    pageNumber,
   );
 }
 
@@ -1785,9 +1787,10 @@ function replaceSessionRoute(
   id: string,
   tab: SessionRouteTab = "chat",
   turnNumber?: number | null,
+  pageNumber?: number | null,
 ): void {
   if (routeHasMessageTarget()) return;
-  const next = sessionRouteUrl(id, tab, turnNumber);
+  const next = sessionRouteUrl(id, tab, turnNumber, null, pageNumber);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -12642,6 +12645,12 @@ function ChatPane({
   const [pendingRouteTurnNumber, setPendingRouteTurnNumber] = useState<
     number | null
   >(initialRunRoute?.tab === "turns" ? initialRunRoute.turnNumber : null);
+  // The page ordinal from a deep-linked /turns/{n}/pages/{p}. Held until the
+  // turn resolves, then applied to selectedTurnPageRef so the activity fetch
+  // loads the linked page instead of the default (last) page.
+  const [pendingRoutePageNumber, setPendingRoutePageNumber] = useState<
+    number | null
+  >(initialRunRoute?.tab === "turns" ? initialRunRoute.pageNumber : null);
   const [pendingTranscriptMessageId, setPendingTranscriptMessageId] = useState<
     string | null
   >(null);
@@ -13961,6 +13970,7 @@ function ChatPane({
     if (route.tab === "turns") {
       setActiveTab("turns");
       setPendingRouteTurnNumber(route.turnNumber);
+      setPendingRoutePageNumber(route.pageNumber);
       setRouteTurnUnavailable(
         route.turnSegmentPresent && route.turnNumber == null,
       );
@@ -16425,6 +16435,17 @@ function ChatPane({
         projectedSelectedTurnNumber ??
         anchoredSelectedTurnNumber)
       : null;
+  // The page ordinal the URL should name. While a deep-linked page is pending,
+  // honor it; otherwise reflect the activity endpoint's resolved current page
+  // (which defaults to the last page), so a bare /turns/{n} canonicalizes to
+  // /turns/{n}/pages/{N} once the page directory loads and tracks paging after.
+  const routedSelectedPageNumber =
+    activeTab === "turns"
+      ? (pendingRoutePageNumber ??
+        (effectiveSelectedTurnId
+          ? (turnActivityPageInfo[effectiveSelectedTurnId]?.page ?? null)
+          : null))
+      : null;
   const transcriptHrefForEntry = useCallback(
     (entry: TranscriptEntry): string | undefined => {
       if (publicView && publicShareTokenValue) {
@@ -16591,6 +16612,15 @@ function ChatPane({
         (turn) => turn.turnNumber === pendingRouteTurnNumber,
       );
       if (match) {
+        // Apply a deep-linked page to this turn before selection so the
+        // activity fetch loads it instead of the default (last) page.
+        if (pendingRoutePageNumber != null) {
+          selectedTurnPageRef.current = {
+            ...selectedTurnPageRef.current,
+            [match.turnId]: pendingRoutePageNumber,
+          };
+          setPendingRoutePageNumber(null);
+        }
         if (selectedTurnId !== match.turnId) setSelectedTurnId(match.turnId);
         setRouteTurnUnavailable(false);
         setPendingRouteTurnNumber(null);
@@ -16613,6 +16643,7 @@ function ChatPane({
   }, [
     historyBootstrapped,
     latestTurnId,
+    pendingRoutePageNumber,
     pendingRouteTurnNumber,
     resolveRouteTurnNumber,
     routeTurnUnavailable,
@@ -16643,7 +16674,12 @@ function ChatPane({
       // re-shows the explicit "this turn isn't available" view rather than
       // silently landing on the latest turn.
       if (!routeTurnUnavailable) {
-        replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber);
+        replaceSessionRoute(
+          session.id,
+          "turns",
+          routedSelectedTurnNumber,
+          routedSelectedPageNumber,
+        );
       }
     } else if (activeTab === "settings") {
       replaceAppRoute("settings", settingsTab, adminView);
@@ -16660,6 +16696,7 @@ function ChatPane({
     effectivePendingScrollMessageId,
     publicView,
     routeTurnUnavailable,
+    routedSelectedPageNumber,
     routedSelectedTurnNumber,
     session.id,
     settingsTab,

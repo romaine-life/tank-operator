@@ -694,11 +694,11 @@ test("turn internals move out of the transcript into a turn view", () => {
   );
   assert.equal(appSource.includes('replaceAppRoute("help")'), true);
   assert.equal(appSource.includes('setActiveTab("turns")'), true);
-  assert.equal(
-    appSource.includes(
-      'replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber)',
-    ),
-    true,
+  // The turns route write threads both the durable turn number AND the page
+  // ordinal so /turns/{n}/pages/{p} is deep-linkable; the call is multi-line.
+  assert.match(
+    appSource,
+    /replaceSessionRoute\(\s*session\.id,\s*"turns",\s*routedSelectedTurnNumber,\s*routedSelectedPageNumber,?\s*\)/,
   );
   assert.equal(
     appSource.includes(
