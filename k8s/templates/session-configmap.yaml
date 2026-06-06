@@ -28,6 +28,8 @@ data:
 {{ .Files.Get "session-config/agent-runner-launch.sh" | indent 4 }}
   codex-runner-launch.sh: |
 {{ .Files.Get "session-config/codex-runner-launch.sh" | indent 4 }}
+  antigravity-runner-launch.sh: |
+{{ .Files.Get "session-config/antigravity-runner-launch.sh" | indent 4 }}
   repo-cloner.sh: |
 {{ .Files.Get "session-config/repo-cloner.sh" | indent 4 }}
 {{- range $path, $_ := $.Files.Glob "session-config/docs/**" }}

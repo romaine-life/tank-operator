@@ -37,7 +37,7 @@ export interface AgyTurnResult {
   stderr: string;
 }
 
-const POLL_INTERVAL_MS = 250;
+const TRANSCRIPT_TAIL_INTERVAL_MS = 250;
 
 export class AgyDriver {
   private child: ChildProcess | null = null;
@@ -99,7 +99,7 @@ export class AgyDriver {
     });
     while (!exited) {
       await this.drain(cursors, baseline, onStep);
-      await sleep(POLL_INTERVAL_MS);
+      await sleep(TRANSCRIPT_TAIL_INTERVAL_MS);
     }
     const { code } = await exitPromise;
     await this.drain(cursors, baseline, onStep);
@@ -139,11 +139,10 @@ export class AgyDriver {
         continue;
       }
       const lines = text.split("\n");
-      // The last element after a trailing newline is ""; a final non-empty
-      // element may be a partially-written record — only consume complete lines.
-      const completeCount = text.endsWith("\n")
-        ? lines.length - 1
-        : lines.length - 1;
+      // Drop the final split element either way: after a trailing newline it is
+      // "" (empty), and without one it is a partially-written record. Only
+      // complete lines are parsed; a partial line is re-read on the next poll.
+      const completeCount = lines.length - 1;
       const start = cursors.get(file) ?? baseline.get(file) ?? 0;
       for (let i = start; i < completeCount; i++) {
         const line = lines[i]?.trim();
