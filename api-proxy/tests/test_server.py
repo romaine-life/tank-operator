@@ -213,7 +213,7 @@ class ConfigFromEnvTests(unittest.TestCase):
                 _config_from_env()
 
     def test_unknown_provider_env_fails_fast(self) -> None:
-        with patch.dict("os.environ", {"PROXY_PROVIDER": "gemini"}, clear=True):
+        with patch.dict("os.environ", {"PROXY_PROVIDER": "bogus"}, clear=True):
             with self.assertRaisesRegex(RuntimeError, "unknown PROXY_PROVIDER"):
                 _config_from_env()
 
