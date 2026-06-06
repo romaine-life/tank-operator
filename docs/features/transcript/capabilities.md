@@ -130,6 +130,46 @@ Evidence:
   control. The Page dropdown is rendered by the Turns view
   (`RunTurnActivityScreen`) in `frontend/src/App.tsx`.
 
+## Turns View Chat Submission
+
+Status: active
+
+Intent:
+Let the Turns view become a durable continuation surface for overloaded
+conversations. A user reading Turn activity can send the next message without
+returning to the main transcript; the message creates a normal new Tank turn and
+the Turns view selects that new turn as soon as the backend accepts the durable
+boundary.
+
+Affected contracts:
+- Transcript
+- Transcript Navigation
+- Agent Runners
+- Auth And Streams
+
+Contract impact:
+- The authenticated Turns view renders the same `ChatComposer` and tool-button
+  surface as the main transcript. Public message-link views remain read-only and
+  do not expose the composer.
+- Submit still goes through `POST /api/sessions/{session_id}/turns`; there is
+  no turns-only route, local queue, or parallel submit path.
+- The backend response includes the deterministic `turn_id` and the durable
+  `turn_number` when session turn numbering is active. The browser uses that
+  identity to select and route `/sessions/{id}/turns/{n}` while the
+  server-projected transcript row catches up; it never derives the number from
+  loaded row position.
+- Queued follow-up inputs remember whether they were created from Turns, so a
+  message typed there while another turn is running still selects its own new
+  turn when it is later submitted.
+
+Evidence:
+- Backend: `backend-go/cmd/tank-operator/handlers_turns_test.go` proves the
+  normal `/turns` submit response includes the durable turn id and number after
+  boundary persistence.
+- Frontend: `frontend/src/migrationPolicy.test.ts` pins the authenticated
+  chat-or-Turns composer visibility, the Turns-origin submit surface, and the
+  `turn_number` route anchor.
+
 ## Context Compaction Notice
 
 Status: active (Claude); Codex blocked on provider signal

@@ -189,6 +189,11 @@ func (b *recordingSessionBus) SubscribePinnedReposUpdates(context.Context, strin
 func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app.turns = fakeSessionTurnStore{
+		byTurnID: map[string]int64{
+			conversation.TurnIDForClientNonce("turn-abc_123"): 42,
+		},
+	}
 	body := `{"client_nonce":"turn-abc_123","prompt":"  /test\n\nhello sdk  ","model":"claude-sonnet-4-6","effort":"xhigh","permission_mode":"bypassPermissions","skill_name":"test","follow_up":true}`
 	req := authedTurnRequest(t, "63", body)
 	resp := httptest.NewRecorder()
@@ -197,6 +202,16 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 
 	if resp.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	var accepted struct {
+		TurnID     string `json:"turn_id"`
+		TurnNumber int64  `json:"turn_number"`
+	}
+	if err := json.Unmarshal(resp.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if accepted.TurnID != conversation.TurnIDForClientNonce("turn-abc_123") || accepted.TurnNumber != 42 {
+		t.Fatalf("response turn identity = %#v, want durable turn id + number 42", accepted)
 	}
 	if len(bus.commands) != 1 {
 		t.Fatalf("published commands = %d, want 1", len(bus.commands))
@@ -236,6 +251,33 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	// command. Mirror of the model/permission_mode assertion above.
 	if got.Effort != "xhigh" {
 		t.Fatalf("effort = %q, want xhigh", got.Effort)
+	}
+}
+
+func TestEnqueueSessionTurnDoesNotFailWhenTurnNumberLookupFails(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app.turns = fakeSessionTurnStore{err: errors.New("turn number store unavailable")}
+	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-number-miss","prompt":"hello"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	var accepted map[string]any
+	if err := json.Unmarshal(resp.Body.Bytes(), &accepted); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if _, ok := accepted["turn_number"]; ok {
+		t.Fatalf("turn_number should be omitted when lookup fails: %#v", accepted)
+	}
+	if got, _ := accepted["turn_id"].(string); got != conversation.TurnIDForClientNonce("turn-number-miss") {
+		t.Fatalf("turn_id = %q, want deterministic accepted turn id", got)
 	}
 }
 

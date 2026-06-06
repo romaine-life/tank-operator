@@ -500,9 +500,9 @@ test("public message links render a read-only unauthenticated transcript shell",
   assert.equal(appSource.includes("function PublicMessageLinkApp"), true);
   assert.equal(appSource.includes("/api/public/message-links/"), true);
   assert.equal(appSource.includes("publicShareToken={route.token}"), true);
-  assert.equal(
-    appSource.includes('composerVisible={activeTab === "chat" && !publicView}'),
-    true,
+  assert.match(
+    appSource,
+    /composerVisible=\{\s*\(activeTab === "chat" \|\| activeTab === "turns"\) && !publicView\s*\}/,
   );
   assert.equal(appSource.includes("{!publicView && ("), true);
   assert.equal(indexCssSource.includes(".shell.public-share-shell"), true);
@@ -1355,7 +1355,7 @@ test("session bug labels are available at create time", () => {
 test("read-only cross-scope sessions keep an explicit composer affordance", () => {
   assert.match(
     appSource,
-    /composerVisible=\{activeTab === "chat" && !publicView\}/,
+    /composerVisible=\{\s*\(activeTab === "chat" \|\| activeTab === "turns"\) && !publicView\s*\}/,
   );
   assert.equal(
     appSource.includes("Production sessions are read-only in this test slot"),
@@ -1371,6 +1371,16 @@ test("read-only cross-scope sessions keep an explicit composer affordance", () =
     indexCssSource.includes(".run-composer.run-composer-readonly"),
     true,
   );
+});
+
+test("Turns composer submit selects the newly accepted durable turn", () => {
+  assert.equal(appSource.includes('type RunSubmitSurface = "chat" | "turns"'), true);
+  assert.equal(appSource.includes("submitSurface?: RunSubmitSurface"), true);
+  assert.equal(appSource.includes('run.submitSurface === "turns"'), true);
+  assert.equal(appSource.includes("turn_number?: unknown"), true);
+  assert.equal(appSource.includes("setSelectedTurnNumberAnchor"), true);
+  assert.equal(appSource.includes('replaceSessionRoute(session.id, "turns", turnNumber)'), true);
+  assert.equal(appSource.includes("selectedTurnHasPendingAnchor"), true);
 });
 
 test("background page uses stacked full-width sections instead of a side pane", () => {

@@ -187,7 +187,7 @@ func (s *appServer) dispatchPendingLaunch(ctx context.Context, launch pgstore.Pe
 		return permanent, fmt.Errorf("enqueue turn (%d): %s", status, strings.TrimSpace(detail))
 	}
 
-	dispatchedTurnID := strings.TrimSpace(resp["turn_id"])
+	dispatchedTurnID := turnIDFromEnqueueResponse(resp)
 	if err := s.pendingLaunch.MarkDispatched(ctx, launch.TankSessionID, launch.TurnID, dispatchedTurnID); err != nil {
 		// The turn is already published; a failed mark just gets reclaimed and
 		// re-published (idempotent at the deterministic turn id / runner

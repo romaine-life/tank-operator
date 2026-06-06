@@ -14,19 +14,29 @@ import (
 type fakeSessionTurnStore struct {
 	byNumber map[int64]store.TurnNumberResolution
 	byTurnID map[string]int64
+	err      error
 }
 
 func (f fakeSessionTurnStore) ResolveTurnNumber(_ context.Context, _ string, number int64) (store.TurnNumberResolution, bool, error) {
+	if f.err != nil {
+		return store.TurnNumberResolution{}, false, f.err
+	}
 	res, ok := f.byNumber[number]
 	return res, ok, nil
 }
 
 func (f fakeSessionTurnStore) TurnNumberForTurnID(_ context.Context, _ string, turnID string) (int64, bool, error) {
+	if f.err != nil {
+		return 0, false, f.err
+	}
 	n, ok := f.byTurnID[turnID]
 	return n, ok, nil
 }
 
 func (f fakeSessionTurnStore) TurnNumbersForSession(_ context.Context, _ string) (map[string]int64, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
 	return f.byTurnID, nil
 }
 

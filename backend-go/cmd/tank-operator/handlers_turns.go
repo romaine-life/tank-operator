@@ -923,7 +923,7 @@ func validateCreateRunConfig(mode, rawModel, rawEffort string) (sessionRunConfig
 	return sessionRunConfig{Model: model, Effort: effort}, 0, ""
 }
 
-func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string, req sdkTurnRequest) (map[string]string, int, string) {
+func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string, req sdkTurnRequest) (map[string]any, int, string) {
 	createdAt := req.CreatedAt
 	if createdAt.IsZero() {
 		createdAt = time.Now().UTC()
@@ -1124,12 +1124,29 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		return nil, http.StatusInternalServerError, "publish turn: " + err.Error()
 	}
 
-	return map[string]string{
+	resp := map[string]any{
 		"status":       "accepted",
 		"turn_id":      turnID,
 		"client_nonce": clientNonce,
 		"provider":     provider,
-	}, 0, ""
+	}
+	if s.turns != nil {
+		if number, ok, err := s.turns.TurnNumberForTurnID(ctx, sessionID, turnID); err != nil {
+			recordTurnNumberMissing("submit_response")
+			slog.Warn("resolve accepted turn number failed",
+				"session_id", sessionID, "turn_id", turnID, "error", err)
+		} else if ok && number > 0 {
+			resp["turn_number"] = number
+		} else {
+			recordTurnNumberMissing("submit_response")
+		}
+	}
+	return resp, 0, ""
+}
+
+func turnIDFromEnqueueResponse(resp map[string]any) string {
+	value, _ := resp["turn_id"].(string)
+	return strings.TrimSpace(value)
 }
 
 func sdkTurnSource(source string) string {
