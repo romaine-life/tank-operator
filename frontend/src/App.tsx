@@ -337,12 +337,18 @@ type SessionMode =
   | "codex_gui"
   | "codex_exec_gui"
   | "codex_app_server"
-  | "codex_config";
+  | "codex_config"
+  | "antigravity_config";
 type DefaultSessionMode = Extract<
   SessionMode,
   "claude_cli" | "claude_gui" | "codex_cli" | "codex_gui" | "codex_exec_gui"
 >;
-type Provider = "anthropic" | "codex";
+// "antigravity" (Gemini-Ultra via `agy`) exists for label/icon resolution of
+// the antigravity_config credential-mint mode. It is intentionally NOT in the
+// PROVIDERS picker array yet: the runnable gui/cli surface + usage quotas land
+// with the antigravity_gui runner. Until then it has no interaction modes and
+// no quota windows.
+type Provider = "anthropic" | "codex" | "antigravity";
 type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 // TurnActivityPageInfo (the per-turn /activity page directory) and the rule for
@@ -771,6 +777,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "Codex Legacy",
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
+  antigravity_config: "Antigravity config",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -785,6 +792,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_exec_gui: "codex-exec",
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
+  antigravity_config: "agy-cfg",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -806,6 +814,10 @@ const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
   codex_exec_gui: "codex",
   codex_app_server: "codex",
   codex_config: "codex",
+  // Resolves the antigravity_config row's provider for label lookups. Never
+  // rendered as a ProviderIcon (config modes use the text chip in ModeChip), so
+  // it needs no icon asset.
+  antigravity_config: "antigravity",
 };
 
 const PROVIDER_INTERACTION_MODES: Record<
@@ -814,6 +826,9 @@ const PROVIDER_INTERACTION_MODES: Record<
 > = {
   anthropic: { gui: "claude_gui", cli: "claude_cli" },
   codex: { gui: "codex_gui", cli: "codex_cli" },
+  // No runnable interaction surface yet — antigravity_config is credential-mint
+  // only; gui/cli arrive with the antigravity-runner.
+  antigravity: {},
 };
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
@@ -826,11 +841,13 @@ const INTERACTION_OPTIONS: SessionInteraction[] = ["gui", "cli"];
 const PROVIDER_CONFIG_MODES: Partial<Record<Provider, SessionMode>> = {
   anthropic: "config",
   codex: "codex_config",
+  antigravity: "antigravity_config",
 };
 
 const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
   codex: "Codex",
+  antigravity: "Antigravity",
 };
 
 type ProviderQuotaWindowId = "five_hour" | "weekly" | "opus_weekly";
@@ -871,6 +888,8 @@ const PROVIDER_QUOTA_WINDOW_DEFS: Record<Provider, Array<Pick<ProviderQuotaWindo
     { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
     { id: "weekly", label: "Weekly", shortLabel: "Week" },
   ],
+  // No quota windows until the antigravity-runner reports usage evidence.
+  antigravity: [],
 };
 
 const MODE_HINTS: Record<SessionMode, string> = {
@@ -883,6 +902,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_exec_gui: "Fallback GUI for legacy codex exec transport",
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
+  antigravity_config: "agy login (paste code) · seeds KV for Antigravity",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -1419,7 +1439,11 @@ function moveSessionId(
 // Modes whose pods carry harvestable credentials — the "save" button
 // surfaces on session rows in these modes. Kept as a Set so adding a third
 // future config mode doesn't grow an OR chain.
-const CONFIG_MODES = new Set<SessionMode>(["config", "codex_config"]);
+const CONFIG_MODES = new Set<SessionMode>([
+  "config",
+  "codex_config",
+  "antigravity_config",
+]);
 const CHAT_MODES = new Set<SessionMode>([
   "claude_gui",
   "codex_gui",
@@ -21209,7 +21233,9 @@ function AuthenticatedApp() {
                           title={
                             s.mode === "codex_config"
                               ? "capture ~/.codex/auth.json from this pod and write it to KV"
-                              : "capture ~/.claude/.credentials.json from this pod and write it to KV"
+                              : s.mode === "antigravity_config"
+                                ? "capture the agy OAuth token from this pod and write it to KV"
+                                : "capture ~/.claude/.credentials.json from this pod and write it to KV"
                           }
                         >
                           save

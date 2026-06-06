@@ -62,6 +62,7 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "codex_cli",
     "config",
     "codex_config",
+    "antigravity_config",
     "gemini_gui",
     "gemini_test",
     "gemini_config",
