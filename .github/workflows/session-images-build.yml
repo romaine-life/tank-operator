@@ -53,7 +53,7 @@ jobs:
             image: antigravity-container
             dockerfile: antigravity-container/Dockerfile
             build_args: ''
-            fingerprint_paths: 'antigravity-container/Dockerfile .dockerignore antigravity-runner runner-shared claude-container/mcp-auth-proxy'
+            fingerprint_paths: 'antigravity-container .dockerignore antigravity-runner runner-shared claude-container/mcp-auth-proxy'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
