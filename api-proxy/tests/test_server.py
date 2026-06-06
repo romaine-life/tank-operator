@@ -255,6 +255,101 @@ class ConfigFromEnvTests(unittest.TestCase):
 
         self.assertEqual(config.kv_secret_name, "tank-operator-slot-2-codex-credentials")
 
+    def test_antigravity_config_from_env(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "PROXY_PROVIDER": "antigravity",
+                "ANTIGRAVITY_CREDENTIALS_FILE": "/etc/antigravity-credentials/antigravity-oauth-token",
+                "ANTIGRAVITY_CREDENTIALS_KV_KEY": "antigravity-credentials",
+                "ANTIGRAVITY_CLIENT_SECRET": "GOCSPX-test",
+            },
+            clear=True,
+        ):
+            config = _config_from_env()
+
+        self.assertEqual(config.provider, "antigravity")
+        # Google's /token endpoint requires form-encoding (not JSON).
+        self.assertTrue(config.token_request_form)
+        self.assertEqual(config.token_url, "https://oauth2.googleapis.com/token")
+        self.assertTrue(config.client_id.endswith(".apps.googleusercontent.com"))
+        self.assertEqual(config.client_secret, "GOCSPX-test")
+        # Antigravity uses plain Bearer — no account / fedramp headers.
+        self.assertIsNone(config.account_header)
+        self.assertFalse(config.patch_last_refresh)
+
+    def test_antigravity_requires_client_secret(self) -> None:
+        with patch.dict(
+            "os.environ",
+            {
+                "PROXY_PROVIDER": "antigravity",
+                "ANTIGRAVITY_CREDENTIALS_FILE": "/etc/antigravity-credentials/antigravity-oauth-token",
+                "ANTIGRAVITY_CREDENTIALS_KV_KEY": "antigravity-credentials",
+            },
+            clear=True,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "ANTIGRAVITY_CLIENT_SECRET is required"):
+                _config_from_env()
+
+    def test_patch_blob_updates_antigravity_expiry(self) -> None:
+        # agy's harvested blob shape: {token:{access_token, refresh_token,
+        # expiry}, auth_method}. The expiry is an RFC3339 string, not epoch ms.
+        blob = {
+            "token": {
+                "access_token": "old-access",
+                "token_type": "Bearer",
+                "refresh_token": "the-refresh",
+                "expiry": "2026-06-06T09:42:16Z",
+            },
+            "auth_method": "consumer",
+        }
+
+        # Google does not return a new refresh token on refresh; the proxy
+        # reuses the cached one (passed in as new_refresh).
+        patched = _patch_blob(blob, "new-access", "the-refresh", 3600)
+
+        self.assertEqual(patched["token"]["access_token"], "new-access")
+        self.assertEqual(patched["token"]["refresh_token"], "the-refresh")
+        self.assertNotEqual(patched["token"]["expiry"], blob["token"]["expiry"])
+        # expiry stays an RFC3339 Z string, not converted to epoch ms.
+        self.assertTrue(patched["token"]["expiry"].endswith("Z"))
+        # No spurious last_refresh injected for the antigravity shape.
+        self.assertNotIn("last_refresh", patched)
+
+    def test_antigravity_reload_uses_expiry_for_freshness(self) -> None:
+        antigravity_cfg = ProxyConfig(
+            provider="antigravity",
+            credentials_file="",
+            token_url="https://oauth2.googleapis.com/token",
+            client_id="x.apps.googleusercontent.com",
+            kv_secret_name="antigravity-credentials",
+            client_secret="GOCSPX-test",
+            token_request_form=True,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "antigravity-oauth-token"
+            path.write_text(
+                json.dumps(
+                    {
+                        "token": {
+                            "access_token": "access",
+                            "refresh_token": "refresh",
+                            "expiry": "2099-01-01T00:00:00Z",
+                        },
+                        "auth_method": "consumer",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            injector = AuthInjector(
+                ProxyConfig(**{**antigravity_cfg.__dict__, "credentials_file": str(path)})
+            )
+            injector._reload_from_file()
+            self.assertEqual(injector._cached_access, "access")
+            self.assertEqual(injector._cached_refresh, "refresh")
+            # The RFC3339 expiry is parsed into the freshness marker.
+            self.assertIsNotNone(injector._cached_freshness_ms())
+
 
 class HealthSnapshotTests(unittest.TestCase):
     """Pins the contract the orchestrator's provider-health poller depends on.

@@ -51,9 +51,11 @@ This doc is the missing reference.
               auth.{openai,anthropic}.com/oauth/token
 ```
 
-Two deployments share the same code (`api-proxy/src/tank_api_proxy/server.py`)
+Three deployments share the same code (`api-proxy/src/tank_api_proxy/server.py`)
 with different `ProxyConfig` env: `claude-api-proxy` fronts
-`api.anthropic.com`; `codex-api-proxy` fronts `chatgpt.com/backend-api/codex`.
+`api.anthropic.com`; `codex-api-proxy` fronts `chatgpt.com/backend-api/codex`;
+`antigravity-api-proxy` fronts `cloudcode-pa.googleapis.com` (the Google Code
+Assist data plane that the Antigravity CLI `agy` / Gemini-Ultra calls).
 Session pods reach these via in-pod hostAlias entries pointing the provider
 hostname at the proxy Service.
 
@@ -374,6 +376,52 @@ The chart and `scripts/check-test-slot-provider-credentials.sh` guard this
 contract. A slot render that reintroduces a slot-local provider proxy, a
 slot-owned provider credential KV key, a provider credential Secret mount, or a
 credential write env var is invalid.
+
+## Antigravity (Gemini-Ultra) provider
+
+`antigravity-api-proxy` is the third deployment. It applies the exact
+session-pods-don't-own-the-refresh-chain boundary above to `agy` (Gemini-Ultra),
+which previously mounted the real Google OAuth blob — including the refresh
+token — directly into the model/tool-capable `antigravity-runner` container.
+That was a credential-boundary bug (a prompt-injected `agy` could exfiltrate the
+refresh token); the proxy closes it.
+
+What carries over unchanged from claude/codex:
+
+- The session pod writes a **placeholder** token (the launch script
+  `antigravity-container/antigravity-runner-launch.sh` seeds
+  `~/.gemini/antigravity-cli/antigravity-oauth-token` with
+  `access_token: "managed-by-tank-operator"`, a far-future `expiry`, and **no
+  refresh token**). The far-future expiry stops `agy` from refreshing in place.
+- `agy`'s `cloudcode-pa.googleapis.com` traffic is host-aliased to the proxy
+  Service; the ext_proc swaps the `Authorization` header for the real access
+  token on every request and single-flight-refreshes on upstream 401.
+- The real refresh token lives only in the proxy pod + KV
+  (`antigravity-credentials`); slots route to the production proxy and render no
+  antigravity credential Secret (`scripts/check-test-slot-provider-credentials.sh`).
+
+What is antigravity-specific (implementation detail, not architecture):
+
+- **`google` `ProxyConfig`** — `token_url=https://oauth2.googleapis.com/token`,
+  the consumer OAuth `client_id`/`client_secret` embedded in the public `agy`
+  binary (`client_secret` is KV-sourced via `ANTIGRAVITY_CLIENT_SECRET` to keep
+  it out of git). Google's `/token` requires **form-encoding**, so the config
+  sets `token_request_form=True` (claude/codex post JSON).
+- **Blob shape** — `{token:{access_token, refresh_token, expiry}, auth_method}`.
+  `expiry` is an RFC3339 string (not epoch ms), so `_patch_blob` and
+  `_blob_freshness_ms` handle `expiry` alongside the existing `expiresAt`/
+  `last_refresh` markers. Google does not return a new refresh token on refresh,
+  so the proxy reuses the cached one (existing behavior).
+- **CA trust** — `agy` is a Go binary, so it trusts the proxy leaf via the
+  system trust store. The launch script concatenates the mounted
+  `oauth-gateway-ca` (same CA as the claude/codex leaves) with the base bundle
+  and exports `SSL_CERT_FILE` — the Go analog of claude's `NODE_EXTRA_CA_CERTS`
+  / codex's `CODEX_CA_CERTIFICATE`.
+
+Re-seeding the chain (the recovery path) is the `antigravity_config` wizard
+mode: it is the one antigravity mode **not** routed through the proxy, so the
+interactive Google/Ultra login reaches real Google; `doSaveCredentials` then
+harvests the token to the `antigravity-credentials` KV secret the proxy owns.
 
 ## Where to look when investigating
 
