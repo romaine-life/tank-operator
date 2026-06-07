@@ -41,6 +41,11 @@ test("Codex model labels do not advertise the unsupported bare GPT-5.3 model", (
   expect(appSource).toContain('"gpt-5.3-codex-spark"');
 });
 
+test("Antigravity model labels include Gemini 3.1 Pro", () => {
+  expect(appSource).toContain('"Gemini 3.1 Pro"');
+  expect(appSource).toContain("Antigravity · Gemini 3.1 Pro");
+});
+
 test("Codex run mode helper follows the session mode contract", () => {
   expect(appSource).toMatch(
     /function isCodexRunMode\(mode: SessionMode\): boolean \{[\s\S]{0,120}MODE_PROVIDERS\[mode\] === "codex" && SDK_CHAT_MODES\.has\(mode\);[\s\S]{0,20}\}/,

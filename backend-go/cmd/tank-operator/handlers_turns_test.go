@@ -890,7 +890,7 @@ func TestEnqueueSessionTurnRejectsCodexWithoutExplicitModel(t *testing.T) {
 func TestEnqueueSessionTurnForwardsAntigravityModel(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-88", "88", "user@example.com", sessionmodel.AntigravityGUIMode, "antigravity-runner"))
-	req := authedTurnRequest(t, "88", `{"client_nonce":"turn-agy-model","prompt":"hello","model":"Gemini 3.5 Flash (Medium)"}`)
+	req := authedTurnRequest(t, "88", `{"client_nonce":"turn-agy-model","prompt":"hello","model":"Gemini 3.1 Pro"}`)
 	resp := httptest.NewRecorder()
 
 	app.handleEnqueueSessionTurn(resp, req)
@@ -904,7 +904,7 @@ func TestEnqueueSessionTurnForwardsAntigravityModel(t *testing.T) {
 	if got := bus.commands[0].Provider; got != "antigravity" {
 		t.Fatalf("provider = %q, want antigravity", got)
 	}
-	if got := bus.commands[0].Model; got != "Gemini 3.5 Flash (Medium)" {
+	if got := bus.commands[0].Model; got != "Gemini 3.1 Pro" {
 		t.Fatalf("model = %q, want Antigravity model", got)
 	}
 }

@@ -4511,6 +4511,7 @@ const MODEL_LABELS: Record<string, string> = {
   "gpt-5.4": "Codex · GPT-5.4",
   "gpt-5.4-mini": "Codex · GPT-5.4 Mini",
   "gpt-5.3-codex-spark": "Codex · GPT-5.3 Codex Spark",
+  "Gemini 3.1 Pro": "Antigravity · Gemini 3.1 Pro",
   "Gemini 3.5 Flash (Medium)": "Antigravity · Gemini 3.5 Flash Medium",
 };
 // Extended-thinking effort levels exposed by the Claude Agent SDK
