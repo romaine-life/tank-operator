@@ -59,6 +59,13 @@ export const eventTruncatedTotal = new Counter({
   registers: [registry],
 });
 
+export const scheduledWakeupRegisterTotal = new Counter({
+  name: "tank_antigravity_runner_scheduled_wakeup_register_total",
+  help: "Antigravity schedule registrations attempted against the orchestrator durable wakeup API.",
+  labelNames: ["result"] as const,
+  registers: [registry],
+});
+
 // agy transcript steps observed, by how the adapter classified them. The
 // `dropped` bucket (user echo / system history) is expected and non-zero; a
 // spike in any other class names a step the adapter handled.

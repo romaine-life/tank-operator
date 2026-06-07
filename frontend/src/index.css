@@ -4648,11 +4648,19 @@ button:disabled {
     color var(--motion-fast, 120ms) ease;
 }
 
-.run-turn-view-context-toggle:hover,
-.run-turn-view-context-toggle:focus-visible {
+.run-turn-view-context-toggle:hover:not(:disabled),
+.run-turn-view-context-toggle:focus-visible:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.2);
   background: rgba(255, 255, 255, 0.08);
   color: var(--text-primary);
+}
+
+.run-turn-view-context-toggle:disabled {
+  cursor: default;
+  opacity: 0.42;
+  border-color: rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text-faint);
 }
 
 .run-turn-view-context-toggle:focus-visible {
@@ -4662,6 +4670,20 @@ button:disabled {
 
 .run-turn-view-context[data-collapsed="true"] {
   padding-bottom: var(--space-2);
+}
+
+.run-turn-view-context[data-context-loaded="false"] {
+  gap: 0.25rem;
+}
+
+.run-turn-view-context-unavailable {
+  min-height: 1.5rem;
+  margin-left: calc(2.625rem + 0.55rem);
+  padding: 0.15rem 0 0.2rem 0.55rem;
+  border-left: 2px solid rgba(255, 255, 255, 0.06);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  line-height: 1.2rem;
 }
 
 .run-turn-view-context [data-slot="message"][data-owner="activity"] {
@@ -4681,18 +4703,33 @@ button:disabled {
    the avatar, instead of the prompt disappearing entirely. Expanding (the
    toggle in .run-turn-view-context-head) restores the full RunMessageBubble. */
 .run-transcript-message[data-compact="true"] {
-  align-items: center;
+  align-items: start;
   row-gap: 0;
 }
 
 .run-transcript-message[data-compact="true"] .run-transcript-message-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.65rem;
   width: 100%;
 }
 
 .run-transcript-message[data-compact="true"] .run-transcript-message-text {
+  grid-column: 1;
+  grid-row: 1;
   display: block;
   min-width: 0;
   max-width: 100%;
+}
+
+.run-transcript-message[data-compact="true"] .run-msg-footer {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  flex-shrink: 0;
+  margin-top: 0;
+  white-space: nowrap;
 }
 
 .run-msg-compact-text {
@@ -9058,11 +9095,19 @@ textarea.run-files-viewer-editor:focus {
   transform: translateY(1px);
 }
 
-.run-turn-activity-divider-toggle:hover,
-.run-turn-activity-divider-toggle:focus-visible {
+.run-turn-activity-divider-toggle:hover:not(:disabled),
+.run-turn-activity-divider-toggle:focus-visible:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.22);
   background: rgba(255, 255, 255, 0.055);
   color: var(--text-primary);
+}
+
+.run-turn-activity-divider-toggle:disabled {
+  cursor: default;
+  opacity: 0.42;
+  border-color: rgba(255, 255, 255, 0.07);
+  background: var(--bg-app);
+  color: var(--text-faint);
 }
 
 .run-turn-activity-divider-toggle:focus-visible {

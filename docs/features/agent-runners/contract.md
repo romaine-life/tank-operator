@@ -48,9 +48,10 @@ the rest of the product reconstruct what happened.
 - Runner events must wake transcript and session-list followers after
   persistence.
 - A runner must not require an open browser to continue work.
-- Claude `ScheduleWakeup` state is durable in Postgres. The runner registers
-  the provider tool_use item with the backend; the orchestrator later submits
-  the wakeup through the same backend-owned turn boundary as a user turn.
+- Provider self-scheduled wakeup state is durable in Postgres. Claude
+  `ScheduleWakeup` and Antigravity `schedule` tool calls are registered by the
+  runner with the backend; the orchestrator later submits the wakeup through
+  the same backend-owned turn boundary as a user turn.
   The browser reads `GET /api/sessions/{session_id}/scheduled-wakeups` and
   renders those rows in Background -> Scheduled so users can confirm due,
   firing, fired, and failed state without inspecting logs.

@@ -6843,8 +6843,9 @@ function RunMessageBubble({
   // Minimal one-line variant: keep the avatar at full size and collapse the
   // body to a single ellipsis-truncated line. Used by the Turns view when the
   // prompt context is collapsed so the entry stays recognizable (avatar +
-  // first line) instead of disappearing entirely. Hides the footer,
-  // attachments, and any inline actions.
+  // first line) instead of disappearing entirely. Compact mode only changes
+  // text rendering; attachments, inline actions, and footer controls keep
+  // their normal layout.
   compact?: boolean;
 }) {
   const variant =
@@ -7002,8 +7003,7 @@ function RunMessageBubble({
           ) : (
             <RunMarkdown>{visibleText}</RunMarkdown>
           )}
-          {!compact &&
-            variant === "system" &&
+          {variant === "system" &&
             messageActionLabel &&
             messageActionHref && (
               <a
@@ -7015,8 +7015,7 @@ function RunMessageBubble({
                 {messageActionLabel}
               </a>
             )}
-          {!compact &&
-            variant === "assistant" &&
+          {variant === "assistant" &&
             awaitingInput &&
             questionTurnId &&
             onOpenTurn && (
@@ -7029,72 +7028,70 @@ function RunMessageBubble({
               </button>
             )}
         </div>
-        {!compact && variant === "user" && visibleAttachments.length > 0 && (
+        {variant === "user" && visibleAttachments.length > 0 && (
           <RunMessageAttachments
             attachments={visibleAttachments}
             sessionId={sessionId}
           />
         )}
-        {!compact && (
-          <div
-            className="run-msg-footer"
-            data-always-visible={alwaysVisible ? "" : undefined}
-          >
-            {canonicalMessage &&
-              (variant === "assistant" || variant === "user") &&
-              entry.turnId &&
-              onOpenTurn && (
-                <TurnViewButton
-                  turnId={entry.turnId}
-                  href={turnHref}
-                  onOpenTurn={onOpenTurn}
-                />
-              )}
-            {!canonicalMessage && onOpenTranscriptMessage && (
-              <TranscriptViewButton
-                entryId={entry.id}
-                href={transcriptHref}
-                onOpenTranscriptMessage={onOpenTranscriptMessage}
+        <div
+          className="run-msg-footer"
+          data-always-visible={alwaysVisible ? "" : undefined}
+        >
+          {canonicalMessage &&
+            (variant === "assistant" || variant === "user") &&
+            entry.turnId &&
+            onOpenTurn && (
+              <TurnViewButton
+                turnId={entry.turnId}
+                href={turnHref}
+                onOpenTurn={onOpenTurn}
               />
             )}
-            {canonicalMessage && variant === "assistant" && onFork && (
-              <ForkButton entry={entry} onFork={onFork} />
-            )}
-            {variant !== "system" && (
-              <>
-                {onQuote && (
-                  <>
-                    <QuoteButton
-                      text={visibleText}
-                      style="fence"
-                      onQuote={onQuote}
-                    />
-                    <QuoteButton
-                      text={visibleText}
-                      style="blockquote"
-                      onQuote={onQuote}
-                    />
-                  </>
-                )}
-                <CopyButton text={visibleText} />
-                {canonicalMessage && !entry.localOnly && (
-                  <LinkButton sessionId={sessionId} entryId={entry.id} />
-                )}
-              </>
-            )}
-            <div className="run-msg-timings">
-              {showDuration && durationMs != null && (
-                <span className="run-msg-timing-row">
-                  {formatTurnDuration(durationMs)}
-                  <TimerIcon size={9} aria-hidden="true" />
-                </span>
+          {!canonicalMessage && onOpenTranscriptMessage && (
+            <TranscriptViewButton
+              entryId={entry.id}
+              href={transcriptHref}
+              onOpenTranscriptMessage={onOpenTranscriptMessage}
+            />
+          )}
+          {canonicalMessage && variant === "assistant" && onFork && (
+            <ForkButton entry={entry} onFork={onFork} />
+          )}
+          {variant !== "system" && (
+            <>
+              {onQuote && (
+                <>
+                  <QuoteButton
+                    text={visibleText}
+                    style="fence"
+                    onQuote={onQuote}
+                  />
+                  <QuoteButton
+                    text={visibleText}
+                    style="blockquote"
+                    onQuote={onQuote}
+                  />
+                </>
               )}
-              {showTimestamps && time && (
-                <span className="run-msg-timing-row">{time}</span>
+              <CopyButton text={visibleText} />
+              {canonicalMessage && !entry.localOnly && (
+                <LinkButton sessionId={sessionId} entryId={entry.id} />
               )}
-            </div>
+            </>
+          )}
+          <div className="run-msg-timings">
+            {showDuration && durationMs != null && (
+              <span className="run-msg-timing-row">
+                {formatTurnDuration(durationMs)}
+                <TimerIcon size={9} aria-hidden="true" />
+              </span>
+            )}
+            {showTimestamps && time && (
+              <span className="run-msg-timing-row">{time}</span>
+            )}
           </div>
-        )}
+        </div>
       </div>
       {variant === "user" &&
         !isAvatarContinuation &&
@@ -10661,13 +10658,13 @@ function RunTurnActivityScreen({
     hasFinalDetailResponse &&
     hasCollapsibleDetailActivity,
   );
+  const showTurnSectionDivider = Boolean(selected);
+  const canToggleDetailActivity = Boolean(selected);
   const detailActivityCollapsed =
-    showDetailActivityDivider &&
     selected !== null &&
     collapsedActivityTurnIds[selected.turnId] === true;
-  const showContextToggleInActivityDivider = Boolean(
-    selectedTurnContext && showDetailActivityDivider,
-  );
+  const showPromptContextShell = Boolean(selected);
+  const canTogglePromptContext = Boolean(selectedTurnContext);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) =>
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
@@ -10716,11 +10713,12 @@ function RunTurnActivityScreen({
   ]);
   const renderedDetailGroups = useMemo(() => {
     if (!detailActivityCollapsed) return detailGroupsWithThinking;
-    return detailGroupsWithThinking.filter((group) =>
-      flatEntryGroupEntries(group).some((entry) =>
+    return detailGroupsWithThinking.filter((group) => {
+      if (group.kind === "thinking") return true;
+      return flatEntryGroupEntries(group).some((entry) =>
         finalDetailEntryIds.has(entry.id),
-      ),
-    );
+      );
+    });
   }, [
     detailActivityCollapsed,
     detailGroupsWithThinking,
@@ -11158,62 +11156,73 @@ function RunTurnActivityScreen({
               <span>{selectedEventProgress.totalLabel}</span>
             )}
           </div>
-          {selectedTurnContext && selected && (
+          {showPromptContextShell && selected && (
             <div
               className="run-turn-view-context"
               aria-label="Turn prompt"
               data-collapsed={selectedTurnContextCollapsed ? "true" : "false"}
+              data-context-loaded={selectedTurnContext ? "true" : "false"}
             >
               <div className="run-turn-view-context-head">
                 <span className="run-turn-view-context-label">Prompt</span>
-                {!showContextToggleInActivityDivider && (
-                  <button
-                    type="button"
-                    className="run-turn-view-context-toggle"
-                    title={
-                      selectedTurnContextCollapsed
+                <button
+                  type="button"
+                  className="run-turn-view-context-toggle"
+                  disabled={!canTogglePromptContext}
+                  title={
+                    canTogglePromptContext
+                      ? selectedTurnContextCollapsed
                         ? "Expand user message"
                         : "Collapse user message"
-                    }
-                    aria-label={
-                      selectedTurnContextCollapsed
+                      : "No user message to collapse"
+                  }
+                  aria-label={
+                    canTogglePromptContext
+                      ? selectedTurnContextCollapsed
                         ? "Expand user message"
                         : "Collapse user message"
-                    }
-                    aria-expanded={!selectedTurnContextCollapsed}
-                    onClick={() => {
-                      setCollapsedContextTurnIds((prev) => ({
-                        ...prev,
-                        [selected.turnId]: !selectedTurnContextCollapsed,
-                      }));
-                    }}
-                  >
-                    {selectedTurnContextCollapsed ? (
-                      <ChevronDownIcon size={14} aria-hidden="true" />
-                    ) : (
-                      <ChevronUpIcon size={14} aria-hidden="true" />
-                    )}
-                  </button>
-                )}
+                      : "No user message to collapse"
+                  }
+                  aria-expanded={!selectedTurnContextCollapsed}
+                  onClick={() => {
+                    if (!canTogglePromptContext) return;
+                    setCollapsedContextTurnIds((prev) => ({
+                      ...prev,
+                      [selected.turnId]: !selectedTurnContextCollapsed,
+                    }));
+                  }}
+                >
+                  {selectedTurnContextCollapsed ? (
+                    <ChevronDownIcon size={14} aria-hidden="true" />
+                  ) : (
+                    <ChevronUpIcon size={14} aria-hidden="true" />
+                  )}
+                </button>
               </div>
               {/* Always render the prompt context. When collapsed we keep a
                   minimal one-line entry (avatar at full size + ellipsis-
                   truncated text) instead of hiding the body, so the prompt
                   stays recognizable in the Turns view. */}
-              <RunMessageBubble
-                entry={selectedTurnContext}
-                avatar={avatar}
-                systemAvatar={systemAvatar}
-                sessionId={sessionId}
-                highlighted={false}
-                showTimestamps={showTimestamps}
-                showDuration={showDuration}
-                canonicalMessage={false}
-                ownedByTurnActivity
-                compact={selectedTurnContextCollapsed}
-                transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
-                onOpenTranscriptMessage={onOpenTranscriptMessage}
-              />
+              {selectedTurnContext ? (
+                <RunMessageBubble
+                  entry={selectedTurnContext}
+                  avatar={avatar}
+                  systemAvatar={systemAvatar}
+                  sessionId={sessionId}
+                  highlighted={false}
+                  showTimestamps={showTimestamps}
+                  showDuration={showDuration}
+                  canonicalMessage={false}
+                  ownedByTurnActivity
+                  compact={selectedTurnContextCollapsed}
+                  transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
+                  onOpenTranscriptMessage={onOpenTranscriptMessage}
+                />
+              ) : (
+                <div className="run-turn-view-context-unavailable" role="status">
+                  Prompt context unavailable
+                </div>
+              )}
             </div>
           )}
           {selectedPageInfo?.kind === "question" && (
@@ -11237,62 +11246,68 @@ function RunTurnActivityScreen({
               </span>
             </div>
           )}
-          {selected && showDetailActivityDivider && (
+          {selected && showTurnSectionDivider && (
             <div className="run-turn-activity-divider run-turn-view-activity-divider">
               <div
                 className="run-turn-activity-divider-controls"
                 role="group"
                 aria-label="Turn section collapse controls"
               >
-                {showContextToggleInActivityDivider && (
-                  <button
-                    type="button"
-                    className="run-turn-activity-divider-toggle"
-                    data-direction="up"
-                    onClick={() => {
-                      setCollapsedContextTurnIds((prev) => ({
-                        ...prev,
-                        [selected.turnId]: !selectedTurnContextCollapsed,
-                      }));
-                    }}
-                    aria-expanded={!selectedTurnContextCollapsed}
-                    aria-label={
-                      selectedTurnContextCollapsed
+                <button
+                  type="button"
+                  className="run-turn-activity-divider-toggle"
+                  data-direction="up"
+                  disabled={!canTogglePromptContext}
+                  onClick={() => {
+                    if (!canTogglePromptContext) return;
+                    setCollapsedContextTurnIds((prev) => ({
+                      ...prev,
+                      [selected.turnId]: !selectedTurnContextCollapsed,
+                    }));
+                  }}
+                  aria-expanded={!selectedTurnContextCollapsed}
+                  aria-label={
+                    canTogglePromptContext
+                      ? selectedTurnContextCollapsed
                         ? "Expand user message"
                         : "Collapse user message"
-                    }
-                    title={
-                      selectedTurnContextCollapsed
+                      : "No user message to collapse"
+                  }
+                  title={
+                    canTogglePromptContext
+                      ? selectedTurnContextCollapsed
                         ? "Expand user message"
                         : "Collapse user message"
-                    }
-                  >
-                    {selectedTurnContextCollapsed ? (
-                      <PlusIcon
-                        size={11}
-                        strokeWidth={2.4}
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      <MinusIcon
-                        size={11}
-                        strokeWidth={2.4}
-                        aria-hidden="true"
-                      />
-                    )}
-                    <ChevronUpIcon
-                      className="run-turn-activity-divider-toggle-chevron"
-                      size={13}
-                      strokeWidth={2.3}
+                      : "No user message to collapse"
+                  }
+                >
+                  {canTogglePromptContext && selectedTurnContextCollapsed ? (
+                    <PlusIcon
+                      size={11}
+                      strokeWidth={2.4}
                       aria-hidden="true"
                     />
-                  </button>
-                )}
+                  ) : canTogglePromptContext ? (
+                    <MinusIcon
+                      size={11}
+                      strokeWidth={2.4}
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <ChevronUpIcon
+                    className="run-turn-activity-divider-toggle-chevron"
+                    size={13}
+                    strokeWidth={2.3}
+                    aria-hidden="true"
+                  />
+                </button>
                 <button
                   type="button"
                   className="run-turn-activity-divider-toggle"
                   data-direction="down"
+                  disabled={!canToggleDetailActivity}
                   onClick={() => {
+                    if (!canToggleDetailActivity) return;
                     setCollapsedActivityTurnIds((prev) => ({
                       ...prev,
                       [selected.turnId]: !detailActivityCollapsed,
@@ -11300,29 +11315,33 @@ function RunTurnActivityScreen({
                   }}
                   aria-expanded={!detailActivityCollapsed}
                   aria-label={
-                    detailActivityCollapsed
-                      ? "Expand assistance turn"
-                      : "Collapse assistance turn"
+                    canToggleDetailActivity
+                      ? detailActivityCollapsed
+                        ? "Expand assistance turn"
+                        : "Collapse assistance turn"
+                      : "No assistance turn to collapse"
                   }
                   title={
-                    detailActivityCollapsed
-                      ? "Expand assistance turn"
-                      : "Collapse assistance turn"
+                    canToggleDetailActivity
+                      ? detailActivityCollapsed
+                        ? "Expand assistance turn"
+                        : "Collapse assistance turn"
+                      : "No assistance turn to collapse"
                   }
                 >
-                  {detailActivityCollapsed ? (
+                  {canToggleDetailActivity && detailActivityCollapsed ? (
                     <PlusIcon
                       size={11}
                       strokeWidth={2.4}
                       aria-hidden="true"
                     />
-                  ) : (
+                  ) : canToggleDetailActivity ? (
                     <MinusIcon
                       size={11}
                       strokeWidth={2.4}
                       aria-hidden="true"
                     />
-                  )}
+                  ) : null}
                   <ChevronDownIcon
                     className="run-turn-activity-divider-toggle-chevron"
                     size={13}

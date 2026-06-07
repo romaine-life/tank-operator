@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 type fakeScheduledWakeupStore struct {
@@ -77,6 +78,17 @@ func TestCancelPendingWakesForSession(t *testing.T) {
 	}
 }
 
+func TestSupportsScheduledWakeupsIncludesAntigravity(t *testing.T) {
+	for _, provider := range []string{"claude", "antigravity"} {
+		if !supportsScheduledWakeups(provider) {
+			t.Fatalf("supportsScheduledWakeups(%q) = false, want true", provider)
+		}
+	}
+	if supportsScheduledWakeups("codex") {
+		t.Fatal("supportsScheduledWakeups(codex) = true, want false")
+	}
+}
+
 func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "agent-runner"))
@@ -125,6 +137,92 @@ func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 	}
 	if got, _ := events[0]["author_kind"].(string); got != "system" {
 		t.Fatalf("author_kind = %q, want system", got)
+	}
+	userPayload, _ := events[0]["payload"].(map[string]any)
+	if got, _ := userPayload["text"].(string); got != "Timer went off!" {
+		t.Fatalf("user_message.created payload.text = %q, want timer announcement", got)
+	}
+	if got, _ := userPayload["source"].(string); got != "schedule-wakeup" {
+		t.Fatalf("user_message.created payload.source = %q, want schedule-wakeup", got)
+	}
+	if got, _ := userPayload["prompt"].(string); got != row.Prompt {
+		t.Fatalf("user_message.created payload.prompt = %q, want wake prompt", got)
+	}
+	submitPayload, _ := events[1]["payload"].(map[string]any)
+	if got, _ := submitPayload["source"].(string); got != "schedule-wakeup" {
+		t.Fatalf("turn.submitted payload.source = %q, want schedule-wakeup", got)
+	}
+	if got, _ := submitPayload["prompt"].(string); got != row.Prompt {
+		t.Fatalf("turn.submitted payload.prompt = %q, want wake prompt", got)
+	}
+}
+
+func TestFireAntigravityScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
+	bus := &recordingSessionBus{}
+	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
+		ID:      "88",
+		Email:   "user@example.com",
+		Mode:    sessionmodel.AntigravityGUIMode,
+		Visible: true,
+		Model:   "Gemini 3.5 Flash (Medium)",
+	})
+	app := testTurnsAppWithRegistry(t, bus, registry, sdkSessionPod("session-88", "88", "user@example.com", "antigravity_gui", "antigravity-runner"))
+	schedules := &fakeScheduledWakeupStore{}
+	app.scheduledWakeups = schedules
+	app.sessionEvents = &recordingSessionEventStore{}
+	row := pgstore.ScheduledWakeup{
+		WakeupID:          "wakeup_agy",
+		SessionScope:      "default",
+		SessionID:         "88",
+		TankSessionID:     "88",
+		OwnerEmail:        "user@example.com",
+		Provider:          "antigravity",
+		Prompt:            "check if the build finished",
+		ClientNonce:       "schedule_wakeup-wakeup_agy",
+		ProviderItemID:    "tool-17-0",
+		SessionStatus:     "Active",
+		SessionTerminated: false,
+	}
+
+	if err := app.fireScheduledWakeup(context.Background(), row, time.Date(2026, 6, 7, 6, 42, 34, 0, time.UTC)); err != nil {
+		t.Fatalf("fireScheduledWakeup returned error: %v", err)
+	}
+	if schedules.firedID != row.WakeupID || schedules.firedTurn != "turn_schedule_wakeup-wakeup_agy" {
+		t.Fatalf("fired = (%q, %q), want (%q, turn_schedule_wakeup-wakeup_agy)", schedules.firedID, schedules.firedTurn, row.WakeupID)
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	cmd := bus.commands[0]
+	if cmd.Provider != "antigravity" || cmd.Source != "schedule-wakeup" || cmd.ClientNonce != row.ClientNonce || cmd.Prompt != row.Prompt {
+		t.Fatalf("command = %+v", cmd)
+	}
+	events := app.sessionEvents.(*recordingSessionEventStore).upserts
+	if len(events) != 2 {
+		t.Fatalf("boundary upserts = %d, want 2", len(events))
+	}
+	if got, _ := events[0]["type"].(string); got != "user_message.created" {
+		t.Fatalf("first event type = %q", got)
+	}
+	if got, _ := events[0]["author_kind"].(string); got != "system" {
+		t.Fatalf("author_kind = %q, want system", got)
+	}
+	userPayload, _ := events[0]["payload"].(map[string]any)
+	if got, _ := userPayload["text"].(string); got != "Timer went off!" {
+		t.Fatalf("user_message.created payload.text = %q, want timer announcement", got)
+	}
+	if got, _ := userPayload["source"].(string); got != "schedule-wakeup" {
+		t.Fatalf("user_message.created payload.source = %q, want schedule-wakeup", got)
+	}
+	if got, _ := userPayload["prompt"].(string); got != row.Prompt {
+		t.Fatalf("user_message.created payload.prompt = %q, want wake prompt", got)
+	}
+	submitPayload, _ := events[1]["payload"].(map[string]any)
+	if got, _ := submitPayload["source"].(string); got != "schedule-wakeup" {
+		t.Fatalf("turn.submitted payload.source = %q, want schedule-wakeup", got)
+	}
+	if got, _ := submitPayload["prompt"].(string); got != row.Prompt {
+		t.Fatalf("turn.submitted payload.prompt = %q, want wake prompt", got)
 	}
 }
 

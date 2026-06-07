@@ -105,6 +105,10 @@ function toolInput(call: AgyToolCall): Record<string, unknown> | undefined {
   return Object.keys(cleaned).length > 0 ? cleaned : undefined;
 }
 
+export function toolCallProviderItemID(stepIndex: number, index: number): string {
+  return `tool-${stepIndex}-${index}`;
+}
+
 /**
  * Stateful mapping from agy steps to Tank events. One instance per session.
  * Idempotent per (turnID, step_index): re-feeding a step the adapter has
@@ -238,7 +242,7 @@ export class AntigravityTranscriptAdapter {
         typeof call.name === "string" && call.name.trim()
           ? call.name.trim()
           : "tool";
-      const providerItemID = `tool-${step.step_index}-${index}`;
+      const providerItemID = toolCallProviderItemID(step.step_index, index);
       const title = toolTitle(call, toolName);
       const input = toolInput(call);
       pending.push({ providerItemID, toolName, title });
