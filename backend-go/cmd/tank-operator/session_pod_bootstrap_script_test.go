@@ -82,6 +82,30 @@ func TestInstallTankSkillsScriptRunsUnderSh(t *testing.T) {
 	}
 }
 
+func TestInstallAgentPostCommitReminderScriptRunsUnderSh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hook install script test runs on POSIX only")
+	}
+
+	sourceScript, err := filepath.Abs("../../../scripts/install-agent-post-commit-reminder.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	sourceHook, err := filepath.Abs("../../../.githooks/post-commit")
+	if err != nil {
+		t.Fatalf("resolve hook path: %v", err)
+	}
+
+	repoDir := t.TempDir()
+	mustRun(t, repoDir, "git", "init")
+	mustRun(t, repoDir, "mkdir", "-p", "scripts", ".githooks")
+	copyFile(t, sourceScript, filepath.Join(repoDir, "scripts", "install-agent-post-commit-reminder.sh"), 0o755)
+	copyFile(t, sourceHook, filepath.Join(repoDir, ".githooks", "post-commit"), 0o755)
+
+	mustRun(t, repoDir, "sh", "scripts/install-agent-post-commit-reminder.sh")
+	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
+}
+
 // TestSessionPodBootstrapScript_PerMode executes the in-pod bootstrap script
 // against each wizard mode in a temp HOME and asserts the right config files
 // land on disk. This is the regression guard the deletion in 650c282 (which
@@ -313,5 +337,26 @@ func writeExecutable(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write executable %s: %v", path, err)
+	}
+}
+
+func copyFile(t *testing.T, src, dst string, mode os.FileMode) {
+	t.Helper()
+	content, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("read %s: %v", src, err)
+	}
+	if err := os.WriteFile(dst, content, mode); err != nil {
+		t.Fatalf("write %s: %v", dst, err)
+	}
+}
+
+func mustRun(t *testing.T, dir, name string, args ...string) {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s failed: %v\noutput:\n%s", name, strings.Join(args, " "), err, string(out))
 	}
 }

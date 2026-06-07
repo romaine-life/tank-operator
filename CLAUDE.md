@@ -66,7 +66,9 @@ or incomplete.
 Always wait for all CI checks/tests to complete successfully on GitHub before merging a PR. Merging a PR before checks finish will break the image build/tagging workflow on main. This includes the PR body checklist check (check-pr-body) — do not bypass or ignore these failures.
 
 After local commits, agents should use the tracked post-commit reminder so the
-CI/test-slot handoff contract stays visible in normal Git flow:
+CI/test-slot handoff contract stays visible in normal Git flow. The
+`repo-cloner` init container installs this hook automatically for selected
+repos that carry the installer. For ad-hoc clones or existing worktrees, run:
 
 ```sh
 scripts/install-agent-post-commit-reminder.sh

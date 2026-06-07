@@ -76,6 +76,28 @@ fail_all_repos() {
   exit 1
 }
 
+install_repo_agent_reminder() {
+  local slug="$1"
+  local target="$2"
+  local strict="$3"
+  local installer="$target/scripts/install-agent-post-commit-reminder.sh"
+
+  [ -f "$installer" ] || return 0
+
+  echo "repo-cloner: installing agent post-commit reminder for $slug"
+  if (cd "$target" && sh "$installer"); then
+    return 0
+  fi
+
+  if [ "$strict" = "strict" ]; then
+    echo "repo-cloner: failed to install agent post-commit reminder for $slug" >&2
+    return 1
+  fi
+
+  echo "repo-cloner: warning: failed to install agent post-commit reminder for existing repo $slug" >&2
+  return 0
+}
+
 echo "repo-cloner: exchanging pod identity"
 AUTH_TOKEN="$(
   curl -fsS -X POST "$AUTH_EXCHANGE_URL" \
@@ -146,6 +168,7 @@ for slug in "${REPOS[@]}"; do
     origin="$(git -C "$target" config --get remote.origin.url || true)"
     if [[ "$origin" == *"github.com/${slug}.git" || "$origin" == *"github.com/${slug}" ]]; then
       echo "repo-cloner: $slug already exists at $target"
+      install_repo_agent_reminder "$slug" "$target" "best-effort"
       set_repo_state "$slug" "cloned" "$target"
       continue
     fi
@@ -174,6 +197,12 @@ for slug in "${REPOS[@]}"; do
     git clone "${clone_args[@]}" "https://github.com/${slug}.git" "$tmp_target"; then
     mv "$tmp_target" "$target"
     git -C "$target" config --local credential.helper ""
+    if ! install_repo_agent_reminder "$slug" "$target" "strict"; then
+      msg="agent post-commit reminder install failed"
+      set_repo_state "$slug" "failed" "$target" "$msg"
+      failures=1
+      continue
+    fi
     set_repo_state "$slug" "cloned" "$target"
   else
     rc=$?
