@@ -70,8 +70,10 @@ Contract impact:
   segments are barred from.
 - Opening `/turns/{n}` resolves the server-default page and canonicalizes via
   `replaceState` to `/turns/{n}/pages/{N}`; the URL then tracks paging, sourced
-  from the activity page directory (no auto-follow of the live tail; crossing a
-  page seal is an explicit hand-off, not an auto-advance).
+  from the activity page directory (no auto-follow of the live tail; if a live
+  turn seals a new page the reader stays on the sealed page and switches via the
+  always-present Page dropdown — announcing the seal was deliberately descoped as
+  an uncommon case not worth a durable event).
 - Question-set pages keep the ordinal form; their question semantics stay
   label-only, not a separate route axis.
 
