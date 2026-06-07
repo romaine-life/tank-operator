@@ -11,24 +11,23 @@
 //
 // Step vocabulary (confirmed live against agy 1.0.5, Gemini-Ultra):
 //   { step_index, type, source, status, content?, tool_calls?, created_at }
-//   source: USER_EXPLICIT (the user prompt) | SYSTEM (history/context) | MODEL
+//   source: USER_EXPLICIT (the user prompt) | SYSTEM (history/context/tool-call
+//     validation errors) | MODEL
 //   type (source=MODEL): PLANNER_RESPONSE (the model's reasoning step — carries
 //     either `tool_calls` to invoke tools or `content` for prose/the final
 //     answer) and per-tool result types (CODE_ACTION, VIEW_FILE, RUN_COMMAND, …)
 //   status: IN_PROGRESS while the step is live, DONE when settled
 //
 // Mapping (docs/tank-conversation-protocol.md):
-//   USER_EXPLICIT / SYSTEM            -> dropped (Tank owns user_message.created)
+//   USER_EXPLICIT / SYSTEM history    -> dropped (Tank owns user_message.created)
 //   first MODEL step                  -> turn.started
 //   PLANNER_RESPONSE + tool_calls     -> item.started (actor=tool) per call
-//   tool result step (CODE_ACTION,…)  -> item.completed for the matching tool
+//   tool result step (CODE_ACTION,…)  -> item.completed/item.failed for the
+//                                        matching tool
+//   SYSTEM ERROR_MESSAGE              -> item.failed for the matching tool
 //   PLANNER_RESPONSE + content        -> assistant item.completed; last one is
 //                                        the turn's final answer
 //   (turn end)                        -> turn.completed{final_answer, usage}
-//
-// The adapter is pure (no I/O, no metrics): the runner loop owns tailing,
-// publishing, metrics, and interrupt/usage. That keeps the mapping unit-
-// testable against a captured transcript fixture.
 
 import type { TankConversationEvent } from "../../../runner-shared/conversation.js";
 import {
@@ -47,6 +46,8 @@ export interface AgyStep {
   content?: string | null;
   tool_calls?: AgyToolCall[] | null;
   created_at?: string;
+  conversation_id?: string;
+  transcript_path?: string;
 }
 
 export interface AgyToolCall {
@@ -69,6 +70,16 @@ interface PendingTool {
 interface FinalAnswer {
   timelineIDs: string[];
   providerItemIDs: string[];
+}
+
+export type AgyAdapterCorrelationKind =
+  | "closed_tool_result"
+  | "failed_tool_result"
+  | "orphan_tool_result"
+  | "unclosed_tool_at_terminal";
+
+export interface AgyAdapterObserver {
+  recordCorrelation?: (kind: AgyAdapterCorrelationKind, count?: number) => void;
 }
 
 // agy folds two UI-hint keys into every tool call's args. They are display
@@ -105,8 +116,14 @@ function toolInput(call: AgyToolCall): Record<string, unknown> | undefined {
   return Object.keys(cleaned).length > 0 ? cleaned : undefined;
 }
 
-export function toolCallProviderItemID(stepIndex: number, index: number): string {
-  return `tool-${stepIndex}-${index}`;
+export function toolCallProviderItemID(
+  stepIndex: number,
+  index: number,
+  conversationID?: string,
+): string {
+  return conversationID
+    ? `conversation-${conversationID}:tool-${stepIndex}-${index}`
+    : `tool-${stepIndex}-${index}`;
 }
 
 /**
@@ -121,18 +138,26 @@ export class AntigravityTranscriptAdapter {
   private readonly pendingTools = new Map<string, PendingTool[]>();
   private readonly finalAnswer = new Map<string, FinalAnswer>();
 
-  constructor(private readonly sessionID: string) {}
+  constructor(
+    private readonly sessionID: string,
+    private readonly observer: AgyAdapterObserver = {},
+  ) {}
 
   /** Map one agy step to zero or more Tank events. */
   stepEvents(turn: AntigravityTurn, step: AgyStep): TankConversationEvent[] {
-    if (!this.markSeen(turn.turnID, step.step_index)) return [];
+    if (!this.markSeen(turn, step)) return [];
 
     const source = upper(step.source);
+    const type = upper(step.type);
     // The user prompt is owned by Tank's durable user_message.created; agy's
     // echo of it (and its injected conversation history) is not a transcript
-    // event.
-    if (source === "USER_EXPLICIT" || source === "SYSTEM") return [];
-    if (source !== "MODEL") return [];
+    // event. SYSTEM/ERROR_MESSAGE is different: agy uses it as the terminal
+    // result for invalid provider tool calls, so it must close the pending
+    // Tank item instead of being discarded as context.
+    if (source === "USER_EXPLICIT") return [];
+    if (source === "SYSTEM" && type !== "ERROR_MESSAGE") return [];
+    if (source !== "MODEL" && !(source === "SYSTEM" && type === "ERROR_MESSAGE"))
+      return [];
 
     const events: TankConversationEvent[] = [];
     if (!this.turnStarted.has(turn.turnID)) {
@@ -149,8 +174,12 @@ export class AntigravityTranscriptAdapter {
       );
     }
 
-    const type = upper(step.type);
     const toolCalls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
+
+    if (source === "SYSTEM" && type === "ERROR_MESSAGE") {
+      events.push(...this.closeToolResult(turn, step));
+      return events;
+    }
 
     if (type === "PLANNER_RESPONSE" && toolCalls.length > 0) {
       events.push(...this.openToolCalls(turn, step, toolCalls));
@@ -181,6 +210,7 @@ export class AntigravityTranscriptAdapter {
     turn: AntigravityTurn,
     usage?: Record<string, unknown>,
   ): TankConversationEvent {
+    this.recordUnclosedTools(turn.turnID);
     const final = this.finalAnswer.get(turn.turnID);
     const event = turnEvent({
       sessionID: this.sessionID,
@@ -236,13 +266,19 @@ export class AntigravityTranscriptAdapter {
     toolCalls: AgyToolCall[],
   ): TankConversationEvent[] {
     const events: TankConversationEvent[] = [];
-    const pending = this.pendingTools.get(turn.turnID) ?? [];
+    const pendingKey = this.pendingKey(turn, step);
+    const conversationID = stepConversationID(step);
+    const pending = this.pendingTools.get(pendingKey) ?? [];
     toolCalls.forEach((call, index) => {
       const toolName =
         typeof call.name === "string" && call.name.trim()
           ? call.name.trim()
           : "tool";
-      const providerItemID = toolCallProviderItemID(step.step_index, index);
+      const providerItemID = toolCallProviderItemID(
+        step.step_index,
+        index,
+        conversationID,
+      );
       const title = toolTitle(call, toolName);
       const input = toolInput(call);
       pending.push({ providerItemID, toolName, title });
@@ -264,7 +300,7 @@ export class AntigravityTranscriptAdapter {
         }) as TankConversationEvent,
       );
     });
-    this.pendingTools.set(turn.turnID, pending);
+    this.pendingTools.set(pendingKey, pending);
     return events;
   }
 
@@ -272,11 +308,20 @@ export class AntigravityTranscriptAdapter {
     turn: AntigravityTurn,
     step: AgyStep,
   ): TankConversationEvent[] {
-    const pending = this.pendingTools.get(turn.turnID) ?? [];
+    const pendingKey = this.pendingKey(turn, step);
+    const pending = this.pendingTools.get(pendingKey) ?? [];
     const text = stepText(step);
     const open = pending.shift();
+    const failed = isToolResultFailure(step);
+    const eventType = failed ? "item.failed" : "item.completed";
+    const outcome = failed
+      ? { kind: "execution_failed", reason: "provider_item_error" }
+      : { kind: "ok" };
+    this.observer.recordCorrelation?.(
+      open ? (failed ? "failed_tool_result" : "closed_tool_result") : "orphan_tool_result",
+    );
     if (open) {
-      this.pendingTools.set(turn.turnID, pending);
+      this.pendingTools.set(pendingKey, pending);
       return [
         itemEvent({
           sessionID: this.sessionID,
@@ -284,23 +329,27 @@ export class AntigravityTranscriptAdapter {
           providerItemID: open.providerItemID,
           actor: "tool",
           source: ANTIGRAVITY_SOURCE,
-          type: "item.completed",
+          type: eventType,
           providerEventID: `step-${step.step_index}`,
           payload: {
             kind: "tool",
             tool_name: open.toolName,
             title: open.title,
             ...(text ? { text } : {}),
-            outcome: { kind: "ok" },
+            ...(failed ? { error: resultErrorText(step) } : {}),
+            outcome,
           },
         }) as TankConversationEvent,
       ];
     }
     // Orphan result (no open tool): emit a self-contained completed tool item.
-    const providerItemID = `tool-${step.step_index}`;
+    const conversationID = stepConversationID(step);
+    const providerItemID = conversationID
+      ? `conversation-${conversationID}:tool-${step.step_index}`
+      : `tool-${step.step_index}`;
     const toolName = (step.type ?? "tool").toLowerCase();
     return [
-      itemEvent({
+        itemEvent({
         sessionID: this.sessionID,
         turnID: turn.turnID,
         providerItemID,
@@ -316,16 +365,17 @@ export class AntigravityTranscriptAdapter {
         providerItemID,
         actor: "tool",
         source: ANTIGRAVITY_SOURCE,
-        type: "item.completed",
-        providerEventID: `step-${step.step_index}-orphan-done`,
-        payload: {
-          kind: "tool",
-          tool_name: toolName,
-          title: toolName,
-          ...(text ? { text } : {}),
-          outcome: { kind: "ok" },
-        },
-      }) as TankConversationEvent,
+          type: eventType,
+          providerEventID: `step-${step.step_index}-orphan-done`,
+          payload: {
+            kind: "tool",
+            tool_name: toolName,
+            title: toolName,
+            ...(text ? { text } : {}),
+            ...(failed ? { error: resultErrorText(step) } : {}),
+            outcome,
+          },
+        }) as TankConversationEvent,
     ];
   }
 
@@ -358,18 +408,57 @@ export class AntigravityTranscriptAdapter {
     return event;
   }
 
-  private markSeen(turnID: string, stepIndex: number): boolean {
-    const seen = this.seenSteps.get(turnID) ?? new Set<number>();
-    if (seen.has(stepIndex)) return false;
-    seen.add(stepIndex);
-    this.seenSteps.set(turnID, seen);
+  private markSeen(turn: AntigravityTurn, step: AgyStep): boolean {
+    const key = this.pendingKey(turn, step);
+    const seen = this.seenSteps.get(key) ?? new Set<number>();
+    if (seen.has(step.step_index)) return false;
+    seen.add(step.step_index);
+    this.seenSteps.set(key, seen);
     return true;
   }
 
   private clearTurn(turnID: string): void {
-    this.seenSteps.delete(turnID);
+    for (const key of [...this.seenSteps.keys()]) {
+      if (keyBelongsToTurn(key, turnID)) this.seenSteps.delete(key);
+    }
     this.turnStarted.delete(turnID);
-    this.pendingTools.delete(turnID);
+    for (const key of [...this.pendingTools.keys()]) {
+      if (keyBelongsToTurn(key, turnID)) this.pendingTools.delete(key);
+    }
     this.finalAnswer.delete(turnID);
   }
+
+  private pendingKey(turn: AntigravityTurn, step: AgyStep): string {
+    return `${turn.turnID}\0${stepConversationID(step) ?? ""}`;
+  }
+
+  private recordUnclosedTools(turnID: string): void {
+    let count = 0;
+    for (const [key, pending] of this.pendingTools.entries()) {
+      if (keyBelongsToTurn(key, turnID)) count += pending.length;
+    }
+    if (count > 0) {
+      this.observer.recordCorrelation?.("unclosed_tool_at_terminal", count);
+    }
+  }
+}
+
+function stepConversationID(step: AgyStep): string | undefined {
+  const id = step.conversation_id;
+  if (typeof id === "string" && id.trim()) return id.trim();
+  return undefined;
+}
+
+function keyBelongsToTurn(key: string, turnID: string): boolean {
+  return key === turnID || key.startsWith(`${turnID}\0`);
+}
+
+function isToolResultFailure(step: AgyStep): boolean {
+  return upper(step.status) === "ERROR" || upper(step.type) === "ERROR_MESSAGE";
+}
+
+function resultErrorText(step: AgyStep): string {
+  const text = stepText(step).trim();
+  if (!text) return `${step.type ?? "tool"} failed`;
+  return text.length > 1000 ? `${text.slice(0, 1000)}...` : text;
 }

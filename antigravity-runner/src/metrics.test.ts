@@ -4,6 +4,7 @@ import { once } from "node:events";
 
 import {
   interruptOutcomeTotal,
+  agyAdapterCorrelationTotal,
   registry,
   scheduleIntentTotal,
   startMetricsServer,
@@ -32,6 +33,7 @@ test("the /metrics endpoint serves the tank_antigravity_runner_ counters", async
     assert.match(body, /tank_antigravity_runner_turn_terminal_total/);
     assert.match(body, /tank_antigravity_runner_provider_error_total/);
     assert.match(body, /tank_antigravity_runner_agy_diagnostic_total/);
+    assert.match(body, /tank_antigravity_runner_agy_adapter_correlation_total/);
     assert.match(body, /tank_antigravity_runner_schedule_intent_total/);
   } finally {
     server.close();
@@ -78,5 +80,17 @@ test("schedule-intent observations are recorded in bounded buckets", async () =>
   assert.match(
     dump,
     /tank_antigravity_runner_schedule_intent_total\{kind="wait_text_without_schedule"\} 1/,
+  );
+});
+
+test("adapter correlation observations are recorded in bounded buckets", async () => {
+  await registry.resetMetrics();
+
+  agyAdapterCorrelationTotal.labels("failed_tool_result").inc();
+
+  const dump = await registry.metrics();
+  assert.match(
+    dump,
+    /tank_antigravity_runner_agy_adapter_correlation_total\{kind="failed_tool_result"\} 1/,
   );
 });

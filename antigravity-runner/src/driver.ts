@@ -123,7 +123,10 @@ export class AgyDriver {
   }
 
   // Read every transcript that has grown past its cursor and forward the new,
-  // fully-written steps in order.
+  // fully-written steps in order. agy can append subagent conversations under
+  // separate brain/<conversation> directories during one root turn, so every
+  // emitted step carries its transcript conversation id for downstream
+  // correlation and dedupe.
   private async drain(
     cursors: Map<string, number>,
     baseline: Map<string, number>,
@@ -155,6 +158,8 @@ export class AgyDriver {
           cursors.set(file, i);
           break;
         }
+        step.conversation_id = conversationIDFromTranscriptFile(file);
+        step.transcript_path = file;
         await onStep(step);
         cursors.set(file, i + 1);
       }
@@ -206,4 +211,11 @@ export class AgyDriver {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function conversationIDFromTranscriptFile(file: string): string | undefined {
+  const parts = file.split(path.sep);
+  const brainIndex = parts.lastIndexOf("brain");
+  if (brainIndex < 0 || brainIndex + 1 >= parts.length) return undefined;
+  return parts[brainIndex + 1] || undefined;
 }

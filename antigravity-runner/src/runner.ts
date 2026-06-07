@@ -41,6 +41,7 @@ import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js"
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
   agyStepTotal,
+  agyAdapterCorrelationTotal,
   agyDiagnosticTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
@@ -145,7 +146,11 @@ export class Runner {
   constructor(private readonly cfg: Config) {
     this.events = new SessionEventSink(cfg);
     this.commands = new SessionCommandBus(cfg, SOURCE);
-    this.adapter = new AntigravityTranscriptAdapter(cfg.sessionId);
+    this.adapter = new AntigravityTranscriptAdapter(cfg.sessionId, {
+      recordCorrelation: (kind, count = 1) => {
+        agyAdapterCorrelationTotal.labels(kind).inc(count);
+      },
+    });
     this.driver = new AgyDriver(cfg.agyHome);
   }
 
@@ -546,10 +551,13 @@ export function agyDiagnostics(result: {
 
 function stepKind(step: AgyStep): string {
   const source = (step.source ?? "").toUpperCase();
+  const type = (step.type ?? "").toUpperCase();
+  if (source === "SYSTEM" && type === "ERROR_MESSAGE")
+    return "tool_error_result";
   if (source === "USER_EXPLICIT" || source === "SYSTEM") return "dropped";
   if (Array.isArray(step.tool_calls) && step.tool_calls.length > 0)
     return "tool_call";
-  if ((step.type ?? "").toUpperCase() === "PLANNER_RESPONSE") return "message";
+  if (type === "PLANNER_RESPONSE") return "message";
   return "tool_result";
 }
 

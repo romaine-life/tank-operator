@@ -83,6 +83,13 @@ export const agyStepTotal = new Counter({
   registers: [registry],
 });
 
+export const agyAdapterCorrelationTotal = new Counter({
+  name: "tank_antigravity_runner_agy_adapter_correlation_total",
+  help: "Antigravity transcript tool-result correlation outcomes emitted by the Tank adapter.",
+  labelNames: ["kind"] as const,
+  registers: [registry],
+});
+
 export const usageReportTotal = new Counter({
   name: "tank_antigravity_runner_usage_report_total",
   help: "loadCodeAssist usage reports, by result.",
