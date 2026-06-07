@@ -591,7 +591,7 @@ var sessionContextWindowReportTotal = promauto.NewCounterVec(
 var scheduledWakeupRegisterTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_scheduled_wakeup_register_total",
-		Help: "Claude ScheduleWakeup registrations accepted by the orchestrator, labeled by provider and bounded result.",
+		Help: "Provider scheduled-wakeup registrations accepted by the orchestrator, labeled by provider and bounded result.",
 	},
 	[]string{"provider", "result"},
 )

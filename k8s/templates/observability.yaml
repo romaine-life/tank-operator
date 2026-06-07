@@ -1228,6 +1228,38 @@ spec:
             summary: "pod-side runner ({{`{{ $labels.mode }}`}}) provider errors > 0.1/s for 5m"
             runbook: "Inspect the affected session pod's agent-runner / codex-runner logs."
 
+        - alert: TankAntigravityRunnerProviderErrorRate
+          expr: rate(tank_antigravity_runner_provider_error_total[5m]) > 0.1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Antigravity runner provider errors > 0.1/s for 5m"
+            runbook: |
+              Inspect the affected session pod's antigravity-runner logs and
+              agy CLI logs under /home/node/.gemini/antigravity-cli/log.
+              Auxiliary userinfo/Clearcut 401s are counted separately as
+              tank_antigravity_runner_agy_diagnostic_total and are not provider
+              auth failures; real Code Assist auth failures surface through
+              tank_api_proxy_upstream_401_total{provider="antigravity"} or
+              provider_error reasons such as provider_auth_failed /
+              skill_missing.
+
+        - alert: TankAntigravitySkillMissing
+          expr: increase(tank_antigravity_runner_provider_error_total{reason="skill_missing"}[15m]) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Antigravity received a skill turn but could not load the requested SKILL.md"
+            runbook: |
+              The session should mount tank-session-config at
+              /opt/tank/session-config and run install-tank-skills.sh before
+              antigravity-runner starts. Check the pod manifest volumeMounts,
+              /home/node/.gemini/skills/<skill>/SKILL.md, and the
+              tank-session-config ConfigMap's skills__common /
+              skills__antigravity entries.
+
         - alert: TankScheduledWakeupsOverdue
           expr: max_over_time(tank_scheduled_wakeups_due[15m]) > 0
           for: 15m

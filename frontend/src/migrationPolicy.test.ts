@@ -300,11 +300,43 @@ test("background wake prompts stay hidden from chat but visible in Turns activit
 
 test("Turns view renders server-projected turn context outside paged activity", () => {
   expect(appSource.includes("turn_context?: unknown")).toBe(true);
-  expect(appSource.includes("turnActivityContextByTurn")).toBe(true);
-  expect(appSource.includes("setTurnActivityContextByTurn")).toBe(true);
+  expect(appSource.includes("turnActivityLoadsByTurn")).toBe(true);
+  expect(appSource.includes("setTurnActivityContextByTurn")).toBe(false);
+  expect(appSource.includes("applyTurnActivityLoad")).toBe(false);
+  expect(appSource.includes("turnActivityLoadVisibleSnapshot")).toBe(true);
+  expect(appSource.includes("completeTurnActivityLoad")).toBe(true);
+  expect(appSource.includes("failTurnActivityLoad")).toBe(true);
+  expect(appSource).toMatch(/type TurnActivityLoadResult = \{[\s\S]{0,180}pageInfo\?: TurnActivityPageInfo;/);
+  expect(appSource).toMatch(/const showActivityLoading =[\s\S]{0,220}!\s*selectedSnapshot/);
+  const fetchTurnActivityEntriesMatch = appSource.match(
+    /const fetchTurnActivityEntries = useCallback\([\s\S]*?\n  \);\n  const startTurnActivityLoad/,
+  );
+  expect(fetchTurnActivityEntriesMatch, "fetchTurnActivityEntries source should be present").toBeTruthy();
+  expect(fetchTurnActivityEntriesMatch![0].includes("setTurnActivityLoadsByTurn")).toBe(false);
   expect(appSource.includes("selectedTurnContext")).toBe(true);
+  expect(appSource.includes("showPromptContextShell")).toBe(true);
   expect(appSource.includes('aria-label="Turn prompt"')).toBe(true);
+  expect(appSource.includes('data-context-loaded={selectedTurnContext ? "true" : "false"}')).toBe(true);
+  expect(appSource.includes("Prompt context unavailable")).toBe(true);
+  expect(appSource.includes("{selectedTurnContext && selected && (")).toBe(false);
   expect(appSource).toMatch(/selectedTurnContext[\s\S]{0,1200}canonicalMessage=\{false\}/);
+  expect(appSource.includes("showContextToggleInActivityDivider")).toBe(false);
+  expect(appSource.includes("showTurnSectionDivider")).toBe(true);
+  expect(appSource.includes("canToggleDetailActivity")).toBe(true);
+  expect(appSource.includes("const canToggleDetailActivity = Boolean(selected);")).toBe(true);
+  expect(appSource.includes("const canToggleDetailActivity = showDetailActivityDivider;")).toBe(false);
+  expect(appSource.includes("{selected && showDetailActivityDivider && (")).toBe(false);
+  expect(appSource.includes("{selected && showTurnSectionDivider && (")).toBe(true);
+  expect(appSource).toMatch(/run-turn-view-context-head[\s\S]{0,500}run-turn-view-context-toggle/);
+  expect(appSource.includes("canTogglePromptContext")).toBe(true);
+  expect(appSource.includes('disabled={!canTogglePromptContext}')).toBe(true);
+  expect(appSource.includes('disabled={!canToggleDetailActivity}')).toBe(true);
+  expect(appSource.includes('if (group.kind === "thinking") return true;')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes("prompt-and-activity-controls-present")).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('aria-label="Collapse assistance turn"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('aria-label="No assistance turn to collapse"')).toBe(false);
+  expect(indexCssSource.includes(".run-turn-view-context-unavailable")).toBe(true);
+  expect(appSource.includes("(selected?.entries ?? [])")).toBe(false);
 });
 
 test("collapsed Turns prompt context stays a minimal one-line entry, not hidden", () => {
@@ -312,16 +344,32 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   // RunMessageBubble renders in compact mode: the avatar stays at full size
   // and the text collapses to a single ellipsis-truncated line. This pins the
   // wiring (compact follows the collapsed flag) and the compact renderer so a
-  // future refactor can't silently revert to hiding the prompt.
+  // future refactor can't silently revert to hiding the prompt. Compact mode
+  // is text-only: controls remain full-size and are laid out beside the
+  // preview line, never stacked under a one-line prompt.
   expect(appSource.includes("compact?: boolean;")).toBe(true);
   expect(appSource.includes("compact={selectedTurnContextCollapsed}")).toBe(true);
   expect(appSource.includes("run-msg-compact-text")).toBe(true);
+  expect(appSource.includes("Compact mode only changes")).toBe(true);
+  expect(appSource.includes("{!compact && variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(false);
+  expect(appSource.includes("{!compact && (\n          <div\n            className=\"run-msg-footer\"")).toBe(false);
+  expect(appSource.includes("{variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(true);
+  expect(appSource.includes("<div\n          className=\"run-msg-footer\"")).toBe(true);
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-content\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-msg-footer\s*\{[^}]*grid-column:\s*2;[\s\S]*margin-top:\s*0/,
+  );
+  expect(styleguidePortfolioTranscriptSource.includes("collapsed-text-preview-controls-inline")).toBe(true);
   // The old "hide the whole bubble when collapsed" gate must be gone.
   expect(appSource.includes("{!selectedTurnContextCollapsed && (")).toBe(false);
-  // CSS: the compact line truncates with an ellipsis and keeps the avatar via
-  // vertical centering on the compact message grid.
+  // CSS: the compact line truncates with an ellipsis without changing the
+  // avatar's top anchor from the expanded row.
   expect(indexCssSource).toMatch(/\.run-msg-compact-text\s*\{[^}]*text-overflow:\s*ellipsis/);
-  expect(indexCssSource.includes('.run-transcript-message[data-compact="true"]')).toBe(true);
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s*\{[^}]*align-items:\s*start/,
+  );
 });
 
 test("transcript meta status lines are attributed to the session system identity", () => {
@@ -514,6 +562,13 @@ test("turn internals move out of the transcript into a turn view", () => {
   expect(indexCssSource.includes("@keyframes run-thinking-dot-bounce")).toBe(false);
   expect(indexCssSource.includes(".run-msg-turn")).toBe(true);
   expect(styleguidePortfolioTranscriptSource.includes("TurnViewSpecimen")).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('useState<HighlightTarget>("activity")')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('data-design-component="TurnPromptContext"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('className="run-turn-view-context-toggle"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('data-design-state="expanded-with-divider"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('data-design-state="context-unavailable-control-disabled"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('data-context-loaded="false"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('disabled')).toBe(true);
   expect(styleguidePortfolioTranscriptSource.includes("showAssistantAvatar")).toBe(true);
   expect(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-content")).toBe(true);
   expect(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-label")).toBe(true);
@@ -610,7 +665,7 @@ test("turn view entry points open at the turn bottom", () => {
   expect(appSource.includes("onScrollRequestConsumed?: (signal: number) => void;")).toBe(true);
   expect(appSource.includes("scrollRequest={turnViewScrollRequest}")).toBe(true);
   expect(appSource.includes("onScrollRequestConsumed={clearTurnViewScrollRequest}")).toBe(true);
-  expect(appSource.includes("if (!selected.loaded) return;")).toBe(true);
+  expect(appSource.includes("if (!selectedSnapshot) return;")).toBe(true);
   expect(appSource.includes("if (loading && detailGroups.length === 0) return;")).toBe(true);
   expect(appSource.includes(
           'body.scrollTo({ top: body.scrollHeight, behavior: "auto" });',

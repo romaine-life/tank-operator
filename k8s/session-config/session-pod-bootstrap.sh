@@ -111,6 +111,12 @@ start_spirelens_tailnet() {
   echo "session-pod-bootstrap: SpireLens tailnet join complete" >&2
 }
 
+install_agent_git_template() {
+  if [ -f /opt/tank/session-config/install-agent-git-template.sh ]; then
+    sh /opt/tank/session-config/install-agent-git-template.sh || true
+  fi
+}
+
 mode="${TANK_SESSION_MODE:-}"
 if [ -z "$mode" ]; then
   echo "session-pod-bootstrap: TANK_SESSION_MODE unset; nothing to seed" >&2
@@ -118,6 +124,7 @@ if [ -z "$mode" ]; then
 fi
 
 start_spirelens_tailnet
+install_agent_git_template
 
 case "$mode" in
   codex_config | codex_cli | codex_gui | codex_exec_gui | codex_app_server)

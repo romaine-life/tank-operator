@@ -88,8 +88,8 @@ type appServer struct {
 	// nil when pgPool is unset (stub mode).
 	providerHealth *providerhealth.Manager
 
-	// scheduledWakeups is the durable backend-owned Claude ScheduleWakeup
-	// store. Runners register provider tool_use items here; the
+	// scheduledWakeups is the durable backend-owned provider wakeup store.
+	// Runners register self-resume schedule tool_use items here; the
 	// orchestrator claims due rows and feeds them through the normal SDK
 	// turn boundary instead of holding process-local timers in a session pod.
 	scheduledWakeups scheduledWakeupStore

@@ -160,8 +160,11 @@ All metric names are prefixed `tank_`. The full namespace:
   transcript_rows_applied,
   stream_silent_while_running, terminal_matched_by_turn_id,
   terminal_local_run_mismatch, queued_followup_blocked_after_terminal,
-  stale_running_blocked_submit, turn_activity_refresh_failed,
-  turn_activity_refresh_gave_up, turn_activity_refresh_recovered,
+  stale_running_blocked_submit, turn_activity_load_started,
+  turn_activity_load_succeeded, turn_activity_load_failed,
+  turn_activity_load_timed_out, turn_activity_load_stale,
+  turn_activity_refresh_failed, turn_activity_refresh_gave_up,
+  turn_activity_refresh_recovered,
   resync_required, stream_error, closed_unmount, closed_error, reconnect_scheduled),
   `session_mode`, and on the `_received_total` variant `event_type`.
   The `_stream_silent_seconds{session_mode}` histogram is the
@@ -317,6 +320,19 @@ All metric names are prefixed `tank_`. The full namespace:
   This localizes "typed answer text disappeared" reports between durable
   persistence (`turn.input_answered.payload.annotations`) and provider
   delivery without per-session labels.
+- `tank_antigravity_runner_*` — Antigravity/Gemini pod-side runner metrics.
+  This runner has its own namespace because it drives the native `agy` binary
+  rather than the Claude/Codex SDK path. `tank_antigravity_runner_provider_error_total{reason}`
+  is the red signal for failed agy turns; `reason="skill_missing"` means the
+  backend accepted a skill turn but the runner could not find
+  `$HOME/.gemini/skills/<skill>/SKILL.md`, so the turn fails before provider
+  execution. `tank_antigravity_runner_agy_diagnostic_total{kind}` records
+  bounded non-terminal diagnostics from agy output: `auxiliary_userinfo_401`
+  and `telemetry_clearcut_401` classify the known placeholder-token
+  profile/telemetry noise and must not be treated as Code Assist auth failure.
+  The real Antigravity auth failure signature is proxy-observed
+  `tank_api_proxy_upstream_401_total{provider="antigravity"}` or a
+  `provider_auth_failed` terminal.
 - `tank_session_runtime_config_update_total` - pod-side runner reports of
   the model/effort actually applied to the provider runtime. Labels:
   `provider` (`claude`, `codex`, `unknown`) and bounded `result`.

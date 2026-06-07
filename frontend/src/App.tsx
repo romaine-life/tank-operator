@@ -325,8 +325,17 @@ import {
   type ClusterHealthStatus,
 } from "./clusterHealth";
 import {
+  beginTurnActivityLoad,
+  completeTurnActivityLoad,
+  failTurnActivityLoad,
+  turnActivityLoadVisibleSnapshot,
   turnActivityGroupIsActive,
+  turnActivityShouldStartLoad,
   turnActivityShellIsDurablyActive,
+  type TurnActivityLoadProblem,
+  type TurnActivityLoadReason,
+  type TurnActivityLoadSnapshot as TurnActivityLoadSnapshotModel,
+  type TurnActivityLoadState as TurnActivityLoadStateModel,
 } from "./turnActivityState";
 import { ANSI_256_OVERRIDES, ANSI_STANDARD_OVERRIDES } from "./terminalTheme";
 import {
@@ -6837,8 +6846,9 @@ function RunMessageBubble({
   // Minimal one-line variant: keep the avatar at full size and collapse the
   // body to a single ellipsis-truncated line. Used by the Turns view when the
   // prompt context is collapsed so the entry stays recognizable (avatar +
-  // first line) instead of disappearing entirely. Hides the footer,
-  // attachments, and any inline actions.
+  // first line) instead of disappearing entirely. Compact mode only changes
+  // text rendering; attachments, inline actions, and footer controls keep
+  // their normal layout.
   compact?: boolean;
 }) {
   const variant =
@@ -6996,8 +7006,7 @@ function RunMessageBubble({
           ) : (
             <RunMarkdown>{visibleText}</RunMarkdown>
           )}
-          {!compact &&
-            variant === "system" &&
+          {variant === "system" &&
             messageActionLabel &&
             messageActionHref && (
               <a
@@ -7009,8 +7018,7 @@ function RunMessageBubble({
                 {messageActionLabel}
               </a>
             )}
-          {!compact &&
-            variant === "assistant" &&
+          {variant === "assistant" &&
             awaitingInput &&
             questionTurnId &&
             onOpenTurn && (
@@ -7023,72 +7031,70 @@ function RunMessageBubble({
               </button>
             )}
         </div>
-        {!compact && variant === "user" && visibleAttachments.length > 0 && (
+        {variant === "user" && visibleAttachments.length > 0 && (
           <RunMessageAttachments
             attachments={visibleAttachments}
             sessionId={sessionId}
           />
         )}
-        {!compact && (
-          <div
-            className="run-msg-footer"
-            data-always-visible={alwaysVisible ? "" : undefined}
-          >
-            {canonicalMessage &&
-              (variant === "assistant" || variant === "user") &&
-              entry.turnId &&
-              onOpenTurn && (
-                <TurnViewButton
-                  turnId={entry.turnId}
-                  href={turnHref}
-                  onOpenTurn={onOpenTurn}
-                />
-              )}
-            {!canonicalMessage && onOpenTranscriptMessage && (
-              <TranscriptViewButton
-                entryId={entry.id}
-                href={transcriptHref}
-                onOpenTranscriptMessage={onOpenTranscriptMessage}
+        <div
+          className="run-msg-footer"
+          data-always-visible={alwaysVisible ? "" : undefined}
+        >
+          {canonicalMessage &&
+            (variant === "assistant" || variant === "user") &&
+            entry.turnId &&
+            onOpenTurn && (
+              <TurnViewButton
+                turnId={entry.turnId}
+                href={turnHref}
+                onOpenTurn={onOpenTurn}
               />
             )}
-            {canonicalMessage && variant === "assistant" && onFork && (
-              <ForkButton entry={entry} onFork={onFork} />
-            )}
-            {variant !== "system" && (
-              <>
-                {onQuote && (
-                  <>
-                    <QuoteButton
-                      text={visibleText}
-                      style="fence"
-                      onQuote={onQuote}
-                    />
-                    <QuoteButton
-                      text={visibleText}
-                      style="blockquote"
-                      onQuote={onQuote}
-                    />
-                  </>
-                )}
-                <CopyButton text={visibleText} />
-                {canonicalMessage && !entry.localOnly && (
-                  <LinkButton sessionId={sessionId} entryId={entry.id} />
-                )}
-              </>
-            )}
-            <div className="run-msg-timings">
-              {showDuration && durationMs != null && (
-                <span className="run-msg-timing-row">
-                  {formatTurnDuration(durationMs)}
-                  <TimerIcon size={9} aria-hidden="true" />
-                </span>
+          {!canonicalMessage && onOpenTranscriptMessage && (
+            <TranscriptViewButton
+              entryId={entry.id}
+              href={transcriptHref}
+              onOpenTranscriptMessage={onOpenTranscriptMessage}
+            />
+          )}
+          {canonicalMessage && variant === "assistant" && onFork && (
+            <ForkButton entry={entry} onFork={onFork} />
+          )}
+          {variant !== "system" && (
+            <>
+              {onQuote && (
+                <>
+                  <QuoteButton
+                    text={visibleText}
+                    style="fence"
+                    onQuote={onQuote}
+                  />
+                  <QuoteButton
+                    text={visibleText}
+                    style="blockquote"
+                    onQuote={onQuote}
+                  />
+                </>
               )}
-              {showTimestamps && time && (
-                <span className="run-msg-timing-row">{time}</span>
+              <CopyButton text={visibleText} />
+              {canonicalMessage && !entry.localOnly && (
+                <LinkButton sessionId={sessionId} entryId={entry.id} />
               )}
-            </div>
+            </>
+          )}
+          <div className="run-msg-timings">
+            {showDuration && durationMs != null && (
+              <span className="run-msg-timing-row">
+                {formatTurnDuration(durationMs)}
+                <TimerIcon size={9} aria-hidden="true" />
+              </span>
+            )}
+            {showTimestamps && time && (
+              <span className="run-msg-timing-row">{time}</span>
+            )}
           </div>
-        )}
+        </div>
       </div>
       {variant === "user" &&
         !isAvatarContinuation &&
@@ -9718,14 +9724,29 @@ type TurnViewItem = {
   lastActivityAt?: string;
 };
 
-type ActivityRefreshProblem = {
-  kind: "load" | "live-refresh";
-  attempts: number;
-};
+const TURN_ACTIVITY_LOAD_TIMEOUT_MS = 15_000;
+
+type TurnActivitySnapshot = TurnActivityLoadSnapshotModel<
+  TranscriptEntry,
+  TurnActivityPageInfo
+>;
+
+type TurnActivityLoadState = TurnActivityLoadStateModel<
+  TranscriptEntry,
+  TurnActivityPageInfo
+>;
+
+type TurnActivityLoadStateByTurn = Record<
+  string,
+  TurnActivityLoadState | undefined
+>;
+
+type ActivityRefreshProblem = TurnActivityLoadProblem;
 
 type TurnActivityLoadResult = {
   entries: TranscriptEntry[];
   context: TranscriptEntry | null;
+  pageInfo?: TurnActivityPageInfo;
 };
 
 function turnEntryTimestamp(entry: TranscriptEntry): string | undefined {
@@ -10528,16 +10549,13 @@ function RunTurnActivityScreen({
   showTimestamps,
   showDuration,
   userKey,
-  loadingActivityTurns,
-  activityRefreshProblemsByTurn,
+  turnActivityLoadsByTurn,
   onRetryActivityRefresh,
   onOpenBackgroundTask,
   transcriptHrefForEntry,
   onOpenTranscriptMessage,
   scrollRequest,
   onScrollRequestConsumed,
-  turnActivityPageInfo,
-  turnActivityContextByTurn,
   onActivitySelectPage,
 }: {
   turns: TurnViewItem[];
@@ -10553,36 +10571,25 @@ function RunTurnActivityScreen({
   // Stable identifier for the currently signed-in user. See the
   // matching prop on RunMessages for the rationale.
   userKey: string;
-  loadingActivityTurns: Record<string, boolean | undefined>;
-  activityRefreshProblemsByTurn: Record<
-    string,
-    ActivityRefreshProblem | undefined
-  >;
+  turnActivityLoadsByTurn: TurnActivityLoadStateByTurn;
   onRetryActivityRefresh: (turnId: string) => void;
   onOpenBackgroundTask?: (entry: TranscriptEntry) => void;
   transcriptHrefForEntry?: (entry: TranscriptEntry) => string | undefined;
   onOpenTranscriptMessage?: (entryId: string) => void;
   scrollRequest?: TurnViewScrollRequest | null;
   onScrollRequestConsumed?: (signal: number) => void;
-  turnActivityPageInfo?: Record<string, TurnActivityPageInfo | undefined>;
-  turnActivityContextByTurn?: Record<
-    string,
-    TranscriptEntry | null | undefined
-  >;
   onActivitySelectPage?: (turnId: string, page: number) => void;
 }) {
   const selected =
     turns.find((turn) => turn.turnId === selectedTurnId) ??
     turns[turns.length - 1] ??
     null;
-  const selectedPageInfo =
-    selected && turnActivityPageInfo
-      ? turnActivityPageInfo[selected.turnId]
-      : undefined;
-  const selectedTurnContext =
-    selected && turnActivityContextByTurn
-      ? (turnActivityContextByTurn[selected.turnId] ?? null)
-      : null;
+  const selectedLoadState = selected
+    ? turnActivityLoadsByTurn[selected.turnId]
+    : undefined;
+  const selectedSnapshot = turnActivityLoadVisibleSnapshot(selectedLoadState);
+  const selectedPageInfo = selectedSnapshot?.pageInfo;
+  const selectedTurnContext = selectedSnapshot?.context ?? null;
   // Same always-present pager as the inline chat disclosure, for the surface a
   // user actually inspects turns from. Without it, a turn over the page limit
   // shows only its last page here (the endpoint default) with no way back.
@@ -10597,12 +10604,12 @@ function RunTurnActivityScreen({
   );
   const detailEntries = useMemo(
     () =>
-      (selected?.entries ?? []).filter(
+      (selectedSnapshot?.entries ?? []).filter(
         (entry) =>
           !isTurnActivityEntry(entry) &&
           (!isUserMessageEntry(entry) || isTurnActivityUserMessageEntry(entry)),
       ),
-    [selected?.entries],
+    [selectedSnapshot?.entries],
   );
   const detailGroups = useMemo(
     () => groupFlatTranscriptEntries(detailEntries),
@@ -10654,13 +10661,13 @@ function RunTurnActivityScreen({
     hasFinalDetailResponse &&
     hasCollapsibleDetailActivity,
   );
+  const showTurnSectionDivider = Boolean(selected);
+  const canToggleDetailActivity = Boolean(selected);
   const detailActivityCollapsed =
-    showDetailActivityDivider &&
     selected !== null &&
     collapsedActivityTurnIds[selected.turnId] === true;
-  const showContextToggleInActivityDivider = Boolean(
-    selectedTurnContext && showDetailActivityDivider,
-  );
+  const showPromptContextShell = Boolean(selected);
+  const canTogglePromptContext = Boolean(selectedTurnContext);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) =>
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
@@ -10671,14 +10678,18 @@ function RunTurnActivityScreen({
       prev[entryId] === expanded ? prev : { ...prev, [entryId]: expanded },
     );
   }, []);
-  const loading = selected
-    ? loadingActivityTurns[selected.turnId] === true
-    : false;
-  const refreshProblem = selected
-    ? activityRefreshProblemsByTurn[selected.turnId]
-    : undefined;
+  const loading = selectedLoadState?.status === "loading";
+  const refreshProblem =
+    selectedLoadState?.status === "error" ? selectedLoadState.problem : undefined;
   const showRefreshProblemOnly =
     Boolean(refreshProblem) && detailGroups.length === 0;
+  const showActivityLoading =
+    Boolean(selected) &&
+    !showRefreshProblemOnly &&
+    !selectedSnapshot &&
+    (selectedLoadState == null ||
+      selectedLoadState.status === "unloaded" ||
+      selectedLoadState.status === "loading");
   const selectedThinkingStatus =
     selected?.shell?.activity?.status === "needs_input"
       ? "needs_input"
@@ -10705,11 +10716,12 @@ function RunTurnActivityScreen({
   ]);
   const renderedDetailGroups = useMemo(() => {
     if (!detailActivityCollapsed) return detailGroupsWithThinking;
-    return detailGroupsWithThinking.filter((group) =>
-      flatEntryGroupEntries(group).some((entry) =>
+    return detailGroupsWithThinking.filter((group) => {
+      if (group.kind === "thinking") return true;
+      return flatEntryGroupEntries(group).some((entry) =>
         isAlwaysVisibleTurnDetailEntry(entry, finalDetailEntryIds),
-      ),
-    );
+      );
+    });
   }, [
     detailActivityCollapsed,
     detailGroupsWithThinking,
@@ -10778,7 +10790,7 @@ function RunTurnActivityScreen({
     if (!scrollRequest || !selected) return;
     if (scrollRequest.turnId !== selected.turnId) return;
     if (consumedScrollRequestRef.current === scrollRequest.signal) return;
-    if (!selected.loaded) return;
+    if (!selectedSnapshot) return;
     if (loading && detailGroups.length === 0) return;
     const body = bodyRef.current;
     if (!body) return;
@@ -10795,6 +10807,7 @@ function RunTurnActivityScreen({
     onScrollRequestConsumed,
     scrollRequest,
     selected,
+    selectedSnapshot,
   ]);
   const renderGroup = (group: FlatEntryGroup, groupIndex: number) => {
     if (group.kind === "tools") {
@@ -11146,62 +11159,73 @@ function RunTurnActivityScreen({
               <span>{selectedEventProgress.totalLabel}</span>
             )}
           </div>
-          {selectedTurnContext && selected && (
+          {showPromptContextShell && selected && (
             <div
               className="run-turn-view-context"
               aria-label="Turn prompt"
               data-collapsed={selectedTurnContextCollapsed ? "true" : "false"}
+              data-context-loaded={selectedTurnContext ? "true" : "false"}
             >
               <div className="run-turn-view-context-head">
                 <span className="run-turn-view-context-label">Prompt</span>
-                {!showContextToggleInActivityDivider && (
-                  <button
-                    type="button"
-                    className="run-turn-view-context-toggle"
-                    title={
-                      selectedTurnContextCollapsed
+                <button
+                  type="button"
+                  className="run-turn-view-context-toggle"
+                  disabled={!canTogglePromptContext}
+                  title={
+                    canTogglePromptContext
+                      ? selectedTurnContextCollapsed
                         ? "Expand user message"
                         : "Collapse user message"
-                    }
-                    aria-label={
-                      selectedTurnContextCollapsed
+                      : "No user message to collapse"
+                  }
+                  aria-label={
+                    canTogglePromptContext
+                      ? selectedTurnContextCollapsed
                         ? "Expand user message"
                         : "Collapse user message"
-                    }
-                    aria-expanded={!selectedTurnContextCollapsed}
-                    onClick={() => {
-                      setCollapsedContextTurnIds((prev) => ({
-                        ...prev,
-                        [selected.turnId]: !selectedTurnContextCollapsed,
-                      }));
-                    }}
-                  >
-                    {selectedTurnContextCollapsed ? (
-                      <ChevronDownIcon size={14} aria-hidden="true" />
-                    ) : (
-                      <ChevronUpIcon size={14} aria-hidden="true" />
-                    )}
-                  </button>
-                )}
+                      : "No user message to collapse"
+                  }
+                  aria-expanded={!selectedTurnContextCollapsed}
+                  onClick={() => {
+                    if (!canTogglePromptContext) return;
+                    setCollapsedContextTurnIds((prev) => ({
+                      ...prev,
+                      [selected.turnId]: !selectedTurnContextCollapsed,
+                    }));
+                  }}
+                >
+                  {selectedTurnContextCollapsed ? (
+                    <ChevronDownIcon size={14} aria-hidden="true" />
+                  ) : (
+                    <ChevronUpIcon size={14} aria-hidden="true" />
+                  )}
+                </button>
               </div>
               {/* Always render the prompt context. When collapsed we keep a
                   minimal one-line entry (avatar at full size + ellipsis-
                   truncated text) instead of hiding the body, so the prompt
                   stays recognizable in the Turns view. */}
-              <RunMessageBubble
-                entry={selectedTurnContext}
-                avatar={avatar}
-                systemAvatar={systemAvatar}
-                sessionId={sessionId}
-                highlighted={false}
-                showTimestamps={showTimestamps}
-                showDuration={showDuration}
-                canonicalMessage={false}
-                ownedByTurnActivity
-                compact={selectedTurnContextCollapsed}
-                transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
-                onOpenTranscriptMessage={onOpenTranscriptMessage}
-              />
+              {selectedTurnContext ? (
+                <RunMessageBubble
+                  entry={selectedTurnContext}
+                  avatar={avatar}
+                  systemAvatar={systemAvatar}
+                  sessionId={sessionId}
+                  highlighted={false}
+                  showTimestamps={showTimestamps}
+                  showDuration={showDuration}
+                  canonicalMessage={false}
+                  ownedByTurnActivity
+                  compact={selectedTurnContextCollapsed}
+                  transcriptHref={transcriptHrefForEntry?.(selectedTurnContext)}
+                  onOpenTranscriptMessage={onOpenTranscriptMessage}
+                />
+              ) : (
+                <div className="run-turn-view-context-unavailable" role="status">
+                  Prompt context unavailable
+                </div>
+              )}
             </div>
           )}
           {selectedPageInfo?.kind === "question" && (
@@ -11225,62 +11249,68 @@ function RunTurnActivityScreen({
               </span>
             </div>
           )}
-          {selected && showDetailActivityDivider && (
+          {selected && showTurnSectionDivider && (
             <div className="run-turn-activity-divider run-turn-view-activity-divider">
               <div
                 className="run-turn-activity-divider-controls"
                 role="group"
                 aria-label="Turn section collapse controls"
               >
-                {showContextToggleInActivityDivider && (
-                  <button
-                    type="button"
-                    className="run-turn-activity-divider-toggle"
-                    data-direction="up"
-                    onClick={() => {
-                      setCollapsedContextTurnIds((prev) => ({
-                        ...prev,
-                        [selected.turnId]: !selectedTurnContextCollapsed,
-                      }));
-                    }}
-                    aria-expanded={!selectedTurnContextCollapsed}
-                    aria-label={
-                      selectedTurnContextCollapsed
+                <button
+                  type="button"
+                  className="run-turn-activity-divider-toggle"
+                  data-direction="up"
+                  disabled={!canTogglePromptContext}
+                  onClick={() => {
+                    if (!canTogglePromptContext) return;
+                    setCollapsedContextTurnIds((prev) => ({
+                      ...prev,
+                      [selected.turnId]: !selectedTurnContextCollapsed,
+                    }));
+                  }}
+                  aria-expanded={!selectedTurnContextCollapsed}
+                  aria-label={
+                    canTogglePromptContext
+                      ? selectedTurnContextCollapsed
                         ? "Expand user message"
                         : "Collapse user message"
-                    }
-                    title={
-                      selectedTurnContextCollapsed
+                      : "No user message to collapse"
+                  }
+                  title={
+                    canTogglePromptContext
+                      ? selectedTurnContextCollapsed
                         ? "Expand user message"
                         : "Collapse user message"
-                    }
-                  >
-                    {selectedTurnContextCollapsed ? (
-                      <PlusIcon
-                        size={11}
-                        strokeWidth={2.4}
-                        aria-hidden="true"
-                      />
-                    ) : (
-                      <MinusIcon
-                        size={11}
-                        strokeWidth={2.4}
-                        aria-hidden="true"
-                      />
-                    )}
-                    <ChevronUpIcon
-                      className="run-turn-activity-divider-toggle-chevron"
-                      size={13}
-                      strokeWidth={2.3}
+                      : "No user message to collapse"
+                  }
+                >
+                  {canTogglePromptContext && selectedTurnContextCollapsed ? (
+                    <PlusIcon
+                      size={11}
+                      strokeWidth={2.4}
                       aria-hidden="true"
                     />
-                  </button>
-                )}
+                  ) : canTogglePromptContext ? (
+                    <MinusIcon
+                      size={11}
+                      strokeWidth={2.4}
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                  <ChevronUpIcon
+                    className="run-turn-activity-divider-toggle-chevron"
+                    size={13}
+                    strokeWidth={2.3}
+                    aria-hidden="true"
+                  />
+                </button>
                 <button
                   type="button"
                   className="run-turn-activity-divider-toggle"
                   data-direction="down"
+                  disabled={!canToggleDetailActivity}
                   onClick={() => {
+                    if (!canToggleDetailActivity) return;
                     setCollapsedActivityTurnIds((prev) => ({
                       ...prev,
                       [selected.turnId]: !detailActivityCollapsed,
@@ -11288,29 +11318,33 @@ function RunTurnActivityScreen({
                   }}
                   aria-expanded={!detailActivityCollapsed}
                   aria-label={
-                    detailActivityCollapsed
-                      ? "Expand assistance turn"
-                      : "Collapse assistance turn"
+                    canToggleDetailActivity
+                      ? detailActivityCollapsed
+                        ? "Expand assistance turn"
+                        : "Collapse assistance turn"
+                      : "No assistance turn to collapse"
                   }
                   title={
-                    detailActivityCollapsed
-                      ? "Expand assistance turn"
-                      : "Collapse assistance turn"
+                    canToggleDetailActivity
+                      ? detailActivityCollapsed
+                        ? "Expand assistance turn"
+                        : "Collapse assistance turn"
+                      : "No assistance turn to collapse"
                   }
                 >
-                  {detailActivityCollapsed ? (
+                  {canToggleDetailActivity && detailActivityCollapsed ? (
                     <PlusIcon
                       size={11}
                       strokeWidth={2.4}
                       aria-hidden="true"
                     />
-                  ) : (
+                  ) : canToggleDetailActivity ? (
                     <MinusIcon
                       size={11}
                       strokeWidth={2.4}
                       aria-hidden="true"
                     />
-                  )}
+                  ) : null}
                   <ChevronDownIcon
                     className="run-turn-activity-divider-toggle-chevron"
                     size={13}
@@ -11346,7 +11380,7 @@ function RunTurnActivityScreen({
                 </button>
               </div>
             ) : null}
-            {loading && detailGroups.length === 0 ? (
+            {showActivityLoading ? (
               <div
                 className="run-shell-loading run-turn-view-loading"
                 role="status"
@@ -13242,12 +13276,19 @@ function ChatPane({
   avatarEditorOpenRequest?: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
-  const [activityEntriesByTurn, setActivityEntriesByTurn] = useState<
-    Record<string, TranscriptEntry[] | undefined>
-  >({});
-  const [turnActivityContextByTurn, setTurnActivityContextByTurn] = useState<
-    Record<string, TranscriptEntry | null | undefined>
-  >({});
+  const [turnActivityLoadsByTurn, setTurnActivityLoadsByTurn] =
+    useState<TurnActivityLoadStateByTurn>({});
+  const turnActivityLoadsByTurnRef = useRef<TurnActivityLoadStateByTurn>({});
+  turnActivityLoadsByTurnRef.current = turnActivityLoadsByTurn;
+  const turnActivityRequestIdRef = useRef(0);
+  const activityEntriesByTurn = useMemo(() => {
+    const next: Record<string, TranscriptEntry[] | undefined> = {};
+    for (const [turnId, state] of Object.entries(turnActivityLoadsByTurn)) {
+      const snapshot = turnActivityLoadVisibleSnapshot(state);
+      if (snapshot) next[turnId] = snapshot.entries;
+    }
+    return next;
+  }, [turnActivityLoadsByTurn]);
   const activityEntriesByTurnRef = useRef<
     Record<string, TranscriptEntry[] | undefined>
   >({});
@@ -13256,9 +13297,21 @@ function ChatPane({
   // reader has selected (default: undefined → the endpoint returns the last
   // page). selectedTurnPageRef is the source of truth the fetch reads so a
   // live refresh re-fetches the page being viewed, not always the tail.
-  const [turnActivityPageInfo, setTurnActivityPageInfo] = useState<
-    Record<string, TurnActivityPageInfo | undefined>
-  >({});
+  const turnActivityPageInfo = useMemo(() => {
+    const next: Record<string, TurnActivityPageInfo | undefined> = {};
+    for (const [turnId, state] of Object.entries(turnActivityLoadsByTurn)) {
+      const snapshot = turnActivityLoadVisibleSnapshot(state);
+      if (snapshot) next[turnId] = snapshot.pageInfo;
+    }
+    return next;
+  }, [turnActivityLoadsByTurn]);
+  const loadingActivityTurns = useMemo(() => {
+    const next: Record<string, boolean | undefined> = {};
+    for (const [turnId, state] of Object.entries(turnActivityLoadsByTurn)) {
+      if (state?.status === "loading") next[turnId] = true;
+    }
+    return next;
+  }, [turnActivityLoadsByTurn]);
   const selectedTurnPageRef = useRef<Record<string, number>>({});
   const activityLiveRefreshTimersRef = useRef<Map<string, number>>(new Map());
   const activityLiveRefreshInFlightRef = useRef<Set<string>>(new Set());
@@ -13269,11 +13322,6 @@ function ChatPane({
     new Map(),
   );
   const activityLiveRefreshAttemptsRef = useRef<Map<string, number>>(new Map());
-  const [loadingActivityTurns, setLoadingActivityTurns] = useState<
-    Record<string, boolean | undefined>
-  >({});
-  const [activityRefreshProblemsByTurn, setActivityRefreshProblemsByTurn] =
-    useState<Record<string, ActivityRefreshProblem | undefined>>({});
   const [renderedActiveTurnId, setRenderedActiveTurnId] = useState<
     string | null
   >(null);
@@ -14021,32 +14069,14 @@ function ChatPane({
     setTurnViewScrollRequest((prev) => (prev?.signal === signal ? null : prev));
   }, []);
   function cachedTurnActivityIsLoaded(turnId: string): boolean {
-    return Object.prototype.hasOwnProperty.call(
-      activityEntriesByTurnRef.current,
-      turnId,
+    return Boolean(
+      turnActivityLoadVisibleSnapshot(turnActivityLoadsByTurnRef.current[turnId]),
     );
   }
   function activityRefreshRetryDelayMs(attempts: number): number {
     const exponent = Math.max(0, attempts - 1);
     const multiplier = Math.min(4, 2 ** exponent);
     return TURN_ACTIVITY_LIVE_REFRESH_RETRY_DELAY_MS * multiplier;
-  }
-  function clearActivityRefreshProblem(turnId: string): void {
-    setActivityRefreshProblemsByTurn((prev) => {
-      if (!prev[turnId]) return prev;
-      const next = { ...prev };
-      delete next[turnId];
-      return next;
-    });
-  }
-  function markActivityRefreshProblem(
-    turnId: string,
-    problem: ActivityRefreshProblem,
-  ): void {
-    setActivityRefreshProblemsByTurn((prev) => ({
-      ...prev,
-      [turnId]: problem,
-    }));
   }
   function clearActivityLiveRefreshState(): void {
     for (const timer of activityLiveRefreshTimersRef.current.values()) {
@@ -14059,10 +14089,14 @@ function ChatPane({
     activityLiveRefreshAttemptsRef.current.clear();
   }
   const fetchTurnActivityEntries = useCallback(
-    async (trimmedTurnId: string): Promise<TurnActivityLoadResult> => {
-      const selectedPage = selectedTurnPageRef.current[trimmedTurnId];
+    async (
+      trimmedTurnId: string,
+      selectedPage: number | undefined,
+      signal: AbortSignal,
+    ): Promise<TurnActivityLoadResult> => {
       const res = await fetchPaneResource(
         turnActivityRequestPathForPane(trimmedTurnId, selectedPage),
+        { signal },
       );
       if (!res.ok) throw new Error(`activity request failed: ${res.status}`);
       const body = (await res.json()) as {
@@ -14078,11 +14112,12 @@ function ChatPane({
         total_event_count?: number;
         turn_context?: unknown;
       };
+      let pageInfo: TurnActivityPageInfo | undefined;
       if (
         typeof body.page === "number" &&
         typeof body.page_count === "number"
       ) {
-        const info: TurnActivityPageInfo = {
+        pageInfo = {
           page: body.page,
           pageCount: body.page_count,
           totalEventCount:
@@ -14106,25 +14141,6 @@ function ChatPane({
             typeof body.answered === "boolean" ? body.answered : undefined,
           pages: normalizeTurnActivityPageDirectory(body.pages),
         };
-        setTurnActivityPageInfo((prev) => {
-          const existing = prev[trimmedTurnId];
-          if (
-            existing &&
-            existing.page === info.page &&
-            existing.pageCount === info.pageCount &&
-            existing.totalEventCount === info.totalEventCount &&
-            existing.kind === info.kind &&
-            existing.questionCount === info.questionCount &&
-            existing.questionIndex === info.questionIndex &&
-            existing.questionSet === info.questionSet &&
-            existing.answered === info.answered &&
-            JSON.stringify(existing.pages ?? []) ===
-              JSON.stringify(info.pages ?? [])
-          ) {
-            return prev;
-          }
-          return { ...prev, [trimmedTurnId]: info };
-        });
       }
       const context = normalizeProjectedTranscriptEntry(body.turn_context);
       return {
@@ -14132,9 +14148,140 @@ function ChatPane({
           Array.isArray(body.entries) ? body.entries : [],
         ),
         context,
+        pageInfo,
       };
     },
     [fetchPaneResource, turnActivityRequestPathForPane],
+  );
+  const startTurnActivityLoad = useCallback(
+    (
+      turnId: string,
+      options: {
+        force?: boolean;
+        page?: number;
+        reason?: TurnActivityLoadReason;
+        attempts?: number;
+      } = {},
+    ): Promise<boolean> => {
+      const trimmedTurnId = turnId.trim();
+      if (!trimmedTurnId) return Promise.resolve(false);
+      const selectedPage =
+        options.page ?? selectedTurnPageRef.current[trimmedTurnId];
+      const force = options.force === true;
+      const current = turnActivityLoadsByTurnRef.current[trimmedTurnId];
+      if (!turnActivityShouldStartLoad(current, selectedPage, force)) {
+        return Promise.resolve(false);
+      }
+      const requestId = (turnActivityRequestIdRef.current += 1);
+      const reason: TurnActivityLoadReason = options.reason ?? "initial";
+      setTurnActivityLoadsByTurn((prev) => {
+        const next = {
+          ...prev,
+          [trimmedTurnId]: beginTurnActivityLoad(
+            prev[trimmedTurnId],
+            requestId,
+            selectedPage,
+            reason,
+          ),
+        };
+        turnActivityLoadsByTurnRef.current = next;
+        return next;
+      });
+      logSessionEventStreamEvent("turn_activity_load_started", {
+        sessionMode: session.mode,
+      });
+
+      const controller = new AbortController();
+      const timeout = window.setTimeout(() => {
+        controller.abort();
+      }, TURN_ACTIVITY_LOAD_TIMEOUT_MS);
+      return fetchTurnActivityEntries(
+        trimmedTurnId,
+        selectedPage,
+        controller.signal,
+      )
+        .then((loaded) => {
+          if (!loaded.pageInfo) {
+            throw new Error("activity response missing page metadata");
+          }
+          const snapshot: TurnActivitySnapshot = {
+            entries: loaded.entries,
+            context: loaded.context,
+            pageInfo: loaded.pageInfo,
+            requestedPage: selectedPage,
+            loadedAt: Date.now(),
+          };
+          let committed = false;
+          setTurnActivityLoadsByTurn((prev) => {
+            const currentState = prev[trimmedTurnId];
+            const nextState = completeTurnActivityLoad(
+              currentState,
+              requestId,
+              snapshot,
+            );
+            if (nextState === currentState) {
+              logSessionEventStreamEvent("turn_activity_load_stale", {
+                sessionMode: session.mode,
+              });
+              return prev;
+            }
+            committed = true;
+            const next = { ...prev, [trimmedTurnId]: nextState };
+            turnActivityLoadsByTurnRef.current = next;
+            return next;
+          });
+          if (committed) {
+            const hadRetryAttempts =
+              activityLiveRefreshAttemptsRef.current.has(trimmedTurnId);
+            activityLiveRefreshAttemptsRef.current.delete(trimmedTurnId);
+            if (reason === "live-refresh" && hadRetryAttempts) {
+              logSessionEventStreamEvent("turn_activity_refresh_recovered", {
+                sessionMode: session.mode,
+              });
+            }
+            logSessionEventStreamEvent("turn_activity_load_succeeded", {
+              sessionMode: session.mode,
+            });
+          }
+          return committed;
+        })
+        .catch((error) => {
+          const isTimeout =
+            error instanceof DOMException && error.name === "AbortError";
+          const problem: ActivityRefreshProblem = {
+            kind: reason === "live-refresh" ? "live-refresh" : isTimeout ? "timeout" : "load",
+            attempts: options.attempts ?? 1,
+          };
+          setTurnActivityLoadsByTurn((prev) => {
+            const currentState = prev[trimmedTurnId];
+            const nextState = failTurnActivityLoad(
+              currentState,
+              requestId,
+              problem,
+            );
+            if (nextState === currentState) {
+              logSessionEventStreamEvent("turn_activity_load_stale", {
+                sessionMode: session.mode,
+              });
+              return prev;
+            }
+            const next = { ...prev, [trimmedTurnId]: nextState };
+            turnActivityLoadsByTurnRef.current = next;
+            return next;
+          });
+          logSessionEventStreamEvent(
+            isTimeout
+              ? "turn_activity_load_timed_out"
+              : "turn_activity_load_failed",
+            { sessionMode: session.mode },
+          );
+          return false;
+        })
+        .finally(() => {
+          window.clearTimeout(timeout);
+        });
+    },
+    [fetchTurnActivityEntries, session.mode],
   );
   const selectTurnActivityPage = useCallback(
     (turnId: string, page: number) => {
@@ -14144,23 +14291,13 @@ function ChatPane({
         ...selectedTurnPageRef.current,
         [trimmedTurnId]: page,
       };
-      void fetchTurnActivityEntries(trimmedTurnId)
-        .then((loaded) => {
-          setActivityEntriesByTurn((prev) => {
-            const next = { ...prev, [trimmedTurnId]: loaded.entries };
-            activityEntriesByTurnRef.current = next;
-            return next;
-          });
-          setTurnActivityContextByTurn((prev) => ({
-            ...prev,
-            [trimmedTurnId]: loaded.context,
-          }));
-        })
-        .catch(() => {
-          /* page switch failures fall back to the loaded page; live refresh retries */
-        });
+      startTurnActivityLoad(trimmedTurnId, {
+        force: true,
+        page,
+        reason: "page",
+      });
     },
-    [fetchTurnActivityEntries],
+    [startTurnActivityLoad],
   );
   function silentlyRefreshCachedTurnActivity(turnId: string): void {
     if (activityLiveRefreshInFlightRef.current.has(turnId)) return;
@@ -14169,31 +14306,24 @@ function ChatPane({
       activityLiveRefreshAttemptsRef.current.delete(turnId);
       return;
     }
+    if (turnActivityLoadsByTurnRef.current[turnId]?.status === "loading") {
+      return;
+    }
     activityLiveRefreshPendingCursorRef.current.delete(turnId);
     activityLiveRefreshInFlightRef.current.add(turnId);
-    void fetchTurnActivityEntries(turnId)
-      .then((loaded) => {
-        const hadRetryAttempts =
-          activityLiveRefreshAttemptsRef.current.has(turnId);
-        activityLiveRefreshAttemptsRef.current.delete(turnId);
-        clearActivityRefreshProblem(turnId);
-        if (hadRetryAttempts) {
-          logSessionEventStreamEvent("turn_activity_refresh_recovered", {
-            sessionMode: session.mode,
-          });
+    const attempts =
+      (activityLiveRefreshAttemptsRef.current.get(turnId) ?? 0) + 1;
+    void startTurnActivityLoad(turnId, {
+      force: true,
+      reason: "live-refresh",
+      attempts,
+    })
+      .then((committed) => {
+        if (committed) {
+          activityLiveRefreshAttemptsRef.current.delete(turnId);
+          return;
         }
-        setActivityEntriesByTurn((prev) => {
-          if (!Object.prototype.hasOwnProperty.call(prev, turnId)) return prev;
-          const next = { ...prev, [turnId]: loaded.entries };
-          activityEntriesByTurnRef.current = next;
-          return next;
-        });
-        setTurnActivityContextByTurn((prev) => ({
-          ...prev,
-          [turnId]: loaded.context,
-        }));
-      })
-      .catch(() => {
+        if (!cachedTurnActivityIsLoaded(turnId)) return;
         const attempts =
           (activityLiveRefreshAttemptsRef.current.get(turnId) ?? 0) + 1;
         activityLiveRefreshAttemptsRef.current.set(turnId, attempts);
@@ -14213,10 +14343,6 @@ function ChatPane({
           activityLiveRefreshTimersRef.current.set(turnId, timer);
           return;
         }
-        markActivityRefreshProblem(turnId, {
-          kind: "live-refresh",
-          attempts,
-        });
         logSessionEventStreamEvent("turn_activity_refresh_gave_up", {
           sessionMode: session.mode,
         });
@@ -14309,13 +14435,10 @@ function ChatPane({
     setEntries([]);
     setTokensUsed(0);
     clearActivityLiveRefreshState();
+    turnActivityLoadsByTurnRef.current = {};
+    setTurnActivityLoadsByTurn({});
     activityEntriesByTurnRef.current = {};
-    setActivityEntriesByTurn({});
-    setTurnActivityContextByTurn({});
     selectedTurnPageRef.current = {};
-    setTurnActivityPageInfo({});
-    setLoadingActivityTurns({});
-    setActivityRefreshProblemsByTurn({});
     setSdkConnectionState("idle");
     dispatchTimelineBootstrap({
       type: "reset",
@@ -17207,41 +17330,12 @@ function ChatPane({
     (turnId: string, options?: { force?: boolean }) => {
       const trimmedTurnId = turnId.trim();
       if (!trimmedTurnId) return;
-      // `force` re-pulls even when activity is already cached. The R refresh uses
-      // it so a turn whose live activity silently lagged is reconciled in place,
-      // mirroring the main transcript's durable tail force-pull. Without force we
-      // keep the cache short-circuit so opening a turn never re-fetches.
-      if (!options?.force && activityEntriesByTurn[trimmedTurnId]) return;
-      if (loadingActivityTurns[trimmedTurnId]) return;
-      setLoadingActivityTurns((prev) => ({ ...prev, [trimmedTurnId]: true }));
-      clearActivityRefreshProblem(trimmedTurnId);
-      void fetchTurnActivityEntries(trimmedTurnId)
-        .then((loaded) => {
-          activityLiveRefreshAttemptsRef.current.delete(trimmedTurnId);
-          setActivityEntriesByTurn((prev) => {
-            const next = { ...prev, [trimmedTurnId]: loaded.entries };
-            activityEntriesByTurnRef.current = next;
-            return next;
-          });
-          setTurnActivityContextByTurn((prev) => ({
-            ...prev,
-            [trimmedTurnId]: loaded.context,
-          }));
-        })
-        .catch(() => {
-          markActivityRefreshProblem(trimmedTurnId, {
-            kind: "load",
-            attempts: 1,
-          });
-        })
-        .finally(() => {
-          setLoadingActivityTurns((prev) => ({
-            ...prev,
-            [trimmedTurnId]: false,
-          }));
-        });
+      void startTurnActivityLoad(trimmedTurnId, {
+        force: options?.force,
+        reason: options?.force ? "force" : "initial",
+      });
     },
-    [activityEntriesByTurn, fetchTurnActivityEntries, loadingActivityTurns],
+    [startTurnActivityLoad],
   );
   // Cold-load deep links carry a number that isn't in the loaded window. Resolve
   // it server-side from durable session_turns (not from render state, per the
@@ -18594,10 +18688,12 @@ function ChatPane({
                   showTimestamps={runPrefs.showTimestamps}
                   showDuration={runPrefs.showDuration}
                   userKey={user?.sub ?? user?.email ?? "anon"}
-                  loadingActivityTurns={loadingActivityTurns}
-                  activityRefreshProblemsByTurn={activityRefreshProblemsByTurn}
+                  turnActivityLoadsByTurn={turnActivityLoadsByTurn}
                   onRetryActivityRefresh={(turnId) => {
-                    ensureTurnActivityLoaded(turnId, { force: true });
+                    void startTurnActivityLoad(turnId, {
+                      force: true,
+                      reason: "retry",
+                    });
                   }}
                   onOpenBackgroundTask={
                     publicView ? undefined : openBackgroundPage
@@ -18606,8 +18702,6 @@ function ChatPane({
                   onOpenTranscriptMessage={openTranscriptMessage}
                   scrollRequest={turnViewScrollRequest}
                   onScrollRequestConsumed={clearTurnViewScrollRequest}
-                  turnActivityPageInfo={turnActivityPageInfo}
-                  turnActivityContextByTurn={turnActivityContextByTurn}
                   onActivitySelectPage={selectTurnActivityPage}
                 />
               )

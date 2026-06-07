@@ -46,4 +46,8 @@ else
   echo "antigravity-runner-launch: no oauth-gateway CA at '${CA}'; agy will not trust the proxy leaf" >&2
 fi
 
+if [ -f /opt/tank/session-config/install-tank-skills.sh ]; then
+  sh /opt/tank/session-config/install-tank-skills.sh || true
+fi
+
 exec node /opt/antigravity-runner/dist/index.js

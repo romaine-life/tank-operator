@@ -97,9 +97,9 @@ func (s *appServer) handleInternalRegisterScheduledWakeup(w http.ResponseWriter,
 		return
 	}
 	provider, ok := sdkProviderForMode(info.Mode)
-	if !ok || provider != "claude" {
+	if !ok || !supportsScheduledWakeups(provider) {
 		recordScheduledWakeupRegister("unknown", "bad_request")
-		writeError(w, http.StatusBadRequest, "scheduled wakeups are only supported for Claude SDK sessions")
+		writeError(w, http.StatusBadRequest, "scheduled wakeups are only supported for Claude and Antigravity SDK sessions")
 		return
 	}
 	now := time.Now().UTC()
@@ -126,6 +126,15 @@ func (s *appServer) handleInternalRegisterScheduledWakeup(w http.ResponseWriter,
 		"client_nonce": row.ClientNonce,
 		"due_at":       row.DueAt.Format(time.RFC3339Nano),
 	})
+}
+
+func supportsScheduledWakeups(provider string) bool {
+	switch strings.TrimSpace(provider) {
+	case "claude", "antigravity":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *appServer) handleListScheduledWakeups(w http.ResponseWriter, r *http.Request) {
@@ -287,6 +296,7 @@ func (s *appServer) fireScheduledWakeup(ctx context.Context, row pgstore.Schedul
 		ClientNonce:  row.ClientNonce,
 		RequireNonce: true,
 		Prompt:       row.Prompt,
+		DisplayText:  scheduledWakeupAnnouncementText(),
 		Source:       "schedule-wakeup",
 		CreatedAt:    now,
 		AuthorKind:   string(conversation.AuthorKindSystem),
@@ -302,6 +312,10 @@ func (s *appServer) fireScheduledWakeup(ctx context.Context, row pgstore.Schedul
 	}
 	recordScheduledWakeupFire(provider, "ok")
 	return nil
+}
+
+func scheduledWakeupAnnouncementText() string {
+	return "Timer went off!"
 }
 
 func (s *appServer) failScheduledWakeup(ctx context.Context, row pgstore.ScheduledWakeup, provider, reason string) error {

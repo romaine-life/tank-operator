@@ -9,16 +9,17 @@ bit (not prior status, which flickers through `scheduled -> submitted -> error`)
 and a direct `scheduled -> ready` is a cancel/clear and does NOT ring — the
 genuine end-of-chain hand-off arrives as `streaming -> ready`.
 Extends [tank-conversation-protocol.md](tank-conversation-protocol.md) (state
-machine, ScheduleWakeup, AskUserQuestion pause/resume) and the
+machine, provider self-scheduled wakeups, AskUserQuestion pause/resume) and the
 [transcript](features/transcript/contract.md) and
 [session-lifecycle](features/session-lifecycle/contract.md) contracts. Names are
 working names (`scheduled`).
 
 ## Problem
 
-When the agent schedules its own continuation (`ScheduleWakeup`, and the same
-shape for `run_in_background` task wakes) it is **not done** — it has parked
-itself and will resume on a clock. Today the runner emits `turn.completed` for
+When the agent schedules its own continuation (Claude `ScheduleWakeup`,
+Antigravity `schedule`, and the same shape for `run_in_background` task wakes)
+it is **not done** — it has parked itself and will resume on a clock. Today the
+runner emits `turn.completed` for
 that turn, so:
 
 - the activity fold (`sessionactivity.DeriveActivitySummaryWithStats`) lands
@@ -187,9 +188,9 @@ what the SDK reported. The change lives in the durable Tank projection:
   indicator nuance for the implementer.
 - **Status name**: `scheduled` is a working name (`sleeping` / `parked`
   candidates).
-- **Pod cost/lifecycle of long sleeps**: predates this feature (ScheduleWakeup
-  already keeps the pod alive across sleeps); handled here only by the legibility
-  obligation above.
+- **Pod cost/lifecycle of long sleeps**: predates this feature (provider
+  self-scheduled wakeups already keep the pod alive across sleeps); handled here
+  only by the legibility obligation above.
 
 ## Definition of done (per quality-timeframes.md)
 
@@ -204,5 +205,5 @@ what the SDK reported. The change lives in the durable Tank projection:
 - Counters: `scheduled` entries/exits by resolution (fired / failed / cancelled /
   superseded-by-prompt); the parked-session aggregate gauge.
 - Docs: this note graduates into the conversation protocol's state machine and
-  the transcript/lifecycle contracts when built; ScheduleWakeup's "rings on
-  completion" behavior is removed, not left as a second path.
+  the transcript/lifecycle contracts when built; provider self-scheduled wakeups
+  do not "ring on completion" through a second path.

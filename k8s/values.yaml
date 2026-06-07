@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-85221316188d0e52ab1621adc0d597250a9a6e68ad4c93b6121847678f5d0bf7"
+  tag: "app-c5eb9595df6a6a71f604874e0b334bff8473e584072609bdb691e799d0908d28"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -59,7 +59,7 @@ session:
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-5948e4dad9a16a4caa6f4dbe171c440ecf9c44f72af932bc51f0506f2095b1bb
+  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-5308fbae1a58c29e8a46c0f4cff9e7577695f3ad0e6c48081a5e51a0de6064e8
   # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
   # orchestrator namespace where the antigravity-api-proxy mounts it; agy
   # session pods never mount it (they get a placeholder + proxy injection).

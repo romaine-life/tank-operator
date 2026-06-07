@@ -76,6 +76,41 @@ fail_all_repos() {
   exit 1
 }
 
+install_repo_agent_reminder() {
+  local slug="$1"
+  local target="$2"
+  local strict="$3"
+  local hook_src="${AGENT_POST_COMMIT_HOOK:-/opt/tank/session-config/agent-post-commit-hook.sh}"
+  local hook_dst
+
+  [ -f "$hook_src" ] || return 0
+
+  echo "repo-cloner: installing agent post-commit reminder for $slug"
+  hook_dst="$(git -C "$target" rev-parse --absolute-git-dir)/hooks/post-commit"
+  if [ -e "$hook_dst" ] && ! cmp -s "$hook_src" "$hook_dst"; then
+    if [ "$strict" = "strict" ]; then
+      echo "repo-cloner: refusing to replace existing post-commit hook for $slug: $hook_dst" >&2
+      return 1
+    fi
+    echo "repo-cloner: warning: leaving existing post-commit hook for $slug: $hook_dst" >&2
+    return 0
+  fi
+
+  if mkdir -p "$(dirname "$hook_dst")" &&
+    cp "$hook_src" "$hook_dst" &&
+    chmod 755 "$hook_dst"; then
+    return 0
+  fi
+
+  if [ "$strict" = "strict" ]; then
+    echo "repo-cloner: failed to install agent post-commit reminder for $slug" >&2
+    return 1
+  fi
+
+  echo "repo-cloner: warning: failed to install agent post-commit reminder for existing repo $slug" >&2
+  return 0
+}
+
 echo "repo-cloner: exchanging pod identity"
 AUTH_TOKEN="$(
   curl -fsS -X POST "$AUTH_EXCHANGE_URL" \
@@ -146,6 +181,7 @@ for slug in "${REPOS[@]}"; do
     origin="$(git -C "$target" config --get remote.origin.url || true)"
     if [[ "$origin" == *"github.com/${slug}.git" || "$origin" == *"github.com/${slug}" ]]; then
       echo "repo-cloner: $slug already exists at $target"
+      install_repo_agent_reminder "$slug" "$target" "best-effort"
       set_repo_state "$slug" "cloned" "$target"
       continue
     fi
@@ -174,6 +210,12 @@ for slug in "${REPOS[@]}"; do
     git clone "${clone_args[@]}" "https://github.com/${slug}.git" "$tmp_target"; then
     mv "$tmp_target" "$target"
     git -C "$target" config --local credential.helper ""
+    if ! install_repo_agent_reminder "$slug" "$target" "strict"; then
+      msg="agent post-commit reminder install failed"
+      set_repo_state "$slug" "failed" "$target" "$msg"
+      failures=1
+      continue
+    fi
     set_repo_state "$slug" "cloned" "$target"
   else
     rc=$?

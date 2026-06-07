@@ -39,6 +39,13 @@ export const providerErrorTotal = new Counter({
   registers: [registry],
 });
 
+export const agyDiagnosticTotal = new Counter({
+  name: "tank_antigravity_runner_agy_diagnostic_total",
+  help: "Non-terminal agy diagnostics observed in process output, by bounded kind.",
+  labelNames: ["kind"] as const,
+  registers: [registry],
+});
+
 export const natsPublishFailureTotal = new Counter({
   name: "tank_antigravity_runner_nats_publish_failure_total",
   help: "Tank event publish failures to the session bus.",
@@ -49,6 +56,13 @@ export const eventTruncatedTotal = new Counter({
   name: "tank_antigravity_runner_event_truncated_total",
   help: "Tank events truncated before publish to fit max_payload.",
   labelNames: ["event_type", "severity"] as const,
+  registers: [registry],
+});
+
+export const scheduledWakeupRegisterTotal = new Counter({
+  name: "tank_antigravity_runner_scheduled_wakeup_register_total",
+  help: "Antigravity schedule registrations attempted against the orchestrator durable wakeup API.",
+  labelNames: ["result"] as const,
   registers: [registry],
 });
 

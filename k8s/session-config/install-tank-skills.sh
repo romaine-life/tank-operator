@@ -1,17 +1,17 @@
 skill_targets_for_scope() {
   case "$1" in
-    common) printf '%s\n' "claude codex" ;;
+    common) printf '%s\n' "claude codex antigravity" ;;
     claude) printf '%s\n' "claude" ;;
     codex) printf '%s\n' "codex" ;;
+    antigravity) printf '%s\n' "antigravity" ;;
     *) return 1 ;;
   esac
 }
 
 install_tank_skills() {
-  local config_dir="${INSTALL_TANK_SKILLS_CONFIG_DIR:-/opt/tank/session-config}"
-  local bundled_file base rest scope encoded_path skill rel targets target root dest_path
+  config_dir="${INSTALL_TANK_SKILLS_CONFIG_DIR:-/opt/tank/session-config}"
   [ -d "$config_dir" ] || return 0
-  mkdir -p "$HOME/.claude/skills" "$HOME/.codex/skills"
+  mkdir -p "$HOME/.claude/skills" "$HOME/.codex/skills" "$HOME/.gemini/skills"
 
   for bundled_file in "$config_dir"/skills__*; do
     [ -e "$bundled_file" ] || continue
@@ -22,12 +22,15 @@ install_tank_skills() {
     skill="${encoded_path%%__*}"
     rel="${encoded_path#"$skill"}"
     rel="${rel#__}"
-    rel="${rel//__/\/}"
+    while [ "$rel" != "${rel%__*}" ]; do
+      rel="${rel%%__*}/${rel#*__}"
+    done
     targets="$(skill_targets_for_scope "$scope")" || continue
     for target in $targets; do
       case "$target" in
         claude) root="$HOME/.claude/skills" ;;
         codex) root="$HOME/.codex/skills" ;;
+        antigravity) root="$HOME/.gemini/skills" ;;
         *) continue ;;
       esac
       dest_path="$root/$skill/$rel"
