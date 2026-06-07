@@ -991,8 +991,42 @@ button:disabled {
   font-size: var(--text-sm);
 }
 
-.avatar-lightbox-caption span:last-child {
+.avatar-lightbox-caption-title {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.avatar-lightbox-caption-actions {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  gap: var(--space-2);
+}
+
+.avatar-lightbox-caption-actions > span {
   color: var(--text-muted);
+}
+
+.avatar-lightbox-edit {
+  display: inline-flex;
+  align-items: center;
+  min-height: 1.8rem;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  color: var(--text-primary);
+  font-family: var(--font-primary);
+  font-size: var(--text-sm);
+  transition:
+    background var(--motion-fast) var(--ease-out-soft),
+    border-color var(--motion-fast) var(--ease-out-soft);
+}
+
+.avatar-lightbox-edit:hover,
+.avatar-lightbox-edit:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
 }
 
 .avatar-lightbox-loading,
@@ -1016,6 +1050,15 @@ button:disabled {
 
   .avatar-lightbox-icon-frame {
     width: min(12rem, 100%);
+  }
+
+  .avatar-lightbox-caption {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .avatar-lightbox-caption-actions {
+    flex-wrap: wrap;
   }
 }
 
