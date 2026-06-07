@@ -1659,6 +1659,74 @@ var schemaMigrations = []migration{
 
 	{ID: "0138", SQL: `ALTER TABLE session_image_overrides
 		ADD COLUMN IF NOT EXISTS antigravity_image text`},
+
+	// Background-task wake continuation turns (turn_bgtask-<task>) are
+	// continuation mechanics, not user-visible turns: the transcript projection
+	// folds them into the originating real turn. Numbering them minted gapped,
+	// separately navigable turn numbers — the session 655 turn 56/57 defect
+	// where a wake-of-a-wake surfaced as its own /turns/{n}. This replaces the
+	// allocator (migration 0089) so it skips wake turns going forward.
+	// Already-numbered wake turns in history are left in place — renumbering
+	// would break existing /turns/{n} deep links — and the turn-number resolver
+	// folds a historical wake-turn number to its originating real turn instead.
+	{ID: "0139", SQL: `CREATE OR REPLACE FUNCTION tank_allocate_session_turn_number(
+		p_tank_session_id text,
+		p_turn_id text,
+		p_order_key text
+	) RETURNS void
+	LANGUAGE plpgsql
+	AS $$
+	DECLARE
+		v_next bigint;
+	BEGIN
+		IF trim(coalesce(p_tank_session_id, '')) = ''
+			OR trim(coalesce(p_turn_id, '')) = '' THEN
+			RETURN;
+		END IF;
+
+		-- Wake continuation turns are not user-visible turns; never number them.
+		IF starts_with(p_turn_id, 'turn_bgtask-') THEN
+			RETURN;
+		END IF;
+
+		PERFORM 1 FROM session_turns
+		WHERE tank_session_id = p_tank_session_id AND turn_id = p_turn_id;
+		IF FOUND THEN
+			UPDATE session_turns
+			SET first_order_key = p_order_key
+			WHERE tank_session_id = p_tank_session_id
+				AND turn_id = p_turn_id
+				AND coalesce(p_order_key, '') <> ''
+				AND (first_order_key = '' OR p_order_key < first_order_key);
+			RETURN;
+		END IF;
+
+		BEGIN
+			INSERT INTO session_turn_counters (tank_session_id, next_turn_number, updated_at)
+			VALUES (p_tank_session_id, 2, now())
+			ON CONFLICT (tank_session_id) DO UPDATE
+			SET next_turn_number = session_turn_counters.next_turn_number + 1,
+				updated_at = now()
+			RETURNING next_turn_number - 1 INTO v_next;
+
+			INSERT INTO session_turns (tank_session_id, turn_id, turn_number, first_order_key)
+			VALUES (p_tank_session_id, p_turn_id, v_next, coalesce(p_order_key, ''))
+			ON CONFLICT (tank_session_id, turn_id) DO NOTHING;
+		EXCEPTION
+			WHEN unique_violation THEN
+				NULL;
+		END;
+	END
+	$$`},
+
+	// Session-level Background screen feed: a partial index over the background
+	// (run_in_background) shell-task lifecycle so the background-task list
+	// endpoint is an indexed scan over only shell-task rows — bounded regardless
+	// of how large the session ledger grows, never a full re-read of the event
+	// ledger on each poll.
+	{ID: "0140", SQL: `CREATE INDEX IF NOT EXISTS session_events_shell_task
+		ON session_events (tank_session_id, order_key)
+		WHERE event_type IN ('shell_task.started', 'shell_task.updated', 'shell_task.exited')`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

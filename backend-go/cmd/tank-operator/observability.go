@@ -165,6 +165,10 @@ var (
 		Name: "tank_turn_number_missing_total",
 		Help: "Turn-activity shells materialized without a durable session_turns number while numbering is active; nonzero means the allocation trigger regressed or an event bypassed it.",
 	}, []string{"phase"})
+	sessionBackgroundTasksListTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_background_tasks_list_total",
+		Help: "Background-task list endpoint responses, labeled by bounded result (ok / store_unavailable / error). Feeds the session-level Background screen from the durable shell_task ledger.",
+	}, []string{"result"})
 	turnActivityEventCount = promauto.NewHistogram(prometheus.HistogramOpts{
 		Name:    "tank_turn_activity_event_count",
 		Help:    "Number of durable events folded into one turn-activity projection. A growing tail past turnPageEventLimit means long (often post-compaction) turns are common and the live-page incremental projection is worth landing.",
@@ -942,7 +946,7 @@ func backgroundTaskWakeRegisterResultLabel(result string) string {
 
 func backgroundTaskWakeFireResultLabel(result string) string {
 	switch result {
-	case "ok", "deferred_needs_input", "session_not_found", "session_not_active", "enqueue_failed", "store_error", "failed":
+	case "ok", "deferred_needs_input", "already_fired", "session_not_found", "session_not_active", "enqueue_failed", "store_error", "failed":
 		return result
 	default:
 		return "other"
@@ -2102,10 +2106,23 @@ func recordTurnNumberResolve(result string) {
 
 func turnNumberResolveResultLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
-	case "ok", "not_found", "invalid":
+	case "ok", "not_found", "invalid", "folded_wake":
 		return strings.TrimSpace(raw)
 	default:
 		return "unknown"
+	}
+}
+
+func recordSessionBackgroundTasksList(result string) {
+	sessionBackgroundTasksListTotal.WithLabelValues(sessionBackgroundTasksListResultLabel(result)).Inc()
+}
+
+func sessionBackgroundTasksListResultLabel(raw string) string {
+	switch strings.TrimSpace(raw) {
+	case "ok", "store_unavailable", "error":
+		return strings.TrimSpace(raw)
+	default:
+		return "other"
 	}
 }
 

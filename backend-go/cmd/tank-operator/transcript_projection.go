@@ -216,11 +216,20 @@ func (s *projectionState) apply(event map[string]any) {
 	case "turn.submitted":
 		turnID := transcriptString(event, "turn_id")
 		if isBackgroundTaskWakeTurnEvent(event) {
+			firstWakeSubmit := !s.backgroundWakeTurns[turnID]
 			s.backgroundWakeTurns[turnID] = true
 			if taskID := transcriptPayloadString(event, "task_id"); taskID != "" {
 				s.backgroundWakeTaskIDs[turnID] = taskID
 			}
-			s.applyBackgroundWakePrompt(event)
+			// A wake turn carries exactly one logical system-user prompt. If the
+			// fire path re-submitted the same continuation (a stale-claim
+			// re-fire publishes a second turn.submitted with the same turn_id),
+			// only the first projects a prompt — later duplicates must not stack
+			// a second identical "A background task you started…" row in the
+			// originating turn's activity.
+			if firstWakeSubmit {
+				s.applyBackgroundWakePrompt(event)
+			}
 		}
 		if _, terminal := s.turnTerminals[turnID]; !terminal {
 			s.runStatus = "submitted"
@@ -1066,21 +1075,47 @@ func backgroundTaskWakeParentTurnsFromTasks(tasks []*projectionBackgroundTask, b
 			wakeTurnParents[wakeTurnID] = task.TurnID
 		}
 	}
+	// directParent resolves a single continuation hop: the turn that started the
+	// background task whose terminal woke wakeTurnID.
+	directParent := func(wakeTurnID string) string {
+		if taskID := backgroundWakeTaskIDs[wakeTurnID]; taskID != "" {
+			if parent := taskParents[taskID]; parent != "" {
+				return parent
+			}
+		}
+		if parent := wakeTurnParents[wakeTurnID]; parent != "" {
+			return parent
+		}
+		return taskParents[backgroundWakeTaskIDFromTurnID(wakeTurnID)]
+	}
 	out := map[string]string{}
 	for wakeTurnID := range backgroundWakeTurns {
-		parent := wakeTurnParents[wakeTurnID]
-		taskID := backgroundWakeTaskIDs[wakeTurnID]
-		if taskID != "" {
-			parent = taskParents[taskID]
-		} else if parent == "" {
-			parent = taskParents[backgroundWakeTaskIDFromTurnID(wakeTurnID)]
+		// Walk the continuation chain to the originating *real* (non-bgtask)
+		// turn. A wake turn that itself launched a background task is the parent
+		// of the next wake turn, so a wake-of-a-wake must collapse all the way
+		// to the one user-visible turn that started the chain — never to an
+		// intermediate wake turn. The contract is explicit: wake activity is
+		// "part of the originating turn, not a second user-visible turn".
+		parent := directParent(wakeTurnID)
+		guard := map[string]bool{wakeTurnID: true}
+		for parent != "" && isBackgroundWakeTurnID(parent) && !guard[parent] {
+			guard[parent] = true
+			parent = directParent(parent)
 		}
-		if parent == "" || parent == wakeTurnID {
+		if parent == "" || parent == wakeTurnID || isBackgroundWakeTurnID(parent) {
 			continue
 		}
 		out[wakeTurnID] = parent
 	}
 	return out
+}
+
+// isBackgroundWakeTurnID reports whether turnID is a synthetic background-task
+// wake continuation turn (turn_bgtask-<task>) rather than a real user-visible
+// turn. Wake turns are continuation mechanics: they fold into the originating
+// turn and are never surfaced as standalone turns.
+func isBackgroundWakeTurnID(turnID string) bool {
+	return strings.HasPrefix(turnID, "turn_bgtask-")
 }
 
 func backgroundWakeParentTurnsFromEvents(events []map[string]any) map[string]string {
@@ -1172,6 +1207,27 @@ func projectProjectionItem(item *projectionItem) map[string]any {
 		"sourceEventId":  item.SourceEventID,
 		"orderKey":       item.OrderKey,
 	}
+}
+
+// projectSessionBackgroundTasks projects a session's background
+// (run_in_background) shell-task lifecycle events into their background_task
+// entries, in start order. This is the session-level ledger the Background
+// screen renders — the same durable shell_task.* events that fold into per-turn
+// activity, surfaced as a first-class list (running and recently completed)
+// instead of buried inside each turn's collapsed activity. Input is the
+// shell_task.* event set (store.ShellTaskEvents); other event types are ignored.
+func projectSessionBackgroundTasks(shellTaskEvents []map[string]any) []map[string]any {
+	state := newProjectionState()
+	for _, event := range orderedTranscriptEvents(shellTaskEvents) {
+		state.apply(event)
+	}
+	out := make([]map[string]any, 0, len(state.backgroundTasks))
+	for _, task := range state.backgroundTasks {
+		if entry := projectProjectionBackgroundTask(task); entry != nil {
+			out = append(out, entry)
+		}
+	}
+	return out
 }
 
 func projectProjectionBackgroundTask(task *projectionBackgroundTask) map[string]any {

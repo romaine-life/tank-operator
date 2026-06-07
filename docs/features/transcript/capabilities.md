@@ -299,7 +299,80 @@ Evidence:
 - Turn detail: `backend-go/cmd/tank-operator/handlers_session_events_test.go`
   (`TestHandleSessionTurnActivityIncludesBackgroundWakeContinuation`) proves the
   parent Turn activity payload includes both the background/timer row and the
-  resumed wake final message.
+  resumed wake final message, and that the wake prompt row carries
+  `wakePrompt`/`turnOnly` (the flags the Turns view keys on to render the
+  system-user bubble; without them the row is dropped as an ordinary user
+  message — the "wake never shows" regression guard).
+
+Chained-wake hardening (a wake turn that itself launches a background task):
+- A wake-of-a-wake collapses transitively to the originating *real* turn, never
+  to an intermediate wake turn, so no synthetic `turn_bgtask-*` turn surfaces as
+  a standalone user-visible turn (the session 655 / turn 56 "system message shows
+  twice" defect). `backgroundTaskWakeParentTurnsFromTasks` walks the continuation
+  chain to the non-wake ancestor; `readUserFacingTurnEvents` reads the whole
+  transitive chain into the origin turn's `/activity` body.
+- A re-fired wake (a stale-claim re-submit publishes a second
+  `turn.submitted` with the same wake turn id) projects exactly one prompt: the
+  apply path is idempotent per wake turn, and the fire path
+  (`fireBackgroundTaskWake`) skips a wake whose deterministic turn already exists
+  in the durable ledger (`tank_background_task_wake_fire_total{result="already_fired"}`).
+- Wake turns are no longer assigned user-facing turn numbers (migration `0139`
+  excludes `turn_bgtask-*` from `tank_allocate_session_turn_number`); historical
+  wake-turn numbers fold to their originating real turn at resolve time
+  (`handleResolveSessionTurnNumber` → `resolveBackgroundWakeOriginTurn`,
+  `tank_turn_number_resolve_total{result="folded_wake"}`).
+- The system-user wake prompt stays visible in the Turns view even when a
+  completed turn's activity log is collapsed behind the divider
+  (`isAlwaysVisibleTurnDetailEntry`), since it is settled context (why the agent
+  resumed), not collapsible tool noise.
+- Evidence: `transcript_projection_test.go`
+  (`TestProjectTranscriptEventsCollapsesChainedBackgroundWakeIntoOriginTurn`),
+  `frontend/src/turnActivityCache.test.ts` (wake prompt stays visible under
+  collapse), and the `wakePrompt`/`turnOnly` assertions in
+  `TestHandleSessionTurnActivityIncludesBackgroundWakeContinuation`.
+
+## Session Background Task Ledger
+
+Status: active
+
+Intent:
+Surface a session's background (`run_in_background`) shell tasks — a timer, a
+watcher, a sub-agent — in the Background screen, both running and recently
+completed. Background tasks are durable `shell_task.*` events that fold into
+per-turn activity; they were never top-level transcript rows, so the Background
+screen's old `renderedEntries.filter(isBackgroundTaskEntry)` was structurally
+always empty and a backgrounded task (e.g. a `sleep` timer that finished while
+the session was idle) showed nowhere.
+
+Affected contracts:
+- Transcript
+- App Chrome (owns the Background screen)
+- Observability
+
+Contract impact:
+- The feed is a projection over the durable `session_events` shell-task ledger,
+  not browser-local optimism and not the main transcript rows. `GET
+  /api/sessions/{id}/background-tasks` returns the projected `background_task`
+  entries; the SPA polls it on the same 10s cadence as scheduled-wakeups and
+  control-actions and feeds the Background "shells" view (running AND recently
+  completed), while the active-only subset drives the badge count so the pill
+  does not grow unbounded.
+- The read is bounded regardless of ledger size: a partial index
+  (`session_events_shell_task`, migration `0140`) makes it an indexed scan over
+  only shell-task rows, so the polled endpoint never re-reads the whole event
+  ledger.
+- The Background screen's `background_task` source moves off `renderedEntries`
+  (which never contained `background_task` rows — they live only inside per-turn
+  activity bodies) onto the durable feed; the old empty-by-construction
+  transcript-row filter is not kept as a fallback.
+
+Evidence:
+- Backend: `backend-go/cmd/tank-operator/transcript_projection_test.go`
+  (`TestProjectSessionBackgroundTasksListsRunningAndCompleted`) proves the
+  shell-task lifecycle projects to running + completed `background_task` entries.
+- Store: `postgresSessionEventStore.ShellTaskEvents`, served by the
+  `session_events_shell_task` partial index.
+- Observability: `tank_session_background_tasks_list_total{result}`.
 
 ## Session Lifecycle In Turn Activity
 

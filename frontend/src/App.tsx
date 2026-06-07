@@ -35,7 +35,10 @@ import {
   pruneLocalRealtimeEchoes,
   pruneRealtimeEntries,
 } from "./transcriptMerge";
-import { cachedTurnActivityRefreshRequests } from "./turnActivityCache";
+import {
+  cachedTurnActivityRefreshRequests,
+  isAlwaysVisibleTurnDetailEntry,
+} from "./turnActivityCache";
 import {
   turnActivityEventProgress,
   turnActivityPagerState,
@@ -8456,7 +8459,7 @@ function BackgroundScreen({
       : view === "control"
         ? "Control"
         : view === "shells"
-          ? "Active"
+          ? "Recent"
           : "Detected";
   const emptyText =
     view === "scheduled"
@@ -8464,7 +8467,7 @@ function BackgroundScreen({
       : view === "control"
         ? "No control actions."
         : view === "shells"
-          ? "No active shells."
+          ? "No background tasks."
           : "No detached process candidates.";
   const selectedStopAvailable = selected ? canStopEntry(selected) : false;
   return (
@@ -10707,7 +10710,7 @@ function RunTurnActivityScreen({
   ]);
   const hasFinalDetailResponse = finalDetailEntryIds.size > 0;
   const hasCollapsibleDetailActivity = detailEntries.some(
-    (entry) => !finalDetailEntryIds.has(entry.id),
+    (entry) => !isAlwaysVisibleTurnDetailEntry(entry, finalDetailEntryIds),
   );
   const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<
     Record<string, boolean>
@@ -10791,7 +10794,7 @@ function RunTurnActivityScreen({
     return detailGroupsWithThinking.filter((group) => {
       if (group.kind === "thinking") return true;
       return flatEntryGroupEntries(group).some((entry) =>
-        finalDetailEntryIds.has(entry.id),
+        isAlwaysVisibleTurnDetailEntry(entry, finalDetailEntryIds),
       );
     });
   }, [
@@ -13471,6 +13474,13 @@ function ChatPane({
   const [controlActionEntries, setControlActionEntries] = useState<
     TranscriptEntry[]
   >([]);
+  // Background (run_in_background) shell tasks come from the durable session-level
+  // /background-tasks projection, not the main transcript rows. background_task
+  // entries only ever live inside per-turn activity bodies, so the old
+  // renderedEntries.filter could never surface them — the "timer never shows in
+  // the Background section" defect.
+  const [backgroundTaskLedgerEntries, setBackgroundTaskLedgerEntries] =
+    useState<TranscriptEntry[]>([]);
   const [testState, setTestState] = useState<TestState | null>(
     session.test_state ?? null,
   );
@@ -13550,6 +13560,22 @@ function ChatPane({
     const body = (await res.json()) as ControlActionRow[];
     setControlActionEntries(
       controlActionRowsToEntries(body) as TranscriptEntry[],
+    );
+  }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
+  const fetchBackgroundTaskEntries = useCallback(async () => {
+    if (publicView) {
+      setBackgroundTaskLedgerEntries([]);
+      return;
+    }
+    const res = await fetchPaneResource(
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/background-tasks`,
+      ),
+    );
+    if (!res.ok) return;
+    const body = (await res.json()) as { background_tasks?: unknown[] };
+    setBackgroundTaskLedgerEntries(
+      normalizeProjectedTranscriptEntries(body.background_tasks ?? []),
     );
   }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
   const supportsFileAttachments =
@@ -17202,6 +17228,7 @@ function ChatPane({
     if (publicView || !visible) {
       setScheduledWakeupEntries([]);
       setControlActionEntries([]);
+      setBackgroundTaskLedgerEntries([]);
       return;
     }
     let cancelled = false;
@@ -17212,6 +17239,9 @@ function ChatPane({
       void fetchControlActionEntries().catch(() => {
         if (!cancelled) setControlActionEntries([]);
       });
+      void fetchBackgroundTaskEntries().catch(() => {
+        if (!cancelled) setBackgroundTaskLedgerEntries([]);
+      });
     };
     refresh();
     const timer = window.setInterval(refresh, 10_000);
@@ -17220,14 +17250,18 @@ function ChatPane({
       window.clearInterval(timer);
     };
   }, [
+    fetchBackgroundTaskEntries,
     fetchControlActionEntries,
     fetchScheduledWakeupEntries,
     publicView,
     visible,
   ]);
+  // Background tasks come from the durable session-level feed, not the main
+  // transcript rows: background_task entries live only inside per-turn activity
+  // bodies, so renderedEntries never contained them.
   const backgroundTaskEntries = useMemo(
-    () => renderedEntries.filter(isBackgroundTaskEntry),
-    [renderedEntries],
+    () => backgroundTaskLedgerEntries.filter(isBackgroundTaskEntry),
+    [backgroundTaskLedgerEntries],
   );
   const runningShellInvocationEntries = useMemo(
     () => renderedEntries.filter(isRunningShellInvocationEntry),
@@ -17246,6 +17280,14 @@ function ChatPane({
       ...backgroundTaskEntries.filter(isBackgroundTaskRunning),
       ...runningShellInvocationEntries,
     ],
+    [backgroundTaskEntries, runningShellInvocationEntries],
+  );
+  // The Background "shells" view shows the session's background tasks — running
+  // AND recently completed — so a task that finished while the session was idle
+  // (e.g. a `sleep` timer) is still visible, not only live ones. The badge count
+  // stays active-only (activeBackgroundEntries) to avoid an ever-growing pill.
+  const backgroundShellEntries = useMemo(
+    () => [...backgroundTaskEntries, ...runningShellInvocationEntries],
     [backgroundTaskEntries, runningShellInvocationEntries],
   );
   const backgroundLedgerEntries = useMemo(
@@ -18745,7 +18787,7 @@ function ChatPane({
               )
             ) : activeTab === "background" ? (
               <BackgroundScreen
-                shellEntries={activeBackgroundEntries}
+                shellEntries={backgroundShellEntries}
                 scheduledEntries={scheduledWakeupEntries}
                 controlEntries={controlActionEntries}
                 detachedEntries={detachedShellEntries}
