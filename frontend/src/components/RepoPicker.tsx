@@ -165,10 +165,11 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
     }
   }, [open, onLoadAllRepos]);
 
-  // Filter out already-selected (case-insensitive) so the "Recent"
-  // section doesn't visually duplicate chips. Disabled-style retains
-  // the slug in the section so the user sees "this was here, you
-  // already added it" rather than the suggestion vanishing.
+  // Lower-cased staged set, used to mark suggestion/shortcut chips as selected
+  // (case-insensitive). A staged repo is NOT removed from its section: it stays
+  // visible and clickable (a plain click narrows the selection back to just
+  // it), reads as selected via `is-selected` + aria-pressed, and only its "+"
+  // additive control is disabled — additive-adding a staged repo is a no-op.
   const selectedLower = useRef<Set<string>>(new Set());
   selectedLower.current = new Set(selected.map((s) => s.toLowerCase()));
 
