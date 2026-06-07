@@ -883,19 +883,44 @@ type sessionRunConfig struct {
 
 func isDefaultModelAlias(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "default", "codex-account-default":
+	case "default", "codex-account-default", "antigravity-default":
 		return true
 	default:
 		return false
 	}
 }
 
+func providerRequiresExplicitModel(provider string) bool {
+	return provider == "codex" || provider == "antigravity"
+}
+
+func explicitModelRequiredMessage(provider, noun string) string {
+	switch provider {
+	case "codex":
+		return "model is required for Codex " + noun
+	case "antigravity":
+		return "model is required for Antigravity " + noun
+	default:
+		return "model is required"
+	}
+}
+
+func effortUnsupportedMessage(provider, noun string) string {
+	if provider == "antigravity" {
+		return "effort is not supported for Antigravity " + noun
+	}
+	if provider == "codex" {
+		return "effort is invalid; want one of low|medium|high|xhigh"
+	}
+	return "effort is invalid; want one of low|medium|high|xhigh|max"
+}
+
 func validateCreateRunConfig(mode, rawModel, rawEffort string) (sessionRunConfig, int, string) {
 	modelInput := strings.TrimSpace(rawModel)
 	effortInput := strings.TrimSpace(rawEffort)
 	if modelInput == "" && effortInput == "" {
-		if provider, ok := sdkProviderForMode(mode); ok && provider == "codex" {
-			return sessionRunConfig{}, http.StatusBadRequest, "model is required for Codex sessions"
+		if provider, ok := sdkProviderForMode(mode); ok && providerRequiresExplicitModel(provider) {
+			return sessionRunConfig{}, http.StatusBadRequest, explicitModelRequiredMessage(provider, "sessions")
 		}
 		return sessionRunConfig{}, 0, ""
 	}
@@ -906,19 +931,16 @@ func validateCreateRunConfig(mode, rawModel, rawEffort string) (sessionRunConfig
 	if isDefaultModelAlias(modelInput) {
 		return sessionRunConfig{}, http.StatusBadRequest, "model must be explicit; default is not accepted"
 	}
-	if provider == "codex" && modelInput == "" {
-		return sessionRunConfig{}, http.StatusBadRequest, "model is required for Codex sessions"
+	if providerRequiresExplicitModel(provider) && modelInput == "" {
+		return sessionRunConfig{}, http.StatusBadRequest, explicitModelRequiredMessage(provider, "sessions")
 	}
-	model := validateTurnArg(modelInput)
+	model := validateModelArg(provider, modelInput)
 	if modelInput != "" && model == "" {
 		return sessionRunConfig{}, http.StatusBadRequest, "model is invalid"
 	}
 	effort := validateEffort(provider, effortInput)
 	if effortInput != "" && effort == "" {
-		if provider == "codex" {
-			return sessionRunConfig{}, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh"
-		}
-		return sessionRunConfig{}, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max"
+		return sessionRunConfig{}, http.StatusBadRequest, effortUnsupportedMessage(provider, "sessions")
 	}
 	return sessionRunConfig{Model: model, Effort: effort}, 0, ""
 }
@@ -994,7 +1016,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	if isDefaultModelAlias(modelInput) {
 		return nil, http.StatusBadRequest, "model must be explicit; default is not accepted"
 	}
-	model := validateTurnArg(modelInput)
+	model := validateModelArg(provider, modelInput)
 	if modelInput != "" && model == "" {
 		return nil, http.StatusBadRequest, "model is invalid"
 	}
@@ -1009,13 +1031,10 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 			effort = registered.Effort
 		}
 	} else if strings.TrimSpace(req.Effort) != "" && effort == "" {
-		if provider == "codex" {
-			return nil, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh"
-		}
-		return nil, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh|max"
+		return nil, http.StatusBadRequest, effortUnsupportedMessage(provider, "turns")
 	}
-	if provider == "codex" && model == "" {
-		return nil, http.StatusBadRequest, "model is required for Codex turns"
+	if providerRequiresExplicitModel(provider) && model == "" {
+		return nil, http.StatusBadRequest, explicitModelRequiredMessage(provider, "turns")
 	}
 	if !req.AllowBeforeReady {
 		if podName == nil {

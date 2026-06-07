@@ -9,6 +9,11 @@ test("sidebar session clicks open the turns view", () => {
 });
 
 test("sidebar turns menu opens the latest turn", () => {
-  expect(appSource, "each mounted ChatPane should receive its session turns-open request signal").toMatch(/sidebarTurnsOpenRequest=\{sessionTurnsOpenRequests\[s\.id\] \?\? 0\}/);
+  expect(
+    appSource,
+    "each mounted ChatPane should receive its session turns-open request signal",
+  ).toMatch(
+    /sidebarTurnsOpenRequest=\{\s*sessionTurnsOpenRequests\[s\.id\] \?\? 0\s*\}/,
+  );
   expect(appSource, "the visible ChatPane should clear any prior turn selection so /turns falls back to the latest turn").toMatch(/if \(!visible \|\| sidebarTurnsOpenRequest === 0\) return;[\s\S]*?setPendingRouteTurnNumber\(null\);[\s\S]*?setRouteTurnUnavailable\(false\);[\s\S]*?setPendingTurnViewRouteAnchor\("bottom"\);[\s\S]*?setSelectedTurnId\(null\);[\s\S]*?setSelectedTurnNumberAnchor\(null\);[\s\S]*?setActiveTab\("turns"\);[\s\S]*?replaceSessionRoute\(session\.id, "turns"\);/);
 });

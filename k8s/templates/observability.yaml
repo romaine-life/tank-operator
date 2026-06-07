@@ -1145,6 +1145,24 @@ spec:
             summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot persist rotated tokens to KV"
             runbook: "Rotations are succeeding in memory but not writing back to KV — the restart-bomb precursor. Grep ext-proc logs for `KV write failed`; check the api-proxy UAMI's Key Vault Secrets Officer role and KV reachability (az keyvault secret show --vault-name romaine-kv --name <provider>-credentials --query attributes.updated). Until fixed, do NOT restart the proxy pod: the next boot will re-read a stale Secret. For claude/codex this surfaces as refresh_token_reused after restart (run the credential wizard to recover); antigravity self-heals on boot because the keeper re-refreshes, but the stale KV blob should still be repaired."
 
+        - alert: TankApiProxyEnvoySdsKeyRotationFailed
+          expr: max_over_time(tank_api_proxy_envoy_sds_key_rotation_failed[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "api-proxy ({{`{{ $labels.provider }}`}}) Envoy SDS key rotation failed for {{`{{ $labels.secret }}`}}"
+            runbook: "Envoy reported a filesystem SDS key-rotation failure. Check the proxy pod's /etc/envoy/tls mounted Secret, cert-manager Certificate readiness, and Envoy logs. A healthy cert-manager Certificate is not enough; Envoy must load the new leaf through SDS."
+
+        - alert: TankApiProxyEnvoySdsStatsScrapeFailing
+          expr: rate(tank_api_proxy_envoy_sds_stats_scrape_total{result="failure"}[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot scrape pod-local Envoy SDS stats"
+            runbook: "The ext_proc metrics sidecar cannot read http://127.0.0.1:9901/stats from the Envoy sidecar. Check that Envoy admin is still bound to localhost:9901 and that the Envoy container is healthy. Prometheus cannot see SDS rotation health until this recovers."
+
     - name: tank-operator.provider-credential-health
       rules:
         # Layer 1 has been "failed" for >5m. The transcript banner is

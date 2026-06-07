@@ -324,14 +324,23 @@ All metric names are prefixed `tank_`. The full namespace:
   the model/effort actually applied to the provider runtime. Labels:
   `provider` (`claude`, `codex`, `unknown`) and bounded `result`.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
-  label: `provider` ("claude" or "codex"), bound from `PROXY_PROVIDER`.
+  label: `provider` ("claude", "codex", or "antigravity"), bound from
+  `PROXY_PROVIDER`.
   `tank_api_proxy_upstream_status_total{provider,status_class}` buckets every
   upstream response; `tank_api_proxy_upstream_401_total` and
   `tank_api_proxy_upstream_429_total` are the two named signatures — 401 is the
   refresh-storm, 429 is the shared account's usage cap being exhausted (the
   upstream cause of the rate-limit-stall class the runner's
   `provider_rate_limit` terminal and the `tank_sessions_stuck_in_progress`
-  detector handle downstream).
+  detector handle downstream). The ext_proc metrics sidecar also polls the
+  pod-local Envoy admin listener and re-exports the bounded SDS cert-rotation
+  subset: `tank_api_proxy_envoy_sds_ssl_context_updates{provider}`,
+  `tank_api_proxy_envoy_sds_key_rotation_failed{provider,secret}`, and
+  `tank_api_proxy_envoy_sds_stats_scrape_total{provider,result}`. Envoy admin
+  remains bound to localhost; Prometheus scrapes the sidecar's existing
+  `/metrics` endpoint. `TankApiProxyEnvoySdsKeyRotationFailed` and
+  `TankApiProxyEnvoySdsStatsScrapeFailing` cover "Certificate Ready but Envoy
+  did not absorb the rotated leaf" and "SDS stats are no longer observable."
 - `tank_mcp_auth_proxy_*` — sidecar counters/histograms. Label
   `mcp_server` is bounded by the LISTENERS table in `server.py`.
 - `tank_schema_migration*` — startup schema-migration engine

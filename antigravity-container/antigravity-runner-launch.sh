@@ -3,10 +3,10 @@
 #
 # Credential boundary (mirrors the Claude/Codex proxy shape): agy NEVER holds
 # the real Google OAuth blob. We write a PLACEHOLDER token into agy's data dir
-# and route agy's cloudcode-pa.googleapis.com traffic through the
-# antigravity-api-proxy (via a pod hostAlias). The proxy owns the refresh
-# token, injects the real access token on every request, and refreshes against
-# Google on upstream 401. The placeholder carries a far-future expiry and no
+# and route agy's Code Assist traffic through the antigravity-api-proxy (via pod
+# hostAliases). The proxy owns the refresh token, injects the real access token
+# on every request, and refreshes against Google on upstream 401. The placeholder
+# carries a far-future expiry and no
 # refresh token, so agy never attempts an in-place refresh — the same way the
 # Claude/Codex session CLIs are seeded.
 #

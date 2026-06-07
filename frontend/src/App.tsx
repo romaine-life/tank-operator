@@ -69,6 +69,12 @@ import { WorkspaceShell } from "./WorkspaceShell";
 import { useViewport } from "./useViewport";
 import { MobileTopBar } from "./MobileTopBar";
 import { DesktopOnly } from "./DesktopOnly";
+import { KEYBOARD_SHORTCUTS } from "./keyboardShortcuts";
+import {
+  breadcrumbCompactLabel,
+  breadcrumbTrail,
+  breadcrumbUpHref,
+} from "./breadcrumb";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
   buildAppRouteUrl,
@@ -880,7 +886,10 @@ interface ProviderQuotaEvidence {
   observedAt?: string | null;
 }
 
-const PROVIDER_QUOTA_WINDOW_DEFS: Record<Provider, Array<Pick<ProviderQuotaWindow, "id" | "label" | "shortLabel">>> = {
+const PROVIDER_QUOTA_WINDOW_DEFS: Record<
+  Provider,
+  Array<Pick<ProviderQuotaWindow, "id" | "label" | "shortLabel">>
+> = {
   anthropic: [
     { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
     { id: "weekly", label: "Weekly", shortLabel: "Week" },
@@ -1278,7 +1287,9 @@ function normalizeBugLabel(value: unknown): SessionBugLabel | null {
   const name = typeof record.name === "string" ? record.name : "";
   const slug = typeof record.slug === "string" ? record.slug : "";
   const rawDisplayName =
-    typeof record.display_name === "string" && record.display_name ? record.display_name : name;
+    typeof record.display_name === "string" && record.display_name
+      ? record.display_name
+      : name;
   const displayName = normalizeBugLabelDisplayName(rawDisplayName);
   if (!name || !slug || !displayName) return null;
   const id =
@@ -1684,6 +1695,7 @@ function sessionRouteUrl(
   tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
   staticPath?: string | null,
+  pageNumber?: number | null,
 ): string {
   return buildSessionRouteUrl(
     window.location.href,
@@ -1691,6 +1703,7 @@ function sessionRouteUrl(
     tab,
     turnNumber,
     staticPath,
+    pageNumber,
   );
 }
 
@@ -1735,9 +1748,10 @@ function replaceSessionRoute(
   id: string,
   tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
+  pageNumber?: number | null,
 ): void {
   if (routeHasMessageTarget()) return;
-  const next = sessionRouteUrl(id, tab, turnNumber);
+  const next = sessionRouteUrl(id, tab, turnNumber, null, pageNumber);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -1765,6 +1779,87 @@ function replaceAppRoute(
   if (routeHasMessageTarget()) return;
   const next = appRouteUrl(tab, settingsTab, adminView);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+// Breadcrumb navigation. A crumb is a real <a href> (cmd/ctrl-click opens a new
+// tab); a plain click pushes the target URL and fires a synthetic popstate,
+// which the visible pane's existing route listener resolves — no per-target
+// signal plumbing, and it works for every routed surface.
+function navigateToSessionRoute(url: string): void {
+  if (url === window.location.href) return;
+  window.history.pushState({}, "", url);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+function BreadcrumbSep() {
+  return (
+    <span className="workspace-crumb-sep" aria-hidden="true">
+      /
+    </span>
+  );
+}
+
+export function BreadcrumbLink({
+  href,
+  label,
+}: {
+  href: string;
+  label: string;
+}) {
+  return (
+    <a
+      className="workspace-crumb"
+      href={href}
+      onClick={(e) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+          return;
+        e.preventDefault();
+        navigateToSessionRoute(href);
+      }}
+    >
+      {label}
+    </a>
+  );
+}
+
+// The breadcrumb segments AFTER the session-name crumb. Climb-only: the section
+// (and, for Turns, the turn and page) are navigable ancestors; the current leaf
+// is non-interactive. The dedicated in-view turn/page dropdowns stay the
+// pickers. Renders nothing for the session-data root or app-level tabs.
+export function WorkspaceBreadcrumbTrail({
+  sessionId,
+  location,
+}: {
+  sessionId: string;
+  location: SessionLocation;
+}) {
+  // Logic lives in the pure, unit-tested breadcrumbTrail; this only maps the
+  // derived crumbs to chrome (link / current marker / structural label).
+  return (
+    <>
+      {breadcrumbTrail(sessionId, location, window.location.href).map(
+        (crumb) => (
+          <span className="workspace-crumb-group" key={crumb.key}>
+            <BreadcrumbSep />
+            {crumb.current ? (
+              <span
+                className="workspace-crumb workspace-crumb-current"
+                aria-current="page"
+              >
+                {crumb.label}
+              </span>
+            ) : crumb.href ? (
+              <BreadcrumbLink href={crumb.href} label={crumb.label} />
+            ) : (
+              <span className="workspace-crumb workspace-crumb-label">
+                {crumb.label}
+              </span>
+            )}
+          </span>
+        ),
+      )}
+    </>
+  );
 }
 
 function closeAvatarPreviewAfterRoutePaint(): void {
@@ -2404,19 +2499,20 @@ function BugLabelPicker({
           {error && <div className="run-bug-label-error">{error}</div>}
           <div className="run-bug-label-list">
             {loading && <div className="run-bug-label-empty">Loading...</div>}
-            {!loading && filteredLabels.map((label) => (
-              <button
-                key={label.slug}
-                type="button"
-                className={`run-bug-label-option${activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(label.display_name)) ? " is-active" : ""}`}
-                onClick={() => toggleLabel(label)}
-              >
-                <span>{label.display_name}</span>
-                {typeof label.session_count === "number" && (
-                  <span>{label.session_count}</span>
-                )}
-              </button>
-            ))}
+            {!loading &&
+              filteredLabels.map((label) => (
+                <button
+                  key={label.slug}
+                  type="button"
+                  className={`run-bug-label-option${activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(label.display_name)) ? " is-active" : ""}`}
+                  onClick={() => toggleLabel(label)}
+                >
+                  <span>{label.display_name}</span>
+                  {typeof label.session_count === "number" && (
+                    <span>{label.session_count}</span>
+                  )}
+                </button>
+              ))}
             {!loading && filteredLabels.length === 0 && (
               <div className="run-bug-label-empty">
                 {labels.length === 0 ? "No labels" : "No matching labels"}
@@ -3213,7 +3309,9 @@ function DemoLanding() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : [];
+        : selectedProvider === "antigravity"
+          ? ANTIGRAVITY_MODELS
+          : [];
   const demoModelApplies =
     demoInteraction === "gui" && demoModelOptions.length > 0;
   const selectedDemoModelId =
@@ -3221,8 +3319,13 @@ function DemoLanding() {
       ? demoClaudeModelId
       : selectedProvider === "codex"
         ? demoCodexModelId
-        : "";
-  const demoProviderQuotaSnapshots = useMemo(() => buildProviderQuotaSnapshots(demoSessions), [demoSessions]);
+        : selectedProvider === "antigravity"
+          ? DEFAULT_ANTIGRAVITY_MODEL_ID
+          : "";
+  const demoProviderQuotaSnapshots = useMemo(
+    () => buildProviderQuotaSnapshots(demoSessions),
+    [demoSessions],
+  );
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -3403,9 +3506,7 @@ function DemoLanding() {
                       className="session-open"
                       onClick={() => setActiveDemoSession(s.id)}
                     >
-                      <span className="session-id">
-                        {s.name}
-                      </span>
+                      <span className="session-id">{s.name}</span>
                     </button>
                     <button
                       className="session-delete"
@@ -3517,8 +3618,12 @@ function DemoLanding() {
                       const mode = defaultModeFor(provider, demoInteraction);
                       const providerSelected = provider === selectedProvider;
                       const quota = demoProviderQuotaSnapshots[provider];
-                      const fiveHour = quota.windows.find((window) => window.id === "five_hour");
-                      const weekly = quota.windows.find((window) => window.id === "weekly");
+                      const fiveHour = quota.windows.find(
+                        (window) => window.id === "five_hour",
+                      );
+                      const weekly = quota.windows.find(
+                        (window) => window.id === "weekly",
+                      );
                       return (
                         <button
                           key={provider}
@@ -3528,12 +3633,21 @@ function DemoLanding() {
                           title={MODE_LABELS[mode]}
                         >
                           <span className="home-provider-choice-main">
-                            <ProviderIcon provider={provider} className="home-choice-icon" />
+                            <ProviderIcon
+                              provider={provider}
+                              className="home-choice-icon"
+                            />
                             <span>{PROVIDER_LABELS[provider]}</span>
                           </span>
                           <span className="home-provider-choice-usage">
-                            <span>{fiveHour?.shortLabel ?? "5h"} {providerQuotaSummary(fiveHour)}</span>
-                            <span>{weekly?.shortLabel ?? "Week"} {providerQuotaSummary(weekly)}</span>
+                            <span>
+                              {fiveHour?.shortLabel ?? "5h"}{" "}
+                              {providerQuotaSummary(fiveHour)}
+                            </span>
+                            <span>
+                              {weekly?.shortLabel ?? "Week"}{" "}
+                              {providerQuotaSummary(weekly)}
+                            </span>
                           </span>
                         </button>
                       );
@@ -3543,7 +3657,11 @@ function DemoLanding() {
                     snapshots={demoProviderQuotaSnapshots}
                     selectedProvider={selectedProvider}
                   />
-                  <div className="home-choice-grid" role="group" aria-label="interaction">
+                  <div
+                    className="home-choice-grid"
+                    role="group"
+                    aria-label="interaction"
+                  >
                     {INTERACTION_OPTIONS.map((interaction) => {
                       const unavailable =
                         PROVIDER_INTERACTION_MODES[selectedProvider][
@@ -3994,6 +4112,28 @@ function isClaudeRunMode(mode: SessionMode): boolean {
 
 function isCodexRunMode(mode: SessionMode): boolean {
   return mode === "codex_gui" || mode === "codex_app_server";
+}
+
+function isAntigravityRunMode(mode: SessionMode): boolean {
+  return mode === "antigravity_gui";
+}
+
+function sessionModeUsesModel(mode: SessionMode): boolean {
+  return (
+    isClaudeRunMode(mode) || isCodexRunMode(mode) || isAntigravityRunMode(mode)
+  );
+}
+
+function providerUsesModel(provider: Provider): boolean {
+  return (
+    provider === "anthropic" ||
+    provider === "codex" ||
+    provider === "antigravity"
+  );
+}
+
+function sessionModeUsesEffort(mode: SessionMode): boolean {
+  return isClaudeRunMode(mode) || isCodexRunMode(mode);
 }
 
 // (formerly: getRunToolGroupSummary — replaced by RunToolGroup's inline
@@ -4496,6 +4636,12 @@ const CODEX_MODELS: ModelOption[] = [
   { id: "gpt-5.3-codex", label: "Codex · GPT-5.3 Codex" },
   { id: "gpt-5.3-codex-spark", label: "Codex · GPT-5.3 Codex Spark" },
 ];
+const ANTIGRAVITY_MODELS: ModelOption[] = [
+  {
+    id: "Gemini 3.5 Flash (Medium)",
+    label: "Antigravity · Gemini 3.5 Flash Medium",
+  },
+];
 // Extended-thinking effort levels exposed by the Claude Agent SDK
 // (EffortLevel union). The ids are the wire values; the labels carry
 // the cost guidance so users picking xhigh/max know what they're
@@ -4525,6 +4671,7 @@ const CODEX_EFFORTS: EffortOption[] = [
 ];
 const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 const DEFAULT_CODEX_EFFORT_ID = "xhigh";
+const DEFAULT_ANTIGRAVITY_MODEL_ID = "Gemini 3.5 Flash (Medium)";
 
 function modelOptionsForMode(mode: SessionMode): ModelOption[] {
   if (mode === "claude_gui") return CLAUDE_MODELS;
@@ -4535,6 +4682,7 @@ function modelOptionsForMode(mode: SessionMode): ModelOption[] {
   ) {
     return CODEX_MODELS;
   }
+  if (mode === "antigravity_gui") return ANTIGRAVITY_MODELS;
   return [];
 }
 
@@ -4602,6 +4750,7 @@ interface RunPrefs {
   claudeEffort: string;
   codexModelId: string;
   codexEffort: string;
+  antigravityModelId: string;
   initialMessageMode: InitialMessageMode;
 }
 
@@ -4620,6 +4769,7 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
   codexModelId: DEFAULT_CODEX_MODEL_ID,
   codexEffort: DEFAULT_CODEX_EFFORT_ID,
+  antigravityModelId: DEFAULT_ANTIGRAVITY_MODEL_ID,
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
@@ -4736,13 +4886,31 @@ function loadRunPrefs(): RunPrefs {
       } else if (key === "turnCompleteSoundVolume") {
         if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
       } else if (key === "claudeModelId") {
-        out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID);
+        out[key] = pickAllowedPrefId(
+          raw,
+          CLAUDE_MODELS,
+          DEFAULT_CLAUDE_MODEL_ID,
+        );
       } else if (key === "claudeEffort") {
-        out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID);
+        out[key] = pickAllowedPrefId(
+          raw,
+          CLAUDE_EFFORTS,
+          DEFAULT_CLAUDE_EFFORT_ID,
+        );
       } else if (key === "codexModelId") {
         out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
       } else if (key === "codexEffort") {
-        out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
+        out[key] = pickAllowedPrefId(
+          raw,
+          CODEX_EFFORTS,
+          DEFAULT_CODEX_EFFORT_ID,
+        );
+      } else if (key === "antigravityModelId") {
+        out[key] = pickAllowedPrefId(
+          raw,
+          ANTIGRAVITY_MODELS,
+          DEFAULT_ANTIGRAVITY_MODEL_ID,
+        );
       } else if (raw === "true" || raw === "false") {
         (out as unknown as Record<string, unknown>)[key] = raw === "true";
       }
@@ -4762,7 +4930,10 @@ type SetRunPref = <K extends keyof RunPrefs>(
 // SPA's RunPrefs shape. Unknown keys are dropped (a future SPA may have
 // written them); unknown values for known keys are ignored (defensive
 // against type drift).
-function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): RunPrefs {
+function mergeServerRunPrefs(
+  prev: RunPrefs,
+  server: Record<string, unknown>,
+): RunPrefs {
   const out: RunPrefs = { ...prev };
   for (const key of Object.keys(prev) as (keyof RunPrefs)[]) {
     if (!isDurableRunPref(key)) continue;
@@ -4956,20 +5127,31 @@ function normalizeProjectedTranscriptEntry(
   } as TranscriptEntry;
 }
 
-function isFoldableStartupSessionStatusTranscriptRow(record: Record<string, unknown>): boolean {
+function isFoldableStartupSessionStatusTranscriptRow(
+  record: Record<string, unknown>,
+): boolean {
   if (record.kind !== "message" || record.role !== "system") return false;
-  const status = typeof record.sessionStatus === "string" ? record.sessionStatus.trim() : "";
+  const status =
+    typeof record.sessionStatus === "string" ? record.sessionStatus.trim() : "";
   const text = typeof record.text === "string" ? record.text.trim() : "";
   const normalizedStatus =
     status ||
-    (text === "Session is loading." ? "loading" : text === "Session is ready." ? "ready" : "");
-  if (normalizedStatus !== "loading" && normalizedStatus !== "ready") return false;
+    (text === "Session is loading."
+      ? "loading"
+      : text === "Session is ready."
+        ? "ready"
+        : "");
+  if (normalizedStatus !== "loading" && normalizedStatus !== "ready")
+    return false;
   const id = typeof record.id === "string" ? record.id : "";
-  const sourceEventId = typeof record.sourceEventId === "string" ? record.sourceEventId : "";
+  const sourceEventId =
+    typeof record.sourceEventId === "string" ? record.sourceEventId : "";
   return !id.includes(":provider:") && !sourceEventId.includes(":provider:");
 }
 
-function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undefined {
+function normalizeTurnActivitySummary(
+  raw: unknown,
+): TurnActivitySummary | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const record = raw as Record<string, unknown>;
   return {
@@ -6858,59 +7040,59 @@ function RunMessageBubble({
             className="run-msg-footer"
             data-always-visible={alwaysVisible ? "" : undefined}
           >
-          {canonicalMessage &&
-            (variant === "assistant" || variant === "user") &&
-            entry.turnId &&
-            onOpenTurn && (
-              <TurnViewButton
-                turnId={entry.turnId}
-                href={turnHref}
-                onOpenTurn={onOpenTurn}
+            {canonicalMessage &&
+              (variant === "assistant" || variant === "user") &&
+              entry.turnId &&
+              onOpenTurn && (
+                <TurnViewButton
+                  turnId={entry.turnId}
+                  href={turnHref}
+                  onOpenTurn={onOpenTurn}
+                />
+              )}
+            {!canonicalMessage && onOpenTranscriptMessage && (
+              <TranscriptViewButton
+                entryId={entry.id}
+                href={transcriptHref}
+                onOpenTranscriptMessage={onOpenTranscriptMessage}
               />
             )}
-          {!canonicalMessage && onOpenTranscriptMessage && (
-            <TranscriptViewButton
-              entryId={entry.id}
-              href={transcriptHref}
-              onOpenTranscriptMessage={onOpenTranscriptMessage}
-            />
-          )}
-          {canonicalMessage && variant === "assistant" && onFork && (
-            <ForkButton entry={entry} onFork={onFork} />
-          )}
-          {variant !== "system" && (
-            <>
-              {onQuote && (
-                <>
-                  <QuoteButton
-                    text={visibleText}
-                    style="fence"
-                    onQuote={onQuote}
-                  />
-                  <QuoteButton
-                    text={visibleText}
-                    style="blockquote"
-                    onQuote={onQuote}
-                  />
-                </>
-              )}
-              <CopyButton text={visibleText} />
-              {canonicalMessage && !entry.localOnly && (
-                <LinkButton sessionId={sessionId} entryId={entry.id} />
-              )}
-            </>
-          )}
-          <div className="run-msg-timings">
-            {showDuration && durationMs != null && (
-              <span className="run-msg-timing-row">
-                {formatTurnDuration(durationMs)}
-                <TimerIcon size={9} aria-hidden="true" />
-              </span>
+            {canonicalMessage && variant === "assistant" && onFork && (
+              <ForkButton entry={entry} onFork={onFork} />
             )}
-            {showTimestamps && time && (
-              <span className="run-msg-timing-row">{time}</span>
+            {variant !== "system" && (
+              <>
+                {onQuote && (
+                  <>
+                    <QuoteButton
+                      text={visibleText}
+                      style="fence"
+                      onQuote={onQuote}
+                    />
+                    <QuoteButton
+                      text={visibleText}
+                      style="blockquote"
+                      onQuote={onQuote}
+                    />
+                  </>
+                )}
+                <CopyButton text={visibleText} />
+                {canonicalMessage && !entry.localOnly && (
+                  <LinkButton sessionId={sessionId} entryId={entry.id} />
+                )}
+              </>
             )}
-          </div>
+            <div className="run-msg-timings">
+              {showDuration && durationMs != null && (
+                <span className="run-msg-timing-row">
+                  {formatTurnDuration(durationMs)}
+                  <TimerIcon size={9} aria-hidden="true" />
+                </span>
+              )}
+              {showTimestamps && time && (
+                <span className="run-msg-timing-row">{time}</span>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -7693,6 +7875,101 @@ function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
   }
 }
 
+function SessionNameCard({
+  name,
+  onRename,
+  readOnly,
+}: {
+  name: string;
+  onRename?: (next: string) => Promise<void>;
+  readOnly?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const begin = () => {
+    setValue(name);
+    setError(null);
+    setEditing(true);
+  };
+  const cancel = () => {
+    setEditing(false);
+    setError(null);
+  };
+  const commit = async () => {
+    const trimmed = value.trim();
+    if (!onRename || trimmed.length === 0 || trimmed === name.trim()) {
+      cancel();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await onRename(trimmed);
+      setEditing(false);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="run-session-data-card is-name">
+      <div className="run-session-data-card-top">
+        <span className="run-session-data-card-main">
+          <span className="run-session-data-card-label">Name</span>
+          {editing ? (
+            <input
+              className="run-session-data-name-input"
+              aria-label="Session name"
+              autoFocus
+              value={value}
+              disabled={busy}
+              maxLength={80}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void commit();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancel();
+                }
+              }}
+              onBlur={() => void commit()}
+            />
+          ) : (
+            <span className="run-session-data-card-detail">{name}</span>
+          )}
+        </span>
+        {readOnly ? (
+          <span className="run-session-data-readonly">Read-only session</span>
+        ) : editing ? (
+          <button
+            type="button"
+            className="run-session-data-action"
+            disabled={busy}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void commit()}
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={begin}
+          >
+            Rename
+          </button>
+        )}
+      </div>
+      {error && <div className="run-session-data-name-error">{error}</div>}
+    </div>
+  );
+}
+
 function SessionDataScreen({
   rows,
   session,
@@ -7700,6 +7977,7 @@ function SessionDataScreen({
   onOpenTranscript,
   onBugLabelSave,
   onBugLabelsSave,
+  onRename,
   readOnly,
 }: {
   rows: SessionDataStatusRow[];
@@ -7708,6 +7986,7 @@ function SessionDataScreen({
   onOpenTranscript: () => void;
   onBugLabelSave: (name: string | null) => Promise<void>;
   onBugLabelsSave: (names: string[]) => Promise<void>;
+  onRename?: (next: string) => Promise<void>;
   readOnly?: boolean;
 }) {
   const activeCount = rows.filter((row) => row.tone !== "muted").length;
@@ -7735,6 +8014,11 @@ function SessionDataScreen({
             {activeCount}/{rows.length} active
           </span>
         </div>
+        <SessionNameCard
+          name={session.name}
+          onRename={onRename}
+          readOnly={readOnly}
+        />
         <div
           className="run-session-data-page-list"
           aria-label="Session data status"
@@ -9314,7 +9598,9 @@ function TurnActivityPager({
       <span className="run-turn-activity-page-label">{pagerState.label}</span>
       <span className="run-turn-activity-event-progress">{progress.label}</span>
       {progress.totalLabel && (
-        <span className="run-turn-activity-total-events">{progress.totalLabel}</span>
+        <span className="run-turn-activity-total-events">
+          {progress.totalLabel}
+        </span>
       )}
       <button
         type="button"
@@ -10371,14 +10657,17 @@ function RunTurnActivityScreen({
     : false;
   const showDetailActivityDivider = Boolean(
     selected &&
-      !selected.active &&
-      hasFinalDetailResponse &&
-      hasCollapsibleDetailActivity,
+    !selected.active &&
+    hasFinalDetailResponse &&
+    hasCollapsibleDetailActivity,
   );
   const detailActivityCollapsed =
     showDetailActivityDivider &&
     selected !== null &&
     collapsedActivityTurnIds[selected.turnId] === true;
+  const showContextToggleInActivityDivider = Boolean(
+    selectedTurnContext && showDetailActivityDivider,
+  );
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) =>
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
@@ -10684,7 +10973,9 @@ function RunTurnActivityScreen({
                   size="sm"
                   aria-label="Select activity page"
                 >
-                  <TurnActivityPageOptionLabel parts={selectedPageOptionParts} />
+                  <TurnActivityPageOptionLabel
+                    parts={selectedPageOptionParts}
+                  />
                 </SelectTrigger>
                 <SelectContent
                   className="run-turn-view-select-menu run-turn-view-page-select-menu"
@@ -10875,33 +11166,35 @@ function RunTurnActivityScreen({
             >
               <div className="run-turn-view-context-head">
                 <span className="run-turn-view-context-label">Prompt</span>
-                <button
-                  type="button"
-                  className="run-turn-view-context-toggle"
-                  title={
-                    selectedTurnContextCollapsed
-                      ? "Expand prompt"
-                      : "Collapse prompt"
-                  }
-                  aria-label={
-                    selectedTurnContextCollapsed
-                      ? "Expand prompt"
-                      : "Collapse prompt"
-                  }
-                  aria-expanded={!selectedTurnContextCollapsed}
-                  onClick={() => {
-                    setCollapsedContextTurnIds((prev) => ({
-                      ...prev,
-                      [selected.turnId]: !selectedTurnContextCollapsed,
-                    }));
-                  }}
-                >
-                  {selectedTurnContextCollapsed ? (
-                    <ChevronDownIcon size={14} aria-hidden="true" />
-                  ) : (
-                    <ChevronUpIcon size={14} aria-hidden="true" />
-                  )}
-                </button>
+                {!showContextToggleInActivityDivider && (
+                  <button
+                    type="button"
+                    className="run-turn-view-context-toggle"
+                    title={
+                      selectedTurnContextCollapsed
+                        ? "Expand user message"
+                        : "Collapse user message"
+                    }
+                    aria-label={
+                      selectedTurnContextCollapsed
+                        ? "Expand user message"
+                        : "Collapse user message"
+                    }
+                    aria-expanded={!selectedTurnContextCollapsed}
+                    onClick={() => {
+                      setCollapsedContextTurnIds((prev) => ({
+                        ...prev,
+                        [selected.turnId]: !selectedTurnContextCollapsed,
+                      }));
+                    }}
+                  >
+                    {selectedTurnContextCollapsed ? (
+                      <ChevronDownIcon size={14} aria-hidden="true" />
+                    ) : (
+                      <ChevronUpIcon size={14} aria-hidden="true" />
+                    )}
+                  </button>
+                )}
               </div>
               {/* Always render the prompt context. When collapsed we keep a
                   minimal one-line entry (avatar at full size + ellipsis-
@@ -10946,34 +11239,98 @@ function RunTurnActivityScreen({
           )}
           {selected && showDetailActivityDivider && (
             <div className="run-turn-activity-divider run-turn-view-activity-divider">
-              <button
-                type="button"
-                className="run-turn-activity-divider-toggle"
-                data-direction={detailActivityCollapsed ? "down" : "up"}
-                onClick={() => {
-                  setCollapsedActivityTurnIds((prev) => ({
-                    ...prev,
-                    [selected.turnId]: !detailActivityCollapsed,
-                  }));
-                }}
-                aria-expanded={!detailActivityCollapsed}
-                aria-label={
-                  detailActivityCollapsed
-                    ? "Show agent activity"
-                    : "Hide agent activity"
-                }
-                title={
-                  detailActivityCollapsed
-                    ? "Show agent activity"
-                    : "Hide agent activity"
-                }
+              <div
+                className="run-turn-activity-divider-controls"
+                role="group"
+                aria-label="Turn section collapse controls"
               >
-                {detailActivityCollapsed ? (
-                  <ChevronDownIcon size={15} strokeWidth={2.2} />
-                ) : (
-                  <ChevronUpIcon size={15} strokeWidth={2.2} />
+                {showContextToggleInActivityDivider && (
+                  <button
+                    type="button"
+                    className="run-turn-activity-divider-toggle"
+                    data-direction="up"
+                    onClick={() => {
+                      setCollapsedContextTurnIds((prev) => ({
+                        ...prev,
+                        [selected.turnId]: !selectedTurnContextCollapsed,
+                      }));
+                    }}
+                    aria-expanded={!selectedTurnContextCollapsed}
+                    aria-label={
+                      selectedTurnContextCollapsed
+                        ? "Expand user message"
+                        : "Collapse user message"
+                    }
+                    title={
+                      selectedTurnContextCollapsed
+                        ? "Expand user message"
+                        : "Collapse user message"
+                    }
+                  >
+                    {selectedTurnContextCollapsed ? (
+                      <PlusIcon
+                        size={11}
+                        strokeWidth={2.4}
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <MinusIcon
+                        size={11}
+                        strokeWidth={2.4}
+                        aria-hidden="true"
+                      />
+                    )}
+                    <ChevronUpIcon
+                      className="run-turn-activity-divider-toggle-chevron"
+                      size={13}
+                      strokeWidth={2.3}
+                      aria-hidden="true"
+                    />
+                  </button>
                 )}
-              </button>
+                <button
+                  type="button"
+                  className="run-turn-activity-divider-toggle"
+                  data-direction="down"
+                  onClick={() => {
+                    setCollapsedActivityTurnIds((prev) => ({
+                      ...prev,
+                      [selected.turnId]: !detailActivityCollapsed,
+                    }));
+                  }}
+                  aria-expanded={!detailActivityCollapsed}
+                  aria-label={
+                    detailActivityCollapsed
+                      ? "Expand assistance turn"
+                      : "Collapse assistance turn"
+                  }
+                  title={
+                    detailActivityCollapsed
+                      ? "Expand assistance turn"
+                      : "Collapse assistance turn"
+                  }
+                >
+                  {detailActivityCollapsed ? (
+                    <PlusIcon
+                      size={11}
+                      strokeWidth={2.4}
+                      aria-hidden="true"
+                    />
+                  ) : (
+                    <MinusIcon
+                      size={11}
+                      strokeWidth={2.4}
+                      aria-hidden="true"
+                    />
+                  )}
+                  <ChevronDownIcon
+                    className="run-turn-activity-divider-toggle-chevron"
+                    size={13}
+                    strokeWidth={2.3}
+                    aria-hidden="true"
+                  />
+                </button>
+              </div>
             </div>
           )}
           <div
@@ -11935,19 +12292,37 @@ function providerRateLimitRows(
   return rows;
 }
 
-function quotaProviderFromInfo(info: Record<string, unknown>, fallback: Provider): Provider {
-  const raw = typeof info.provider === "string" ? info.provider.toLowerCase() : "";
+function quotaProviderFromInfo(
+  info: Record<string, unknown>,
+  fallback: Provider,
+): Provider {
+  const raw =
+    typeof info.provider === "string" ? info.provider.toLowerCase() : "";
   if (raw.includes("codex") || raw.includes("openai")) return "codex";
   if (raw.includes("claude") || raw.includes("anthropic")) return "anthropic";
   return fallback;
 }
 
-function quotaWindowIdFromInfo(info: Record<string, unknown>): ProviderQuotaWindowId {
-  const raw = typeof info.rateLimitType === "string" ? info.rateLimitType.toLowerCase() : "";
+function quotaWindowIdFromInfo(
+  info: Record<string, unknown>,
+): ProviderQuotaWindowId {
+  const raw =
+    typeof info.rateLimitType === "string"
+      ? info.rateLimitType.toLowerCase()
+      : "";
   const normalized = raw.replace(/[\s-]+/g, "_");
   if (normalized.includes("opus")) return "opus_weekly";
-  if (normalized.includes("other") || normalized.includes("sonnet") || normalized.includes("non_opus")) return "weekly";
-  if (normalized.includes("week") || normalized.includes("seven_day") || normalized.includes("7_day")) {
+  if (
+    normalized.includes("other") ||
+    normalized.includes("sonnet") ||
+    normalized.includes("non_opus")
+  )
+    return "weekly";
+  if (
+    normalized.includes("week") ||
+    normalized.includes("seven_day") ||
+    normalized.includes("7_day")
+  ) {
     return "weekly";
   }
   return "five_hour";
@@ -11985,23 +12360,31 @@ function quotaWindowStatus(
   const resetMs = resetAt ? Date.parse(resetAt) : Number.NaN;
   if (Number.isFinite(resetMs) && resetMs < now) return "stale";
   const observedMs = Date.parse(observedAt);
-  if (Number.isFinite(observedMs) && now - observedMs > 24 * 60 * 60 * 1000) return "stale";
-  const status = typeof info.status === "string" ? info.status.toLowerCase() : "";
-  if (status.includes("reject") || status.includes("exhaust")) return "exhausted";
+  if (Number.isFinite(observedMs) && now - observedMs > 24 * 60 * 60 * 1000)
+    return "stale";
+  const status =
+    typeof info.status === "string" ? info.status.toLowerCase() : "";
+  if (status.includes("reject") || status.includes("exhaust"))
+    return "exhausted";
   if (percentRemaining !== null && percentRemaining <= 0) return "exhausted";
   if (percentRemaining !== null && percentRemaining <= 20) return "low";
   return "ok";
 }
 
-function quotaSnapshotStatus(windows: ProviderQuotaWindow[]): ProviderQuotaStatus {
-  if (windows.some((window) => window.status === "exhausted")) return "exhausted";
+function quotaSnapshotStatus(
+  windows: ProviderQuotaWindow[],
+): ProviderQuotaStatus {
+  if (windows.some((window) => window.status === "exhausted"))
+    return "exhausted";
   if (windows.some((window) => window.status === "low")) return "low";
   if (windows.some((window) => window.status === "ok")) return "ok";
   if (windows.some((window) => window.status === "stale")) return "stale";
   return "unknown";
 }
 
-function providerQuotaEvidenceFromPayload(value: unknown): ProviderQuotaEvidence[] {
+function providerQuotaEvidenceFromPayload(
+  value: unknown,
+): ProviderQuotaEvidence[] {
   if (!value || typeof value !== "object") return [];
   const raw = value as Record<string, unknown>;
   const rows = Array.isArray(raw.rate_limits) ? raw.rate_limits : [];
@@ -12009,8 +12392,12 @@ function providerQuotaEvidenceFromPayload(value: unknown): ProviderQuotaEvidence
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
     const item = row as Record<string, unknown>;
-    const provider = typeof item.provider === "string" ? quotaProviderFromInfo(item, "anthropic") : null;
-    const rateLimitType = typeof item.rateLimitType === "string" ? item.rateLimitType : "";
+    const provider =
+      typeof item.provider === "string"
+        ? quotaProviderFromInfo(item, "anthropic")
+        : null;
+    const rateLimitType =
+      typeof item.rateLimitType === "string" ? item.rateLimitType : "";
     if (!provider || !rateLimitType) continue;
     const utilization =
       typeof item.utilization === "number" && Number.isFinite(item.utilization)
@@ -12021,16 +12408,22 @@ function providerQuotaEvidenceFromPayload(value: unknown): ProviderQuotaEvidence
       rateLimitType,
       ...(typeof item.status === "string" ? { status: item.status } : {}),
       ...(utilization !== undefined ? { utilization } : {}),
-      ...(typeof item.resetsAt === "string" || typeof item.resetsAt === "number" || item.resetsAt === null
+      ...(typeof item.resetsAt === "string" ||
+      typeof item.resetsAt === "number" ||
+      item.resetsAt === null
         ? { resetsAt: item.resetsAt }
         : {}),
-      ...(typeof item.observedAt === "string" ? { observedAt: item.observedAt } : {}),
+      ...(typeof item.observedAt === "string"
+        ? { observedAt: item.observedAt }
+        : {}),
     });
   }
   return out;
 }
 
-function providerQuotaEvidenceFromSessions(sessions: readonly Session[]): ProviderQuotaEvidence[] {
+function providerQuotaEvidenceFromSessions(
+  sessions: readonly Session[],
+): ProviderQuotaEvidence[] {
   const out: ProviderQuotaEvidence[] = [];
   for (const session of sessions) {
     const info = session.provider_rate_limit_info;
@@ -12046,12 +12439,14 @@ function providerQuotaEvidenceFromSessions(sessions: readonly Session[]): Provid
       provider,
       rateLimitType,
       ...(typeof info.status === "string" ? { status: info.status } : {}),
-      ...(typeof info.utilization === "number" && Number.isFinite(info.utilization)
+      ...(typeof info.utilization === "number" &&
+      Number.isFinite(info.utilization)
         ? { utilization: info.utilization }
         : {}),
       ...(typeof info.resetsAt === "string" || typeof info.resetsAt === "number"
         ? { resetsAt: info.resetsAt }
-        : typeof info.overageResetsAt === "string" || typeof info.overageResetsAt === "number"
+        : typeof info.overageResetsAt === "string" ||
+            typeof info.overageResetsAt === "number"
           ? { resetsAt: info.overageResetsAt }
           : {}),
       observedAt,
@@ -12064,22 +12459,39 @@ function buildProviderQuotaSnapshots(
   sessions: readonly Session[],
   remoteEvidence: readonly ProviderQuotaEvidence[] = [],
 ): Record<Provider, ProviderQuotaSnapshot> {
-  const latest: Partial<Record<Provider, Partial<Record<ProviderQuotaWindowId, {
-    info: Record<string, unknown>;
-    observedAt: string;
-  }>>>> = {};
+  const latest: Partial<
+    Record<
+      Provider,
+      Partial<
+        Record<
+          ProviderQuotaWindowId,
+          {
+            info: Record<string, unknown>;
+            observedAt: string;
+          }
+        >
+      >
+    >
+  > = {};
   const evidence = [
     ...providerQuotaEvidenceFromSessions(sessions),
     ...remoteEvidence,
   ];
   for (const row of evidence) {
-    const observedAt = typeof row.observedAt === "string" && row.observedAt ? row.observedAt : new Date().toISOString();
+    const observedAt =
+      typeof row.observedAt === "string" && row.observedAt
+        ? row.observedAt
+        : new Date().toISOString();
     const info: Record<string, unknown> = {
       provider: row.provider,
       rateLimitType: row.rateLimitType,
       ...(row.status ? { status: row.status } : {}),
-      ...(typeof row.utilization === "number" ? { utilization: row.utilization } : {}),
-      ...(row.resetsAt !== undefined && row.resetsAt !== null ? { resetsAt: row.resetsAt } : {}),
+      ...(typeof row.utilization === "number"
+        ? { utilization: row.utilization }
+        : {}),
+      ...(row.resetsAt !== undefined && row.resetsAt !== null
+        ? { resetsAt: row.resetsAt }
+        : {}),
     };
     const provider = row.provider;
     const windowId = quotaWindowIdFromInfo(info);
@@ -12094,22 +12506,32 @@ function buildProviderQuotaSnapshots(
 
   const out = {} as Record<Provider, ProviderQuotaSnapshot>;
   for (const provider of PROVIDERS) {
-    const windows = PROVIDER_QUOTA_WINDOW_DEFS[provider].map((def): ProviderQuotaWindow => {
-      const evidence = latest[provider]?.[def.id];
-      const percentRemaining = evidence ? quotaPercentRemaining(evidence.info) : null;
-      const resetAt = evidence ? quotaResetAt(evidence.info) : null;
-      return {
-        ...def,
-        status: quotaWindowStatus(evidence?.info ?? null, percentRemaining, resetAt, evidence?.observedAt ?? null),
-        percentRemaining,
-        resetAt,
-        observedAt: evidence?.observedAt ?? null,
-      };
-    });
-    const observedAt = windows
-      .map((window) => window.observedAt)
-      .filter((value): value is string => Boolean(value))
-      .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
+    const windows = PROVIDER_QUOTA_WINDOW_DEFS[provider].map(
+      (def): ProviderQuotaWindow => {
+        const evidence = latest[provider]?.[def.id];
+        const percentRemaining = evidence
+          ? quotaPercentRemaining(evidence.info)
+          : null;
+        const resetAt = evidence ? quotaResetAt(evidence.info) : null;
+        return {
+          ...def,
+          status: quotaWindowStatus(
+            evidence?.info ?? null,
+            percentRemaining,
+            resetAt,
+            evidence?.observedAt ?? null,
+          ),
+          percentRemaining,
+          resetAt,
+          observedAt: evidence?.observedAt ?? null,
+        };
+      },
+    );
+    const observedAt =
+      windows
+        .map((window) => window.observedAt)
+        .filter((value): value is string => Boolean(value))
+        .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
     out[provider] = {
       provider,
       status: quotaSnapshotStatus(windows),
@@ -12157,25 +12579,33 @@ function ProviderCapacityStrip({
 }) {
   const snapshot = snapshots[selectedProvider];
   return (
-    <div className={`home-provider-capacity-panel is-${snapshot.status}`} aria-label={`${PROVIDER_LABELS[selectedProvider]} usage remaining`}>
+    <div
+      className={`home-provider-capacity-panel is-${snapshot.status}`}
+      aria-label={`${PROVIDER_LABELS[selectedProvider]} usage remaining`}
+    >
       <div className="home-provider-capacity-head">
         <span>Capacity</span>
         <span>
-          {snapshot.observedAt ? `Last captured ${formatProviderQuotaTimestamp(snapshot.observedAt)}` : "No recent capture"}
+          {snapshot.observedAt
+            ? `Last captured ${formatProviderQuotaTimestamp(snapshot.observedAt)}`
+            : "No recent capture"}
         </span>
       </div>
       <div className="home-provider-capacity-rows">
         {snapshot.windows.map((window) => (
-          <div className={`home-provider-capacity-row is-${window.status}`} key={window.id}>
+          <div
+            className={`home-provider-capacity-row is-${window.status}`}
+            key={window.id}
+          >
             <span className="home-provider-capacity-label">{window.label}</span>
             <span className="home-provider-capacity-meter" aria-hidden="true">
-              <span
-                style={{ width: `${window.percentRemaining ?? 0}%` }}
-              />
+              <span style={{ width: `${window.percentRemaining ?? 0}%` }} />
             </span>
             <span className="home-provider-capacity-value">
               {providerQuotaSummary(window)}
-              {providerQuotaResetLabel(window) ? ` · ${providerQuotaResetLabel(window)}` : ""}
+              {providerQuotaResetLabel(window)
+                ? ` · ${providerQuotaResetLabel(window)}`
+                : ""}
             </span>
           </div>
         ))}
@@ -12711,23 +13141,12 @@ function RunHelpScreen() {
       <section className="run-help-section">
         <h2 className="run-help-title">Keyboard</h2>
         <div className="run-help-list">
-          <div className="run-help-row">
-            <span className="run-help-key">R</span>
-            <span>
-              Refresh the transcript — force-pull any durable messages that
-              haven&apos;t been delivered yet. Works on the chat transcript and
-              the Turns page; click the transcript (or press Tab) to focus it
-              first.
-            </span>
-          </div>
-          <div className="run-help-row">
-            <span className="run-help-key">Home / End</span>
-            <span>Jump to the start or the live tail of the conversation.</span>
-          </div>
-          <div className="run-help-row">
-            <span className="run-help-key">Tab</span>
-            <span>Move focus between the composer and the transcript.</span>
-          </div>
+          {KEYBOARD_SHORTCUTS.map((shortcut) => (
+            <div className="run-help-row" key={shortcut.id}>
+              <span className="run-help-key">{shortcut.keys}</span>
+              <span>{shortcut.description}</span>
+            </div>
+          ))}
         </div>
       </section>
       <section
@@ -12759,11 +13178,23 @@ function RunHelpScreen() {
   );
 }
 
+// The visible pane reports its current in-session location up to the App so the
+// App-level title chrome can render the breadcrumb trail. Mirrors the
+// onConnectionLabelChange bubble-up; null when the pane isn't the visible one.
+type SessionLocation = {
+  tab: string;
+  turnNumber: number | null;
+  pageNumber: number | null;
+  staticPath: string | null;
+  turnUnavailable: boolean;
+};
+
 function ChatPane({
   session,
   visible,
   onSessionPatch,
   onConnectionLabelChange,
+  onLocationChange,
   onRefreshFlashChange,
   onForkMessage,
   pendingScrollMessageId,
@@ -12788,6 +13219,7 @@ function ChatPane({
   visible: boolean;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onConnectionLabelChange: (id: string, label: string | null) => void;
+  onLocationChange: (id: string, location: SessionLocation | null) => void;
   // Transient "Refreshed" confirmation, surfaced in the same title-overlay
   // slot as the connection pill. Bubbled per-session so the parent shows it
   // for the active pane only.
@@ -12887,9 +13319,7 @@ function ChatPane({
     initialAppRoute?.tab ??
     initialRunRoute?.tab ??
     (pendingScrollMessageId?.trim() ? "chat" : "turns");
-  const [activeTab, setActiveTab] = useState<RunTab>(
-    initialTab,
-  );
+  const [activeTab, setActiveTab] = useState<RunTab>(initialTab);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
     initialAppRoute?.tab === "settings"
       ? initialAppRoute.settingsTab
@@ -12911,6 +13341,12 @@ function ChatPane({
   const [pendingRouteTurnNumber, setPendingRouteTurnNumber] = useState<
     number | null
   >(initialRunRoute?.tab === "turns" ? initialRunRoute.turnNumber : null);
+  // The page ordinal from a deep-linked /turns/{n}/pages/{p}. Held until the
+  // turn resolves, then applied to selectedTurnPageRef so the activity fetch
+  // loads the linked page instead of the default (last) page.
+  const [pendingRoutePageNumber, setPendingRoutePageNumber] = useState<
+    number | null
+  >(initialRunRoute?.tab === "turns" ? initialRunRoute.pageNumber : null);
   const [pendingTranscriptMessageId, setPendingTranscriptMessageId] = useState<
     string | null
   >(null);
@@ -12947,6 +13383,9 @@ function ChatPane({
   );
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
+  const isAntigravity = isAntigravityRunMode(session.mode);
+  const usesModel = sessionModeUsesModel(session.mode);
+  const usesEffort = sessionModeUsesEffort(session.mode);
   const ready = sessionContainerAvailable(session);
   const scopedSessionPathForPane = useCallback(
     (path: string) => appendQueryParam(path, "session_scope", sessionScope),
@@ -13043,7 +13482,9 @@ function ChatPane({
     ? runPrefs.claudeModelId
     : isCodex
       ? runPrefs.codexModelId
-      : "";
+      : isAntigravity
+        ? runPrefs.antigravityModelId
+        : "";
   const preferredEffortId = isClaude
     ? runPrefs.claudeEffort
     : isCodex
@@ -13053,7 +13494,9 @@ function ChatPane({
     ? DEFAULT_CLAUDE_MODEL_ID
     : isCodex
       ? DEFAULT_CODEX_MODEL_ID
-      : "";
+      : isAntigravity
+        ? DEFAULT_ANTIGRAVITY_MODEL_ID
+        : "";
   const fallbackEffortId = isClaude
     ? DEFAULT_CLAUDE_EFFORT_ID
     : isCodex
@@ -14305,6 +14748,7 @@ function ChatPane({
     if (route.tab === "turns") {
       setActiveTab("turns");
       setPendingRouteTurnNumber(route.turnNumber);
+      setPendingRoutePageNumber(route.pageNumber);
       setRouteTurnUnavailable(
         route.turnSegmentPresent && route.turnNumber == null,
       );
@@ -14330,6 +14774,20 @@ function ChatPane({
     }
     if (route.tab === "session-data") {
       setActiveTab("session-data");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "files") {
+      setActiveTab("files");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "background") {
+      setActiveTab("background");
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -16318,8 +16776,8 @@ function ChatPane({
       displayAttachments,
       skillName,
       followUp,
-      model: isClaude || isCodex ? selectedModelId : "",
-      effort: isClaude || isCodex ? selectedEffortId : "",
+      model: usesModel ? selectedModelId : "",
+      effort: usesEffort ? selectedEffortId : "",
       turnStart,
       submitAccepted: false,
       submitSurface,
@@ -16742,7 +17200,7 @@ function ChatPane({
     ? selectedTurnId
     : selectedTurnHasPendingAnchor
       ? selectedTurnId
-    : latestTurnId;
+      : latestTurnId;
   const routedSelectedTurnId =
     activeTab === "turns" ? effectiveSelectedTurnId : null;
   const projectedSelectedTurnNumber =
@@ -16763,6 +17221,17 @@ function ChatPane({
       ? (pendingRouteTurnNumber ??
         projectedSelectedTurnNumber ??
         anchoredSelectedTurnNumber)
+      : null;
+  // The page ordinal the URL should name. While a deep-linked page is pending,
+  // honor it; otherwise reflect the activity endpoint's resolved current page
+  // (which defaults to the last page), so a bare /turns/{n} canonicalizes to
+  // /turns/{n}/pages/{N} once the page directory loads and tracks paging after.
+  const routedSelectedPageNumber =
+    activeTab === "turns"
+      ? (pendingRoutePageNumber ??
+        (effectiveSelectedTurnId
+          ? (turnActivityPageInfo[effectiveSelectedTurnId]?.page ?? null)
+          : null))
       : null;
   const transcriptHrefForEntry = useCallback(
     (entry: TranscriptEntry): string | undefined => {
@@ -16901,6 +17370,15 @@ function ChatPane({
         (turn) => turn.turnNumber === pendingRouteTurnNumber,
       );
       if (match) {
+        // Apply a deep-linked page to this turn before selection so the
+        // activity fetch loads it instead of the default (last) page.
+        if (pendingRoutePageNumber != null) {
+          selectedTurnPageRef.current = {
+            ...selectedTurnPageRef.current,
+            [match.turnId]: pendingRoutePageNumber,
+          };
+          setPendingRoutePageNumber(null);
+        }
         if (selectedTurnId !== match.turnId) setSelectedTurnId(match.turnId);
         setRouteTurnUnavailable(false);
         setPendingRouteTurnNumber(null);
@@ -16923,6 +17401,7 @@ function ChatPane({
   }, [
     historyBootstrapped,
     latestTurnId,
+    pendingRoutePageNumber,
     pendingRouteTurnNumber,
     resolveRouteTurnNumber,
     routeTurnUnavailable,
@@ -16941,7 +17420,12 @@ function ChatPane({
       // re-shows the explicit "this turn isn't available" view rather than
       // silently landing on the latest turn.
       if (!routeTurnUnavailable) {
-        replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber);
+        replaceSessionRoute(
+          session.id,
+          "turns",
+          routedSelectedTurnNumber,
+          routedSelectedPageNumber,
+        );
       }
     } else if (activeTab === "settings") {
       replaceAppRoute("settings", settingsTab, adminView);
@@ -16949,6 +17433,10 @@ function ChatPane({
       replaceAppRoute("help");
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
+    } else if (activeTab === "files") {
+      replaceSessionRoute(session.id, "files");
+    } else if (activeTab === "background") {
+      replaceSessionRoute(session.id, "background");
     } else if (activeTab === "chat") {
       replaceSessionTranscriptRoute(session.id);
     } else {
@@ -16960,6 +17448,7 @@ function ChatPane({
     effectivePendingScrollMessageId,
     publicView,
     routeTurnUnavailable,
+    routedSelectedPageNumber,
     routedSelectedTurnNumber,
     session.id,
     settingsTab,
@@ -17440,6 +17929,28 @@ function ChatPane({
     onConnectionLabelChange(session.id, visibleConnectionLabel);
     return () => onConnectionLabelChange(session.id, null);
   }, [onConnectionLabelChange, session.id, visibleConnectionLabel]);
+
+  // Bubble the visible pane's in-session location up for the breadcrumb trail.
+  useEffect(() => {
+    if (!visible) return;
+    onLocationChange(session.id, {
+      tab: activeTab,
+      turnNumber: routedSelectedTurnNumber,
+      pageNumber: routedSelectedPageNumber,
+      staticPath: activeTab === "static" ? staticPagePath : null,
+      turnUnavailable: routeTurnUnavailable,
+    });
+    return () => onLocationChange(session.id, null);
+  }, [
+    visible,
+    session.id,
+    onLocationChange,
+    activeTab,
+    routedSelectedTurnNumber,
+    routedSelectedPageNumber,
+    staticPagePath,
+    routeTurnUnavailable,
+  ]);
 
   const visibleRefreshFlash = refreshFlashLabel({
     visible,
@@ -18160,6 +18671,24 @@ function ChatPane({
                 }}
                 onBugLabelSave={saveSessionBugLabel}
                 onBugLabelsSave={saveSessionBugLabels}
+                onRename={
+                  readOnly
+                    ? undefined
+                    : async (next) => {
+                        const res = await authedFetch(
+                          `/api/sessions/${session.id}`,
+                          {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ name: next }),
+                          },
+                        );
+                        if (!res.ok)
+                          throw new Error(`rename failed: ${res.status}`);
+                        const updated = normalizeSession(await res.json());
+                        onSessionPatch(session.id, { name: updated.name });
+                      }
+                }
                 readOnly={readOnly}
               />
             ) : activeTab === "settings" ? (
@@ -18303,11 +18832,11 @@ function ChatPane({
                           onForkMessage({
                             sourceSession: session,
                             forkedEntry,
-                            model: isClaude || isCodex ? selectedModelId : "",
+                            model: usesModel ? selectedModelId : "",
                             // Fork inherits the source pane's effort pick so the
                             // forked pod boots with the same reasoning depth the
                             // user had been working at.
-                            effort: isClaude || isCodex ? selectedEffortId : "",
+                            effort: usesEffort ? selectedEffortId : "",
                           })
                   }
                   onOpenBackgroundTask={
@@ -18717,7 +19246,7 @@ function ChatPane({
                   },
                 }}
                 modelChip={
-                  isClaude || isCodex ? (
+                  usesModel ? (
                     <span
                       className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
                       title={modelChipTitle}
@@ -18896,6 +19425,7 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
               visible
               onSessionPatch={noop}
               onConnectionLabelChange={noop}
+              onLocationChange={noop}
               onRefreshFlashChange={noop}
               onForkMessage={readonlyFork}
               pendingScrollMessageId={pendingScrollMessageId}
@@ -18988,7 +19518,9 @@ function AuthenticatedApp() {
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
   const [appConfigLoaded, setAppConfigLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [providerQuotaEvidence, setProviderQuotaEvidence] = useState<ProviderQuotaEvidence[]>([]);
+  const [providerQuotaEvidence, setProviderQuotaEvidence] = useState<
+    ProviderQuotaEvidence[]
+  >([]);
   const providerQuotaSnapshots = useMemo(
     () => buildProviderQuotaSnapshots(sessions, providerQuotaEvidence),
     [providerQuotaEvidence, sessions],
@@ -19400,6 +19932,17 @@ function AuthenticatedApp() {
         else delete next[id];
         return next;
       });
+    },
+    [],
+  );
+  // Current in-session location of each visible pane, bubbled up so the
+  // App-level title chrome can render the breadcrumb trail.
+  const [sessionLocations, setSessionLocations] = useState<
+    Record<string, SessionLocation | null>
+  >({});
+  const updateSessionLocation = useCallback(
+    (id: string, location: SessionLocation | null) => {
+      setSessionLocations((prev) => ({ ...prev, [id]: location }));
     },
     [],
   );
@@ -20344,7 +20887,8 @@ function AuthenticatedApp() {
         const res = await authedFetch("/api/provider-quotas");
         if (!res.ok) throw new Error(`provider quotas failed: ${res.status}`);
         const payload = await res.json();
-        if (!cancelled) setProviderQuotaEvidence(providerQuotaEvidenceFromPayload(payload));
+        if (!cancelled)
+          setProviderQuotaEvidence(providerQuotaEvidenceFromPayload(payload));
       } catch {
         if (!cancelled) setProviderQuotaEvidence([]);
       }
@@ -20883,11 +21427,7 @@ function AuthenticatedApp() {
 
   function openSession(id: string, e: ReactMouseEvent) {
     if (e.ctrlKey || e.metaKey) {
-      window.open(
-        sessionUrl(id),
-        "_blank",
-        "noopener,noreferrer",
-      );
+      window.open(sessionUrl(id), "_blank", "noopener,noreferrer");
       return;
     }
     // A tap on a session row is a navigation; close the compact nav drawer so
@@ -21028,10 +21568,9 @@ function AuthenticatedApp() {
         requestedInitialSkillName) &&
       CHAT_MODES.has(mode);
     const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
-    const seedModel =
-      selectedProvider === "anthropic" || selectedProvider === "codex"
-        ? selectedHomeModelId
-        : "";
+    const seedModel = providerUsesModel(selectedProvider)
+      ? selectedHomeModelId
+      : "";
     const seedEffort =
       selectedProvider === "anthropic" || selectedProvider === "codex"
         ? selectedHomeEffortId
@@ -21084,7 +21623,9 @@ function AuthenticatedApp() {
           ...(homeBugLabels.length > 0 ? { bug_labels: homeBugLabels } : {}),
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(requestedName ? { name: requestedName } : {}),
-          ...(sessionModel || sessionEffort ? { model: sessionModel, effort: sessionEffort } : {}),
+          ...(sessionModel || sessionEffort
+            ? { model: sessionModel, effort: sessionEffort }
+            : {}),
           ...(initialTurnPayload ? { initial_turn: initialTurnPayload } : {}),
         }),
       });
@@ -21607,7 +22148,9 @@ function AuthenticatedApp() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : [];
+        : selectedProvider === "antigravity"
+          ? ANTIGRAVITY_MODELS
+          : [];
   const homeModelApplies =
     defaultInteraction === "gui" && homeModelOptions.length > 0;
   const selectedHomeModelId =
@@ -21615,7 +22158,9 @@ function AuthenticatedApp() {
       ? runPrefs.claudeModelId
       : selectedProvider === "codex"
         ? runPrefs.codexModelId
-        : "";
+        : selectedProvider === "antigravity"
+          ? runPrefs.antigravityModelId
+          : "";
   const selectedHomeEffortId =
     selectedProvider === "anthropic"
       ? runPrefs.claudeEffort
@@ -21639,6 +22184,23 @@ function AuthenticatedApp() {
     activeWorkspaceSession == null
       ? null
       : (sessionRefreshFlashes[activeWorkspaceSession.id] ?? null);
+  const activeWorkspaceLocation =
+    activeWorkspaceSession == null
+      ? null
+      : (sessionLocations[activeWorkspaceSession.id] ?? null);
+  // Compact-shell orientation: the location label + parent target for the
+  // MobileTopBar back+title hybrid (the full trail is desktop-only).
+  const mobileLocationLabel = activeWorkspaceLocation
+    ? (breadcrumbCompactLabel(activeWorkspaceLocation) ?? undefined)
+    : undefined;
+  const mobileUpHref =
+    activeWorkspaceLocation && activeWorkspaceSession
+      ? breadcrumbUpHref(
+          activeWorkspaceSession.id,
+          activeWorkspaceLocation,
+          window.location.href,
+        )
+      : null;
   const useHomeTitleChrome =
     active == null || homeEditingTitle || pendingCreateTitleSessionId != null;
   const showWorkspaceTitleChrome =
@@ -21730,19 +22292,48 @@ function AuthenticatedApp() {
             maxLength={80}
           />
         ) : (
-          <button
-            type="button"
-            className="run-header-name-btn"
-            title={
-              readOnlySessionView
-                ? activeWorkspaceSession.name
-                : "click to rename"
-            }
-            disabled={readOnlySessionView}
-            onClick={() => beginSessionTitleEdit(activeWorkspaceSession)}
-          >
-            {activeWorkspaceSession.name}
-          </button>
+          <>
+            <a
+              className="run-header-name-btn workspace-crumb-name"
+              href={buildSessionRouteUrl(
+                window.location.href,
+                activeWorkspaceSession.id,
+                "session-data",
+              )}
+              title="open session data"
+              aria-current={
+                activeWorkspaceLocation?.tab === "session-data"
+                  ? "page"
+                  : undefined
+              }
+              onClick={(e) => {
+                if (
+                  e.button !== 0 ||
+                  e.metaKey ||
+                  e.ctrlKey ||
+                  e.shiftKey ||
+                  e.altKey
+                )
+                  return;
+                e.preventDefault();
+                navigateToSessionRoute(
+                  buildSessionRouteUrl(
+                    window.location.href,
+                    activeWorkspaceSession.id,
+                    "session-data",
+                  ),
+                );
+              }}
+            >
+              {activeWorkspaceSession.name}
+            </a>
+            {activeWorkspaceLocation && (
+              <WorkspaceBreadcrumbTrail
+                sessionId={activeWorkspaceSession.id}
+                location={activeWorkspaceLocation}
+              />
+            )}
+          </>
         )
       ) : null}
       {!useHomeTitleChrome && activeConnectionLabel && (
@@ -21775,189 +22366,181 @@ function AuthenticatedApp() {
   // components/ui/sheet.tsx). No parallel mobile scaffold.
   const sidebarBody = (
     <>
-        <div className="sidebar-brand">
+      <div className="sidebar-brand">
+        <button
+          className={`sidebar-home${active == null ? " is-active" : ""}`}
+          onClick={goHome}
+          title="Home"
+          aria-label="Home"
+          aria-current={active == null ? "page" : undefined}
+        >
+          <span className="sidebar-home-label">tank-operator</span>
+        </button>
+        <div className="sidebar-brand-actions">
           <button
-            className={`sidebar-home${active == null ? " is-active" : ""}`}
-            onClick={goHome}
-            title="Home"
-            aria-label="Home"
-            aria-current={active == null ? "page" : undefined}
+            className="sidebar-collapse"
+            onClick={() => setSidebarCollapsed((v) => !v)}
+            title={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+            aria-label={
+              sidebarCollapsed ? "expand sidebar" : "collapse sidebar"
+            }
+            aria-pressed={sidebarCollapsed}
           >
-            <span className="sidebar-home-label">tank-operator</span>
+            <IconPanelToggle collapsed={sidebarCollapsed} />
           </button>
-          <div className="sidebar-brand-actions">
-            <button
-              className="sidebar-collapse"
-              onClick={() => setSidebarCollapsed((v) => !v)}
-              title={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
-              aria-label={
-                sidebarCollapsed ? "expand sidebar" : "collapse sidebar"
-              }
-              aria-pressed={sidebarCollapsed}
-            >
-              <IconPanelToggle collapsed={sidebarCollapsed} />
-            </button>
-          </div>
         </div>
+      </div>
 
-        {error && <pre className="error">{error}</pre>}
+      {error && <pre className="error">{error}</pre>}
 
-        <div className="sidebar-list">
-          <div className="sidebar-list-head">
-            <div className="sidebar-section-label">Sessions</div>
-            <button
-              className="sidebar-new-session"
-              onClick={goHome}
-              aria-label="New session"
-              title="new session"
-            >
-              <span className="row-icon">
-                <IconPlus />
-              </span>
-            </button>
-          </div>
-          <ul className="sessions">
-            {sessions.length === 0 ? (
-              <li className="sessions-empty">no sessions</li>
-            ) : (
-              sessions.map((s) => {
-                const isLive = s.status === "Active";
-                const isClosing = closingIds.has(s.id);
-                const isActive = active === s.id && !isClosing;
-                const avatar = getSessionAvatarByID(s.agent_avatar_id);
-                const statusDotClass = sessionStatusDotClass(
-                  s,
-                  sessionActivities[s.id],
-                );
-                const statusLabel = sessionStatusLabel(
-                  s,
-                  sessionActivities[s.id],
-                );
-                const skillStateClass = sessionSkillStateClass(s);
-                return (
-                  <li
-                    key={s.id}
-                    data-session-id={s.id}
-                    className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
-                    draggable={!isClosing && !readOnlySessionView && !isCompact}
-                    onDragStart={(e) => dragSessionStart(s.id, e)}
-                    onDragOver={(e) => dragSessionOver(s.id, e)}
-                    onDrop={(e) => dropSession(s.id, e)}
-                    onDragEnd={dragSessionEnd}
-                    onClick={
-                      isClosing ? undefined : (e) => openSession(s.id, e)
-                    }
-                    title={
-                      sidebarCollapsed
-                        ? `${s.name} (${statusLabel})`
-                        : undefined
-                    }
-                  >
-                    <SessionAvatarIcon
-                      avatar={avatar}
-                      className="session-avatar"
-                    />
-                    <div className="session-row-top">
-                      {/* Session name is now a read-only label here; rename
+      <div className="sidebar-list">
+        <div className="sidebar-list-head">
+          <div className="sidebar-section-label">Sessions</div>
+          <button
+            className="sidebar-new-session"
+            onClick={goHome}
+            aria-label="New session"
+            title="new session"
+          >
+            <span className="row-icon">
+              <IconPlus />
+            </span>
+          </button>
+        </div>
+        <ul className="sessions">
+          {sessions.length === 0 ? (
+            <li className="sessions-empty">no sessions</li>
+          ) : (
+            sessions.map((s) => {
+              const isLive = s.status === "Active";
+              const isClosing = closingIds.has(s.id);
+              const isActive = active === s.id && !isClosing;
+              const avatar = getSessionAvatarByID(s.agent_avatar_id);
+              const statusDotClass = sessionStatusDotClass(
+                s,
+                sessionActivities[s.id],
+              );
+              const statusLabel = sessionStatusLabel(
+                s,
+                sessionActivities[s.id],
+              );
+              const skillStateClass = sessionSkillStateClass(s);
+              return (
+                <li
+                  key={s.id}
+                  data-session-id={s.id}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                  draggable={!isClosing && !readOnlySessionView && !isCompact}
+                  onDragStart={(e) => dragSessionStart(s.id, e)}
+                  onDragOver={(e) => dragSessionOver(s.id, e)}
+                  onDrop={(e) => dropSession(s.id, e)}
+                  onDragEnd={dragSessionEnd}
+                  onClick={isClosing ? undefined : (e) => openSession(s.id, e)}
+                  title={
+                    sidebarCollapsed ? `${s.name} (${statusLabel})` : undefined
+                  }
+                >
+                  <SessionAvatarIcon
+                    avatar={avatar}
+                    className="session-avatar"
+                  />
+                  <div className="session-row-top">
+                    {/* Session name is now a read-only label here; rename
                         lives in the chat-pane header (see ChatPane's
                         run-header-title). This avoids the prior
                         sidebar-inline-edit input that opened on a row click
                         and lost typed characters whenever the pod-state
                         re-render or refresh fired underneath it. */}
-                      <span
-                        className="session-open"
+                    <span
+                      className="session-open"
+                      title={isClosing ? "session is closing" : s.name}
+                    >
+                      <span className="session-id">{s.name}</span>
+                    </span>
+                    <SessionTabMenu
+                      session={s}
+                      isClosing={isClosing}
+                      readOnly={readOnlySessionView}
+                      onClose={() => deleteSession(s.id)}
+                    />
+                  </div>
+                  <div className="session-row-bottom">
+                    <span
+                      className={statusDotClass}
+                      title={statusLabel}
+                      aria-label={`status: ${statusLabel}`}
+                    />
+                    <ModeChip
+                      mode={s.mode}
+                      interaction={sessionInteractionForSession(s)}
+                    />
+                    <SessionStats session={s} />
+                    {isClosing && (
+                      <span className="session-closing-chip">closing</span>
+                    )}
+                    {CONFIG_MODES.has(s.mode) && (
+                      <button
+                        className="session-action"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          saveCredentials(s.id);
+                        }}
+                        disabled={
+                          busy || !isLive || isClosing || readOnlySessionView
+                        }
                         title={
-                          isClosing ? "session is closing" : s.name
+                          s.mode === "codex_config"
+                            ? "capture ~/.codex/auth.json from this pod and write it to KV"
+                            : s.mode === "antigravity_config"
+                              ? "capture the agy OAuth token from this pod and write it to KV"
+                              : "capture ~/.claude/.credentials.json from this pod and write it to KV"
                         }
                       >
-                        <span className="session-id">
-                          {s.name}
-                        </span>
-                      </span>
-                      <SessionTabMenu
-                        session={s}
-                        isClosing={isClosing}
-                        readOnly={readOnlySessionView}
-                        onClose={() => deleteSession(s.id)}
-                      />
-                    </div>
-                    <div className="session-row-bottom">
-                      <span
-                        className={statusDotClass}
-                        title={statusLabel}
-                        aria-label={`status: ${statusLabel}`}
-                      />
-                      <ModeChip
-                        mode={s.mode}
-                        interaction={sessionInteractionForSession(s)}
-                      />
-                      <SessionStats session={s} />
-                      {isClosing && (
-                        <span className="session-closing-chip">closing</span>
-                      )}
-                      {CONFIG_MODES.has(s.mode) && (
-                        <button
-                          className="session-action"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            saveCredentials(s.id);
-                          }}
-                          disabled={
-                            busy || !isLive || isClosing || readOnlySessionView
-                          }
-                          title={
-                            s.mode === "codex_config"
-                              ? "capture ~/.codex/auth.json from this pod and write it to KV"
-                              : s.mode === "antigravity_config"
-                                ? "capture the agy OAuth token from this pod and write it to KV"
-                                : "capture ~/.claude/.credentials.json from this pod and write it to KV"
-                          }
-                        >
-                          save
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                );
-              })
-            )}
-          </ul>
-        </div>
-
-        <ClusterHealthWidget enabled={Boolean(user)} />
-
-        <div className="sidebar-footer" data-menu="profile">
-          <button
-            className="profile"
-            onClick={() => setProfileMenuOpen((v) => !v)}
-            title={user.email}
-          >
-            <Avatar user={user} />
-            <span className="profile-text">
-              <span className="profile-name">{user.name || user.email}</span>
-            </span>
-            <span className="profile-kebab">
-              <IconKebab />
-            </span>
-          </button>
-          {profileMenuOpen && (
-            <ul className="dropdown dropdown-profile" role="menu">
-              <li className="dropdown-meta">
-                <span className="dropdown-meta-label">Signed in as</span>
-                <span className="dropdown-meta-value">{user.email}</span>
-              </li>
-              <li className="dropdown-divider" role="separator" />
-              <li>
-                <button onClick={logout}>Sign out</button>
-              </li>
-            </ul>
+                        save
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })
           )}
-        </div>
+        </ul>
+      </div>
+
+      <ClusterHealthWidget enabled={Boolean(user)} />
+
+      <div className="sidebar-footer" data-menu="profile">
+        <button
+          className="profile"
+          onClick={() => setProfileMenuOpen((v) => !v)}
+          title={user.email}
+        >
+          <Avatar user={user} />
+          <span className="profile-text">
+            <span className="profile-name">{user.name || user.email}</span>
+          </span>
+          <span className="profile-kebab">
+            <IconKebab />
+          </span>
+        </button>
+        {profileMenuOpen && (
+          <ul className="dropdown dropdown-profile" role="menu">
+            <li className="dropdown-meta">
+              <span className="dropdown-meta-label">Signed in as</span>
+              <span className="dropdown-meta-value">{user.email}</span>
+            </li>
+            <li className="dropdown-divider" role="separator" />
+            <li>
+              <button onClick={logout}>Sign out</button>
+            </li>
+          </ul>
+        )}
+      </div>
     </>
   );
 
   const activeSessionForChrome =
-    active != null ? sessions.find((s) => s.id === active) ?? null : null;
+    active != null ? (sessions.find((s) => s.id === active) ?? null) : null;
 
   return (
     <div
@@ -22001,6 +22584,12 @@ function AuthenticatedApp() {
                 : undefined
             }
             onOpenNav={() => setNavDrawerOpen(true)}
+            locationLabel={mobileLocationLabel}
+            onBack={
+              mobileLocationLabel && mobileUpHref
+                ? () => navigateToSessionRoute(mobileUpHref)
+                : undefined
+            }
           />
           <Sheet open={navDrawerOpen} onOpenChange={setNavDrawerOpen}>
             <SheetContent
@@ -22345,6 +22934,13 @@ function AuthenticatedApp() {
                                         setRunPref("claudeModelId", model.id);
                                       } else if (selectedProvider === "codex") {
                                         setRunPref("codexModelId", model.id);
+                                      } else if (
+                                        selectedProvider === "antigravity"
+                                      ) {
+                                        setRunPref(
+                                          "antigravityModelId",
+                                          model.id,
+                                        );
                                       }
                                     }}
                                     aria-pressed={selected}
@@ -22427,11 +23023,9 @@ function AuthenticatedApp() {
                               </span>
                             </button>
                           )}
-                          {/* Antigravity is login-only for now (no runnable
-                              gui/cli surface yet), so it gets a standalone
-                              credential-mint action rather than a provider
-                              tile. Folds into the provider picker once the
-                              antigravity-runner lands. */}
+                          {/* Credential-mint sessions remain a setup shortcut
+                              even though Antigravity GUI is selectable through
+                              the provider picker. */}
                           <button
                             className="home-quick-action"
                             onClick={() => createSession("antigravity_config")}
@@ -22698,6 +23292,7 @@ function AuthenticatedApp() {
                       visible={active === s.id}
                       onSessionPatch={patchSession}
                       onConnectionLabelChange={updateSessionConnectionLabel}
+                      onLocationChange={updateSessionLocation}
                       onRefreshFlashChange={updateSessionRefreshFlash}
                       onForkMessage={forkSessionFromMessage}
                       pendingScrollMessageId={
@@ -22719,7 +23314,9 @@ function AuthenticatedApp() {
                       readOnly={readOnlySessionView}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
-                      sidebarTurnsOpenRequest={sessionTurnsOpenRequests[s.id] ?? 0}
+                      sidebarTurnsOpenRequest={
+                        sessionTurnsOpenRequests[s.id] ?? 0
+                      }
                       avatarEditorOpenRequest={
                         avatarEditorOpenRequests[s.id] ?? 0
                       }

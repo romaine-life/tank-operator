@@ -1,7 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyAgyTerminal } from "./runner.js";
+import { classifyAgyTerminal, modelForAgyTurn } from "./runner.js";
+
+test("agy turns require a concrete model", () => {
+  assert.equal(
+    modelForAgyTurn(" Gemini 3.5 Flash (Medium) "),
+    "Gemini 3.5 Flash (Medium)",
+  );
+  assert.equal(modelForAgyTurn(""), null);
+  assert.equal(modelForAgyTurn(undefined), null);
+});
 
 test("zero-step agy timeout is a durable failure, not completion", () => {
   const terminal = classifyAgyTerminal(
@@ -23,7 +32,10 @@ test("zero-step agy timeout is a durable failure, not completion", () => {
     terminal.kind === "failed" ? terminal.metricReason : "",
     "provider_start_timeout",
   );
-  assert.match(terminal.kind === "failed" ? terminal.reason : "", /provider_start_timeout/);
+  assert.match(
+    terminal.kind === "failed" ? terminal.reason : "",
+    /provider_start_timeout/,
+  );
 });
 
 test("zero-step agy model setup failure is a durable failure", () => {
@@ -32,7 +44,8 @@ test("zero-step agy model setup failure is a durable failure", () => {
       exitCode: 0,
       killed: false,
       stdout: "",
-      stderr: "failed to construct executor: neither PlanModel nor RequestedModel specified.",
+      stderr:
+        "failed to construct executor: neither PlanModel nor RequestedModel specified.",
     },
     0,
     false,
@@ -51,7 +64,8 @@ test("zero-step agy auth failure is a durable failure", () => {
       exitCode: 0,
       killed: false,
       stdout: "",
-      stderr: "Request had invalid authentication credentials. status: UNAUTHENTICATED",
+      stderr:
+        "Request had invalid authentication credentials. status: UNAUTHENTICATED",
     },
     0,
     false,
@@ -77,7 +91,10 @@ test("nonzero agy exit remains a provider failure", () => {
   );
 
   assert.deepEqual(terminal.kind, "failed");
-  assert.equal(terminal.kind === "failed" ? terminal.metricReason : "", "nonzero_exit");
+  assert.equal(
+    terminal.kind === "failed" ? terminal.metricReason : "",
+    "nonzero_exit",
+  );
   assert.match(terminal.kind === "failed" ? terminal.reason : "", /agy exit 2/);
 });
 
