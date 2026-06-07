@@ -47,14 +47,16 @@ import {
   interruptOutcomeTotal,
   natsPublishFailureTotal,
   providerErrorTotal,
+  scheduleIntentTotal,
   scheduledWakeupRegisterTotal,
   turnDurationSeconds,
   turnTerminalTotal,
 } from "./metrics.js";
 import {
-  extractScheduleWakeups,
+  inspectScheduleWakeups,
   isAssistantPlannerTextStep,
   isNativeScheduleWakeResponse,
+  isWaitIntentWithoutScheduleStep,
   scheduleAckGraceMs,
   type AntigravityScheduleWakeup,
 } from "./wakeup.js";
@@ -259,6 +261,7 @@ export class Runner {
       const parkNativeSchedule = () => {
         if (scheduledWakeupParked) return;
         scheduledWakeupParked = true;
+        scheduleIntentTotal.labels("parked_after_schedule").inc();
         clearScheduleParkTimers();
         this.driver.interrupt();
       };
@@ -274,7 +277,42 @@ export class Runner {
             async (step) => {
               observedStepCount += 1;
               agyStepTotal.labels(stepKind(step)).inc();
-              for (const wakeup of extractScheduleWakeups(step)) {
+              const scheduleInspection = inspectScheduleWakeups(step);
+              if (scheduleInspection.scheduleCallCount > 0) {
+                scheduleIntentTotal
+                  .labels("native_schedule_call")
+                  .inc(scheduleInspection.scheduleCallCount);
+              }
+              if (scheduleInspection.malformedScheduleCallCount > 0) {
+                scheduleIntentTotal
+                  .labels("malformed_schedule_call")
+                  .inc(scheduleInspection.malformedScheduleCallCount);
+                console.warn(
+                  JSON.stringify({
+                    msg: "antigravity malformed schedule tool call observed",
+                    session_id: this.cfg.sessionId,
+                    turn_id: turn.turnID,
+                    step_index: step.step_index,
+                    count: scheduleInspection.malformedScheduleCallCount,
+                  }),
+                );
+              }
+              if (
+                scheduleInspection.scheduleCallCount === 0 &&
+                registeredSchedulePrompts.length === 0 &&
+                isWaitIntentWithoutScheduleStep(step)
+              ) {
+                scheduleIntentTotal.labels("wait_text_without_schedule").inc();
+                console.warn(
+                  JSON.stringify({
+                    msg: "antigravity wait text without native schedule tool call",
+                    session_id: this.cfg.sessionId,
+                    turn_id: turn.turnID,
+                    step_index: step.step_index,
+                  }),
+                );
+              }
+              for (const wakeup of scheduleInspection.wakeups) {
                 const ok = await this.registerWakeup(wakeup, turn.turnID);
                 wakeupRegistrationFailed = wakeupRegistrationFailed || !ok;
                 if (ok) {

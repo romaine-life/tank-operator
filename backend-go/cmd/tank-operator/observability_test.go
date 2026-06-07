@@ -41,6 +41,25 @@ func TestMetricsEndpointServesPrometheus(t *testing.T) {
 	}
 }
 
+func TestSessionContainerTerminationMetricsUseBoundedLabels(t *testing.T) {
+	promK8sWatchMetrics{}.RecordContainerTermination("custom-container", "custom-reason", 137)
+
+	rr := httptest.NewRecorder()
+	promhttp.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	body, _ := io.ReadAll(rr.Body)
+	got := string(body)
+	for _, want := range []string{
+		"tank_session_container_terminations_total",
+		`container="other"`,
+		`reason="other"`,
+		`exit_code="137"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("metrics scrape missing %s; got: %s", want, got)
+		}
+	}
+}
+
 func TestTurnNumberMissingPhaseLabels(t *testing.T) {
 	cases := map[string]string{
 		"materialize":     "materialize",
