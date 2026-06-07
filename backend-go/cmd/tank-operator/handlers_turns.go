@@ -1213,7 +1213,9 @@ func stampTurnSubmittedSource(events []map[string]any, source, taskID, prompt st
 		return
 	}
 	for _, event := range events {
-		if event["type"] != string(conversation.EventTurnSubmitted) {
+		eventType, _ := event["type"].(string)
+		if eventType != string(conversation.EventTurnSubmitted) &&
+			eventType != string(conversation.EventUserMessageCreated) {
 			continue
 		}
 		payload, _ := event["payload"].(map[string]any)
@@ -1221,11 +1223,21 @@ func stampTurnSubmittedSource(events []map[string]any, source, taskID, prompt st
 			payload = map[string]any{}
 			event["payload"] = payload
 		}
+		if eventType == string(conversation.EventUserMessageCreated) {
+			if source == string(conversation.TurnSubmittedSourceScheduleWakeup) {
+				payload["source"] = source
+				if prompt := strings.TrimSpace(prompt); prompt != "" {
+					payload["prompt"] = prompt
+				}
+			}
+			continue
+		}
 		payload["source"] = source
 		if taskID != "" {
 			payload["task_id"] = taskID
 		}
-		if source == string(conversation.TurnSubmittedSourceBackgroundTask) {
+		if source == string(conversation.TurnSubmittedSourceBackgroundTask) ||
+			source == string(conversation.TurnSubmittedSourceScheduleWakeup) {
 			if prompt := strings.TrimSpace(prompt); prompt != "" {
 				payload["prompt"] = prompt
 			}
