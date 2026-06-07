@@ -69,6 +69,12 @@ import { WorkspaceShell } from "./WorkspaceShell";
 import { useViewport } from "./useViewport";
 import { MobileTopBar } from "./MobileTopBar";
 import { DesktopOnly } from "./DesktopOnly";
+import { KEYBOARD_SHORTCUTS } from "./keyboardShortcuts";
+import {
+  breadcrumbCompactLabel,
+  breadcrumbTrail,
+  breadcrumbUpHref,
+} from "./breadcrumb";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
   buildAppRouteUrl,
@@ -1680,6 +1686,7 @@ function sessionRouteUrl(
   tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
   staticPath?: string | null,
+  pageNumber?: number | null,
 ): string {
   return buildSessionRouteUrl(
     window.location.href,
@@ -1687,6 +1694,7 @@ function sessionRouteUrl(
     tab,
     turnNumber,
     staticPath,
+    pageNumber,
   );
 }
 
@@ -1731,9 +1739,10 @@ function replaceSessionRoute(
   id: string,
   tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
+  pageNumber?: number | null,
 ): void {
   if (routeHasMessageTarget()) return;
-  const next = sessionRouteUrl(id, tab, turnNumber);
+  const next = sessionRouteUrl(id, tab, turnNumber, null, pageNumber);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -1761,6 +1770,87 @@ function replaceAppRoute(
   if (routeHasMessageTarget()) return;
   const next = appRouteUrl(tab, settingsTab, adminView);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+// Breadcrumb navigation. A crumb is a real <a href> (cmd/ctrl-click opens a new
+// tab); a plain click pushes the target URL and fires a synthetic popstate,
+// which the visible pane's existing route listener resolves — no per-target
+// signal plumbing, and it works for every routed surface.
+function navigateToSessionRoute(url: string): void {
+  if (url === window.location.href) return;
+  window.history.pushState({}, "", url);
+  window.dispatchEvent(new PopStateEvent("popstate"));
+}
+
+function BreadcrumbSep() {
+  return (
+    <span className="workspace-crumb-sep" aria-hidden="true">
+      /
+    </span>
+  );
+}
+
+export function BreadcrumbLink({
+  href,
+  label,
+}: {
+  href: string;
+  label: string;
+}) {
+  return (
+    <a
+      className="workspace-crumb"
+      href={href}
+      onClick={(e) => {
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey)
+          return;
+        e.preventDefault();
+        navigateToSessionRoute(href);
+      }}
+    >
+      {label}
+    </a>
+  );
+}
+
+// The breadcrumb segments AFTER the session-name crumb. Climb-only: the section
+// (and, for Turns, the turn and page) are navigable ancestors; the current leaf
+// is non-interactive. The dedicated in-view turn/page dropdowns stay the
+// pickers. Renders nothing for the session-data root or app-level tabs.
+export function WorkspaceBreadcrumbTrail({
+  sessionId,
+  location,
+}: {
+  sessionId: string;
+  location: SessionLocation;
+}) {
+  // Logic lives in the pure, unit-tested breadcrumbTrail; this only maps the
+  // derived crumbs to chrome (link / current marker / structural label).
+  return (
+    <>
+      {breadcrumbTrail(sessionId, location, window.location.href).map(
+        (crumb) => (
+          <span className="workspace-crumb-group" key={crumb.key}>
+            <BreadcrumbSep />
+            {crumb.current ? (
+              <span
+                className="workspace-crumb workspace-crumb-current"
+                aria-current="page"
+              >
+                {crumb.label}
+              </span>
+            ) : crumb.href ? (
+              <BreadcrumbLink href={crumb.href} label={crumb.label} />
+            ) : (
+              <span className="workspace-crumb workspace-crumb-label">
+                {crumb.label}
+              </span>
+            )}
+          </span>
+        ),
+      )}
+    </>
+  );
 }
 
 function closeAvatarPreviewAfterRoutePaint(): void {
@@ -7776,6 +7866,101 @@ function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
   }
 }
 
+function SessionNameCard({
+  name,
+  onRename,
+  readOnly,
+}: {
+  name: string;
+  onRename?: (next: string) => Promise<void>;
+  readOnly?: boolean;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(name);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const begin = () => {
+    setValue(name);
+    setError(null);
+    setEditing(true);
+  };
+  const cancel = () => {
+    setEditing(false);
+    setError(null);
+  };
+  const commit = async () => {
+    const trimmed = value.trim();
+    if (!onRename || trimmed.length === 0 || trimmed === name.trim()) {
+      cancel();
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      await onRename(trimmed);
+      setEditing(false);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="run-session-data-card is-name">
+      <div className="run-session-data-card-top">
+        <span className="run-session-data-card-main">
+          <span className="run-session-data-card-label">Name</span>
+          {editing ? (
+            <input
+              className="run-session-data-name-input"
+              aria-label="Session name"
+              autoFocus
+              value={value}
+              disabled={busy}
+              maxLength={80}
+              onChange={(e) => setValue(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  void commit();
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancel();
+                }
+              }}
+              onBlur={() => void commit()}
+            />
+          ) : (
+            <span className="run-session-data-card-detail">{name}</span>
+          )}
+        </span>
+        {readOnly ? (
+          <span className="run-session-data-readonly">Read-only session</span>
+        ) : editing ? (
+          <button
+            type="button"
+            className="run-session-data-action"
+            disabled={busy}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void commit()}
+          >
+            {busy ? "Saving…" : "Save"}
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={begin}
+          >
+            Rename
+          </button>
+        )}
+      </div>
+      {error && <div className="run-session-data-name-error">{error}</div>}
+    </div>
+  );
+}
+
 function SessionDataScreen({
   rows,
   session,
@@ -7783,6 +7968,7 @@ function SessionDataScreen({
   onOpenTranscript,
   onBugLabelSave,
   onBugLabelsSave,
+  onRename,
   readOnly,
 }: {
   rows: SessionDataStatusRow[];
@@ -7791,6 +7977,7 @@ function SessionDataScreen({
   onOpenTranscript: () => void;
   onBugLabelSave: (name: string | null) => Promise<void>;
   onBugLabelsSave: (names: string[]) => Promise<void>;
+  onRename?: (next: string) => Promise<void>;
   readOnly?: boolean;
 }) {
   const activeCount = rows.filter((row) => row.tone !== "muted").length;
@@ -7818,6 +8005,11 @@ function SessionDataScreen({
             {activeCount}/{rows.length} active
           </span>
         </div>
+        <SessionNameCard
+          name={session.name}
+          onRename={onRename}
+          readOnly={readOnly}
+        />
         <div
           className="run-session-data-page-list"
           aria-label="Session data status"
@@ -12865,23 +13057,12 @@ function RunHelpScreen() {
       <section className="run-help-section">
         <h2 className="run-help-title">Keyboard</h2>
         <div className="run-help-list">
-          <div className="run-help-row">
-            <span className="run-help-key">R</span>
-            <span>
-              Refresh the transcript — force-pull any durable messages that
-              haven&apos;t been delivered yet. Works on the chat transcript and
-              the Turns page; click the transcript (or press Tab) to focus it
-              first.
-            </span>
-          </div>
-          <div className="run-help-row">
-            <span className="run-help-key">Home / End</span>
-            <span>Jump to the start or the live tail of the conversation.</span>
-          </div>
-          <div className="run-help-row">
-            <span className="run-help-key">Tab</span>
-            <span>Move focus between the composer and the transcript.</span>
-          </div>
+          {KEYBOARD_SHORTCUTS.map((shortcut) => (
+            <div className="run-help-row" key={shortcut.id}>
+              <span className="run-help-key">{shortcut.keys}</span>
+              <span>{shortcut.description}</span>
+            </div>
+          ))}
         </div>
       </section>
       <section
@@ -12913,11 +13094,23 @@ function RunHelpScreen() {
   );
 }
 
+// The visible pane reports its current in-session location up to the App so the
+// App-level title chrome can render the breadcrumb trail. Mirrors the
+// onConnectionLabelChange bubble-up; null when the pane isn't the visible one.
+type SessionLocation = {
+  tab: string;
+  turnNumber: number | null;
+  pageNumber: number | null;
+  staticPath: string | null;
+  turnUnavailable: boolean;
+};
+
 function ChatPane({
   session,
   visible,
   onSessionPatch,
   onConnectionLabelChange,
+  onLocationChange,
   onRefreshFlashChange,
   onForkMessage,
   pendingScrollMessageId,
@@ -12942,6 +13135,7 @@ function ChatPane({
   visible: boolean;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onConnectionLabelChange: (id: string, label: string | null) => void;
+  onLocationChange: (id: string, location: SessionLocation | null) => void;
   // Transient "Refreshed" confirmation, surfaced in the same title-overlay
   // slot as the connection pill. Bubbled per-session so the parent shows it
   // for the active pane only.
@@ -13049,6 +13243,12 @@ function ChatPane({
   const [pendingRouteTurnNumber, setPendingRouteTurnNumber] = useState<
     number | null
   >(initialRunRoute?.tab === "turns" ? initialRunRoute.turnNumber : null);
+  // The page ordinal from a deep-linked /turns/{n}/pages/{p}. Held until the
+  // turn resolves, then applied to selectedTurnPageRef so the activity fetch
+  // loads the linked page instead of the default (last) page.
+  const [pendingRoutePageNumber, setPendingRoutePageNumber] = useState<
+    number | null
+  >(initialRunRoute?.tab === "turns" ? initialRunRoute.pageNumber : null);
   const [pendingTranscriptMessageId, setPendingTranscriptMessageId] = useState<
     string | null
   >(null);
@@ -14375,6 +14575,7 @@ function ChatPane({
     if (route.tab === "turns") {
       setActiveTab("turns");
       setPendingRouteTurnNumber(route.turnNumber);
+      setPendingRoutePageNumber(route.pageNumber);
       setRouteTurnUnavailable(
         route.turnSegmentPresent && route.turnNumber == null,
       );
@@ -14400,6 +14601,20 @@ function ChatPane({
     }
     if (route.tab === "session-data") {
       setActiveTab("session-data");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "files") {
+      setActiveTab("files");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "background") {
+      setActiveTab("background");
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -16834,6 +17049,17 @@ function ChatPane({
         projectedSelectedTurnNumber ??
         anchoredSelectedTurnNumber)
       : null;
+  // The page ordinal the URL should name. While a deep-linked page is pending,
+  // honor it; otherwise reflect the activity endpoint's resolved current page
+  // (which defaults to the last page), so a bare /turns/{n} canonicalizes to
+  // /turns/{n}/pages/{N} once the page directory loads and tracks paging after.
+  const routedSelectedPageNumber =
+    activeTab === "turns"
+      ? (pendingRoutePageNumber ??
+        (effectiveSelectedTurnId
+          ? (turnActivityPageInfo[effectiveSelectedTurnId]?.page ?? null)
+          : null))
+      : null;
   const transcriptHrefForEntry = useCallback(
     (entry: TranscriptEntry): string | undefined => {
       if (publicView && publicShareTokenValue) {
@@ -17000,6 +17226,15 @@ function ChatPane({
         (turn) => turn.turnNumber === pendingRouteTurnNumber,
       );
       if (match) {
+        // Apply a deep-linked page to this turn before selection so the
+        // activity fetch loads it instead of the default (last) page.
+        if (pendingRoutePageNumber != null) {
+          selectedTurnPageRef.current = {
+            ...selectedTurnPageRef.current,
+            [match.turnId]: pendingRoutePageNumber,
+          };
+          setPendingRoutePageNumber(null);
+        }
         if (selectedTurnId !== match.turnId) setSelectedTurnId(match.turnId);
         setRouteTurnUnavailable(false);
         setPendingRouteTurnNumber(null);
@@ -17022,6 +17257,7 @@ function ChatPane({
   }, [
     historyBootstrapped,
     latestTurnId,
+    pendingRoutePageNumber,
     pendingRouteTurnNumber,
     resolveRouteTurnNumber,
     routeTurnUnavailable,
@@ -17040,7 +17276,12 @@ function ChatPane({
       // re-shows the explicit "this turn isn't available" view rather than
       // silently landing on the latest turn.
       if (!routeTurnUnavailable) {
-        replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber);
+        replaceSessionRoute(
+          session.id,
+          "turns",
+          routedSelectedTurnNumber,
+          routedSelectedPageNumber,
+        );
       }
     } else if (activeTab === "settings") {
       replaceAppRoute("settings", settingsTab, adminView);
@@ -17048,6 +17289,10 @@ function ChatPane({
       replaceAppRoute("help");
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
+    } else if (activeTab === "files") {
+      replaceSessionRoute(session.id, "files");
+    } else if (activeTab === "background") {
+      replaceSessionRoute(session.id, "background");
     } else if (activeTab === "chat") {
       replaceSessionTranscriptRoute(session.id);
     } else {
@@ -17059,6 +17304,7 @@ function ChatPane({
     effectivePendingScrollMessageId,
     publicView,
     routeTurnUnavailable,
+    routedSelectedPageNumber,
     routedSelectedTurnNumber,
     session.id,
     settingsTab,
@@ -17539,6 +17785,28 @@ function ChatPane({
     onConnectionLabelChange(session.id, visibleConnectionLabel);
     return () => onConnectionLabelChange(session.id, null);
   }, [onConnectionLabelChange, session.id, visibleConnectionLabel]);
+
+  // Bubble the visible pane's in-session location up for the breadcrumb trail.
+  useEffect(() => {
+    if (!visible) return;
+    onLocationChange(session.id, {
+      tab: activeTab,
+      turnNumber: routedSelectedTurnNumber,
+      pageNumber: routedSelectedPageNumber,
+      staticPath: activeTab === "static" ? staticPagePath : null,
+      turnUnavailable: routeTurnUnavailable,
+    });
+    return () => onLocationChange(session.id, null);
+  }, [
+    visible,
+    session.id,
+    onLocationChange,
+    activeTab,
+    routedSelectedTurnNumber,
+    routedSelectedPageNumber,
+    staticPagePath,
+    routeTurnUnavailable,
+  ]);
 
   const visibleRefreshFlash = refreshFlashLabel({
     visible,
@@ -18259,6 +18527,24 @@ function ChatPane({
                 }}
                 onBugLabelSave={saveSessionBugLabel}
                 onBugLabelsSave={saveSessionBugLabels}
+                onRename={
+                  readOnly
+                    ? undefined
+                    : async (next) => {
+                        const res = await authedFetch(
+                          `/api/sessions/${session.id}`,
+                          {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ name: next }),
+                          },
+                        );
+                        if (!res.ok)
+                          throw new Error(`rename failed: ${res.status}`);
+                        const updated = normalizeSession(await res.json());
+                        onSessionPatch(session.id, { name: updated.name });
+                      }
+                }
                 readOnly={readOnly}
               />
             ) : activeTab === "settings" ? (
@@ -18995,6 +19281,7 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
               visible
               onSessionPatch={noop}
               onConnectionLabelChange={noop}
+              onLocationChange={noop}
               onRefreshFlashChange={noop}
               onForkMessage={readonlyFork}
               pendingScrollMessageId={pendingScrollMessageId}
@@ -19501,6 +19788,17 @@ function AuthenticatedApp() {
         else delete next[id];
         return next;
       });
+    },
+    [],
+  );
+  // Current in-session location of each visible pane, bubbled up so the
+  // App-level title chrome can render the breadcrumb trail.
+  const [sessionLocations, setSessionLocations] = useState<
+    Record<string, SessionLocation | null>
+  >({});
+  const updateSessionLocation = useCallback(
+    (id: string, location: SessionLocation | null) => {
+      setSessionLocations((prev) => ({ ...prev, [id]: location }));
     },
     [],
   );
@@ -21742,6 +22040,23 @@ function AuthenticatedApp() {
     activeWorkspaceSession == null
       ? null
       : (sessionRefreshFlashes[activeWorkspaceSession.id] ?? null);
+  const activeWorkspaceLocation =
+    activeWorkspaceSession == null
+      ? null
+      : (sessionLocations[activeWorkspaceSession.id] ?? null);
+  // Compact-shell orientation: the location label + parent target for the
+  // MobileTopBar back+title hybrid (the full trail is desktop-only).
+  const mobileLocationLabel = activeWorkspaceLocation
+    ? (breadcrumbCompactLabel(activeWorkspaceLocation) ?? undefined)
+    : undefined;
+  const mobileUpHref =
+    activeWorkspaceLocation && activeWorkspaceSession
+      ? breadcrumbUpHref(
+          activeWorkspaceSession.id,
+          activeWorkspaceLocation,
+          window.location.href,
+        )
+      : null;
   const useHomeTitleChrome =
     active == null || homeEditingTitle || pendingCreateTitleSessionId != null;
   const showWorkspaceTitleChrome =
@@ -21833,19 +22148,48 @@ function AuthenticatedApp() {
             maxLength={80}
           />
         ) : (
-          <button
-            type="button"
-            className="run-header-name-btn"
-            title={
-              readOnlySessionView
-                ? activeWorkspaceSession.name
-                : "click to rename"
-            }
-            disabled={readOnlySessionView}
-            onClick={() => beginSessionTitleEdit(activeWorkspaceSession)}
-          >
-            {activeWorkspaceSession.name}
-          </button>
+          <>
+            <a
+              className="run-header-name-btn workspace-crumb-name"
+              href={buildSessionRouteUrl(
+                window.location.href,
+                activeWorkspaceSession.id,
+                "session-data",
+              )}
+              title="open session data"
+              aria-current={
+                activeWorkspaceLocation?.tab === "session-data"
+                  ? "page"
+                  : undefined
+              }
+              onClick={(e) => {
+                if (
+                  e.button !== 0 ||
+                  e.metaKey ||
+                  e.ctrlKey ||
+                  e.shiftKey ||
+                  e.altKey
+                )
+                  return;
+                e.preventDefault();
+                navigateToSessionRoute(
+                  buildSessionRouteUrl(
+                    window.location.href,
+                    activeWorkspaceSession.id,
+                    "session-data",
+                  ),
+                );
+              }}
+            >
+              {activeWorkspaceSession.name}
+            </a>
+            {activeWorkspaceLocation && (
+              <WorkspaceBreadcrumbTrail
+                sessionId={activeWorkspaceSession.id}
+                location={activeWorkspaceLocation}
+              />
+            )}
+          </>
         )
       ) : null}
       {!useHomeTitleChrome && activeConnectionLabel && (
@@ -22096,6 +22440,12 @@ function AuthenticatedApp() {
                 : undefined
             }
             onOpenNav={() => setNavDrawerOpen(true)}
+            locationLabel={mobileLocationLabel}
+            onBack={
+              mobileLocationLabel && mobileUpHref
+                ? () => navigateToSessionRoute(mobileUpHref)
+                : undefined
+            }
           />
           <Sheet open={navDrawerOpen} onOpenChange={setNavDrawerOpen}>
             <SheetContent
@@ -22798,6 +23148,7 @@ function AuthenticatedApp() {
                       visible={active === s.id}
                       onSessionPatch={patchSession}
                       onConnectionLabelChange={updateSessionConnectionLabel}
+                      onLocationChange={updateSessionLocation}
                       onRefreshFlashChange={updateSessionRefreshFlash}
                       onForkMessage={forkSessionFromMessage}
                       pendingScrollMessageId={

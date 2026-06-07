@@ -3880,6 +3880,75 @@ button:disabled {
 }
 .run-header-name-btn:hover { color: var(--text-primary); opacity: 0.75; }
 
+/* Breadcrumb trail in the title chrome: muted ancestor crumbs + a primary
+   current leaf, faint slash separators. The name crumb keeps run-header-name-btn
+   sizing and stays prominent; only the trailing segments use .workspace-crumb. */
+.workspace-crumb {
+  font-family: var(--font-primary);
+  font-weight: 400;
+  font-size: var(--text-lg);
+  color: var(--text-muted);
+  background: transparent;
+  border: 0;
+  padding: 0;
+  text-decoration: none;
+  white-space: nowrap;
+  cursor: pointer;
+  min-width: 0;
+}
+.workspace-crumb:hover { color: var(--text-primary); opacity: 0.85; }
+.workspace-crumb-current { color: var(--text-primary); cursor: default; }
+.workspace-crumb-label { color: var(--text-muted); cursor: default; }
+.workspace-crumb-current:hover,
+.workspace-crumb-label:hover { opacity: 1; }
+.workspace-crumb-name { cursor: pointer; overflow: hidden; text-overflow: ellipsis; }
+.workspace-crumb-sep {
+  color: var(--text-faint);
+  font-size: var(--text-lg);
+  /* The crumb groups are flex children of .workspace-title-overlay, so the
+     container's `gap: var(--space-2)` already sits to the LEFT of each slash.
+     Mirror that exact amount on the right (and zero the left) so every slash is
+     centered between its crumbs instead of hugging the one after it. */
+  margin: 0 var(--space-2) 0 0;
+  user-select: none;
+}
+
+/* Session-data inline rename: the visible (non-keyboard) path for renaming,
+   landing point of the breadcrumb name crumb. F2 still renames in the title. */
+.run-session-data-name-input {
+  font: inherit;
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-muted);
+  border-radius: var(--radius-sm);
+  padding: 0.25rem 0.5rem;
+  min-width: 12rem;
+  max-width: 100%;
+}
+.run-session-data-name-error {
+  color: var(--text-danger, #f87171);
+  font-size: var(--text-sm);
+  margin-top: 0.35rem;
+}
+
+/* Compact-shell back/up affordance, paired with the current-location title. */
+.mobile-topbar-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.mobile-topbar-back:hover,
+.mobile-topbar-back:active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .run-header-name-input {
   background: transparent;
   border: 1px solid var(--gray-700);

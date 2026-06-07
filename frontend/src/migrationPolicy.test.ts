@@ -456,9 +456,12 @@ test("turn internals move out of the transcript into a turn view", () => {
   expect(appSource).toMatch(/const turnsAvailable\s*=\s*turnViewItems\.length > 0/);
   expect(appSource.includes("function readSessionRouteFromPath")).toBe(true);
   expect(appRoutesSource.includes("url.pathname = `/sessions/${encodedId}${")).toBe(true);
-  expect(appRoutesSource.includes(
-          'export type SessionRouteTab = "turns" | "chat" | "static" | "session-data";',
-        )).toBe(true);
+  // SessionRouteTab covers every routed session surface — turns is the default,
+  // and every primary surface is URL-addressable, including the file-browser and
+  // background panes; the definition is multi-line, turns-first.
+  expect(appRoutesSource).toMatch(
+    /export type SessionRouteTab =[\s\S]*?"turns"[\s\S]*?"chat"[\s\S]*?"static"[\s\S]*?"session-data"[\s\S]*?"files"[\s\S]*?"background"/,
+  );
   expect(appRoutesSource.includes('export type AppRouteTab = "settings" | "help";')).toBe(true);
   expect(appRoutesSource.includes("readAppRouteFromPathname")).toBe(true);
   expect(appRoutesSource.includes("buildAppRouteUrl")).toBe(true);
@@ -470,9 +473,12 @@ test("turn internals move out of the transcript into a turn view", () => {
         )).toBe(true);
   expect(appSource.includes('replaceAppRoute("help")')).toBe(true);
   expect(appSource.includes('setActiveTab("turns")')).toBe(true);
-  expect(appSource.includes(
-          'replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber)',
-        )).toBe(true);
+  // The turns route write threads both the durable turn number AND the page
+  // ordinal so /turns/{n}/pages/{p} is deep-linkable; the call is multi-line.
+  expect(appSource).toMatch(
+    /replaceSessionRoute\(\s*session\.id,\s*"turns",\s*routedSelectedTurnNumber,\s*routedSelectedPageNumber,?\s*\)/,
+  );
+  // The /transcript route reads back to the main-transcript (chat) view.
   expect(appSource).toMatch(/if \(route\.tab === "chat"\) \{[\s\S]{0,160}setActiveTab\("chat"\)/);
   expect(appSource.includes(
           'window.addEventListener("popstate", applyCurrentSessionRoute)',
