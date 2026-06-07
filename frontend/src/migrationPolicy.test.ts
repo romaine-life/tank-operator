@@ -300,11 +300,23 @@ test("background wake prompts stay hidden from chat but visible in Turns activit
 
 test("Turns view renders server-projected turn context outside paged activity", () => {
   expect(appSource.includes("turn_context?: unknown")).toBe(true);
-  expect(appSource.includes("turnActivityContextByTurn")).toBe(true);
-  expect(appSource.includes("setTurnActivityContextByTurn")).toBe(true);
+  expect(appSource.includes("turnActivityLoadsByTurn")).toBe(true);
+  expect(appSource.includes("setTurnActivityContextByTurn")).toBe(false);
+  expect(appSource.includes("applyTurnActivityLoad")).toBe(false);
+  expect(appSource.includes("turnActivityLoadVisibleSnapshot")).toBe(true);
+  expect(appSource.includes("completeTurnActivityLoad")).toBe(true);
+  expect(appSource.includes("failTurnActivityLoad")).toBe(true);
+  expect(appSource).toMatch(/type TurnActivityLoadResult = \{[\s\S]{0,180}pageInfo\?: TurnActivityPageInfo;/);
+  expect(appSource).toMatch(/const showActivityLoading =[\s\S]{0,220}!\s*selectedSnapshot/);
+  const fetchTurnActivityEntriesMatch = appSource.match(
+    /const fetchTurnActivityEntries = useCallback\([\s\S]*?\n  \);\n  const startTurnActivityLoad/,
+  );
+  expect(fetchTurnActivityEntriesMatch, "fetchTurnActivityEntries source should be present").toBeTruthy();
+  expect(fetchTurnActivityEntriesMatch![0].includes("setTurnActivityLoadsByTurn")).toBe(false);
   expect(appSource.includes("selectedTurnContext")).toBe(true);
   expect(appSource.includes('aria-label="Turn prompt"')).toBe(true);
   expect(appSource).toMatch(/selectedTurnContext[\s\S]{0,1200}canonicalMessage=\{false\}/);
+  expect(appSource.includes("(selected?.entries ?? [])")).toBe(false);
 });
 
 test("collapsed Turns prompt context stays a minimal one-line entry, not hidden", () => {
@@ -604,7 +616,7 @@ test("turn view entry points open at the turn bottom", () => {
   expect(appSource.includes("onScrollRequestConsumed?: (signal: number) => void;")).toBe(true);
   expect(appSource.includes("scrollRequest={turnViewScrollRequest}")).toBe(true);
   expect(appSource.includes("onScrollRequestConsumed={clearTurnViewScrollRequest}")).toBe(true);
-  expect(appSource.includes("if (!selected.loaded) return;")).toBe(true);
+  expect(appSource.includes("if (!selectedSnapshot) return;")).toBe(true);
   expect(appSource.includes("if (loading && detailGroups.length === 0) return;")).toBe(true);
   expect(appSource.includes(
           'body.scrollTo({ top: body.scrollHeight, behavior: "auto" });',
