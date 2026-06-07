@@ -72,6 +72,14 @@ type SessionEventStore interface {
 	// regardless of total ledger size. Background-task wake continuations do not
 	// write user_message.created, so they are correctly excluded.
 	CountUserMessages(ctx context.Context, tankSessionID string) (int64, error)
+	// ShellTaskEvents returns every durable shell_task.* event for a session in
+	// ASC order_key. It backs the session-level Background screen, which
+	// projects the background (run_in_background) shell-task ledger. Bounded and
+	// indexed by the session_events_shell_task partial index so it stays cheap
+	// regardless of total ledger size. It is on the interface (not a concrete
+	// method reached by type assertion) so it survives the materializing store
+	// wrapper that fronts the local scope.
+	ShellTaskEvents(ctx context.Context, tankSessionID string) ([]map[string]any, error)
 	// FindStrandedLaunchTurns returns deferred-launch turns that were durably
 	// recorded (a lone user_message.created) but never dispatched: their
 	// turn_id carries no other event of any kind. This is the cross-session
@@ -687,6 +695,48 @@ func (s *postgresSessionEventStore) CountContextCompactions(ctx context.Context,
 	return n, nil
 }
 
+// ShellTaskEvents returns every durable shell_task.* event for a session in ASC
+// order. Served by the session_events_shell_task partial index, so it is an
+// indexed scan over only background-shell-task rows — bounded regardless of how
+// large the session ledger has grown. This is the durable source the
+// session-level Background screen projects, instead of re-reading the whole
+// event ledger on each poll.
+func (s *postgresSessionEventStore) ShellTaskEvents(ctx context.Context, tankSessionID string) ([]map[string]any, error) {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	const q = `
+		SELECT payload
+		FROM session_events
+		WHERE tank_session_id = $1
+			AND event_type IN ('shell_task.started', 'shell_task.updated', 'shell_task.exited')
+		ORDER BY order_key ASC
+	`
+	rows, err := s.pool.Query(ctx, q, storageKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]map[string]any, 0)
+	for rows.Next() {
+		var payload []byte
+		if err := rows.Scan(&payload); err != nil {
+			return nil, err
+		}
+		var doc map[string]any
+		if err := json.Unmarshal(payload, &doc); err != nil {
+			return nil, fmt.Errorf("session-events doc is not JSON: %w", err)
+		}
+		if err := conversation.ValidateEventMap(doc); err != nil {
+			return nil, fmt.Errorf("session-events doc rejected by schema: %w", err)
+		}
+		doc["tank_session_id"] = tankSessionID
+		out = append(out, doc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // CountUserMessages counts every durable user_message.created event for a
 // session — one per human back-and-forth. Served by the
 // session_events_user_message_by_session partial index
@@ -832,6 +882,10 @@ func (StubSessionEventStore) UnreadOutputCount(_ context.Context, _, _ string) (
 
 func (StubSessionEventStore) CountContextCompactions(_ context.Context, _ string) (int64, error) {
 	return 0, nil
+}
+
+func (StubSessionEventStore) ShellTaskEvents(_ context.Context, _ string) ([]map[string]any, error) {
+	return nil, nil
 }
 
 func (StubSessionEventStore) CountUserMessages(_ context.Context, _ string) (int64, error) {

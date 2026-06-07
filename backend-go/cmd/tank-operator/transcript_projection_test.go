@@ -1352,6 +1352,165 @@ func TestProjectTranscriptEventsFoldsHashedBackgroundWakeTurnIntoParent(t *testi
 	}
 }
 
+// TestProjectTranscriptEventsCollapsesChainedBackgroundWakeIntoOriginTurn covers
+// the wake-of-a-wake chain seen in session 655 / turn 56: a background task
+// started in a real turn wakes a continuation turn, and that wake turn itself
+// launches another background task whose terminal wakes a further continuation
+// turn. The whole chain must collapse into the one originating real turn — no
+// intermediate wake turn may surface as a standalone user-visible turn, and a
+// duplicated wake fire (a stale-claim re-submit) must not stack a second
+// identical system-user prompt.
+func TestProjectTranscriptEventsCollapsesChainedBackgroundWakeIntoOriginTurn(t *testing.T) {
+	wakeTurnX := conversation.TurnIDForClientNonce(pgstore.BackgroundTaskWakeClientNonce("taskx"))
+	wakeTurnY := conversation.TurnIDForClientNonce(pgstore.BackgroundTaskWakeClientNonce("tasky"))
+	const promptX = "A background task you started earlier has finished. [taskx]"
+	const promptY = "A background task you started earlier has finished. [tasky]"
+	events := []map[string]any{
+		projectionTestEvent("user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "Run CI and tell me when it passes.",
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("x-started", "003", "shell_task.started", "tool", "claude", "turn-1", "turn-1:task:x", map[string]any{
+			"task_id": "taskx", "status": "running", "summary": "first task",
+		}),
+		projectionTestEvent("waiting-1", "004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:waiting1", map[string]any{
+			"kind": "message", "text": "I will wait for the first task.",
+		}),
+		projectionTestEvent("turn-1-terminal", "005", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:waiting1")),
+		projectionTestEvent("x-exited", "006", "shell_task.exited", "tool", "claude", "turn-1", "turn-1:task:x", map[string]any{
+			"task_id": "taskx", "status": "completed", "summary": "first done",
+		}),
+		// Wake for taskx — itself launches tasky.
+		projectionTestEvent("x-wake", "007", "turn.submitted", "runner", "tank", wakeTurnX, "", map[string]any{"status": "submitted", "source": "background-task", "task_id": "taskx", "prompt": promptX}),
+		projectionTestEvent("y-started", "008", "shell_task.started", "tool", "claude", wakeTurnX, wakeTurnX+":task:y", map[string]any{
+			"task_id": "tasky", "status": "running", "summary": "second task",
+		}),
+		projectionTestEvent("waiting-2", "009", "item.completed", "assistant", "claude", wakeTurnX, wakeTurnX+":item:waiting2", map[string]any{
+			"kind": "message", "text": "I will wait for the second task.",
+		}),
+		projectionTestEvent("x-wake-terminal", "010", "turn.completed", "runner", "claude", wakeTurnX, "", projectionFinalAnswerPayload(wakeTurnX+":item:waiting2")),
+		projectionTestEvent("y-exited", "011", "shell_task.exited", "tool", "claude", wakeTurnX, wakeTurnX+":task:y", map[string]any{
+			"task_id": "tasky", "status": "completed", "summary": "second done",
+		}),
+		// Wake for tasky — fired twice (stale-claim re-submit). Only one prompt.
+		projectionTestEvent("y-wake", "012", "turn.submitted", "runner", "tank", wakeTurnY, "", map[string]any{"status": "submitted", "source": "background-task", "task_id": "tasky", "prompt": promptY}),
+		projectionTestEvent("y-wake-dup", "013", "turn.submitted", "runner", "tank", wakeTurnY, "", map[string]any{"status": "submitted", "source": "background-task", "task_id": "tasky", "prompt": promptY}),
+		projectionTestEvent("y-final", "014", "item.completed", "assistant", "claude", wakeTurnY, wakeTurnY+":item:final", map[string]any{
+			"kind": "message", "text": "Both tasks passed. The branch is ready.",
+		}),
+		projectionTestEvent("y-wake-terminal", "015", "turn.completed", "runner", "claude", wakeTurnY, "", projectionFinalAnswerPayload(wakeTurnY+":item:final")),
+	}
+
+	projection := projectTranscriptEvents(events)
+
+	// Main transcript: the original user message plus the single true final
+	// answer, attributed to the origin turn while retaining the wake backend id.
+	if got := transcriptMapString(projection.Entries[0], "role"); got != "user" {
+		t.Fatalf("first entry role = %q, want user: %#v", got, projection.Entries[0])
+	}
+	last := projection.Entries[len(projection.Entries)-1]
+	if got, want := transcriptMapString(last, "text"), "Both tasks passed. The branch is ready."; got != want {
+		t.Fatalf("last entry text = %q, want true final answer: %#v", got, projection.Entries)
+	}
+	if got, want := transcriptMapString(last, "turnId"), "turn-1"; got != want {
+		t.Fatalf("final answer turnId = %q, want origin %q: %#v", got, want, last)
+	}
+	if got, want := transcriptMapString(last, "backendTurnId"), wakeTurnY; got != want {
+		t.Fatalf("final answer backendTurnId = %q, want %q: %#v", got, want, last)
+	}
+	for _, entry := range projection.Entries {
+		if entry["kind"] == "turn_activity" {
+			t.Fatalf("chained wake leaked an activity shell into the main transcript: %#v", entry)
+		}
+		text := transcriptMapString(entry, "text")
+		if strings.Contains(text, "background task you started earlier") || strings.Contains(text, "I will wait") {
+			t.Fatalf("chained wake mechanics leaked into main transcript: %#v", entry)
+		}
+	}
+
+	// No intermediate wake turn may surface as its own activity body; the whole
+	// chain folds into the origin turn.
+	if _, ok := projection.ActivityBodies[wakeTurnX]; ok {
+		t.Fatalf("intermediate wake turn %s surfaced standalone: %#v", wakeTurnX, projection.ActivityBodies)
+	}
+	if _, ok := projection.ActivityBodies[wakeTurnY]; ok {
+		t.Fatalf("chained wake turn %s surfaced standalone: %#v", wakeTurnY, projection.ActivityBodies)
+	}
+	body, ok := projection.ActivityBodies["turn-1"]
+	if !ok {
+		t.Fatalf("origin turn lost its activity body after chained fold: %#v", projection.ActivityBodies)
+	}
+
+	// Both distinct wake prompts fold in (once each), system-authored and owned
+	// by the origin turn; the duplicated tasky fire does NOT stack a second copy.
+	countX, countY := 0, 0
+	for _, entry := range body.Entries {
+		switch transcriptMapString(entry, "text") {
+		case promptX:
+			countX++
+			assertChainedWakePrompt(t, entry, wakeTurnX)
+		case promptY:
+			countY++
+			assertChainedWakePrompt(t, entry, wakeTurnY)
+		}
+	}
+	if countX != 1 {
+		t.Fatalf("taskx wake prompt count = %d, want 1: %#v", countX, body.Entries)
+	}
+	if countY != 1 {
+		t.Fatalf("tasky wake prompt count = %d, want 1 (duplicate fire must dedupe): %#v", countY, body.Entries)
+	}
+}
+
+// TestProjectSessionBackgroundTasksListsRunningAndCompleted covers the
+// session-level Background feed: the durable shell_task.* lifecycle projects to
+// first-class background_task entries (running and completed), the data the
+// Background screen renders instead of filtering the main transcript rows (which
+// never contain background_task entries).
+func TestProjectSessionBackgroundTasksListsRunningAndCompleted(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("a-start", "001", "shell_task.started", "tool", "claude", "turn-1", "turn-1:shell_task:a", map[string]any{
+			"task_id": "taska", "status": "running", "summary": "watcher",
+		}),
+		projectionTestEvent("b-start", "002", "shell_task.started", "tool", "claude", "turn-1", "turn-1:shell_task:b", map[string]any{
+			"task_id": "taskb", "status": "running", "summary": "sleep 180",
+		}),
+		projectionTestEvent("b-exit", "003", "shell_task.exited", "tool", "claude", "turn-1", "turn-1:shell_task:b", map[string]any{
+			"task_id": "taskb", "status": "completed", "summary": "done",
+		}),
+	}
+	tasks := projectSessionBackgroundTasks(events)
+	if got, want := len(tasks), 2; got != want {
+		t.Fatalf("background tasks = %d, want %d: %#v", got, want, tasks)
+	}
+	byID := map[string]map[string]any{}
+	for _, task := range tasks {
+		if got := transcriptMapString(task, "kind"); got != "background_task" {
+			t.Fatalf("entry kind = %q, want background_task: %#v", got, task)
+		}
+		byID[transcriptMapString(task, "taskId")] = task
+	}
+	if got := transcriptMapString(byID["taska"], "taskStatus"); got != "running" {
+		t.Fatalf("taska status = %q, want running: %#v", got, byID["taska"])
+	}
+	if got := transcriptMapString(byID["taskb"], "taskStatus"); got != "completed" {
+		t.Fatalf("taskb status = %q, want completed: %#v", got, byID["taskb"])
+	}
+}
+
+func assertChainedWakePrompt(t *testing.T, entry map[string]any, wakeTurnID string) {
+	t.Helper()
+	if got, want := transcriptMapString(entry, "authorKind"), string(conversation.AuthorKindSystem); got != want {
+		t.Fatalf("wake prompt authorKind = %q, want %q: %#v", got, want, entry)
+	}
+	if got, want := transcriptMapString(entry, "turnId"), "turn-1"; got != want {
+		t.Fatalf("wake prompt turnId = %q, want origin turn-1: %#v", got, entry)
+	}
+	if got, want := transcriptMapString(entry, "backendTurnId"), wakeTurnID; got != want {
+		t.Fatalf("wake prompt backendTurnId = %q, want %q: %#v", got, want, entry)
+	}
+}
+
 func TestProjectTranscriptEventsHidesFailedBackgroundWakeContinuationFromMainTranscript(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

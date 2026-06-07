@@ -64,6 +64,27 @@ func readAllTurnEvents(ctx context.Context, eventStore store.SessionEventStore, 
 	return adoptLeadingSessionLifecycle(ctx, eventStore, sessionID, all)
 }
 
+// readAllSessionEvents reads every event of a session in ASC order by paging the
+// session cursor to exhaustion. Used by the rare deep-link path that must
+// project the whole session — folding a historical background-wake turn number
+// to its originating real turn — not the per-event materialization hot path.
+func readAllSessionEvents(ctx context.Context, eventStore store.SessionEventStore, sessionID string) ([]map[string]any, error) {
+	var all []map[string]any
+	cursor := ""
+	for {
+		page, err := eventStore.ListBySession(ctx, sessionID, store.SessionEventCursor{AfterOrderKey: cursor}, turnPageReadBatch)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, page.Events...)
+		if page.FoundNewest || len(page.Events) == 0 || page.NextOrderKey == "" || page.NextOrderKey == cursor {
+			break
+		}
+		cursor = page.NextOrderKey
+	}
+	return all, nil
+}
+
 // readUserFacingTurnEvents returns the event set for the turn as the user
 // experiences it. A background-task wake is a backend continuation turn, but it
 // belongs in the originating turn's activity detail.
@@ -72,19 +93,28 @@ func readUserFacingTurnEvents(ctx context.Context, eventStore store.SessionEvent
 	if err != nil {
 		return nil, err
 	}
-	wakeTurnIDs := backgroundWakeTurnIDsForParentEvents(events, turnID)
-	if len(wakeTurnIDs) == 0 {
-		return events, nil
-	}
-	all := append([]map[string]any{}, events...)
-	for _, wakeTurnID := range wakeTurnIDs {
+	// Transitively pull the entire background-wake continuation chain rooted at
+	// turnID. A wake turn can itself launch a background task whose terminal
+	// wakes a further continuation turn (wake-of-a-wake); the whole chain folds
+	// into this turn's activity, so the /activity body must read every link, not
+	// only the direct children. seen also bounds the read against any cycle.
+	seen := map[string]bool{turnID: true}
+	frontier := backgroundWakeTurnIDsForParentEvents(events, turnID)
+	for len(frontier) > 0 {
+		wakeTurnID := frontier[0]
+		frontier = frontier[1:]
+		if seen[wakeTurnID] {
+			continue
+		}
+		seen[wakeTurnID] = true
 		wakeEvents, err := readAllTurnEvents(ctx, eventStore, sessionID, wakeTurnID)
 		if err != nil {
 			return nil, err
 		}
-		all = append(all, wakeEvents...)
+		events = append(events, wakeEvents...)
+		frontier = append(frontier, backgroundWakeTurnIDsForParentEvents(wakeEvents, wakeTurnID)...)
 	}
-	return orderedTranscriptEvents(all), nil
+	return orderedTranscriptEvents(events), nil
 }
 
 func backgroundWakeTurnIDsForParentEvents(events []map[string]any, parentTurnID string) []string {

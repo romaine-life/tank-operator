@@ -213,6 +213,10 @@ func (s *activityEventStore) FindStrandedLaunchTurns(context.Context, time.Time,
 	return nil, nil
 }
 
+func (s *activityEventStore) ShellTaskEvents(context.Context, string) ([]map[string]any, error) {
+	return nil, nil
+}
+
 func (s *activityEventStore) ListBySession(_ context.Context, _ string, _ store.SessionEventCursor, _ int) (store.SessionEventPage, error) {
 	return store.SessionEventPage{}, nil
 }
