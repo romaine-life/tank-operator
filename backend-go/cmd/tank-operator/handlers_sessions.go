@@ -693,18 +693,7 @@ func (s *appServer) handleGetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	// Honor the session_scope query param and use transcript-read auth so a
-	// session whose pod is gone (completed/failed) and a cross-scope read (a prod
-	// session inspected from a test slot) still resolve for the owner and for
-	// admins. The snapshot is durable registry metadata, not a live-only
-	// resource — a full admin must be able to read any session's snapshot the
-	// same way the transcript/timeline endpoints already allow.
-	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
-	if scopeErr != nil {
-		writeError(w, status, scopeErr.Error())
-		return
-	}
-	info, status, err := s.authorizeSessionTranscriptReadInScope(r.Context(), user, sessionID, sessionScope)
+	info, status, err := s.authorizeSessionRead(r.Context(), user, sessionID)
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			return

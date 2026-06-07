@@ -307,12 +307,7 @@ func (s *appServer) handleListSessionBackgroundTasks(w http.ResponseWriter, r *h
 		writeError(w, status, scopeErr.Error())
 		return
 	}
-	// Transcript-read auth (not the live-session read): the background-task
-	// ledger is historical transcript-derived data, so it must resolve for a
-	// completed session whose pod is gone — the user opening the Background
-	// section of a past session — and allow the same admin cross-user reads as
-	// /timeline and /turns/{id}/activity.
-	if _, status, err := s.authorizeSessionTranscriptReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
+	if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
 		writeError(w, status, err.Error())
 		return
 	}
