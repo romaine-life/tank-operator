@@ -13,6 +13,7 @@ import {
   modeSupportsRepos,
   normalizeRepoSlugs,
   pinRepoSlug,
+  repoNumberShortcut,
   pinnedRepoSlugs,
   recentRepoPreviewSlugs,
   recentRepoShortcutSlugs,
@@ -209,6 +210,47 @@ test("applyRepoSelection trims before staging", () => {
   const result = applyRepoSelection([], "  romaine-life/tank-operator  ", "exclusive");
   expect(result.ok).toBe(true);
   if (result.ok) expect(result.next).toEqual(["romaine-life/tank-operator"]);
+});
+
+// repoNumberShortcut decodes the splash number-key shortcut. These cases pin
+// the headline behavior: a bare number selects exclusively, Shift+number adds,
+// and the match keys off event.code so Shift+digit (which changes event.key to
+// a symbol) still resolves.
+const baseKey = { shiftKey: false, altKey: false, ctrlKey: false, metaKey: false };
+
+test("repoNumberShortcut maps a bare digit to an exclusive selection", () => {
+  expect(repoNumberShortcut({ ...baseKey, code: "Digit1" })).toEqual({
+    index: 0,
+    mode: "exclusive",
+  });
+  expect(repoNumberShortcut({ ...baseKey, code: "Digit9" })).toEqual({
+    index: 8,
+    mode: "exclusive",
+  });
+});
+
+test("repoNumberShortcut maps Shift+digit to an additive selection", () => {
+  // Shift+3 reports event.key "#", but code stays "Digit3" — the decode keys
+  // off code so the shortcut still resolves, in additive mode.
+  expect(repoNumberShortcut({ ...baseKey, code: "Digit3", shiftKey: true })).toEqual({
+    index: 2,
+    mode: "additive",
+  });
+});
+
+test("repoNumberShortcut accepts numpad digits", () => {
+  expect(repoNumberShortcut({ ...baseKey, code: "Numpad4" })).toEqual({
+    index: 3,
+    mode: "exclusive",
+  });
+});
+
+test("repoNumberShortcut ignores Alt/Ctrl/Meta and non-digit codes", () => {
+  expect(repoNumberShortcut({ ...baseKey, code: "Digit1", altKey: true })).toBeNull();
+  expect(repoNumberShortcut({ ...baseKey, code: "Digit1", ctrlKey: true })).toBeNull();
+  expect(repoNumberShortcut({ ...baseKey, code: "Digit1", metaKey: true })).toBeNull();
+  expect(repoNumberShortcut({ ...baseKey, code: "Digit0" })).toBeNull();
+  expect(repoNumberShortcut({ ...baseKey, code: "KeyA" })).toBeNull();
 });
 
 test("removeRepoSlug removes exact matches", () => {

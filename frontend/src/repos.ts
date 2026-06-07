@@ -271,6 +271,44 @@ export function applyRepoSelection(
   return { ok: true, next: [...current, slug] };
 }
 
+// repoNumberShortcut decodes a splash repo number shortcut from a keyboard
+// event into the staged-list index and the selection mode. It is the pure core
+// of App.tsx's `selectRecentRepoByNumber` handler so the headline behavior —
+// bare number selects exclusively, Shift+number adds — is unit-testable without
+// rendering the whole splash.
+//
+// Two subtleties live here:
+//   - It matches `event.code` (`Digit1..9` / `Numpad1..9`), not `event.key`,
+//     because Shift+1 reports key "!" while code stays "Digit1". Keying off
+//     code keeps the shortcut layout-stable and lets Shift mean "additive"
+//     instead of breaking the match.
+//   - Alt/Ctrl/Meta are disqualifying (those belong to the browser/OS), but
+//     Shift is meaningful, so only Shift flips the mode.
+// The caller still owns focus/composition/active-view gating; this function is
+// purely "which shortcut, which mode" and returns null when no repo shortcut
+// applies.
+export interface RepoNumberShortcut {
+  /** Zero-based index into the ordered shortcut slug list. */
+  index: number;
+  mode: RepoSelectionMode;
+}
+
+export function repoNumberShortcut(event: {
+  code: string;
+  shiftKey: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+}): RepoNumberShortcut | null {
+  if (event.altKey || event.ctrlKey || event.metaKey) return null;
+  const match = /^(?:Digit|Numpad)([1-9])$/.exec(event.code);
+  if (!match) return null;
+  return {
+    index: Number(match[1]) - 1,
+    mode: event.shiftKey ? "additive" : "exclusive",
+  };
+}
+
 export function removeRepoSlug(current: string[], slug: string): string[] {
   return current.filter((existing) => existing !== slug);
 }

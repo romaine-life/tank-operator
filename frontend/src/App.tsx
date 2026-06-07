@@ -224,6 +224,7 @@ import {
   pinRepoSlug,
   pinnedRepoSlugs,
   reorderPinnedRepoSlugs,
+  repoNumberShortcut,
   repoShortcutSlugs,
   removeRepoSlug,
   unpinRepoSlug,
@@ -19905,28 +19906,20 @@ function AuthenticatedApp() {
       return;
     }
     const selectRecentRepoByNumber = (event: KeyboardEvent) => {
-      // Match on event.code (Digit1..Digit9 / Numpad1..Numpad9) rather than
-      // event.key so the shortcut still resolves when Shift is held — Shift+1
-      // reports key "!" but code "Digit1". Shift is now meaningful (additive),
-      // so it must NOT be in the bail-out guard; Alt/Ctrl/Meta still are.
-      const digitMatch = /^(?:Digit|Numpad)([1-9])$/.exec(event.code);
-      if (
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.isComposing ||
-        event.target !== homeBodyRef.current ||
-        !digitMatch
-      ) {
-        return;
-      }
-      const slug = recentRepoShortcuts[Number(digitMatch[1]) - 1];
+      // repoNumberShortcut owns the digit + modifier decoding (matches
+      // event.code so Shift+1 — key "!" — still resolves; Shift = additive,
+      // Alt/Ctrl/Meta disqualify). The handler keeps the focus/composition/
+      // active-view gating that is specific to the splash body.
+      if (event.isComposing || event.target !== homeBodyRef.current) return;
+      const shortcut = repoNumberShortcut(event);
+      if (!shortcut) return;
+      const slug = recentRepoShortcuts[shortcut.index];
       if (!slug) return;
       event.preventDefault();
       event.stopPropagation();
       // Bare number → exclusive (this becomes the only staged repo);
       // Shift+number → additive (join the current selection).
-      selectRepo(slug, event.shiftKey ? "additive" : "exclusive");
+      selectRepo(slug, shortcut.mode);
     };
     window.addEventListener("keydown", selectRecentRepoByNumber, {
       capture: true,
