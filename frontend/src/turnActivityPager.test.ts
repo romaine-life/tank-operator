@@ -92,29 +92,29 @@ test("a current page below 1 clamps to the first page", () => {
 test("page stepper exposes first/last jump targets with boundary-aware enablement", () => {
   // Middle page: every direction is reachable; ends target 1 and pageCount.
   let s = turnActivityPagerState(info(2, 3));
-  assert.equal(s.firstPage, 1);
-  assert.equal(s.lastPage, 3);
-  assert.equal(s.canPageFirst, true);
-  assert.equal(s.canPageLast, true);
+  expect(s.firstPage).toBe(1);
+  expect(s.lastPage).toBe(3);
+  expect(s.canPageFirst).toBe(true);
+  expect(s.canPageLast).toBe(true);
 
   // On the first page: first is inert, last is reachable.
   s = turnActivityPagerState(info(1, 3));
-  assert.equal(s.canPageFirst, false);
-  assert.equal(s.canPageLast, true);
-  assert.equal(s.firstPage, 1);
-  assert.equal(s.lastPage, 3);
+  expect(s.canPageFirst).toBe(false);
+  expect(s.canPageLast).toBe(true);
+  expect(s.firstPage).toBe(1);
+  expect(s.lastPage).toBe(3);
 
   // On the last (default) page: last is inert, first is reachable.
   s = turnActivityPagerState(info(3, 3));
-  assert.equal(s.canPageFirst, true);
-  assert.equal(s.canPageLast, false);
+  expect(s.canPageFirst).toBe(true);
+  expect(s.canPageLast).toBe(false);
 
   // Single page: both jumps disabled but the targets are still well-defined.
   s = turnActivityPagerState(info(1, 1));
-  assert.equal(s.canPageFirst, false);
-  assert.equal(s.canPageLast, false);
-  assert.equal(s.firstPage, 1);
-  assert.equal(s.lastPage, 1);
+  expect(s.canPageFirst).toBe(false);
+  expect(s.canPageLast).toBe(false);
+  expect(s.firstPage).toBe(1);
+  expect(s.lastPage).toBe(1);
 });
 
 test("non-finite inputs are treated as no directory (hidden), never NaN labels", () => {
