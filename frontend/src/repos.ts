@@ -217,6 +217,60 @@ export function addRepoSlug(current: string[], rawSlug: string): AddRepoResult {
   return { ok: true, next: [...current, slug] };
 }
 
+// RepoSelectionMode is the gesture intent behind a splash-picker repo pick.
+//
+//   - "exclusive": a bare number shortcut or a plain click. The staged set
+//     becomes exactly the chosen slug, mirroring a single-select list.
+//   - "additive": shift+number, shift-click, or the explicit "+" affordance.
+//     The slug is unioned into the current set, keeping prior picks.
+//
+// Both gestures flow through applyRepoSelection so the exclusive/additive split
+// lives in one tested place instead of being re-derived at every call site.
+export type RepoSelectionMode = "exclusive" | "additive";
+
+// applyRepoSelection is the splash picker's selection core for chip/shortcut
+// gestures. Exclusive mode replaces the staged set with the single chosen slug;
+// additive mode unions the slug into the current set. Both share the same slug
+// validation as addRepoSlug, so the two gestures reject identical malformed
+// input.
+//
+// Additive is intentionally idempotent: re-adding an already-staged repo is a
+// no-op success rather than the "already added" error addRepoSlug returns. A
+// multi-select gesture (shift-click, "+") on a repo that is already in the set
+// should simply leave it in the set, not raise an error the user did not cause.
+// The explicit typed-entry Add button keeps using addRepoSlug precisely because
+// a duplicate there is worth surfacing. The 5-repo cap still bounds additive;
+// exclusive can never exceed it because its result is a single slug.
+export function applyRepoSelection(
+  current: string[],
+  rawSlug: string,
+  mode: RepoSelectionMode,
+): AddRepoResult {
+  const slug = rawSlug.trim();
+  if (slug === "") {
+    return { ok: false, error: "Repository slug is empty" };
+  }
+  if (!isValidRepoSlug(slug)) {
+    return { ok: false, error: `"${slug}" doesn't look like owner/name` };
+  }
+  if (mode === "exclusive") {
+    return { ok: true, next: [slug] };
+  }
+  const alreadyStaged = current.some(
+    (existing) => existing.toLowerCase() === slug.toLowerCase(),
+  );
+  if (alreadyStaged) {
+    return { ok: true, next: current };
+  }
+  if (current.length >= MAX_REPOS_PER_SESSION) {
+    return {
+      ok: false,
+      error: `At most ${MAX_REPOS_PER_SESSION} repos per session`,
+    };
+  }
+  return { ok: true, next: [...current, slug] };
+}
+
 export function removeRepoSlug(current: string[], slug: string): string[] {
   return current.filter((existing) => existing !== slug);
 }

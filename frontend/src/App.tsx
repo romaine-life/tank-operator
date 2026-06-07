@@ -218,6 +218,7 @@ import { RepoPicker } from "./components/RepoPicker";
 import {
   REPO_SUPPORTED_MODES,
   addRepoSlug,
+  applyRepoSelection,
   isValidRepoSlug,
   isRepoPinned,
   pinRepoSlug,
@@ -226,6 +227,7 @@ import {
   repoShortcutSlugs,
   removeRepoSlug,
   unpinRepoSlug,
+  type RepoSelectionMode,
 } from "./repos";
 import {
   CHAT_MODES,
@@ -19766,6 +19768,28 @@ function AuthenticatedApp() {
     [selectedRepos],
   );
 
+  // selectRepo is the chip/shortcut selection gesture shared by the splash
+  // picker clicks and the number-key shortcuts. Exclusive mode (a plain click
+  // or a bare number) makes the chosen repo the only staged repo; additive mode
+  // (Shift-click, the "+" affordance, or Shift+number) unions it into the
+  // current selection. The exclusive/additive rule lives in applyRepoSelection;
+  // this handler only maps the result onto state. The manual typed-entry Add
+  // button keeps using addSelectedRepo so a typed duplicate still surfaces an
+  // explicit error.
+  const selectRepo = useCallback(
+    (rawSlug: string, mode: RepoSelectionMode) => {
+      const result = applyRepoSelection(selectedRepos, rawSlug, mode);
+      if (result.ok) {
+        setSelectedRepos(result.next);
+        setRepoInput("");
+        setRepoError(null);
+      } else {
+        setRepoError(result.error);
+      }
+    },
+    [selectedRepos],
+  );
+
   const dismissRecentRepo = useCallback((rawSlug: string) => {
     const slug = rawSlug.trim();
     if (slug && isValidRepoSlug(slug)) {
@@ -19881,22 +19905,28 @@ function AuthenticatedApp() {
       return;
     }
     const selectRecentRepoByNumber = (event: KeyboardEvent) => {
+      // Match on event.code (Digit1..Digit9 / Numpad1..Numpad9) rather than
+      // event.key so the shortcut still resolves when Shift is held — Shift+1
+      // reports key "!" but code "Digit1". Shift is now meaningful (additive),
+      // so it must NOT be in the bail-out guard; Alt/Ctrl/Meta still are.
+      const digitMatch = /^(?:Digit|Numpad)([1-9])$/.exec(event.code);
       if (
         event.altKey ||
         event.ctrlKey ||
         event.metaKey ||
-        event.shiftKey ||
         event.isComposing ||
         event.target !== homeBodyRef.current ||
-        !/^[1-9]$/.test(event.key)
+        !digitMatch
       ) {
         return;
       }
-      const slug = recentRepoShortcuts[Number(event.key) - 1];
+      const slug = recentRepoShortcuts[Number(digitMatch[1]) - 1];
       if (!slug) return;
       event.preventDefault();
       event.stopPropagation();
-      addSelectedRepo(slug);
+      // Bare number → exclusive (this becomes the only staged repo);
+      // Shift+number → additive (join the current selection).
+      selectRepo(slug, event.shiftKey ? "additive" : "exclusive");
     };
     window.addEventListener("keydown", selectRecentRepoByNumber, {
       capture: true,
@@ -19911,7 +19941,7 @@ function AuthenticatedApp() {
     defaultSessionMode,
     homeActiveTab,
     recentRepoShortcuts,
-    addSelectedRepo,
+    selectRepo,
   ]);
 
   // Close the profile menu on an outside click. Menus use a `data-menu`
@@ -22312,7 +22342,7 @@ function AuthenticatedApp() {
                               setRepoError(null);
                             }}
                             onAdd={addSelectedRepo}
-                            onAddShortcut={addSelectedRepo}
+                            onSelect={selectRepo}
                             onTogglePin={togglePinnedRepo}
                             onReorderPin={reorderPinnedRepo}
                             onRemove={(slug) => {

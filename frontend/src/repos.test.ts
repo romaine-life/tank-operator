@@ -7,6 +7,7 @@ import {
   REPO_SUPPORTED_MODES,
   RECENT_REPO_PREVIEW_LIMIT,
   addRepoSlug,
+  applyRepoSelection,
   isRepoPinned,
   isValidRepoSlug,
   modeSupportsRepos,
@@ -147,6 +148,67 @@ test("addRepoSlug trims before storing", () => {
   if (result.ok) {
     expect(result.next).toEqual(["romaine-life/tank-operator"]);
   }
+});
+
+// applyRepoSelection is the splash picker's chip/shortcut selection core. These
+// cases pin the exclusive-by-default, additive-on-intent contract the number
+// shortcuts (App.tsx) and the picker clicks (RepoPicker.tsx) both flow through.
+test("applyRepoSelection exclusive replaces the entire staged set", () => {
+  const result = applyRepoSelection(["a/1", "b/2", "c/3"], "d/4", "exclusive");
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.next).toEqual(["d/4"]);
+});
+
+test("applyRepoSelection exclusive narrows to an already-staged repo", () => {
+  // Plain-clicking / numbering a repo that is already part of a multi-repo
+  // selection makes it the ONLY selection — never an error.
+  const result = applyRepoSelection(["a/1", "b/2", "c/3"], "b/2", "exclusive");
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.next).toEqual(["b/2"]);
+});
+
+test("applyRepoSelection exclusive ignores the 5-repo cap (result is one slug)", () => {
+  const five = ["a/1", "b/2", "c/3", "d/4", "e/5"];
+  const result = applyRepoSelection(five, "f/6", "exclusive");
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.next).toEqual(["f/6"]);
+});
+
+test("applyRepoSelection additive unions onto the current selection", () => {
+  const result = applyRepoSelection(["a/1"], "b/2", "additive");
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.next).toEqual(["a/1", "b/2"]);
+});
+
+test("applyRepoSelection additive is an idempotent no-op for duplicates", () => {
+  // Unlike addRepoSlug (typed entry), an additive gesture on an already-staged
+  // repo keeps the set unchanged rather than raising "already added".
+  const current = ["Romaine-Life/Tank-Operator", "openai/codex"];
+  const result = applyRepoSelection(current, "romaine-life/tank-operator", "additive");
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.next).toEqual(current);
+});
+
+test("applyRepoSelection additive enforces the 5-repo cap", () => {
+  const five = ["a/1", "b/2", "c/3", "d/4", "e/5"];
+  const result = applyRepoSelection(five, "f/6", "additive");
+  expect(result.ok).toBe(false);
+  expect(result.ok === false && /At most 5/.test(result.error)).toBeTruthy();
+});
+
+test("applyRepoSelection rejects empty and malformed slugs in both modes", () => {
+  for (const mode of ["exclusive", "additive"] as const) {
+    expect(applyRepoSelection([], "   ", mode).ok).toBe(false);
+    const bad = applyRepoSelection([], "https://github.com/foo/bar", mode);
+    expect(bad.ok).toBe(false);
+    expect(bad.ok === false && /doesn't look like/.test(bad.error)).toBeTruthy();
+  }
+});
+
+test("applyRepoSelection trims before staging", () => {
+  const result = applyRepoSelection([], "  romaine-life/tank-operator  ", "exclusive");
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.next).toEqual(["romaine-life/tank-operator"]);
 });
 
 test("removeRepoSlug removes exact matches", () => {
