@@ -86,7 +86,7 @@ install_repo_agent_reminder() {
   [ -f "$hook_src" ] || return 0
 
   echo "repo-cloner: installing agent post-commit reminder for $slug"
-  hook_dst="$(git -C "$target" rev-parse --git-path hooks/post-commit)"
+  hook_dst="$(git -C "$target" rev-parse --absolute-git-dir)/hooks/post-commit"
   if [ -e "$hook_dst" ] && ! cmp -s "$hook_src" "$hook_dst"; then
     if [ "$strict" = "strict" ]; then
       echo "repo-cloner: refusing to replace existing post-commit hook for $slug: $hook_dst" >&2
