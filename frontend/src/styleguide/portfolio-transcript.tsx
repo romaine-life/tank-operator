@@ -61,12 +61,14 @@ function TranscriptMessage({
   highlighted,
   ownedByActivity,
   showAssistantAvatar = !ownedByActivity,
+  compact,
   children,
 }: {
   variant: "assistant" | "user" | "system";
   highlighted?: boolean;
   ownedByActivity?: boolean;
   showAssistantAvatar?: boolean;
+  compact?: boolean;
   children: ReactNode;
 }) {
   const avatar = getSessionAvatarByID("jp1-malcolm");
@@ -76,6 +78,7 @@ function TranscriptMessage({
       data-slot="message"
       data-variant={variant}
       data-role={variant}
+      data-compact={compact ? "true" : undefined}
       data-owner={ownedByActivity ? "activity" : undefined}
       data-highlight={highlighted ? "true" : undefined}
       data-design-component="TranscriptMessage"
@@ -99,7 +102,16 @@ function TranscriptMessage({
       )}
       <div className="run-transcript-message-content" data-slot="message-content">
         <div className="run-transcript-message-text" data-slot="message-text">
-          {children}
+          {compact ? (
+            <span
+              className="run-msg-compact-text"
+              title="Please inspect the completed turn with a long initiating prompt. The prompt header must keep its collapse control visible without stacking message controls below the preview."
+            >
+              Please inspect the completed turn with a long initiating prompt. The prompt header must keep its collapse control visible without stacking message controls below the preview.
+            </span>
+          ) : (
+            children
+          )}
         </div>
         <div className="run-msg-footer" data-always-visible>
           {variant !== "system" && (
@@ -287,6 +299,35 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
             Please inspect the completed turn with a long initiating prompt.
             The prompt header must always keep its collapse control visible,
             even when the activity divider also renders section controls.
+          </p>
+        </TranscriptMessage>
+      </div>
+      <div
+        className="run-turn-view-context"
+        aria-label="Turn prompt collapsed"
+        data-collapsed="true"
+        data-context-loaded="true"
+        data-design-component="TurnPromptContext"
+        data-design-state="collapsed-text-preview-controls-inline"
+        data-inspectable
+      >
+        <div className="run-turn-view-context-head">
+          <span className="run-turn-view-context-label">Prompt</span>
+          <button
+            type="button"
+            className="run-turn-view-context-toggle"
+            aria-expanded={false}
+            aria-label="Expand user message"
+            title="Expand user message"
+          >
+            <ChevronDownIcon size={14} aria-hidden="true" />
+          </button>
+        </div>
+        <TranscriptMessage variant="user" ownedByActivity compact>
+          <p style={{ margin: 0 }}>
+            Please inspect the completed turn with a long initiating prompt.
+            The prompt header must keep its collapse control visible without
+            stacking message controls below the preview.
           </p>
         </TranscriptMessage>
       </div>

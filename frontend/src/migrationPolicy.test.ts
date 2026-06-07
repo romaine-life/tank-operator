@@ -345,8 +345,8 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   // and the text collapses to a single ellipsis-truncated line. This pins the
   // wiring (compact follows the collapsed flag) and the compact renderer so a
   // future refactor can't silently revert to hiding the prompt. Compact mode
-  // is text-only; the message controls remain mounted in their normal footer
-  // layout instead of being hidden or squeezed into the preview line.
+  // is text-only: controls remain full-size and are laid out beside the
+  // preview line, never stacked under a one-line prompt.
   expect(appSource.includes("compact?: boolean;")).toBe(true);
   expect(appSource.includes("compact={selectedTurnContextCollapsed}")).toBe(true);
   expect(appSource.includes("run-msg-compact-text")).toBe(true);
@@ -355,6 +355,13 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   expect(appSource.includes("{!compact && (\n          <div\n            className=\"run-msg-footer\"")).toBe(false);
   expect(appSource.includes("{variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(true);
   expect(appSource.includes("<div\n          className=\"run-msg-footer\"")).toBe(true);
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-transcript-message-content\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+auto/,
+  );
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s+\.run-msg-footer\s*\{[^}]*grid-column:\s*2;[\s\S]*margin-top:\s*0/,
+  );
+  expect(styleguidePortfolioTranscriptSource.includes("collapsed-text-preview-controls-inline")).toBe(true);
   // The old "hide the whole bubble when collapsed" gate must be gone.
   expect(appSource.includes("{!selectedTurnContextCollapsed && (")).toBe(false);
   // CSS: the compact line truncates with an ellipsis without changing the

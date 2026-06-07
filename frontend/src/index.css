@@ -4708,13 +4708,28 @@ button:disabled {
 }
 
 .run-transcript-message[data-compact="true"] .run-transcript-message-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 0.65rem;
   width: 100%;
 }
 
 .run-transcript-message[data-compact="true"] .run-transcript-message-text {
+  grid-column: 1;
+  grid-row: 1;
   display: block;
   min-width: 0;
   max-width: 100%;
+}
+
+.run-transcript-message[data-compact="true"] .run-msg-footer {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: center;
+  flex-shrink: 0;
+  margin-top: 0;
+  white-space: nowrap;
 }
 
 .run-msg-compact-text {
