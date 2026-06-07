@@ -10662,9 +10662,8 @@ function RunTurnActivityScreen({
     hasCollapsibleDetailActivity,
   );
   const showTurnSectionDivider = Boolean(selected);
-  const canToggleDetailActivity = showDetailActivityDivider;
+  const canToggleDetailActivity = Boolean(selected);
   const detailActivityCollapsed =
-    showDetailActivityDivider &&
     selected !== null &&
     collapsedActivityTurnIds[selected.turnId] === true;
   const showPromptContextShell = Boolean(selected);
@@ -10717,11 +10716,12 @@ function RunTurnActivityScreen({
   ]);
   const renderedDetailGroups = useMemo(() => {
     if (!detailActivityCollapsed) return detailGroupsWithThinking;
-    return detailGroupsWithThinking.filter((group) =>
-      flatEntryGroupEntries(group).some((entry) =>
+    return detailGroupsWithThinking.filter((group) => {
+      if (group.kind === "thinking") return true;
+      return flatEntryGroupEntries(group).some((entry) =>
         finalDetailEntryIds.has(entry.id),
-      ),
-    );
+      );
+    });
   }, [
     detailActivityCollapsed,
     detailGroupsWithThinking,

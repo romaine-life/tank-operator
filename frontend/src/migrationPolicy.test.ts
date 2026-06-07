@@ -323,12 +323,18 @@ test("Turns view renders server-projected turn context outside paged activity", 
   expect(appSource.includes("showContextToggleInActivityDivider")).toBe(false);
   expect(appSource.includes("showTurnSectionDivider")).toBe(true);
   expect(appSource.includes("canToggleDetailActivity")).toBe(true);
+  expect(appSource.includes("const canToggleDetailActivity = Boolean(selected);")).toBe(true);
+  expect(appSource.includes("const canToggleDetailActivity = showDetailActivityDivider;")).toBe(false);
   expect(appSource.includes("{selected && showDetailActivityDivider && (")).toBe(false);
   expect(appSource.includes("{selected && showTurnSectionDivider && (")).toBe(true);
   expect(appSource).toMatch(/run-turn-view-context-head[\s\S]{0,500}run-turn-view-context-toggle/);
   expect(appSource.includes("canTogglePromptContext")).toBe(true);
   expect(appSource.includes('disabled={!canTogglePromptContext}')).toBe(true);
   expect(appSource.includes('disabled={!canToggleDetailActivity}')).toBe(true);
+  expect(appSource.includes('if (group.kind === "thinking") return true;')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes("prompt-and-activity-controls-present")).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('aria-label="Collapse assistance turn"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('aria-label="No assistance turn to collapse"')).toBe(false);
   expect(indexCssSource.includes(".run-turn-view-context-unavailable")).toBe(true);
   expect(appSource.includes("(selected?.entries ?? [])")).toBe(false);
 });

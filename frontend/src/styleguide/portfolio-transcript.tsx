@@ -319,7 +319,7 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
       <div
         className="run-turn-activity-divider run-turn-view-activity-divider"
         data-design-component="TurnSectionDivider"
-        data-design-state="prompt-control-present"
+        data-design-state="prompt-and-activity-controls-present"
         data-inspectable
       >
         <div
@@ -347,11 +347,11 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
             type="button"
             className="run-turn-activity-divider-toggle"
             data-direction="down"
-            disabled
-            aria-expanded={false}
-            aria-label="No assistance turn to collapse"
-            title="No assistance turn to collapse"
+            aria-expanded={true}
+            aria-label="Collapse assistance turn"
+            title="Collapse assistance turn"
           >
+            <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
             <ChevronDownIcon
               className="run-turn-activity-divider-toggle-chevron"
               size={13}
