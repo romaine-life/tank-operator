@@ -3496,10 +3496,42 @@ button:disabled {
   color: var(--bg-base);
 }
 
-.home-repos-recent-chip.is-disabled,
 .home-repos-recent-chip:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* The explicit additive "+" affordance: a compact icon button beside each
+   selectable repo chip. Plain-clicking the chip name selects exclusively;
+   this adds the repo to the current selection without the Shift key. Mirrors
+   the recent-remove "x" button footprint so the chip row stays balanced. */
+.home-repos-add-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.home-repos-add-more:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.home-repos-add-more:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.home-repos-add-more-icon {
+  width: 0.85rem;
+  height: 0.85rem;
 }
 
 .home-repos-recent-remove {
@@ -6520,6 +6552,7 @@ button:disabled {
 }
 
 .run-main[aria-label="Transcript"],
+.run-main[aria-label="Turn view"],
 .run-main[aria-label="New session setup"],
 .demo-workspace[aria-label="New session setup"] {
   transition:
@@ -6528,13 +6561,21 @@ button:disabled {
 }
 
 .run-main[aria-label="Transcript"],
+.run-main[aria-label="Turn view"],
 .run-main[aria-label="New session setup"],
 .demo-workspace[aria-label="New session setup"],
 .styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active {
   --run-transcript-active-rail-left: 0.2rem;
 }
 
+/* The Turns view is a primary reading surface too ("Turns view is the primary
+   session view", docs/features/transcript-navigation), so it shares the
+   transcript's focus rail + wash when the shared <main> takes focus — via
+   click-into-empty-space or slash→tab. The Turns surface carries
+   aria-label "Turn view" (see WorkspaceShell bodyAriaLabel in App.tsx), not
+   "Transcript", so it needs its own entry here. */
 .run-main[aria-label="Transcript"]:is(:focus, :focus-within),
+.run-main[aria-label="Turn view"]:is(:focus, :focus-within),
 .run-main[aria-label="New session setup"]:is(:focus, :focus-within),
 .demo-workspace[aria-label="New session setup"]:is(:focus, :focus-within),
 .styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active {

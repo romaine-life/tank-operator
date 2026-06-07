@@ -218,14 +218,17 @@ import { RepoPicker } from "./components/RepoPicker";
 import {
   REPO_SUPPORTED_MODES,
   addRepoSlug,
+  applyRepoSelection,
   isValidRepoSlug,
   isRepoPinned,
   pinRepoSlug,
   pinnedRepoSlugs,
   reorderPinnedRepoSlugs,
+  repoNumberShortcut,
   repoShortcutSlugs,
   removeRepoSlug,
   unpinRepoSlug,
+  type RepoSelectionMode,
 } from "./repos";
 import {
   CHAT_MODES,
@@ -278,7 +281,9 @@ import {
 } from "./sessionStore";
 import { decideFollowupSubmit } from "./submitLatch";
 import {
+  insertThinkingGroupByDurableOrder,
   resolveThinkingInsertIndex,
+  turnActivityPageContainsLiveTail,
   type ThinkingPlacementGroup,
 } from "./transcriptThinkingPlacement";
 import {
@@ -5452,6 +5457,44 @@ function turnActivityShellTailOrderKey(shell?: TranscriptEntry): string {
   );
 }
 
+function flatGroupThinkingPlacement(
+  group: FlatEntryGroup,
+): ThinkingPlacementGroup & { group: FlatEntryGroup } {
+  return {
+    group,
+    orderKey: entryGroupOrderKey(group),
+    includesTurn: false,
+  };
+}
+
+function insertTurnDetailThinkingGroup(
+  groups: FlatEntryGroup[],
+  turnId: string,
+  shell?: TranscriptEntry,
+  status: "thinking" | "needs_input" = "thinking",
+): FlatEntryGroup[] {
+  const trimmedTurnId = turnId.trim();
+  if (!trimmedTurnId) return groups;
+  const shellTailOrderKey = turnActivityShellTailOrderKey(shell);
+  const thinking = turnThinkingGroup(trimmedTurnId, shell, status);
+  thinking.orderKey = shellTailOrderKey;
+  const placement = groups.map((group) => ({
+    ...flatGroupThinkingPlacement(group),
+    includesTurn: entryGroupIncludesTurn(group, trimmedTurnId),
+  }));
+  const placed = insertThinkingGroupByDurableOrder(
+    placement,
+    {
+      group: thinking,
+      orderKey: shellTailOrderKey,
+      includesTurn: true,
+    },
+    shellTailOrderKey,
+    groups.length,
+  );
+  return placed.map((item) => item.group);
+}
+
 function insertActiveTurnThinkingGroups(
   groups: EntryGroup[],
   thinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[],
@@ -10420,14 +10463,6 @@ function RunTurnActivityScreen({
     showDetailActivityDivider &&
     selected !== null &&
     collapsedActivityTurnIds[selected.turnId] === true;
-  const renderedDetailGroups = useMemo(() => {
-    if (!detailActivityCollapsed) return detailGroups;
-    return detailGroups.filter((group) =>
-      flatEntryGroupEntries(group).some((entry) =>
-        finalDetailEntryIds.has(entry.id),
-      ),
-    );
-  }, [detailActivityCollapsed, detailGroups, finalDetailEntryIds]);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) =>
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
@@ -10450,17 +10485,38 @@ function RunTurnActivityScreen({
     selected?.shell?.activity?.status === "needs_input"
       ? "needs_input"
       : "thinking";
-  const selectedThinkingBubble =
-    selected && selected.active ? (
-      <RunTurnThinkingBubble
-        key={`turn-view-thinking-${selected.turnId}`}
-        userKey={userKey}
-        turnId={selected.turnId}
-        status={selectedThinkingStatus}
-        lastActivityAt={selected.lastActivityAt}
-        avatar={avatar}
-      />
-    ) : null;
+  const detailGroupsWithThinking = useMemo(() => {
+    if (
+      !selected ||
+      !selected.active ||
+      !turnActivityPageContainsLiveTail(selectedPageInfo)
+    ) {
+      return detailGroups;
+    }
+    return insertTurnDetailThinkingGroup(
+      detailGroups,
+      selected.turnId,
+      selected.shell,
+      selectedThinkingStatus,
+    );
+  }, [
+    detailGroups,
+    selected,
+    selectedPageInfo,
+    selectedThinkingStatus,
+  ]);
+  const renderedDetailGroups = useMemo(() => {
+    if (!detailActivityCollapsed) return detailGroupsWithThinking;
+    return detailGroupsWithThinking.filter((group) =>
+      flatEntryGroupEntries(group).some((entry) =>
+        finalDetailEntryIds.has(entry.id),
+      ),
+    );
+  }, [
+    detailActivityCollapsed,
+    detailGroupsWithThinking,
+    finalDetailEntryIds,
+  ]);
   const selectedPageDirectoryItem = selectedPageInfo?.pages?.find(
     (page) => page.number === pagerState.page,
   );
@@ -10622,7 +10678,18 @@ function RunTurnActivityScreen({
         />
       );
     }
-    if (group.kind === "thinking") return null;
+    if (group.kind === "thinking") {
+      return (
+        <RunTurnThinkingBubble
+          key={group.id}
+          userKey={userKey}
+          turnId={group.turnId}
+          status={group.status}
+          lastActivityAt={group.lastActivityAt}
+          avatar={avatar}
+        />
+      );
+    }
     return (
       <RunMessageBubble
         key={group.entry.id}
@@ -11028,17 +11095,12 @@ function RunTurnActivityScreen({
                 />
                 <span>Loading activity...</span>
               </div>
-            ) : showRefreshProblemOnly ? (
-              selectedThinkingBubble
-            ) : detailGroups.length === 0 ? (
-              (selectedThinkingBubble ?? (
-                <div className="run-shell-tasks-empty">No turn activity.</div>
-              ))
+            ) : showRefreshProblemOnly && renderedDetailGroups.length === 0 ? (
+              <div className="run-shell-tasks-empty">No turn activity.</div>
+            ) : renderedDetailGroups.length === 0 ? (
+              <div className="run-shell-tasks-empty">No turn activity.</div>
             ) : (
-              <>
-                {selectedThinkingBubble}
-                {renderedDetailGroups.map(renderGroup)}
-              </>
+              renderedDetailGroups.map(renderGroup)
             )}
           </div>
         </>
@@ -17636,7 +17698,13 @@ function ChatPane({
         style={chatFontScaleStyle}
         bodyClassName={`run-main-${runStatus}`}
         bodyRef={transcriptScrollCallbackRef}
-        bodyAriaLabel={activeTab === "chat" ? "Transcript" : "Workspace panel"}
+        bodyAriaLabel={
+          activeTab === "chat"
+            ? "Transcript"
+            : activeTab === "turns"
+              ? "Turn view"
+              : "Workspace panel"
+        }
         composerVisible={
           (activeTab === "chat" || activeTab === "turns") && !publicView
         }
@@ -19942,6 +20010,28 @@ function AuthenticatedApp() {
     [selectedRepos],
   );
 
+  // selectRepo is the chip/shortcut selection gesture shared by the splash
+  // picker clicks and the number-key shortcuts. Exclusive mode (a plain click
+  // or a bare number) makes the chosen repo the only staged repo; additive mode
+  // (Shift-click, the "+" affordance, or Shift+number) unions it into the
+  // current selection. The exclusive/additive rule lives in applyRepoSelection;
+  // this handler only maps the result onto state. The manual typed-entry Add
+  // button keeps using addSelectedRepo so a typed duplicate still surfaces an
+  // explicit error.
+  const selectRepo = useCallback(
+    (rawSlug: string, mode: RepoSelectionMode) => {
+      const result = applyRepoSelection(selectedRepos, rawSlug, mode);
+      if (result.ok) {
+        setSelectedRepos(result.next);
+        setRepoInput("");
+        setRepoError(null);
+      } else {
+        setRepoError(result.error);
+      }
+    },
+    [selectedRepos],
+  );
+
   const dismissRecentRepo = useCallback((rawSlug: string) => {
     const slug = rawSlug.trim();
     if (slug && isValidRepoSlug(slug)) {
@@ -20057,22 +20147,20 @@ function AuthenticatedApp() {
       return;
     }
     const selectRecentRepoByNumber = (event: KeyboardEvent) => {
-      if (
-        event.altKey ||
-        event.ctrlKey ||
-        event.metaKey ||
-        event.shiftKey ||
-        event.isComposing ||
-        event.target !== homeBodyRef.current ||
-        !/^[1-9]$/.test(event.key)
-      ) {
-        return;
-      }
-      const slug = recentRepoShortcuts[Number(event.key) - 1];
+      // repoNumberShortcut owns the digit + modifier decoding (matches
+      // event.code so Shift+1 — key "!" — still resolves; Shift = additive,
+      // Alt/Ctrl/Meta disqualify). The handler keeps the focus/composition/
+      // active-view gating that is specific to the splash body.
+      if (event.isComposing || event.target !== homeBodyRef.current) return;
+      const shortcut = repoNumberShortcut(event);
+      if (!shortcut) return;
+      const slug = recentRepoShortcuts[shortcut.index];
       if (!slug) return;
       event.preventDefault();
       event.stopPropagation();
-      addSelectedRepo(slug);
+      // Bare number → exclusive (this becomes the only staged repo);
+      // Shift+number → additive (join the current selection).
+      selectRepo(slug, shortcut.mode);
     };
     window.addEventListener("keydown", selectRecentRepoByNumber, {
       capture: true,
@@ -20087,7 +20175,7 @@ function AuthenticatedApp() {
     defaultSessionMode,
     homeActiveTab,
     recentRepoShortcuts,
-    addSelectedRepo,
+    selectRepo,
   ]);
 
   // Close the profile menu on an outside click. Menus use a `data-menu`
@@ -22487,7 +22575,7 @@ function AuthenticatedApp() {
                               setRepoError(null);
                             }}
                             onAdd={addSelectedRepo}
-                            onAddShortcut={addSelectedRepo}
+                            onSelect={selectRepo}
                             onTogglePin={togglePinnedRepo}
                             onReorderPin={reorderPinnedRepo}
                             onRemove={(slug) => {

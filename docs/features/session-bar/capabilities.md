@@ -104,6 +104,58 @@ Named behaviors in the session-bar surface. See
     pinned-repos endpoint" pins the reorder to the durable PUT path and forbids
     a browser-local order shadow.
 
+## splash-repo-selection-gesture
+
+- **Status:** shipped
+- **Intent:** Give the splash repo picker a single-select-by-default,
+  multi-select-on-intent model so a user can pick one repo fast or build a set
+  deliberately, matching how OS file lists behave. A bare number shortcut (1-9)
+  or a plain click on a repo name selects that repo *exclusively* — the staged
+  set becomes exactly that repo. Shift+number, Shift-click, and an explicit "+"
+  affordance on each chip are *additive* — the repo joins the current selection.
+  This supersedes the prior additive-only behavior where a number/click always
+  appended and an already-staged suggestion was a dimmed, disabled no-op.
+
+- **Affected contracts:** Session Bar. The picker is part of the session
+  creation surface; this entry governs how a gesture maps to the staged
+  selection, not how the selection is persisted.
+
+- **Mechanism:**
+  - The exclusive/additive decision is a pure function,
+    `applyRepoSelection(current, slug, mode)` in `frontend/src/repos.ts`.
+    Exclusive returns `[slug]`; additive unions `slug` into `current`. Additive
+    is idempotent (re-adding a staged repo is a no-op success, never an error)
+    and stays bounded by `MAX_REPOS_PER_SESSION` (5); exclusive cannot exceed
+    the cap because its result is a single slug.
+  - The number-shortcut handler in `App.tsx` matches `event.code`
+    (`Digit1..9` / `Numpad1..9`) instead of `event.key`, so `Shift+1` — which
+    reports key `"!"` — still resolves to shortcut 1 in additive mode. Shift is
+    no longer in the bail-out guard; Alt/Ctrl/Meta still are.
+  - `RepoPicker.tsx` maps a plain click to exclusive and a Shift-click to
+    additive via `repoSelectModeFromEvent`; the per-chip `AdditiveAddButton`
+    ("+") is always additive. A staged repo stays clickable (a plain click
+    narrows the selection back down to just it) and reads as selected (accent
+    fill + `aria-pressed`) instead of a disabled no-op; its "+" is disabled
+    because additive-adding a staged repo is a no-op.
+  - The manual typed-entry Add button keeps `addRepoSlug` (additive with a
+    duplicate error) so a typed duplicate is still surfaced rather than silently
+    swallowed; it is a deliberately distinct path from the gesture `onSelect`.
+  - This is client gesture mapping only: the durable create path
+    (`sessions.repos`), the shared slug regex, the 5-repo cap, and the
+    `profile-backed-repo-pins` durable behavior are unchanged, and the picker
+    remains a pure render of parent state — no new browser-local source of truth.
+
+- **Evidence:**
+  - `repos.ts` `applyRepoSelection` tests: exclusive replace and narrow,
+    cap-exempt exclusive, additive union, idempotent-duplicate additive,
+    additive 5-cap enforcement, slug validation in both modes, and trimming.
+  - `components/RepoPicker.test.tsx`: a plain click → `exclusive`, a Shift-click
+    → `additive`, the "+" affordance → `additive`, a staged shortcut stays
+    enabled (narrows) with a disabled "+", and the manual Add stays a distinct
+    additive action that does not fire the gesture handler.
+  - Live validation on a Glimmung `tank-operator` test slot via `static`
+    hot-swap (keyboard + click + "+" exercised in the browser).
+
 ## session-bug-labels
 
 - **Status:** introduced

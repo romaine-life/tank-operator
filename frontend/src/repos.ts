@@ -217,6 +217,98 @@ export function addRepoSlug(current: string[], rawSlug: string): AddRepoResult {
   return { ok: true, next: [...current, slug] };
 }
 
+// RepoSelectionMode is the gesture intent behind a splash-picker repo pick.
+//
+//   - "exclusive": a bare number shortcut or a plain click. The staged set
+//     becomes exactly the chosen slug, mirroring a single-select list.
+//   - "additive": shift+number, shift-click, or the explicit "+" affordance.
+//     The slug is unioned into the current set, keeping prior picks.
+//
+// Both gestures flow through applyRepoSelection so the exclusive/additive split
+// lives in one tested place instead of being re-derived at every call site.
+export type RepoSelectionMode = "exclusive" | "additive";
+
+// applyRepoSelection is the splash picker's selection core for chip/shortcut
+// gestures. Exclusive mode replaces the staged set with the single chosen slug;
+// additive mode unions the slug into the current set. Both share the same slug
+// validation as addRepoSlug, so the two gestures reject identical malformed
+// input.
+//
+// Additive is intentionally idempotent: re-adding an already-staged repo is a
+// no-op success rather than the "already added" error addRepoSlug returns. A
+// multi-select gesture (shift-click, "+") on a repo that is already in the set
+// should simply leave it in the set, not raise an error the user did not cause.
+// The explicit typed-entry Add button keeps using addRepoSlug precisely because
+// a duplicate there is worth surfacing. The 5-repo cap still bounds additive;
+// exclusive can never exceed it because its result is a single slug.
+export function applyRepoSelection(
+  current: string[],
+  rawSlug: string,
+  mode: RepoSelectionMode,
+): AddRepoResult {
+  const slug = rawSlug.trim();
+  if (slug === "") {
+    return { ok: false, error: "Repository slug is empty" };
+  }
+  if (!isValidRepoSlug(slug)) {
+    return { ok: false, error: `"${slug}" doesn't look like owner/name` };
+  }
+  if (mode === "exclusive") {
+    return { ok: true, next: [slug] };
+  }
+  const alreadyStaged = current.some(
+    (existing) => existing.toLowerCase() === slug.toLowerCase(),
+  );
+  if (alreadyStaged) {
+    return { ok: true, next: current };
+  }
+  if (current.length >= MAX_REPOS_PER_SESSION) {
+    return {
+      ok: false,
+      error: `At most ${MAX_REPOS_PER_SESSION} repos per session`,
+    };
+  }
+  return { ok: true, next: [...current, slug] };
+}
+
+// repoNumberShortcut decodes a splash repo number shortcut from a keyboard
+// event into the staged-list index and the selection mode. It is the pure core
+// of App.tsx's `selectRecentRepoByNumber` handler so the headline behavior —
+// bare number selects exclusively, Shift+number adds — is unit-testable without
+// rendering the whole splash.
+//
+// Two subtleties live here:
+//   - It matches `event.code` (`Digit1..9` / `Numpad1..9`), not `event.key`,
+//     because Shift+1 reports key "!" while code stays "Digit1". Keying off
+//     code keeps the shortcut layout-stable and lets Shift mean "additive"
+//     instead of breaking the match.
+//   - Alt/Ctrl/Meta are disqualifying (those belong to the browser/OS), but
+//     Shift is meaningful, so only Shift flips the mode.
+// The caller still owns focus/composition/active-view gating; this function is
+// purely "which shortcut, which mode" and returns null when no repo shortcut
+// applies.
+export interface RepoNumberShortcut {
+  /** Zero-based index into the ordered shortcut slug list. */
+  index: number;
+  mode: RepoSelectionMode;
+}
+
+export function repoNumberShortcut(event: {
+  code: string;
+  shiftKey: boolean;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
+}): RepoNumberShortcut | null {
+  if (event.altKey || event.ctrlKey || event.metaKey) return null;
+  const match = /^(?:Digit|Numpad)([1-9])$/.exec(event.code);
+  if (!match) return null;
+  return {
+    index: Number(match[1]) - 1,
+    mode: event.shiftKey ? "additive" : "exclusive",
+  };
+}
+
 export function removeRepoSlug(current: string[], slug: string): string[] {
   return current.filter((existing) => existing !== slug);
 }

@@ -10,14 +10,24 @@
 //   - The selected repos render as removable chips above the trigger.
 //   - Short Pinned and Recent groups stay visible on the splash page so
 //     common choices are one click without opening the dialog.
+//   - Selection is a single-select-by-default, multi-select-on-intent
+//     model, matching how OS file lists behave. Clicking a repo name (or
+//     pressing its number shortcut) selects it EXCLUSIVELY — the staged
+//     set becomes exactly that repo. Shift-clicking (or Shift+number), and
+//     the explicit "+" affordance on each chip, are ADDITIVE — the repo
+//     joins the current selection instead of replacing it. The split lives
+//     in repos.ts `applyRepoSelection`; the picker only maps the gesture.
+//   - An already-staged repo stays clickable: a plain click narrows the
+//     selection back down to just it, while its "+" is disabled because
+//     additive-adding a repo already in the set is a no-op. Staged repos
+//     read as selected (accent fill + aria-pressed), not dimmed-and-dead.
 //   - "+ Add repo" opens a small dropdown panel below the chip row.
 //   - The panel has a text input ("owner/name") with an explicit Add
 //     button, plus a "Recent" section of clickable suggestions
 //     sourced from the user's prior sessions
-//     (GET /api/github/recent-repos).
-//   - Already-selected suggestions are visually dimmed and a no-op
-//     to click — clearer than removing them from the list, which
-//     would reorder things every time the user clicks a chip.
+//     (GET /api/github/recent-repos). The typed-entry Add button stays
+//     additive-with-validation (addRepoSlug) so a duplicate you typed is
+//     surfaced as an error rather than silently swallowed.
 //   - Pin order is user-controlled by drag-and-drop on two surfaces:
 //     the always-visible numbered "Pinned" shortcuts (drag a chip) and
 //     the full "Pinned" list inside the panel (drag a grip handle, or
@@ -33,9 +43,32 @@
 // what the vitest in RepoPicker.test.tsx asserts.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { GripVertical, PinIcon, XIcon } from "lucide-react";
+import { GripVertical, PinIcon, PlusIcon, XIcon } from "lucide-react";
 
-import { isValidRepoSlug, isRepoPinned, repoShortcutSlugs } from "../repos";
+import {
+  isValidRepoSlug,
+  isRepoPinned,
+  repoShortcutSlugs,
+  type RepoSelectionMode,
+} from "../repos";
+
+// repoSelectModeFromEvent maps a chip click to its selection gesture: a plain
+// left click selects the repo exclusively (it becomes the only staged repo),
+// while holding Shift makes the click additive (the repo joins the current
+// selection). The keyboard number shortcuts in App.tsx use the same rule —
+// bare number = exclusive, Shift+number = additive — so pointer and keyboard
+// stay in lockstep. The explicit "+" affordance is always additive regardless
+// of modifiers.
+function repoSelectModeFromEvent(
+  e: { shiftKey: boolean },
+): RepoSelectionMode {
+  return e.shiftKey ? "additive" : "exclusive";
+}
+
+/** onSelect picks a repo via a chip/shortcut gesture: exclusive (plain) or
+ *  additive (Shift / the "+" affordance). Distinct from onAdd, which is the
+ *  manual typed-entry Add button. */
+type RepoSelectHandler = (slug: string, mode: RepoSelectionMode) => void;
 
 /** allRepos surfaces the user's full GitHub App installation, sourced
  *  from /api/github/repos. The picker filters this list by
@@ -78,8 +111,12 @@ export interface RepoPickerProps {
   onToggleOpen: () => void;
   onClose: () => void;
   onInputChange: (value: string) => void;
+  /** Manual typed-entry Add (the panel form). Additive with validation —
+   *  duplicates surface as an inline error via addRepoSlug. */
   onAdd: (slug: string) => void;
-  onAddShortcut: (slug: string) => void;
+  /** Chip/shortcut selection gesture. `mode` is "exclusive" for a plain
+   *  click / bare number and "additive" for Shift / the "+" affordance. */
+  onSelect: RepoSelectHandler;
   onTogglePin: (slug: string) => void;
   /** Reorder the durable pin list by moving `sourceSlug` relative to
    *  `targetSlug`. Wired to the same PUT /api/github/pinned-repos write
@@ -106,7 +143,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
     onClose,
     onInputChange,
     onAdd,
-    onAddShortcut,
+    onSelect,
     onTogglePin,
     onReorderPin,
     onRemove,
@@ -128,10 +165,11 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
     }
   }, [open, onLoadAllRepos]);
 
-  // Filter out already-selected (case-insensitive) so the "Recent"
-  // section doesn't visually duplicate chips. Disabled-style retains
-  // the slug in the section so the user sees "this was here, you
-  // already added it" rather than the suggestion vanishing.
+  // Lower-cased staged set, used to mark suggestion/shortcut chips as selected
+  // (case-insensitive). A staged repo is NOT removed from its section: it stays
+  // visible and clickable (a plain click narrows the selection back to just
+  // it), reads as selected via `is-selected` + aria-pressed, and only its "+"
+  // additive control is disabled — additive-adding a staged repo is a no-op.
   const selectedLower = useRef<Set<string>>(new Set());
   selectedLower.current = new Set(selected.map((s) => s.toLowerCase()));
 
@@ -217,7 +255,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
               items={pinnedPreview}
               selectedLower={selectedLower.current}
               busy={busy}
-              onAddShortcut={onAddShortcut}
+              onSelect={onSelect}
               onTogglePin={onTogglePin}
               onReorderPin={onReorderPin}
             />
@@ -228,7 +266,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
               items={recentPreview}
               selectedLower={selectedLower.current}
               busy={busy}
-              onAddShortcut={onAddShortcut}
+              onSelect={onSelect}
               onTogglePin={onTogglePin}
               onDismissRecent={onDismissRecent}
             />
@@ -274,7 +312,7 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
             allRepos={allRepos}
             selectedLower={selectedLower.current}
             busy={busy}
-            onAdd={onAdd}
+            onSelect={onSelect}
             onTogglePin={onTogglePin}
             onReorderPin={onReorderPin}
             onDismissRecent={onDismissRecent}
@@ -362,7 +400,7 @@ interface RepoPreviewSectionProps {
   items: RepoPreviewItem[];
   selectedLower: ReadonlySet<string>;
   busy: boolean;
-  onAddShortcut: (slug: string) => void;
+  onSelect: RepoSelectHandler;
   onTogglePin: (slug: string) => void;
   /** When provided, the section's chips become drag-to-reorder — used for the
    *  always-visible Pinned shortcuts so users can rearrange pin order without
@@ -373,7 +411,7 @@ interface RepoPreviewSectionProps {
 }
 
 function RepoPreviewSection(props: RepoPreviewSectionProps): JSX.Element {
-  const { label, items, selectedLower, busy, onAddShortcut, onTogglePin, onReorderPin, onDismissRecent } =
+  const { label, items, selectedLower, busy, onSelect, onTogglePin, onReorderPin, onDismissRecent } =
     props;
   // Called unconditionally (rules of hooks); a section is reorderable only when
   // a reorder callback is supplied and there is more than one chip to order.
@@ -407,18 +445,28 @@ function RepoPreviewSection(props: RepoPreviewSectionProps): JSX.Element {
                   "home-repos-recent-chip home-repos-recent-shortcut" +
                   (selectedRecent ? " is-selected" : "")
                 }
-                onClick={() => !selectedRecent && onAddShortcut(item.slug)}
-                disabled={busy || selectedRecent}
-                title={reorderable ? `${item.slug} — drag to reorder` : item.slug}
+                onClick={(e) => onSelect(item.slug, repoSelectModeFromEvent(e))}
+                disabled={busy}
+                title={
+                  reorderable
+                    ? `${item.slug} — click to select, Shift-click to add, drag to reorder`
+                    : `${item.slug} — click to select, Shift-click to add`
+                }
                 aria-pressed={selectedRecent}
-                aria-keyshortcuts={String(item.shortcut)}
-                aria-label={`Add ${label.toLowerCase()} repository ${item.shortcut}: ${item.slug}`}
+                aria-keyshortcuts={`${item.shortcut} Shift+${item.shortcut}`}
+                aria-label={`Select ${label.toLowerCase()} repository ${item.shortcut}: ${item.slug} (Shift to add)`}
               >
                 <span className="home-repos-recent-key" aria-hidden="true">
                   {item.shortcut}
                 </span>
                 <span>{item.slug}</span>
               </button>
+              <AdditiveAddButton
+                slug={item.slug}
+                selected={selectedRecent}
+                busy={busy}
+                onSelect={onSelect}
+              />
               {!item.pinned && onDismissRecent && (
                 <button
                   type="button"
@@ -467,14 +515,14 @@ interface RepoPickerSuggestionsProps {
   allRepos?: AllReposState;
   selectedLower: ReadonlySet<string>;
   busy: boolean;
-  onAdd: (slug: string) => void;
+  onSelect: RepoSelectHandler;
   onTogglePin: (slug: string) => void;
   onReorderPin: (sourceSlug: string, targetSlug: string) => void;
   onDismissRecent: (slug: string) => void;
 }
 
 function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
-  const { input, pinned, recent, allRepos, selectedLower, busy, onAdd, onTogglePin, onReorderPin, onDismissRecent } = props;
+  const { input, pinned, recent, allRepos, selectedLower, busy, onSelect, onTogglePin, onReorderPin, onDismissRecent } = props;
   const trimmed = input.trim();
   const looksLikeSlug = trimmed !== "" && isValidRepoSlug(trimmed);
 
@@ -553,7 +601,7 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
             slugs={filteredPinned}
             selectedLower={selectedLower}
             busy={busy}
-            onAdd={onAdd}
+            onSelect={onSelect}
             onTogglePin={onTogglePin}
             onReorderPin={onReorderPin}
           />
@@ -565,7 +613,7 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
             selectedLower={selectedLower}
             pinnedLower={pinnedLower}
             busy={busy}
-            onAdd={onAdd}
+            onSelect={onSelect}
             onTogglePin={onTogglePin}
           />
         ))}
@@ -577,7 +625,7 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
           selectedLower={selectedLower}
           pinnedLower={pinnedLower}
           busy={busy}
-          onAdd={onAdd}
+          onSelect={onSelect}
           onTogglePin={onTogglePin}
           onDismissRecent={onDismissRecent}
         />
@@ -590,7 +638,7 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
           selectedLower={selectedLower}
           pinnedLower={pinnedLower}
           busy={busy}
-          onAdd={onAdd}
+          onSelect={onSelect}
           onTogglePin={onTogglePin}
         />
       )}
@@ -607,13 +655,13 @@ interface RepoSectionProps {
   selectedLower: ReadonlySet<string>;
   pinnedLower: ReadonlySet<string>;
   busy: boolean;
-  onAdd: (slug: string) => void;
+  onSelect: RepoSelectHandler;
   onTogglePin: (slug: string) => void;
   onDismissRecent?: (slug: string) => void;
 }
 
 function RepoSection(props: RepoSectionProps): JSX.Element {
-  const { label, slugs, filtered, selectedLower, pinnedLower, busy, onAdd, onTogglePin, onDismissRecent } = props;
+  const { label, slugs, filtered, selectedLower, pinnedLower, busy, onSelect, onTogglePin, onDismissRecent } = props;
   return (
     <div className="home-repos-recent">
       <div className="home-repos-recent-label">
@@ -633,14 +681,25 @@ function RepoSection(props: RepoSectionProps): JSX.Element {
               <button
                 type="button"
                 className={
-                  "home-repos-recent-chip" + (alreadyPicked ? " is-disabled" : "")
+                  "home-repos-recent-chip" + (alreadyPicked ? " is-selected" : "")
                 }
-                onClick={() => !alreadyPicked && onAdd(slug)}
-                disabled={busy || alreadyPicked}
-                title={alreadyPicked ? `${slug} (already added)` : slug}
+                onClick={(e) => onSelect(slug, repoSelectModeFromEvent(e))}
+                disabled={busy}
+                aria-pressed={alreadyPicked}
+                title={
+                  alreadyPicked
+                    ? `${slug} (selected) — click to keep only this, Shift-click to add`
+                    : `${slug} — click to select, Shift-click to add`
+                }
               >
                 {slug}
               </button>
+              <AdditiveAddButton
+                slug={slug}
+                selected={alreadyPicked}
+                busy={busy}
+                onSelect={onSelect}
+              />
               <PinToggleButton
                 slug={slug}
                 pinned={pinnedRepo}
@@ -679,13 +738,13 @@ interface DraggablePinnedSectionProps {
   slugs: string[];
   selectedLower: ReadonlySet<string>;
   busy: boolean;
-  onAdd: (slug: string) => void;
+  onSelect: RepoSelectHandler;
   onTogglePin: (slug: string) => void;
   onReorderPin: (sourceSlug: string, targetSlug: string) => void;
 }
 
 function DraggablePinnedSection(props: DraggablePinnedSectionProps): JSX.Element {
-  const { slugs, selectedLower, busy, onAdd, onTogglePin, onReorderPin } = props;
+  const { slugs, selectedLower, busy, onSelect, onTogglePin, onReorderPin } = props;
   const { itemState, dragHandlers } = usePinDragReorder(busy, onReorderPin);
   // After a keyboard move the list re-renders in a new order; keep focus on the
   // row the user is moving so repeated ArrowUp/ArrowDown presses keep working.
@@ -764,13 +823,24 @@ function DraggablePinnedSection(props: DraggablePinnedSectionProps): JSX.Element
               </button>
               <button
                 type="button"
-                className={"home-repos-recent-chip" + (alreadyPicked ? " is-disabled" : "")}
-                onClick={() => !alreadyPicked && onAdd(slug)}
-                disabled={busy || alreadyPicked}
-                title={alreadyPicked ? `${slug} (already added)` : slug}
+                className={"home-repos-recent-chip" + (alreadyPicked ? " is-selected" : "")}
+                onClick={(e) => onSelect(slug, repoSelectModeFromEvent(e))}
+                disabled={busy}
+                aria-pressed={alreadyPicked}
+                title={
+                  alreadyPicked
+                    ? `${slug} (selected) — click to keep only this, Shift-click to add`
+                    : `${slug} — click to select, Shift-click to add`
+                }
               >
                 {slug}
               </button>
+              <AdditiveAddButton
+                slug={slug}
+                selected={alreadyPicked}
+                busy={busy}
+                onSelect={onSelect}
+              />
               <PinToggleButton
                 slug={slug}
                 pinned
@@ -782,6 +852,40 @@ function DraggablePinnedSection(props: DraggablePinnedSectionProps): JSX.Element
         })}
       </ul>
     </div>
+  );
+}
+
+// AdditiveAddButton is the explicit "+" affordance the requirement calls for:
+// a non-keyboard, non-Shift way to ADD a repo to the current selection. Plain
+// clicking the repo name is exclusive (it becomes the only staged repo), so
+// this button is how a pointer user keeps the existing selection and appends
+// one more. It is disabled when the repo is already staged, because additive-
+// adding a repo already in the set is a no-op — the disabled state communicates
+// "already selected" instead of presenting a button that does nothing.
+interface AdditiveAddButtonProps {
+  slug: string;
+  selected: boolean;
+  busy: boolean;
+  onSelect: RepoSelectHandler;
+}
+
+function AdditiveAddButton(props: AdditiveAddButtonProps): JSX.Element {
+  const { slug, selected, busy, onSelect } = props;
+  return (
+    <button
+      type="button"
+      className="home-repos-add-more"
+      onClick={() => onSelect(slug, "additive")}
+      disabled={busy || selected}
+      aria-label={
+        selected ? `${slug} already selected` : `Add ${slug} to selection`
+      }
+      title={
+        selected ? `${slug} already selected` : `Add ${slug} (keep current selection)`
+      }
+    >
+      <PlusIcon aria-hidden="true" className="home-repos-add-more-icon" />
+    </button>
   );
 }
 

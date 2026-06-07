@@ -39,9 +39,48 @@ export interface ThinkingPlacementGroup {
   includesTurn: boolean;
 }
 
+export interface ThinkingPlacementPageInfo {
+  page: number;
+  pageCount: number;
+  pages?: Array<{
+    number: number;
+    sealed?: boolean;
+  }>;
+}
+
 function clampIndex(index: number, length: number): number {
   if (!Number.isFinite(index)) return length;
   return Math.min(Math.max(Math.trunc(index), 0), length);
+}
+
+export function turnActivityPageContainsLiveTail(
+  pageInfo: ThinkingPlacementPageInfo | undefined,
+): boolean {
+  if (!pageInfo) return true;
+  if (!Number.isFinite(pageInfo.page) || !Number.isFinite(pageInfo.pageCount))
+    return true;
+  const current = Math.floor(pageInfo.page);
+  const total = Math.floor(pageInfo.pageCount);
+  if (total < 1) return true;
+  if (current !== total) return false;
+  const page = pageInfo.pages?.find((item) => item.number === current);
+  return page?.sealed !== true;
+}
+
+export function insertThinkingGroupByDurableOrder<T extends ThinkingPlacementGroup>(
+  groups: T[],
+  thinking: T,
+  shellTailOrderKey: string,
+  fallbackIndex: number,
+): T[] {
+  const insertIndex = resolveThinkingInsertIndex(
+    groups,
+    shellTailOrderKey,
+    fallbackIndex,
+  );
+  const out = [...groups];
+  out.splice(insertIndex, 0, thinking);
+  return out;
 }
 
 // resolveThinkingInsertIndex returns the index at which to splice the running
