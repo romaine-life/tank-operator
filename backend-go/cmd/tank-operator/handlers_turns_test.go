@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -541,6 +542,104 @@ func TestCreateSessionRejectsCodexDefaultModelAlias(t *testing.T) {
 	}
 }
 
+func TestCreateSessionRejectsUnavailableCodexModel(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"codex_gui",
+		"model":"gpt-5.3-codex",
+		"effort":"medium"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	if !strings.Contains(body, "model is not available for codex") ||
+		!strings.Contains(body, "gpt-5.5") ||
+		!strings.Contains(body, "gpt-5.3-codex-spark") ||
+		strings.Contains(body, "gpt-5.3-codex|") {
+		t.Fatalf("body = %s, want actionable supported Codex model list without gpt-5.3-codex", body)
+	}
+}
+
+func TestCreateSessionRejectsRetiredCodexGUIModes(t *testing.T) {
+	for _, mode := range []string{sessionmodel.CodexExecGUIMode, sessionmodel.CodexAppServerMode} {
+		t.Run(mode, func(t *testing.T) {
+			before := testutil.ToFloat64(sessionRunConfigRejectedTotal.WithLabelValues("create", "codex", "retired_mode"))
+			bus := &recordingSessionBus{}
+			app := testTurnsApp(t, bus)
+			req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+				"mode":"`+mode+`",
+				"model":"gpt-5.5",
+				"effort":"high"
+			}`))
+			req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+			req.Header.Set("Content-Type", "application/json")
+			resp := httptest.NewRecorder()
+
+			app.handleCreateSession(resp, req)
+
+			if resp.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+			}
+			if !strings.Contains(resp.Body.String(), "session mode "+mode+" is retired; use codex_gui") {
+				t.Fatalf("body = %s, want retired mode error", resp.Body.String())
+			}
+			after := testutil.ToFloat64(sessionRunConfigRejectedTotal.WithLabelValues("create", "codex", "retired_mode"))
+			if after != before+1 {
+				t.Fatalf("retired-mode rejection counter = %v, want %v", after, before+1)
+			}
+		})
+	}
+}
+
+func TestCreateSessionRejectsUnknownMode(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{"mode":"codex_mystery_gui"}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "session mode is invalid") {
+		t.Fatalf("body = %s, want invalid mode error", resp.Body.String())
+	}
+}
+
+func TestCreateSessionWithContextRejectsRetiredCodexGUIMode(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions/with-context", strings.NewReader(`{
+		"mode":"codex_app_server",
+		"model":"gpt-5.5",
+		"effort":"high",
+		"glimmung_run_ref":"run-123"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSessionWithContext(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "session mode codex_app_server is retired; use codex_gui") {
+		t.Fatalf("body = %s, want retired mode error", resp.Body.String())
+	}
+}
+
 func TestCreateSessionRejectsAntigravityDefaultModelAlias(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus)
@@ -842,6 +941,29 @@ func TestEnqueueSessionTurnRejectsCodexDefaultModelAlias(t *testing.T) {
 	}
 	if !strings.Contains(resp.Body.String(), "default is not accepted") {
 		t.Fatalf("body = %s, want default rejection", resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	}
+}
+
+func TestEnqueueSessionTurnRejectsUnavailableCodexModel(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
+	req := authedTurnRequest(t, "64", `{"client_nonce":"turn-codex-unavailable-model","prompt":"hello","model":"gpt-5.3-codex"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	body := resp.Body.String()
+	if !strings.Contains(body, "model is not available for codex") ||
+		!strings.Contains(body, "gpt-5.5") ||
+		!strings.Contains(body, "gpt-5.3-codex-spark") ||
+		strings.Contains(body, "gpt-5.3-codex|") {
+		t.Fatalf("body = %s, want actionable supported Codex model list without gpt-5.3-codex", body)
 	}
 	if len(bus.commands) != 0 {
 		t.Fatalf("published commands = %d, want 0", len(bus.commands))

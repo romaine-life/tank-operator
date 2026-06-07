@@ -349,6 +349,15 @@ All metric names are prefixed `tank_`. The full namespace:
   runner cannot reliably emit from inside the killed process. Correlate it with
   durable turn lifecycle and scheduled-wakeup rows to distinguish a missing
   schedule intent from a fired wake whose runner died mid-turn.
+- `tank_session_run_config_rejected_total` - backend rejections of invalid
+  session mode/model/effort requests before runner dispatch. Labels are bounded:
+  `surface` (`create`, `turn`, `runtime_config`, `other`), `provider`
+  (`claude`, `codex`, `antigravity`, `unknown`, `other`), and `reason`
+  (`invalid_mode`, `retired_mode`, `unsupported_model`,
+  `unsupported_effort`, `missing_model`, `default_model`, `other`). This is the
+  red signal for agents or browser prefs attempting retired Codex modes or
+  unavailable model strings; the corresponding HTTP response must be a hard
+  400 with an actionable allowed-value list, never a silent default.
 - `tank_api_proxy_*` — api-proxy ext_proc counters/histograms. Single
   label: `provider` ("claude", "codex", or "antigravity"), bound from
   `PROXY_PROVIDER`.

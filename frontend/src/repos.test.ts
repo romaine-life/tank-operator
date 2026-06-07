@@ -53,8 +53,6 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
   for (const mode of [
     "claude_gui",
     "codex_gui",
-    "codex_exec_gui",
-    "codex_app_server",
     "antigravity_gui",
   ]) {
     expect(REPO_SUPPORTED_MODES.has(mode), `${mode} should support repos`).toBeTruthy();
@@ -69,6 +67,8 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "gemini_test",
     "gemini_config",
     "api_key",
+    "codex_exec_gui",
+    "codex_app_server",
   ]) {
     expect(!REPO_SUPPORTED_MODES.has(mode), `${mode} should NOT support repos`).toBeTruthy();
   }

@@ -265,6 +265,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// SPA user.
 	mux.HandleFunc("GET /api/github/repos", s.handleGitHubRepos)
 	mux.HandleFunc("GET /api/bug-labels", s.handleListBugLabels)
+	mux.HandleFunc("GET /api/session-run-options", s.handleSessionRunOptions)
 
 	// Sessions CRUD.
 	mux.HandleFunc("POST /api/sessions", s.handleCreateSession)
@@ -385,6 +386,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 
 	// Internal API.
 	mux.HandleFunc("GET /api/internal/github/installation", s.handleInternalGitHubInstallation)
+	mux.HandleFunc("GET /api/internal/session-run-options", s.handleInternalSessionRunOptions)
 	mux.HandleFunc("GET /api/internal/sessions", s.handleInternalListSessions)
 	mux.HandleFunc("POST /api/internal/sessions", s.handleInternalCreateSession)
 	mux.HandleFunc("POST /api/internal/session-scopes/{session_scope}/retire", s.handleInternalRetireSessionScope)

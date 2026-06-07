@@ -108,13 +108,15 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 	}
 	if model != "" && validateModelArg(provider, model) == "" {
 		recordSessionRuntimeConfigUpdate(provider, "bad_request")
-		writeError(w, http.StatusBadRequest, "model is invalid")
+		recordSessionRunConfigRejected("runtime_config", provider, "unsupported_model")
+		writeError(w, http.StatusBadRequest, modelUnsupportedMessage(provider))
 		return
 	}
 	effortInput := strings.TrimSpace(body.Effort)
 	effort := validateEffort(provider, effortInput)
 	if effortInput != "" && effort == "" {
 		recordSessionRuntimeConfigUpdate(provider, "bad_request")
+		recordSessionRunConfigRejected("runtime_config", provider, "unsupported_effort")
 		if provider == "antigravity" {
 			writeError(w, http.StatusBadRequest, effortUnsupportedMessage(provider, "sessions"))
 			return
