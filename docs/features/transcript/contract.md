@@ -160,6 +160,13 @@ answer; it must not visibly move a rendered row from one surface to the other.
   This context is sourced from durable `user_message.created` and is not an
   activity child row, so it stays visible while the reader moves between
   activity pages.
+- The dedicated Turns view renders successful final assistant prose from the
+  server-projected `/turns/{id}/activity` `final_answer.entries` section, not by
+  inferring finality from the currently selected activity page. Collapsing agent
+  activity hides non-final activity rows across the selected page while keeping
+  that durable final answer visible even when the final-answer event belongs to
+  a different activity page. Failed, interrupted, active, and no-final completed
+  turns do not expose a final-answer collapse affordance.
 - The authenticated Turns view is a chat-capable continuation surface. Its
   composer uses the same `POST /api/sessions/{session_id}/turns` durable
   boundary as the main transcript composer; it does not create a second submit
@@ -241,6 +248,10 @@ answer; it must not visibly move a rendered row from one surface to the other.
   initiating user message at the top of the Turns view from the server
   projection. Switching activity pages keeps that same context visible and does
   not duplicate the human user message inside the activity page body.
+- Collapsing agent activity in the Turns view keeps the server-projected final
+  answer visible, hides ordinary tool/reasoning/progress rows, keeps
+  server-owned always-visible context such as background-wake prompts visible,
+  and stays disabled when no durable final answer exists.
 - Submitting from the authenticated Turns view writes the normal durable
   `user_message.created` / `turn.submitted` boundary, keeps public message-link
   views read-only, routes the browser to `/sessions/{id}/turns/{n}` when the

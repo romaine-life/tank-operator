@@ -60,6 +60,16 @@ Contract impact:
   settled conversation projection.
 - Assistant prose may be duplicated across those projections, but a rendered row
   must not relocate between them.
+- The dedicated Turns detail view gets its final-answer display from
+  `/turns/{id}/activity` `final_answer.entries`, which is projected from durable
+  `turn.completed.payload.final_answer.timeline_ids`. The browser no longer
+  decides that an assistant row is final because it is absent from
+  `compactedEntryIds`.
+- Collapsing agent activity is a final-answer isolation control: it is enabled
+  only when the server says a turn has both a durable final answer and
+  collapsible activity. It keeps the final answer and server-owned wake/context
+  rows visible, and it is disabled for failed, interrupted, active, or no-final
+  turns instead of collapsing the page to an empty detail view.
 - The settled main-transcript answer remains canonical for message links,
   unread counts, latest-message state, and fork-from-message actions.
 
@@ -118,8 +128,9 @@ Evidence:
 - Backend unit: `backend-go/cmd/tank-operator/turn_pages_test.go` proves an
   over-limit turn keeps a `completed` shell and seals pages at the threshold.
 - Backend contract: `TestHandleSessionTurnActivityPaginatesOverLimitTurnWithTerminalShell`
-  proves the endpoint reports a completed shell, `page_count >= 2`, and defaults
-  to the last page.
+  proves the endpoint reports a completed shell, `page_count >= 2`, defaults to
+  the last page, and returns server-owned `final_answer.entries` plus collapse
+  metadata.
 - Observability: `tank_transcript_materialization_invariant_violation_total{invariant="active_shell_after_terminal"}`
   + `TankTurnActiveWithDurableTerminal` guard the regression; `tank_turn_activity_event_count`
   / `tank_turn_activity_page_count` track long-turn frequency.

@@ -164,7 +164,8 @@ All metric names are prefixed `tank_`. The full namespace:
   turn_activity_load_succeeded, turn_activity_load_failed,
   turn_activity_load_timed_out, turn_activity_load_stale,
   turn_activity_refresh_failed, turn_activity_refresh_gave_up,
-  turn_activity_refresh_recovered,
+  turn_activity_refresh_recovered, turn_activity_collapse_applied,
+  turn_activity_collapse_projection_mismatch,
   resync_required, stream_error, closed_unmount, closed_error, reconnect_scheduled),
   `session_mode`, and on the `_received_total` variant `event_type`.
   The `_stream_silent_seconds{session_mode}` histogram is the

@@ -408,6 +408,13 @@ type TurnActivitySummary = {
   turnUsage?: unknown;
   usageObservation?: unknown;
 };
+type TurnActivityCollapseSummary = {
+  collapsible?: boolean;
+  defaultCollapsed?: boolean;
+  hiddenCount?: number;
+  finalAnswerCount?: number;
+  reason?: string;
+};
 export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   kind: SandboxTranscriptEntry["kind"] | "background_task" | "turn_activity";
   role?: "user" | "assistant" | "system";
@@ -451,6 +458,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   turnOnly?: boolean;
   wakePrompt?: boolean;
   backendTurnId?: string;
+  turnDetailRole?: "final_answer";
   // metaKind specializes a meta-kind row into a distinguishable transcript
   // surface without growing the shared `kind` enum (which comes from the
   // sandbox-agent SDK). renderItem branches on metaKind before falling
@@ -9728,12 +9736,14 @@ const TURN_ACTIVITY_LOAD_TIMEOUT_MS = 15_000;
 
 type TurnActivitySnapshot = TurnActivityLoadSnapshotModel<
   TranscriptEntry,
-  TurnActivityPageInfo
+  TurnActivityPageInfo,
+  TurnActivityCollapseSummary
 >;
 
 type TurnActivityLoadState = TurnActivityLoadStateModel<
   TranscriptEntry,
-  TurnActivityPageInfo
+  TurnActivityPageInfo,
+  TurnActivityCollapseSummary
 >;
 
 type TurnActivityLoadStateByTurn = Record<
@@ -9746,8 +9756,28 @@ type ActivityRefreshProblem = TurnActivityLoadProblem;
 type TurnActivityLoadResult = {
   entries: TranscriptEntry[];
   context: TranscriptEntry | null;
+  finalAnswerEntries: TranscriptEntry[];
+  collapse?: TurnActivityCollapseSummary;
   pageInfo?: TurnActivityPageInfo;
 };
+
+function normalizeTurnActivityCollapseSummary(
+  raw: unknown,
+): TurnActivityCollapseSummary | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  return {
+    collapsible:
+      typeof record.collapsible === "boolean" ? record.collapsible : undefined,
+    defaultCollapsed:
+      typeof record.default_collapsed === "boolean"
+        ? record.default_collapsed
+        : undefined,
+    hiddenCount: numericRecordValue(record, "hidden_count"),
+    finalAnswerCount: numericRecordValue(record, "final_answer_count"),
+    reason: stringRecordValue(record, "reason"),
+  };
+}
 
 function turnEntryTimestamp(entry: TranscriptEntry): string | undefined {
   return entry.startedAt ?? entry.time ?? entry.completedAt ?? entry.updatedAt;
@@ -10544,6 +10574,7 @@ function RunTurnActivityScreen({
   avatar,
   systemAvatar,
   sessionId,
+  sessionMode,
   showThinking,
   autoExpandTools,
   showTimestamps,
@@ -10564,6 +10595,7 @@ function RunTurnActivityScreen({
   avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
   sessionId: string;
+  sessionMode: string;
   showThinking: boolean;
   autoExpandTools: boolean;
   showTimestamps: boolean;
@@ -10590,6 +10622,8 @@ function RunTurnActivityScreen({
   const selectedSnapshot = turnActivityLoadVisibleSnapshot(selectedLoadState);
   const selectedPageInfo = selectedSnapshot?.pageInfo;
   const selectedTurnContext = selectedSnapshot?.context ?? null;
+  const selectedFinalAnswerEntries = selectedSnapshot?.finalAnswerEntries ?? [];
+  const selectedCollapse = selectedSnapshot?.collapse;
   // Same always-present pager as the inline chat disclosure, for the surface a
   // user actually inspects turns from. Without it, a turn over the page limit
   // shows only its last page here (the endpoint default) with no way back.
@@ -10603,36 +10637,31 @@ function RunTurnActivityScreen({
     [turnIds, selected?.turnId],
   );
   const detailEntries = useMemo(
-    () =>
-      (selectedSnapshot?.entries ?? []).filter(
+    () => {
+      const finalAnswerIds = new Set(
+        selectedFinalAnswerEntries.map((entry) => entry.id),
+      );
+      return (selectedSnapshot?.entries ?? []).filter(
         (entry) =>
+          !finalAnswerIds.has(entry.id) &&
+          entry.turnDetailRole !== "final_answer" &&
           !isTurnActivityEntry(entry) &&
           (!isUserMessageEntry(entry) || isTurnActivityUserMessageEntry(entry)),
-      ),
-    [selectedSnapshot?.entries],
+      );
+    },
+    [selectedFinalAnswerEntries, selectedSnapshot?.entries],
   );
   const detailGroups = useMemo(
     () => groupFlatTranscriptEntries(detailEntries),
     [detailEntries],
   );
   const finalDetailEntryIds = useMemo(() => {
-    const compactedEntryIds = new Set(
-      selected?.shell?.activityIds ??
-        selected?.shell?.activity?.compactedEntryIds ??
-        [],
-    );
-    return new Set(
-      detailEntries
-        .filter((entry) =>
-          isTurnActivityFinalAssistantEntry(entry, compactedEntryIds),
-        )
-        .map((entry) => entry.id),
-    );
-  }, [
-    detailEntries,
-    selected?.shell?.activity?.compactedEntryIds,
-    selected?.shell?.activityIds,
-  ]);
+    return new Set(selectedFinalAnswerEntries.map((entry) => entry.id));
+  }, [selectedFinalAnswerEntries]);
+  const finalAnswerGroups = useMemo(
+    () => groupFlatTranscriptEntries(selectedFinalAnswerEntries),
+    [selectedFinalAnswerEntries],
+  );
   const hasFinalDetailResponse = finalDetailEntryIds.size > 0;
   const hasCollapsibleDetailActivity = detailEntries.some(
     (entry) => !isAlwaysVisibleTurnDetailEntry(entry, finalDetailEntryIds),
@@ -10659,12 +10688,14 @@ function RunTurnActivityScreen({
     selected &&
     !selected.active &&
     hasFinalDetailResponse &&
-    hasCollapsibleDetailActivity,
+    hasCollapsibleDetailActivity &&
+    selectedCollapse?.collapsible !== false,
   );
   const showTurnSectionDivider = Boolean(selected);
-  const canToggleDetailActivity = Boolean(selected);
+  const canToggleDetailActivity = showDetailActivityDivider;
   const detailActivityCollapsed =
     selected !== null &&
+    showDetailActivityDivider &&
     collapsedActivityTurnIds[selected.turnId] === true;
   const showPromptContextShell = Boolean(selected);
   const canTogglePromptContext = Boolean(selectedTurnContext);
@@ -10776,7 +10807,7 @@ function RunTurnActivityScreen({
   useEffect(() => {
     if (!selected) return;
     const turnId = selected.turnId;
-    if (!showDetailActivityDivider) {
+    if (!showDetailActivityDivider || selectedCollapse?.defaultCollapsed === false) {
       finalCollapsedDetailTurnIdsRef.current.delete(turnId);
       return;
     }
@@ -10785,7 +10816,42 @@ function RunTurnActivityScreen({
     setCollapsedActivityTurnIds((prev) =>
       prev[turnId] === true ? prev : { ...prev, [turnId]: true },
     );
-  }, [selected, showDetailActivityDivider]);
+  }, [selected, selectedCollapse?.defaultCollapsed, showDetailActivityDivider]);
+  const collapseAppliedTelemetryKeysRef = useRef<Set<string>>(new Set());
+  const collapseMismatchTelemetryKeysRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!selected || !selectedSnapshot) return;
+    const key = `${selected.turnId}:${selectedPageInfo?.page ?? "unknown"}:${selectedFinalAnswerEntries.length}`;
+    const projectedFinalAnswerCount =
+      selectedCollapse?.finalAnswerCount ?? selectedFinalAnswerEntries.length;
+    if (
+      projectedFinalAnswerCount > 0 &&
+      selectedFinalAnswerEntries.length === 0 &&
+      !collapseMismatchTelemetryKeysRef.current.has(key)
+    ) {
+      collapseMismatchTelemetryKeysRef.current.add(key);
+      logSessionEventStreamEvent("turn_activity_collapse_projection_mismatch", {
+        sessionMode,
+      });
+    }
+    if (
+      detailActivityCollapsed &&
+      !collapseAppliedTelemetryKeysRef.current.has(key)
+    ) {
+      collapseAppliedTelemetryKeysRef.current.add(key);
+      logSessionEventStreamEvent("turn_activity_collapse_applied", {
+        sessionMode,
+      });
+    }
+  }, [
+    detailActivityCollapsed,
+    selected,
+    selectedCollapse?.finalAnswerCount,
+    selectedFinalAnswerEntries.length,
+    selectedPageInfo?.page,
+    selectedSnapshot,
+    sessionMode,
+  ]);
   useLayoutEffect(() => {
     if (!scrollRequest || !selected) return;
     if (scrollRequest.turnId !== selected.turnId) return;
@@ -10923,6 +10989,23 @@ function RunTurnActivityScreen({
       />
     );
   };
+  const renderFinalAnswerEntry = (entry: TranscriptEntry) => (
+    <RunMessageBubble
+      key={entry.id}
+      entry={entry}
+      avatar={avatar}
+      systemAvatar={systemAvatar}
+      sessionId={sessionId}
+      highlighted={false}
+      showTimestamps={showTimestamps}
+      showDuration={showDuration}
+      canonicalMessage={false}
+      ownedByTurnActivity
+      showAssistantAvatar
+      transcriptHref={transcriptHrefForEntry?.(entry)}
+      onOpenTranscriptMessage={onOpenTranscriptMessage}
+    />
+  );
 
   return (
     <div className="run-turn-view" aria-label="Turn view">
@@ -11320,16 +11403,20 @@ function RunTurnActivityScreen({
                   aria-label={
                     canToggleDetailActivity
                       ? detailActivityCollapsed
-                        ? "Expand assistance turn"
-                        : "Collapse assistance turn"
-                      : "No assistance turn to collapse"
+                        ? "Expand agent activity"
+                        : "Collapse agent activity"
+                      : hasFinalDetailResponse
+                        ? "No agent activity to collapse"
+                        : "No final answer to isolate"
                   }
                   title={
                     canToggleDetailActivity
                       ? detailActivityCollapsed
-                        ? "Expand assistance turn"
-                        : "Collapse assistance turn"
-                      : "No assistance turn to collapse"
+                        ? "Expand agent activity"
+                        : "Collapse agent activity"
+                      : hasFinalDetailResponse
+                        ? "No agent activity to collapse"
+                        : "No final answer to isolate"
                   }
                 >
                   {canToggleDetailActivity && detailActivityCollapsed ? (
@@ -11393,12 +11480,20 @@ function RunTurnActivityScreen({
                 />
                 <span>Loading activity...</span>
               </div>
-            ) : showRefreshProblemOnly && renderedDetailGroups.length === 0 ? (
+            ) : showRefreshProblemOnly &&
+              renderedDetailGroups.length === 0 &&
+              finalAnswerGroups.length === 0 ? (
               <div className="run-shell-tasks-empty">No turn activity.</div>
-            ) : renderedDetailGroups.length === 0 ? (
+            ) : renderedDetailGroups.length === 0 &&
+              finalAnswerGroups.length === 0 ? (
               <div className="run-shell-tasks-empty">No turn activity.</div>
             ) : (
-              renderedDetailGroups.map(renderGroup)
+              <>
+                {renderedDetailGroups.map(renderGroup)}
+                {finalAnswerGroups.map((group) =>
+                  flatEntryGroupEntries(group).map(renderFinalAnswerEntry),
+                )}
+              </>
             )}
           </div>
         </>
@@ -14111,6 +14206,8 @@ function ChatPane({
         pages?: unknown;
         total_event_count?: number;
         turn_context?: unknown;
+        final_answer?: { entries?: unknown };
+        collapse?: unknown;
       };
       let pageInfo: TurnActivityPageInfo | undefined;
       if (
@@ -14143,11 +14240,23 @@ function ChatPane({
         };
       }
       const context = normalizeProjectedTranscriptEntry(body.turn_context);
+      const finalAnswerBody =
+        body.final_answer &&
+        typeof body.final_answer === "object" &&
+        !Array.isArray(body.final_answer)
+          ? body.final_answer
+          : undefined;
       return {
         entries: normalizeProjectedTranscriptEntries(
           Array.isArray(body.entries) ? body.entries : [],
         ),
         context,
+        finalAnswerEntries: normalizeProjectedTranscriptEntries(
+          Array.isArray(finalAnswerBody?.entries)
+            ? finalAnswerBody.entries
+            : [],
+        ),
+        collapse: normalizeTurnActivityCollapseSummary(body.collapse),
         pageInfo,
       };
     },
@@ -14207,6 +14316,8 @@ function ChatPane({
           const snapshot: TurnActivitySnapshot = {
             entries: loaded.entries,
             context: loaded.context,
+            finalAnswerEntries: loaded.finalAnswerEntries,
+            collapse: loaded.collapse,
             pageInfo: loaded.pageInfo,
             requestedPage: selectedPage,
             loadedAt: Date.now(),
@@ -18683,6 +18794,7 @@ function ChatPane({
                   avatar={sessionAvatar}
                   systemAvatar={systemAvatar}
                   sessionId={session.id}
+                  sessionMode={session.mode}
                   showThinking={runPrefs.showThinking}
                   autoExpandTools={runPrefs.autoExpandTools}
                   showTimestamps={runPrefs.showTimestamps}
