@@ -284,14 +284,6 @@ func backgroundTaskWakeFireFailureLabel(reason string) string {
 	}
 }
 
-// shellTaskEventLister is the narrow capability the background-task list endpoint
-// needs: an indexed read of a session's shell-task lifecycle events. The
-// postgres event store implements it; the degraded no-Postgres stub does not, so
-// the endpoint returns an empty list rather than re-reading the whole ledger.
-type shellTaskEventLister interface {
-	ShellTaskEvents(ctx context.Context, tankSessionID string) ([]map[string]any, error)
-}
-
 // handleListSessionBackgroundTasks lists the session's background
 // (run_in_background) shell tasks — the durable feed for the Background screen.
 // Background tasks are recorded as shell_task.* events that fold into per-turn
@@ -315,17 +307,16 @@ func (s *appServer) handleListSessionBackgroundTasks(w http.ResponseWriter, r *h
 		writeError(w, status, scopeErr.Error())
 		return
 	}
-	if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
+	// Transcript-read auth (not the live-session read): the background-task
+	// ledger is historical transcript-derived data, so it must resolve for a
+	// completed session whose pod is gone — the user opening the Background
+	// section of a past session — and allow the same admin cross-user reads as
+	// /timeline and /turns/{id}/activity.
+	if _, status, err := s.authorizeSessionTranscriptReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
 		writeError(w, status, err.Error())
 		return
 	}
-	lister, ok := s.sessionEventStoreForScope(sessionScope).(shellTaskEventLister)
-	if !ok {
-		recordSessionBackgroundTasksList("store_unavailable")
-		writeJSON(w, http.StatusOK, map[string]any{"background_tasks": []map[string]any{}})
-		return
-	}
-	events, err := lister.ShellTaskEvents(r.Context(), sessionID)
+	events, err := s.sessionEventStoreForScope(sessionScope).ShellTaskEvents(r.Context(), sessionID)
 	if err != nil {
 		recordSessionBackgroundTasksList("error")
 		writeError(w, http.StatusInternalServerError, err.Error())

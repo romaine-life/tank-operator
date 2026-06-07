@@ -32,6 +32,10 @@ func (f *fakeDebugSessionEventLedgerStore) Upsert(context.Context, map[string]an
 	return nil
 }
 
+func (f *fakeDebugSessionEventLedgerStore) ShellTaskEvents(context.Context, string) ([]map[string]any, error) {
+	return nil, nil
+}
+
 func (f *fakeDebugSessionEventLedgerStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
 	return nil, nil
 }

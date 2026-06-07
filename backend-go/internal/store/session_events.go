@@ -72,6 +72,14 @@ type SessionEventStore interface {
 	// regardless of total ledger size. Background-task wake continuations do not
 	// write user_message.created, so they are correctly excluded.
 	CountUserMessages(ctx context.Context, tankSessionID string) (int64, error)
+	// ShellTaskEvents returns every durable shell_task.* event for a session in
+	// ASC order_key. It backs the session-level Background screen, which
+	// projects the background (run_in_background) shell-task ledger. Bounded and
+	// indexed by the session_events_shell_task partial index so it stays cheap
+	// regardless of total ledger size. It is on the interface (not a concrete
+	// method reached by type assertion) so it survives the materializing store
+	// wrapper that fronts the local scope.
+	ShellTaskEvents(ctx context.Context, tankSessionID string) ([]map[string]any, error)
 	// FindStrandedLaunchTurns returns deferred-launch turns that were durably
 	// recorded (a lone user_message.created) but never dispatched: their
 	// turn_id carries no other event of any kind. This is the cross-session
@@ -874,6 +882,10 @@ func (StubSessionEventStore) UnreadOutputCount(_ context.Context, _, _ string) (
 
 func (StubSessionEventStore) CountContextCompactions(_ context.Context, _ string) (int64, error) {
 	return 0, nil
+}
+
+func (StubSessionEventStore) ShellTaskEvents(_ context.Context, _ string) ([]map[string]any, error) {
+	return nil, nil
 }
 
 func (StubSessionEventStore) CountUserMessages(_ context.Context, _ string) (int64, error) {

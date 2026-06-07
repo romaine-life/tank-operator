@@ -18,11 +18,16 @@ import (
 )
 
 type fakeSessionEventStore struct {
-	pages map[string]store.SessionEventPage
+	pages      map[string]store.SessionEventPage
+	shellTasks []map[string]any
 }
 
 func (s fakeSessionEventStore) Upsert(_ context.Context, _ map[string]any) error {
 	return nil
+}
+
+func (s fakeSessionEventStore) ShellTaskEvents(_ context.Context, _ string) ([]map[string]any, error) {
+	return s.shellTasks, nil
 }
 
 func (s fakeSessionEventStore) CountContextCompactions(_ context.Context, _ string) (int64, error) {
@@ -297,6 +302,45 @@ func TestHandleSessionTurnActivityPaginatesOverLimitTurnWithTerminalShell(t *tes
 	entries, _ := body["entries"].([]any)
 	if len(entries) == 0 {
 		t.Fatalf("last page entries empty, want the tail of the turn")
+	}
+}
+
+func TestHandleListSessionBackgroundTasksProjectsShellTaskLedger(t *testing.T) {
+	app := adminTestServer(t)
+	app.sessionScope = "default"
+	app.sessionEvents = fakeSessionEventStore{shellTasks: []map[string]any{
+		projectionTestEvent("a-start", "001", "shell_task.started", "tool", "claude", "turn-1", "turn-1:shell_task:a", map[string]any{
+			"task_id": "taska", "status": "running", "summary": "watcher",
+		}),
+		projectionTestEvent("b-start", "002", "shell_task.started", "tool", "claude", "turn-1", "turn-1:shell_task:b", map[string]any{
+			"task_id": "taskb", "status": "running", "summary": "sleep 180",
+		}),
+		projectionTestEvent("b-exit", "003", "shell_task.exited", "tool", "claude", "turn-1", "turn-1:shell_task:b", map[string]any{
+			"task_id": "taskb", "status": "completed", "summary": "done",
+		}),
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/background-tasks", nil)
+	req.SetPathValue("session_id", "63")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	app.handleListSessionBackgroundTasks(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	tasks, _ := body["background_tasks"].([]any)
+	// The endpoint must project the shell-task ledger through the store wiring,
+	// not silently return empty: the wrapped-store regression that returned 0
+	// for a session that actually had background tasks (caught live on the test
+	// slot, where the materializing store fronting the local scope hid the
+	// concrete ShellTaskEvents method from a type assertion).
+	if len(tasks) != 2 {
+		t.Fatalf("background_tasks = %d, want 2: %s", len(tasks), res.Body.String())
 	}
 }
 
