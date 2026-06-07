@@ -4,11 +4,13 @@ import {
   ArrowDownIcon,
   CheckCircle2Icon,
   ChevronDownIcon,
+  ChevronUpIcon,
   CopyIcon,
   FlaskConicalIcon,
   ImageIcon,
   LinkIcon,
   MessageSquareIcon,
+  MinusIcon,
   SquareTerminalIcon,
   TimerIcon,
   XIcon,
@@ -59,12 +61,14 @@ function TranscriptMessage({
   highlighted,
   ownedByActivity,
   showAssistantAvatar = !ownedByActivity,
+  compact,
   children,
 }: {
   variant: "assistant" | "user" | "system";
   highlighted?: boolean;
   ownedByActivity?: boolean;
   showAssistantAvatar?: boolean;
+  compact?: boolean;
   children: ReactNode;
 }) {
   const avatar = getSessionAvatarByID("jp1-malcolm");
@@ -74,6 +78,7 @@ function TranscriptMessage({
       data-slot="message"
       data-variant={variant}
       data-role={variant}
+      data-compact={compact ? "true" : undefined}
       data-owner={ownedByActivity ? "activity" : undefined}
       data-highlight={highlighted ? "true" : undefined}
       data-design-component="TranscriptMessage"
@@ -97,7 +102,16 @@ function TranscriptMessage({
       )}
       <div className="run-transcript-message-content" data-slot="message-content">
         <div className="run-transcript-message-text" data-slot="message-text">
-          {children}
+          {compact ? (
+            <span
+              className="run-msg-compact-text"
+              title="Please inspect the completed turn with a long initiating prompt. The prompt header must keep its collapse control visible without stacking message controls below the preview."
+            >
+              Please inspect the completed turn with a long initiating prompt. The prompt header must keep its collapse control visible without stacking message controls below the preview.
+            </span>
+          ) : (
+            children
+          )}
         </div>
         <div className="run-msg-footer" data-always-visible>
           {variant !== "system" && (
@@ -259,6 +273,135 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
         <span>19:04:14</span>
         <span>19:10:26</span>
       </div>
+      <div
+        className="run-turn-view-context"
+        aria-label="Turn prompt"
+        data-collapsed="false"
+        data-context-loaded="true"
+        data-design-component="TurnPromptContext"
+        data-design-state="expanded-with-divider"
+        data-inspectable
+      >
+        <div className="run-turn-view-context-head">
+          <span className="run-turn-view-context-label">Prompt</span>
+          <button
+            type="button"
+            className="run-turn-view-context-toggle"
+            aria-expanded={true}
+            aria-label="Collapse user message"
+            title="Collapse user message"
+          >
+            <ChevronUpIcon size={14} aria-hidden="true" />
+          </button>
+        </div>
+        <TranscriptMessage variant="user" ownedByActivity>
+          <p style={{ margin: 0 }}>
+            Please inspect the completed turn with a long initiating prompt.
+            The prompt header must always keep its collapse control visible,
+            even when the activity divider also renders section controls.
+          </p>
+        </TranscriptMessage>
+      </div>
+      <div
+        className="run-turn-view-context"
+        aria-label="Turn prompt collapsed"
+        data-collapsed="true"
+        data-context-loaded="true"
+        data-design-component="TurnPromptContext"
+        data-design-state="collapsed-text-preview-controls-inline"
+        data-inspectable
+      >
+        <div className="run-turn-view-context-head">
+          <span className="run-turn-view-context-label">Prompt</span>
+          <button
+            type="button"
+            className="run-turn-view-context-toggle"
+            aria-expanded={false}
+            aria-label="Expand user message"
+            title="Expand user message"
+          >
+            <ChevronDownIcon size={14} aria-hidden="true" />
+          </button>
+        </div>
+        <TranscriptMessage variant="user" ownedByActivity compact>
+          <p style={{ margin: 0 }}>
+            Please inspect the completed turn with a long initiating prompt.
+            The prompt header must keep its collapse control visible without
+            stacking message controls below the preview.
+          </p>
+        </TranscriptMessage>
+      </div>
+      <div
+        className="run-turn-view-context"
+        aria-label="Turn prompt unavailable"
+        data-collapsed="false"
+        data-context-loaded="false"
+        data-design-component="TurnPromptContext"
+        data-design-state="context-unavailable-control-disabled"
+        data-inspectable
+      >
+        <div className="run-turn-view-context-head">
+          <span className="run-turn-view-context-label">Prompt</span>
+          <button
+            type="button"
+            className="run-turn-view-context-toggle"
+            disabled
+            aria-expanded={false}
+            aria-label="No user message to collapse"
+            title="No user message to collapse"
+          >
+            <ChevronUpIcon size={14} aria-hidden="true" />
+          </button>
+        </div>
+        <div className="run-turn-view-context-unavailable" role="status">
+          Prompt context unavailable
+        </div>
+      </div>
+      <div
+        className="run-turn-activity-divider run-turn-view-activity-divider"
+        data-design-component="TurnSectionDivider"
+        data-design-state="prompt-and-activity-controls-present"
+        data-inspectable
+      >
+        <div
+          className="run-turn-activity-divider-controls"
+          role="group"
+          aria-label="Turn section collapse controls"
+        >
+          <button
+            type="button"
+            className="run-turn-activity-divider-toggle"
+            data-direction="up"
+            aria-expanded={true}
+            aria-label="Collapse user message"
+            title="Collapse user message"
+          >
+            <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
+            <ChevronUpIcon
+              className="run-turn-activity-divider-toggle-chevron"
+              size={13}
+              strokeWidth={2.3}
+              aria-hidden="true"
+            />
+          </button>
+          <button
+            type="button"
+            className="run-turn-activity-divider-toggle"
+            data-direction="down"
+            aria-expanded={true}
+            aria-label="Collapse assistance turn"
+            title="Collapse assistance turn"
+          >
+            <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
+            <ChevronDownIcon
+              className="run-turn-activity-divider-toggle-chevron"
+              size={13}
+              strokeWidth={2.3}
+              aria-hidden="true"
+            />
+          </button>
+        </div>
+      </div>
       <div className="run-turn-view-body run-transcript run-transcript-claude">
         <RunningTool highlighted={highlighted} />
         <TranscriptMessage variant="assistant" highlighted={highlighted} ownedByActivity showAssistantAvatar>
@@ -411,7 +554,7 @@ function SegmentedControl<T extends string>({
 }
 
 export function StyleguidePortfolioTranscript() {
-  const [highlightTarget, setHighlightTarget] = useState<HighlightTarget>("assistant");
+  const [highlightTarget, setHighlightTarget] = useState<HighlightTarget>("activity");
   const [composerState, setComposerState] = useState<ComposerSpecimenState>("ready");
   const [activeSurface, setActiveSurface] = useState<ActiveSurface>("both");
   const transcriptActive = activeSurface === "transcript" || activeSurface === "both";

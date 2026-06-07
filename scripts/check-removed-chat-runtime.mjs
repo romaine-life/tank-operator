@@ -52,6 +52,12 @@ const ignoredRelativePaths = new Set([
   "backend-go/cmd/tank-operator/handlers_repos_test.go",
   "frontend/src/repos.test.ts",
   "frontend/src/sessionWorkspace.test.ts",
+  // Antigravity uses the Gemini CLI skill directory as its current agent-native
+  // skill install target. These files test/route that sanctioned Antigravity
+  // skill scope; they do not reopen the retired raw Gemini provider/session
+  // surface guarded below.
+  "backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go",
+  "k8s/session-config/install-tank-skills.sh",
   // The session-list redesign plan names the retired packages as
   // migration targets — it is documentation of the deletion, not a
   // resurrection. Same exemption shape as docs/tank-conversation-protocol.md.
