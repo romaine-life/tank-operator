@@ -303,8 +303,17 @@ test("Turns view renders server-projected turn context outside paged activity", 
   expect(appSource.includes("turnActivityContextByTurn")).toBe(true);
   expect(appSource.includes("setTurnActivityContextByTurn")).toBe(true);
   expect(appSource.includes("selectedTurnContext")).toBe(true);
+  expect(appSource.includes("showPromptContextShell")).toBe(true);
   expect(appSource.includes('aria-label="Turn prompt"')).toBe(true);
+  expect(appSource.includes('data-context-loaded={selectedTurnContext ? "true" : "false"}')).toBe(true);
+  expect(appSource.includes("Prompt context unavailable")).toBe(true);
+  expect(appSource.includes("{selectedTurnContext && selected && (")).toBe(false);
   expect(appSource).toMatch(/selectedTurnContext[\s\S]{0,1200}canonicalMessage=\{false\}/);
+  expect(appSource.includes("showContextToggleInActivityDivider")).toBe(false);
+  expect(appSource).toMatch(/run-turn-view-context-head[\s\S]{0,500}run-turn-view-context-toggle/);
+  expect(appSource.includes("canTogglePromptContext")).toBe(true);
+  expect(appSource.includes('disabled={!canTogglePromptContext}')).toBe(true);
+  expect(indexCssSource.includes(".run-turn-view-context-unavailable")).toBe(true);
 });
 
 test("collapsed Turns prompt context stays a minimal one-line entry, not hidden", () => {
@@ -318,10 +327,12 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   expect(appSource.includes("run-msg-compact-text")).toBe(true);
   // The old "hide the whole bubble when collapsed" gate must be gone.
   expect(appSource.includes("{!selectedTurnContextCollapsed && (")).toBe(false);
-  // CSS: the compact line truncates with an ellipsis and keeps the avatar via
-  // vertical centering on the compact message grid.
+  // CSS: the compact line truncates with an ellipsis without changing the
+  // avatar's top anchor from the expanded row.
   expect(indexCssSource).toMatch(/\.run-msg-compact-text\s*\{[^}]*text-overflow:\s*ellipsis/);
-  expect(indexCssSource.includes('.run-transcript-message[data-compact="true"]')).toBe(true);
+  expect(indexCssSource).toMatch(
+    /\.run-transcript-message\[data-compact="true"\]\s*\{[^}]*align-items:\s*start/,
+  );
 });
 
 test("transcript meta status lines are attributed to the session system identity", () => {
@@ -514,6 +525,13 @@ test("turn internals move out of the transcript into a turn view", () => {
   expect(indexCssSource.includes("@keyframes run-thinking-dot-bounce")).toBe(false);
   expect(indexCssSource.includes(".run-msg-turn")).toBe(true);
   expect(styleguidePortfolioTranscriptSource.includes("TurnViewSpecimen")).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('useState<HighlightTarget>("activity")')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('data-design-component="TurnPromptContext"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('className="run-turn-view-context-toggle"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('data-design-state="expanded-with-divider"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('data-design-state="context-unavailable-control-disabled"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('data-context-loaded="false"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes('disabled')).toBe(true);
   expect(styleguidePortfolioTranscriptSource.includes("showAssistantAvatar")).toBe(true);
   expect(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-content")).toBe(true);
   expect(styleguidePortfolioTranscriptSource.includes("run-turn-thinking-label")).toBe(true);
