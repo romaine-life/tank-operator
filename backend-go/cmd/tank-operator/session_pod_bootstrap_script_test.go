@@ -106,6 +106,40 @@ func TestInstallAgentPostCommitReminderScriptRunsUnderSh(t *testing.T) {
 	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
 }
 
+func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("git template install script test runs on POSIX only")
+	}
+
+	scriptPath, err := filepath.Abs("../../../k8s/session-config/install-agent-git-template.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	hookPath, err := filepath.Abs("../../../k8s/session-config/agent-post-commit-hook.sh")
+	if err != nil {
+		t.Fatalf("resolve hook path: %v", err)
+	}
+
+	home := t.TempDir()
+	templateDir := filepath.Join(t.TempDir(), "template")
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"AGENT_POST_COMMIT_HOOK="+hookPath,
+		"AGENT_GIT_TEMPLATE_DIR="+templateDir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed under sh: %v\noutput:\n%s", err, string(out))
+	}
+
+	assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
+	configured := strings.TrimSpace(string(mustOutput(t, home, "git", "config", "--global", "init.templateDir")))
+	if configured != templateDir {
+		t.Fatalf("init.templateDir = %q, want %q", configured, templateDir)
+	}
+}
+
 // TestSessionPodBootstrapScript_PerMode executes the in-pod bootstrap script
 // against each wizard mode in a temp HOME and asserts the right config files
 // land on disk. This is the regression guard the deletion in 650c282 (which
@@ -359,4 +393,15 @@ func mustRun(t *testing.T, dir, name string, args ...string) {
 	if err != nil {
 		t.Fatalf("%s %s failed: %v\noutput:\n%s", name, strings.Join(args, " "), err, string(out))
 	}
+}
+
+func mustOutput(t *testing.T, home, name string, args ...string) []byte {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s failed: %v\noutput:\n%s", name, strings.Join(args, " "), err, string(out))
+	}
+	return out
 }

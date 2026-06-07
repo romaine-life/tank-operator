@@ -1,9 +1,5 @@
 #!/bin/sh
 
-if [ -f /opt/tank/session-config/agent-post-commit-hook.sh ]; then
-  exec sh /opt/tank/session-config/agent-post-commit-hook.sh "$@"
-fi
-
 cat <<'EOF'
 
 [tank-agent-reminder] Local commit created.

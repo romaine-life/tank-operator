@@ -80,12 +80,25 @@ install_repo_agent_reminder() {
   local slug="$1"
   local target="$2"
   local strict="$3"
-  local installer="$target/scripts/install-agent-post-commit-reminder.sh"
+  local hook_src="${AGENT_POST_COMMIT_HOOK:-/opt/tank/session-config/agent-post-commit-hook.sh}"
+  local hook_dst
 
-  [ -f "$installer" ] || return 0
+  [ -f "$hook_src" ] || return 0
 
   echo "repo-cloner: installing agent post-commit reminder for $slug"
-  if (cd "$target" && sh "$installer"); then
+  hook_dst="$(git -C "$target" rev-parse --git-path hooks/post-commit)"
+  if [ -e "$hook_dst" ] && ! cmp -s "$hook_src" "$hook_dst"; then
+    if [ "$strict" = "strict" ]; then
+      echo "repo-cloner: refusing to replace existing post-commit hook for $slug: $hook_dst" >&2
+      return 1
+    fi
+    echo "repo-cloner: warning: leaving existing post-commit hook for $slug: $hook_dst" >&2
+    return 0
+  fi
+
+  if mkdir -p "$(dirname "$hook_dst")" &&
+    cp "$hook_src" "$hook_dst" &&
+    chmod 755 "$hook_dst"; then
     return 0
   fi
 
