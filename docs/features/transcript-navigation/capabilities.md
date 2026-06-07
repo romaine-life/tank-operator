@@ -47,3 +47,36 @@ Evidence:
   projection version bump (re-stamps existing shells with `turnNumber`), and
   `scripts/check-removed-chat-runtime.mjs` guards against the retired
   `turn_<uuid>` route and the array-position label.
+
+## Deep-linkable turn activity pages
+
+Status: active
+
+Intent:
+A turn's activity page is a first-class, shareable route coordinate:
+`/sessions/{id}/turns/{n}/pages/{p}`. Opening a turn canonicalizes to its
+resolved page, and paging updates the URL, so a copied link reproduces the exact
+page the reader saw.
+
+Affected contracts:
+- Transcript Navigation (primary)
+- App Chrome (the breadcrumb renders the page coordinate)
+
+Contract impact:
+- The page ordinal parses with the same discipline as turn numbers (positive
+  integer). A malformed page within a valid turn recovers to the turn's default
+  page — the turn resolves, only the page sub-coordinate was bad; this is a
+  deliberate graceful recovery, not the silent fallback-to-latest that bad turn
+  segments are barred from.
+- Opening `/turns/{n}` resolves the server-default page and canonicalizes via
+  `replaceState` to `/turns/{n}/pages/{N}`; the URL then tracks paging, sourced
+  from the activity page directory (no auto-follow of the live tail; crossing a
+  page seal is an explicit hand-off, not an auto-advance).
+- Question-set pages keep the ordinal form; their question semantics stay
+  label-only, not a separate route axis.
+
+Evidence:
+- `frontend/src/appRoutes.ts` page segment + `parsePageNumber` with
+  `appRoutes.test.ts`; `App.tsx` route-driven page selection + canonicalization
+  (`replaceState`, no spurious history); `breadcrumb.ts` / `breadcrumb.test.ts`
+  for the page crumb.

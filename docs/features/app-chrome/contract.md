@@ -28,6 +28,11 @@ behavior.
   lifecycle, and the relevant terminal or runner surfaces.
 - External help/documentation URLs are content references; they are not product
   state.
+- The active session surface — transcript, turns (with the turn/page
+  coordinate), files, background, session-data — is owned by the URL route and
+  reconstructs from it on reload. Every primary session surface is
+  URL-addressable; the breadcrumb title bar reflects that route, it does not own
+  it.
 - Menu open/closed state, hover state, and focus state are browser UI state
   only.
 
@@ -42,6 +47,9 @@ behavior.
   the same global action.
 - Do not add a top-level button for a complex behavior without naming the
   capability in this feature area's ledger or a more specific feature ledger.
+- Do not add a primary session surface that has no route. Transient, non-routed
+  panes that lose their identity on reload are not allowed; ephemeral UI state
+  (menus, hover, focus, drawer open/close) is the only browser-only exception.
 
 ## Live Behavior
 

@@ -318,3 +318,42 @@ Evidence:
   Safari + Android Chrome) of the sign-in bounce, drawer focus/scroll-lock
   behavior, and the keyboard-aware composer at 390/768px. This is named scope,
   not optional robustness.
+
+## Session Breadcrumb Title Bar
+
+Status: active
+
+Intent:
+The run title bar is a navigable, deep-linkable breadcrumb of the current
+in-session location rather than a bare display name: `‹name› / main transcript`,
+`‹name› / turns / 12 / pages / 3`, etc. It orients the reader and makes every
+location a shareable URL.
+
+Affected contracts:
+- App Chrome (the title chrome is breadcrumb navigation)
+- Transcript Navigation (turn/page are deep-linkable route coordinates)
+- Session Bar (the sidebar F2 rename path is unchanged)
+
+Contract impact:
+- The session name is the breadcrumb root and links to the session-data page; it
+  no longer renames on click. Inline rename moves to F2 (unchanged) plus a
+  visible rename field on the session-data page.
+- Crumbs are climb-only: ancestors are links (URL `pushState` + a synthetic
+  `popstate` the visible pane already resolves), the current leaf is a marker.
+  The in-view turn and page dropdowns remain the pickers; the breadcrumb does not
+  duplicate them.
+- The trail reflects the URL route, which owns the active surface — every primary
+  surface (transcript, `turns/{n}/pages/{p}`, files, background, session-data) is
+  routed and reconstructs on reload.
+- Desktop only. On the compact shell the top bar shows the current-location label
+  with a back/up affordance (iOS Files / Drive hybrid), not the full trail.
+
+Evidence:
+- Pure derivation in `frontend/src/breadcrumb.ts` (trail, compact mobile label,
+  parent up-href) with `breadcrumb.test.ts`; route layer in `appRoutes.ts`
+  (`/turns/{n}/pages/{p}`, files/background surfaces) with `appRoutes.test.ts`;
+  `migrationPolicy.test.ts` pins the routed `SessionRouteTab` and the turns
+  route-write threading the page ordinal.
+- Owed before "done": behavioral validation on a per-change environment, and
+  component/interaction tests (render + click→nav) once the frontend
+  component-test tooling lands (separate testing-strategy effort, session 667).
