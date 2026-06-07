@@ -236,8 +236,9 @@ A conversation projection has these UI states:
   Tank-visible product model, the question set is the assistant response for
   the submitted turn. The provider callback may still be paused internally,
   but the transcript turn boundary is owned by Tank.
-- `scheduled`: the agent parked itself with pending time-bound work (a
-  `ScheduleWakeup` timer or a `run_in_background` wake). The sibling of
+- `scheduled`: the agent parked itself with pending time-bound work (a Claude
+  `ScheduleWakeup`, an Antigravity `schedule`, or a `run_in_background` wake).
+  The sibling of
   `needs_input` — a non-terminal pause-phase of a live (simulated) turn that
   resumes on the clock/event, not on the user, so it does **not** summon. A turn
   terminal with a pending wake folds here instead of `ready`; the chat-activity
@@ -684,8 +685,9 @@ When `existing_user_message=true`, the user row must already have been written
 by the launch-time create boundary, so this endpoint writes `turn.submitted`
 only.
 Command ack happens only after the corresponding durable terminal event is
-published. Claude `ScheduleWakeup` is backend-owned durable state: the
-agent-runner extracts the tool_use and registers it through
+published. Provider self-scheduled wakeups are backend-owned durable state:
+the Claude runner extracts `ScheduleWakeup` tool_use calls and the Antigravity
+runner extracts `schedule` tool calls, then registers them through
 `POST /api/internal/sessions/{session_id}/scheduled-wakeups` with the provider
 item id as the idempotency key. The orchestrator claims due rows from
 `session_scheduled_wakeups`, writes the normal `user_message.created` and

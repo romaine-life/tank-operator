@@ -36,6 +36,7 @@ import {
   turnIDForClientNonce,
 } from "../../runner-shared/conversation-builders.js";
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
+import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js";
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
   agyStepTotal,
@@ -44,9 +45,14 @@ import {
   interruptOutcomeTotal,
   natsPublishFailureTotal,
   providerErrorTotal,
+  scheduledWakeupRegisterTotal,
   turnDurationSeconds,
   turnTerminalTotal,
 } from "./metrics.js";
+import {
+  extractScheduleWakeups,
+  type AntigravityScheduleWakeup,
+} from "./wakeup.js";
 
 const SOURCE = "antigravity";
 
@@ -219,6 +225,7 @@ export class Runner {
       void this.reportRuntime(model);
 
       let observedStepCount = 0;
+      let wakeupRegistrationFailed = false;
       const result = await this.driver.runTurn(
         {
           prompt,
@@ -229,6 +236,10 @@ export class Runner {
         async (step) => {
           observedStepCount += 1;
           agyStepTotal.labels(stepKind(step)).inc();
+          for (const wakeup of extractScheduleWakeups(step)) {
+            const ok = await this.registerWakeup(wakeup, turn.turnID);
+            wakeupRegistrationFailed = wakeupRegistrationFailed || !ok;
+          }
           for (const ev of this.adapter.stepEvents(turn, step)) {
             await this.publish(ev);
           }
@@ -249,6 +260,11 @@ export class Runner {
         providerErrorTotal.labels(terminal.metricReason).inc();
         await this.publishTerminal(
           this.adapter.failTurn(turn, terminal.reason),
+        );
+      } else if (wakeupRegistrationFailed) {
+        providerErrorTotal.labels("scheduled_wakeup_register_failed").inc();
+        await this.publishTerminal(
+          this.adapter.failTurn(turn, "scheduled_wakeup_register_failed"),
         );
       } else {
         await this.publishTerminal(this.adapter.completeTurn(turn));
@@ -375,6 +391,28 @@ export class Runner {
       });
     } catch {
       // best-effort; the composer footer just lacks the applied model
+    }
+  }
+
+  private async registerWakeup(
+    req: AntigravityScheduleWakeup,
+    scheduledTurnID: string,
+  ): Promise<boolean> {
+    try {
+      const registered = await registerScheduledWakeup(this.cfg, {
+        delayMs: req.delayMs,
+        prompt: req.prompt,
+        providerItemID: req.providerItemID,
+        scheduledTurnID,
+      });
+      scheduledWakeupRegisterTotal
+        .labels(registered ? "ok" : "disabled")
+        .inc();
+      return registered;
+    } catch (err) {
+      scheduledWakeupRegisterTotal.labels("failed").inc();
+      console.error("antigravity scheduled wakeup register failed:", err);
+      return false;
     }
   }
 }

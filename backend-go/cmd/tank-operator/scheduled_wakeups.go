@@ -97,9 +97,9 @@ func (s *appServer) handleInternalRegisterScheduledWakeup(w http.ResponseWriter,
 		return
 	}
 	provider, ok := sdkProviderForMode(info.Mode)
-	if !ok || provider != "claude" {
+	if !ok || !supportsScheduledWakeups(provider) {
 		recordScheduledWakeupRegister("unknown", "bad_request")
-		writeError(w, http.StatusBadRequest, "scheduled wakeups are only supported for Claude SDK sessions")
+		writeError(w, http.StatusBadRequest, "scheduled wakeups are only supported for Claude and Antigravity SDK sessions")
 		return
 	}
 	now := time.Now().UTC()
@@ -126,6 +126,15 @@ func (s *appServer) handleInternalRegisterScheduledWakeup(w http.ResponseWriter,
 		"client_nonce": row.ClientNonce,
 		"due_at":       row.DueAt.Format(time.RFC3339Nano),
 	})
+}
+
+func supportsScheduledWakeups(provider string) bool {
+	switch strings.TrimSpace(provider) {
+	case "claude", "antigravity":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *appServer) handleListScheduledWakeups(w http.ResponseWriter, r *http.Request) {
