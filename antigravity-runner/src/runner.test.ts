@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { classifyAgyTerminal, modelForAgyTurn } from "./runner.js";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+import { agyDiagnostics, classifyAgyTerminal, modelForAgyTurn } from "./runner.js";
+import { expandSkillPrompt, stripSkillTrigger } from "./skills.js";
 
 test("agy turns require a concrete model", () => {
   assert.equal(
@@ -96,6 +101,56 @@ test("nonzero agy exit remains a provider failure", () => {
     "nonzero_exit",
   );
   assert.match(terminal.kind === "failed" ? terminal.reason : "", /agy exit 2/);
+});
+
+test("agy diagnostics classify auxiliary 401s separately from provider failures", () => {
+  assert.deepEqual(
+    agyDiagnostics({
+      stdout: "",
+      stderr: [
+        "Cache(peopleInfo): Singleflight refresh failed: failed to fetch user info: 401 Unauthorized",
+        "Clearcut responded with HTTP code: 401",
+      ].join("\n"),
+    }),
+    ["auxiliary_userinfo_401", "telemetry_clearcut_401"],
+  );
+});
+
+test("Antigravity skill prompt expansion embeds hydrated SKILL.md", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agy-skills-"));
+  try {
+    const skillDir = path.join(root, "north-star");
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(path.join(skillDir, "SKILL.md"), "Read the policy docs.\n");
+    const expanded = await expandSkillPrompt(
+      "$north-star\n\nwhat now?",
+      "north-star",
+      root,
+    );
+    assert.equal(expanded.loaded, true);
+    assert.match(expanded.prompt, /Use the Tank skill "north-star"/);
+    assert.match(expanded.prompt, /Read the policy docs/);
+    assert.match(expanded.prompt, /User request:\nwhat now\?/);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Antigravity skill prompt expansion reports missing skills", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "agy-skills-"));
+  try {
+    const expanded = await expandSkillPrompt("$missing\n\nrun", "missing", root);
+    assert.equal(expanded.loaded, false);
+    assert.equal(expanded.reason, "missing");
+    assert.equal(expanded.prompt, "$missing\n\nrun");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("skill trigger stripping handles slash and dollar prefixes", () => {
+  assert.equal(stripSkillTrigger("north-star", "$north-star\n\ngo"), "go");
+  assert.equal(stripSkillTrigger("north-star", "/north-star go"), "go");
 });
 
 test("interrupted agy turn remains interrupted", () => {

@@ -370,6 +370,8 @@ func TestPodManifestAntigravityGUIRunnerProxiedNoCredMount(t *testing.T) {
 	assertHostAlias(t, spec, "10.0.0.42", "daily-cloudcode-pa.googleapis.com")
 	assertVolume(t, spec["volumes"].([]any), "oauth-gateway-ca")
 	assertVolumeMount(t, runner, "oauth-gateway-ca")
+	assertVolumeMount(t, runner, "session-config")
+	assertConfigMapMountPath(t, runner, SessionConfigDirMount)
 	assertVolumeMount(t, runner, "tank-operator-sa-token")
 }
 
@@ -967,6 +969,20 @@ func assertConfigMapMountSubPath(t *testing.T, container map[string]any, mountPa
 		if mount["mountPath"] == mountPath {
 			if got := mount["subPath"]; got != subPath {
 				t.Fatalf("mount %s subPath = %v, want %q", mountPath, got, subPath)
+			}
+			return
+		}
+	}
+	t.Fatalf("mountPath %q not found", mountPath)
+}
+
+func assertConfigMapMountPath(t *testing.T, container map[string]any, mountPath string) {
+	t.Helper()
+	for _, item := range container["volumeMounts"].([]any) {
+		mount := item.(map[string]any)
+		if mount["mountPath"] == mountPath {
+			if _, ok := mount["subPath"]; ok {
+				t.Fatalf("mount %s unexpectedly has subPath", mountPath)
 			}
 			return
 		}

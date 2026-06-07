@@ -918,6 +918,25 @@ func TestEnqueueSessionTurnAcceptsCodexSkillTrigger(t *testing.T) {
 	}
 }
 
+func TestEnqueueSessionTurnAcceptsAntigravitySkillTrigger(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-88", "88", "user@example.com", sessionmodel.AntigravityGUIMode, "antigravity-runner"))
+	req := authedTurnRequest(t, "88", `{"client_nonce":"turn-antigravity-skill","prompt":"$test","model":"Gemini 3.5 Flash (Medium)","skill_name":"test"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if got := bus.commands[0].Provider; got != "antigravity" {
+		t.Fatalf("provider = %q, want antigravity", got)
+	}
+	if got := bus.commands[0].SkillName; got != "test" {
+		t.Fatalf("skill_name = %q, want test", got)
+	}
+}
+
 func TestEnqueueSessionTurnRoutesCodexProvider(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.CodexGUIMode, "codex-runner"))
