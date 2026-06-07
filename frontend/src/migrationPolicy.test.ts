@@ -540,10 +540,12 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   expect(appSource.includes("run-turn-thinking-last-activity")).toBe(true);
   expect(appSource.includes("lastActivityAt")).toBe(true);
   expect(appSource).toMatch(/<RunTurnThinkingBubble[\s\S]{0,260}userKey=\{userKey\}[\s\S]{0,80}turnId=\{g\.turnId\}/);
-  expect(appSource).toMatch(/const selectedThinkingBubble =[\s\S]{0,180}<RunTurnThinkingBubble[\s\S]{0,180}userKey=\{userKey\}[\s\S]{0,80}turnId=\{selected\.turnId\}/);
-  expect(appSource).toMatch(/const selectedThinkingBubble =[\s\S]{0,260}<RunTurnThinkingBubble[\s\S]{0,220}lastActivityAt=\{selected\.lastActivityAt\}[\s\S]{0,80}avatar=\{avatar\}/);
+  expect(appSource.includes("insertTurnDetailThinkingGroup")).toBe(true);
+  expect(appSource.includes("turnActivityPageContainsLiveTail")).toBe(true);
+  expect(appSource).toMatch(/if \(group\.kind === "thinking"\)[\s\S]{0,220}<RunTurnThinkingBubble[\s\S]{0,180}turnId=\{group\.turnId\}/);
+  expect(appSource).toMatch(/if \(group\.kind === "thinking"\)[\s\S]{0,260}lastActivityAt=\{group\.lastActivityAt\}[\s\S]{0,80}avatar=\{avatar\}/);
   expect(appSource.includes("run-turn-view-thinking")).toBe(false);
-  expect(appSource.includes("selectedThinkingBubble}")).toBe(true);
+  expect(appSource.includes("selectedThinkingBubble")).toBe(false);
   // No backend timestamp should leak into the timer's anchor — the
   // resolver takes only (userKey, turnId) and never reads a startedAt
   // prop. If a future refactor tries to add one back, this assertion
