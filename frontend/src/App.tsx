@@ -21189,14 +21189,39 @@ function AuthenticatedApp() {
     });
   }, [sessions, active, closingIds]);
 
+  const crossScopeDeepLinkFetchRef = useRef<string | null>(null);
   useEffect(() => {
     const target = initialSessionId.current;
     if (!target) return;
-    if (!sessions.some((s) => s.id === target)) return;
-    activate(target);
-    initialSessionId.current = null;
-    clearInitialSessionId();
-  }, [sessions]);
+    if (sessions.some((s) => s.id === target)) {
+      activate(target);
+      initialSessionId.current = null;
+      clearInitialSessionId();
+      return;
+    }
+    // Deep link to a session that isn't in the loaded list — an older session
+    // past the recent window, or (with ?session_view=prod) a prod session viewed
+    // from a slot. Fetch its snapshot in the active scope and inject it so the
+    // next render activates it through the normal path; without this the deep
+    // link silently fell back to home. The prod-session view is already
+    // read-only, so this stays a read-only inspection.
+    if (!user || crossScopeDeepLinkFetchRef.current === target) return;
+    crossScopeDeepLinkFetchRef.current = target;
+    void authedFetch(
+      scopedSessionPath(`/api/sessions/${encodeURIComponent(target)}`),
+    )
+      .then((res) => (res.ok ? res.json() : null))
+      .then((raw) => {
+        if (!raw) return;
+        const fetched = normalizeSession(raw);
+        if (fetched?.id) {
+          setSessions((prev) =>
+            prev.some((s) => s.id === fetched.id) ? prev : [...prev, fetched],
+          );
+        }
+      })
+      .catch(() => {});
+  }, [sessions, user, scopedSessionPath]);
 
   useEffect(() => {
     if (active !== null) {
