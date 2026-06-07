@@ -664,12 +664,19 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "AUTH_ROMAINE_EXCHANGE_URL", "value": "https://auth.romaine.life/api/auth/exchange/k8s"},
 				map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
 				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+				map[string]any{"name": "AGENT_POST_COMMIT_HOOK", "value": "/opt/tank/agent-post-commit-hook.sh"},
 			},
 			"volumeMounts": []any{
 				map[string]any{
 					"name":      "session-config",
 					"mountPath": "/opt/tank/repo-cloner.sh",
 					"subPath":   "repo-cloner.sh",
+					"readOnly":  true,
+				},
+				map[string]any{
+					"name":      "session-config",
+					"mountPath": "/opt/tank/agent-post-commit-hook.sh",
+					"subPath":   "agent-post-commit-hook.sh",
 					"readOnly":  true,
 				},
 				map[string]any{
