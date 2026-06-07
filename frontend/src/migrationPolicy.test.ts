@@ -306,7 +306,7 @@ test("Turns view renders server-projected turn context outside paged activity", 
   expect(appSource.includes("turnActivityLoadVisibleSnapshot")).toBe(true);
   expect(appSource.includes("completeTurnActivityLoad")).toBe(true);
   expect(appSource.includes("failTurnActivityLoad")).toBe(true);
-  expect(appSource).toMatch(/type TurnActivityLoadResult = \{[\s\S]{0,180}pageInfo\?: TurnActivityPageInfo;/);
+  expect(appSource).toMatch(/type TurnActivityLoadResult = \{[\s\S]{0,260}finalAnswerEntries: TranscriptEntry\[\];[\s\S]{0,180}pageInfo\?: TurnActivityPageInfo;/);
   expect(appSource).toMatch(/const showActivityLoading =[\s\S]{0,220}!\s*selectedSnapshot/);
   const fetchTurnActivityEntriesMatch = appSource.match(
     /const fetchTurnActivityEntries = useCallback\([\s\S]*?\n  \);\n  const startTurnActivityLoad/,
@@ -325,6 +325,10 @@ test("Turns view renders server-projected turn context outside paged activity", 
   expect(appSource.includes("canToggleDetailActivity")).toBe(true);
   expect(appSource.includes("const canToggleDetailActivity = Boolean(selected);")).toBe(true);
   expect(appSource.includes("const canToggleDetailActivity = showDetailActivityDivider;")).toBe(false);
+  expect(appSource.includes("const showDetailActivityDivider")).toBe(false);
+  expect(appSource.includes("selected.active || selectedCollapse?.defaultCollapsed === true")).toBe(true);
+  expect(appSource.includes("selectedActivityCollapseOverride ?? selectedActivityDefaultCollapsed")).toBe(true);
+  expect(appSource.includes("Object.prototype.hasOwnProperty.call(prev, turnId)")).toBe(true);
   expect(appSource.includes("{selected && showDetailActivityDivider && (")).toBe(false);
   expect(appSource.includes("{selected && showTurnSectionDivider && (")).toBe(true);
   expect(appSource).toMatch(/run-turn-view-context-head[\s\S]{0,500}run-turn-view-context-toggle/);
@@ -333,10 +337,24 @@ test("Turns view renders server-projected turn context outside paged activity", 
   expect(appSource.includes('disabled={!canToggleDetailActivity}')).toBe(true);
   expect(appSource.includes('if (group.kind === "thinking") return true;')).toBe(true);
   expect(styleguidePortfolioTranscriptSource.includes("prompt-and-activity-controls-present")).toBe(true);
-  expect(styleguidePortfolioTranscriptSource.includes('aria-label="Collapse assistance turn"')).toBe(true);
-  expect(styleguidePortfolioTranscriptSource.includes('aria-label="No assistance turn to collapse"')).toBe(false);
+  expect(styleguidePortfolioTranscriptSource.includes('aria-label="Collapse agent activity"')).toBe(true);
+  expect(styleguidePortfolioTranscriptSource.includes("Collapse assistance turn")).toBe(false);
+  expect(appSource.includes("No final answer to isolate")).toBe(true);
+  expect(appSource.includes("No assistance turn to collapse")).toBe(false);
   expect(indexCssSource.includes(".run-turn-view-context-unavailable")).toBe(true);
   expect(appSource.includes("(selected?.entries ?? [])")).toBe(false);
+});
+
+test("Turns collapse uses server-projected final answers instead of page-local assistant inference", () => {
+  expect(appSource.includes("final_answer?: { entries?: unknown };")).toBe(true);
+  expect(appSource.includes("selectedFinalAnswerEntries")).toBe(true);
+  expect(appSource.includes("finalAnswerEntries: loaded.finalAnswerEntries")).toBe(true);
+  expect(appSource.includes("collapse: loaded.collapse")).toBe(true);
+  expect(appSource.includes('entry.turnDetailRole !== "final_answer"')).toBe(true);
+  expect(appSource.includes("selected?.shell?.activityIds ??")).toBe(false);
+  expect(appSource.includes("selected?.shell?.activity?.compactedEntryIds ??")).toBe(false);
+  expect(appSource.includes("turn_activity_collapse_applied")).toBe(true);
+  expect(appSource.includes("turn_activity_collapse_projection_mismatch")).toBe(true);
 });
 
 test("collapsed Turns prompt context stays a minimal one-line entry, not hidden", () => {

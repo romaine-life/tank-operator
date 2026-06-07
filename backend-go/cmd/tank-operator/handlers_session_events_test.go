@@ -299,9 +299,69 @@ func TestHandleSessionTurnActivityPaginatesOverLimitTurnWithTerminalShell(t *tes
 	if page, _ := body["page"].(float64); page != pageCount {
 		t.Fatalf("default page = %v, want last page %v", body["page"], pageCount)
 	}
+	finalAnswer, _ := body["final_answer"].(map[string]any)
+	finalEntries, _ := finalAnswer["entries"].([]any)
+	if len(finalEntries) != 1 {
+		t.Fatalf("final_answer.entries = %#v, want one final answer", finalAnswer["entries"])
+	}
+	collapse, _ := body["collapse"].(map[string]any)
+	if collapsible, _ := collapse["collapsible"].(bool); !collapsible {
+		t.Fatalf("collapse.collapsible = %#v, want true: %#v", collapse["collapsible"], collapse)
+	}
 	entries, _ := body["entries"].([]any)
 	if len(entries) == 0 {
 		t.Fatalf("last page entries empty, want the tail of the turn")
+	}
+}
+
+func TestHandleSessionTurnActivityResolvesTurnNumberSelector(t *testing.T) {
+	app := adminTestServer(t)
+	app.sessionScope = "default"
+	app.turns = fakeSessionTurnStore{byNumber: map[int64]store.TurnNumberResolution{
+		1: {TurnID: "turn-1", TurnNumber: 1},
+	}}
+	app.sessionEvents = fakeSessionEventStore{pages: map[string]store.SessionEventPage{
+		"": {Events: []map[string]any{
+			projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+				"text": "go", "display": map[string]any{"kind": "plain"},
+			}),
+			projectionTestEvent("tool", "00000002", "item.completed", "tool", "claude", "turn-1", "turn-1:item:tool", map[string]any{
+				"kind": "tool_result", "name": "Bash", "output": "collapse-smoke",
+			}),
+			projectionTestEvent("final", "00000003", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:final", map[string]any{
+				"kind": "message", "text": "Command completed.",
+			}),
+			projectionTestEvent("terminal", "00000004", "turn.completed", "runner", "claude", "turn-1", "", map[string]any{
+				"status": "completed",
+			}),
+		}, FoundOldest: true, FoundNewest: true},
+	}}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/turns/1/activity", nil)
+	req.SetPathValue("session_id", "63")
+	req.SetPathValue("turn_id", "1")
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	res := httptest.NewRecorder()
+
+	app.handleSessionTurnActivity(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", res.Code, res.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(res.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if got, _ := body["turn_id"].(string); got != "turn-1" {
+		t.Fatalf("turn_id = %q, want resolved durable turn id", got)
+	}
+	finalAnswer, _ := body["final_answer"].(map[string]any)
+	finalEntries, _ := finalAnswer["entries"].([]any)
+	if len(finalEntries) != 1 {
+		t.Fatalf("final_answer.entries = %#v, want resolved final answer", finalAnswer["entries"])
+	}
+	collapse, _ := body["collapse"].(map[string]any)
+	if collapsible, _ := collapse["collapsible"].(bool); !collapsible {
+		t.Fatalf("collapse.collapsible = %#v, want true: %#v", collapse["collapsible"], collapse)
 	}
 }
 

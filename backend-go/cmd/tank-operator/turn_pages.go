@@ -246,11 +246,13 @@ type turnEventPage struct {
 // turnPagesProjection is the page-aware projection of a single turn: a
 // terminal-correct shell summary plus the ordered page directory and bodies.
 type turnPagesProjection struct {
-	TurnID          string
-	Shell           map[string]any
-	TurnContext     map[string]any
-	Pages           []turnPage
-	TotalEventCount int
+	TurnID             string
+	Shell              map[string]any
+	TurnContext        map[string]any
+	FinalAnswerEntries []map[string]any
+	Collapse           map[string]any
+	Pages              []turnPage
+	TotalEventCount    int
 }
 
 // splitTurnEventsIntoPages folds a turn's events (any order) into ordered page
@@ -467,6 +469,7 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 	pageSlices := splitTurnEventsIntoSemanticPages(events)
 	wakeParents := backgroundWakeParentTurnsFromEvents(events)
 	turnContext := projectTurnContextEntry(turnID, events)
+	finalAnswerIDs := finalAnswerIDsFromTurnEvents(events)
 
 	// Terminal-correct shell from the COMPLETE event set: the full projection
 	// folds the whole turn, so its activity summary always reflects the
@@ -474,10 +477,14 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 	full := projectTranscriptEvents(events)
 	status := ""
 	shell := map[string]any{}
-	if body, ok := full.ActivityBodies[turnID]; ok {
-		shell = cloneAnyMap(body.Summary)
-		status = body.Status
+	activityBody := full.ActivityBodies[turnID]
+	if activityBody.Summary != nil {
+		shell = cloneAnyMap(activityBody.Summary)
+		status = activityBody.Status
 	}
+	finalAnswerEntries := turnFinalAnswerEntries(activityBody.Entries, turnID, finalAnswerIDs, turnHasCompletedTerminal(events))
+	finalAnswerIDs = mergeFinalAnswerEntryIDs(finalAnswerIDs, finalAnswerEntries)
+	collapse := turnActivityCollapseSummary(activityBody, finalAnswerEntries, finalAnswerIDs)
 	live := turnPageStatusIsLive(status)
 
 	pages := make([]turnPage, 0, len(pageSlices))
@@ -525,11 +532,108 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 	shell["pages"] = directory
 
 	return turnPagesProjection{
-		TurnID:          turnID,
-		Shell:           shell,
-		TurnContext:     turnContext,
-		Pages:           pages,
-		TotalEventCount: len(events),
+		TurnID:             turnID,
+		Shell:              shell,
+		TurnContext:        turnContext,
+		FinalAnswerEntries: finalAnswerEntries,
+		Collapse:           collapse,
+		Pages:              pages,
+		TotalEventCount:    len(events),
+	}
+}
+
+func finalAnswerIDsFromTurnEvents(events []map[string]any) map[string]bool {
+	out := map[string]bool{}
+	for _, event := range orderedTranscriptEvents(events) {
+		if transcriptString(event, "type") != string(conversation.EventTurnCompleted) {
+			continue
+		}
+		for id := range projectionFinalAnswerIDs(event) {
+			out[id] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func turnHasCompletedTerminal(events []map[string]any) bool {
+	for _, event := range orderedTranscriptEvents(events) {
+		if transcriptString(event, "type") == string(conversation.EventTurnCompleted) {
+			return true
+		}
+	}
+	return false
+}
+
+func turnFinalAnswerEntries(entries []map[string]any, turnID string, finalAnswerIDs map[string]bool, completed bool) []map[string]any {
+	var out []map[string]any
+	var fallback map[string]any
+	for _, entry := range entries {
+		if transcriptMapString(entry, "turnId") != turnID {
+			continue
+		}
+		if !isProjectedAssistantMessage(entry) {
+			continue
+		}
+		if len(finalAnswerIDs) == 0 && completed && !isProjectionAwaitingInputEntry(entry) {
+			fallback = entry
+			continue
+		}
+		if !finalAnswerIDs[transcriptMapString(entry, "id")] {
+			continue
+		}
+		next := cloneAnyMap(entry)
+		next["turnDetailRole"] = "final_answer"
+		out = append(out, next)
+	}
+	if len(out) == 0 && fallback != nil {
+		next := cloneAnyMap(fallback)
+		next["turnDetailRole"] = "final_answer"
+		out = append(out, next)
+	}
+	return out
+}
+
+func mergeFinalAnswerEntryIDs(finalAnswerIDs map[string]bool, entries []map[string]any) map[string]bool {
+	if len(entries) == 0 {
+		return finalAnswerIDs
+	}
+	if finalAnswerIDs == nil {
+		finalAnswerIDs = map[string]bool{}
+	}
+	for _, entry := range entries {
+		if id := transcriptMapString(entry, "id"); id != "" {
+			finalAnswerIDs[id] = true
+		}
+	}
+	return finalAnswerIDs
+}
+
+func turnActivityCollapseSummary(body turnActivityBody, finalAnswerEntries []map[string]any, finalAnswerIDs map[string]bool) map[string]any {
+	finalCount := len(finalAnswerEntries)
+	hiddenCount := 0
+	for _, entry := range body.Entries {
+		id := transcriptMapString(entry, "id")
+		if finalAnswerIDs[id] || isProjectionWakePrompt(entry) {
+			continue
+		}
+		hiddenCount++
+	}
+	collapsible := finalCount > 0 && hiddenCount > 0
+	reason := "no_final_answer"
+	if finalCount > 0 && hiddenCount == 0 {
+		reason = "no_collapsible_activity"
+	} else if collapsible {
+		reason = "final_answer"
+	}
+	return map[string]any{
+		"collapsible":        collapsible,
+		"default_collapsed":  collapsible,
+		"hidden_count":       hiddenCount,
+		"final_answer_count": finalCount,
+		"reason":             reason,
 	}
 }
 

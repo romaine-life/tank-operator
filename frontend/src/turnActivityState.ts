@@ -18,40 +18,42 @@ export interface TurnActivityLoadProblem {
   attempts: number;
 }
 
-export interface TurnActivityLoadSnapshot<Entry, PageInfo> {
+export interface TurnActivityLoadSnapshot<Entry, PageInfo, Collapse = unknown> {
   entries: Entry[];
   context: Entry | null;
+  finalAnswerEntries?: Entry[];
+  collapse?: Collapse;
   pageInfo: PageInfo;
   requestedPage?: number;
   loadedAt: number;
 }
 
-export type TurnActivityLoadState<Entry, PageInfo> =
+export type TurnActivityLoadState<Entry, PageInfo, Collapse = unknown> =
   | { status: "unloaded" }
   | {
       status: "loading";
       requestId: number;
       requestedPage?: number;
       reason: TurnActivityLoadReason;
-      previous?: TurnActivityLoadSnapshot<Entry, PageInfo>;
+      previous?: TurnActivityLoadSnapshot<Entry, PageInfo, Collapse>;
     }
   | {
       status: "loaded";
-      snapshot: TurnActivityLoadSnapshot<Entry, PageInfo>;
+      snapshot: TurnActivityLoadSnapshot<Entry, PageInfo, Collapse>;
     }
   | {
       status: "error";
       requestedPage?: number;
       problem: TurnActivityLoadProblem;
-      previous?: TurnActivityLoadSnapshot<Entry, PageInfo>;
+      previous?: TurnActivityLoadSnapshot<Entry, PageInfo, Collapse>;
     };
 
-export function beginTurnActivityLoad<Entry, PageInfo>(
-  current: TurnActivityLoadState<Entry, PageInfo> | undefined,
+export function beginTurnActivityLoad<Entry, PageInfo, Collapse = unknown>(
+  current: TurnActivityLoadState<Entry, PageInfo, Collapse> | undefined,
   requestId: number,
   requestedPage: number | undefined,
   reason: TurnActivityLoadReason,
-): TurnActivityLoadState<Entry, PageInfo> {
+): TurnActivityLoadState<Entry, PageInfo, Collapse> {
   const previous =
     current?.status === "loaded"
       ? current.snapshot
@@ -67,22 +69,22 @@ export function beginTurnActivityLoad<Entry, PageInfo>(
   };
 }
 
-export function completeTurnActivityLoad<Entry, PageInfo>(
-  current: TurnActivityLoadState<Entry, PageInfo> | undefined,
+export function completeTurnActivityLoad<Entry, PageInfo, Collapse = unknown>(
+  current: TurnActivityLoadState<Entry, PageInfo, Collapse> | undefined,
   requestId: number,
-  snapshot: TurnActivityLoadSnapshot<Entry, PageInfo>,
-): TurnActivityLoadState<Entry, PageInfo> | undefined {
+  snapshot: TurnActivityLoadSnapshot<Entry, PageInfo, Collapse>,
+): TurnActivityLoadState<Entry, PageInfo, Collapse> | undefined {
   if (current?.status !== "loading" || current.requestId !== requestId) {
     return current;
   }
   return { status: "loaded", snapshot };
 }
 
-export function failTurnActivityLoad<Entry, PageInfo>(
-  current: TurnActivityLoadState<Entry, PageInfo> | undefined,
+export function failTurnActivityLoad<Entry, PageInfo, Collapse = unknown>(
+  current: TurnActivityLoadState<Entry, PageInfo, Collapse> | undefined,
   requestId: number,
   problem: TurnActivityLoadProblem,
-): TurnActivityLoadState<Entry, PageInfo> | undefined {
+): TurnActivityLoadState<Entry, PageInfo, Collapse> | undefined {
   if (current?.status !== "loading" || current.requestId !== requestId) {
     return current;
   }
@@ -94,8 +96,8 @@ export function failTurnActivityLoad<Entry, PageInfo>(
   };
 }
 
-export function turnActivityShouldStartLoad<Entry, PageInfo>(
-  current: TurnActivityLoadState<Entry, PageInfo> | undefined,
+export function turnActivityShouldStartLoad<Entry, PageInfo, Collapse = unknown>(
+  current: TurnActivityLoadState<Entry, PageInfo, Collapse> | undefined,
   requestedPage: number | undefined,
   force: boolean,
 ): boolean {
@@ -108,9 +110,9 @@ export function turnActivityShouldStartLoad<Entry, PageInfo>(
   return true;
 }
 
-export function turnActivityLoadVisibleSnapshot<Entry, PageInfo>(
-  state: TurnActivityLoadState<Entry, PageInfo> | undefined,
-): TurnActivityLoadSnapshot<Entry, PageInfo> | undefined {
+export function turnActivityLoadVisibleSnapshot<Entry, PageInfo, Collapse = unknown>(
+  state: TurnActivityLoadState<Entry, PageInfo, Collapse> | undefined,
+): TurnActivityLoadSnapshot<Entry, PageInfo, Collapse> | undefined {
   if (state?.status === "loaded") return state.snapshot;
   if (state?.status === "error") return state.previous;
   if (state?.status === "loading" && state.reason === "live-refresh") {

@@ -203,14 +203,19 @@ func (s *appServer) handlePublicMessageLinkTurnActivity(w http.ResponseWriter, r
 		"compacted_entry_ids": []string{},
 		"summary":             pages.Shell,
 		"turn_context":        pages.TurnContext,
-		"page":                selected,
-		"page_count":          len(pages.Pages),
-		"pages":               directory,
-		"total_event_count":   pages.TotalEventCount,
-		"has_more":            false,
-		"cursor_semantic":     "order_key",
-		"projection":          "server_turn_activity_v3",
-		"public":              true,
+		"final_answer": map[string]any{
+			"entries": pages.FinalAnswerEntries,
+			"count":   len(pages.FinalAnswerEntries),
+		},
+		"collapse":          pages.Collapse,
+		"page":              selected,
+		"page_count":        len(pages.Pages),
+		"pages":             directory,
+		"total_event_count": pages.TotalEventCount,
+		"has_more":          false,
+		"cursor_semantic":   "order_key",
+		"projection":        "server_turn_activity_v3",
+		"public":            true,
 	}
 	if selected >= 1 && selected <= len(pages.Pages) {
 		current := pages.Pages[selected-1]
