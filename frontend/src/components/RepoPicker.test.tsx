@@ -148,3 +148,82 @@ test("the manual typed-entry Add stays a distinct additive action", () => {
   expect(onAdd).toHaveBeenCalledWith("octocat/hello");
   expect(onSelect).not.toHaveBeenCalled();
 });
+
+test("submitting the form selects the best match (pinned > recent > all)", () => {
+  // Setup with pinned, recent, and all repos, and input that matches all,
+  // to verify it selects the best match (pinned in this case).
+  const { onAdd } = setup({
+    open: true,
+    input: "hello",
+    pinned: ["org/hello-pinned"],
+    recent: ["org/hello-recent"],
+    allRepos: {
+      status: "ready",
+      repos: ["org/hello-all"],
+    },
+  });
+
+  const form = screen.getByRole("dialog").querySelector("form");
+  expect(form).not.toBeNull();
+  fireEvent.submit(form!);
+
+  expect(onAdd).toHaveBeenCalledWith("org/hello-pinned");
+});
+
+test("submitting the form selects recent if no pinned matches", () => {
+  const { onAdd } = setup({
+    open: true,
+    input: "hello",
+    pinned: ["org/other-pinned"],
+    recent: ["org/hello-recent"],
+    allRepos: {
+      status: "ready",
+      repos: ["org/hello-all"],
+    },
+  });
+
+  const form = screen.getByRole("dialog").querySelector("form");
+  expect(form).not.toBeNull();
+  fireEvent.submit(form!);
+
+  expect(onAdd).toHaveBeenCalledWith("org/hello-recent");
+});
+
+test("submitting the form selects all repos if no pinned or recent matches", () => {
+  const { onAdd } = setup({
+    open: true,
+    input: "hello",
+    pinned: ["org/other-pinned"],
+    recent: ["org/other-recent"],
+    allRepos: {
+      status: "ready",
+      repos: ["org/hello-all"],
+    },
+  });
+
+  const form = screen.getByRole("dialog").querySelector("form");
+  expect(form).not.toBeNull();
+  fireEvent.submit(form!);
+
+  expect(onAdd).toHaveBeenCalledWith("org/hello-all");
+});
+
+test("submitting the form falls back to typed input if no match exists", () => {
+  const { onAdd } = setup({
+    open: true,
+    input: "hello-world",
+    pinned: ["org/other-pinned"],
+    recent: ["org/other-recent"],
+    allRepos: {
+      status: "ready",
+      repos: ["org/other-all"],
+    },
+  });
+
+  const form = screen.getByRole("dialog").querySelector("form");
+  expect(form).not.toBeNull();
+  fireEvent.submit(form!);
+
+  expect(onAdd).toHaveBeenCalledWith("hello-world");
+});
+

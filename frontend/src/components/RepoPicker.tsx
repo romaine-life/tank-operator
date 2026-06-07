@@ -206,12 +206,64 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
     };
   }, [open, onClose]);
 
+  // Find the best matching suggestion for the typed input.
+  const bestMatch = useMemo(() => {
+    const trimmed = input.trim().toLowerCase();
+    if (trimmed === "") return null;
+
+    const matches = (slug: string) => slug.toLowerCase().includes(trimmed);
+    const exactMatch = (slug: string) => slug.toLowerCase() === trimmed;
+
+    // First, check for exact matches (case-insensitive) across pinned, recent, allRepos
+    const exactPinned = pinned.find(exactMatch);
+    if (exactPinned) return exactPinned;
+
+    const pinnedLower = new Set(pinned.map((s) => s.toLowerCase()));
+    const exactRecent = recent.find(
+      (slug) => exactMatch(slug) && !pinnedLower.has(slug.toLowerCase())
+    );
+    if (exactRecent) return exactRecent;
+
+    if (allRepos && allRepos.status === "ready") {
+      const recentLower = new Set(recent.map((s) => s.toLowerCase()));
+      const exactAll = allRepos.repos.find(
+        (slug) =>
+          exactMatch(slug) &&
+          !pinnedLower.has(slug.toLowerCase()) &&
+          !recentLower.has(slug.toLowerCase())
+      );
+      if (exactAll) return exactAll;
+    }
+
+    // Next, check for substring matches in priority order
+    const matchedPinned = pinned.find(matches);
+    if (matchedPinned) return matchedPinned;
+
+    const matchedRecent = recent.find(
+      (slug) => matches(slug) && !pinnedLower.has(slug.toLowerCase())
+    );
+    if (matchedRecent) return matchedRecent;
+
+    if (allRepos && allRepos.status === "ready") {
+      const recentLower = new Set(recent.map((s) => s.toLowerCase()));
+      const matchedAll = allRepos.repos.find(
+        (slug) =>
+          matches(slug) &&
+          !pinnedLower.has(slug.toLowerCase()) &&
+          !recentLower.has(slug.toLowerCase())
+      );
+      if (matchedAll) return matchedAll;
+    }
+
+    return null;
+  }, [input, pinned, recent, allRepos]);
+
   const handleSubmit = useCallback(
     (e: React.FormEvent<HTMLFormElement>) => {
       e.preventDefault();
-      onAdd(input);
+      onAdd(bestMatch || input);
     },
-    [input, onAdd],
+    [input, bestMatch, onAdd],
   );
 
   return (

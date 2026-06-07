@@ -1076,12 +1076,13 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// leaf via SSL_CERT_FILE (a system-bundle + oauth-gateway-ca concat built
 	// by the launch script), not NODE_EXTRA_CA_CERTS.
 	if wantAntigravityRunner {
-		// The runner is self-contained: it drives agy + the session bus and
-		// needs no session ConfigMap (no Tank mcp.json — agy owns its MCP). Its
-		// launch script is baked into the antigravity image at /opt/tank, so the
-		// pod has no ConfigMap-launch-script coupling.
+		// The runner drives agy + the session bus. agy owns its MCP config, so
+		// Antigravity still does not consume Tank's mcp.json, but the runner
+		// mounts the session-config bundle to hydrate Tank skills and expand
+		// skill turns into explicit prompt context for Gemini.
 		runnerVolumeMounts := []any{
 			map[string]any{"name": "workspace", "mountPath": "/workspace"},
+			map[string]any{"name": "session-config", "mountPath": SessionConfigDirMount, "readOnly": true},
 			map[string]any{"name": "tank-operator-sa-token", "mountPath": "/var/run/secrets/tank-operator", "readOnly": true},
 			map[string]any{"name": "auth-romaine-sa-token", "mountPath": "/var/run/secrets/auth.romaine.life", "readOnly": true},
 		}

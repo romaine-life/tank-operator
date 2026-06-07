@@ -39,6 +39,13 @@ export const providerErrorTotal = new Counter({
   registers: [registry],
 });
 
+export const agyDiagnosticTotal = new Counter({
+  name: "tank_antigravity_runner_agy_diagnostic_total",
+  help: "Non-terminal agy diagnostics observed in process output, by bounded kind.",
+  labelNames: ["kind"] as const,
+  registers: [registry],
+});
+
 export const natsPublishFailureTotal = new Counter({
   name: "tank_antigravity_runner_nats_publish_failure_total",
   help: "Tank event publish failures to the session bus.",

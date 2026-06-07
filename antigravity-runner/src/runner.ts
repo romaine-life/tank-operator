@@ -21,6 +21,7 @@ import {
 } from "./adapters/antigravity.js";
 import { AgyDriver } from "./driver.js";
 import type { Config } from "./config.js";
+import { expandSkillPrompt } from "./skills.js";
 import { SessionEventSink } from "./sessionEvents.js";
 import {
   SessionCommandBus,
@@ -40,6 +41,7 @@ import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js"
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
   agyStepTotal,
+  agyDiagnosticTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
   interruptOutcomeTotal,
@@ -77,6 +79,7 @@ const TERMINAL_PUBLISH_BACKOFF_MS = envInt(
 type SubmitRecord = SessionCommandRecord & {
   prompt?: string;
   model?: string;
+  skill_name?: string;
   client_nonce?: string;
   target_turn_id?: string;
 };
@@ -206,14 +209,31 @@ export class Runner {
         }) as TankConversationEvent,
       );
 
-      const prompt = String(rec.prompt ?? "").trim();
-      if (!prompt) {
+      const basePrompt = String(rec.prompt ?? "").trim();
+      if (!basePrompt) {
         providerErrorTotal.labels("missing_prompt").inc();
         await this.publishTerminal(
           this.adapter.failTurn(turn, "missing_prompt"),
         );
         return;
       }
+      const expanded = await expandSkillPrompt(basePrompt, rec.skill_name);
+      if (expanded.reason !== "no_skill") {
+        agyDiagnosticTotal.labels(
+          expanded.loaded ? "skill_loaded" : "skill_missing",
+        ).inc();
+      }
+      if (expanded.reason === "missing") {
+        providerErrorTotal.labels("skill_missing").inc();
+        await this.publishTerminal(
+          this.adapter.failTurn(
+            turn,
+            `skill_missing: ${String(rec.skill_name ?? "").trim()}`,
+          ),
+        );
+        return;
+      }
+      const prompt = expanded.prompt;
       const model = modelForAgyTurn(rec.model);
       if (!model) {
         providerErrorTotal.labels("missing_model").inc();
@@ -246,6 +266,9 @@ export class Runner {
         },
         abort.signal,
       );
+      for (const kind of agyDiagnostics(result)) {
+        agyDiagnosticTotal.labels(kind).inc();
+      }
       this.hasConversation = true;
 
       const terminal = classifyAgyTerminal(
@@ -415,6 +438,24 @@ export class Runner {
       return false;
     }
   }
+}
+
+export function agyDiagnostics(result: {
+  stdout: string;
+  stderr: string;
+}): string[] {
+  const text = `${result.stderr}\n${result.stdout}`.toLowerCase();
+  const kinds: string[] = [];
+  if (
+    text.includes("failed to fetch user info: 401") ||
+    text.includes("userinfo returned status 401")
+  ) {
+    kinds.push("auxiliary_userinfo_401");
+  }
+  if (text.includes("clearcut responded with http code: 401")) {
+    kinds.push("telemetry_clearcut_401");
+  }
+  return kinds;
 }
 
 function stepKind(step: AgyStep): string {

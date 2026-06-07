@@ -100,7 +100,7 @@ RUN chmod 0755 /opt/tank/antigravity-runner-launch.sh
 # user at uid/gid 1000 (same as the Alpine images). agy stores its auth + state
 # under ~/.gemini/antigravity-cli/ (it creates the subdir itself on first run);
 # /opt/tank is the mount point for the chart-managed launch scripts.
-RUN mkdir -p /workspace /opt/tank /home/node/.gemini \
+RUN mkdir -p /workspace /opt/tank /home/node/.gemini/skills \
     && chown -R node:node /workspace /home/node/.gemini
 
 WORKDIR /workspace
