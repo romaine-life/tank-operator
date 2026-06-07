@@ -281,7 +281,9 @@ import {
 } from "./sessionStore";
 import { decideFollowupSubmit } from "./submitLatch";
 import {
+  insertThinkingGroupByDurableOrder,
   resolveThinkingInsertIndex,
+  turnActivityPageContainsLiveTail,
   type ThinkingPlacementGroup,
 } from "./transcriptThinkingPlacement";
 import {
@@ -5363,6 +5365,44 @@ function turnActivityShellTailOrderKey(shell?: TranscriptEntry): string {
   );
 }
 
+function flatGroupThinkingPlacement(
+  group: FlatEntryGroup,
+): ThinkingPlacementGroup & { group: FlatEntryGroup } {
+  return {
+    group,
+    orderKey: entryGroupOrderKey(group),
+    includesTurn: false,
+  };
+}
+
+function insertTurnDetailThinkingGroup(
+  groups: FlatEntryGroup[],
+  turnId: string,
+  shell?: TranscriptEntry,
+  status: "thinking" | "needs_input" = "thinking",
+): FlatEntryGroup[] {
+  const trimmedTurnId = turnId.trim();
+  if (!trimmedTurnId) return groups;
+  const shellTailOrderKey = turnActivityShellTailOrderKey(shell);
+  const thinking = turnThinkingGroup(trimmedTurnId, shell, status);
+  thinking.orderKey = shellTailOrderKey;
+  const placement = groups.map((group) => ({
+    ...flatGroupThinkingPlacement(group),
+    includesTurn: entryGroupIncludesTurn(group, trimmedTurnId),
+  }));
+  const placed = insertThinkingGroupByDurableOrder(
+    placement,
+    {
+      group: thinking,
+      orderKey: shellTailOrderKey,
+      includesTurn: true,
+    },
+    shellTailOrderKey,
+    groups.length,
+  );
+  return placed.map((item) => item.group);
+}
+
 function insertActiveTurnThinkingGroups(
   groups: EntryGroup[],
   thinkingGroups: Extract<EntryGroup, { kind: "thinking" }>[],
@@ -10329,14 +10369,6 @@ function RunTurnActivityScreen({
     showDetailActivityDivider &&
     selected !== null &&
     collapsedActivityTurnIds[selected.turnId] === true;
-  const renderedDetailGroups = useMemo(() => {
-    if (!detailActivityCollapsed) return detailGroups;
-    return detailGroups.filter((group) =>
-      flatEntryGroupEntries(group).some((entry) =>
-        finalDetailEntryIds.has(entry.id),
-      ),
-    );
-  }, [detailActivityCollapsed, detailGroups, finalDetailEntryIds]);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) =>
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
@@ -10359,17 +10391,38 @@ function RunTurnActivityScreen({
     selected?.shell?.activity?.status === "needs_input"
       ? "needs_input"
       : "thinking";
-  const selectedThinkingBubble =
-    selected && selected.active ? (
-      <RunTurnThinkingBubble
-        key={`turn-view-thinking-${selected.turnId}`}
-        userKey={userKey}
-        turnId={selected.turnId}
-        status={selectedThinkingStatus}
-        lastActivityAt={selected.lastActivityAt}
-        avatar={avatar}
-      />
-    ) : null;
+  const detailGroupsWithThinking = useMemo(() => {
+    if (
+      !selected ||
+      !selected.active ||
+      !turnActivityPageContainsLiveTail(selectedPageInfo)
+    ) {
+      return detailGroups;
+    }
+    return insertTurnDetailThinkingGroup(
+      detailGroups,
+      selected.turnId,
+      selected.shell,
+      selectedThinkingStatus,
+    );
+  }, [
+    detailGroups,
+    selected,
+    selectedPageInfo,
+    selectedThinkingStatus,
+  ]);
+  const renderedDetailGroups = useMemo(() => {
+    if (!detailActivityCollapsed) return detailGroupsWithThinking;
+    return detailGroupsWithThinking.filter((group) =>
+      flatEntryGroupEntries(group).some((entry) =>
+        finalDetailEntryIds.has(entry.id),
+      ),
+    );
+  }, [
+    detailActivityCollapsed,
+    detailGroupsWithThinking,
+    finalDetailEntryIds,
+  ]);
   const selectedPageDirectoryItem = selectedPageInfo?.pages?.find(
     (page) => page.number === pagerState.page,
   );
@@ -10531,7 +10584,18 @@ function RunTurnActivityScreen({
         />
       );
     }
-    if (group.kind === "thinking") return null;
+    if (group.kind === "thinking") {
+      return (
+        <RunTurnThinkingBubble
+          key={group.id}
+          userKey={userKey}
+          turnId={group.turnId}
+          status={group.status}
+          lastActivityAt={group.lastActivityAt}
+          avatar={avatar}
+        />
+      );
+    }
     return (
       <RunMessageBubble
         key={group.entry.id}
@@ -10935,17 +10999,12 @@ function RunTurnActivityScreen({
                 />
                 <span>Loading activity...</span>
               </div>
-            ) : showRefreshProblemOnly ? (
-              selectedThinkingBubble
-            ) : detailGroups.length === 0 ? (
-              selectedThinkingBubble ?? (
-                <div className="run-shell-tasks-empty">No turn activity.</div>
-              )
+            ) : showRefreshProblemOnly && renderedDetailGroups.length === 0 ? (
+              <div className="run-shell-tasks-empty">No turn activity.</div>
+            ) : renderedDetailGroups.length === 0 ? (
+              <div className="run-shell-tasks-empty">No turn activity.</div>
             ) : (
-              <>
-                {selectedThinkingBubble}
-                {renderedDetailGroups.map(renderGroup)}
-              </>
+              renderedDetailGroups.map(renderGroup)
             )}
           </div>
         </>
