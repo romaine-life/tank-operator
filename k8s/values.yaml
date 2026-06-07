@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-e78c7be84c817266cb15ef25a4499c7c6dabb1d79087cde291e0808a4c0578e7"
+  tag: "app-6d47efa8599370560c395d9ec5d540090d2e4d42bf26c5fce70464b31b05597b"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -144,7 +144,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-c84b7c75a8688889e789cd2d7a35f5ab55260839a6e75b1fca9ebebf6326c285"
+    tag: "api-proxy-cc32cf5d50f1a21c3833142801415d3d72ffe0309cd71a01de16abfff9c6d77d"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   serviceAccount: claude-api-proxy

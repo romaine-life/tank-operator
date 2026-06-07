@@ -63,10 +63,10 @@ type SessionEventStore interface {
 	// Bounded and indexed by the session_events_context_compacted partial index
 	// so it stays cheap regardless of total ledger size.
 	CountContextCompactions(ctx context.Context, tankSessionID string) (int64, error)
-	// CountUserMessages returns the total number of durable user_message.created
-	// events recorded for a session across its whole history — one per human
-	// back-and-forth submission. It backs the frontend auto-default-to-Turns
-	// sidebar gate and is recomputed by the chat-activity emitter on each
+		// CountUserMessages returns the total number of durable user_message.created
+		// events recorded for a session across its whole history — one per human
+		// back-and-forth submission. It is durable row metadata recomputed by the
+		// chat-activity emitter on each
 	// user_message.created upsert. Bounded and indexed by the
 	// session_events_user_message_by_session partial index so it stays cheap
 	// regardless of total ledger size. Background-task wake continuations do not

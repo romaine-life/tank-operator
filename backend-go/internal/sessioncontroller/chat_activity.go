@@ -256,10 +256,9 @@ func (e *ChatActivityEmitter) refreshCompactionCount(ctx context.Context, owner,
 // writes it onto the sessions row when it advances. user_message.created is
 // delivered at-least-once; recompute-and-compare makes a redelivery a no-op — no
 // row_version churn and no rewrite. The exact per-session total always lives in
-// the durable user_message_count column, which the frontend's
-// auto-default-to-Turns sidebar gate reads. Mirrors refreshCompactionCount but
-// emits no metric: the durable column is the observable, and a per-message
-// counter would be high-churn / low-signal.
+// the durable user_message_count column as row metadata. Mirrors
+// refreshCompactionCount but emits no metric: the durable column is the
+// observable, and a per-message counter would be high-churn / low-signal.
 func (e *ChatActivityEmitter) refreshUserMessageCount(ctx context.Context, owner, publicID string) error {
 	metrics := e.Metrics
 	if metrics == nil {

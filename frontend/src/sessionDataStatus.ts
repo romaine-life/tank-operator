@@ -4,6 +4,7 @@ import { normalizeBugLabelDisplayName } from "./bugLabels";
 export type StatusTone = "good" | "info" | "warning" | "danger" | "muted";
 
 export type SessionDataStatusId =
+  | "transcript"
   | "test"
   | "context"
   | "rollout"
@@ -74,6 +75,13 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
   const bugCount = bugLabels.length || (bugLabel ? 1 : 0);
 
   return [
+    {
+      id: "transcript",
+      label: "Main transcript",
+      status: "Available",
+      detail: "Full conversation timeline",
+      tone: "info",
+    },
     {
       id: "test",
       label: "Test slot",

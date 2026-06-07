@@ -457,7 +457,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   expect(appSource.includes("function readSessionRouteFromPath")).toBe(true);
   expect(appRoutesSource.includes("url.pathname = `/sessions/${encodedId}${")).toBe(true);
   expect(appRoutesSource.includes(
-          'export type SessionRouteTab = "chat" | "turns" | "static" | "session-data";',
+          'export type SessionRouteTab = "turns" | "chat" | "static" | "session-data";',
         )).toBe(true);
   expect(appRoutesSource.includes('export type AppRouteTab = "settings" | "help";')).toBe(true);
   expect(appRoutesSource.includes("readAppRouteFromPathname")).toBe(true);
@@ -473,6 +473,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   expect(appSource.includes(
           'replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber)',
         )).toBe(true);
+  expect(appSource).toMatch(/if \(route\.tab === "chat"\) \{[\s\S]{0,160}setActiveTab\("chat"\)/);
   expect(appSource.includes(
           'window.addEventListener("popstate", applyCurrentSessionRoute)',
         )).toBe(true);
@@ -489,12 +490,12 @@ test("turn internals move out of the transcript into a turn view", () => {
   expect(appSource.includes("function TurnsTab")).toBe(true);
   expect(appSource.includes("openTurnPage")).toBe(true);
   // Turns stays a standalone tab only in the read-only public view, where the
-  // overflow menu is not rendered; the normal view folds it into the menu.
-  expect(appSource).toMatch(/<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{!turnsAvailable\}/);
-  // The pre-session home view exposes Turns through the overflow menu as a
-  // disabled, no-op entry until a session exists.
-  expect(appSource).toMatch(/turns=\{\{\s*active: false,\s*disabled: true,\s*title:\s*"Turns are available once the agent has turn activity",\s*onOpen: \(\) => undefined,/);
-  expect(appSource).toMatch(/if \(activeTab !== "turns" \|\| turnsAvailable\) return;/);
+  // overflow menu is not rendered. Normal sessions use Turns as the primary
+  // surface, so the top-right overflow no longer offers it as a menu row.
+  expect(appSource).toMatch(/<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{false\}/);
+  expect(appSource.includes("turns={{")).toBe(false);
+  expect(appSource.includes('setActiveTab("chat");')).toBe(true);
+  expect(appSource.includes('if (activeTab !== "turns" || turnsAvailable) return;')).toBe(false);
   expect(indexCssSource.includes(".run-turn-view")).toBe(true);
   expect(indexCssSource.includes(
           '.run-turn-view-body [data-slot="message"][data-owner="activity"]',
@@ -589,7 +590,7 @@ test("turn view entry points open at the turn bottom", () => {
   expect(appSource.includes("transcriptHrefForEntry")).toBe(true);
   expect(appSource.includes("onOpenTranscriptMessage")).toBe(true);
   expect(appSource.includes("Open message in transcript")).toBe(true);
-  expect(appSource.includes('else openTurnPage(undefined, { anchor: "bottom" });')).toBe(true);
+  expect(appSource.includes('openTurnPage(undefined, { anchor: "bottom" });')).toBe(true);
   expect(appSource.includes(
           "const [pendingTurnViewRouteAnchor, setPendingTurnViewRouteAnchor]",
         )).toBe(true);

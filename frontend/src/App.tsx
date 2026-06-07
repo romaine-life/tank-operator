@@ -44,7 +44,6 @@ import {
   type TurnActivityPagerState,
 } from "./turnActivityPager";
 import { turnViewTurnNavigation } from "./turnViewNavigation";
-import { shouldAutoDefaultToTurns } from "./autoTurnsDefault";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer } from "./ChatComposer";
@@ -59,8 +58,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
@@ -326,7 +323,13 @@ import {
   loadRuntimeAvatarCatalog,
   type AgentAvatar,
 } from "./sessionAvatars";
-import { openAvatarPreview } from "./avatarPreview";
+import {
+  addAvatarPreviewEditRequestListener,
+  avatarPreviewIsEditable,
+  closeAvatarPreview,
+  openAvatarPreview,
+  setAvatarPreviewEditAvailable,
+} from "./avatarPreview";
 import {
   linkTextTargetsInMarkdown,
   normalizeWorkspacePathTarget,
@@ -756,11 +759,11 @@ interface Session {
   // compaction metric; absent/0 means the session has not compacted yet.
   compaction_count?: number;
   // Durable count of user_message.created events (one per human back-and-forth),
-  // projected from the session_events ledger onto the row. Drives the
-  // auto-default-to-Turns sidebar gate; absent/0 means too few exchanges yet.
+  // projected from the session_events ledger onto the row. Kept as metadata for
+  // compatibility and diagnostics; sidebar opens now always land on Turns.
   user_message_count?: number;
-  // Durable manual open-target pin ("chat"/"turns") set from the session tab
-  // menu; absent means the user has not pinned and the auto-default applies.
+  // Legacy durable manual open-target pin ("chat"/"turns"). The frontend still
+  // parses it from existing rows but no longer uses it for session-open defaults.
   open_target?: "chat" | "turns";
   agent_avatar_id?: string | null;
   system_avatar_id?: string | null;
@@ -1664,7 +1667,7 @@ function readAppRouteFromPath(
 
 function sessionRouteUrl(
   id: string,
-  tab: SessionRouteTab = "chat",
+  tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
   staticPath?: string | null,
 ): string {
@@ -1716,7 +1719,7 @@ function readInitialPublicSessionReportRoute(): PublicSessionReportRoute | null 
 
 function replaceSessionRoute(
   id: string,
-  tab: SessionRouteTab = "chat",
+  tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
 ): void {
   if (routeHasMessageTarget()) return;
@@ -1748,6 +1751,13 @@ function replaceAppRoute(
   if (routeHasMessageTarget()) return;
   const next = appRouteUrl(tab, settingsTab, adminView);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+function closeAvatarPreviewAfterRoutePaint(): void {
+  if (typeof window === "undefined") return;
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => closeAvatarPreview());
+  });
 }
 
 function readInitialSessionId(): string | null {
@@ -4232,7 +4242,6 @@ type TurnViewScrollRequest = {
   signal: number;
 };
 type RunSubmitSurface = "chat" | "turns";
-type SessionOpenTarget = "chat" | "turns";
 
 /** A file the user picked / dropped / pasted on the home composer before
  *  a session pod exists. The `file` is kept on the object so it can be
@@ -7421,7 +7430,7 @@ function TurnsTab({
   );
 }
 
-// One menu-row's worth of state for a header view (Turns / Background / Files).
+// One menu-row's worth of state for a header view (Background / Files).
 // The overflow menu owns the icon + label markup so the labels stay literal
 // and testable; callers pass only the live state.
 type RunHeaderMenuTabState = {
@@ -7434,15 +7443,15 @@ type RunHeaderMenuTabState = {
 };
 
 // The run header's single overflow control. It is the one consolidation point
-// for every top-right session action: the view tabs (Turns / Background /
-// Files) and the auxiliary actions (Settings / Help). Keeping all of them here
-// means the header stays a clean "title + ⋮" strip instead of a row of
-// competing buttons. Live counts ride each row, and an attention dot surfaces
-// on the trigger so ambient signal is not lost when the menu is closed.
+// for every top-right session action beyond the primary Turns surface:
+// Background / Files / Session data and the auxiliary actions (Settings / Help).
+// Keeping all of them here means the header stays a clean "title + ⋮" strip
+// instead of a row of competing buttons. Live counts ride each row, and an
+// attention dot surfaces on the trigger so ambient signal is not lost when the
+// menu is closed.
 function RunHeaderOverflowMenu({
   triggerActive,
   triggerAttention,
-  turns,
   background,
   files,
   sessionData,
@@ -7453,7 +7462,6 @@ function RunHeaderOverflowMenu({
 }: {
   triggerActive: boolean;
   triggerAttention?: "critical" | "warning" | null;
-  turns: RunHeaderMenuTabState;
   background: RunHeaderMenuTabState;
   files: RunHeaderMenuTabState;
   sessionData: RunHeaderMenuTabState;
@@ -7487,24 +7495,6 @@ function RunHeaderOverflowMenu({
         sideOffset={8}
         className="run-tab-more-menu"
       >
-        <DropdownMenuItem
-          className={`run-tab-more-item${turns.active ? " is-active" : ""}`}
-          disabled={turns.disabled}
-          onSelect={turns.onOpen}
-          title={turns.title}
-        >
-          <ActivityIcon className="run-tab-more-item-icon" aria-hidden="true" />
-          <span>Turns</span>
-          {turns.count !== undefined && turns.count > 0 && (
-            <span
-              className="run-shell-tasks-count run-tab-more-item-count"
-              data-active={turns.countActive ? "true" : undefined}
-              aria-label={`${turns.count} turns`}
-            >
-              {turns.count}
-            </span>
-          )}
-        </DropdownMenuItem>
         <DropdownMenuItem
           className={`run-tab-more-item${background.active ? " is-active" : ""}`}
           disabled={background.disabled}
@@ -7576,15 +7566,11 @@ function SessionTabMenu({
   session,
   isClosing,
   readOnly,
-  openTarget,
-  onOpenTargetChange,
   onClose,
 }: {
   session: Session;
   isClosing: boolean;
   readOnly: boolean;
-  openTarget: SessionOpenTarget;
-  onOpenTargetChange: (target: SessionOpenTarget) => void;
   onClose: () => void;
 }) {
   if (isClosing) {
@@ -7623,36 +7609,6 @@ function SessionTabMenu({
         className="run-tab-more-menu session-tab-menu"
         onClick={(e) => e.stopPropagation()}
       >
-        <DropdownMenuRadioGroup
-          value={openTarget}
-          onValueChange={(value) => {
-            if (value === "chat" || value === "turns") {
-              onOpenTargetChange(value);
-            }
-          }}
-        >
-          <DropdownMenuRadioItem
-            value="chat"
-            className="run-tab-more-item session-tab-menu-radio"
-          >
-            <MessageSquareIcon
-              className="run-tab-more-item-icon"
-              aria-hidden="true"
-            />
-            <span>Main transcript</span>
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem
-            value="turns"
-            className="run-tab-more-item session-tab-menu-radio"
-          >
-            <ListChecksIcon
-              className="run-tab-more-item-icon"
-              aria-hidden="true"
-            />
-            <span>Turns view</span>
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-        <DropdownMenuSeparator className="run-tab-more-separator" />
         <DropdownMenuItem
           className="run-tab-more-item"
           variant="destructive"
@@ -7668,6 +7624,8 @@ function SessionTabMenu({
 
 function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
   switch (id) {
+    case "transcript":
+      return <MessageSquareIcon />;
     case "test":
       return <FlaskConicalIcon />;
     case "context":
@@ -7687,6 +7645,7 @@ function SessionDataScreen({
   rows,
   session,
   requestPath,
+  onOpenTranscript,
   onBugLabelSave,
   onBugLabelsSave,
   readOnly,
@@ -7694,6 +7653,7 @@ function SessionDataScreen({
   rows: SessionDataStatusRow[];
   session: Session;
   requestPath: (path: string) => string;
+  onOpenTranscript: () => void;
   onBugLabelSave: (name: string | null) => Promise<void>;
   onBugLabelsSave: (names: string[]) => Promise<void>;
   readOnly?: boolean;
@@ -7768,6 +7728,7 @@ function SessionDataScreen({
                 bugLabels={bugLabels}
                 bugLabelNames={bugLabelNames}
                 requestPath={requestPath}
+                onOpenTranscript={onOpenTranscript}
                 onBugLabelSave={onBugLabelSave}
                 onBugLabelsSave={onBugLabelsSave}
                 readOnly={readOnly}
@@ -7787,6 +7748,7 @@ function SessionDataCardDetails({
   bugLabels,
   bugLabelNames,
   requestPath,
+  onOpenTranscript,
   onBugLabelSave,
   onBugLabelsSave,
   readOnly,
@@ -7797,11 +7759,28 @@ function SessionDataCardDetails({
   bugLabels: SessionBugLabel[];
   bugLabelNames: string[];
   requestPath: (path: string) => string;
+  onOpenTranscript: () => void;
   onBugLabelSave: (name: string | null) => Promise<void>;
   onBugLabelsSave: (names: string[]) => Promise<void>;
   readOnly?: boolean;
 }) {
   switch (row.id) {
+    case "transcript":
+      return (
+        <div className="run-session-data-actions">
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={onOpenTranscript}
+          >
+            <MessageSquareIcon
+              className="run-session-data-action-icon"
+              aria-hidden="true"
+            />
+            <span>Open transcript</span>
+          </button>
+        </div>
+      );
     case "test":
       return (
         <SessionDataFacts
@@ -12725,8 +12704,8 @@ function ChatPane({
   publicShareToken = null,
   sessionScope,
   avatarCatalogVersion,
-  sidebarTranscriptOpenRequest = 0,
   sidebarTurnsOpenRequest = 0,
+  avatarEditorOpenRequest = 0,
 }: {
   session: Session;
   visible: boolean;
@@ -12762,8 +12741,8 @@ function ChatPane({
   publicShareToken?: string | null;
   sessionScope: string;
   avatarCatalogVersion: number;
-  sidebarTranscriptOpenRequest?: number;
   sidebarTurnsOpenRequest?: number;
+  avatarEditorOpenRequest?: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [activityEntriesByTurn, setActivityEntriesByTurn] = useState<
@@ -12813,8 +12792,12 @@ function ChatPane({
   const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
   const initialRunRoute =
     initialSessionRoute?.sessionId === session.id ? initialSessionRoute : null;
+  const initialTab: RunTab =
+    initialAppRoute?.tab ??
+    initialRunRoute?.tab ??
+    (pendingScrollMessageId?.trim() ? "chat" : "turns");
   const [activeTab, setActiveTab] = useState<RunTab>(
-    initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat",
+    initialTab,
   );
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
     initialAppRoute?.tab === "settings"
@@ -14163,6 +14146,14 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
+    if (route.tab === "chat") {
+      setActiveTab("chat");
+      setPendingRouteTurnNumber(null);
+      setRouteTurnUnavailable(false);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     if (route.tab === "static" && route.staticPath) {
       setStaticPagePath(route.staticPath);
       setActiveTab("static");
@@ -14178,9 +14169,9 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
-    setActiveTab("chat");
+    setActiveTab("turns");
     setPendingRouteTurnNumber(null);
-    setPendingTurnViewRouteAnchor(null);
+    setPendingTurnViewRouteAnchor("bottom");
     setSelectedTurnNumberAnchor(null);
   }, [publicView, session.id, visible]);
   useEffect(() => {
@@ -14193,19 +14184,6 @@ function ChatPane({
     return () =>
       window.removeEventListener("popstate", applyCurrentSessionRoute);
   }, [applyCurrentSessionRoute, publicView, visible]);
-  useEffect(() => {
-    if (publicView) return;
-    if (!visible || sidebarTranscriptOpenRequest === 0) return;
-    setActiveTab("chat");
-    setPendingRouteTurnNumber(null);
-    setPendingTurnViewRouteAnchor(null);
-    setSelectedTurnNumberAnchor(null);
-    slashManualOpenRef.current = false;
-    setSlashOpen(false);
-    setMentionOpen(false);
-    setMcpOpen(false);
-    replaceSessionTranscriptRoute(session.id);
-  }, [publicView, session.id, sidebarTranscriptOpenRequest, visible]);
   useEffect(() => {
     if (publicView) return;
     if (!visible || sidebarTurnsOpenRequest === 0) return;
@@ -16817,18 +16795,6 @@ function ChatPane({
     turnViewItems,
   ]);
   useEffect(() => {
-    if (activeTab !== "turns" || turnsAvailable) return;
-    if (!historyBootstrapped || pendingRouteTurnNumber != null) return;
-    if (selectedTurnHasPendingAnchor) return;
-    setActiveTab("chat");
-  }, [
-    activeTab,
-    historyBootstrapped,
-    pendingRouteTurnNumber,
-    selectedTurnHasPendingAnchor,
-    turnsAvailable,
-  ]);
-  useEffect(() => {
     if (publicView) return;
     if (!visible || effectivePendingScrollMessageId) return;
     if (activeTab === "turns") {
@@ -16846,8 +16812,10 @@ function ChatPane({
       replaceAppRoute("help");
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
+    } else if (activeTab === "chat") {
+      replaceSessionTranscriptRoute(session.id);
     } else {
-      replaceSessionRoute(session.id, "chat");
+      replaceSessionRoute(session.id, "turns");
     }
   }, [
     activeTab,
@@ -17194,7 +17162,12 @@ function ChatPane({
 
   useEffect(() => {
     if (publicView) return;
-    if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready)
+    if (
+      !autoFocusComposer ||
+      !visible ||
+      (activeTab !== "chat" && activeTab !== "turns") ||
+      !ready
+    )
       return;
     const activeElement = document.activeElement;
     if (
@@ -17221,7 +17194,7 @@ function ChatPane({
 
   useEffect(() => {
     if (publicView) return;
-    if (!visible || activeTab !== "chat" || !pendingComposerFocusRef.current)
+    if (!visible || activeTab !== "turns" || !pendingComposerFocusRef.current)
       return;
     pendingComposerFocusRef.current = false;
     requestAnimationFrame(() => {
@@ -17280,8 +17253,8 @@ function ChatPane({
 
   // `/` is a "jump to the prompt" shortcut when focus is anywhere except the
   // composer textarea. The turns view renders the same composer as the chat
-  // transcript, so `/` focuses it in place there rather than navigating back to
-  // the main transcript; tabs without an in-page composer switch to chat first.
+  // transcript, so `/` focuses it in place there; tabs without an in-page
+  // composer switch to the primary turns view first.
   // Once the textarea is focused, `/` keeps its normal typing behavior and opens
   // the slash-command palette through input events.
   useEffect(() => {
@@ -17305,9 +17278,9 @@ function ChatPane({
 
       e.preventDefault();
       e.stopPropagation();
-      if (action === "switch-to-chat") {
+      if (action === "switch-to-turns") {
         pendingComposerFocusRef.current = true;
-        setActiveTab("chat");
+        setActiveTab("turns");
         return;
       }
       pendingComposerFocusRef.current = false;
@@ -17406,7 +17379,7 @@ function ChatPane({
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
     if (publicView && tab !== "turns") return;
     if (tab === "files" && !filesAvailable) return;
-    setActiveTab((current) => (current === tab ? "chat" : tab));
+    setActiveTab((current) => (current === tab ? "turns" : tab));
   };
   const setSettingsRoute = useCallback(
     (nextSettingsTab: SettingsTab, nextAdminView: AdminView) => {
@@ -17416,6 +17389,12 @@ function ChatPane({
     },
     [],
   );
+  useEffect(() => {
+    if (publicView) return;
+    if (!visible || avatarEditorOpenRequest === 0) return;
+    setSettingsRoute("admin", "avatars");
+    closeAvatarPreviewAfterRoutePaint();
+  }, [avatarEditorOpenRequest, publicView, setSettingsRoute, visible]);
   const retryTimelineBootstrap = () => {
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
@@ -17523,13 +17502,13 @@ function ChatPane({
         title={<WorkspaceTitleSpacer />}
         tabs={
           <>
-            {activeTab !== "chat" && (
+            {activeTab !== "turns" && (
               <button
                 type="button"
                 className="run-tab run-tab-back"
-                onClick={() => setActiveTab("chat")}
-                aria-label="Back to chat"
-                title="Back to chat"
+                onClick={() => setActiveTab("turns")}
+                aria-label="Back to turns"
+                title="Back to turns"
               >
                 <ArrowLeftIcon
                   className="run-tab-icon"
@@ -17544,42 +17523,25 @@ function ChatPane({
                 active={activeTab === "turns"}
                 count={turnViewItems.length}
                 hasActiveTurn={turnViewItems.some((turn) => turn.active)}
-                disabled={!turnsAvailable}
-                title={
-                  turnsAvailable
-                    ? "Turns"
-                    : "Turns are available once the agent has turn activity"
-                }
+                disabled={false}
+                title="Turns"
                 onOpen={() => {
-                  if (activeTab === "turns") setActiveTab("chat");
-                  else openTurnPage(undefined, { anchor: "bottom" });
+                  if (activeTab !== "turns")
+                    openTurnPage(undefined, { anchor: "bottom" });
                 }}
               />
             )}
             {!publicView && (
               <RunHeaderOverflowMenu
-                triggerActive={activeTab !== "chat"}
+                triggerActive={activeTab !== "turns"}
                 triggerAttention={adminObservabilityAttention}
-                turns={{
-                  active: activeTab === "turns",
-                  count: turnViewItems.length,
-                  countActive: turnViewItems.some((turn) => turn.active),
-                  disabled: !turnsAvailable,
-                  title: turnsAvailable
-                    ? "Turns"
-                    : "Turns are available once the agent has turn activity",
-                  onOpen: () => {
-                    if (activeTab === "turns") setActiveTab("chat");
-                    else openTurnPage(undefined, { anchor: "bottom" });
-                  },
-                }}
                 background={{
                   active: activeTab === "background",
                   count: backgroundLedgerEntries.length,
                   disabled: false,
                   title: "Background",
                   onOpen: () => {
-                    if (activeTab === "background") setActiveTab("chat");
+                    if (activeTab === "background") setActiveTab("turns");
                     else openBackgroundPage();
                   },
                 }}
@@ -18046,6 +18008,13 @@ function ChatPane({
                 rows={sessionDataRows}
                 session={session}
                 requestPath={scopedSessionPathForPane}
+                onOpenTranscript={() => {
+                  setActiveTab("chat");
+                  setPendingRouteTurnNumber(null);
+                  setPendingTurnViewRouteAnchor(null);
+                  setSelectedTurnNumberAnchor(null);
+                  replaceSessionTranscriptRoute(session.id);
+                }}
                 onBugLabelSave={saveSessionBugLabel}
                 onBugLabelsSave={saveSessionBugLabels}
                 readOnly={readOnly}
@@ -18088,7 +18057,7 @@ function ChatPane({
                     path={staticPagePath}
                     onClose={() => {
                       setActiveTab("files");
-                      replaceSessionTranscriptRoute(session.id);
+                      replaceSessionRoute(session.id, "turns");
                     }}
                   />
                 </Suspense>
@@ -19054,13 +19023,11 @@ function AuthenticatedApp() {
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
-  const [sessionTranscriptOpenRequests, setSessionTranscriptOpenRequests] =
-    useState<Record<string, number>>({});
   const [sessionTurnsOpenRequests, setSessionTurnsOpenRequests] = useState<
     Record<string, number>
   >({});
-  const [sessionOpenTargets, setSessionOpenTargets] = useState<
-    Record<string, SessionOpenTarget>
+  const [avatarEditorOpenRequests, setAvatarEditorOpenRequests] = useState<
+    Record<string, number>
   >({});
   const [sessionActivities, setSessionActivities] = useState<
     Record<string, SessionActivitySummary>
@@ -19405,6 +19372,26 @@ function AuthenticatedApp() {
     },
     [],
   );
+  useEffect(() => {
+    setAvatarPreviewEditAvailable(hasAdminAccess);
+    return () => setAvatarPreviewEditAvailable(false);
+  }, [hasAdminAccess]);
+  useEffect(() => {
+    return addAvatarPreviewEditRequestListener((detail) => {
+      if (!hasAdminAccess || !avatarPreviewIsEditable(detail)) return;
+      const activeSessionId = activeRef.current;
+      if (activeSessionId) {
+        setAvatarEditorOpenRequests((prev) => ({
+          ...prev,
+          [activeSessionId]: (prev[activeSessionId] ?? 0) + 1,
+        }));
+        replaceAppRoute("settings", "admin", "avatars");
+        return;
+      }
+      setHomeSettingsRoute("admin", "avatars");
+      closeAvatarPreviewAfterRoutePaint();
+    });
+  }, [hasAdminAccess, setHomeSettingsRoute]);
   const applyCurrentHomeRoute = useCallback(() => {
     if (active !== null) return;
     const appRoute = readAppRouteFromPath();
@@ -20513,16 +20500,6 @@ function AuthenticatedApp() {
       });
       return changed ? next : prev;
     });
-    setSessionTranscriptOpenRequests((prev) => {
-      const existing = new Set(sessions.map((s) => s.id));
-      let changed = false;
-      const next: Record<string, number> = {};
-      for (const [id, signal] of Object.entries(prev)) {
-        if (existing.has(id) && !closingIds.has(id)) next[id] = signal;
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
     setSessionActivities((prev) => {
       const existing = new Set(sessions.map((s) => s.id));
       let changed = false;
@@ -20727,57 +20704,11 @@ function AuthenticatedApp() {
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
-  function requestSessionTranscriptOpen(id: string) {
-    setSessionTranscriptOpenRequests((prev) => ({
-      ...prev,
-      [id]: (prev[id] ?? 0) + 1,
-    }));
-  }
-
   function requestSessionTurnsOpen(id: string) {
     setSessionTurnsOpenRequests((prev) => ({
       ...prev,
       [id]: (prev[id] ?? 0) + 1,
     }));
-  }
-
-  function sessionOpenTarget(id: string): SessionOpenTarget {
-    // Precedence: optimistic overlay (this tab's just-clicked choice) > durable
-    // pin on the row (`sessions.open_target`, survives reload) > auto-default for
-    // substantial sessions > main transcript. The overlay is only the in-flight
-    // echo of a click so the menu radio updates instantly; the durable row is the
-    // source of truth across reload and fresh tabs. The auto-default reads the
-    // durable per-session user_message_count; the threshold gate lives in
-    // autoTurnsDefault.ts. This only changes where a *click* lands; it never
-    // moves an already-open pane.
-    const overlay = sessionOpenTargets[id];
-    if (overlay) return overlay;
-    const session = sessions.find((s) => s.id === id);
-    const pinned = session?.open_target;
-    if (pinned === "chat" || pinned === "turns") return pinned;
-    if (session && shouldAutoDefaultToTurns(session.user_message_count)) {
-      return "turns";
-    }
-    return "chat";
-  }
-
-  function setSessionOpenTarget(id: string, target: SessionOpenTarget) {
-    // Optimistic overlay for instant menu feedback, then persist durably so the
-    // choice survives reload — the row's open_target becomes the source of truth
-    // once the row-update SSE round-trips. Fire-and-forget: a failed write just
-    // means the pin reverts on reload, which the durable row makes self-healing.
-    setSessionOpenTargets((prev) => ({ ...prev, [id]: target }));
-    void authedFetch(`/api/sessions/${id}/open-target`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ open_target: target }),
-    }).catch(() => undefined);
-    if (active !== id) return;
-    if (target === "turns") {
-      requestSessionTurnsOpen(id);
-    } else {
-      requestSessionTranscriptOpen(id);
-    }
   }
 
   function goHome() {
@@ -20788,10 +20719,9 @@ function AuthenticatedApp() {
   }
 
   function openSession(id: string, e: ReactMouseEvent) {
-    const target = sessionOpenTarget(id);
     if (e.ctrlKey || e.metaKey) {
       window.open(
-        target === "turns" ? sessionRouteUrl(id, "turns") : sessionUrl(id),
+        sessionUrl(id),
         "_blank",
         "noopener,noreferrer",
       );
@@ -20800,13 +20730,8 @@ function AuthenticatedApp() {
     // A tap on a session row is a navigation; close the compact nav drawer so
     // the chosen session's pane is what the user lands on.
     setNavDrawerOpen(false);
-    if (target === "turns") {
-      requestSessionTurnsOpen(id);
-      replaceSessionRoute(id, "turns");
-    } else {
-      requestSessionTranscriptOpen(id);
-      replaceSessionTranscriptRoute(id);
-    }
+    requestSessionTurnsOpen(id);
+    replaceSessionRoute(id, "turns");
     activate(id);
   }
 
@@ -21790,10 +21715,6 @@ function AuthenticatedApp() {
                         session={s}
                         isClosing={isClosing}
                         readOnly={readOnlySessionView}
-                        openTarget={sessionOpenTarget(s.id)}
-                        onOpenTargetChange={(target) =>
-                          setSessionOpenTarget(s.id, target)
-                        }
                         onClose={() => deleteSession(s.id)}
                       />
                     </div>
@@ -21973,13 +21894,6 @@ function AuthenticatedApp() {
                 <RunHeaderOverflowMenu
                   triggerActive={homeActiveTab !== "chat"}
                   triggerAttention={adminObservabilityAttention}
-                  turns={{
-                    active: false,
-                    disabled: true,
-                    title:
-                      "Turns are available once the agent has turn activity",
-                    onOpen: () => undefined,
-                  }}
                   background={{
                     active: false,
                     count: 0,
@@ -22642,8 +22556,10 @@ function AuthenticatedApp() {
                       readOnly={readOnlySessionView}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
-                      sidebarTranscriptOpenRequest={sessionTranscriptOpenRequests[s.id] ?? 0}
                       sidebarTurnsOpenRequest={sessionTurnsOpenRequests[s.id] ?? 0}
+                      avatarEditorOpenRequest={
+                        avatarEditorOpenRequests[s.id] ?? 0
+                      }
                     />
                   </div>
                 ) : (

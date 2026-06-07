@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import json
 import sys
@@ -349,6 +350,91 @@ class ConfigFromEnvTests(unittest.TestCase):
             self.assertEqual(injector._cached_refresh, "refresh")
             # The RFC3339 expiry is parsed into the freshness marker.
             self.assertIsNotNone(injector._cached_freshness_ms())
+
+
+def _antigravity_injector(credentials_file: str) -> AuthInjector:
+    return AuthInjector(
+        ProxyConfig(
+            provider="antigravity",
+            credentials_file=credentials_file,
+            token_url="https://oauth2.googleapis.com/token",
+            client_id="x.apps.googleusercontent.com",
+            kv_secret_name="antigravity-credentials",
+            client_secret="GOCSPX-test",
+            token_request_form=True,
+        )
+    )
+
+
+class RefreshKeeperTests(unittest.TestCase):
+    """The proactive keeper that fixes the antigravity cold-start: the token is
+    warmed before traffic and the refresh + KV write run in a long-lived task,
+    not a cancellable request stream.
+    """
+
+    def test_should_refresh_false_without_refresh_token(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            inj = _antigravity_injector(str(Path(tmp) / "t"))
+            inj._cached_refresh = None
+            self.assertFalse(inj._should_refresh())
+
+    def test_should_refresh_true_when_invalidated(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            inj = _antigravity_injector(str(Path(tmp) / "t"))
+            inj._cached_refresh = "r"
+            inj._access_invalidated = True
+            self.assertTrue(inj._should_refresh())
+
+    def test_should_refresh_true_when_access_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            inj = _antigravity_injector(str(Path(tmp) / "t"))
+            inj._cached_refresh = "r"
+            inj._cached_access = None
+            self.assertTrue(inj._should_refresh())
+
+    def test_should_refresh_false_when_token_is_fresh(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            inj = _antigravity_injector(str(Path(tmp) / "t"))
+            inj._cached_refresh = "r"
+            inj._cached_access = "a"
+            inj._access_invalidated = False
+            inj._cached_blob = {"token": {"access_token": "a", "expiry": "2099-01-01T00:00:00Z"}}
+            self.assertFalse(inj._should_refresh())
+
+    def test_should_refresh_true_when_near_expiry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            inj = _antigravity_injector(str(Path(tmp) / "t"))
+            inj._cached_refresh = "r"
+            inj._cached_access = "a"
+            inj._access_invalidated = False
+            # Expired in the past -> within skew -> needs refresh.
+            inj._cached_blob = {"token": {"access_token": "a", "expiry": "2000-01-01T00:00:00Z"}}
+            self.assertTrue(inj._should_refresh())
+
+    def test_refresh_skips_redundant_rotation_when_fresh(self) -> None:
+        # The keeper and the reactive 401 path can both call _refresh; when the
+        # token is already fresh and not invalidated, _refresh must NOT burn the
+        # provider round trip (no httpx client constructed).
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "antigravity-oauth-token"
+            path.write_text(
+                json.dumps(
+                    {
+                        "token": {
+                            "access_token": "a",
+                            "refresh_token": "r",
+                            "expiry": "2099-01-01T00:00:00Z",
+                        },
+                        "auth_method": "consumer",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            inj = _antigravity_injector(str(path))
+            inj._access_invalidated = False
+            with patch("tank_api_proxy.server.httpx.AsyncClient") as mock_client:
+                asyncio.run(inj._refresh())
+                mock_client.assert_not_called()
 
 
 class HealthSnapshotTests(unittest.TestCase):

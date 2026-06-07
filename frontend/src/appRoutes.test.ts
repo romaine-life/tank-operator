@@ -12,6 +12,15 @@ import {
 test("session routes parse only session-scoped pages", () => {
   expect(readSessionRouteFromPathname("/sessions/s-1")).toEqual({
         sessionId: "s-1",
+        tab: "turns",
+        turnNumber: null,
+        turnSegmentPresent: false,
+        staticPath: null,
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
+  expect(readSessionRouteFromPathname("/sessions/s-1/transcript")).toEqual({
+        sessionId: "s-1",
         tab: "chat",
         turnNumber: null,
         turnSegmentPresent: false,
@@ -97,9 +106,10 @@ test("static page route urls embed the workspace path per segment", () => {
 test("session route urls broadcast only session-owned pages", () => {
   const current = "https://tank.example.test/sessions/old?session=s-1#stale";
   expect(buildSessionRouteUrl(current, "s 1")).toBe("https://tank.example.test/sessions/s%201");
+  expect(buildSessionRouteUrl(current, "s 1", "chat")).toBe("https://tank.example.test/sessions/s%201/transcript");
   expect(buildSessionRouteUrl(current, "s 1", "turns", 2)).toBe("https://tank.example.test/sessions/s%201/turns/2");
-  // turns tab with no selected number stays on the bare /turns page.
-  expect(buildSessionRouteUrl(current, "s 1", "turns")).toBe("https://tank.example.test/sessions/s%201/turns");
+  // turns tab with no selected number stays on the root session page.
+  expect(buildSessionRouteUrl(current, "s 1", "turns")).toBe("https://tank.example.test/sessions/s%201");
   expect(buildSessionRouteUrl(current, "s 1", "session-data")).toBe("https://tank.example.test/sessions/s%201/session-data");
 });
 
