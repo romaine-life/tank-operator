@@ -6520,6 +6520,7 @@ button:disabled {
 }
 
 .run-main[aria-label="Transcript"],
+.run-main[aria-label="Turn view"],
 .run-main[aria-label="New session setup"],
 .demo-workspace[aria-label="New session setup"] {
   transition:
@@ -6528,13 +6529,21 @@ button:disabled {
 }
 
 .run-main[aria-label="Transcript"],
+.run-main[aria-label="Turn view"],
 .run-main[aria-label="New session setup"],
 .demo-workspace[aria-label="New session setup"],
 .styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active {
   --run-transcript-active-rail-left: 0.2rem;
 }
 
+/* The Turns view is a primary reading surface too ("Turns view is the primary
+   session view", docs/features/transcript-navigation), so it shares the
+   transcript's focus rail + wash when the shared <main> takes focus — via
+   click-into-empty-space or slash→tab. The Turns surface carries
+   aria-label "Turn view" (see WorkspaceShell bodyAriaLabel in App.tsx), not
+   "Transcript", so it needs its own entry here. */
 .run-main[aria-label="Transcript"]:is(:focus, :focus-within),
+.run-main[aria-label="Turn view"]:is(:focus, :focus-within),
 .run-main[aria-label="New session setup"]:is(:focus, :focus-within),
 .demo-workspace[aria-label="New session setup"]:is(:focus, :focus-within),
 .styleguide-transcript-focus-shell .run-main.styleguide-transcript-surface-active {
