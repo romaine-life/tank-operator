@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { breadcrumbTrail, type BreadcrumbLocation } from "./breadcrumb";
+import {
+  breadcrumbCompactLabel,
+  breadcrumbTrail,
+  breadcrumbUpHref,
+  type BreadcrumbLocation,
+} from "./breadcrumb";
 
 const HREF = "https://tank.example.test/sessions/s-1";
 const loc = (over: Partial<BreadcrumbLocation>): BreadcrumbLocation => ({
@@ -97,4 +102,40 @@ test("session-data root and app-level tabs have no trailing trail", () => {
   );
   assert.deepEqual(breadcrumbTrail("s-1", loc({ tab: "settings" }), HREF), []);
   assert.deepEqual(breadcrumbTrail("s-1", loc({ tab: "files" }), HREF), []);
+});
+
+test("compact mobile label is the joined trail; null at base/root", () => {
+  assert.equal(breadcrumbCompactLabel(loc({ tab: "chat" })), null);
+  assert.equal(breadcrumbCompactLabel(loc({ tab: "session-data" })), null);
+  assert.equal(
+    breadcrumbCompactLabel(loc({ tab: "turns", turnNumber: 3, pageNumber: 2 })),
+    "turns / 3 / pages / 2",
+  );
+  assert.equal(
+    breadcrumbCompactLabel(loc({ tab: "static", staticPath: "a/b.html" })),
+    "files / a/b.html",
+  );
+});
+
+test("mobile up-href climbs one navigable ancestor", () => {
+  assert.equal(
+    breadcrumbUpHref(
+      "s-1",
+      loc({ tab: "turns", turnNumber: 3, pageNumber: 2 }),
+      HREF,
+    ),
+    "https://tank.example.test/sessions/s-1/turns/3",
+  );
+  assert.equal(
+    breadcrumbUpHref("s-1", loc({ tab: "turns", turnNumber: 3 }), HREF),
+    "https://tank.example.test/sessions/s-1/turns",
+  );
+  assert.equal(
+    breadcrumbUpHref("s-1", loc({ tab: "chat" }), HREF),
+    "https://tank.example.test/sessions/s-1/session-data",
+  );
+  assert.equal(
+    breadcrumbUpHref("s-1", loc({ tab: "session-data" }), HREF),
+    null,
+  );
 });

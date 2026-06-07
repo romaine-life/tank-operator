@@ -106,3 +106,38 @@ export function breadcrumbTrail(
 
   return [];
 }
+
+// A compact one-line label of the current location for the mobile top bar,
+// which can't fit the full trail. null at the base (chat) and the session-data
+// root, where the bar shows the session name instead.
+export function breadcrumbCompactLabel(
+  location: BreadcrumbLocation,
+): string | null {
+  if (location.tab === "chat" || location.tab === "session-data") return null;
+  const labels = breadcrumbTrail("", location, "https://x/").map((c) => c.label);
+  return labels.length > 0 ? labels.join(" / ") : null;
+}
+
+// The parent location to climb to from where you are now (the mobile back/up
+// affordance), or null at the root. Walks the navigable ancestors — the
+// session-data root, then the trail's linkable crumbs — and returns the nearest
+// one above the current leaf with a distinct target.
+export function breadcrumbUpHref(
+  sessionId: string,
+  location: BreadcrumbLocation,
+  currentHref: string,
+): string | null {
+  const rootHref = buildSessionRouteUrl(currentHref, sessionId, "session-data");
+  const navigable = [
+    rootHref,
+    ...breadcrumbTrail(sessionId, location, currentHref)
+      .filter((c) => c.href != null)
+      .map((c) => c.href as string),
+  ];
+  if (navigable.length <= 1) return null;
+  const leaf = navigable[navigable.length - 1];
+  for (let i = navigable.length - 2; i >= 0; i--) {
+    if (navigable[i] !== leaf) return navigable[i];
+  }
+  return null;
+}

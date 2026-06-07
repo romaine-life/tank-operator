@@ -71,7 +71,11 @@ import { useViewport } from "./useViewport";
 import { MobileTopBar } from "./MobileTopBar";
 import { DesktopOnly } from "./DesktopOnly";
 import { KEYBOARD_SHORTCUTS } from "./keyboardShortcuts";
-import { breadcrumbTrail } from "./breadcrumb";
+import {
+  breadcrumbCompactLabel,
+  breadcrumbTrail,
+  breadcrumbUpHref,
+} from "./breadcrumb";
 import { Sheet, SheetContent, SheetTitle } from "@/components/ui/sheet";
 import {
   buildAppRouteUrl,
@@ -21591,6 +21595,19 @@ function AuthenticatedApp() {
     activeWorkspaceSession == null
       ? null
       : (sessionLocations[activeWorkspaceSession.id] ?? null);
+  // Compact-shell orientation: the location label + parent target for the
+  // MobileTopBar back+title hybrid (the full trail is desktop-only).
+  const mobileLocationLabel = activeWorkspaceLocation
+    ? (breadcrumbCompactLabel(activeWorkspaceLocation) ?? undefined)
+    : undefined;
+  const mobileUpHref =
+    activeWorkspaceLocation && activeWorkspaceSession
+      ? breadcrumbUpHref(
+          activeWorkspaceSession.id,
+          activeWorkspaceLocation,
+          window.location.href,
+        )
+      : null;
   const useHomeTitleChrome =
     active == null || homeEditingTitle || pendingCreateTitleSessionId != null;
   const showWorkspaceTitleChrome =
@@ -21986,6 +22003,12 @@ function AuthenticatedApp() {
                 : undefined
             }
             onOpenNav={() => setNavDrawerOpen(true)}
+            locationLabel={mobileLocationLabel}
+            onBack={
+              mobileLocationLabel && mobileUpHref
+                ? () => navigateToSessionRoute(mobileUpHref)
+                : undefined
+            }
           />
           <Sheet open={navDrawerOpen} onOpenChange={setNavDrawerOpen}>
             <SheetContent

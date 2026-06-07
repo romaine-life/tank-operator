@@ -3852,6 +3852,24 @@ button:disabled {
   margin-top: 0.35rem;
 }
 
+/* Compact-shell back/up affordance, paired with the current-location title. */
+.mobile-topbar-back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2rem;
+  height: 2.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.mobile-topbar-back:hover,
+.mobile-topbar-back:active {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+
 .run-header-name-input {
   background: transparent;
   border: 1px solid var(--gray-700);
