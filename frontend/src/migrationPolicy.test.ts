@@ -456,9 +456,12 @@ test("turn internals move out of the transcript into a turn view", () => {
   expect(appSource).toMatch(/const turnsAvailable\s*=\s*turnViewItems\.length > 0/);
   expect(appSource.includes("function readSessionRouteFromPath")).toBe(true);
   expect(appRoutesSource.includes("url.pathname = `/sessions/${encodedId}${")).toBe(true);
-  expect(appRoutesSource.includes(
-          'export type SessionRouteTab = "turns" | "chat" | "static" | "session-data";',
-        )).toBe(true);
+  // SessionRouteTab covers every routed session surface — turns is the default,
+  // and every primary surface is URL-addressable, including the file-browser and
+  // background panes; the definition is multi-line, turns-first.
+  expect(appRoutesSource).toMatch(
+    /export type SessionRouteTab =[\s\S]*?"turns"[\s\S]*?"chat"[\s\S]*?"static"[\s\S]*?"session-data"[\s\S]*?"files"[\s\S]*?"background"/,
+  );
   expect(appRoutesSource.includes('export type AppRouteTab = "settings" | "help";')).toBe(true);
   expect(appRoutesSource.includes("readAppRouteFromPathname")).toBe(true);
   expect(appRoutesSource.includes("buildAppRouteUrl")).toBe(true);
@@ -470,9 +473,12 @@ test("turn internals move out of the transcript into a turn view", () => {
         )).toBe(true);
   expect(appSource.includes('replaceAppRoute("help")')).toBe(true);
   expect(appSource.includes('setActiveTab("turns")')).toBe(true);
-  expect(appSource.includes(
-          'replaceSessionRoute(session.id, "turns", routedSelectedTurnNumber)',
-        )).toBe(true);
+  // The turns route write threads both the durable turn number AND the page
+  // ordinal so /turns/{n}/pages/{p} is deep-linkable; the call is multi-line.
+  expect(appSource).toMatch(
+    /replaceSessionRoute\(\s*session\.id,\s*"turns",\s*routedSelectedTurnNumber,\s*routedSelectedPageNumber,?\s*\)/,
+  );
+  // The /transcript route reads back to the main-transcript (chat) view.
   expect(appSource).toMatch(/if \(route\.tab === "chat"\) \{[\s\S]{0,160}setActiveTab\("chat"\)/);
   expect(appSource.includes(
           'window.addEventListener("popstate", applyCurrentSessionRoute)',
@@ -540,10 +546,12 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   expect(appSource.includes("run-turn-thinking-last-activity")).toBe(true);
   expect(appSource.includes("lastActivityAt")).toBe(true);
   expect(appSource).toMatch(/<RunTurnThinkingBubble[\s\S]{0,260}userKey=\{userKey\}[\s\S]{0,80}turnId=\{g\.turnId\}/);
-  expect(appSource).toMatch(/const selectedThinkingBubble =[\s\S]{0,180}<RunTurnThinkingBubble[\s\S]{0,180}userKey=\{userKey\}[\s\S]{0,80}turnId=\{selected\.turnId\}/);
-  expect(appSource).toMatch(/const selectedThinkingBubble =[\s\S]{0,260}<RunTurnThinkingBubble[\s\S]{0,220}lastActivityAt=\{selected\.lastActivityAt\}[\s\S]{0,80}avatar=\{avatar\}/);
+  expect(appSource.includes("insertTurnDetailThinkingGroup")).toBe(true);
+  expect(appSource.includes("turnActivityPageContainsLiveTail")).toBe(true);
+  expect(appSource).toMatch(/if \(group\.kind === "thinking"\)[\s\S]{0,220}<RunTurnThinkingBubble[\s\S]{0,180}turnId=\{group\.turnId\}/);
+  expect(appSource).toMatch(/if \(group\.kind === "thinking"\)[\s\S]{0,260}lastActivityAt=\{group\.lastActivityAt\}[\s\S]{0,80}avatar=\{avatar\}/);
   expect(appSource.includes("run-turn-view-thinking")).toBe(false);
-  expect(appSource.includes("selectedThinkingBubble}")).toBe(true);
+  expect(appSource.includes("selectedThinkingBubble")).toBe(false);
   // No backend timestamp should leak into the timer's anchor — the
   // resolver takes only (userKey, turnId) and never reads a startedAt
   // prop. If a future refactor tries to add one back, this assertion

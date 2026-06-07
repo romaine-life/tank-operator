@@ -1,13 +1,14 @@
 """Prometheus instrumentation for the api-proxy ext_proc service.
 
-The api-proxy is deployed twice — once for Anthropic (provider="anthropic")
-and once for ChatGPT/Codex (provider="chatgpt-codex"). The two deployments
-share this code and the ``provider`` label distinguishes their metrics at
-scrape time so Grafana can show them on one dashboard.
+The api-proxy is deployed once per managed provider (Claude, Codex, and
+Antigravity). The deployments share this code and the ``provider`` label
+distinguishes their metrics at scrape time so Grafana can show them on one
+dashboard.
 
 Cardinality discipline matches the orchestrator's: bounded labels only.
-``provider`` has two values; ``result`` is a small enum; ``status_class``
-is the 2xx/3xx/4xx/5xx bucket. No per-call labels (request_id, user, etc.).
+``provider`` has a bounded value set; ``result`` is a small enum;
+``status_class`` is the 2xx/3xx/4xx/5xx bucket. No per-call labels
+(request_id, user, etc.).
 
 The HTTP listener is separate from the gRPC ext_proc listener so the
 kube-prometheus-stack ServiceMonitor can scrape /metrics independently
@@ -16,13 +17,15 @@ without colliding with the ext_proc port.
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import json
 import logging
 import os
 from typing import Any, Awaitable, Callable
 
 from aiohttp import web
-from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+import httpx
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 log = logging.getLogger(__name__)
 
@@ -86,6 +89,27 @@ single_flight_waits_total = Counter(
     ["provider"],
 )
 
+envoy_sds_ssl_context_updates = Gauge(
+    "tank_api_proxy_envoy_sds_ssl_context_updates",
+    "Current Envoy downstream SSL context updates performed through SDS, "
+    "re-exported from the localhost Envoy admin stats endpoint.",
+    ["provider"],
+)
+
+envoy_sds_key_rotation_failed = Gauge(
+    "tank_api_proxy_envoy_sds_key_rotation_failed",
+    "Current Envoy SDS filesystem key rotation failures by SDS secret, "
+    "re-exported from the localhost Envoy admin stats endpoint.",
+    ["provider", "secret"],
+)
+
+envoy_sds_stats_scrape_total = Counter(
+    "tank_api_proxy_envoy_sds_stats_scrape_total",
+    "Attempts by the ext_proc metrics sidecar to scrape Envoy SDS stats from "
+    "the pod-local admin listener.",
+    ["provider", "result"],
+)
+
 
 def record_ext_proc_request(outcome: str) -> None:
     """outcome is one of: injected, passthrough, missing_token."""
@@ -117,6 +141,65 @@ def record_kv_persist(result: str) -> None:
 
 def record_single_flight_wait() -> None:
     single_flight_waits_total.labels(provider=PROVIDER).inc()
+
+
+def record_envoy_sds_stats(stats_text: str) -> None:
+    """Re-export bounded Envoy SDS counters from /stats text output.
+
+    Envoy admin stays bound to 127.0.0.1 for safety; this sidecar polls it
+    inside the pod and publishes the small SDS subset through the already
+    scraped /metrics surface.
+    """
+    ssl_context_updates = 0.0
+    key_rotation_failures: dict[str, float] = {}
+
+    for raw_line in stats_text.splitlines():
+        if ":" not in raw_line:
+            continue
+        name, raw_value = raw_line.split(":", 1)
+        name = name.strip()
+        try:
+            value = float(raw_value.strip())
+        except ValueError:
+            continue
+        if name.endswith(".ssl_context_update_by_sds"):
+            ssl_context_updates += value
+            continue
+        if name.startswith("sds.") and name.endswith(".key_rotation_failed"):
+            parts = name.split(".")
+            if len(parts) >= 3:
+                key_rotation_failures[parts[1]] = value
+
+    envoy_sds_ssl_context_updates.labels(provider=PROVIDER).set(ssl_context_updates)
+    for secret, value in key_rotation_failures.items():
+        envoy_sds_key_rotation_failed.labels(provider=PROVIDER, secret=secret).set(value)
+
+
+async def _poll_envoy_sds_stats(admin_url: str, interval_seconds: float) -> None:
+    stats_url = admin_url.rstrip("/") + "/stats"
+    params = {"filter": "sds|ssl_context_update_by_sds"}
+    async with httpx.AsyncClient(timeout=2.0) as client:
+        while True:
+            try:
+                response = await client.get(stats_url, params=params)
+                response.raise_for_status()
+                record_envoy_sds_stats(response.text)
+                envoy_sds_stats_scrape_total.labels(provider=PROVIDER, result="success").inc()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("envoy SDS stats scrape failed")
+                envoy_sds_stats_scrape_total.labels(provider=PROVIDER, result="failure").inc()
+            await asyncio.sleep(interval_seconds)
+
+
+async def _cleanup_envoy_sds_task(app: web.Application) -> None:
+    task = app.get("envoy_sds_task")
+    if not isinstance(task, asyncio.Task):
+        return
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
 
 
 def _status_class(status: int) -> str:
@@ -193,6 +276,8 @@ async def start_metrics_server(
     port: int,
     health_snapshot: HealthSnapshotProvider | None = None,
     usage_snapshot: UsageSnapshotProvider | None = None,
+    envoy_admin_url: str | None = None,
+    envoy_sds_poll_interval_seconds: float = 30.0,
 ) -> web.AppRunner:
     app = web.Application()
     app.router.add_get("/metrics", _handle_metrics)
@@ -206,6 +291,11 @@ async def start_metrics_server(
         app.router.add_get(f"/health/{PROVIDER}", _make_health_handler(health_snapshot))
     if usage_snapshot is not None:
         app.router.add_get(f"/usage/{PROVIDER}", _make_usage_handler(usage_snapshot))
+    if envoy_admin_url:
+        app["envoy_sds_task"] = asyncio.create_task(
+            _poll_envoy_sds_stats(envoy_admin_url, envoy_sds_poll_interval_seconds)
+        )
+        app.on_cleanup.append(_cleanup_envoy_sds_task)
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, host="0.0.0.0", port=port)
@@ -217,6 +307,7 @@ async def start_metrics_server(
 __all__ = [
     "PROVIDER",
     "record_ext_proc_request",
+    "record_envoy_sds_stats",
     "record_kv_persist",
     "record_refresh",
     "record_single_flight_wait",

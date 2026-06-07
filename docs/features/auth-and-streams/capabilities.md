@@ -38,3 +38,39 @@ Evidence:
   production and slot chart shape.
 - `docs/api-proxy-auth.md` documents the final ownership model and incident
   diagnosis path.
+
+## API Proxy Leaf Cert Rotation Through Envoy SDS
+
+Status: active
+
+Intent:
+Provider API proxy TLS leaf rotations must be absorbed by the running Envoy
+listener without relying on a manual pod recycle.
+
+Affected contracts:
+- Auth And Streams
+- Observability
+
+Contract impact:
+- `claude-api-proxy`, `codex-api-proxy`, and `antigravity-api-proxy` Envoy
+  downstream listeners consume their cert-manager leaf Secrets through
+  file-based SDS.
+- The mounted TLS Secret directory is watched at `/etc/envoy/tls`, matching
+  Kubernetes Secret symlink rotation semantics.
+- Static downstream `tls_certificates` file references are retired for these
+  proxies; a Ready `Certificate` can no longer leave Envoy serving a stale
+  in-memory leaf until a human restarts the pod.
+- The ext_proc metrics sidecar polls Envoy's localhost admin stats and
+  re-exports bounded SDS counters through the existing `/metrics` endpoint, so
+  failed filesystem key rotations are visible without exposing Envoy admin on
+  the pod IP.
+
+Evidence:
+- `scripts/check-api-proxy-envoy-sds.sh` renders the production Helm chart and
+  rejects missing SDS config, missing `watched_directory`, or reintroduced
+  static downstream `tls_certificates` blocks.
+- `api-proxy/tests/test_metrics.py` pins the Envoy SDS stat parser and
+  re-exported metric labels.
+- `helm template tank-operator ./k8s` covers chart rendering.
+- `docs/api-proxy-auth.md` documents the SDS rotation path and the reason
+  Deployment rollouts are not the source of truth for cert uptake.

@@ -14,7 +14,11 @@
 // timeout (orphaned). agy runs with --dangerously-skip-permissions in -p mode,
 // so it never pauses for AskUserQuestion; input_reply is acked as a no-op.
 
-import { AntigravityTranscriptAdapter, type AgyStep, type AntigravityTurn } from "./adapters/antigravity.js";
+import {
+  AntigravityTranscriptAdapter,
+  type AgyStep,
+  type AntigravityTurn,
+} from "./adapters/antigravity.js";
 import { AgyDriver } from "./driver.js";
 import type { Config } from "./config.js";
 import { SessionEventSink } from "./sessionEvents.js";
@@ -51,9 +55,18 @@ function envInt(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
-const INTERRUPT_BUFFER_MS = envInt(process.env.SESSION_INTERRUPT_BUFFER_MS, 30_000);
-const TERMINAL_PUBLISH_ATTEMPTS = envInt(process.env.SESSION_TERMINAL_PUBLISH_ATTEMPTS, 3);
-const TERMINAL_PUBLISH_BACKOFF_MS = envInt(process.env.SESSION_TERMINAL_PUBLISH_BACKOFF_MS, 500);
+const INTERRUPT_BUFFER_MS = envInt(
+  process.env.SESSION_INTERRUPT_BUFFER_MS,
+  30_000,
+);
+const TERMINAL_PUBLISH_ATTEMPTS = envInt(
+  process.env.SESSION_TERMINAL_PUBLISH_ATTEMPTS,
+  3,
+);
+const TERMINAL_PUBLISH_BACKOFF_MS = envInt(
+  process.env.SESSION_TERMINAL_PUBLISH_BACKOFF_MS,
+  500,
+);
 
 type SubmitRecord = SessionCommandRecord & {
   prompt?: string;
@@ -99,6 +112,11 @@ interface ActiveTurn extends AntigravityTurn {
   abort: AbortController;
 }
 
+export function modelForAgyTurn(recordModel: unknown): string | null {
+  const model = String(recordModel ?? "").trim();
+  return model || null;
+}
+
 export class Runner {
   private readonly events: SessionEventSink;
   private readonly commands: SessionCommandBus;
@@ -138,7 +156,10 @@ export class Runner {
     await this.events.close().catch(() => {});
   }
 
-  private async handleSubmit(rec: SubmitRecord, signal: AbortSignal): Promise<void> {
+  private async handleSubmit(
+    rec: SubmitRecord,
+    signal: AbortSignal,
+  ): Promise<void> {
     const clientNonce = commandClientNonce(rec) || rec.client_nonce || "";
     const turnID = turnIDForClientNonce(clientNonce);
     const turn: AntigravityTurn = { turnID, clientNonce };
@@ -182,21 +203,26 @@ export class Runner {
       const prompt = String(rec.prompt ?? "").trim();
       if (!prompt) {
         providerErrorTotal.labels("missing_prompt").inc();
-        await this.publishTerminal(this.adapter.failTurn(turn, "missing_prompt"));
+        await this.publishTerminal(
+          this.adapter.failTurn(turn, "missing_prompt"),
+        );
         return;
       }
-      const model = String(rec.model ?? "").trim() || this.cfg.defaultModel;
-      // When no explicit model is configured, agy selects the Antigravity
-      // default internally. Record a bounded applied-runtime fact without
-      // changing provider invocation by passing a new --model flag.
-      const runtimeModel = model || "antigravity-default";
-      void this.reportRuntime(runtimeModel);
+      const model = modelForAgyTurn(rec.model);
+      if (!model) {
+        providerErrorTotal.labels("missing_model").inc();
+        await this.publishTerminal(
+          this.adapter.failTurn(turn, "missing_model"),
+        );
+        return;
+      }
+      void this.reportRuntime(model);
 
       let observedStepCount = 0;
       const result = await this.driver.runTurn(
         {
           prompt,
-          model: model || undefined,
+          model,
           resume: this.hasConversation,
           workspace: this.cfg.workspace,
         },
@@ -211,13 +237,19 @@ export class Runner {
       );
       this.hasConversation = true;
 
-      const terminal = classifyAgyTerminal(result, observedStepCount, abort.signal.aborted);
+      const terminal = classifyAgyTerminal(
+        result,
+        observedStepCount,
+        abort.signal.aborted,
+      );
       if (terminal.kind === "interrupted") {
         await this.publishTerminal(this.adapter.interruptTurn(turn));
         interruptOutcomeTotal.labels("terminated_via_sdk").inc();
       } else if (terminal.kind === "failed") {
         providerErrorTotal.labels(terminal.metricReason).inc();
-        await this.publishTerminal(this.adapter.failTurn(turn, terminal.reason));
+        await this.publishTerminal(
+          this.adapter.failTurn(turn, terminal.reason),
+        );
       } else {
         await this.publishTerminal(this.adapter.completeTurn(turn));
       }
@@ -251,14 +283,18 @@ export class Runner {
     commandsConsumedTotal.labels("interrupt_turn").inc();
     interruptOutcomeTotal.labels("buffered").inc();
     const nonce = commandClientNonce(rec) || rec.client_nonce || "";
-    const targetTurnID = rec.target_turn_id || (nonce ? turnIDForClientNonce(nonce) : "");
+    const targetTurnID =
+      rec.target_turn_id || (nonce ? turnIDForClientNonce(nonce) : "");
     if (!nonce && !targetTurnID) {
       interruptOutcomeTotal.labels("invalid_target").inc();
       rec.ack();
       return;
     }
 
-    if (this.active && (this.active.turnID === targetTurnID || this.active.clientNonce === nonce)) {
+    if (
+      this.active &&
+      (this.active.turnID === targetTurnID || this.active.clientNonce === nonce)
+    ) {
       // Active turn: kill agy. handleSubmit publishes turn.interrupted and
       // counts terminated_via_sdk when the driver returns killed.
       this.active.abort.abort();
@@ -278,7 +314,10 @@ export class Runner {
     const turnID = turnIDForClientNonce(nonce);
     try {
       await this.publishTerminal(
-        this.adapter.failTurn({ turnID, clientNonce: nonce }, "interrupt_orphaned"),
+        this.adapter.failTurn(
+          { turnID, clientNonce: nonce },
+          "interrupt_orphaned",
+        ),
       );
       interruptOutcomeTotal.labels("orphaned").inc();
     } catch {
@@ -290,7 +329,10 @@ export class Runner {
     const stamped = stampTankEvent(event);
     const guard = truncateEventIfOversized(stamped);
     if (guard.truncated) {
-      const severity = guard.reason === "payload-dropped" ? "payload-dropped" : "strings-truncated";
+      const severity =
+        guard.reason === "payload-dropped"
+          ? "payload-dropped"
+          : "strings-truncated";
       eventTruncatedTotal.labels(stamped.type, severity).inc();
     }
     try {
@@ -315,7 +357,11 @@ export class Runner {
     }
     interruptOutcomeTotal.labels("publish_failed").inc();
     console.error(
-      JSON.stringify({ msg: "terminal publish failed", type: event.type, error: String(lastErr) }),
+      JSON.stringify({
+        msg: "terminal publish failed",
+        type: event.type,
+        error: String(lastErr),
+      }),
     );
   }
 
@@ -323,7 +369,10 @@ export class Runner {
     if (model === this.lastReportedModel) return;
     this.lastReportedModel = model;
     try {
-      await reportRuntimeConfig(this.cfg, { model, contextWindowSource: "antigravity" });
+      await reportRuntimeConfig(this.cfg, {
+        model,
+        contextWindowSource: "antigravity",
+      });
     } catch {
       // best-effort; the composer footer just lacks the applied model
     }
@@ -333,7 +382,8 @@ export class Runner {
 function stepKind(step: AgyStep): string {
   const source = (step.source ?? "").toUpperCase();
   if (source === "USER_EXPLICIT" || source === "SYSTEM") return "dropped";
-  if (Array.isArray(step.tool_calls) && step.tool_calls.length > 0) return "tool_call";
+  if (Array.isArray(step.tool_calls) && step.tool_calls.length > 0)
+    return "tool_call";
   if ((step.type ?? "").toUpperCase() === "PLANNER_RESPONSE") return "message";
   return "tool_result";
 }
@@ -372,7 +422,10 @@ export function classifyAgyTerminal(
   return { kind: "completed" };
 }
 
-function agySemanticFailureMetric(result: { stdout: string; stderr: string }): string {
+function agySemanticFailureMetric(result: {
+  stdout: string;
+  stderr: string;
+}): string {
   const text = `${result.stderr}\n${result.stdout}`.toLowerCase();
   if (text.includes("timed out waiting for cascade to start running")) {
     return "provider_start_timeout";
@@ -407,13 +460,15 @@ function agyFailReason(exitCode: number | null, stderr: string): string {
 }
 
 function agyOutputTail(result: { stdout: string; stderr: string }): string {
-  return `${result.stderr}\n${result.stdout}`
-    .trim()
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .slice(-1)[0]
-    ?.slice(0, 200) ?? "";
+  return (
+    `${result.stderr}\n${result.stdout}`
+      .trim()
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .slice(-1)[0]
+      ?.slice(0, 200) ?? ""
+  );
 }
 
 function sleep(ms: number): Promise<void> {

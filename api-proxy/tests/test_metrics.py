@@ -62,5 +62,33 @@ class RecordUpstreamStatusTest(unittest.TestCase):
         self.assertEqual(_count(proxy_metrics.upstream_429_total), before_429)
 
 
+class RecordEnvoySdsStatsTest(unittest.TestCase):
+    def test_reexports_bounded_sds_counters_from_envoy_admin_text(self) -> None:
+        proxy_metrics.record_envoy_sds_stats(
+            "\n".join(
+                [
+                    "listener.0.0.0.0_8443.server_ssl_socket_factory.ssl_context_update_by_sds: 2",
+                    "listener.127.0.0.1_8443.server_ssl_socket_factory.ssl_context_update_by_sds: 1",
+                    "sds.api_proxy_leaf.key_rotation_failed: 3",
+                    "sds.other_secret.key_rotation_failed: not-a-number",
+                ]
+            )
+        )
+
+        self.assertEqual(
+            proxy_metrics.envoy_sds_ssl_context_updates.labels(
+                provider=proxy_metrics.PROVIDER
+            )._value.get(),
+            3,
+        )
+        self.assertEqual(
+            proxy_metrics.envoy_sds_key_rotation_failed.labels(
+                provider=proxy_metrics.PROVIDER,
+                secret="api_proxy_leaf",
+            )._value.get(),
+            3,
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

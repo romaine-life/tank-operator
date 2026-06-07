@@ -17,9 +17,6 @@ export interface Config {
   workspace: string;
   // agy data dir (it writes conversations + the structured transcript here).
   agyHome: string;
-  // Default model when a turn does not specify one. agy selects a Gemini-Ultra
-  // tier; the runner passes --model through when the turn carries one.
-  defaultModel: string;
 }
 
 export function loadConfig(): Config {
@@ -36,7 +33,8 @@ export function loadConfig(): Config {
   const home = (process.env.HOME ?? "/home/node").trim() || "/home/node";
   return {
     sessionId,
-    sessionStorageKey: process.env.TANK_SESSION_STORAGE_KEY?.trim() || sessionId,
+    sessionStorageKey:
+      process.env.TANK_SESSION_STORAGE_KEY?.trim() || sessionId,
     ownerEmail: (process.env.POD_OWNER_EMAIL ?? "").trim().toLowerCase(),
     natsURL,
     natsToken: process.env.NATS_TOKEN?.trim() || "",
@@ -45,8 +43,6 @@ export function loadConfig(): Config {
     operatorTokenPath: process.env.TANK_OPERATOR_TOKEN_PATH?.trim() || "",
     workspace: process.env.WORKSPACE?.trim() || "/workspace",
     agyHome:
-      process.env.ANTIGRAVITY_HOME?.trim() ||
-      `${home}/.gemini/antigravity-cli`,
-    defaultModel: process.env.ANTIGRAVITY_DEFAULT_MODEL?.trim() || "",
+      process.env.ANTIGRAVITY_HOME?.trim() || `${home}/.gemini/antigravity-cli`,
   };
 }

@@ -1,7 +1,9 @@
 import { test, expect } from "vitest";
 
 import {
+  insertThinkingGroupByDurableOrder,
   resolveThinkingInsertIndex,
+  turnActivityPageContainsLiveTail,
   type ThinkingPlacementGroup,
 } from "./transcriptThinkingPlacement.ts";
 
@@ -93,4 +95,43 @@ test("a tail older than every group key falls back to the clamped index", () => 
   const groups = [group("010", true), group("011", false)];
   const index = resolveThinkingInsertIndex(groups, "005", 1);
   expect(index).toBe(1);
+});
+
+test("turn activity thinking is allowed only on the unsealed live-tail page", () => {
+  expect(turnActivityPageContainsLiveTail(undefined)).toBe(true);
+  expect(
+    turnActivityPageContainsLiveTail({
+      page: 1,
+      pageCount: 1,
+      pages: [{ number: 1, sealed: false }],
+    }),
+  ).toBe(true);
+  expect(
+    turnActivityPageContainsLiveTail({
+      page: 1,
+      pageCount: 2,
+      pages: [
+        { number: 1, sealed: true },
+        { number: 2, sealed: false },
+      ],
+    }),
+  ).toBe(false);
+  expect(
+    turnActivityPageContainsLiveTail({
+      page: 2,
+      pageCount: 2,
+      pages: [
+        { number: 1, sealed: true },
+        { number: 2, sealed: true },
+      ],
+    }),
+  ).toBe(false);
+});
+
+test("shared insertion helper places the thinking group after durable tail rows", () => {
+  const groups = [group("001", true), group("006", true)];
+  const thinking = group("", true);
+  expect(
+    insertThinkingGroupByDurableOrder(groups, thinking, "004", groups.length),
+  ).toEqual([groups[0], groups[1], thinking]);
 });
