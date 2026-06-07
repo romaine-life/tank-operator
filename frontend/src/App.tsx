@@ -17465,7 +17465,13 @@ function ChatPane({
         style={chatFontScaleStyle}
         bodyClassName={`run-main-${runStatus}`}
         bodyRef={transcriptScrollCallbackRef}
-        bodyAriaLabel={activeTab === "chat" ? "Transcript" : "Workspace panel"}
+        bodyAriaLabel={
+          activeTab === "chat"
+            ? "Transcript"
+            : activeTab === "turns"
+              ? "Turn view"
+              : "Workspace panel"
+        }
         composerVisible={
           (activeTab === "chat" || activeTab === "turns") && !publicView
         }
