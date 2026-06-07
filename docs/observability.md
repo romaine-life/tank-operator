@@ -164,7 +164,8 @@ All metric names are prefixed `tank_`. The full namespace:
   turn_activity_load_succeeded, turn_activity_load_failed,
   turn_activity_load_timed_out, turn_activity_load_stale,
   turn_activity_refresh_failed, turn_activity_refresh_gave_up,
-  turn_activity_refresh_recovered,
+  turn_activity_refresh_recovered, turn_activity_collapse_applied,
+  turn_activity_collapse_projection_mismatch,
   resync_required, stream_error, closed_unmount, closed_error, reconnect_scheduled),
   `session_mode`, and on the `_received_total` variant `event_type`.
   The `_stream_silent_seconds{session_mode}` histogram is the
@@ -333,9 +334,22 @@ All metric names are prefixed `tank_`. The full namespace:
   The real Antigravity auth failure signature is proxy-observed
   `tank_api_proxy_upstream_401_total{provider="antigravity"}` or a
   `provider_auth_failed` terminal.
+  `tank_antigravity_runner_schedule_intent_total{kind}` records the schedule
+  decision boundary before durable wakeup registration. `native_schedule_call`
+  means agy emitted the native `schedule` tool, `malformed_schedule_call` means
+  the tool call existed but was not registerable, `parked_after_schedule` means
+  the runner interrupted the native timer after durable registration, and
+  `wait_text_without_schedule` is the diagnostic signature for a planner text
+  step that says it will wait while emitting no native schedule tool call.
 - `tank_session_runtime_config_update_total` - pod-side runner reports of
   the model/effort actually applied to the provider runtime. Labels:
   `provider` (`claude`, `codex`, `unknown`) and bounded `result`.
+- `tank_session_container_terminations_total{container,reason,exit_code}` —
+  session pod container terminations observed by the leader-elected K8s watch.
+  Labels are bounded: `reason="oom_killed"` is the runtime-death signal that a
+  runner cannot reliably emit from inside the killed process. Correlate it with
+  durable turn lifecycle and scheduled-wakeup rows to distinguish a missing
+  schedule intent from a fired wake whose runner died mid-turn.
 - `tank_session_run_config_rejected_total` - backend rejections of invalid
   session mode/model/effort requests before runner dispatch. Labels are bounded:
   `surface` (`create`, `turn`, `runtime_config`, `other`), `provider`

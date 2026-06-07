@@ -3,6 +3,7 @@ import {
   ChevronDownIcon,
   ChevronUpIcon,
   CircleCheckIcon,
+  LoaderCircleIcon,
   SquareTerminalIcon,
 } from "lucide-react";
 import { AgentAvatarIcon, getSessionAvatarByID } from "../sessionAvatars";
@@ -62,6 +63,26 @@ function MockAgentResponse() {
   );
 }
 
+function MockThinkingResponse() {
+  return (
+    <div className="run-transcript-message run-turn-thinking" data-kind="turn-thinking">
+      <button type="button" className="run-transcript-message-content run-turn-thinking-content">
+        <span className="run-turn-thinking-lines">
+          <span className="run-turn-thinking-label run-turn-thinking-shimmer">Thinking...</span>
+          <span className="run-turn-thinking-meta-row">
+            <span className="run-turn-thinking-meta-label">Runtime</span>
+            <span className="run-turn-thinking-duration">0:34</span>
+          </span>
+          <span className="run-turn-thinking-meta-row">
+            <span className="run-turn-thinking-meta-label">Last activity</span>
+            <span className="run-turn-thinking-last-activity">6s ago</span>
+          </span>
+        </span>
+      </button>
+    </div>
+  );
+}
+
 function ActivityDivider({
   expanded,
   onToggle,
@@ -100,15 +121,33 @@ export function StyleguideCollapsedTurnActivity() {
         <BackLink />
         <h1 style={pageTitleStyle}>collapsed turn activity divider</h1>
         <p style={{ ...captionStyle, maxWidth: "72ch" }}>
-          Interactive mockup for the minimal affordance: the existing separator
-          between the user turn and agent-side activity gets only a circular
-          chevron button. Hover the button for the tooltip; click to expand.
+          Interactive mockup for the compact Turns projection: active turns keep
+          the generic thinking affordance visible, completed turns keep the final
+          answer visible, and the chevron reveals the execution trace.
         </p>
 
         <section style={{ ...sectionStyle, display: "grid", gap: 16 }}>
           <div className="collapsed-turn-mock-frame">
             <div className="collapsed-turn-mock-head">
-              <span>Turns</span>
+              <span>Turns / active</span>
+              <span className="collapsed-turn-mock-state">
+                <LoaderCircleIcon size={13} aria-hidden="true" />
+                running
+              </span>
+            </div>
+            <div className="collapsed-turn-mock-body">
+              <MockUserTurn />
+              <ActivityDivider
+                expanded={expanded}
+                onToggle={() => setExpanded((value) => !value)}
+              />
+              {expanded ? <MockAgentActivity /> : <MockThinkingResponse />}
+            </div>
+          </div>
+
+          <div className="collapsed-turn-mock-frame">
+            <div className="collapsed-turn-mock-head">
+              <span>Turns / completed</span>
               <span className="collapsed-turn-mock-state">
                 <CircleCheckIcon size={13} aria-hidden="true" />
                 complete

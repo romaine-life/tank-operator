@@ -70,6 +70,132 @@ func TestProjectTurnPagesKeepsTerminalShellWhenOverLimit(t *testing.T) {
 	if total != len(events) {
 		t.Fatalf("sum of page event counts = %d, want %d", total, len(events))
 	}
+	if len(proj.FinalAnswerEntries) != 1 {
+		t.Fatalf("final answer entries = %d, want 1: %#v", len(proj.FinalAnswerEntries), proj.FinalAnswerEntries)
+	}
+	if got := transcriptMapString(proj.FinalAnswerEntries[0], "id"); got != lastMsgTimeline {
+		t.Fatalf("final answer id = %q, want %q", got, lastMsgTimeline)
+	}
+	if got := transcriptMapString(proj.FinalAnswerEntries[0], "turnDetailRole"); got != "final_answer" {
+		t.Fatalf("final answer role = %q, want final_answer: %#v", got, proj.FinalAnswerEntries[0])
+	}
+	if collapsible, _ := proj.Collapse["collapsible"].(bool); !collapsible {
+		t.Fatalf("collapse.collapsible = %#v, want true: %#v", proj.Collapse["collapsible"], proj.Collapse)
+	}
+}
+
+func TestProjectTurnPagesFinalAnswerIsServerOwnedAcrossPages(t *testing.T) {
+	var events []map[string]any
+	seq := 0
+	next := func() string {
+		seq++
+		return fmt.Sprintf("%08d", seq)
+	}
+	events = append(events,
+		projectionTestEvent("u", next(), "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "go",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("submitted", next(), "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+	)
+	for i := 0; i < turnPageEventLimit+2; i++ {
+		events = append(events, projectionTestEvent(
+			fmt.Sprintf("tool-%d", i), next(), "item.completed", "tool", "claude", "turn-1",
+			fmt.Sprintf("turn-1:item:tool-%d", i), map[string]any{"kind": "tool_result", "name": "Read", "output": "x"},
+		))
+	}
+	const finalID = "turn-1:item:final"
+	events = append(events,
+		projectionTestEvent("final", next(), "item.completed", "assistant", "claude", "turn-1", finalID, map[string]any{
+			"kind": "message", "text": "done",
+		}),
+		projectionTestEvent("terminal", next(), "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload(finalID)),
+	)
+
+	proj := projectTurnPages("turn-1", events)
+	if len(proj.Pages) < 2 {
+		t.Fatalf("page count = %d, want paged activity", len(proj.Pages))
+	}
+	if len(proj.FinalAnswerEntries) != 1 {
+		t.Fatalf("final answer entries = %#v, want one", proj.FinalAnswerEntries)
+	}
+	firstPageHasFinal := false
+	for _, entry := range proj.Pages[0].Entries {
+		if transcriptMapString(entry, "id") == finalID {
+			firstPageHasFinal = true
+		}
+	}
+	if firstPageHasFinal {
+		t.Fatalf("test fixture expected final answer outside page 1 body")
+	}
+	if got := transcriptMapString(proj.FinalAnswerEntries[0], "text"); got != "done" {
+		t.Fatalf("final answer text = %q, want done", got)
+	}
+	if got := proj.Collapse["final_answer_count"]; got != 1 {
+		t.Fatalf("collapse final_answer_count = %#v, want 1", got)
+	}
+}
+
+func TestProjectTurnPagesCompletedTurnFallsBackToLastAssistantAsFinalAnswer(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "go", "display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("tool", "00000002", "item.completed", "tool", "claude", "turn-1", "turn-1:item:tool", map[string]any{
+			"kind": "tool_result", "name": "Bash", "output": "collapse-smoke",
+		}),
+		projectionTestEvent("final", "00000003", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:final", map[string]any{
+			"kind": "message", "text": "Command completed.",
+		}),
+		projectionTestEvent("terminal", "00000004", "turn.completed", "runner", "claude", "turn-1", "", map[string]any{
+			"status": "completed",
+		}),
+	}
+
+	proj := projectTurnPages("turn-1", events)
+	if len(proj.FinalAnswerEntries) != 1 {
+		t.Fatalf("final answer entries = %#v, want fallback final assistant message", proj.FinalAnswerEntries)
+	}
+	if got := transcriptMapString(proj.FinalAnswerEntries[0], "id"); got != "turn-1:item:final" {
+		t.Fatalf("final answer id = %q, want fallback assistant id", got)
+	}
+	if got := transcriptMapString(proj.FinalAnswerEntries[0], "turnDetailRole"); got != "final_answer" {
+		t.Fatalf("final answer role = %q, want final_answer", got)
+	}
+	if got := proj.Collapse["final_answer_count"]; got != 1 {
+		t.Fatalf("collapse final_answer_count = %#v, want 1", got)
+	}
+	if collapsible, _ := proj.Collapse["collapsible"].(bool); !collapsible {
+		t.Fatalf("collapse.collapsible = %#v, want true: %#v", proj.Collapse["collapsible"], proj.Collapse)
+	}
+	if defaultCollapsed, _ := proj.Collapse["default_collapsed"].(bool); !defaultCollapsed {
+		t.Fatalf("collapse.default_collapsed = %#v, want true: %#v", proj.Collapse["default_collapsed"], proj.Collapse)
+	}
+}
+
+func TestProjectTurnPagesNoFinalAnswerIsNotCollapsible(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "00000001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "go", "display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("tool", "00000002", "item.completed", "tool", "claude", "turn-1", "turn-1:item:tool", map[string]any{
+			"kind": "tool_result", "name": "Read", "output": "x",
+		}),
+		projectionTestEvent("terminal", "00000003", "turn.failed", "runner", "claude", "turn-1", "", map[string]any{
+			"reason": "provider_error",
+		}),
+	}
+
+	proj := projectTurnPages("turn-1", events)
+	if len(proj.FinalAnswerEntries) != 0 {
+		t.Fatalf("final answer entries = %#v, want none", proj.FinalAnswerEntries)
+	}
+	if collapsible, _ := proj.Collapse["collapsible"].(bool); collapsible {
+		t.Fatalf("collapse.collapsible = true, want false: %#v", proj.Collapse)
+	}
+	if got := transcriptMapString(proj.Collapse, "reason"); got != "no_final_answer" {
+		t.Fatalf("collapse reason = %q, want no_final_answer", got)
+	}
 }
 
 // Pages seal at the event threshold: each page holds at most turnPageEventLimit

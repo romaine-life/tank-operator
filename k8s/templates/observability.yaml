@@ -884,6 +884,24 @@ spec:
               Inspect logs for `sessioncontroller: row column update
               failed`.
 
+        - alert: TankSessionContainerOOMKilled
+          expr: |
+            sum by (container) (
+              increase(tank_session_container_terminations_total{reason="oom_killed"}[15m])
+            ) > 0
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "session container {{`{{ $labels.container }}`}} was OOMKilled"
+            runbook: |
+              The leader-elected session K8s watch observed an OOMKilled
+              container in a session pod. This is a runner/runtime failure
+              signal, even when Kubernetes restarts the container and the pod
+              later becomes Ready again. Correlate with the affected session's
+              activity row, durable turn lifecycle, and scheduled wakeup rows;
+              inspect orchestrator logs for `session container terminated`.
+
         # Cross-scope event leak guard. The per-(owner, scope) NATS
         # subject prevents cross-scope delivery in steady state; if a
         # publisher ever lands a wrong-scope payload (regression of the

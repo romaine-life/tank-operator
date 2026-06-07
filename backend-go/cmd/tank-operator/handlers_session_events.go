@@ -130,6 +130,12 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		return
 	}
 	eventStore := s.sessionEventStoreForScope(sessionScope)
+	resolvedTurnID, resolveStatus, resolveErr := s.resolveSessionTurnActivityID(r.Context(), sessionScope, sessionID, turnID)
+	if resolveErr != nil {
+		writeError(w, resolveStatus, resolveErr.Error())
+		return
+	}
+	turnID = resolvedTurnID
 	events, err := readUserFacingTurnEvents(r.Context(), eventStore, sessionID, turnID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -166,13 +172,18 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		"compacted_entry_ids": []string{},
 		"summary":             pages.Shell,
 		"turn_context":        pages.TurnContext,
-		"page":                selected,
-		"page_count":          len(pages.Pages),
-		"pages":               directory,
-		"total_event_count":   pages.TotalEventCount,
-		"has_more":            false,
-		"cursor_semantic":     "order_key",
-		"projection":          "server_turn_activity_v3",
+		"final_answer": map[string]any{
+			"entries": pages.FinalAnswerEntries,
+			"count":   len(pages.FinalAnswerEntries),
+		},
+		"collapse":          pages.Collapse,
+		"page":              selected,
+		"page_count":        len(pages.Pages),
+		"pages":             directory,
+		"total_event_count": pages.TotalEventCount,
+		"has_more":          false,
+		"cursor_semantic":   "order_key",
+		"projection":        "server_turn_activity_v3",
 	}
 	if selected >= 1 && selected <= len(pages.Pages) {
 		current := pages.Pages[selected-1]
@@ -194,6 +205,34 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		body["has_more"] = selected < len(pages.Pages)
 	}
 	writeJSON(w, http.StatusOK, body)
+}
+
+func (s *appServer) resolveSessionTurnActivityID(ctx context.Context, sessionScope, sessionID, selector string) (string, int, error) {
+	selector = strings.TrimSpace(selector)
+	number, err := strconv.ParseInt(selector, 10, 64)
+	if err != nil {
+		return selector, 0, nil
+	}
+	if number < 1 {
+		return "", http.StatusBadRequest, fmt.Errorf("turn number must be a positive integer")
+	}
+	resolution, found, err := s.sessionTurnStoreForScope(sessionScope).ResolveTurnNumber(ctx, sessionID, number)
+	if err != nil {
+		return "", http.StatusInternalServerError, err
+	}
+	if !found {
+		return "", http.StatusNotFound, fmt.Errorf("turn not found")
+	}
+	if isBackgroundWakeTurnID(resolution.TurnID) {
+		folded, ok, err := s.resolveBackgroundWakeOriginTurn(ctx, sessionScope, sessionID, resolution.TurnID)
+		if err != nil {
+			return "", http.StatusInternalServerError, err
+		}
+		if ok {
+			resolution = folded
+		}
+	}
+	return resolution.TurnID, 0, nil
 }
 
 // handleResolveSessionTurnNumber maps a public per-session turn number to its

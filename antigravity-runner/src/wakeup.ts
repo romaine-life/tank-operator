@@ -10,6 +10,12 @@ export interface AntigravityScheduleWakeup {
   providerItemID: string;
 }
 
+export interface AntigravityScheduleInspection {
+  wakeups: AntigravityScheduleWakeup[];
+  scheduleCallCount: number;
+  malformedScheduleCallCount: number;
+}
+
 const MIN_SCHEDULE_ACK_GRACE_MS = 100;
 const MAX_SCHEDULE_ACK_GRACE_MS = 1_000;
 
@@ -23,30 +29,54 @@ function scheduleDelayMs(value: unknown): number | null {
   return Math.floor(n * 1000);
 }
 
-export function extractScheduleWakeups(
+export function inspectScheduleWakeups(
   step: AgyStep,
-): AntigravityScheduleWakeup[] {
-  if (String(step.source ?? "").trim().toUpperCase() !== "MODEL") return [];
+): AntigravityScheduleInspection {
+  const empty = {
+    wakeups: [],
+    scheduleCallCount: 0,
+    malformedScheduleCallCount: 0,
+  };
+  if (String(step.source ?? "").trim().toUpperCase() !== "MODEL") return empty;
   if (String(step.type ?? "").trim().toUpperCase() !== "PLANNER_RESPONSE") {
-    return [];
+    return empty;
   }
-  if (!Array.isArray(step.tool_calls)) return [];
+  if (!Array.isArray(step.tool_calls)) return empty;
 
   const out: AntigravityScheduleWakeup[] = [];
+  let scheduleCallCount = 0;
+  let malformedScheduleCallCount = 0;
   step.tool_calls.forEach((call, index) => {
     if (!scheduleToolName(call)) return;
+    scheduleCallCount += 1;
     const args = call.args ?? {};
     const delayMs = scheduleDelayMs(args.DurationSeconds);
-    if (delayMs === null) return;
+    if (delayMs === null) {
+      malformedScheduleCallCount += 1;
+      return;
+    }
     const prompt = String(args.Prompt ?? "").trim();
-    if (!prompt) return;
+    if (!prompt) {
+      malformedScheduleCallCount += 1;
+      return;
+    }
     out.push({
       delayMs,
       prompt,
       providerItemID: toolCallProviderItemID(step.step_index, index),
     });
   });
-  return out;
+  return {
+    wakeups: out,
+    scheduleCallCount,
+    malformedScheduleCallCount,
+  };
+}
+
+export function extractScheduleWakeups(
+  step: AgyStep,
+): AntigravityScheduleWakeup[] {
+  return inspectScheduleWakeups(step).wakeups;
 }
 
 export function scheduleAckGraceMs(delayMs: number): number {
@@ -64,6 +94,18 @@ export function isAssistantPlannerTextStep(step: AgyStep): boolean {
   }
   if (Array.isArray(step.tool_calls) && step.tool_calls.length > 0) return false;
   return String(step.content ?? "").trim().length > 0;
+}
+
+export function isWaitIntentWithoutScheduleStep(step: AgyStep): boolean {
+  if (!isAssistantPlannerTextStep(step)) return false;
+  const text = normalizeText(String(step.content ?? ""));
+  if (!text) return false;
+  return (
+    /\bi(?:'ll| will| am)\s+(?:now\s+)?wait\b/.test(text) ||
+    /\bi\s+am\s+waiting\b/.test(text) ||
+    /\bi(?:'ll| will)\s+check\s+back\b/.test(text) ||
+    /\bwait(?:ing)?\s+for\b/.test(text)
+  );
 }
 
 function normalizeText(value: string): string {

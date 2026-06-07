@@ -389,8 +389,8 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
             className="run-turn-activity-divider-toggle"
             data-direction="down"
             aria-expanded={true}
-            aria-label="Collapse assistance turn"
-            title="Collapse assistance turn"
+            aria-label="Collapse agent activity"
+            title="Collapse agent activity"
           >
             <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
             <ChevronDownIcon

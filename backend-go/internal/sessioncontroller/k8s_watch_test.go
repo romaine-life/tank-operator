@@ -54,6 +54,30 @@ func newTestTracker() (*transitionTracker, *eventRecorder) {
 	return tracker, rec
 }
 
+type terminationMetricRecorder struct {
+	noopK8sWatchMetrics
+	mu    sync.Mutex
+	calls []containerTermination
+}
+
+func (r *terminationMetricRecorder) RecordContainerTermination(container, reason string, exitCode int32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.calls = append(r.calls, containerTermination{
+		container: container,
+		reason:    reason,
+		exitCode:  exitCode,
+	})
+}
+
+func (r *terminationMetricRecorder) all() []containerTermination {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]containerTermination, len(r.calls))
+	copy(out, r.calls)
+	return out
+}
+
 type eventRecorder struct {
 	mu     sync.Mutex
 	events []Event
@@ -167,6 +191,49 @@ func TestHandleUpsertEmitsFailedOnEviction(t *testing.T) {
 	}
 	if want.Payload["container"] != "agent-runner" {
 		t.Fatalf("failedEvent payload.container = %v, want agent-runner", want.Payload["container"])
+	}
+}
+
+func TestHandleUpsertRecordsContainerOOMTermination(t *testing.T) {
+	recorder := &terminationMetricRecorder{}
+	tracker, _ := newTestTracker()
+	tracker.metrics = recorder
+
+	running := newSessionPod("21", "u@example.com", corev1.PodRunning, true)
+	tracker.handleUpsert(context.Background(), nil, running)
+
+	restarted := running.DeepCopy()
+	restarted.Status.ContainerStatuses = []corev1.ContainerStatus{
+		{Name: "claude", Ready: true},
+		{
+			Name:         "antigravity-runner",
+			Ready:        true,
+			RestartCount: 1,
+			LastTerminationState: corev1.ContainerState{
+				Terminated: &corev1.ContainerStateTerminated{
+					Reason:     "OOMKilled",
+					ExitCode:   137,
+					FinishedAt: metav1.NewTime(time.Date(2026, 6, 7, 18, 59, 28, 0, time.UTC)),
+				},
+			},
+		},
+		{Name: "mcp-auth-proxy", Ready: true},
+	}
+	tracker.handleUpsert(context.Background(), running, restarted)
+	tracker.handleUpsert(context.Background(), restarted, restarted)
+
+	calls := recorder.all()
+	if len(calls) != 1 {
+		t.Fatalf("termination metric calls = %d, want 1", len(calls))
+	}
+	if calls[0].container != "antigravity-runner" {
+		t.Fatalf("container = %q, want antigravity-runner", calls[0].container)
+	}
+	if calls[0].reason != "oom_killed" {
+		t.Fatalf("reason = %q, want oom_killed", calls[0].reason)
+	}
+	if calls[0].exitCode != 137 {
+		t.Fatalf("exitCode = %d, want 137", calls[0].exitCode)
 	}
 }
 

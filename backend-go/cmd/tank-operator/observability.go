@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -1759,6 +1760,10 @@ var (
 		Name: "tank_session_row_updates_total",
 		Help: "sessions row column updates from RowWriter, labeled by event type and outcome.",
 	}, []string{"type", "outcome"})
+	sessionContainerTerminationsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_container_terminations_total",
+		Help: "Session pod container terminations observed by the K8s watch, labeled by bounded container, reason, and exit code.",
+	}, []string{"container", "reason", "exit_code"})
 	// sessionCompactionTotal counts durable context.compaction events recorded
 	// per session, labeled by provider (claude, codex, other) and trigger
 	// (auto, manual, other). It increments once per newly-observed compaction —
@@ -1804,6 +1809,55 @@ func (promK8sWatchMetrics) RecordLeaderStatus(isLeader bool) {
 		return
 	}
 	sessionPodInformerLeaderHeld.Set(0)
+}
+
+func (promK8sWatchMetrics) RecordContainerTermination(container, reason string, exitCode int32) {
+	sessionContainerTerminationsTotal.WithLabelValues(
+		boundedSessionContainer(container),
+		boundedTerminationReason(reason),
+		boundedExitCode(exitCode),
+	).Inc()
+}
+
+func boundedSessionContainer(container string) string {
+	switch strings.TrimSpace(container) {
+	case "antigravity-runner":
+		return "antigravity-runner"
+	case "agent-runner":
+		return "agent-runner"
+	case "codex":
+		return "codex"
+	case "claude":
+		return "claude"
+	case "mcp-auth-proxy":
+		return "mcp-auth-proxy"
+	default:
+		return "other"
+	}
+}
+
+func boundedTerminationReason(reason string) string {
+	switch strings.TrimSpace(reason) {
+	case "oom_killed":
+		return "oom_killed"
+	case "error":
+		return "error"
+	case "completed":
+		return "completed"
+	case "unknown":
+		return "unknown"
+	default:
+		return "other"
+	}
+}
+
+func boundedExitCode(exitCode int32) string {
+	switch exitCode {
+	case 0, 1, 2, 126, 127, 130, 137, 143:
+		return fmt.Sprint(exitCode)
+	default:
+		return "other"
+	}
 }
 
 // promRowWriterMetrics satisfies sessioncontroller.RowWriterMetrics —
