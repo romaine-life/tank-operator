@@ -53,6 +53,9 @@ import {
 } from "./metrics.js";
 import {
   extractScheduleWakeups,
+  isAssistantPlannerTextStep,
+  isNativeScheduleWakeResponse,
+  scheduleAckGraceMs,
   type AntigravityScheduleWakeup,
 } from "./wakeup.js";
 
@@ -246,26 +249,67 @@ export class Runner {
 
       let observedStepCount = 0;
       let wakeupRegistrationFailed = false;
-      const result = await this.driver.runTurn(
-        {
-          prompt,
-          model,
-          resume: this.hasConversation,
-          workspace: this.cfg.workspace,
-        },
-        async (step) => {
-          observedStepCount += 1;
-          agyStepTotal.labels(stepKind(step)).inc();
-          for (const wakeup of extractScheduleWakeups(step)) {
-            const ok = await this.registerWakeup(wakeup, turn.turnID);
-            wakeupRegistrationFailed = wakeupRegistrationFailed || !ok;
-          }
-          for (const ev of this.adapter.stepEvents(turn, step)) {
-            await this.publish(ev);
-          }
-        },
-        abort.signal,
-      );
+      let scheduledWakeupParked = false;
+      const registeredSchedulePrompts: string[] = [];
+      const scheduleParkTimers = new Set<NodeJS.Timeout>();
+      const clearScheduleParkTimers = () => {
+        for (const timer of scheduleParkTimers) clearTimeout(timer);
+        scheduleParkTimers.clear();
+      };
+      const parkNativeSchedule = () => {
+        if (scheduledWakeupParked) return;
+        scheduledWakeupParked = true;
+        clearScheduleParkTimers();
+        this.driver.interrupt();
+      };
+      const result = await (async () => {
+        try {
+          return await this.driver.runTurn(
+            {
+              prompt,
+              model,
+              resume: this.hasConversation,
+              workspace: this.cfg.workspace,
+            },
+            async (step) => {
+              observedStepCount += 1;
+              agyStepTotal.labels(stepKind(step)).inc();
+              for (const wakeup of extractScheduleWakeups(step)) {
+                const ok = await this.registerWakeup(wakeup, turn.turnID);
+                wakeupRegistrationFailed = wakeupRegistrationFailed || !ok;
+                if (ok) {
+                  registeredSchedulePrompts.push(wakeup.prompt);
+                  const timer = setTimeout(
+                    parkNativeSchedule,
+                    scheduleAckGraceMs(wakeup.delayMs),
+                  );
+                  timer.unref();
+                  scheduleParkTimers.add(timer);
+                }
+              }
+              if (
+                registeredSchedulePrompts.length > 0 &&
+                isNativeScheduleWakeResponse(step, registeredSchedulePrompts)
+              ) {
+                parkNativeSchedule();
+                return;
+              }
+              for (const ev of this.adapter.stepEvents(turn, step)) {
+                await this.publish(ev);
+              }
+              if (
+                registeredSchedulePrompts.length > 0 &&
+                isAssistantPlannerTextStep(step)
+              ) {
+                parkNativeSchedule();
+              }
+            },
+            abort.signal,
+          );
+        } finally {
+          clearScheduleParkTimers();
+        }
+      })();
       for (const kind of agyDiagnostics(result)) {
         agyDiagnosticTotal.labels(kind).inc();
       }
@@ -277,8 +321,12 @@ export class Runner {
         abort.signal.aborted,
       );
       if (terminal.kind === "interrupted") {
-        await this.publishTerminal(this.adapter.interruptTurn(turn));
-        interruptOutcomeTotal.labels("terminated_via_sdk").inc();
+        if (scheduledWakeupParked && !abort.signal.aborted) {
+          await this.publishTerminal(this.adapter.completeTurn(turn));
+        } else {
+          await this.publishTerminal(this.adapter.interruptTurn(turn));
+          interruptOutcomeTotal.labels("terminated_via_sdk").inc();
+        }
       } else if (terminal.kind === "failed") {
         providerErrorTotal.labels(terminal.metricReason).inc();
         await this.publishTerminal(
