@@ -8943,12 +8943,25 @@ textarea.run-files-viewer-editor:focus {
   pointer-events: none;
 }
 
+.run-turn-activity-divider-controls {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  border-radius: 999px;
+  background: var(--bg-app);
+  box-shadow: 0 0 0 5px var(--bg-app);
+  position: relative;
+  z-index: 1;
+}
+
 .run-turn-activity-divider-toggle {
   appearance: none;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
+  gap: 0.05rem;
+  width: 34px;
   height: 22px;
   border: 1px solid rgba(255, 255, 255, 0.09);
   border-radius: 999px;
@@ -8958,9 +8971,6 @@ textarea.run-files-viewer-editor:focus {
   flex-shrink: 0;
   line-height: 1;
   padding: 0;
-  position: relative;
-  z-index: 1;
-  box-shadow: 0 0 0 5px var(--bg-app);
   transition:
     border-color var(--motion-fast) ease,
     background var(--motion-fast) ease,
@@ -8971,11 +8981,11 @@ textarea.run-files-viewer-editor:focus {
   display: block;
 }
 
-.run-turn-activity-divider-toggle[data-direction="down"] svg {
+.run-turn-activity-divider-toggle[data-direction="down"] .run-turn-activity-divider-toggle-chevron {
   transform: translateY(-1px);
 }
 
-.run-turn-activity-divider-toggle[data-direction="up"] svg {
+.run-turn-activity-divider-toggle[data-direction="up"] .run-turn-activity-divider-toggle-chevron {
   transform: translateY(1px);
 }
 
