@@ -58,7 +58,7 @@ func TestInstallTankSkillsScriptRunsUnderSh(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, "skills__common__rollout__agents__openai.yaml"), []byte("agent"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "skills__antigravity__gemini-only__SKILL.md"), []byte("gemini"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, "skills__antigravity__antigravity-only__SKILL.md"), []byte("agy"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -76,8 +76,8 @@ func TestInstallTankSkillsScriptRunsUnderSh(t *testing.T) {
 	assertFileContains(t, filepath.Join(home, ".codex", "skills", "north-star", "SKILL.md"), "north")
 	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "north-star", "SKILL.md"), "north")
 	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "rollout", "agents", "openai.yaml"), "agent")
-	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "gemini-only", "SKILL.md"), "gemini")
-	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "gemini-only", "SKILL.md")); !os.IsNotExist(err) {
+	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "antigravity-only", "SKILL.md"), "agy")
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "antigravity-only", "SKILL.md")); !os.IsNotExist(err) {
 		t.Fatalf("antigravity-scoped skill should not install into claude, stat err: %v", err)
 	}
 }

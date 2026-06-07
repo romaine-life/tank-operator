@@ -1,9 +1,9 @@
 skill_targets_for_scope() {
   case "$1" in
-    common) printf '%s\n' "claude codex gemini" ;;
+    common) printf '%s\n' "claude codex antigravity" ;;
     claude) printf '%s\n' "claude" ;;
     codex) printf '%s\n' "codex" ;;
-    antigravity) printf '%s\n' "gemini" ;;
+    antigravity) printf '%s\n' "antigravity" ;;
     *) return 1 ;;
   esac
 }
@@ -30,7 +30,7 @@ install_tank_skills() {
       case "$target" in
         claude) root="$HOME/.claude/skills" ;;
         codex) root="$HOME/.codex/skills" ;;
-        gemini) root="$HOME/.gemini/skills" ;;
+        antigravity) root="$HOME/.gemini/skills" ;;
         *) continue ;;
       esac
       dest_path="$root/$skill/$rel"
