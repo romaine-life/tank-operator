@@ -1127,6 +1127,24 @@ spec:
             summary: "api-proxy ({{`{{ $labels.provider }}`}}) upstream 429s sustained — provider usage cap likely exhausted"
             runbook: "The shared provider account is being rate-limited (429s from api.anthropic.com / chatgpt.com). Confirm with the provider usage endpoint and the runner-side tank_runner_provider_api_retry_total{error=\"rate_limit\"} rate. Affected turns resolve to turn.failed{reason:provider_rate_limit} (runner) and any wedged ones surface on TankSessionStuckInProgress + GET /api/debug/stuck-turns. Mitigate by spreading load or raising the account cap; there is currently no per-session attribution of cap consumption (dependency-gated — see docs/api-proxy-auth.md)."
 
+        # KV write-back is best-effort by design (a rotation updates memory
+        # first and serves immediately), but a SUSTAINED failure is the
+        # "restart-bomb precursor" (docs/api-proxy-auth.md → Failure modes):
+        # the proxy is rotating fine in memory, but the next restart re-reads a
+        # stale Secret and replays an already-used refresh token → refresh_token_reused
+        # → chain death → wizard recovery. The keeper (run_refresh_keeper) writes
+        # back on boot + before expiry, so steady-state is zero; a non-zero rate
+        # over 15m means the write path itself is broken (UAMI/KV RBAC, KV
+        # outage). Provider-generic — covers claude, codex, and antigravity.
+        - alert: TankApiProxyKvPersistFailing
+          expr: increase(tank_api_proxy_kv_persist_total{result="failure"}[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot persist rotated tokens to KV"
+            runbook: "Rotations are succeeding in memory but not writing back to KV — the restart-bomb precursor. Grep ext-proc logs for `KV write failed`; check the api-proxy UAMI's Key Vault Secrets Officer role and KV reachability (az keyvault secret show --vault-name romaine-kv --name <provider>-credentials --query attributes.updated). Until fixed, do NOT restart the proxy pod: the next boot will re-read a stale Secret. For claude/codex this surfaces as refresh_token_reused after restart (run the credential wizard to recover); antigravity self-heals on boot because the keeper re-refreshes, but the stale KV blob should still be repaired."
+
     - name: tank-operator.provider-credential-health
       rules:
         # Layer 1 has been "failed" for >5m. The transcript banner is
