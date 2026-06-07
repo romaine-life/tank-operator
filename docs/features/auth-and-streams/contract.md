@@ -27,6 +27,10 @@ product state.
   refresh chains. Validation slots may use those credentials only by routing
   provider traffic through the production proxy services; they must not mount,
   mirror, refresh, or write provider credential secrets.
+- cert-manager owns provider api-proxy leaf certificate material. The Envoy
+  listeners must consume those mounted leaf Secrets through file-based SDS so
+  Secret rotation updates the running TLS context without relying on a manual
+  pod restart.
 
 ## Migration Rules
 
@@ -67,6 +71,10 @@ product state.
 - Validation-slot save-credentials paths must fail closed because slots do not
   receive provider credential KV key env vars. A slot config session must not
   be able to overwrite production provider OAuth blobs.
+- A provider api-proxy `Certificate` may become Ready without changing the
+  proxy Deployment pod template. That must not leave Envoy serving stale
+  certificate material; the configured rotation mechanism must converge the
+  running listener to the mounted Secret.
 
 ## Observability
 
@@ -97,3 +105,7 @@ product state.
   mounts, or `*_CREDENTIALS_KV_KEY` env vars; they do route
   `CLAUDE_API_PROXY_HOST`, `CODEX_API_PROXY_HOST`, and
   `CLAUDE_OAUTH_GATEWAY_HOST` to production service DNS.
+- Production Helm renders configure `claude-api-proxy`, `codex-api-proxy`, and
+  `antigravity-api-proxy` Envoy downstream TLS with file-based SDS and
+  `watched_directory: /etc/envoy/tls`, not static `tls_certificates` file
+  references.
