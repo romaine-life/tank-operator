@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import {
   resolveThinkingInsertIndex,
@@ -23,7 +22,7 @@ test("placeholder sorts below untagged session.status notices on a new session's
   ];
   // First activity row arrives after "ready", so the shell's live tail is 004.
   const index = resolveThinkingInsertIndex(groups, "004", 3);
-  assert.equal(index, 3);
+  expect(index).toBe(3);
 });
 
 // #732 invariant preserved: an AskUserQuestion awaiting-input payload stays
@@ -37,13 +36,13 @@ test("placeholder sorts below a later AskUserQuestion awaiting-input payload for
   // Shell's compacted tail is the tool's raw key 005; the standalone handoff
   // sorts after it via the suffix, so the placeholder must land after both.
   const index = resolveThinkingInsertIndex(groups, "005", 2);
-  assert.equal(index, 2);
+  expect(index).toBe(2);
 });
 
 test("placeholder lands after the user message on a plain mid-turn with no other rows", () => {
   const groups = [group("001", true)];
   const index = resolveThinkingInsertIndex(groups, "004", 1);
-  assert.equal(index, 1);
+  expect(index).toBe(1);
 });
 
 // The live tail respects order keys in both directions: an untagged row with a
@@ -55,7 +54,7 @@ test("placeholder does not jump below an untagged row whose order key exceeds th
   ];
   // Shell tail is 002 — between the two rows.
   const index = resolveThinkingInsertIndex(groups, "002", 2);
-  assert.equal(index, 1);
+  expect(index).toBe(1);
 });
 
 test("multiple turn-tagged rows union into the live tail", () => {
@@ -66,7 +65,7 @@ test("multiple turn-tagged rows union into the live tail", () => {
   ];
   // Shell tail (004) is older than the turn-tagged row at 006; tail unions to 006.
   const index = resolveThinkingInsertIndex(groups, "004", 1);
-  assert.equal(index, 3);
+  expect(index).toBe(3);
 });
 
 // Keyless fallback: when no durable order key exists anywhere (local-only
@@ -78,14 +77,14 @@ test("keyless rows fall back to the latest turn-tagged group", () => {
     group("", false),
   ];
   const index = resolveThinkingInsertIndex(groups, "", 5);
-  assert.equal(index, 1);
+  expect(index).toBe(1);
 });
 
 // Keyless and no turn-tagged group: use the clamped shell stream position.
 test("keyless rows with no turn-tagged group use the clamped fallback index", () => {
   const groups = [group("", false)];
-  assert.equal(resolveThinkingInsertIndex(groups, "", 3), 1); // clamped to length
-  assert.equal(resolveThinkingInsertIndex([], "", 0), 0);
+  expect(resolveThinkingInsertIndex(groups, "", 3)).toBe(1); // clamped to length
+  expect(resolveThinkingInsertIndex([], "", 0)).toBe(0);
 });
 
 // When a durable tail exists but precedes every group's key (degenerate), fall
@@ -93,5 +92,5 @@ test("keyless rows with no turn-tagged group use the clamped fallback index", ()
 test("a tail older than every group key falls back to the clamped index", () => {
   const groups = [group("010", true), group("011", false)];
   const index = resolveThinkingInsertIndex(groups, "005", 1);
-  assert.equal(index, 1);
+  expect(index).toBe(1);
 });

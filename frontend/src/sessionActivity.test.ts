@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import {
   SESSION_ACTIVITY_STATUS_LEGEND,
@@ -42,10 +41,10 @@ test("normalizes backend session activity summaries", () => {
     updated_at: "2026-05-12T00:00:00Z",
   });
 
-  assert.equal(activity?.session_id, "63");
-  assert.equal(activity?.status, "streaming");
-  assert.equal(activity?.unread_count, 3);
-  assert.equal(activity?.active_turn_id, "turn-1");
+  expect(activity?.session_id).toBe("63");
+  expect(activity?.status).toBe("streaming");
+  expect(activity?.unread_count).toBe(3);
+  expect(activity?.active_turn_id).toBe("turn-1");
 });
 
 test("session activity drives sidebar labels and dots", () => {
@@ -57,8 +56,8 @@ test("session activity drives sidebar labels and dots", () => {
     failed: false,
   });
 
-  assert.equal(sessionActivityDotStatus("Active", true, needsInput ?? undefined), "agent-needs-input");
-  assert.equal(sessionActivityStatusLabel("Active", true, needsInput ?? undefined), "Needs input");
+  expect(sessionActivityDotStatus("Active", true, needsInput ?? undefined)).toBe("agent-needs-input");
+  expect(sessionActivityStatusLabel("Active", true, needsInput ?? undefined)).toBe("Needs input");
 });
 
 test("running and unread activity stay on the status dot", () => {
@@ -71,8 +70,8 @@ test("running and unread activity stay on the status dot", () => {
     active_turn_id: "turn-1",
   });
 
-  assert.equal(sessionActivityDotStatus("Active", true, streaming ?? undefined), "agent-working");
-  assert.equal(sessionActivityStatusLabel("Active", true, streaming ?? undefined), "Running");
+  expect(sessionActivityDotStatus("Active", true, streaming ?? undefined)).toBe("agent-working");
+  expect(sessionActivityStatusLabel("Active", true, streaming ?? undefined)).toBe("Running");
 });
 
 test("claimed activity is a working starting state", () => {
@@ -85,9 +84,9 @@ test("claimed activity is a working starting state", () => {
     active_turn_id: "turn-1",
   });
 
-  assert.equal(claimed?.status, "claimed");
-  assert.equal(sessionActivityDotStatus("Active", true, claimed ?? undefined), "agent-working");
-  assert.equal(sessionActivityStatusLabel("Active", true, claimed ?? undefined), "Starting");
+  expect(claimed?.status).toBe("claimed");
+  expect(sessionActivityDotStatus("Active", true, claimed ?? undefined)).toBe("agent-working");
+  expect(sessionActivityStatusLabel("Active", true, claimed ?? undefined)).toBe("Starting");
 });
 
 test("stopping status drives Stopping label and agent-stopping dot", () => {
@@ -100,9 +99,9 @@ test("stopping status drives Stopping label and agent-stopping dot", () => {
     active_turn_id: "turn-1",
   });
 
-  assert.equal(stopping?.status, "stopping");
-  assert.equal(sessionActivityDotStatus("Active", true, stopping ?? undefined), "agent-stopping");
-  assert.equal(sessionActivityStatusLabel("Active", true, stopping ?? undefined), "Stopping");
+  expect(stopping?.status).toBe("stopping");
+  expect(sessionActivityDotStatus("Active", true, stopping ?? undefined)).toBe("agent-stopping");
+  expect(sessionActivityStatusLabel("Active", true, stopping ?? undefined)).toBe("Stopping");
 });
 
 test("session activity legend mirrors sidebar dot mappings", () => {
@@ -121,17 +120,14 @@ test("session activity legend mirrors sidebar dot mappings", () => {
     { key: "failed", activity: summary("error"), dot: "agent-error" },
   ];
 
-  assert.equal(byKey.size, cases.length);
+  expect(byKey.size).toBe(cases.length);
   for (const item of cases) {
     const legend = byKey.get(item.key);
-    assert.ok(legend, `missing legend item for ${item.key}`);
+    expect(legend, `missing legend item for ${item.key}`).toBeTruthy();
     if (item.dot) {
-      assert.equal(
-        legend.dotStatus,
-        sessionActivityDotStatus("Active", true, item.activity),
-      );
+      expect(legend.dotStatus).toBe(sessionActivityDotStatus("Active", true, item.activity));
     } else {
-      assert.equal(legend.dotStatus, null);
+      expect(legend.dotStatus).toBe(null);
     }
   }
 });
@@ -149,24 +145,15 @@ test("session activity legend mirrors sidebar dot mappings", () => {
 // the caller's responsibility (snapshot-applied flag + per-session
 // last_order_key dedup).
 test("shouldRingForActivityTransition: streaming -> ready rings", () => {
-  assert.equal(
-    shouldRingForActivityTransition(summary("streaming"), summary("ready")),
-    true,
-  );
+  expect(shouldRingForActivityTransition(summary("streaming"), summary("ready"))).toBe(true);
 });
 
 test("shouldRingForActivityTransition: submitted -> ready rings", () => {
-  assert.equal(
-    shouldRingForActivityTransition(summary("submitted"), summary("ready")),
-    true,
-  );
+  expect(shouldRingForActivityTransition(summary("submitted"), summary("ready"))).toBe(true);
 });
 
 test("shouldRingForActivityTransition: streaming -> needs_input rings", () => {
-  assert.equal(
-    shouldRingForActivityTransition(summary("streaming"), summary("needs_input")),
-    true,
-  );
+  expect(shouldRingForActivityTransition(summary("streaming"), summary("needs_input"))).toBe(true);
 });
 
 test("shouldRingForActivityTransition: no prior -> ready rings (fast-turn coalesce case)", () => {
@@ -177,150 +164,105 @@ test("shouldRingForActivityTransition: no prior -> ready rings (fast-turn coales
   // for this session yet, but this transition IS a turn completion and
   // must ring. Outer bootstrap-applied/dedup gates protect this from
   // double-ringing on SSE catchup replays.
-  assert.equal(
-    shouldRingForActivityTransition(undefined, summary("ready")),
-    true,
-  );
+  expect(shouldRingForActivityTransition(undefined, summary("ready"))).toBe(true);
 });
 
 test("shouldRingForActivityTransition: no prior -> needs_input rings", () => {
   // Same reasoning as the no-prior → ready case: approval-required terminal
   // is also a "your turn" state.
-  assert.equal(
-    shouldRingForActivityTransition(undefined, summary("needs_input")),
-    true,
-  );
+  expect(shouldRingForActivityTransition(undefined, summary("needs_input"))).toBe(true);
 });
 
 test("shouldRingForActivityTransition: error -> ready rings (recovery)", () => {
   // A new turn succeeded after a prior failure. Agent went from a
   // not-ready-for-input state to a ready-for-input state — that's the
   // signal we want to surface.
-  assert.equal(
-    shouldRingForActivityTransition(summary("error"), summary("ready")),
-    true,
-  );
+  expect(shouldRingForActivityTransition(summary("error"), summary("ready"))).toBe(true);
 });
 
 test("shouldRingForActivityTransition: streaming -> stopped does NOT ring", () => {
   // Stop is user-initiated; the user pressed the button, they know it stopped.
-  assert.equal(
-    shouldRingForActivityTransition(summary("streaming"), summary("stopped")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("streaming"), summary("stopped"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: streaming -> stopping does NOT ring", () => {
   // Stop in progress; same reasoning as stopped — user-initiated.
-  assert.equal(
-    shouldRingForActivityTransition(summary("streaming"), summary("stopping")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("streaming"), summary("stopping"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: stopping -> ready does NOT ring", () => {
   // The user pressed Stop; a stop-requested turn resolving to ready is expected.
   // Don't treat it as a "your turn" event.
-  assert.equal(
-    shouldRingForActivityTransition(summary("stopping"), summary("ready")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("stopping"), summary("ready"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: stopped -> ready does NOT ring", () => {
   // Same as stopping → ready: the user already knows they stopped the agent.
-  assert.equal(
-    shouldRingForActivityTransition(summary("stopped"), summary("ready")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("stopped"), summary("ready"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: streaming -> error does NOT ring", () => {
   // Matches today's working path: finalizeSdkRun only rang on terminal=done.
   // Errors are visible in-pane; not surfacing as audio keeps the sound
   // semantically narrow ("your turn now").
-  assert.equal(
-    shouldRingForActivityTransition(summary("streaming"), summary("error")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("streaming"), summary("error"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: ready -> ready (no-op) does NOT ring", () => {
-  assert.equal(
-    shouldRingForActivityTransition(summary("ready"), summary("ready")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("ready"), summary("ready"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: needs_input -> needs_input does NOT ring", () => {
   // Two approval requests in a row — already in "your turn", don't re-ring.
-  assert.equal(
-    shouldRingForActivityTransition(summary("needs_input"), summary("needs_input")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("needs_input"), summary("needs_input"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: ready -> needs_input does NOT ring", () => {
   // Both are user-turn states; agent didn't transition OUT of user-turn first.
-  assert.equal(
-    shouldRingForActivityTransition(summary("ready"), summary("needs_input")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("ready"), summary("needs_input"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: ready -> streaming does NOT ring", () => {
   // User submitted a new turn; agent is now working. Not "your turn."
-  assert.equal(
-    shouldRingForActivityTransition(summary("ready"), summary("streaming")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("ready"), summary("streaming"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: no prior -> streaming does NOT ring", () => {
   // First sighting but the new state is "agent working" — nothing for the
   // user to act on yet.
-  assert.equal(
-    shouldRingForActivityTransition(undefined, summary("streaming")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(undefined, summary("streaming"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: no prior -> error does NOT ring", () => {
   // First sighting but the new state is a failure — error toast / pill
   // covers visibility; sound stays scoped to user-action transitions.
-  assert.equal(
-    shouldRingForActivityTransition(undefined, summary("error")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(undefined, summary("error"))).toBe(false);
 });
 
 test("orderKeyAfter: numeric compare across digit boundary", () => {
   // The bug this guards against: lexicographic string compare says
   // "100" < "99", which made the sound-dedup gate suppress every
   // transition that crossed a power-of-ten ledger order_key boundary.
-  assert.equal(orderKeyAfter("100", "99"), true);
-  assert.equal(orderKeyAfter("99", "100"), false);
-  assert.equal(orderKeyAfter("1000", "999"), true);
-  assert.equal(orderKeyAfter("999", "1000"), false);
+  expect(orderKeyAfter("100", "99")).toBe(true);
+  expect(orderKeyAfter("99", "100")).toBe(false);
+  expect(orderKeyAfter("1000", "999")).toBe(true);
+  expect(orderKeyAfter("999", "1000")).toBe(false);
 });
 
 test("orderKeyAfter: same value is not after", () => {
-  assert.equal(orderKeyAfter("42", "42"), false);
+  expect(orderKeyAfter("42", "42")).toBe(false);
 });
 
 test("orderKeyAfter: handles BIGSERIAL values past Number.MAX_SAFE_INTEGER", () => {
   // Long-running ledger forward compatibility — BIGSERIAL is int64.
-  assert.equal(
-    orderKeyAfter("9223372036854775806", "9223372036854775805"),
-    true,
-  );
+  expect(orderKeyAfter("9223372036854775806", "9223372036854775805")).toBe(true);
 });
 
 test("orderKeyAfter: garbage input falls back to string compare", () => {
   // Defensive: backend always emits decimal strings, but we shouldn't
   // throw if some test or future schema change hands us a non-numeric.
-  assert.equal(orderKeyAfter("zzz", "aaa"), true);
-  assert.equal(orderKeyAfter("aaa", "zzz"), false);
+  expect(orderKeyAfter("zzz", "aaa")).toBe(true);
+  expect(orderKeyAfter("aaa", "zzz")).toBe(false);
 });
 
 test("non-chat sessions keep pod lifecycle status", () => {
@@ -330,8 +272,8 @@ test("non-chat sessions keep pod lifecycle status", () => {
     unread_count: 2,
   });
 
-  assert.equal(sessionActivityDotStatus("Pending", false, activity ?? undefined), "pending");
-  assert.equal(sessionActivityStatusLabel("Pending", false, activity ?? undefined), "Pending");
+  expect(sessionActivityDotStatus("Pending", false, activity ?? undefined)).toBe("pending");
+  expect(sessionActivityStatusLabel("Pending", false, activity ?? undefined)).toBe("Pending");
 });
 
 test("normalizes scheduled status (not coerced to ready)", () => {
@@ -343,9 +285,9 @@ test("normalizes scheduled status (not coerced to ready)", () => {
     failed: false,
   });
 
-  assert.equal(activity?.status, "scheduled");
-  assert.equal(sessionActivityDotStatus("Active", true, activity ?? undefined), "agent-scheduled");
-  assert.equal(sessionActivityStatusLabel("Active", true, activity ?? undefined), "Scheduled");
+  expect(activity?.status).toBe("scheduled");
+  expect(sessionActivityDotStatus("Active", true, activity ?? undefined)).toBe("agent-scheduled");
+  expect(sessionActivityStatusLabel("Active", true, activity ?? undefined)).toBe("Scheduled");
 });
 
 // The scheduled status is the sibling of needs_input: both are non-terminal
@@ -355,48 +297,30 @@ test("normalizes scheduled status (not coerced to ready)", () => {
 // the turn-complete bell stays silent while the agent parks itself and fires
 // exactly once when the wake chain truly ends.
 test("shouldRingForActivityTransition: streaming -> scheduled does NOT ring (self-parked agent)", () => {
-  assert.equal(
-    shouldRingForActivityTransition(summary("streaming"), summary("scheduled")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("streaming"), summary("scheduled"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: ready -> scheduled does NOT ring (armed a wake while idle)", () => {
-  assert.equal(
-    shouldRingForActivityTransition(summary("ready"), summary("scheduled")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("ready"), summary("scheduled"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: no prior -> scheduled does NOT ring", () => {
-  assert.equal(
-    shouldRingForActivityTransition(undefined, summary("scheduled")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(undefined, summary("scheduled"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: scheduled -> ready does NOT ring (cancel/clear)", () => {
   // A direct scheduled -> ready means the timer was cancelled or the user took
   // over the session — not the genuine end-of-chain hand-off, which arrives as
   // streaming -> ready when the woken turn finishes. Don't summon for the cancel.
-  assert.equal(
-    shouldRingForActivityTransition(summary("scheduled"), summary("ready")),
-    false,
-  );
+  expect(shouldRingForActivityTransition(summary("scheduled"), summary("ready"))).toBe(false);
 });
 
 test("shouldRingForActivityTransition: away-error rings (broken self-resume)", () => {
   // A scheduled/background continuation the orchestrator could not fire while
   // the session was alive — the agent broke while you were away — rings the
   // same bell as a normal hand-off, even though ordinary errors stay silent.
-  assert.equal(
-    shouldRingForActivityTransition(summary("scheduled"), summary("error", { away_error: true })),
-    true,
-  );
-  assert.equal(
-    shouldRingForActivityTransition(summary("streaming"), summary("error", { away_error: true })),
-    true,
-  );
+  expect(shouldRingForActivityTransition(summary("scheduled"), summary("error", { away_error: true }))).toBe(true);
+  expect(shouldRingForActivityTransition(summary("streaming"), summary("error", { away_error: true }))).toBe(true);
 });
 
 test("shouldRingForActivityTransition: ring user-turn set stays exactly {ready, needs_input} (guard)", () => {
@@ -418,23 +342,17 @@ test("shouldRingForActivityTransition: ring user-turn set stays exactly {ready, 
   for (const next of all) {
     const rings = shouldRingForActivityTransition(summary("streaming"), summary(next));
     const expected = next === "ready" || next === "needs_input";
-    assert.equal(rings, expected, `working -> ${next} should ${expected ? "" : "not "}ring`);
+    expect(rings, `working -> ${next} should ${expected ? "" : "not "}ring`).toBe(expected);
   }
 });
 
 test("shouldRingForActivityTransition: away-error does not re-ring when already error", () => {
-  assert.equal(
-    shouldRingForActivityTransition(
-      summary("error", { away_error: true }),
-      summary("error", { away_error: true }),
-    ),
-    false,
-  );
+  expect(shouldRingForActivityTransition(
+          summary("error", { away_error: true }),
+          summary("error", { away_error: true }),
+        )).toBe(false);
 });
 
 test("shouldRingForActivityTransition: scheduled -> needs_input rings (woke and asked you)", () => {
-  assert.equal(
-    shouldRingForActivityTransition(summary("scheduled"), summary("needs_input")),
-    true,
-  );
+  expect(shouldRingForActivityTransition(summary("scheduled"), summary("needs_input"))).toBe(true);
 });

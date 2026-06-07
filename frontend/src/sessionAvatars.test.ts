@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 import {
   AGENT_AVATARS,
   getAgentAvatarPool,
@@ -11,7 +10,7 @@ import {
 
 test("runtime avatars extend the agent pool without removing built-ins", () => {
   setRuntimeAvatarsForTest([]);
-  assert.equal(getAgentAvatarPool().some((avatar) => avatar.id === AGENT_AVATARS[0].id), true);
+  expect(getAgentAvatarPool().some((avatar) => avatar.id === AGENT_AVATARS[0].id)).toBe(true);
 
   const custom: AgentAvatar = {
     id: "custom-agent",
@@ -21,13 +20,13 @@ test("runtime avatars extend the agent pool without removing built-ins", () => {
     custom: true,
   };
   setRuntimeAvatarsForTest([custom]);
-  assert.equal(getAgentAvatarPool().some((avatar) => avatar.id === custom.id), true);
-  assert.equal(getAgentAvatarPool().some((avatar) => avatar.id === AGENT_AVATARS[0].id), true);
+  expect(getAgentAvatarPool().some((avatar) => avatar.id === custom.id)).toBe(true);
+  expect(getAgentAvatarPool().some((avatar) => avatar.id === AGENT_AVATARS[0].id)).toBe(true);
 });
 
 test("built-in agent avatars use their icon as the backing image", () => {
   for (const avatar of AGENT_AVATARS) {
-    assert.equal(avatar.backingSrc, avatar.src);
+    expect(avatar.backingSrc).toBe(avatar.src);
   }
 });
 
@@ -41,8 +40,8 @@ test("runtime avatars replace built-in avatars with the same id", () => {
     backingSrc: "/api/avatars/seeded/backing",
   }]);
   const matching = getAgentAvatarPool().filter((avatar) => avatar.id === builtIn.id);
-  assert.equal(matching.length, 1);
-  assert.equal(matching[0].src, "blob:seeded-agent");
+  expect(matching.length).toBe(1);
+  expect(matching[0].src).toBe("blob:seeded-agent");
 });
 
 test("assigned agent avatar resolves by durable id", () => {
@@ -55,14 +54,14 @@ test("assigned agent avatar resolves by durable id", () => {
   };
   setRuntimeAvatarsForTest([custom]);
 
-  assert.equal(getSessionAvatarByID(custom.id)?.id, custom.id);
+  expect(getSessionAvatarByID(custom.id)?.id).toBe(custom.id);
 });
 
 test("session avatars require a durable assigned avatar id", () => {
   setRuntimeAvatarsForTest([]);
 
-  assert.equal(getSessionAvatarByID(), null);
-  assert.equal(getSessionAvatarByID("unknown-avatar"), null);
+  expect(getSessionAvatarByID()).toBe(null);
+  expect(getSessionAvatarByID("unknown-avatar")).toBe(null);
 });
 
 test("system avatars are separate from agent avatars", () => {
@@ -75,7 +74,7 @@ test("system avatars are separate from agent avatars", () => {
   };
   setRuntimeAvatarsForTest([system]);
 
-  assert.equal(getSystemAvatarByID(), null);
-  assert.equal(getSystemAvatarByID("custom-system")?.id, "custom-system");
-  assert.equal(getAgentAvatarPool().some((avatar) => avatar.id === system.id), false);
+  expect(getSystemAvatarByID()).toBe(null);
+  expect(getSystemAvatarByID("custom-system")?.id).toBe("custom-system");
+  expect(getAgentAvatarPool().some((avatar) => avatar.id === system.id)).toBe(false);
 });

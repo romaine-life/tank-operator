@@ -19,19 +19,17 @@
 //     pinned in a prior SPA version that no longer matches the
 //     allowlist must fall back to the default, not be forwarded as
 //     opaque.
-
-import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
 
 test("CLAUDE_MODELS lists claude-opus-4-8 first so it is the default selection", () => {
   const match = appSource.match(/const CLAUDE_MODELS:\s*ModelOption\[\][^[]*\[([\s\S]*?)\];/);
-  assert.ok(match, "CLAUDE_MODELS literal should be present");
+  expect(match, "CLAUDE_MODELS literal should be present").toBeTruthy();
   const firstId = match[1]!.match(/id:\s*"([^"]+)"/);
-  assert.ok(firstId, "CLAUDE_MODELS first entry should have an id");
-  assert.equal(firstId[1], "claude-opus-4-8");
+  expect(firstId, "CLAUDE_MODELS first entry should have an id").toBeTruthy();
+  expect(firstId[1]).toBe("claude-opus-4-8");
 });
 
 test("DEFAULT_CLAUDE_MODEL_ID and DEFAULT_CLAUDE_EFFORT_ID match the agent-runner constants", () => {
@@ -40,57 +38,42 @@ test("DEFAULT_CLAUDE_MODEL_ID and DEFAULT_CLAUDE_EFFORT_ID match the agent-runne
   // backend-go/cmd/tank-operator/middleware.go allowedClaudeEfforts.
   // If product changes the defaults, ALL three layers must move
   // together — that's the cross-layer contract this test enforces.
-  assert.match(appSource, /const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";/);
-  assert.match(appSource, /const DEFAULT_CLAUDE_EFFORT_ID = "high";/);
+  expect(appSource).toMatch(/const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";/);
+  expect(appSource).toMatch(/const DEFAULT_CLAUDE_EFFORT_ID = "high";/);
 });
 
 test("DEFAULT_CODEX_MODEL_ID and DEFAULT_CODEX_EFFORT_ID pin the strongest Codex defaults", () => {
-  assert.match(appSource, /const DEFAULT_CODEX_MODEL_ID = "gpt-5\.5";/);
-  assert.match(appSource, /const DEFAULT_CODEX_EFFORT_ID = "xhigh";/);
+  expect(appSource).toMatch(/const DEFAULT_CODEX_MODEL_ID = "gpt-5\.5";/);
+  expect(appSource).toMatch(/const DEFAULT_CODEX_EFFORT_ID = "xhigh";/);
 });
 
 test("Codex model options require a concrete model instead of account default", () => {
-  assert.doesNotMatch(appSource, /codex-account-default/);
-  assert.doesNotMatch(appSource, /Codex (?:· )?Account default/i);
-  assert.doesNotMatch(appSource, /Codex account default/i);
+  expect(appSource).not.toMatch(/codex-account-default/);
+  expect(appSource).not.toMatch(/Codex (?:· )?Account default/i);
+  expect(appSource).not.toMatch(/Codex account default/i);
 });
 
 test("RunPrefs persists provider model and effort across page reloads", () => {
-  assert.match(appSource, /claudeModelId:\s*string;/);
-  assert.match(appSource, /claudeEffort:\s*string;/);
-  assert.match(appSource, /codexModelId:\s*string;/);
-  assert.match(appSource, /codexEffort:\s*string;/);
-  assert.match(appSource, /claudeModelId:\s*DEFAULT_CLAUDE_MODEL_ID/);
-  assert.match(appSource, /claudeEffort:\s*DEFAULT_CLAUDE_EFFORT_ID/);
-  assert.match(appSource, /codexModelId:\s*DEFAULT_CODEX_MODEL_ID/);
-  assert.match(appSource, /codexEffort:\s*DEFAULT_CODEX_EFFORT_ID/);
+  expect(appSource).toMatch(/claudeModelId:\s*string;/);
+  expect(appSource).toMatch(/claudeEffort:\s*string;/);
+  expect(appSource).toMatch(/codexModelId:\s*string;/);
+  expect(appSource).toMatch(/codexEffort:\s*string;/);
+  expect(appSource).toMatch(/claudeModelId:\s*DEFAULT_CLAUDE_MODEL_ID/);
+  expect(appSource).toMatch(/claudeEffort:\s*DEFAULT_CLAUDE_EFFORT_ID/);
+  expect(appSource).toMatch(/codexModelId:\s*DEFAULT_CODEX_MODEL_ID/);
+  expect(appSource).toMatch(/codexEffort:\s*DEFAULT_CODEX_EFFORT_ID/);
 });
 
 test("initialMessageMode is an ephemeral run preference that resets to direct on fresh loads", () => {
-  assert.match(appSource, /initialMessageMode:\s*InitialMessageMode;/);
-  assert.match(appSource, /initialMessageMode:\s*DEFAULT_INITIAL_MESSAGE_MODE/);
-  assert.match(
-    appSource,
-    /const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\(\["initialMessageMode"\]\);/,
-  );
-  assert.match(
-    appSource,
-    /function durableRunPrefs\(prefs: RunPrefs\): Record<string, unknown> \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;/,
-  );
-  assert.match(
-    appSource,
-    /function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}localStorage\.getItem/,
-  );
-  assert.match(
-    appSource,
-    /function mergeServerRunPrefs\(prev: RunPrefs, server: Record<string, unknown>\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}const raw = server\[key\];/,
-  );
-  assert.match(appSource, /JSON\.stringify\(\{ run_prefs: durableRunPrefs\(prefs\) \}\)/);
-  assert.match(
-    appSource,
-    /if \(isDurableRunPref\(key\)\) \{[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\}[\s\S]{0,120}if \(!isDurableRunPref\(key\)\) return;[\s\S]{0,120}localStorage\.setItem/,
-  );
-  assert.doesNotMatch(appSource, /pickInitialMessageMode\(raw/);
+  expect(appSource).toMatch(/initialMessageMode:\s*InitialMessageMode;/);
+  expect(appSource).toMatch(/initialMessageMode:\s*DEFAULT_INITIAL_MESSAGE_MODE/);
+  expect(appSource).toMatch(/const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\(\["initialMessageMode"\]\);/);
+  expect(appSource).toMatch(/function durableRunPrefs\(prefs: RunPrefs\): Record<string, unknown> \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;/);
+  expect(appSource).toMatch(/function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}localStorage\.getItem/);
+  expect(appSource).toMatch(/function mergeServerRunPrefs\(prev: RunPrefs, server: Record<string, unknown>\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}const raw = server\[key\];/);
+  expect(appSource).toMatch(/JSON\.stringify\(\{ run_prefs: durableRunPrefs\(prefs\) \}\)/);
+  expect(appSource).toMatch(/if \(isDurableRunPref\(key\)\) \{[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\}[\s\S]{0,120}if \(!isDurableRunPref\(key\)\) return;[\s\S]{0,120}localStorage\.setItem/);
+  expect(appSource).not.toMatch(/pickInitialMessageMode\(raw/);
 });
 
 test("loadRunPrefs filters localStorage-loaded model/effort through the allowlist", () => {
@@ -100,26 +83,11 @@ test("loadRunPrefs filters localStorage-loaded model/effort through the allowlis
   // a typo would silently become a runner default at pod boot,
   // looking to the user like "my pick was ignored." The
   // pickAllowedPrefId call is the load-bearing fix.
-  assert.match(
-    appSource,
-    /key === "claudeModelId"[\s\S]{0,300}pickAllowedPrefId\(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID\)/,
-  );
-  assert.match(
-    appSource,
-    /key === "claudeEffort"[\s\S]{0,300}pickAllowedPrefId\(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID\)/,
-  );
-  assert.match(
-    appSource,
-    /key === "codexModelId"[\s\S]{0,300}pickAllowedPrefId\(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID\)/,
-  );
-  assert.match(
-    appSource,
-    /key === "codexEffort"[\s\S]{0,300}pickAllowedPrefId\(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID\)/,
-  );
-  assert.doesNotMatch(
-    appSource,
-    /key === "initialMessageMode"[\s\S]{0,300}localStorage\.getItem/,
-  );
+  expect(appSource).toMatch(/key === "claudeModelId"[\s\S]{0,300}pickAllowedPrefId\(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID\)/);
+  expect(appSource).toMatch(/key === "claudeEffort"[\s\S]{0,300}pickAllowedPrefId\(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID\)/);
+  expect(appSource).toMatch(/key === "codexModelId"[\s\S]{0,300}pickAllowedPrefId\(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID\)/);
+  expect(appSource).toMatch(/key === "codexEffort"[\s\S]{0,300}pickAllowedPrefId\(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID\)/);
+  expect(appSource).not.toMatch(/key === "initialMessageMode"[\s\S]{0,300}localStorage\.getItem/);
 });
 
 test("enqueueSdkTurn forwards effort on the POST body so the runner sees the user's pick", () => {
@@ -127,23 +95,17 @@ test("enqueueSdkTurn forwards effort on the POST body so the runner sees the use
   // it arrives in the wire body. The spread form keeps Codex sessions
   // (which set effort to "") from sending a noisy empty field, but
   // the property MUST be present when run.effort is set.
-  assert.match(appSource, /\.\.\.\(run\.effort \? \{ effort: run\.effort \} : \{\}\)/);
+  expect(appSource).toMatch(/\.\.\.\(run\.effort \? \{ effort: run\.effort \} : \{\}\)/);
 });
 
 test("createSession forwards model and effort as session-owned config", () => {
-  assert.match(appSource, /const sessionModel = SDK_CHAT_MODES\.has\(mode\) \? seedModel : "";/);
-  assert.match(appSource, /const sessionEffort = SDK_CHAT_MODES\.has\(mode\) \? seedEffort : "";/);
-  assert.match(
-    appSource,
-    /\.\.\.\(sessionModel \|\| sessionEffort \? \{ model: sessionModel, effort: sessionEffort \} : \{\}\)/,
-  );
-  assert.doesNotMatch(appSource, /initialTurnPayload[\s\S]{0,400}model: seedModel/);
+  expect(appSource).toMatch(/const sessionModel = SDK_CHAT_MODES\.has\(mode\) \? seedModel : "";/);
+  expect(appSource).toMatch(/const sessionEffort = SDK_CHAT_MODES\.has\(mode\) \? seedEffort : "";/);
+  expect(appSource).toMatch(/\.\.\.\(sessionModel \|\| sessionEffort \? \{ model: sessionModel, effort: sessionEffort \} : \{\}\)/);
+  expect(appSource).not.toMatch(/initialTurnPayload[\s\S]{0,400}model: seedModel/);
 });
 
 test("forkSessionFromMessage forwards model and effort on create, not the first turn", () => {
-  assert.match(
-    appSource,
-    /SDK_CHAT_MODES\.has\(mode\) && \(request\.model \|\| request\.effort\)[\s\S]{0,120}\{ model: request\.model, effort: request\.effort \}/,
-  );
-  assert.doesNotMatch(appSource, /client_nonce: newForkTurnId\(\)[\s\S]{0,160}model: request\.model/);
+  expect(appSource).toMatch(/SDK_CHAT_MODES\.has\(mode\) && \(request\.model \|\| request\.effort\)[\s\S]{0,120}\{ model: request\.model, effort: request\.effort \}/);
+  expect(appSource).not.toMatch(/client_nonce: newForkTurnId\(\)[\s\S]{0,160}model: request\.model/);
 });

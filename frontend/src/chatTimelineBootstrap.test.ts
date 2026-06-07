@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import {
   initialTimelineBootstrapState,
@@ -24,12 +23,12 @@ test("timeline bootstrap ignores stale async completions", () => {
     epoch: 1,
   });
 
-  assert.deepEqual(state, {
-    sessionId: "121",
-    epoch: 2,
-    status: "idle",
-    error: null,
-  });
+  expect(state).toEqual({
+        sessionId: "121",
+        epoch: 2,
+        status: "idle",
+        error: null,
+      });
 });
 
 test("timeline bootstrap exposes current-generation failures for retry", () => {
@@ -46,14 +45,14 @@ test("timeline bootstrap exposes current-generation failures for retry", () => {
     error: "timeline request failed: 500",
   });
 
-  assert.equal(state.status, "error");
-  assert.equal(state.error, "timeline request failed: 500");
+  expect(state.status).toBe("error");
+  expect(state.error).toBe("timeline request failed: 500");
 
   state = reduceTimelineBootstrap(state, {
     type: "reset",
     sessionId: "121",
     epoch: 4,
   });
-  assert.equal(state.status, "idle");
-  assert.equal(state.error, null);
+  expect(state.status).toBe("idle");
+  expect(state.error).toBe(null);
 });

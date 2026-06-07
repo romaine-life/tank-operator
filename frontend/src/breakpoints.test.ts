@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import {
   BP_COMPACT,
@@ -11,21 +10,21 @@ import {
 } from "./breakpoints.ts";
 
 test("canonical compact/phone breakpoints are the documented widths", () => {
-  assert.equal(BP_COMPACT, 768);
-  assert.equal(BP_PHONE, 640);
+  expect(BP_COMPACT).toBe(768);
+  expect(BP_PHONE).toBe(640);
   // The phone tier must sit strictly inside the compact tier.
-  assert.ok(BP_PHONE < BP_COMPACT);
+  expect(BP_PHONE < BP_COMPACT).toBeTruthy();
 });
 
 test("media queries derive from the constants so JS and CSS cannot drift", () => {
-  assert.equal(MQ_COMPACT, "(max-width: 768px)");
-  assert.equal(MQ_PHONE, "(max-width: 640px)");
+  expect(MQ_COMPACT).toBe("(max-width: 768px)");
+  expect(MQ_PHONE).toBe("(max-width: 640px)");
 });
 
 test("width predicates treat the breakpoint as inclusive-compact", () => {
-  assert.equal(isCompactWidth(390), true); // common phone
-  assert.equal(isCompactWidth(768), true); // boundary is compact
-  assert.equal(isCompactWidth(769), false); // desktop
-  assert.equal(isPhoneWidth(640), true);
-  assert.equal(isPhoneWidth(641), false);
+  expect(isCompactWidth(390)).toBe(true); // common phone
+  expect(isCompactWidth(768)).toBe(true); // boundary is compact
+  expect(isCompactWidth(769)).toBe(false); // desktop
+  expect(isPhoneWidth(640)).toBe(true);
+  expect(isPhoneWidth(641)).toBe(false);
 });

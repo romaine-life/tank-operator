@@ -1,6 +1,4 @@
-import { afterEach, beforeEach, test } from "node:test";
-import assert from "node:assert/strict";
-
+import { afterEach, beforeEach, test, expect } from "vitest";
 import {
   flushLongTaskMetricsForTest,
   ingestLongTaskEntryForTest,
@@ -102,24 +100,24 @@ function fakeLongTaskEntry(
 }
 
 test("long-task debug logs are off by default", () => {
-  assert.equal(isLongTaskDebugEnabled(), false);
+  expect(isLongTaskDebugEnabled()).toBe(false);
   ingestLongTaskEntryForTest(fakeLongTaskEntry(120, 500));
-  assert.equal(consoleLogs.length, 0);
+  expect(consoleLogs.length).toBe(0);
 });
 
 test("long-task debug logs fire when tankDebug includes long-tasks", () => {
   fakeStorage.tankDebug = "session-list,long-tasks";
-  assert.equal(isLongTaskDebugEnabled(), true);
+  expect(isLongTaskDebugEnabled()).toBe(true);
   ingestLongTaskEntryForTest(fakeLongTaskEntry(120, 500));
-  assert.equal(consoleLogs.length, 1);
-  assert.equal(consoleLogs[0]?.[0], "[tank/long-tasks] long-task");
+  expect(consoleLogs.length).toBe(1);
+  expect(consoleLogs[0]?.[0]).toBe("[tank/long-tasks] long-task");
 });
 
 test("entries below the 50ms threshold are dropped", () => {
   fakeStorage["auth-romaine-jwt"] = "token-123";
   ingestLongTaskEntryForTest(fakeLongTaskEntry(40, 500));
   flushLongTaskMetricsForTest();
-  assert.equal(fetchCalls.length, 0);
+  expect(fetchCalls.length).toBe(0);
 });
 
 test("entries are batched to the Prometheus ingestion endpoint", () => {
@@ -128,22 +126,19 @@ test("entries are batched to the Prometheus ingestion endpoint", () => {
   ingestLongTaskEntryForTest(fakeLongTaskEntry(180, 600, "self"));
   flushLongTaskMetricsForTest();
 
-  assert.equal(fetchCalls.length, 1);
-  assert.equal(fetchCalls[0]?.input, "/api/client-metrics/long-tasks");
-  assert.equal(fetchCalls[0]?.init?.method, "POST");
-  assert.equal(
-    new Headers(fetchCalls[0]?.init?.headers).get("Authorization"),
-    "Bearer token-123",
-  );
+  expect(fetchCalls.length).toBe(1);
+  expect(fetchCalls[0]?.input).toBe("/api/client-metrics/long-tasks");
+  expect(fetchCalls[0]?.init?.method).toBe("POST");
+  expect(new Headers(fetchCalls[0]?.init?.headers).get("Authorization")).toBe("Bearer token-123");
   const payload = JSON.parse(String(fetchCalls[0]?.init?.body)) as {
     events: Array<Record<string, unknown>>;
   };
   const event = payload.events[0]!;
-  assert.equal(event.durationMs, 180);
-  assert.equal(event.startMs, 600);
-  assert.equal(event.sessionMode, "claude_gui");
-  assert.equal(event.attribution, "self");
-  assert.equal(event.pagePath, "/sessions/188");
+  expect(event.durationMs).toBe(180);
+  expect(event.startMs).toBe(600);
+  expect(event.sessionMode).toBe("claude_gui");
+  expect(event.attribution).toBe("self");
+  expect(event.pagePath).toBe("/sessions/188");
 });
 
 test("correlation hints record deltas to recent tank-event / session-switch / scroll", () => {
@@ -164,9 +159,9 @@ test("correlation hints record deltas to recent tank-event / session-switch / sc
     events: Array<Record<string, unknown>>;
   };
   const event = payload.events[0]!;
-  assert.equal(event.sinceTankEventMs, 100);
-  assert.equal(event.sinceSessionSwitchMs, 50);
-  assert.equal(event.sinceScrollMs, 20);
+  expect(event.sinceTankEventMs).toBe(100);
+  expect(event.sinceSessionSwitchMs).toBe(50);
+  expect(event.sinceScrollMs).toBe(20);
 });
 
 test("correlation deltas are null when the signal hasn't fired yet", () => {
@@ -179,9 +174,9 @@ test("correlation deltas are null when the signal hasn't fired yet", () => {
     events: Array<Record<string, unknown>>;
   };
   const event = payload.events[0]!;
-  assert.equal(event.sinceTankEventMs, null);
-  assert.equal(event.sinceSessionSwitchMs, null);
-  assert.equal(event.sinceScrollMs, null);
+  expect(event.sinceTankEventMs).toBe(null);
+  expect(event.sinceSessionSwitchMs).toBe(null);
+  expect(event.sinceScrollMs).toBe(null);
 });
 
 test("batched entries flush when they hit the batch cap without waiting for the timer", () => {
@@ -191,9 +186,9 @@ test("batched entries flush when they hit the batch cap without waiting for the 
     ingestLongTaskEntryForTest(fakeLongTaskEntry(60, 100 + i));
   }
   // No explicit flush call; the 40th entry should have tripped the cap.
-  assert.equal(fetchCalls.length, 1);
+  expect(fetchCalls.length).toBe(1);
   const payload = JSON.parse(String(fetchCalls[0]?.init?.body)) as {
     events: Array<Record<string, unknown>>;
   };
-  assert.equal(payload.events.length, 40);
+  expect(payload.events.length).toBe(40);
 });

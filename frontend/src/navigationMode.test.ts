@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import {
   DEFAULT_NAVIGATION_MODE,
@@ -10,12 +9,12 @@ import {
 } from "./navigationMode.ts";
 
 test("default navigation mode is live-tail per the contract", () => {
-  assert.equal(DEFAULT_NAVIGATION_MODE, "live-tail");
+  expect(DEFAULT_NAVIGATION_MODE).toBe("live-tail");
 });
 
 test("session-open reasons map to the correct target mode", () => {
-  assert.equal(targetModeForReason("session-open-tail"), "live-tail");
-  assert.equal(targetModeForReason("session-open-anchored"), "historical-anchor");
+  expect(targetModeForReason("session-open-tail")).toBe("live-tail");
+  expect(targetModeForReason("session-open-anchored")).toBe("historical-anchor");
 });
 
 test("user gestures that leave the tail target historical-anchor", () => {
@@ -26,11 +25,7 @@ test("user gestures that leave the tail target historical-anchor", () => {
     "user-scroll-up",
   ];
   for (const reason of upGestures) {
-    assert.equal(
-      targetModeForReason(reason),
-      "historical-anchor",
-      `${reason} should target historical-anchor`,
-    );
+    expect(targetModeForReason(reason), `${reason} should target historical-anchor`).toBe("historical-anchor");
   }
 });
 
@@ -43,28 +38,24 @@ test("explicit return-to-tail reasons target live-tail", () => {
     "virtuoso-at-bottom-true",
   ];
   for (const reason of downGestures) {
-    assert.equal(
-      targetModeForReason(reason),
-      "live-tail",
-      `${reason} should target live-tail`,
-    );
+    expect(targetModeForReason(reason), `${reason} should target live-tail`).toBe("live-tail");
   }
 });
 
 test("transitioning into the current mode reports changed=false", () => {
   const t = transitionNavigationMode("live-tail", "submit");
-  assert.equal(t.from, "live-tail");
-  assert.equal(t.to, "live-tail");
-  assert.equal(t.changed, false);
-  assert.equal(t.reason, "submit");
+  expect(t.from).toBe("live-tail");
+  expect(t.to).toBe("live-tail");
+  expect(t.changed).toBe(false);
+  expect(t.reason).toBe("submit");
 });
 
 test("transitioning out of the current mode reports changed=true", () => {
   const t = transitionNavigationMode("live-tail", "user-scroll-up");
-  assert.equal(t.from, "live-tail");
-  assert.equal(t.to, "historical-anchor");
-  assert.equal(t.changed, true);
-  assert.equal(t.reason, "user-scroll-up");
+  expect(t.from).toBe("live-tail");
+  expect(t.to).toBe("historical-anchor");
+  expect(t.changed).toBe(true);
+  expect(t.reason).toBe("user-scroll-up");
 });
 
 test("an SSE-arrival-class reason does not exist", () => {
@@ -85,29 +76,23 @@ test("an SSE-arrival-class reason does not exist", () => {
     // closed reason union; the cast would fail compile but the runtime
     // test confirms targetModeForReason never returns anything for
     // them.
-    assert.throws(() => targetModeForReason(candidate));
+    expect(() => targetModeForReason(candidate)).toThrow();
   }
 });
 
 test("virtuoso-at-bottom-true returns to live-tail when in historical-anchor", () => {
   const t = transitionNavigationMode("historical-anchor", "virtuoso-at-bottom-true");
-  assert.equal(t.to, "live-tail");
-  assert.equal(t.changed, true);
+  expect(t.to).toBe("live-tail");
+  expect(t.changed).toBe(true);
 });
 
 test("virtuoso-at-bottom-true is a no-op while already in live-tail", () => {
   const t = transitionNavigationMode("live-tail", "virtuoso-at-bottom-true");
-  assert.equal(t.to, "live-tail");
-  assert.equal(t.changed, false);
+  expect(t.to).toBe("live-tail");
+  expect(t.changed).toBe(false);
 });
 
 test("telemetry event name binds to the target mode", () => {
-  assert.equal(
-    navigationModeTelemetryEvent("live-tail"),
-    "navigation-mode-entered-live-tail",
-  );
-  assert.equal(
-    navigationModeTelemetryEvent("historical-anchor"),
-    "navigation-mode-entered-historical-anchor",
-  );
+  expect(navigationModeTelemetryEvent("live-tail")).toBe("navigation-mode-entered-live-tail");
+  expect(navigationModeTelemetryEvent("historical-anchor")).toBe("navigation-mode-entered-historical-anchor");
 });

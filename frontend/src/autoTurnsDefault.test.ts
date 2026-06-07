@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import {
   AUTO_TURNS_USER_MESSAGE_THRESHOLD,
@@ -10,25 +9,25 @@ import {
 // If a future change moves it, this test should be the deliberate place that
 // records the new value.
 test("threshold is pinned at 8 user back-and-forths", () => {
-  assert.equal(AUTO_TURNS_USER_MESSAGE_THRESHOLD, 8);
+  expect(AUTO_TURNS_USER_MESSAGE_THRESHOLD).toBe(8);
 });
 
 test("stays on the main transcript below the threshold", () => {
-  assert.equal(shouldAutoDefaultToTurns(0), false);
-  assert.equal(shouldAutoDefaultToTurns(1), false);
-  assert.equal(shouldAutoDefaultToTurns(7), false);
+  expect(shouldAutoDefaultToTurns(0)).toBe(false);
+  expect(shouldAutoDefaultToTurns(1)).toBe(false);
+  expect(shouldAutoDefaultToTurns(7)).toBe(false);
 });
 
 test("defaults to Turns at and above the threshold", () => {
-  assert.equal(shouldAutoDefaultToTurns(8), true);
-  assert.equal(shouldAutoDefaultToTurns(9), true);
-  assert.equal(shouldAutoDefaultToTurns(40), true);
+  expect(shouldAutoDefaultToTurns(8)).toBe(true);
+  expect(shouldAutoDefaultToTurns(9)).toBe(true);
+  expect(shouldAutoDefaultToTurns(40)).toBe(true);
 });
 
 test("treats missing / non-finite / negative counts as not-yet-substantial", () => {
-  assert.equal(shouldAutoDefaultToTurns(undefined), false);
-  assert.equal(shouldAutoDefaultToTurns(null), false);
-  assert.equal(shouldAutoDefaultToTurns(Number.NaN), false);
-  assert.equal(shouldAutoDefaultToTurns(Number.POSITIVE_INFINITY), false);
-  assert.equal(shouldAutoDefaultToTurns(-3), false);
+  expect(shouldAutoDefaultToTurns(undefined)).toBe(false);
+  expect(shouldAutoDefaultToTurns(null)).toBe(false);
+  expect(shouldAutoDefaultToTurns(Number.NaN)).toBe(false);
+  expect(shouldAutoDefaultToTurns(Number.POSITIVE_INFINITY)).toBe(false);
+  expect(shouldAutoDefaultToTurns(-3)).toBe(false);
 });

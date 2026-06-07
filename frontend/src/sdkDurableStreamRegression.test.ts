@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import { reduceConversationEvents } from "./conversationReducer.ts";
 import { projectConversationState } from "./conversationProjection.ts";
@@ -41,7 +40,7 @@ function streamAfterLastOrderKey(
   events: readonly TankConversationEvent[],
   lastOrderKey: string | null,
 ): TankConversationEvent[] {
-  assert.ok(lastOrderKey, "resume cursor should be non-empty");
+  expect(lastOrderKey, "resume cursor should be non-empty").toBeTruthy();
   return events.filter((event) => (event.order_key ?? "") > lastOrderKey);
 }
 
@@ -99,44 +98,38 @@ test("durable stream resumes from the last order key without duplicating transcr
   const projectionBeforeDisconnect = projectConversationState(stateBeforeDisconnect);
   const reconnectCursor = projectionBeforeDisconnect.lastOrderKey;
 
-  assert.equal(reconnectCursor, "order-004");
-  assert.equal(projectionBeforeDisconnect.runStatus, "streaming");
-  assert.equal(projectionBeforeDisconnect.activeToolName, "github.get_issue");
+  expect(reconnectCursor).toBe("order-004");
+  expect(projectionBeforeDisconnect.runStatus).toBe("streaming");
+  expect(projectionBeforeDisconnect.activeToolName).toBe("github.get_issue");
 
   const streamedAfterReconnect = streamAfterLastOrderKey(canonicalTurn, reconnectCursor);
-  assert.deepEqual(
-    streamedAfterReconnect.map((event) => event.event_id),
-    ["evt-005", "evt-006", "evt-007"],
-  );
+  expect(streamedAfterReconnect.map((event) => event.event_id)).toEqual(["evt-005", "evt-006", "evt-007"]);
 
   const finalState = reduceConversationEvents(streamedAfterReconnect, stateBeforeDisconnect);
   const expectedState = reduceConversationEvents(canonicalTurn);
-  assert.deepEqual(finalState, expectedState);
+  expect(finalState).toEqual(expectedState);
 
   const finalProjection = projectConversationState(finalState);
   const messageEntries = finalProjection.entries.filter((entry) => entry.kind === "message");
   const toolEntries = finalProjection.entries.filter((entry) => entry.kind === "tool");
 
-  assert.deepEqual(
-    messageEntries.map((entry) => (entry.kind === "message" ? [entry.role, entry.text] : [])),
-    [
-      ["user", "Investigate issue #414"],
-      ["assistant", "Durable stream delivery now converges."],
-    ],
-  );
-  assert.equal(toolEntries.length, 1);
+  expect(messageEntries.map((entry) => (entry.kind === "message" ? [entry.role, entry.text] : []))).toEqual([
+          ["user", "Investigate issue #414"],
+          ["assistant", "Durable stream delivery now converges."],
+        ]);
+  expect(toolEntries.length).toBe(1);
   if (toolEntries[0]?.kind === "tool") {
-    assert.equal(toolEntries[0].toolName, "github.get_issue");
-    assert.equal(toolEntries[0].toolStatus, "completed");
-    assert.match(toolEntries[0].toolInput ?? "", /"number": 414/);
-    assert.equal(toolEntries[0].toolOutput, "Add durable stream resume regression test");
+    expect(toolEntries[0].toolName).toBe("github.get_issue");
+    expect(toolEntries[0].toolStatus).toBe("completed");
+    expect(toolEntries[0].toolInput ?? "").toMatch(/"number": 414/);
+    expect(toolEntries[0].toolOutput).toBe("Add durable stream resume regression test");
   }
-  assert.equal(finalProjection.runStatus, "ready");
-  assert.equal(finalProjection.activeTurnId, null);
-  assert.equal(finalProjection.activeToolName, null);
-  assert.equal(finalProjection.failed, false);
-  assert.equal(finalProjection.lastOrderKey, "order-007");
-  assert.equal(new Set(finalProjection.entries.map((entry) => entry.id)).size, 3);
+  expect(finalProjection.runStatus).toBe("ready");
+  expect(finalProjection.activeTurnId).toBe(null);
+  expect(finalProjection.activeToolName).toBe(null);
+  expect(finalProjection.failed).toBe(false);
+  expect(finalProjection.lastOrderKey).toBe("order-007");
+  expect(new Set(finalProjection.entries.map((entry) => entry.id)).size).toBe(3);
 });
 
 test("stop-then-reconnect: durable replay reconstructs the stopping projection", () => {
@@ -162,16 +155,16 @@ test("stop-then-reconnect: durable replay reconstructs the stopping projection",
   const livePath = reduceConversationEvents(stoppingTurn);
   const replayPath = reduceConversationEvents(stoppingTurn);
 
-  assert.deepEqual(replayPath, livePath);
-  assert.equal(replayPath.runStatus, "stopping");
-  assert.equal(replayPath.activeTurnId, "turn-414");
-  assert.equal(replayPath.interruptRequests.length, 1);
+  expect(replayPath).toEqual(livePath);
+  expect(replayPath.runStatus).toBe("stopping");
+  expect(replayPath.activeTurnId).toBe("turn-414");
+  expect(replayPath.interruptRequests.length).toBe(1);
 
   const projection = projectConversationState(replayPath);
   const metaEntries = projection.entries.filter((entry) => entry.kind === "meta");
-  assert.equal(metaEntries.length, 1);
+  expect(metaEntries.length).toBe(1);
   if (metaEntries[0]?.kind === "meta") {
-    assert.equal(metaEntries[0].meta.title, "Stop requested");
+    expect(metaEntries[0].meta.title).toBe("Stop requested");
   }
-  assert.equal(projection.stopping, true);
+  expect(projection.stopping).toBe(true);
 });

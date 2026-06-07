@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import { reduceConversationEvents } from "./conversationReducer.ts";
 import { projectConversationState } from "./conversationProjection.ts";
@@ -57,16 +56,16 @@ test("turn.interrupt_requested renders a 'Stop requested' meta chip at its order
     ]),
   );
 
-  assert.equal(projection.runStatus, "stopping");
-  assert.equal(projection.stopping, true);
+  expect(projection.runStatus).toBe("stopping");
+  expect(projection.stopping).toBe(true);
   const meta = projection.entries.find((entry) => entry.kind === "meta");
-  assert.ok(meta, "Stop requested chip should appear in projection entries");
+  expect(meta, "Stop requested chip should appear in projection entries").toBeTruthy();
   if (meta?.kind === "meta") {
-    assert.equal(meta.meta.title, "Stop requested");
-    assert.equal(meta.meta.detail, "Terminating the active turn.");
-    assert.equal(meta.meta.severity, "info");
-    assert.equal(meta.turnId, "turn-1");
-    assert.equal(meta.orderKey, "0004");
+    expect(meta.meta.title).toBe("Stop requested");
+    expect(meta.meta.detail).toBe("Terminating the active turn.");
+    expect(meta.meta.severity).toBe("info");
+    expect(meta.turnId).toBe("turn-1");
+    expect(meta.orderKey).toBe("0004");
   }
 });
 
@@ -87,17 +86,17 @@ test("turn.failed projects as an error meta line at its order_key", () => {
     ]),
   );
 
-  assert.equal(projection.runStatus, "error");
-  assert.equal(projection.failed, true);
+  expect(projection.runStatus).toBe("error");
+  expect(projection.failed).toBe(true);
   const metas = projection.entries.filter((entry) => entry.kind === "meta");
-  assert.equal(metas.length, 1, "turn.failed should produce one meta entry");
+  expect(metas.length, "turn.failed should produce one meta entry").toBe(1);
   const meta = metas[0];
   if (meta.kind === "meta") {
-    assert.equal(meta.meta.title, "Turn failed");
-    assert.equal(meta.meta.detail, "rate limit exceeded");
-    assert.equal(meta.meta.severity, "error");
-    assert.equal(meta.turnId, "turn-1");
-    assert.equal(meta.orderKey, "0004");
+    expect(meta.meta.title).toBe("Turn failed");
+    expect(meta.meta.detail).toBe("rate limit exceeded");
+    expect(meta.meta.severity).toBe("error");
+    expect(meta.turnId).toBe("turn-1");
+    expect(meta.orderKey).toBe("0004");
   }
 });
 
@@ -120,9 +119,9 @@ test("turn.failed with structured-error object unwraps .message into the meta de
   );
 
   const meta = projection.entries.find((entry) => entry.kind === "meta");
-  assert.ok(meta, "turn.failed should produce a meta entry");
+  expect(meta, "turn.failed should produce a meta entry").toBeTruthy();
   if (meta?.kind === "meta") {
-    assert.equal(meta.meta.detail, "auth token expired");
+    expect(meta.meta.detail).toBe("auth token expired");
   }
 });
 
@@ -143,13 +142,13 @@ test("turn.interrupted projects as an info 'Stopped' meta line; not 'failed'", (
     ]),
   );
 
-  assert.equal(projection.failed, false);
+  expect(projection.failed).toBe(false);
   const metas = projection.entries.filter((entry) => entry.kind === "meta");
-  assert.equal(metas.length, 1);
+  expect(metas.length).toBe(1);
   const meta = metas[0];
   if (meta.kind === "meta") {
-    assert.equal(meta.meta.title, "Stopped");
-    assert.equal(meta.meta.severity, "info");
+    expect(meta.meta.title).toBe("Stopped");
+    expect(meta.meta.severity).toBe("info");
   }
 });
 
@@ -168,7 +167,7 @@ test("turn.completed produces no meta entry — success speaks through the bubbl
   );
 
   const metas = projection.entries.filter((entry) => entry.kind === "meta");
-  assert.equal(metas.length, 0);
+  expect(metas.length).toBe(0);
 });
 
 test("turn.usage remains backend plumbing and does not project a visible row", () => {
@@ -218,11 +217,11 @@ test("turn.usage remains backend plumbing and does not project a visible row", (
     ]),
   );
 
-  assert.equal(projection.entries.some((entry) => entry.kind === "meta"), false);
-  assert.equal(projection.entries.some((entry) => "turnUsage" in entry), false);
-  assert.equal(projection.entries.some((entry) => "usageObservation" in entry), false);
+  expect(projection.entries.some((entry) => entry.kind === "meta")).toBe(false);
+  expect(projection.entries.some((entry) => "turnUsage" in entry)).toBe(false);
+  expect(projection.entries.some((entry) => "usageObservation" in entry)).toBe(false);
   const toolIndex = projection.entries.findIndex((entry) => entry.kind === "tool");
-  assert.ok(toolIndex >= 0, "non-usage turn activity should still project");
+  expect(toolIndex >= 0, "non-usage turn activity should still project").toBeTruthy();
 });
 
 test("terminal usage does not annotate projected transcript rows", () => {
@@ -247,11 +246,11 @@ test("terminal usage does not annotate projected transcript rows", () => {
     ]),
   );
 
-  assert.equal(projection.entries.some((entry) => entry.kind === "meta"), false);
+  expect(projection.entries.some((entry) => entry.kind === "meta")).toBe(false);
   const user = projection.entries.find((entry) => entry.kind === "message" && entry.role === "user");
-  assert.ok(user);
-  assert.equal(user && "turnUsage" in user, false);
-  assert.equal(user && "usageObservation" in user, false);
+  expect(user).toBeTruthy();
+  expect(user && "turnUsage" in user).toBe(false);
+  expect(user && "usageObservation" in user).toBe(false);
 });
 
 test("session.status:failed with provider extension carries severity + action onto the system message", () => {
@@ -276,14 +275,14 @@ test("session.status:failed with provider extension carries severity + action on
     ]),
   );
   const msg = projection.entries.find((entry) => entry.kind === "message");
-  assert.ok(msg, "session.status:failed should produce a message entry");
+  expect(msg, "session.status:failed should produce a message entry").toBeTruthy();
   if (msg?.kind === "message") {
-    assert.equal(msg.role, "system");
-    assert.equal(msg.severity, "error");
-    assert.deepEqual(msg.action, {
-      label: "Re-sign-in to Codex",
-      href: "https://auth.romaine.life/codex",
-    });
+    expect(msg.role).toBe("system");
+    expect(msg.severity).toBe("error");
+    expect(msg.action).toEqual({
+            label: "Re-sign-in to Codex",
+            href: "https://auth.romaine.life/codex",
+          });
   }
 });
 
@@ -321,12 +320,12 @@ test("session.status:ready replaces a prior failed banner with the same timeline
   const messages = projection.entries.filter(
     (entry) => entry.kind === "message" && entry.role === "system",
   );
-  assert.equal(messages.length, 1, "recovery must replace, not append");
+  expect(messages.length, "recovery must replace, not append").toBe(1);
   const msg = messages[0];
   if (msg.kind === "message") {
-    assert.equal(msg.text, "Codex sign-in is back online.");
-    assert.equal(msg.severity, "info");
-    assert.equal(msg.action, undefined);
+    expect(msg.text).toBe("Codex sign-in is back online.");
+    expect(msg.severity).toBe("info");
+    expect(msg.action).toBe(undefined);
   }
 });
 
@@ -352,11 +351,7 @@ test("session-startup notices are turn noise, not main-transcript messages", () 
     ]),
   );
 
-  assert.deepEqual(
-    projection.entries.filter((entry) => entry.kind === "message" && entry.role === "system"),
-    [],
-    "startup notices must not appear as main-transcript system messages",
-  );
+  expect(projection.entries.filter((entry) => entry.kind === "message" && entry.role === "system"), "startup notices must not appear as main-transcript system messages").toEqual([]);
 });
 
 test("background shell task projects as its own transcript artifact", () => {
@@ -395,23 +390,20 @@ test("background shell task projects as its own transcript artifact", () => {
     ]),
   );
 
-  assert.deepEqual(
-    projection.entries.map((entry) => entry.kind),
-    ["tool", "background_task", "tool"],
-  );
+  expect(projection.entries.map((entry) => entry.kind)).toEqual(["tool", "background_task", "tool"]);
   const task = projection.entries.find((entry) => entry.kind === "background_task");
-  assert.ok(task);
+  expect(task).toBeTruthy();
   if (task?.kind === "background_task") {
-    assert.equal(task.taskId, "task-abc");
-    assert.equal(task.taskStatus, "running");
-    assert.equal(task.taskSummary, "Watching logs");
-    assert.equal(task.taskToolUseId, "toolu-monitor");
-    assert.equal(task.taskCommand, "tail -f app.log");
-    assert.equal(task.taskCwd, "/workspace/app");
-    assert.equal(task.taskProcessId, "proc-abc");
-    assert.equal(task.taskOutput, "booting\n");
+    expect(task.taskId).toBe("task-abc");
+    expect(task.taskStatus).toBe("running");
+    expect(task.taskSummary).toBe("Watching logs");
+    expect(task.taskToolUseId).toBe("toolu-monitor");
+    expect(task.taskCommand).toBe("tail -f app.log");
+    expect(task.taskCwd).toBe("/workspace/app");
+    expect(task.taskProcessId).toBe("proc-abc");
+    expect(task.taskOutput).toBe("booting\n");
   }
-  assert.equal(projection.backgroundTasks.length, 1);
+  expect(projection.backgroundTasks.length).toBe(1);
 });
 
 test("background shell task projection hides the matching foreground command item", () => {
@@ -446,17 +438,14 @@ test("background shell task projection hides the matching foreground command ite
     ]),
   );
 
-  assert.deepEqual(
-    projection.entries.map((entry) => entry.kind),
-    ["background_task"],
-  );
-  assert.equal(projection.activeToolName, null);
+  expect(projection.entries.map((entry) => entry.kind)).toEqual(["background_task"]);
+  expect(projection.activeToolName).toBe(null);
   const task = projection.entries[0];
-  assert.equal(task?.kind, "background_task");
+  expect(task?.kind).toBe("background_task");
   if (task?.kind === "background_task") {
-    assert.equal(task.taskCommand, "npm run dev");
-    assert.equal(task.taskProcessId, "proc-123");
-    assert.equal(task.taskOutput, "Listening on 5173");
+    expect(task.taskCommand).toBe("npm run dev");
+    expect(task.taskProcessId).toBe("proc-123");
+    expect(task.taskOutput).toBe("Listening on 5173");
   }
 });
 
@@ -479,16 +468,13 @@ test("projects canonical user and assistant events into chat messages", () => {
 
   const projection = projectConversationState(state);
 
-  assert.deepEqual(
-    projection.entries.map((entry) =>
-      entry.kind === "message" ? [entry.role, entry.text] : [entry.kind],
-    ),
-    [
-      ["user", "hello"],
-      ["assistant", "world"],
-    ],
-  );
-  assert.equal(projection.runStatus, "ready");
+  expect(projection.entries.map((entry) =>
+          entry.kind === "message" ? [entry.role, entry.text] : [entry.kind],
+        )).toEqual([
+          ["user", "hello"],
+          ["assistant", "world"],
+        ]);
+  expect(projection.runStatus).toBe("ready");
 });
 
 test("projects turn terminal metadata onto completed turn entries", () => {
@@ -520,9 +506,9 @@ test("projects turn terminal metadata onto completed turn entries", () => {
   );
 
   for (const entry of projection.entries) {
-    assert.equal(entry.turnTerminalStatus, "completed");
-    assert.equal(entry.turnTerminalAt, "2026-05-12T00:00:05.000Z");
-    assert.equal(entry.turnTerminalEventId, "5");
+    expect(entry.turnTerminalStatus).toBe("completed");
+    expect(entry.turnTerminalAt).toBe("2026-05-12T00:00:05.000Z");
+    expect(entry.turnTerminalEventId).toBe("5");
   }
 });
 
@@ -562,17 +548,14 @@ test("keys assistant messages by Tank timeline id, not provider item id", () => 
     ]),
   );
 
-  assert.deepEqual(
-    projection.entries.map((entry) =>
-      entry.kind === "message" ? [entry.role, entry.text] : [entry.kind],
-    ),
-    [
-      ["user", "first prompt"],
-      ["assistant", "first answer"],
-      ["user", "second prompt"],
-      ["assistant", "second answer"],
-    ],
-  );
+  expect(projection.entries.map((entry) =>
+          entry.kind === "message" ? [entry.role, entry.text] : [entry.kind],
+        )).toEqual([
+          ["user", "first prompt"],
+          ["assistant", "first answer"],
+          ["user", "second prompt"],
+          ["assistant", "second answer"],
+        ]);
 });
 
 test("projects canonical tool lifecycle and active tool state", () => {
@@ -596,13 +579,13 @@ test("projects canonical tool lifecycle and active tool state", () => {
     ]),
   );
 
-  assert.equal(running.activeToolName, "Read");
-  assert.equal(running.entries[0]?.kind, "tool");
+  expect(running.activeToolName).toBe("Read");
+  expect(running.entries[0]?.kind).toBe("tool");
   if (running.entries[0]?.kind === "tool") {
-    assert.equal(running.entries[0].toolStatus, "started");
-    assert.match(running.entries[0].toolInput ?? "", /README\.md/);
-    assert.equal(running.entries[0].startedAt, "2026-05-12T00:00:10.000Z");
-    assert.equal(running.entries[0].completedAt, undefined);
+    expect(running.entries[0].toolStatus).toBe("started");
+    expect(running.entries[0].toolInput ?? "").toMatch(/README\.md/);
+    expect(running.entries[0].startedAt).toBe("2026-05-12T00:00:10.000Z");
+    expect(running.entries[0].completedAt).toBe(undefined);
   }
 
   const completed = projectConversationState(
@@ -625,15 +608,15 @@ test("projects canonical tool lifecycle and active tool state", () => {
     ]),
   );
 
-  assert.equal(completed.activeToolName, null);
-  assert.equal(completed.entries[0]?.kind, "tool");
+  expect(completed.activeToolName).toBe(null);
+  expect(completed.entries[0]?.kind).toBe("tool");
   if (completed.entries[0]?.kind === "tool") {
-    assert.equal(completed.entries[0].toolName, "Read");
-    assert.equal(completed.entries[0].toolStatus, "completed");
-    assert.equal(completed.entries[0].toolOutput, "README contents");
-    assert.equal(completed.entries[0].time, "2026-05-12T00:00:10.000Z");
-    assert.equal(completed.entries[0].startedAt, "2026-05-12T00:00:10.000Z");
-    assert.equal(completed.entries[0].completedAt, "2026-05-12T00:00:15.000Z");
+    expect(completed.entries[0].toolName).toBe("Read");
+    expect(completed.entries[0].toolStatus).toBe("completed");
+    expect(completed.entries[0].toolOutput).toBe("README contents");
+    expect(completed.entries[0].time).toBe("2026-05-12T00:00:10.000Z");
+    expect(completed.entries[0].startedAt).toBe("2026-05-12T00:00:10.000Z");
+    expect(completed.entries[0].completedAt).toBe("2026-05-12T00:00:15.000Z");
   }
 });
 
@@ -655,10 +638,10 @@ test("projects completed result_failed items as failed tools", () => {
     ]),
   );
 
-  assert.equal(projection.entries[0]?.kind, "tool");
+  expect(projection.entries[0]?.kind).toBe("tool");
   if (projection.entries[0]?.kind === "tool") {
-    assert.equal(projection.entries[0].toolStatus, "failed");
-    assert.equal(projection.entries[0].toolOutput, "1 failed");
+    expect(projection.entries[0].toolStatus).toBe("failed");
+    expect(projection.entries[0].toolOutput).toBe("1 failed");
   }
 });
 
@@ -680,9 +663,9 @@ test("projects active client nonce for resumed running turn", () => {
     ]),
   );
 
-  assert.equal(projection.runStatus, "streaming");
-  assert.equal(projection.activeTurnId, "turn-resumed");
-  assert.equal(projection.activeClientNonce, "client-resumed-1");
+  expect(projection.runStatus).toBe("streaming");
+  expect(projection.activeTurnId).toBe("turn-resumed");
+  expect(projection.activeClientNonce).toBe("client-resumed-1");
 });
 
 test("canonical duplicate delivery converges before projection", () => {
@@ -704,13 +687,13 @@ test("canonical duplicate delivery converges before projection", () => {
 
   // Two entries: the user message + the "Stopped" transcript meta line
   // derived from turn.interrupted. Duplicate delivery must not double either.
-  assert.equal(projection.entries.length, 2);
+  expect(projection.entries.length).toBe(2);
   const messageEntries = projection.entries.filter((e) => e.kind === "message");
   const metaEntries = projection.entries.filter((e) => e.kind === "meta");
-  assert.equal(messageEntries.length, 1);
-  assert.equal(metaEntries.length, 1);
-  assert.equal(projection.stopped, true);
-  assert.equal(projection.failed, false);
+  expect(messageEntries.length).toBe(1);
+  expect(metaEntries.length).toBe(1);
+  expect(projection.stopped).toBe(true);
+  expect(projection.failed).toBe(false);
 });
 
 test("projects author_kind onto the user message entry", () => {
@@ -726,10 +709,10 @@ test("projects author_kind onto the user message entry", () => {
     ]),
   );
 
-  assert.equal(projection.entries.length, 1);
-  assert.equal(projection.entries[0]?.kind, "message");
+  expect(projection.entries.length).toBe(1);
+  expect(projection.entries[0]?.kind).toBe("message");
   if (projection.entries[0]?.kind === "message") {
-    assert.equal(projection.entries[0].authorKind, "system");
+    expect(projection.entries[0].authorKind).toBe("system");
   }
 });
 
@@ -752,14 +735,14 @@ test("projects durable skill invocation display metadata", () => {
     ]),
   );
 
-  assert.equal(projection.entries.length, 1);
-  assert.equal(projection.entries[0]?.kind, "message");
+  expect(projection.entries.length).toBe(1);
+  expect(projection.entries[0]?.kind).toBe("message");
   if (projection.entries[0]?.kind === "message") {
-    assert.deepEqual(projection.entries[0].display, {
-      kind: "skill_invocation",
-      skill_name: "test",
-      supplemental_text: "please verify",
-    });
+    expect(projection.entries[0].display).toEqual({
+            kind: "skill_invocation",
+            skill_name: "test",
+            supplemental_text: "please verify",
+          });
   }
 });
 
@@ -783,8 +766,8 @@ test("turn.awaiting_input surfaces the live needs-input signal", () => {
     ]),
   );
 
-  assert.equal(projection.needsInput, true);
-  assert.equal(projection.runStatus, "needs_input");
+  expect(projection.needsInput).toBe(true);
+  expect(projection.runStatus).toBe("needs_input");
 });
 
 test("turn.input_answered clears needs-input without adding a transcript message", () => {
@@ -816,8 +799,8 @@ test("turn.input_answered clears needs-input without adding a transcript message
     ]),
   );
 
-  assert.equal(projection.needsInput, false);
-  assert.equal(projection.entries.some((entry) => entry.kind === "message" && entry.role === "user"), false);
+  expect(projection.needsInput).toBe(false);
+  expect(projection.entries.some((entry) => entry.kind === "message" && entry.role === "user")).toBe(false);
 });
 
 // The interrupted-while-awaiting-input case is owned by the server projection:

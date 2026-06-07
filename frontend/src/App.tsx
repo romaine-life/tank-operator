@@ -5827,7 +5827,7 @@ async function buildForkSessionPrompt(
   );
 }
 
-function CopyButton({ text }: { text: string }) {
+export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -5860,7 +5860,7 @@ function CopyButton({ text }: { text: string }) {
 // (?session=<id>&message=<entry.id>) so a human pasting it lands on the
 // session and scrolls/highlights the entry, while an agent can parse
 // the query params to fetch the underlying event from the API.
-function LinkButton({
+export function LinkButton({
   sessionId,
   entryId,
 }: {
@@ -5899,7 +5899,7 @@ function LinkButton({
   );
 }
 
-function TurnViewButton({
+export function TurnViewButton({
   turnId,
   href,
   onOpenTurn,
@@ -6537,7 +6537,7 @@ interface QuestionPageNavigation {
   onSelectPage?: (page: number) => void;
 }
 
-const RunContext = createContext<{
+export const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   submitAnswer: (askingTurnId: string, payload: AnswerPayload) => Promise<void>;
   askUserQuestionDrafts: Record<string, AskUserQuestionDraft | undefined>;

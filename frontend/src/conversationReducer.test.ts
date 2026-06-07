@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import {
   initialConversationState,
@@ -44,18 +43,18 @@ function ev(
 
 test("context.compacted is a valid Tank envelope", () => {
   const event = ev("c", "context.compacted", { source: "claude", payload: { trigger: "manual" } });
-  assert.equal(isTankConversationEvent(event), true);
+  expect(isTankConversationEvent(event)).toBe(true);
 });
 
 test("turn.claimed is a valid Tank envelope and keeps the turn submitted", () => {
   const event = ev("2", "turn.claimed", { source: "claude", client_nonce: "client-1" });
-  assert.equal(isTankConversationEvent(event), true);
+  expect(isTankConversationEvent(event)).toBe(true);
   const state = reduceConversationEvents([
     ev("1", "turn.submitted"),
     event,
   ]);
-  assert.equal(state.runStatus, "submitted");
-  assert.equal(state.activeTurnId, "turn-1");
+  expect(state.runStatus).toBe("submitted");
+  expect(state.activeTurnId).toBe("turn-1");
 });
 
 test("late turn.started after terminal does not reactivate a stopped turn", () => {
@@ -64,8 +63,8 @@ test("late turn.started after terminal does not reactivate a stopped turn", () =
     ev("2", "turn.interrupted", { source: "claude", payload: { reason: "client_interrupt" } }),
     ev("3", "turn.started", { source: "claude" }),
   ]);
-  assert.equal(state.runStatus, "stopped");
-  assert.equal(state.activeTurnId, null);
+  expect(state.runStatus).toBe("stopped");
+  expect(state.activeTurnId).toBe(null);
 });
 
 test("context.compacted is an informational no-op for run state", () => {
@@ -74,11 +73,11 @@ test("context.compacted is an informational no-op for run state", () => {
     ev("2", "turn.started"),
     ev("3", "context.compacted", { source: "claude", payload: { trigger: "auto", pre_tokens: 158000 } }),
   ]);
-  assert.equal(state.runStatus, "streaming");
-  assert.equal(state.activeTurnId, "turn-1");
-  assert.equal(state.needsInput, false);
-  assert.equal(state.failed, false);
-  assert.equal(state.seenEventIds.includes("3"), true);
+  expect(state.runStatus).toBe("streaming");
+  expect(state.activeTurnId).toBe("turn-1");
+  expect(state.needsInput).toBe(false);
+  expect(state.failed).toBe(false);
+  expect(state.seenEventIds.includes("3")).toBe(true);
 });
 
 test("Codex interrupt is stopped state, not provider error", () => {
@@ -97,9 +96,9 @@ test("Codex interrupt is stopped state, not provider error", () => {
     }),
   ]);
 
-  assert.equal(state.runStatus, "stopped");
-  assert.equal(state.failed, false);
-  assert.equal(state.messages.length, 1);
+  expect(state.runStatus).toBe("stopped");
+  expect(state.failed).toBe(false);
+  expect(state.messages.length).toBe(1);
 });
 
 test("session status events replay as durable system messages", () => {
@@ -118,12 +117,12 @@ test("session status events replay as durable system messages", () => {
     }),
   ]);
 
-  assert.deepEqual(state.messages.map((message) => message.role), ["system", "system"]);
-  assert.deepEqual(state.messages.map((message) => message.text), [
-    "Session is loading.",
-    "Session is ready.",
-  ]);
-  assert.equal(state.runStatus, "ready");
+  expect(state.messages.map((message) => message.role)).toEqual(["system", "system"]);
+  expect(state.messages.map((message) => message.text)).toEqual([
+        "Session is loading.",
+        "Session is ready.",
+      ]);
+  expect(state.runStatus).toBe("ready");
 });
 
 test("Normal turn reaches ready with one user message and assistant item", () => {
@@ -144,15 +143,15 @@ test("Normal turn reaches ready with one user message and assistant item", () =>
     ev("5", "turn.completed", { source: "claude" }),
   ]);
 
-  assert.equal(state.runStatus, "ready");
-  assert.equal(state.messages.length, 1);
-  assert.equal(state.messages[0]?.text, "summarize");
-  assert.equal(state.items.length, 1);
-  assert.equal(state.items[0]?.actor, "assistant");
-  assert.equal(state.items[0]?.text, "summary");
-  assert.equal(state.activeTurnId, null);
-  assert.equal(state.turnTerminals["turn-1"]?.status, "completed");
-  assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "5");
+  expect(state.runStatus).toBe("ready");
+  expect(state.messages.length).toBe(1);
+  expect(state.messages[0]?.text).toBe("summarize");
+  expect(state.items.length).toBe(1);
+  expect(state.items[0]?.actor).toBe("assistant");
+  expect(state.items[0]?.text).toBe("summary");
+  expect(state.activeTurnId).toBe(null);
+  expect(state.turnTerminals["turn-1"]?.status).toBe("completed");
+  expect(state.turnTerminals["turn-1"]?.sourceEventId).toBe("5");
 });
 
 test("turn.usage records latest usage without closing the active turn", () => {
@@ -186,13 +185,13 @@ test("turn.usage records latest usage without closing the active turn", () => {
     }),
   ]);
 
-  assert.equal(state.runStatus, "streaming");
-  assert.equal(state.activeTurnId, "turn-1");
-  assert.deepEqual(state.lastUsage, latestUsage);
-  assert.equal(state.turnUsages["turn-1"]?.orderKey, "0003");
-  assert.equal(state.turnUsages["turn-1"]?.endOrderKey, "0004");
-  assert.deepEqual(state.turnUsages["turn-1"]?.usage, latestUsage);
-  assert.deepEqual(state.turnUsages["turn-1"]?.usageObservation, usageObservation);
+  expect(state.runStatus).toBe("streaming");
+  expect(state.activeTurnId).toBe("turn-1");
+  expect(state.lastUsage).toEqual(latestUsage);
+  expect(state.turnUsages["turn-1"]?.orderKey).toBe("0003");
+  expect(state.turnUsages["turn-1"]?.endOrderKey).toBe("0004");
+  expect(state.turnUsages["turn-1"]?.usage).toEqual(latestUsage);
+  expect(state.turnUsages["turn-1"]?.usageObservation).toEqual(usageObservation);
 });
 
 test("origin_session_id on user message flows onto ConversationMessage", () => {
@@ -210,8 +209,8 @@ test("origin_session_id on user message flows onto ConversationMessage", () => {
     } as Partial<TankConversationEvent>),
   ]);
 
-  assert.equal(state.messages.length, 1);
-  assert.equal(state.messages[0]?.originSessionId, "42");
+  expect(state.messages.length).toBe(1);
+  expect(state.messages[0]?.originSessionId).toBe("42");
 });
 
 test("user message without origin_session_id leaves originSessionId undefined", () => {
@@ -223,8 +222,8 @@ test("user message without origin_session_id leaves originSessionId undefined", 
     }),
   ]);
 
-  assert.equal(state.messages.length, 1);
-  assert.equal(state.messages[0]?.originSessionId, undefined);
+  expect(state.messages.length).toBe(1);
+  expect(state.messages[0]?.originSessionId).toBe(undefined);
 });
 
 test("author_kind on user message flows onto ConversationMessage", () => {
@@ -240,8 +239,8 @@ test("author_kind on user message flows onto ConversationMessage", () => {
     } as Partial<TankConversationEvent>),
   ]);
 
-  assert.equal(state.messages.length, 1);
-  assert.equal(state.messages[0]?.authorKind, "system");
+  expect(state.messages.length).toBe(1);
+  expect(state.messages[0]?.authorKind).toBe("system");
 });
 
 test("user message without author_kind leaves authorKind undefined", () => {
@@ -253,8 +252,8 @@ test("user message without author_kind leaves authorKind undefined", () => {
     }),
   ]);
 
-  assert.equal(state.messages.length, 1);
-  assert.equal(state.messages[0]?.authorKind, undefined);
+  expect(state.messages.length).toBe(1);
+  expect(state.messages[0]?.authorKind).toBe(undefined);
 });
 
 test("Tool lifecycle replays to a completed tool item", () => {
@@ -277,13 +276,13 @@ test("Tool lifecycle replays to a completed tool item", () => {
     ev("4", "turn.completed"),
   ]);
 
-  assert.equal(state.runStatus, "ready");
-  assert.equal(state.activeItemId, null);
-  assert.deepEqual(state.items.map((item) => [item.id, item.status, item.title]), [
-    ["toolu-read", "completed", "Read"],
-  ]);
-  assert.equal(state.items[0]?.startedAt, "2026-05-12T00:00:10.000Z");
-  assert.equal(state.items[0]?.completedAt, "2026-05-12T00:00:15.000Z");
+  expect(state.runStatus).toBe("ready");
+  expect(state.activeItemId).toBe(null);
+  expect(state.items.map((item) => [item.id, item.status, item.title])).toEqual([
+        ["toolu-read", "completed", "Read"],
+      ]);
+  expect(state.items[0]?.startedAt).toBe("2026-05-12T00:00:10.000Z");
+  expect(state.items[0]?.completedAt).toBe("2026-05-12T00:00:15.000Z");
 });
 
 test("Background shell task lifecycle replays independent of active tool state", () => {
@@ -328,21 +327,21 @@ test("Background shell task lifecycle replays independent of active tool state",
     }),
   ]);
 
-  assert.equal(state.runStatus, "ready");
-  assert.equal(state.items.length, 0);
-  assert.equal(state.backgroundTasks.length, 1);
-  assert.equal(state.backgroundTasks[0]?.status, "completed");
-  assert.equal(state.backgroundTasks[0]?.taskId, "task-abc");
-  assert.equal(state.backgroundTasks[0]?.toolUseId, "toolu-monitor");
-  assert.equal(state.backgroundTasks[0]?.summary, "Log watch finished");
-  assert.equal(state.backgroundTasks[0]?.command, "tail -f app.log");
-  assert.equal(state.backgroundTasks[0]?.cwd, "/workspace/app");
-  assert.equal(state.backgroundTasks[0]?.processId, "proc-abc");
-  assert.equal(state.backgroundTasks[0]?.output, "booting\nready\n");
-  assert.equal(state.backgroundTasks[0]?.exitCode, 0);
-  assert.equal(state.backgroundTasks[0]?.durationMs, 10_000);
-  assert.equal(state.backgroundTasks[0]?.startedAt, "2026-05-12T00:00:10.000Z");
-  assert.equal(state.backgroundTasks[0]?.completedAt, "2026-05-12T00:00:20.000Z");
+  expect(state.runStatus).toBe("ready");
+  expect(state.items.length).toBe(0);
+  expect(state.backgroundTasks.length).toBe(1);
+  expect(state.backgroundTasks[0]?.status).toBe("completed");
+  expect(state.backgroundTasks[0]?.taskId).toBe("task-abc");
+  expect(state.backgroundTasks[0]?.toolUseId).toBe("toolu-monitor");
+  expect(state.backgroundTasks[0]?.summary).toBe("Log watch finished");
+  expect(state.backgroundTasks[0]?.command).toBe("tail -f app.log");
+  expect(state.backgroundTasks[0]?.cwd).toBe("/workspace/app");
+  expect(state.backgroundTasks[0]?.processId).toBe("proc-abc");
+  expect(state.backgroundTasks[0]?.output).toBe("booting\nready\n");
+  expect(state.backgroundTasks[0]?.exitCode).toBe(0);
+  expect(state.backgroundTasks[0]?.durationMs).toBe(10_000);
+  expect(state.backgroundTasks[0]?.startedAt).toBe("2026-05-12T00:00:10.000Z");
+  expect(state.backgroundTasks[0]?.completedAt).toBe("2026-05-12T00:00:20.000Z");
 });
 
 test("Codex userMessage provider echo items are ignored on frontend replay", () => {
@@ -400,11 +399,8 @@ test("Codex userMessage provider echo items are ignored on frontend replay", () 
     }),
   ]);
 
-  assert.equal(state.messages.length, 1);
-  assert.deepEqual(
-    state.items.map((item) => [item.id, item.kind, item.text]),
-    [["turn-1:item:item-agent-message", "agent_message", "hi"]],
-  );
+  expect(state.messages.length).toBe(1);
+  expect(state.items.map((item) => [item.id, item.kind, item.text])).toEqual([["turn-1:item:item-agent-message", "agent_message", "hi"]]);
 });
 
 test("Late item.started does not regress a completed tool back to running", () => {
@@ -448,17 +444,17 @@ test("Late item.started does not regress a completed tool back to running", () =
     }),
   ]);
 
-  assert.equal(state.items.length, 1);
-  assert.equal(state.items[0]?.status, "completed");
-  assert.equal(state.activeItemId, null);
-  assert.deepEqual(state.items[0]?.payload?.raw_item, {
-    id: "item_1",
-    type: "command_execution",
-    status: "completed",
-    command: "/bin/sh -lc \"printf 'success\\n'\"",
-    exit_code: 0,
-    aggregated_output: "success\n",
-  });
+  expect(state.items.length).toBe(1);
+  expect(state.items[0]?.status).toBe("completed");
+  expect(state.activeItemId).toBe(null);
+  expect(state.items[0]?.payload?.raw_item).toEqual({
+        id: "item_1",
+        type: "command_execution",
+        status: "completed",
+        command: "/bin/sh -lc \"printf 'success\\n'\"",
+        exit_code: 0,
+        aggregated_output: "success\n",
+      });
 });
 
 test("Late item.started does not regress a failed result back to running", () => {
@@ -502,9 +498,9 @@ test("Late item.started does not regress a failed result back to running", () =>
     }),
   ]);
 
-  assert.equal(state.items.length, 1);
-  assert.equal(state.items[0]?.status, "failed");
-  assert.equal(state.activeItemId, null);
+  expect(state.items.length).toBe(1);
+  expect(state.items[0]?.status).toBe("failed");
+  expect(state.activeItemId).toBe(null);
 });
 
 test("Duplicate user submissions with the same client nonce do not duplicate bubbles", () => {
@@ -521,8 +517,8 @@ test("Duplicate user submissions with the same client nonce do not duplicate bub
     }),
   ]);
 
-  assert.equal(state.messages.length, 1);
-  assert.equal(state.messages[0]?.text, "same prompt");
+  expect(state.messages.length).toBe(1);
+  expect(state.messages[0]?.text).toBe("same prompt");
 });
 
 test("turn.awaiting_input hands off; answer submission opens a continuation turn", () => {
@@ -541,9 +537,9 @@ test("turn.awaiting_input hands off; answer submission opens a continuation turn
       },
     }),
   ]);
-  assert.equal(paused.needsInput, true);
-  assert.equal(paused.runStatus, "needs_input");
-  assert.equal(paused.activeTurnId, "turn-ask");
+  expect(paused.needsInput).toBe(true);
+  expect(paused.runStatus).toBe("needs_input");
+  expect(paused.activeTurnId).toBe("turn-ask");
 
   const resumed = reduceConversationEvents([
     ev("1", "turn.started", { turn_id: "turn-ask" }),
@@ -575,9 +571,9 @@ test("turn.awaiting_input hands off; answer submission opens a continuation turn
       client_nonce: "answer-1",
     }),
   ]);
-  assert.equal(resumed.needsInput, false);
-  assert.equal(resumed.runStatus, "submitted");
-  assert.equal(resumed.activeTurnId, "turn-answer");
+  expect(resumed.needsInput).toBe(false);
+  expect(resumed.runStatus).toBe("submitted");
+  expect(resumed.activeTurnId).toBe("turn-answer");
 });
 
 test("Provider error becomes terminal error state without needs-input", () => {
@@ -589,12 +585,12 @@ test("Provider error becomes terminal error state without needs-input", () => {
     }),
   ]);
 
-  assert.equal(state.runStatus, "error");
-  assert.equal(state.failed, true);
-  assert.equal(state.needsInput, false);
-  assert.equal(state.activeTurnId, null);
-  assert.equal(state.turnTerminals["turn-1"]?.status, "failed");
-  assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "3");
+  expect(state.runStatus).toBe("error");
+  expect(state.failed).toBe(true);
+  expect(state.needsInput).toBe(false);
+  expect(state.activeTurnId).toBe(null);
+  expect(state.turnTerminals["turn-1"]?.status).toBe("failed");
+  expect(state.turnTerminals["turn-1"]?.sourceEventId).toBe("3");
 });
 
 test("turn.interrupt_requested transitions streaming → stopping", () => {
@@ -612,10 +608,10 @@ test("turn.interrupt_requested transitions streaming → stopping", () => {
     }),
   ]);
 
-  assert.equal(state.runStatus, "stopping");
-  assert.equal(state.activeTurnId, "turn-1");
-  assert.equal(state.interruptRequests.length, 1);
-  assert.equal(state.interruptRequests[0]?.turnId, "turn-1");
+  expect(state.runStatus).toBe("stopping");
+  expect(state.activeTurnId).toBe("turn-1");
+  expect(state.interruptRequests.length).toBe(1);
+  expect(state.interruptRequests[0]?.turnId).toBe("turn-1");
 });
 
 test("turn.interrupt_requested → turn.interrupted resolves to stopped", () => {
@@ -625,11 +621,11 @@ test("turn.interrupt_requested → turn.interrupted resolves to stopped", () => 
     ev("3", "turn.interrupted", { source: "claude", payload: { reason: "client_interrupt" } }),
   ]);
 
-  assert.equal(state.runStatus, "stopped");
-  assert.equal(state.activeTurnId, null);
-  assert.equal(state.interruptRequests.length, 1);
-  assert.equal(state.turnTerminals["turn-1"]?.status, "interrupted");
-  assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "3");
+  expect(state.runStatus).toBe("stopped");
+  expect(state.activeTurnId).toBe(null);
+  expect(state.interruptRequests.length).toBe(1);
+  expect(state.turnTerminals["turn-1"]?.status).toBe("interrupted");
+  expect(state.turnTerminals["turn-1"]?.sourceEventId).toBe("3");
 });
 
 test("turn.interrupt_requested losing race to turn.completed resolves to ready", () => {
@@ -639,12 +635,12 @@ test("turn.interrupt_requested losing race to turn.completed resolves to ready",
     ev("3", "turn.completed", { source: "claude" }),
   ]);
 
-  assert.equal(state.runStatus, "ready");
-  assert.equal(state.activeTurnId, null);
+  expect(state.runStatus).toBe("ready");
+  expect(state.activeTurnId).toBe(null);
   // Chip stays as transcript evidence even though stop "lost the race."
-  assert.equal(state.interruptRequests.length, 1);
-  assert.equal(state.turnTerminals["turn-1"]?.status, "completed");
-  assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "3");
+  expect(state.interruptRequests.length).toBe(1);
+  expect(state.turnTerminals["turn-1"]?.status).toBe("completed");
+  expect(state.turnTerminals["turn-1"]?.sourceEventId).toBe("3");
 });
 
 test("turn.interrupt_requested followed by turn.command_failed resolves to error", () => {
@@ -658,11 +654,11 @@ test("turn.interrupt_requested followed by turn.command_failed resolves to error
     }),
   ]);
 
-  assert.equal(state.runStatus, "error");
-  assert.equal(state.failed, true);
-  assert.equal(state.interruptRequests.length, 1);
-  assert.equal(state.turnTerminals["turn-1"]?.status, "failed");
-  assert.equal(state.turnTerminals["turn-1"]?.sourceEventId, "3");
+  expect(state.runStatus).toBe("error");
+  expect(state.failed).toBe(true);
+  expect(state.interruptRequests.length).toBe(1);
+  expect(state.turnTerminals["turn-1"]?.status).toBe("failed");
+  expect(state.turnTerminals["turn-1"]?.sourceEventId).toBe("3");
 });
 
 test("Late turn.interrupt_requested after terminal state does NOT downgrade run status", () => {
@@ -674,8 +670,8 @@ test("Late turn.interrupt_requested after terminal state does NOT downgrade run 
 
   // Stop request lands after the turn already cleanly finished. Chip is
   // recorded for transcript transparency, but runStatus stays ready.
-  assert.equal(state.runStatus, "ready");
-  assert.equal(state.interruptRequests.length, 1);
+  expect(state.runStatus).toBe("ready");
+  expect(state.interruptRequests.length).toBe(1);
 });
 
 // item.failed marks a single tool call as errored; the agent typically
@@ -707,14 +703,14 @@ test("item.failed mid-turn does NOT flip runStatus or set failed", () => {
     }),
   ]);
 
-  assert.equal(state.runStatus, "streaming");
-  assert.equal(state.failed, false);
-  assert.equal(state.lastError, null);
-  assert.equal(state.activeTurnId, "turn-1");
+  expect(state.runStatus).toBe("streaming");
+  expect(state.failed).toBe(false);
+  expect(state.lastError).toBe(null);
+  expect(state.activeTurnId).toBe("turn-1");
   // The per-item failure must still show in the transcript so the
   // user sees the orange error badge under the tool call.
   const failedItem = state.items.find((item) => item.id === "tool-1");
-  assert.equal(failedItem?.status, "failed");
+  expect(failedItem?.status).toBe("failed");
 });
 
 test("completed item with result_failed outcome marks the item failed without failing the session", () => {
@@ -732,9 +728,9 @@ test("completed item with result_failed outcome marks the item failed without fa
     }),
   ]);
 
-  assert.equal(state.runStatus, "streaming");
-  assert.equal(state.failed, false);
-  assert.equal(state.items.find((item) => item.id === "tool-warn")?.status, "failed");
+  expect(state.runStatus).toBe("streaming");
+  expect(state.failed).toBe(false);
+  expect(state.items.find((item) => item.id === "tool-warn")?.status).toBe("failed");
 });
 
 test("completed command item with legacy nonzero raw exit code marks the item failed", () => {
@@ -752,7 +748,7 @@ test("completed command item with legacy nonzero raw exit code marks the item fa
     }),
   ]);
 
-  assert.equal(state.items.find((item) => item.id === "legacy-exit")?.status, "failed");
+  expect(state.items.find((item) => item.id === "legacy-exit")?.status).toBe("failed");
 });
 
 test("turn.completed after a mid-turn item.failed resolves to ready, not error", () => {
@@ -773,9 +769,9 @@ test("turn.completed after a mid-turn item.failed resolves to ready, not error",
     ev("4", "turn.completed", { source: "claude" }),
   ]);
 
-  assert.equal(state.runStatus, "ready");
-  assert.equal(state.failed, false);
-  assert.equal(state.lastError, null);
+  expect(state.runStatus).toBe("ready");
+  expect(state.failed).toBe(false);
+  expect(state.lastError).toBe(null);
 });
 
 test("Duplicate turn.interrupt_requested events dedupe by event_id", () => {
@@ -785,8 +781,8 @@ test("Duplicate turn.interrupt_requested events dedupe by event_id", () => {
     ev("dup", "turn.interrupt_requested", { actor: "system", source: "tank" }),
   ]);
 
-  assert.equal(state.runStatus, "stopping");
-  assert.equal(state.interruptRequests.length, 1);
+  expect(state.runStatus).toBe("stopping");
+  expect(state.interruptRequests.length).toBe(1);
 });
 
 test("Timeline replay and SSE delivery converge through event id dedupe", () => {
@@ -807,78 +803,78 @@ test("Timeline replay and SSE delivery converge through event id dedupe", () => 
   const replayOnly = reduceConversationEvents(events);
   const replayThenLive = reduceConversationEvents(events, reduceConversationEvents(events));
 
-  assert.deepEqual(replayThenLive, replayOnly);
-  assert.notDeepEqual(replayOnly, initialConversationState);
+  expect(replayThenLive).toEqual(replayOnly);
+  expect(replayOnly).not.toEqual(initialConversationState);
 });
 
 test("contract guard rejects malformed per-type events", () => {
-  assert.equal(isTankConversationEvent(ev("10", "user_message.created", {
-    actor: "user",
-    timeline_id: "turn-1:user",
-    client_nonce: "client-1",
-    payload: { text: "hello", display: { kind: "plain" } },
-  })), true);
+  expect(isTankConversationEvent(ev("10", "user_message.created", {
+        actor: "user",
+        timeline_id: "turn-1:user",
+        client_nonce: "client-1",
+        payload: { text: "hello", display: { kind: "plain" } },
+      }))).toBe(true);
 
-  assert.equal(isTankConversationEvent(ev("session:63:status:loading", "session.status", {
-    actor: "system",
-    timeline_id: "session:63:status:loading",
-    payload: { status: "loading", text: "Session is loading." },
-  })), true);
+  expect(isTankConversationEvent(ev("session:63:status:loading", "session.status", {
+        actor: "system",
+        timeline_id: "session:63:status:loading",
+        payload: { status: "loading", text: "Session is loading." },
+      }))).toBe(true);
 
-  assert.equal(isTankConversationEvent(ev("turn-1:usage:1", "turn.usage", {
-    source: "codex",
-    payload: { usage: { input_tokens: 1, output_tokens: 1 } },
-  })), true);
+  expect(isTankConversationEvent(ev("turn-1:usage:1", "turn.usage", {
+        source: "codex",
+        payload: { usage: { input_tokens: 1, output_tokens: 1 } },
+      }))).toBe(true);
 
-  assert.equal(isTankConversationEvent({
-    event_id: "bad-user",
-    order_key: "bad-user",
-    session_id: "63",
-    turn_id: "turn-1",
-    actor: "user",
-    source: "tank",
-    type: "user_message.created",
-    created_at: "2026-05-12T00:00:00.000Z",
-    visibility: "durable",
-    payload: { text: "hello" },
-  }), false);
+  expect(isTankConversationEvent({
+        event_id: "bad-user",
+        order_key: "bad-user",
+        session_id: "63",
+        turn_id: "turn-1",
+        actor: "user",
+        source: "tank",
+        type: "user_message.created",
+        created_at: "2026-05-12T00:00:00.000Z",
+        visibility: "durable",
+        payload: { text: "hello" },
+      })).toBe(false);
 
-  assert.equal(isTankConversationEvent({
-    event_id: "bad-session-status",
-    order_key: "bad-session-status",
-    session_id: "63",
-    timeline_id: "session:63:status:loading",
-    actor: "system",
-    source: "tank",
-    type: "session.status",
-    created_at: "2026-05-12T00:00:00.000Z",
-    visibility: "durable",
-    payload: { status: "loading" },
-  }), false);
+  expect(isTankConversationEvent({
+        event_id: "bad-session-status",
+        order_key: "bad-session-status",
+        session_id: "63",
+        timeline_id: "session:63:status:loading",
+        actor: "system",
+        source: "tank",
+        type: "session.status",
+        created_at: "2026-05-12T00:00:00.000Z",
+        visibility: "durable",
+        payload: { status: "loading" },
+      })).toBe(false);
 
-  assert.equal(isTankConversationEvent({
-    event_id: "bad-usage",
-    order_key: "bad-usage",
-    session_id: "63",
-    turn_id: "turn-1",
-    actor: "runner",
-    source: "codex",
-    type: "turn.usage",
-    created_at: "2026-05-12T00:00:00.000Z",
-    visibility: "durable",
-    payload: {},
-  }), false);
+  expect(isTankConversationEvent({
+        event_id: "bad-usage",
+        order_key: "bad-usage",
+        session_id: "63",
+        turn_id: "turn-1",
+        actor: "runner",
+        source: "codex",
+        type: "turn.usage",
+        created_at: "2026-05-12T00:00:00.000Z",
+        visibility: "durable",
+        payload: {},
+      })).toBe(false);
 
-  assert.equal(isTankConversationEvent({
-    event_id: "bad-item",
-    order_key: "bad-item",
-    session_id: "63",
-    turn_id: "turn-1",
-    actor: "assistant",
-    source: "claude",
-    type: "item.completed",
-    created_at: "2026-05-12T00:00:00.000Z",
-    visibility: "durable",
-    payload: { kind: "message" },
-  }), false);
+  expect(isTankConversationEvent({
+        event_id: "bad-item",
+        order_key: "bad-item",
+        session_id: "63",
+        turn_id: "turn-1",
+        actor: "assistant",
+        source: "claude",
+        type: "item.completed",
+        created_at: "2026-05-12T00:00:00.000Z",
+        visibility: "durable",
+        payload: { kind: "message" },
+      })).toBe(false);
 });

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import {
   CHAT_MODES,
@@ -17,13 +16,13 @@ import {
 
 test("antigravity_gui keeps the full GUI chat surface contract", () => {
   const mode = "antigravity_gui";
-  assert.equal(isDefaultSessionMode(mode), true);
-  assert.ok(DEFAULT_SESSION_MODES.has(mode));
-  assert.ok(CHAT_MODES.has(mode));
-  assert.ok(SDK_CHAT_MODES.has(mode));
-  assert.ok(GUI_ROLLOUT_MODES.has(mode));
-  assert.ok(REPO_SUPPORTED_MODES.has(mode));
-  assert.ok(WORKSPACE_FILE_MODES.has(mode));
+  expect(isDefaultSessionMode(mode)).toBe(true);
+  expect(DEFAULT_SESSION_MODES.has(mode)).toBeTruthy();
+  expect(CHAT_MODES.has(mode)).toBeTruthy();
+  expect(SDK_CHAT_MODES.has(mode)).toBeTruthy();
+  expect(GUI_ROLLOUT_MODES.has(mode)).toBeTruthy();
+  expect(REPO_SUPPORTED_MODES.has(mode)).toBeTruthy();
+  expect(WORKSPACE_FILE_MODES.has(mode)).toBeTruthy();
 });
 
 test("provider-picker GUI modes declare the complete chat surface", () => {
@@ -32,25 +31,13 @@ test("provider-picker GUI modes declare the complete chat surface", () => {
     if (mode == null) continue;
 
     const contract = SESSION_MODE_CONTRACT[mode];
-    assert.equal(
-      contract.interaction,
-      "gui",
-      `${mode} should be a GUI interaction`,
-    );
-    assert.equal(
-      contract.defaultSelectable,
-      true,
-      `${mode} should round-trip default mode persistence`,
-    );
-    assert.equal(contract.chatSurface, true, `${mode} should keep chat chrome`);
-    assert.equal(contract.sdkChat, true, `${mode} should use SDK chat flow`);
-    assert.equal(
-      contract.workspaceFiles,
-      true,
-      `${mode} should keep attachment/workspace affordances`,
-    );
-    assert.equal(contract.repos, true, `${mode} should support repo selection`);
-    assert.equal(contract.rollout, "gui", `${mode} should expose GUI rollout`);
+    expect(contract.interaction, `${mode} should be a GUI interaction`).toBe("gui");
+    expect(contract.defaultSelectable, `${mode} should round-trip default mode persistence`).toBe(true);
+    expect(contract.chatSurface, `${mode} should keep chat chrome`).toBe(true);
+    expect(contract.sdkChat, `${mode} should use SDK chat flow`).toBe(true);
+    expect(contract.workspaceFiles, `${mode} should keep attachment/workspace affordances`).toBe(true);
+    expect(contract.repos, `${mode} should support repo selection`).toBe(true);
+    expect(contract.rollout, `${mode} should expose GUI rollout`).toBe("gui");
   }
 });
 
@@ -58,11 +45,11 @@ test("derived mode sets match the session-mode contract", () => {
   for (const [mode, contract] of Object.entries(SESSION_MODE_CONTRACT) as Array<
     [SessionMode, (typeof SESSION_MODE_CONTRACT)[SessionMode]]
   >) {
-    assert.equal(DEFAULT_SESSION_MODES.has(mode), contract.defaultSelectable);
-    assert.equal(CHAT_MODES.has(mode), contract.chatSurface);
-    assert.equal(SDK_CHAT_MODES.has(mode), contract.sdkChat);
-    assert.equal(WORKSPACE_FILE_MODES.has(mode), contract.workspaceFiles);
-    assert.equal(REPO_SUPPORTED_MODES.has(mode), contract.repos);
-    assert.equal(GUI_ROLLOUT_MODES.has(mode), contract.rollout === "gui");
+    expect(DEFAULT_SESSION_MODES.has(mode)).toBe(contract.defaultSelectable);
+    expect(CHAT_MODES.has(mode)).toBe(contract.chatSurface);
+    expect(SDK_CHAT_MODES.has(mode)).toBe(contract.sdkChat);
+    expect(WORKSPACE_FILE_MODES.has(mode)).toBe(contract.workspaceFiles);
+    expect(REPO_SUPPORTED_MODES.has(mode)).toBe(contract.repos);
+    expect(GUI_ROLLOUT_MODES.has(mode)).toBe(contract.rollout === "gui");
   }
 });

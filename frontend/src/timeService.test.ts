@@ -1,6 +1,4 @@
-import { afterEach, beforeEach, test } from "node:test";
-import assert from "node:assert/strict";
-
+import { afterEach, beforeEach, test, expect } from "vitest";
 import {
   __timeServiceListenerCountForTest,
   __timeServiceResetForTest,
@@ -30,23 +28,23 @@ afterEach(() => {
 });
 
 test("ticker stays off until the first listener subscribes", () => {
-  assert.equal(__timeServiceListenerCountForTest(), 0);
-  assert.equal(__timeServiceTickerRunningForTest(), false);
+  expect(__timeServiceListenerCountForTest()).toBe(0);
+  expect(__timeServiceTickerRunningForTest()).toBe(false);
 });
 
 test("first subscriber starts the ticker; tick fans out to every listener", () => {
   let firstCalls = 0;
   let secondCalls = 0;
   const unsubA = __timeServiceSubscribeForTest(() => { firstCalls += 1; });
-  assert.equal(__timeServiceTickerRunningForTest(), true);
+  expect(__timeServiceTickerRunningForTest()).toBe(true);
   const unsubB = __timeServiceSubscribeForTest(() => { secondCalls += 1; });
-  assert.equal(__timeServiceListenerCountForTest(), 2);
+  expect(__timeServiceListenerCountForTest()).toBe(2);
 
   __timeServiceTickForTest();
   __timeServiceTickForTest();
 
-  assert.equal(firstCalls, 2);
-  assert.equal(secondCalls, 2);
+  expect(firstCalls).toBe(2);
+  expect(secondCalls).toBe(2);
 
   unsubA();
   unsubB();
@@ -54,18 +52,18 @@ test("first subscriber starts the ticker; tick fans out to every listener", () =
 
 test("ticker stops once the last subscriber unsubscribes", () => {
   const unsub = __timeServiceSubscribeForTest(() => {});
-  assert.equal(__timeServiceTickerRunningForTest(), true);
+  expect(__timeServiceTickerRunningForTest()).toBe(true);
   unsub();
-  assert.equal(__timeServiceListenerCountForTest(), 0);
-  assert.equal(__timeServiceTickerRunningForTest(), false);
+  expect(__timeServiceListenerCountForTest()).toBe(0);
+  expect(__timeServiceTickerRunningForTest()).toBe(false);
 });
 
 test("unsubscribing one of several listeners keeps the ticker running", () => {
   const unsubA = __timeServiceSubscribeForTest(() => {});
   const unsubB = __timeServiceSubscribeForTest(() => {});
   unsubA();
-  assert.equal(__timeServiceListenerCountForTest(), 1);
-  assert.equal(__timeServiceTickerRunningForTest(), true);
+  expect(__timeServiceListenerCountForTest()).toBe(1);
+  expect(__timeServiceTickerRunningForTest()).toBe(true);
   unsubB();
-  assert.equal(__timeServiceTickerRunningForTest(), false);
+  expect(__timeServiceTickerRunningForTest()).toBe(false);
 });
