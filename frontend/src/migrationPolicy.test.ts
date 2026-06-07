@@ -323,8 +323,12 @@ test("Turns view renders server-projected turn context outside paged activity", 
   expect(appSource.includes("showContextToggleInActivityDivider")).toBe(false);
   expect(appSource.includes("showTurnSectionDivider")).toBe(true);
   expect(appSource.includes("canToggleDetailActivity")).toBe(true);
-  expect(appSource.includes("const canToggleDetailActivity = showDetailActivityDivider;")).toBe(true);
-  expect(appSource.includes("const canToggleDetailActivity = Boolean(selected);")).toBe(false);
+  expect(appSource.includes("const canToggleDetailActivity = Boolean(selected);")).toBe(true);
+  expect(appSource.includes("const canToggleDetailActivity = showDetailActivityDivider;")).toBe(false);
+  expect(appSource.includes("const showDetailActivityDivider")).toBe(false);
+  expect(appSource.includes("selected.active || selectedCollapse?.defaultCollapsed === true")).toBe(true);
+  expect(appSource.includes("selectedActivityCollapseOverride ?? selectedActivityDefaultCollapsed")).toBe(true);
+  expect(appSource.includes("Object.prototype.hasOwnProperty.call(prev, turnId)")).toBe(true);
   expect(appSource.includes("{selected && showDetailActivityDivider && (")).toBe(false);
   expect(appSource.includes("{selected && showTurnSectionDivider && (")).toBe(true);
   expect(appSource).toMatch(/run-turn-view-context-head[\s\S]{0,500}run-turn-view-context-toggle/);

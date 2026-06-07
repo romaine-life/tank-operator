@@ -162,11 +162,16 @@ answer; it must not visibly move a rendered row from one surface to the other.
   activity pages.
 - The dedicated Turns view renders successful final assistant prose from the
   server-projected `/turns/{id}/activity` `final_answer.entries` section, not by
-  inferring finality from the currently selected activity page. Collapsing agent
-  activity hides non-final activity rows across the selected page while keeping
-  that durable final answer visible even when the final-answer event belongs to
-  a different activity page. Failed, interrupted, active, and no-final completed
-  turns do not expose a final-answer collapse affordance.
+  inferring finality from the currently selected activity page. Agent activity
+  is compacted by default so the Turns surface follows the settled chat
+  projection: an active compacted turn derives liveness from the server-owned
+  active shell and keeps context plus the generic running `Thinking...`
+  affordance visible while hiding self-talk/tool rows as they arrive; a
+  completed compacted turn keeps the durable final answer visible even when the
+  final-answer event belongs to a different activity page. Expanding the turn
+  reveals the execution trace for that turn. Failed, interrupted, and no-final
+  completed turns do not expose a compacted final-answer projection because
+  there is no durable assistant result to show.
 - The authenticated Turns view is a chat-capable continuation surface. Its
   composer uses the same `POST /api/sessions/{session_id}/turns` durable
   boundary as the main transcript composer; it does not create a second submit

@@ -168,6 +168,9 @@ func TestProjectTurnPagesCompletedTurnFallsBackToLastAssistantAsFinalAnswer(t *t
 	if collapsible, _ := proj.Collapse["collapsible"].(bool); !collapsible {
 		t.Fatalf("collapse.collapsible = %#v, want true: %#v", proj.Collapse["collapsible"], proj.Collapse)
 	}
+	if defaultCollapsed, _ := proj.Collapse["default_collapsed"].(bool); !defaultCollapsed {
+		t.Fatalf("collapse.default_collapsed = %#v, want true: %#v", proj.Collapse["default_collapsed"], proj.Collapse)
+	}
 }
 
 func TestProjectTurnPagesNoFinalAnswerIsNotCollapsible(t *testing.T) {

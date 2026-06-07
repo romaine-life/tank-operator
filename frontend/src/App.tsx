@@ -10663,9 +10663,6 @@ function RunTurnActivityScreen({
     [selectedFinalAnswerEntries],
   );
   const hasFinalDetailResponse = finalDetailEntryIds.size > 0;
-  const hasCollapsibleDetailActivity = detailEntries.some(
-    (entry) => !isAlwaysVisibleTurnDetailEntry(entry, finalDetailEntryIds),
-  );
   const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<
     Record<string, boolean>
   >({});
@@ -10680,23 +10677,22 @@ function RunTurnActivityScreen({
   >({});
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const consumedScrollRequestRef = useRef(0);
-  const finalCollapsedDetailTurnIdsRef = useRef<Set<string>>(new Set());
   const selectedTurnContextCollapsed = selected
     ? collapsedContextTurnIds[selected.turnId] === true
     : false;
-  const showDetailActivityDivider = Boolean(
-    selected &&
-    !selected.active &&
-    hasFinalDetailResponse &&
-    hasCollapsibleDetailActivity &&
-    selectedCollapse?.collapsible !== false,
-  );
   const showTurnSectionDivider = Boolean(selected);
-  const canToggleDetailActivity = showDetailActivityDivider;
+  const canToggleDetailActivity = Boolean(selected);
+  const selectedActivityCollapseOverride = selected
+    ? collapsedActivityTurnIds[selected.turnId]
+    : undefined;
+  const selectedActivityDefaultCollapsed = Boolean(
+    selected && (selected.active || selectedCollapse?.defaultCollapsed === true),
+  );
   const detailActivityCollapsed =
     selected !== null &&
-    showDetailActivityDivider &&
-    collapsedActivityTurnIds[selected.turnId] === true;
+    canToggleDetailActivity &&
+    (selectedActivityCollapseOverride ?? selectedActivityDefaultCollapsed) ===
+      true;
   const showPromptContextShell = Boolean(selected);
   const canTogglePromptContext = Boolean(selectedTurnContext);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
@@ -10807,16 +10803,12 @@ function RunTurnActivityScreen({
   useEffect(() => {
     if (!selected) return;
     const turnId = selected.turnId;
-    if (!showDetailActivityDivider || selectedCollapse?.defaultCollapsed === false) {
-      finalCollapsedDetailTurnIdsRef.current.delete(turnId);
-      return;
-    }
-    if (finalCollapsedDetailTurnIdsRef.current.has(turnId)) return;
-    finalCollapsedDetailTurnIdsRef.current.add(turnId);
-    setCollapsedActivityTurnIds((prev) =>
-      prev[turnId] === true ? prev : { ...prev, [turnId]: true },
-    );
-  }, [selected, selectedCollapse?.defaultCollapsed, showDetailActivityDivider]);
+    if (!selected.active && selectedCollapse?.defaultCollapsed !== true) return;
+    setCollapsedActivityTurnIds((prev) => {
+      if (Object.prototype.hasOwnProperty.call(prev, turnId)) return prev;
+      return { ...prev, [turnId]: true };
+    });
+  }, [selected, selectedCollapse?.defaultCollapsed]);
   const collapseAppliedTelemetryKeysRef = useRef<Set<string>>(new Set());
   const collapseMismatchTelemetryKeysRef = useRef<Set<string>>(new Set());
   useEffect(() => {

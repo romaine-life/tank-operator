@@ -65,11 +65,15 @@ Contract impact:
   `turn.completed.payload.final_answer.timeline_ids`. The browser no longer
   decides that an assistant row is final because it is absent from
   `compactedEntryIds`.
-- Collapsing agent activity is a final-answer isolation control: it is enabled
-  only when the server says a turn has both a durable final answer and
-  collapsible activity. It keeps the final answer and server-owned wake/context
-  rows visible, and it is disabled for failed, interrupted, active, or no-final
-  turns instead of collapsing the page to an empty detail view.
+- Collapsing agent activity is the default Turns chat projection. Active turns
+  default compacted from the server-owned active shell, keeping only context plus
+  the generic `Thinking...` affordance visible while new self-talk/tool rows
+  remain hidden until the user expands that turn. Completed turns with
+  server-projected `collapse.default_collapsed=true` default to final-answer
+  compact mode, keeping the final answer and server-owned wake/context rows
+  visible. Failed, interrupted, and no-final completed turns do not expose a
+  compacted final-answer projection because there is no durable assistant result
+  to show.
 - The settled main-transcript answer remains canonical for message links,
   unread counts, latest-message state, and fork-from-message actions.
 
