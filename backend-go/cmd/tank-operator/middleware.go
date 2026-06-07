@@ -59,8 +59,13 @@ func validateModelArg(provider, v string) string {
 	if v == "" {
 		return ""
 	}
-	if provider != "antigravity" {
-		return validateTurnArg(v)
+	if allowed := allowedModelsForProvider(provider); allowed != nil {
+		for _, model := range allowed {
+			if v == model {
+				return v
+			}
+		}
+		return ""
 	}
 	if len([]byte(v)) > 128 {
 		return ""
@@ -73,6 +78,64 @@ func validateModelArg(provider, v string) string {
 	return v
 }
 
+var providerModels = map[string][]string{
+	"claude": {
+		"claude-opus-4-8",
+		"claude-opus-4-7",
+		"claude-sonnet-4-6",
+		"claude-haiku-4-5",
+	},
+	"codex": {
+		"gpt-5.5",
+		"gpt-5.4",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex-spark",
+	},
+	"antigravity": {
+		"Gemini 3.5 Flash (Medium)",
+	},
+}
+
+func allowedModelsForProvider(provider string) []string {
+	models, ok := providerModels[provider]
+	if !ok {
+		return nil
+	}
+	return append([]string(nil), models...)
+}
+
+// providerEfforts is the canonical extended-thinking effort allowlist.
+// Claude mirrors the EffortLevel union in @anthropic-ai/claude-agent-sdk,
+// and Codex mirrors @openai/codex-sdk's modelReasoningEffort values, so a
+// typo or stale UI value can't poison the runner's options at pod boot.
+// Empty input is allowed and means "use the runner's baked-in default" — keep
+// that mapping intact.
+//
+// sessionRunOptions() advertises these values to the frontend and MCP. Keep
+// the defaults in lockstep with agent-runner/src/runner.ts DEFAULT_EFFORT.
+// The runner does NOT re-validate (it trusts whatever lands on the wire) so
+// this is the single point of allowlist enforcement.
+var providerEfforts = map[string][]string{
+	"claude": {"low", "medium", "high", "xhigh", "max"},
+	"codex":  {"low", "medium", "high", "xhigh"},
+}
+
+func allowedEffortsForProvider(provider string) []string {
+	efforts, ok := providerEfforts[provider]
+	if !ok {
+		return []string{}
+	}
+	return append([]string(nil), efforts...)
+}
+
+func modelUnsupportedMessage(provider string) string {
+	models := allowedModelsForProvider(provider)
+	if len(models) == 0 {
+		return "model is invalid"
+	}
+	return "model is not available for " + provider + "; want one of " + strings.Join(models, "|")
+}
+
 func validateSkillName(v string) string {
 	if skillNamePattern.MatchString(v) {
 		return v
@@ -80,48 +143,14 @@ func validateSkillName(v string) string {
 	return ""
 }
 
-// allowedClaudeEfforts is the canonical Claude extended-thinking effort
-// allowlist. Mirrors the EffortLevel union in @anthropic-ai/claude-agent-sdk
-// so a typo or stale UI value can't poison the runner's options at pod boot.
-// Empty input is allowed and means "use the runner's baked-in default" — keep
-// that mapping intact.
-//
-// Keep this list in lockstep with frontend/src/App.tsx CLAUDE_EFFORTS
-// and agent-runner/src/runner.ts DEFAULT_EFFORT. The runner does NOT
-// re-validate (it trusts whatever lands on the wire) so this is the
-// single point of allowlist enforcement.
-var allowedClaudeEfforts = map[string]struct{}{
-	"low":    {},
-	"medium": {},
-	"high":   {},
-	"xhigh":  {},
-	"max":    {},
-}
-
-// allowedCodexEfforts mirrors @openai/codex-sdk's modelReasoningEffort values
-// exposed in Tank. Codex models do not accept Claude's "max" value.
-var allowedCodexEfforts = map[string]struct{}{
-	"low":    {},
-	"medium": {},
-	"high":   {},
-	"xhigh":  {},
-}
-
 func validateEffort(provider string, v string) string {
 	if v == "" {
 		return ""
 	}
-	var allowed map[string]struct{}
-	switch provider {
-	case "claude":
-		allowed = allowedClaudeEfforts
-	case "codex":
-		allowed = allowedCodexEfforts
-	default:
-		return ""
-	}
-	if _, ok := allowed[v]; ok {
-		return v
+	for _, effort := range allowedEffortsForProvider(provider) {
+		if v == effort {
+			return v
+		}
 	}
 	return ""
 }

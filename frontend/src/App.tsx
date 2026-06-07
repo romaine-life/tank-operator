@@ -912,8 +912,8 @@ const MODE_HINTS: Record<SessionMode, string> = {
   config: "Log in once · seeds KV for future sessions",
   codex_cli: "Uses ChatGPT login from KV",
   codex_gui: "GUI chat pane for Codex app-server transport",
-  codex_exec_gui: "Fallback GUI for legacy codex exec transport",
-  codex_app_server: "GUI chat pane for codex app-server transport",
+  codex_exec_gui: "Retired Codex exec GUI mode",
+  codex_app_server: "Retired Codex app-server alias",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   antigravity_config: "agy login (paste code) · seeds KV for Antigravity",
   antigravity_gui: "GUI chat pane for Gemini-Ultra (agy)",
@@ -1167,7 +1167,7 @@ function AnsiLine({ line }: { line: string }) {
 function createDemoSession(mode: DefaultSessionMode, index: number): Session {
   const provider = MODE_MENU_ICONS[mode];
   const label =
-    mode === "codex_cli" || mode === "codex_gui" || mode === "codex_exec_gui"
+    mode === "codex_cli" || mode === "codex_gui"
       ? "Codex"
       : "Claude Code";
   return {
@@ -1210,7 +1210,9 @@ function readDefaultSessionMode(): DefaultSessionMode {
     const stored = normalizeSessionMode(
       localStorage.getItem(DEFAULT_SESSION_MODE_KEY),
     );
-    if (stored === "codex_app_server") return "codex_gui";
+    if (stored === "codex_app_server" || stored === "codex_exec_gui") {
+      return "codex_gui";
+    }
     if (isDefaultSessionMode(stored)) return stored;
   } catch {
     // localStorage can be unavailable in hardened/private browser contexts.
@@ -3284,18 +3286,6 @@ function DemoLanding() {
     useState<Provider>("anthropic");
   const [demoInteraction, setDemoInteraction] =
     useState<SessionInteraction>("cli");
-  const [demoClaudeModelId, setDemoClaudeModelId] = useState(
-    DEFAULT_CLAUDE_MODEL_ID,
-  );
-  const [demoClaudeEffortId, setDemoClaudeEffortId] = useState(
-    DEFAULT_CLAUDE_EFFORT_ID,
-  );
-  const [demoCodexModelId, setDemoCodexModelId] = useState(
-    DEFAULT_CODEX_MODEL_ID,
-  );
-  const [demoCodexEffortId, setDemoCodexEffortId] = useState(
-    DEFAULT_CODEX_EFFORT_ID,
-  );
   const [demoSessionOrdinal, setDemoSessionOrdinal] = useState(
     DEMO_BASE_SESSIONS.length,
   );
@@ -3307,24 +3297,6 @@ function DemoLanding() {
   const selected = demoSessions.find((s) => s.id === activeDemoSession) ?? null;
   const selectedMode = defaultModeFor(selectedProvider, demoInteraction);
   const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
-  const demoModelOptions =
-    selectedProvider === "anthropic"
-      ? CLAUDE_MODELS
-      : selectedProvider === "codex"
-        ? CODEX_MODELS
-        : selectedProvider === "antigravity"
-          ? ANTIGRAVITY_MODELS
-          : [];
-  const demoModelApplies =
-    demoInteraction === "gui" && demoModelOptions.length > 0;
-  const selectedDemoModelId =
-    selectedProvider === "anthropic"
-      ? demoClaudeModelId
-      : selectedProvider === "codex"
-        ? demoCodexModelId
-        : selectedProvider === "antigravity"
-          ? DEFAULT_ANTIGRAVITY_MODEL_ID
-          : "";
   const demoProviderQuotaSnapshots = useMemo(
     () => buildProviderQuotaSnapshots(demoSessions),
     [demoSessions],
@@ -3694,93 +3666,6 @@ function DemoLanding() {
                       );
                     })}
                   </div>
-                  {demoModelApplies && (
-                    <>
-                      <div className="home-panel-head home-panel-subhead">
-                        <h3>Model</h3>
-                        <span className="home-panel-meta">
-                          {selectedProvider === "anthropic"
-                            ? CLAUDE_EFFORTS.find(
-                                (effort) => effort.id === demoClaudeEffortId,
-                              )?.label
-                            : selectedProvider === "codex"
-                              ? CODEX_EFFORTS.find(
-                                  (effort) => effort.id === demoCodexEffortId,
-                                )?.label
-                              : ""}
-                        </span>
-                      </div>
-                      <div
-                        className="home-model-list"
-                        role="group"
-                        aria-label="model"
-                      >
-                        {demoModelOptions.map((model) => {
-                          const modelSelected =
-                            model.id === selectedDemoModelId;
-                          return (
-                            <button
-                              key={model.id}
-                              className={`home-model${modelSelected ? " is-selected" : ""}`}
-                              onClick={() => {
-                                if (selectedProvider === "anthropic")
-                                  setDemoClaudeModelId(model.id);
-                                if (selectedProvider === "codex")
-                                  setDemoCodexModelId(model.id);
-                              }}
-                              aria-pressed={modelSelected}
-                            >
-                              <span className="home-model-title">
-                                {model.label}
-                              </span>
-                            </button>
-                          );
-                        })}
-                      </div>
-                      {(selectedProvider === "anthropic" ||
-                        selectedProvider === "codex") && (
-                        <div
-                          className="home-effort-grid"
-                          role="group"
-                          aria-label="effort"
-                        >
-                          {(selectedProvider === "anthropic"
-                            ? CLAUDE_EFFORTS
-                            : CODEX_EFFORTS
-                          ).map((effort) => {
-                            const effortSelected =
-                              effort.id ===
-                              (selectedProvider === "anthropic"
-                                ? demoClaudeEffortId
-                                : demoCodexEffortId);
-                            return (
-                              <button
-                                key={effort.id}
-                                className={`home-model home-effort${effortSelected ? " is-selected" : ""}`}
-                                onClick={() => {
-                                  if (selectedProvider === "anthropic")
-                                    setDemoClaudeEffortId(effort.id);
-                                  if (selectedProvider === "codex")
-                                    setDemoCodexEffortId(effort.id);
-                                }}
-                                aria-pressed={effortSelected}
-                                title={effort.hint}
-                              >
-                                <span className="home-model-title">
-                                  {effort.label}
-                                </span>
-                                {effort.hint && (
-                                  <span className="home-model-sub">
-                                    {effort.hint}
-                                  </span>
-                                )}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </>
-                  )}
                 </section>
 
                 <section
@@ -4114,7 +3999,7 @@ function isClaudeRunMode(mode: SessionMode): boolean {
 }
 
 function isCodexRunMode(mode: SessionMode): boolean {
-  return mode === "codex_gui" || mode === "codex_app_server";
+  return MODE_PROVIDERS[mode] === "codex" && SDK_CHAT_MODES.has(mode);
 }
 
 function isAntigravityRunMode(mode: SessionMode): boolean {
@@ -4617,34 +4502,17 @@ interface ModelOption {
   label: string; // display name in dropdown + provider card
 }
 
-// CLAUDE_MODELS is ordered with the agent-runner's DEFAULT_MODEL first
-// (claude-opus-4-8) so a fresh session lands on the strongest model by
-// default. Opus 4.7 stays listed as a secondary option for the first
-// few weeks after 4.8 ships so users have an escape hatch if 4.8
-// misbehaves on day one; drop it once 4.8 has bedded in. The id
-// strings are forwarded straight to the SDK's options.model via the
-// bus; tightening to an allowlist lives in the agent-runner's pinning
-// code, not here, because adding a model should be a one-line UI
-// change.
-const CLAUDE_MODELS: ModelOption[] = [
-  { id: "claude-opus-4-8", label: "Claude · Opus 4.8" },
-  { id: "claude-opus-4-7", label: "Claude · Opus 4.7" },
-  { id: "claude-sonnet-4-6", label: "Claude · Sonnet 4.6" },
-  { id: "claude-haiku-4-5", label: "Claude · Haiku 4.5" },
-];
-const CODEX_MODELS: ModelOption[] = [
-  { id: "gpt-5.5", label: "Codex · GPT-5.5" },
-  { id: "gpt-5.4", label: "Codex · GPT-5.4" },
-  { id: "gpt-5.4-mini", label: "Codex · GPT-5.4 Mini" },
-  { id: "gpt-5.3-codex", label: "Codex · GPT-5.3 Codex" },
-  { id: "gpt-5.3-codex-spark", label: "Codex · GPT-5.3 Codex Spark" },
-];
-const ANTIGRAVITY_MODELS: ModelOption[] = [
-  {
-    id: "Gemini 3.5 Flash (Medium)",
-    label: "Antigravity · Gemini 3.5 Flash Medium",
-  },
-];
+const MODEL_LABELS: Record<string, string> = {
+  "claude-opus-4-8": "Claude · Opus 4.8",
+  "claude-opus-4-7": "Claude · Opus 4.7",
+  "claude-sonnet-4-6": "Claude · Sonnet 4.6",
+  "claude-haiku-4-5": "Claude · Haiku 4.5",
+  "gpt-5.5": "Codex · GPT-5.5",
+  "gpt-5.4": "Codex · GPT-5.4",
+  "gpt-5.4-mini": "Codex · GPT-5.4 Mini",
+  "gpt-5.3-codex-spark": "Codex · GPT-5.3 Codex Spark",
+  "Gemini 3.5 Flash (Medium)": "Antigravity · Gemini 3.5 Flash Medium",
+};
 // Extended-thinking effort levels exposed by the Claude Agent SDK
 // (EffortLevel union). The ids are the wire values; the labels carry
 // the cost guidance so users picking xhigh/max know what they're
@@ -4657,66 +4525,274 @@ interface EffortOption {
   label: string;
   hint?: string;
 }
-const CLAUDE_EFFORTS: EffortOption[] = [
-  { id: "low", label: "Low", hint: "Fastest, minimal thinking" },
-  { id: "medium", label: "Medium", hint: "Moderate thinking" },
-  { id: "high", label: "High", hint: "Deep reasoning (default)" },
-  { id: "xhigh", label: "Extra High", hint: "Opus 4.7/4.8 only; ~2× tokens" },
-  { id: "max", label: "Max", hint: "Opus 4.6/4.7/4.8, Sonnet 4.6 only" },
-];
-const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";
-const DEFAULT_CLAUDE_EFFORT_ID = "high";
-const CODEX_EFFORTS: EffortOption[] = [
-  { id: "low", label: "Low", hint: "Fast responses with lighter reasoning" },
-  { id: "medium", label: "Medium", hint: "Balanced reasoning" },
-  { id: "high", label: "High", hint: "Greater reasoning depth" },
-  { id: "xhigh", label: "Extra High", hint: "Strongest reasoning" },
-];
-const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
-const DEFAULT_CODEX_EFFORT_ID = "xhigh";
-const DEFAULT_ANTIGRAVITY_MODEL_ID = "Gemini 3.5 Flash (Medium)";
+const EFFORT_LABELS: Record<string, Omit<EffortOption, "id">> = {
+  low: { label: "Low", hint: "Fast responses with lighter reasoning" },
+  medium: { label: "Medium", hint: "Balanced reasoning" },
+  high: { label: "High", hint: "Greater reasoning depth" },
+  xhigh: { label: "Extra High", hint: "Strongest reasoning" },
+  max: { label: "Max", hint: "Largest Claude reasoning budget" },
+};
+const DEFAULT_CLAUDE_MODEL_ID = "";
+const DEFAULT_CLAUDE_EFFORT_ID = "";
+const DEFAULT_CODEX_MODEL_ID = "";
+const DEFAULT_CODEX_EFFORT_ID = "";
+const DEFAULT_ANTIGRAVITY_MODEL_ID = "";
 
-function modelOptionsForMode(mode: SessionMode): ModelOption[] {
-  if (mode === "claude_gui") return CLAUDE_MODELS;
+interface SessionRunOptionMode {
+  mode: string;
+  provider: Provider;
+}
+
+interface SessionRunOptions {
+  create_modes: string[];
+  sdk_chat_modes: SessionRunOptionMode[];
+  retired_create_modes: Record<string, string>;
+  models: Partial<Record<Provider, string[]>>;
+  efforts: Partial<Record<Provider, string[]>>;
+  default_models: Partial<Record<Provider, string>>;
+  default_efforts: Partial<Record<Provider, string>>;
+}
+
+function providerForRunMode(mode: SessionMode): Provider | null {
+  if (mode === "claude_gui") return "anthropic";
   if (
     mode === "codex_gui" ||
     mode === "codex_exec_gui" ||
     mode === "codex_app_server"
   ) {
-    return CODEX_MODELS;
+    return "codex";
   }
-  if (mode === "antigravity_gui") return ANTIGRAVITY_MODELS;
-  return [];
+  if (mode === "antigravity_gui") return "antigravity";
+  return null;
 }
 
-function effortOptionsForMode(mode: SessionMode): EffortOption[] {
-  if (mode === "claude_gui") return CLAUDE_EFFORTS;
-  if (
-    mode === "codex_gui" ||
-    mode === "codex_exec_gui" ||
-    mode === "codex_app_server"
-  ) {
-    return CODEX_EFFORTS;
-  }
-  return [];
+function runOptionsProviderKey(provider: Provider): Provider {
+  return provider;
 }
 
-function modelDisplayLabel(mode: SessionMode, modelId: string): string {
+function modelOptionsForProvider(
+  provider: Provider,
+  runOptions: SessionRunOptions | null,
+): ModelOption[] {
+  return (runOptions?.models[runOptionsProviderKey(provider)] ?? []).map(
+    (id) => ({
+      id,
+      label: MODEL_LABELS[id] ?? id,
+    }),
+  );
+}
+
+function modelOptionsForMode(
+  mode: SessionMode,
+  runOptions: SessionRunOptions | null,
+): ModelOption[] {
+  const provider = providerForRunMode(mode);
+  if (!provider) return [];
+  return modelOptionsForProvider(provider, runOptions);
+}
+
+function effortOptionsForProvider(
+  provider: Provider,
+  runOptions: SessionRunOptions | null,
+): EffortOption[] {
+  return (runOptions?.efforts[runOptionsProviderKey(provider)] ?? []).map(
+    (id) => ({
+      id,
+      ...(EFFORT_LABELS[id] ?? { label: id }),
+    }),
+  );
+}
+
+function effortOptionsForMode(
+  mode: SessionMode,
+  runOptions: SessionRunOptions | null,
+): EffortOption[] {
+  const provider = providerForRunMode(mode);
+  if (!provider) return [];
+  return effortOptionsForProvider(provider, runOptions);
+}
+
+function defaultModelForProvider(
+  provider: Provider,
+  runOptions: SessionRunOptions | null,
+): string {
+  return runOptions?.default_models[runOptionsProviderKey(provider)] ?? "";
+}
+
+function defaultEffortForProvider(
+  provider: Provider,
+  runOptions: SessionRunOptions | null,
+): string {
+  return runOptions?.default_efforts[runOptionsProviderKey(provider)] ?? "";
+}
+
+function defaultModelForMode(
+  mode: SessionMode,
+  runOptions: SessionRunOptions | null,
+): string {
+  const provider = providerForRunMode(mode);
+  return provider ? defaultModelForProvider(provider, runOptions) : "";
+}
+
+function defaultEffortForMode(
+  mode: SessionMode,
+  runOptions: SessionRunOptions | null,
+): string {
+  const provider = providerForRunMode(mode);
+  return provider ? defaultEffortForProvider(provider, runOptions) : "";
+}
+
+function reconcileRunPrefsWithRunOptions(
+  prefs: RunPrefs,
+  runOptions: SessionRunOptions,
+): RunPrefs {
+  return {
+    ...prefs,
+    claudeModelId: pickAllowedPrefId(
+      prefs.claudeModelId,
+      modelOptionsForProvider("anthropic", runOptions),
+      defaultModelForProvider("anthropic", runOptions),
+    ),
+    claudeEffort: pickAllowedPrefId(
+      prefs.claudeEffort,
+      effortOptionsForProvider("anthropic", runOptions),
+      defaultEffortForProvider("anthropic", runOptions),
+    ),
+    codexModelId: pickAllowedPrefId(
+      prefs.codexModelId,
+      modelOptionsForProvider("codex", runOptions),
+      defaultModelForProvider("codex", runOptions),
+    ),
+    codexEffort: pickAllowedPrefId(
+      prefs.codexEffort,
+      effortOptionsForProvider("codex", runOptions),
+      defaultEffortForProvider("codex", runOptions),
+    ),
+    antigravityModelId: pickAllowedPrefId(
+      prefs.antigravityModelId,
+      modelOptionsForProvider("antigravity", runOptions),
+      defaultModelForProvider("antigravity", runOptions),
+    ),
+  };
+}
+
+function modelDisplayLabel(
+  mode: SessionMode,
+  modelId: string,
+  runOptions: SessionRunOptions | null = null,
+): string {
   const trimmed = modelId.trim();
   if (!trimmed) return "";
   return (
-    modelOptionsForMode(mode).find((option) => option.id === trimmed)?.label ??
+    modelOptionsForMode(mode, runOptions).find((option) => option.id === trimmed)
+      ?.label ??
+    MODEL_LABELS[trimmed] ??
     trimmed
   );
 }
 
-function effortDisplayLabel(mode: SessionMode, effortId: string): string {
+function effortDisplayLabel(
+  mode: SessionMode,
+  effortId: string,
+  runOptions: SessionRunOptions | null = null,
+): string {
   const trimmed = effortId.trim();
   if (!trimmed) return "";
   return (
-    effortOptionsForMode(mode).find((option) => option.id === trimmed)?.label ??
+    effortOptionsForMode(mode, runOptions).find((option) => option.id === trimmed)
+      ?.label ??
+    EFFORT_LABELS[trimmed]?.label ??
     trimmed
   );
+}
+
+function normalizeSessionRunOptions(raw: unknown): SessionRunOptions {
+  if (!raw || typeof raw !== "object") throw new Error("invalid run options");
+  const value = raw as Record<string, unknown>;
+  const providers: Provider[] = ["anthropic", "codex", "antigravity"];
+  const normalizeProvider = (provider: unknown): Provider | null => {
+    if (provider === "claude" || provider === "anthropic") return "anthropic";
+    if (provider === "codex") return "codex";
+    if (provider === "antigravity") return "antigravity";
+    return null;
+  };
+  const stringArray = (v: unknown): string[] =>
+    Array.isArray(v) ? v.filter((item): item is string => typeof item === "string") : [];
+  const stringMapArray = (v: unknown): Partial<Record<Provider, string[]>> => {
+    const out: Partial<Record<Provider, string[]>> = {};
+    const src = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+    for (const provider of providers) out[provider] = stringArray(src[provider]);
+    if (!out.anthropic?.length) out.anthropic = stringArray(src.claude);
+    return out;
+  };
+  const stringMapString = (v: unknown): Partial<Record<Provider, string>> => {
+    const out: Partial<Record<Provider, string>> = {};
+    const src = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+    for (const provider of providers) {
+      if (typeof src[provider] === "string") out[provider] = src[provider];
+    }
+    if (!out.anthropic && typeof src.claude === "string") {
+      out.anthropic = src.claude;
+    }
+    return out;
+  };
+  return {
+    create_modes: stringArray(value.create_modes),
+    sdk_chat_modes: Array.isArray(value.sdk_chat_modes)
+      ? value.sdk_chat_modes
+          .filter((item): item is Record<string, unknown> => !!item && typeof item === "object")
+          .map((item) => {
+            const provider = normalizeProvider(item.provider);
+            return {
+              mode: typeof item.mode === "string" ? item.mode : "",
+              provider,
+            };
+          })
+          .filter(
+            (item): item is SessionRunOptionMode =>
+              Boolean(item.mode) && item.provider != null,
+          )
+      : [],
+    retired_create_modes:
+      value.retired_create_modes && typeof value.retired_create_modes === "object"
+        ? Object.fromEntries(
+            Object.entries(value.retired_create_modes as Record<string, unknown>).filter(
+              (entry): entry is [string, string] => typeof entry[1] === "string",
+            ),
+          )
+        : {},
+    models: stringMapArray(value.models),
+    efforts: stringMapArray(value.efforts),
+    default_models: stringMapString(value.default_models),
+    default_efforts: stringMapString(value.default_efforts),
+  };
+}
+
+async function fetchSessionRunOptions(): Promise<SessionRunOptions> {
+  const res = await authedFetch("/api/session-run-options");
+  if (!res.ok) throw new Error(`session run options failed: ${res.status}`);
+  return normalizeSessionRunOptions(await res.json());
+}
+
+function createModeAllowedByRunOptions(
+  mode: SessionMode,
+  runOptions: SessionRunOptions | null,
+): boolean {
+  return Boolean(runOptions?.create_modes.includes(mode));
+}
+
+function sdkModeReadyForCreate(
+  mode: SessionMode,
+  runOptions: SessionRunOptions | null,
+): boolean {
+  if (!SDK_CHAT_MODES.has(mode)) return true;
+  const provider = providerForRunMode(mode);
+  if (!provider) return false;
+  return modelOptionsForProvider(provider, runOptions).length > 0;
+}
+
+function modelOptionsReady(runOptions: SessionRunOptions | null): boolean {
+  return Boolean(runOptions);
 }
 
 // Per-user run-pane preferences. localStorage-backed, shared across all
@@ -4789,6 +4865,17 @@ function durableRunPrefs(prefs: RunPrefs): Record<string, unknown> {
     out[key] = prefs[key];
   }
   return out;
+}
+
+function persistRunPrefsLocally(prefs: RunPrefs) {
+  try {
+    for (const key of Object.keys(prefs) as (keyof RunPrefs)[]) {
+      if (!isDurableRunPref(key)) continue;
+      localStorage.setItem(RUN_PREF_PREFIX + String(key), String(prefs[key]));
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 const CHAT_FONT_SCALE_MIN = 0.8;
@@ -4889,31 +4976,15 @@ function loadRunPrefs(): RunPrefs {
       } else if (key === "turnCompleteSoundVolume") {
         if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
       } else if (key === "claudeModelId") {
-        out[key] = pickAllowedPrefId(
-          raw,
-          CLAUDE_MODELS,
-          DEFAULT_CLAUDE_MODEL_ID,
-        );
+        if (raw != null) out[key] = raw.trim();
       } else if (key === "claudeEffort") {
-        out[key] = pickAllowedPrefId(
-          raw,
-          CLAUDE_EFFORTS,
-          DEFAULT_CLAUDE_EFFORT_ID,
-        );
+        if (raw != null) out[key] = raw.trim();
       } else if (key === "codexModelId") {
-        out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
+        if (raw != null) out[key] = raw.trim();
       } else if (key === "codexEffort") {
-        out[key] = pickAllowedPrefId(
-          raw,
-          CODEX_EFFORTS,
-          DEFAULT_CODEX_EFFORT_ID,
-        );
+        if (raw != null) out[key] = raw.trim();
       } else if (key === "antigravityModelId") {
-        out[key] = pickAllowedPrefId(
-          raw,
-          ANTIGRAVITY_MODELS,
-          DEFAULT_ANTIGRAVITY_MODEL_ID,
-        );
+        if (raw != null) out[key] = raw.trim();
       } else if (raw === "true" || raw === "false") {
         (out as unknown as Record<string, unknown>)[key] = raw === "true";
       }
@@ -4948,19 +5019,23 @@ function mergeServerRunPrefs(
       if (typeof raw === "number") out[key] = clampTurnCompleteSoundVolume(raw);
     } else if (key === "claudeModelId") {
       if (typeof raw === "string") {
-        out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, prev.claudeModelId);
+        out[key] = raw.trim();
       }
     } else if (key === "claudeEffort") {
       if (typeof raw === "string") {
-        out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, prev.claudeEffort);
+        out[key] = raw.trim();
       }
     } else if (key === "codexModelId") {
       if (typeof raw === "string") {
-        out[key] = pickAllowedPrefId(raw, CODEX_MODELS, prev.codexModelId);
+        out[key] = raw.trim();
       }
     } else if (key === "codexEffort") {
       if (typeof raw === "string") {
-        out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, prev.codexEffort);
+        out[key] = raw.trim();
+      }
+    } else if (key === "antigravityModelId") {
+      if (typeof raw === "string") {
+        out[key] = raw.trim();
       }
     } else if (typeof raw === "boolean") {
       (out as unknown as Record<string, unknown>)[key] = raw;
@@ -13223,6 +13298,7 @@ function ChatPane({
   onScrollConsumed,
   runPrefs,
   setRunPref,
+  sessionRunOptions,
   user,
   autoFocusComposer,
   onAutoFocusComposerConsumed,
@@ -13254,6 +13330,7 @@ function ChatPane({
   onScrollConsumed?: () => void;
   runPrefs: RunPrefs;
   setRunPref: SetRunPref;
+  sessionRunOptions: SessionRunOptions | null;
   user: SessionUser;
   autoFocusComposer: boolean;
   onAutoFocusComposerConsumed: () => void;
@@ -13521,8 +13598,8 @@ function ChatPane({
   const hasConfiguredSessionRunConfig = Boolean(
     configuredModelId || configuredEffortId,
   );
-  const modelOptions = modelOptionsForMode(session.mode);
-  const effortOptions = effortOptionsForMode(session.mode);
+  const modelOptions = modelOptionsForMode(session.mode, sessionRunOptions);
+  const effortOptions = effortOptionsForMode(session.mode, sessionRunOptions);
   const preferredModelId = isClaude
     ? runPrefs.claudeModelId
     : isCodex
@@ -13536,16 +13613,16 @@ function ChatPane({
       ? runPrefs.codexEffort
       : "";
   const fallbackModelId = isClaude
-    ? DEFAULT_CLAUDE_MODEL_ID
+    ? defaultModelForMode(session.mode, sessionRunOptions)
     : isCodex
-      ? DEFAULT_CODEX_MODEL_ID
+      ? defaultModelForMode(session.mode, sessionRunOptions)
       : isAntigravity
-        ? DEFAULT_ANTIGRAVITY_MODEL_ID
+        ? defaultModelForMode(session.mode, sessionRunOptions)
         : "";
   const fallbackEffortId = isClaude
-    ? DEFAULT_CLAUDE_EFFORT_ID
+    ? defaultEffortForMode(session.mode, sessionRunOptions)
     : isCodex
-      ? DEFAULT_CODEX_EFFORT_ID
+      ? defaultEffortForMode(session.mode, sessionRunOptions)
       : "";
   const initialModelId = hasConfiguredSessionRunConfig
     ? configuredModelId || fallbackModelId
@@ -17822,16 +17899,19 @@ function ChatPane({
   const appliedEffortId = (session.runtime_effort ?? "").trim();
   const hasAppliedRuntimeConfig = Boolean(session.runtime_configured_at);
   const configuredModelLabel =
-    modelDisplayLabel(session.mode, selectedModelId) || "model not selected";
+    modelDisplayLabel(session.mode, selectedModelId, sessionRunOptions) ||
+    "model not selected";
   const configuredEffortLabel = effortDisplayLabel(
     session.mode,
     selectedEffortId,
+    sessionRunOptions,
   );
   const modelChipLabel = hasAppliedRuntimeConfig
-    ? modelDisplayLabel(session.mode, appliedModelId) || configuredModelLabel
+    ? modelDisplayLabel(session.mode, appliedModelId, sessionRunOptions) ||
+      configuredModelLabel
     : "Model pending";
   const effortChipLabel = hasAppliedRuntimeConfig
-    ? effortDisplayLabel(session.mode, appliedEffortId)
+    ? effortDisplayLabel(session.mode, appliedEffortId, sessionRunOptions)
     : "";
   const modelChipTitle = hasAppliedRuntimeConfig
     ? appliedModelId
@@ -19493,6 +19573,7 @@ function PublicMessageLinkApp({ route }: { route: PublicMessageLinkRoute }) {
               onScrollConsumed={() => setPendingScrollMessageId(null)}
               runPrefs={DEFAULT_RUN_PREFS}
               setRunPref={noopSetRunPref}
+              sessionRunOptions={null}
               user={publicUser}
               autoFocusComposer={false}
               onAutoFocusComposerConsumed={noop}
@@ -19600,6 +19681,8 @@ function AuthenticatedApp() {
   // Phase E: also persisted to the Postgres profiles row so prefs ride across
   // devices. The localStorage write stays as the offline fallback.
   const [runPrefs, setRunPrefs] = useState<RunPrefs>(() => loadRunPrefs());
+  const [sessionRunOptions, setSessionRunOptions] =
+    useState<SessionRunOptions | null>(null);
   const prefsWriteTimer = useRef<number | null>(null);
   const persistRunPrefs = useCallback((prefs: RunPrefs) => {
     // 500ms debounce — sliders fire setRunPref dozens of times per drag,
@@ -19623,16 +19706,11 @@ function AuthenticatedApp() {
     setRunPrefs((p) => {
       const next = { ...p, [key]: value };
       if (isDurableRunPref(key)) {
+        persistRunPrefsLocally(next);
         persistRunPrefs(next);
       }
       return next;
     });
-    if (!isDurableRunPref(key)) return;
-    try {
-      localStorage.setItem(RUN_PREF_PREFIX + String(key), String(value));
-    } catch {
-      /* ignore */
-    }
   }
   const setTurnCompleteSoundVolume = useCallback((value: number) => {
     setRunPref(
@@ -19739,6 +19817,31 @@ function AuthenticatedApp() {
     return () => window.removeEventListener("storage", syncRunPrefs);
   }, []);
 
+  useEffect(() => {
+    if (!user) {
+      setSessionRunOptions(null);
+      return;
+    }
+    let cancelled = false;
+    void fetchSessionRunOptions()
+      .then((options) => {
+        if (cancelled) return;
+        setSessionRunOptions(options);
+        setRunPrefs((prev) => {
+          const next = reconcileRunPrefsWithRunOptions(prev, options);
+          persistRunPrefsLocally(next);
+          persistRunPrefs(next);
+          return next;
+        });
+      })
+      .catch((e) => {
+        if (!cancelled) setError(errorMessage(e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user, persistRunPrefs]);
+
   // Phase E: merge server-canonical prefs in once the user resolves. If
   // the server has prefs they win (this device may be stale); if it
   // doesn't, push our local prefs up so cross-device sync stops at the
@@ -19747,14 +19850,21 @@ function AuthenticatedApp() {
     if (!user) return;
     const server = user.run_prefs;
     if (server && Object.keys(server).length > 0) {
-      setRunPrefs((prev) => mergeServerRunPrefs(prev, server));
+      setRunPrefs((prev) => {
+        const merged = mergeServerRunPrefs(prev, server);
+        const next = sessionRunOptions
+          ? reconcileRunPrefsWithRunOptions(merged, sessionRunOptions)
+          : merged;
+        persistRunPrefsLocally(next);
+        return next;
+      });
     } else {
       persistRunPrefs(runPrefs);
     }
     // We deliberately don't re-run when runPrefs changes — this is a
     // one-shot reconciliation per user identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [user, persistRunPrefs]);
+  }, [user, persistRunPrefs, sessionRunOptions]);
   const [closingIds, setClosingIds] = useState<Set<string>>(() => new Set());
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
@@ -21594,6 +21704,13 @@ function AuthenticatedApp() {
     initialSkillName?: SkillStateName,
     initialMessageMode: InitialMessageMode = DEFAULT_INITIAL_MESSAGE_MODE,
   ) {
+    if (
+      !createModeAllowedByRunOptions(mode, sessionRunOptions) ||
+      !sdkModeReadyForCreate(mode, sessionRunOptions)
+    ) {
+      setError("session run options are not ready for this mode");
+      return;
+    }
     if (isDefaultSessionMode(mode)) {
       setDefaultSessionMode(mode);
       writeDefaultSessionMode(mode);
@@ -21629,11 +21746,12 @@ function AuthenticatedApp() {
         requestedInitialSkillName) &&
       CHAT_MODES.has(mode);
     const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
-    const seedModel = providerUsesModel(selectedProvider)
+    const modeProvider = MODE_MENU_ICONS[mode];
+    const seedModel = providerUsesModel(modeProvider)
       ? selectedHomeModelId
       : "";
     const seedEffort =
-      selectedProvider === "anthropic" || selectedProvider === "codex"
+      modeProvider === "anthropic" || modeProvider === "codex"
         ? selectedHomeEffortId
         : "";
     const sessionModel = SDK_CHAT_MODES.has(mode) ? seedModel : "";
@@ -22204,30 +22322,39 @@ function AuthenticatedApp() {
 
   const selectedProvider = MODE_MENU_ICONS[defaultSessionMode];
   const configMode = PROVIDER_CONFIG_MODES[selectedProvider];
-  const homeModelOptions =
-    selectedProvider === "anthropic"
-      ? CLAUDE_MODELS
-      : selectedProvider === "codex"
-        ? CODEX_MODELS
-        : selectedProvider === "antigravity"
-          ? ANTIGRAVITY_MODELS
-          : [];
+  const homeModelOptions = modelOptionsForProvider(
+    selectedProvider,
+    sessionRunOptions,
+  );
+  const homeEffortOptions = effortOptionsForProvider(
+    selectedProvider,
+    sessionRunOptions,
+  );
   const homeModelApplies =
     defaultInteraction === "gui" && homeModelOptions.length > 0;
   const selectedHomeModelId =
     selectedProvider === "anthropic"
-      ? runPrefs.claudeModelId
+      ? runPrefs.claudeModelId ||
+        defaultModelForProvider("anthropic", sessionRunOptions)
       : selectedProvider === "codex"
-        ? runPrefs.codexModelId
+        ? runPrefs.codexModelId ||
+          defaultModelForProvider("codex", sessionRunOptions)
         : selectedProvider === "antigravity"
-          ? runPrefs.antigravityModelId
+          ? runPrefs.antigravityModelId ||
+            defaultModelForProvider("antigravity", sessionRunOptions)
           : "";
   const selectedHomeEffortId =
     selectedProvider === "anthropic"
-      ? runPrefs.claudeEffort
+      ? runPrefs.claudeEffort ||
+        defaultEffortForProvider("anthropic", sessionRunOptions)
       : selectedProvider === "codex"
-        ? runPrefs.codexEffort
-        : DEFAULT_CLAUDE_EFFORT_ID;
+        ? runPrefs.codexEffort ||
+          defaultEffortForProvider("codex", sessionRunOptions)
+        : "";
+  const runOptionsReadyForHome =
+    modelOptionsReady(sessionRunOptions) &&
+    createModeAllowedByRunOptions(defaultSessionMode, sessionRunOptions) &&
+    sdkModeReadyForCreate(defaultSessionMode, sessionRunOptions);
   const selectedInitialMessageMode =
     INITIAL_MESSAGE_MODE_OPTIONS.find(
       (option) => option.id === runPrefs.initialMessageMode,
@@ -22852,7 +22979,13 @@ function AuthenticatedApp() {
                                 key={provider}
                                 className={`home-choice home-provider-choice is-${quota.status}${selected ? " is-selected" : ""}`}
                                 onClick={() => setDefaultProvider(provider)}
-                                disabled={busy}
+                                disabled={
+                                  busy ||
+                                  !createModeAllowedByRunOptions(
+                                    mode,
+                                    sessionRunOptions,
+                                  )
+                                }
                                 aria-pressed={selected}
                                 title={MODE_LABELS[mode]}
                               >
@@ -22890,7 +23023,11 @@ function AuthenticatedApp() {
                             const unavailable =
                               PROVIDER_INTERACTION_MODES[selectedProvider][
                                 interaction
-                              ] == null;
+                              ] == null ||
+                              !createModeAllowedByRunOptions(
+                                defaultModeFor(selectedProvider, interaction),
+                                sessionRunOptions,
+                              );
                             const selected =
                               defaultInteraction === interaction &&
                               !unavailable;
@@ -22940,7 +23077,7 @@ function AuthenticatedApp() {
                                 onClick={() =>
                                   setRunPref("initialMessageMode", option.id)
                                 }
-                                disabled={busy}
+                                disabled={busy || !runOptionsReadyForHome}
                                 aria-pressed={selected}
                                 title={option.hint}
                               >
@@ -22965,17 +23102,9 @@ function AuthenticatedApp() {
                             <div className="home-panel-head home-panel-subhead">
                               <h3>Model</h3>
                               <span className="home-panel-meta">
-                                {selectedProvider === "anthropic"
-                                  ? CLAUDE_EFFORTS.find(
-                                      (effort) =>
-                                        effort.id === selectedHomeEffortId,
-                                    )?.label
-                                  : selectedProvider === "codex"
-                                    ? CODEX_EFFORTS.find(
-                                        (effort) =>
-                                          effort.id === selectedHomeEffortId,
-                                      )?.label
-                                    : ""}
+                                {homeEffortOptions.find(
+                                  (effort) => effort.id === selectedHomeEffortId,
+                                )?.label ?? ""}
                               </span>
                             </div>
                             <div
@@ -23004,6 +23133,7 @@ function AuthenticatedApp() {
                                         );
                                       }
                                     }}
+                                    disabled={busy || !runOptionsReadyForHome}
                                     aria-pressed={selected}
                                   >
                                     <span className="home-model-title">
@@ -23020,10 +23150,7 @@ function AuthenticatedApp() {
                                 role="group"
                                 aria-label="effort"
                               >
-                                {(selectedProvider === "anthropic"
-                                  ? CLAUDE_EFFORTS
-                                  : CODEX_EFFORTS
-                                ).map((effort) => {
+                                {homeEffortOptions.map((effort) => {
                                   const selected =
                                     effort.id === selectedHomeEffortId;
                                   return (
@@ -23039,6 +23166,7 @@ function AuthenticatedApp() {
                                           setRunPref("codexEffort", effort.id);
                                         }
                                       }}
+                                      disabled={busy || !runOptionsReadyForHome}
                                       aria-pressed={selected}
                                       title={effort.hint}
                                     >
@@ -23071,7 +23199,13 @@ function AuthenticatedApp() {
                             <button
                               className="home-quick-action"
                               onClick={() => createSession(configMode)}
-                              disabled={busy}
+                              disabled={
+                                busy ||
+                                !createModeAllowedByRunOptions(
+                                  configMode,
+                                  sessionRunOptions,
+                                )
+                              }
                             >
                               <IconWrench className="home-quick-icon" />
                               <span className="home-quick-main">
@@ -23090,7 +23224,13 @@ function AuthenticatedApp() {
                           <button
                             className="home-quick-action"
                             onClick={() => createSession("antigravity_config")}
-                            disabled={busy}
+                            disabled={
+                              busy ||
+                              !createModeAllowedByRunOptions(
+                                "antigravity_config",
+                                sessionRunOptions,
+                              )
+                            }
                           >
                             <ProviderIcon
                               provider="antigravity"
@@ -23287,7 +23427,7 @@ function AuthenticatedApp() {
                 sendByCtrlEnter={runPrefs.sendByCtrlEnter}
                 hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
                 hideHint
-                disabled={busy}
+                disabled={busy || !runOptionsReadyForHome}
                 onTextChange={setHomeComposerText}
                 toolButtons={
                   <ComposerToolButtons
@@ -23300,6 +23440,7 @@ function AuthenticatedApp() {
                       onClick: () => homeFileInputRef.current?.click(),
                       disabled:
                         busy ||
+                        !runOptionsReadyForHome ||
                         !sessionModeSupportsWorkspaceFiles(defaultSessionMode),
                     }}
                     cost={{
@@ -23364,6 +23505,7 @@ function AuthenticatedApp() {
                       onScrollConsumed={consumePendingScroll}
                       runPrefs={runPrefs}
                       setRunPref={setRunPref}
+                      sessionRunOptions={sessionRunOptions}
                       user={user!}
                       autoFocusComposer={autoFocusComposerSessionId === s.id}
                       onAutoFocusComposerConsumed={() =>

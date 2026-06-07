@@ -41,6 +41,19 @@ test("provider-picker GUI modes declare the complete chat surface", () => {
   }
 });
 
+test("provider picker uses the primary Codex GUI mode instead of legacy exec", () => {
+  expect(PROVIDER_INTERACTION_MODES.codex.gui).toBe("codex_gui");
+});
+
+test("retired Codex GUI modes are not create-time affordances", () => {
+  for (const mode of ["codex_exec_gui", "codex_app_server"] as const) {
+    expect(DEFAULT_SESSION_MODES.has(mode)).toBe(false);
+    expect(REPO_SUPPORTED_MODES.has(mode)).toBe(false);
+    expect(SESSION_MODE_CONTRACT[mode].chatSurface).toBe(true);
+    expect(SESSION_MODE_CONTRACT[mode].sdkChat).toBe(true);
+  }
+});
+
 test("derived mode sets match the session-mode contract", () => {
   for (const [mode, contract] of Object.entries(SESSION_MODE_CONTRACT) as Array<
     [SessionMode, (typeof SESSION_MODE_CONTRACT)[SessionMode]]
