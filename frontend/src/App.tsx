@@ -4644,6 +4644,10 @@ const ANTIGRAVITY_MODELS: ModelOption[] = [
     id: "Gemini 3.5 Flash (Medium)",
     label: "Antigravity · Gemini 3.5 Flash Medium",
   },
+  {
+    id: "Gemini 3.1 Pro",
+    label: "Antigravity · Gemini 3.1 Pro",
+  },
 ];
 // Extended-thinking effort levels exposed by the Claude Agent SDK
 // (EffortLevel union). The ids are the wire values; the labels carry
