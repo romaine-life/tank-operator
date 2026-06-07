@@ -136,6 +136,17 @@ GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
 # unknowns) passes through with its Authorization untouched.
 PLACEHOLDER_BEARER = "Bearer managed-by-tank-operator"
 
+# Proactive refresh keeper tuning. Refresh when the access token is within
+# REFRESH_SKEW_MS of expiry so the first/next request never rides an expired
+# token, and re-check at most every PROACTIVE_REFRESH_POLL_SECONDS (the keeper
+# also wakes immediately on an upstream 401). This is what makes the proxy
+# survive its own restart on a low-traffic provider: without continuous
+# traffic to trigger a reactive 401-refresh, the keeper warms the token on
+# boot and keeps it warm, and it runs the refresh + KV write in a long-lived
+# task that a short-lived agy request stream cannot cancel mid-flight.
+REFRESH_SKEW_MS = 10 * 60 * 1000
+PROACTIVE_REFRESH_POLL_SECONDS = 60
+
 @dataclass(frozen=True)
 class ProxyConfig:
     provider: str
@@ -366,6 +377,15 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         # refresh token, and the proxy logs would show a "rotation storm"
         # of five+ successful rotations in two seconds.
         self._refresh_task: asyncio.Task[None] | None = None
+        # Proactive refresh keeper plumbing. The keeper is a long-lived task
+        # (started in serve()) that warms the token on boot and before expiry,
+        # so a request never rides an expired token (the cold-start race) and so
+        # the refresh + KV write run in a task a short-lived request stream
+        # cannot cancel mid-flight. _refresh_wakeup lets the reactive 401 path
+        # nudge the keeper to run immediately instead of waiting for the poll.
+        self._refresh_wakeup = asyncio.Event()
+        self._keeper_task: asyncio.Task[None] | None = None
+        self._stopping = False
         self._kv_url = os.environ.get("AZURE_KEYVAULT_URL", "")
         # Health snapshot — the durable provider-credential health surface
         # consumed by tank-operator's poller. The orchestrator polls
@@ -496,6 +516,13 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 # _get_access_token.await(self._refresh_task).
                 if self._refresh_task is None or self._refresh_task.done():
                     self._refresh_task = asyncio.create_task(self._refresh())
+                # Also wake the long-lived keeper. The create_task above lives
+                # in this request handler's lineage and can be cancelled when
+                # agy's short stream closes before the refresh + KV write land
+                # (the antigravity cold-start failure). The keeper re-runs the
+                # refresh from a task that outlives the stream, so the rotation
+                # and KV persist always complete.
+                self._refresh_wakeup.set()
         return ext_proc_pb2.ProcessingResponse(response_headers=ext_proc_pb2.HeadersResponse())
 
     async def _get_access_token(self) -> str:
@@ -645,12 +672,68 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
             file_account_id or "none",
         )
 
+    def _should_refresh(self) -> bool:
+        """Whether the keeper should rotate now.
+
+        True when the cached token is invalidated by an upstream 401, missing,
+        or within REFRESH_SKEW_MS of expiry. False when there is no refresh
+        token (an unconfigured provider — don't spin) or the freshness marker
+        is unknown (don't churn blindly; the reactive 401 path still covers
+        genuine invalidation).
+        """
+        if self._cached_refresh is None:
+            return False
+        if self._access_invalidated or self._cached_access is None:
+            return True
+        fresh = self._cached_freshness_ms()
+        if fresh is None:
+            return False
+        return fresh - int(time.time() * 1000) < REFRESH_SKEW_MS
+
+    async def run_refresh_keeper(self) -> None:
+        """Long-lived proactive refresh loop (started in serve()).
+
+        Warms the token on boot and keeps it warm before expiry, and — because
+        it lives for the whole process, not a single request stream — it is the
+        path that guarantees the refresh *and* the KV write-back run to
+        completion. A reactive 401-triggered refresh created inside a request
+        handler can be cancelled when agy's short stream closes (the antigravity
+        cold-start failure: turn 1 stranded the rotation, turn 2 stranded the KV
+        persist); the keeper re-runs it here where nothing cancels it.
+        """
+        while not self._stopping:
+            try:
+                if self._cached_access is None and self._cached_refresh is None:
+                    async with self._lock:
+                        self._reload_from_file()
+                if self._should_refresh():
+                    await self._refresh()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("refresh keeper iteration failed")
+            try:
+                await asyncio.wait_for(
+                    self._refresh_wakeup.wait(), PROACTIVE_REFRESH_POLL_SECONDS
+                )
+            except asyncio.TimeoutError:
+                pass
+            self._refresh_wakeup.clear()
+
     async def _refresh(self) -> None:
         async with self._lock:
             # Re-read the file under the lock: ESO may have mirrored a
             # newer KV value (e.g. someone re-seeded via "+ config sub")
             # and we should prefer that over rotating against the provider.
             self._reload_from_file()
+            # The keeper and the reactive 401 path can both reach here. If the
+            # token is already fresh and not invalidated (another refresh just
+            # landed), skip the redundant provider round trip rather than
+            # burning the refresh token a second time.
+            if not self._access_invalidated:
+                fresh = self._cached_freshness_ms()
+                if fresh is not None and fresh - int(time.time() * 1000) > REFRESH_SKEW_MS:
+                    return
             if self._cached_refresh is None:
                 log.error("no refresh token available; cannot rotate")
                 record_refresh("no_refresh_token")
@@ -928,6 +1011,10 @@ async def serve(port: int) -> tuple[grpc.aio.Server, AuthInjector]:
     server.add_insecure_port(f"0.0.0.0:{port}")
     await server.start()
     log.info("%s ext_proc listening on 0.0.0.0:%d", config.provider, port)
+    # Start the proactive refresh keeper as a long-lived task so it outlives any
+    # single request stream (see run_refresh_keeper / the antigravity cold-start
+    # incident). Stored on the injector so __main__ can cancel it on shutdown.
+    injector._keeper_task = asyncio.create_task(injector.run_refresh_keeper())
     return server, injector
 
 

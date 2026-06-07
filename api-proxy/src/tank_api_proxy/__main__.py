@@ -42,6 +42,13 @@ async def _run() -> None:
             pass
 
     await stop.wait()
+    injector._stopping = True
+    if injector._keeper_task is not None:
+        injector._keeper_task.cancel()
+        try:
+            await injector._keeper_task
+        except asyncio.CancelledError:
+            pass
     await server.stop(grace=5)
     await metrics_runner.cleanup()
 
