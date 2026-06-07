@@ -39,6 +39,9 @@ func TestSessionRunOptionsExposeTankOwnedCreateAndRunConfig(t *testing.T) {
 	if want := []string{"claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"}; !slices.Equal(opts.Models["claude"], want) {
 		t.Fatalf("claude models = %v, want %v", opts.Models["claude"], want)
 	}
+	if want := []string{"Gemini 3.1 Pro", "Gemini 3.5 Flash (Medium)"}; !slices.Equal(opts.Models["antigravity"], want) {
+		t.Fatalf("antigravity models = %v, want %v", opts.Models["antigravity"], want)
+	}
 	if want := []string{"low", "medium", "high", "xhigh"}; !slices.Equal(opts.Efforts["codex"], want) {
 		t.Fatalf("codex efforts = %v, want %v", opts.Efforts["codex"], want)
 	}
@@ -50,6 +53,9 @@ func TestSessionRunOptionsExposeTankOwnedCreateAndRunConfig(t *testing.T) {
 	}
 	if opts.DefaultModels["codex"] != "gpt-5.5" || opts.DefaultEfforts["codex"] != "xhigh" {
 		t.Fatalf("codex defaults = model %q effort %q", opts.DefaultModels["codex"], opts.DefaultEfforts["codex"])
+	}
+	if opts.DefaultModels["antigravity"] != "Gemini 3.5 Flash (Medium)" {
+		t.Fatalf("antigravity default model = %q", opts.DefaultModels["antigravity"])
 	}
 }
 
