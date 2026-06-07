@@ -14,6 +14,12 @@
 #   - antigravity_gui: GUI chat. The antigravity-runner sidecar drives agy and
 #     maps its structured transcript onto the Tank conversation protocol; the
 #     mcp-auth-proxy sidecar (same image) provides the in-cluster MCP gateway.
+#     agy's OAuth is proxy-owned: the launch script seeds a placeholder token and
+#     agy's cloudcode-pa.googleapis.com traffic is host-aliased to the
+#     antigravity-api-proxy, which injects the real access token and owns the
+#     refresh chain — the real refresh token never lands in the session pod
+#     (see docs/api-proxy-auth.md). Only antigravity_config (interactive login)
+#     reaches real Google to mint the token that the proxy then owns.
 
 # Stage 1: build the antigravity-runner (TS -> JS + production node_modules).
 # Build context is the repo root (docker-build-check.yaml sets context: .).

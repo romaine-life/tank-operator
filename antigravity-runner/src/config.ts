@@ -1,7 +1,9 @@
 // Runtime config for the Antigravity runner. Mirrors codex-runner/src/config.ts
-// (downward-API session identity + scoped event-ledger plumbing) with agy
-// specifics: the credential is mounted from KV and copied to agy's data dir by
-// the pod bootstrap; this process only drives the CLI.
+// (downward-API session identity + scoped event-ledger plumbing). agy auth is
+// proxy-owned: the launch script seeds a placeholder OAuth token and agy's
+// cloudcode-pa.googleapis.com traffic is host-aliased to the
+// antigravity-api-proxy, which injects the real access token. This process only
+// drives the CLI; it never sees the real Google credential.
 
 export interface Config {
   sessionId: string;

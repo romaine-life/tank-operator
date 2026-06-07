@@ -62,6 +62,18 @@ export type TurnActivityPagerState = {
   // can* flag is false these equal the current page, so a stray click is inert.
   olderPage: number;
   newerPage: number;
+  // Whether the « (first / oldest) / » (last / newest) jump controls are
+  // actionable. These share the boundary condition of older/newer respectively
+  // (you can jump to the first page exactly when an older page exists), but they
+  // target the ends rather than the neighbours. They back the first/last buttons
+  // in the Turns view nav cluster.
+  canPageFirst: boolean;
+  canPageLast: boolean;
+  // The end pages each jump navigates to (page 1 and pageCount). When the
+  // matching can* flag is false these equal the current page, so a click is
+  // inert — same discipline as olderPage/newerPage.
+  firstPage: number;
+  lastPage: number;
 };
 
 export const TURN_ACTIVITY_PAGE_EVENT_LIMIT = 1000;
@@ -109,6 +121,10 @@ const HIDDEN: TurnActivityPagerState = {
   canPageNewer: false,
   olderPage: 1,
   newerPage: 1,
+  canPageFirst: false,
+  canPageLast: false,
+  firstPage: 1,
+  lastPage: 1,
 };
 
 export function turnActivityPagerState(
@@ -133,5 +149,9 @@ export function turnActivityPagerState(
     canPageNewer: current < totalPages,
     olderPage: Math.max(1, current - 1),
     newerPage: Math.min(totalPages, current + 1),
+    canPageFirst: current > 1,
+    canPageLast: current < totalPages,
+    firstPage: 1,
+    lastPage: totalPages,
   };
 }

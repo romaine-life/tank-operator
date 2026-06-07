@@ -105,9 +105,10 @@ type Manager struct {
 	reaperInterval time.Duration
 
 	// Resolved ClusterIPs for host-alias injection.
-	oauthGatewayIP  string
-	apiProxyIP      string
-	codexAPIProxyIP string
+	oauthGatewayIP        string
+	apiProxyIP            string
+	codexAPIProxyIP       string
+	antigravityAPIProxyIP string
 
 	localCounter     int64
 	localCounterLock sync.Mutex
@@ -121,6 +122,10 @@ type ManagerOptions struct {
 	OAuthGatewayHost  string
 	APIProxyHost      string
 	CodexAPIProxyHost string
+	// AntigravityAPIProxyHost is the in-cluster antigravity-api-proxy Service
+	// (fronts cloudcode-pa.googleapis.com). agy_gui pods host-alias the Google
+	// data-plane host to this proxy so the refresh token stays in the proxy.
+	AntigravityAPIProxyHost string
 	// ImageOverrides, when non-nil, lets the orchestrator repoint NEW session
 	// pods at a branch-built session image for its (test-slot) scope. Left nil
 	// in production. OnImageOverrideApplied is an optional metrics/log hook
@@ -172,6 +177,9 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	}
 	if opts.CodexAPIProxyHost != "" {
 		m.codexAPIProxyIP = resolveIP(opts.CodexAPIProxyHost)
+	}
+	if opts.AntigravityAPIProxyHost != "" {
+		m.antigravityAPIProxyIP = resolveIP(opts.AntigravityAPIProxyHost)
 	}
 	return m
 }
@@ -420,6 +428,9 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	if m.codexAPIProxyIP == "" {
 		m.codexAPIProxyIP = resolveIP(os.Getenv("CODEX_API_PROXY_HOST"))
 	}
+	if m.antigravityAPIProxyIP == "" {
+		m.antigravityAPIProxyIP = resolveIP(os.Getenv("ANTIGRAVITY_API_PROXY_HOST"))
+	}
 
 	sessionID, err := m.nextSessionID(ctx)
 	if err != nil {
@@ -443,6 +454,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.OAuthGatewayIP = m.oauthGatewayIP
 	manifestOpts.APIProxyIP = m.apiProxyIP
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
+	manifestOpts.AntigravityAPIProxyIP = m.antigravityAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
 	manifestOpts.Name = &storedName
