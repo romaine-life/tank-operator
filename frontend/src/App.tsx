@@ -7417,7 +7417,7 @@ function TurnsTab({
   );
 }
 
-// One menu-row's worth of state for a header view (Turns / Background / Files).
+// One menu-row's worth of state for a header view (Background / Files).
 // The overflow menu owns the icon + label markup so the labels stay literal
 // and testable; callers pass only the live state.
 type RunHeaderMenuTabState = {
@@ -7430,15 +7430,15 @@ type RunHeaderMenuTabState = {
 };
 
 // The run header's single overflow control. It is the one consolidation point
-// for every top-right session action: the view tabs (Turns / Background /
-// Files) and the auxiliary actions (Settings / Help). Keeping all of them here
-// means the header stays a clean "title + ⋮" strip instead of a row of
-// competing buttons. Live counts ride each row, and an attention dot surfaces
-// on the trigger so ambient signal is not lost when the menu is closed.
+// for every top-right session action beyond the primary Turns surface:
+// Background / Files / Session data and the auxiliary actions (Settings / Help).
+// Keeping all of them here means the header stays a clean "title + ⋮" strip
+// instead of a row of competing buttons. Live counts ride each row, and an
+// attention dot surfaces on the trigger so ambient signal is not lost when the
+// menu is closed.
 function RunHeaderOverflowMenu({
   triggerActive,
   triggerAttention,
-  turns,
   background,
   files,
   sessionData,
@@ -7449,7 +7449,6 @@ function RunHeaderOverflowMenu({
 }: {
   triggerActive: boolean;
   triggerAttention?: "critical" | "warning" | null;
-  turns: RunHeaderMenuTabState;
   background: RunHeaderMenuTabState;
   files: RunHeaderMenuTabState;
   sessionData: RunHeaderMenuTabState;
@@ -7483,24 +7482,6 @@ function RunHeaderOverflowMenu({
         sideOffset={8}
         className="run-tab-more-menu"
       >
-        <DropdownMenuItem
-          className={`run-tab-more-item${turns.active ? " is-active" : ""}`}
-          disabled={turns.disabled}
-          onSelect={turns.onOpen}
-          title={turns.title}
-        >
-          <ActivityIcon className="run-tab-more-item-icon" aria-hidden="true" />
-          <span>Turns</span>
-          {turns.count !== undefined && turns.count > 0 && (
-            <span
-              className="run-shell-tasks-count run-tab-more-item-count"
-              data-active={turns.countActive ? "true" : undefined}
-              aria-label={`${turns.count} turns`}
-            >
-              {turns.count}
-            </span>
-          )}
-        </DropdownMenuItem>
         <DropdownMenuItem
           className={`run-tab-more-item${background.active ? " is-active" : ""}`}
           disabled={background.disabled}
@@ -17533,17 +17514,6 @@ function ChatPane({
               <RunHeaderOverflowMenu
                 triggerActive={activeTab !== "turns"}
                 triggerAttention={adminObservabilityAttention}
-                turns={{
-                  active: activeTab === "turns",
-                  count: turnViewItems.length,
-                  countActive: turnViewItems.some((turn) => turn.active),
-                  disabled: false,
-                  title: "Turns",
-                  onOpen: () => {
-                    if (activeTab !== "turns")
-                      openTurnPage(undefined, { anchor: "bottom" });
-                  },
-                }}
                 background={{
                   active: activeTab === "background",
                   count: backgroundLedgerEntries.length,
@@ -21880,13 +21850,6 @@ function AuthenticatedApp() {
                 <RunHeaderOverflowMenu
                   triggerActive={homeActiveTab !== "chat"}
                   triggerAttention={adminObservabilityAttention}
-                  turns={{
-                    active: false,
-                    disabled: true,
-                    title:
-                      "Turns are available once the agent has turn activity",
-                    onOpen: () => undefined,
-                  }}
                   background={{
                     active: false,
                     count: 0,

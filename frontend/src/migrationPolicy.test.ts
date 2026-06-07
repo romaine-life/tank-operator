@@ -732,17 +732,13 @@ test("turn internals move out of the transcript into a turn view", () => {
   assert.equal(appSource.includes("function TurnsTab"), true);
   assert.equal(appSource.includes("openTurnPage"), true);
   // Turns stays a standalone tab only in the read-only public view, where the
-  // overflow menu is not rendered; the normal view folds it into the menu.
+  // overflow menu is not rendered. Normal sessions use Turns as the primary
+  // surface, so the top-right overflow no longer offers it as a menu row.
   assert.match(
     appSource,
     /<TurnsTab\n\s+active=\{activeTab === "turns"\}[\s\S]{0,260}disabled=\{false\}/,
   );
-  // The pre-session home view exposes Turns through the overflow menu as a
-  // disabled, no-op entry until a session exists.
-  assert.match(
-    appSource,
-    /turns=\{\{\s*active: false,\s*disabled: true,\s*title:\s*"Turns are available once the agent has turn activity",\s*onOpen: \(\) => undefined,/,
-  );
+  assert.equal(appSource.includes("turns={{"), false);
   assert.equal(appSource.includes('setActiveTab("chat");'), true);
   assert.equal(
     appSource.includes('if (activeTab !== "turns" || turnsAvailable) return;'),
