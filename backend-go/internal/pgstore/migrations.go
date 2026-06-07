@@ -1634,13 +1634,11 @@ var schemaMigrations = []migration{
 		ALTER TABLE sessions ALTER COLUMN name SET NOT NULL;
 	END $$`},
 
-	// user_message_count: durable per-session count of user_message.created
-	// events (one per human back-and-forth). Backs the frontend's
-	// auto-default-to-Turns sidebar gate (frontend/src/autoTurnsDefault.ts) —
-	// once a session crosses the threshold, opening it from the sidebar lands on
-	// the latest turn instead of a long main transcript. Mirrors compaction_count
-	// (0125/0126): the chat-activity emitter recomputes it with a bounded COUNT
-	// over the partial index below on each user_message.created upsert
+		// user_message_count: durable per-session count of user_message.created
+		// events (one per human back-and-forth). Kept as durable row metadata for
+		// diagnostics and compatibility. Mirrors compaction_count (0125/0126): the
+		// chat-activity emitter recomputes it with a bounded COUNT over the partial
+		// index below on each user_message.created upsert
 	// (recompute-and-compare, so an at-least-once redelivery is a no-op rather
 	// than a double-count). The index is keyed on (tank_session_id) for the
 	// per-session count — distinct from the (created_at)-keyed
@@ -1652,13 +1650,10 @@ var schemaMigrations = []migration{
 		ON session_events (tank_session_id)
 		WHERE event_type = 'user_message.created'`},
 
-	// open_target: durable per-session sidebar open-target preference
-	// (''/chat/turns); the manual override for the auto-default-to-Turns gate,
-	// persisted so it survives reload (was previously in-memory only). '' = unset
-	// (the frontend then applies its auto-default), 'chat' = pinned to the main
-	// transcript, 'turns' = pinned to the Turns view. Set through
-	// PUT /api/sessions/{session_id}/open-target; rides the session row on the
-	// wire like the other string fields.
+		// open_target: legacy durable per-session sidebar open-target preference
+		// (''/chat/turns). The frontend no longer uses it for session-open defaults,
+		// but the column remains on the row wire for compatibility with existing
+		// clients and historical rows.
 	{ID: "0137", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS open_target text NOT NULL DEFAULT ''`},
 

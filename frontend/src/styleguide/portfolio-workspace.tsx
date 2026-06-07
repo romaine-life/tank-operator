@@ -132,9 +132,9 @@ function PortfolioWorkspaceScene() {
           <div className="run-header-title">
             <button className="run-header-name-btn" type="button">design-showcase</button>
           </div>
-          {/* All session views (Turns / Background / Files) and actions
-              (Settings / Help) collapse into the single overflow control, so
-              the header stays a clean title + ⋮ strip. */}
+          {/* Secondary session views (Background / Files / Session data) and
+              actions (Settings / Help) collapse into the single overflow
+              control, so the header stays a clean title + ⋮ strip. */}
           <nav className="run-tabs" aria-label="Session actions">
             <button
               className="run-tab run-tab-more"
