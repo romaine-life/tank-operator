@@ -139,6 +139,9 @@ func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 		t.Fatalf("author_kind = %q, want system", got)
 	}
 	userPayload, _ := events[0]["payload"].(map[string]any)
+	if got, _ := userPayload["text"].(string); got != "Timer went off!" {
+		t.Fatalf("user_message.created payload.text = %q, want timer announcement", got)
+	}
 	if got, _ := userPayload["source"].(string); got != "schedule-wakeup" {
 		t.Fatalf("user_message.created payload.source = %q, want schedule-wakeup", got)
 	}
@@ -205,6 +208,9 @@ func TestFireAntigravityScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 		t.Fatalf("author_kind = %q, want system", got)
 	}
 	userPayload, _ := events[0]["payload"].(map[string]any)
+	if got, _ := userPayload["text"].(string); got != "Timer went off!" {
+		t.Fatalf("user_message.created payload.text = %q, want timer announcement", got)
+	}
 	if got, _ := userPayload["source"].(string); got != "schedule-wakeup" {
 		t.Fatalf("user_message.created payload.source = %q, want schedule-wakeup", got)
 	}

@@ -296,6 +296,7 @@ func (s *appServer) fireScheduledWakeup(ctx context.Context, row pgstore.Schedul
 		ClientNonce:  row.ClientNonce,
 		RequireNonce: true,
 		Prompt:       row.Prompt,
+		DisplayText:  scheduledWakeupAnnouncementText(),
 		Source:       "schedule-wakeup",
 		CreatedAt:    now,
 		AuthorKind:   string(conversation.AuthorKindSystem),
@@ -311,6 +312,10 @@ func (s *appServer) fireScheduledWakeup(ctx context.Context, row pgstore.Schedul
 	}
 	recordScheduledWakeupFire(provider, "ok")
 	return nil
+}
+
+func scheduledWakeupAnnouncementText() string {
+	return "Timer went off!"
 }
 
 func (s *appServer) failScheduledWakeup(ctx context.Context, row pgstore.ScheduledWakeup, provider, reason string) error {
