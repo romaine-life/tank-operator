@@ -65,6 +65,22 @@ or incomplete.
 
 Always wait for all CI checks/tests to complete successfully on GitHub before merging a PR. Merging a PR before checks finish will break the image build/tagging workflow on main. This includes the PR body checklist check (check-pr-body) — do not bypass or ignore these failures.
 
+After local commits, agents should use the tracked post-commit reminder so the
+CI/test-slot handoff contract stays visible in normal Git flow. Tank session
+bootstrap installs the hook as a Git template for every session, and
+`repo-cloner` installs it into every selected repo it clones. For ad-hoc
+existing worktrees that predate the template, run:
+
+```sh
+scripts/install-agent-post-commit-reminder.sh
+```
+
+The hook template lives at `.githooks/post-commit`. It reminds the committing
+agent to push the branch, inspect the open PR's current HEAD CI checks, treat CI
+as part of the contract/test surface, resolve merge conflicts, update
+hot-swap/test-slot evidence after follow-up changes, and avoid handing off
+broken or intentionally failing CI unless explicitly stated.
+
 When adding or substantially changing named product behavior, check whether the
 relevant feature folder needs a `capabilities.md` entry. Capability ledgers are
 for behavior a future agent should be able to name, audit, or retire without

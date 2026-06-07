@@ -22,6 +22,10 @@ data:
 {{ .Files.Get "session-config/install-tank-docs.sh" | indent 4 }}
   install-tank-skills.sh: |
 {{ .Files.Get "session-config/install-tank-skills.sh" | indent 4 }}
+  agent-post-commit-hook.sh: |
+{{ .Files.Get "session-config/agent-post-commit-hook.sh" | indent 4 }}
+  install-agent-git-template.sh: |
+{{ .Files.Get "session-config/install-agent-git-template.sh" | indent 4 }}
   session-pod-bootstrap.sh: |
 {{ .Files.Get "session-config/session-pod-bootstrap.sh" | indent 4 }}
   agent-runner-launch.sh: |

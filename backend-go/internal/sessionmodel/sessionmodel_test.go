@@ -455,11 +455,15 @@ func TestPodManifestSelectedReposAddsRepoClonerInitContainer(t *testing.T) {
 	if got, want := env["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.test"; got != want {
 		t.Fatalf("TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)
 	}
+	if got, want := env["AGENT_POST_COMMIT_HOOK"], "/opt/tank/agent-post-commit-hook.sh"; got != want {
+		t.Fatalf("AGENT_POST_COMMIT_HOOK = %v, want %q", got, want)
+	}
 	sessionIDRef := env["SESSION_ID"].(map[string]any)["fieldRef"].(map[string]any)
 	if got, want := sessionIDRef["fieldPath"], "metadata.labels['tank-operator/session-id']"; got != want {
 		t.Fatalf("SESSION_ID fieldPath = %v, want %q", got, want)
 	}
 	assertVolumeMount(t, cloner, "session-config")
+	assertConfigMapMountSubPath(t, cloner, "/opt/tank/agent-post-commit-hook.sh", "agent-post-commit-hook.sh")
 	assertVolumeMount(t, cloner, "workspace")
 	assertVolumeMount(t, cloner, "auth-romaine-sa-token")
 }

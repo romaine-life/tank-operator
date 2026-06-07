@@ -75,6 +75,9 @@ EOF
 # Git identity for any commits the agent makes from /workspace.
 git config --global user.name "tank-operator-claude[bot]"
 git config --global user.email "tank-operator-claude@romaine.life"
+if [ -f /opt/tank/session-config/install-agent-git-template.sh ]; then
+  sh /opt/tank/session-config/install-agent-git-template.sh || true
+fi
 
 configure_claude
 
