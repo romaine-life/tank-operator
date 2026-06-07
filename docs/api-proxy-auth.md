@@ -423,6 +423,33 @@ mode: it is the one antigravity mode **not** routed through the proxy, so the
 interactive Google/Ultra login reaches real Google; `doSaveCredentials` then
 harvests the token to the `antigravity-credentials` KV secret the proxy owns.
 
+## Proactive refresh keeper
+
+Each proxy runs a long-lived **refresh keeper** task (`run_refresh_keeper`,
+started in `serve()`) that warms the access token on boot and again before it
+reaches `REFRESH_SKEW_MS` of expiry. It exists for two reasons that a purely
+reactive (refresh-on-upstream-401) design cannot cover on a low-traffic
+provider:
+
+- **Cold-start race.** Without continuous traffic to trigger a reactive
+  refresh, a proxy that boots with an already-expired cached token would serve
+  that expired token on the first request, 401, and only then start an async
+  refresh — which can finish *after* the caller (e.g. agy's short single-turn
+  stream) has already given up. The keeper warms the token before the first
+  request, so the first turn succeeds.
+- **Cancellation safety.** A reactive refresh is created inside a request
+  handler (`_on_response_headers`), so it can be cancelled when that request's
+  stream closes — stranding both the rotation and the KV write-back. The keeper
+  re-runs the refresh from a task that outlives any single stream, so the
+  rotation **and** `_persist_to_kv` always complete. The reactive 401 path
+  additionally wakes the keeper (`_refresh_wakeup`) for immediate recovery.
+
+`_refresh` skips the provider round trip when the token is already fresh and not
+invalidated, so the keeper and a reactive 401 cannot double-rotate. This was
+added after the antigravity rollout exposed the race (the first turn after the
+proxy booted with a stale cached token returned empty, and rotations were not
+persisting to KV); it hardens the claude/codex proxies the same way.
+
 ## Where to look when investigating
 
 If a user reports "my codex token died," in order:
