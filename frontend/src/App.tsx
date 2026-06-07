@@ -326,7 +326,12 @@ import {
   loadRuntimeAvatarCatalog,
   type AgentAvatar,
 } from "./sessionAvatars";
-import { openAvatarPreview } from "./avatarPreview";
+import {
+  addAvatarPreviewEditRequestListener,
+  avatarPreviewIsEditable,
+  openAvatarPreview,
+  setAvatarPreviewEditAvailable,
+} from "./avatarPreview";
 import {
   linkTextTargetsInMarkdown,
   normalizeWorkspacePathTarget,
@@ -12727,6 +12732,7 @@ function ChatPane({
   avatarCatalogVersion,
   sidebarTranscriptOpenRequest = 0,
   sidebarTurnsOpenRequest = 0,
+  avatarEditorOpenRequest = 0,
 }: {
   session: Session;
   visible: boolean;
@@ -12764,6 +12770,7 @@ function ChatPane({
   avatarCatalogVersion: number;
   sidebarTranscriptOpenRequest?: number;
   sidebarTurnsOpenRequest?: number;
+  avatarEditorOpenRequest?: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [activityEntriesByTurn, setActivityEntriesByTurn] = useState<
@@ -17416,6 +17423,11 @@ function ChatPane({
     },
     [],
   );
+  useEffect(() => {
+    if (publicView) return;
+    if (!visible || avatarEditorOpenRequest === 0) return;
+    setSettingsRoute("admin", "avatars");
+  }, [avatarEditorOpenRequest, publicView, setSettingsRoute, visible]);
   const retryTimelineBootstrap = () => {
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
@@ -19059,6 +19071,9 @@ function AuthenticatedApp() {
   const [sessionTurnsOpenRequests, setSessionTurnsOpenRequests] = useState<
     Record<string, number>
   >({});
+  const [avatarEditorOpenRequests, setAvatarEditorOpenRequests] = useState<
+    Record<string, number>
+  >({});
   const [sessionOpenTargets, setSessionOpenTargets] = useState<
     Record<string, SessionOpenTarget>
   >({});
@@ -19405,6 +19420,25 @@ function AuthenticatedApp() {
     },
     [],
   );
+  useEffect(() => {
+    setAvatarPreviewEditAvailable(hasAdminAccess);
+    return () => setAvatarPreviewEditAvailable(false);
+  }, [hasAdminAccess]);
+  useEffect(() => {
+    return addAvatarPreviewEditRequestListener((detail) => {
+      if (!hasAdminAccess || !avatarPreviewIsEditable(detail)) return;
+      const activeSessionId = activeRef.current;
+      if (activeSessionId) {
+        setAvatarEditorOpenRequests((prev) => ({
+          ...prev,
+          [activeSessionId]: (prev[activeSessionId] ?? 0) + 1,
+        }));
+        replaceAppRoute("settings", "admin", "avatars");
+        return;
+      }
+      setHomeSettingsRoute("admin", "avatars");
+    });
+  }, [hasAdminAccess, setHomeSettingsRoute]);
   const applyCurrentHomeRoute = useCallback(() => {
     if (active !== null) return;
     const appRoute = readAppRouteFromPath();
@@ -22644,6 +22678,9 @@ function AuthenticatedApp() {
                       avatarCatalogVersion={avatarCatalogVersion}
                       sidebarTranscriptOpenRequest={sessionTranscriptOpenRequests[s.id] ?? 0}
                       sidebarTurnsOpenRequest={sessionTurnsOpenRequests[s.id] ?? 0}
+                      avatarEditorOpenRequest={
+                        avatarEditorOpenRequests[s.id] ?? 0
+                      }
                     />
                   </div>
                 ) : (

@@ -10,6 +10,15 @@ export type AvatarPreviewDetail = {
 };
 
 const AVATAR_PREVIEW_EVENT = "tank-avatar-preview";
+const AVATAR_PREVIEW_EDIT_AVAILABILITY_EVENT =
+  "tank-avatar-preview-edit-availability";
+const AVATAR_PREVIEW_EDIT_REQUEST_EVENT = "tank-avatar-preview-edit-request";
+
+let avatarPreviewEditAvailable = false;
+
+type AvatarPreviewEditAvailabilityDetail = {
+  available: boolean;
+};
 
 export function openAvatarPreview(
   detail: AvatarPreviewDetail,
@@ -19,6 +28,47 @@ export function openAvatarPreview(
   event?.preventDefault?.();
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent<AvatarPreviewDetail>(AVATAR_PREVIEW_EVENT, { detail }));
+}
+
+export function avatarPreviewIsEditable(detail: AvatarPreviewDetail): boolean {
+  return detail.kind === "agent" || detail.kind === "system";
+}
+
+export function setAvatarPreviewEditAvailable(available: boolean) {
+  avatarPreviewEditAvailable = available;
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<AvatarPreviewEditAvailabilityDetail>(
+      AVATAR_PREVIEW_EDIT_AVAILABILITY_EVENT,
+      { detail: { available } },
+    ),
+  );
+}
+
+export function addAvatarPreviewEditRequestListener(
+  listener: (detail: AvatarPreviewDetail) => void,
+): () => void {
+  if (typeof window === "undefined") return () => undefined;
+  const onEditRequest = (event: Event) => {
+    const detail = (event as CustomEvent<AvatarPreviewDetail>).detail;
+    if (!detail) return;
+    listener(detail);
+  };
+  window.addEventListener(AVATAR_PREVIEW_EDIT_REQUEST_EVENT, onEditRequest);
+  return () =>
+    window.removeEventListener(
+      AVATAR_PREVIEW_EDIT_REQUEST_EVENT,
+      onEditRequest,
+    );
+}
+
+function requestAvatarPreviewEdit(detail: AvatarPreviewDetail) {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(
+    new CustomEvent<AvatarPreviewDetail>(AVATAR_PREVIEW_EDIT_REQUEST_EVENT, {
+      detail,
+    }),
+  );
 }
 
 function displayLabel(kind?: string): string {
@@ -51,6 +101,9 @@ export function AvatarPreviewHost() {
   const [preview, setPreview] = useState<AvatarPreviewDetail | null>(null);
   const [resolvedSrc, setResolvedSrc] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [editAvailable, setEditAvailable] = useState(
+    avatarPreviewEditAvailable,
+  );
 
   useEffect(() => {
     const onPreview = (event: Event) => {
@@ -60,6 +113,24 @@ export function AvatarPreviewHost() {
     };
     window.addEventListener(AVATAR_PREVIEW_EVENT, onPreview);
     return () => window.removeEventListener(AVATAR_PREVIEW_EVENT, onPreview);
+  }, []);
+
+  useEffect(() => {
+    const onEditAvailability = (event: Event) => {
+      const detail = (
+        event as CustomEvent<AvatarPreviewEditAvailabilityDetail>
+      ).detail;
+      setEditAvailable(detail?.available === true);
+    };
+    window.addEventListener(
+      AVATAR_PREVIEW_EDIT_AVAILABILITY_EVENT,
+      onEditAvailability,
+    );
+    return () =>
+      window.removeEventListener(
+        AVATAR_PREVIEW_EDIT_AVAILABILITY_EVENT,
+        onEditAvailability,
+      );
   }, []);
 
   useEffect(() => {
@@ -100,6 +171,7 @@ export function AvatarPreviewHost() {
   }, [preview]);
 
   if (!preview) return null;
+  const canEdit = editAvailable && avatarPreviewIsEditable(preview);
 
   return (
     <div className="avatar-lightbox" role="dialog" aria-modal="true" aria-label={preview.name}>
@@ -142,8 +214,23 @@ export function AvatarPreviewHost() {
           )}
         </div>
         <div className="avatar-lightbox-caption">
-          <span>{preview.name}</span>
-          <span>{displayLabel(preview.kind)}</span>
+          <span className="avatar-lightbox-caption-title">{preview.name}</span>
+          <span className="avatar-lightbox-caption-actions">
+            <span>{displayLabel(preview.kind)}</span>
+            {canEdit && (
+              <button
+                type="button"
+                className="avatar-lightbox-edit"
+                onClick={() => {
+                  const detail = preview;
+                  setPreview(null);
+                  requestAvatarPreviewEdit(detail);
+                }}
+              >
+                Edit
+              </button>
+            )}
+          </span>
         </div>
       </div>
     </div>
