@@ -1,0 +1,10 @@
+#!/bin/sh
+cat <<'EOF'
+
+Post-commit agent reminder:
+- Inspect this branch's open PR head CI checks; treat CI as part of the contract/test surface.
+- Resolve merge conflicts against the current base branch before handoff.
+- Update Glimmung hot-swap/test-slot evidence after this change.
+- Do not hand off broken, pending, or intentionally failing CI unless the user explicitly accepted that state.
+
+EOF

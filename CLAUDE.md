@@ -65,6 +65,22 @@ or incomplete.
 
 Always wait for all CI checks/tests to complete successfully on GitHub before merging a PR. Merging a PR before checks finish will break the image build/tagging workflow on main. This includes the PR body checklist check (check-pr-body) — do not bypass or ignore these failures.
 
+## Agent git hooks
+
+This repo carries a tracked post-commit reminder for agents in
+[`.githooks/post-commit`](.githooks/post-commit). Install it in a local clone
+with:
+
+```sh
+scripts/install-agent-git-hooks.sh
+```
+
+The hook is informational and must not block commits. After every local commit,
+agents should inspect the open PR's current head CI checks, treat CI as part of
+the contract/test surface, resolve merge conflicts, update Glimmung hot-swap or
+test-slot evidence after changes, and avoid handing off broken, pending, or
+intentionally failing CI unless the user explicitly accepted that state.
+
 When adding or substantially changing named product behavior, check whether the
 relevant feature folder needs a `capabilities.md` entry. Capability ledgers are
 for behavior a future agent should be able to name, audit, or retire without
