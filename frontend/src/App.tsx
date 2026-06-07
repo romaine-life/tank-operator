@@ -10661,6 +10661,8 @@ function RunTurnActivityScreen({
     hasFinalDetailResponse &&
     hasCollapsibleDetailActivity,
   );
+  const showTurnSectionDivider = Boolean(selected);
+  const canToggleDetailActivity = showDetailActivityDivider;
   const detailActivityCollapsed =
     showDetailActivityDivider &&
     selected !== null &&
@@ -11247,7 +11249,7 @@ function RunTurnActivityScreen({
               </span>
             </div>
           )}
-          {selected && showDetailActivityDivider && (
+          {selected && showTurnSectionDivider && (
             <div className="run-turn-activity-divider run-turn-view-activity-divider">
               <div
                 className="run-turn-activity-divider-controls"
@@ -11306,7 +11308,9 @@ function RunTurnActivityScreen({
                   type="button"
                   className="run-turn-activity-divider-toggle"
                   data-direction="down"
+                  disabled={!canToggleDetailActivity}
                   onClick={() => {
+                    if (!canToggleDetailActivity) return;
                     setCollapsedActivityTurnIds((prev) => ({
                       ...prev,
                       [selected.turnId]: !detailActivityCollapsed,
@@ -11314,29 +11318,33 @@ function RunTurnActivityScreen({
                   }}
                   aria-expanded={!detailActivityCollapsed}
                   aria-label={
-                    detailActivityCollapsed
-                      ? "Expand assistance turn"
-                      : "Collapse assistance turn"
+                    canToggleDetailActivity
+                      ? detailActivityCollapsed
+                        ? "Expand assistance turn"
+                        : "Collapse assistance turn"
+                      : "No assistance turn to collapse"
                   }
                   title={
-                    detailActivityCollapsed
-                      ? "Expand assistance turn"
-                      : "Collapse assistance turn"
+                    canToggleDetailActivity
+                      ? detailActivityCollapsed
+                        ? "Expand assistance turn"
+                        : "Collapse assistance turn"
+                      : "No assistance turn to collapse"
                   }
                 >
-                  {detailActivityCollapsed ? (
+                  {canToggleDetailActivity && detailActivityCollapsed ? (
                     <PlusIcon
                       size={11}
                       strokeWidth={2.4}
                       aria-hidden="true"
                     />
-                  ) : (
+                  ) : canToggleDetailActivity ? (
                     <MinusIcon
                       size={11}
                       strokeWidth={2.4}
                       aria-hidden="true"
                     />
-                  )}
+                  ) : null}
                   <ChevronDownIcon
                     className="run-turn-activity-divider-toggle-chevron"
                     size={13}
