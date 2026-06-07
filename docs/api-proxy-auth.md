@@ -59,6 +59,31 @@ Assist data plane that the Antigravity CLI `agy` / Gemini-Ultra calls).
 Session pods reach these via in-pod hostAlias entries pointing the provider
 hostname at the proxy Service.
 
+## Proxy TLS cert rotation
+
+The three provider API proxies terminate TLS for provider hostnames with
+cert-manager leaf certificates issued by `claude-oauth-ca-issuer`. Envoy must
+consume those leaf Secrets through file-based SDS, not a static
+`tls_certificates` file reference. The Secret is still mounted at
+`/etc/envoy/tls`, but the downstream listener references the named
+`api_proxy_leaf` SDS secret and the `TlsCertificate` sets
+`watched_directory: /etc/envoy/tls`.
+
+This is load-bearing for cert-manager rotation. A `Certificate` update changes
+the Secret content, not the Deployment pod template; Kubernetes therefore does
+not create a new ReplicaSet. File-based SDS makes Envoy observe the mounted
+Secret's symlink rotation and update its TLS context in-process instead of
+requiring a manual pod recycle. The chart guard
+`scripts/check-api-proxy-envoy-sds.sh` renders the production Helm chart and
+fails if `claude-api-proxy-envoy`, `codex-api-proxy-envoy`, or
+`antigravity-api-proxy-envoy` returns to static downstream cert loading.
+Envoy admin remains bound to localhost; the ext_proc metrics sidecar polls
+`127.0.0.1:9901/stats` in-pod and re-exports the bounded SDS counters
+`tank_api_proxy_envoy_sds_ssl_context_updates`,
+`tank_api_proxy_envoy_sds_key_rotation_failed`, and
+`tank_api_proxy_envoy_sds_stats_scrape_total` through the existing
+ServiceMonitor-scraped `/metrics` endpoint.
+
 ## Why session pods don't own the refresh chain
 
 Session pods write a **placeholder** Bearer token to `~/.claude/.credentials.json`

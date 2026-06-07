@@ -26,6 +26,7 @@ async def _run() -> None:
         metrics_port,
         injector.health_snapshot,
         injector.usage_snapshot,
+        envoy_admin_url=os.environ.get("ENVOY_ADMIN_URL", "http://127.0.0.1:9901"),
     )
     stop = asyncio.Event()
 

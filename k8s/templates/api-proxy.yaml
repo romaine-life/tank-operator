@@ -1,3 +1,19 @@
+{{- define "tank-operator.apiProxyLeafSdsSecret" -}}
+secrets:
+  - name: api_proxy_leaf
+    tls_certificate:
+      certificate_chain:
+        filename: /etc/envoy/tls/tls.crt
+      private_key:
+        filename: /etc/envoy/tls/tls.key
+      watched_directory:
+        path: /etc/envoy/tls
+{{- end -}}
+{{- define "tank-operator.apiProxyDownstreamTlsContext" -}}
+common_tls_context:
+  tls_certificate_sds_secret_configs:
+    - name: api_proxy_leaf
+{{- end -}}
 {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
 {{- /*
 Anthropic API proxy: Envoy in front of api.anthropic.com plus a small
@@ -117,6 +133,7 @@ data:
       address:
         socket_address: { address: 127.0.0.1, port_value: 9901 }
     static_resources:
+{{ include "tank-operator.apiProxyLeafSdsSecret" . | nindent 6 }}
       listeners:
         - name: api_listener
           address:
@@ -127,10 +144,7 @@ data:
                 name: envoy.transport_sockets.tls
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
-                  common_tls_context:
-                    tls_certificates:
-                      - certificate_chain: { filename: /etc/envoy/tls/tls.crt }
-                        private_key:       { filename: /etc/envoy/tls/tls.key }
+{{ include "tank-operator.apiProxyDownstreamTlsContext" . | nindent 18 }}
               filters:
                 - name: envoy.filters.network.http_connection_manager
                   typed_config:
@@ -427,6 +441,7 @@ data:
       address:
         socket_address: { address: 127.0.0.1, port_value: 9901 }
     static_resources:
+{{ include "tank-operator.apiProxyLeafSdsSecret" . | nindent 6 }}
       listeners:
         - name: api_listener
           address:
@@ -437,10 +452,7 @@ data:
                 name: envoy.transport_sockets.tls
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
-                  common_tls_context:
-                    tls_certificates:
-                      - certificate_chain: { filename: /etc/envoy/tls/tls.crt }
-                        private_key:       { filename: /etc/envoy/tls/tls.key }
+{{ include "tank-operator.apiProxyDownstreamTlsContext" . | nindent 18 }}
               filters:
                 - name: envoy.filters.network.http_connection_manager
                   typed_config:
@@ -691,6 +703,7 @@ data:
       address:
         socket_address: { address: 127.0.0.1, port_value: 9901 }
     static_resources:
+{{ include "tank-operator.apiProxyLeafSdsSecret" . | nindent 6 }}
       listeners:
         - name: api_listener
           address:
@@ -701,10 +714,7 @@ data:
                 name: envoy.transport_sockets.tls
                 typed_config:
                   "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
-                  common_tls_context:
-                    tls_certificates:
-                      - certificate_chain: { filename: /etc/envoy/tls/tls.crt }
-                        private_key:       { filename: /etc/envoy/tls/tls.key }
+{{ include "tank-operator.apiProxyDownstreamTlsContext" . | nindent 18 }}
               filters:
                 - name: envoy.filters.network.http_connection_manager
                   typed_config:
