@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import {
   isTranscriptToTurnsShortcut,
@@ -28,81 +27,51 @@ function ctx(
 }
 
 test("plain T on the focused chat transcript opens turns", () => {
-  assert.equal(isTranscriptToTurnsShortcut(ctx()), true);
+  expect(isTranscriptToTurnsShortcut(ctx())).toBe(true);
 });
 
 test("caps-lock T still opens turns", () => {
-  assert.equal(isTranscriptToTurnsShortcut(ctx({ key: "T" })), true);
+  expect(isTranscriptToTurnsShortcut(ctx({ key: "T" }))).toBe(true);
 });
 
 test("T opens turns only from a focused chat transcript with turns available", () => {
-  assert.equal(
-    isTranscriptToTurnsShortcut(ctx({ targetIsTranscript: false })),
-    false,
-  );
-  assert.equal(isTranscriptToTurnsShortcut(ctx({ activeTab: "turns" })), false);
-  assert.equal(isTranscriptToTurnsShortcut(ctx({ turnsAvailable: false })), false);
+  expect(isTranscriptToTurnsShortcut(ctx({ targetIsTranscript: false }))).toBe(false);
+  expect(isTranscriptToTurnsShortcut(ctx({ activeTab: "turns" }))).toBe(false);
+  expect(isTranscriptToTurnsShortcut(ctx({ turnsAvailable: false }))).toBe(false);
 });
 
 test("T shortcut ignores modifiers, repeat, IME, and palettes", () => {
-  assert.equal(isTranscriptToTurnsShortcut(ctx({ altKey: true })), false);
-  assert.equal(isTranscriptToTurnsShortcut(ctx({ ctrlKey: true })), false);
-  assert.equal(isTranscriptToTurnsShortcut(ctx({ metaKey: true })), false);
-  assert.equal(isTranscriptToTurnsShortcut(ctx({ shiftKey: true })), false);
-  assert.equal(isTranscriptToTurnsShortcut(ctx({ repeat: true })), false);
-  assert.equal(isTranscriptToTurnsShortcut(ctx({ isComposing: true })), false);
-  assert.equal(isTranscriptToTurnsShortcut(ctx({ palettesOpen: true })), false);
+  expect(isTranscriptToTurnsShortcut(ctx({ altKey: true }))).toBe(false);
+  expect(isTranscriptToTurnsShortcut(ctx({ ctrlKey: true }))).toBe(false);
+  expect(isTranscriptToTurnsShortcut(ctx({ metaKey: true }))).toBe(false);
+  expect(isTranscriptToTurnsShortcut(ctx({ shiftKey: true }))).toBe(false);
+  expect(isTranscriptToTurnsShortcut(ctx({ repeat: true }))).toBe(false);
+  expect(isTranscriptToTurnsShortcut(ctx({ isComposing: true }))).toBe(false);
+  expect(isTranscriptToTurnsShortcut(ctx({ palettesOpen: true }))).toBe(false);
 });
 
 test("plain Escape in the turns view returns to transcript", () => {
-  assert.equal(
-    isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape" })),
-    true,
-  );
+  expect(isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape" }))).toBe(true);
 });
 
 test("Escape does not return from turns while text entry owns the event", () => {
-  assert.equal(
-    isTurnsToTranscriptShortcut(
-      ctx({
-        activeTab: "turns",
-        key: "Escape",
-        targetIsTranscript: false,
-        targetIsTextEntry: true,
-      }),
-    ),
-    false,
-  );
+  expect(isTurnsToTranscriptShortcut(
+          ctx({
+            activeTab: "turns",
+            key: "Escape",
+            targetIsTranscript: false,
+            targetIsTextEntry: true,
+          }),
+        )).toBe(false);
 });
 
 test("Escape return ignores modifiers, repeat, IME, palettes, and other tabs", () => {
-  assert.equal(
-    isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", altKey: true })),
-    false,
-  );
-  assert.equal(
-    isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", ctrlKey: true })),
-    false,
-  );
-  assert.equal(
-    isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", metaKey: true })),
-    false,
-  );
-  assert.equal(
-    isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", shiftKey: true })),
-    false,
-  );
-  assert.equal(
-    isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", repeat: true })),
-    false,
-  );
-  assert.equal(
-    isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", isComposing: true })),
-    false,
-  );
-  assert.equal(
-    isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", palettesOpen: true })),
-    false,
-  );
-  assert.equal(isTurnsToTranscriptShortcut(ctx({ key: "Escape" })), false);
+  expect(isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", altKey: true }))).toBe(false);
+  expect(isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", ctrlKey: true }))).toBe(false);
+  expect(isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", metaKey: true }))).toBe(false);
+  expect(isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", shiftKey: true }))).toBe(false);
+  expect(isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", repeat: true }))).toBe(false);
+  expect(isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", isComposing: true }))).toBe(false);
+  expect(isTurnsToTranscriptShortcut(ctx({ activeTab: "turns", key: "Escape", palettesOpen: true }))).toBe(false);
+  expect(isTurnsToTranscriptShortcut(ctx({ key: "Escape" }))).toBe(false);
 });

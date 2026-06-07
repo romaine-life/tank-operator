@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import {
   contextWindowTokenCount,
@@ -13,8 +12,8 @@ import {
 } from "./sessionCostEstimate";
 
 function assertNearlyEqual(actual: number | null, expected: number): void {
-  assert.notEqual(actual, null);
-  assert.ok(Math.abs((actual ?? 0) - expected) < 1e-12, `expected ${expected}, got ${actual}`);
+  expect(actual).not.toBe(null);
+  expect(Math.abs((actual ?? 0) - expected) < 1e-12, `expected ${expected}, got ${actual}`).toBeTruthy();
 }
 
 test("estimates Claude usage with cache write and read tokens", () => {
@@ -45,7 +44,7 @@ test("prefers provider-reported cost when present", () => {
     total_cost_usd: "1.2345",
   }, "gpt-5.4");
 
-  assert.equal(cost, 1.2345);
+  expect(cost).toBe(1.2345);
 });
 
 test("deduplicates transcript usage rows by turn", () => {
@@ -56,7 +55,7 @@ test("deduplicates transcript usage rows by turn", () => {
   ], "gpt-5.4-mini");
 
   assertNearlyEqual(estimate?.amountUsd ?? null, 0.01575);
-  assert.equal(estimate?.tokens, 6_000);
+  expect(estimate?.tokens).toBe(6_000);
 });
 
 test("ignores transcript rows when provider usage is missing", () => {
@@ -65,7 +64,7 @@ test("ignores transcript rows when provider usage is missing", () => {
     { id: "a", turnId: "turn-1" },
   ], "gpt-5.4-mini");
 
-  assert.equal(estimate, null);
+  expect(estimate).toBe(null);
 });
 
 test("uses provider usage when available", () => {
@@ -79,7 +78,7 @@ test("uses provider usage when available", () => {
   ], "gpt-5.4-mini");
 
   assertNearlyEqual(estimate?.amountUsd ?? null, 0.00525);
-  assert.equal(estimate?.tokens, 2_000);
+  expect(estimate?.tokens).toBe(2_000);
 });
 
 test("estimates one selected turn from mixed transcript rows", () => {
@@ -90,51 +89,51 @@ test("estimates one selected turn from mixed transcript rows", () => {
   ], "gpt-5.4-mini", "turn-2");
 
   assertNearlyEqual(estimate?.amountUsd ?? null, 0.0105);
-  assert.equal(estimate?.tokens, 4_000);
+  expect(estimate?.tokens).toBe(4_000);
 });
 
 test("formats compact token counts", () => {
-  assert.equal(formatCompactTokens(0), "0");
-  assert.equal(formatCompactTokens(999), "999");
-  assert.equal(formatCompactTokens(1_000), "1k");
-  assert.equal(formatCompactTokens(423_999), "423k");
-  assert.equal(formatCompactTokens(999_999), "999k");
-  assert.equal(formatCompactTokens(1_000_000), "1m");
-  assert.equal(formatCompactTokens(1_230_000), "1.23m");
-  assert.equal(formatCompactTokens(1_239_999), "1.23m");
-  assert.equal(formatCompactTokens(1_200_000), "1.2m");
-  assert.equal(formatCompactTokens(12_900_000), "12.9m");
+  expect(formatCompactTokens(0)).toBe("0");
+  expect(formatCompactTokens(999)).toBe("999");
+  expect(formatCompactTokens(1_000)).toBe("1k");
+  expect(formatCompactTokens(423_999)).toBe("423k");
+  expect(formatCompactTokens(999_999)).toBe("999k");
+  expect(formatCompactTokens(1_000_000)).toBe("1m");
+  expect(formatCompactTokens(1_230_000)).toBe("1.23m");
+  expect(formatCompactTokens(1_239_999)).toBe("1.23m");
+  expect(formatCompactTokens(1_200_000)).toBe("1.2m");
+  expect(formatCompactTokens(12_900_000)).toBe("12.9m");
 });
 
 test("context window token count uses active uncached Codex delta for cumulative thread usage", () => {
-  assert.equal(contextWindowTokenCount({
-    cached_input_tokens: 24_488_064,
-    input_tokens: 25_131_214,
-    output_tokens: 29_896,
-    reasoning_output_tokens: 4_449,
-    total_tokens: 25_161_110,
-  }, 1_050_000, {
-    usage_source: "thread.tokenUsage.updated",
-  }), 643_150);
+  expect(contextWindowTokenCount({
+        cached_input_tokens: 24_488_064,
+        input_tokens: 25_131_214,
+        output_tokens: 29_896,
+        reasoning_output_tokens: 4_449,
+        total_tokens: 25_161_110,
+      }, 1_050_000, {
+        usage_source: "thread.tokenUsage.updated",
+      })).toBe(643_150);
 });
 
 test("context window token count uses Codex uncached delta even below the model window", () => {
-  assert.equal(contextWindowTokenCount({
-    cached_input_tokens: 525_440,
-    input_tokens: 608_743,
-    output_tokens: 4_238,
-    reasoning_output_tokens: 1_291,
-    total_tokens: 612_981,
-  }, 1_050_000, {
-    usage_source: "thread.tokenUsage.updated",
-  }), 83_303);
+  expect(contextWindowTokenCount({
+        cached_input_tokens: 525_440,
+        input_tokens: 608_743,
+        output_tokens: 4_238,
+        reasoning_output_tokens: 1_291,
+        total_tokens: 612_981,
+      }, 1_050_000, {
+        usage_source: "thread.tokenUsage.updated",
+      })).toBe(83_303);
 });
 
 test("context window token count keeps in-window cached prompts intact", () => {
-  assert.equal(contextWindowTokenCount({
-    input_tokens: 180_000,
-    cached_input_tokens: 120_000,
-  }, 200_000), 180_000);
+  expect(contextWindowTokenCount({
+        input_tokens: 180_000,
+        cached_input_tokens: 120_000,
+      }, 200_000)).toBe(180_000);
 });
 
 test("estimates one selected turn context tokens from latest usage row", () => {
@@ -161,59 +160,59 @@ test("estimates one selected turn context tokens from latest usage row", () => {
     },
   ];
 
-  assert.equal(estimateTurnContextTokens(rows, 1_050_000, "turn-1"), 83_303);
+  expect(estimateTurnContextTokens(rows, 1_050_000, "turn-1")).toBe(83_303);
 });
 
 test("formats compact composer costs", () => {
-  assert.equal(formatComposerCostUsd(0), "$0.00");
-  assert.equal(formatComposerCostUsd(0.00012), "<$0.01");
-  assert.equal(formatComposerCostUsd(0.0012), "<$0.01");
-  assert.equal(formatComposerCostUsd(0.01234), "$0.01");
-  assert.equal(formatComposerCostUsd(0.025), "$0.03");
-  assert.equal(formatComposerCostUsd(1.2345), "$1.23");
-  assert.equal(formatComposerCostUsd(12.345), "$12.35");
+  expect(formatComposerCostUsd(0)).toBe("$0.00");
+  expect(formatComposerCostUsd(0.00012)).toBe("<$0.01");
+  expect(formatComposerCostUsd(0.0012)).toBe("<$0.01");
+  expect(formatComposerCostUsd(0.01234)).toBe("$0.01");
+  expect(formatComposerCostUsd(0.025)).toBe("$0.03");
+  expect(formatComposerCostUsd(1.2345)).toBe("$1.23");
+  expect(formatComposerCostUsd(12.345)).toBe("$12.35");
 });
 
 test("formats tiny turn costs without rounding nonzero usage to zero", () => {
-  assert.equal(formatTurnCostUsd(0), "$0.00");
-  assert.equal(formatTurnCostUsd(0.000012), "<$0.01");
-  assert.equal(formatTurnCostUsd(0.00012), "<$0.01");
-  assert.equal(formatTurnCostUsd(0.0012), "<$0.01");
-  assert.equal(formatTurnCostUsd(0.012), "$0.01");
+  expect(formatTurnCostUsd(0)).toBe("$0.00");
+  expect(formatTurnCostUsd(0.000012)).toBe("<$0.01");
+  expect(formatTurnCostUsd(0.00012)).toBe("<$0.01");
+  expect(formatTurnCostUsd(0.0012)).toBe("<$0.01");
+  expect(formatTurnCostUsd(0.012)).toBe("$0.01");
 });
 
 test("context window token count sums additive Claude cache tokens for a per-message snapshot", () => {
   // Claude reports cache_read/cache_creation as additive to input_tokens, so
   // the live prompt size is the sum. Real durable blob shape (session 509).
-  assert.equal(contextWindowTokenCount({
-    input_tokens: 4,
-    cache_read_input_tokens: 157_652,
-    cache_creation_input_tokens: 161_334,
-    output_tokens: 5_016,
-  }, 1_000_000, { usage_source: "claude.message" }), 318_990);
+  expect(contextWindowTokenCount({
+        input_tokens: 4,
+        cache_read_input_tokens: 157_652,
+        cache_creation_input_tokens: 161_334,
+        output_tokens: 5_016,
+      }, 1_000_000, { usage_source: "claude.message" })).toBe(318_990);
 });
 
 test("context window token count ignores the cumulative Claude terminal for occupancy", () => {
   // claude.result is cumulative across the turn's tool loop (cache reads
   // summed over every model call), so it over-counts occupancy. Real durable
   // blob shape (session 508): a naive sum would report 3.26M against a window.
-  assert.equal(contextWindowTokenCount({
-    input_tokens: 266,
-    cache_read_input_tokens: 3_219_249,
-    cache_creation_input_tokens: 21_332,
-    output_tokens: 19_380,
-  }, 1_000_000, { usage_source: "claude.result" }), 0);
+  expect(contextWindowTokenCount({
+        input_tokens: 266,
+        cache_read_input_tokens: 3_219_249,
+        cache_creation_input_tokens: 21_332,
+        output_tokens: 19_380,
+      }, 1_000_000, { usage_source: "claude.result" })).toBe(0);
 });
 
 test("context window token count does not fabricate occupancy from a bare Claude blob", () => {
   // The shipped bug returned input_tokens (4) as "occupancy" for Claude. A
   // pre-fix durable turn (cumulative terminal, no usage_observation) must
   // resolve to no occupancy rather than the fabricated uncached sliver.
-  assert.equal(contextWindowTokenCount({
-    input_tokens: 4,
-    cache_read_input_tokens: 157_652,
-    cache_creation_input_tokens: 161_334,
-  }, 1_000_000), 0);
+  expect(contextWindowTokenCount({
+        input_tokens: 4,
+        cache_read_input_tokens: 157_652,
+        cache_creation_input_tokens: 161_334,
+      }, 1_000_000)).toBe(0);
 });
 
 test("estimates Claude turn context tokens from the latest snapshot, not the cumulative terminal", () => {
@@ -238,7 +237,7 @@ test("estimates Claude turn context tokens from the latest snapshot, not the cum
     },
   ];
   // Latest snapshot s2: 2 + 540000 + 800 = 540802. The cumulative terminal is skipped.
-  assert.equal(estimateTurnContextTokens(rows, 1_000_000, "turn-1"), 540_802);
+  expect(estimateTurnContextTokens(rows, 1_000_000, "turn-1")).toBe(540_802);
 });
 
 test("Claude turn cost uses the cumulative terminal, not per-message snapshots", () => {

@@ -1,6 +1,4 @@
-import { afterEach, beforeEach, test } from "node:test";
-import assert from "node:assert/strict";
-
+import { afterEach, beforeEach, test, expect } from "vitest";
 import {
   flushChatScrollMetricsForTest,
   isChatScrollDebugEnabled,
@@ -58,18 +56,18 @@ afterEach(() => {
 });
 
 test("chat scroll debug logs are off by default", () => {
-  assert.equal(isChatScrollDebugEnabled(), false);
+  expect(isChatScrollDebugEnabled()).toBe(false);
   logChatScrollEvent("timeline-loaded", { sessionId: "101" });
-  assert.equal(consoleLogs.length, 0);
-  assert.equal(fakeStorage["tank.chatScrollEvents"], undefined);
+  expect(consoleLogs.length).toBe(0);
+  expect(fakeStorage["tank.chatScrollEvents"]).toBe(undefined);
 });
 
 test("chat scroll debug logs fire when tankDebug includes chat-scroll", () => {
   fakeStorage.tankDebug = "session-list,chat-scroll";
-  assert.equal(isChatScrollDebugEnabled(), true);
+  expect(isChatScrollDebugEnabled()).toBe(true);
   logChatScrollEvent("timeline-loaded", { sessionId: "101" });
-  assert.equal(consoleLogs.length, 1);
-  assert.equal(consoleLogs[0]?.[0], "[tank/chat-scroll] timeline-loaded");
+  expect(consoleLogs.length).toBe(1);
+  expect(consoleLogs[0]?.[0]).toBe("[tank/chat-scroll] timeline-loaded");
 });
 
 test("chat scroll metrics flush to the prometheus ingestion endpoint", () => {
@@ -98,25 +96,25 @@ test("chat scroll metrics flush to the prometheus ingestion endpoint", () => {
   });
   flushChatScrollMetricsForTest();
 
-  assert.equal(fetchCalls.length, 1);
-  assert.equal(fetchCalls[0]?.input, "/api/client-metrics/chat-scroll");
-  assert.equal(fetchCalls[0]?.init?.method, "POST");
-  assert.equal(new Headers(fetchCalls[0]?.init?.headers).get("Authorization"), "Bearer token-123");
+  expect(fetchCalls.length).toBe(1);
+  expect(fetchCalls[0]?.input).toBe("/api/client-metrics/chat-scroll");
+  expect(fetchCalls[0]?.init?.method).toBe("POST");
+  expect(new Headers(fetchCalls[0]?.init?.headers).get("Authorization")).toBe("Bearer token-123");
   const payload = JSON.parse(String(fetchCalls[0]?.init?.body)) as {
     events: Array<Record<string, unknown>>;
   };
   const event = payload.events[0]!;
-  assert.equal(event.event, "at-bottom-change");
-  assert.equal(event.sessionMode, "codex_gui");
-  assert.equal(event.sessionId, "101");
-  assert.equal(event.pagePath, "/sessions/101");
-  assert.equal(event.pageSearch, "?session=101");
-  assert.equal(event.source, "keyboard");
-  assert.equal(event.anchor, "oldest");
-  assert.equal(event.key, "Home");
-  assert.equal(event.targetEdge, "oldest");
-  assert.equal(event.thinkingGroups, 0);
-  assert.equal(event.turnActivityShells, 1);
-  assert.equal(event.durableActiveActivityGroups, 1);
-  assert.equal(event.durableActiveTurnActivityShells, 1);
+  expect(event.event).toBe("at-bottom-change");
+  expect(event.sessionMode).toBe("codex_gui");
+  expect(event.sessionId).toBe("101");
+  expect(event.pagePath).toBe("/sessions/101");
+  expect(event.pageSearch).toBe("?session=101");
+  expect(event.source).toBe("keyboard");
+  expect(event.anchor).toBe("oldest");
+  expect(event.key).toBe("Home");
+  expect(event.targetEdge).toBe("oldest");
+  expect(event.thinkingGroups).toBe(0);
+  expect(event.turnActivityShells).toBe(1);
+  expect(event.durableActiveActivityGroups).toBe(1);
+  expect(event.durableActiveTurnActivityShells).toBe(1);
 });

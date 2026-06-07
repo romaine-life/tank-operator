@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 import {
   authedFetch,
   authedEventSourceURL,
@@ -43,7 +42,7 @@ test("bootstrapAuth stores and presents the upstream auth.romaine.life JWT direc
       return jsonResponse({ token: "upstream.jwt" });
     }
     if (url === "/api/auth/me") {
-      assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer upstream.jwt");
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer upstream.jwt");
       return jsonResponse({
         sub: "sub-1",
         email: "user@example.test",
@@ -62,9 +61,9 @@ test("bootstrapAuth stores and presents the upstream auth.romaine.life JWT direc
   try {
     clearStoredToken();
     const user = await bootstrapAuth();
-    assert.equal(user?.email, "user@example.test");
-    assert.equal(getStoredToken(), "upstream.jwt");
-    assert.deepEqual(calls, ["/api/config", "https://auth.test/api/auth/token", "/api/auth/me"]);
+    expect(user?.email).toBe("user@example.test");
+    expect(getStoredToken()).toBe("upstream.jwt");
+    expect(calls).toEqual(["/api/config", "https://auth.test/api/auth/token", "/api/auth/me"]);
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
@@ -105,11 +104,11 @@ test("authedFetch refreshes an expired JWT and retries the original request", as
       protectedAttempts += 1;
       const authorization = new Headers(init?.headers).get("Authorization");
       if (protectedAttempts === 1) {
-        assert.equal(authorization, "Bearer expired.jwt");
+        expect(authorization).toBe("Bearer expired.jwt");
         return new Response("expired", { status: 401 });
       }
-      assert.equal(authorization, "Bearer fresh.jwt");
-      assert.equal(init?.method, "DELETE");
+      expect(authorization).toBe("Bearer fresh.jwt");
+      expect(init?.method).toBe("DELETE");
       return new Response(null, { status: 204 });
     }
     return new Response("not found", { status: 404 });
@@ -117,9 +116,9 @@ test("authedFetch refreshes an expired JWT and retries the original request", as
 
   try {
     const res = await authedFetch("/api/sessions/123", { method: "DELETE" });
-    assert.equal(res.status, 204);
-    assert.equal(protectedAttempts, 2);
-    assert.equal(getStoredToken(), "fresh.jwt");
+    expect(res.status).toBe(204);
+    expect(protectedAttempts).toBe(2);
+    expect(getStoredToken()).toBe("fresh.jwt");
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
@@ -148,24 +147,21 @@ test("authedEventSourceURL mints a short-lived stream ticket", async () => {
     },
   } as Storage;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    assert.equal(String(input), "/api/auth/stream-ticket");
-    assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer jwt.with+/chars");
-    assert.equal(init?.method, "POST");
-    assert.deepEqual(JSON.parse(String(init?.body)), {
-      stream: "session-events",
-      session_id: "152",
-    });
+    expect(String(input)).toBe("/api/auth/stream-ticket");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer jwt.with+/chars");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+            stream: "session-events",
+            session_id: "152",
+          });
     return jsonResponse({ ticket: "ticket.with+/chars" });
   }) as typeof fetch;
 
   try {
-    assert.equal(
-      await authedEventSourceURL("/api/sessions/152/events?last_order_key=7", {
-        stream: "session-events",
-        sessionId: "152",
-      }),
-      "/api/sessions/152/events?last_order_key=7&stream_ticket=ticket.with%2B%2Fchars",
-    );
+    expect(await authedEventSourceURL("/api/sessions/152/events?last_order_key=7", {
+              stream: "session-events",
+              sessionId: "152",
+            })).toBe("/api/sessions/152/events?last_order_key=7&stream_ticket=ticket.with%2B%2Fchars");
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
@@ -194,20 +190,17 @@ test("authedEventSourceURL mints pinned-repos stream tickets without a session i
     },
   } as Storage;
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    assert.equal(String(input), "/api/auth/stream-ticket");
-    assert.deepEqual(JSON.parse(String(init?.body)), {
-      stream: "pinned-repos",
-    });
+    expect(String(input)).toBe("/api/auth/stream-ticket");
+    expect(JSON.parse(String(init?.body))).toEqual({
+            stream: "pinned-repos",
+          });
     return jsonResponse({ ticket: "pins-ticket" });
   }) as typeof fetch;
 
   try {
-    assert.equal(
-      await authedEventSourceURL("/api/github/pinned-repos/events", {
-        stream: "pinned-repos",
-      }),
-      "/api/github/pinned-repos/events?stream_ticket=pins-ticket",
-    );
+    expect(await authedEventSourceURL("/api/github/pinned-repos/events", {
+              stream: "pinned-repos",
+            })).toBe("/api/github/pinned-repos/events?stream_ticket=pins-ticket");
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;

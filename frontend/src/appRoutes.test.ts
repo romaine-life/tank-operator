@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import {
   buildAppRouteUrl,
@@ -11,169 +10,142 @@ import {
 } from "./appRoutes";
 
 test("session routes parse only session-scoped pages", () => {
-  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1"), {
-    sessionId: "s-1",
-    tab: "turns",
-    turnNumber: null,
-    turnSegmentPresent: false,
-    staticPath: null,
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
-  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/transcript"), {
-    sessionId: "s-1",
-    tab: "chat",
-    turnNumber: null,
-    turnSegmentPresent: false,
-    staticPath: null,
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
-  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/turns/3"), {
-    sessionId: "s-1",
-    tab: "turns",
-    turnNumber: 3,
-    turnSegmentPresent: true,
-    staticPath: null,
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
+  expect(readSessionRouteFromPathname("/sessions/s-1")).toEqual({
+        sessionId: "s-1",
+        tab: "turns",
+        turnNumber: null,
+        turnSegmentPresent: false,
+        staticPath: null,
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
+  expect(readSessionRouteFromPathname("/sessions/s-1/transcript")).toEqual({
+        sessionId: "s-1",
+        tab: "chat",
+        turnNumber: null,
+        turnSegmentPresent: false,
+        staticPath: null,
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
+  expect(readSessionRouteFromPathname("/sessions/s-1/turns/3")).toEqual({
+        sessionId: "s-1",
+        tab: "turns",
+        turnNumber: 3,
+        turnSegmentPresent: true,
+        staticPath: null,
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
   // A bare /turns with no number selects the latest turn (segment absent).
-  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/turns"), {
-    sessionId: "s-1",
-    tab: "turns",
-    turnNumber: null,
-    turnSegmentPresent: false,
-    staticPath: null,
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
+  expect(readSessionRouteFromPathname("/sessions/s-1/turns")).toEqual({
+        sessionId: "s-1",
+        tab: "turns",
+        turnNumber: null,
+        turnSegmentPresent: false,
+        staticPath: null,
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
   // A non-numeric segment (e.g. a bookmarked legacy turn_<uuid>) is a
   // present-but-unresolvable target: turnNumber null, turnSegmentPresent true,
   // so the SPA shows the unavailable-target state instead of silently
   // defaulting. This is the migration guard against the retired route shape.
-  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/turns/turn_abc"), {
-    sessionId: "s-1",
-    tab: "turns",
-    turnNumber: null,
-    turnSegmentPresent: true,
-    staticPath: null,
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
+  expect(readSessionRouteFromPathname("/sessions/s-1/turns/turn_abc")).toEqual({
+        sessionId: "s-1",
+        tab: "turns",
+        turnNumber: null,
+        turnSegmentPresent: true,
+        staticPath: null,
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
   // Leading-zero / signed / decimal segments are not valid turn numbers.
-  assert.equal(readSessionRouteFromPathname("/sessions/s-1/turns/01")?.turnNumber, null);
-  assert.equal(readSessionRouteFromPathname("/sessions/s-1/turns/-1")?.turnNumber, null);
-  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/session-data"), {
-    sessionId: "s-1",
-    tab: "session-data",
-    turnNumber: null,
-    turnSegmentPresent: false,
-    staticPath: null,
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
-  assert.equal(readSessionRouteFromPathname("/sessions/s-1/session-data/extra"), null);
-  assert.equal(readSessionRouteFromPathname("/sessions/s-1/settings"), null);
-  assert.equal(readSessionRouteFromPathname("/sessions/s-1/settings/admin/observability"), null);
-  assert.equal(readSessionRouteFromPathname("/sessions/s-1/help"), null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/turns/01")?.turnNumber).toBe(null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/turns/-1")?.turnNumber).toBe(null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/session-data")).toEqual({
+        sessionId: "s-1",
+        tab: "session-data",
+        turnNumber: null,
+        turnSegmentPresent: false,
+        staticPath: null,
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
+  expect(readSessionRouteFromPathname("/sessions/s-1/session-data/extra")).toBe(null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/settings")).toBe(null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/settings/admin/observability")).toBe(null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/help")).toBe(null);
 });
 
 test("session routes parse the sandboxed static-page subroute", () => {
-  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/static/diagram.html"), {
-    sessionId: "s-1",
-    tab: "static",
-    turnNumber: null,
-    turnSegmentPresent: false,
-    staticPath: "diagram.html",
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
+  expect(readSessionRouteFromPathname("/sessions/s-1/static/diagram.html")).toEqual({
+        sessionId: "s-1",
+        tab: "static",
+        turnNumber: null,
+        turnSegmentPresent: false,
+        staticPath: "diagram.html",
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
   // Nested workspace paths keep their slashes.
-  assert.equal(
-    readSessionRouteFromPathname("/sessions/s-1/static/out/report.html")?.staticPath,
-    "out/report.html",
-  );
+  expect(readSessionRouteFromPathname("/sessions/s-1/static/out/report.html")?.staticPath).toBe("out/report.html");
   // A `..` segment is rejected so the link can't escape the workspace.
-  assert.equal(readSessionRouteFromPathname("/sessions/s-1/static/../etc/passwd"), null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/static/../etc/passwd")).toBe(null);
   // Bare /static with no path is not a valid target.
-  assert.equal(readSessionRouteFromPathname("/sessions/s-1/static"), null);
+  expect(readSessionRouteFromPathname("/sessions/s-1/static")).toBe(null);
 });
 
 test("static page route urls embed the workspace path per segment", () => {
   const current = "https://tank.example.test/sessions/s-1";
-  assert.equal(
-    buildSessionRouteUrl(current, "s-1", "static", null, "out/report.html"),
-    "https://tank.example.test/sessions/s-1/static/out/report.html",
-  );
+  expect(buildSessionRouteUrl(current, "s-1", "static", null, "out/report.html")).toBe("https://tank.example.test/sessions/s-1/static/out/report.html");
   // Spaces in a segment are percent-encoded; path separators are preserved.
-  assert.equal(
-    buildSessionRouteUrl(current, "s-1", "static", null, "my diagram.html"),
-    "https://tank.example.test/sessions/s-1/static/my%20diagram.html",
-  );
+  expect(buildSessionRouteUrl(current, "s-1", "static", null, "my diagram.html")).toBe("https://tank.example.test/sessions/s-1/static/my%20diagram.html");
 });
 
 test("session route urls broadcast only session-owned pages", () => {
   const current = "https://tank.example.test/sessions/old?session=s-1#stale";
-  assert.equal(
-    buildSessionRouteUrl(current, "s 1"),
-    "https://tank.example.test/sessions/s%201",
-  );
-  assert.equal(
-    buildSessionRouteUrl(current, "s 1", "chat"),
-    "https://tank.example.test/sessions/s%201/transcript",
-  );
-  assert.equal(
-    buildSessionRouteUrl(current, "s 1", "turns", 2),
-    "https://tank.example.test/sessions/s%201/turns/2",
-  );
+  expect(buildSessionRouteUrl(current, "s 1")).toBe("https://tank.example.test/sessions/s%201");
+  expect(buildSessionRouteUrl(current, "s 1", "chat")).toBe("https://tank.example.test/sessions/s%201/transcript");
+  expect(buildSessionRouteUrl(current, "s 1", "turns", 2)).toBe("https://tank.example.test/sessions/s%201/turns/2");
   // turns tab with no selected number stays on the root session page.
-  assert.equal(
-    buildSessionRouteUrl(current, "s 1", "turns"),
-    "https://tank.example.test/sessions/s%201",
-  );
-  assert.equal(
-    buildSessionRouteUrl(current, "s 1", "session-data"),
-    "https://tank.example.test/sessions/s%201/session-data",
-  );
+  expect(buildSessionRouteUrl(current, "s 1", "turns")).toBe("https://tank.example.test/sessions/s%201");
+  expect(buildSessionRouteUrl(current, "s 1", "session-data")).toBe("https://tank.example.test/sessions/s%201/session-data");
 });
 
 test("home splash route parses only the new-session splash", () => {
-  assert.deepEqual(readHomeRouteFromPathname("/new"), {
-    tab: "chat",
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
-  assert.equal(readHomeRouteFromPathname("/new/settings"), null);
-  assert.equal(readHomeRouteFromPathname("/new/settings/admin/report"), null);
-  assert.equal(readHomeRouteFromPathname("/new/help"), null);
+  expect(readHomeRouteFromPathname("/new")).toEqual({
+        tab: "chat",
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
+  expect(readHomeRouteFromPathname("/new/settings")).toBe(null);
+  expect(readHomeRouteFromPathname("/new/settings/admin/report")).toBe(null);
+  expect(readHomeRouteFromPathname("/new/help")).toBe(null);
 });
 
 test("home route urls broadcast only the new-session splash surface", () => {
   const current = "https://tank.example.test/?github_install_state=stale#ignored";
-  assert.equal(buildHomeRouteUrl(current), "https://tank.example.test/new");
+  expect(buildHomeRouteUrl(current)).toBe("https://tank.example.test/new");
 });
 
 test("app route urls broadcast top-level settings and help surfaces", () => {
   const current = "https://tank.example.test/sessions/s-1?session=s-1#ignored";
-  assert.deepEqual(readAppRouteFromPathname("/settings"), {
-    tab: "settings",
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
-  assert.deepEqual(readAppRouteFromPathname("/settings/admin/report"), {
-    tab: "settings",
-    settingsTab: "admin",
-    adminView: "report",
-  });
-  assert.deepEqual(readAppRouteFromPathname("/help"), {
-    tab: "help",
-    settingsTab: "preferences",
-    adminView: "controls",
-  });
-  assert.equal(
-    buildAppRouteUrl(current, "settings", "admin", "observability"),
-    "https://tank.example.test/settings/admin/observability",
-  );
-  assert.equal(buildAppRouteUrl(current, "help"), "https://tank.example.test/help");
+  expect(readAppRouteFromPathname("/settings")).toEqual({
+        tab: "settings",
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
+  expect(readAppRouteFromPathname("/settings/admin/report")).toEqual({
+        tab: "settings",
+        settingsTab: "admin",
+        adminView: "report",
+      });
+  expect(readAppRouteFromPathname("/help")).toEqual({
+        tab: "help",
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
+  expect(buildAppRouteUrl(current, "settings", "admin", "observability")).toBe("https://tank.example.test/settings/admin/observability");
+  expect(buildAppRouteUrl(current, "help")).toBe("https://tank.example.test/help");
 });

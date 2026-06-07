@@ -1,22 +1,21 @@
-import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 const mainSource = readFileSync(new URL("./main.tsx", import.meta.url), "utf8");
 
 test("main.tsx allowlist keeps the splash repo defaults localStorage key alive", () => {
-  assert.match(mainSource, /"tank\.homeSelectedRepos"/);
+  expect(mainSource).toMatch(/"tank\.homeSelectedRepos"/);
 });
 
 test("main.tsx does not allowlist retired local repo pins", () => {
-  assert.doesNotMatch(mainSource, /"tank\.homePinnedRepos"/);
+  expect(mainSource).not.toMatch(/"tank\.homePinnedRepos"/);
 });
 
 test("main.tsx no longer allowlists retired local tank auth token", () => {
-  assert.doesNotMatch(mainSource, new RegExp('"tank-operator' + '-jwt"'));
+  expect(mainSource).not.toMatch(new RegExp('"tank-operator' + '-jwt"'));
 });
 
 test("main.tsx exposes the session-list debug route", () => {
-  assert.match(mainSource, /SessionListDebugPage/);
-  assert.match(mainSource, /"\/_debug\/session-list"/);
+  expect(mainSource).toMatch(/SessionListDebugPage/);
+  expect(mainSource).toMatch(/"\/_debug\/session-list"/);
 });

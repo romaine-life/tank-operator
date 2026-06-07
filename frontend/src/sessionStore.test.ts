@@ -1,6 +1,4 @@
-import { beforeEach, test } from "node:test";
-import assert from "node:assert/strict";
-
+import { beforeEach, test, expect } from "vitest";
 import {
   SessionStore,
   normalizeSessionRowUpdate,
@@ -44,9 +42,9 @@ test("applyRowUpdate replaces by id without duplicating", () => {
   store.applyRowUpdate({ cursor: "2", row: row("8", { status: "Active", row_version: 2 }) });
 
   const list = store.list();
-  assert.equal(list.length, 1, "should have one row for id 8 only");
-  assert.equal(list[0].status, "Active");
-  assert.equal(store.getCursor(), "2");
+  expect(list.length, "should have one row for id 8 only").toBe(1);
+  expect(list[0].status).toBe("Active");
+  expect(store.getCursor()).toBe("2");
 });
 
 test("debug dump includes recent session-list row events", () => {
@@ -63,13 +61,10 @@ test("debug dump includes recent session-list row events", () => {
 
   const snapshot = getSessionListDebugSnapshot();
   const dump = store.debugDump();
-  assert.equal(snapshot.store?.rows[0]?.id, "8");
-  assert.equal(snapshot.store?.rows[0]?.agent_avatar_id, "av_agent");
-  assert.ok(
-    snapshot.events.some((event) => event.kind === "row-added" && event.session_id === "8"),
-    "row-added event should be retained",
-  );
-  assert.deepEqual(dump.recent_events, snapshot.events);
+  expect(snapshot.store?.rows[0]?.id).toBe("8");
+  expect(snapshot.store?.rows[0]?.agent_avatar_id).toBe("av_agent");
+  expect(snapshot.events.some((event) => event.kind === "row-added" && event.session_id === "8"), "row-added event should be retained").toBeTruthy();
+  expect(dump.recent_events).toEqual(snapshot.events);
 });
 
 test("applyRowUpdate ignores older row versions", () => {
@@ -81,9 +76,9 @@ test("applyRowUpdate ignores older row versions", () => {
     row: row("8", { status: "Pending", row_version: 8 }),
   });
 
-  assert.equal(applied, false, "older row update must not replace newer state");
-  assert.equal(store.list()[0].status, "Active");
-  assert.equal(store.getCursor(), "10");
+  expect(applied, "older row update must not replace newer state").toBe(false);
+  expect(store.list()[0].status).toBe("Active");
+  expect(store.getCursor()).toBe("10");
 });
 
 test("applySnapshot does not regress rows updated after the snapshot was read", () => {
@@ -95,9 +90,9 @@ test("applySnapshot does not regress rows updated after the snapshot was read", 
   ], "1");
 
   const list = store.list();
-  assert.equal(list.length, 1);
-  assert.equal(list[0].status, "Active");
-  assert.equal(store.getCursor(), "2");
+  expect(list.length).toBe(1);
+  expect(list[0].status).toBe("Active");
+  expect(store.getCursor()).toBe("2");
 });
 
 test("applySnapshot preserves rows newer than the snapshot cursor", () => {
@@ -114,8 +109,8 @@ test("applySnapshot preserves rows newer than the snapshot cursor", () => {
     row("old", { row_version: 4, sidebar_position: 2 }),
   ], "4");
 
-  assert.deepEqual(store.list().map((r) => r.id), ["old", "new"]);
-  assert.equal(store.getCursor(), "5");
+  expect(store.list().map((r) => r.id)).toEqual(["old", "new"]);
+  expect(store.getCursor()).toBe("5");
 });
 
 // TestOptimisticDeleteTombstones is the protective-layer
@@ -128,8 +123,8 @@ test("optimisticDelete tombstones the id and drops subsequent wire updates", () 
   store.applyRowUpdate({ cursor: "5", row: row("8", { status: "Active", row_version: 5 }) });
 
   store.optimisticDelete("8");
-  assert.equal(store.list().length, 0, "row should be removed after optimistic delete");
-  assert.ok(store.isTombstoned("8"), "id should be tombstoned");
+  expect(store.list().length, "row should be removed after optimistic delete").toBe(0);
+  expect(store.isTombstoned("8"), "id should be tombstoned").toBeTruthy();
 
   // Server-side pod-informer event arriving after the optimistic
   // delete — must be dropped at the store boundary, not re-added.
@@ -137,8 +132,8 @@ test("optimisticDelete tombstones the id and drops subsequent wire updates", () 
     cursor: "9",
     row: row("8", { status: "Failed", row_version: 9 }),
   });
-  assert.equal(applied, false, "tombstoned row updates must be dropped");
-  assert.equal(store.list().length, 0, "tombstoned id must not reappear");
+  expect(applied, "tombstoned row updates must be dropped").toBe(false);
+  expect(store.list().length, "tombstoned id must not reappear").toBe(0);
 });
 
 // TestVisibleFalseTombstonesAndRemoves locks in the server-initiated
@@ -148,16 +143,16 @@ test("optimisticDelete tombstones the id and drops subsequent wire updates", () 
 test("applyRowUpdate with visible=false tombstones and removes", () => {
   const store = new SessionStore();
   store.applyRowUpdate({ cursor: "5", row: row("8", { row_version: 5 }) });
-  assert.equal(store.list().length, 1);
+  expect(store.list().length).toBe(1);
 
   store.applyRowUpdate({ cursor: "6", row: row("8", { visible: false, row_version: 6 }) });
-  assert.equal(store.list().length, 0, "visible=false must remove the row");
-  assert.ok(store.isTombstoned("8"), "visible=false must tombstone the id");
+  expect(store.list().length, "visible=false must remove the row").toBe(0);
+  expect(store.isTombstoned("8"), "visible=false must tombstone the id").toBeTruthy();
 
   // Late post-delete pod event landing on the wire after MarkDeleted
   // — must be dropped (this is the resurrection bug class).
   store.applyRowUpdate({ cursor: "7", row: row("8", { status: "Failed", row_version: 7 }) });
-  assert.equal(store.list().length, 0);
+  expect(store.list().length).toBe(0);
 });
 
 test("list uses sidebar_position instead of row_version", () => {
@@ -173,7 +168,7 @@ test("list uses sidebar_position instead of row_version", () => {
     row: row("c", { sidebar_position: 1, row_version: 99, test_state: { active: true } }),
   });
 
-  assert.deepEqual(store.list().map((r) => r.id), ["a", "b", "c"]);
+  expect(store.list().map((r) => r.id)).toEqual(["a", "b", "c"]);
 });
 
 test("rename row updates keep assigned avatar ids", () => {
@@ -217,19 +212,19 @@ test("rename row updates keep assigned avatar ids", () => {
     },
   });
 
-  assert.ok(update, "valid rename row update must parse");
+  expect(update, "valid rename row update must parse").toBeTruthy();
   store.applyRowUpdate(update);
 
   const [updated] = store.list();
-  assert.equal(updated.name, "renamed session");
-  assert.deepEqual(updated.capabilities, ["spirelens_mcp"]);
-  assert.equal(updated.bug_label?.display_name, "Slow checkout");
-  assert.deepEqual(updated.bug_labels?.map((label) => label.display_name), [
-    "Slow checkout",
-    "Transcript",
-  ]);
-  assert.equal(updated.agent_avatar_id, "jp1-malcolm");
-  assert.equal(updated.system_avatar_id, "system-logo");
+  expect(updated.name).toBe("renamed session");
+  expect(updated.capabilities).toEqual(["spirelens_mcp"]);
+  expect(updated.bug_label?.display_name).toBe("Slow checkout");
+  expect(updated.bug_labels?.map((label) => label.display_name)).toEqual([
+        "Slow checkout",
+        "Transcript",
+      ]);
+  expect(updated.agent_avatar_id).toBe("jp1-malcolm");
+  expect(updated.system_avatar_id).toBe("system-logo");
 });
 
 test("applyLocalOrder preserves drag order through later row updates", () => {
@@ -240,15 +235,15 @@ test("applyLocalOrder preserves drag order through later row updates", () => {
     row("c", { sidebar_position: 1, row_version: 3 }),
   ], "3");
 
-  assert.equal(store.applyLocalOrder(["b", "c", "a"]), true);
-  assert.deepEqual(store.list().map((r) => r.id), ["b", "c", "a"]);
+  expect(store.applyLocalOrder(["b", "c", "a"])).toBe(true);
+  expect(store.list().map((r) => r.id)).toEqual(["b", "c", "a"]);
 
   store.applyRowUpdate({
     cursor: "4",
     row: row("a", { sidebar_position: 1, row_version: 4, rollout_state: { active: true } }),
   });
 
-  assert.deepEqual(store.list().map((r) => r.id), ["b", "c", "a"]);
+  expect(store.list().map((r) => r.id)).toEqual(["b", "c", "a"]);
 });
 
 // TestApplySnapshotClearsTombstonesForVisibleIds is the recovery
@@ -261,13 +256,13 @@ test("applySnapshot clears tombstones for ids the server still considers visible
   const store = new SessionStore();
   store.applyRowUpdate({ cursor: "5", row: row("8", { row_version: 5 }) });
   store.optimisticDelete("8");
-  assert.ok(store.isTombstoned("8"), "tombstoned by optimistic delete");
+  expect(store.isTombstoned("8"), "tombstoned by optimistic delete").toBeTruthy();
 
   // refresh() returns the row as visible — the optimistic delete
   // never made it to the server.
   store.applySnapshot([row("8", { row_version: 10 })], "10");
-  assert.equal(store.list().length, 1, "row should be back");
-  assert.equal(store.isTombstoned("8"), false, "tombstone must clear");
+  expect(store.list().length, "row should be back").toBe(1);
+  expect(store.isTombstoned("8"), "tombstone must clear").toBe(false);
 });
 
 // TestApplySnapshotPreservesTombstoneWhenServerAgrees confirms the
@@ -281,50 +276,38 @@ test("applySnapshot preserves tombstones the server did not contradict", () => {
 
   // refresh returns no row for id 8 — server agreed the delete went through.
   store.applySnapshot([], "10");
-  assert.ok(store.isTombstoned("8"), "tombstone must persist when server agrees");
+  expect(store.isTombstoned("8"), "tombstone must persist when server agrees").toBeTruthy();
 
   // Late wire delivery for the deleted id — still dropped.
   const applied = store.applyRowUpdate({
     cursor: "11",
     row: row("8", { status: "Failed", row_version: 11 }),
   });
-  assert.equal(applied, false);
+  expect(applied).toBe(false);
 });
 
 // TestNormalizeSessionRowUpdate pins the wire-shape parse. session_scope,
 // row_version, id, and name are all required; anything missing → null
 // (handler logs + drops). No defaulting silently.
 test("normalizeSessionRowUpdate rejects malformed payloads", () => {
-  assert.equal(normalizeSessionRowUpdate(null), null);
-  assert.equal(normalizeSessionRowUpdate({}), null);
-  assert.equal(
-    normalizeSessionRowUpdate({ cursor: "1", row: { id: "8", visible: true, row_version: 1 } }),
-    null,
-    "missing owner + session_scope must be rejected",
-  );
-  assert.equal(
-    normalizeSessionRowUpdate({
-      cursor: "1",
-      row: { id: "8", owner: "u@example.com", session_scope: "default", visible: true },
-    }),
-    null,
-    "missing row_version + sidebar_position must be rejected",
-  );
-  assert.equal(
-    normalizeSessionRowUpdate({
-      cursor: "1",
-      row: {
-        id: "8",
-        owner: "u@example.com",
-        session_scope: "default",
-        visible: true,
-        sidebar_position: 1,
-        row_version: 1,
-      },
-    }),
-    null,
-    "missing name must be rejected (server-canonical title is required)",
-  );
+  expect(normalizeSessionRowUpdate(null)).toBe(null);
+  expect(normalizeSessionRowUpdate({})).toBe(null);
+  expect(normalizeSessionRowUpdate({ cursor: "1", row: { id: "8", visible: true, row_version: 1 } }), "missing owner + session_scope must be rejected").toBe(null);
+  expect(normalizeSessionRowUpdate({
+          cursor: "1",
+          row: { id: "8", owner: "u@example.com", session_scope: "default", visible: true },
+        }), "missing row_version + sidebar_position must be rejected").toBe(null);
+  expect(normalizeSessionRowUpdate({
+          cursor: "1",
+          row: {
+            id: "8",
+            owner: "u@example.com",
+            session_scope: "default",
+            visible: true,
+            sidebar_position: 1,
+            row_version: 1,
+          },
+        }), "missing name must be rejected (server-canonical title is required)").toBe(null);
   const good = normalizeSessionRowUpdate({
     cursor: "1",
     row: {
@@ -345,18 +328,18 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
       row_version: 1,
     },
   });
-  assert.ok(good, "valid payload must parse");
-  assert.equal(good!.row.id, "8");
-  assert.equal(good!.row.name, "session-8");
-  assert.equal(good!.row.model, "gpt-5.5");
-  assert.equal(good!.row.effort, "xhigh");
-  assert.equal(good!.row.runtime_model, "gpt-5.5");
-  assert.equal(good!.row.runtime_effort, "xhigh");
-  assert.equal(good!.row.runtime_configured_at, "2026-05-21T00:00:00Z");
-  assert.equal(good!.row.agent_avatar_id, "jp1-malcolm");
-  assert.equal(good!.row.system_avatar_id, "system-logo");
-  assert.equal(good!.row.sidebar_position, 7);
-  assert.equal(good!.row.row_version, 1);
+  expect(good, "valid payload must parse").toBeTruthy();
+  expect(good!.row.id).toBe("8");
+  expect(good!.row.name).toBe("session-8");
+  expect(good!.row.model).toBe("gpt-5.5");
+  expect(good!.row.effort).toBe("xhigh");
+  expect(good!.row.runtime_model).toBe("gpt-5.5");
+  expect(good!.row.runtime_effort).toBe("xhigh");
+  expect(good!.row.runtime_configured_at).toBe("2026-05-21T00:00:00Z");
+  expect(good!.row.agent_avatar_id).toBe("jp1-malcolm");
+  expect(good!.row.system_avatar_id).toBe("system-logo");
+  expect(good!.row.sidebar_position).toBe(7);
+  expect(good!.row.row_version).toBe(1);
 });
 
 // TestStoreSubscribeEmitsEvents pins the subscriber contract so the
@@ -372,5 +355,5 @@ test("subscribers receive row-added / row-replaced / row-removed events", () => 
   store.optimisticDelete("8");
 
   unsub();
-  assert.deepEqual(events, ["row-added", "row-replaced", "row-removed"]);
+  expect(events).toEqual(["row-added", "row-replaced", "row-removed"]);
 });

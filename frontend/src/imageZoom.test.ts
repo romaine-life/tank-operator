@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import {
   MAX_SCALE,
@@ -17,16 +16,16 @@ import {
 } from "./imageZoom";
 
 test("clampScale keeps values within the supported range", () => {
-  assert.equal(clampScale(1), 1);
-  assert.equal(clampScale(100), MAX_SCALE);
-  assert.equal(clampScale(0), MIN_SCALE);
-  assert.equal(clampScale(-5), MIN_SCALE);
+  expect(clampScale(1)).toBe(1);
+  expect(clampScale(100)).toBe(MAX_SCALE);
+  expect(clampScale(0)).toBe(MIN_SCALE);
+  expect(clampScale(-5)).toBe(MIN_SCALE);
 });
 
 test("clampScale falls back to 1 for non-finite input", () => {
-  assert.equal(clampScale(Number.NaN), 1);
-  assert.equal(clampScale(Number.POSITIVE_INFINITY), 1);
-  assert.equal(clampScale(Number.NEGATIVE_INFINITY), 1);
+  expect(clampScale(Number.NaN)).toBe(1);
+  expect(clampScale(Number.POSITIVE_INFINITY)).toBe(1);
+  expect(clampScale(Number.NEGATIVE_INFINITY)).toBe(1);
 });
 
 test("computeFitScale shrinks large images to fit the container", () => {
@@ -35,7 +34,7 @@ test("computeFitScale shrinks large images to fit the container", () => {
     { width: 2000, height: 1000 },
     { width: 1000, height: 1000 },
   );
-  assert.equal(fit, 0.5);
+  expect(fit).toBe(0.5);
 });
 
 test("computeFitScale never upscales small images past natural size", () => {
@@ -43,54 +42,48 @@ test("computeFitScale never upscales small images past natural size", () => {
     { width: 100, height: 100 },
     { width: 1000, height: 1000 },
   );
-  assert.equal(fit, 1);
+  expect(fit).toBe(1);
 });
 
 test("computeFitScale is defensive about unknown dimensions", () => {
-  assert.equal(
-    computeFitScale({ width: 0, height: 0 }, { width: 10, height: 10 }),
-    1,
-  );
-  assert.equal(
-    computeFitScale({ width: 10, height: 10 }, { width: 0, height: 0 }),
-    1,
-  );
+  expect(computeFitScale({ width: 0, height: 0 }, { width: 10, height: 10 })).toBe(1);
+  expect(computeFitScale({ width: 10, height: 10 }, { width: 0, height: 0 })).toBe(1);
 });
 
 test("zoomIn and zoomOut step by the configured factor and round-trip", () => {
-  assert.equal(zoomIn(1), ZOOM_STEP);
-  assert.equal(zoomOut(1), 1 / ZOOM_STEP);
-  assert.ok(scalesEqual(zoomOut(zoomIn(1)), 1));
+  expect(zoomIn(1)).toBe(ZOOM_STEP);
+  expect(zoomOut(1)).toBe(1 / ZOOM_STEP);
+  expect(scalesEqual(zoomOut(zoomIn(1)), 1)).toBeTruthy();
 });
 
 test("zoom steps saturate at the range bounds", () => {
-  assert.equal(zoomIn(MAX_SCALE), MAX_SCALE);
-  assert.equal(zoomOut(MIN_SCALE), MIN_SCALE);
+  expect(zoomIn(MAX_SCALE)).toBe(MAX_SCALE);
+  expect(zoomOut(MIN_SCALE)).toBe(MIN_SCALE);
 });
 
 test("zoomBy applies an arbitrary factor with clamping", () => {
-  assert.ok(scalesEqual(zoomBy(1, 2), 2));
-  assert.equal(zoomBy(1, 1000), MAX_SCALE);
+  expect(scalesEqual(zoomBy(1, 2), 2)).toBeTruthy();
+  expect(zoomBy(1, 1000)).toBe(MAX_SCALE);
 });
 
 test("wheelZoomFactor maps mouse wheel direction to zoom direction", () => {
-  assert.ok(scalesEqual(wheelZoomFactor(-100), WHEEL_ZOOM_STEP));
-  assert.ok(scalesEqual(wheelZoomFactor(100), 1 / WHEEL_ZOOM_STEP));
+  expect(scalesEqual(wheelZoomFactor(-100), WHEEL_ZOOM_STEP)).toBeTruthy();
+  expect(scalesEqual(wheelZoomFactor(100), 1 / WHEEL_ZOOM_STEP)).toBeTruthy();
 });
 
 test("wheelZoomFactor scales high-resolution and line-mode deltas", () => {
-  assert.ok(wheelZoomFactor(-10) > 1);
-  assert.ok(wheelZoomFactor(-10) < WHEEL_ZOOM_STEP);
-  assert.ok(scalesEqual(wheelZoomFactor(-3, 1), Math.pow(WHEEL_ZOOM_STEP, 1.2)));
+  expect(wheelZoomFactor(-10) > 1).toBeTruthy();
+  expect(wheelZoomFactor(-10) < WHEEL_ZOOM_STEP).toBeTruthy();
+  expect(scalesEqual(wheelZoomFactor(-3, 1), Math.pow(WHEEL_ZOOM_STEP, 1.2))).toBeTruthy();
 });
 
 test("wheelZoomFactor ignores empty or non-finite deltas", () => {
-  assert.equal(wheelZoomFactor(0), 1);
-  assert.equal(wheelZoomFactor(Number.NaN), 1);
+  expect(wheelZoomFactor(0)).toBe(1);
+  expect(wheelZoomFactor(Number.NaN)).toBe(1);
 });
 
 test("formatZoomPercent renders whole-number percentages", () => {
-  assert.equal(formatZoomPercent(1), 100);
-  assert.equal(formatZoomPercent(1.25), 125);
-  assert.equal(formatZoomPercent(0.333), 33);
+  expect(formatZoomPercent(1)).toBe(100);
+  expect(formatZoomPercent(1.25)).toBe(125);
+  expect(formatZoomPercent(0.333)).toBe(33);
 });

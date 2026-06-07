@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import { createSilenceWatchdog } from "./sessionEventStreamTelemetry";
 
@@ -34,20 +33,20 @@ test("watchdog publishes a metric after idleThresholdMs", () => {
   });
 
   watchdog.reset();
-  assert.equal(scheduled.length, 1, "reset should schedule one timer");
-  assert.equal(scheduled[0]!.delay, 30_000);
+  expect(scheduled.length, "reset should schedule one timer").toBe(1);
+  expect(scheduled[0]!.delay).toBe(30_000);
 
   // Advance clock + fire timer.
   nowMs = 31_000;
   const fired = scheduled.shift()!;
   fired.fn();
 
-  assert.equal(emits.length, 1);
-  assert.equal(emits[0]!.whileRunning, true);
-  assert.ok(emits[0]!.idleSeconds >= 30 && emits[0]!.idleSeconds < 31);
+  expect(emits.length).toBe(1);
+  expect(emits[0]!.whileRunning).toBe(true);
+  expect(emits[0]!.idleSeconds >= 30 && emits[0]!.idleSeconds < 31).toBeTruthy();
 
   // Re-arm after fire — silence still ongoing means we keep observing.
-  assert.equal(scheduled.length, 1, "watchdog should re-arm after firing");
+  expect(scheduled.length, "watchdog should re-arm after firing").toBe(1);
 
   watchdog.stop();
 });
@@ -71,14 +70,14 @@ test("watchdog reset clears the pending timer", () => {
     setTimeoutFn,
     clearTimeoutFn,
     now: () => 0,
-    emit: () => assert.fail("should not fire after reset clears"),
+    emit: () => expect.fail("should not fire after reset clears"),
   });
   watchdog.reset();
-  assert.equal(scheduled.length, 1);
+  expect(scheduled.length).toBe(1);
   watchdog.reset(); // clears and re-arms
-  assert.equal(scheduled.length, 1, "outstanding timer should be cleared on re-reset");
+  expect(scheduled.length, "outstanding timer should be cleared on re-reset").toBe(1);
   watchdog.stop();
-  assert.equal(scheduled.length, 0, "stop() should clear the timer");
+  expect(scheduled.length, "stop() should clear the timer").toBe(0);
 });
 
 test("watchdog reports whileRunning=false outside a turn", () => {
@@ -102,7 +101,7 @@ test("watchdog reports whileRunning=false outside a turn", () => {
   watchdog.reset();
   nowMs = 31_000;
   scheduled[0]!.fn();
-  assert.equal(emits.length, 1);
-  assert.equal(emits[0]!.whileRunning, false, "still emits metric — operator reads idleSeconds for both states");
+  expect(emits.length).toBe(1);
+  expect(emits[0]!.whileRunning, "still emits metric — operator reads idleSeconds for both states").toBe(false);
   watchdog.stop();
 });

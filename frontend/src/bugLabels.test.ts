@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 import {
   addBugLabelName,
   filterBugLabelSuggestions,
@@ -7,13 +6,13 @@ import {
 } from "./bugLabels";
 
 test("normalizeBugLabelDisplayName removes the redundant bug prefix", () => {
-  assert.equal(normalizeBugLabelDisplayName("  bug:   Slow checkout  "), "Slow checkout");
-  assert.equal(normalizeBugLabelDisplayName("Transcript"), "Transcript");
+  expect(normalizeBugLabelDisplayName("  bug:   Slow checkout  ")).toBe("Slow checkout");
+  expect(normalizeBugLabelDisplayName("Transcript")).toBe("Transcript");
 });
 
 test("addBugLabelName stores display names without the bug prefix", () => {
-  assert.deepEqual(addBugLabelName([], "bug: Slow checkout"), ["Slow checkout"]);
-  assert.deepEqual(addBugLabelName(["Slow checkout"], "slow checkout"), ["Slow checkout"]);
+  expect(addBugLabelName([], "bug: Slow checkout")).toEqual(["Slow checkout"]);
+  expect(addBugLabelName(["Slow checkout"], "slow checkout")).toEqual(["Slow checkout"]);
 });
 
 test("filterBugLabelSuggestions searches visible names and slugs", () => {
@@ -23,16 +22,7 @@ test("filterBugLabelSuggestions searches visible names and slugs", () => {
     { name: "Auth redirect", slug: "auth-redirect", display_name: "Auth redirect" },
   ];
 
-  assert.deepEqual(
-    filterBugLabelSuggestions(labels, "script").map((label) => label.name),
-    ["Transcript"],
-  );
-  assert.deepEqual(
-    filterBugLabelSuggestions(labels, "slow-check").map((label) => label.name),
-    ["Slow checkout"],
-  );
-  assert.deepEqual(
-    filterBugLabelSuggestions(labels, "bug: auth").map((label) => label.name),
-    ["Auth redirect"],
-  );
+  expect(filterBugLabelSuggestions(labels, "script").map((label) => label.name)).toEqual(["Transcript"]);
+  expect(filterBugLabelSuggestions(labels, "slow-check").map((label) => label.name)).toEqual(["Slow checkout"]);
+  expect(filterBugLabelSuggestions(labels, "bug: auth").map((label) => label.name)).toEqual(["Auth redirect"]);
 });

@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 import {
   addAvatarPreviewEditRequestListener,
   avatarPreviewIsEditable,
@@ -36,30 +35,21 @@ function withWindow<T>(fn: (windowTarget: EventTarget) => T): T {
 }
 
 test("avatar preview editability is limited to managed avatar kinds", () => {
-  assert.equal(
-    avatarPreviewIsEditable({
-      name: "Agent",
-      avatarSrc: "/agent.png",
-      kind: "agent",
-    }),
-    true,
-  );
-  assert.equal(
-    avatarPreviewIsEditable({
-      name: "System",
-      avatarSrc: "/system.png",
-      kind: "system",
-    }),
-    true,
-  );
-  assert.equal(
-    avatarPreviewIsEditable({
-      name: "Profile",
-      avatarSrc: "/profile.png",
-      kind: "personal",
-    }),
-    false,
-  );
+  expect(avatarPreviewIsEditable({
+          name: "Agent",
+          avatarSrc: "/agent.png",
+          kind: "agent",
+        })).toBe(true);
+  expect(avatarPreviewIsEditable({
+          name: "System",
+          avatarSrc: "/system.png",
+          kind: "system",
+        })).toBe(true);
+  expect(avatarPreviewIsEditable({
+          name: "Profile",
+          avatarSrc: "/profile.png",
+          kind: "personal",
+        })).toBe(false);
 });
 
 test("openAvatarPreview dispatches the preview detail and consumes source events", () => {
@@ -85,9 +75,9 @@ test("openAvatarPreview dispatches the preview detail and consumes source events
       },
     });
 
-    assert.equal(observed, detail);
-    assert.equal(stopped, true);
-    assert.equal(prevented, true);
+    expect(observed).toBe(detail);
+    expect(stopped).toBe(true);
+    expect(prevented).toBe(true);
   });
 });
 
@@ -115,7 +105,7 @@ test("avatar preview edit request listeners receive details and unsubscribe clea
       }),
     );
 
-    assert.deepEqual(observed, [detail]);
+    expect(observed).toEqual([detail]);
   });
 });
 
@@ -128,6 +118,6 @@ test("closeAvatarPreview dispatches a lightbox close event", () => {
 
     closeAvatarPreview();
 
-    assert.equal(closeCount, 1);
+    expect(closeCount).toBe(1);
   });
 });

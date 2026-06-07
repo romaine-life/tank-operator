@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { afterEach, test, expect } from "vitest";
 
 import { readMatch, subscribeMatch } from "./useViewport.ts";
 
@@ -44,7 +43,7 @@ afterEach(() => {
 
 test("readMatch returns false without matchMedia (SSR/node desktop default)", () => {
   delete slot.window;
-  assert.equal(readMatch("(max-width: 768px)"), false);
+  expect(readMatch("(max-width: 768px)")).toBe(false);
 });
 
 test("readMatch reflects the live matchMedia result", () => {
@@ -54,9 +53,9 @@ test("readMatch reflects the live matchMedia result", () => {
     modern: true,
   };
   installMatchMedia(controller);
-  assert.equal(readMatch("(max-width: 768px)"), true);
+  expect(readMatch("(max-width: 768px)")).toBe(true);
   controller.matches = false;
-  assert.equal(readMatch("(max-width: 768px)"), false);
+  expect(readMatch("(max-width: 768px)")).toBe(false);
 });
 
 test("subscribeMatch wires the modern change listener and unsubscribes cleanly", () => {
@@ -70,11 +69,11 @@ test("subscribeMatch wires the modern change listener and unsubscribes cleanly",
   const unsubscribe = subscribeMatch("(max-width: 768px)", () => {
     fired += 1;
   });
-  assert.equal(controller.listeners.size, 1);
+  expect(controller.listeners.size).toBe(1);
   for (const cb of controller.listeners) cb();
-  assert.equal(fired, 1);
+  expect(fired).toBe(1);
   unsubscribe();
-  assert.equal(controller.listeners.size, 0);
+  expect(controller.listeners.size).toBe(0);
 });
 
 test("subscribeMatch falls back to legacy addListener/removeListener", () => {
@@ -85,14 +84,14 @@ test("subscribeMatch falls back to legacy addListener/removeListener", () => {
   };
   installMatchMedia(controller);
   const unsubscribe = subscribeMatch("(max-width: 640px)", () => {});
-  assert.equal(controller.listeners.size, 1);
+  expect(controller.listeners.size).toBe(1);
   unsubscribe();
-  assert.equal(controller.listeners.size, 0);
+  expect(controller.listeners.size).toBe(0);
 });
 
 test("subscribeMatch is a safe no-op when matchMedia is unavailable", () => {
   delete slot.window;
   const unsubscribe = subscribeMatch("(max-width: 768px)", () => {});
-  assert.equal(typeof unsubscribe, "function");
+  expect(typeof unsubscribe).toBe("function");
   unsubscribe(); // must not throw
 });

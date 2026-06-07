@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import {
   clusterHealthHeadline,
@@ -67,11 +66,11 @@ function baseHealth(): ClusterHealthResponse {
 
 test("cluster health headline maps status", () => {
   const health = baseHealth();
-  assert.equal(clusterHealthHeadline(health), "Cluster healthy");
+  expect(clusterHealthHeadline(health)).toBe("Cluster healthy");
   health.status = "warning";
-  assert.equal(clusterHealthHeadline(health), "Cluster warning");
+  expect(clusterHealthHeadline(health)).toBe("Cluster warning");
   health.status = "critical";
-  assert.equal(clusterHealthHeadline(health), "Cluster critical");
+  expect(clusterHealthHeadline(health)).toBe("Cluster critical");
 });
 
 test("cluster health issue text prioritizes node pressure", () => {
@@ -79,7 +78,7 @@ test("cluster health issue text prioritizes node pressure", () => {
   health.status = "warning";
   health.nodes.status = "warning";
   health.nodes.memory_pressure_nodes = 1;
-  assert.equal(clusterHealthIssueText(health), "1 node under memory pressure");
+  expect(clusterHealthIssueText(health)).toBe("1 node under memory pressure");
 });
 
 test("cluster health issue text surfaces NATS warnings", () => {
@@ -87,19 +86,19 @@ test("cluster health issue text surfaces NATS warnings", () => {
   health.status = "warning";
   health.nats.status = "warning";
   health.nats.warnings = ["Live delivery replicas 2/3 current"];
-  assert.equal(clusterHealthIssueText(health), "Live delivery replicas 2/3 current");
+  expect(clusterHealthIssueText(health)).toBe("Live delivery replicas 2/3 current");
 });
 
 test("cluster health issue text uses a non-label healthy summary", () => {
-  assert.equal(clusterHealthIssueText(baseHealth()), "all checks passing");
+  expect(clusterHealthIssueText(baseHealth())).toBe("all checks passing");
 });
 
 test("cluster health NATS reachability formats monitor availability", () => {
-  assert.equal(clusterHealthNatsReachabilityLabel(baseHealth().nats), "3/3");
+  expect(clusterHealthNatsReachabilityLabel(baseHealth().nats)).toBe("3/3");
   const health = baseHealth();
   health.nats.reachable_servers = 2;
-  assert.equal(clusterHealthNatsReachabilityLabel(health.nats), "2/3");
+  expect(clusterHealthNatsReachabilityLabel(health.nats)).toBe("2/3");
   health.nats.expected_servers = 0;
   health.nats.configured_monitor_urls = 0;
-  assert.equal(clusterHealthNatsReachabilityLabel(health.nats), "2/?");
+  expect(clusterHealthNatsReachabilityLabel(health.nats)).toBe("2/?");
 });

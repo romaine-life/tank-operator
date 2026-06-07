@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import { cachedTurnActivityRefreshRequests } from "./turnActivityCache.ts";
 import type { TranscriptEntry } from "./App.tsx";
@@ -22,7 +21,7 @@ test("requests a live Turns refresh when a cached turn receives a shell update",
     ],
   );
 
-  assert.deepEqual(Array.from(requests.entries()), [["turn-1", "009"]]);
+  expect(Array.from(requests.entries())).toEqual([["turn-1", "009"]]);
 });
 
 test("does not seed uncached turns from the live stream", () => {
@@ -39,7 +38,7 @@ test("does not seed uncached turns from the live stream", () => {
     ],
   );
 
-  assert.equal(requests.size, 0);
+  expect(requests.size).toBe(0);
 });
 
 test("coalesces multiple streamed rows for the same cached turn to the newest cursor", () => {
@@ -57,7 +56,7 @@ test("coalesces multiple streamed rows for the same cached turn to the newest cu
     ],
   );
 
-  assert.deepEqual(Array.from(requests.entries()), [["turn-1", "006"]]);
+  expect(Array.from(requests.entries())).toEqual([["turn-1", "006"]]);
 });
 
 test("ignores durable user messages because they are not part of the Turns activity body", () => {
@@ -74,7 +73,7 @@ test("ignores durable user messages because they are not part of the Turns activ
     ],
   );
 
-  assert.equal(requests.size, 0);
+  expect(requests.size).toBe(0);
 });
 
 test("refreshes cached turn activity for turn-only background wake prompts", () => {
@@ -94,7 +93,7 @@ test("refreshes cached turn activity for turn-only background wake prompts", () 
     ],
   );
 
-  assert.deepEqual(Array.from(requests.entries()), [["turn-1", "011"]]);
+  expect(Array.from(requests.entries())).toEqual([["turn-1", "011"]]);
 });
 
 test("treats an empty cached activity body as loaded", () => {
@@ -111,5 +110,5 @@ test("treats an empty cached activity body as loaded", () => {
     ],
   );
 
-  assert.deepEqual(Array.from(requests.entries()), [["turn-1", "010"]]);
+  expect(Array.from(requests.entries())).toEqual([["turn-1", "010"]]);
 });
