@@ -29,14 +29,21 @@ func TestSessionRunOptionsExposeTankOwnedCreateAndRunConfig(t *testing.T) {
 		t.Fatalf("retired_create_modes = %#v", opts.RetiredCreateModes)
 	}
 	codexModels := opts.Models["codex"]
-	if !slices.Contains(codexModels, "gpt-5.5") ||
-		!slices.Contains(codexModels, "gpt-5.3-codex-spark") ||
-		slices.Contains(codexModels, "gpt-5.3-codex") {
+	wantCodexModels := []string{"gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex-spark"}
+	if !slices.Equal(codexModels, wantCodexModels) {
+		t.Fatalf("codex models = %v, want %v", codexModels, wantCodexModels)
+	}
+	if slices.Contains(codexModels, "gpt-5.3-codex") {
 		t.Fatalf("codex models = %v", codexModels)
 	}
-	if !slices.Contains(opts.Efforts["codex"], "xhigh") ||
-		slices.Contains(opts.Efforts["codex"], "max") {
-		t.Fatalf("codex efforts = %v", opts.Efforts["codex"])
+	if want := []string{"claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"}; !slices.Equal(opts.Models["claude"], want) {
+		t.Fatalf("claude models = %v, want %v", opts.Models["claude"], want)
+	}
+	if want := []string{"low", "medium", "high", "xhigh"}; !slices.Equal(opts.Efforts["codex"], want) {
+		t.Fatalf("codex efforts = %v, want %v", opts.Efforts["codex"], want)
+	}
+	if want := []string{"low", "medium", "high", "xhigh", "max"}; !slices.Equal(opts.Efforts["claude"], want) {
+		t.Fatalf("claude efforts = %v, want %v", opts.Efforts["claude"], want)
 	}
 	if opts.DefaultModels["claude"] != "claude-opus-4-8" || opts.DefaultEfforts["claude"] != "high" {
 		t.Fatalf("claude defaults = model %q effort %q", opts.DefaultModels["claude"], opts.DefaultEfforts["claude"])
