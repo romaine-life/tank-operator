@@ -31,6 +31,23 @@ function isTurnActivityUserMessageEntry(entry: TranscriptEntry): boolean {
   );
 }
 
+// isAlwaysVisibleTurnDetailEntry reports whether a Turn-activity entry stays
+// visible even when a completed turn's activity log is collapsed behind the
+// divider. The final assistant answer is always visible; so is the system-user
+// background-wake prompt — it is the settled message explaining why the agent
+// resumed (a background task finished while the session was idle), not
+// collapsible tool noise. Burying it inside the collapsed activity was the
+// "the wake never shows" defect: a single-wake continuation folds into the
+// origin turn correctly, but the prompt then read as missing.
+export function isAlwaysVisibleTurnDetailEntry(
+  entry: TranscriptEntry,
+  finalDetailEntryIds: ReadonlySet<string>,
+): boolean {
+  return (
+    finalDetailEntryIds.has(entry.id) || isTurnActivityUserMessageEntry(entry)
+  );
+}
+
 export function cachedTurnActivityRefreshRequests(
   cache: ActivityEntriesByTurn,
   rows: TranscriptEntry[],

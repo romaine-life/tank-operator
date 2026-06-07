@@ -377,6 +377,16 @@ func TestHandleSessionTurnActivityIncludesBackgroundWakeContinuation(t *testing.
 			if got, want := entry["backendTurnId"], "turn_bgtask-task-ci"; got != want {
 				t.Fatalf("wake prompt backendTurnId = %#v, want %#v: %#v", got, want, entry)
 			}
+			// The frontend Turns view only renders a role=user activity row as
+			// the system-user wake bubble when it carries wakePrompt/turnOnly
+			// (isTurnActivityUserMessageEntry). Without these flags the row is
+			// dropped as an ordinary user message — the "wake never shows" bug.
+			if entry["wakePrompt"] != true {
+				t.Fatalf("wake prompt row missing wakePrompt=true (frontend would drop it): %#v", entry)
+			}
+			if entry["turnOnly"] != true {
+				t.Fatalf("wake prompt row missing turnOnly=true: %#v", entry)
+			}
 		case entry["role"] == "assistant" && entry["text"] == "CI passed. The branch is ready.":
 			foundWakeFinal = true
 			if got, want := entry["turnId"], "turn-1"; got != want {

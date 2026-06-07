@@ -223,6 +223,19 @@ func (s *appServer) fireBackgroundTaskWake(ctx context.Context, row pgstore.Back
 		}
 		return nil
 	}
+	// Durable idempotency: if this wake's deterministic turn already exists in
+	// the ledger, a prior tick already fired it and the claim merely went stale
+	// while the (possibly long) wake turn ran. Re-submitting would publish a
+	// second turn.submitted for the same continuation — the source of the
+	// session 655 duplicate wake. The durable ledger, not the claim status, is
+	// the authority for "already fired".
+	wakeTurnID := conversation.TurnIDForClientNonce(row.ClientNonce)
+	if eventStore := s.sessionEventStoreForScope(row.SessionScope); eventStore != nil && wakeTurnID != "" {
+		if existing, err := eventStore.EventsForTurnAfter(ctx, row.SessionID, wakeTurnID, "", 1); err == nil && len(existing.Events) > 0 {
+			recordBackgroundTaskWakeFire(provider, "already_fired")
+			return s.backgroundTaskWakes.MarkFired(ctx, row.WakeID, wakeTurnID)
+		}
+	}
 	resp, status, detail := s.enqueueSDKTurn(ctx, row.OwnerEmail, row.SessionID, sdkTurnRequest{
 		ClientNonce:     row.ClientNonce,
 		RequireNonce:    true,
@@ -269,4 +282,56 @@ func backgroundTaskWakeFireFailureLabel(reason string) string {
 	default:
 		return "failed"
 	}
+}
+
+// shellTaskEventLister is the narrow capability the background-task list endpoint
+// needs: an indexed read of a session's shell-task lifecycle events. The
+// postgres event store implements it; the degraded no-Postgres stub does not, so
+// the endpoint returns an empty list rather than re-reading the whole ledger.
+type shellTaskEventLister interface {
+	ShellTaskEvents(ctx context.Context, tankSessionID string) ([]map[string]any, error)
+}
+
+// handleListSessionBackgroundTasks lists the session's background
+// (run_in_background) shell tasks — the durable feed for the Background screen.
+// Background tasks are recorded as shell_task.* events that fold into per-turn
+// activity; this surfaces them as a first-class session-level list (running and
+// recently completed) so a backgrounded task — a timer, a watcher, a sub-agent —
+// is visible where the user expects it, not only inside a turn's collapsed
+// activity. The durable shell-task lifecycle is the source; this endpoint is a
+// projection over it, never browser-local optimism.
+func (s *appServer) handleListSessionBackgroundTasks(w http.ResponseWriter, r *http.Request) {
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "missing session_id")
+		return
+	}
+	user, ok := s.requireAuth(w, r)
+	if !ok {
+		return
+	}
+	sessionScope, status, scopeErr := s.resolveSessionScopeFromRequest(user, r)
+	if scopeErr != nil {
+		writeError(w, status, scopeErr.Error())
+		return
+	}
+	if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
+		writeError(w, status, err.Error())
+		return
+	}
+	lister, ok := s.sessionEventStoreForScope(sessionScope).(shellTaskEventLister)
+	if !ok {
+		recordSessionBackgroundTasksList("store_unavailable")
+		writeJSON(w, http.StatusOK, map[string]any{"background_tasks": []map[string]any{}})
+		return
+	}
+	events, err := lister.ShellTaskEvents(r.Context(), sessionID)
+	if err != nil {
+		recordSessionBackgroundTasksList("error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	tasks := projectSessionBackgroundTasks(events)
+	recordSessionBackgroundTasksList("ok")
+	writeJSON(w, http.StatusOK, map[string]any{"background_tasks": tasks})
 }

@@ -903,7 +903,7 @@ test("background tab stays discoverable before background entries exist", () => 
 test("background page includes active shell invocations alongside managed tasks", () => {
   expect(appSource).toMatch(/function isShellToolEntry\([\s\S]*?entry\.toolKind === "shell"[\s\S]*?function isRunningShellInvocationEntry\([\s\S]*?isShellToolEntry\(entry\)[\s\S]*?normalizeToolState\(entry\.toolStatus\) === "running"/);
   expect(appSource).toMatch(/const activeBackgroundEntries = useMemo\([\s\S]*?backgroundTaskEntries\.filter\(isBackgroundTaskRunning\)[\s\S]*?runningShellInvocationEntries/);
-  expect(appSource).toMatch(/<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}/);
+  expect(appSource).toMatch(/<BackgroundScreen\n\s+shellEntries=\{backgroundShellEntries\}/);
 });
 
 test("background page surfaces scheduled wakeups as first-class continuation state", () => {
@@ -911,21 +911,21 @@ test("background page surfaces scheduled wakeups as first-class continuation sta
   expect(appSource).toMatch(/function isScheduledWakeupEntry\([\s\S]*?entry\.taskKind === "scheduled_wakeup"/);
   expect(appSource).toMatch(/<span>Scheduled<\/span>[\s\S]*?<span>\{scheduledEntries\.length\}<\/span>/);
   expect(appSource).toMatch(/scheduledWakeupRowsToEntries\(\s*body\.scheduled_wakeups \?\? \[\],\s*\)/);
-  expect(appSource).toMatch(/<BackgroundScreen[\s\S]{0,400}shellEntries=\{activeBackgroundEntries\}[\s\S]{0,400}scheduledEntries=\{scheduledWakeupEntries\}/);
+  expect(appSource).toMatch(/<BackgroundScreen[\s\S]{0,400}shellEntries=\{backgroundShellEntries\}[\s\S]{0,400}scheduledEntries=\{scheduledWakeupEntries\}/);
 });
 
 test("background page surfaces control actions as first-class audit state", () => {
   expect(appSource).toMatch(/function isControlActionEntry\([\s\S]*?entry\.taskKind === "control_action"/);
   expect(appSource).toMatch(/<span>Control<\/span>[\s\S]*?<span>\{controlEntries\.length\}<\/span>/);
   expect(appSource).toMatch(/controlActionRowsToEntries\(body\)/);
-  expect(appSource).toMatch(/<BackgroundScreen[\s\S]{0,160}shellEntries=\{activeBackgroundEntries\}[\s\S]{0,160}scheduledEntries=\{scheduledWakeupEntries\}[\s\S]{0,160}controlEntries=\{controlActionEntries\}/);
+  expect(appSource).toMatch(/<BackgroundScreen[\s\S]{0,160}shellEntries=\{backgroundShellEntries\}[\s\S]{0,160}scheduledEntries=\{scheduledWakeupEntries\}[\s\S]{0,160}controlEntries=\{controlActionEntries\}/);
 });
 
 test("background page separates tracked shells from detached shell candidates", () => {
   expect(appSource).toMatch(/function isDetachedShellCandidateEntry\([\s\S]*?isShellToolEntry\(entry\)[\s\S]*?detachedShellLaunchReason\(entry\)/);
   expect(appSource).toMatch(/<span>Shells<\/span>[\s\S]*?<span>Detached<\/span>/);
   expect(appSource).toMatch(/const detachedShellEntries = useMemo\([\s\S]*?renderedEntries\.filter\(isDetachedShellCandidateEntry\)/);
-  expect(appSource).toMatch(/<BackgroundScreen\n\s+shellEntries=\{activeBackgroundEntries\}\n\s+scheduledEntries=\{scheduledWakeupEntries\}\n\s+controlEntries=\{controlActionEntries\}\n\s+detachedEntries=\{detachedShellEntries\}/);
+  expect(appSource).toMatch(/<BackgroundScreen\n\s+shellEntries=\{backgroundShellEntries\}\n\s+scheduledEntries=\{scheduledWakeupEntries\}\n\s+controlEntries=\{controlActionEntries\}\n\s+detachedEntries=\{detachedShellEntries\}/);
 });
 
 test("background stop controls exclude untracked detached shells", () => {
@@ -933,6 +933,30 @@ test("background stop controls exclude untracked detached shells", () => {
   expect(appSource).toMatch(/<BackgroundScreen[\s\S]*canStopEntry=\{canStopBackgroundEntry\}[\s\S]*onStop=\{stopBackgroundActivity\}/);
   expect(appSource).toMatch(/className="run-shell-task-stop"/);
   expect(appSource).toMatch(/\/background-tasks\/\$\{encodeURIComponent\(taskID\)\}\/stop/);
+});
+
+test("background tasks come from the durable session-level feed, not transcript rows", () => {
+  // background_task rows live only inside per-turn activity bodies, never as
+  // top-level transcript rows, so the Background feed reads the durable
+  // /background-tasks projection rather than filtering renderedEntries (which
+  // was empty by construction). Guards the cutover against the old filter
+  // returning.
+  expect(appSource).toMatch(
+    /const backgroundTaskEntries = useMemo\(\s*\(\) =>\s*backgroundTaskLedgerEntries\.filter\(isBackgroundTaskEntry\)/,
+  );
+  expect(appSource.includes("renderedEntries.filter(isBackgroundTaskEntry)")).toBe(
+    false,
+  );
+  expect(appSource.includes("/background-tasks`")).toBe(true);
+  expect(appSource).toMatch(
+    /normalizeProjectedTranscriptEntries\(\s*body\.background_tasks \?\? \[\]/,
+  );
+  // The shells view shows running AND recently completed tasks, so a task that
+  // finished while idle (a timer) stays visible; the active subset still drives
+  // the badge count.
+  expect(appSource).toMatch(
+    /const backgroundShellEntries = useMemo\([\s\S]*?\.\.\.backgroundTaskEntries[\s\S]*?\.\.\.runningShellInvocationEntries/,
+  );
 });
 
 test("web search transcript tools use the web glyph", () => {

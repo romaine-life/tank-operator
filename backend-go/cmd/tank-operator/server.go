@@ -353,6 +353,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/sessions/{session_id}/turns", s.handleEnqueueSessionTurn)
 	mux.HandleFunc("POST /api/sessions/{session_id}/turns/{turn_id}/interrupt", s.handleInterruptSessionTurn)
 	mux.HandleFunc("POST /api/sessions/{session_id}/turns/{turn_id}/answer", s.handleAnswerSessionTurn)
+	mux.HandleFunc("GET /api/sessions/{session_id}/background-tasks", s.handleListSessionBackgroundTasks)
 	mux.HandleFunc("POST /api/sessions/{session_id}/background-tasks/{task_id}/stop", s.handleStopBackgroundTask)
 	mux.HandleFunc("GET /api/sessions/{session_id}/events", s.handleSessionEventStream)
 	mux.HandleFunc("GET /api/sessions/{session_id}/timeline", s.handleSessionTimeline)

@@ -240,13 +240,50 @@ func (s *appServer) handleResolveSessionTurnNumber(w http.ResponseWriter, r *htt
 		writeError(w, http.StatusNotFound, "turn not found")
 		return
 	}
-	recordTurnNumberResolve("ok")
+	resolveLabel := "ok"
+	// A background-task wake continuation turn is not a user-visible turn. Wake
+	// turns numbered before migration 0139 are still resolvable by number, so a
+	// deep link to one folds to the originating real turn that owns the chain.
+	if isBackgroundWakeTurnID(resolution.TurnID) {
+		folded, ok, ferr := s.resolveBackgroundWakeOriginTurn(r.Context(), sessionScope, sessionID, resolution.TurnID)
+		if ferr != nil {
+			writeError(w, http.StatusInternalServerError, ferr.Error())
+			return
+		}
+		if ok {
+			resolution = folded
+			resolveLabel = "folded_wake"
+		}
+	}
+	recordTurnNumberResolve(resolveLabel)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id":  sessionID,
 		"turn_id":     resolution.TurnID,
 		"turn_number": resolution.TurnNumber,
 		"row_cursor":  resolution.RowCursor,
 	})
+}
+
+// resolveBackgroundWakeOriginTurn folds a background-task wake continuation turn
+// (turn_bgtask-<task>) to its originating real (user-visible) turn. The whole
+// continuation chain belongs to the one turn that started it, so a deep link to
+// a historical wake-turn number lands on that turn rather than a synthetic wake
+// turn the transcript projection otherwise hides.
+func (s *appServer) resolveBackgroundWakeOriginTurn(ctx context.Context, sessionScope, sessionID, wakeTurnID string) (store.TurnNumberResolution, bool, error) {
+	events, err := readAllSessionEvents(ctx, s.sessionEventStoreForScope(sessionScope), sessionID)
+	if err != nil {
+		return store.TurnNumberResolution{}, false, err
+	}
+	origin := backgroundWakeParentTurnsFromEvents(events)[wakeTurnID]
+	if origin == "" || isBackgroundWakeTurnID(origin) {
+		return store.TurnNumberResolution{}, false, nil
+	}
+	turnStore := s.sessionTurnStoreForScope(sessionScope)
+	number, ok, err := turnStore.TurnNumberForTurnID(ctx, sessionID, origin)
+	if err != nil || !ok {
+		return store.TurnNumberResolution{}, false, err
+	}
+	return turnStore.ResolveTurnNumber(ctx, sessionID, number)
 }
 
 func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
