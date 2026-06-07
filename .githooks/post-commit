@@ -1,0 +1,17 @@
+#!/bin/sh
+
+cat <<'EOF'
+
+[tank-agent-reminder] Local commit created.
+Before handoff:
+- Push the branch and inspect the open PR's current HEAD CI checks.
+- Treat CI as part of the contract/test surface, not as optional bookkeeping.
+- Resolve merge conflicts against the base branch.
+- Re-run or update hot-swap/test-slot evidence after follow-up changes.
+- Do not hand off broken or intentionally failing CI unless that is explicitly stated.
+
+Useful checks:
+  gh pr view --json url,headRefOid,mergeStateStatus,statusCheckRollup
+  gh pr checks --watch
+
+EOF
