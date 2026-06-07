@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   addAvatarPreviewEditRequestListener,
   avatarPreviewIsEditable,
+  closeAvatarPreview,
   openAvatarPreview,
   type AvatarPreviewDetail,
 } from "./avatarPreview";
@@ -115,5 +116,18 @@ test("avatar preview edit request listeners receive details and unsubscribe clea
     );
 
     assert.deepEqual(observed, [detail]);
+  });
+});
+
+test("closeAvatarPreview dispatches a lightbox close event", () => {
+  withWindow((windowTarget) => {
+    let closeCount = 0;
+    windowTarget.addEventListener("tank-avatar-preview-close", () => {
+      closeCount += 1;
+    });
+
+    closeAvatarPreview();
+
+    assert.equal(closeCount, 1);
   });
 });

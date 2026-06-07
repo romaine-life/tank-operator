@@ -13,6 +13,7 @@ const AVATAR_PREVIEW_EVENT = "tank-avatar-preview";
 const AVATAR_PREVIEW_EDIT_AVAILABILITY_EVENT =
   "tank-avatar-preview-edit-availability";
 const AVATAR_PREVIEW_EDIT_REQUEST_EVENT = "tank-avatar-preview-edit-request";
+const AVATAR_PREVIEW_CLOSE_EVENT = "tank-avatar-preview-close";
 
 let avatarPreviewEditAvailable = false;
 
@@ -71,6 +72,11 @@ function requestAvatarPreviewEdit(detail: AvatarPreviewDetail) {
   );
 }
 
+export function closeAvatarPreview() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new Event(AVATAR_PREVIEW_CLOSE_EVENT));
+}
+
 function displayLabel(kind?: string): string {
   switch (kind) {
     case "agent":
@@ -113,6 +119,12 @@ export function AvatarPreviewHost() {
     };
     window.addEventListener(AVATAR_PREVIEW_EVENT, onPreview);
     return () => window.removeEventListener(AVATAR_PREVIEW_EVENT, onPreview);
+  }, []);
+
+  useEffect(() => {
+    const onClose = () => setPreview(null);
+    window.addEventListener(AVATAR_PREVIEW_CLOSE_EVENT, onClose);
+    return () => window.removeEventListener(AVATAR_PREVIEW_CLOSE_EVENT, onClose);
   }, []);
 
   useEffect(() => {
@@ -222,9 +234,7 @@ export function AvatarPreviewHost() {
                 type="button"
                 className="avatar-lightbox-edit"
                 onClick={() => {
-                  const detail = preview;
-                  setPreview(null);
-                  requestAvatarPreviewEdit(detail);
+                  requestAvatarPreviewEdit(preview);
                 }}
               >
                 Edit

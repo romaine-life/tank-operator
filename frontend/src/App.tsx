@@ -329,6 +329,7 @@ import {
 import {
   addAvatarPreviewEditRequestListener,
   avatarPreviewIsEditable,
+  closeAvatarPreview,
   openAvatarPreview,
   setAvatarPreviewEditAvailable,
 } from "./avatarPreview";
@@ -1753,6 +1754,13 @@ function replaceAppRoute(
   if (routeHasMessageTarget()) return;
   const next = appRouteUrl(tab, settingsTab, adminView);
   if (next !== window.location.href) window.history.replaceState({}, "", next);
+}
+
+function closeAvatarPreviewAfterRoutePaint(): void {
+  if (typeof window === "undefined") return;
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => closeAvatarPreview());
+  });
 }
 
 function readInitialSessionId(): string | null {
@@ -17427,6 +17435,7 @@ function ChatPane({
     if (publicView) return;
     if (!visible || avatarEditorOpenRequest === 0) return;
     setSettingsRoute("admin", "avatars");
+    closeAvatarPreviewAfterRoutePaint();
   }, [avatarEditorOpenRequest, publicView, setSettingsRoute, visible]);
   const retryTimelineBootstrap = () => {
     historyRefreshRef.current = null;
@@ -19437,6 +19446,7 @@ function AuthenticatedApp() {
         return;
       }
       setHomeSettingsRoute("admin", "avatars");
+      closeAvatarPreviewAfterRoutePaint();
     });
   }, [hasAdminAccess, setHomeSettingsRoute]);
   const applyCurrentHomeRoute = useCallback(() => {
