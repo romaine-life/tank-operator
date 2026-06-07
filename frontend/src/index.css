@@ -3496,10 +3496,42 @@ button:disabled {
   color: var(--bg-base);
 }
 
-.home-repos-recent-chip.is-disabled,
 .home-repos-recent-chip:disabled {
   opacity: 0.45;
   cursor: not-allowed;
+}
+
+/* The explicit additive "+" affordance: a compact icon button beside each
+   selectable repo chip. Plain-clicking the chip name selects exclusively;
+   this adds the repo to the current selection without the Shift key. Mirrors
+   the recent-remove "x" button footprint so the chip row stays balanced. */
+.home-repos-add-more {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.25rem;
+  height: 1.25rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.home-repos-add-more:hover:not(:disabled) {
+  background: var(--accent-soft);
+  color: var(--text-primary);
+}
+
+.home-repos-add-more:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.home-repos-add-more-icon {
+  width: 0.85rem;
+  height: 0.85rem;
 }
 
 .home-repos-recent-remove {
