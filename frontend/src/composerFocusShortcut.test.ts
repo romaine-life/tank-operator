@@ -26,7 +26,7 @@ test("plain / on the chat tab focuses the composer in place", () => {
   assert.equal(resolveComposerFocusShortcut(ctx()), "focus-in-place");
 });
 
-test("plain / on the turns tab focuses the composer in place, not back to chat", () => {
+test("plain / on the turns tab focuses the composer in place", () => {
   // Regression: the turns view renders the same composer, so `/` must focus it
   // where it is instead of navigating back to the main transcript.
   assert.equal(
@@ -35,12 +35,12 @@ test("plain / on the turns tab focuses the composer in place, not back to chat",
   );
 });
 
-test("/ on a tab without an in-page composer switches to chat first", () => {
+test("/ on a tab without an in-page composer switches to turns first", () => {
   for (const activeTab of ["files", "background", "session-data", "terminal"]) {
     assert.equal(
       resolveComposerFocusShortcut(ctx({ activeTab })),
-      "switch-to-chat",
-      `expected switch-to-chat for ${activeTab}`,
+      "switch-to-turns",
+      `expected switch-to-turns for ${activeTab}`,
     );
   }
 });

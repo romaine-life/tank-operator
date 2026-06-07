@@ -680,10 +680,10 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 	return m.GetByOwner(ctx, owner, sessionID)
 }
 
-// SetOpenTarget persists the durable per-session sidebar open-target preference
-// (” / 'chat' / 'turns'). Like SetBugLabel it is registry-only UI state, so no
-// pod annotation is patched. Validation lives in the HTTP handler; the manager
-// just persists the value, publishes the updated row, and returns the refreshed
+// SetOpenTarget persists the legacy durable per-session sidebar open-target
+// preference ('' / 'chat' / 'turns'). Like SetBugLabel it is registry-only UI
+// state, so no pod annotation is patched. Validation lives in the HTTP handler;
+// the manager just persists the value, publishes the updated row, and returns the refreshed
 // Info the same way SetName's tail does.
 func (m *Manager) SetOpenTarget(ctx context.Context, owner, sessionID, target string) (Info, error) {
 	if m.registry != nil {

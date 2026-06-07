@@ -180,23 +180,20 @@ type SessionRecord struct {
 	// window uses). Monotonic: it only ever advances over a session's life.
 	CompactionCount int64
 
-	// UserMessageCount is the durable count of user_message.created events the
-	// session has recorded — one per human back-and-forth submission. Like
-	// CompactionCount it is a projection over the append-only session_events
-	// ledger (the chat-activity emitter recomputes it on each
-	// user_message.created upsert), surfaced on the row so the frontend's
-	// auto-default-to-Turns sidebar gate hydrates from durable row metadata,
-	// stable across reload and identical in a fresh tab. Monotonic: it only ever
-	// advances. Background-task wake continuations carry their prompt on
-	// turn.submitted, not user_message.created, so they are excluded.
-	UserMessageCount int64
+		// UserMessageCount is the durable count of user_message.created events the
+		// session has recorded — one per human back-and-forth submission. Like
+		// CompactionCount it is a projection over the append-only session_events
+		// ledger (the chat-activity emitter recomputes it on each
+		// user_message.created upsert), surfaced on the row as durable metadata,
+		// stable across reload and identical in a fresh tab. Monotonic: it only ever
+		// advances. Background-task wake continuations carry their prompt on
+		// turn.submitted, not user_message.created, so they are excluded.
+		UserMessageCount int64
 
-	// OpenTarget is the durable per-session sidebar open-target preference.
-	// '' = unset → the frontend auto-default applies; 'chat'/'turns' = an
-	// explicit pin to the main transcript or the Turns view. It is the durable
-	// manual override for the auto-default-to-Turns gate (previously in-memory
-	// only), persisted so the choice survives reload.
-	OpenTarget string
+		// OpenTarget is the legacy durable per-session sidebar open-target
+		// preference. Current frontend builds no longer use it for session-open
+		// defaults, but it stays on the row for compatibility.
+		OpenTarget string
 
 	// Avatar IDs are assigned by the backend from a durable shuffled deck.
 	// Visible production rows must have an agent avatar id before publication.

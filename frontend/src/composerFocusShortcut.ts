@@ -7,7 +7,7 @@
  * Tabs that render the shared composer in-page (see `composerVisible` in
  * App.tsx / WorkspaceShell). On these tabs `/` focuses the composer where it
  * already is; on any other tab the composer is unmounted, so `/` first
- * navigates to the chat transcript, which always renders it.
+ * navigates to the turns view, which is the primary composer surface.
  *
  * Keep this set in sync with the `composerVisible` predicate in App.tsx.
  */
@@ -33,8 +33,8 @@ export type ComposerFocusShortcutAction =
   | "ignore"
   /** The composer is already on this tab: focus it in place, no navigation. */
   | "focus-in-place"
-  /** The composer is not on this tab: switch to chat, then focus it. */
-  | "switch-to-chat";
+  /** The composer is not on this tab: switch to turns, then focus it. */
+  | "switch-to-turns";
 
 /**
  * Decide what `/` should do when pressed.
@@ -42,8 +42,7 @@ export type ComposerFocusShortcutAction =
  * `/` is a "jump to the prompt" shortcut: from anywhere that is not the
  * composer textarea it focuses the composer. The turns view renders the same
  * composer as the chat transcript, so the shortcut must focus it in place
- * there rather than yanking the user back to the main transcript. Tabs without
- * an in-page composer fall back to navigating to chat first.
+ * there. Tabs without an in-page composer fall back to navigating to turns first.
  */
 export function resolveComposerFocusShortcut(
   ctx: ComposerFocusShortcutContext,
@@ -56,5 +55,5 @@ export function resolveComposerFocusShortcut(
   if (ctx.targetIsComposer) return "ignore";
   return TABS_WITH_COMPOSER.has(ctx.activeTab)
     ? "focus-in-place"
-    : "switch-to-chat";
+    : "switch-to-turns";
 }

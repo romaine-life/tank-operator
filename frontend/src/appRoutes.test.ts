@@ -13,6 +13,15 @@ import {
 test("session routes parse only session-scoped pages", () => {
   assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1"), {
     sessionId: "s-1",
+    tab: "turns",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    staticPath: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/transcript"), {
+    sessionId: "s-1",
     tab: "chat",
     turnNumber: null,
     turnSegmentPresent: false,
@@ -111,13 +120,17 @@ test("session route urls broadcast only session-owned pages", () => {
     "https://tank.example.test/sessions/s%201",
   );
   assert.equal(
+    buildSessionRouteUrl(current, "s 1", "chat"),
+    "https://tank.example.test/sessions/s%201/transcript",
+  );
+  assert.equal(
     buildSessionRouteUrl(current, "s 1", "turns", 2),
     "https://tank.example.test/sessions/s%201/turns/2",
   );
-  // turns tab with no selected number stays on the bare /turns page.
+  // turns tab with no selected number stays on the root session page.
   assert.equal(
     buildSessionRouteUrl(current, "s 1", "turns"),
-    "https://tank.example.test/sessions/s%201/turns",
+    "https://tank.example.test/sessions/s%201",
   );
   assert.equal(
     buildSessionRouteUrl(current, "s 1", "session-data"),

@@ -241,10 +241,11 @@ func (s *Store) SetName(ctx context.Context, email, sessionID string, name *stri
 	return err
 }
 
-// SetOpenTarget records the durable per-session sidebar open-target preference
-// (” / 'chat' / 'turns'). Like SetName, missing-session is a no-op and the
-// row_version bump keeps the row-update cursor advancing so open tabs converge.
-// Validation lives in the handler; this just persists the already-checked value.
+// SetOpenTarget records the legacy durable per-session sidebar open-target
+// preference ('' / 'chat' / 'turns'). Like SetName, missing-session is a no-op
+// and the row_version bump keeps the row-update cursor advancing so open tabs
+// converge. Validation lives in the handler; this just persists the
+// already-checked value.
 func (s *Store) SetOpenTarget(ctx context.Context, email, sessionID, target string) error {
 	normalized := strings.ToLower(strings.TrimSpace(email))
 	if normalized == "" || strings.TrimSpace(sessionID) == "" {
