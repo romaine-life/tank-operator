@@ -192,6 +192,7 @@ export class Runner {
       const runtimeModel = model || "antigravity-default";
       void this.reportRuntime(runtimeModel);
 
+      let observedStepCount = 0;
       const result = await this.driver.runTurn(
         {
           prompt,
@@ -200,6 +201,7 @@ export class Runner {
           workspace: this.cfg.workspace,
         },
         async (step) => {
+          observedStepCount += 1;
           agyStepTotal.labels(stepKind(step)).inc();
           for (const ev of this.adapter.stepEvents(turn, step)) {
             await this.publish(ev);
@@ -209,14 +211,13 @@ export class Runner {
       );
       this.hasConversation = true;
 
-      if (result.killed || abort.signal.aborted) {
+      const terminal = classifyAgyTerminal(result, observedStepCount, abort.signal.aborted);
+      if (terminal.kind === "interrupted") {
         await this.publishTerminal(this.adapter.interruptTurn(turn));
         interruptOutcomeTotal.labels("terminated_via_sdk").inc();
-      } else if (result.exitCode !== 0) {
-        providerErrorTotal.labels("nonzero_exit").inc();
-        await this.publishTerminal(
-          this.adapter.failTurn(turn, agyFailReason(result.exitCode, result.stderr)),
-        );
+      } else if (terminal.kind === "failed") {
+        providerErrorTotal.labels(terminal.metricReason).inc();
+        await this.publishTerminal(this.adapter.failTurn(turn, terminal.reason));
       } else {
         await this.publishTerminal(this.adapter.completeTurn(turn));
       }
@@ -337,9 +338,82 @@ function stepKind(step: AgyStep): string {
   return "tool_result";
 }
 
+export type AgyTerminalClassification =
+  | { kind: "completed" }
+  | { kind: "interrupted" }
+  | { kind: "failed"; metricReason: string; reason: string };
+
+export function classifyAgyTerminal(
+  result: {
+    exitCode: number | null;
+    killed: boolean;
+    stdout: string;
+    stderr: string;
+  },
+  observedStepCount: number,
+  aborted: boolean,
+): AgyTerminalClassification {
+  if (result.killed || aborted) return { kind: "interrupted" };
+  if (result.exitCode !== 0) {
+    return {
+      kind: "failed",
+      metricReason: "nonzero_exit",
+      reason: agyFailReason(result.exitCode, result.stderr),
+    };
+  }
+  if (observedStepCount <= 0) {
+    const metricReason = agySemanticFailureMetric(result);
+    return {
+      kind: "failed",
+      metricReason,
+      reason: agySemanticFailReason(metricReason, result),
+    };
+  }
+  return { kind: "completed" };
+}
+
+function agySemanticFailureMetric(result: { stdout: string; stderr: string }): string {
+  const text = `${result.stderr}\n${result.stdout}`.toLowerCase();
+  if (text.includes("timed out waiting for cascade to start running")) {
+    return "provider_start_timeout";
+  }
+  if (
+    text.includes("neither planmodel nor requestedmodel specified") ||
+    text.includes("failed to get model config")
+  ) {
+    return "provider_model_unavailable";
+  }
+  if (
+    text.includes("invalid authentication credentials") ||
+    text.includes("you are not logged into antigravity") ||
+    text.includes("unauthenticated")
+  ) {
+    return "provider_auth_failed";
+  }
+  return "provider_no_output";
+}
+
+function agySemanticFailReason(
+  metricReason: string,
+  result: { stdout: string; stderr: string },
+): string {
+  const tail = agyOutputTail(result);
+  return tail ? `${metricReason}: ${tail}` : metricReason;
+}
+
 function agyFailReason(exitCode: number | null, stderr: string): string {
   const tail = stderr.trim().split("\n").slice(-1)[0]?.slice(0, 200) ?? "";
   return tail ? `agy exit ${exitCode}: ${tail}` : `agy exit ${exitCode}`;
+}
+
+function agyOutputTail(result: { stdout: string; stderr: string }): string {
+  return `${result.stderr}\n${result.stdout}`
+    .trim()
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .slice(-1)[0]
+    ?.slice(0, 200) ?? "";
 }
 
 function sleep(ms: number): Promise<void> {
