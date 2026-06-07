@@ -1780,7 +1780,13 @@ function BreadcrumbSep() {
   );
 }
 
-function BreadcrumbLink({ href, label }: { href: string; label: string }) {
+export function BreadcrumbLink({
+  href,
+  label,
+}: {
+  href: string;
+  label: string;
+}) {
   return (
     <a
       className="workspace-crumb"
@@ -1801,7 +1807,7 @@ function BreadcrumbLink({ href, label }: { href: string; label: string }) {
 // (and, for Turns, the turn and page) are navigable ancestors; the current leaf
 // is non-interactive. The dedicated in-view turn/page dropdowns stay the
 // pickers. Renders nothing for the session-data root or app-level tabs.
-function WorkspaceBreadcrumbTrail({
+export function WorkspaceBreadcrumbTrail({
   sessionId,
   location,
 }: {
