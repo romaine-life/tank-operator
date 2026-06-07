@@ -180,20 +180,20 @@ type SessionRecord struct {
 	// window uses). Monotonic: it only ever advances over a session's life.
 	CompactionCount int64
 
-		// UserMessageCount is the durable count of user_message.created events the
-		// session has recorded — one per human back-and-forth submission. Like
-		// CompactionCount it is a projection over the append-only session_events
-		// ledger (the chat-activity emitter recomputes it on each
-		// user_message.created upsert), surfaced on the row as durable metadata,
-		// stable across reload and identical in a fresh tab. Monotonic: it only ever
-		// advances. Background-task wake continuations carry their prompt on
-		// turn.submitted, not user_message.created, so they are excluded.
-		UserMessageCount int64
+	// UserMessageCount is the durable count of user_message.created events the
+	// session has recorded — one per human back-and-forth submission. Like
+	// CompactionCount it is a projection over the append-only session_events
+	// ledger (the chat-activity emitter recomputes it on each
+	// user_message.created upsert), surfaced on the row as durable metadata,
+	// stable across reload and identical in a fresh tab. Monotonic: it only ever
+	// advances. Background-task wake continuations carry their prompt on
+	// turn.submitted, not user_message.created, so they are excluded.
+	UserMessageCount int64
 
-		// OpenTarget is the legacy durable per-session sidebar open-target
-		// preference. Current frontend builds no longer use it for session-open
-		// defaults, but it stays on the row for compatibility.
-		OpenTarget string
+	// OpenTarget is the legacy durable per-session sidebar open-target
+	// preference. Current frontend builds no longer use it for session-open
+	// defaults, but it stays on the row for compatibility.
+	OpenTarget string
 
 	// Avatar IDs are assigned by the backend from a durable shuffled deck.
 	// Visible production rows must have an agent avatar id before publication.
@@ -741,9 +741,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	// Antigravity API proxy host alias. agy (Gemini-Ultra) is a Go binary that
-	// calls cloudcode-pa.googleapis.com (Google Code Assist) with a Bearer
-	// access token; pointing that host at the antigravity-api-proxy lets the
-	// proxy inject the real token so the agy pod never holds the refresh token.
+	// calls Google Code Assist hosts with a Bearer access token; pointing those
+	// hosts at the antigravity-api-proxy lets the proxy inject the real token so
+	// the agy pod never holds the refresh token.
 	// The CA-trust + placeholder wiring lives in the antigravity-runner block
 	// below (agy runs in that container, so SSL_CERT_FILE belongs there, not on
 	// the sandbox-agent container). Only the GUI mode is hijacked;
@@ -751,7 +751,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	if mode == AntigravityGUIMode && opts.AntigravityAPIProxyIP != "" {
 		hostAliases = append(hostAliases, map[string]any{
 			"ip":        opts.AntigravityAPIProxyIP,
-			"hostnames": []any{"cloudcode-pa.googleapis.com"},
+			"hostnames": []any{"cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"},
 		})
 	}
 

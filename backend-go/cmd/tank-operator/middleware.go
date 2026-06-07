@@ -54,6 +54,25 @@ func validateTurnArg(v string) string {
 	return ""
 }
 
+func validateModelArg(provider, v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return ""
+	}
+	if provider != "antigravity" {
+		return validateTurnArg(v)
+	}
+	if len([]byte(v)) > 128 {
+		return ""
+	}
+	for _, r := range v {
+		if r < 0x20 || r == 0x7f {
+			return ""
+		}
+	}
+	return v
+}
+
 func validateSkillName(v string) string {
 	if skillNamePattern.MatchString(v) {
 		return v
@@ -92,9 +111,14 @@ func validateEffort(provider string, v string) string {
 	if v == "" {
 		return ""
 	}
-	allowed := allowedClaudeEfforts
-	if provider == "codex" {
+	var allowed map[string]struct{}
+	switch provider {
+	case "claude":
+		allowed = allowedClaudeEfforts
+	case "codex":
 		allowed = allowedCodexEfforts
+	default:
+		return ""
 	}
 	if _, ok := allowed[v]; ok {
 		return v

@@ -871,7 +871,10 @@ interface ProviderQuotaEvidence {
   observedAt?: string | null;
 }
 
-const PROVIDER_QUOTA_WINDOW_DEFS: Record<Provider, Array<Pick<ProviderQuotaWindow, "id" | "label" | "shortLabel">>> = {
+const PROVIDER_QUOTA_WINDOW_DEFS: Record<
+  Provider,
+  Array<Pick<ProviderQuotaWindow, "id" | "label" | "shortLabel">>
+> = {
   anthropic: [
     { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
     { id: "weekly", label: "Weekly", shortLabel: "Week" },
@@ -1269,7 +1272,9 @@ function normalizeBugLabel(value: unknown): SessionBugLabel | null {
   const name = typeof record.name === "string" ? record.name : "";
   const slug = typeof record.slug === "string" ? record.slug : "";
   const rawDisplayName =
-    typeof record.display_name === "string" && record.display_name ? record.display_name : name;
+    typeof record.display_name === "string" && record.display_name
+      ? record.display_name
+      : name;
   const displayName = normalizeBugLabelDisplayName(rawDisplayName);
   if (!name || !slug || !displayName) return null;
   const id =
@@ -2395,19 +2400,20 @@ function BugLabelPicker({
           {error && <div className="run-bug-label-error">{error}</div>}
           <div className="run-bug-label-list">
             {loading && <div className="run-bug-label-empty">Loading...</div>}
-            {!loading && filteredLabels.map((label) => (
-              <button
-                key={label.slug}
-                type="button"
-                className={`run-bug-label-option${activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(label.display_name)) ? " is-active" : ""}`}
-                onClick={() => toggleLabel(label)}
-              >
-                <span>{label.display_name}</span>
-                {typeof label.session_count === "number" && (
-                  <span>{label.session_count}</span>
-                )}
-              </button>
-            ))}
+            {!loading &&
+              filteredLabels.map((label) => (
+                <button
+                  key={label.slug}
+                  type="button"
+                  className={`run-bug-label-option${activeSlugSet.has(label.slug) || currentLabels.some((name) => bugLabelNameKey(name) === bugLabelNameKey(label.display_name)) ? " is-active" : ""}`}
+                  onClick={() => toggleLabel(label)}
+                >
+                  <span>{label.display_name}</span>
+                  {typeof label.session_count === "number" && (
+                    <span>{label.session_count}</span>
+                  )}
+                </button>
+              ))}
             {!loading && filteredLabels.length === 0 && (
               <div className="run-bug-label-empty">
                 {labels.length === 0 ? "No labels" : "No matching labels"}
@@ -3204,7 +3210,9 @@ function DemoLanding() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : [];
+        : selectedProvider === "antigravity"
+          ? ANTIGRAVITY_MODELS
+          : [];
   const demoModelApplies =
     demoInteraction === "gui" && demoModelOptions.length > 0;
   const selectedDemoModelId =
@@ -3212,8 +3220,13 @@ function DemoLanding() {
       ? demoClaudeModelId
       : selectedProvider === "codex"
         ? demoCodexModelId
-        : "";
-  const demoProviderQuotaSnapshots = useMemo(() => buildProviderQuotaSnapshots(demoSessions), [demoSessions]);
+        : selectedProvider === "antigravity"
+          ? DEFAULT_ANTIGRAVITY_MODEL_ID
+          : "";
+  const demoProviderQuotaSnapshots = useMemo(
+    () => buildProviderQuotaSnapshots(demoSessions),
+    [demoSessions],
+  );
   const terminalLines = selected
     ? demoTerminalLines(selected, demoPromptMessages[selected.id])
     : DEMO_LANDING_LINES;
@@ -3394,9 +3407,7 @@ function DemoLanding() {
                       className="session-open"
                       onClick={() => setActiveDemoSession(s.id)}
                     >
-                      <span className="session-id">
-                        {s.name}
-                      </span>
+                      <span className="session-id">{s.name}</span>
                     </button>
                     <button
                       className="session-delete"
@@ -3508,8 +3519,12 @@ function DemoLanding() {
                       const mode = defaultModeFor(provider, demoInteraction);
                       const providerSelected = provider === selectedProvider;
                       const quota = demoProviderQuotaSnapshots[provider];
-                      const fiveHour = quota.windows.find((window) => window.id === "five_hour");
-                      const weekly = quota.windows.find((window) => window.id === "weekly");
+                      const fiveHour = quota.windows.find(
+                        (window) => window.id === "five_hour",
+                      );
+                      const weekly = quota.windows.find(
+                        (window) => window.id === "weekly",
+                      );
                       return (
                         <button
                           key={provider}
@@ -3519,12 +3534,21 @@ function DemoLanding() {
                           title={MODE_LABELS[mode]}
                         >
                           <span className="home-provider-choice-main">
-                            <ProviderIcon provider={provider} className="home-choice-icon" />
+                            <ProviderIcon
+                              provider={provider}
+                              className="home-choice-icon"
+                            />
                             <span>{PROVIDER_LABELS[provider]}</span>
                           </span>
                           <span className="home-provider-choice-usage">
-                            <span>{fiveHour?.shortLabel ?? "5h"} {providerQuotaSummary(fiveHour)}</span>
-                            <span>{weekly?.shortLabel ?? "Week"} {providerQuotaSummary(weekly)}</span>
+                            <span>
+                              {fiveHour?.shortLabel ?? "5h"}{" "}
+                              {providerQuotaSummary(fiveHour)}
+                            </span>
+                            <span>
+                              {weekly?.shortLabel ?? "Week"}{" "}
+                              {providerQuotaSummary(weekly)}
+                            </span>
                           </span>
                         </button>
                       );
@@ -3534,7 +3558,11 @@ function DemoLanding() {
                     snapshots={demoProviderQuotaSnapshots}
                     selectedProvider={selectedProvider}
                   />
-                  <div className="home-choice-grid" role="group" aria-label="interaction">
+                  <div
+                    className="home-choice-grid"
+                    role="group"
+                    aria-label="interaction"
+                  >
                     {INTERACTION_OPTIONS.map((interaction) => {
                       const unavailable =
                         PROVIDER_INTERACTION_MODES[selectedProvider][
@@ -3985,6 +4013,28 @@ function isClaudeRunMode(mode: SessionMode): boolean {
 
 function isCodexRunMode(mode: SessionMode): boolean {
   return mode === "codex_gui" || mode === "codex_app_server";
+}
+
+function isAntigravityRunMode(mode: SessionMode): boolean {
+  return mode === "antigravity_gui";
+}
+
+function sessionModeUsesModel(mode: SessionMode): boolean {
+  return (
+    isClaudeRunMode(mode) || isCodexRunMode(mode) || isAntigravityRunMode(mode)
+  );
+}
+
+function providerUsesModel(provider: Provider): boolean {
+  return (
+    provider === "anthropic" ||
+    provider === "codex" ||
+    provider === "antigravity"
+  );
+}
+
+function sessionModeUsesEffort(mode: SessionMode): boolean {
+  return isClaudeRunMode(mode) || isCodexRunMode(mode);
 }
 
 // (formerly: getRunToolGroupSummary — replaced by RunToolGroup's inline
@@ -4487,6 +4537,12 @@ const CODEX_MODELS: ModelOption[] = [
   { id: "gpt-5.3-codex", label: "Codex · GPT-5.3 Codex" },
   { id: "gpt-5.3-codex-spark", label: "Codex · GPT-5.3 Codex Spark" },
 ];
+const ANTIGRAVITY_MODELS: ModelOption[] = [
+  {
+    id: "Gemini 3.5 Flash (Medium)",
+    label: "Antigravity · Gemini 3.5 Flash Medium",
+  },
+];
 // Extended-thinking effort levels exposed by the Claude Agent SDK
 // (EffortLevel union). The ids are the wire values; the labels carry
 // the cost guidance so users picking xhigh/max know what they're
@@ -4516,6 +4572,7 @@ const CODEX_EFFORTS: EffortOption[] = [
 ];
 const DEFAULT_CODEX_MODEL_ID = "gpt-5.5";
 const DEFAULT_CODEX_EFFORT_ID = "xhigh";
+const DEFAULT_ANTIGRAVITY_MODEL_ID = "Gemini 3.5 Flash (Medium)";
 
 function modelOptionsForMode(mode: SessionMode): ModelOption[] {
   if (mode === "claude_gui") return CLAUDE_MODELS;
@@ -4526,6 +4583,7 @@ function modelOptionsForMode(mode: SessionMode): ModelOption[] {
   ) {
     return CODEX_MODELS;
   }
+  if (mode === "antigravity_gui") return ANTIGRAVITY_MODELS;
   return [];
 }
 
@@ -4593,6 +4651,7 @@ interface RunPrefs {
   claudeEffort: string;
   codexModelId: string;
   codexEffort: string;
+  antigravityModelId: string;
   initialMessageMode: InitialMessageMode;
 }
 
@@ -4611,6 +4670,7 @@ const DEFAULT_RUN_PREFS: RunPrefs = {
   claudeEffort: DEFAULT_CLAUDE_EFFORT_ID,
   codexModelId: DEFAULT_CODEX_MODEL_ID,
   codexEffort: DEFAULT_CODEX_EFFORT_ID,
+  antigravityModelId: DEFAULT_ANTIGRAVITY_MODEL_ID,
   initialMessageMode: DEFAULT_INITIAL_MESSAGE_MODE,
 };
 
@@ -4727,13 +4787,31 @@ function loadRunPrefs(): RunPrefs {
       } else if (key === "turnCompleteSoundVolume") {
         if (raw != null) out[key] = clampTurnCompleteSoundVolume(Number(raw));
       } else if (key === "claudeModelId") {
-        out[key] = pickAllowedPrefId(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID);
+        out[key] = pickAllowedPrefId(
+          raw,
+          CLAUDE_MODELS,
+          DEFAULT_CLAUDE_MODEL_ID,
+        );
       } else if (key === "claudeEffort") {
-        out[key] = pickAllowedPrefId(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID);
+        out[key] = pickAllowedPrefId(
+          raw,
+          CLAUDE_EFFORTS,
+          DEFAULT_CLAUDE_EFFORT_ID,
+        );
       } else if (key === "codexModelId") {
         out[key] = pickAllowedPrefId(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID);
       } else if (key === "codexEffort") {
-        out[key] = pickAllowedPrefId(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID);
+        out[key] = pickAllowedPrefId(
+          raw,
+          CODEX_EFFORTS,
+          DEFAULT_CODEX_EFFORT_ID,
+        );
+      } else if (key === "antigravityModelId") {
+        out[key] = pickAllowedPrefId(
+          raw,
+          ANTIGRAVITY_MODELS,
+          DEFAULT_ANTIGRAVITY_MODEL_ID,
+        );
       } else if (raw === "true" || raw === "false") {
         (out as unknown as Record<string, unknown>)[key] = raw === "true";
       }
@@ -4753,7 +4831,10 @@ type SetRunPref = <K extends keyof RunPrefs>(
 // SPA's RunPrefs shape. Unknown keys are dropped (a future SPA may have
 // written them); unknown values for known keys are ignored (defensive
 // against type drift).
-function mergeServerRunPrefs(prev: RunPrefs, server: Record<string, unknown>): RunPrefs {
+function mergeServerRunPrefs(
+  prev: RunPrefs,
+  server: Record<string, unknown>,
+): RunPrefs {
   const out: RunPrefs = { ...prev };
   for (const key of Object.keys(prev) as (keyof RunPrefs)[]) {
     if (!isDurableRunPref(key)) continue;
@@ -4947,20 +5028,31 @@ function normalizeProjectedTranscriptEntry(
   } as TranscriptEntry;
 }
 
-function isFoldableStartupSessionStatusTranscriptRow(record: Record<string, unknown>): boolean {
+function isFoldableStartupSessionStatusTranscriptRow(
+  record: Record<string, unknown>,
+): boolean {
   if (record.kind !== "message" || record.role !== "system") return false;
-  const status = typeof record.sessionStatus === "string" ? record.sessionStatus.trim() : "";
+  const status =
+    typeof record.sessionStatus === "string" ? record.sessionStatus.trim() : "";
   const text = typeof record.text === "string" ? record.text.trim() : "";
   const normalizedStatus =
     status ||
-    (text === "Session is loading." ? "loading" : text === "Session is ready." ? "ready" : "");
-  if (normalizedStatus !== "loading" && normalizedStatus !== "ready") return false;
+    (text === "Session is loading."
+      ? "loading"
+      : text === "Session is ready."
+        ? "ready"
+        : "");
+  if (normalizedStatus !== "loading" && normalizedStatus !== "ready")
+    return false;
   const id = typeof record.id === "string" ? record.id : "";
-  const sourceEventId = typeof record.sourceEventId === "string" ? record.sourceEventId : "";
+  const sourceEventId =
+    typeof record.sourceEventId === "string" ? record.sourceEventId : "";
   return !id.includes(":provider:") && !sourceEventId.includes(":provider:");
 }
 
-function normalizeTurnActivitySummary(raw: unknown): TurnActivitySummary | undefined {
+function normalizeTurnActivitySummary(
+  raw: unknown,
+): TurnActivitySummary | undefined {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
   const record = raw as Record<string, unknown>;
   return {
@@ -6849,59 +6941,59 @@ function RunMessageBubble({
             className="run-msg-footer"
             data-always-visible={alwaysVisible ? "" : undefined}
           >
-          {canonicalMessage &&
-            (variant === "assistant" || variant === "user") &&
-            entry.turnId &&
-            onOpenTurn && (
-              <TurnViewButton
-                turnId={entry.turnId}
-                href={turnHref}
-                onOpenTurn={onOpenTurn}
+            {canonicalMessage &&
+              (variant === "assistant" || variant === "user") &&
+              entry.turnId &&
+              onOpenTurn && (
+                <TurnViewButton
+                  turnId={entry.turnId}
+                  href={turnHref}
+                  onOpenTurn={onOpenTurn}
+                />
+              )}
+            {!canonicalMessage && onOpenTranscriptMessage && (
+              <TranscriptViewButton
+                entryId={entry.id}
+                href={transcriptHref}
+                onOpenTranscriptMessage={onOpenTranscriptMessage}
               />
             )}
-          {!canonicalMessage && onOpenTranscriptMessage && (
-            <TranscriptViewButton
-              entryId={entry.id}
-              href={transcriptHref}
-              onOpenTranscriptMessage={onOpenTranscriptMessage}
-            />
-          )}
-          {canonicalMessage && variant === "assistant" && onFork && (
-            <ForkButton entry={entry} onFork={onFork} />
-          )}
-          {variant !== "system" && (
-            <>
-              {onQuote && (
-                <>
-                  <QuoteButton
-                    text={visibleText}
-                    style="fence"
-                    onQuote={onQuote}
-                  />
-                  <QuoteButton
-                    text={visibleText}
-                    style="blockquote"
-                    onQuote={onQuote}
-                  />
-                </>
-              )}
-              <CopyButton text={visibleText} />
-              {canonicalMessage && !entry.localOnly && (
-                <LinkButton sessionId={sessionId} entryId={entry.id} />
-              )}
-            </>
-          )}
-          <div className="run-msg-timings">
-            {showDuration && durationMs != null && (
-              <span className="run-msg-timing-row">
-                {formatTurnDuration(durationMs)}
-                <TimerIcon size={9} aria-hidden="true" />
-              </span>
+            {canonicalMessage && variant === "assistant" && onFork && (
+              <ForkButton entry={entry} onFork={onFork} />
             )}
-            {showTimestamps && time && (
-              <span className="run-msg-timing-row">{time}</span>
+            {variant !== "system" && (
+              <>
+                {onQuote && (
+                  <>
+                    <QuoteButton
+                      text={visibleText}
+                      style="fence"
+                      onQuote={onQuote}
+                    />
+                    <QuoteButton
+                      text={visibleText}
+                      style="blockquote"
+                      onQuote={onQuote}
+                    />
+                  </>
+                )}
+                <CopyButton text={visibleText} />
+                {canonicalMessage && !entry.localOnly && (
+                  <LinkButton sessionId={sessionId} entryId={entry.id} />
+                )}
+              </>
             )}
-          </div>
+            <div className="run-msg-timings">
+              {showDuration && durationMs != null && (
+                <span className="run-msg-timing-row">
+                  {formatTurnDuration(durationMs)}
+                  <TimerIcon size={9} aria-hidden="true" />
+                </span>
+              )}
+              {showTimestamps && time && (
+                <span className="run-msg-timing-row">{time}</span>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -9305,7 +9397,9 @@ function TurnActivityPager({
       <span className="run-turn-activity-page-label">{pagerState.label}</span>
       <span className="run-turn-activity-event-progress">{progress.label}</span>
       {progress.totalLabel && (
-        <span className="run-turn-activity-total-events">{progress.totalLabel}</span>
+        <span className="run-turn-activity-total-events">
+          {progress.totalLabel}
+        </span>
       )}
       <button
         type="button"
@@ -10292,7 +10386,7 @@ function RunTurnActivityScreen({
       : undefined;
   const selectedTurnContext =
     selected && turnActivityContextByTurn
-      ? turnActivityContextByTurn[selected.turnId] ?? null
+      ? (turnActivityContextByTurn[selected.turnId] ?? null)
       : null;
   // Same always-present pager as the inline chat disclosure, for the surface a
   // user actually inspects turns from. Without it, a turn over the page limit
@@ -10361,9 +10455,9 @@ function RunTurnActivityScreen({
     : false;
   const showDetailActivityDivider = Boolean(
     selected &&
-      !selected.active &&
-      hasFinalDetailResponse &&
-      hasCollapsibleDetailActivity,
+    !selected.active &&
+    hasFinalDetailResponse &&
+    hasCollapsibleDetailActivity,
   );
   const detailActivityCollapsed =
     showDetailActivityDivider &&
@@ -10669,7 +10763,9 @@ function RunTurnActivityScreen({
                   size="sm"
                   aria-label="Select activity page"
                 >
-                  <TurnActivityPageOptionLabel parts={selectedPageOptionParts} />
+                  <TurnActivityPageOptionLabel
+                    parts={selectedPageOptionParts}
+                  />
                 </SelectTrigger>
                 <SelectContent
                   className="run-turn-view-select-menu run-turn-view-page-select-menu"
@@ -11920,19 +12016,37 @@ function providerRateLimitRows(
   return rows;
 }
 
-function quotaProviderFromInfo(info: Record<string, unknown>, fallback: Provider): Provider {
-  const raw = typeof info.provider === "string" ? info.provider.toLowerCase() : "";
+function quotaProviderFromInfo(
+  info: Record<string, unknown>,
+  fallback: Provider,
+): Provider {
+  const raw =
+    typeof info.provider === "string" ? info.provider.toLowerCase() : "";
   if (raw.includes("codex") || raw.includes("openai")) return "codex";
   if (raw.includes("claude") || raw.includes("anthropic")) return "anthropic";
   return fallback;
 }
 
-function quotaWindowIdFromInfo(info: Record<string, unknown>): ProviderQuotaWindowId {
-  const raw = typeof info.rateLimitType === "string" ? info.rateLimitType.toLowerCase() : "";
+function quotaWindowIdFromInfo(
+  info: Record<string, unknown>,
+): ProviderQuotaWindowId {
+  const raw =
+    typeof info.rateLimitType === "string"
+      ? info.rateLimitType.toLowerCase()
+      : "";
   const normalized = raw.replace(/[\s-]+/g, "_");
   if (normalized.includes("opus")) return "opus_weekly";
-  if (normalized.includes("other") || normalized.includes("sonnet") || normalized.includes("non_opus")) return "weekly";
-  if (normalized.includes("week") || normalized.includes("seven_day") || normalized.includes("7_day")) {
+  if (
+    normalized.includes("other") ||
+    normalized.includes("sonnet") ||
+    normalized.includes("non_opus")
+  )
+    return "weekly";
+  if (
+    normalized.includes("week") ||
+    normalized.includes("seven_day") ||
+    normalized.includes("7_day")
+  ) {
     return "weekly";
   }
   return "five_hour";
@@ -11970,23 +12084,31 @@ function quotaWindowStatus(
   const resetMs = resetAt ? Date.parse(resetAt) : Number.NaN;
   if (Number.isFinite(resetMs) && resetMs < now) return "stale";
   const observedMs = Date.parse(observedAt);
-  if (Number.isFinite(observedMs) && now - observedMs > 24 * 60 * 60 * 1000) return "stale";
-  const status = typeof info.status === "string" ? info.status.toLowerCase() : "";
-  if (status.includes("reject") || status.includes("exhaust")) return "exhausted";
+  if (Number.isFinite(observedMs) && now - observedMs > 24 * 60 * 60 * 1000)
+    return "stale";
+  const status =
+    typeof info.status === "string" ? info.status.toLowerCase() : "";
+  if (status.includes("reject") || status.includes("exhaust"))
+    return "exhausted";
   if (percentRemaining !== null && percentRemaining <= 0) return "exhausted";
   if (percentRemaining !== null && percentRemaining <= 20) return "low";
   return "ok";
 }
 
-function quotaSnapshotStatus(windows: ProviderQuotaWindow[]): ProviderQuotaStatus {
-  if (windows.some((window) => window.status === "exhausted")) return "exhausted";
+function quotaSnapshotStatus(
+  windows: ProviderQuotaWindow[],
+): ProviderQuotaStatus {
+  if (windows.some((window) => window.status === "exhausted"))
+    return "exhausted";
   if (windows.some((window) => window.status === "low")) return "low";
   if (windows.some((window) => window.status === "ok")) return "ok";
   if (windows.some((window) => window.status === "stale")) return "stale";
   return "unknown";
 }
 
-function providerQuotaEvidenceFromPayload(value: unknown): ProviderQuotaEvidence[] {
+function providerQuotaEvidenceFromPayload(
+  value: unknown,
+): ProviderQuotaEvidence[] {
   if (!value || typeof value !== "object") return [];
   const raw = value as Record<string, unknown>;
   const rows = Array.isArray(raw.rate_limits) ? raw.rate_limits : [];
@@ -11994,8 +12116,12 @@ function providerQuotaEvidenceFromPayload(value: unknown): ProviderQuotaEvidence
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
     const item = row as Record<string, unknown>;
-    const provider = typeof item.provider === "string" ? quotaProviderFromInfo(item, "anthropic") : null;
-    const rateLimitType = typeof item.rateLimitType === "string" ? item.rateLimitType : "";
+    const provider =
+      typeof item.provider === "string"
+        ? quotaProviderFromInfo(item, "anthropic")
+        : null;
+    const rateLimitType =
+      typeof item.rateLimitType === "string" ? item.rateLimitType : "";
     if (!provider || !rateLimitType) continue;
     const utilization =
       typeof item.utilization === "number" && Number.isFinite(item.utilization)
@@ -12006,16 +12132,22 @@ function providerQuotaEvidenceFromPayload(value: unknown): ProviderQuotaEvidence
       rateLimitType,
       ...(typeof item.status === "string" ? { status: item.status } : {}),
       ...(utilization !== undefined ? { utilization } : {}),
-      ...(typeof item.resetsAt === "string" || typeof item.resetsAt === "number" || item.resetsAt === null
+      ...(typeof item.resetsAt === "string" ||
+      typeof item.resetsAt === "number" ||
+      item.resetsAt === null
         ? { resetsAt: item.resetsAt }
         : {}),
-      ...(typeof item.observedAt === "string" ? { observedAt: item.observedAt } : {}),
+      ...(typeof item.observedAt === "string"
+        ? { observedAt: item.observedAt }
+        : {}),
     });
   }
   return out;
 }
 
-function providerQuotaEvidenceFromSessions(sessions: readonly Session[]): ProviderQuotaEvidence[] {
+function providerQuotaEvidenceFromSessions(
+  sessions: readonly Session[],
+): ProviderQuotaEvidence[] {
   const out: ProviderQuotaEvidence[] = [];
   for (const session of sessions) {
     const info = session.provider_rate_limit_info;
@@ -12031,12 +12163,14 @@ function providerQuotaEvidenceFromSessions(sessions: readonly Session[]): Provid
       provider,
       rateLimitType,
       ...(typeof info.status === "string" ? { status: info.status } : {}),
-      ...(typeof info.utilization === "number" && Number.isFinite(info.utilization)
+      ...(typeof info.utilization === "number" &&
+      Number.isFinite(info.utilization)
         ? { utilization: info.utilization }
         : {}),
       ...(typeof info.resetsAt === "string" || typeof info.resetsAt === "number"
         ? { resetsAt: info.resetsAt }
-        : typeof info.overageResetsAt === "string" || typeof info.overageResetsAt === "number"
+        : typeof info.overageResetsAt === "string" ||
+            typeof info.overageResetsAt === "number"
           ? { resetsAt: info.overageResetsAt }
           : {}),
       observedAt,
@@ -12049,22 +12183,39 @@ function buildProviderQuotaSnapshots(
   sessions: readonly Session[],
   remoteEvidence: readonly ProviderQuotaEvidence[] = [],
 ): Record<Provider, ProviderQuotaSnapshot> {
-  const latest: Partial<Record<Provider, Partial<Record<ProviderQuotaWindowId, {
-    info: Record<string, unknown>;
-    observedAt: string;
-  }>>>> = {};
+  const latest: Partial<
+    Record<
+      Provider,
+      Partial<
+        Record<
+          ProviderQuotaWindowId,
+          {
+            info: Record<string, unknown>;
+            observedAt: string;
+          }
+        >
+      >
+    >
+  > = {};
   const evidence = [
     ...providerQuotaEvidenceFromSessions(sessions),
     ...remoteEvidence,
   ];
   for (const row of evidence) {
-    const observedAt = typeof row.observedAt === "string" && row.observedAt ? row.observedAt : new Date().toISOString();
+    const observedAt =
+      typeof row.observedAt === "string" && row.observedAt
+        ? row.observedAt
+        : new Date().toISOString();
     const info: Record<string, unknown> = {
       provider: row.provider,
       rateLimitType: row.rateLimitType,
       ...(row.status ? { status: row.status } : {}),
-      ...(typeof row.utilization === "number" ? { utilization: row.utilization } : {}),
-      ...(row.resetsAt !== undefined && row.resetsAt !== null ? { resetsAt: row.resetsAt } : {}),
+      ...(typeof row.utilization === "number"
+        ? { utilization: row.utilization }
+        : {}),
+      ...(row.resetsAt !== undefined && row.resetsAt !== null
+        ? { resetsAt: row.resetsAt }
+        : {}),
     };
     const provider = row.provider;
     const windowId = quotaWindowIdFromInfo(info);
@@ -12079,22 +12230,32 @@ function buildProviderQuotaSnapshots(
 
   const out = {} as Record<Provider, ProviderQuotaSnapshot>;
   for (const provider of PROVIDERS) {
-    const windows = PROVIDER_QUOTA_WINDOW_DEFS[provider].map((def): ProviderQuotaWindow => {
-      const evidence = latest[provider]?.[def.id];
-      const percentRemaining = evidence ? quotaPercentRemaining(evidence.info) : null;
-      const resetAt = evidence ? quotaResetAt(evidence.info) : null;
-      return {
-        ...def,
-        status: quotaWindowStatus(evidence?.info ?? null, percentRemaining, resetAt, evidence?.observedAt ?? null),
-        percentRemaining,
-        resetAt,
-        observedAt: evidence?.observedAt ?? null,
-      };
-    });
-    const observedAt = windows
-      .map((window) => window.observedAt)
-      .filter((value): value is string => Boolean(value))
-      .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
+    const windows = PROVIDER_QUOTA_WINDOW_DEFS[provider].map(
+      (def): ProviderQuotaWindow => {
+        const evidence = latest[provider]?.[def.id];
+        const percentRemaining = evidence
+          ? quotaPercentRemaining(evidence.info)
+          : null;
+        const resetAt = evidence ? quotaResetAt(evidence.info) : null;
+        return {
+          ...def,
+          status: quotaWindowStatus(
+            evidence?.info ?? null,
+            percentRemaining,
+            resetAt,
+            evidence?.observedAt ?? null,
+          ),
+          percentRemaining,
+          resetAt,
+          observedAt: evidence?.observedAt ?? null,
+        };
+      },
+    );
+    const observedAt =
+      windows
+        .map((window) => window.observedAt)
+        .filter((value): value is string => Boolean(value))
+        .sort((a, b) => Date.parse(b) - Date.parse(a))[0] ?? null;
     out[provider] = {
       provider,
       status: quotaSnapshotStatus(windows),
@@ -12142,25 +12303,33 @@ function ProviderCapacityStrip({
 }) {
   const snapshot = snapshots[selectedProvider];
   return (
-    <div className={`home-provider-capacity-panel is-${snapshot.status}`} aria-label={`${PROVIDER_LABELS[selectedProvider]} usage remaining`}>
+    <div
+      className={`home-provider-capacity-panel is-${snapshot.status}`}
+      aria-label={`${PROVIDER_LABELS[selectedProvider]} usage remaining`}
+    >
       <div className="home-provider-capacity-head">
         <span>Capacity</span>
         <span>
-          {snapshot.observedAt ? `Last captured ${formatProviderQuotaTimestamp(snapshot.observedAt)}` : "No recent capture"}
+          {snapshot.observedAt
+            ? `Last captured ${formatProviderQuotaTimestamp(snapshot.observedAt)}`
+            : "No recent capture"}
         </span>
       </div>
       <div className="home-provider-capacity-rows">
         {snapshot.windows.map((window) => (
-          <div className={`home-provider-capacity-row is-${window.status}`} key={window.id}>
+          <div
+            className={`home-provider-capacity-row is-${window.status}`}
+            key={window.id}
+          >
             <span className="home-provider-capacity-label">{window.label}</span>
             <span className="home-provider-capacity-meter" aria-hidden="true">
-              <span
-                style={{ width: `${window.percentRemaining ?? 0}%` }}
-              />
+              <span style={{ width: `${window.percentRemaining ?? 0}%` }} />
             </span>
             <span className="home-provider-capacity-value">
               {providerQuotaSummary(window)}
-              {providerQuotaResetLabel(window) ? ` · ${providerQuotaResetLabel(window)}` : ""}
+              {providerQuotaResetLabel(window)
+                ? ` · ${providerQuotaResetLabel(window)}`
+                : ""}
             </span>
           </div>
         ))}
@@ -12858,9 +13027,7 @@ function ChatPane({
     initialAppRoute?.tab ??
     initialRunRoute?.tab ??
     (pendingScrollMessageId?.trim() ? "chat" : "turns");
-  const [activeTab, setActiveTab] = useState<RunTab>(
-    initialTab,
-  );
+  const [activeTab, setActiveTab] = useState<RunTab>(initialTab);
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
     initialAppRoute?.tab === "settings"
       ? initialAppRoute.settingsTab
@@ -12918,6 +13085,9 @@ function ChatPane({
   );
   const isClaude = isClaudeRunMode(session.mode);
   const isCodex = isCodexRunMode(session.mode);
+  const isAntigravity = isAntigravityRunMode(session.mode);
+  const usesModel = sessionModeUsesModel(session.mode);
+  const usesEffort = sessionModeUsesEffort(session.mode);
   const ready = sessionContainerAvailable(session);
   const scopedSessionPathForPane = useCallback(
     (path: string) => appendQueryParam(path, "session_scope", sessionScope),
@@ -13014,7 +13184,9 @@ function ChatPane({
     ? runPrefs.claudeModelId
     : isCodex
       ? runPrefs.codexModelId
-      : "";
+      : isAntigravity
+        ? runPrefs.antigravityModelId
+        : "";
   const preferredEffortId = isClaude
     ? runPrefs.claudeEffort
     : isCodex
@@ -13024,7 +13196,9 @@ function ChatPane({
     ? DEFAULT_CLAUDE_MODEL_ID
     : isCodex
       ? DEFAULT_CODEX_MODEL_ID
-      : "";
+      : isAntigravity
+        ? DEFAULT_ANTIGRAVITY_MODEL_ID
+        : "";
   const fallbackEffortId = isClaude
     ? DEFAULT_CLAUDE_EFFORT_ID
     : isCodex
@@ -16214,8 +16388,8 @@ function ChatPane({
       displayAttachments,
       skillName,
       followUp,
-      model: isClaude || isCodex ? selectedModelId : "",
-      effort: isClaude || isCodex ? selectedEffortId : "",
+      model: usesModel ? selectedModelId : "",
+      effort: usesEffort ? selectedEffortId : "",
       turnStart,
       submitAccepted: false,
       submitSurface,
@@ -16638,7 +16812,7 @@ function ChatPane({
     ? selectedTurnId
     : selectedTurnHasPendingAnchor
       ? selectedTurnId
-    : latestTurnId;
+      : latestTurnId;
   const routedSelectedTurnId =
     activeTab === "turns" ? effectiveSelectedTurnId : null;
   const projectedSelectedTurnNumber =
@@ -18228,11 +18402,11 @@ function ChatPane({
                           onForkMessage({
                             sourceSession: session,
                             forkedEntry,
-                            model: isClaude || isCodex ? selectedModelId : "",
+                            model: usesModel ? selectedModelId : "",
                             // Fork inherits the source pane's effort pick so the
                             // forked pod boots with the same reasoning depth the
                             // user had been working at.
-                            effort: isClaude || isCodex ? selectedEffortId : "",
+                            effort: usesEffort ? selectedEffortId : "",
                           })
                   }
                   onOpenBackgroundTask={
@@ -18642,7 +18816,7 @@ function ChatPane({
                   },
                 }}
                 modelChip={
-                  isClaude || isCodex ? (
+                  usesModel ? (
                     <span
                       className={`run-model-chip${hasAppliedRuntimeConfig ? "" : " is-pending"}`}
                       title={modelChipTitle}
@@ -18913,7 +19087,9 @@ function AuthenticatedApp() {
   const [appConfig, setAppConfig] = useState<AppPublicConfig>({});
   const [appConfigLoaded, setAppConfigLoaded] = useState(false);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [providerQuotaEvidence, setProviderQuotaEvidence] = useState<ProviderQuotaEvidence[]>([]);
+  const [providerQuotaEvidence, setProviderQuotaEvidence] = useState<
+    ProviderQuotaEvidence[]
+  >([]);
   const providerQuotaSnapshots = useMemo(
     () => buildProviderQuotaSnapshots(sessions, providerQuotaEvidence),
     [providerQuotaEvidence, sessions],
@@ -20269,7 +20445,8 @@ function AuthenticatedApp() {
         const res = await authedFetch("/api/provider-quotas");
         if (!res.ok) throw new Error(`provider quotas failed: ${res.status}`);
         const payload = await res.json();
-        if (!cancelled) setProviderQuotaEvidence(providerQuotaEvidenceFromPayload(payload));
+        if (!cancelled)
+          setProviderQuotaEvidence(providerQuotaEvidenceFromPayload(payload));
       } catch {
         if (!cancelled) setProviderQuotaEvidence([]);
       }
@@ -20808,11 +20985,7 @@ function AuthenticatedApp() {
 
   function openSession(id: string, e: ReactMouseEvent) {
     if (e.ctrlKey || e.metaKey) {
-      window.open(
-        sessionUrl(id),
-        "_blank",
-        "noopener,noreferrer",
-      );
+      window.open(sessionUrl(id), "_blank", "noopener,noreferrer");
       return;
     }
     // A tap on a session row is a navigation; close the compact nav drawer so
@@ -20953,10 +21126,9 @@ function AuthenticatedApp() {
         requestedInitialSkillName) &&
       CHAT_MODES.has(mode);
     const seedClientNonce = seedTurnRequested ? newForkTurnId() : "";
-    const seedModel =
-      selectedProvider === "anthropic" || selectedProvider === "codex"
-        ? selectedHomeModelId
-        : "";
+    const seedModel = providerUsesModel(selectedProvider)
+      ? selectedHomeModelId
+      : "";
     const seedEffort =
       selectedProvider === "anthropic" || selectedProvider === "codex"
         ? selectedHomeEffortId
@@ -21009,7 +21181,9 @@ function AuthenticatedApp() {
           ...(homeBugLabels.length > 0 ? { bug_labels: homeBugLabels } : {}),
           ...(capabilities.length > 0 ? { capabilities } : {}),
           ...(requestedName ? { name: requestedName } : {}),
-          ...(sessionModel || sessionEffort ? { model: sessionModel, effort: sessionEffort } : {}),
+          ...(sessionModel || sessionEffort
+            ? { model: sessionModel, effort: sessionEffort }
+            : {}),
           ...(initialTurnPayload ? { initial_turn: initialTurnPayload } : {}),
         }),
       });
@@ -21532,7 +21706,9 @@ function AuthenticatedApp() {
       ? CLAUDE_MODELS
       : selectedProvider === "codex"
         ? CODEX_MODELS
-        : [];
+        : selectedProvider === "antigravity"
+          ? ANTIGRAVITY_MODELS
+          : [];
   const homeModelApplies =
     defaultInteraction === "gui" && homeModelOptions.length > 0;
   const selectedHomeModelId =
@@ -21540,7 +21716,9 @@ function AuthenticatedApp() {
       ? runPrefs.claudeModelId
       : selectedProvider === "codex"
         ? runPrefs.codexModelId
-        : "";
+        : selectedProvider === "antigravity"
+          ? runPrefs.antigravityModelId
+          : "";
   const selectedHomeEffortId =
     selectedProvider === "anthropic"
       ? runPrefs.claudeEffort
@@ -21700,189 +21878,181 @@ function AuthenticatedApp() {
   // components/ui/sheet.tsx). No parallel mobile scaffold.
   const sidebarBody = (
     <>
-        <div className="sidebar-brand">
+      <div className="sidebar-brand">
+        <button
+          className={`sidebar-home${active == null ? " is-active" : ""}`}
+          onClick={goHome}
+          title="Home"
+          aria-label="Home"
+          aria-current={active == null ? "page" : undefined}
+        >
+          <span className="sidebar-home-label">tank-operator</span>
+        </button>
+        <div className="sidebar-brand-actions">
           <button
-            className={`sidebar-home${active == null ? " is-active" : ""}`}
-            onClick={goHome}
-            title="Home"
-            aria-label="Home"
-            aria-current={active == null ? "page" : undefined}
+            className="sidebar-collapse"
+            onClick={() => setSidebarCollapsed((v) => !v)}
+            title={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
+            aria-label={
+              sidebarCollapsed ? "expand sidebar" : "collapse sidebar"
+            }
+            aria-pressed={sidebarCollapsed}
           >
-            <span className="sidebar-home-label">tank-operator</span>
+            <IconPanelToggle collapsed={sidebarCollapsed} />
           </button>
-          <div className="sidebar-brand-actions">
-            <button
-              className="sidebar-collapse"
-              onClick={() => setSidebarCollapsed((v) => !v)}
-              title={sidebarCollapsed ? "expand sidebar" : "collapse sidebar"}
-              aria-label={
-                sidebarCollapsed ? "expand sidebar" : "collapse sidebar"
-              }
-              aria-pressed={sidebarCollapsed}
-            >
-              <IconPanelToggle collapsed={sidebarCollapsed} />
-            </button>
-          </div>
         </div>
+      </div>
 
-        {error && <pre className="error">{error}</pre>}
+      {error && <pre className="error">{error}</pre>}
 
-        <div className="sidebar-list">
-          <div className="sidebar-list-head">
-            <div className="sidebar-section-label">Sessions</div>
-            <button
-              className="sidebar-new-session"
-              onClick={goHome}
-              aria-label="New session"
-              title="new session"
-            >
-              <span className="row-icon">
-                <IconPlus />
-              </span>
-            </button>
-          </div>
-          <ul className="sessions">
-            {sessions.length === 0 ? (
-              <li className="sessions-empty">no sessions</li>
-            ) : (
-              sessions.map((s) => {
-                const isLive = s.status === "Active";
-                const isClosing = closingIds.has(s.id);
-                const isActive = active === s.id && !isClosing;
-                const avatar = getSessionAvatarByID(s.agent_avatar_id);
-                const statusDotClass = sessionStatusDotClass(
-                  s,
-                  sessionActivities[s.id],
-                );
-                const statusLabel = sessionStatusLabel(
-                  s,
-                  sessionActivities[s.id],
-                );
-                const skillStateClass = sessionSkillStateClass(s);
-                return (
-                  <li
-                    key={s.id}
-                    data-session-id={s.id}
-                    className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
-                    draggable={!isClosing && !readOnlySessionView && !isCompact}
-                    onDragStart={(e) => dragSessionStart(s.id, e)}
-                    onDragOver={(e) => dragSessionOver(s.id, e)}
-                    onDrop={(e) => dropSession(s.id, e)}
-                    onDragEnd={dragSessionEnd}
-                    onClick={
-                      isClosing ? undefined : (e) => openSession(s.id, e)
-                    }
-                    title={
-                      sidebarCollapsed
-                        ? `${s.name} (${statusLabel})`
-                        : undefined
-                    }
-                  >
-                    <SessionAvatarIcon
-                      avatar={avatar}
-                      className="session-avatar"
-                    />
-                    <div className="session-row-top">
-                      {/* Session name is now a read-only label here; rename
+      <div className="sidebar-list">
+        <div className="sidebar-list-head">
+          <div className="sidebar-section-label">Sessions</div>
+          <button
+            className="sidebar-new-session"
+            onClick={goHome}
+            aria-label="New session"
+            title="new session"
+          >
+            <span className="row-icon">
+              <IconPlus />
+            </span>
+          </button>
+        </div>
+        <ul className="sessions">
+          {sessions.length === 0 ? (
+            <li className="sessions-empty">no sessions</li>
+          ) : (
+            sessions.map((s) => {
+              const isLive = s.status === "Active";
+              const isClosing = closingIds.has(s.id);
+              const isActive = active === s.id && !isClosing;
+              const avatar = getSessionAvatarByID(s.agent_avatar_id);
+              const statusDotClass = sessionStatusDotClass(
+                s,
+                sessionActivities[s.id],
+              );
+              const statusLabel = sessionStatusLabel(
+                s,
+                sessionActivities[s.id],
+              );
+              const skillStateClass = sessionSkillStateClass(s);
+              return (
+                <li
+                  key={s.id}
+                  data-session-id={s.id}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                  draggable={!isClosing && !readOnlySessionView && !isCompact}
+                  onDragStart={(e) => dragSessionStart(s.id, e)}
+                  onDragOver={(e) => dragSessionOver(s.id, e)}
+                  onDrop={(e) => dropSession(s.id, e)}
+                  onDragEnd={dragSessionEnd}
+                  onClick={isClosing ? undefined : (e) => openSession(s.id, e)}
+                  title={
+                    sidebarCollapsed ? `${s.name} (${statusLabel})` : undefined
+                  }
+                >
+                  <SessionAvatarIcon
+                    avatar={avatar}
+                    className="session-avatar"
+                  />
+                  <div className="session-row-top">
+                    {/* Session name is now a read-only label here; rename
                         lives in the chat-pane header (see ChatPane's
                         run-header-title). This avoids the prior
                         sidebar-inline-edit input that opened on a row click
                         and lost typed characters whenever the pod-state
                         re-render or refresh fired underneath it. */}
-                      <span
-                        className="session-open"
+                    <span
+                      className="session-open"
+                      title={isClosing ? "session is closing" : s.name}
+                    >
+                      <span className="session-id">{s.name}</span>
+                    </span>
+                    <SessionTabMenu
+                      session={s}
+                      isClosing={isClosing}
+                      readOnly={readOnlySessionView}
+                      onClose={() => deleteSession(s.id)}
+                    />
+                  </div>
+                  <div className="session-row-bottom">
+                    <span
+                      className={statusDotClass}
+                      title={statusLabel}
+                      aria-label={`status: ${statusLabel}`}
+                    />
+                    <ModeChip
+                      mode={s.mode}
+                      interaction={sessionInteractionForSession(s)}
+                    />
+                    <SessionStats session={s} />
+                    {isClosing && (
+                      <span className="session-closing-chip">closing</span>
+                    )}
+                    {CONFIG_MODES.has(s.mode) && (
+                      <button
+                        className="session-action"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          saveCredentials(s.id);
+                        }}
+                        disabled={
+                          busy || !isLive || isClosing || readOnlySessionView
+                        }
                         title={
-                          isClosing ? "session is closing" : s.name
+                          s.mode === "codex_config"
+                            ? "capture ~/.codex/auth.json from this pod and write it to KV"
+                            : s.mode === "antigravity_config"
+                              ? "capture the agy OAuth token from this pod and write it to KV"
+                              : "capture ~/.claude/.credentials.json from this pod and write it to KV"
                         }
                       >
-                        <span className="session-id">
-                          {s.name}
-                        </span>
-                      </span>
-                      <SessionTabMenu
-                        session={s}
-                        isClosing={isClosing}
-                        readOnly={readOnlySessionView}
-                        onClose={() => deleteSession(s.id)}
-                      />
-                    </div>
-                    <div className="session-row-bottom">
-                      <span
-                        className={statusDotClass}
-                        title={statusLabel}
-                        aria-label={`status: ${statusLabel}`}
-                      />
-                      <ModeChip
-                        mode={s.mode}
-                        interaction={sessionInteractionForSession(s)}
-                      />
-                      <SessionStats session={s} />
-                      {isClosing && (
-                        <span className="session-closing-chip">closing</span>
-                      )}
-                      {CONFIG_MODES.has(s.mode) && (
-                        <button
-                          className="session-action"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            saveCredentials(s.id);
-                          }}
-                          disabled={
-                            busy || !isLive || isClosing || readOnlySessionView
-                          }
-                          title={
-                            s.mode === "codex_config"
-                              ? "capture ~/.codex/auth.json from this pod and write it to KV"
-                              : s.mode === "antigravity_config"
-                                ? "capture the agy OAuth token from this pod and write it to KV"
-                                : "capture ~/.claude/.credentials.json from this pod and write it to KV"
-                          }
-                        >
-                          save
-                        </button>
-                      )}
-                    </div>
-                  </li>
-                );
-              })
-            )}
-          </ul>
-        </div>
-
-        <ClusterHealthWidget enabled={Boolean(user)} />
-
-        <div className="sidebar-footer" data-menu="profile">
-          <button
-            className="profile"
-            onClick={() => setProfileMenuOpen((v) => !v)}
-            title={user.email}
-          >
-            <Avatar user={user} />
-            <span className="profile-text">
-              <span className="profile-name">{user.name || user.email}</span>
-            </span>
-            <span className="profile-kebab">
-              <IconKebab />
-            </span>
-          </button>
-          {profileMenuOpen && (
-            <ul className="dropdown dropdown-profile" role="menu">
-              <li className="dropdown-meta">
-                <span className="dropdown-meta-label">Signed in as</span>
-                <span className="dropdown-meta-value">{user.email}</span>
-              </li>
-              <li className="dropdown-divider" role="separator" />
-              <li>
-                <button onClick={logout}>Sign out</button>
-              </li>
-            </ul>
+                        save
+                      </button>
+                    )}
+                  </div>
+                </li>
+              );
+            })
           )}
-        </div>
+        </ul>
+      </div>
+
+      <ClusterHealthWidget enabled={Boolean(user)} />
+
+      <div className="sidebar-footer" data-menu="profile">
+        <button
+          className="profile"
+          onClick={() => setProfileMenuOpen((v) => !v)}
+          title={user.email}
+        >
+          <Avatar user={user} />
+          <span className="profile-text">
+            <span className="profile-name">{user.name || user.email}</span>
+          </span>
+          <span className="profile-kebab">
+            <IconKebab />
+          </span>
+        </button>
+        {profileMenuOpen && (
+          <ul className="dropdown dropdown-profile" role="menu">
+            <li className="dropdown-meta">
+              <span className="dropdown-meta-label">Signed in as</span>
+              <span className="dropdown-meta-value">{user.email}</span>
+            </li>
+            <li className="dropdown-divider" role="separator" />
+            <li>
+              <button onClick={logout}>Sign out</button>
+            </li>
+          </ul>
+        )}
+      </div>
     </>
   );
 
   const activeSessionForChrome =
-    active != null ? sessions.find((s) => s.id === active) ?? null : null;
+    active != null ? (sessions.find((s) => s.id === active) ?? null) : null;
 
   return (
     <div
@@ -22270,6 +22440,13 @@ function AuthenticatedApp() {
                                         setRunPref("claudeModelId", model.id);
                                       } else if (selectedProvider === "codex") {
                                         setRunPref("codexModelId", model.id);
+                                      } else if (
+                                        selectedProvider === "antigravity"
+                                      ) {
+                                        setRunPref(
+                                          "antigravityModelId",
+                                          model.id,
+                                        );
                                       }
                                     }}
                                     aria-pressed={selected}
@@ -22352,11 +22529,9 @@ function AuthenticatedApp() {
                               </span>
                             </button>
                           )}
-                          {/* Antigravity is login-only for now (no runnable
-                              gui/cli surface yet), so it gets a standalone
-                              credential-mint action rather than a provider
-                              tile. Folds into the provider picker once the
-                              antigravity-runner lands. */}
+                          {/* Credential-mint sessions remain a setup shortcut
+                              even though Antigravity GUI is selectable through
+                              the provider picker. */}
                           <button
                             className="home-quick-action"
                             onClick={() => createSession("antigravity_config")}
@@ -22644,7 +22819,9 @@ function AuthenticatedApp() {
                       readOnly={readOnlySessionView}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
-                      sidebarTurnsOpenRequest={sessionTurnsOpenRequests[s.id] ?? 0}
+                      sidebarTurnsOpenRequest={
+                        sessionTurnsOpenRequests[s.id] ?? 0
+                      }
                       avatarEditorOpenRequest={
                         avatarEditorOpenRequests[s.id] ?? 0
                       }

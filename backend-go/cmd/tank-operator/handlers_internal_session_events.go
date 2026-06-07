@@ -93,11 +93,6 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 		return
 	}
 	model := strings.TrimSpace(body.Model)
-	if model != "" && validateTurnArg(model) == "" {
-		recordSessionRuntimeConfigUpdate("unknown", "bad_request")
-		writeError(w, http.StatusBadRequest, "model is invalid")
-		return
-	}
 
 	info, err := s.mgr.GetRegisteredByOwner(r.Context(), caller.Email, sessionID)
 	if err != nil {
@@ -111,10 +106,19 @@ func (s *appServer) handleInternalSessionRuntimeConfig(w http.ResponseWriter, r 
 		writeError(w, http.StatusBadRequest, "session mode does not support SDK runtime config")
 		return
 	}
+	if model != "" && validateModelArg(provider, model) == "" {
+		recordSessionRuntimeConfigUpdate(provider, "bad_request")
+		writeError(w, http.StatusBadRequest, "model is invalid")
+		return
+	}
 	effortInput := strings.TrimSpace(body.Effort)
 	effort := validateEffort(provider, effortInput)
 	if effortInput != "" && effort == "" {
 		recordSessionRuntimeConfigUpdate(provider, "bad_request")
+		if provider == "antigravity" {
+			writeError(w, http.StatusBadRequest, effortUnsupportedMessage(provider, "sessions"))
+			return
+		}
 		if provider == "codex" {
 			writeError(w, http.StatusBadRequest, "effort is invalid; want one of low|medium|high|xhigh")
 			return

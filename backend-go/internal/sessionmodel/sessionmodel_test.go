@@ -367,6 +367,7 @@ func TestPodManifestAntigravityGUIRunnerProxiedNoCredMount(t *testing.T) {
 
 	// Instead: host-alias agy's Google host to the proxy + trust its CA.
 	assertHostAlias(t, spec, "10.0.0.42", "cloudcode-pa.googleapis.com")
+	assertHostAlias(t, spec, "10.0.0.42", "daily-cloudcode-pa.googleapis.com")
 	assertVolume(t, spec["volumes"].([]any), "oauth-gateway-ca")
 	assertVolumeMount(t, runner, "oauth-gateway-ca")
 	assertVolumeMount(t, runner, "tank-operator-sa-token")
