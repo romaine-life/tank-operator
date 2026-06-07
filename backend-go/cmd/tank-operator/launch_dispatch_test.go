@@ -32,6 +32,12 @@ func TestComposeLaunchDispatchPrompt(t *testing.T) {
 			skillTurn: true,
 		},
 		{
+			name: "antigravity skill with attachments", runtime: "antigravity", skill: "test", base: "do it",
+			paths:     []string{"/workspace/.attachments/turn_x-0-a.zip"},
+			want:      "$test\n\ndo it\n\nAttachments:\n- /workspace/.attachments/turn_x-0-a.zip",
+			skillTurn: true,
+		},
+		{
 			name: "codex skill already triggered", runtime: "codex", skill: "test", base: "$test\n\ndo it",
 			paths:     []string{"/workspace/.attachments/turn_x-0-a.zip"},
 			want:      "$test\n\ndo it\n\nAttachments:\n- /workspace/.attachments/turn_x-0-a.zip",
