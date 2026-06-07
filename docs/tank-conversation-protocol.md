@@ -692,7 +692,12 @@ runner extracts `schedule` tool calls, then registers them through
 item id as the idempotency key. The orchestrator claims due rows from
 `session_scheduled_wakeups`, writes the normal `user_message.created` and
 `turn.submitted` boundary events, then publishes a normal `submit_turn` command
-with `source=schedule-wakeup`. The browser-facing read model is
+with `source=schedule-wakeup`. The synthetic `user_message.created` row is
+authored by the session's system identity and carries
+`payload.source=schedule-wakeup` plus the wake prompt so UI projections can key
+the visible wake announcement without weakening the top-level event schema.
+`turn.submitted` carries the same payload-level provenance. The browser-facing
+read model is
 `GET /api/sessions/{session_id}/scheduled-wakeups`; the SPA maps those durable
 rows into Background -> Scheduled entries so a scheduled continuation is
 visually confirmable even when its original tool row has scrolled out of the

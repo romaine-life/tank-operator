@@ -138,6 +138,20 @@ func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 	if got, _ := events[0]["author_kind"].(string); got != "system" {
 		t.Fatalf("author_kind = %q, want system", got)
 	}
+	userPayload, _ := events[0]["payload"].(map[string]any)
+	if got, _ := userPayload["source"].(string); got != "schedule-wakeup" {
+		t.Fatalf("user_message.created payload.source = %q, want schedule-wakeup", got)
+	}
+	if got, _ := userPayload["prompt"].(string); got != row.Prompt {
+		t.Fatalf("user_message.created payload.prompt = %q, want wake prompt", got)
+	}
+	submitPayload, _ := events[1]["payload"].(map[string]any)
+	if got, _ := submitPayload["source"].(string); got != "schedule-wakeup" {
+		t.Fatalf("turn.submitted payload.source = %q, want schedule-wakeup", got)
+	}
+	if got, _ := submitPayload["prompt"].(string); got != row.Prompt {
+		t.Fatalf("turn.submitted payload.prompt = %q, want wake prompt", got)
+	}
 }
 
 func TestFireAntigravityScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
@@ -179,6 +193,30 @@ func TestFireAntigravityScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 	cmd := bus.commands[0]
 	if cmd.Provider != "antigravity" || cmd.Source != "schedule-wakeup" || cmd.ClientNonce != row.ClientNonce || cmd.Prompt != row.Prompt {
 		t.Fatalf("command = %+v", cmd)
+	}
+	events := app.sessionEvents.(*recordingSessionEventStore).upserts
+	if len(events) != 2 {
+		t.Fatalf("boundary upserts = %d, want 2", len(events))
+	}
+	if got, _ := events[0]["type"].(string); got != "user_message.created" {
+		t.Fatalf("first event type = %q", got)
+	}
+	if got, _ := events[0]["author_kind"].(string); got != "system" {
+		t.Fatalf("author_kind = %q, want system", got)
+	}
+	userPayload, _ := events[0]["payload"].(map[string]any)
+	if got, _ := userPayload["source"].(string); got != "schedule-wakeup" {
+		t.Fatalf("user_message.created payload.source = %q, want schedule-wakeup", got)
+	}
+	if got, _ := userPayload["prompt"].(string); got != row.Prompt {
+		t.Fatalf("user_message.created payload.prompt = %q, want wake prompt", got)
+	}
+	submitPayload, _ := events[1]["payload"].(map[string]any)
+	if got, _ := submitPayload["source"].(string); got != "schedule-wakeup" {
+		t.Fatalf("turn.submitted payload.source = %q, want schedule-wakeup", got)
+	}
+	if got, _ := submitPayload["prompt"].(string); got != row.Prompt {
+		t.Fatalf("turn.submitted payload.prompt = %q, want wake prompt", got)
 	}
 }
 
