@@ -565,6 +565,14 @@ var sessionRuntimeConfigUpdateTotal = promauto.NewCounterVec(
 	[]string{"provider", "result"},
 )
 
+var sessionRunConfigRejectedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_run_config_rejected_total",
+		Help: "Rejected session mode/model/effort requests before runner dispatch, labeled by surface, provider, and bounded reason.",
+	},
+	[]string{"surface", "provider", "reason"},
+)
+
 // sessionContextWindowReportTotal counts provider-observed context-window
 // reports carried on the runtime-config PUT. The window is durable session
 // metadata sourced from runtime_context_window_tokens; the run UI does not
@@ -1967,6 +1975,25 @@ func recordSessionEventPersistSchemaRejected() {
 
 func recordSessionEventPersistTransientFailure() {
 	sessionEventPersistTransientFailureTotal.Inc()
+}
+
+func recordSessionRunConfigRejected(surface, provider, reason string) {
+	switch surface {
+	case "create", "turn", "runtime_config":
+	default:
+		surface = "other"
+	}
+	switch provider {
+	case "claude", "codex", "antigravity", "unknown":
+	default:
+		provider = "other"
+	}
+	switch reason {
+	case "invalid_mode", "retired_mode", "unsupported_model", "unsupported_effort", "missing_model", "default_model":
+	default:
+		reason = "other"
+	}
+	sessionRunConfigRejectedTotal.WithLabelValues(surface, provider, reason).Inc()
 }
 
 // promPersisterMetrics satisfies sessionbus.PersisterMetrics so the bus

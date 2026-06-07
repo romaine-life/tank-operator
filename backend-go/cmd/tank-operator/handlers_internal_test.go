@@ -608,6 +608,84 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	}
 }
 
+func TestHandleInternalCreateSessionRejectsUnavailableCodexModel(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &appServer{
+		verifier: auth.NewVerifier(jwtKey),
+	}
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions", strings.NewReader(`{
+		"mode":"codex_gui",
+		"model":"gpt-5.3-codex",
+		"effort":"medium"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "model is not available for codex") ||
+		!strings.Contains(body, "gpt-5.5") ||
+		!strings.Contains(body, "gpt-5.3-codex-spark") ||
+		strings.Contains(body, "gpt-5.3-codex|") {
+		t.Fatalf("body = %s, want supported Codex model list without gpt-5.3-codex", body)
+	}
+}
+
+func TestHandleInternalCreateSessionRejectsRetiredCodexGUIMode(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &appServer{
+		verifier: auth.NewVerifier(jwtKey),
+	}
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions", strings.NewReader(`{
+		"mode":"codex_exec_gui",
+		"model":"gpt-5.5",
+		"effort":"high"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "session mode codex_exec_gui is retired; use codex_gui") {
+		t.Fatalf("body = %s, want retired mode error", rec.Body.String())
+	}
+}
+
 type terminalEventStore struct {
 	store.StubSessionEventStore
 	event map[string]any

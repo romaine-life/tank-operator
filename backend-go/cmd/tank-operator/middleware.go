@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
@@ -59,8 +60,13 @@ func validateModelArg(provider, v string) string {
 	if v == "" {
 		return ""
 	}
-	if provider != "antigravity" {
-		return validateTurnArg(v)
+	if allowed := allowedModelsForProvider(provider); allowed != nil {
+		for _, model := range allowed {
+			if v == model {
+				return v
+			}
+		}
+		return ""
 	}
 	if len([]byte(v)) > 128 {
 		return ""
@@ -71,6 +77,60 @@ func validateModelArg(provider, v string) string {
 		}
 	}
 	return v
+}
+
+var providerModels = map[string][]string{
+	"claude": {
+		"claude-opus-4-8",
+		"claude-opus-4-7",
+		"claude-sonnet-4-6",
+		"claude-haiku-4-5",
+	},
+	"codex": {
+		"gpt-5.5",
+		"gpt-5.4",
+		"gpt-5.4-mini",
+		"gpt-5.3-codex-spark",
+	},
+	"antigravity": {
+		"Gemini 3.5 Flash (Medium)",
+	},
+}
+
+func allowedModelsForProvider(provider string) []string {
+	models, ok := providerModels[provider]
+	if !ok {
+		return nil
+	}
+	out := append([]string(nil), models...)
+	sort.Strings(out)
+	return out
+}
+
+func allowedEffortsForProvider(provider string) []string {
+	var allowed map[string]struct{}
+	switch provider {
+	case "claude":
+		allowed = allowedClaudeEfforts
+	case "codex":
+		allowed = allowedCodexEfforts
+	default:
+		return []string{}
+	}
+	out := make([]string, 0, len(allowed))
+	for effort := range allowed {
+		out = append(out, effort)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func modelUnsupportedMessage(provider string) string {
+	models := allowedModelsForProvider(provider)
+	if len(models) == 0 {
+		return "model is invalid"
+	}
+	return "model is not available for " + provider + "; want one of " + strings.Join(models, "|")
 }
 
 func validateSkillName(v string) string {

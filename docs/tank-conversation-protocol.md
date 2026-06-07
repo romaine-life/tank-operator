@@ -973,12 +973,15 @@ derived assistant question message, with an affordance to open the question set.
   `turn.awaiting_input` and keeps the permission callback pending. When
   `input_reply` arrives, the runner resolves the callback with
   `{behavior:"allow", updatedInput:{answers}}` so the provider turn continues.
-- **Codex** (`codex_gui` / `codex_app_server`): on the App Server's
-  `item/tool/requestUserInput`, the runner publishes `turn.awaiting_input`,
-  keeps the JSON-RPC request pending, then responds with the submitted answers
-  when `input_reply` arrives.
+- **Codex** (`codex_gui`): on the App Server's `item/tool/requestUserInput`,
+  the runner publishes `turn.awaiting_input`, keeps the JSON-RPC request
+  pending, then responds with the submitted answers when `input_reply` arrives.
+- Historical `codex_app_server` rows used the same App Server AskUserQuestion
+  path, but that mode is retired for create-time use; new sessions must use
+  `codex_gui`.
 - `codex_exec_gui` never produces `turn.awaiting_input` — the `codex exec`
-  transport rejects `request_user_input`, so it has no AskUserQuestion path.
+  transport rejects `request_user_input`, and the mode is retired for
+  create-time use.
 
 The user's answer resumes the same turn:
 

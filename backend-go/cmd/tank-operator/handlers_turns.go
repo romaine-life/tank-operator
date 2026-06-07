@@ -920,26 +920,32 @@ func validateCreateRunConfig(mode, rawModel, rawEffort string) (sessionRunConfig
 	effortInput := strings.TrimSpace(rawEffort)
 	if modelInput == "" && effortInput == "" {
 		if provider, ok := sdkProviderForMode(mode); ok && providerRequiresExplicitModel(provider) {
+			recordSessionRunConfigRejected("create", provider, "missing_model")
 			return sessionRunConfig{}, http.StatusBadRequest, explicitModelRequiredMessage(provider, "sessions")
 		}
 		return sessionRunConfig{}, 0, ""
 	}
 	provider, ok := sdkProviderForMode(mode)
 	if !ok {
+		recordSessionRunConfigRejected("create", "unknown", "invalid_mode")
 		return sessionRunConfig{}, http.StatusBadRequest, "model and effort are only supported for SDK chat sessions"
 	}
 	if isDefaultModelAlias(modelInput) {
+		recordSessionRunConfigRejected("create", provider, "default_model")
 		return sessionRunConfig{}, http.StatusBadRequest, "model must be explicit; default is not accepted"
 	}
 	if providerRequiresExplicitModel(provider) && modelInput == "" {
+		recordSessionRunConfigRejected("create", provider, "missing_model")
 		return sessionRunConfig{}, http.StatusBadRequest, explicitModelRequiredMessage(provider, "sessions")
 	}
 	model := validateModelArg(provider, modelInput)
 	if modelInput != "" && model == "" {
-		return sessionRunConfig{}, http.StatusBadRequest, "model is invalid"
+		recordSessionRunConfigRejected("create", provider, "unsupported_model")
+		return sessionRunConfig{}, http.StatusBadRequest, modelUnsupportedMessage(provider)
 	}
 	effort := validateEffort(provider, effortInput)
 	if effortInput != "" && effort == "" {
+		recordSessionRunConfigRejected("create", provider, "unsupported_effort")
 		return sessionRunConfig{}, http.StatusBadRequest, effortUnsupportedMessage(provider, "sessions")
 	}
 	return sessionRunConfig{Model: model, Effort: effort}, 0, ""
@@ -1014,11 +1020,13 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	// which model was selected.
 	modelInput := strings.TrimSpace(req.Model)
 	if isDefaultModelAlias(modelInput) {
+		recordSessionRunConfigRejected("turn", provider, "default_model")
 		return nil, http.StatusBadRequest, "model must be explicit; default is not accepted"
 	}
 	model := validateModelArg(provider, modelInput)
 	if modelInput != "" && model == "" {
-		return nil, http.StatusBadRequest, "model is invalid"
+		recordSessionRunConfigRejected("turn", provider, "unsupported_model")
+		return nil, http.StatusBadRequest, modelUnsupportedMessage(provider)
 	}
 	effort := validateEffort(provider, strings.TrimSpace(req.Effort))
 	registered, regErr := s.mgr.GetRegisteredByOwner(ctx, email, sessionID)
@@ -1031,9 +1039,11 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 			effort = registered.Effort
 		}
 	} else if strings.TrimSpace(req.Effort) != "" && effort == "" {
+		recordSessionRunConfigRejected("turn", provider, "unsupported_effort")
 		return nil, http.StatusBadRequest, effortUnsupportedMessage(provider, "turns")
 	}
 	if providerRequiresExplicitModel(provider) && model == "" {
+		recordSessionRunConfigRejected("turn", provider, "missing_model")
 		return nil, http.StatusBadRequest, explicitModelRequiredMessage(provider, "turns")
 	}
 	if !req.AllowBeforeReady {

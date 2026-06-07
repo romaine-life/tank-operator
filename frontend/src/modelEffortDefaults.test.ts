@@ -1,73 +1,53 @@
-// Pins the load-bearing model + effort defaults end-to-end in App.tsx
-// without spinning up React or DOM. Mirrors the regex-assert style of
-// migrationPolicy.test.ts because App.tsx is the SPA's monolith and
-// extracting these constants into a separate module would require
-// touching ~hundreds of unrelated lines.
-//
-// Each assertion catches a specific user-trust failure if it regresses:
-//   - "Opus 4.8 is the default" — a re-order of CLAUDE_MODELS that
-//     puts Opus 4.7 / Sonnet / Haiku first would silently change every
-//     new session's model. Pin the first id.
-//   - "high is the default effort" — same shape, but for the effort
-//     enum.
-//   - "RunPrefs persists model + effort" — without these keys the
-//     dropdown picks would reset on every page reload.
-//   - "wire body forwards effort" — without the field in the POST
-//     body the dropdown is a no-op end to end (the agent-runner's
-//     pinning relies on it).
-//   - "validation lives in pickAllowedPrefId" — a localStorage value
-//     pinned in a prior SPA version that no longer matches the
-//     allowlist must fall back to the default, not be forwarded as
-//     opaque.
+// Pins the run-options ownership contract in App.tsx without spinning up
+// React or DOM. App.tsx is still the SPA monolith, so these regex guards
+// catch cross-layer drift until the run-picker code is extracted into a
+// separately imported module.
 import { readFileSync } from "node:fs";
 import { test, expect } from "vitest";
 
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
 
-test("CLAUDE_MODELS lists claude-opus-4-8 first so it is the default selection", () => {
-  const match = appSource.match(
-    /const CLAUDE_MODELS:\s*ModelOption\[\][^[]*\[([\s\S]*?)\];/,
-  );
-  expect(match, "CLAUDE_MODELS literal should be present").toBeTruthy();
-  const firstId = match[1]!.match(/id:\s*"([^"]+)"/);
-  expect(firstId, "CLAUDE_MODELS first entry should have an id").toBeTruthy();
-  expect(firstId[1]).toBe("claude-opus-4-8");
-});
-
-test("DEFAULT_CLAUDE_MODEL_ID and DEFAULT_CLAUDE_EFFORT_ID match the agent-runner constants", () => {
-  // Pin the literal values in lockstep with
-  // agent-runner/src/runner.ts DEFAULT_MODEL / DEFAULT_EFFORT and
-  // backend-go/cmd/tank-operator/middleware.go allowedClaudeEfforts.
-  // If product changes the defaults, ALL three layers must move
-  // together — that's the cross-layer contract this test enforces.
+test("model and effort option lists come from Tank run options, not local arrays", () => {
+  expect(appSource).not.toMatch(/const CLAUDE_MODELS:/);
+  expect(appSource).not.toMatch(/const CODEX_MODELS:/);
+  expect(appSource).not.toMatch(/const ANTIGRAVITY_MODELS:/);
+  expect(appSource).not.toMatch(/const CLAUDE_EFFORTS:/);
+  expect(appSource).not.toMatch(/const CODEX_EFFORTS:/);
   expect(appSource).toMatch(
-    /const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";/,
+    /async function fetchSessionRunOptions\(\): Promise<SessionRunOptions> \{[\s\S]{0,180}authedFetch\("\/api\/session-run-options"\)/,
   );
-  expect(appSource).toMatch(/const DEFAULT_CLAUDE_EFFORT_ID = "high";/);
-});
-
-test("DEFAULT_CODEX_MODEL_ID and DEFAULT_CODEX_EFFORT_ID pin the strongest Codex defaults", () => {
-  expect(appSource).toMatch(/const DEFAULT_CODEX_MODEL_ID = "gpt-5\.5";/);
-  expect(appSource).toMatch(/const DEFAULT_CODEX_EFFORT_ID = "xhigh";/);
-});
-
-test("DEFAULT_ANTIGRAVITY_MODEL_ID pins the explicit agy model", () => {
   expect(appSource).toMatch(
-    /const DEFAULT_ANTIGRAVITY_MODEL_ID = "Gemini 3\.5 Flash \(Medium\)";/,
+    /function modelOptionsForProvider\([\s\S]{0,180}runOptions\?\.models\[runOptionsProviderKey\(provider\)\]/,
   );
-});
-
-test("Codex model options require a concrete model instead of account default", () => {
-  expect(appSource).not.toMatch(/codex-account-default/);
-  expect(appSource).not.toMatch(/Codex (?:· )?Account default/i);
-  expect(appSource).not.toMatch(/Codex account default/i);
-});
-
-test("Antigravity model options require a concrete model instead of agy internal default", () => {
   expect(appSource).toMatch(
-    /const ANTIGRAVITY_MODELS:\s*ModelOption\[\][\s\S]{0,180}id:\s*"Gemini 3\.5 Flash \(Medium\)"/,
+    /function effortOptionsForProvider\([\s\S]{0,180}runOptions\?\.efforts\[runOptionsProviderKey\(provider\)\]/,
   );
-  expect(appSource).not.toMatch(/antigravity-default/);
+});
+
+test("Tank's claude provider key is normalized to the frontend anthropic provider", () => {
+  expect(appSource).toMatch(
+    /provider === "claude" \|\| provider === "anthropic"[\s\S]{0,80}return "anthropic";/,
+  );
+  expect(appSource).toMatch(
+    /if \(!out\.anthropic\?\.length\) out\.anthropic = stringArray\(src\.claude\);/,
+  );
+  expect(appSource).toMatch(
+    /if \(!out\.anthropic && typeof src\.claude === "string"\) \{[\s\S]{0,80}out\.anthropic = src\.claude;/,
+  );
+});
+
+test("Codex model labels do not advertise the unsupported bare GPT-5.3 model", () => {
+  expect(appSource).not.toContain('"gpt-5.3-codex":');
+  expect(appSource).toContain('"gpt-5.3-codex-spark"');
+});
+
+test("Codex run mode helper follows the session mode contract", () => {
+  expect(appSource).toMatch(
+    /function isCodexRunMode\(mode: SessionMode\): boolean \{[\s\S]{0,120}MODE_PROVIDERS\[mode\] === "codex" && SDK_CHAT_MODES\.has\(mode\);[\s\S]{0,20}\}/,
+  );
+  expect(appSource).not.toMatch(
+    /function isCodexRunMode\(mode: SessionMode\): boolean \{[\s\S]{0,120}mode === "codex_gui" \|\| mode === "codex_app_server"/,
+  );
 });
 
 test("RunPrefs persists provider model and effort across page reloads", () => {
@@ -106,43 +86,48 @@ test("initialMessageMode is an ephemeral run preference that resets to direct on
     /JSON\.stringify\(\{ run_prefs: durableRunPrefs\(prefs\) \}\)/,
   );
   expect(appSource).toMatch(
-    /if \(isDurableRunPref\(key\)\) \{[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\}[\s\S]{0,120}if \(!isDurableRunPref\(key\)\) return;[\s\S]{0,120}localStorage\.setItem/,
+    /if \(isDurableRunPref\(key\)\) \{[\s\S]{0,120}persistRunPrefsLocally\(next\);[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\}/,
   );
   expect(appSource).not.toMatch(/pickInitialMessageMode\(raw/);
 });
 
-test("loadRunPrefs filters localStorage-loaded model/effort through the allowlist", () => {
-  // Without this filter a stale or hand-edited LS key would forward
-  // an unknown string to the backend. The backend would reject the
-  // effort path with a 400, but the model path is opaque-validated;
-  // a typo would silently become a runner default at pod boot,
-  // looking to the user like "my pick was ignored." The
-  // pickAllowedPrefId call is the load-bearing fix.
+test("stored legacy Codex GUI defaults migrate to the primary Codex GUI mode", () => {
   expect(appSource).toMatch(
-    /key === "claudeModelId"[\s\S]{0,420}pickAllowedPrefId\([\s\S]{0,180}raw,[\s\S]{0,180}CLAUDE_MODELS,[\s\S]{0,180}DEFAULT_CLAUDE_MODEL_ID[\s\S]{0,180}\)/,
+    /stored === "codex_app_server" \|\| stored === "codex_exec_gui"[\s\S]{0,80}return "codex_gui";/,
+  );
+});
+
+test("server and browser run prefs are reconciled through Tank run options", () => {
+  expect(appSource).toMatch(
+    /const next = reconcileRunPrefsWithRunOptions\(prev, options\);[\s\S]{0,120}persistRunPrefsLocally\(next\);[\s\S]{0,80}persistRunPrefs\(next\);/,
   );
   expect(appSource).toMatch(
-    /key === "claudeEffort"[\s\S]{0,420}pickAllowedPrefId\([\s\S]{0,180}raw,[\s\S]{0,180}CLAUDE_EFFORTS,[\s\S]{0,180}DEFAULT_CLAUDE_EFFORT_ID[\s\S]{0,180}\)/,
+    /const merged = mergeServerRunPrefs\(prev, server\);[\s\S]{0,160}reconcileRunPrefsWithRunOptions\(merged, sessionRunOptions\)/,
   );
   expect(appSource).toMatch(
-    /key === "codexModelId"[\s\S]{0,420}pickAllowedPrefId\([\s\S]{0,180}raw,[\s\S]{0,180}CODEX_MODELS,[\s\S]{0,180}DEFAULT_CODEX_MODEL_ID[\s\S]{0,180}\)/,
+    /claudeModelId: pickAllowedPrefId\([\s\S]{0,160}modelOptionsForProvider\("anthropic", runOptions\),[\s\S]{0,120}defaultModelForProvider\("anthropic", runOptions\)/,
   );
   expect(appSource).toMatch(
-    /key === "codexEffort"[\s\S]{0,420}pickAllowedPrefId\([\s\S]{0,180}raw,[\s\S]{0,180}CODEX_EFFORTS,[\s\S]{0,180}DEFAULT_CODEX_EFFORT_ID[\s\S]{0,180}\)/,
+    /codexModelId: pickAllowedPrefId\([\s\S]{0,160}modelOptionsForProvider\("codex", runOptions\),[\s\S]{0,120}defaultModelForProvider\("codex", runOptions\)/,
   );
   expect(appSource).toMatch(
-    /key === "antigravityModelId"[\s\S]{0,420}pickAllowedPrefId\([\s\S]{0,180}raw,[\s\S]{0,180}ANTIGRAVITY_MODELS,[\s\S]{0,180}DEFAULT_ANTIGRAVITY_MODEL_ID[\s\S]{0,180}\)/,
+    /antigravityModelId: pickAllowedPrefId\([\s\S]{0,160}modelOptionsForProvider\("antigravity", runOptions\),[\s\S]{0,120}defaultModelForProvider\("antigravity", runOptions\)/,
   );
-  expect(appSource).not.toMatch(
-    /key === "initialMessageMode"[\s\S]{0,300}localStorage\.getItem/,
+});
+
+test("createSession refuses modes before Tank run options are ready", () => {
+  expect(appSource).toMatch(
+    /!createModeAllowedByRunOptions\(mode, sessionRunOptions\) \|\|[\s\S]{0,80}!sdkModeReadyForCreate\(mode, sessionRunOptions\)/,
+  );
+  expect(appSource).toMatch(
+    /setError\("session run options are not ready for this mode"\);[\s\S]{0,40}return;/,
+  );
+  expect(appSource).toMatch(
+    /const modeProvider = MODE_MENU_ICONS\[mode\];[\s\S]{0,180}providerUsesModel\(modeProvider\)[\s\S]{0,80}selectedHomeModelId/,
   );
 });
 
 test("enqueueSdkTurn forwards effort on the POST body so the runner sees the user's pick", () => {
-  // The whole point of plumbing effort through three layers is that
-  // it arrives in the wire body. The spread form keeps Codex sessions
-  // (which set effort to "") from sending a noisy empty field, but
-  // the property MUST be present when run.effort is set.
   expect(appSource).toMatch(
     /\.\.\.\(run\.effort \? \{ effort: run\.effort \} : \{\}\)/,
   );
@@ -154,9 +139,6 @@ test("createSession forwards model and effort as session-owned config", () => {
   );
   expect(appSource).toMatch(
     /const sessionEffort = SDK_CHAT_MODES\.has\(mode\) \? seedEffort : "";/,
-  );
-  expect(appSource).toMatch(
-    /const seedModel =[\s\S]{0,140}providerUsesModel\(selectedProvider\)[\s\S]{0,80}selectedHomeModelId/,
   );
   expect(appSource).toMatch(
     /\.\.\.\(sessionModel \|\| sessionEffort[\s\S]{0,120}\? \{ model: sessionModel, effort: sessionEffort \}[\s\S]{0,80}: \{\}\)/,

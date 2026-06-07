@@ -46,6 +46,21 @@ func validateCreateSessionCapabilities(mode string, raw []string) ([]string, int
 	return capabilities, 0, ""
 }
 
+func validateCreateSessionMode(raw string) (string, int, string) {
+	mode := sessionmodel.NormalizeSessionMode(raw)
+	if !sessionmodel.IsSessionMode(mode) {
+		recordSessionRunConfigRejected("create", "unknown", "invalid_mode")
+		return "", http.StatusBadRequest, "session mode is invalid"
+	}
+	switch mode {
+	case sessionmodel.CodexExecGUIMode, sessionmodel.CodexAppServerMode:
+		recordSessionRunConfigRejected("create", "codex", "retired_mode")
+		return "", http.StatusBadRequest, "session mode " + mode + " is retired; use codex_gui"
+	default:
+		return mode, 0, ""
+	}
+}
+
 type createSessionInitialTurnRequest struct {
 	ClientNonce        string                               `json:"client_nonce"`
 	Prompt             string                               `json:"prompt"`
@@ -142,7 +157,11 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		body.BugLabels = nil
 		body.InitialTurn = nil
 	}
-	mode := sessionmodel.NormalizeSessionMode(body.Mode)
+	mode, status, detail := validateCreateSessionMode(body.Mode)
+	if status != 0 {
+		writeError(w, status, detail)
+		return
+	}
 	repos, err := validateRepoSlugs(body.Repos)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -967,7 +986,11 @@ func (s *appServer) handleCreateSessionWithContext(w http.ResponseWriter, r *htt
 	if body.CallerEmail != "" {
 		email = body.CallerEmail
 	}
-	mode := sessionmodel.NormalizeSessionMode(body.Mode)
+	mode, status, detail := validateCreateSessionMode(body.Mode)
+	if status != 0 {
+		writeError(w, status, detail)
+		return
+	}
 
 	glimmungContext := map[string]any{}
 	if body.GlimmungRunRef != "" {

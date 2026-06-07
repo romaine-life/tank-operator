@@ -9,7 +9,6 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/kubeexec"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessioncontroller"
-	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 )
 
@@ -144,7 +143,11 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
 	}
-	mode := sessionmodel.NormalizeSessionMode(body.Mode)
+	mode, status, detail := validateCreateSessionMode(body.Mode)
+	if status != 0 {
+		writeError(w, status, detail)
+		return
+	}
 
 	repos, err := validateRepoSlugs(body.Repos)
 	if err != nil {

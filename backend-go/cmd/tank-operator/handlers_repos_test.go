@@ -207,8 +207,8 @@ func TestSessionModeSupportsRepos(t *testing.T) {
 	cases := map[string]bool{
 		sessionmodel.ClaudeGUIMode:      true,
 		sessionmodel.CodexGUIMode:       true,
-		sessionmodel.CodexExecGUIMode:   true,
-		sessionmodel.CodexAppServerMode: true,
+		sessionmodel.CodexExecGUIMode:   false,
+		sessionmodel.CodexAppServerMode: false,
 		sessionmodel.ClaudeCLIMode:      false,
 		sessionmodel.CodexCLIMode:       false,
 		sessionmodel.CodexConfigMode:    false,

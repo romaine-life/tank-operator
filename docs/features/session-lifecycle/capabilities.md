@@ -3,6 +3,56 @@
 This ledger names session lifecycle behavior that crosses browser,
 orchestrator, database, and pod boundaries.
 
+## Tank-Owned Session Run Options
+
+Status: complete
+
+Intent:
+Make Tank the source of truth for create-time session modes and provider
+model/effort choices, so browser UI and MCP tools cannot guess or hardcode a
+model string that the backend cannot run.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- `GET /api/session-run-options` and
+  `GET /api/internal/session-run-options` expose the accepted create modes,
+  SDK chat modes, provider model allowlists, effort allowlists, and defaults.
+  The browser fetches this metadata before enabling new-session creation; MCP
+  exposes it through `get_session_run_options` for agents that want to pick a
+  non-default run shape.
+- Tank validates create, turn, and runtime-config model/effort values against
+  the same provider-owned allowlists. Rejections are hard `400` responses with
+  an actionable allowed-value list instead of a silent runner default.
+- `codex_exec_gui` and `codex_app_server` are retired create modes. Existing
+  historical rows can still render as chat sessions, but new creates through
+  browser, internal, or MCP paths must use `codex_gui`.
+- Codex sessions must carry an explicit account-supported model. The unsupported
+  bare `gpt-5.3-codex` string is not advertised; the supported Spark variant is
+  `gpt-5.3-codex-spark`.
+- Browser-stored and profile-stored run preferences are reconciled against the
+  Tank metadata before they can seed a new session, so an agent-created session
+  cannot poison the user's next-session default with an invalid model string.
+
+Evidence:
+- `backend-go/cmd/tank-operator/handlers_run_options_test.go` covers the
+  browser and internal metadata endpoints and asserts retired Codex modes and
+  bare `gpt-5.3-codex` are not advertised.
+- `backend-go/cmd/tank-operator/handlers_sessions_test.go`,
+  `handlers_turns_test.go`, and `handlers_internal_test.go` cover retired-mode,
+  unknown-mode, unsupported-model, missing-model, and unsupported-effort
+  rejection paths.
+- `frontend/src/modelEffortDefaults.test.ts` covers the SPA's Tank metadata
+  fetch, Claude provider-key normalization, preference reconciliation, and
+  create-time readiness guard.
+- `mcp-tank-operator/tests/test_tools.py` and `tests/test_client.py` cover the
+  MCP `get_session_run_options` tool and assert MCP schemas do not carry local
+  hardcoded model/mode enums.
+- Metric: `tank_session_run_config_rejected_total{surface,provider,reason}`.
+
 ## SpireLens MCP Session Capability
 
 Status: in progress

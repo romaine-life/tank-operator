@@ -22,7 +22,6 @@ export type DefaultSessionMode = Extract<
   | "claude_gui"
   | "codex_cli"
   | "codex_gui"
-  | "codex_exec_gui"
   | "antigravity_gui"
 >;
 
@@ -113,12 +112,12 @@ export const SESSION_MODE_CONTRACT = {
   codex_exec_gui: {
     provider: "codex",
     interaction: "gui",
-    defaultSelectable: true,
+    defaultSelectable: false,
     configCredentials: false,
     chatSurface: true,
     sdkChat: true,
     workspaceFiles: true,
-    repos: true,
+    repos: false,
     rollout: "gui",
   },
   codex_app_server: {
@@ -129,7 +128,7 @@ export const SESSION_MODE_CONTRACT = {
     chatSurface: true,
     sdkChat: true,
     workspaceFiles: true,
-    repos: true,
+    repos: false,
     rollout: "gui",
   },
   codex_config: {
@@ -229,7 +228,7 @@ export const PROVIDER_CONFIG_MODES: Partial<Record<Provider, SessionMode>> = {};
 for (const mode of SESSION_MODE_ORDER) {
   const contract = SESSION_MODE_CONTRACT[mode];
   if (contract.defaultSelectable && contract.interaction != null) {
-    PROVIDER_INTERACTION_MODES[contract.provider][contract.interaction] =
+    PROVIDER_INTERACTION_MODES[contract.provider][contract.interaction] ??=
       mode as DefaultSessionMode;
   }
   if (contract.configCredentials) {
