@@ -6843,8 +6843,9 @@ function RunMessageBubble({
   // Minimal one-line variant: keep the avatar at full size and collapse the
   // body to a single ellipsis-truncated line. Used by the Turns view when the
   // prompt context is collapsed so the entry stays recognizable (avatar +
-  // first line) instead of disappearing entirely. Hides the footer,
-  // attachments, and any inline actions.
+  // first line) instead of disappearing entirely. Compact mode only changes
+  // text rendering; attachments, inline actions, and footer controls keep
+  // their normal layout.
   compact?: boolean;
 }) {
   const variant =
@@ -7002,8 +7003,7 @@ function RunMessageBubble({
           ) : (
             <RunMarkdown>{visibleText}</RunMarkdown>
           )}
-          {!compact &&
-            variant === "system" &&
+          {variant === "system" &&
             messageActionLabel &&
             messageActionHref && (
               <a
@@ -7015,8 +7015,7 @@ function RunMessageBubble({
                 {messageActionLabel}
               </a>
             )}
-          {!compact &&
-            variant === "assistant" &&
+          {variant === "assistant" &&
             awaitingInput &&
             questionTurnId &&
             onOpenTurn && (
@@ -7029,72 +7028,70 @@ function RunMessageBubble({
               </button>
             )}
         </div>
-        {!compact && variant === "user" && visibleAttachments.length > 0 && (
+        {variant === "user" && visibleAttachments.length > 0 && (
           <RunMessageAttachments
             attachments={visibleAttachments}
             sessionId={sessionId}
           />
         )}
-        {!compact && (
-          <div
-            className="run-msg-footer"
-            data-always-visible={alwaysVisible ? "" : undefined}
-          >
-            {canonicalMessage &&
-              (variant === "assistant" || variant === "user") &&
-              entry.turnId &&
-              onOpenTurn && (
-                <TurnViewButton
-                  turnId={entry.turnId}
-                  href={turnHref}
-                  onOpenTurn={onOpenTurn}
-                />
-              )}
-            {!canonicalMessage && onOpenTranscriptMessage && (
-              <TranscriptViewButton
-                entryId={entry.id}
-                href={transcriptHref}
-                onOpenTranscriptMessage={onOpenTranscriptMessage}
+        <div
+          className="run-msg-footer"
+          data-always-visible={alwaysVisible ? "" : undefined}
+        >
+          {canonicalMessage &&
+            (variant === "assistant" || variant === "user") &&
+            entry.turnId &&
+            onOpenTurn && (
+              <TurnViewButton
+                turnId={entry.turnId}
+                href={turnHref}
+                onOpenTurn={onOpenTurn}
               />
             )}
-            {canonicalMessage && variant === "assistant" && onFork && (
-              <ForkButton entry={entry} onFork={onFork} />
-            )}
-            {variant !== "system" && (
-              <>
-                {onQuote && (
-                  <>
-                    <QuoteButton
-                      text={visibleText}
-                      style="fence"
-                      onQuote={onQuote}
-                    />
-                    <QuoteButton
-                      text={visibleText}
-                      style="blockquote"
-                      onQuote={onQuote}
-                    />
-                  </>
-                )}
-                <CopyButton text={visibleText} />
-                {canonicalMessage && !entry.localOnly && (
-                  <LinkButton sessionId={sessionId} entryId={entry.id} />
-                )}
-              </>
-            )}
-            <div className="run-msg-timings">
-              {showDuration && durationMs != null && (
-                <span className="run-msg-timing-row">
-                  {formatTurnDuration(durationMs)}
-                  <TimerIcon size={9} aria-hidden="true" />
-                </span>
+          {!canonicalMessage && onOpenTranscriptMessage && (
+            <TranscriptViewButton
+              entryId={entry.id}
+              href={transcriptHref}
+              onOpenTranscriptMessage={onOpenTranscriptMessage}
+            />
+          )}
+          {canonicalMessage && variant === "assistant" && onFork && (
+            <ForkButton entry={entry} onFork={onFork} />
+          )}
+          {variant !== "system" && (
+            <>
+              {onQuote && (
+                <>
+                  <QuoteButton
+                    text={visibleText}
+                    style="fence"
+                    onQuote={onQuote}
+                  />
+                  <QuoteButton
+                    text={visibleText}
+                    style="blockquote"
+                    onQuote={onQuote}
+                  />
+                </>
               )}
-              {showTimestamps && time && (
-                <span className="run-msg-timing-row">{time}</span>
+              <CopyButton text={visibleText} />
+              {canonicalMessage && !entry.localOnly && (
+                <LinkButton sessionId={sessionId} entryId={entry.id} />
               )}
-            </div>
+            </>
+          )}
+          <div className="run-msg-timings">
+            {showDuration && durationMs != null && (
+              <span className="run-msg-timing-row">
+                {formatTurnDuration(durationMs)}
+                <TimerIcon size={9} aria-hidden="true" />
+              </span>
+            )}
+            {showTimestamps && time && (
+              <span className="run-msg-timing-row">{time}</span>
+            )}
           </div>
-        )}
+        </div>
       </div>
       {variant === "user" &&
         !isAvatarContinuation &&

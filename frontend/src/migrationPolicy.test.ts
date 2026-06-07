@@ -344,10 +344,17 @@ test("collapsed Turns prompt context stays a minimal one-line entry, not hidden"
   // RunMessageBubble renders in compact mode: the avatar stays at full size
   // and the text collapses to a single ellipsis-truncated line. This pins the
   // wiring (compact follows the collapsed flag) and the compact renderer so a
-  // future refactor can't silently revert to hiding the prompt.
+  // future refactor can't silently revert to hiding the prompt. Compact mode
+  // is text-only; the message controls remain mounted in their normal footer
+  // layout instead of being hidden or squeezed into the preview line.
   expect(appSource.includes("compact?: boolean;")).toBe(true);
   expect(appSource.includes("compact={selectedTurnContextCollapsed}")).toBe(true);
   expect(appSource.includes("run-msg-compact-text")).toBe(true);
+  expect(appSource.includes("Compact mode only changes")).toBe(true);
+  expect(appSource.includes("{!compact && variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(false);
+  expect(appSource.includes("{!compact && (\n          <div\n            className=\"run-msg-footer\"")).toBe(false);
+  expect(appSource.includes("{variant === \"user\" && visibleAttachments.length > 0 && (")).toBe(true);
+  expect(appSource.includes("<div\n          className=\"run-msg-footer\"")).toBe(true);
   // The old "hide the whole bubble when collapsed" gate must be gone.
   expect(appSource.includes("{!selectedTurnContextCollapsed && (")).toBe(false);
   // CSS: the compact line truncates with an ellipsis without changing the
