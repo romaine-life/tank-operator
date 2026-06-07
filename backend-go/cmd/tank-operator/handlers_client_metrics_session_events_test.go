@@ -20,6 +20,11 @@ func TestSessionEventStreamMetricsAcceptsValidBatch(t *testing.T) {
 			{"event":"terminal_matched_by_turn_id","eventType":"turn.completed","sessionMode":"codex_gui"},
 			{"event":"queued_followup_blocked_after_terminal","sessionMode":"codex_gui"},
 			{"event":"stale_running_blocked_submit","sessionMode":"codex_gui"},
+			{"event":"turn_activity_load_started","sessionMode":"codex_gui"},
+			{"event":"turn_activity_load_succeeded","sessionMode":"codex_gui"},
+			{"event":"turn_activity_load_failed","sessionMode":"codex_gui"},
+			{"event":"turn_activity_load_timed_out","sessionMode":"codex_gui"},
+			{"event":"turn_activity_load_stale","sessionMode":"codex_gui"},
 			{"event":"turn_activity_refresh_failed","sessionMode":"codex_gui"},
 			{"event":"turn_activity_refresh_gave_up","sessionMode":"codex_gui"},
 			{"event":"turn_activity_refresh_recovered","sessionMode":"codex_gui"},
@@ -89,6 +94,9 @@ func TestSessionEventStreamClientEventLabelClamp(t *testing.T) {
 	}
 	if got := sessionEventStreamClientEventLabel("turn_activity_refresh_gave_up"); got != "turn_activity_refresh_gave_up" {
 		t.Fatalf("turn activity refresh label = %q", got)
+	}
+	if got := sessionEventStreamClientEventLabel("turn_activity_load_timed_out"); got != "turn_activity_load_timed_out" {
+		t.Fatalf("turn activity load label = %q", got)
 	}
 	if got := sessionEventStreamClientEventLabel("turn_number_unavailable_target"); got != "turn_number_unavailable_target" {
 		t.Fatalf("turn number unavailable-target label = %q", got)

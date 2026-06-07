@@ -268,7 +268,7 @@ func composeLaunchDispatchPrompt(runtime, skillName, basePrompt string, absPaths
 
 func isLaunchSkillRuntime(runtime string) bool {
 	switch strings.TrimSpace(runtime) {
-	case "claude", "codex":
+	case "claude", "codex", "antigravity":
 		return true
 	default:
 		return false

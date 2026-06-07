@@ -41,6 +41,47 @@ func TestInstallTankDocsScriptRunsUnderSh(t *testing.T) {
 	assertFileContains(t, filepath.Join(destRoot, "nested", "migration-policy.md"), "migration")
 }
 
+func TestInstallTankSkillsScriptRunsUnderSh(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("skills install script test runs on POSIX only")
+	}
+
+	scriptPath, err := filepath.Abs("../../../k8s/session-config/install-tank-skills.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	configDir := t.TempDir()
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(configDir, "skills__common__north-star__SKILL.md"), []byte("north"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "skills__common__rollout__agents__openai.yaml"), []byte("agent"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "skills__antigravity__gemini-only__SKILL.md"), []byte("gemini"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"INSTALL_TANK_SKILLS_CONFIG_DIR="+configDir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed under sh: %v\noutput:\n%s", err, string(out))
+	}
+
+	assertFileContains(t, filepath.Join(home, ".claude", "skills", "north-star", "SKILL.md"), "north")
+	assertFileContains(t, filepath.Join(home, ".codex", "skills", "north-star", "SKILL.md"), "north")
+	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "north-star", "SKILL.md"), "north")
+	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "rollout", "agents", "openai.yaml"), "agent")
+	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "gemini-only", "SKILL.md"), "gemini")
+	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "gemini-only", "SKILL.md")); !os.IsNotExist(err) {
+		t.Fatalf("antigravity-scoped skill should not install into claude, stat err: %v", err)
+	}
+}
+
 // TestSessionPodBootstrapScript_PerMode executes the in-pod bootstrap script
 // against each wizard mode in a temp HOME and asserts the right config files
 // land on disk. This is the regression guard the deletion in 650c282 (which

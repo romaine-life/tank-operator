@@ -30,6 +30,7 @@ test("the /metrics endpoint serves the tank_antigravity_runner_ counters", async
     assert.match(body, /tank_antigravity_runner_commands_consumed_total/);
     assert.match(body, /tank_antigravity_runner_turn_terminal_total/);
     assert.match(body, /tank_antigravity_runner_provider_error_total/);
+    assert.match(body, /tank_antigravity_runner_agy_diagnostic_total/);
   } finally {
     server.close();
     await once(server, "close");
