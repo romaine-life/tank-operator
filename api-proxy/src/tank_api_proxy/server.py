@@ -117,12 +117,35 @@ ANTHROPIC_TOKEN_URL = "https://platform.claude.com/v1/oauth/token"
 CODEX_CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 CODEX_TOKEN_URL = "https://auth.openai.com/oauth/token"
 
+# Antigravity (Gemini-Ultra via Google's `agy` CLI) authenticates with a
+# standard Google OAuth2 "consumer" chain. The client_id below is the consumer
+# OAuth client embedded in the public agy binary (a second, enterprise client
+# also ships but is not the consumer flow). Confirmed by refreshing a live
+# consumer refresh_token against Google's token endpoint. The client_secret is
+# an installed-app secret (also embedded in the public binary, hence not
+# confidential) but is sourced from env so it stays out of source control.
+# Unlike the Claude/Codex custom OAuth servers, Google's /token endpoint
+# requires application/x-www-form-urlencoded, not JSON (token_request_form).
+GOOGLE_CLIENT_ID = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
+GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
+
 # The session launchers write this placeholder into
 # ~/.claude/.credentials.json's accessToken (and matching refreshToken).
 # Used as the discriminator for "this is a request that wants OAuth-
 # Bearer injection" — anything else (worker_jwt, missing, future
 # unknowns) passes through with its Authorization untouched.
 PLACEHOLDER_BEARER = "Bearer managed-by-tank-operator"
+
+# Proactive refresh keeper tuning. Refresh when the access token is within
+# REFRESH_SKEW_MS of expiry so the first/next request never rides an expired
+# token, and re-check at most every PROACTIVE_REFRESH_POLL_SECONDS (the keeper
+# also wakes immediately on an upstream 401). This is what makes the proxy
+# survive its own restart on a low-traffic provider: without continuous
+# traffic to trigger a reactive 401-refresh, the keeper warms the token on
+# boot and keeps it warm, and it runs the refresh + KV write in a long-lived
+# task that a short-lived agy request stream cannot cancel mid-flight.
+REFRESH_SKEW_MS = 10 * 60 * 1000
+PROACTIVE_REFRESH_POLL_SECONDS = 60
 
 @dataclass(frozen=True)
 class ProxyConfig:
@@ -135,6 +158,9 @@ class ProxyConfig:
     account_header: str | None = None
     fedramp_header: str | None = None
     patch_last_refresh: bool = False
+    # When True, POST the token refresh as application/x-www-form-urlencoded
+    # (Google's OAuth2 /token contract) instead of JSON (Claude/Codex).
+    token_request_form: bool = False
 
 
 def _config_from_env() -> ProxyConfig:
@@ -149,6 +175,16 @@ def _config_from_env() -> ProxyConfig:
             account_header="ChatGPT-Account-ID",
             fedramp_header="X-OpenAI-Fedramp",
             patch_last_refresh=True,
+        )
+    if provider == "antigravity":
+        return ProxyConfig(
+            provider="antigravity",
+            credentials_file=_required_env("ANTIGRAVITY_CREDENTIALS_FILE"),
+            token_url=os.environ.get("ANTIGRAVITY_TOKEN_URL", GOOGLE_TOKEN_URL),
+            client_id=os.environ.get("ANTIGRAVITY_CLIENT_ID", GOOGLE_CLIENT_ID),
+            client_secret=_required_env("ANTIGRAVITY_CLIENT_SECRET"),
+            kv_secret_name=_required_env("ANTIGRAVITY_CREDENTIALS_KV_KEY"),
+            token_request_form=True,
         )
     if provider != "claude":
         raise RuntimeError(f"unknown PROXY_PROVIDER={provider!r}")
@@ -191,6 +227,11 @@ def _patch_blob(
     patch_last_refresh: bool = False,
 ) -> dict[str, Any]:
     expires_at_ms = int((time.time() + expires_in) * 1000)
+    expiry_rfc3339 = (
+        datetime.fromtimestamp(time.time() + expires_in, timezone.utc)
+        .isoformat()
+        .replace("+00:00", "Z")
+    )
     last_refresh = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     out = json.loads(json.dumps(blob))
 
@@ -206,6 +247,9 @@ def _patch_blob(
                 node[key] = new_id
             elif key in ("expiresAt", "expires_at"):
                 node[key] = expires_at_ms
+            elif key == "expiry":
+                # Google (antigravity) blob: RFC3339 string, not epoch ms.
+                node[key] = expiry_rfc3339
             elif patch_last_refresh and key == "last_refresh":
                 node[key] = last_refresh
             elif isinstance(node[key], dict):
@@ -333,6 +377,15 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
         # refresh token, and the proxy logs would show a "rotation storm"
         # of five+ successful rotations in two seconds.
         self._refresh_task: asyncio.Task[None] | None = None
+        # Proactive refresh keeper plumbing. The keeper is a long-lived task
+        # (started in serve()) that warms the token on boot and before expiry,
+        # so a request never rides an expired token (the cold-start race) and so
+        # the refresh + KV write run in a task a short-lived request stream
+        # cannot cancel mid-flight. _refresh_wakeup lets the reactive 401 path
+        # nudge the keeper to run immediately instead of waiting for the poll.
+        self._refresh_wakeup = asyncio.Event()
+        self._keeper_task: asyncio.Task[None] | None = None
+        self._stopping = False
         self._kv_url = os.environ.get("AZURE_KEYVAULT_URL", "")
         # Health snapshot — the durable provider-credential health surface
         # consumed by tank-operator's poller. The orchestrator polls
@@ -463,6 +516,13 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                 # _get_access_token.await(self._refresh_task).
                 if self._refresh_task is None or self._refresh_task.done():
                     self._refresh_task = asyncio.create_task(self._refresh())
+                # Also wake the long-lived keeper. The create_task above lives
+                # in this request handler's lineage and can be cancelled when
+                # agy's short stream closes before the refresh + KV write land
+                # (the antigravity cold-start failure). The keeper re-runs the
+                # refresh from a task that outlives the stream, so the rotation
+                # and KV persist always complete.
+                self._refresh_wakeup.set()
         return ext_proc_pb2.ProcessingResponse(response_headers=ext_proc_pb2.HeadersResponse())
 
     async def _get_access_token(self) -> str:
@@ -511,7 +571,9 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
             for k, v in node.items():
                 if k in ("expiresAt", "expires_at") and isinstance(v, int):
                     candidates.append(v)
-                elif k == "last_refresh" and isinstance(v, str):
+                elif k in ("last_refresh", "expiry") and isinstance(v, str):
+                    # last_refresh: Codex auth.json. expiry: Google/antigravity
+                    # RFC3339 access-token expiry.
                     parsed = _iso_ms(v)
                     if parsed is not None:
                         candidates.append(parsed)
@@ -610,12 +672,68 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
             file_account_id or "none",
         )
 
+    def _should_refresh(self) -> bool:
+        """Whether the keeper should rotate now.
+
+        True when the cached token is invalidated by an upstream 401, missing,
+        or within REFRESH_SKEW_MS of expiry. False when there is no refresh
+        token (an unconfigured provider — don't spin) or the freshness marker
+        is unknown (don't churn blindly; the reactive 401 path still covers
+        genuine invalidation).
+        """
+        if self._cached_refresh is None:
+            return False
+        if self._access_invalidated or self._cached_access is None:
+            return True
+        fresh = self._cached_freshness_ms()
+        if fresh is None:
+            return False
+        return fresh - int(time.time() * 1000) < REFRESH_SKEW_MS
+
+    async def run_refresh_keeper(self) -> None:
+        """Long-lived proactive refresh loop (started in serve()).
+
+        Warms the token on boot and keeps it warm before expiry, and — because
+        it lives for the whole process, not a single request stream — it is the
+        path that guarantees the refresh *and* the KV write-back run to
+        completion. A reactive 401-triggered refresh created inside a request
+        handler can be cancelled when agy's short stream closes (the antigravity
+        cold-start failure: turn 1 stranded the rotation, turn 2 stranded the KV
+        persist); the keeper re-runs it here where nothing cancels it.
+        """
+        while not self._stopping:
+            try:
+                if self._cached_access is None and self._cached_refresh is None:
+                    async with self._lock:
+                        self._reload_from_file()
+                if self._should_refresh():
+                    await self._refresh()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("refresh keeper iteration failed")
+            try:
+                await asyncio.wait_for(
+                    self._refresh_wakeup.wait(), PROACTIVE_REFRESH_POLL_SECONDS
+                )
+            except asyncio.TimeoutError:
+                pass
+            self._refresh_wakeup.clear()
+
     async def _refresh(self) -> None:
         async with self._lock:
             # Re-read the file under the lock: ESO may have mirrored a
             # newer KV value (e.g. someone re-seeded via "+ config sub")
             # and we should prefer that over rotating against the provider.
             self._reload_from_file()
+            # The keeper and the reactive 401 path can both reach here. If the
+            # token is already fresh and not invalidated (another refresh just
+            # landed), skip the redundant provider round trip rather than
+            # burning the refresh token a second time.
+            if not self._access_invalidated:
+                fresh = self._cached_freshness_ms()
+                if fresh is not None and fresh - int(time.time() * 1000) > REFRESH_SKEW_MS:
+                    return
             if self._cached_refresh is None:
                 log.error("no refresh token available; cannot rotate")
                 record_refresh("no_refresh_token")
@@ -634,11 +752,17 @@ class AuthInjector(ext_proc_grpc.ExternalProcessorServicer):
                     }
                     if self._config.client_secret is not None:
                         payload["client_secret"] = self._config.client_secret
-                    resp = await http.post(
-                        self._config.token_url,
-                        json=payload,
-                        headers={"Content-Type": "application/json"},
-                    )
+                    if self._config.token_request_form:
+                        # Google's OAuth2 /token endpoint requires
+                        # application/x-www-form-urlencoded; httpx sets the
+                        # content-type from data=.
+                        resp = await http.post(self._config.token_url, data=payload)
+                    else:
+                        resp = await http.post(
+                            self._config.token_url,
+                            json=payload,
+                            headers={"Content-Type": "application/json"},
+                        )
             except Exception:
                 log.exception("refresh request crashed; keeping existing tokens")
                 record_refresh("request_failed", time.monotonic() - refresh_start)
@@ -887,6 +1011,10 @@ async def serve(port: int) -> tuple[grpc.aio.Server, AuthInjector]:
     server.add_insecure_port(f"0.0.0.0:{port}")
     await server.start()
     log.info("%s ext_proc listening on 0.0.0.0:%d", config.provider, port)
+    # Start the proactive refresh keeper as a long-lived task so it outlives any
+    # single request stream (see run_refresh_keeper / the antigravity cold-start
+    # incident). Stored on the injector so __main__ can cancel it on shutdown.
+    injector._keeper_task = asyncio.create_task(injector.run_refresh_keeper())
     return server, injector
 
 

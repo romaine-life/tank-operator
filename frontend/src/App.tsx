@@ -43,6 +43,7 @@ import {
   type TurnActivityPageInfo,
   type TurnActivityPagerState,
 } from "./turnActivityPager";
+import { turnViewTurnNavigation } from "./turnViewNavigation";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
 import { ChatComposer } from "./ChatComposer";
@@ -57,8 +58,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "./components/ui/dropdown-menu";
@@ -169,6 +168,7 @@ import {
   navigationModeTelemetryEvent,
   transitionNavigationMode,
 } from "./navigationMode";
+import { resolveComposerFocusShortcut } from "./composerFocusShortcut";
 import { isTranscriptRefreshShortcut } from "./transcriptRefreshShortcut";
 import {
   isTranscriptToTurnsShortcut,
@@ -233,6 +233,24 @@ import {
   removeRepoSlug,
   unpinRepoSlug,
 } from "./repos";
+import {
+  CHAT_MODES,
+  CODEX_ROLLOUT_MODES,
+  CONFIG_MODES,
+  CREATE_TIME_INITIAL_TURN_MODES,
+  GUI_ROLLOUT_MODES,
+  MODE_PROVIDERS,
+  PROVIDER_CONFIG_MODES,
+  PROVIDER_INTERACTION_MODES,
+  PROVIDERS,
+  ROLLOUT_MODES,
+  SDK_CHAT_MODES,
+  isDefaultSessionMode,
+  type DefaultSessionMode,
+  type Provider,
+  type SessionInteraction,
+  type SessionMode,
+} from "./sessionModes";
 import {
   readHomeDismissedRecentRepos,
   readHomeSelectedRepos,
@@ -311,7 +329,13 @@ import {
   loadRuntimeAvatarCatalog,
   type AgentAvatar,
 } from "./sessionAvatars";
-import { openAvatarPreview } from "./avatarPreview";
+import {
+  addAvatarPreviewEditRequestListener,
+  avatarPreviewIsEditable,
+  closeAvatarPreview,
+  openAvatarPreview,
+  setAvatarPreviewEditAvailable,
+} from "./avatarPreview";
 import {
   linkTextTargetsInMarkdown,
   normalizeWorkspacePathTarget,
@@ -340,28 +364,6 @@ const TURN_ACTIVITY_LIVE_REFRESH_DELAY_MS = 120;
 const TURN_ACTIVITY_LIVE_REFRESH_RETRY_DELAY_MS = 1_500;
 const TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS = 3;
 
-type SessionMode =
-  | "api_key"
-  | "claude_cli"
-  | "claude_gui"
-  | "config"
-  | "codex_cli"
-  | "codex_gui"
-  | "codex_exec_gui"
-  | "codex_app_server"
-  | "codex_config"
-  | "antigravity_config";
-type DefaultSessionMode = Extract<
-  SessionMode,
-  "claude_cli" | "claude_gui" | "codex_cli" | "codex_gui" | "codex_exec_gui"
->;
-// "antigravity" (Gemini-Ultra via `agy`) exists for label/icon resolution of
-// the antigravity_config credential-mint mode. It is intentionally NOT in the
-// PROVIDERS picker array yet: the runnable gui/cli surface + usage quotas land
-// with the antigravity_gui runner. Until then it has no interaction modes and
-// no quota windows.
-type Provider = "anthropic" | "codex" | "antigravity";
-type SessionInteraction = "gui" | "cli";
 type ToolKind = "mcp" | "shell";
 // TurnActivityPageInfo (the per-turn /activity page directory) and the rule for
 // turning it into a rendered pager live in ./turnActivityPager.
@@ -762,6 +764,13 @@ interface Session {
   // the session_events ledger onto the row. The composer renders it as the
   // compaction metric; absent/0 means the session has not compacted yet.
   compaction_count?: number;
+  // Durable count of user_message.created events (one per human back-and-forth),
+  // projected from the session_events ledger onto the row. Kept as metadata for
+  // compatibility and diagnostics; sidebar opens now always land on Turns.
+  user_message_count?: number;
+  // Legacy durable manual open-target pin ("chat"/"turns"). The frontend still
+  // parses it from existing rows but no longer uses it for session-open defaults.
+  open_target?: "chat" | "turns";
   agent_avatar_id?: string | null;
   system_avatar_id?: string | null;
   sidebar_position?: number;
@@ -790,6 +799,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   antigravity_config: "Antigravity config",
+  antigravity_gui: "Antigravity GUI",
 };
 
 // Compact labels for the inline session-row chip. Falls back to MODE_LABELS
@@ -805,6 +815,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   antigravity_config: "agy-cfg",
+  antigravity_gui: "agy-gui",
 };
 
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
@@ -814,34 +825,10 @@ const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   codex_gui: "codex",
   codex_exec_gui: "codex",
   codex_app_server: "codex",
+  antigravity_gui: "antigravity",
 };
 
-const MODE_MENU_ICONS: Record<SessionMode, Provider> = {
-  api_key: "anthropic",
-  claude_cli: "anthropic",
-  claude_gui: "anthropic",
-  config: "anthropic",
-  codex_cli: "codex",
-  codex_gui: "codex",
-  codex_exec_gui: "codex",
-  codex_app_server: "codex",
-  codex_config: "codex",
-  // Resolves the antigravity_config row's provider for label lookups. Never
-  // rendered as a ProviderIcon (config modes use the text chip in ModeChip), so
-  // it needs no icon asset.
-  antigravity_config: "antigravity",
-};
-
-const PROVIDER_INTERACTION_MODES: Record<
-  Provider,
-  Partial<Record<SessionInteraction, DefaultSessionMode | null>>
-> = {
-  anthropic: { gui: "claude_gui", cli: "claude_cli" },
-  codex: { gui: "codex_gui", cli: "codex_cli" },
-  // No runnable interaction surface yet — antigravity_config is credential-mint
-  // only; gui/cli arrive with the antigravity-runner.
-  antigravity: {},
-};
+const MODE_MENU_ICONS: Record<SessionMode, Provider> = MODE_PROVIDERS;
 
 const INTERACTION_LABELS: Record<SessionInteraction, string> = {
   gui: "gui",
@@ -849,12 +836,6 @@ const INTERACTION_LABELS: Record<SessionInteraction, string> = {
 };
 
 const INTERACTION_OPTIONS: SessionInteraction[] = ["gui", "cli"];
-
-const PROVIDER_CONFIG_MODES: Partial<Record<Provider, SessionMode>> = {
-  anthropic: "config",
-  codex: "codex_config",
-  antigravity: "antigravity_config",
-};
 
 const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
@@ -915,6 +896,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_app_server: "GUI chat pane for codex app-server transport",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   antigravity_config: "agy login (paste code) · seeds KV for Antigravity",
+  antigravity_gui: "GUI chat pane for Gemini-Ultra (agy)",
 };
 
 const DEMO_AGENT_AVATAR_IDS = [
@@ -1203,18 +1185,6 @@ function normalizeSessionMode(value: string | null): string | null {
   return value;
 }
 
-function isDefaultSessionMode(
-  value: string | null,
-): value is DefaultSessionMode {
-  return (
-    value === "claude_cli" ||
-    value === "claude_gui" ||
-    value === "codex_cli" ||
-    value === "codex_gui" ||
-    value === "codex_exec_gui"
-  );
-}
-
 function readDefaultSessionMode(): DefaultSessionMode {
   try {
     const stored = normalizeSessionMode(
@@ -1448,44 +1418,10 @@ function moveSessionId(
   return next;
 }
 
-// Modes whose pods carry harvestable credentials — the "save" button
-// surfaces on session rows in these modes. Kept as a Set so adding a third
-// future config mode doesn't grow an OR chain.
-const CONFIG_MODES = new Set<SessionMode>([
-  "config",
-  "codex_config",
-  "antigravity_config",
-]);
-const CHAT_MODES = new Set<SessionMode>([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-]);
-const SDK_CHAT_MODES = new Set<SessionMode>([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-]);
-const CREATE_TIME_INITIAL_TURN_MODES = new Set<SessionMode>(SDK_CHAT_MODES);
 const SDK_TIMELINE_TAIL_ROWS = 24;
 const SDK_TIMELINE_OLDER_ROWS = 8;
 const SDK_TIMELINE_DEEPLINK_ROWS_BEFORE = 12;
 const SDK_TIMELINE_DEEPLINK_ROWS_AFTER = 12;
-const CLAUDE_ROLLOUT_MODES = new Set<SessionMode>(["claude_cli", "api_key"]);
-const CODEX_ROLLOUT_MODES = new Set<SessionMode>(["codex_cli"]);
-const GUI_ROLLOUT_MODES = new Set<SessionMode>([
-  "claude_gui",
-  "codex_gui",
-  "codex_exec_gui",
-  "codex_app_server",
-]);
-const ROLLOUT_MODES = new Set<SessionMode>([
-  ...CLAUDE_ROLLOUT_MODES,
-  ...CODEX_ROLLOUT_MODES,
-]);
-const PROVIDERS: Provider[] = ["anthropic", "codex"];
 
 function defaultModeFor(
   provider: Provider,
@@ -1737,7 +1673,7 @@ function readAppRouteFromPath(
 
 function sessionRouteUrl(
   id: string,
-  tab: SessionRouteTab = "chat",
+  tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
   staticPath?: string | null,
   pageNumber?: number | null,
@@ -1791,7 +1727,7 @@ function readInitialPublicSessionReportRoute(): PublicSessionReportRoute | null 
 
 function replaceSessionRoute(
   id: string,
-  tab: SessionRouteTab = "chat",
+  tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
   pageNumber?: number | null,
 ): void {
@@ -1899,6 +1835,13 @@ function WorkspaceBreadcrumbTrail({
       )}
     </>
   );
+}
+
+function closeAvatarPreviewAfterRoutePaint(): void {
+  if (typeof window === "undefined") return;
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => closeAvatarPreview());
+  });
 }
 
 function readInitialSessionId(): string | null {
@@ -4383,7 +4326,6 @@ type TurnViewScrollRequest = {
   signal: number;
 };
 type RunSubmitSurface = "chat" | "turns";
-type SessionOpenTarget = "chat" | "turns";
 
 /** A file the user picked / dropped / pasted on the home composer before
  *  a session pod exists. The `file` is kept on the object so it can be
@@ -5258,6 +5200,13 @@ function messageEntryForAvatarGrouping(
   return group.kind === "message" ? group.entry : null;
 }
 
+function flatEntryGroupEntries(group: FlatEntryGroup): TranscriptEntry[] {
+  if (group.kind === "tools" || group.kind === "message_group")
+    return group.entries;
+  if (group.kind === "thinking") return [];
+  return [group.entry];
+}
+
 function isMessageAvatarContinuation(
   groups: readonly (EntryGroup | FlatEntryGroup)[],
   index: number,
@@ -5327,11 +5276,19 @@ function turnActivityOwnedAssistantEntries(
   group: Extract<EntryGroup, { kind: "activity" }>,
 ): TranscriptEntry[] {
   const compactedEntryIds = new Set(group.compactedEntryIds);
-  return group.entries.filter(
-    (entry) =>
-      entry.kind === "message" &&
-      entry.role === "assistant" &&
-      !compactedEntryIds.has(entry.id),
+  return group.entries.filter((entry) =>
+    isTurnActivityFinalAssistantEntry(entry, compactedEntryIds),
+  );
+}
+
+function isTurnActivityFinalAssistantEntry(
+  entry: TranscriptEntry,
+  compactedEntryIds?: ReadonlySet<string>,
+): boolean {
+  return (
+    entry.kind === "message" &&
+    entry.role === "assistant" &&
+    !compactedEntryIds?.has(entry.id)
   );
 }
 
@@ -5964,7 +5921,7 @@ async function buildForkSessionPrompt(
   );
 }
 
-function CopyButton({ text }: { text: string }) {
+export function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
@@ -5997,7 +5954,7 @@ function CopyButton({ text }: { text: string }) {
 // (?session=<id>&message=<entry.id>) so a human pasting it lands on the
 // session and scrolls/highlights the entry, while an agent can parse
 // the query params to fetch the underlying event from the API.
-function LinkButton({
+export function LinkButton({
   sessionId,
   entryId,
 }: {
@@ -6036,7 +5993,7 @@ function LinkButton({
   );
 }
 
-function TurnViewButton({
+export function TurnViewButton({
   turnId,
   href,
   onOpenTurn,
@@ -6674,7 +6631,7 @@ interface QuestionPageNavigation {
   onSelectPage?: (page: number) => void;
 }
 
-const RunContext = createContext<{
+export const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
   submitAnswer: (askingTurnId: string, payload: AnswerPayload) => Promise<void>;
   askUserQuestionDrafts: Record<string, AskUserQuestionDraft | undefined>;
@@ -7557,7 +7514,7 @@ function TurnsTab({
   );
 }
 
-// One menu-row's worth of state for a header view (Turns / Background / Files).
+// One menu-row's worth of state for a header view (Background / Files).
 // The overflow menu owns the icon + label markup so the labels stay literal
 // and testable; callers pass only the live state.
 type RunHeaderMenuTabState = {
@@ -7570,15 +7527,15 @@ type RunHeaderMenuTabState = {
 };
 
 // The run header's single overflow control. It is the one consolidation point
-// for every top-right session action: the view tabs (Turns / Background /
-// Files) and the auxiliary actions (Settings / Help). Keeping all of them here
-// means the header stays a clean "title + ⋮" strip instead of a row of
-// competing buttons. Live counts ride each row, and an attention dot surfaces
-// on the trigger so ambient signal is not lost when the menu is closed.
+// for every top-right session action beyond the primary Turns surface:
+// Background / Files / Session data and the auxiliary actions (Settings / Help).
+// Keeping all of them here means the header stays a clean "title + ⋮" strip
+// instead of a row of competing buttons. Live counts ride each row, and an
+// attention dot surfaces on the trigger so ambient signal is not lost when the
+// menu is closed.
 function RunHeaderOverflowMenu({
   triggerActive,
   triggerAttention,
-  turns,
   background,
   files,
   sessionData,
@@ -7589,7 +7546,6 @@ function RunHeaderOverflowMenu({
 }: {
   triggerActive: boolean;
   triggerAttention?: "critical" | "warning" | null;
-  turns: RunHeaderMenuTabState;
   background: RunHeaderMenuTabState;
   files: RunHeaderMenuTabState;
   sessionData: RunHeaderMenuTabState;
@@ -7623,24 +7579,6 @@ function RunHeaderOverflowMenu({
         sideOffset={8}
         className="run-tab-more-menu"
       >
-        <DropdownMenuItem
-          className={`run-tab-more-item${turns.active ? " is-active" : ""}`}
-          disabled={turns.disabled}
-          onSelect={turns.onOpen}
-          title={turns.title}
-        >
-          <ActivityIcon className="run-tab-more-item-icon" aria-hidden="true" />
-          <span>Turns</span>
-          {turns.count !== undefined && turns.count > 0 && (
-            <span
-              className="run-shell-tasks-count run-tab-more-item-count"
-              data-active={turns.countActive ? "true" : undefined}
-              aria-label={`${turns.count} turns`}
-            >
-              {turns.count}
-            </span>
-          )}
-        </DropdownMenuItem>
         <DropdownMenuItem
           className={`run-tab-more-item${background.active ? " is-active" : ""}`}
           disabled={background.disabled}
@@ -7712,15 +7650,11 @@ function SessionTabMenu({
   session,
   isClosing,
   readOnly,
-  openTarget,
-  onOpenTargetChange,
   onClose,
 }: {
   session: Session;
   isClosing: boolean;
   readOnly: boolean;
-  openTarget: SessionOpenTarget;
-  onOpenTargetChange: (target: SessionOpenTarget) => void;
   onClose: () => void;
 }) {
   if (isClosing) {
@@ -7759,36 +7693,6 @@ function SessionTabMenu({
         className="run-tab-more-menu session-tab-menu"
         onClick={(e) => e.stopPropagation()}
       >
-        <DropdownMenuRadioGroup
-          value={openTarget}
-          onValueChange={(value) => {
-            if (value === "chat" || value === "turns") {
-              onOpenTargetChange(value);
-            }
-          }}
-        >
-          <DropdownMenuRadioItem
-            value="chat"
-            className="run-tab-more-item session-tab-menu-radio"
-          >
-            <MessageSquareIcon
-              className="run-tab-more-item-icon"
-              aria-hidden="true"
-            />
-            <span>Main transcript</span>
-          </DropdownMenuRadioItem>
-          <DropdownMenuRadioItem
-            value="turns"
-            className="run-tab-more-item session-tab-menu-radio"
-          >
-            <ListChecksIcon
-              className="run-tab-more-item-icon"
-              aria-hidden="true"
-            />
-            <span>Turns view</span>
-          </DropdownMenuRadioItem>
-        </DropdownMenuRadioGroup>
-        <DropdownMenuSeparator className="run-tab-more-separator" />
         <DropdownMenuItem
           className="run-tab-more-item"
           variant="destructive"
@@ -7804,6 +7708,8 @@ function SessionTabMenu({
 
 function SessionDataIcon({ id }: { id: SessionDataStatusId }) {
   switch (id) {
+    case "transcript":
+      return <MessageSquareIcon />;
     case "test":
       return <FlaskConicalIcon />;
     case "context":
@@ -7918,6 +7824,7 @@ function SessionDataScreen({
   rows,
   session,
   requestPath,
+  onOpenTranscript,
   onBugLabelSave,
   onBugLabelsSave,
   onRename,
@@ -7926,6 +7833,7 @@ function SessionDataScreen({
   rows: SessionDataStatusRow[];
   session: Session;
   requestPath: (path: string) => string;
+  onOpenTranscript: () => void;
   onBugLabelSave: (name: string | null) => Promise<void>;
   onBugLabelsSave: (names: string[]) => Promise<void>;
   onRename?: (next: string) => Promise<void>;
@@ -8006,6 +7914,7 @@ function SessionDataScreen({
                 bugLabels={bugLabels}
                 bugLabelNames={bugLabelNames}
                 requestPath={requestPath}
+                onOpenTranscript={onOpenTranscript}
                 onBugLabelSave={onBugLabelSave}
                 onBugLabelsSave={onBugLabelsSave}
                 readOnly={readOnly}
@@ -8025,6 +7934,7 @@ function SessionDataCardDetails({
   bugLabels,
   bugLabelNames,
   requestPath,
+  onOpenTranscript,
   onBugLabelSave,
   onBugLabelsSave,
   readOnly,
@@ -8035,11 +7945,28 @@ function SessionDataCardDetails({
   bugLabels: SessionBugLabel[];
   bugLabelNames: string[];
   requestPath: (path: string) => string;
+  onOpenTranscript: () => void;
   onBugLabelSave: (name: string | null) => Promise<void>;
   onBugLabelsSave: (names: string[]) => Promise<void>;
   readOnly?: boolean;
 }) {
   switch (row.id) {
+    case "transcript":
+      return (
+        <div className="run-session-data-actions">
+          <button
+            type="button"
+            className="run-session-data-action"
+            onClick={onOpenTranscript}
+          >
+            <MessageSquareIcon
+              className="run-session-data-action-icon"
+              aria-hidden="true"
+            />
+            <span>Open transcript</span>
+          </button>
+        </div>
+      );
     case "test":
       return (
         <SessionDataFacts
@@ -10195,6 +10122,7 @@ function RunTurnActivityGroup({
     .find((entry) => entry.completedAt || entry.turnTerminalAt || entry.time);
   const shellSummary = group.shell?.activity;
   const needsInput = shellSummary?.status === "needs_input";
+  const useDividerDisclosure = !open && !needsInput;
   const questionCount =
     shellSummary?.questionCount ?? pageInfo?.questionCount ?? 0;
   // Always-present pager state: a single-page turn renders a disabled
@@ -10204,205 +10132,224 @@ function RunTurnActivityGroup({
     <div
       className="run-turn-activity"
       data-state={open ? "open" : "closed"}
+      data-display={useDividerDisclosure ? "divider" : "panel"}
       data-active={group.active === true ? "true" : undefined}
       data-inline-response={
         ownedAssistantEntries.length > 0 ? "true" : undefined
       }
     >
-      <span className="run-turn-activity-avatar" aria-hidden="true">
-        <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
-      </span>
+      {!useDividerDisclosure && (
+        <span className="run-turn-activity-avatar" aria-hidden="true">
+          <SessionAvatarIcon avatar={avatar} className="run-msg-ai-icon" />
+        </span>
+      )}
       <div className="run-turn-activity-stack">
-        <div className="run-turn-activity-content">
-          <button
-            type="button"
-            className="run-turn-activity-header"
-            onClick={() => onOpenChange(!open)}
-            aria-expanded={open}
-          >
-            <span
-              className="run-turn-activity-icon"
-              title={
-                needsInput ? "Agent needs input" : "Condensed turn activity"
-              }
-              aria-label={
-                needsInput ? "Agent needs input" : "Condensed turn activity"
-              }
-            >
-              <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
-            </span>
-            <span className="run-turn-activity-label">
-              {needsInput ? "Agent needs input" : "Turn activity"}
-            </span>
-            <span className="run-turn-activity-summary">
-              {needsInput && questionCount > 0
-                ? plural(questionCount, "question")
-                : group.shell
-                  ? turnActivityShellSummary(shellSummary)
-                  : turnActivitySummary(group.entries)}
-            </span>
-            {showTimestamps && (
-              <ToolTiming
-                startedAt={
-                  shellSummary?.startedAt ??
-                  startedAt?.startedAt ??
-                  startedAt?.time
-                }
-                completedAt={
-                  shellSummary?.completedAt ??
-                  completedAt?.completedAt ??
-                  completedAt?.turnTerminalAt ??
-                  completedAt?.time
-                }
-                running={group.active === true}
-              />
-            )}
-            <span className="run-turn-activity-chevron">
-              {open ? (
-                <ChevronUpIcon size={14} className="run-chevron-icon" />
-              ) : (
-                <ChevronDownIcon size={14} className="run-chevron-icon" />
-              )}
-            </span>
-          </button>
-          {needsInput && onOpenTurn && (
+        {useDividerDisclosure ? (
+          <div className="run-turn-activity-divider">
             <button
               type="button"
-              className="run-turn-activity-action"
-              onClick={() =>
-                onOpenTurn(group.turnId, { anchor: "top", resetPage: true })
-              }
+              className="run-turn-activity-divider-toggle"
+              data-direction="down"
+              onClick={() => onOpenChange(true)}
+              aria-expanded={false}
+              aria-label="Show agent activity"
+              title="Show agent activity"
             >
-              Answer questions
+              <ChevronDownIcon size={15} strokeWidth={2.2} />
             </button>
-          )}
-          {open && (
-            <div className="run-turn-activity-body">
-              {onSelectPage && (
-                <TurnActivityPager
-                  pagerState={pagerState}
-                  onSelectPage={onSelectPage}
-                  pageInfo={pageInfo}
+          </div>
+        ) : (
+          <div className="run-turn-activity-content">
+            <button
+              type="button"
+              className="run-turn-activity-header"
+              onClick={() => onOpenChange(!open)}
+              aria-expanded={open}
+            >
+              <span
+                className="run-turn-activity-icon"
+                title={
+                  needsInput ? "Agent needs input" : "Condensed turn activity"
+                }
+                aria-label={
+                  needsInput ? "Agent needs input" : "Condensed turn activity"
+                }
+              >
+                <ActivityIcon size={14} strokeWidth={2} aria-hidden="true" />
+              </span>
+              <span className="run-turn-activity-label">
+                {needsInput ? "Agent needs input" : "Turn activity"}
+              </span>
+              <span className="run-turn-activity-summary">
+                {needsInput && questionCount > 0
+                  ? plural(questionCount, "question")
+                  : group.shell
+                    ? turnActivityShellSummary(shellSummary)
+                    : turnActivitySummary(group.entries)}
+              </span>
+              {showTimestamps && (
+                <ToolTiming
+                  startedAt={
+                    shellSummary?.startedAt ??
+                    startedAt?.startedAt ??
+                    startedAt?.time
+                  }
+                  completedAt={
+                    shellSummary?.completedAt ??
+                    completedAt?.completedAt ??
+                    completedAt?.turnTerminalAt ??
+                    completedAt?.time
+                  }
+                  running={group.active === true}
                 />
               )}
-              {group.shell && !group.loaded ? (
-                <div
-                  className="run-shell-loading run-turn-activity-loading"
-                  role="status"
-                  aria-live="polite"
-                >
-                  <Loader2Icon
-                    size={14}
-                    className="run-spin"
-                    aria-hidden="true"
+              <span className="run-turn-activity-chevron">
+                {open ? (
+                  <ChevronUpIcon size={14} className="run-chevron-icon" />
+                ) : (
+                  <ChevronDownIcon size={14} className="run-chevron-icon" />
+                )}
+              </span>
+            </button>
+            {needsInput && onOpenTurn && (
+              <button
+                type="button"
+                className="run-turn-activity-action"
+                onClick={() =>
+                  onOpenTurn(group.turnId, { anchor: "top", resetPage: true })
+                }
+              >
+                Answer questions
+              </button>
+            )}
+            {open && (
+              <div className="run-turn-activity-body">
+                {onSelectPage && (
+                  <TurnActivityPager
+                    pagerState={pagerState}
+                    onSelectPage={onSelectPage}
+                    pageInfo={pageInfo}
                   />
-                  <span>
-                    {loading
-                      ? "Loading activity..."
-                      : "Activity details unavailable."}
-                  </span>
-                </div>
-              ) : (
-                childGroups.map((child, childIndex) => {
-                  if (child.kind === "tools") {
-                    const childGroupKey = toolGroupStateKey(child.entries);
-                    return (
-                      <RunToolGroup
-                        key={childGroupKey}
-                        entries={child.entries}
-                        autoExpand={autoExpandTools}
-                        showTimestamps={showTimestamps}
-                        open={
-                          toolGroupOpenOverrides[childGroupKey] ??
-                          toolGroupDefaultOpen(
-                            child.entries,
-                            autoExpandTools,
-                            toolExpansionOverrides,
-                          )
-                        }
-                        onOpenChange={(nextOpen) =>
-                          onToolGroupOpenChange(childGroupKey, nextOpen)
-                        }
-                        toolExpansionOverrides={toolExpansionOverrides}
-                        onToolExpandedChange={onToolExpandedChange}
-                      />
-                    );
-                  }
-                  if (child.kind === "reasoning") {
-                    return (
-                      <RunReasoningBlock
-                        key={child.entry.id}
-                        entry={child.entry}
-                        showThinking={showThinking}
-                      />
-                    );
-                  }
-                  if (child.kind === "meta") {
-                    if (child.entry.metaKind === "awaiting_input") {
+                )}
+                {group.shell && !group.loaded ? (
+                  <div
+                    className="run-shell-loading run-turn-activity-loading"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <Loader2Icon
+                      size={14}
+                      className="run-spin"
+                      aria-hidden="true"
+                    />
+                    <span>
+                      {loading
+                        ? "Loading activity..."
+                        : "Activity details unavailable."}
+                    </span>
+                  </div>
+                ) : (
+                  childGroups.map((child, childIndex) => {
+                    if (child.kind === "tools") {
+                      const childGroupKey = toolGroupStateKey(child.entries);
                       return (
-                        <RunAwaitingInputCard
-                          key={child.entry.id}
-                          entry={child.entry}
+                        <RunToolGroup
+                          key={childGroupKey}
+                          entries={child.entries}
+                          autoExpand={autoExpandTools}
+                          showTimestamps={showTimestamps}
+                          open={
+                            toolGroupOpenOverrides[childGroupKey] ??
+                            toolGroupDefaultOpen(
+                              child.entries,
+                              autoExpandTools,
+                              toolExpansionOverrides,
+                            )
+                          }
+                          onOpenChange={(nextOpen) =>
+                            onToolGroupOpenChange(childGroupKey, nextOpen)
+                          }
+                          toolExpansionOverrides={toolExpansionOverrides}
+                          onToolExpandedChange={onToolExpandedChange}
                         />
                       );
                     }
-                    if (child.entry.metaKind === "turn_usage") return null;
-                    return (
-                      <RunMetaBlock
-                        key={child.entry.id}
-                        entry={child.entry}
-                        systemAvatar={systemAvatar}
-                      />
-                    );
-                  }
-                  if (child.kind === "background_task") {
-                    return (
-                      <RunBackgroundTaskBlock
-                        key={child.entry.id}
-                        entry={child.entry}
-                        showTimestamps={showTimestamps}
-                        onOpenTask={onOpenBackgroundTask}
-                      />
-                    );
-                  }
-                  if (child.kind === "message_group") {
-                    return (
-                      <RunSystemMessageGroupBubble
-                        key={entryGroupKey(child)}
-                        entries={child.entries}
-                        systemAvatar={systemAvatar}
-                        highlightedEntryId={highlightedEntryId}
-                        showTimestamps={showTimestamps}
-                      />
-                    );
-                  }
-                  if (child.kind === "thinking") return null;
-                  return (
-                    <RunMessageBubble
-                      key={child.entry.id}
-                      entry={child.entry}
-                      avatar={avatar}
-                      systemAvatar={systemAvatar}
-                      sessionId={sessionId}
-                      highlighted={
-                        compactedEntryIds.has(child.entry.id) &&
-                        highlightedEntryId === child.entry.id
+                    if (child.kind === "reasoning") {
+                      return (
+                        <RunReasoningBlock
+                          key={child.entry.id}
+                          entry={child.entry}
+                          showThinking={showThinking}
+                        />
+                      );
+                    }
+                    if (child.kind === "meta") {
+                      if (child.entry.metaKind === "awaiting_input") {
+                        return (
+                          <RunAwaitingInputCard
+                            key={child.entry.id}
+                            entry={child.entry}
+                          />
+                        );
                       }
-                      showTimestamps={showTimestamps}
-                      showDuration={showDuration}
-                      onQuote={onQuote}
-                      canonicalMessage={false}
-                      isAvatarContinuation={isMessageAvatarContinuation(
-                        childGroups,
-                        childIndex,
-                      )}
-                    />
-                  );
-                })
-              )}
-            </div>
-          )}
-        </div>
+                      if (child.entry.metaKind === "turn_usage") return null;
+                      return (
+                        <RunMetaBlock
+                          key={child.entry.id}
+                          entry={child.entry}
+                          systemAvatar={systemAvatar}
+                        />
+                      );
+                    }
+                    if (child.kind === "background_task") {
+                      return (
+                        <RunBackgroundTaskBlock
+                          key={child.entry.id}
+                          entry={child.entry}
+                          showTimestamps={showTimestamps}
+                          onOpenTask={onOpenBackgroundTask}
+                        />
+                      );
+                    }
+                    if (child.kind === "message_group") {
+                      return (
+                        <RunSystemMessageGroupBubble
+                          key={entryGroupKey(child)}
+                          entries={child.entries}
+                          systemAvatar={systemAvatar}
+                          highlightedEntryId={highlightedEntryId}
+                          showTimestamps={showTimestamps}
+                        />
+                      );
+                    }
+                    if (child.kind === "thinking") return null;
+                    return (
+                      <RunMessageBubble
+                        key={child.entry.id}
+                        entry={child.entry}
+                        avatar={avatar}
+                        systemAvatar={systemAvatar}
+                        sessionId={sessionId}
+                        highlighted={
+                          compactedEntryIds.has(child.entry.id) &&
+                          highlightedEntryId === child.entry.id
+                        }
+                        showTimestamps={showTimestamps}
+                        showDuration={showDuration}
+                        onQuote={onQuote}
+                        canonicalMessage={false}
+                        isAvatarContinuation={isMessageAvatarContinuation(
+                          childGroups,
+                          childIndex,
+                        )}
+                      />
+                    );
+                  })
+                )}
+              </div>
+            )}
+          </div>
+        )}
         {ownedAssistantEntries.map((entry) => (
           <RunMessageBubble
             key={entry.id}
@@ -10494,6 +10441,14 @@ function RunTurnActivityScreen({
   // user actually inspects turns from. Without it, a turn over the page limit
   // shows only its last page here (the endpoint default) with no way back.
   const pagerState = turnActivityPagerState(selectedPageInfo);
+  // Turn-level stepper (first / prev / next / last) beside the turn dropdown.
+  // Anchored on the effective selected turn so it matches the rendered turn even
+  // when selectedTurnId is null/stale (the view falls back to the latest turn).
+  const turnIds = useMemo(() => turns.map((turn) => turn.turnId), [turns]);
+  const turnNav = useMemo(
+    () => turnViewTurnNavigation(turnIds, selected?.turnId ?? null),
+    [turnIds, selected?.turnId],
+  );
   const detailEntries = useMemo(
     () =>
       (selected?.entries ?? []).filter(
@@ -10507,6 +10462,28 @@ function RunTurnActivityScreen({
     () => groupFlatTranscriptEntries(detailEntries),
     [detailEntries],
   );
+  const finalDetailEntryIds = useMemo(() => {
+    const compactedEntryIds = new Set(
+      selected?.shell?.activityIds ??
+        selected?.shell?.activity?.compactedEntryIds ??
+        [],
+    );
+    return new Set(
+      detailEntries
+        .filter((entry) =>
+          isTurnActivityFinalAssistantEntry(entry, compactedEntryIds),
+        )
+        .map((entry) => entry.id),
+    );
+  }, [
+    detailEntries,
+    selected?.shell?.activity?.compactedEntryIds,
+    selected?.shell?.activityIds,
+  ]);
+  const hasFinalDetailResponse = finalDetailEntryIds.size > 0;
+  const hasCollapsibleDetailActivity = detailEntries.some(
+    (entry) => !finalDetailEntryIds.has(entry.id),
+  );
   const [toolGroupOpenOverrides, setToolGroupOpenOverrides] = useState<
     Record<string, boolean>
   >({});
@@ -10516,11 +10493,33 @@ function RunTurnActivityScreen({
   const [collapsedContextTurnIds, setCollapsedContextTurnIds] = useState<
     Record<string, boolean>
   >({});
+  const [collapsedActivityTurnIds, setCollapsedActivityTurnIds] = useState<
+    Record<string, boolean>
+  >({});
   const bodyRef = useRef<HTMLDivElement | null>(null);
   const consumedScrollRequestRef = useRef(0);
+  const finalCollapsedDetailTurnIdsRef = useRef<Set<string>>(new Set());
   const selectedTurnContextCollapsed = selected
     ? collapsedContextTurnIds[selected.turnId] === true
     : false;
+  const showDetailActivityDivider = Boolean(
+    selected &&
+      !selected.active &&
+      hasFinalDetailResponse &&
+      hasCollapsibleDetailActivity,
+  );
+  const detailActivityCollapsed =
+    showDetailActivityDivider &&
+    selected !== null &&
+    collapsedActivityTurnIds[selected.turnId] === true;
+  const renderedDetailGroups = useMemo(() => {
+    if (!detailActivityCollapsed) return detailGroups;
+    return detailGroups.filter((group) =>
+      flatEntryGroupEntries(group).some((entry) =>
+        finalDetailEntryIds.has(entry.id),
+      ),
+    );
+  }, [detailActivityCollapsed, detailGroups, finalDetailEntryIds]);
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) =>
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
@@ -10539,6 +10538,21 @@ function RunTurnActivityScreen({
     : undefined;
   const showRefreshProblemOnly =
     Boolean(refreshProblem) && detailGroups.length === 0;
+  const selectedThinkingStatus =
+    selected?.shell?.activity?.status === "needs_input"
+      ? "needs_input"
+      : "thinking";
+  const selectedThinkingBubble =
+    selected && selected.active ? (
+      <RunTurnThinkingBubble
+        key={`turn-view-thinking-${selected.turnId}`}
+        userKey={userKey}
+        turnId={selected.turnId}
+        status={selectedThinkingStatus}
+        lastActivityAt={selected.lastActivityAt}
+        avatar={avatar}
+      />
+    ) : null;
   const selectedPageDirectoryItem = selectedPageInfo?.pages?.find(
     (page) => page.number === pagerState.page,
   );
@@ -10585,6 +10599,19 @@ function RunTurnActivityScreen({
       nextPage,
     };
   }, [selectedPageInfo]);
+  useEffect(() => {
+    if (!selected) return;
+    const turnId = selected.turnId;
+    if (!showDetailActivityDivider) {
+      finalCollapsedDetailTurnIdsRef.current.delete(turnId);
+      return;
+    }
+    if (finalCollapsedDetailTurnIdsRef.current.has(turnId)) return;
+    finalCollapsedDetailTurnIdsRef.current.add(turnId);
+    setCollapsedActivityTurnIds((prev) =>
+      prev[turnId] === true ? prev : { ...prev, [turnId]: true },
+    );
+  }, [selected, showDetailActivityDivider]);
   useLayoutEffect(() => {
     if (!scrollRequest || !selected) return;
     if (scrollRequest.turnId !== selected.turnId) return;
@@ -10704,7 +10731,7 @@ function RunTurnActivityScreen({
         transcriptHref={transcriptHrefForEntry?.(group.entry)}
         onOpenTranscriptMessage={onOpenTranscriptMessage}
         isAvatarContinuation={isMessageAvatarContinuation(
-          detailGroups,
+          renderedDetailGroups,
           groupIndex,
         )}
       />
@@ -10720,49 +10747,103 @@ function RunTurnActivityScreen({
         </div>
         <div className="run-turn-view-controls">
           {selected && onActivitySelectPage && (
-            <Select
-              value={String(pagerState.page)}
-              onValueChange={(value) =>
-                onActivitySelectPage(selected.turnId, Number(value))
-              }
-              disabled={pagerState.pageCount <= 1}
+            <div
+              className="run-turn-view-nav run-turn-view-page-nav"
+              role="group"
+              aria-label="Activity page navigation"
             >
-              <SelectTrigger
-                className="run-turn-view-select run-turn-view-page-select"
-                size="sm"
-                aria-label="Select activity page"
+              <button
+                type="button"
+                className="run-turn-view-nav-btn"
+                onClick={() =>
+                  onActivitySelectPage(selected.turnId, pagerState.firstPage)
+                }
+                disabled={!pagerState.canPageFirst}
+                aria-label="First activity page"
+                title="First page"
               >
-                <TurnActivityPageOptionLabel parts={selectedPageOptionParts} />
-              </SelectTrigger>
-              <SelectContent
-                className="run-turn-view-select-menu run-turn-view-page-select-menu"
-                position="popper"
-                align="end"
+                «
+              </button>
+              <button
+                type="button"
+                className="run-turn-view-nav-btn"
+                onClick={() =>
+                  onActivitySelectPage(selected.turnId, pagerState.olderPage)
+                }
+                disabled={!pagerState.canPageOlder}
+                aria-label="Previous activity page"
+                title="Previous page"
               >
-                {Array.from(
-                  { length: pagerState.pageCount },
-                  (_, index) => index + 1,
-                ).map((pageNumber) => {
-                  const directoryItem = selectedPageInfo?.pages?.find(
-                    (page) => page.number === pageNumber,
-                  );
-                  const optionParts = turnActivityPageOptionParts(
-                    pageNumber,
-                    directoryItem,
-                  );
-                  return (
-                    <SelectItem
-                      key={pageNumber}
-                      value={String(pageNumber)}
-                      textValue={optionParts.textValue}
-                      className="run-turn-view-select-item run-turn-view-page-select-item"
-                    >
-                      <TurnActivityPageOptionLabel parts={optionParts} />
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
+                ‹
+              </button>
+              <Select
+                value={String(pagerState.page)}
+                onValueChange={(value) =>
+                  onActivitySelectPage(selected.turnId, Number(value))
+                }
+                disabled={pagerState.pageCount <= 1}
+              >
+                <SelectTrigger
+                  className="run-turn-view-select run-turn-view-page-select"
+                  size="sm"
+                  aria-label="Select activity page"
+                >
+                  <TurnActivityPageOptionLabel parts={selectedPageOptionParts} />
+                </SelectTrigger>
+                <SelectContent
+                  className="run-turn-view-select-menu run-turn-view-page-select-menu"
+                  position="popper"
+                  align="end"
+                >
+                  {Array.from(
+                    { length: pagerState.pageCount },
+                    (_, index) => index + 1,
+                  ).map((pageNumber) => {
+                    const directoryItem = selectedPageInfo?.pages?.find(
+                      (page) => page.number === pageNumber,
+                    );
+                    const optionParts = turnActivityPageOptionParts(
+                      pageNumber,
+                      directoryItem,
+                    );
+                    return (
+                      <SelectItem
+                        key={pageNumber}
+                        value={String(pageNumber)}
+                        textValue={optionParts.textValue}
+                        className="run-turn-view-select-item run-turn-view-page-select-item"
+                      >
+                        <TurnActivityPageOptionLabel parts={optionParts} />
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              <button
+                type="button"
+                className="run-turn-view-nav-btn"
+                onClick={() =>
+                  onActivitySelectPage(selected.turnId, pagerState.newerPage)
+                }
+                disabled={!pagerState.canPageNewer}
+                aria-label="Next activity page"
+                title="Next page"
+              >
+                ›
+              </button>
+              <button
+                type="button"
+                className="run-turn-view-nav-btn"
+                onClick={() =>
+                  onActivitySelectPage(selected.turnId, pagerState.lastPage)
+                }
+                disabled={!pagerState.canPageLast}
+                aria-label="Last activity page"
+                title="Last page"
+              >
+                »
+              </button>
+            </div>
           )}
           {selectedEventProgress && (
             <span
@@ -10776,35 +10857,89 @@ function RunTurnActivityScreen({
               {selectedEventProgress.label}
             </span>
           )}
-          <Select
-            value={selected?.turnId ?? ""}
-            onValueChange={onSelectTurn}
-            disabled={turns.length === 0}
+          <div
+            className="run-turn-view-nav run-turn-view-turn-nav"
+            role="group"
+            aria-label="Turn navigation"
           >
-            <SelectTrigger
-              className="run-turn-view-select"
-              size="sm"
-              aria-label="Select turn"
+            <button
+              type="button"
+              className="run-turn-view-nav-btn"
+              onClick={() =>
+                turnNav.firstTurnId && onSelectTurn(turnNav.firstTurnId)
+              }
+              disabled={!turnNav.canFirst}
+              aria-label="First turn"
+              title="First turn"
             >
-              <SelectValue placeholder="No turns" />
-            </SelectTrigger>
-            <SelectContent
-              className="run-turn-view-select-menu"
-              position="popper"
-              align="end"
+              «
+            </button>
+            <button
+              type="button"
+              className="run-turn-view-nav-btn"
+              onClick={() =>
+                turnNav.prevTurnId && onSelectTurn(turnNav.prevTurnId)
+              }
+              disabled={!turnNav.canPrev}
+              aria-label="Previous turn"
+              title="Previous turn"
             >
-              {turns.map((turn) => (
-                <SelectItem
-                  key={turn.turnId}
-                  value={turn.turnId}
-                  className="run-turn-view-select-item"
-                >
-                  {turn.label}
-                  {turn.active ? " (running)" : ""}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+              ‹
+            </button>
+            <Select
+              value={selected?.turnId ?? ""}
+              onValueChange={onSelectTurn}
+              disabled={turns.length === 0}
+            >
+              <SelectTrigger
+                className="run-turn-view-select"
+                size="sm"
+                aria-label="Select turn"
+              >
+                <SelectValue placeholder="No turns" />
+              </SelectTrigger>
+              <SelectContent
+                className="run-turn-view-select-menu"
+                position="popper"
+                align="end"
+              >
+                {turns.map((turn) => (
+                  <SelectItem
+                    key={turn.turnId}
+                    value={turn.turnId}
+                    className="run-turn-view-select-item"
+                  >
+                    {turn.label}
+                    {turn.active ? " (running)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <button
+              type="button"
+              className="run-turn-view-nav-btn"
+              onClick={() =>
+                turnNav.nextTurnId && onSelectTurn(turnNav.nextTurnId)
+              }
+              disabled={!turnNav.canNext}
+              aria-label="Next turn"
+              title="Next turn"
+            >
+              ›
+            </button>
+            <button
+              type="button"
+              className="run-turn-view-nav-btn"
+              onClick={() =>
+                turnNav.lastTurnId && onSelectTurn(turnNav.lastTurnId)
+              }
+              disabled={!turnNav.canLast}
+              aria-label="Last turn"
+              title="Last turn"
+            >
+              »
+            </button>
+          </div>
         </div>
       </div>
       {selected ? (
@@ -10913,6 +11048,38 @@ function RunTurnActivityScreen({
               </span>
             </div>
           )}
+          {selected && showDetailActivityDivider && (
+            <div className="run-turn-activity-divider run-turn-view-activity-divider">
+              <button
+                type="button"
+                className="run-turn-activity-divider-toggle"
+                data-direction={detailActivityCollapsed ? "down" : "up"}
+                onClick={() => {
+                  setCollapsedActivityTurnIds((prev) => ({
+                    ...prev,
+                    [selected.turnId]: !detailActivityCollapsed,
+                  }));
+                }}
+                aria-expanded={!detailActivityCollapsed}
+                aria-label={
+                  detailActivityCollapsed
+                    ? "Show agent activity"
+                    : "Hide agent activity"
+                }
+                title={
+                  detailActivityCollapsed
+                    ? "Show agent activity"
+                    : "Hide agent activity"
+                }
+              >
+                {detailActivityCollapsed ? (
+                  <ChevronDownIcon size={15} strokeWidth={2.2} />
+                ) : (
+                  <ChevronUpIcon size={15} strokeWidth={2.2} />
+                )}
+              </button>
+            </div>
+          )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
             data-page-kind={selectedPageInfo?.kind ?? "activity"}
@@ -10951,40 +11118,17 @@ function RunTurnActivityScreen({
                 />
                 <span>Loading activity...</span>
               </div>
-            ) : showRefreshProblemOnly ? null : selected.active &&
-              detailGroups.length === 0 ? (
-              <div
-                className="run-turn-view-thinking"
-                aria-label="Turn is running"
-              >
-                <span className="run-turn-thinking-lines">
-                  <span className="run-turn-thinking-label run-turn-thinking-shimmer">
-                    Thinking...
-                  </span>
-                  <span className="run-turn-thinking-meta-row">
-                    <span className="run-turn-thinking-meta-label">
-                      Runtime
-                    </span>
-                    <RunTurnThinkingDuration
-                      userKey={userKey}
-                      turnId={selected.turnId}
-                    />
-                  </span>
-                  <span className="run-turn-thinking-meta-row">
-                    <span className="run-turn-thinking-meta-label">
-                      Last activity
-                    </span>
-                    <RunTurnThinkingLastActivity
-                      lastActivityAt={selected.lastActivityAt}
-                      turnId={selected.turnId}
-                    />
-                  </span>
-                </span>
-              </div>
+            ) : showRefreshProblemOnly ? (
+              selectedThinkingBubble
             ) : detailGroups.length === 0 ? (
-              <div className="run-shell-tasks-empty">No turn activity.</div>
+              selectedThinkingBubble ?? (
+                <div className="run-shell-tasks-empty">No turn activity.</div>
+              )
             ) : (
-              detailGroups.map(renderGroup)
+              <>
+                {selectedThinkingBubble}
+                {renderedDetailGroups.map(renderGroup)}
+              </>
             )}
           </div>
         </>
@@ -11163,6 +11307,7 @@ export function RunMessages({
   const virtuosoRef = useRef<VirtuosoHandle | null>(null);
   const previousGroupKeysRef = useRef<string[]>([]);
   const thinkingInvariantRef = useRef<string>("");
+  const finalCollapsedActivityKeysRef = useRef<Set<string>>(new Set());
   // Keep disclosure choices above virtualized row components so streaming
   // events and offscreen remounts do not reset expanded tool details.
   const [activityOpenOverrides, setActivityOpenOverrides] = useState<
@@ -11200,6 +11345,35 @@ export function RunMessages({
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
     );
   }, []);
+  useEffect(() => {
+    setActivityOpenOverrides((prev) => {
+      let next = prev;
+      const liveKeys = new Set<string>();
+      for (const group of groups) {
+        const groupKey = entryGroupKey(group);
+        liveKeys.add(groupKey);
+        if (group.kind !== "activity") continue;
+        const hasFinalResponse =
+          turnActivityOwnedAssistantEntries(group).length > 0;
+        if (!hasFinalResponse) {
+          finalCollapsedActivityKeysRef.current.delete(groupKey);
+          continue;
+        }
+        if (finalCollapsedActivityKeysRef.current.has(groupKey)) continue;
+        finalCollapsedActivityKeysRef.current.add(groupKey);
+        if (prev[groupKey] !== false) {
+          if (next === prev) next = { ...prev };
+          next[groupKey] = false;
+        }
+      }
+      for (const groupKey of finalCollapsedActivityKeysRef.current) {
+        if (!liveKeys.has(groupKey)) {
+          finalCollapsedActivityKeysRef.current.delete(groupKey);
+        }
+      }
+      return next;
+    });
+  }, [groups]);
   const turnHrefForEntry = useCallback(
     (entry: TranscriptEntry): string | undefined => {
       if (!turnLinksEnabled || !entry.turnId) return undefined;
@@ -12717,8 +12891,8 @@ function ChatPane({
   publicShareToken = null,
   sessionScope,
   avatarCatalogVersion,
-  sidebarTranscriptOpenRequest = 0,
   sidebarTurnsOpenRequest = 0,
+  avatarEditorOpenRequest = 0,
 }: {
   session: Session;
   visible: boolean;
@@ -12755,8 +12929,8 @@ function ChatPane({
   publicShareToken?: string | null;
   sessionScope: string;
   avatarCatalogVersion: number;
-  sidebarTranscriptOpenRequest?: number;
   sidebarTurnsOpenRequest?: number;
+  avatarEditorOpenRequest?: number;
 }) {
   const [entries, setEntries] = useState<TranscriptEntry[]>([]);
   const [activityEntriesByTurn, setActivityEntriesByTurn] = useState<
@@ -12806,8 +12980,12 @@ function ChatPane({
   const initialAppRoute = useMemo(() => readAppRouteFromPath(), []);
   const initialRunRoute =
     initialSessionRoute?.sessionId === session.id ? initialSessionRoute : null;
+  const initialTab: RunTab =
+    initialAppRoute?.tab ??
+    initialRunRoute?.tab ??
+    (pendingScrollMessageId?.trim() ? "chat" : "turns");
   const [activeTab, setActiveTab] = useState<RunTab>(
-    initialAppRoute?.tab ?? initialRunRoute?.tab ?? "chat",
+    initialTab,
   );
   const [settingsTab, setSettingsTab] = useState<SettingsTab>(
     initialAppRoute?.tab === "settings"
@@ -14163,6 +14341,14 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
+    if (route.tab === "chat") {
+      setActiveTab("chat");
+      setPendingRouteTurnNumber(null);
+      setRouteTurnUnavailable(false);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     if (route.tab === "static" && route.staticPath) {
       setStaticPagePath(route.staticPath);
       setActiveTab("static");
@@ -14192,9 +14378,9 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
-    setActiveTab("chat");
+    setActiveTab("turns");
     setPendingRouteTurnNumber(null);
-    setPendingTurnViewRouteAnchor(null);
+    setPendingTurnViewRouteAnchor("bottom");
     setSelectedTurnNumberAnchor(null);
   }, [publicView, session.id, visible]);
   useEffect(() => {
@@ -14207,19 +14393,6 @@ function ChatPane({
     return () =>
       window.removeEventListener("popstate", applyCurrentSessionRoute);
   }, [applyCurrentSessionRoute, publicView, visible]);
-  useEffect(() => {
-    if (publicView) return;
-    if (!visible || sidebarTranscriptOpenRequest === 0) return;
-    setActiveTab("chat");
-    setPendingRouteTurnNumber(null);
-    setPendingTurnViewRouteAnchor(null);
-    setSelectedTurnNumberAnchor(null);
-    slashManualOpenRef.current = false;
-    setSlashOpen(false);
-    setMentionOpen(false);
-    setMcpOpen(false);
-    replaceSessionTranscriptRoute(session.id);
-  }, [publicView, session.id, sidebarTranscriptOpenRequest, visible]);
   useEffect(() => {
     if (publicView) return;
     if (!visible || sidebarTurnsOpenRequest === 0) return;
@@ -16852,18 +17025,6 @@ function ChatPane({
     turnViewItems,
   ]);
   useEffect(() => {
-    if (activeTab !== "turns" || turnsAvailable) return;
-    if (!historyBootstrapped || pendingRouteTurnNumber != null) return;
-    if (selectedTurnHasPendingAnchor) return;
-    setActiveTab("chat");
-  }, [
-    activeTab,
-    historyBootstrapped,
-    pendingRouteTurnNumber,
-    selectedTurnHasPendingAnchor,
-    turnsAvailable,
-  ]);
-  useEffect(() => {
     if (publicView) return;
     if (!visible || effectivePendingScrollMessageId) return;
     if (activeTab === "turns") {
@@ -16890,8 +17051,10 @@ function ChatPane({
       replaceSessionRoute(session.id, "files");
     } else if (activeTab === "background") {
       replaceSessionRoute(session.id, "background");
+    } else if (activeTab === "chat") {
+      replaceSessionTranscriptRoute(session.id);
     } else {
-      replaceSessionRoute(session.id, "chat");
+      replaceSessionRoute(session.id, "turns");
     }
   }, [
     activeTab,
@@ -17239,7 +17402,12 @@ function ChatPane({
 
   useEffect(() => {
     if (publicView) return;
-    if (!autoFocusComposer || !visible || activeTab !== "chat" || !ready)
+    if (
+      !autoFocusComposer ||
+      !visible ||
+      (activeTab !== "chat" && activeTab !== "turns") ||
+      !ready
+    )
       return;
     const activeElement = document.activeElement;
     if (
@@ -17266,7 +17434,7 @@ function ChatPane({
 
   useEffect(() => {
     if (publicView) return;
-    if (!visible || activeTab !== "chat" || !pendingComposerFocusRef.current)
+    if (!visible || activeTab !== "turns" || !pendingComposerFocusRef.current)
       return;
     pendingComposerFocusRef.current = false;
     requestAnimationFrame(() => {
@@ -17323,33 +17491,36 @@ function ChatPane({
     scheduledWakeupEntries,
   ]);
 
-  // `/` is a "return to prompt" shortcut when focus is anywhere except the
-  // composer textarea. Once the textarea is focused, `/` keeps its normal
-  // typing behavior and opens the slash-command palette through input events.
+  // `/` is a "jump to the prompt" shortcut when focus is anywhere except the
+  // composer textarea. The turns view renders the same composer as the chat
+  // transcript, so `/` focuses it in place there; tabs without an in-page
+  // composer switch to the primary turns view first.
+  // Once the textarea is focused, `/` keeps its normal typing behavior and opens
+  // the slash-command palette through input events.
   useEffect(() => {
     if (publicView) return;
     if (!visible) return;
     const onKey = (e: KeyboardEvent) => {
-      if (
-        e.key !== "/" ||
-        e.altKey ||
-        e.ctrlKey ||
-        e.metaKey ||
-        e.shiftKey ||
-        e.isComposing
-      ) {
-        return;
-      }
       const textarea = composerWrapRef.current?.querySelector(
         "textarea",
       ) as HTMLTextAreaElement | null;
-      if (textarea && e.target === textarea) return;
+      const action = resolveComposerFocusShortcut({
+        key: e.key,
+        altKey: e.altKey,
+        ctrlKey: e.ctrlKey,
+        metaKey: e.metaKey,
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
+        targetIsComposer: !!textarea && e.target === textarea,
+        activeTab,
+      });
+      if (action === "ignore") return;
 
       e.preventDefault();
       e.stopPropagation();
-      pendingComposerFocusRef.current = true;
-      if (activeTab !== "chat") {
-        setActiveTab("chat");
+      if (action === "switch-to-turns") {
+        pendingComposerFocusRef.current = true;
+        setActiveTab("turns");
         return;
       }
       pendingComposerFocusRef.current = false;
@@ -17470,7 +17641,7 @@ function ChatPane({
   const toggleRunTab = (tab: Exclude<RunTab, "chat">) => {
     if (publicView && tab !== "turns") return;
     if (tab === "files" && !filesAvailable) return;
-    setActiveTab((current) => (current === tab ? "chat" : tab));
+    setActiveTab((current) => (current === tab ? "turns" : tab));
   };
   const setSettingsRoute = useCallback(
     (nextSettingsTab: SettingsTab, nextAdminView: AdminView) => {
@@ -17480,6 +17651,12 @@ function ChatPane({
     },
     [],
   );
+  useEffect(() => {
+    if (publicView) return;
+    if (!visible || avatarEditorOpenRequest === 0) return;
+    setSettingsRoute("admin", "avatars");
+    closeAvatarPreviewAfterRoutePaint();
+  }, [avatarEditorOpenRequest, publicView, setSettingsRoute, visible]);
   const retryTimelineBootstrap = () => {
     historyRefreshRef.current = null;
     timelineBootstrapSourceRef.current = "history";
@@ -17587,13 +17764,13 @@ function ChatPane({
         title={<WorkspaceTitleSpacer />}
         tabs={
           <>
-            {activeTab !== "chat" && (
+            {activeTab !== "turns" && (
               <button
                 type="button"
                 className="run-tab run-tab-back"
-                onClick={() => setActiveTab("chat")}
-                aria-label="Back to chat"
-                title="Back to chat"
+                onClick={() => setActiveTab("turns")}
+                aria-label="Back to turns"
+                title="Back to turns"
               >
                 <ArrowLeftIcon
                   className="run-tab-icon"
@@ -17608,42 +17785,25 @@ function ChatPane({
                 active={activeTab === "turns"}
                 count={turnViewItems.length}
                 hasActiveTurn={turnViewItems.some((turn) => turn.active)}
-                disabled={!turnsAvailable}
-                title={
-                  turnsAvailable
-                    ? "Turns"
-                    : "Turns are available once the agent has turn activity"
-                }
+                disabled={false}
+                title="Turns"
                 onOpen={() => {
-                  if (activeTab === "turns") setActiveTab("chat");
-                  else openTurnPage(undefined, { anchor: "bottom" });
+                  if (activeTab !== "turns")
+                    openTurnPage(undefined, { anchor: "bottom" });
                 }}
               />
             )}
             {!publicView && (
               <RunHeaderOverflowMenu
-                triggerActive={activeTab !== "chat"}
+                triggerActive={activeTab !== "turns"}
                 triggerAttention={adminObservabilityAttention}
-                turns={{
-                  active: activeTab === "turns",
-                  count: turnViewItems.length,
-                  countActive: turnViewItems.some((turn) => turn.active),
-                  disabled: !turnsAvailable,
-                  title: turnsAvailable
-                    ? "Turns"
-                    : "Turns are available once the agent has turn activity",
-                  onOpen: () => {
-                    if (activeTab === "turns") setActiveTab("chat");
-                    else openTurnPage(undefined, { anchor: "bottom" });
-                  },
-                }}
                 background={{
                   active: activeTab === "background",
                   count: backgroundLedgerEntries.length,
                   disabled: false,
                   title: "Background",
                   onOpen: () => {
-                    if (activeTab === "background") setActiveTab("chat");
+                    if (activeTab === "background") setActiveTab("turns");
                     else openBackgroundPage();
                   },
                 }}
@@ -18110,6 +18270,13 @@ function ChatPane({
                 rows={sessionDataRows}
                 session={session}
                 requestPath={scopedSessionPathForPane}
+                onOpenTranscript={() => {
+                  setActiveTab("chat");
+                  setPendingRouteTurnNumber(null);
+                  setPendingTurnViewRouteAnchor(null);
+                  setSelectedTurnNumberAnchor(null);
+                  replaceSessionTranscriptRoute(session.id);
+                }}
                 onBugLabelSave={saveSessionBugLabel}
                 onBugLabelsSave={saveSessionBugLabels}
                 onRename={
@@ -18170,7 +18337,7 @@ function ChatPane({
                     path={staticPagePath}
                     onClose={() => {
                       setActiveTab("files");
-                      replaceSessionTranscriptRoute(session.id);
+                      replaceSessionRoute(session.id, "turns");
                     }}
                   />
                 </Suspense>
@@ -19137,13 +19304,11 @@ function AuthenticatedApp() {
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
-  const [sessionTranscriptOpenRequests, setSessionTranscriptOpenRequests] =
-    useState<Record<string, number>>({});
   const [sessionTurnsOpenRequests, setSessionTurnsOpenRequests] = useState<
     Record<string, number>
   >({});
-  const [sessionOpenTargets, setSessionOpenTargets] = useState<
-    Record<string, SessionOpenTarget>
+  const [avatarEditorOpenRequests, setAvatarEditorOpenRequests] = useState<
+    Record<string, number>
   >({});
   const [sessionActivities, setSessionActivities] = useState<
     Record<string, SessionActivitySummary>
@@ -19499,6 +19664,26 @@ function AuthenticatedApp() {
     },
     [],
   );
+  useEffect(() => {
+    setAvatarPreviewEditAvailable(hasAdminAccess);
+    return () => setAvatarPreviewEditAvailable(false);
+  }, [hasAdminAccess]);
+  useEffect(() => {
+    return addAvatarPreviewEditRequestListener((detail) => {
+      if (!hasAdminAccess || !avatarPreviewIsEditable(detail)) return;
+      const activeSessionId = activeRef.current;
+      if (activeSessionId) {
+        setAvatarEditorOpenRequests((prev) => ({
+          ...prev,
+          [activeSessionId]: (prev[activeSessionId] ?? 0) + 1,
+        }));
+        replaceAppRoute("settings", "admin", "avatars");
+        return;
+      }
+      setHomeSettingsRoute("admin", "avatars");
+      closeAvatarPreviewAfterRoutePaint();
+    });
+  }, [hasAdminAccess, setHomeSettingsRoute]);
   const applyCurrentHomeRoute = useCallback(() => {
     if (active !== null) return;
     const appRoute = readAppRouteFromPath();
@@ -20084,6 +20269,8 @@ function AuthenticatedApp() {
       provider_rate_limit_observed_at:
         row.provider_rate_limit_observed_at ?? null,
       compaction_count: row.compaction_count ?? 0,
+      user_message_count: row.user_message_count ?? 0,
+      open_target: row.open_target,
       agent_avatar_id: row.agent_avatar_id ?? null,
       system_avatar_id: row.system_avatar_id ?? null,
       row_version: row.row_version,
@@ -20159,6 +20346,15 @@ function AuthenticatedApp() {
         typeof raw.compaction_count === "number" &&
         Number.isFinite(raw.compaction_count)
           ? Math.max(0, Math.floor(raw.compaction_count))
+          : undefined,
+      user_message_count:
+        typeof raw.user_message_count === "number" &&
+        Number.isFinite(raw.user_message_count)
+          ? Math.max(0, Math.floor(raw.user_message_count))
+          : undefined,
+      open_target:
+        raw.open_target === "chat" || raw.open_target === "turns"
+          ? raw.open_target
           : undefined,
       agent_avatar_id:
         typeof raw.agent_avatar_id === "string"
@@ -20596,16 +20792,6 @@ function AuthenticatedApp() {
       });
       return changed ? next : prev;
     });
-    setSessionTranscriptOpenRequests((prev) => {
-      const existing = new Set(sessions.map((s) => s.id));
-      let changed = false;
-      const next: Record<string, number> = {};
-      for (const [id, signal] of Object.entries(prev)) {
-        if (existing.has(id) && !closingIds.has(id)) next[id] = signal;
-        else changed = true;
-      }
-      return changed ? next : prev;
-    });
     setSessionActivities((prev) => {
       const existing = new Set(sessions.map((s) => s.id));
       let changed = false;
@@ -20810,32 +20996,11 @@ function AuthenticatedApp() {
     setMounted((prev) => (prev.has(id) ? prev : new Set(prev).add(id)));
   }
 
-  function requestSessionTranscriptOpen(id: string) {
-    setSessionTranscriptOpenRequests((prev) => ({
-      ...prev,
-      [id]: (prev[id] ?? 0) + 1,
-    }));
-  }
-
   function requestSessionTurnsOpen(id: string) {
     setSessionTurnsOpenRequests((prev) => ({
       ...prev,
       [id]: (prev[id] ?? 0) + 1,
     }));
-  }
-
-  function sessionOpenTarget(id: string): SessionOpenTarget {
-    return sessionOpenTargets[id] ?? "chat";
-  }
-
-  function setSessionOpenTarget(id: string, target: SessionOpenTarget) {
-    setSessionOpenTargets((prev) => ({ ...prev, [id]: target }));
-    if (active !== id) return;
-    if (target === "turns") {
-      requestSessionTurnsOpen(id);
-    } else {
-      requestSessionTranscriptOpen(id);
-    }
   }
 
   function goHome() {
@@ -20846,10 +21011,9 @@ function AuthenticatedApp() {
   }
 
   function openSession(id: string, e: ReactMouseEvent) {
-    const target = sessionOpenTarget(id);
     if (e.ctrlKey || e.metaKey) {
       window.open(
-        target === "turns" ? sessionRouteUrl(id, "turns") : sessionUrl(id),
+        sessionUrl(id),
         "_blank",
         "noopener,noreferrer",
       );
@@ -20858,13 +21022,8 @@ function AuthenticatedApp() {
     // A tap on a session row is a navigation; close the compact nav drawer so
     // the chosen session's pane is what the user lands on.
     setNavDrawerOpen(false);
-    if (target === "turns") {
-      requestSessionTurnsOpen(id);
-      replaceSessionRoute(id, "turns");
-    } else {
-      requestSessionTranscriptOpen(id);
-      replaceSessionTranscriptRoute(id);
-    }
+    requestSessionTurnsOpen(id);
+    replaceSessionRoute(id, "turns");
     activate(id);
   }
 
@@ -21894,10 +22053,6 @@ function AuthenticatedApp() {
                         session={s}
                         isClosing={isClosing}
                         readOnly={readOnlySessionView}
-                        openTarget={sessionOpenTarget(s.id)}
-                        onOpenTargetChange={(target) =>
-                          setSessionOpenTarget(s.id, target)
-                        }
                         onClose={() => deleteSession(s.id)}
                       />
                     </div>
@@ -22083,13 +22238,6 @@ function AuthenticatedApp() {
                 <RunHeaderOverflowMenu
                   triggerActive={homeActiveTab !== "chat"}
                   triggerAttention={adminObservabilityAttention}
-                  turns={{
-                    active: false,
-                    disabled: true,
-                    title:
-                      "Turns are available once the agent has turn activity",
-                    onOpen: () => undefined,
-                  }}
                   background={{
                     active: false,
                     count: 0,
@@ -22753,8 +22901,10 @@ function AuthenticatedApp() {
                       readOnly={readOnlySessionView}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
-                      sidebarTranscriptOpenRequest={sessionTranscriptOpenRequests[s.id] ?? 0}
                       sidebarTurnsOpenRequest={sessionTurnsOpenRequests[s.id] ?? 0}
+                      avatarEditorOpenRequest={
+                        avatarEditorOpenRequests[s.id] ?? 0
+                      }
                     />
                   </div>
                 ) : (

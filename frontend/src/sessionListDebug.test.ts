@@ -1,6 +1,4 @@
-import { beforeEach, test } from "node:test";
-import assert from "node:assert/strict";
-
+import { beforeEach, test, expect } from "vitest";
 import {
   analyzeSessionListDebugSnapshot,
   captureSessionListDebugSnapshot,
@@ -59,11 +57,8 @@ test("created session identity changes stay local until a manual capture", async
   });
   await Promise.resolve();
 
-  assert.equal(reports.length, 0);
-  assert.equal(
-    getSessionListDebugSnapshot().events.some((event) => event.kind === "render-state"),
-    true,
-  );
+  expect(reports.length).toBe(0);
+  expect(getSessionListDebugSnapshot().events.some((event) => event.kind === "render-state")).toBe(true);
 });
 
 test("manual capture posts the current debug snapshot", async () => {
@@ -90,17 +85,17 @@ test("manual capture posts the current debug snapshot", async () => {
     detail: { note: "bad render visible" },
   });
 
-  assert.equal(result?.capture_id, "sldc_test");
-  assert.equal(reports.length, 1);
-  assert.equal(reports[0]?.reason, "manual-capture");
-  assert.equal(reports[0]?.session_id, "223");
-  assert.equal(reports[0]?.source, "SessionListDebugPage");
-  assert.equal(reports[0]?.snapshot.events.at(-1)?.kind, "manual-capture-requested");
+  expect(result?.capture_id).toBe("sldc_test");
+  expect(reports.length).toBe(1);
+  expect(reports[0]?.reason).toBe("manual-capture");
+  expect(reports[0]?.session_id).toBe("223");
+  expect(reports[0]?.source).toBe("SessionListDebugPage");
+  expect(reports[0]?.snapshot.events.at(-1)?.kind).toBe("manual-capture-requested");
   const diagnostics = (reports[0]?.detail as {
     session_list_debug_diagnostics?: { issue_count?: number; generated_display_names?: string[] };
   }).session_list_debug_diagnostics;
-  assert.equal(diagnostics?.issue_count, 0);
-  assert.deepEqual(diagnostics?.generated_display_names, ["223"]);
+  expect(diagnostics?.issue_count).toBe(0);
+  expect(diagnostics?.generated_display_names).toEqual(["223"]);
 });
 
 test("session-list diagnostics flag missing and mismatched identity", () => {
@@ -123,16 +118,10 @@ test("session-list diagnostics flag missing and mismatched identity", () => {
   });
 
   const diagnostics = analyzeSessionListDebugSnapshot(getSessionListDebugSnapshot());
-  assert.equal(
-    diagnostics.issues.some((issue) => issue.code === "rendered_avatar_without_assignment"),
-    true,
-  );
-  assert.equal(
-    diagnostics.issues.some(
-      (issue) => issue.code === "store_render_identity_mismatch" && issue.field === "name",
-    ),
-    true,
-  );
+  expect(diagnostics.issues.some((issue) => issue.code === "rendered_avatar_without_assignment")).toBe(true);
+  expect(diagnostics.issues.some(
+          (issue) => issue.code === "store_render_identity_mismatch" && issue.field === "name",
+        )).toBe(true);
 });
 
 test("manual recording samples can share a run id", async () => {
@@ -168,10 +157,10 @@ test("manual recording samples can share a run id", async () => {
     detail: { run_id: "sldr_test", phase: "sample", sample_index: 1 },
   });
 
-  assert.equal(reports.length, 2);
-  assert.equal(reports[0]?.session_id, "223");
-  assert.equal(reports[1]?.reason, "manual-record-sample");
-  assert.deepEqual((reports[1]?.detail as { run_id?: string }).run_id, "sldr_test");
+  expect(reports.length).toBe(2);
+  expect(reports[0]?.session_id).toBe("223");
+  expect(reports[1]?.reason).toBe("manual-record-sample");
+  expect((reports[1]?.detail as { run_id?: string }).run_id).toEqual("sldr_test");
 });
 
 test("manual recording keeps sampling after controls unmount", async () => {
@@ -213,16 +202,13 @@ test("manual recording keeps sampling after controls unmount", async () => {
       report.reason === "manual-record-sample" &&
       (report.detail as { phase?: string }).phase === "event-sample",
   );
-  assert.equal(sample?.source, "SettingsAdmin");
-  assert.equal(sample?.session_id, "223");
-  assert.equal(
-    sample?.snapshot.events.some(
-      (event) =>
-        event.kind === "render-state" &&
-        event.rows?.some((row) => row.id === "223" && row.display_name === "wrong name"),
-    ),
-    true,
-  );
+  expect(sample?.source).toBe("SettingsAdmin");
+  expect(sample?.session_id).toBe("223");
+  expect(sample?.snapshot.events.some(
+          (event) =>
+            event.kind === "render-state" &&
+            event.rows?.some((row) => row.id === "223" && row.display_name === "wrong name"),
+        )).toBe(true);
 });
 
 test("manual capture failures are retained in the local debug ring", async () => {
@@ -230,21 +216,15 @@ test("manual capture failures are retained in the local debug ring", async () =>
     throw new Error("store unavailable");
   });
 
-  await assert.rejects(
-    captureSessionListDebugSnapshot({
-      reason: "manual-capture",
-      session_id: "223",
-      source: "SessionListDebugPage",
-    }),
-    /store unavailable/,
-  );
+  await expect(captureSessionListDebugSnapshot({
+        reason: "manual-capture",
+        session_id: "223",
+        source: "SessionListDebugPage",
+      })).rejects.toThrow(/store unavailable/);
 
-  assert.equal(
-    getSessionListDebugSnapshot().events.some(
-      (event) => event.kind === "manual-capture-report-failed",
-    ),
-    true,
-  );
+  expect(getSessionListDebugSnapshot().events.some(
+          (event) => event.kind === "manual-capture-report-failed",
+        )).toBe(true);
 });
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -253,5 +233,5 @@ async function waitFor(predicate: () => boolean): Promise<void> {
     if (predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
-  assert.equal(predicate(), true);
+  expect(predicate()).toBe(true);
 }

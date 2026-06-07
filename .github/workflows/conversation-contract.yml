@@ -13,6 +13,7 @@ on:
       - 'frontend/src/**'
       - 'agent-runner/src/**'
       - 'codex-runner/src/**'
+      - 'antigravity-runner/src/**'
       - 'runner-shared/**'
       - 'scripts/check-tank-conversation-contract.mjs'
       - 'docs/tank-conversation-protocol.md'
@@ -29,6 +30,7 @@ on:
       - 'frontend/src/**'
       - 'agent-runner/src/**'
       - 'codex-runner/src/**'
+      - 'antigravity-runner/src/**'
       - 'runner-shared/**'
       - 'scripts/check-tank-conversation-contract.mjs'
       - 'docs/tank-conversation-protocol.md'
@@ -61,6 +63,9 @@ jobs:
       - name: Install codex-runner dependencies
         run: npm ci --prefix codex-runner
 
+      - name: Install antigravity-runner dependencies
+        run: npm ci --prefix antigravity-runner
+
       - name: Check schema drift
         run: node scripts/check-tank-conversation-contract.mjs
 
@@ -76,6 +81,11 @@ jobs:
         run: |
           npm run build --prefix codex-runner
           npm test --prefix codex-runner
+
+      - name: Test antigravity-runner contract
+        run: |
+          npm run build --prefix antigravity-runner
+          npm test --prefix antigravity-runner
 
       - name: Test Go conversation contract
         working-directory: backend-go

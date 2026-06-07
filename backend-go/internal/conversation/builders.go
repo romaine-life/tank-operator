@@ -28,7 +28,7 @@ func UserSubmissionEventMaps(args UserSubmissionArgs) (string, []map[string]any,
 		return "", nil, fmt.Errorf("client nonce is required")
 	}
 	runtime := strings.TrimSpace(args.Runtime)
-	if runtime != string(SourceClaude) && runtime != string(SourceCodex) {
+	if runtime != string(SourceClaude) && runtime != string(SourceCodex) && runtime != string(SourceAntigravity) {
 		return "", nil, fmt.Errorf("runtime is required")
 	}
 	createdAt := args.Now

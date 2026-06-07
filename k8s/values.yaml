@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-d84809a1e42aa5fcb400217b419cd44fd47371dbfc765629056c899c63f64e67"
+  tag: "app-506c19c3a23b01e4288d83f47386a739405a8f452f4e40b86cd72dac3553f109"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -53,13 +53,18 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-114e856fa5489cf8cab61a2693ce213754ebf5e71cb2cea71807ee95c07662dc
-  codexImage: romainecr.azurecr.io/codex-container:codex-5357e367c779e978e729c9611128d160f0beb6462dc1f33639947443a0a9a4e6
+  image: romainecr.azurecr.io/claude-container:claude-56084c7d2ab9eb08232f4a1973bd02a6e7eb563eb6ee6da9e5f97958850781fb
+  codexImage: romainecr.azurecr.io/codex-container:codex-046269a9fb860eff864571e9cdde287d47c020dbb752204b6e21e57a53acb24f
   # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-f6ef7de7b6a8224df2c0c7dbf814c9c7ffce7ed8b9cb46bc0cbda62833e8b424
+  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-0c4ff2ff3cc374a834dc6b9514c6d68a631060e30cdc10c91c218cef792019f5
+  # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
+  # orchestrator namespace where the antigravity-api-proxy mounts it; agy
+  # session pods never mount it (they get a placeholder + proxy injection).
+  antigravityCredentialsSecret: antigravity-credentials
+  antigravityCredentialsSecretKey: antigravity-oauth-token
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
@@ -119,17 +124,18 @@ sessionsIngress:
     enabled: false
     ttl: 300
 
-# OAuth gateway: the orchestrator pod also serves an HTTPS listener
-# impersonating platform.claude.com (self-signed CA, trusted only by session
-# pods that mount our ca.crt). Session pods get a hostAlias mapping that
-# hostname to the gateway service's ClusterIP.
+# OAuth gateway: production serves the HTTPS listener impersonating
+# platform.claude.com (self-signed CA, trusted only by session pods that mount
+# our ca.crt). Session pods in production and validation slots get a hostAlias
+# mapping that hostname to this production service's ClusterIP.
 oauthGateway:
   serviceHost: claude-oauth-gateway.tank-operator.svc.cluster.local
 
 # Anthropic API proxy: Envoy + ext_proc sidecar in front of api.anthropic.com.
-# Session pods get a hostAlias mapping api.anthropic.com to this service's
-# ClusterIP and the proxy injects the real OAuth Authorization on every
-# request. See k8s/templates/api-proxy.yaml for the design rationale.
+# Session pods in production and validation slots get a hostAlias mapping
+# api.anthropic.com to this production service's ClusterIP and the proxy
+# injects the real OAuth Authorization on every request. See
+# k8s/templates/api-proxy.yaml for the design rationale.
 apiProxy:
   image:
     repository: romainecr.azurecr.io/api-proxy
@@ -138,7 +144,7 @@ apiProxy:
     # is load-bearing â€” the bump-tag sed in .github/workflows/api-proxy-build.yml
     # anchors to it so the orchestrator's 2-space `  tag:` line in this same
     # file isn't accidentally rewritten.
-    tag: "api-proxy-b393184f862bae5df8199122046060cbb7a34bac23aea077f732efb82d9767e5"
+    tag: "api-proxy-cc32cf5d50f1a21c3833142801415d3d72ffe0309cd71a01de16abfff9c6d77d"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
   serviceAccount: claude-api-proxy
@@ -147,12 +153,25 @@ apiProxy:
   # Published to KV by infra/api_proxy.tf â€” separate UAMI from the
   # orchestrator's, scoped to "read+write the credentials KV secret only".
   kvClientIdKey: claude-api-proxy-mi-client-id
+  # KV key holding the Google installed-app OAuth client_secret used by the
+  # antigravity-api-proxy refresh exchange. Seeded out-of-band (like the
+  # provider credential blobs); the value is extractable from the public agy
+  # binary so it is not confidential, but is kept out of git regardless.
+  kvAntigravityClientSecretKey: antigravity-oauth-client-secret
 
-# Codex API proxy: a second Envoy + ext_proc deployment using the same image
-# and UAMI as apiProxy. It fronts chatgpt.com/backend-api/codex and owns the
-# real ChatGPT OAuth refresh chain for Codex sessions.
+# Codex API proxy: a second production Envoy + ext_proc deployment using the
+# same image and UAMI as apiProxy. It fronts chatgpt.com/backend-api/codex and
+# owns the real ChatGPT OAuth refresh chain for Codex sessions in production
+# and validation slots.
 codexApiProxy:
   serviceHost: codex-api-proxy.tank-operator.svc.cluster.local
+
+# Antigravity API proxy: a third production Envoy + ext_proc deployment using
+# the same image and UAMI as apiProxy. It fronts cloudcode-pa.googleapis.com
+# (Google Code Assist data plane) and owns the Google OAuth refresh chain for
+# agy (Gemini-Ultra) GUI sessions in production and validation slots.
+antigravityApiProxy:
+  serviceHost: antigravity-api-proxy.tank-operator.svc.cluster.local
 
 # Anthropic credential rotation: lives in the api-proxy's ext_proc sidecar
 # (api-proxy/src/tank_api_proxy/server.py). The sidecar caches the access
@@ -252,12 +271,12 @@ internalApi:
 # "<provider> sign-in expired" banner. The orchestrator polls
 # codexProxyHealthURL every 30s, debounces sustained failures, writes
 # Layer 1 rows (provider_credential_health), and fans session.status
-# banner events into every active codex_gui session whose transcript
-# would otherwise show only a cryptic "Error" line. Leave
-# codexProxyHealthURL empty to disable the banner — useful in test
-# environments that lack a real Codex sign-in. The re-auth URL is the
-# affordance the SPA renders as a button on the banner; point at the
-# canonical Codex sign-in flow on auth.romaine.life.
+# banner events into every active codex_gui session whose transcript would
+# otherwise show only a cryptic "Error" line. Validation slots route Codex
+# through the same production proxy, so they intentionally poll this same
+# production health URL. The re-auth URL is the affordance the SPA renders as a
+# button on the banner; point at the canonical Codex sign-in flow on
+# auth.romaine.life.
 providerHealth:
   codexProxyHealthURL: "http://codex-api-proxy.tank-operator.svc.cluster.local:9100/health/codex"
   codexReauthURL: "https://auth.romaine.life"
@@ -266,21 +285,21 @@ externalSecret:
   storeName: romaine-kv
   storeKind: ClusterSecretStore
   refreshInterval: 1h
-  # Claude Code subscription credentials. Lives ONLY in the orchestrator
-  # namespace; session pods cannot read this Secret. KV is the source of
-  # truth: the orchestrator's in-process rotation writes to KV, ESO
-  # mirrors KV â†’ this Secret on a 1m interval, and the orchestrator pod
-  # mounts the Secret as a file. Re-seed via the in-app "+ config sub"
-  # flow, or out-of-band by uploading a fresh credentials.json to the
-  # KV secret named below.
+  # Claude Code subscription credentials. Lives ONLY in the production
+  # orchestrator namespace; session pods and validation-slot orchestrators
+  # cannot read this Secret. KV is the source of truth: production
+  # save-credentials writes to KV, ESO mirrors KV → this Secret on a 1m
+  # interval, and the production api-proxy pod mounts the Secret as a file.
+  # Re-seed via the in-app "+ config sub" flow on production, or out-of-band by
+  # uploading a fresh credentials.json to the KV secret named below.
   claudeCredentials:
     secretName: claude-code-credentials
     secretKey: claude-code-credentials
   # OpenAI Codex subscription credentials. The primary Secret lives in the
-  # ORCHESTRATOR namespace and is mounted by codex-api-proxy. Codex CLI/GUI
-  # session launchers write a placeholder chatgptAuthTokens auth.json and
-  # route chatgpt.com through the proxy, which injects/rotates the real
-  # tokens and writes back to KV.
+  # production orchestrator namespace and is mounted by production
+  # codex-api-proxy. Codex CLI/GUI session launchers write a placeholder
+  # chatgptAuthTokens auth.json and route chatgpt.com through the production
+  # proxy, which injects/rotates the real tokens and writes back to KV.
   codexCredentials:
     secretName: codex-credentials
     # Key inside the K8s Secret. The proxy mounts this as

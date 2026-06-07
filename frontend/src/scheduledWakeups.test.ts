@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import {
   scheduledWakeupRowsToEntries,
@@ -17,15 +16,15 @@ test("scheduled wakeups map to background entries with visible due state", () =>
     scheduled_turn_id: "turn_1",
   }]);
 
-  assert.equal(entries.length, 1);
-  assert.equal(entries[0]!.kind, "background_task");
-  assert.equal(entries[0]!.taskKind, "scheduled_wakeup");
-  assert.equal(entries[0]!.taskStatus, "running");
-  assert.equal(entries[0]!.taskSummary, "Scheduled continuation");
-  assert.equal(entries[0]!.taskCommand, "check CI");
-  assert.equal(entries[0]!.wakeupDueAt, "2026-06-03T15:25:00Z");
-  assert.equal(entries[0]!.providerItemId, "toolu_123");
-  assert.equal(entries[0]!.turnId, "turn_1");
+  expect(entries.length).toBe(1);
+  expect(entries[0]!.kind).toBe("background_task");
+  expect(entries[0]!.taskKind).toBe("scheduled_wakeup");
+  expect(entries[0]!.taskStatus).toBe("running");
+  expect(entries[0]!.taskSummary).toBe("Scheduled continuation");
+  expect(entries[0]!.taskCommand).toBe("check CI");
+  expect(entries[0]!.wakeupDueAt).toBe("2026-06-03T15:25:00Z");
+  expect(entries[0]!.providerItemId).toBe("toolu_123");
+  expect(entries[0]!.turnId).toBe("turn_1");
 });
 
 test("terminal scheduled wakeups expose fired and failed status labels", () => {
@@ -44,10 +43,10 @@ test("terminal scheduled wakeups expose fired and failed status labels", () => {
     },
   ]);
 
-  assert.equal(fired!.taskStatus, "completed");
-  assert.equal(fired!.wakeupFiredTurnId, "turn_schedule_wakeup");
-  assert.equal(scheduledWakeupStatusLabel(fired!.wakeupStatus), "fired");
-  assert.equal(failed!.taskStatus, "failed");
-  assert.equal(failed!.taskError, "session_not_active");
-  assert.equal(scheduledWakeupStatusLabel(failed!.wakeupStatus), "failed");
+  expect(fired!.taskStatus).toBe("completed");
+  expect(fired!.wakeupFiredTurnId).toBe("turn_schedule_wakeup");
+  expect(scheduledWakeupStatusLabel(fired!.wakeupStatus)).toBe("fired");
+  expect(failed!.taskStatus).toBe("failed");
+  expect(failed!.taskError).toBe("session_not_active");
+  expect(scheduledWakeupStatusLabel(failed!.wakeupStatus)).toBe("failed");
 });

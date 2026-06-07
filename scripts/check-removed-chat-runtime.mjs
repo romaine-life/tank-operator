@@ -91,6 +91,12 @@ const ignoredRelativePaths = new Set([
   // runbook understands what was retired and why.
   "k8s/templates/observability.yaml",
   "k8s/templates/grafana-dashboard.yaml",
+  // The session-lifecycle capability ledger names the retired antigravity
+  // credential-mount surface (ANTIGRAVITY_CRED_FILE, /var/run/antigravity-cred,
+  // AntigravityCredentialsSecret) in its "Evidence" prose so a future agent can
+  // audit/trace the deletion. Prose-not-code, same exemption shape as
+  // docs/tank-conversation-protocol.md; the guard blocks live-code reintroduction.
+  "docs/features/session-lifecycle/capabilities.md",
 ]);
 
 const blocked = [
@@ -861,8 +867,16 @@ const blocked = [
     pattern: /["']gemini["']|["']Gemini["']/,
   },
   {
+    // The retired raw-Gemini-API provider fronted generativelanguage /
+    // aiplatform; those stay blocked. cloudcode-pa.googleapis.com was removed
+    // from this set once the LIVE Antigravity product (agy / Gemini-Ultra
+    // subscription — a distinct, sanctioned provider) began fronting it through
+    // the antigravity-api-proxy for the credential-boundary fix. The retired
+    // provider's distinctive surface (gemini-api-proxy, GEMINI_* creds,
+    // gemini_gui mode, @google/genai) remains blocked by the rules around this
+    // one, so this narrowing does not reopen the retired path.
     name: "retired Gemini Google API host",
-    pattern: /\bgenerativelanguage\.googleapis\.com\b|\bcloudcode-pa\.googleapis\.com\b|\baiplatform\.googleapis\.com\b/,
+    pattern: /\bgenerativelanguage\.googleapis\.com\b|\baiplatform\.googleapis\.com\b/,
   },
   {
     name: "retired Gemini npm package",
@@ -889,6 +903,28 @@ const blocked = [
   {
     name: "retired pi-container image identifier",
     pattern: /\bpi-container\b/,
+  },
+  // Antigravity credential-boundary fix: the real Google OAuth blob used to be
+  // mounted into the model/tool-capable antigravity-runner container (the
+  // `antigravity-cred` Secret volume at /var/run/antigravity-cred, read via the
+  // ANTIGRAVITY_CRED_FILE env, copied into agy's home by the launch script).
+  // That refresh-token-on-the-model-filesystem path was the bug; agy now gets a
+  // placeholder + antigravity-api-proxy injection (docs/api-proxy-auth.md).
+  // Block every name from the old mount so a refactor can't quietly remount the
+  // real Secret into the session pod. These patterns are precise enough not to
+  // match the live `antigravity-credentials` Secret (proxy-side only) or the
+  // ManifestOptions image fields.
+  {
+    name: "retired ANTIGRAVITY_CRED_FILE session-pod env",
+    pattern: /\bANTIGRAVITY_CRED_FILE\b/,
+  },
+  {
+    name: "retired /var/run/antigravity-cred Secret mount path",
+    pattern: /\/var\/run\/antigravity-cred\b/,
+  },
+  {
+    name: "retired AntigravityCredentialsSecret manifest option",
+    pattern: /\bAntigravityCredentialsSecret\b/,
   },
 ];
 

@@ -132,11 +132,12 @@ func (w *RowWriter) RecordTransition(ctx context.Context, event Event) (Transiti
 // effect" (session.created / .deleted / .name_changed — those are
 // owned by sessionregistry.Store's write methods).
 type rowColumnChanges struct {
-	status          string // empty means leave unchanged
-	readyAt         *time.Time
-	terminatingAt   *time.Time
-	activitySummary []byte // marshaled JSON; nil means leave unchanged
-	compactionCount *int64 // nil means leave unchanged
+	status           string // empty means leave unchanged
+	readyAt          *time.Time
+	terminatingAt    *time.Time
+	activitySummary  []byte // marshaled JSON; nil means leave unchanged
+	compactionCount  *int64 // nil means leave unchanged
+	userMessageCount *int64 // nil means leave unchanged
 }
 
 func deriveRowColumnChanges(event Event) (rowColumnChanges, bool) {
@@ -165,6 +166,12 @@ func deriveRowColumnChanges(event Event) (rowColumnChanges, bool) {
 			return rowColumnChanges{}, false
 		}
 		return rowColumnChanges{compactionCount: &count}, true
+	case EventTypeUserMessageCountChanged:
+		count, ok := userMessageCountFromPayload(event.Payload)
+		if !ok {
+			return rowColumnChanges{}, false
+		}
+		return rowColumnChanges{userMessageCount: &count}, true
 	}
 	return rowColumnChanges{}, false
 }
@@ -178,6 +185,26 @@ func compactionCountFromPayload(payload map[string]any) (int64, bool) {
 		return 0, false
 	}
 	switch v := payload["compaction_count"].(type) {
+	case int64:
+		return v, true
+	case int:
+		return int64(v), true
+	case float64:
+		return int64(v), true
+	}
+	return 0, false
+}
+
+// userMessageCountFromPayload extracts the recomputed user-message total the
+// ChatActivityEmitter stamps on an EventTypeUserMessageCountChanged transition.
+// Mirrors compactionCountFromPayload: the emitter builds the payload in-process
+// with an int64, but tolerate the JSON number shapes so a future direct caller
+// can't silently zero the column.
+func userMessageCountFromPayload(payload map[string]any) (int64, bool) {
+	if payload == nil {
+		return 0, false
+	}
+	switch v := payload["user_message_count"].(type) {
 	case int64:
 		return v, true
 	case int:
@@ -215,6 +242,11 @@ func (w *RowWriter) applyRowColumnChanges(ctx context.Context, event Event, c ro
 	if c.compactionCount != nil {
 		setParts = append(setParts, fmt.Sprintf("compaction_count = $%d", argIdx))
 		args = append(args, *c.compactionCount)
+		argIdx++
+	}
+	if c.userMessageCount != nil {
+		setParts = append(setParts, fmt.Sprintf("user_message_count = $%d", argIdx))
+		args = append(args, *c.userMessageCount)
 		argIdx++
 	}
 	if len(setParts) == 0 {

@@ -43,7 +43,7 @@ type SessionImageOverrides interface {
 	// set" (the caller falls back to the configured image). A non-nil error
 	// means the lookup failed; the caller also falls back rather than failing
 	// session creation.
-	Get(ctx context.Context, scope string) (claudeImage, codexImage string, ok bool, err error)
+	Get(ctx context.Context, scope string) (claudeImage, codexImage, antigravityImage string, ok bool, err error)
 }
 
 // SessionRegistry is a write-capable registry interface.
@@ -52,6 +52,7 @@ type SessionRegistry interface {
 	NextSessionID(ctx context.Context) (string, error)
 	Upsert(ctx context.Context, record sessionmodel.SessionRecord) error
 	SetName(ctx context.Context, email, sessionID string, name *string) error
+	SetOpenTarget(ctx context.Context, email, sessionID, target string) error
 	SetBugLabel(ctx context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error
 	SetBugLabels(ctx context.Context, email, sessionID string, labels []*sessionmodel.SessionBugLabel) error
 	SetTestState(ctx context.Context, email, sessionID string, state map[string]any) error
@@ -104,9 +105,10 @@ type Manager struct {
 	reaperInterval time.Duration
 
 	// Resolved ClusterIPs for host-alias injection.
-	oauthGatewayIP  string
-	apiProxyIP      string
-	codexAPIProxyIP string
+	oauthGatewayIP        string
+	apiProxyIP            string
+	codexAPIProxyIP       string
+	antigravityAPIProxyIP string
 
 	localCounter     int64
 	localCounterLock sync.Mutex
@@ -120,6 +122,10 @@ type ManagerOptions struct {
 	OAuthGatewayHost  string
 	APIProxyHost      string
 	CodexAPIProxyHost string
+	// AntigravityAPIProxyHost is the in-cluster antigravity-api-proxy Service
+	// (fronts cloudcode-pa.googleapis.com). agy_gui pods host-alias the Google
+	// data-plane host to this proxy so the refresh token stays in the proxy.
+	AntigravityAPIProxyHost string
 	// ImageOverrides, when non-nil, lets the orchestrator repoint NEW session
 	// pods at a branch-built session image for its (test-slot) scope. Left nil
 	// in production. OnImageOverrideApplied is an optional metrics/log hook
@@ -172,6 +178,9 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	if opts.CodexAPIProxyHost != "" {
 		m.codexAPIProxyIP = resolveIP(opts.CodexAPIProxyHost)
 	}
+	if opts.AntigravityAPIProxyHost != "" {
+		m.antigravityAPIProxyIP = resolveIP(opts.AntigravityAPIProxyHost)
+	}
 	return m
 }
 
@@ -192,13 +201,13 @@ func resolveIP(host string) string {
 //
 // It is a deliberate no-op when no resolver is wired (production never wires
 // one) or for the production scope, so prod always stamps the configured
-// SESSION_IMAGE / CODEX_SESSION_IMAGE. A lookup error falls back to the pinned
-// image rather than failing session creation.
+// SESSION_IMAGE / CODEX_SESSION_IMAGE / ANTIGRAVITY_SESSION_IMAGE. A lookup
+// error falls back to the pinned image rather than failing session creation.
 func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.ManifestOptions, mode string) {
 	if m.imageOverrides == nil || m.scope == "" || m.scope == defaultSessionScope {
 		return
 	}
-	claudeImage, codexImage, ok, err := m.imageOverrides.Get(ctx, m.scope)
+	claudeImage, codexImage, antigravityImage, ok, err := m.imageOverrides.Get(ctx, m.scope)
 	if err != nil {
 		slog.Warn("session image override lookup failed; using pinned image",
 			"scope", m.scope, "mode", mode, "error", err)
@@ -208,7 +217,12 @@ func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.Man
 		return
 	}
 	kind := ""
-	if sessionmodel.IsCodexMode(mode) {
+	if sessionmodel.IsAntigravityMode(mode) {
+		if antigravityImage != "" {
+			opts.AntigravitySessionImage = antigravityImage
+			kind = "antigravity"
+		}
+	} else if sessionmodel.IsCodexMode(mode) {
 		if codexImage != "" {
 			opts.CodexSessionImage = codexImage
 			kind = "codex"
@@ -414,6 +428,9 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	if m.codexAPIProxyIP == "" {
 		m.codexAPIProxyIP = resolveIP(os.Getenv("CODEX_API_PROXY_HOST"))
 	}
+	if m.antigravityAPIProxyIP == "" {
+		m.antigravityAPIProxyIP = resolveIP(os.Getenv("ANTIGRAVITY_API_PROXY_HOST"))
+	}
 
 	sessionID, err := m.nextSessionID(ctx)
 	if err != nil {
@@ -437,6 +454,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.OAuthGatewayIP = m.oauthGatewayIP
 	manifestOpts.APIProxyIP = m.apiProxyIP
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
+	manifestOpts.AntigravityAPIProxyIP = m.antigravityAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON
 	manifestOpts.Repos = repos
 	manifestOpts.Name = &storedName
@@ -651,6 +669,26 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 		// Persist the resolved NON-NULL name; clearing writes the default, not null.
 		if regErr := m.registry.SetName(ctx, owner, sessionID, &resolvedName); regErr != nil {
 			slog.Warn("set-name registry update failed",
+				"session_id", sessionID, "owner", owner, "error", regErr)
+		}
+	}
+	m.publishRow(ctx, owner, sessionID)
+
+	if registered, err := m.GetRegisteredByOwner(ctx, owner, sessionID); err == nil {
+		return registered, nil
+	}
+	return m.GetByOwner(ctx, owner, sessionID)
+}
+
+// SetOpenTarget persists the legacy durable per-session sidebar open-target
+// preference ('' / 'chat' / 'turns'). Like SetBugLabel it is registry-only UI
+// state, so no pod annotation is patched. Validation lives in the HTTP handler;
+// the manager just persists the value, publishes the updated row, and returns the refreshed
+// Info the same way SetName's tail does.
+func (m *Manager) SetOpenTarget(ctx context.Context, owner, sessionID, target string) (Info, error) {
+	if m.registry != nil {
+		if regErr := m.registry.SetOpenTarget(ctx, owner, sessionID, target); regErr != nil {
+			slog.Warn("set-open-target registry update failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
 		}
 	}

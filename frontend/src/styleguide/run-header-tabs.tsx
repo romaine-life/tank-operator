@@ -20,7 +20,7 @@ import {
   styleguideShellStyle,
 } from "./shared";
 
-// The single overflow control that now owns every top-right session action.
+// The single overflow control for secondary top-right session actions.
 // Mirrors RunHeaderOverflowMenu's trigger in App.tsx.
 function MoreTab({
   active = false,
@@ -91,16 +91,10 @@ function MoreMenuItem({
   );
 }
 
-// The open menu panel — every top-right action lives here now.
+// The open menu panel — secondary top-right actions live here.
 function MoreMenuPanel() {
   return (
     <div className="run-tab-more-menu" role="menu" aria-label="Session actions">
-      <MoreMenuItem
-        icon={<ActivityIcon className="run-tab-more-item-icon" aria-hidden="true" />}
-        label="Turns"
-        count={4}
-        countActive
-      />
       <MoreMenuItem
         icon={<ActivityIcon className="run-tab-more-item-icon" aria-hidden="true" />}
         label="Background"
@@ -133,12 +127,12 @@ export function StyleguideRunHeaderTabs() {
         <BackLink />
         <h1 style={pageTitleStyle}>run header tabs</h1>
         <p style={captionStyle}>
-          The header now collapses every top-right session action — the view
-          tabs (Turns / Background / Files) and the auxiliary actions (Settings
-          / Help) — into a single vertical overflow control (⋮). The header
-          stays a clean title-plus-menu strip at any width; live counts and an
-          attention dot ride the menu so ambient signal survives when it is
-          closed.
+          The header keeps Turns as the primary session surface and collapses
+          secondary top-right actions — Background / Files / Session data plus
+          Settings / Help — into a single vertical overflow control (⋮). The
+          header stays a clean title-plus-menu strip at any width; live counts
+          and an attention dot ride the menu so ambient signal survives when it
+          is closed.
         </p>
         <section style={sectionStyle}>
           <div style={{ display: "grid", gap: 14 }}>

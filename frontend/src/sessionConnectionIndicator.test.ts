@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import {
   CONNECTION_CONNECTING_VISIBLE_AFTER_MS,
@@ -23,59 +22,40 @@ function ctx(
 }
 
 test("routine connecting is telemetry-only before the display threshold", () => {
-  assert.equal(
-    sessionConnectionIndicatorLabel(ctx({ state: "connecting" })),
-    null,
-  );
+  expect(sessionConnectionIndicatorLabel(ctx({ state: "connecting" }))).toBe(null);
 });
 
 test("connecting that outlasts the threshold is shown as reconnecting", () => {
-  assert.equal(
-    sessionConnectionIndicatorLabel(ctx({
-      state: "connecting",
-      delayedConnectingVisible: true,
-    })),
-    CONNECTION_RECONNECTING_LABEL,
-  );
+  expect(sessionConnectionIndicatorLabel(ctx({
+          state: "connecting",
+          delayedConnectingVisible: true,
+        }))).toBe(CONNECTION_RECONNECTING_LABEL);
 });
 
 test("connection failures and explicit resyncs show immediately", () => {
-  assert.equal(
-    sessionConnectionIndicatorLabel(ctx({ state: "connection_lost" })),
-    CONNECTION_LOST_LABEL,
-  );
-  assert.equal(
-    sessionConnectionIndicatorLabel(ctx({ state: "resyncing" })),
-    CONNECTION_RESYNCING_LABEL,
-  );
+  expect(sessionConnectionIndicatorLabel(ctx({ state: "connection_lost" }))).toBe(CONNECTION_LOST_LABEL);
+  expect(sessionConnectionIndicatorLabel(ctx({ state: "resyncing" }))).toBe(CONNECTION_RESYNCING_LABEL);
 });
 
 test("healthy or idle streams do not show connection chrome", () => {
-  assert.equal(sessionConnectionIndicatorLabel(ctx({ state: "idle" })), null);
-  assert.equal(sessionConnectionIndicatorLabel(ctx({ state: "connected" })), null);
+  expect(sessionConnectionIndicatorLabel(ctx({ state: "idle" }))).toBe(null);
+  expect(sessionConnectionIndicatorLabel(ctx({ state: "connected" }))).toBe(null);
 });
 
 test("connection state is scoped to the visible chat pane", () => {
-  assert.equal(
-    sessionConnectionIndicatorLabel(ctx({
-      state: "connection_lost",
-      visible: false,
-    })),
-    null,
-  );
+  expect(sessionConnectionIndicatorLabel(ctx({
+          state: "connection_lost",
+          visible: false,
+        }))).toBe(null);
   for (const activeTab of ["turns", "files", "background", "settings", "help"]) {
-    assert.equal(
-      sessionConnectionIndicatorLabel(ctx({
-        state: "connection_lost",
-        activeTab,
-      })),
-      null,
-      activeTab,
-    );
+    expect(sessionConnectionIndicatorLabel(ctx({
+              state: "connection_lost",
+              activeTab,
+            })), activeTab).toBe(null);
   }
 });
 
 test("the reconnect threshold is long enough to suppress flicker and still prompt", () => {
-  assert.ok(CONNECTION_CONNECTING_VISIBLE_AFTER_MS >= 700);
-  assert.ok(CONNECTION_CONNECTING_VISIBLE_AFTER_MS <= 1500);
+  expect(CONNECTION_CONNECTING_VISIBLE_AFTER_MS >= 700).toBeTruthy();
+  expect(CONNECTION_CONNECTING_VISIBLE_AFTER_MS <= 1500).toBeTruthy();
 });

@@ -1,5 +1,127 @@
 # Testing tank-operator
 
+The repo tests at three layers, cheapest first. Pick the lowest layer that can
+actually prove the behavior:
+
+1. **Pure logic** — extract a decision into a side-effect-free module and unit
+   test it. Most of `frontend/src/*.ts` (`appRoutes`, `navigationMode`,
+   `breadcrumb`, `conversation*`, `turnActivityPager`) and the bulk of
+   `backend-go` live here. Fast, deterministic, the default.
+2. **Component / interaction** — render a real React component in jsdom and
+   drive it the way a user would (click, type, tab) to prove *does clicking
+   actually navigate; does the right thing render for these props/state*. This
+   is the [Frontend test layers](#frontend-test-layers) section below.
+3. **Real browser / integration** — a Glimmung test slot driven by
+   `inspect_browser_url`, for visual fidelity, real auth, and full
+   cross-service flows. Everything from [Glimmung Test Slots](#glimmung-test-slots)
+   down is this layer.
+
+A render/interaction test is not a substitute for the slot tier (it can't prove
+real layout, real auth, or a real NATS round-trip) and the slot tier is not a
+substitute for it (it's slow, scarce, and a bad place to enumerate every
+prop/state branch). Use both for what each is good at.
+
+## Frontend test layers
+
+The frontend test runner is **Vitest**, invoked by `npm test` (one-shot, used by
+CI) and `npm run test:watch` (watch mode). There is exactly one runner — the
+previous `tsx --test` / `node:test` pure-logic suite was migrated onto Vitest so
+there is no second runner, config, or assertion dialect to keep in sync.
+
+Vitest is configured in `frontend/vitest.config.ts` with two projects split by
+file extension, so the boundary is self-documenting and the wrong environment
+cannot leak in:
+
+| File | Project | Environment | For |
+|---|---|---|---|
+| `*.test.ts`  | `unit` | `node`  | pure logic — no DOM |
+| `*.test.tsx` | `dom`  | `jsdom` | component / interaction — React + DOM |
+
+Vitest reuses the project's Vite resolution, so the `@/` alias and the React
+plugin match the app build — there is no separate transform pipeline. The
+`dom` project loads `frontend/vitest.setup.ts`, which registers
+`@testing-library/jest-dom` matchers and an `afterEach(cleanup)` so DOM state
+never leaks across tests.
+
+### Why this stack (and not Vitest browser mode)
+
+- **Vitest + @testing-library/react + @testing-library/user-event + jsdom** is
+  the Vite-native fit. RTL drives the testing-trophy idea: assert on what a user
+  perceives (accessible roles/names, rendered text), not implementation detail.
+- **jsdom, not Vitest browser mode.** Browser mode (real Chromium via Playwright)
+  buys real layout/CSS and true focus/clipboard fidelity, but at the cost of
+  browser binaries in CI and slower, flakier runs. This repo already owns the
+  real-browser tier — Glimmung slots + `inspect_browser_url` — and
+  `product-inspirations.md` names a live styleguide route + per-change
+  environment as the *visual* review surface. So jsdom covers interaction
+  *logic* here, and real-browser fidelity stays in the slot tier. Reconsider
+  browser mode only for a specific behavior jsdom genuinely cannot model (e.g.
+  real focus-ring/measurement-dependent logic); add it as a third Vitest project
+  rather than swapping jsdom out.
+
+### Conventions
+
+- **Co-locate** tests next to the source (`Foo.tsx` → `Foo.test.tsx`). Extension
+  picks the environment; don't fight it.
+- **Query by accessibility, in priority order:** `getByRole` (with a `name`) >
+  `getByLabelText` > `getByText` / `getByTitle` > `getByTestId` (last resort).
+  If a role query is awkward, that's usually a hint the markup needs a real
+  label, which helps real users too. Never assert on classnames.
+- **`userEvent` over `fireEvent`.** `userEvent.setup()` simulates real user
+  input (focus, key sequences, a working clipboard). `fireEvent` is the
+  deliberate exception for two narrow cases the exemplars show:
+  (a) **timer-isolation** tests under fake timers, where user-event's async
+  pipeline fights faked time (`CopyButton.test.tsx`); and (b) needing precise
+  **event-init / dispatch-result** control — the modifier/middle-click matrix
+  and reading whether `preventDefault` fired (`TurnViewButton.test.tsx`).
+- **Assert observable outcomes.** A successful copy is proven by reading the
+  clipboard back and the accessible name flipping to "Copied", not by spying on
+  a private call. A failure must render a *visible* affordance, not be swallowed.
+- **Async:** prefer `await screen.findBy…` / `await user.…`; don't poke at
+  component state. **Fake timers** only for genuinely time-based behavior, and
+  pass user-event the bridge: `userEvent.setup({ advanceTimers: vi.advanceTimersByTime })`.
+
+### Rendering components that live in `App.tsx`
+
+`frontend/src/App.tsx` is a large module; most components are local. To test one,
+**export it** (a minimal, intentional `export function`) — see `CopyButton`,
+`LinkButton`, `TurnViewButton`. For a component that reads app context, also
+export the context (`RunContext` is exported) and wrap the component in a real
+provider with injected fakes; `LinkButton.test.tsx` shows a reusable
+`renderWithRunContext` helper.
+
+### Testing navigation (the breadcrumb pattern)
+
+Tank's SPA navigates by `history.pushState` + a synthetic `popstate` that each
+visible pane's route listener resolves (`applyCurrentSessionRoute` /
+`applyCurrentHomeRoute` in `App.tsx`). Two halves are worth testing separately:
+
+- **A control navigates in-app.** A plain left click on a link-style control
+  should call the in-app navigate (assert the callback / resulting route) *and*
+  suppress the browser's full-page navigation (`preventDefault`), while
+  ⌘/Ctrl/Shift/Alt/middle clicks are left entirely to the browser so
+  open-in-new-tab still works. Render real `href`s so links stay deep-linkable.
+  `TurnViewButton.test.tsx` is the worked example and the template a breadcrumb
+  crumb should follow.
+- **A pane re-resolves on `popstate`.** To prove a pane re-renders the right
+  trail/route when history changes, render it, call
+  `window.history.pushState({}, "", "/sessions/42/turns/7")`, dispatch
+  `window.dispatchEvent(new PopStateEvent("popstate"))`, and assert the pane now
+  shows the new route — exercising the same listener real navigation drives.
+
+### Exemplars
+
+`CopyButton.test.tsx`, `TurnViewButton.test.tsx`, and `LinkButton.test.tsx` are
+seeded as the canonical patterns (stateful async + fake timers; navigation +
+modifier-key semantics; context injection + success/error paths). Read them
+before adding a new component test; copy their shape.
+
+### CI
+
+`npm test --prefix frontend` runs in `.github/workflows/conversation-contract.yml`
+on any `frontend/src/**` change, and `npm ci` there installs the test devDeps —
+so this whole layer runs in CI with no extra workflow wiring.
+
 ## Glimmung Test Slots
 
 Tank-operator test slots are provisioned by Glimmung. Before relying on
@@ -141,13 +263,15 @@ Two steps:
    curl -X PUT \
      https://tank-operator-slot-1.tank.dev.romaine.life/api/internal/session-scopes/tank-operator-slot-1/image-override \
      -H "Authorization: Bearer $AUTH_JWT" -H 'Content-Type: application/json' \
-     -d '{"codex_image":"romainecr.azurecr.io/codex-container:codex-<fp>","git_ref":"<branch>"}'
+     -d '{"codex_image":"romainecr.azurecr.io/codex-container:codex-<fp>","antigravity_image":"romainecr.azurecr.io/antigravity-container:antigravity-<fp>","git_ref":"<branch>"}'
    ```
 
    `GET` the same path to see what new sessions will inherit; `DELETE` it to
-   revert to the chart-pinned image. The override is durable (survives the slot
-   orchestrator restarting), refuses the production scope, and is honored only by
-   test-env orchestrators — production sessions are never repointed.
+   revert to the chart-pinned image. `PUT` replaces the scoped override row, so
+   include every image family you want to keep pointed at branch images. The
+   override is durable (survives the slot orchestrator restarting), refuses the
+   production scope, and is honored only by test-env orchestrators — production
+   sessions are never repointed.
 
 The existing `apply_test_slot_hot_swap` remains the fast inner loop for the
 session you are already in; the repoint is what makes *new* sessions match. A

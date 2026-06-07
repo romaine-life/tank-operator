@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import {
   entryMessageFingerprint,
@@ -46,11 +45,7 @@ function durableSkillMessage(skill: string, nonce: string): TranscriptEntry {
 test("optimistic skill card and durable projection share a fingerprint", () => {
   const optimistic = optimisticSkillCard("test", "run-1");
   const durable = durableSkillMessage("test", "run-1");
-  assert.equal(
-    entryMessageFingerprint(optimistic),
-    entryMessageFingerprint(durable),
-    "the local card must collapse onto the durable row once it lands",
-  );
+  expect(entryMessageFingerprint(optimistic), "the local card must collapse onto the durable row once it lands").toBe(entryMessageFingerprint(durable));
 });
 
 test("the optimistic skill card is pruned once the durable event arrives", () => {
@@ -61,7 +56,7 @@ test("the optimistic skill card is pruned once the durable event arrives", () =>
   const realtime = [optimisticSkillCard("test", "run-1")];
 
   const pruned = pruneRealtimeEntries(server, realtime);
-  assert.equal(pruned.length, 0, "optimistic skill card must be dropped");
+  expect(pruned.length, "optimistic skill card must be dropped").toBe(0);
 
   const merged = mergeSdkTranscript(server, realtime);
   const skillRows = merged.filter(
@@ -69,7 +64,7 @@ test("the optimistic skill card is pruned once the durable event arrives", () =>
       (e as Record<string, unknown>).messageKind === "skill-action" ||
       e.display?.kind === "skill_invocation",
   );
-  assert.equal(skillRows.length, 1, "exactly one skill card should render");
+  expect(skillRows.length, "exactly one skill card should render").toBe(1);
 });
 
 test("distinct invocations of the same skill do not cross-prune", () => {
@@ -80,8 +75,8 @@ test("distinct invocations of the same skill do not cross-prune", () => {
   const realtime = [optimisticSkillCard("test", "run-2")];
 
   const pruned = pruneRealtimeEntries(server, realtime);
-  assert.equal(pruned.length, 1, "the second invocation must not be dropped");
-  assert.equal(pruned[0].clientNonce, "run-2");
+  expect(pruned.length, "the second invocation must not be dropped").toBe(1);
+  expect(pruned[0].clientNonce).toBe("run-2");
 });
 
 test("plain user message dedup is unchanged", () => {
@@ -108,7 +103,7 @@ test("plain user message dedup is unchanged", () => {
       clientNonce: "run-9",
     } as TranscriptEntry,
   ];
-  assert.equal(pruneRealtimeEntries(server, realtime).length, 0);
+  expect(pruneRealtimeEntries(server, realtime).length).toBe(0);
 });
 
 test("projected transcript live updates append after a non-tail window", () => {
@@ -137,11 +132,7 @@ test("projected transcript live updates append after a non-tail window", () => {
 
   const merged = mergeProjectedTranscriptRowUpdates(historicalWindow, liveRows);
 
-  assert.deepEqual(
-    merged.map((entry) => entry.id),
-    ["turn-1:user", "turn-9:assistant"],
-    "post-cursor SSE rows must render even when the bootstrapped window was not found_newest",
-  );
+  expect(merged.map((entry) => entry.id), "post-cursor SSE rows must render even when the bootstrapped window was not found_newest").toEqual(["turn-1:user", "turn-9:assistant"]);
 });
 
 test("projected transcript compaction shell replaces compacted rows", () => {
@@ -186,7 +177,7 @@ test("projected transcript compaction shell replaces compacted rows", () => {
 
   const merged = mergeProjectedTranscriptRowUpdates(current, updates);
 
-  assert.deepEqual(merged.map((entry) => entry.id), ["turn-7:activity"]);
+  expect(merged.map((entry) => entry.id)).toEqual(["turn-7:activity"]);
 });
 
 test("projected transcript terminal rows remove stale active shells", () => {
@@ -221,5 +212,5 @@ test("projected transcript terminal rows remove stale active shells", () => {
 
   const merged = mergeProjectedTranscriptRowUpdates(current, updates);
 
-  assert.deepEqual(merged.map((entry) => entry.id), ["turn-8:completed"]);
+  expect(merged.map((entry) => entry.id)).toEqual(["turn-8:completed"]);
 });

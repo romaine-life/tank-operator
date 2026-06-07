@@ -1,14 +1,12 @@
-import { test, beforeEach, afterEach } from "node:test";
-import assert from "node:assert/strict";
-
+import { test, beforeEach, afterEach, expect } from "vitest";
 import {
   logSessionListEvent,
   logSessionListSnapshot,
 } from "./sessionListTelemetry";
 
-// node:test runs without jsdom; the telemetry module needs
-// `localStorage`. Stub it per-test so the no-op vs. enabled paths
-// are deterministic regardless of node version.
+// This pure-logic test runs in the Vitest `node` environment (no jsdom), but
+// the telemetry module needs `localStorage`. Stub it per-test so the no-op vs.
+// enabled paths are deterministic regardless of node version.
 let fakeStorage: Record<string, string>;
 let consoleLogs: Array<[string, unknown[]]>;
 let origConsoleLog: typeof console.log;
@@ -52,19 +50,13 @@ afterEach(() => {
 test("debug logs are no-ops when tankDebug is unset", () => {
   logSessionListEvent({ type: "session.row_update", session_id: "8" });
   logSessionListSnapshot({ tip: "42", sessionCount: 3, source: "initial" });
-  assert.equal(consoleLogs.length, 0, "debug-gated logs must not fire without the flag");
+  expect(consoleLogs.length, "debug-gated logs must not fire without the flag").toBe(0);
 });
 
 test("debug logs fire when tankDebug includes session-list", () => {
   fakeStorage["tankDebug"] = "other-tag,session-list,more";
   logSessionListEvent({ type: "session.row_update", session_id: "8" });
   logSessionListSnapshot({ tip: "42", sessionCount: 3, source: "initial" });
-  assert.ok(
-    consoleLogs.some(([msg]) => msg.includes("event")),
-    "event log must fire when flag is enabled",
-  );
-  assert.ok(
-    consoleLogs.some(([msg]) => msg.includes("snapshot")),
-    "snapshot log must fire when flag is enabled",
-  );
+  expect(consoleLogs.some(([msg]) => msg.includes("event")), "event log must fire when flag is enabled").toBeTruthy();
+  expect(consoleLogs.some(([msg]) => msg.includes("snapshot")), "snapshot log must fire when flag is enabled").toBeTruthy();
 });

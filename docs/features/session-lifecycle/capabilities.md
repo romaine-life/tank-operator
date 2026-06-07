@@ -68,9 +68,9 @@ Contract impact:
   read or apply it.
 - A lookup failure falls back to the pinned image rather than failing session
   creation.
-- The override is durable (survives orchestrator rollout) and lives in shared
-  Postgres keyed by scope, so a slot override can never bleed into prod or
-  another slot.
+- The override is durable (survives orchestrator rollout), covers Claude,
+  Codex, and Antigravity session images, and lives in shared Postgres keyed by
+  scope, so a slot override can never bleed into prod or another slot.
 
 Evidence:
 - `backend-go/internal/sessions/manager_image_override_test.go` covers
@@ -84,3 +84,51 @@ Evidence:
 - Metrics `tank_session_image_override_applied_total{scope,image_kind}` and
   `tank_session_image_override_write_total{action}`.
 - Operator flow: `docs/testing.md` → "Making new slot sessions inherit a change".
+
+## Antigravity proxy-owned OAuth (credential boundary)
+
+Status: in progress
+
+Intent:
+Keep the real Antigravity (Gemini-Ultra / Google) OAuth refresh token off the
+model/tool-capable runtime's filesystem. Previously `antigravity_gui` pods
+mounted the harvested OAuth blob (refresh token included) into the
+`antigravity-runner` container and copied it into agy's home — a prompt-injected
+agy could exfiltrate it. The fix gives agy the same proxy-owned boundary the
+Claude/Codex providers use.
+
+Affected contracts:
+- Session Lifecycle
+- Observability
+
+Contract impact:
+- `antigravity_gui` pods never mount the `antigravity-credentials` Secret. The
+  launch script seeds a placeholder token (`access_token:
+  "managed-by-tank-operator"`, far-future `expiry`, no refresh token) so agy
+  never refreshes in place.
+- agy's `cloudcode-pa.googleapis.com` traffic is host-aliased to the production
+  `antigravity-api-proxy`, which owns the refresh token (mounted only in the
+  proxy pod), injects the real access token per request, single-flight-refreshes
+  against `oauth2.googleapis.com` on upstream 401, and writes rotated blobs back
+  to KV. agy (a Go binary) trusts the proxy leaf via `SSL_CERT_FILE`.
+- The credential authority is a single production deployment; validation slots
+  route to it and render no antigravity credential Secret / KV key (same slot
+  contract as claude/codex). `antigravity_config` (interactive login) is the one
+  antigravity mode NOT proxied — it reaches real Google to mint the token.
+
+Evidence:
+- `backend-go/internal/sessionmodel/sessionmodel_test.go`
+  (`TestPodManifestAntigravityGUIRunnerProxiedNoCredMount`): no `antigravity-cred`
+  mount/volume, no `ANTIGRAVITY_CRED_FILE` env, has the `cloudcode-pa` hostAlias
+  + `oauth-gateway-ca` mount.
+- `api-proxy/tests/test_server.py`: the `antigravity`/`google` provider config
+  (form-encoded refresh, KV-sourced client secret), `expiry` blob patch, and
+  `expiry`-based freshness.
+- Migration guards: `scripts/check-removed-chat-runtime.mjs` blocks the retired
+  `ANTIGRAVITY_CRED_FILE` / `/var/run/antigravity-cred` / `AntigravityCredentialsSecret`
+  surface; `scripts/check-test-slot-provider-credentials.sh` asserts slots route
+  antigravity to the production proxy and mount no antigravity credential.
+- Mechanism reference: `docs/api-proxy-auth.md` → "Antigravity (Gemini-Ultra) provider".
+- Metrics: `tank_api_proxy_*{provider="antigravity"}` (scraped via the
+  `tank-api-proxy` ServiceMonitor; the provider-generic `TankApiProxy*` alerts
+  cover it).

@@ -311,6 +311,67 @@ func TestPodManifestAntigravityConfigUsesGlibcImageWithoutSidecar(t *testing.T) 
 	}
 }
 
+func TestPodManifestAntigravityGUIRunnerProxiedNoCredMount(t *testing.T) {
+	// Credential-boundary contract: an antigravity_gui pod must NOT mount the
+	// real OAuth Secret. agy's Google host is host-aliased to the
+	// antigravity-api-proxy and it trusts the proxy leaf via the oauth-gateway
+	// CA; the launch script seeds a placeholder. See the antigravity-api-proxy
+	// (k8s/templates/api-proxy.yaml) and docs/api-proxy-auth.md.
+	manifest := PodManifest("88", "nelson@romaine.life", AntigravityGUIMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		AntigravitySessionImage: "antigravity-image",
+		NATSAuthSecret:          "tank-nats-auth",
+		AntigravityAPIProxyIP:   "10.0.0.42",
+	})
+
+	if got, want := manifest["metadata"].(map[string]any)["labels"].(map[string]any)["tank-operator/mode"], AntigravityGUIMode; got != want {
+		t.Fatalf("mode label = %v, want %q", got, want)
+	}
+
+	spec := manifest["spec"].(map[string]any)
+	containers := spec["containers"].([]any)
+	// GUI pod shape: mcp-auth-proxy sidecar + claude (sandbox-agent terminal) +
+	// antigravity-runner. All three run the glibc antigravity image.
+	if got, want := len(containers), 3; got != want {
+		t.Fatalf("container count = %d, want %d (mcp-auth-proxy + claude + antigravity-runner)", got, want)
+	}
+	runner := findContainer(t, containers, "antigravity-runner")
+	if got, want := runner["image"], "antigravity-image"; got != want {
+		t.Fatalf("antigravity-runner image = %v, want %q", got, want)
+	}
+	cmd := runner["command"].([]any)
+	if got, want := cmd[len(cmd)-1], "/opt/tank/antigravity-runner-launch.sh"; got != want {
+		t.Fatalf("runner launch = %v, want %q", got, want)
+	}
+
+	// The real OAuth Secret must NOT be mounted anywhere in the pod.
+	for _, v := range spec["volumes"].([]any) {
+		if name := v.(map[string]any)["name"]; name == "antigravity-cred" {
+			t.Fatal("antigravity_gui must NOT mount the real OAuth Secret (antigravity-cred volume present)")
+		}
+	}
+	for _, m := range runner["volumeMounts"].([]any) {
+		if name := m.(map[string]any)["name"]; name == "antigravity-cred" {
+			t.Fatal("antigravity-runner must NOT mount the antigravity-cred Secret")
+		}
+	}
+	// Built via concat so the migration guard (check-removed-chat-runtime.mjs),
+	// which blocks the retired literal, doesn't trip on this negative assertion.
+	retiredCredFileEnv := "ANTIGRAVITY_CRED" + "_FILE"
+	for _, e := range runner["env"].([]any) {
+		if name := e.(map[string]any)["name"]; name == retiredCredFileEnv {
+			t.Fatalf("%s env must be gone — the runner no longer reads a real cred file", retiredCredFileEnv)
+		}
+	}
+
+	// Instead: host-alias agy's Google host to the proxy + trust its CA.
+	assertHostAlias(t, spec, "10.0.0.42", "cloudcode-pa.googleapis.com")
+	assertVolume(t, spec["volumes"].([]any), "oauth-gateway-ca")
+	assertVolumeMount(t, runner, "oauth-gateway-ca")
+	assertVolumeMount(t, runner, "tank-operator-sa-token")
+}
+
 func TestPodManifestDisplayNameAnnotation(t *testing.T) {
 	name := "  Launch draft  "
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
@@ -351,6 +412,9 @@ func TestPodManifestMaterializesTankDocsBeforeSandboxAgent(t *testing.T) {
 	script := cmd[2].(string)
 	if !strings.Contains(script, "/opt/tank/session-config/install-tank-docs.sh") {
 		t.Fatalf("claude command does not materialize Tank docs: %s", script)
+	}
+	if strings.Contains(script, "install-tank-docs.sh || true") {
+		t.Fatalf("claude command silently ignores required Tank docs install failure: %s", script)
 	}
 	if !strings.Contains(script, "exec $sandbox_agent_cmd server") {
 		t.Fatalf("claude command no longer execs sandbox-agent: %s", script)

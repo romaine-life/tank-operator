@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import {
   MAX_PINNED_REPOS,
@@ -29,23 +28,23 @@ import {
 // is the regression these tests are designed to surface.
 
 test("REPO_SLUG_PATTERN accepts canonical owner/name slugs", () => {
-  assert.ok(REPO_SLUG_PATTERN.test("romaine-life/tank-operator"));
-  assert.ok(REPO_SLUG_PATTERN.test("a/b"));
-  assert.ok(REPO_SLUG_PATTERN.test("romaine-life/mcp.azure-personal"));
+  expect(REPO_SLUG_PATTERN.test("romaine-life/tank-operator")).toBeTruthy();
+  expect(REPO_SLUG_PATTERN.test("a/b")).toBeTruthy();
+  expect(REPO_SLUG_PATTERN.test("romaine-life/mcp.azure-personal")).toBeTruthy();
 });
 
 test("REPO_SLUG_PATTERN rejects shell/scheme/path injection", () => {
-  assert.ok(!REPO_SLUG_PATTERN.test("https://github.com/romaine-life/tank-operator"));
-  assert.ok(!REPO_SLUG_PATTERN.test("../etc/passwd"));
-  assert.ok(!REPO_SLUG_PATTERN.test("romaine-life/tank-operator;rm -rf /"));
-  assert.ok(!REPO_SLUG_PATTERN.test("romaine-life"));
-  assert.ok(!REPO_SLUG_PATTERN.test("-org/repo"));
-  assert.ok(!REPO_SLUG_PATTERN.test(""));
+  expect(!REPO_SLUG_PATTERN.test("https://github.com/romaine-life/tank-operator")).toBeTruthy();
+  expect(!REPO_SLUG_PATTERN.test("../etc/passwd")).toBeTruthy();
+  expect(!REPO_SLUG_PATTERN.test("romaine-life/tank-operator;rm -rf /")).toBeTruthy();
+  expect(!REPO_SLUG_PATTERN.test("romaine-life")).toBeTruthy();
+  expect(!REPO_SLUG_PATTERN.test("-org/repo")).toBeTruthy();
+  expect(!REPO_SLUG_PATTERN.test("")).toBeTruthy();
 });
 
 test("isValidRepoSlug trims whitespace before validating", () => {
-  assert.ok(isValidRepoSlug("  romaine-life/tank-operator  "));
-  assert.ok(!isValidRepoSlug("   "));
+  expect(isValidRepoSlug("  romaine-life/tank-operator  ")).toBeTruthy();
+  expect(!isValidRepoSlug("   ")).toBeTruthy();
 });
 
 test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
@@ -54,8 +53,9 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "codex_gui",
     "codex_exec_gui",
     "codex_app_server",
+    "antigravity_gui",
   ]) {
-    assert.ok(REPO_SUPPORTED_MODES.has(mode), `${mode} should support repos`);
+    expect(REPO_SUPPORTED_MODES.has(mode), `${mode} should support repos`).toBeTruthy();
   }
   for (const mode of [
     "claude_cli",
@@ -68,93 +68,90 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
     "gemini_config",
     "api_key",
   ]) {
-    assert.ok(!REPO_SUPPORTED_MODES.has(mode), `${mode} should NOT support repos`);
+    expect(!REPO_SUPPORTED_MODES.has(mode), `${mode} should NOT support repos`).toBeTruthy();
   }
 });
 
 test("modeSupportsRepos round-trips the supported-modes set", () => {
-  assert.equal(modeSupportsRepos("claude_gui"), true);
-  assert.equal(modeSupportsRepos("claude_cli"), false);
+  expect(modeSupportsRepos("claude_gui")).toBe(true);
+  expect(modeSupportsRepos("claude_cli")).toBe(false);
 });
 
 test("MAX_REPOS_PER_SESSION matches backend cap", () => {
   // Mirrors maxReposPerSession in cmd/tank-operator/handlers_repos.go.
   // Update both sides together — this test exists to surface a
   // one-sided change.
-  assert.equal(MAX_REPOS_PER_SESSION, 5);
+  expect(MAX_REPOS_PER_SESSION).toBe(5);
 });
 
 test("normalizeRepoSlugs trims, dedupes, and caps staged repo defaults", () => {
-  assert.deepEqual(
-    normalizeRepoSlugs([
-      "  romaine-life/tank-operator  ",
-      "Romaine-Life/Tank-Operator",
-      "bad slug",
-      "romaine-life/infra-bootstrap",
-      "romaine-life/mcp-tank-operator",
-      "openai/codex",
-      "example/fifth",
-      "example/sixth",
-    ]),
-    [
-      "romaine-life/tank-operator",
-      "romaine-life/infra-bootstrap",
-      "romaine-life/mcp-tank-operator",
-      "openai/codex",
-      "example/fifth",
-    ],
-  );
+  expect(normalizeRepoSlugs([
+          "  romaine-life/tank-operator  ",
+          "Romaine-Life/Tank-Operator",
+          "bad slug",
+          "romaine-life/infra-bootstrap",
+          "romaine-life/mcp-tank-operator",
+          "openai/codex",
+          "example/fifth",
+          "example/sixth",
+        ])).toEqual([
+          "romaine-life/tank-operator",
+          "romaine-life/infra-bootstrap",
+          "romaine-life/mcp-tank-operator",
+          "openai/codex",
+          "example/fifth",
+        ]);
 });
 
 test("RECENT_REPO_PREVIEW_LIMIT keeps the splash recent list short", () => {
-  assert.equal(RECENT_REPO_PREVIEW_LIMIT, 4);
+  expect(RECENT_REPO_PREVIEW_LIMIT).toBe(4);
 });
 
 test("addRepoSlug rejects empty input", () => {
   const result = addRepoSlug([], "   ");
-  assert.equal(result.ok, false);
+  expect(result.ok).toBe(false);
 });
 
 test("addRepoSlug rejects malformed slugs", () => {
   const result = addRepoSlug([], "https://github.com/foo/bar");
-  assert.equal(result.ok, false);
-  assert.ok(result.ok === false && /doesn't look like/.test(result.error));
+  expect(result.ok).toBe(false);
+  expect(result.ok === false && /doesn't look like/.test(result.error)).toBeTruthy();
 });
 
 test("addRepoSlug rejects case-insensitive duplicates", () => {
   const result = addRepoSlug(["Romaine-Life/Tank-Operator"], "romaine-life/tank-operator");
-  assert.equal(result.ok, false);
-  assert.ok(result.ok === false && /already added/.test(result.error));
+  expect(result.ok).toBe(false);
+  expect(result.ok === false && /already added/.test(result.error)).toBeTruthy();
 });
 
 test("addRepoSlug enforces the 5-repo cap", () => {
   const five = ["a/1", "b/2", "c/3", "d/4", "e/5"];
   const result = addRepoSlug(five, "f/6");
-  assert.equal(result.ok, false);
-  assert.ok(result.ok === false && /At most 5/.test(result.error));
+  expect(result.ok).toBe(false);
+  expect(result.ok === false && /At most 5/.test(result.error)).toBeTruthy();
 });
 
 test("addRepoSlug preserves insertion order on success", () => {
   let staged: string[] = [];
   for (const slug of ["a/1", "b/2", "c/3"]) {
     const result = addRepoSlug(staged, slug);
-    assert.equal(result.ok, true);
+    expect(result.ok).toBe(true);
     if (result.ok) staged = result.next;
   }
-  assert.deepEqual(staged, ["a/1", "b/2", "c/3"]);
+  expect(staged).toEqual(["a/1", "b/2", "c/3"]);
 });
 
 test("addRepoSlug trims before storing", () => {
   const result = addRepoSlug([], "  romaine-life/tank-operator  ");
-  assert.equal(result.ok, true);
+  expect(result.ok).toBe(true);
   if (result.ok) {
-    assert.deepEqual(result.next, ["romaine-life/tank-operator"]);
+    expect(result.next).toEqual(["romaine-life/tank-operator"]);
   }
 });
 
 test("removeRepoSlug removes exact matches", () => {
   const next = removeRepoSlug(["a/1", "b/2", "c/3"], "b/2");
-  assert.deepEqual(next, ["a/1", "c/3"]);
+  expect(next).toEqual(["a/1", "c/3"]);
 });
 
 test("removeRepoSlug is case-sensitive (mirrors UI)", () => {
@@ -163,7 +160,7 @@ test("removeRepoSlug is case-sensitive (mirrors UI)", () => {
   // would be a bug — typing "Foo/Bar" then clicking X on "Foo/Bar"
   // should remove "Foo/Bar", not a hypothetical "foo/bar".
   const next = removeRepoSlug(["Foo/Bar"], "foo/bar");
-  assert.deepEqual(next, ["Foo/Bar"]);
+  expect(next).toEqual(["Foo/Bar"]);
 });
 
 test("recentRepoPreviewSlugs caps and filters recent repos", () => {
@@ -178,86 +175,77 @@ test("recentRepoPreviewSlugs caps and filters recent repos", () => {
   ];
   const selected = ["romaine-life/infra-bootstrap"];
 
-  assert.deepEqual(recentRepoPreviewSlugs(recent, selected), [
-    "romaine-life/tank-operator",
-    "romaine-life/mcp-tank-operator",
-    "openai/codex",
-    "example/fifth",
-  ]);
+  expect(recentRepoPreviewSlugs(recent, selected)).toEqual([
+        "romaine-life/tank-operator",
+        "romaine-life/mcp-tank-operator",
+        "openai/codex",
+        "example/fifth",
+      ]);
 });
 
 test("recentRepoPreviewSlugs hides suggestions once the session repo cap is reached", () => {
   const selected = ["a/1", "b/2", "c/3", "d/4", "e/5"];
 
-  assert.deepEqual(recentRepoPreviewSlugs(["f/6"], selected), []);
+  expect(recentRepoPreviewSlugs(["f/6"], selected)).toEqual([]);
 });
 
 test("recentRepoShortcutSlugs keeps stable numbered recent choices", () => {
-  assert.deepEqual(
-    recentRepoShortcutSlugs([
-      "romaine-life/tank-operator",
-      "  bad slug  ",
-      "Romaine-Life/Tank-Operator",
-      "romaine-life/infra-bootstrap",
-      "romaine-life/mcp-tank-operator",
-      "openai/codex",
-      "example/fifth",
-    ]),
-    [
-      "romaine-life/tank-operator",
-      "romaine-life/infra-bootstrap",
-      "romaine-life/mcp-tank-operator",
-      "openai/codex",
-    ],
-  );
+  expect(recentRepoShortcutSlugs([
+          "romaine-life/tank-operator",
+          "  bad slug  ",
+          "Romaine-Life/Tank-Operator",
+          "romaine-life/infra-bootstrap",
+          "romaine-life/mcp-tank-operator",
+          "openai/codex",
+          "example/fifth",
+        ])).toEqual([
+          "romaine-life/tank-operator",
+          "romaine-life/infra-bootstrap",
+          "romaine-life/mcp-tank-operator",
+          "openai/codex",
+        ]);
 });
 
 test("pinnedRepoSlugs normalizes pins without the session repo cap", () => {
-  assert.deepEqual(
-    pinnedRepoSlugs([
-      "romaine-life/tank-operator",
-      "bad slug",
-      "Romaine-Life/Tank-Operator",
-      "a/1",
-      "b/2",
-      "c/3",
-      "d/4",
-      "e/5",
-    ]),
-    ["romaine-life/tank-operator", "a/1", "b/2", "c/3", "d/4", "e/5"],
-  );
+  expect(pinnedRepoSlugs([
+          "romaine-life/tank-operator",
+          "bad slug",
+          "Romaine-Life/Tank-Operator",
+          "a/1",
+          "b/2",
+          "c/3",
+          "d/4",
+          "e/5",
+        ])).toEqual(["romaine-life/tank-operator", "a/1", "b/2", "c/3", "d/4", "e/5"]);
 });
 
 test("pinnedRepoSlugs caps profile metadata", () => {
   const raw = Array.from({ length: MAX_PINNED_REPOS + 3 }, (_, i) => `owner/repo${i}`);
   const pinned = pinnedRepoSlugs(raw);
-  assert.equal(pinned.length, MAX_PINNED_REPOS);
-  assert.equal(pinned[0], "owner/repo0");
-  assert.equal(pinned[MAX_PINNED_REPOS - 1], `owner/repo${MAX_PINNED_REPOS - 1}`);
+  expect(pinned.length).toBe(MAX_PINNED_REPOS);
+  expect(pinned[0]).toBe("owner/repo0");
+  expect(pinned[MAX_PINNED_REPOS - 1]).toBe(`owner/repo${MAX_PINNED_REPOS - 1}`);
 });
 
 test("repoShortcutSlugs orders pinned repos before recent repos", () => {
-  assert.deepEqual(
-    repoShortcutSlugs(
-      ["romaine-life/glimmung", "Romaine-Life/Tank-Operator"],
-      ["romaine-life/tank-operator", "romaine-life/infra-bootstrap", "openai/codex"],
-    ),
-    [
-      "romaine-life/glimmung",
-      "Romaine-Life/Tank-Operator",
-      "romaine-life/infra-bootstrap",
-      "openai/codex",
-    ],
-  );
+  expect(repoShortcutSlugs(
+          ["romaine-life/glimmung", "Romaine-Life/Tank-Operator"],
+          ["romaine-life/tank-operator", "romaine-life/infra-bootstrap", "openai/codex"],
+        )).toEqual([
+          "romaine-life/glimmung",
+          "Romaine-Life/Tank-Operator",
+          "romaine-life/infra-bootstrap",
+          "openai/codex",
+        ]);
 });
 
 test("pin helpers toggle case-insensitive pins", () => {
   const pinned = pinRepoSlug(["romaine-life/tank-operator"], "Romaine-Life/Glimmung");
-  assert.deepEqual(pinned, ["romaine-life/tank-operator", "Romaine-Life/Glimmung"]);
-  assert.equal(isRepoPinned(pinned, "romaine-life/glimmung"), true);
-  assert.deepEqual(unpinRepoSlug(pinned, "ROMAINE-LIFE/GLIMMUNG"), [
-    "romaine-life/tank-operator",
-  ]);
+  expect(pinned).toEqual(["romaine-life/tank-operator", "Romaine-Life/Glimmung"]);
+  expect(isRepoPinned(pinned, "romaine-life/glimmung")).toBe(true);
+  expect(unpinRepoSlug(pinned, "ROMAINE-LIFE/GLIMMUNG")).toEqual([
+        "romaine-life/tank-operator",
+      ]);
 });
 
 // reorderPinnedRepoSlugs is the pure core of the splash picker's drag-and-drop
@@ -266,74 +254,50 @@ test("pin helpers toggle case-insensitive pins", () => {
 // user drags into is exactly the order PUT to the server.
 test("reorderPinnedRepoSlugs moves a pin downward to land after the target", () => {
   // Dragging the first pin onto the third lands it just after the third.
-  assert.deepEqual(
-    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3", "d/4"], "a/1", "c/3"),
-    ["b/2", "c/3", "a/1", "d/4"],
-  );
+  expect(reorderPinnedRepoSlugs(["a/1", "b/2", "c/3", "d/4"], "a/1", "c/3")).toEqual(["b/2", "c/3", "a/1", "d/4"]);
 });
 
 test("reorderPinnedRepoSlugs moves a pin upward to land before the target", () => {
-  assert.deepEqual(
-    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3", "d/4"], "d/4", "b/2"),
-    ["a/1", "d/4", "b/2", "c/3"],
-  );
+  expect(reorderPinnedRepoSlugs(["a/1", "b/2", "c/3", "d/4"], "d/4", "b/2")).toEqual(["a/1", "d/4", "b/2", "c/3"]);
 });
 
 test("reorderPinnedRepoSlugs reaches both ends via the drop target", () => {
   // Drop on the last item while dragging down -> moves to the very end.
-  assert.deepEqual(
-    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "a/1", "c/3"),
-    ["b/2", "c/3", "a/1"],
-  );
+  expect(reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "a/1", "c/3")).toEqual(["b/2", "c/3", "a/1"]);
   // Drop on the first item while dragging up -> moves to the very front.
-  assert.deepEqual(
-    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "c/3", "a/1"),
-    ["c/3", "a/1", "b/2"],
-  );
+  expect(reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "c/3", "a/1")).toEqual(["c/3", "a/1", "b/2"]);
 });
 
 test("reorderPinnedRepoSlugs supports adjacent (keyboard) single-step moves", () => {
   // ArrowDown on b/2: target is its next neighbour c/3.
-  assert.deepEqual(
-    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "b/2", "c/3"),
-    ["a/1", "c/3", "b/2"],
-  );
+  expect(reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "b/2", "c/3")).toEqual(["a/1", "c/3", "b/2"]);
   // ArrowUp on b/2: target is its previous neighbour a/1.
-  assert.deepEqual(
-    reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "b/2", "a/1"),
-    ["b/2", "a/1", "c/3"],
-  );
+  expect(reorderPinnedRepoSlugs(["a/1", "b/2", "c/3"], "b/2", "a/1")).toEqual(["b/2", "a/1", "c/3"]);
 });
 
 test("reorderPinnedRepoSlugs matches slugs case-insensitively", () => {
-  assert.deepEqual(
-    reorderPinnedRepoSlugs(
-      ["Romaine-Life/Tank-Operator", "romaine-life/glimmung", "openai/codex"],
-      "OPENAI/CODEX",
-      "romaine-life/tank-operator",
-    ),
-    ["openai/codex", "Romaine-Life/Tank-Operator", "romaine-life/glimmung"],
-  );
+  expect(reorderPinnedRepoSlugs(
+          ["Romaine-Life/Tank-Operator", "romaine-life/glimmung", "openai/codex"],
+          "OPENAI/CODEX",
+          "romaine-life/tank-operator",
+        )).toEqual(["openai/codex", "Romaine-Life/Tank-Operator", "romaine-life/glimmung"]);
 });
 
 test("reorderPinnedRepoSlugs is a normalized no-op for same/unknown/empty slugs", () => {
   const list = ["a/1", "b/2", "c/3"];
-  assert.deepEqual(reorderPinnedRepoSlugs(list, "a/1", "a/1"), list);
-  assert.deepEqual(reorderPinnedRepoSlugs(list, "a/1", "z/9"), list);
-  assert.deepEqual(reorderPinnedRepoSlugs(list, "z/9", "a/1"), list);
-  assert.deepEqual(reorderPinnedRepoSlugs(list, "", "a/1"), list);
-  assert.deepEqual(reorderPinnedRepoSlugs(list, "a/1", ""), list);
+  expect(reorderPinnedRepoSlugs(list, "a/1", "a/1")).toEqual(list);
+  expect(reorderPinnedRepoSlugs(list, "a/1", "z/9")).toEqual(list);
+  expect(reorderPinnedRepoSlugs(list, "z/9", "a/1")).toEqual(list);
+  expect(reorderPinnedRepoSlugs(list, "", "a/1")).toEqual(list);
+  expect(reorderPinnedRepoSlugs(list, "a/1", "")).toEqual(list);
 });
 
 test("reorderPinnedRepoSlugs normalizes the list (dedup, drop invalid, cap)", () => {
   // A malformed entry and a case-dup are stripped before the move, so the
   // output always satisfies the same contract as pinnedRepoSlugs.
-  assert.deepEqual(
-    reorderPinnedRepoSlugs(
-      ["a/1", "bad slug", "A/1", "b/2", "c/3"],
-      "c/3",
-      "a/1",
-    ),
-    ["c/3", "a/1", "b/2"],
-  );
+  expect(reorderPinnedRepoSlugs(
+          ["a/1", "bad slug", "A/1", "b/2", "c/3"],
+          "c/3",
+          "a/1",
+        )).toEqual(["c/3", "a/1", "b/2"]);
 });

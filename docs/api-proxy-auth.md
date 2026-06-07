@@ -51,9 +51,11 @@ This doc is the missing reference.
               auth.{openai,anthropic}.com/oauth/token
 ```
 
-Two deployments share the same code (`api-proxy/src/tank_api_proxy/server.py`)
+Three deployments share the same code (`api-proxy/src/tank_api_proxy/server.py`)
 with different `ProxyConfig` env: `claude-api-proxy` fronts
-`api.anthropic.com`; `codex-api-proxy` fronts `chatgpt.com/backend-api/codex`.
+`api.anthropic.com`; `codex-api-proxy` fronts `chatgpt.com/backend-api/codex`;
+`antigravity-api-proxy` fronts `cloudcode-pa.googleapis.com` (the Google Code
+Assist data plane that the Antigravity CLI `agy` / Gemini-Ultra calls).
 Session pods reach these via in-pod hostAlias entries pointing the provider
 hostname at the proxy Service.
 
@@ -81,12 +83,12 @@ with a non-placeholder Authorization (e.g. claude-code worker_jwt for
 The refresh_token has four physical residences and three transitions:
 
 1. **Azure Key Vault** (`romaine-kv` vault). Production uses the historical
-   `claude-code-credentials` and `codex-credentials` secrets. Validation slots
-   use slot-owned secrets named `<slotName>-claude-code-credentials` and
-   `<slotName>-codex-credentials`. Each secret is the source of truth for one
-   refresh-token chain across that deployment's restarts. Provisioned by
-   `infra/keyvault.tf`; only the proxy's UAMI and the credentials-refresher
-   UAMI have write access.
+   `claude-code-credentials` and `codex-credentials` secrets. Each secret is
+   the source of truth for one refresh-token chain across the production proxy
+   deployment's restarts. Validation slots do not own provider credential KV
+   secrets; their session pods route through the production proxy services
+   instead of running independent refreshers. Provisioned by `infra/keyvault.tf`;
+   only the proxy's UAMI and the credentials-refresher UAMI have write access.
 
 2. **K8s Secret** in the orchestrator namespace, mirrored from KV by the
    ExternalSecret resource declared in `k8s/templates/externalsecret-*.yaml`
@@ -218,14 +220,14 @@ for a new pair. Possible causes, ordered by likelihood:
    from file" then immediate `refresh_token_reused`. Recovery: run the
    wizard.
 
-2. **External client consumed the chain.** A different deployment or
-   break-glass process with write access to the same KV secret rotated and
-   either wrote back to KV stale or failed to write back. Test slots must not
-   share production credential KV secrets; a rendered slot that points at
-   `claude-code-credentials` or `codex-credentials` is invalid. Tell from logs:
-   the production proxy never logged a successful rotation, but the KV version
-   history shows a write the production proxy didn't make. Recovery: run the
-   wizard; investigate the other writer.
+2. **External client consumed the chain.** A break-glass process or unapproved
+   deployment with write access to the same KV secret rotated and either wrote
+   back to KV stale or failed to write back. Test slots must not render
+   provider credential KV keys or credential ExternalSecrets at all; they share
+   credentials by routing traffic through the production proxy authority. Tell
+   from logs: the production proxy never logged a successful rotation, but the
+   KV version history shows a write the production proxy didn't make. Recovery:
+   run the wizard; investigate the other writer.
 
 3. **Provider-side invalidation.** Account-level revocation, security
    action, or maintenance event at the provider side. Tell from logs:
@@ -285,6 +287,13 @@ metrics on `:9100/metrics`. Key counters:
 - `tank_api_proxy_upstream_status_total{status}` — provider response
   codes seen on Envoy's data-plane side (chatgpt.com or api.anthropic.com).
   Elevated `401` means injected tokens are getting rejected.
+- `tank_api_proxy_upstream_429_total{provider}` — upstream 429 rate-limit
+  responses on injected requests. A sustained rate is the shared account's
+  usage cap being exhausted (alert: `TankApiProxyRateLimited`). This is the
+  upstream cause of the rate-limit-stall class; pod-side runners convert a
+  stuck `api_retry{rate_limit}` storm into a durable
+  `turn.failed{reason:"provider_rate_limit"}` and the orchestrator's
+  `TankSessionStuckInProgress` catches any that wedge.
 - `tank_api_proxy_ext_proc_request_total{result}` — `passthrough`,
   `injected`, `missing_token`. `missing_token` means
   `_get_access_token` returned `"missing"` because cache was empty;
@@ -308,25 +317,138 @@ Log lines to grep for in `kubectl -n tank-operator logs codex-api-proxy-* -c ext
 For grafana, the boards loaded from `k8s/templates/grafana-dashboards/`
 include an "api-proxy" panel showing the above counters as rates.
 
+## Per-session attribution (dependency-gated)
+
+The proxy sees every model call but cannot today say *which Tank session*
+caused a given upstream 429, latency spike, or `request-id`. Two facts block
+per-session attribution at this layer:
+
+- The Claude Agent SDK `Options` (agent-runner) exposes no custom-header /
+  fetch hook, so the runner cannot stamp an `x-tank-session-id` (plus owner /
+  turn) header on outbound model requests. Without an inbound identity header
+  the ext_proc has nothing to attribute by.
+- The proxy has no Postgres or session-bus producer, so it cannot itself write
+  a durable per-call ledger keyed by session.
+
+Deliberately NOT done: inferring the session from the downstream pod IP or by
+post-hoc joining the Envoy access log. Pod IPs churn and a log join is the
+"re-scrape of logs" anti-pattern (`docs/product-inspirations.md`); per-session
+resolution must live in a durable ledger, never a metric label or a log grep
+(`docs/observability.md` cardinality rules).
+
+Path forward when the dependency lands: stamp `x-tank-session-id` + hashed
+owner + turn id from the runner, read them in `_on_request_headers`, capture
+the upstream `request-id` and `anthropic-ratelimit-*` headers in
+`_on_response_headers`, and emit a durable per-call record — or have the runner
+emit it from the `rate_limit_event` frame, which already carries the provider
+`session_id`. As a down payment, the Envoy access log's `anthropic_req_id`
+field was corrected to `%RESP(request-id)%` (it had been
+`%RESP(anthropic-request-id)%`, a header the provider never sends, so it logged
+`-` on every line) so the upstream request id is at least captured in logs in
+the meantime.
+
 ## Slot credential ownership
 
-Every live proxy deployment owns exactly one refresh-token chain. Production
-owns `claude-code-credentials` and `codex-credentials`. A validation slot owns
-`<slotName>-claude-code-credentials` and `<slotName>-codex-credentials`.
+Every refresh-token chain has exactly one live credential authority. Production
+owns the Claude and Codex authorities: the production api-proxy deployments,
+the production credential ExternalSecrets, and the production KV secrets
+`claude-code-credentials` and `codex-credentials`.
 
-Slots are intentionally prod-shaped: each slot runs its own api-proxy
-deployments, ExternalSecrets, K8s Secrets, and config-mode save path. The
-credential wizard must be run once per slot/provider to seed those slot-owned
-KV secrets. Copying a production OAuth blob into a slot secret is invalid
-because it duplicates the same single-use refresh token into two independent
-refresh coordinators.
+Validation slots share those credentials by routing provider traffic to the
+production services:
+
+- `CLAUDE_API_PROXY_HOST=claude-api-proxy.tank-operator.svc.cluster.local`
+- `CODEX_API_PROXY_HOST=codex-api-proxy.tank-operator.svc.cluster.local`
+- `CLAUDE_OAUTH_GATEWAY_HOST=claude-oauth-gateway.tank-operator.svc.cluster.local`
+
+Slot session pods still receive only placeholder provider credentials. They
+trust the production proxy TLS leaf because the slot warm render reflects the
+production `claude-oauth-ca` public cert into the slot sessions namespace as
+the same `claude-oauth-ca` ConfigMap mounted by session pods.
+
+Slots do **not** render api-proxy deployments, provider credential
+ExternalSecrets, provider credential K8s Secrets, or `*_CREDENTIALS_KV_KEY`
+env vars on the orchestrator. That makes the save-credentials path fail closed
+in slots with "`<env> not configured`" instead of giving a config-mode slot a
+way to overwrite production's credential KV secrets.
 
 The chart and `scripts/check-test-slot-provider-credentials.sh` guard this
-contract. Hot slot renders must set `CLAUDE_CREDENTIALS_KV_KEY` and
-`CODEX_CREDENTIALS_KV_KEY` to slot-owned names; warm slot renders must mirror
-the same slot-owned KV keys through ExternalSecret. The proxy and
-save-credentials handler fail fast when the credential KV env is absent rather
-than choosing a production default.
+contract. A slot render that reintroduces a slot-local provider proxy, a
+slot-owned provider credential KV key, a provider credential Secret mount, or a
+credential write env var is invalid.
+
+## Antigravity (Gemini-Ultra) provider
+
+`antigravity-api-proxy` is the third deployment. It applies the exact
+session-pods-don't-own-the-refresh-chain boundary above to `agy` (Gemini-Ultra),
+which previously mounted the real Google OAuth blob — including the refresh
+token — directly into the model/tool-capable `antigravity-runner` container.
+That was a credential-boundary bug (a prompt-injected `agy` could exfiltrate the
+refresh token); the proxy closes it.
+
+What carries over unchanged from claude/codex:
+
+- The session pod writes a **placeholder** token (the launch script
+  `antigravity-container/antigravity-runner-launch.sh` seeds
+  `~/.gemini/antigravity-cli/antigravity-oauth-token` with
+  `access_token: "managed-by-tank-operator"`, a far-future `expiry`, and **no
+  refresh token**). The far-future expiry stops `agy` from refreshing in place.
+- `agy`'s `cloudcode-pa.googleapis.com` traffic is host-aliased to the proxy
+  Service; the ext_proc swaps the `Authorization` header for the real access
+  token on every request and single-flight-refreshes on upstream 401.
+- The real refresh token lives only in the proxy pod + KV
+  (`antigravity-credentials`); slots route to the production proxy and render no
+  antigravity credential Secret (`scripts/check-test-slot-provider-credentials.sh`).
+
+What is antigravity-specific (implementation detail, not architecture):
+
+- **`google` `ProxyConfig`** — `token_url=https://oauth2.googleapis.com/token`,
+  the consumer OAuth `client_id`/`client_secret` embedded in the public `agy`
+  binary (`client_secret` is KV-sourced via `ANTIGRAVITY_CLIENT_SECRET` to keep
+  it out of git). Google's `/token` requires **form-encoding**, so the config
+  sets `token_request_form=True` (claude/codex post JSON).
+- **Blob shape** — `{token:{access_token, refresh_token, expiry}, auth_method}`.
+  `expiry` is an RFC3339 string (not epoch ms), so `_patch_blob` and
+  `_blob_freshness_ms` handle `expiry` alongside the existing `expiresAt`/
+  `last_refresh` markers. Google does not return a new refresh token on refresh,
+  so the proxy reuses the cached one (existing behavior).
+- **CA trust** — `agy` is a Go binary, so it trusts the proxy leaf via the
+  system trust store. The launch script concatenates the mounted
+  `oauth-gateway-ca` (same CA as the claude/codex leaves) with the base bundle
+  and exports `SSL_CERT_FILE` — the Go analog of claude's `NODE_EXTRA_CA_CERTS`
+  / codex's `CODEX_CA_CERTIFICATE`.
+
+Re-seeding the chain (the recovery path) is the `antigravity_config` wizard
+mode: it is the one antigravity mode **not** routed through the proxy, so the
+interactive Google/Ultra login reaches real Google; `doSaveCredentials` then
+harvests the token to the `antigravity-credentials` KV secret the proxy owns.
+
+## Proactive refresh keeper
+
+Each proxy runs a long-lived **refresh keeper** task (`run_refresh_keeper`,
+started in `serve()`) that warms the access token on boot and again before it
+reaches `REFRESH_SKEW_MS` of expiry. It exists for two reasons that a purely
+reactive (refresh-on-upstream-401) design cannot cover on a low-traffic
+provider:
+
+- **Cold-start race.** Without continuous traffic to trigger a reactive
+  refresh, a proxy that boots with an already-expired cached token would serve
+  that expired token on the first request, 401, and only then start an async
+  refresh — which can finish *after* the caller (e.g. agy's short single-turn
+  stream) has already given up. The keeper warms the token before the first
+  request, so the first turn succeeds.
+- **Cancellation safety.** A reactive refresh is created inside a request
+  handler (`_on_response_headers`), so it can be cancelled when that request's
+  stream closes — stranding both the rotation and the KV write-back. The keeper
+  re-runs the refresh from a task that outlives any single stream, so the
+  rotation **and** `_persist_to_kv` always complete. The reactive 401 path
+  additionally wakes the keeper (`_refresh_wakeup`) for immediate recovery.
+
+`_refresh` skips the provider round trip when the token is already fresh and not
+invalidated, so the keeper and a reactive 401 cannot double-rotate. This was
+added after the antigravity rollout exposed the race (the first turn after the
+proxy booted with a stale cached token returned empty, and rotations were not
+persisting to KV); it hardens the claude/codex proxies the same way.
 
 ## Where to look when investigating
 

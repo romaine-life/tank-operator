@@ -92,27 +92,29 @@ Evidence:
 Status: active
 
 Intent:
-Keep the run header a clean "title + ⋮" strip by collapsing every top-right
-session control — the view tabs (Turns, Background, Files) and the auxiliary
-actions (Settings, Help) — behind a single vertical overflow control instead of
-a row of competing buttons.
+Keep the run header a clean "title + ⋮" strip by making Turns the primary
+session surface and collapsing secondary top-right controls — Background, Files,
+Session data, Settings, and Help — behind a single vertical overflow control
+instead of a row of competing buttons.
 
 Affected contracts:
 - App Chrome
-- Transcript Navigation, because the menu is the entry point to the Turns and
-  Background side-pane views
+- Transcript Navigation, because the menu sits alongside the Back-to-turns
+  affordance for secondary session views
 - Observability, because the trigger carries the admin observability attention
   dot
 
 Contract impact:
-- The menu is the single entry point for these actions in the normal view; the
-  old standalone Turns/Background/Files/Settings/Help tab buttons do not survive
+- The menu is the single entry point for secondary actions in the normal view;
+  the old standalone Background/Files/Settings/Help tab buttons do not survive
   alongside it (no duplicate control paths).
-- Availability gating stays on the row, not on header chrome: Turns is disabled
-  until the agent has turn activity, Files until the session container is
-  available. Disabled rows stay visible and non-selectable, never hidden.
-- The collapse does not hide ambient state: live Turns/Background counts ride
-  their rows, and a "needs attention" dot stays on the closed trigger so admin
+- Turns is not a row in the overflow menu; sessions land on Turns by default,
+  and secondary views use the header Back control to return to Turns.
+- Availability gating stays on the row, not on header chrome: Files stays
+  disabled until the session container is available. Disabled rows stay visible
+  and non-selectable, never hidden.
+- The collapse does not hide ambient state: live Background counts ride their
+  row, and a "needs attention" dot stays on the closed trigger so admin
   observability state is visible without opening the menu.
 - The read-only public message-link view renders no overflow menu; it keeps the
   standalone Turns tab, which is that view's only session surface.

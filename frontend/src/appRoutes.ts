@@ -1,8 +1,8 @@
 export type SettingsTab = "preferences" | "admin";
 export type AdminView = "controls" | "avatars" | "report" | "observability";
 export type SessionRouteTab =
-  | "chat"
   | "turns"
+  | "chat"
   | "static"
   | "session-data"
   | "files"
@@ -115,6 +115,18 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
   const parts = routeParts(pathname);
   if (parts[0] !== "sessions" || !parts[1]) return null;
   if (parts.length === 2) {
+    return {
+      sessionId: parts[1],
+      tab: "turns",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "transcript" && parts.length === 3) {
     return {
       sessionId: parts[1],
       tab: "chat",
@@ -237,7 +249,7 @@ function settingsPath(settingsTab: SettingsTab, adminView: AdminView): string {
 export function buildSessionRouteUrl(
   currentHref: string,
   id: string,
-  tab: SessionRouteTab = "chat",
+  tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
   staticPath?: string | null,
   pageNumber?: number | null,
@@ -246,12 +258,14 @@ export function buildSessionRouteUrl(
   const encodedId = encodeURIComponent(id);
   let suffix = "";
   if (tab === "turns") {
-    suffix = `/turns${turnNumber != null ? `/${turnNumber}` : ""}`;
-    // A page ordinal qualifies a specific turn only — never a bare /turns,
-    // which resolves to the latest turn and canonicalizes its own page.
+    suffix = turnNumber != null ? `/turns/${turnNumber}` : "";
+    // A page ordinal qualifies a specific numbered turn; the bare turns route
+    // (/sessions/{id} = latest) canonicalizes its own page once resolved.
     if (turnNumber != null && pageNumber != null) {
       suffix += `/pages/${pageNumber}`;
     }
+  } else if (tab === "chat") {
+    suffix = "/transcript";
   } else if (tab === "static" && staticPath) {
     suffix = `/static/${staticPath.split("/").map(encodeURIComponent).join("/")}`;
   } else if (tab === "session-data") {

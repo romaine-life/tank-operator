@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 import {
   avatarSaveErrorMessage,
   fetchAvatarViews,
@@ -9,18 +8,12 @@ import {
 } from "./AdminAvatarManager";
 
 test("avatar save errors include server attempt references", () => {
-  assert.equal(
-    avatarSaveErrorMessage(400, {
-      detail: "Avatar upload request must use multipart/form-data.",
-      code: "wrong_content_type",
-      attempt_id: "avu_123",
-    }),
-    "Avatar upload request must use multipart/form-data. Reference avu_123.",
-  );
-  assert.equal(
-    avatarSaveErrorMessage(500, {}),
-    "save failed: 500",
-  );
+  expect(avatarSaveErrorMessage(400, {
+          detail: "Avatar upload request must use multipart/form-data.",
+          code: "wrong_content_type",
+          attempt_id: "avu_123",
+        })).toBe("Avatar upload request must use multipart/form-data. Reference avu_123.");
+  expect(avatarSaveErrorMessage(500, {})).toBe("save failed: 500");
 });
 
 test("avatar admin accepts image files from drag transfer data", () => {
@@ -30,7 +23,7 @@ test("avatar admin accepts image files from drag transfer data", () => {
     files: [file],
   } as unknown as DataTransfer;
 
-  assert.equal(imageFileFromTransfer(transfer), file);
+  expect(imageFileFromTransfer(transfer)).toBe(file);
 });
 
 test("avatar admin names dropped image data that has no filename", () => {
@@ -48,8 +41,8 @@ test("avatar admin names dropped image data that has no filename", () => {
 
   const image = imageFileFromTransfer(transfer, "dropped-avatar");
 
-  assert.equal(image?.name, "dropped-avatar.webp");
-  assert.equal(image?.type, "image/webp");
+  expect(image?.name).toBe("dropped-avatar.webp");
+  expect(image?.type).toBe("image/webp");
 });
 
 test("avatar admin ignores non-image drag transfer data", () => {
@@ -64,7 +57,7 @@ test("avatar admin ignores non-image drag transfer data", () => {
     files: [new File(["text"], "notes.txt", { type: "text/plain" })],
   } as unknown as DataTransfer;
 
-  assert.equal(imageFileFromTransfer(transfer), null);
+  expect(imageFileFromTransfer(transfer)).toBe(null);
 });
 
 test("avatar admin keeps usable entries when another avatar image is missing", async () => {
@@ -93,7 +86,7 @@ test("avatar admin keeps usable entries when another avatar image is missing", a
     return `blob:avatar-${objectURLs.length}`;
   };
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer jwt");
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer jwt");
     const url = String(input);
     if (url === "/api/avatars") {
       return jsonResponse({
@@ -136,13 +129,13 @@ test("avatar admin keeps usable entries when another avatar image is missing", a
   try {
     const views = await fetchAvatarViews();
 
-    assert.equal(views.length, 2);
-    assert.equal(views[0].id, "jp1-malcolm");
-    assert.equal(views[0].avatarSrc, "blob:avatar-1");
-    assert.equal(views[0].imageError, null);
-    assert.equal(views[1].id, "av_missing_system");
-    assert.equal(views[1].avatarSrc, null);
-    assert.equal(views[1].imageError, "avatar image failed: 404");
+    expect(views.length).toBe(2);
+    expect(views[0].id).toBe("jp1-malcolm");
+    expect(views[0].avatarSrc).toBe("blob:avatar-1");
+    expect(views[0].imageError).toBe(null);
+    expect(views[1].id).toBe("av_missing_system");
+    expect(views[1].avatarSrc).toBe(null);
+    expect(views[1].imageError).toBe("avatar image failed: 404");
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
@@ -201,12 +194,12 @@ test("requestAvatarKindChange PATCHes /api/admin/avatars/{id}/kind with the requ
   try {
     const result = await requestAvatarKindChange("av_1", "system");
 
-    assert.deepEqual(result, { ok: true });
-    assert.equal(observedMethod, "PATCH");
-    assert.equal(observedURL, "/api/admin/avatars/av_1/kind");
-    assert.equal(observedBody, JSON.stringify({ kind: "system" }));
-    assert.equal(observedAuth, "Bearer jwt");
-    assert.equal(observedContentType, "application/json");
+    expect(result).toEqual({ ok: true });
+    expect(observedMethod).toBe("PATCH");
+    expect(observedURL).toBe("/api/admin/avatars/av_1/kind");
+    expect(observedBody).toBe(JSON.stringify({ kind: "system" }));
+    expect(observedAuth).toBe("Bearer jwt");
+    expect(observedContentType).toBe("application/json");
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
@@ -262,11 +255,11 @@ test("requestAvatarUpdate PATCHes /api/admin/avatars/{id} with multipart payload
 
     const result = await requestAvatarUpdate("av_1", payload);
 
-    assert.deepEqual(result, { ok: true });
-    assert.equal(observedMethod, "PATCH");
-    assert.equal(observedURL, "/api/admin/avatars/av_1");
-    assert.equal(observedAuth, "Bearer jwt");
-    assert.equal(observedBody, payload);
+    expect(result).toEqual({ ok: true });
+    expect(observedMethod).toBe("PATCH");
+    expect(observedURL).toBe("/api/admin/avatars/av_1");
+    expect(observedAuth).toBe("Bearer jwt");
+    expect(observedBody).toBe(payload);
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
@@ -301,7 +294,7 @@ test("requestAvatarKindChange surfaces backend detail on failure", async () => {
 
   try {
     const result = await requestAvatarKindChange("av_1", "agent");
-    assert.deepEqual(result, { ok: false, detail: "avatar already has the requested kind" });
+    expect(result).toEqual({ ok: false, detail: "avatar already has the requested kind" });
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;
@@ -333,7 +326,7 @@ test("requestAvatarKindChange falls back to status when body has no detail", asy
 
   try {
     const result = await requestAvatarKindChange("av_1", "agent");
-    assert.deepEqual(result, { ok: false, detail: "kind change failed: 500" });
+    expect(result).toEqual({ ok: false, detail: "kind change failed: 500" });
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as { localStorage?: Storage }).localStorage = originalLocalStorage;

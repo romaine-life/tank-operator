@@ -82,3 +82,39 @@ Evidence:
   `appRoutes.test.ts`; `App.tsx` route-driven page selection + canonicalization
   (`replaceState`, no spurious history); `breadcrumb.ts` / `breadcrumb.test.ts`
   for the page crumb.
+
+## Turns view is the primary session view
+
+Status: shipped
+
+Intent:
+Opening a session from the sidebar lands in the Turns view. New sessions with no
+turn activity render the Turns empty state, and sessions with activity select the
+latest turn. The main transcript remains available as a deliberate fallback from
+Session Data at `/sessions/{id}/transcript`, but it is no longer the default
+session root or a sidebar-level open-target choice.
+
+Affected contracts:
+- Transcript Navigation (primary — where a session open lands)
+- Transcript (main transcript remains a durable artifact/fallback)
+
+Contract impact:
+- `/sessions/{id}` is the Turns route. A numbered turn still uses
+  `/sessions/{id}/turns/{n}`.
+- `/sessions/{id}/transcript` is the explicit main-transcript route.
+- Sidebar row clicks and new-session activation request the Turns view, not the
+  transcript.
+- The sidebar session menu no longer offers Main transcript vs Turns view; it
+  only carries session-level actions such as Close session.
+- Session Data includes a Main transcript row with an Open transcript action.
+- The prior `sessions.user_message_count` and `sessions.open_target` row fields
+  remain on the wire for compatibility/diagnostics, but the frontend no longer
+  uses them to choose the session landing surface.
+
+Evidence:
+- Frontend: `appRoutes.ts` maps root session routes to Turns and
+  `/transcript` to `chat`; `App.tsx` sidebar open requests use
+  `requestSessionTurnsOpen`; `RunTurnActivityScreen` renders its empty state for
+  new sessions; `SessionDataScreen` exposes the transcript action.
+- Tests: `appRoutes.test.ts`, `sessionSidebarNavigation.test.ts`,
+  `sessionDataStatus.test.ts`, and `migrationPolicy.test.ts`.

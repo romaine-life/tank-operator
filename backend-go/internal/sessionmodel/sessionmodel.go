@@ -35,6 +35,15 @@ const (
 	// save-credentials harvest writes the resulting OAuth token file to KV.
 	// Runs on the glibc antigravity-container image (agy + sandbox-agent).
 	AntigravityConfigMode = "antigravity_config"
+	// AntigravityGUIMode is the GUI chat mode for Antigravity (Gemini-Ultra).
+	// A pod-side antigravity-runner drives agy and maps its structured
+	// transcript stream onto the Tank conversation protocol. Runs on the glibc
+	// antigravity-container image and carries the mcp-auth-proxy sidecar like
+	// the other GUI modes. agy's OAuth is proxy-owned (the credential-boundary
+	// fix): the pod gets a placeholder + an antigravity-api-proxy host-alias so
+	// the real refresh token never lands on the model-readable filesystem — the
+	// same shape claude_gui / codex_gui use. See docs/api-proxy-auth.md.
+	AntigravityGUIMode    = "antigravity_gui"
 	DefaultSessionMode    = ClaudeGUIMode
 	MaxNameLength         = 80
 	SessionsNamespace     = "tank-operator-sessions"
@@ -54,9 +63,10 @@ const (
 	// "runner-metrics"). Numbers are documented in docs/observability.md;
 	// changing them requires bumping both the values here and the
 	// PodMonitor port-name references.
-	MCPAuthProxyMetricsPort = 9990
-	AgentRunnerMetricsPort  = 9095
-	CodexRunnerMetricsPort  = 9096
+	MCPAuthProxyMetricsPort      = 9990
+	AgentRunnerMetricsPort       = 9095
+	CodexRunnerMetricsPort       = 9096
+	AntigravityRunnerMetricsPort = 9097
 	// No DefaultSessionImage constants. The Helm chart owns image tags
 	// (k8s/values.yaml's session.* keys are bumped per-commit to
 	// fingerprinted tags by .github/workflows/claude-container-build.yml),
@@ -83,6 +93,7 @@ var (
 		CodexExecGUIMode:      {},
 		CodexAppServerMode:    {},
 		AntigravityConfigMode: {},
+		AntigravityGUIMode:    {},
 	}
 
 	sessionCapabilities = map[string]struct{}{
@@ -169,6 +180,21 @@ type SessionRecord struct {
 	// window uses). Monotonic: it only ever advances over a session's life.
 	CompactionCount int64
 
+		// UserMessageCount is the durable count of user_message.created events the
+		// session has recorded — one per human back-and-forth submission. Like
+		// CompactionCount it is a projection over the append-only session_events
+		// ledger (the chat-activity emitter recomputes it on each
+		// user_message.created upsert), surfaced on the row as durable metadata,
+		// stable across reload and identical in a fresh tab. Monotonic: it only ever
+		// advances. Background-task wake continuations carry their prompt on
+		// turn.submitted, not user_message.created, so they are excluded.
+		UserMessageCount int64
+
+		// OpenTarget is the legacy durable per-session sidebar open-target
+		// preference. Current frontend builds no longer use it for session-open
+		// defaults, but it stays on the row for compatibility.
+		OpenTarget string
+
 	// Avatar IDs are assigned by the backend from a durable shuffled deck.
 	// Visible production rows must have an agent avatar id before publication.
 	// Empty values are legacy/incomplete state; clients render them as missing
@@ -211,16 +237,23 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"session-pod-bootstrap.sh", "/opt/tank/session-pod-bootstrap.sh"},
 }
 
-// noClaudeHijackModes are modes that should not receive the OAuth gateway / api proxy host aliases.
+// noClaudeHijackModes are modes that must not receive the *Claude* OAuth
+// gateway / api-proxy host aliases (platform.claude.com, api.anthropic.com).
+// Codex and antigravity_gui are listed here because they route their own
+// provider host through a dedicated proxy via the separate blocks below
+// (codex-api-proxy, antigravity-api-proxy) — they just must not also get
+// Claude's aliases. antigravity_config is the interactive login mode: it must
+// talk to real Google to complete OAuth and have its token harvested, so it
+// gets no proxy hijack at all.
 var noClaudeHijackModes = map[string]bool{
-	ConfigMode:         true,
-	CodexConfigMode:    true,
-	CodexCLIMode:       true,
-	CodexGUIMode:       true,
-	CodexExecGUIMode:   true,
-	CodexAppServerMode: true,
-	// Antigravity talks to Google directly; no Claude OAuth-gateway aliases.
+	ConfigMode:            true,
+	CodexConfigMode:       true,
+	CodexCLIMode:          true,
+	CodexGUIMode:          true,
+	CodexExecGUIMode:      true,
+	CodexAppServerMode:    true,
 	AntigravityConfigMode: true,
+	AntigravityGUIMode:    true,
 }
 
 type ManifestOptions struct {
@@ -235,9 +268,10 @@ type ManifestOptions struct {
 	SandboxAgentPort        int
 	TankOperatorInternalURL string
 	// Optional: in-cluster Service IPs for host alias injection.
-	OAuthGatewayIP  string
-	APIProxyIP      string
-	CodexAPIProxyIP string
+	OAuthGatewayIP        string
+	APIProxyIP            string
+	CodexAPIProxyIP       string
+	AntigravityAPIProxyIP string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
 	// SDK runners use NATS JetStream for durable command/event delivery.
@@ -296,6 +330,18 @@ func IsSessionMode(mode string) bool {
 func IsCodexMode(mode string) bool {
 	switch NormalizeSessionMode(mode) {
 	case CodexConfigMode, CodexCLIMode, CodexGUIMode, CodexExecGUIMode, CodexAppServerMode:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsAntigravityMode reports whether a session mode runs the Antigravity agent
+// (agy) and so is stamped with AntigravitySessionImage. Covers both the
+// credential-mint terminal mode and the GUI chat mode.
+func IsAntigravityMode(mode string) bool {
+	switch NormalizeSessionMode(mode) {
+	case AntigravityConfigMode, AntigravityGUIMode:
 		return true
 	default:
 		return false
@@ -475,7 +521,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	argoTrackingID := opts.ArgoCDTrackingApp + ":/Pod:" + opts.SessionsNamespace + "/" + podName
 
 	sessionImage := opts.SessionImage
-	if mode == AntigravityConfigMode {
+	if IsAntigravityMode(mode) {
 		sessionImage = opts.AntigravitySessionImage
 	}
 	if IsCodexMode(mode) {
@@ -582,7 +628,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Codex GUI modes use codex-runner. Both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
 	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
-	wantSDKRunner := wantAgentRunner || wantCodexRunner
+	wantAntigravityRunner := mode == AntigravityGUIMode
+	wantSDKRunner := wantAgentRunner || wantCodexRunner || wantAntigravityRunner
 	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
 			"name":     "workspace",
@@ -693,13 +740,28 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		}
 	}
 
+	// Antigravity API proxy host alias. agy (Gemini-Ultra) is a Go binary that
+	// calls cloudcode-pa.googleapis.com (Google Code Assist) with a Bearer
+	// access token; pointing that host at the antigravity-api-proxy lets the
+	// proxy inject the real token so the agy pod never holds the refresh token.
+	// The CA-trust + placeholder wiring lives in the antigravity-runner block
+	// below (agy runs in that container, so SSL_CERT_FILE belongs there, not on
+	// the sandbox-agent container). Only the GUI mode is hijacked;
+	// antigravity_config must reach real Google to complete the login.
+	if mode == AntigravityGUIMode && opts.AntigravityAPIProxyIP != "" {
+		hostAliases = append(hostAliases, map[string]any{
+			"ip":        opts.AntigravityAPIProxyIP,
+			"hostnames": []any{"cloudcode-pa.googleapis.com"},
+		})
+	}
+
 	claudeContainer := map[string]any{
 		"name":            "claude",
 		"image":           sessionImage,
 		"imagePullPolicy": "Always",
 		"command": []any{
 			"bash", "-lc",
-			"if [ -f /opt/tank/session-config/install-tank-docs.sh ]; then sh /opt/tank/session-config/install-tank-docs.sh || true; fi; " +
+			"if [ -f /opt/tank/session-config/install-tank-docs.sh ]; then sh /opt/tank/session-config/install-tank-docs.sh; fi; " +
 				"if [ -f /opt/tank/session-pod-bootstrap.sh ]; then bash /opt/tank/session-pod-bootstrap.sh || true; fi; " +
 				"if command -v sandbox-agent >/dev/null 2>&1; then sandbox_agent_cmd=sandbox-agent; else sandbox_agent_cmd='npx -y @sandbox-agent/cli@0.4.2'; fi; " +
 				"exec $sandbox_agent_cmd server --host 0.0.0.0 --port " + itoa(opts.SandboxAgentPort) + " --no-token --no-telemetry",
@@ -999,6 +1061,87 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"resources": codexRunnerResources(),
 		}
 		containers = append(containers, codexRunnerContainer)
+	}
+
+	// Antigravity-runner sidecar (antigravity_gui). Drives agy (Gemini-Ultra)
+	// and maps its structured transcript onto the Tank conversation protocol.
+	// Same workspace + session-bus contract as the other runners.
+	//
+	// Credential boundary: agy NEVER holds the real Google OAuth blob. The
+	// launch script writes a placeholder token (far-future expiry, no refresh
+	// token) into agy's data dir, and agy's cloudcode-pa.googleapis.com traffic
+	// is host-aliased to the antigravity-api-proxy, which injects the real
+	// access token and owns the refresh chain — the same boundary the Claude
+	// and Codex proxies enforce. agy is a Go binary, so it trusts the proxy's
+	// leaf via SSL_CERT_FILE (a system-bundle + oauth-gateway-ca concat built
+	// by the launch script), not NODE_EXTRA_CA_CERTS.
+	if wantAntigravityRunner {
+		// The runner is self-contained: it drives agy + the session bus and
+		// needs no session ConfigMap (no Tank mcp.json — agy owns its MCP). Its
+		// launch script is baked into the antigravity image at /opt/tank, so the
+		// pod has no ConfigMap-launch-script coupling.
+		runnerVolumeMounts := []any{
+			map[string]any{"name": "workspace", "mountPath": "/workspace"},
+			map[string]any{"name": "tank-operator-sa-token", "mountPath": "/var/run/secrets/tank-operator", "readOnly": true},
+			map[string]any{"name": "auth-romaine-sa-token", "mountPath": "/var/run/secrets/auth.romaine.life", "readOnly": true},
+		}
+		antigravityProxied := opts.AntigravityAPIProxyIP != "" && opts.OAuthGatewayCAConfigMap != ""
+		if antigravityProxied {
+			volumes = append(volumes, map[string]any{
+				"name":      "oauth-gateway-ca",
+				"configMap": map[string]any{"name": opts.OAuthGatewayCAConfigMap},
+			})
+			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+				"name": "oauth-gateway-ca", "mountPath": "/etc/oauth-gateway-ca", "readOnly": true,
+			})
+		}
+		antigravityRunnerEnv := []any{
+			map[string]any{
+				"name": "SESSION_ID",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{"fieldPath": "metadata.labels['tank-operator/session-id']"},
+				},
+			},
+			map[string]any{"name": "TANK_SESSION_STORAGE_KEY", "value": storageKey},
+			map[string]any{
+				"name": "POD_OWNER_EMAIL",
+				"valueFrom": map[string]any{
+					"fieldRef": map[string]any{"fieldPath": "metadata.annotations['tank-operator/owner-email']"},
+				},
+			},
+			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
+			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
+			map[string]any{
+				"name": "NATS_TOKEN",
+				"valueFrom": map[string]any{
+					"secretKeyRef": map[string]any{"name": opts.NATSAuthSecret, "key": "token"},
+				},
+			},
+			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
+			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
+			map[string]any{"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(AntigravityRunnerMetricsPort)},
+		}
+		if antigravityProxied {
+			// The launch script concatenates this CA with the system bundle and
+			// exports SSL_CERT_FILE so the Go-based agy trusts the proxy leaf.
+			antigravityRunnerEnv = append(antigravityRunnerEnv,
+				map[string]any{"name": "ANTIGRAVITY_OAUTH_GATEWAY_CA", "value": "/etc/oauth-gateway-ca/ca.crt"},
+			)
+		}
+		antigravityRunnerContainer := map[string]any{
+			"name":            "antigravity-runner",
+			"image":           sessionImage,
+			"imagePullPolicy": "Always",
+			"command":         []any{"bash", "/opt/tank/antigravity-runner-launch.sh"},
+			"env":             antigravityRunnerEnv,
+			"volumeMounts":    runnerVolumeMounts,
+			"ports": []any{
+				map[string]any{"name": "runner-metrics", "containerPort": AntigravityRunnerMetricsPort},
+			},
+			"resources": codexRunnerResources(),
+		}
+		containers = append(containers, antigravityRunnerContainer)
 	}
 
 	spec := map[string]any{

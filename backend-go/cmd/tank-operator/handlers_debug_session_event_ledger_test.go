@@ -79,6 +79,10 @@ func (f *fakeDebugSessionEventLedgerStore) CountContextCompactions(context.Conte
 	return 0, nil
 }
 
+func (f *fakeDebugSessionEventLedgerStore) CountUserMessages(context.Context, string) (int64, error) {
+	return 0, nil
+}
+
 func newLedgerTestServer(t *testing.T) (*appServer, *fakeDebugSessionEventLedgerStore) {
 	t.Helper()
 	app := adminTestServer(t)

@@ -68,6 +68,7 @@ import {
   natsPublishFailureTotal,
   optionsOverrideIgnoredTotal,
   optionsPinnedTotal,
+  providerApiRetryTotal,
   providerControlTotal,
   providerErrorTotal,
   providerFailureClassTotal,
@@ -210,6 +211,35 @@ export function classifyProviderFailure(message: string): ProviderFailureClass {
     m.includes(" 403")
   ) {
     return "auth";
+  }
+  return "other";
+}
+
+// classifyApiRetryError maps a Claude SDK system/api_retry frame's `error`
+// field to a closed, low-cardinality set for providerApiRetryTotal. The SDK
+// emits short tokens ("rate_limit", "overloaded", …); anything unrecognized
+// folds to "other" so a provider upgrade can't blow up the label set.
+export function classifyApiRetryError(
+  raw: unknown,
+): "rate_limit" | "overloaded" | "api_error" | "other" {
+  const m = String(raw ?? "").toLowerCase();
+  if (
+    m.includes("rate_limit") ||
+    m.includes("rate limit") ||
+    m.includes("429")
+  ) {
+    return "rate_limit";
+  }
+  if (m.includes("overload")) return "overloaded";
+  if (
+    m.includes("api_error") ||
+    m.includes("api error") ||
+    m.includes("500") ||
+    m.includes("502") ||
+    m.includes("503") ||
+    m.includes("529")
+  ) {
+    return "api_error";
   }
   return "other";
 }
@@ -580,6 +610,22 @@ const INTERRUPT_BUFFER_MS = parsePositiveEnvInt(
   30_000,
 );
 
+// PROVIDER_RETRY_STALL_MS bounds how long the runner tolerates a Claude SDK
+// api_retry{error:"rate_limit"} storm with zero turn progress before forcing a
+// durable turn.failed{reason:"provider_rate_limit"} terminal. The SDK retries
+// 429s internally and, when the retries don't converge, never surfaces a
+// terminal rate_limit_event — so without this bound the turn sits "claimed"
+// with the user seeing dead air (session 638, 2026-06-06: 35+ minutes, no
+// terminal). Sized above a normal slow-but-progressing first response (the
+// api-proxy serves even ~1M-token requests in well under two minutes), so only
+// a genuinely stuck retry loop trips it. Any real provider output (turn.started
+// or a mapped canonical event) resets the window; status/thinking_tokens
+// heartbeats do NOT, since they are part of the stuck retry cycle.
+const PROVIDER_RETRY_STALL_MS = parsePositiveEnvInt(
+  process.env.SESSION_PROVIDER_RETRY_STALL_MS,
+  240_000,
+);
+
 // TERMINAL_PUBLISH_* bound how hard `applyInterruptToTurn` retries the
 // durable terminal publish before falling back to
 // turn.failed{publish_interrupt_failed}. The body of either event is
@@ -661,6 +707,18 @@ export class Runner {
   // app-server transport's first-observed latch. Stays null until the first
   // `result` message carries a usable window.
   private reportedContextWindowTokens: number | null = null;
+  // providerRetryStall tracks an in-flight Claude SDK api_retry{error:"rate_limit"}
+  // storm against the turn it is stalling. It is armed on the first such frame
+  // for a turn and cleared by resetProviderRetryStall() the moment the turn
+  // makes real progress (turn.started or a mapped canonical event). When the
+  // window exceeds providerRetryStallMs with no progress the runner forces a
+  // durable terminal so the command queue drains. See PROVIDER_RETRY_STALL_MS.
+  private providerRetryStall: {
+    turnKey: string;
+    firstAtMs: number;
+    count: number;
+  } | null = null;
+  private providerRetryStallMs = PROVIDER_RETRY_STALL_MS;
   // sdkReady gates run()'s for-await loop on the first submit_turn
   // arriving so we can pin model/effort from that command's payload
   // before constructing query(). resolveSdkReady is called exactly once
@@ -911,6 +969,17 @@ export class Runner {
       logUnhandledSdkMessage(message);
       return;
     }
+    if (
+      providerEvent.type === "system" &&
+      providerEvent.subtype === "api_retry"
+    ) {
+      // The Claude SDK's internal HTTP-retry signal. A sustained
+      // error=rate_limit storm with no turn progress used to fall through to
+      // logUnhandledSdkMessage and strand the turn (session 638); classify it
+      // and force a durable terminal once the no-progress window elapses.
+      await this.handleProviderApiRetry(providerEvent);
+      return;
+    }
     const adapterTurn = this.turnContextForProviderEvent(
       providerEvent,
       activeTurn,
@@ -952,6 +1021,12 @@ export class Runner {
           }
         }
       }
+    }
+    if (canonicalEvents.length > 0) {
+      // Real provider output means the turn is progressing, so clear any armed
+      // api_retry stall window. status/thinking_tokens heartbeats are NOT
+      // progress and intentionally do not reset it.
+      this.resetProviderRetryStall();
     }
     if (providerEvent.type === "result" && this.activeTurn === activeTurn) {
       this.activeTurn = null;
@@ -1012,6 +1087,100 @@ export class Runner {
     if (this.activeTurn === turn) {
       this.activeTurn = null;
     }
+  }
+
+  // handleProviderApiRetry classifies a Claude SDK system/api_retry frame (the
+  // SDK's internal HTTP-retry signal) and, for a sustained error=rate_limit
+  // storm with no turn progress, forces the in-flight turn to a durable
+  // terminal so the command queue drains. Without this the SDK retries 429s
+  // indefinitely and never surfaces a terminal rate_limit_event, leaving the
+  // turn "claimed" with the user seeing dead air (session 638). Non-rate_limit
+  // retries (overloaded / api_error) are transient and the SDK recovers on its
+  // own, so they are observed but never forced to a terminal.
+  private async handleProviderApiRetry(
+    message: ClaudeProviderEvent,
+  ): Promise<void> {
+    const error = classifyApiRetryError(message.error);
+    providerApiRetryTotal.labels(error).inc();
+    const turn = this.activeTurn ?? this.pendingTurns[0] ?? null;
+    if (error !== "rate_limit" || !turn || turn.terminalEmitted) {
+      return;
+    }
+    const now = Date.now();
+    if (
+      !this.providerRetryStall ||
+      this.providerRetryStall.turnKey !== turn.turnID
+    ) {
+      this.providerRetryStall = {
+        turnKey: turn.turnID,
+        firstAtMs: now,
+        count: 1,
+      };
+      return;
+    }
+    this.providerRetryStall.count += 1;
+    if (now - this.providerRetryStall.firstAtMs < this.providerRetryStallMs) {
+      return;
+    }
+    const stalledMs = now - this.providerRetryStall.firstAtMs;
+    const count = this.providerRetryStall.count;
+    this.resetProviderRetryStall();
+    await this.failTurnForProviderRetryStall(turn, message, stalledMs, count);
+  }
+
+  // failTurnForProviderRetryStall resolves a turn wedged in a provider
+  // rate-limit retry loop to the same durable terminal a terminal
+  // rate_limit_event would (turn.failed{reason:"provider_rate_limit"}), aborts
+  // the stuck SDK request, drains the command, and removes the turn from the
+  // pending queue so a late SDK frame cannot re-promote an already-terminal
+  // turn. Mirrors failTurnForProviderRateLimit; the distinct decision label
+  // (retry_stall_failed) keeps the "SDK never surfaced a terminal frame" case
+  // separable from an ordinary rejected primary quota.
+  private async failTurnForProviderRetryStall(
+    turn: PendingTurn,
+    message: ClaudeProviderEvent,
+    stalledMs: number,
+    retryCount: number,
+  ): Promise<void> {
+    providerRateLimitDecisionTotal.labels("retry_stall_failed").inc();
+    if (turn.terminalEmitted) return;
+    providerFailureClassTotal.labels("rate_limit").inc();
+    const error =
+      `provider rate-limit retry stall: ${retryCount} api_retry{error:rate_limit} frames over ` +
+      `${Math.round(stalledMs / 1000)}s with no turn progress ` +
+      `(no turn.started, no provider output)`;
+    const dispatched = await dispatch(
+      this.sink,
+      turnEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        clientNonce: turn.clientNonce,
+        source: "claude",
+        type: "turn.failed",
+        reason: "provider_rate_limit",
+        error,
+        providerEventID: message.uuid,
+      }),
+    );
+    if (!dispatched) return;
+    turn.terminalEmitted = true;
+    this.signalStopToSdk();
+    this.removePendingTurn(turn);
+    if (this.activeTurn === turn) {
+      this.activeTurn = null;
+    }
+    await this.markCommandTerminal(turn, "turn.failed").catch((markErr) =>
+      console.error("provider retry-stall terminal mark failed:", markErr),
+    );
+  }
+
+  private removePendingTurn(turn: PendingTurn): void {
+    const idx = this.pendingTurns.indexOf(turn);
+    if (idx >= 0) this.pendingTurns.splice(idx, 1);
+  }
+
+  private resetProviderRetryStall(): void {
+    this.providerRetryStall = null;
   }
 
   private turnContextForProviderEvent(
@@ -1821,6 +1990,7 @@ export class Runner {
             type: "turn.started",
           }),
         );
+        this.resetProviderRetryStall();
       }
     }
     return this.activeTurn;

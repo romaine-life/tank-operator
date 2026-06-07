@@ -161,6 +161,40 @@ func TestDeriveRowColumnChangesCompactionCarriesCount(t *testing.T) {
 	}
 }
 
+// TestDeriveRowColumnChangesUserMessageCarriesCount mirrors the compaction
+// guard for the user_message_count column: the recomputed total reaches the
+// column verbatim across the JSON number shapes, never silently zeroed.
+func TestDeriveRowColumnChangesUserMessageCarriesCount(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload map[string]any
+		want    int64
+	}{
+		{"int64", map[string]any{"user_message_count": int64(8)}, 8},
+		{"float64", map[string]any{"user_message_count": float64(8)}, 8},
+		{"int", map[string]any{"user_message_count": 8}, 8},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := deriveRowColumnChanges(Event{Type: EventTypeUserMessageCountChanged, Payload: tc.payload})
+			if !ok {
+				t.Fatalf("ok = false, want true")
+			}
+			if got.userMessageCount == nil || *got.userMessageCount != tc.want {
+				t.Fatalf("userMessageCount = %v, want %d", got.userMessageCount, tc.want)
+			}
+		})
+	}
+}
+
+// TestDeriveRowColumnChangesUserMessageMissingCountNoOp proves a
+// user-message-count transition with no usable count is inert — never a write
+// that could zero the durable column.
+func TestDeriveRowColumnChangesUserMessageMissingCountNoOp(t *testing.T) {
+	if _, ok := deriveRowColumnChanges(Event{Type: EventTypeUserMessageCountChanged, Payload: map[string]any{}}); ok {
+		t.Fatalf("ok = true, want false for missing user_message_count")
+	}
+}
+
 // TestRowWriterRecordTransitionNoOpSkipsPublish verifies that an
 // event with no row-column effect (e.g. session.created — owned by
 // the registry) returns TransitionNoOp AND skips the publish. Without

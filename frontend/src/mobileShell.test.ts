@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test, expect } from "vitest";
 
 import { BP_COMPACT } from "./breakpoints.ts";
 
@@ -14,48 +13,42 @@ function cssRule(selector: string): string {
   const match = indexCss.match(
     new RegExp(`^\\s*${escaped}\\s*\\{([\\s\\S]*?)\\}`, "m"),
   );
-  assert.ok(match, `${selector} rule should exist`);
+  expect(match, `${selector} rule should exist`).toBeTruthy();
   return match[1];
 }
 
 test("compact shell collapses to a single column with a top-bar row", () => {
   const rule = cssRule(".shell.shell-compact");
-  assert.match(rule, /grid-template-columns:\s*1fr;/);
-  assert.match(rule, /grid-template-rows:\s*auto\s+1fr;/);
+  expect(rule).toMatch(/grid-template-columns:\s*1fr;/);
+  expect(rule).toMatch(/grid-template-rows:\s*auto\s+1fr;/);
 });
 
 test("compact breakpoint in CSS matches the BP_COMPACT constant (no drift)", () => {
-  assert.ok(
-    indexCss.includes(`@media (max-width: ${BP_COMPACT}px)`),
-    `index.css should drive compact tuning from BP_COMPACT (${BP_COMPACT}px)`,
-  );
+  expect(indexCss.includes(`@media (max-width: ${BP_COMPACT}px)`), `index.css should drive compact tuning from BP_COMPACT (${BP_COMPACT}px)`).toBeTruthy();
 });
 
 test("the shell wires the compact drawer, top bar, and desktop-only gate", () => {
   // The load-bearing pieces of the compact triage shell. A change that removes
   // one without a deliberate replacement should fail here.
-  assert.ok(appSource.includes('import { useViewport } from "./useViewport";'));
-  assert.ok(appSource.includes("<MobileTopBar"));
-  assert.ok(appSource.includes("<Sheet open={navDrawerOpen}"));
-  assert.ok(appSource.includes("<DesktopOnly"));
+  expect(appSource.includes('import { useViewport } from "./useViewport";')).toBeTruthy();
+  expect(appSource.includes("<MobileTopBar")).toBeTruthy();
+  expect(appSource.includes("<Sheet open={navDrawerOpen}")).toBeTruthy();
+  expect(appSource.includes("<DesktopOnly")).toBeTruthy();
 });
 
 test("reorder-by-drag is a desktop-only enhancement (no dead gesture on touch)", () => {
-  assert.ok(
-    appSource.includes(
-      "draggable={!isClosing && !readOnlySessionView && !isCompact}",
-    ),
-    "session rows must be non-draggable on compact viewports",
-  );
+  expect(appSource.includes(
+          "draggable={!isClosing && !readOnlySessionView && !isCompact}",
+        ), "session rows must be non-draggable on compact viewports").toBeTruthy();
 });
 
 test("compact nav drawer keeps the session delete affordance visible, not hover-only", () => {
   const rule = cssRule(".sidebar-in-drawer .session-delete");
-  assert.match(rule, /color:\s*var\(--text-muted\);/);
+  expect(rule).toMatch(/color:\s*var\(--text-muted\);/);
 });
 
 test("desktop-only boundary renders an honest card, not a blank surface", () => {
-  assert.ok(appSource.includes('feature="terminal sessions"'));
+  expect(appSource.includes('feature="terminal sessions"')).toBeTruthy();
   const rule = cssRule(".desktop-only-title");
-  assert.match(rule, /color:\s*var\(--text-primary\);/);
+  expect(rule).toMatch(/color:\s*var\(--text-primary\);/);
 });

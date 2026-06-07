@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 
 import {
   breadcrumbCompactLabel,
@@ -19,142 +18,130 @@ const loc = (over: Partial<BreadcrumbLocation>): BreadcrumbLocation => ({
 });
 
 test("chat surface is a single current 'main transcript' crumb", () => {
-  assert.deepEqual(
+  // Turns is the primary session view, so the main transcript is its own
+  // explicit /transcript route, not the bare session root.
+  expect(
     breadcrumbTrail("s-1", loc({ tab: "chat" }), HREF).map((c) => [
       c.label,
       c.href,
       c.current,
     ]),
-    [["main transcript", "https://tank.example.test/sessions/s-1", true]],
-  );
+  ).toEqual([
+    ["main transcript", "https://tank.example.test/sessions/s-1/transcript", true],
+  ]);
 });
 
 test("a numbered turn with a page yields turns / N / pages / P, leaf current", () => {
-  assert.deepEqual(
+  expect(
     breadcrumbTrail(
       "s-1",
       loc({ tab: "turns", turnNumber: 3, pageNumber: 2 }),
       HREF,
     ).map((c) => [c.label, c.href, c.current]),
-    [
-      ["turns", "https://tank.example.test/sessions/s-1/turns", false],
-      ["3", "https://tank.example.test/sessions/s-1/turns/3", false],
-      ["pages", null, false],
-      ["2", "https://tank.example.test/sessions/s-1/turns/3/pages/2", true],
-    ],
-  );
+  ).toEqual([
+    ["turns", "https://tank.example.test/sessions/s-1", false],
+    ["3", "https://tank.example.test/sessions/s-1/turns/3", false],
+    ["pages", null, false],
+    ["2", "https://tank.example.test/sessions/s-1/turns/3/pages/2", true],
+  ]);
 });
 
 test("a turn with no page makes the turn crumb the current leaf", () => {
-  assert.deepEqual(
+  expect(
     breadcrumbTrail("s-1", loc({ tab: "turns", turnNumber: 5 }), HREF).map(
       (c) => [c.label, c.current],
     ),
-    [
-      ["turns", false],
-      ["5", true],
-    ],
-  );
+  ).toEqual([
+    ["turns", false],
+    ["5", true],
+  ]);
 });
 
 test("the in-progress turn with no durable number renders as 'current'", () => {
   const trail = breadcrumbTrail("s-1", loc({ tab: "turns" }), HREF);
-  assert.equal(trail[1].label, "current");
-  assert.equal(trail[1].current, true);
+  expect(trail[1].label).toBe("current");
+  expect(trail[1].current).toBe(true);
 });
 
 test("an unavailable turn target is an explicit non-link leaf", () => {
-  assert.deepEqual(
+  expect(
     breadcrumbTrail(
       "s-1",
       loc({ tab: "turns", turnUnavailable: true }),
       HREF,
     ).map((c) => [c.label, c.href, c.current]),
-    [
-      ["turns", "https://tank.example.test/sessions/s-1/turns", false],
-      ["unavailable", null, true],
-    ],
-  );
+  ).toEqual([
+    ["turns", "https://tank.example.test/sessions/s-1", false],
+    ["unavailable", null, true],
+  ]);
 });
 
 test("static surface is files / <path>, path current", () => {
-  assert.deepEqual(
+  expect(
     breadcrumbTrail(
       "s-1",
       loc({ tab: "static", staticPath: "out/report.html" }),
       HREF,
     ).map((c) => [c.label, c.href, c.current]),
+  ).toEqual([
+    ["files", null, false],
     [
-      ["files", null, false],
-      [
-        "out/report.html",
-        "https://tank.example.test/sessions/s-1/static/out/report.html",
-        true,
-      ],
+      "out/report.html",
+      "https://tank.example.test/sessions/s-1/static/out/report.html",
+      true,
     ],
-  );
+  ]);
 });
 
 test("session-data root and app-level tabs have no trailing trail", () => {
-  assert.deepEqual(
-    breadcrumbTrail("s-1", loc({ tab: "session-data" }), HREF),
-    [],
-  );
-  assert.deepEqual(breadcrumbTrail("s-1", loc({ tab: "settings" }), HREF), []);
-  assert.deepEqual(breadcrumbTrail("s-1", loc({ tab: "help" }), HREF), []);
+  expect(breadcrumbTrail("s-1", loc({ tab: "session-data" }), HREF)).toEqual([]);
+  expect(breadcrumbTrail("s-1", loc({ tab: "settings" }), HREF)).toEqual([]);
+  expect(breadcrumbTrail("s-1", loc({ tab: "help" }), HREF)).toEqual([]);
 });
 
 test("file-browser and background surfaces render a single current crumb", () => {
-  assert.deepEqual(
+  expect(
     breadcrumbTrail("s-1", loc({ tab: "files" }), HREF).map((c) => [
       c.label,
       c.href,
       c.current,
     ]),
-    [["files", "https://tank.example.test/sessions/s-1/files", true]],
-  );
-  assert.deepEqual(
+  ).toEqual([["files", "https://tank.example.test/sessions/s-1/files", true]]);
+  expect(
     breadcrumbTrail("s-1", loc({ tab: "background" }), HREF).map((c) => [
       c.label,
       c.href,
       c.current,
     ]),
-    [["background", "https://tank.example.test/sessions/s-1/background", true]],
-  );
+  ).toEqual([
+    ["background", "https://tank.example.test/sessions/s-1/background", true],
+  ]);
 });
 
 test("compact mobile label is the joined trail; null at base/root", () => {
-  assert.equal(breadcrumbCompactLabel(loc({ tab: "chat" })), null);
-  assert.equal(breadcrumbCompactLabel(loc({ tab: "session-data" })), null);
-  assert.equal(
+  expect(breadcrumbCompactLabel(loc({ tab: "chat" }))).toBe(null);
+  expect(breadcrumbCompactLabel(loc({ tab: "session-data" }))).toBe(null);
+  expect(
     breadcrumbCompactLabel(loc({ tab: "turns", turnNumber: 3, pageNumber: 2 })),
-    "turns / 3 / pages / 2",
-  );
-  assert.equal(
+  ).toBe("turns / 3 / pages / 2");
+  expect(
     breadcrumbCompactLabel(loc({ tab: "static", staticPath: "a/b.html" })),
-    "files / a/b.html",
-  );
+  ).toBe("files / a/b.html");
 });
 
 test("mobile up-href climbs one navigable ancestor", () => {
-  assert.equal(
+  expect(
     breadcrumbUpHref(
       "s-1",
       loc({ tab: "turns", turnNumber: 3, pageNumber: 2 }),
       HREF,
     ),
-    "https://tank.example.test/sessions/s-1/turns/3",
-  );
-  assert.equal(
+  ).toBe("https://tank.example.test/sessions/s-1/turns/3");
+  expect(
     breadcrumbUpHref("s-1", loc({ tab: "turns", turnNumber: 3 }), HREF),
-    "https://tank.example.test/sessions/s-1/turns",
-  );
-  assert.equal(
-    breadcrumbUpHref("s-1", loc({ tab: "chat" }), HREF),
+  ).toBe("https://tank.example.test/sessions/s-1");
+  expect(breadcrumbUpHref("s-1", loc({ tab: "chat" }), HREF)).toBe(
     "https://tank.example.test/sessions/s-1/session-data",
   );
-  assert.equal(
-    breadcrumbUpHref("s-1", loc({ tab: "session-data" }), HREF),
-    null,
-  );
+  expect(breadcrumbUpHref("s-1", loc({ tab: "session-data" }), HREF)).toBe(null);
 });

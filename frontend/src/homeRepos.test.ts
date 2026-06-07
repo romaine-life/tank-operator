@@ -1,6 +1,4 @@
-import { afterEach, beforeEach, test } from "node:test";
-import assert from "node:assert/strict";
-
+import { afterEach, beforeEach, test, expect } from "vitest";
 import {
   readHomeDismissedRecentRepos,
   readHomeSelectedRepos,
@@ -49,18 +47,18 @@ test("home repo defaults round-trip through localStorage", () => {
     "example/sixth",
   ]);
 
-  assert.deepEqual(readHomeSelectedRepos(), [
-    "romaine-life/tank-operator",
-    "romaine-life/infra-bootstrap",
-    "romaine-life/mcp-tank-operator",
-    "openai/codex",
-    "example/fifth",
-  ]);
+  expect(readHomeSelectedRepos()).toEqual([
+        "romaine-life/tank-operator",
+        "romaine-life/infra-bootstrap",
+        "romaine-life/mcp-tank-operator",
+        "openai/codex",
+        "example/fifth",
+      ]);
 });
 
 test("home repo defaults ignore malformed storage", () => {
   fakeStorage["tank.homeSelectedRepos"] = "not-json";
-  assert.deepEqual(readHomeSelectedRepos(), []);
+  expect(readHomeSelectedRepos()).toEqual([]);
 });
 
 test("dismissed recent repos round-trip without the session repo cap", () => {
@@ -75,17 +73,17 @@ test("dismissed recent repos round-trip without the session repo cap", () => {
     "example/sixth",
   ]);
 
-  assert.deepEqual(readHomeDismissedRecentRepos(), [
-    "romaine-life/tank-operator",
-    "romaine-life/infra-bootstrap",
-    "romaine-life/mcp-tank-operator",
-    "openai/codex",
-    "example/fifth",
-    "example/sixth",
-  ]);
+  expect(readHomeDismissedRecentRepos()).toEqual([
+        "romaine-life/tank-operator",
+        "romaine-life/infra-bootstrap",
+        "romaine-life/mcp-tank-operator",
+        "openai/codex",
+        "example/fifth",
+        "example/sixth",
+      ]);
 });
 
 test("dismissed recent repos ignore malformed storage", () => {
   fakeStorage["tank.homeDismissedRecentRepos"] = "not-json";
-  assert.deepEqual(readHomeDismissedRecentRepos(), []);
+  expect(readHomeDismissedRecentRepos()).toEqual([]);
 });

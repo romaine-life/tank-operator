@@ -795,6 +795,15 @@ func (r *managerTestRegistry) SetName(_ context.Context, email, sessionID string
 	}
 	return nil
 }
+func (r *managerTestRegistry) SetOpenTarget(_ context.Context, email, sessionID, target string) error {
+	for i, record := range r.records {
+		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
+			r.records[i].OpenTarget = target
+			return nil
+		}
+	}
+	return nil
+}
 func (r *managerTestRegistry) SetBugLabel(_ context.Context, email, sessionID string, label *sessionmodel.SessionBugLabel) error {
 	if label == nil {
 		return r.SetBugLabels(context.Background(), email, sessionID, nil)

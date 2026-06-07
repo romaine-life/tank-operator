@@ -107,6 +107,14 @@ export interface SessionRow {
   // row from the session_events ledger. Powers the composer's compaction metric;
   // stable across reload and identical in a fresh tab, like the window above.
   compaction_count?: number;
+  // Durable per-session count of user_message.created events — one per human
+  // back-and-forth — projected onto the row from the session_events ledger.
+  // Kept as row metadata for compatibility and diagnostics; sidebar opens now
+  // always land on Turns.
+  user_message_count?: number;
+  // Legacy durable sidebar open-target pin. The frontend no longer uses it to
+  // decide where a session opens, but still carries valid row values.
+  open_target?: "chat" | "turns";
   agent_avatar_id?: string;
   system_avatar_id?: string;
   // Durable user-facing order for the sidebar. Larger values render
@@ -556,6 +564,12 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       provider_rate_limit_observed_at:
         stringField(rowRaw, "provider_rate_limit_observed_at") ?? undefined,
       compaction_count: nonNegativeNumberField(rowRaw, "compaction_count") ?? undefined,
+      user_message_count:
+        nonNegativeNumberField(rowRaw, "user_message_count") ?? undefined,
+      open_target:
+        rowRaw.open_target === "chat" || rowRaw.open_target === "turns"
+          ? rowRaw.open_target
+          : undefined,
       agent_avatar_id: stringField(rowRaw, "agent_avatar_id") ?? undefined,
       system_avatar_id: stringField(rowRaw, "system_avatar_id") ?? undefined,
       sidebar_position: sidebarPosition,

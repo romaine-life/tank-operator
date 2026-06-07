@@ -1,5 +1,4 @@
-import assert from "node:assert/strict";
-import test from "node:test";
+import { test, expect } from "vitest";
 import { buildSessionDataStatusRows } from "./sessionDataStatus";
 
 test("buildSessionDataStatusRows summarizes active workflow links", () => {
@@ -20,21 +19,19 @@ test("buildSessionDataStatusRows summarizes active workflow links", () => {
     },
   });
 
-  assert.deepEqual(
-    rows.map((row) => [row.id, row.status, row.tone]),
-    [
-      ["test", "Active", "good"],
-      ["context", "Compacted", "warning"],
-      ["rollout", "Inactive", "muted"],
-      ["pull_request", "Linked", "info"],
-      ["bug_report", "Linked", "info"],
-      ["linked_repo", "Ready", "good"],
-    ],
-  );
-  assert.equal(rows[0]?.detail, "Slot 3 reserved");
-  assert.equal(rows[0]?.href, "https://tank-operator-slot-3.tank.dev.romaine.life/");
-  assert.equal(rows[1]?.detail, "2 compactions / 1m window / provider");
-  assert.equal(rows[3]?.detail, "romaine-life/tank-operator#123");
+  expect(rows.map((row) => [row.id, row.status, row.tone])).toEqual([
+          ["transcript", "Available", "info"],
+          ["test", "Active", "good"],
+          ["context", "Compacted", "warning"],
+          ["rollout", "Inactive", "muted"],
+          ["pull_request", "Linked", "info"],
+          ["bug_report", "Linked", "info"],
+          ["linked_repo", "Ready", "good"],
+        ]);
+  expect(rows[1]?.detail).toBe("Slot 3 reserved");
+  expect(rows[1]?.href).toBe("https://tank-operator-slot-3.tank.dev.romaine.life/");
+  expect(rows[2]?.detail).toBe("2 compactions / 1m window / provider");
+  expect(rows[4]?.detail).toBe("romaine-life/tank-operator#123");
 });
 
 test("buildSessionDataStatusRows surfaces repo clone issues", () => {
@@ -47,9 +44,9 @@ test("buildSessionDataStatusRows surfaces repo clone issues", () => {
   });
 
   const repo = rows.find((row) => row.id === "linked_repo");
-  assert.equal(repo?.status, "Needs attention");
-  assert.equal(repo?.tone, "danger");
-  assert.equal(repo?.detail, "1/2 repo clone issue");
+  expect(repo?.status).toBe("Needs attention");
+  expect(repo?.tone).toBe("danger");
+  expect(repo?.detail).toBe("1/2 repo clone issue");
 });
 
 test("buildSessionDataStatusRows summarizes multiple bug labels", () => {
@@ -61,7 +58,7 @@ test("buildSessionDataStatusRows summarizes multiple bug labels", () => {
   });
 
   const bugReport = rows.find((row) => row.id === "bug_report");
-  assert.equal(bugReport?.status, "2 linked");
-  assert.equal(bugReport?.detail, "checkout, transcript");
-  assert.equal(bugReport?.tone, "info");
+  expect(bugReport?.status).toBe("2 linked");
+  expect(bugReport?.detail).toBe("checkout, transcript");
+  expect(bugReport?.tone).toBe("info");
 });

@@ -23,6 +23,10 @@ product state.
 - Stream tickets are short-lived carriers for browser-native EventSource only.
 - Durable feature tables and event ledgers own product state; streams deliver
   changes.
+- Production api-proxy deployments own host-wide provider subscription OAuth
+  refresh chains. Validation slots may use those credentials only by routing
+  provider traffic through the production proxy services; they must not mount,
+  mirror, refresh, or write provider credential secrets.
 
 ## Migration Rules
 
@@ -60,6 +64,9 @@ product state.
 - Unknown stream cursors trigger explicit resync.
 - Service-principal calls must carry actor identity where user scoping is
   required.
+- Validation-slot save-credentials paths must fail closed because slots do not
+  receive provider credential KV key env vars. A slot config session must not
+  be able to overwrite production provider OAuth blobs.
 
 ## Observability
 
@@ -85,3 +92,8 @@ product state.
   reconnect.
 - Unknown cursor and invalid ticket paths produce explicit resync/auth failure
   behavior rather than silent gaps.
+- Test-slot Helm renders do not contain slot-local provider api-proxy
+  deployments, provider credential ExternalSecrets, provider credential Secret
+  mounts, or `*_CREDENTIALS_KV_KEY` env vars; they do route
+  `CLAUDE_API_PROXY_HOST`, `CODEX_API_PROXY_HOST`, and
+  `CLAUDE_OAUTH_GATEWAY_HOST` to production service DNS.

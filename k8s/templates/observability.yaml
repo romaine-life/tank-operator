@@ -38,9 +38,12 @@ spec:
       interval: {{ .Values.observability.scrapeInterval | default "30s" | quote }}
       scrapeTimeout: 10s
 ---
-# ServiceMonitor: api-proxy deployments (Claude + Codex). Both Services
-# expose the metrics sidecar port; the `provider` label on each metric
-# distinguishes the two at query time.
+{{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
+# ServiceMonitor: api-proxy deployments (Claude + Codex + Antigravity). All
+# Services expose the metrics sidecar port; the `provider` label on each metric
+# distinguishes them at query time. The provider-generic TankApiProxy* alerts
+# below fire per-provider via {{`{{ $labels.provider }}`}}, so antigravity is
+# covered for refresh-storm / refresh-failure / rate-limit the moment it scrapes.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -53,13 +56,14 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: [claude-api-proxy, codex-api-proxy]
+        values: [claude-api-proxy, codex-api-proxy, antigravity-api-proxy]
   endpoints:
     - port: metrics
       path: /metrics
       interval: {{ .Values.observability.scrapeInterval | default "30s" | quote }}
       scrapeTimeout: 10s
 ---
+{{- end }}
 # PodMonitor: session pods. The PodMonitor scrapes the mcp-auth-proxy
 # sidecar and (for claude_gui / codex_gui sessions) the runner sidecar.
 # Session pods are ephemeral — scrape interval 15s gives the operator a
@@ -728,6 +732,42 @@ spec:
               The submitted line outpacing the terminal lines is the
               direct signature.
 
+        # Per-session, durable-state stuck-turn detector. A fully-wedged
+        # or crashed runner emits nothing and cannot fail its own turn,
+        # so the turn sits in sessions.activity_summary.status =
+        # "claimed"/"submitted" forever with no terminal. The
+        # orchestrator-side sampler (internal/stuckturns) flags such
+        # rows once they are unprogressed past the stall threshold (10m,
+        # above the runner's 240s PROVIDER_RETRY_STALL_MS terminal) and
+        # publishes the count to tank_sessions_stuck_in_progress. This
+        # is per-session and durable-state-based, complementing the
+        # aggregate, rate-based TankTurnSilentStranding above.
+        - alert: TankSessionStuckInProgress
+          expr: tank_sessions_stuck_in_progress > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "a session has been accepted-but-unprogressed (submitted/claimed) past the stall threshold"
+            runbook: |
+              The durable source of truth is sessions.activity_summary in
+              Postgres; this is the orchestrator-side complement to the
+              runner's api_retry rate-limit terminal
+              (PROVIDER_RETRY_STALL_MS, 240s). A nonzero gauge means a
+              turn was durably claimed/submitted but produced no
+              turn.started/terminal for >10m, so the runner did NOT fail
+              it (fully-wedged/crashed runner, or a stall class the runner
+              can't see).
+
+              Localize with GET /api/debug/stuck-turns (lists the
+              session_ids + stuck_seconds + provider_rate_limit_status),
+              then read that session's agent-runner logs and
+              session_events.
+
+              Distinguishes from TankTurnSilentStranding (aggregate
+              submitted-vs-terminal rate) by being per-session and
+              durable-state-based.
+
         # Background-task wake fire failures. A Claude run_in_background task
         # that finishes while the session is idle registers a durable wake in
         # session_background_task_wakes; the orchestrator fire loop turns it
@@ -1066,6 +1106,44 @@ spec:
           annotations:
             summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot rotate its OAuth refresh chain"
             runbook: "All inbound requests will eventually 401. Inspect ext-proc logs for `refresh failed` / `refresh request crashed`."
+
+        # Sustained upstream 429s = the shared provider account's usage cap is
+        # exhausted. This is the upstream-cause view of the rate-limit-stall
+        # class: pod-side runners convert a stuck rate-limit retry into a
+        # durable turn.failed{reason:provider_rate_limit} (PROVIDER_RETRY_STALL_MS)
+        # and the orchestrator's TankSessionStuckInProgress catches any that
+        # still wedge — this alert says WHY (the account is being throttled),
+        # not just that a turn stalled. Threshold tolerates transient single
+        # 429s the SDK retries through (a real cap-exhaustion sustains a high
+        # 429 count over 15m). Per-session attribution of which session is
+        # consuming the cap is not yet wired (needs an SDK request-header hook;
+        # see docs/api-proxy-auth.md "Per-session attribution").
+        - alert: TankApiProxyRateLimited
+          expr: increase(tank_api_proxy_upstream_429_total[15m]) > 20
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "api-proxy ({{`{{ $labels.provider }}`}}) upstream 429s sustained — provider usage cap likely exhausted"
+            runbook: "The shared provider account is being rate-limited (429s from api.anthropic.com / chatgpt.com). Confirm with the provider usage endpoint and the runner-side tank_runner_provider_api_retry_total{error=\"rate_limit\"} rate. Affected turns resolve to turn.failed{reason:provider_rate_limit} (runner) and any wedged ones surface on TankSessionStuckInProgress + GET /api/debug/stuck-turns. Mitigate by spreading load or raising the account cap; there is currently no per-session attribution of cap consumption (dependency-gated — see docs/api-proxy-auth.md)."
+
+        # KV write-back is best-effort by design (a rotation updates memory
+        # first and serves immediately), but a SUSTAINED failure is the
+        # "restart-bomb precursor" (docs/api-proxy-auth.md → Failure modes):
+        # the proxy is rotating fine in memory, but the next restart re-reads a
+        # stale Secret and replays an already-used refresh token → refresh_token_reused
+        # → chain death → wizard recovery. The keeper (run_refresh_keeper) writes
+        # back on boot + before expiry, so steady-state is zero; a non-zero rate
+        # over 15m means the write path itself is broken (UAMI/KV RBAC, KV
+        # outage). Provider-generic — covers claude, codex, and antigravity.
+        - alert: TankApiProxyKvPersistFailing
+          expr: increase(tank_api_proxy_kv_persist_total{result="failure"}[15m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot persist rotated tokens to KV"
+            runbook: "Rotations are succeeding in memory but not writing back to KV — the restart-bomb precursor. Grep ext-proc logs for `KV write failed`; check the api-proxy UAMI's Key Vault Secrets Officer role and KV reachability (az keyvault secret show --vault-name romaine-kv --name <provider>-credentials --query attributes.updated). Until fixed, do NOT restart the proxy pod: the next boot will re-read a stale Secret. For claude/codex this surfaces as refresh_token_reused after restart (run the credential wizard to recover); antigravity self-heals on boot because the keeper re-refreshes, but the stale KV blob should still be repaired."
 
     - name: tank-operator.provider-credential-health
       rules:

@@ -72,6 +72,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			sessions.provider_rate_limit_info,
 			COALESCE(to_char(sessions.provider_rate_limit_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS provider_rate_limit_observed_at,
 			sessions.compaction_count,
+			sessions.user_message_count,
+			sessions.open_target,
 			COALESCE(sessions.agent_avatar_id, ''),
 			COALESCE(sessions.system_avatar_id, ''),
 			sessions.sidebar_position,
@@ -114,22 +116,23 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 	var records []sessionmodel.SessionRecord
 	for rows.Next() {
 		var (
-			sessionID, mode, podName, requestedAt, createdAt, updatedAt string
-			status, readyAt, terminatingAt                              string
-			name                                                        string
-			visible                                                     bool
-			activitySummary, testState, rolloutState, cloneState        []byte
-			providerRateLimitInfo                                       []byte
-			repos, capabilities                                         []string
-			model, effort, runtimeModel, runtimeEffort, runtimeAt       string
-			runtimeContextWindowSource, runtimeContextWindowObservedAt  string
-			providerRateLimitObservedAt                                 string
-			agentAvatarID, systemAvatarID                               string
-			runtimeContextWindowTokens, compactionCount                 int64
-			sidebarPosition, rowVersion                                 int64
-			bugLabelID                                                  sql.NullInt64
-			bugLabelName, bugLabelSlug                                  sql.NullString
-			bugLabelsRaw                                                []byte
+			sessionID, mode, podName, requestedAt, createdAt, updatedAt   string
+			status, readyAt, terminatingAt                                string
+			name                                                          string
+			visible                                                       bool
+			activitySummary, testState, rolloutState, cloneState          []byte
+			providerRateLimitInfo                                         []byte
+			repos, capabilities                                           []string
+			model, effort, runtimeModel, runtimeEffort, runtimeAt         string
+			runtimeContextWindowSource, runtimeContextWindowObservedAt    string
+			providerRateLimitObservedAt                                   string
+			openTarget                                                    string
+			agentAvatarID, systemAvatarID                                 string
+			runtimeContextWindowTokens, compactionCount, userMessageCount int64
+			sidebarPosition, rowVersion                                   int64
+			bugLabelID                                                    sql.NullInt64
+			bugLabelName, bugLabelSlug                                    sql.NullString
+			bugLabelsRaw                                                  []byte
 		)
 		if err := rows.Scan(
 			&sessionID, &mode, &podName, &name, &visible,
@@ -141,6 +144,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowObservedAt,
 			&providerRateLimitInfo, &providerRateLimitObservedAt,
 			&compactionCount,
+			&userMessageCount,
+			&openTarget,
 			&agentAvatarID, &systemAvatarID,
 			&sidebarPosition,
 			&rowVersion,
@@ -185,6 +190,8 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			ProviderRateLimitInfo:          unmarshalJSONB(providerRateLimitInfo),
 			ProviderRateLimitObservedAt:    providerRateLimitObservedAt,
 			CompactionCount:                compactionCount,
+			UserMessageCount:               userMessageCount,
+			OpenTarget:                     openTarget,
 			AgentAvatarID:                  agentAvatarID,
 			SystemAvatarID:                 systemAvatarID,
 			SidebarPosition:                sidebarPosition,

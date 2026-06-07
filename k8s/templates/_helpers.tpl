@@ -1,14 +1,12 @@
 {{/*
 Resolve the Key Vault secret that stores Claude Code OAuth credentials.
 
-Primary production keeps the historical shared name.
-Validation slots default to a namespace-scoped name so each slot has an
-independent refresh-token chain.
+Primary production keeps the historical shared name. Validation slots do not
+own a credential chain; their sessions route through the production provider
+proxies and their orchestrators intentionally omit credential-write env vars.
 */}}
 {{- define "tank-operator.claudeCredentialsKvKey" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}
-{{ printf "%s-claude-code-credentials" (include "tank-operator.slotName" .) }}
-{{- else if eq .Values.namespaces.orchestrator "tank-operator" -}}
+{{- if eq .Values.namespaces.orchestrator "tank-operator" -}}
 claude-code-credentials
 {{- else -}}
 {{ printf "%s-claude-code-credentials" .Values.namespaces.orchestrator }}
@@ -16,9 +14,7 @@ claude-code-credentials
 {{- end -}}
 
 {{- define "tank-operator.codexCredentialsKvKey" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}
-{{ printf "%s-codex-credentials" (include "tank-operator.slotName" .) }}
-{{- else if eq .Values.namespaces.orchestrator "tank-operator" -}}
+{{- if eq .Values.namespaces.orchestrator "tank-operator" -}}
 codex-credentials
 {{- else -}}
 {{ printf "%s-codex-credentials" .Values.namespaces.orchestrator }}
@@ -26,9 +22,7 @@ codex-credentials
 {{- end -}}
 
 {{- define "tank-operator.antigravityCredentialsKvKey" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}
-{{ printf "%s-antigravity-credentials" (include "tank-operator.slotName" .) }}
-{{- else if eq .Values.namespaces.orchestrator "tank-operator" -}}
+{{- if or (eq .Values.namespaces.orchestrator "tank-operator") (eq (include "tank-operator.isTestEnv" .) "true") -}}
 antigravity-credentials
 {{- else -}}
 {{ printf "%s-antigravity-credentials" .Values.namespaces.orchestrator }}
@@ -110,24 +104,36 @@ antigravity-credentials
 {{ printf "http://tank-operator.%s.svc.cluster.local" (include "tank-operator.orchestratorNamespace" .) }}
 {{- end -}}
 
+{{- define "tank-operator.providerAuthorityNamespace" -}}
+{{- .Values.namespaces.orchestrator -}}
+{{- end -}}
+
+{{- define "tank-operator.oauthCAReflectorReadName" -}}
+{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-claude-oauth-ca-reflector" (include "tank-operator.slotName" .) }}{{- else -}}claude-oauth-ca-reflector{{- end -}}
+{{- end -}}
+
 {{- define "tank-operator.oauthGatewayHost" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "claude-oauth-gateway.%s.svc.cluster.local" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.oauthGateway.serviceHost }}{{- end -}}
+{{- .Values.oauthGateway.serviceHost -}}
 {{- end -}}
 
 {{- define "tank-operator.apiProxyHost" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "claude-api-proxy.%s.svc.cluster.local" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.apiProxy.serviceHost }}{{- end -}}
+{{- .Values.apiProxy.serviceHost -}}
 {{- end -}}
 
 {{- define "tank-operator.codexApiProxyHost" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "codex-api-proxy.%s.svc.cluster.local" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.codexApiProxy.serviceHost }}{{- end -}}
+{{- .Values.codexApiProxy.serviceHost -}}
+{{- end -}}
+
+{{- define "tank-operator.antigravityApiProxyHost" -}}
+{{- .Values.antigravityApiProxy.serviceHost -}}
 {{- end -}}
 
 {{- define "tank-operator.codexCredentialsSecret" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-codex-credentials" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.codexCredentials.secretName }}{{- end -}}
+{{- .Values.externalSecret.codexCredentials.secretName -}}
 {{- end -}}
 
 {{- define "tank-operator.claudeCredentialsSecret" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-claude-code-credentials" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.externalSecret.claudeCredentials.secretName }}{{- end -}}
+{{- .Values.externalSecret.claudeCredentials.secretName -}}
 {{- end -}}
 
 {{- define "tank-operator.credentialRefresherConfigSecret" -}}
@@ -135,7 +141,7 @@ antigravity-credentials
 {{- end -}}
 
 {{- define "tank-operator.apiProxyConfigSecret" -}}
-{{- if eq (include "tank-operator.isTestEnv" .) "true" -}}{{ printf "%s-api-proxy-config" (include "tank-operator.slotName" .) }}{{- else -}}{{ .Values.apiProxy.configSecret }}{{- end -}}
+{{- .Values.apiProxy.configSecret -}}
 {{- end -}}
 
 {{- define "tank-operator.sessionsIngressDnsEnabled" -}}

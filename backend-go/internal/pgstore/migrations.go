@@ -1015,10 +1015,11 @@ var schemaMigrations = []migration{
 	// the test-slot "point this slot at a branch-built session image" flow
 	// (docs/testing.md): a slot's orchestrator reads the row for its own scope
 	// and stamps the override instead of the chart-pinned SESSION_IMAGE /
-	// CODEX_SESSION_IMAGE, so newly-created sessions boot the branch runner
-	// code the same way prod boots its pinned image. Keyed by session_scope so
-	// the shared Postgres can never let a slot override bleed into another slot
-	// or prod; the write path additionally refuses the production scope.
+	// CODEX_SESSION_IMAGE / ANTIGRAVITY_SESSION_IMAGE, so newly-created sessions
+	// boot the branch runner code the same way prod boots its pinned image. Keyed
+	// by session_scope so the shared Postgres can never let a slot override bleed
+	// into another slot or prod; the write path additionally refuses the
+	// production scope.
 	{ID: "0086", SQL: `CREATE TABLE IF NOT EXISTS session_image_overrides (
 		session_scope text PRIMARY KEY,
 		claude_image  text,
@@ -1632,6 +1633,32 @@ var schemaMigrations = []migration{
 		WHERE name IS NULL OR btrim(name) = '';
 		ALTER TABLE sessions ALTER COLUMN name SET NOT NULL;
 	END $$`},
+
+		// user_message_count: durable per-session count of user_message.created
+		// events (one per human back-and-forth). Kept as durable row metadata for
+		// diagnostics and compatibility. Mirrors compaction_count (0125/0126): the
+		// chat-activity emitter recomputes it with a bounded COUNT over the partial
+		// index below on each user_message.created upsert
+	// (recompute-and-compare, so an at-least-once redelivery is a no-op rather
+	// than a double-count). The index is keyed on (tank_session_id) for the
+	// per-session count — distinct from the (created_at)-keyed
+	// session_events_user_message_created_at index (0102) that the time-windowed
+	// stranded-launch sweep uses.
+	{ID: "0135", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS user_message_count bigint NOT NULL DEFAULT 0`},
+	{ID: "0136", SQL: `CREATE INDEX IF NOT EXISTS session_events_user_message_by_session
+		ON session_events (tank_session_id)
+		WHERE event_type = 'user_message.created'`},
+
+		// open_target: legacy durable per-session sidebar open-target preference
+		// (''/chat/turns). The frontend no longer uses it for session-open defaults,
+		// but the column remains on the row wire for compatibility with existing
+		// clients and historical rows.
+	{ID: "0137", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS open_target text NOT NULL DEFAULT ''`},
+
+	{ID: "0138", SQL: `ALTER TABLE session_image_overrides
+		ADD COLUMN IF NOT EXISTS antigravity_image text`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
