@@ -665,11 +665,12 @@ test("turn internals move out of the transcript into a turn view", () => {
     appRoutesSource.includes("url.pathname = `/sessions/${encodedId}${"),
     true,
   );
-  assert.equal(
-    appRoutesSource.includes(
-      'export type SessionRouteTab = "chat" | "turns" | "static" | "session-data";',
-    ),
-    true,
+  // SessionRouteTab covers every routed session surface — every primary surface
+  // is URL-addressable, including the file-browser and background panes; the
+  // definition is multi-line.
+  assert.match(
+    appRoutesSource,
+    /export type SessionRouteTab =[\s\S]*?"chat"[\s\S]*?"turns"[\s\S]*?"static"[\s\S]*?"session-data"[\s\S]*?"files"[\s\S]*?"background"/,
   );
   assert.equal(
     appRoutesSource.includes('export type AppRouteTab = "settings" | "help";'),

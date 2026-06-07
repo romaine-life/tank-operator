@@ -1,6 +1,12 @@
 export type SettingsTab = "preferences" | "admin";
 export type AdminView = "controls" | "avatars" | "report" | "observability";
-export type SessionRouteTab = "chat" | "turns" | "static" | "session-data";
+export type SessionRouteTab =
+  | "chat"
+  | "turns"
+  | "static"
+  | "session-data"
+  | "files"
+  | "background";
 export type HomeRouteTab = "chat";
 export type AppRouteTab = "settings" | "help";
 
@@ -173,6 +179,34 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       ...defaultSettingsRoute,
     };
   }
+  // The file-browser and background panes are routed at the surface level so they
+  // are addressable and reload-stable and appear in the breadcrumb. Their deeper
+  // internal state (file path, selected file, background view) stays client-side
+  // for now; deep-linking it is a deliberate, named follow-up.
+  if (parts[2] === "files" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "files",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      ...defaultSettingsRoute,
+    };
+  }
+  if (parts[2] === "background" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "background",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      ...defaultSettingsRoute,
+    };
+  }
   return null;
 }
 
@@ -222,6 +256,10 @@ export function buildSessionRouteUrl(
     suffix = `/static/${staticPath.split("/").map(encodeURIComponent).join("/")}`;
   } else if (tab === "session-data") {
     suffix = "/session-data";
+  } else if (tab === "files") {
+    suffix = "/files";
+  } else if (tab === "background") {
+    suffix = "/background";
   }
   url.pathname = `/sessions/${encodedId}${suffix}`;
   url.search = "";

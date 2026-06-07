@@ -75,6 +75,30 @@ test("session routes parse only session-scoped pages", () => {
     adminView: "controls",
   });
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/session-data/extra"), null);
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/files"), {
+    sessionId: "s-1",
+    tab: "files",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
+    staticPath: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  assert.deepEqual(readSessionRouteFromPathname("/sessions/s-1/background"), {
+    sessionId: "s-1",
+    tab: "background",
+    turnNumber: null,
+    turnSegmentPresent: false,
+    pageNumber: null,
+    pageSegmentPresent: false,
+    staticPath: null,
+    settingsTab: "preferences",
+    adminView: "controls",
+  });
+  // Surface-only for now: a deeper segment isn't a valid target yet.
+  assert.equal(readSessionRouteFromPathname("/sessions/s-1/files/src"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/settings"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/settings/admin/observability"), null);
   assert.equal(readSessionRouteFromPathname("/sessions/s-1/help"), null);
@@ -134,6 +158,14 @@ test("session route urls broadcast only session-owned pages", () => {
   assert.equal(
     buildSessionRouteUrl(current, "s 1", "session-data"),
     "https://tank.example.test/sessions/s%201/session-data",
+  );
+  assert.equal(
+    buildSessionRouteUrl(current, "s 1", "files"),
+    "https://tank.example.test/sessions/s%201/files",
+  );
+  assert.equal(
+    buildSessionRouteUrl(current, "s 1", "background"),
+    "https://tank.example.test/sessions/s%201/background",
   );
 });
 

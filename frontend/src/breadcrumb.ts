@@ -104,6 +104,17 @@ export function breadcrumbTrail(
     ];
   }
 
+  if (location.tab === "files" || location.tab === "background") {
+    return [
+      {
+        key: "section",
+        label: location.tab,
+        href: url(location.tab, null, null, null),
+        current: true,
+      },
+    ];
+  }
+
   return [];
 }
 

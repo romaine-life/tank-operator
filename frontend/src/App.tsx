@@ -14178,6 +14178,20 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
+    if (route.tab === "files") {
+      setActiveTab("files");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
+    if (route.tab === "background") {
+      setActiveTab("background");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     setActiveTab("chat");
     setPendingRouteTurnNumber(null);
     setPendingTurnViewRouteAnchor(null);
@@ -16872,6 +16886,10 @@ function ChatPane({
       replaceAppRoute("help");
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
+    } else if (activeTab === "files") {
+      replaceSessionRoute(session.id, "files");
+    } else if (activeTab === "background") {
+      replaceSessionRoute(session.id, "background");
     } else {
       replaceSessionRoute(session.id, "chat");
     }

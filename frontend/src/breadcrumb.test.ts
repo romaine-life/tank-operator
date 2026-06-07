@@ -101,7 +101,26 @@ test("session-data root and app-level tabs have no trailing trail", () => {
     [],
   );
   assert.deepEqual(breadcrumbTrail("s-1", loc({ tab: "settings" }), HREF), []);
-  assert.deepEqual(breadcrumbTrail("s-1", loc({ tab: "files" }), HREF), []);
+  assert.deepEqual(breadcrumbTrail("s-1", loc({ tab: "help" }), HREF), []);
+});
+
+test("file-browser and background surfaces render a single current crumb", () => {
+  assert.deepEqual(
+    breadcrumbTrail("s-1", loc({ tab: "files" }), HREF).map((c) => [
+      c.label,
+      c.href,
+      c.current,
+    ]),
+    [["files", "https://tank.example.test/sessions/s-1/files", true]],
+  );
+  assert.deepEqual(
+    breadcrumbTrail("s-1", loc({ tab: "background" }), HREF).map((c) => [
+      c.label,
+      c.href,
+      c.current,
+    ]),
+    [["background", "https://tank.example.test/sessions/s-1/background", true]],
+  );
 });
 
 test("compact mobile label is the joined trail; null at base/root", () => {
