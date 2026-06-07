@@ -147,7 +147,11 @@ func (s *appServer) handleListScheduledWakeups(w http.ResponseWriter, r *http.Re
 		writeError(w, status, scopeErr.Error())
 		return
 	}
-	if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
+	// Transcript-read auth so the scheduled-continuation ledger resolves for a
+	// completed/cross-scope session the same way the timeline, activity, snapshot
+	// and background-task endpoints do — a full admin/owner must be able to read
+	// it after the pod is gone, not get a 404.
+	if _, status, err := s.authorizeSessionTranscriptReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
 		writeError(w, status, err.Error())
 		return
 	}
