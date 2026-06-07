@@ -653,6 +653,7 @@ spec:
   renewBefore: 360h
   dnsNames:
     - cloudcode-pa.googleapis.com
+    - daily-cloudcode-pa.googleapis.com
   issuerRef:
     name: claude-oauth-ca-issuer
     kind: Issuer

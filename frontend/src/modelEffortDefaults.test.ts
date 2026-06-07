@@ -25,7 +25,9 @@ import { test, expect } from "vitest";
 const appSource = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
 
 test("CLAUDE_MODELS lists claude-opus-4-8 first so it is the default selection", () => {
-  const match = appSource.match(/const CLAUDE_MODELS:\s*ModelOption\[\][^[]*\[([\s\S]*?)\];/);
+  const match = appSource.match(
+    /const CLAUDE_MODELS:\s*ModelOption\[\][^[]*\[([\s\S]*?)\];/,
+  );
   expect(match, "CLAUDE_MODELS literal should be present").toBeTruthy();
   const firstId = match[1]!.match(/id:\s*"([^"]+)"/);
   expect(firstId, "CLAUDE_MODELS first entry should have an id").toBeTruthy();
@@ -38,7 +40,9 @@ test("DEFAULT_CLAUDE_MODEL_ID and DEFAULT_CLAUDE_EFFORT_ID match the agent-runne
   // backend-go/cmd/tank-operator/middleware.go allowedClaudeEfforts.
   // If product changes the defaults, ALL three layers must move
   // together — that's the cross-layer contract this test enforces.
-  expect(appSource).toMatch(/const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";/);
+  expect(appSource).toMatch(
+    /const DEFAULT_CLAUDE_MODEL_ID = "claude-opus-4-8";/,
+  );
   expect(appSource).toMatch(/const DEFAULT_CLAUDE_EFFORT_ID = "high";/);
 });
 
@@ -47,10 +51,23 @@ test("DEFAULT_CODEX_MODEL_ID and DEFAULT_CODEX_EFFORT_ID pin the strongest Codex
   expect(appSource).toMatch(/const DEFAULT_CODEX_EFFORT_ID = "xhigh";/);
 });
 
+test("DEFAULT_ANTIGRAVITY_MODEL_ID pins the explicit agy model", () => {
+  expect(appSource).toMatch(
+    /const DEFAULT_ANTIGRAVITY_MODEL_ID = "Gemini 3\.5 Flash \(Medium\)";/,
+  );
+});
+
 test("Codex model options require a concrete model instead of account default", () => {
   expect(appSource).not.toMatch(/codex-account-default/);
   expect(appSource).not.toMatch(/Codex (?:· )?Account default/i);
   expect(appSource).not.toMatch(/Codex account default/i);
+});
+
+test("Antigravity model options require a concrete model instead of agy internal default", () => {
+  expect(appSource).toMatch(
+    /const ANTIGRAVITY_MODELS:\s*ModelOption\[\][\s\S]{0,180}id:\s*"Gemini 3\.5 Flash \(Medium\)"/,
+  );
+  expect(appSource).not.toMatch(/antigravity-default/);
 });
 
 test("RunPrefs persists provider model and effort across page reloads", () => {
@@ -58,21 +75,39 @@ test("RunPrefs persists provider model and effort across page reloads", () => {
   expect(appSource).toMatch(/claudeEffort:\s*string;/);
   expect(appSource).toMatch(/codexModelId:\s*string;/);
   expect(appSource).toMatch(/codexEffort:\s*string;/);
+  expect(appSource).toMatch(/antigravityModelId:\s*string;/);
   expect(appSource).toMatch(/claudeModelId:\s*DEFAULT_CLAUDE_MODEL_ID/);
   expect(appSource).toMatch(/claudeEffort:\s*DEFAULT_CLAUDE_EFFORT_ID/);
   expect(appSource).toMatch(/codexModelId:\s*DEFAULT_CODEX_MODEL_ID/);
   expect(appSource).toMatch(/codexEffort:\s*DEFAULT_CODEX_EFFORT_ID/);
+  expect(appSource).toMatch(
+    /antigravityModelId:\s*DEFAULT_ANTIGRAVITY_MODEL_ID/,
+  );
 });
 
 test("initialMessageMode is an ephemeral run preference that resets to direct on fresh loads", () => {
   expect(appSource).toMatch(/initialMessageMode:\s*InitialMessageMode;/);
-  expect(appSource).toMatch(/initialMessageMode:\s*DEFAULT_INITIAL_MESSAGE_MODE/);
-  expect(appSource).toMatch(/const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\(\["initialMessageMode"\]\);/);
-  expect(appSource).toMatch(/function durableRunPrefs\(prefs: RunPrefs\): Record<string, unknown> \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;/);
-  expect(appSource).toMatch(/function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}localStorage\.getItem/);
-  expect(appSource).toMatch(/function mergeServerRunPrefs\(prev: RunPrefs, server: Record<string, unknown>\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}const raw = server\[key\];/);
-  expect(appSource).toMatch(/JSON\.stringify\(\{ run_prefs: durableRunPrefs\(prefs\) \}\)/);
-  expect(appSource).toMatch(/if \(isDurableRunPref\(key\)\) \{[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\}[\s\S]{0,120}if \(!isDurableRunPref\(key\)\) return;[\s\S]{0,120}localStorage\.setItem/);
+  expect(appSource).toMatch(
+    /initialMessageMode:\s*DEFAULT_INITIAL_MESSAGE_MODE/,
+  );
+  expect(appSource).toMatch(
+    /const EPHEMERAL_RUN_PREF_KEYS = new Set<keyof RunPrefs>\(\["initialMessageMode"\]\);/,
+  );
+  expect(appSource).toMatch(
+    /function durableRunPrefs\(prefs: RunPrefs\): Record<string, unknown> \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;/,
+  );
+  expect(appSource).toMatch(
+    /function loadRunPrefs\(\): RunPrefs \{[\s\S]{0,260}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,120}localStorage\.getItem/,
+  );
+  expect(appSource).toMatch(
+    /function mergeServerRunPrefs\([\s\S]{0,220}prev: RunPrefs,[\s\S]{0,220}server: Record<string, unknown>,[\s\S]{0,420}if \(!isDurableRunPref\(key\)\) continue;[\s\S]{0,180}const raw = server\[key\];/,
+  );
+  expect(appSource).toMatch(
+    /JSON\.stringify\(\{ run_prefs: durableRunPrefs\(prefs\) \}\)/,
+  );
+  expect(appSource).toMatch(
+    /if \(isDurableRunPref\(key\)\) \{[\s\S]{0,80}persistRunPrefs\(next\);[\s\S]{0,80}\}[\s\S]{0,120}if \(!isDurableRunPref\(key\)\) return;[\s\S]{0,120}localStorage\.setItem/,
+  );
   expect(appSource).not.toMatch(/pickInitialMessageMode\(raw/);
 });
 
@@ -83,11 +118,24 @@ test("loadRunPrefs filters localStorage-loaded model/effort through the allowlis
   // a typo would silently become a runner default at pod boot,
   // looking to the user like "my pick was ignored." The
   // pickAllowedPrefId call is the load-bearing fix.
-  expect(appSource).toMatch(/key === "claudeModelId"[\s\S]{0,300}pickAllowedPrefId\(raw, CLAUDE_MODELS, DEFAULT_CLAUDE_MODEL_ID\)/);
-  expect(appSource).toMatch(/key === "claudeEffort"[\s\S]{0,300}pickAllowedPrefId\(raw, CLAUDE_EFFORTS, DEFAULT_CLAUDE_EFFORT_ID\)/);
-  expect(appSource).toMatch(/key === "codexModelId"[\s\S]{0,300}pickAllowedPrefId\(raw, CODEX_MODELS, DEFAULT_CODEX_MODEL_ID\)/);
-  expect(appSource).toMatch(/key === "codexEffort"[\s\S]{0,300}pickAllowedPrefId\(raw, CODEX_EFFORTS, DEFAULT_CODEX_EFFORT_ID\)/);
-  expect(appSource).not.toMatch(/key === "initialMessageMode"[\s\S]{0,300}localStorage\.getItem/);
+  expect(appSource).toMatch(
+    /key === "claudeModelId"[\s\S]{0,420}pickAllowedPrefId\([\s\S]{0,180}raw,[\s\S]{0,180}CLAUDE_MODELS,[\s\S]{0,180}DEFAULT_CLAUDE_MODEL_ID[\s\S]{0,180}\)/,
+  );
+  expect(appSource).toMatch(
+    /key === "claudeEffort"[\s\S]{0,420}pickAllowedPrefId\([\s\S]{0,180}raw,[\s\S]{0,180}CLAUDE_EFFORTS,[\s\S]{0,180}DEFAULT_CLAUDE_EFFORT_ID[\s\S]{0,180}\)/,
+  );
+  expect(appSource).toMatch(
+    /key === "codexModelId"[\s\S]{0,420}pickAllowedPrefId\([\s\S]{0,180}raw,[\s\S]{0,180}CODEX_MODELS,[\s\S]{0,180}DEFAULT_CODEX_MODEL_ID[\s\S]{0,180}\)/,
+  );
+  expect(appSource).toMatch(
+    /key === "codexEffort"[\s\S]{0,420}pickAllowedPrefId\([\s\S]{0,180}raw,[\s\S]{0,180}CODEX_EFFORTS,[\s\S]{0,180}DEFAULT_CODEX_EFFORT_ID[\s\S]{0,180}\)/,
+  );
+  expect(appSource).toMatch(
+    /key === "antigravityModelId"[\s\S]{0,420}pickAllowedPrefId\([\s\S]{0,180}raw,[\s\S]{0,180}ANTIGRAVITY_MODELS,[\s\S]{0,180}DEFAULT_ANTIGRAVITY_MODEL_ID[\s\S]{0,180}\)/,
+  );
+  expect(appSource).not.toMatch(
+    /key === "initialMessageMode"[\s\S]{0,300}localStorage\.getItem/,
+  );
 });
 
 test("enqueueSdkTurn forwards effort on the POST body so the runner sees the user's pick", () => {
@@ -95,17 +143,34 @@ test("enqueueSdkTurn forwards effort on the POST body so the runner sees the use
   // it arrives in the wire body. The spread form keeps Codex sessions
   // (which set effort to "") from sending a noisy empty field, but
   // the property MUST be present when run.effort is set.
-  expect(appSource).toMatch(/\.\.\.\(run\.effort \? \{ effort: run\.effort \} : \{\}\)/);
+  expect(appSource).toMatch(
+    /\.\.\.\(run\.effort \? \{ effort: run\.effort \} : \{\}\)/,
+  );
 });
 
 test("createSession forwards model and effort as session-owned config", () => {
-  expect(appSource).toMatch(/const sessionModel = SDK_CHAT_MODES\.has\(mode\) \? seedModel : "";/);
-  expect(appSource).toMatch(/const sessionEffort = SDK_CHAT_MODES\.has\(mode\) \? seedEffort : "";/);
-  expect(appSource).toMatch(/\.\.\.\(sessionModel \|\| sessionEffort \? \{ model: sessionModel, effort: sessionEffort \} : \{\}\)/);
-  expect(appSource).not.toMatch(/initialTurnPayload[\s\S]{0,400}model: seedModel/);
+  expect(appSource).toMatch(
+    /const sessionModel = SDK_CHAT_MODES\.has\(mode\) \? seedModel : "";/,
+  );
+  expect(appSource).toMatch(
+    /const sessionEffort = SDK_CHAT_MODES\.has\(mode\) \? seedEffort : "";/,
+  );
+  expect(appSource).toMatch(
+    /const seedModel =[\s\S]{0,140}providerUsesModel\(selectedProvider\)[\s\S]{0,80}selectedHomeModelId/,
+  );
+  expect(appSource).toMatch(
+    /\.\.\.\(sessionModel \|\| sessionEffort[\s\S]{0,120}\? \{ model: sessionModel, effort: sessionEffort \}[\s\S]{0,80}: \{\}\)/,
+  );
+  expect(appSource).not.toMatch(
+    /initialTurnPayload[\s\S]{0,400}model: seedModel/,
+  );
 });
 
 test("forkSessionFromMessage forwards model and effort on create, not the first turn", () => {
-  expect(appSource).toMatch(/SDK_CHAT_MODES\.has\(mode\) && \(request\.model \|\| request\.effort\)[\s\S]{0,120}\{ model: request\.model, effort: request\.effort \}/);
-  expect(appSource).not.toMatch(/client_nonce: newForkTurnId\(\)[\s\S]{0,160}model: request\.model/);
+  expect(appSource).toMatch(
+    /SDK_CHAT_MODES\.has\(mode\) && \(request\.model \|\| request\.effort\)[\s\S]{0,120}\{ model: request\.model, effort: request\.effort \}/,
+  );
+  expect(appSource).not.toMatch(
+    /client_nonce: newForkTurnId\(\)[\s\S]{0,160}model: request\.model/,
+  );
 });

@@ -354,7 +354,7 @@ func TestHandleInternalSessionRuntimeConfigAcceptsAntigravity(t *testing.T) {
 	})
 	server.mgr = sessions.NewManager(server.k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
 	req := httptest.NewRequest(http.MethodPut, "/api/internal/sessions/12/runtime-config", strings.NewReader(`{
-		"model":"antigravity-default"
+		"model":"Gemini 3.5 Flash (Medium)"
 	}`))
 	req.SetPathValue("session_id", "12")
 	req.Header.Set("Authorization", "Bearer session-token")
@@ -369,7 +369,7 @@ func TestHandleInternalSessionRuntimeConfigAcceptsAntigravity(t *testing.T) {
 	if err != nil || !ok {
 		t.Fatalf("registry Get ok=%v err=%v", ok, err)
 	}
-	if record.RuntimeModel != "antigravity-default" || record.RuntimeConfiguredAt == "" {
+	if record.RuntimeModel != "Gemini 3.5 Flash (Medium)" || record.RuntimeConfiguredAt == "" {
 		t.Fatalf("registry runtime config = %#v", record)
 	}
 }

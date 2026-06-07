@@ -393,9 +393,10 @@ What carries over unchanged from claude/codex:
   `~/.gemini/antigravity-cli/antigravity-oauth-token` with
   `access_token: "managed-by-tank-operator"`, a far-future `expiry`, and **no
   refresh token**). The far-future expiry stops `agy` from refreshing in place.
-- `agy`'s `cloudcode-pa.googleapis.com` traffic is host-aliased to the proxy
-  Service; the ext_proc swaps the `Authorization` header for the real access
-  token on every request and single-flight-refreshes on upstream 401.
+- `agy`'s Code Assist traffic (`cloudcode-pa.googleapis.com` and
+  `daily-cloudcode-pa.googleapis.com`) is host-aliased to the proxy Service;
+  the ext_proc swaps the `Authorization` header for the real access token on
+  every request and single-flight-refreshes on upstream 401.
 - The real refresh token lives only in the proxy pod + KV
   (`antigravity-credentials`); slots route to the production proxy and render no
   antigravity credential Secret (`scripts/check-test-slot-provider-credentials.sh`).

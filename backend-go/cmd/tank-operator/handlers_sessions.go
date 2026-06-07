@@ -232,8 +232,8 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 					SkillName:       initialTurn.SkillName,
 					BasePrompt:      initialTurn.Prompt,
 					DisplayText:     initialTurn.Prompt,
-					Model:           initialTurn.Model,
-					Effort:          initialTurn.Effort,
+					Model:           runConfig.Model,
+					Effort:          runConfig.Effort,
 					AttachmentCount: len(initialTurn.DisplayAttachments),
 				}); err != nil {
 					s.rollbackCreatedSession(r.Context(), owner, info.ID, "register pending launch", err.Error())
@@ -247,8 +247,8 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 				RequireNonce:       true,
 				Prompt:             initialTurn.Prompt,
 				DisplayAttachments: initialTurn.DisplayAttachments,
-				Model:              initialTurn.Model,
-				Effort:             initialTurn.Effort,
+				Model:              runConfig.Model,
+				Effort:             runConfig.Effort,
 				PermissionMode:     initialTurn.PermissionMode,
 				SkillName:          initialTurn.SkillName,
 				FollowUp:           false,
@@ -756,7 +756,7 @@ func (s *appServer) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleSetOpenTarget persists the legacy durable per-session sidebar
-// open-target preference ('' / 'chat' / 'turns'). Current frontend builds no
+// open-target preference (” / 'chat' / 'turns'). Current frontend builds no
 // longer use it for session-open defaults, but keeping the endpoint preserves
 // compatibility with existing clients and row metadata. Registry-only UI state —
 // no pod annotation patch.

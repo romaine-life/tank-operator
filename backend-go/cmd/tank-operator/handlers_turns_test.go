@@ -372,11 +372,11 @@ func TestCreateSessionInitialTurnPersistsBeforeStartupStatus(t *testing.T) {
 	app := testTurnsApp(t, bus)
 	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
 		"mode":"claude_gui",
+		"model":"claude-sonnet-4-6",
+		"effort":"xhigh",
 		"initial_turn":{
 			"client_nonce":"turn-launch_123",
 			"prompt":"  /test\n\nlaunch prompt  ",
-			"model":"claude-sonnet-4-6",
-			"effort":"xhigh",
 			"permission_mode":"bypassPermissions",
 			"skill_name":"test"
 		}
@@ -499,6 +499,26 @@ func TestCreateSessionRejectsCodexWithoutExplicitModel(t *testing.T) {
 	}
 }
 
+func TestCreateSessionRejectsAntigravityWithoutExplicitModel(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"antigravity_gui"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "model is required for Antigravity sessions") {
+		t.Fatalf("body = %s, want explicit Antigravity model error", resp.Body.String())
+	}
+}
+
 func TestCreateSessionRejectsCodexDefaultModelAlias(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus)
@@ -506,6 +526,27 @@ func TestCreateSessionRejectsCodexDefaultModelAlias(t *testing.T) {
 		"mode":"codex_gui",
 		"model":"codex-account-default",
 		"effort":"xhigh"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+
+	app.handleCreateSession(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "default is not accepted") {
+		t.Fatalf("body = %s, want default rejection", resp.Body.String())
+	}
+}
+
+func TestCreateSessionRejectsAntigravityDefaultModelAlias(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
+	req := httptest.NewRequest(http.MethodPost, "/api/sessions", strings.NewReader(`{
+		"mode":"antigravity_gui",
+		"model":"antigravity-default"
 	}`))
 	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
 	req.Header.Set("Content-Type", "application/json")
@@ -741,6 +782,47 @@ func TestEnqueueSessionTurnRejectsCodexWithoutExplicitModel(t *testing.T) {
 	}
 	if !strings.Contains(resp.Body.String(), "model is required for Codex turns") {
 		t.Fatalf("body = %s, want explicit Codex model error", resp.Body.String())
+	}
+	if len(bus.commands) != 0 {
+		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	}
+}
+
+func TestEnqueueSessionTurnForwardsAntigravityModel(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-88", "88", "user@example.com", sessionmodel.AntigravityGUIMode, "antigravity-runner"))
+	req := authedTurnRequest(t, "88", `{"client_nonce":"turn-agy-model","prompt":"hello","model":"Gemini 3.5 Flash (Medium)"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
+	}
+	if got := bus.commands[0].Provider; got != "antigravity" {
+		t.Fatalf("provider = %q, want antigravity", got)
+	}
+	if got := bus.commands[0].Model; got != "Gemini 3.5 Flash (Medium)" {
+		t.Fatalf("model = %q, want Antigravity model", got)
+	}
+}
+
+func TestEnqueueSessionTurnRejectsAntigravityWithoutExplicitModel(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-88", "88", "user@example.com", sessionmodel.AntigravityGUIMode, "antigravity-runner"))
+	req := authedTurnRequest(t, "88", `{"client_nonce":"turn-agy-no-model","prompt":"hello"}`)
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	if !strings.Contains(resp.Body.String(), "model is required for Antigravity turns") {
+		t.Fatalf("body = %s, want explicit Antigravity model error", resp.Body.String())
 	}
 	if len(bus.commands) != 0 {
 		t.Fatalf("published commands = %d, want 0", len(bus.commands))
