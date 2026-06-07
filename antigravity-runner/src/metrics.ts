@@ -66,6 +66,13 @@ export const scheduledWakeupRegisterTotal = new Counter({
   registers: [registry],
 });
 
+export const scheduleIntentTotal = new Counter({
+  name: "tank_antigravity_runner_schedule_intent_total",
+  help: "Antigravity schedule-intent observations before durable wakeup registration.",
+  labelNames: ["kind"] as const,
+  registers: [registry],
+});
+
 // agy transcript steps observed, by how the adapter classified them. The
 // `dropped` bucket (user echo / system history) is expected and non-zero; a
 // spike in any other class names a step the adapter handled.

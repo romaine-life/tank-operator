@@ -5,6 +5,7 @@ import { once } from "node:events";
 import {
   interruptOutcomeTotal,
   registry,
+  scheduleIntentTotal,
   startMetricsServer,
 } from "./metrics.js";
 
@@ -31,6 +32,7 @@ test("the /metrics endpoint serves the tank_antigravity_runner_ counters", async
     assert.match(body, /tank_antigravity_runner_turn_terminal_total/);
     assert.match(body, /tank_antigravity_runner_provider_error_total/);
     assert.match(body, /tank_antigravity_runner_agy_diagnostic_total/);
+    assert.match(body, /tank_antigravity_runner_schedule_intent_total/);
   } finally {
     server.close();
     await once(server, "close");
@@ -64,5 +66,17 @@ test("an interrupt outcome is recorded in exactly its labeled bucket", async () 
   assert.match(
     dump,
     /tank_antigravity_runner_interrupt_outcome_total\{outcome="interrupted"\} 1/,
+  );
+});
+
+test("schedule-intent observations are recorded in bounded buckets", async () => {
+  await registry.resetMetrics();
+
+  scheduleIntentTotal.labels("wait_text_without_schedule").inc();
+
+  const dump = await registry.metrics();
+  assert.match(
+    dump,
+    /tank_antigravity_runner_schedule_intent_total\{kind="wait_text_without_schedule"\} 1/,
   );
 });

@@ -3,8 +3,10 @@ import test from "node:test";
 
 import {
   extractScheduleWakeups,
+  inspectScheduleWakeups,
   isAssistantPlannerTextStep,
   isNativeScheduleWakeResponse,
+  isWaitIntentWithoutScheduleStep,
   scheduleAckGraceMs,
 } from "./wakeup.js";
 
@@ -36,7 +38,7 @@ test("extracts Antigravity schedule tool calls as durable wake intents", () => {
 });
 
 test("ignores malformed schedule calls instead of registering broken wakes", () => {
-  const wakeups = extractScheduleWakeups({
+  const step = {
     step_index: 3,
     source: "MODEL",
     type: "PLANNER_RESPONSE",
@@ -46,9 +48,15 @@ test("ignores malformed schedule calls instead of registering broken wakes", () 
       { name: "schedule", args: { DurationSeconds: "5", Prompt: "" } },
       { name: "run_command", args: { CommandLine: "sleep 5" } },
     ],
-  });
+  };
+  const wakeups = extractScheduleWakeups(step);
 
   assert.deepEqual(wakeups, []);
+  assert.deepEqual(inspectScheduleWakeups(step), {
+    wakeups: [],
+    scheduleCallCount: 2,
+    malformedScheduleCallCount: 2,
+  });
 });
 
 test("classifies Antigravity schedule acknowledgement versus native wake text", () => {
@@ -91,4 +99,28 @@ test("schedule acknowledgement grace is bounded below the native timer", () => {
   assert.equal(scheduleAckGraceMs(200), 100);
   assert.equal(scheduleAckGraceMs(2_000), 500);
   assert.equal(scheduleAckGraceMs(15_000), 1_000);
+});
+
+test("detects planner wait text that has no native schedule call", () => {
+  assert.equal(
+    isWaitIntentWithoutScheduleStep({
+      step_index: 9,
+      source: "MODEL",
+      type: "PLANNER_RESPONSE",
+      status: "DONE",
+      content: "I have sent the request. I will now wait for it to reply.",
+    }),
+    true,
+  );
+  assert.equal(
+    isWaitIntentWithoutScheduleStep({
+      step_index: 10,
+      source: "MODEL",
+      type: "PLANNER_RESPONSE",
+      status: "DONE",
+      content: "I will schedule a timer.",
+      tool_calls: [{ name: "schedule", args: { DurationSeconds: "5" } }],
+    }),
+    false,
+  );
 });

@@ -47,13 +47,15 @@ type K8sWatchMetrics interface {
 	RecordTransition(eventType string)
 	RecordLag(seconds float64)
 	RecordLeaderStatus(isLeader bool)
+	RecordContainerTermination(container, reason string, exitCode int32)
 }
 
 type noopK8sWatchMetrics struct{}
 
-func (noopK8sWatchMetrics) RecordTransition(_ string) {}
-func (noopK8sWatchMetrics) RecordLag(_ float64)       {}
-func (noopK8sWatchMetrics) RecordLeaderStatus(_ bool) {}
+func (noopK8sWatchMetrics) RecordTransition(_ string)                       {}
+func (noopK8sWatchMetrics) RecordLag(_ float64)                             {}
+func (noopK8sWatchMetrics) RecordLeaderStatus(_ bool)                       {}
+func (noopK8sWatchMetrics) RecordContainerTermination(_, _ string, _ int32) {}
 
 // K8sWatchConfig wires the watch loop with everything it needs to
 // produce durable rows + NATS payloads. Namespace is the sessions
@@ -265,6 +267,15 @@ type podState struct {
 	ready        bool
 	terminating  bool
 	failedReason string
+	terminations map[string]containerTermination
+}
+
+type containerTermination struct {
+	container    string
+	reason       string
+	exitCode     int32
+	restartCount int32
+	finishedAt   string
 }
 
 func newTransitionTracker(writer *RowWriter, metrics K8sWatchMetrics, scope string) *transitionTracker {
@@ -298,10 +309,13 @@ func (t *transitionTracker) handleUpsert(ctx context.Context, oldPod, newPod *co
 	// emit a session.pod_scheduled row + whichever current condition row
 	// reflects the live state. Idempotent via event_id.
 	if !hadPrev {
+		t.recordContainerTerminations(newPod, curr, nil)
 		t.emit(ctx, scheduledEvent(t.scope, owner, sessionID, newPod))
 		t.emitCurrentConditions(ctx, owner, sessionID, newPod, curr)
 		return
 	}
+
+	t.recordContainerTerminations(newPod, curr, prev.terminations)
 
 	// Transitions:
 	if !prev.terminating && curr.terminating {
@@ -321,6 +335,24 @@ func (t *transitionTracker) handleUpsert(ctx context.Context, oldPod, newPod *co
 		} else if curr.phase == corev1.PodRunning {
 			t.emit(ctx, notReadyEvent(t.scope, owner, sessionID, newPod))
 		}
+	}
+}
+
+func (t *transitionTracker) recordContainerTerminations(pod *corev1.Pod, curr podState, prev map[string]containerTermination) {
+	for key, term := range curr.terminations {
+		if old, ok := prev[key]; ok && old == term {
+			continue
+		}
+		t.metrics.RecordContainerTermination(term.container, term.reason, term.exitCode)
+		slog.Warn("sessioncontroller k8s-watch: session container terminated",
+			"session_id", sessionID(pod),
+			"pod", pod.Name,
+			"container", term.container,
+			"reason", term.reason,
+			"exit_code", term.exitCode,
+			"restart_count", term.restartCount,
+			"finished_at", term.finishedAt,
+		)
 	}
 }
 
@@ -406,6 +438,7 @@ func derivePodState(pod *corev1.Pod) podState {
 	if reason := failureReason(pod); reason != "" {
 		st.failedReason = reason
 	}
+	st.terminations = containerTerminations(pod)
 	return st
 }
 
@@ -601,3 +634,69 @@ func failureDetails(pod *corev1.Pod) (int32, string, string) {
 	return 0, "", ""
 }
 
+func containerTerminations(pod *corev1.Pod) map[string]containerTermination {
+	out := map[string]containerTermination{}
+	if pod == nil {
+		return out
+	}
+	for _, cs := range pod.Status.ContainerStatuses {
+		if cs.State.Terminated != nil {
+			term := terminationFromState(cs.Name, cs.RestartCount, cs.State.Terminated)
+			out[terminationKey(term)] = term
+		}
+		if cs.LastTerminationState.Terminated != nil {
+			term := terminationFromState(cs.Name, cs.RestartCount, cs.LastTerminationState.Terminated)
+			out[terminationKey(term)] = term
+		}
+	}
+	return out
+}
+
+func terminationFromState(container string, restartCount int32, state *corev1.ContainerStateTerminated) containerTermination {
+	if state == nil {
+		return containerTermination{}
+	}
+	finishedAt := ""
+	if !state.FinishedAt.IsZero() {
+		finishedAt = state.FinishedAt.UTC().Format(time.RFC3339Nano)
+	}
+	return containerTermination{
+		container:    strings.TrimSpace(container),
+		reason:       normalizeTerminationReason(state.Reason, state.ExitCode),
+		exitCode:     state.ExitCode,
+		restartCount: restartCount,
+		finishedAt:   finishedAt,
+	}
+}
+
+func terminationKey(term containerTermination) string {
+	return strings.Join([]string{
+		term.container,
+		term.reason,
+		fmt.Sprint(term.exitCode),
+		fmt.Sprint(term.restartCount),
+		term.finishedAt,
+	}, "\x00")
+}
+
+func normalizeTerminationReason(reason string, exitCode int32) string {
+	clean := strings.TrimSpace(reason)
+	switch clean {
+	case "OOMKilled":
+		return "oom_killed"
+	case "Error":
+		return "error"
+	case "Completed":
+		return "completed"
+	case "":
+		if exitCode == 137 {
+			return "oom_killed"
+		}
+		if exitCode == 0 {
+			return "completed"
+		}
+		return "unknown"
+	default:
+		return "other"
+	}
+}
