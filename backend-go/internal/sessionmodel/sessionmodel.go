@@ -94,10 +94,7 @@ var (
 		CodexGUIMode:          {},
 		CodexExecGUIMode:      {},
 		CodexAppServerMode:    {},
-		GeminiGUIMode:         {},
-		GeminiConfigMode:      {},
-		GeminiTestMode:        {},
-		HermesGUIMode:         {},
+
 		AntigravityConfigMode: {},
 		AntigravityCLIMode:    {},
 		AntigravityGUIMode:    {},
