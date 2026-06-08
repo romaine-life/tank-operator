@@ -834,6 +834,51 @@ func TestPodManifestSlotModeAttachesCodexRunnerHotSwap(t *testing.T) {
 	}
 }
 
+func TestPodManifestSlotModeAttachesAntigravityRunnerHotSwap(t *testing.T) {
+	manifest := PodManifest("63", "user@example.com", AntigravityGUIMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		AntigravitySessionImage: "antigravity-image",
+		HotSwapAgentRunner:      true,
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	volumes := spec["volumes"].([]any)
+	assertVolume(t, volumes, "antigravity-runner-hot")
+
+	containers := spec["containers"].([]any)
+	runner := findContainer(t, containers, "antigravity-runner")
+	assertVolumeMount(t, runner, "antigravity-runner-hot")
+
+	mounts := runner["volumeMounts"].([]any)
+	var hotMountPath string
+	for _, m := range mounts {
+		mm := m.(map[string]any)
+		if mm["name"] == "antigravity-runner-hot" {
+			hotMountPath, _ = mm["mountPath"].(string)
+		}
+	}
+	if hotMountPath != "/var/run/antigravity-runner-hot" {
+		t.Fatalf("antigravity-runner-hot mountPath = %q, want /var/run/antigravity-runner-hot", hotMountPath)
+	}
+
+	env := containerEnv(runner)
+	if got, want := env["GLIMMUNG_SUPERVISOR_CHILD"], "/app/antigravity-runner-launch-binary.sh"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_CHILD = %v, want %q", got, want)
+	}
+	if got, want := env["GLIMMUNG_SUPERVISOR_HOT_ARTIFACT"], "/var/run/antigravity-runner-hot/antigravity-runner-launch-binary.sh"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_HOT_ARTIFACT = %v, want %q", got, want)
+	}
+	if got, want := env["GLIMMUNG_SUPERVISOR_RESTART_ENABLED"], "true"; got != want {
+		t.Fatalf("GLIMMUNG_SUPERVISOR_RESTART_ENABLED = %v, want %q", got, want)
+	}
+
+	cmd := runner["command"].([]any)
+	if len(cmd) != 2 || cmd[0] != "bash" || cmd[1] != "/opt/tank/antigravity-runner-launch.sh" {
+		t.Fatalf("antigravity-runner command = %v, want [bash /opt/tank/antigravity-runner-launch.sh]", cmd)
+	}
+}
+
 // TestPodManifestProdLeavesAgentRunnerUnchanged pins Checkbox 2 of
 // scripts/check-session-pod-hot-swap-migration.mjs: with testEnv disabled
 // (HotSwapAgentRunner=false, the default), the agent-runner container has
@@ -879,6 +924,33 @@ func TestPodManifestProdLeavesCodexRunnerUnchanged(t *testing.T) {
 	containers := spec["containers"].([]any)
 	runner := findContainer(t, containers, "codex-runner")
 	assertNoVolumeMount(t, runner, "codex-runner-hot")
+
+	env := containerEnv(runner)
+	for _, name := range []string{
+		"GLIMMUNG_SUPERVISOR_CHILD",
+		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT",
+		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED",
+	} {
+		if _, present := env[name]; present {
+			t.Fatalf("env %s leaked into prod (HotSwapAgentRunner=false); value=%v", name, env[name])
+		}
+	}
+}
+
+func TestPodManifestProdLeavesAntigravityRunnerUnchanged(t *testing.T) {
+	manifest := PodManifest("63", "user@example.com", AntigravityGUIMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		AntigravitySessionImage: "antigravity-image",
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	volumes := spec["volumes"].([]any)
+	assertNoVolume(t, volumes, "antigravity-runner-hot")
+
+	containers := spec["containers"].([]any)
+	runner := findContainer(t, containers, "antigravity-runner")
+	assertNoVolumeMount(t, runner, "antigravity-runner-hot")
 
 	env := containerEnv(runner)
 	for _, name := range []string{

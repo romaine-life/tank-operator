@@ -50,4 +50,10 @@ if [ -f /opt/tank/session-config/install-tank-skills.sh ]; then
   sh /opt/tank/session-config/install-tank-skills.sh || true
 fi
 
+# In test-slot mode the pod spec sets GLIMMUNG_SUPERVISOR_CHILD, and the
+# supervisor becomes PID 1 so Glimmung can restart the runner after copying a
+# hot artifact. Production leaves the env var unset and keeps the direct exec.
+if [ -n "${GLIMMUNG_SUPERVISOR_CHILD:-}" ] && [ -x /app/tank-supervisor ]; then
+  exec /app/tank-supervisor
+fi
 exec node /opt/antigravity-runner/dist/index.js
