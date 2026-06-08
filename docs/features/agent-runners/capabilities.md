@@ -4,6 +4,69 @@ This ledger names user-facing behavior under the agent-runners feature area. It
 is not a backlog. Add entries only when the behavior needs a stable handle for
 planning, review, tests, incident follow-up, or retirement.
 
+## Antigravity no-answer provider failure terminal
+
+Status: in progress
+
+Intent:
+When Antigravity (`agy`) exits with code 0 after producing tool activity but no
+assistant prose, the turn must resolve as a durable failure instead of a
+successful empty completion. Originating incident: session 711 on 2026-06-08
+ran 61 tool steps, logged `agent executor error: UNKNOWN (code 500)` /
+`PlannerResponse without ModifiedResponse`, and wrote `turn.completed` with no
+final answer, making the page look stalled even though the durable terminal was
+`completed`.
+
+Affected contracts:
+- Agent Runners
+
+Contract impact:
+- Converts a provider failure that previously masqueraded as success into
+  exactly one durable `turn.failed`, satisfying "Provider failures must become
+  durable failure events instead of silent strandings."
+- A normal successful Antigravity turn requires assistant prose that can be
+  promoted as `final_answer`; tool activity alone is not a successful user
+  answer. The explicit exception is native schedule parking, where the runner
+  interrupts agy's native timer only after durable wakeup registration.
+- The Antigravity adapter mirrors the SDK's completed-response boundary where
+  possible from agy's JSONL: only a `MODEL` `PLANNER_RESPONSE` that is `DONE`
+  and has non-empty text can become assistant prose. `IN_PROGRESS` records may
+  start the turn but cannot open tools, close tools, or consume a step index
+  before the later settled transition.
+- The driver is event-driven: it watches agy's data directory and drains
+  transcript records on filesystem/output/process-exit notifications, then
+  performs one final reconciliation drain after exit. It does not run a fixed
+  transcript polling loop. The transcript tailer owns per-file byte cursors and
+  partial-line buffers, so long cumulative Antigravity transcripts are not
+  reread from the beginning on every file event.
+- Transcript event-source health is explicit. Watcher startup failure or a
+  watcher error becomes a bounded `turn.failed` reason
+  (`transcript_event_source_unavailable` / `transcript_event_source_error`) and
+  increments `tank_antigravity_runner_transcript_event_source_total{result}`;
+  live-update degradation is not silent.
+- Provider executor stderr such as `UNKNOWN (code 500)` and
+  `PlannerResponse without ModifiedResponse` is counted separately as
+  `provider_executor_error`; normal-looking no-answer exits are counted as
+  `provider_no_final_answer`.
+
+Evidence:
+- Runner: `antigravity-runner/src/runner.test.ts` (executor 500 after tool
+  output fails, tool-only no-final-answer fails, schedule parking may complete
+  without final prose).
+- Adapter: `antigravity-runner/src/adapters/antigravity.test.ts` (final-answer
+  state requires done non-empty assistant prose; in-progress tool calls and
+  tool results do not consume the later done transition).
+- Driver: `antigravity-runner/src/driver.test.ts` (a transcript write is
+  surfaced before the fake agy process exits, proving live updates are driven
+  by events rather than process-exit reconciliation).
+- Tailer: `antigravity-runner/src/transcriptTailer.test.ts` (pre-existing
+  transcript bytes are skipped, new appended bytes are emitted, and partial
+  appended JSONL records are buffered until complete).
+- Metrics/docs: `tank_antigravity_runner_provider_error_total{reason}` with
+  `provider_executor_error`, `provider_no_final_answer`, and transcript
+  event-source failure reasons documented in `docs/observability.md` and the
+  Antigravity provider-error alert runbook.
+
 ## Background-task completion wake
 
 Status: in progress

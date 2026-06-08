@@ -8,17 +8,18 @@
 // across runner restarts in the same live pod, so --continue survives a runner
 // crash too).
 //
-// Only this turn's steps are emitted: the driver snapshots each transcript's
-// line count before spawning agy and only forwards lines beyond that baseline,
-// so a cumulative transcript (--continue appending) does not re-emit prior
-// turns. The adapter additionally dedupes by step_index, so a re-read mid-write
-// is harmless.
+// Only this turn's steps are emitted: the tailer snapshots each transcript's
+// byte size before spawning agy and only forwards appended complete JSONL
+// records, so a cumulative transcript (--continue appending) does not re-emit
+// prior turns. The adapter additionally dedupes by step_index, so a repeated
+// provider update is harmless.
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFile, readdir, stat } from "node:fs/promises";
-import path from "node:path";
+import { watch, type FSWatcher } from "node:fs";
+import { mkdir } from "node:fs/promises";
 
 import type { AgyStep } from "./adapters/antigravity.js";
+import { TranscriptTailer } from "./transcriptTailer.js";
 
 export interface AgyTurnRequest {
   prompt: string;
@@ -37,7 +38,35 @@ export interface AgyTurnResult {
   stderr: string;
 }
 
-const TRANSCRIPT_TAIL_INTERVAL_MS = 250;
+type TranscriptEventKind =
+  | "initial_scan"
+  | "transcript_changed"
+  | "provider_output"
+  | "process_exit"
+  | "watcher_error";
+
+export type TranscriptEventSourceObservation =
+  | "started"
+  | "unavailable"
+  | "error";
+
+export interface AgyDriverObserver {
+  recordTranscriptEventSource?: (
+    result: TranscriptEventSourceObservation,
+  ) => void;
+}
+
+export class TranscriptEventSourceUnavailableError extends Error {
+  constructor(
+    public readonly reason:
+      | "transcript_event_source_unavailable"
+      | "transcript_event_source_error",
+    message = reason,
+  ) {
+    super(message);
+    this.name = "TranscriptEventSourceUnavailableError";
+  }
+}
 
 export class AgyDriver {
   private child: ChildProcess | null = null;
@@ -46,6 +75,7 @@ export class AgyDriver {
   constructor(
     private readonly agyHome: string,
     private readonly agyBin: string = "agy",
+    private readonly observer: AgyDriverObserver = {},
   ) {}
 
   /**
@@ -57,8 +87,14 @@ export class AgyDriver {
     onStep: (step: AgyStep) => Promise<void> | void,
     signal: AbortSignal,
   ): Promise<AgyTurnResult> {
-    const baseline = await this.snapshotTranscripts();
-    const cursors = new Map<string, number>(baseline);
+    await mkdir(this.agyHome, { recursive: true });
+    const transcriptTailer = new TranscriptTailer(this.agyHome);
+    await transcriptTailer.snapshotExisting();
+    const transcriptEvents = new TranscriptEventSource(
+      this.agyHome,
+      this.observer,
+    );
+    transcriptEvents.start();
 
     const args: string[] = [];
     if (req.resume) args.push("--continue");
@@ -78,9 +114,11 @@ export class AgyDriver {
     let stderr = "";
     child.stdout?.on("data", (d: Buffer) => {
       stdout += d.toString();
+      transcriptEvents.emit("provider_output");
     });
     child.stderr?.on("data", (d: Buffer) => {
       stderr += d.toString();
+      transcriptEvents.emit("provider_output");
     });
 
     const onAbort = () => this.interrupt();
@@ -91,22 +129,35 @@ export class AgyDriver {
       child.once("error", () => resolve({ code: null }));
     });
 
-    // Tail the active transcript until agy exits, then do one final pass to
-    // catch records written between the last poll and exit.
+    // Drain on provider output or filesystem notifications, then do one final
+    // pass after exit to catch records written just before the process ends.
     let exited = false;
     exitPromise.then(() => {
       exited = true;
+      transcriptEvents.emit("process_exit");
     });
-    while (!exited) {
-      await this.drain(cursors, baseline, onStep);
-      await sleep(TRANSCRIPT_TAIL_INTERVAL_MS);
-    }
-    const { code } = await exitPromise;
-    await this.drain(cursors, baseline, onStep);
+    try {
+      transcriptEvents.emit("initial_scan");
+      while (!exited) {
+        const event = await transcriptEvents.next();
+        if (event === "watcher_error") {
+          this.interrupt();
+          await exitPromise;
+          throw new TranscriptEventSourceUnavailableError(
+            "transcript_event_source_error",
+          );
+        }
+        await transcriptTailer.drain(onStep);
+      }
+      const { code } = await exitPromise;
+      await transcriptTailer.drain(onStep);
 
-    signal.removeEventListener("abort", onAbort);
-    this.child = null;
-    return { exitCode: code, killed: this.killed, stdout, stderr };
+      return { exitCode: code, killed: this.killed, stdout, stderr };
+    } finally {
+      signal.removeEventListener("abort", onAbort);
+      transcriptEvents.close();
+      this.child = null;
+    }
   }
 
   /** Signal agy to stop the in-flight turn (Stop / shutdown). */
@@ -122,100 +173,68 @@ export class AgyDriver {
     }
   }
 
-  // Read every transcript that has grown past its cursor and forward the new,
-  // fully-written steps in order. agy can append subagent conversations under
-  // separate brain/<conversation> directories during one root turn, so every
-  // emitted step carries its transcript conversation id for downstream
-  // correlation and dedupe.
-  private async drain(
-    cursors: Map<string, number>,
-    baseline: Map<string, number>,
-    onStep: (step: AgyStep) => Promise<void> | void,
-  ): Promise<void> {
-    const files = await this.transcriptFiles();
-    // Sort by mtime so the active conversation's steps emit before any stale one.
-    for (const file of files) {
-      let text: string;
-      try {
-        text = await readFile(file, "utf8");
-      } catch {
-        continue;
-      }
-      const lines = text.split("\n");
-      // Drop the final split element either way: after a trailing newline it is
-      // "" (empty), and without one it is a partially-written record. Only
-      // complete lines are parsed; a partial line is re-read on the next poll.
-      const completeCount = lines.length - 1;
-      const start = cursors.get(file) ?? baseline.get(file) ?? 0;
-      for (let i = start; i < completeCount; i++) {
-        const line = lines[i]?.trim();
-        if (!line) continue;
-        let step: AgyStep;
-        try {
-          step = JSON.parse(line) as AgyStep;
-        } catch {
-          // Partial/garbled line; stop here and re-read next poll.
-          cursors.set(file, i);
-          break;
-        }
-        step.conversation_id = conversationIDFromTranscriptFile(file);
-        step.transcript_path = file;
-        await onStep(step);
-        cursors.set(file, i + 1);
-      }
-    }
-  }
+}
 
-  private async snapshotTranscripts(): Promise<Map<string, number>> {
-    const baseline = new Map<string, number>();
-    for (const file of await this.transcriptFiles()) {
-      try {
-        const text = await readFile(file, "utf8");
-        baseline.set(file, text.split("\n").filter((l) => l.trim()).length);
-      } catch {
-        baseline.set(file, 0);
-      }
-    }
-    return baseline;
-  }
+class TranscriptEventSource {
+  private watcher: FSWatcher | null = null;
+  private readonly queue: TranscriptEventKind[] = [];
+  private resolveWaiter: (() => void) | null = null;
 
-  // All transcript_full.jsonl files under the agy data dir, newest mtime last.
-  private async transcriptFiles(): Promise<string[]> {
-    const brain = path.join(this.agyHome, "brain");
-    let convs: string[];
+  constructor(
+    private readonly agyHome: string,
+    private readonly observer: AgyDriverObserver,
+  ) {}
+
+  start(): void {
     try {
-      convs = await readdir(brain);
-    } catch {
-      return [];
-    }
-    const found: Array<{ file: string; mtime: number }> = [];
-    for (const conv of convs) {
-      const file = path.join(
-        brain,
-        conv,
-        ".system_generated",
-        "logs",
-        "transcript_full.jsonl",
+      this.watcher = watch(this.agyHome, { recursive: true }, () => {
+        this.emit("transcript_changed");
+      });
+      this.observer.recordTranscriptEventSource?.("started");
+      this.watcher.on("error", (err) => {
+        console.warn(
+          `antigravity transcript watcher error: ${
+            err instanceof Error ? err.message : String(err)
+          }`,
+        );
+        this.observer.recordTranscriptEventSource?.("error");
+        this.emit("watcher_error");
+      });
+    } catch (err) {
+      console.warn(
+        `antigravity transcript watcher unavailable: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
       );
-      try {
-        const s = await stat(file);
-        found.push({ file, mtime: s.mtimeMs });
-      } catch {
-        // no transcript for this conversation yet
-      }
+      this.observer.recordTranscriptEventSource?.("unavailable");
+      throw new TranscriptEventSourceUnavailableError(
+        "transcript_event_source_unavailable",
+      );
     }
-    found.sort((a, b) => a.mtime - b.mtime);
-    return found.map((f) => f.file);
   }
-}
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+  emit(kind: TranscriptEventKind): void {
+    this.queue.push(kind);
+    const resolve = this.resolveWaiter;
+    if (!resolve) return;
+    this.resolveWaiter = null;
+    resolve();
+  }
 
-function conversationIDFromTranscriptFile(file: string): string | undefined {
-  const parts = file.split(path.sep);
-  const brainIndex = parts.lastIndexOf("brain");
-  if (brainIndex < 0 || brainIndex + 1 >= parts.length) return undefined;
-  return parts[brainIndex + 1] || undefined;
+  next(): Promise<TranscriptEventKind> {
+    const event = this.queue.shift();
+    if (event) {
+      return Promise.resolve(event);
+    }
+    return new Promise((resolve) => {
+      this.resolveWaiter = () => {
+        resolve(this.queue.shift() ?? "transcript_changed");
+      };
+    });
+  }
+
+  close(): void {
+    this.watcher?.close();
+    this.watcher = null;
+  }
 }

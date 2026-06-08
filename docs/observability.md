@@ -324,14 +324,26 @@ All metric names are prefixed `tank_`. The full namespace:
 - `tank_antigravity_runner_*` — Antigravity/Gemini pod-side runner metrics.
   This runner has its own namespace because it drives the native `agy` binary
   rather than the Claude/Codex SDK path. `tank_antigravity_runner_provider_error_total{reason}`
-  is the red signal for failed agy turns; `reason="skill_missing"` means the
+  is the red signal for failed agy turns. `reason="skill_missing"` means the
   backend accepted a skill turn but the runner could not find
   `$HOME/.gemini/skills/<skill>/SKILL.md`, so the turn fails before provider
-  execution. `tank_antigravity_runner_agy_diagnostic_total{kind}` records
-  bounded non-terminal diagnostics from agy output: `auxiliary_userinfo_401`
-  and `telemetry_clearcut_401` classify the known placeholder-token
-  profile/telemetry noise and must not be treated as Code Assist auth failure.
-  The real Antigravity auth failure signature is proxy-observed
+  execution. `reason="provider_executor_error"` means agy emitted a provider
+  executor terminal error such as `UNKNOWN (code 500)` or
+  `PlannerResponse without ModifiedResponse`; `reason="provider_no_final_answer"`
+  means agy exited successfully after tool activity but produced no assistant
+  prose to promote as the final answer.
+  `reason="transcript_event_source_unavailable"` and
+  `reason="transcript_event_source_error"` mean the local file-backed event
+  source for agy's JSONL transcript failed before or during the turn; these are
+  durable `turn.failed` outcomes, not silent live-update degradation.
+  `tank_antigravity_runner_transcript_event_source_total{result}` records the
+  underlying watcher health with `started`, `unavailable`, and `error` buckets.
+  `tank_antigravity_runner_agy_diagnostic_total{kind}`
+  records bounded non-terminal diagnostics from agy output:
+  `auxiliary_userinfo_401` and `telemetry_clearcut_401` classify the known
+  placeholder-token profile/telemetry noise and must not be treated as Code
+  Assist auth failure. The real Antigravity auth failure signature is
+  proxy-observed
   `tank_api_proxy_upstream_401_total{provider="antigravity"}` or a
   `provider_auth_failed` terminal.
   `tank_antigravity_runner_schedule_intent_total{kind}` records the schedule
