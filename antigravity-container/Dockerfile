@@ -21,6 +21,16 @@
 #     (see docs/api-proxy-auth.md). Only antigravity_config (interactive login)
 #     reaches real Google to mint the token that the proxy then owns.
 
+# Stage 0: build tank-supervisor for in-pod test-slot hot-swap.
+# Same supervisor binary used by the Claude/Codex session images; Antigravity
+# only invokes it when the pod spec sets GLIMMUNG_SUPERVISOR_CHILD.
+FROM golang:1.26-alpine AS tank-supervisor-build
+WORKDIR /src
+COPY backend-go/go.mod backend-go/go.sum ./
+RUN go mod download
+COPY backend-go/cmd/tank-supervisor ./cmd/tank-supervisor
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tank-supervisor ./cmd/tank-supervisor
+
 # Stage 1: build the antigravity-runner (TS -> JS + production node_modules).
 # Build context is the repo root (docker-build-check.yaml sets context: .).
 FROM node:20-bookworm-slim AS antigravity-runner-build
@@ -89,6 +99,22 @@ COPY --from=antigravity-runner-build /src/antigravity-runner/dist /opt/antigravi
 COPY --from=antigravity-runner-build /src/antigravity-runner/node_modules /opt/antigravity-runner/node_modules
 COPY --from=antigravity-runner-build /src/antigravity-runner/package.json /opt/antigravity-runner/package.json
 COPY runner-shared /opt/runner-shared
+
+# tank-supervisor + baked launch shim for test-slot antigravity-runner hot-swap.
+# The baked shim is hot-aware: fresh pods run /opt/antigravity-runner/dist,
+# while SIGHUP restarts prefer /var/run/antigravity-runner-hot/dist when a
+# Glimmung hot-swap has populated it.
+COPY --from=tank-supervisor-build /out/tank-supervisor /app/tank-supervisor
+RUN cat > /app/antigravity-runner-launch-binary.sh <<'EOF' && chmod 0755 /app/antigravity-runner-launch-binary.sh
+#!/bin/sh
+if [ ! -e /var/run/antigravity-runner-hot/node_modules ]; then
+  ln -sfn /opt/antigravity-runner/node_modules /var/run/antigravity-runner-hot/node_modules
+fi
+if [ -f /var/run/antigravity-runner-hot/dist/index.js ]; then
+  exec node /var/run/antigravity-runner-hot/dist/index.js
+fi
+exec node /opt/antigravity-runner/dist/index.js
+EOF
 
 # Baked antigravity-runner launch script — self-contained, no session-ConfigMap
 # coupling. Copies the read-only KV credential into agy's writable data dir,

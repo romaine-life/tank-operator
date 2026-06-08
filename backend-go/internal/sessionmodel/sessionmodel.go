@@ -1138,6 +1138,21 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "ANTIGRAVITY_OAUTH_GATEWAY_CA", "value": "/etc/oauth-gateway-ca/ca.crt"},
 			)
 		}
+		if opts.HotSwapAgentRunner {
+			volumes = append(volumes, map[string]any{
+				"name":     "antigravity-runner-hot",
+				"emptyDir": map[string]any{},
+			})
+			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
+				"name":      "antigravity-runner-hot",
+				"mountPath": "/var/run/antigravity-runner-hot",
+			})
+			antigravityRunnerEnv = append(antigravityRunnerEnv,
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_CHILD", "value": "/app/antigravity-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_HOT_ARTIFACT", "value": "/var/run/antigravity-runner-hot/antigravity-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_RESTART_ENABLED", "value": "true"},
+			)
+		}
 		antigravityRunnerContainer := map[string]any{
 			"name":            "antigravity-runner",
 			"image":           sessionImage,
