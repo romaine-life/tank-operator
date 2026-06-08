@@ -46,6 +46,10 @@ const (
 	AntigravityGUIMode    = "antigravity_gui"
 	AntigravityCLIMode    = "antigravity_cli"
 	DefaultSessionMode    = ClaudeGUIMode
+	GeminiGUIMode      = "gemini_gui"
+	GeminiConfigMode   = "gemini_config"
+	GeminiTestMode     = "gemini_test"
+	HermesGUIMode           = "hermes_gui"
 	GeminiRunnerMetricsPort = 9097
 	MaxNameLength         = 80
 	SessionsNamespace     = "tank-operator-sessions"
@@ -1177,75 +1181,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		containers = append(containers, antigravityRunnerContainer)
 	}
 
-	if wantAntigravityRunner {
-		runnerVolumeMounts := append([]any{}, configMounts...)
-		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
-			"name":      "workspace",
-			"mountPath": "/workspace",
-		})
-		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
-			"name":      "tank-operator-sa-token",
-			"mountPath": "/var/run/secrets/tank-operator",
-			"readOnly":  true,
-		})
-		runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
-			"name":      "auth-romaine-sa-token",
-			"mountPath": "/var/run/secrets/auth.romaine.life",
-			"readOnly":  true,
-		})
-		antigravityRunnerEnv := []any{
-			map[string]any{
-				"name": "SESSION_ID",
-				"valueFrom": map[string]any{
-					"fieldRef": map[string]any{
-						"fieldPath": "metadata.labels['tank-operator/session-id']",
-					},
-				},
-			},
-			map[string]any{"name": "TANK_SESSION_STORAGE_KEY", "value": storageKey},
-			map[string]any{
-				"name": "POD_OWNER_EMAIL",
-				"valueFrom": map[string]any{
-					"fieldRef": map[string]any{
-						"fieldPath": "metadata.annotations['tank-operator/owner-email']",
-					},
-				},
-			},
-			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
-			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
-			map[string]any{
-				"name": "NATS_TOKEN",
-				"valueFrom": map[string]any{
-					"secretKeyRef": map[string]any{
-						"name": opts.NATSAuthSecret,
-						"key":  "token",
-					},
-				},
-			},
-			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
-			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
-			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
-		}
-		antigravityRunnerEnv = append(antigravityRunnerEnv, map[string]any{
-			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(AgentRunnerMetricsPort), // Reuse the agent runner port
-		})
-		antigravityRunnerContainer := map[string]any{
-			"name":            "antigravity-runner",
-			"image":           sessionImage,
-			"imagePullPolicy": "Always",
-			"command":         []any{"antigravity-runner"},
-			"env":             antigravityRunnerEnv,
-			"volumeMounts":    runnerVolumeMounts,
-			"ports": []any{
-				map[string]any{"name": "runner-metrics", "containerPort": AgentRunnerMetricsPort},
-			},
-			"resources": agentRunnerResources(),
-		}
-		if len(envFrom) > 0 {
-			antigravityRunnerContainer["envFrom"] = envFrom
-		}
-		containers = append(containers, antigravityRunnerContainer)
-	}
 
 	spec := map[string]any{
 		"serviceAccountName": opts.SessionServiceAccount,
