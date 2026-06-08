@@ -93,6 +93,7 @@ const (
 	EventShellTaskStarted            EventType = "shell_task.started"
 	EventShellTaskUpdated            EventType = "shell_task.updated"
 	EventShellTaskExited             EventType = "shell_task.exited"
+	EventScheduledWakeupUpdated      EventType = "scheduled_wakeup.updated"
 	EventTurnAwaitingInput           EventType = "turn.awaiting_input"
 	EventTurnAwaitingInputInvocation EventType = "turn.awaiting_input.invocation"
 )
@@ -283,6 +284,14 @@ func validateEventMap(event map[string]any) error {
 			return fmt.Errorf("%s must be actor=tool", eventType)
 		}
 		return validateShellTaskPayload(event)
+	case EventScheduledWakeupUpdated:
+		if err := requireFields(event, "timeline_id", "client_nonce"); err != nil {
+			return err
+		}
+		if Actor(stringField(event, "actor")) != ActorSystem || Source(stringField(event, "source")) != SourceTank {
+			return fmt.Errorf("scheduled_wakeup.updated must be actor=system source=tank")
+		}
+		return validateScheduledWakeupPayload(event)
 	case EventTurnAwaitingInput:
 		if err := requireFields(event, "turn_id"); err != nil {
 			return err
@@ -701,6 +710,28 @@ func validateShellTaskPayload(event map[string]any) error {
 	return nil
 }
 
+func validateScheduledWakeupPayload(event map[string]any) error {
+	payload, err := requirePayload(event)
+	if err != nil {
+		return err
+	}
+	if stringField(payload, "kind") != "scheduled_wakeup" {
+		return fmt.Errorf("payload.kind must be scheduled_wakeup for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "wakeup_id") == "" {
+		return fmt.Errorf("payload.wakeup_id is required for %s", stringField(event, "type"))
+	}
+	switch stringField(payload, "status") {
+	case "scheduled", "claiming", "fired", "failed", "cancelled":
+	default:
+		return fmt.Errorf("payload.status is invalid for %s", stringField(event, "type"))
+	}
+	if stringField(payload, "due_at") == "" {
+		return fmt.Errorf("payload.due_at is required for %s", stringField(event, "type"))
+	}
+	return nil
+}
+
 func validateTurnInputAnsweredPayload(event map[string]any) error {
 	payload, err := requirePayload(event)
 	if err != nil {
@@ -874,6 +905,7 @@ func validEventType(eventType EventType) bool {
 		EventShellTaskStarted,
 		EventShellTaskUpdated,
 		EventShellTaskExited,
+		EventScheduledWakeupUpdated,
 		EventTurnAwaitingInput,
 		EventTurnAwaitingInputInvocation:
 		return true

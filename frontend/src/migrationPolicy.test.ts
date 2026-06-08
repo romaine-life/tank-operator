@@ -1009,7 +1009,13 @@ test("background page surfaces scheduled wakeups as first-class continuation sta
   expect(appSource).toMatch(/type BackgroundView = "shells" \| "scheduled" \| "control" \| "detached"/);
   expect(appSource).toMatch(/function isScheduledWakeupEntry\([\s\S]*?entry\.taskKind === "scheduled_wakeup"/);
   expect(appSource).toMatch(/<span>Scheduled<\/span>[\s\S]*?<span>\{scheduledEntries\.length\}<\/span>/);
-  expect(appSource).toMatch(/scheduledWakeupRowsToEntries\(\s*body\.scheduled_wakeups \?\? \[\],\s*\)/);
+  expect(appSource).toMatch(/scheduled_background_tasks\?: unknown\[\]/);
+  expect(appSource).toMatch(/replaceScheduledWakeupEntries\(body\.scheduled_background_tasks \?\? \[\]\)/);
+  expect(appSource).toMatch(/mergeScheduledWakeupEntries\(projectedRows\)/);
+  expect(appSource).toMatch(/const currentViewHasEntries =[\s\S]*?backgroundView === "scheduled"[\s\S]*?scheduledWakeupEntries\.length > 0/);
+  expect(appSource).toMatch(/const nextView =[\s\S]*?backgroundShellEntries\.length > 0[\s\S]*?"shells"[\s\S]*?scheduledWakeupEntries\.length > 0[\s\S]*?"scheduled"/);
+  expect(appSource).not.toContain("scheduledWakeupRowsToEntries");
+  expect(appSource).not.toContain("/scheduled-wakeups");
   expect(appSource).toMatch(/<BackgroundScreen[\s\S]{0,400}shellEntries=\{backgroundShellEntries\}[\s\S]{0,400}scheduledEntries=\{scheduledWakeupEntries\}/);
 });
 

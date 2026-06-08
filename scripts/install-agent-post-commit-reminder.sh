@@ -37,7 +37,9 @@ if [ ! -f "$hook_src" ]; then
   exit 1
 fi
 
-if [ -e "$hook_dst" ] && ! cmp -s "$hook_src" "$hook_dst" && [ "$force" -ne 1 ]; then
+managed_marker='[tank-agent-reminder] Local commit created.'
+
+if [ -e "$hook_dst" ] && ! cmp -s "$hook_src" "$hook_dst" && [ "$force" -ne 1 ] && ! grep -Fq "$managed_marker" "$hook_dst"; then
   cat >&2 <<EOF
 Refusing to replace existing local hook:
   $hook_dst

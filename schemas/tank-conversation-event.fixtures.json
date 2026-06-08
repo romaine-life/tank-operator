@@ -742,6 +742,44 @@
       }
     },
     {
+      "name": "scheduled wakeup updated",
+      "event": {
+        "event_id": "scheduled-wakeup:wakeup_contract:scheduled:1768179853000000000",
+        "uuid": "scheduled-wakeup:wakeup_contract:scheduled:1768179853000000000",
+        "order_key": "1768179853000-00000014-scheduled-wakeup:wakeup_contract",
+        "sequence": 14,
+        "conversation_id": "63",
+        "session_id": "63",
+        "turn_id": "turn_contract",
+        "timeline_id": "scheduled-wakeup:wakeup_contract",
+        "provider_item_id": "toolu_schedule",
+        "client_nonce": "schedule_wakeup-wakeup_contract",
+        "actor": "system",
+        "source": "tank",
+        "type": "scheduled_wakeup.updated",
+        "created_at": "2026-05-12T00:00:13.000Z",
+        "written_at": "2026-05-12T00:00:13.000Z",
+        "producer": {
+          "name": "tank-operator",
+          "runtime": "claude"
+        },
+        "visibility": "durable",
+        "payload": {
+          "kind": "scheduled_wakeup",
+          "wakeup_id": "wakeup_contract",
+          "status": "scheduled",
+          "prompt": "check CI",
+          "scheduled_turn_id": "turn_contract",
+          "provider_item_id": "toolu_schedule",
+          "scheduled_at": "2026-05-12T00:00:13.000Z",
+          "due_at": "2026-05-12T00:05:13.000Z",
+          "attempt_count": 0,
+          "fired_turn_id": "",
+          "last_error": ""
+        }
+      }
+    },
+    {
       "name": "ask user answer durable event",
       "event": {
         "event_id": "turn_contract:turn.input_answered:client-answer-contract",

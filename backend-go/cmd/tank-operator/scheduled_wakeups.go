@@ -119,6 +119,11 @@ func (s *appServer) handleInternalRegisterScheduledWakeup(w http.ResponseWriter,
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	if err := s.persistScheduledWakeupEvent(r.Context(), row, row.ScheduledAt); err != nil {
+		recordScheduledWakeupRegister(provider, "event_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
 	recordScheduledWakeupRegister(provider, "ok")
 	writeJSON(w, http.StatusAccepted, map[string]any{
 		"status":       "scheduled",
@@ -222,10 +227,15 @@ func (s *appServer) handleCancelScheduledWakeups(w http.ResponseWriter, r *http.
 func (s *appServer) cancelPendingWakesForSession(ctx context.Context, sessionID string) int64 {
 	var total int64
 	if s.scheduledWakeups != nil {
-		if n, err := s.scheduledWakeups.CancelPendingForSession(ctx, s.sessionScope, sessionID); err != nil {
+		if rows, err := s.scheduledWakeups.CancelPendingForSession(ctx, s.sessionScope, sessionID); err != nil {
 			slog.Warn("cancel pending scheduled wakeups failed", "session_id", sessionID, "error", err)
 		} else {
-			total += n
+			total += int64(len(rows))
+			for _, row := range rows {
+				if err := s.persistScheduledWakeupEvent(ctx, row, time.Now().UTC()); err != nil {
+					slog.Warn("cancel pending scheduled wakeup event failed", "session_id", sessionID, "wakeup_id", row.WakeupID, "error", err)
+				}
+			}
 		}
 	}
 	if s.backgroundTaskWakes != nil {
@@ -306,8 +316,13 @@ func (s *appServer) fireScheduledWakeup(ctx context.Context, row pgstore.Schedul
 		return s.failScheduledWakeup(ctx, row, provider, reason)
 	}
 	turnID := turnIDFromEnqueueResponse(resp)
-	if err := s.scheduledWakeups.MarkFired(ctx, row.WakeupID, turnID); err != nil {
+	fired, err := s.scheduledWakeups.MarkFired(ctx, row.WakeupID, turnID)
+	if err != nil {
 		recordScheduledWakeupFire(provider, "store_error")
+		return err
+	}
+	if err := s.persistScheduledWakeupEvent(ctx, fired, now); err != nil {
+		recordScheduledWakeupFire(provider, "event_error")
 		return err
 	}
 	recordScheduledWakeupFire(provider, "ok")
@@ -318,9 +333,46 @@ func scheduledWakeupAnnouncementText() string {
 	return "Timer went off!"
 }
 
+func (s *appServer) persistScheduledWakeupEvent(ctx context.Context, row pgstore.ScheduledWakeup, now time.Time) error {
+	if s == nil || s.sessionEvents == nil {
+		return errors.New("session event store unavailable")
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	storageKey := row.TankSessionID
+	if storageKey == "" {
+		storageKey = sessionmodel.SessionStorageKey(row.SessionScope, row.SessionID)
+	}
+	event := conversation.ScheduledWakeupUpdatedEventMap(conversation.ScheduledWakeupUpdatedArgs{
+		SessionID:         row.SessionID,
+		SessionStorageKey: storageKey,
+		Email:             row.OwnerEmail,
+		Runtime:           row.Provider,
+		WakeupID:          row.WakeupID,
+		Status:            string(row.Status),
+		Prompt:            row.Prompt,
+		ClientNonce:       row.ClientNonce,
+		ScheduledTurnID:   row.ScheduledTurnID,
+		ProviderItemID:    row.ProviderItemID,
+		ScheduledAt:       row.ScheduledAt,
+		DueAt:             row.DueAt,
+		AttemptCount:      row.AttemptCount,
+		FiredTurnID:       row.FiredTurnID,
+		LastError:         row.LastError,
+		Now:               now,
+	})
+	return s.persistBackendEvent(ctx, storageKey, event)
+}
+
 func (s *appServer) failScheduledWakeup(ctx context.Context, row pgstore.ScheduledWakeup, provider, reason string) error {
-	if err := s.scheduledWakeups.MarkFailed(ctx, row.WakeupID, reason); err != nil {
+	failed, err := s.scheduledWakeups.MarkFailed(ctx, row.WakeupID, reason)
+	if err != nil {
 		recordScheduledWakeupFire(provider, "store_error")
+		return err
+	}
+	if err := s.persistScheduledWakeupEvent(ctx, failed, time.Now().UTC()); err != nil {
+		recordScheduledWakeupFire(provider, "event_error")
 		return err
 	}
 	recordScheduledWakeupFire(provider, scheduledWakeupFireFailureLabel(reason))
