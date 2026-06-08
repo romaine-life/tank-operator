@@ -195,6 +195,60 @@ async def _proxy_app_for(upstream_url: str, http: ClientSession) -> web.Applicat
     return app
 
 
+def test_handler_forwards_static_caller_context_headers() -> None:
+    async def run() -> dict[str, str]:
+        seen: dict[str, str] = {}
+
+        async def handler(request: web.Request) -> web.Response:
+            seen.update(dict(request.headers))
+            return web.json_response({"ok": True})
+
+        upstream_app = web.Application()
+        upstream_app.router.add_route("*", "/{tail:.*}", handler)
+        upstream_server = TestServer(upstream_app)
+        await upstream_server.start_server()
+        try:
+            http = ClientSession(timeout=ClientTimeout(total=10, sock_connect=2))
+            try:
+                upstream_url = f"http://{upstream_server.host}:{upstream_server.port}"
+                proxy_app = web.Application()
+                proxy_app.router.add_route(
+                    "*",
+                    "/{tail:.*}",
+                    _make_handler(
+                        upstream_url,
+                        http,
+                        _StaticTokenProvider("sa-token"),
+                        static_headers={
+                            "X-Tank-Caller-System": "tank-operator",
+                            "X-Tank-Caller-Kind": "session",
+                            "X-Tank-Caller-Session-Id": "709",
+                            "X-Tank-Caller-Session-Scope": "default",
+                        },
+                    ),
+                )
+                proxy_server = TestServer(proxy_app)
+                client = TestClient(proxy_server)
+                await client.start_server()
+                try:
+                    resp = await client.post("/mcp/some/path", data=b"{}")
+                    assert resp.status == 200
+                    return seen
+                finally:
+                    await client.close()
+            finally:
+                await http.close()
+        finally:
+            await upstream_server.close()
+
+    headers = asyncio.run(run())
+    assert headers["Authorization"] == "Bearer sa-token"
+    assert headers["X-Tank-Caller-System"] == "tank-operator"
+    assert headers["X-Tank-Caller-Kind"] == "session"
+    assert headers["X-Tank-Caller-Session-Id"] == "709"
+    assert headers["X-Tank-Caller-Session-Scope"] == "default"
+
+
 async def _run_proxy_against_upstream(status_sequence: list[int], success_body: bytes = b'{"ok":true}') -> tuple[int, str, int]:
     """Wire upstream + proxy via TestServer, POST one request through,
     return (response_status, response_text, upstream_call_count)."""
