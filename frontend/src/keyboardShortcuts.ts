@@ -53,6 +53,13 @@ export const KEYBOARD_SHORTCUTS: KeyboardShortcut[] = [
     description: "From the Turns view, return to the main transcript.",
   },
   {
+    id: "navigate-pages-turns",
+    keys: "Left / Right",
+    tokens: ["ArrowLeft", "ArrowRight"],
+    description:
+      "When the transcript is focused, navigate to the previous or next page of activity, or step to the previous or next turn if no more pages are available.",
+  },
+  {
     id: "rename-session",
     keys: "F2",
     tokens: ["F2"],
