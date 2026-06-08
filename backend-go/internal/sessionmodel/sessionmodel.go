@@ -46,10 +46,6 @@ const (
 	AntigravityGUIMode    = "antigravity_gui"
 	AntigravityCLIMode    = "antigravity_cli"
 	DefaultSessionMode    = ClaudeGUIMode
-	GeminiGUIMode      = "gemini_gui"
-	GeminiConfigMode   = "gemini_config"
-	GeminiTestMode     = "gemini_test"
-	HermesGUIMode           = "hermes_gui"
 	GeminiRunnerMetricsPort = 9097
 	MaxNameLength         = 80
 	SessionsNamespace     = "tank-operator-sessions"
@@ -639,9 +635,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Codex GUI modes use codex-runner. Both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
 	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
-	wantGeminiRunner := mode == GeminiGUIMode || mode == GeminiTestMode
 	wantAntigravityRunner := mode == AntigravityGUIMode
-	wantSDKRunner := wantAgentRunner || wantCodexRunner || wantGeminiRunner || wantAntigravityRunner
+	wantSDKRunner := wantAgentRunner || wantCodexRunner || wantAntigravityRunner
 	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
 			"name":     "workspace",
