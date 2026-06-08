@@ -920,7 +920,7 @@ func sessionContextWindowResultLabel(result string) string {
 
 func scheduledWakeupRegisterResultLabel(result string) string {
 	switch result {
-	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "manager_unavailable", "store_error":
+	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "manager_unavailable", "store_error", "event_error":
 		return result
 	default:
 		return "other"
@@ -929,7 +929,7 @@ func scheduledWakeupRegisterResultLabel(result string) string {
 
 func scheduledWakeupFireResultLabel(result string) string {
 	switch result {
-	case "ok", "session_not_found", "session_not_active", "enqueue_failed", "store_error", "failed":
+	case "ok", "session_not_found", "session_not_active", "enqueue_failed", "store_error", "event_error", "failed":
 		return result
 	default:
 		return "other"

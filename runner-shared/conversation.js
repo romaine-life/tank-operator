@@ -41,6 +41,7 @@ export const TANK_EVENT_TYPES = [
   "shell_task.started",
   "shell_task.updated",
   "shell_task.exited",
+  "scheduled_wakeup.updated",
   "turn.awaiting_input",
   "turn.awaiting_input.invocation",
 ];
@@ -175,6 +176,13 @@ function isValidEventByType(event) {
         event.actor === "tool" &&
         hasStrings(event, ["turn_id", "timeline_id"]) &&
         isShellTaskPayload(event.payload)
+      );
+    case "scheduled_wakeup.updated":
+      return (
+        event.actor === "system" &&
+        event.source === "tank" &&
+        hasStrings(event, ["timeline_id", "client_nonce"]) &&
+        isScheduledWakeupPayload(event.payload)
       );
     case "turn.awaiting_input":
       return (
@@ -359,6 +367,25 @@ function isShellTaskPayload(payload) {
     payload.task_id.length > 0 &&
     typeof payload.status === "string" &&
     payload.status.length > 0
+  );
+}
+
+function isScheduledWakeupPayload(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload))
+    return false;
+  return (
+    payload.kind === "scheduled_wakeup" &&
+    typeof payload.wakeup_id === "string" &&
+    payload.wakeup_id.length > 0 &&
+    [
+      "scheduled",
+      "claiming",
+      "fired",
+      "failed",
+      "cancelled",
+    ].includes(payload.status) &&
+    typeof payload.due_at === "string" &&
+    payload.due_at.length > 0
   );
 }
 

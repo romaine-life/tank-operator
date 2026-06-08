@@ -243,6 +243,84 @@ type TurnInterruptRequestedArgs struct {
 	Now               time.Time
 }
 
+type ScheduledWakeupUpdatedArgs struct {
+	SessionID         string
+	SessionStorageKey string
+	Email             string
+	Runtime           string
+	WakeupID          string
+	Status            string
+	Prompt            string
+	ClientNonce       string
+	ScheduledTurnID   string
+	ProviderItemID    string
+	ScheduledAt       time.Time
+	DueAt             time.Time
+	AttemptCount      int
+	FiredTurnID       string
+	LastError         string
+	Now               time.Time
+}
+
+func ScheduledWakeupUpdatedEventMap(args ScheduledWakeupUpdatedArgs) map[string]any {
+	createdAt := args.Now
+	if createdAt.IsZero() {
+		createdAt = time.Now().UTC()
+	}
+	wakeupID := strings.TrimSpace(args.WakeupID)
+	status := strings.TrimSpace(args.Status)
+	clientNonce := strings.TrimSpace(args.ClientNonce)
+	producer := map[string]any{"name": "tank-operator"}
+	if args.Runtime != "" {
+		producer["runtime"] = args.Runtime
+	}
+	timelineID := "scheduled-wakeup:" + wakeupID
+	payload := map[string]any{
+		"kind":              "scheduled_wakeup",
+		"wakeup_id":         wakeupID,
+		"status":            status,
+		"prompt":            strings.TrimSpace(args.Prompt),
+		"scheduled_turn_id": strings.TrimSpace(args.ScheduledTurnID),
+		"provider_item_id":  strings.TrimSpace(args.ProviderItemID),
+		"scheduled_at":      args.ScheduledAt.UTC().Format(time.RFC3339Nano),
+		"due_at":            args.DueAt.UTC().Format(time.RFC3339Nano),
+		"attempt_count":     args.AttemptCount,
+		"fired_turn_id":     strings.TrimSpace(args.FiredTurnID),
+		"last_error":        strings.TrimSpace(args.LastError),
+	}
+	event := StampEventMap(map[string]any{
+		"event_id":        timelineID + ":" + status + ":" + fmt.Sprintf("%d", createdAt.UnixNano()),
+		"conversation_id": args.SessionID,
+		"session_id":      args.SessionID,
+		"turn_id":         strings.TrimSpace(args.ScheduledTurnID),
+		"timeline_id":     timelineID,
+		"client_nonce":    clientNonce,
+		"actor":           string(ActorSystem),
+		"source":          string(SourceTank),
+		"type":            string(EventScheduledWakeupUpdated),
+		"created_at":      createdAt.Format(time.RFC3339Nano),
+		"producer":        producer,
+		"visibility":      string(VisibilityDurable),
+		"payload":         payload,
+	})
+	if args.SessionStorageKey != "" {
+		event["tank_session_id"] = args.SessionStorageKey
+	}
+	if args.SessionID != "" {
+		event["tank_public_session_id"] = args.SessionID
+	}
+	if args.Email != "" {
+		event["email"] = args.Email
+	}
+	if args.Runtime != "" {
+		event["runtime"] = args.Runtime
+	}
+	if strings.TrimSpace(args.ProviderItemID) != "" {
+		event["provider_item_id"] = strings.TrimSpace(args.ProviderItemID)
+	}
+	return event
+}
+
 // TurnCommandFailedEventMap builds a turn.command_failed event keyed
 // by the same turn_id the failed command targeted, so client renderers
 // associate it with the stranded turn submission.

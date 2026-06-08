@@ -1498,6 +1498,82 @@ func TestProjectSessionBackgroundTasksListsRunningAndCompleted(t *testing.T) {
 	}
 }
 
+func TestProjectTranscriptEventsProjectsScheduledWakeupLifecycleForBackground(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("wake-scheduled", "001", "scheduled_wakeup.updated", "system", "tank", "turn_schedule_wakeup-wakeup_123", "scheduled-wakeup:wakeup_123", map[string]any{
+			"kind":              "scheduled_wakeup",
+			"wakeup_id":         "wakeup_123",
+			"status":            "scheduled",
+			"prompt":            "check CI",
+			"scheduled_turn_id": "turn_schedule_wakeup-wakeup_123",
+			"provider_item_id":  "toolu_wake",
+			"scheduled_at":      "2026-06-03T15:20:00Z",
+			"due_at":            "2026-06-03T15:25:00Z",
+			"attempt_count":     float64(0),
+		}),
+		projectionTestEvent("wake-fired", "002", "scheduled_wakeup.updated", "system", "tank", "turn_schedule_wakeup-wakeup_123", "scheduled-wakeup:wakeup_123", map[string]any{
+			"kind":              "scheduled_wakeup",
+			"wakeup_id":         "wakeup_123",
+			"status":            "fired",
+			"prompt":            "check CI",
+			"scheduled_turn_id": "turn_schedule_wakeup-wakeup_123",
+			"provider_item_id":  "toolu_wake",
+			"scheduled_at":      "2026-06-03T15:20:00Z",
+			"due_at":            "2026-06-03T15:25:00Z",
+			"attempt_count":     float64(1),
+			"fired_turn_id":     "turn_schedule_wakeup-wakeup_123",
+		}),
+	}
+	for _, event := range events {
+		event["client_nonce"] = "schedule_wakeup-wakeup_123"
+	}
+
+	pendingProjection := projectTranscriptEvents(events[:1])
+	if got, want := len(pendingProjection.Entries), 1; got != want {
+		t.Fatalf("pending projected entries = %d, want %d: %#v", got, want, pendingProjection.Entries)
+	}
+	pending := pendingProjection.Entries[0]
+	if got := transcriptMapString(pending, "taskStatus"); got != "running" {
+		t.Fatalf("pending taskStatus = %q, want running: %#v", got, pending)
+	}
+	if got := transcriptMapString(pending, "taskSummary"); got != "Timer scheduled" {
+		t.Fatalf("pending taskSummary = %q, want Timer scheduled: %#v", got, pending)
+	}
+	if got, _ := pending["backgroundOnly"].(bool); !got {
+		t.Fatalf("pending backgroundOnly = %#v, want true: %#v", pending["backgroundOnly"], pending)
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 1; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	entry := projection.Entries[0]
+	if got := transcriptMapString(entry, "kind"); got != "background_task" {
+		t.Fatalf("entry kind = %q, want background_task: %#v", got, entry)
+	}
+	if got, _ := entry["backgroundOnly"].(bool); !got {
+		t.Fatalf("backgroundOnly = %#v, want true: %#v", entry["backgroundOnly"], entry)
+	}
+	if got := transcriptMapString(entry, "taskKind"); got != "scheduled_wakeup" {
+		t.Fatalf("taskKind = %q, want scheduled_wakeup: %#v", got, entry)
+	}
+	if got := transcriptMapString(entry, "taskStatus"); got != "completed" {
+		t.Fatalf("taskStatus = %q, want completed: %#v", got, entry)
+	}
+	if got := transcriptMapString(entry, "taskSummary"); got != "Timer fired" {
+		t.Fatalf("taskSummary = %q, want Timer fired: %#v", got, entry)
+	}
+	if got := transcriptMapString(entry, "taskCommand"); got != "check CI" {
+		t.Fatalf("taskCommand = %q, want prompt: %#v", got, entry)
+	}
+	if got := transcriptMapString(entry, "wakeupDueAt"); got != "2026-06-03T15:25:00Z" {
+		t.Fatalf("wakeupDueAt = %q, want due timestamp: %#v", got, entry)
+	}
+	if got := transcriptMapString(entry, "wakeupFiredTurnId"); got != "turn_schedule_wakeup-wakeup_123" {
+		t.Fatalf("wakeupFiredTurnId = %q, want fired turn: %#v", got, entry)
+	}
+}
+
 func assertChainedWakePrompt(t *testing.T, entry map[string]any, wakeTurnID string) {
 	t.Helper()
 	if got, want := transcriptMapString(entry, "authorKind"), string(conversation.AuthorKindSystem); got != want {

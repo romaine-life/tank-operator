@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
@@ -36,6 +37,8 @@ type projectionState struct {
 	itemIndex             map[string]int
 	backgroundTasks       []*projectionBackgroundTask
 	backgroundIndex       map[string]int
+	scheduledWakeups      []*projectionScheduledWakeup
+	scheduledWakeupIndex  map[string]int
 	interruptRequests     []projectedEntryItem
 	contextCompactions    []projectedEntryItem
 	wakePrompts           []projectedEntryItem
@@ -100,6 +103,27 @@ type projectionBackgroundTask struct {
 	CompletedOrderKey string
 }
 
+type projectionScheduledWakeup struct {
+	ID                string
+	WakeupID          string
+	TurnID            string
+	ClientNonce       string
+	ProviderItemID    string
+	Status            string
+	Prompt            string
+	ScheduledAt       string
+	DueAt             string
+	FiredTurnID       string
+	LastError         string
+	AttemptCount      any
+	OrderKey          string
+	SourceEventID     string
+	CreatedAt         string
+	UpdatedAt         string
+	CompletedAt       string
+	CompletedOrderKey string
+}
+
 type turnTerminalProjection struct {
 	TurnID           string
 	Status           string
@@ -152,6 +176,7 @@ func newProjectionState() projectionState {
 	return projectionState{
 		itemIndex:             map[string]int{},
 		backgroundIndex:       map[string]int{},
+		scheduledWakeupIndex:  map[string]int{},
 		turnUsages:            map[string]turnUsageProjection{},
 		turnTerminals:         map[string]turnTerminalProjection{},
 		backgroundWakeTurns:   map[string]bool{},
@@ -299,6 +324,8 @@ func (s *projectionState) apply(event map[string]any) {
 			status = "completed"
 		}
 		s.upsertBackgroundTask(event, status)
+	case "scheduled_wakeup.updated":
+		s.upsertScheduledWakeup(event)
 	case "turn.awaiting_input":
 		// The agent asked the user a question as the Tank-visible response.
 		// The durable question set owns the Turn question page; the main
@@ -902,8 +929,56 @@ func (s *projectionState) upsertBackgroundTask(event map[string]any, status stri
 	}
 }
 
+func (s *projectionState) upsertScheduledWakeup(event map[string]any) {
+	payload := transcriptPayload(event)
+	wakeupID := transcriptMapString(payload, "wakeup_id")
+	if wakeupID == "" {
+		return
+	}
+	id := transcriptString(event, "timeline_id")
+	if id == "" {
+		id = "scheduled-wakeup:" + wakeupID
+	}
+	status := normalizeProjectionScheduledWakeupStatus(transcriptMapString(payload, "status"))
+	existingIdx, exists := s.scheduledWakeupIndex[id]
+	var existing *projectionScheduledWakeup
+	if exists {
+		existing = s.scheduledWakeups[existingIdx]
+	}
+	wakeup := &projectionScheduledWakeup{
+		ID:                id,
+		WakeupID:          wakeupID,
+		TurnID:            projectionFirstNonEmpty(transcriptString(event, "turn_id"), transcriptMapString(payload, "scheduled_turn_id"), existingScheduledWakeupString(existing, "TurnID")),
+		ClientNonce:       projectionFirstNonEmpty(transcriptString(event, "client_nonce"), existingScheduledWakeupString(existing, "ClientNonce")),
+		ProviderItemID:    projectionFirstNonEmpty(transcriptString(event, "provider_item_id"), transcriptMapString(payload, "provider_item_id"), existingScheduledWakeupString(existing, "ProviderItemID")),
+		Status:            status,
+		Prompt:            projectionFirstNonEmpty(transcriptMapString(payload, "prompt"), existingScheduledWakeupString(existing, "Prompt")),
+		ScheduledAt:       projectionFirstNonEmpty(transcriptMapString(payload, "scheduled_at"), existingScheduledWakeupString(existing, "ScheduledAt")),
+		DueAt:             projectionFirstNonEmpty(transcriptMapString(payload, "due_at"), existingScheduledWakeupString(existing, "DueAt")),
+		FiredTurnID:       projectionFirstNonEmpty(transcriptMapString(payload, "fired_turn_id"), existingScheduledWakeupString(existing, "FiredTurnID")),
+		LastError:         projectionFirstNonEmpty(transcriptMapString(payload, "last_error"), existingScheduledWakeupString(existing, "LastError")),
+		AttemptCount:      firstNonNil(payload["attempt_count"], existingScheduledWakeupAny(existing, "AttemptCount")),
+		OrderKey:          projectionFirstNonEmpty(transcriptString(event, "order_key"), existingScheduledWakeupString(existing, "OrderKey")),
+		SourceEventID:     transcriptString(event, "event_id"),
+		CreatedAt:         projectionFirstNonEmpty(existingScheduledWakeupString(existing, "CreatedAt"), transcriptString(event, "created_at")),
+		UpdatedAt:         projectionFirstNonEmpty(transcriptString(event, "created_at"), existingScheduledWakeupString(existing, "UpdatedAt")),
+		CompletedAt:       existingScheduledWakeupString(existing, "CompletedAt"),
+		CompletedOrderKey: existingScheduledWakeupString(existing, "CompletedOrderKey"),
+	}
+	if isTerminalProjectionScheduledWakeupStatus(status) {
+		wakeup.CompletedAt = projectionFirstNonEmpty(existingScheduledWakeupString(existing, "CompletedAt"), transcriptString(event, "created_at"))
+		wakeup.CompletedOrderKey = projectionFirstNonEmpty(existingScheduledWakeupString(existing, "CompletedOrderKey"), transcriptString(event, "order_key"))
+	}
+	if exists {
+		s.scheduledWakeups[existingIdx] = wakeup
+	} else {
+		s.scheduledWakeupIndex[id] = len(s.scheduledWakeups)
+		s.scheduledWakeups = append(s.scheduledWakeups, wakeup)
+	}
+}
+
 func (s *projectionState) projectFlatEntries() []map[string]any {
-	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.wakePrompts)+len(s.turnUsages)+len(s.turnTerminals)+len(s.awaitingInputTools))
+	items := make([]projectedEntryItem, 0, len(s.messages)+len(s.items)+len(s.backgroundTasks)+len(s.scheduledWakeups)+len(s.interruptRequests)+len(s.contextCompactions)+len(s.wakePrompts)+len(s.turnUsages)+len(s.turnTerminals)+len(s.awaitingInputTools))
 	items = append(items, s.messages...)
 	baseIndex := len(items)
 	backgroundProviderIDs := s.backgroundProviderItemIDs()
@@ -929,6 +1004,15 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 		})
 	}
 	baseIndex += len(s.backgroundTasks)
+	for idx, wakeup := range s.scheduledWakeups {
+		entry := projectProjectionScheduledWakeup(wakeup)
+		items = append(items, projectedEntryItem{
+			entry:    entry,
+			orderKey: wakeup.OrderKey,
+			index:    baseIndex + idx,
+		})
+	}
+	baseIndex += len(s.scheduledWakeups)
 	for idx, request := range s.interruptRequests {
 		request.index = baseIndex + idx
 		items = append(items, request)
@@ -1258,6 +1342,80 @@ func projectProjectionBackgroundTask(task *projectionBackgroundTask) map[string]
 		"orderKey":        task.OrderKey,
 	}
 	return entry
+}
+
+func projectProjectionScheduledWakeup(wakeup *projectionScheduledWakeup) map[string]any {
+	if wakeup == nil {
+		return nil
+	}
+	entry := map[string]any{
+		"id":                 wakeup.ID,
+		"kind":               "background_task",
+		"backgroundOnly":     true,
+		"taskKind":           "scheduled_wakeup",
+		"taskId":             wakeup.WakeupID,
+		"taskStatus":         scheduledWakeupTaskStatus(wakeup.Status),
+		"taskSummary":        scheduledWakeupSummary(wakeup.Status),
+		"taskDescription":    scheduledWakeupDescription(wakeup),
+		"taskCommand":        wakeup.Prompt,
+		"taskOutput":         scheduledWakeupOutput(wakeup),
+		"taskError":          wakeup.LastError,
+		"taskRawItem":        scheduledWakeupRawItem(wakeup),
+		"turnId":             wakeup.TurnID,
+		"clientNonce":        wakeup.ClientNonce,
+		"providerItemId":     wakeup.ProviderItemID,
+		"time":               projectionFirstNonEmpty(wakeup.ScheduledAt, wakeup.CreatedAt, wakeup.DueAt),
+		"startedAt":          projectionFirstNonEmpty(wakeup.ScheduledAt, wakeup.CreatedAt),
+		"updatedAt":          projectionFirstNonEmpty(wakeup.UpdatedAt, wakeup.DueAt),
+		"completedAt":        wakeup.CompletedAt,
+		"sourceEventId":      wakeup.SourceEventID,
+		"orderKey":           wakeup.OrderKey,
+		"wakeupStatus":       wakeup.Status,
+		"wakeupDueAt":        wakeup.DueAt,
+		"wakeupScheduledAt":  wakeup.ScheduledAt,
+		"wakeupPrompt":       wakeup.Prompt,
+		"wakeupFiredTurnId":  wakeup.FiredTurnID,
+		"wakeupLastError":    wakeup.LastError,
+		"wakeupAttemptCount": wakeup.AttemptCount,
+	}
+	return entry
+}
+
+func projectScheduledWakeupRows(rows []pgstore.ScheduledWakeup) []map[string]any {
+	out := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		wakeup := projectionScheduledWakeupFromRow(row)
+		if entry := projectProjectionScheduledWakeup(wakeup); entry != nil {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+func projectionScheduledWakeupFromRow(row pgstore.ScheduledWakeup) *projectionScheduledWakeup {
+	status := normalizeProjectionScheduledWakeupStatus(string(row.Status))
+	updated := ""
+	completedAt := ""
+	if isTerminalProjectionScheduledWakeupStatus(status) {
+		completedAt = row.DueAt.UTC().Format(time.RFC3339Nano)
+	}
+	return &projectionScheduledWakeup{
+		ID:             "scheduled-wakeup:" + row.WakeupID,
+		WakeupID:       row.WakeupID,
+		TurnID:         row.ScheduledTurnID,
+		ClientNonce:    row.ClientNonce,
+		ProviderItemID: row.ProviderItemID,
+		Status:         status,
+		Prompt:         row.Prompt,
+		ScheduledAt:    row.ScheduledAt.UTC().Format(time.RFC3339Nano),
+		DueAt:          row.DueAt.UTC().Format(time.RFC3339Nano),
+		FiredTurnID:    row.FiredTurnID,
+		LastError:      row.LastError,
+		AttemptCount:   row.AttemptCount,
+		CreatedAt:      row.ScheduledAt.UTC().Format(time.RFC3339Nano),
+		UpdatedAt:      updated,
+		CompletedAt:    completedAt,
+	}
 }
 
 func projectTurnUsage(usage turnUsageProjection) map[string]any {
@@ -2488,6 +2646,104 @@ func firstNonNil(values ...any) any {
 	return nil
 }
 
+func normalizeProjectionScheduledWakeupStatus(status string) string {
+	switch strings.TrimSpace(status) {
+	case "claiming":
+		return "claiming"
+	case "fired":
+		return "fired"
+	case "failed":
+		return "failed"
+	case "cancelled":
+		return "cancelled"
+	default:
+		return "scheduled"
+	}
+}
+
+func scheduledWakeupTaskStatus(status string) string {
+	switch normalizeProjectionScheduledWakeupStatus(status) {
+	case "fired":
+		return "completed"
+	case "failed":
+		return "failed"
+	case "cancelled":
+		return "stopped"
+	default:
+		return "running"
+	}
+}
+
+func isTerminalProjectionScheduledWakeupStatus(status string) bool {
+	switch normalizeProjectionScheduledWakeupStatus(status) {
+	case "fired", "failed", "cancelled":
+		return true
+	default:
+		return false
+	}
+}
+
+func scheduledWakeupSummary(status string) string {
+	switch normalizeProjectionScheduledWakeupStatus(status) {
+	case "claiming":
+		return "Timer is firing"
+	case "fired":
+		return "Timer fired"
+	case "failed":
+		return "Timer failed"
+	case "cancelled":
+		return "Timer cancelled"
+	default:
+		return "Timer scheduled"
+	}
+}
+
+func scheduledWakeupDescription(wakeup *projectionScheduledWakeup) string {
+	if wakeup == nil {
+		return ""
+	}
+	parts := []string{}
+	if wakeup.DueAt != "" {
+		parts = append(parts, "Due "+wakeup.DueAt)
+	}
+	if wakeup.FiredTurnID != "" {
+		parts = append(parts, "Fired turn "+wakeup.FiredTurnID)
+	}
+	if wakeup.LastError != "" {
+		parts = append(parts, "Error "+wakeup.LastError)
+	}
+	return strings.Join(parts, " · ")
+}
+
+func scheduledWakeupOutput(wakeup *projectionScheduledWakeup) string {
+	if wakeup == nil {
+		return ""
+	}
+	if wakeup.FiredTurnID != "" {
+		return "Fired turn " + wakeup.FiredTurnID
+	}
+	return ""
+}
+
+func scheduledWakeupRawItem(wakeup *projectionScheduledWakeup) map[string]any {
+	if wakeup == nil {
+		return nil
+	}
+	return map[string]any{
+		"wakeup_id":         wakeup.WakeupID,
+		"status":            wakeup.Status,
+		"prompt":            wakeup.Prompt,
+		"client_nonce":      wakeup.ClientNonce,
+		"scheduled_turn_id": wakeup.TurnID,
+		"provider_item_id":  wakeup.ProviderItemID,
+		"scheduled_at":      wakeup.ScheduledAt,
+		"due_at":            wakeup.DueAt,
+		"attempt_count":     wakeup.AttemptCount,
+		"fired_turn_id":     wakeup.FiredTurnID,
+		"last_error":        wakeup.LastError,
+	}
+}
+
 func existingString(item *projectionItem, field string) string {
 	if item == nil {
 		return ""
@@ -2567,6 +2823,54 @@ func existingBackgroundAny(item *projectionBackgroundTask, field string) any {
 		return item.RawItem
 	case "Error":
 		return item.Error
+	default:
+		return nil
+	}
+}
+
+func existingScheduledWakeupString(item *projectionScheduledWakeup, field string) string {
+	if item == nil {
+		return ""
+	}
+	switch field {
+	case "TurnID":
+		return item.TurnID
+	case "ClientNonce":
+		return item.ClientNonce
+	case "ProviderItemID":
+		return item.ProviderItemID
+	case "Prompt":
+		return item.Prompt
+	case "ScheduledAt":
+		return item.ScheduledAt
+	case "DueAt":
+		return item.DueAt
+	case "FiredTurnID":
+		return item.FiredTurnID
+	case "LastError":
+		return item.LastError
+	case "OrderKey":
+		return item.OrderKey
+	case "CreatedAt":
+		return item.CreatedAt
+	case "UpdatedAt":
+		return item.UpdatedAt
+	case "CompletedAt":
+		return item.CompletedAt
+	case "CompletedOrderKey":
+		return item.CompletedOrderKey
+	default:
+		return ""
+	}
+}
+
+func existingScheduledWakeupAny(item *projectionScheduledWakeup, field string) any {
+	if item == nil {
+		return nil
+	}
+	switch field {
+	case "AttemptCount":
+		return item.AttemptCount
 	default:
 		return nil
 	}
