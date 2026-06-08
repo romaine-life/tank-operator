@@ -105,9 +105,9 @@ function TranscriptMessage({
           {compact ? (
             <span
               className="run-msg-compact-text"
-              title="Please inspect the completed turn with a long initiating prompt. The prompt header must keep its collapse control visible without stacking message controls below the preview."
+              title="Please inspect the completed turn with a long initiating prompt. The divider owns the section controls while the prompt preview stays readable."
             >
-              Please inspect the completed turn with a long initiating prompt. The prompt header must keep its collapse control visible without stacking message controls below the preview.
+              Please inspect the completed turn with a long initiating prompt. The divider owns the section controls while the prompt preview stays readable.
             </span>
           ) : (
             children
@@ -237,11 +237,17 @@ function TurnThinkingMessage({
 function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
   return (
     <div className="run-turn-view" data-design-component="TurnView" data-inspectable>
-      <div className="run-turn-view-head">
-        <div className="run-turn-view-title">
-          <ActivityIcon size={16} strokeWidth={2.1} aria-hidden="true" />
-          <h2>Turns</h2>
-        </div>
+      <div className="run-turn-titlebar-controls">
+        <button
+          type="button"
+          className="run-turn-view-stats-toggle"
+          aria-expanded={true}
+          aria-label="Hide turn stats"
+          title="Hide stats"
+        >
+          <span>Stats</span>
+          <ChevronUpIcon size={14} aria-hidden="true" />
+        </button>
         <Select value="turn-3" onValueChange={() => {}}>
           <SelectTrigger
             className="run-turn-view-select"
@@ -267,9 +273,18 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
           </SelectContent>
         </Select>
       </div>
-      <div className="run-turn-view-summary">
+      <div
+        className="run-turn-view-summary"
+        data-design-component="TurnStatsPanel"
+        data-design-state="expanded"
+        data-inspectable
+      >
         <span>complete</span>
         <span>1 shell / 1 edit candidate / 2 progress notes</span>
+        <span title="9/1000 events on this page; 2375 total">
+          9/1000 events
+        </span>
+        <span>2375 total</span>
         <span>19:04:14</span>
         <span>19:10:26</span>
       </div>
@@ -284,21 +299,12 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
       >
         <div className="run-turn-view-context-head">
           <span className="run-turn-view-context-label">Prompt</span>
-          <button
-            type="button"
-            className="run-turn-view-context-toggle"
-            aria-expanded={true}
-            aria-label="Collapse user message"
-            title="Collapse user message"
-          >
-            <ChevronUpIcon size={14} aria-hidden="true" />
-          </button>
         </div>
         <TranscriptMessage variant="user" ownedByActivity>
           <p style={{ margin: 0 }}>
             Please inspect the completed turn with a long initiating prompt.
-            The prompt header must always keep its collapse control visible,
-            even when the activity divider also renders section controls.
+            The divider owns section collapse controls while the prompt label
+            stays as plain section chrome.
           </p>
         </TranscriptMessage>
       </div>
@@ -313,21 +319,12 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
       >
         <div className="run-turn-view-context-head">
           <span className="run-turn-view-context-label">Prompt</span>
-          <button
-            type="button"
-            className="run-turn-view-context-toggle"
-            aria-expanded={false}
-            aria-label="Expand user message"
-            title="Expand user message"
-          >
-            <ChevronDownIcon size={14} aria-hidden="true" />
-          </button>
         </div>
         <TranscriptMessage variant="user" ownedByActivity compact>
           <p style={{ margin: 0 }}>
             Please inspect the completed turn with a long initiating prompt.
-            The prompt header must keep its collapse control visible without
-            stacking message controls below the preview.
+            The collapsed preview stays visible while section controls live on
+            the divider.
           </p>
         </TranscriptMessage>
       </div>
@@ -342,16 +339,6 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
       >
         <div className="run-turn-view-context-head">
           <span className="run-turn-view-context-label">Prompt</span>
-          <button
-            type="button"
-            className="run-turn-view-context-toggle"
-            disabled
-            aria-expanded={false}
-            aria-label="No user message to collapse"
-            title="No user message to collapse"
-          >
-            <ChevronUpIcon size={14} aria-hidden="true" />
-          </button>
         </div>
         <div className="run-turn-view-context-unavailable" role="status">
           Prompt context unavailable
