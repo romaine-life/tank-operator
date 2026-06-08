@@ -174,13 +174,17 @@ export function RepoPicker(props: RepoPickerProps): JSX.Element {
   selectedLower.current = new Set(selected.map((s) => s.toLowerCase()));
 
   const shortcutPreview = useMemo(
-    () =>
-      repoShortcutSlugs(pinned, recent).map((slug, index) => ({
+    () => {
+      const selectedSet = new Set(selected.map((s) => s.toLowerCase()));
+      const filteredPinned = pinned.filter((slug) => !selectedSet.has(slug.toLowerCase()));
+      const filteredRecent = recent.filter((slug) => !selectedSet.has(slug.toLowerCase()));
+      return repoShortcutSlugs(filteredPinned, filteredRecent).map((slug, index) => ({
         slug,
         shortcut: index + 1,
         pinned: isRepoPinned(pinned, slug),
-      })),
-    [pinned, recent],
+      }));
+    },
+    [pinned, recent, selected],
   );
   const pinnedPreview = shortcutPreview.filter((item) => item.pinned);
   const recentPreview = shortcutPreview.filter((item) => !item.pinned);
@@ -582,7 +586,10 @@ function RepoPickerSuggestions(props: RepoPickerSuggestionsProps): JSX.Element {
   const matches = (slug: string) =>
     needle === "" || slug.toLowerCase().includes(needle);
 
-  const filteredPinned = useMemo(() => pinned.filter(matches), [pinned, trimmed]);
+  const filteredPinned = useMemo(
+    () => pinned.filter((slug) => matches(slug) && !selectedLower.has(slug.toLowerCase())),
+    [pinned, trimmed, selectedLower],
+  );
   const pinnedLower = useMemo(
     () => new Set(pinned.map((s) => s.toLowerCase())),
     [pinned],
