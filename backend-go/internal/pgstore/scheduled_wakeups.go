@@ -227,11 +227,11 @@ func (s *ScheduledWakeupStore) ListBySession(ctx context.Context, sessionScope, 
 	return out, rows.Err()
 }
 
-func (s *ScheduledWakeupStore) MarkFired(ctx context.Context, wakeupID, turnID string) error {
+func (s *ScheduledWakeupStore) MarkFired(ctx context.Context, wakeupID, turnID string) (ScheduledWakeup, error) {
 	if s == nil || s.pool == nil {
-		return errors.New("scheduled wakeup store unavailable")
+		return ScheduledWakeup{}, errors.New("scheduled wakeup store unavailable")
 	}
-	_, err := s.pool.Exec(ctx, `
+	return scanScheduledWakeup(s.pool.QueryRow(ctx, `
 		UPDATE session_scheduled_wakeups
 		SET status = 'fired',
 			fired_turn_id = $2,
@@ -240,23 +240,29 @@ func (s *ScheduledWakeupStore) MarkFired(ctx context.Context, wakeupID, turnID s
 			updated_at = now(),
 			fired_at = now()
 		WHERE wakeup_id = $1
-	`, strings.TrimSpace(wakeupID), strings.TrimSpace(turnID))
-	return err
+		RETURNING wakeup_id, session_scope, session_id, tank_session_id, owner_email,
+			provider, prompt, client_nonce, scheduled_turn_id, provider_item_id,
+			scheduled_at, due_at, status, attempt_count, fired_turn_id, last_error,
+			NULL::text AS session_status, NULL::boolean AS session_terminated
+	`, strings.TrimSpace(wakeupID), strings.TrimSpace(turnID)))
 }
 
-func (s *ScheduledWakeupStore) MarkFailed(ctx context.Context, wakeupID, reason string) error {
+func (s *ScheduledWakeupStore) MarkFailed(ctx context.Context, wakeupID, reason string) (ScheduledWakeup, error) {
 	if s == nil || s.pool == nil {
-		return errors.New("scheduled wakeup store unavailable")
+		return ScheduledWakeup{}, errors.New("scheduled wakeup store unavailable")
 	}
-	_, err := s.pool.Exec(ctx, `
+	return scanScheduledWakeup(s.pool.QueryRow(ctx, `
 		UPDATE session_scheduled_wakeups
 		SET status = 'failed',
 			last_error = left($2, 2000),
 			locked_at = NULL,
 			updated_at = now()
 		WHERE wakeup_id = $1
-	`, strings.TrimSpace(wakeupID), strings.TrimSpace(reason))
-	return err
+		RETURNING wakeup_id, session_scope, session_id, tank_session_id, owner_email,
+			provider, prompt, client_nonce, scheduled_turn_id, provider_item_id,
+			scheduled_at, due_at, status, attempt_count, fired_turn_id, last_error,
+			NULL::text AS session_status, NULL::boolean AS session_terminated
+	`, strings.TrimSpace(wakeupID), strings.TrimSpace(reason)))
 }
 
 func (s *ScheduledWakeupStore) ScheduledDueCount(ctx context.Context, now time.Time) (int, error) {
@@ -308,10 +314,10 @@ func (s *ScheduledWakeupStore) HasPending(ctx context.Context, sessionScope, ses
 // 'cancelled' — a terminal that leaves the wake non-pending without 'failed”s
 // error semantics (a cancel must not ring or read as an error). Used by the
 // explicit cancel control and the prompt-mid-sleep take-over (a user turn to a
-// parked session). Returns the number cancelled.
-func (s *ScheduledWakeupStore) CancelPendingForSession(ctx context.Context, sessionScope, sessionID string) (int64, error) {
+// parked session). Returns the cancelled row snapshots.
+func (s *ScheduledWakeupStore) CancelPendingForSession(ctx context.Context, sessionScope, sessionID string) ([]ScheduledWakeup, error) {
 	if s == nil || s.pool == nil {
-		return 0, errors.New("scheduled wakeup store unavailable")
+		return nil, errors.New("scheduled wakeup store unavailable")
 	}
 	sessionScope = strings.TrimSpace(sessionScope)
 	if sessionScope == "" {
@@ -319,17 +325,30 @@ func (s *ScheduledWakeupStore) CancelPendingForSession(ctx context.Context, sess
 	}
 	sessionID = strings.TrimSpace(sessionID)
 	if sessionID == "" {
-		return 0, nil
+		return nil, nil
 	}
-	tag, err := s.pool.Exec(ctx, `
+	rows, err := s.pool.Query(ctx, `
 		UPDATE session_scheduled_wakeups
 		SET status = 'cancelled', locked_at = NULL, updated_at = now()
 		WHERE session_scope = $1 AND session_id = $2 AND status IN ('scheduled', 'claiming')
+		RETURNING wakeup_id, session_scope, session_id, tank_session_id, owner_email,
+			provider, prompt, client_nonce, scheduled_turn_id, provider_item_id,
+			scheduled_at, due_at, status, attempt_count, fired_turn_id, last_error,
+			NULL::text AS session_status, NULL::boolean AS session_terminated
 	`, sessionScope, sessionID)
 	if err != nil {
-		return 0, err
+		return nil, err
 	}
-	return tag.RowsAffected(), nil
+	defer rows.Close()
+	var out []ScheduledWakeup
+	for rows.Next() {
+		row, err := scanScheduledWakeup(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 type scheduledWakeupScanner interface {

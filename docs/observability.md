@@ -895,8 +895,9 @@ declares one rule group per subsystem:
 - **Runners**: provider error rate, durable scheduled wakeup registration
   outcomes, and backend due-wakeup backlog. Pending, fired, and failed
   scheduled wakeups are also user-visible from Background -> Scheduled via
-  the backend scheduled-wakeup read model, so confirmation does not depend on
-  runner logs. Background-task-completion wakes (a `run_in_background` task
+  durable `scheduled_wakeup.updated` events, the timeline bootstrap, and the
+  session event stream, so confirmation does not depend on runner logs or
+  browser polling. Background-task-completion wakes (a `run_in_background` task
   finishing while the session is idle) are counted the same way:
   `tank_runner_background_task_wake_total{result}` on the runner and
   `tank_background_task_wake_register_total` /

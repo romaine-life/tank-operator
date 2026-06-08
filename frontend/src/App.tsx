@@ -209,9 +209,7 @@ import {
   normalizeBugLabelDisplayName,
 } from "./bugLabels";
 import {
-  scheduledWakeupRowsToEntries,
   scheduledWakeupStatusLabel,
-  type ScheduledWakeupRow,
   type ScheduledWakeupStatus,
 } from "./scheduledWakeups";
 import {
@@ -497,6 +495,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   taskExitCode?: number;
   taskDurationMs?: number;
   taskRawItem?: unknown;
+  backgroundOnly?: boolean;
   taskKind?: "scheduled_wakeup" | "control_action";
   wakeupStatus?: ScheduledWakeupStatus;
   wakeupDueAt?: string;
@@ -538,6 +537,7 @@ type TranscriptTimelineBody = {
   found_newest?: boolean;
   read_state?: { last_read_order_key?: unknown } | null;
   activity?: unknown;
+  scheduled_background_tasks?: unknown[];
   target_timeline_id?: string;
   target_cursor?: string;
 };
@@ -5501,6 +5501,7 @@ function pushTranscriptEntryGroup(
   entry: TranscriptEntry,
   bucket: { entries: TranscriptEntry[] },
 ): void {
+  if (entry.backgroundOnly) return;
   if (entry.kind === "tool") {
     bucket.entries.push(entry);
     return;
@@ -13701,26 +13702,24 @@ function ChatPane({
       publicView ? fetch(input, init) : authedFetch(input, init),
     [publicView],
   );
-  const fetchScheduledWakeupEntries = useCallback(async () => {
-    if (publicView) {
-      setScheduledWakeupEntries([]);
-      return;
-    }
-    const res = await fetchPaneResource(
-      scopedSessionPathForPane(
-        `/api/sessions/${encodeURIComponent(session.id)}/scheduled-wakeups`,
-      ),
-    );
-    if (!res.ok) return;
-    const body = (await res.json()) as {
-      scheduled_wakeups?: ScheduledWakeupRow[];
-    };
+  const replaceScheduledWakeupEntries = useCallback((rows: unknown[]) => {
     setScheduledWakeupEntries(
-      scheduledWakeupRowsToEntries(
-        body.scheduled_wakeups ?? [],
-      ) as TranscriptEntry[],
+      normalizeProjectedTranscriptEntries(rows).filter(isScheduledWakeupEntry),
     );
-  }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
+  }, []);
+  const mergeScheduledWakeupEntries = useCallback((rows: TranscriptEntry[]) => {
+    const scheduledRows = rows.filter(isScheduledWakeupEntry);
+    if (scheduledRows.length === 0) return;
+    setScheduledWakeupEntries((prev) => {
+      const byID = new Map(prev.map((entry) => [entry.id, entry]));
+      for (const entry of scheduledRows) byID.set(entry.id, entry);
+      return Array.from(byID.values()).sort((a, b) =>
+        (a.wakeupDueAt ?? a.updatedAt ?? a.time ?? "").localeCompare(
+          b.wakeupDueAt ?? b.updatedAt ?? b.time ?? "",
+        ),
+      );
+    });
+  }, []);
   const fetchControlActionEntries = useCallback(async () => {
     if (publicView) {
       setControlActionEntries([]);
@@ -15303,6 +15302,7 @@ function ChatPane({
       });
       replaceSdkServerRows(projectedEntries, clearRealtime);
       applySdkActivitySummaryToUi(body.activity);
+      replaceScheduledWakeupEntries(body.scheduled_background_tasks ?? []);
       if (scrollToLatestOnReady) {
         timelineBootstrapScrollToLatestRef.current = false;
         requestScrollToLatest("auto", source);
@@ -15453,6 +15453,7 @@ function ChatPane({
         sdkServerProjectedEntriesRef.current = nextProjectedEntries;
         syncSdkRenderedEntries();
         applySdkActivitySummaryToUi(body.activity);
+        replaceScheduledWakeupEntries(body.scheduled_background_tasks ?? []);
       }
       if (projectedOlderEntries.length === 0) {
         logChatScrollEntries("older-no-visible-change", nextProjectedEntries, {
@@ -15552,6 +15553,7 @@ function ChatPane({
     });
     replaceSdkServerRows(projectedEntries, false);
     applySdkActivitySummaryToUi(body.activity);
+    replaceScheduledWakeupEntries(body.scheduled_background_tasks ?? []);
   }
 
   // jumpSdkToLatest resets the window to the live tail. If the SPA never
@@ -15642,6 +15644,7 @@ function ChatPane({
     });
     replaceSdkServerRows(projectedEntries, false);
     applySdkActivitySummaryToUi(body.activity);
+    replaceScheduledWakeupEntries(body.scheduled_background_tasks ?? []);
   }
 
   async function scrollTranscriptToConversationStart(): Promise<void> {
@@ -17287,6 +17290,7 @@ function ChatPane({
         projectedRows,
         typeof parsed.order_key === "string" ? parsed.order_key : "",
       );
+      mergeScheduledWakeupEntries(projectedRows);
     });
     source.addEventListener("resync_required", () => {
       source.close();
@@ -17414,7 +17418,10 @@ function ChatPane({
     systemAvatar?.src,
     systemAvatar?.custom,
   ]);
-  const renderedEntries = entries;
+  const renderedEntries = useMemo(
+    () => entries.filter((entry) => !entry.backgroundOnly),
+    [entries],
+  );
   useEffect(() => {
     if (publicView || !visible) {
       setScheduledWakeupEntries([]);
@@ -17424,9 +17431,6 @@ function ChatPane({
     }
     let cancelled = false;
     const refresh = () => {
-      void fetchScheduledWakeupEntries().catch(() => {
-        if (!cancelled) setScheduledWakeupEntries([]);
-      });
       void fetchControlActionEntries().catch(() => {
         if (!cancelled) setControlActionEntries([]);
       });
@@ -17443,7 +17447,6 @@ function ChatPane({
   }, [
     fetchBackgroundTaskEntries,
     fetchControlActionEntries,
-    fetchScheduledWakeupEntries,
     publicView,
     visible,
   ]);

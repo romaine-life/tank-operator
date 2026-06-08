@@ -160,10 +160,10 @@ type scheduledWakeupStore interface {
 	Register(context.Context, pgstore.RegisterScheduledWakeupRequest) (pgstore.ScheduledWakeup, error)
 	ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.ScheduledWakeup, error)
 	ListBySession(context.Context, string, string) ([]pgstore.ScheduledWakeup, error)
-	MarkFired(context.Context, string, string) error
-	MarkFailed(context.Context, string, string) error
+	MarkFired(context.Context, string, string) (pgstore.ScheduledWakeup, error)
+	MarkFailed(context.Context, string, string) (pgstore.ScheduledWakeup, error)
 	ScheduledDueCount(context.Context, time.Time) (int, error)
-	CancelPendingForSession(context.Context, string, string) (int64, error)
+	CancelPendingForSession(context.Context, string, string) ([]pgstore.ScheduledWakeup, error)
 }
 
 type pendingLaunchStore interface {

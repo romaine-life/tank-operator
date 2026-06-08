@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 type conversationSchema struct {
@@ -147,6 +148,34 @@ func TestValidateEventMapAcceptsTurnSubmittedPayloadSource(t *testing.T) {
 				t.Fatal(err)
 			}
 		})
+	}
+}
+
+func TestValidateEventMapAcceptsScheduledWakeupUpdated(t *testing.T) {
+	event := ScheduledWakeupUpdatedEventMap(ScheduledWakeupUpdatedArgs{
+		SessionID:         "63",
+		SessionStorageKey: "63",
+		Email:             "human@example.com",
+		Runtime:           "claude",
+		WakeupID:          "wakeup_123",
+		Status:            "scheduled",
+		Prompt:            "check CI",
+		ClientNonce:       "schedule_wakeup-wakeup_123",
+		ScheduledTurnID:   "turn_schedule_wakeup-wakeup_123",
+		ProviderItemID:    "toolu_wake",
+		ScheduledAt:       time.Date(2026, 6, 3, 15, 20, 0, 0, time.UTC),
+		DueAt:             time.Date(2026, 6, 3, 15, 25, 0, 0, time.UTC),
+		Now:               time.Date(2026, 6, 3, 15, 20, 0, 0, time.UTC),
+	})
+
+	if err := ValidateEventMap(event); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := event["type"].(string); got != "scheduled_wakeup.updated" {
+		t.Fatalf("event type = %q, want scheduled_wakeup.updated", got)
+	}
+	if got, _ := event["timeline_id"].(string); got != "scheduled-wakeup:wakeup_123" {
+		t.Fatalf("timeline_id = %q, want scheduled-wakeup:wakeup_123", got)
 	}
 }
 

@@ -14,6 +14,7 @@ import (
 
 type fakeScheduledWakeupStore struct {
 	rows            []pgstore.ScheduledWakeup
+	registerRow     pgstore.ScheduledWakeup
 	firedID         string
 	firedTurn       string
 	failedID        string
@@ -23,8 +24,27 @@ type fakeScheduledWakeupStore struct {
 	cancelReturn    int64
 }
 
-func (f *fakeScheduledWakeupStore) Register(context.Context, pgstore.RegisterScheduledWakeupRequest) (pgstore.ScheduledWakeup, error) {
-	return pgstore.ScheduledWakeup{}, nil
+func (f *fakeScheduledWakeupStore) Register(_ context.Context, req pgstore.RegisterScheduledWakeupRequest) (pgstore.ScheduledWakeup, error) {
+	if f.registerRow.WakeupID != "" {
+		return f.registerRow, nil
+	}
+	return pgstore.ScheduledWakeup{
+		WakeupID:          "wakeup_registered",
+		SessionScope:      req.SessionScope,
+		SessionID:         req.SessionID,
+		TankSessionID:     sessionmodel.SessionStorageKey(req.SessionScope, req.SessionID),
+		OwnerEmail:        req.OwnerEmail,
+		Provider:          req.Provider,
+		Prompt:            req.Prompt,
+		ClientNonce:       "schedule_wakeup-wakeup_registered",
+		ScheduledTurnID:   req.ScheduledTurnID,
+		ProviderItemID:    req.ProviderItemID,
+		ScheduledAt:       req.ScheduledAt,
+		DueAt:             req.DueAt,
+		Status:            pgstore.ScheduledWakeupScheduled,
+		SessionStatus:     "Active",
+		SessionTerminated: false,
+	}, nil
 }
 
 func (f *fakeScheduledWakeupStore) ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.ScheduledWakeup, error) {
@@ -35,26 +55,54 @@ func (f *fakeScheduledWakeupStore) ListBySession(context.Context, string, string
 	return f.rows, nil
 }
 
-func (f *fakeScheduledWakeupStore) MarkFired(_ context.Context, wakeupID, turnID string) error {
+func (f *fakeScheduledWakeupStore) MarkFired(_ context.Context, wakeupID, turnID string) (pgstore.ScheduledWakeup, error) {
 	f.firedID = wakeupID
 	f.firedTurn = turnID
-	return nil
+	for _, row := range f.rows {
+		if row.WakeupID == wakeupID {
+			row.Status = pgstore.ScheduledWakeupFired
+			row.FiredTurnID = turnID
+			return row, nil
+		}
+	}
+	return pgstore.ScheduledWakeup{WakeupID: wakeupID, Status: pgstore.ScheduledWakeupFired, FiredTurnID: turnID}, nil
 }
 
-func (f *fakeScheduledWakeupStore) MarkFailed(_ context.Context, wakeupID, reason string) error {
+func (f *fakeScheduledWakeupStore) MarkFailed(_ context.Context, wakeupID, reason string) (pgstore.ScheduledWakeup, error) {
 	f.failedID = wakeupID
 	f.failReason = reason
-	return nil
+	for _, row := range f.rows {
+		if row.WakeupID == wakeupID {
+			row.Status = pgstore.ScheduledWakeupFailed
+			row.LastError = reason
+			return row, nil
+		}
+	}
+	return pgstore.ScheduledWakeup{WakeupID: wakeupID, Status: pgstore.ScheduledWakeupFailed, LastError: reason}, nil
 }
 
 func (f *fakeScheduledWakeupStore) ScheduledDueCount(context.Context, time.Time) (int, error) {
 	return len(f.rows), nil
 }
 
-func (f *fakeScheduledWakeupStore) CancelPendingForSession(_ context.Context, _, sessionID string) (int64, error) {
+func (f *fakeScheduledWakeupStore) CancelPendingForSession(_ context.Context, _, sessionID string) ([]pgstore.ScheduledWakeup, error) {
 	f.cancelCalls++
 	f.cancelSessionID = sessionID
-	return f.cancelReturn, nil
+	rows := make([]pgstore.ScheduledWakeup, 0, f.cancelReturn)
+	for i := int64(0); i < f.cancelReturn; i++ {
+		rows = append(rows, pgstore.ScheduledWakeup{
+			WakeupID:      "wakeup_cancelled",
+			SessionScope:  "default",
+			SessionID:     sessionID,
+			TankSessionID: sessionmodel.SessionStorageKey("default", sessionID),
+			ClientNonce:   "schedule_wakeup-wakeup_cancelled",
+			Prompt:        "cancelled wake",
+			ScheduledAt:   time.Date(2026, 6, 3, 15, 20, 0, 0, time.UTC),
+			DueAt:         time.Date(2026, 6, 3, 15, 25, 0, 0, time.UTC),
+			Status:        pgstore.ScheduledWakeupCancelled,
+		})
+	}
+	return rows, nil
 }
 
 // TestCancelPendingWakesForSession pins the cancel fan-out used by both the
@@ -105,6 +153,8 @@ func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 		Prompt:            "check the deploy",
 		ClientNonce:       "schedule_wakeup-wakeup_123",
 		ProviderItemID:    "toolu_wake",
+		ScheduledAt:       time.Date(2026, 6, 3, 0, 0, 0, 0, time.UTC),
+		DueAt:             time.Date(2026, 6, 3, 0, 5, 0, 0, time.UTC),
 		SessionStatus:     "Active",
 		SessionTerminated: false,
 	}
@@ -126,14 +176,17 @@ func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 		t.Fatalf("command = %+v", cmd)
 	}
 	events := app.sessionEvents.(*recordingSessionEventStore).upserts
-	if len(events) != 2 {
-		t.Fatalf("boundary upserts = %d, want 2", len(events))
+	if len(events) != 3 {
+		t.Fatalf("event upserts = %d, want 3", len(events))
 	}
 	if got, _ := events[0]["type"].(string); got != "user_message.created" {
 		t.Fatalf("first event type = %q", got)
 	}
 	if got, _ := events[1]["type"].(string); got != "turn.submitted" {
 		t.Fatalf("second event type = %q", got)
+	}
+	if got, _ := events[2]["type"].(string); got != "scheduled_wakeup.updated" {
+		t.Fatalf("third event type = %q", got)
 	}
 	if got, _ := events[0]["author_kind"].(string); got != "system" {
 		t.Fatalf("author_kind = %q, want system", got)
@@ -154,6 +207,13 @@ func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 	}
 	if got, _ := submitPayload["prompt"].(string); got != row.Prompt {
 		t.Fatalf("turn.submitted payload.prompt = %q, want wake prompt", got)
+	}
+	wakeupPayload, _ := events[2]["payload"].(map[string]any)
+	if got, _ := wakeupPayload["status"].(string); got != "fired" {
+		t.Fatalf("scheduled_wakeup.updated payload.status = %q, want fired", got)
+	}
+	if got, _ := wakeupPayload["wakeup_id"].(string); got != row.WakeupID {
+		t.Fatalf("scheduled_wakeup.updated payload.wakeup_id = %q, want %q", got, row.WakeupID)
 	}
 }
 
@@ -180,6 +240,8 @@ func TestFireAntigravityScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 		Prompt:            "check if the build finished",
 		ClientNonce:       "schedule_wakeup-wakeup_agy",
 		ProviderItemID:    "tool-17-0",
+		ScheduledAt:       time.Date(2026, 6, 7, 6, 40, 0, 0, time.UTC),
+		DueAt:             time.Date(2026, 6, 7, 6, 42, 34, 0, time.UTC),
 		SessionStatus:     "Active",
 		SessionTerminated: false,
 	}
@@ -198,14 +260,17 @@ func TestFireAntigravityScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 		t.Fatalf("command = %+v", cmd)
 	}
 	events := app.sessionEvents.(*recordingSessionEventStore).upserts
-	if len(events) != 2 {
-		t.Fatalf("boundary upserts = %d, want 2", len(events))
+	if len(events) != 3 {
+		t.Fatalf("event upserts = %d, want 3", len(events))
 	}
 	if got, _ := events[0]["type"].(string); got != "user_message.created" {
 		t.Fatalf("first event type = %q", got)
 	}
 	if got, _ := events[0]["author_kind"].(string); got != "system" {
 		t.Fatalf("author_kind = %q, want system", got)
+	}
+	if got, _ := events[2]["type"].(string); got != "scheduled_wakeup.updated" {
+		t.Fatalf("third event type = %q", got)
 	}
 	userPayload, _ := events[0]["payload"].(map[string]any)
 	if got, _ := userPayload["text"].(string); got != "Timer went off!" {
@@ -224,18 +289,28 @@ func TestFireAntigravityScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 	if got, _ := submitPayload["prompt"].(string); got != row.Prompt {
 		t.Fatalf("turn.submitted payload.prompt = %q, want wake prompt", got)
 	}
+	wakeupPayload, _ := events[2]["payload"].(map[string]any)
+	if got, _ := wakeupPayload["status"].(string); got != "fired" {
+		t.Fatalf("scheduled_wakeup.updated payload.status = %q, want fired", got)
+	}
 }
 
 func TestFireScheduledWakeupFailsInactiveSessionDurably(t *testing.T) {
 	app := testTurnsApp(t, &recordingSessionBus{})
 	schedules := &fakeScheduledWakeupStore{}
 	app.scheduledWakeups = schedules
+	app.sessionEvents = &recordingSessionEventStore{}
 	row := pgstore.ScheduledWakeup{
 		WakeupID:      "wakeup_inactive",
+		SessionScope:  "default",
 		SessionID:     "63",
+		TankSessionID: "63",
 		OwnerEmail:    "user@example.com",
 		Provider:      "claude",
+		Prompt:        "resume after sleep",
 		ClientNonce:   "schedule_wakeup-wakeup_inactive",
+		ScheduledAt:   time.Date(2026, 6, 3, 15, 20, 0, 0, time.UTC),
+		DueAt:         time.Date(2026, 6, 3, 15, 25, 0, 0, time.UTC),
 		SessionStatus: "Failed",
 	}
 
@@ -244,6 +319,20 @@ func TestFireScheduledWakeupFailsInactiveSessionDurably(t *testing.T) {
 	}
 	if schedules.failedID != row.WakeupID || schedules.failReason != "session_not_active" {
 		t.Fatalf("failed = (%q, %q), want (%q, session_not_active)", schedules.failedID, schedules.failReason, row.WakeupID)
+	}
+	events := app.sessionEvents.(*recordingSessionEventStore).upserts
+	if len(events) != 1 {
+		t.Fatalf("event upserts = %d, want 1", len(events))
+	}
+	if got, _ := events[0]["type"].(string); got != "scheduled_wakeup.updated" {
+		t.Fatalf("event type = %q, want scheduled_wakeup.updated", got)
+	}
+	payload, _ := events[0]["payload"].(map[string]any)
+	if got, _ := payload["status"].(string); got != "failed" {
+		t.Fatalf("scheduled_wakeup.updated payload.status = %q, want failed", got)
+	}
+	if got, _ := payload["last_error"].(string); got != "session_not_active" {
+		t.Fatalf("scheduled_wakeup.updated payload.last_error = %q, want session_not_active", got)
 	}
 }
 
