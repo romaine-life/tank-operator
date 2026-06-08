@@ -34,6 +34,8 @@ export interface WorkspaceShellProps {
    * should be visible before session-bound targets exist.
    */
   tabs?: ReactNode;
+  /** Extra class appended to the header action nav. */
+  tabsClassName?: string;
   /**
    * Floating UI over the scrollable body — transcript edge cues and related
    * jump controls. Optional; the home starter doesn't supply any.
@@ -80,6 +82,7 @@ export function WorkspaceShell({
   style,
   title,
   tabs,
+  tabsClassName,
   floatingBetweenBodyAndComposer,
   body,
   bodyClassName,
@@ -105,7 +108,10 @@ export function WorkspaceShell({
         <header className="run-header">
           {title != null && <div className="run-header-title">{title}</div>}
           {tabs != null && (
-            <nav className="run-tabs" aria-label="Session actions">
+            <nav
+              className={["run-tabs", tabsClassName].filter(Boolean).join(" ")}
+              aria-label="Session actions"
+            >
               {tabs}
             </nav>
           )}

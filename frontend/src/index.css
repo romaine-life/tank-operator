@@ -3985,6 +3985,10 @@ button:disabled {
   min-width: 0;
 }
 
+.run-tabs-turn-view {
+  align-items: center;
+}
+
 .run-tab {
   display: inline-flex;
   align-items: center;
@@ -4171,36 +4175,49 @@ button:disabled {
   padding: var(--space-3) 0 var(--space-3);
 }
 
-.run-turn-view-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--space-3);
-  min-width: 0;
-  padding: 0 var(--space-3);
-}
-
-.run-turn-view-title {
-  min-width: 0;
+.run-turn-titlebar-controls {
   display: inline-flex;
   align-items: center;
   gap: var(--space-2);
-  color: var(--text-primary);
-}
-
-.run-turn-view-title h2 {
-  margin: 0;
-  font-size: var(--text-base);
-  font-weight: 650;
-}
-
-.run-turn-view-controls {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  min-width: 0;
-  flex-wrap: wrap;
+  min-width: max-content;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  flex: 0 0 auto;
+}
+
+.run-turn-titlebar-controls .run-turn-view-nav {
+  flex: 0 0 auto;
+  min-width: max-content;
+}
+
+@media (max-width: 900px) {
+  .run-tabs.run-tabs-turn-view {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+
+  .run-tabs-turn-view .run-turn-titlebar-controls {
+    flex: 1 1 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    min-width: 0;
+  }
+
+  .run-tabs-turn-view .run-turn-view-page-select {
+    width: 12rem;
+    min-width: 12rem;
+  }
+}
+
+@media (max-width: 420px) {
+  .run-tabs-turn-view .run-turn-view-page-select {
+    width: 10.25rem;
+    min-width: 10.25rem;
+  }
+
+  .run-tabs-turn-view .run-turn-view-select {
+    min-width: 6.75rem;
+  }
 }
 
 .run-turn-view-page-select {
@@ -4313,7 +4330,6 @@ button:disabled {
   white-space: nowrap;
 }
 
-.run-turn-view-event-progress,
 .run-turn-activity-event-progress,
 .run-turn-activity-total-events {
   color: var(--text-muted);
@@ -4321,14 +4337,6 @@ button:disabled {
   font-size: var(--text-xs);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-.run-turn-view-event-progress {
-  flex: 0 0 auto;
-  padding: 0.22rem 0.5rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.035);
 }
 
 /* Turns view nav clusters: a first/prev/next/last stepper wrapping the
@@ -4377,6 +4385,43 @@ button:disabled {
 .run-turn-view-nav-btn:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.run-turn-view-stats-toggle {
+  height: 2rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-1);
+  flex: 0 0 auto;
+  padding: 0 0.55rem;
+  border: 1px solid var(--border-soft, rgba(255, 255, 255, 0.12));
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-sm);
+  line-height: 1;
+  cursor: pointer;
+}
+
+.run-turn-view-stats-toggle:hover,
+.run-turn-view-stats-toggle:focus-visible,
+.run-turn-view-stats-toggle[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.07);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: var(--text-primary);
+}
+
+.run-turn-view-stats-toggle:focus-visible {
+  outline: none;
+  border-color: rgba(147, 197, 253, 0.8);
+  box-shadow: 0 0 0 3px rgba(96, 165, 250, 0.16);
+}
+
+.run-turn-view-stats-toggle svg {
+  flex: 0 0 auto;
+  color: var(--text-muted);
 }
 
 .run-turn-view-summary {
@@ -4627,45 +4672,6 @@ button:disabled {
   font-size: var(--text-xs);
   letter-spacing: 0;
   text-transform: uppercase;
-}
-
-.run-turn-view-context-toggle {
-  flex: 0 0 auto;
-  width: 1.45rem;
-  height: 1.45rem;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--text-muted);
-  cursor: pointer;
-  transition:
-    background var(--motion-fast, 120ms) ease,
-    border-color var(--motion-fast, 120ms) ease,
-    color var(--motion-fast, 120ms) ease;
-}
-
-.run-turn-view-context-toggle:hover:not(:disabled),
-.run-turn-view-context-toggle:focus-visible:not(:disabled) {
-  border-color: rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--text-primary);
-}
-
-.run-turn-view-context-toggle:disabled {
-  cursor: default;
-  opacity: 0.42;
-  border-color: rgba(255, 255, 255, 0.08);
-  background: rgba(255, 255, 255, 0.025);
-  color: var(--text-faint);
-}
-
-.run-turn-view-context-toggle:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: 2px;
 }
 
 .run-turn-view-context[data-collapsed="true"] {
