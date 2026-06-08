@@ -20269,10 +20269,12 @@ function AuthenticatedApp() {
     );
     return recentRepos.filter((slug) => !dismissed.has(slug.toLowerCase()));
   }, [dismissedRecentRepos, recentRepos]);
-  const recentRepoShortcuts = useMemo(
-    () => repoShortcutSlugs(pinnedRepos, visibleRecentRepos),
-    [pinnedRepos, visibleRecentRepos],
-  );
+  const recentRepoShortcuts = useMemo(() => {
+    const selectedSet = new Set(selectedRepos.map((s) => s.toLowerCase()));
+    const filteredPinned = pinnedRepos.filter((s) => !selectedSet.has(s.toLowerCase()));
+    const filteredRecent = visibleRecentRepos.filter((s) => !selectedSet.has(s.toLowerCase()));
+    return repoShortcutSlugs(filteredPinned, filteredRecent);
+  }, [pinnedRepos, visibleRecentRepos, selectedRepos]);
   // All-repos lazy-load state. Sourced from /api/github/repos,
   // which proxies to mcp-github via an on-behalf-of token mint. The
   // picker calls onLoadAllRepos on first open; this state is the
