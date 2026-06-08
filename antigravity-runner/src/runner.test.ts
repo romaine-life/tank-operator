@@ -179,6 +179,26 @@ test("native schedule parking may complete without final answer", () => {
   );
 });
 
+test("Antigravity wait text without a native schedule is a durable failure", () => {
+  const terminal = classifyAgyTerminal(
+    {
+      exitCode: 0,
+      killed: true,
+      stdout: "",
+      stderr: "",
+    },
+    12,
+    false,
+    { hasFinalAnswer: true, waitIntentWithoutSchedule: true },
+  );
+
+  assert.deepEqual(terminal.kind, "failed");
+  assert.equal(
+    terminal.kind === "failed" ? terminal.metricReason : "",
+    "provider_wait_without_schedule",
+  );
+});
+
 test("Antigravity skill prompt expansion embeds hydrated SKILL.md", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "agy-skills-"));
   try {

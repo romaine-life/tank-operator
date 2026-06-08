@@ -352,7 +352,10 @@ All metric names are prefixed `tank_`. The full namespace:
   the tool call existed but was not registerable, `parked_after_schedule` means
   the runner interrupted the native timer after durable registration, and
   `wait_text_without_schedule` is the diagnostic signature for a planner text
-  step that says it will wait while emitting no native schedule tool call.
+  step that says it will wait while emitting no native schedule tool call. That
+  diagnostic is terminal: the runner interrupts the provider run and publishes
+  `turn.failed` with `reason="provider_wait_without_schedule"` rather than
+  leaving a session parked with no wake row.
 - `tank_session_runtime_config_update_total` - pod-side runner reports of
   the model/effort actually applied to the provider runtime. Labels:
   `provider` (`claude`, `codex`, `unknown`) and bounded `result`.

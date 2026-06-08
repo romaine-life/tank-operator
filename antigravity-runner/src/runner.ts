@@ -265,6 +265,7 @@ export class Runner {
       let observedStepCount = 0;
       let wakeupRegistrationFailed = false;
       let scheduledWakeupParked = false;
+      let waitTextWithoutScheduleObserved = false;
       const registeredSchedulePrompts: string[] = [];
       const scheduleParkTimers = new Set<NodeJS.Timeout>();
       const clearScheduleParkTimers = () => {
@@ -315,15 +316,20 @@ export class Runner {
                 registeredSchedulePrompts.length === 0 &&
                 isWaitIntentWithoutScheduleStep(step)
               ) {
-                scheduleIntentTotal.labels("wait_text_without_schedule").inc();
-                console.warn(
-                  JSON.stringify({
-                    msg: "antigravity wait text without native schedule tool call",
-                    session_id: this.cfg.sessionId,
-                    turn_id: turn.turnID,
-                    step_index: step.step_index,
-                  }),
-                );
+                if (!waitTextWithoutScheduleObserved) {
+                  waitTextWithoutScheduleObserved = true;
+                  scheduleIntentTotal.labels("wait_text_without_schedule").inc();
+                  console.warn(
+                    JSON.stringify({
+                      msg: "antigravity wait text without native schedule tool call",
+                      session_id: this.cfg.sessionId,
+                      turn_id: turn.turnID,
+                      step_index: step.step_index,
+                    }),
+                  );
+                }
+                this.driver.interrupt();
+                return;
               }
               for (const wakeup of scheduleInspection.wakeups) {
                 const ok = await this.registerWakeup(wakeup, turn.turnID);
@@ -373,6 +379,7 @@ export class Runner {
         {
           hasFinalAnswer: this.adapter.hasFinalAnswer(turn),
           allowNoFinalAnswer: scheduledWakeupParked,
+          waitIntentWithoutSchedule: waitTextWithoutScheduleObserved,
         },
       );
       if (terminal.kind === "interrupted") {
@@ -596,8 +603,17 @@ export function classifyAgyTerminal(
   options: {
     hasFinalAnswer?: boolean;
     allowNoFinalAnswer?: boolean;
+    waitIntentWithoutSchedule?: boolean;
   } = {},
 ): AgyTerminalClassification {
+  if (options.waitIntentWithoutSchedule) {
+    const metricReason = "provider_wait_without_schedule";
+    return {
+      kind: "failed",
+      metricReason,
+      reason: agySemanticFailReason(metricReason, result),
+    };
+  }
   if (result.killed || aborted) return { kind: "interrupted" };
   if (result.exitCode !== 0) {
     return {

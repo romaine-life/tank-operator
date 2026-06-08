@@ -48,11 +48,15 @@ Contract impact:
   `PlannerResponse without ModifiedResponse` is counted separately as
   `provider_executor_error`; normal-looking no-answer exits are counted as
   `provider_no_final_answer`.
+- Planner text that promises to wait without emitting the native Antigravity
+  `schedule` tool is a durable `turn.failed` with
+  `reason="provider_wait_without_schedule"`. The runner interrupts that provider
+  run instead of allowing a parked-looking turn with no wake row.
 
 Evidence:
 - Runner: `antigravity-runner/src/runner.test.ts` (executor 500 after tool
   output fails, tool-only no-final-answer fails, schedule parking may complete
-  without final prose).
+  without final prose, wait text without a native schedule fails durably).
 - Adapter: `antigravity-runner/src/adapters/antigravity.test.ts` (final-answer
   state requires done non-empty assistant prose; in-progress tool calls and
   tool results do not consume the later done transition).
