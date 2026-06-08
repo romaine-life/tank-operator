@@ -97,13 +97,82 @@ func TestInstallAgentPostCommitReminderScriptRunsUnderSh(t *testing.T) {
 	}
 
 	repoDir := t.TempDir()
-	mustRun(t, repoDir, "git", "init")
+	home := t.TempDir()
+	env := isolatedGitEnv(home)
+	mustRunEnv(t, repoDir, env, "git", "init")
 	mustRun(t, repoDir, "mkdir", "-p", "scripts", ".githooks")
 	copyFile(t, sourceScript, filepath.Join(repoDir, "scripts", "install-agent-post-commit-reminder.sh"), 0o755)
 	copyFile(t, sourceHook, filepath.Join(repoDir, ".githooks", "post-commit"), 0o755)
 
-	mustRun(t, repoDir, "sh", "scripts/install-agent-post-commit-reminder.sh")
+	mustRunEnv(t, repoDir, env, "sh", "scripts/install-agent-post-commit-reminder.sh")
 	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
+}
+
+func TestInstallAgentPostCommitReminderReplacesManagedTemplateHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hook install script test runs on POSIX only")
+	}
+
+	sourceScript, err := filepath.Abs("../../../scripts/install-agent-post-commit-reminder.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	sourceHook, err := filepath.Abs("../../../.githooks/post-commit")
+	if err != nil {
+		t.Fatalf("resolve hook path: %v", err)
+	}
+
+	repoDir := t.TempDir()
+	home := t.TempDir()
+	env := isolatedGitEnv(home)
+	mustRunEnv(t, repoDir, env, "git", "init")
+	mustRun(t, repoDir, "mkdir", "-p", "scripts", ".githooks")
+	copyFile(t, sourceScript, filepath.Join(repoDir, "scripts", "install-agent-post-commit-reminder.sh"), 0o755)
+	copyFile(t, sourceHook, filepath.Join(repoDir, ".githooks", "post-commit"), 0o755)
+	writeExecutable(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), `#!/bin/sh
+echo '[tank-agent-reminder] Local commit created.'
+`)
+
+	mustRunEnv(t, repoDir, env, "sh", "scripts/install-agent-post-commit-reminder.sh")
+	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), "exec sh /opt/tank/session-config/agent-post-commit-hook.sh")
+}
+
+func TestInstallAgentPostCommitReminderRefusesUnmanagedHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hook install script test runs on POSIX only")
+	}
+
+	sourceScript, err := filepath.Abs("../../../scripts/install-agent-post-commit-reminder.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	sourceHook, err := filepath.Abs("../../../.githooks/post-commit")
+	if err != nil {
+		t.Fatalf("resolve hook path: %v", err)
+	}
+
+	repoDir := t.TempDir()
+	home := t.TempDir()
+	env := isolatedGitEnv(home)
+	mustRunEnv(t, repoDir, env, "git", "init")
+	mustRun(t, repoDir, "mkdir", "-p", "scripts", ".githooks")
+	copyFile(t, sourceScript, filepath.Join(repoDir, "scripts", "install-agent-post-commit-reminder.sh"), 0o755)
+	copyFile(t, sourceHook, filepath.Join(repoDir, ".githooks", "post-commit"), 0o755)
+	writeExecutable(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), `#!/bin/sh
+echo custom
+`)
+
+	cmd := exec.Command("sh", "scripts/install-agent-post-commit-reminder.sh")
+	cmd.Dir = repoDir
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("installer succeeded, want refusal for unmanaged hook\noutput:\n%s", string(out))
+	}
+	if !strings.Contains(string(out), "Refusing to replace existing local hook") {
+		t.Fatalf("installer output missing refusal:\n%s", string(out))
+	}
+	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), "echo custom")
 }
 
 func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
@@ -123,8 +192,7 @@ func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
 	home := t.TempDir()
 	templateDir := filepath.Join(t.TempDir(), "template")
 	cmd := exec.Command("sh", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
+	cmd.Env = append(isolatedGitEnv(home),
 		"AGENT_POST_COMMIT_HOOK="+hookPath,
 		"AGENT_GIT_TEMPLATE_DIR="+templateDir,
 	)
@@ -134,7 +202,7 @@ func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
 	}
 
 	assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
-	configured := strings.TrimSpace(string(mustOutput(t, home, "git", "config", "--global", "init.templateDir")))
+	configured := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "init.templateDir")))
 	if configured != templateDir {
 		t.Fatalf("init.templateDir = %q, want %q", configured, templateDir)
 	}
@@ -156,6 +224,14 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 	scriptPath, err := filepath.Abs("../../../k8s/session-config/session-pod-bootstrap.sh")
 	if err != nil {
 		t.Fatalf("resolve script path: %v", err)
+	}
+	gitTemplateScript, err := filepath.Abs("../../../k8s/session-config/install-agent-git-template.sh")
+	if err != nil {
+		t.Fatalf("resolve git template script path: %v", err)
+	}
+	hookPath, err := filepath.Abs("../../../k8s/session-config/agent-post-commit-hook.sh")
+	if err != nil {
+		t.Fatalf("resolve hook path: %v", err)
 	}
 	if _, err := os.Stat(scriptPath); err != nil {
 		t.Fatalf("script not at expected path %s: %v", scriptPath, err)
@@ -191,14 +267,23 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.mode, func(t *testing.T) {
 			home := t.TempDir()
+			templateDir := filepath.Join(home, ".config", "tank", "git-template")
 			cmd := exec.Command("bash", scriptPath)
-			cmd.Env = append(os.Environ(),
-				"HOME="+home,
+			cmd.Env = append(isolatedGitEnv(home),
 				"TANK_SESSION_MODE="+tc.mode,
+				"INSTALL_AGENT_GIT_TEMPLATE_SCRIPT="+gitTemplateScript,
+				"AGENT_POST_COMMIT_HOOK="+hookPath,
+				"AGENT_GIT_TEMPLATE_DIR="+templateDir,
 			)
 			out, err := cmd.CombinedOutput()
 			if err != nil {
 				t.Fatalf("script failed: %v\noutput:\n%s", err, string(out))
+			}
+
+			assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
+			configured := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "init.templateDir")))
+			if configured != templateDir {
+				t.Fatalf("init.templateDir = %q, want %q", configured, templateDir)
 			}
 
 			for suffix, wantSubstr := range tc.wantFiles {
@@ -525,13 +610,42 @@ func mustRun(t *testing.T, dir, name string, args ...string) {
 	}
 }
 
-func mustOutput(t *testing.T, home, name string, args ...string) []byte {
+func mustRunEnv(t *testing.T, dir string, env []string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Dir = dir
+	cmd.Env = env
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s failed: %v\noutput:\n%s", name, strings.Join(args, " "), err, string(out))
+	}
+}
+
+func mustOutputEnv(t *testing.T, env []string, name string, args ...string) []byte {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("%s %s failed: %v\noutput:\n%s", name, strings.Join(args, " "), err, string(out))
 	}
 	return out
+}
+
+func isolatedGitEnv(home string) []string {
+	env := make([]string, 0, len(os.Environ())+4)
+	for _, item := range os.Environ() {
+		if strings.HasPrefix(item, "HOME=") ||
+			strings.HasPrefix(item, "XDG_CONFIG_HOME=") ||
+			strings.HasPrefix(item, "GIT_CONFIG") {
+			continue
+		}
+		env = append(env, item)
+	}
+	return append(env,
+		"HOME="+home,
+		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
+		"GIT_CONFIG_GLOBAL="+filepath.Join(home, ".gitconfig"),
+		"GIT_CONFIG_NOSYSTEM=1",
+	)
 }

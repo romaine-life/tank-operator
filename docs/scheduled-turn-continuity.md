@@ -167,9 +167,10 @@ what the SDK reported. The change lives in the durable Tank projection:
   it before the terminal, like `turn.awaiting_input`, or refresh the activity
   summary transactionally with the wake-row write) so the fold goes
   `working -> scheduled` without passing through `ready`.
-- **Failure event** — `backend-go/cmd/tank-operator/scheduled_wakeups.go ->
-  MarkFailed` emits a durable, provenance-tagged error event; the ring predicate
-  rings it.
+- **Lifecycle visibility** — `backend-go/cmd/tank-operator/scheduled_wakeups.go`
+  persists `scheduled_wakeup.updated` for registration, cancellation, fire, and
+  failure. Background -> Scheduled is fed by the timeline bootstrap and session
+  event stream, so the user can see a pending timer before it fires.
 - **Frontend** — `frontend/src/sessionActivity.ts`: add `scheduled` to
   `ConversationActivityStatus` and `sessionActivityDotStatus` (live-but-holding);
   keep `shouldRingForActivityTransition`'s user-turn set as `{ready, needs_input}`

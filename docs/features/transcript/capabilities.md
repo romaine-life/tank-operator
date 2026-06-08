@@ -368,8 +368,7 @@ Contract impact:
 - The feed is a projection over the durable `session_events` shell-task ledger,
   not browser-local optimism and not the main transcript rows. `GET
   /api/sessions/{id}/background-tasks` returns the projected `background_task`
-  entries; the SPA polls it on the same 10s cadence as scheduled-wakeups and
-  control-actions and feeds the Background "shells" view (running AND recently
+  entries; the SPA feeds the Background "shells" view (running AND recently
   completed), while the active-only subset drives the badge count so the pill
   does not grow unbounded.
 - The read is bounded regardless of ledger size: a partial index
@@ -383,6 +382,34 @@ Contract impact:
 
 Evidence:
 - Backend: `backend-go/cmd/tank-operator/transcript_projection_test.go`
+
+## Scheduled Wakeup Event Ledger
+
+Status: active
+
+Intent:
+Make an agent's self-scheduled timer visible while it is still pending. A
+successful `ScheduleWakeup`/`schedule` registration must not leave the user with
+only an invisible backend row and a promise that the wakeup will happen later.
+
+Affected contracts:
+- Transcript
+- Agent Runners
+- App Chrome (owns the Background screen)
+
+Contract impact:
+- Scheduled wakeup lifecycle transitions persist `scheduled_wakeup.updated` in
+  the durable `session_events` ledger. The event is authored by Tank, keyed by
+  `timeline_id=scheduled-wakeup:{wakeup_id}`, and carries the due time, prompt,
+  status, client nonce, provider item id, fired turn id, and error fields needed
+  to explain the timer.
+- `/timeline` returns `scheduled_background_tasks` as a one-shot bootstrap from
+  durable scheduled-wakeup rows. After bootstrap, the SPA updates Background ->
+  Scheduled from the existing session event stream's projected `transcript-rows`
+  events. Browser polling of `/scheduled-wakeups` is not the live path.
+- Scheduled wakeup projections are `background_task` rows with
+  `taskKind=scheduled_wakeup` and `backgroundOnly=true`; they are available to
+  the Background screen without leaking into the main transcript.
   (`TestProjectSessionBackgroundTasksListsRunningAndCompleted`) proves the
   shell-task lifecycle projects to running + completed `background_task` entries.
 - Store: `postgresSessionEventStore.ShellTaskEvents`, served by the

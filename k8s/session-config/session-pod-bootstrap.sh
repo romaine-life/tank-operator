@@ -112,8 +112,9 @@ start_spirelens_tailnet() {
 }
 
 install_agent_git_template() {
-  if [ -f /opt/tank/session-config/install-agent-git-template.sh ]; then
-    sh /opt/tank/session-config/install-agent-git-template.sh || true
+  script="${INSTALL_AGENT_GIT_TEMPLATE_SCRIPT:-/opt/tank/session-config/install-agent-git-template.sh}"
+  if [ -f "$script" ]; then
+    sh "$script" || true
   fi
 }
 

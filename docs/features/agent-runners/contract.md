@@ -52,9 +52,12 @@ the rest of the product reconstruct what happened.
   `ScheduleWakeup` and Antigravity `schedule` tool calls are registered by the
   runner with the backend; the orchestrator later submits the wakeup through
   the same backend-owned turn boundary as a user turn.
-  The browser reads `GET /api/sessions/{session_id}/scheduled-wakeups` and
-  renders those rows in Background -> Scheduled so users can confirm due,
-  firing, fired, and failed state without inspecting logs.
+  Registration, cancellation, fire, and failure also write
+  `scheduled_wakeup.updated` into `session_events`. `/timeline` includes a
+  one-shot `scheduled_background_tasks` bootstrap and the session event stream
+  delivers later projected rows, so Background -> Scheduled is event-driven and
+  users can confirm due, firing, fired, and failed state without inspecting
+  logs or waiting for browser polling.
 - A Claude background task (`run_in_background`) that reaches a natural terminal
   while the session has no active turn wakes the session through the same
   backend-owned turn boundary as a user turn (`source=background-task`). The
@@ -82,8 +85,9 @@ the rest of the product reconstruct what happened.
   the session pod and runner remain alive.
 - Runner-process restart may lose in-process state that is explicitly outside
   the durability boundary, such as current provider call state. Scheduled
-  wakeups are not in-process state and must remain visible from the backend
-  scheduled-wakeup table after a runner restart.
+  wakeups are not in-process state and must remain visible from durable
+  `scheduled_wakeup.updated` events and the backend scheduled-wakeup table after
+  a runner restart.
 - Command redelivery must be idempotent through command keys, turn IDs, or
   provider item IDs.
 - Provider failures must become durable failure events instead of silent

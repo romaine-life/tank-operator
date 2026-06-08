@@ -102,6 +102,13 @@ func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, us
 		"activity":        info.Activity,
 		"read_state":      sessionReadStateBody(readState),
 	}
+	if s.scheduledWakeups != nil {
+		rows, err := s.scheduledWakeups.ListBySession(ctx, sessionScope, sessionID)
+		if err != nil {
+			return nil, http.StatusInternalServerError, err
+		}
+		body["scheduled_background_tasks"] = projectScheduledWakeupRows(rows)
+	}
 	if intent.timelineID != "" {
 		body["target_timeline_id"] = intent.timelineID
 		body["target_cursor"] = targetCursor

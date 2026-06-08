@@ -123,6 +123,7 @@
         "shell_task.started",
         "shell_task.updated",
         "shell_task.exited",
+        "scheduled_wakeup.updated",
         "turn.awaiting_input",
         "turn.awaiting_input.invocation"
       ]
@@ -472,6 +473,27 @@
         "last_tool_name": { "type": "string" },
         "error": {}
       }
+    },
+    "scheduledWakeupPayload": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind", "wakeup_id", "status", "due_at"],
+      "properties": {
+        "kind": { "const": "scheduled_wakeup" },
+        "wakeup_id": { "$ref": "#/$defs/nonEmptyString" },
+        "status": {
+          "type": "string",
+          "enum": ["scheduled", "claiming", "fired", "failed", "cancelled"]
+        },
+        "prompt": { "type": "string" },
+        "scheduled_turn_id": { "type": "string" },
+        "provider_item_id": { "type": "string" },
+        "scheduled_at": { "type": "string", "format": "date-time" },
+        "due_at": { "type": "string", "format": "date-time" },
+        "attempt_count": { "type": "integer", "minimum": 0 },
+        "fired_turn_id": { "type": "string" },
+        "last_error": { "type": "string" }
+      }
     }
   },
   "allOf": [
@@ -636,6 +658,17 @@
         "properties": {
           "actor": { "const": "tool" },
           "payload": { "$ref": "#/$defs/shellTaskPayload" }
+        }
+      }
+    },
+    {
+      "if": { "properties": { "type": { "const": "scheduled_wakeup.updated" } }, "required": ["type"] },
+      "then": {
+        "required": ["timeline_id", "client_nonce", "payload"],
+        "properties": {
+          "actor": { "const": "system" },
+          "source": { "const": "tank" },
+          "payload": { "$ref": "#/$defs/scheduledWakeupPayload" }
         }
       }
     },

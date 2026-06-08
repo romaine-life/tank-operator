@@ -714,10 +714,14 @@ authored by the session's system identity and carries
 `payload.source=schedule-wakeup`. Its visible text is the timer-fired
 announcement; the original wake prompt stays on `payload.prompt` and
 `turn.submitted.payload.prompt` so the UI can key the announcement while the
-agent still receives the requested continuation prompt. The browser-facing read
-model is
-`GET /api/sessions/{session_id}/scheduled-wakeups`; the SPA maps those durable
-rows into Background -> Scheduled entries so a scheduled continuation is
+agent still receives the requested continuation prompt. Every scheduled-wakeup
+lifecycle transition also persists `scheduled_wakeup.updated` with
+`actor=system`, `source=tank`, `timeline_id=scheduled-wakeup:{wakeup_id}`, and
+the stable `client_nonce`. The timeline bootstrap includes
+`scheduled_background_tasks` projected from durable rows, and the session event
+stream carries later projections through `transcript-rows`, so the SPA can keep
+Background -> Scheduled current without polling `GET
+/api/sessions/{session_id}/scheduled-wakeups`. A scheduled continuation is
 visually confirmable even when its original tool row has scrolled out of the
 loaded transcript window.
 
