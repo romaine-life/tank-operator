@@ -12,6 +12,7 @@ export const SESSION_MODE_ORDER = [
   "codex_app_server",
   "codex_config",
   "antigravity_config",
+  "antigravity_cli",
   "antigravity_gui",
 ] as const;
 
@@ -22,6 +23,7 @@ export type DefaultSessionMode = Extract<
   | "claude_gui"
   | "codex_cli"
   | "codex_gui"
+  | "antigravity_cli"
   | "antigravity_gui"
 >;
 
@@ -147,6 +149,17 @@ export const SESSION_MODE_CONTRACT = {
     interaction: null,
     defaultSelectable: false,
     configCredentials: true,
+    chatSurface: false,
+    sdkChat: false,
+    workspaceFiles: false,
+    repos: false,
+    rollout: null,
+  },
+  antigravity_cli: {
+    provider: "antigravity",
+    interaction: "cli",
+    defaultSelectable: true,
+    configCredentials: false,
     chatSurface: false,
     sdkChat: false,
     workspaceFiles: false,
