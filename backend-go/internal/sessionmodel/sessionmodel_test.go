@@ -237,6 +237,15 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	// sidecar to exchange for a role=service JWT against
 	// /api/auth/exchange/k8s. See romaine-life/tank-operator#486.
 	assertVolumeMount(t, mcpProxy, "auth-romaine-sa-token")
+	mcpProxyEnv := containerEnv(mcpProxy)
+	sessionIDRef := mcpProxyEnv["SESSION_ID"].(map[string]any)["fieldRef"].(map[string]any)
+	if got, want := sessionIDRef["fieldPath"], "metadata.labels['tank-operator/session-id']"; got != want {
+		t.Fatalf("mcp-auth-proxy SESSION_ID fieldPath = %v, want %q", got, want)
+	}
+	sessionScopeRef := mcpProxyEnv["SESSION_SCOPE"].(map[string]any)["fieldRef"].(map[string]any)
+	if got, want := sessionScopeRef["fieldPath"], "metadata.labels['tank-operator/session-scope']"; got != want {
+		t.Fatalf("mcp-auth-proxy SESSION_SCOPE fieldPath = %v, want %q", got, want)
+	}
 	claude := containers[1].(map[string]any)
 	if got, want := claude["name"], "claude"; got != want {
 		t.Fatalf("main container name = %v, want %q", got, want)

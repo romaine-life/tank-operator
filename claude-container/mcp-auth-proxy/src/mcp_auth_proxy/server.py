@@ -159,6 +159,18 @@ AUTH_ROMAINE_FORWARD_HEADER = "X-Auth-Romaine-Token"
 ORIGIN_SESSION_FORWARD_HEADER = "X-Tank-Origin-Session-Id"
 ORIGIN_SESSION_ID = (os.environ.get("SESSION_ID") or "").strip()
 
+# Caller-context headers identify the session pod that is making an MCP call.
+# Unlike X-Tank-Origin-Session-Id, these are not handoff/display metadata; they
+# are the workflow ownership identity that Tank/Glimmung tools use when a tool
+# means "the current session". The auth.romaine.life JWT remains the authority
+# for owner/email. These headers only bind the already-authenticated caller to
+# its session row without asking the model to restate that id.
+CALLER_SYSTEM_FORWARD_HEADER = "X-Tank-Caller-System"
+CALLER_KIND_FORWARD_HEADER = "X-Tank-Caller-Kind"
+CALLER_SESSION_ID_FORWARD_HEADER = "X-Tank-Caller-Session-Id"
+CALLER_SESSION_SCOPE_FORWARD_HEADER = "X-Tank-Caller-Session-Scope"
+SESSION_SCOPE = (os.environ.get("SESSION_SCOPE") or "").strip()
+
 # (port, upstream URL). Mirrors k8s/session-config/mcp.json. Adding an
 # MCP means: append here, append a port mapping in mcp.json, ship.
 #
@@ -616,19 +628,22 @@ async def run() -> None:
                     return AUTH_ROMAINE_FORWARD_HEADER, await provider.token()
                 extra_header_provider = _provide_auth_romaine_header
 
-            # Tell mcp-tank-operator which session pod is calling so it
-            # can forward the originating session id to the orchestrator,
-            # which stamps it onto user_message.created events and lets
-            # the frontend render the parent session's avatar on the
-            # user bubble in the target session. Only meaningful for the
-            # tank-operator handoff path (send_prompt / spawn_run_session)
-            # — other upstreams ignore the header. SESSION_ID is sourced
-            # from the pod's downward-API env var; when unset we omit
-            # the header and the orchestrator falls back to the
-            # human-Gravatar rendering.
+            # Tell Tank/Glimmung MCP servers which session pod is calling.
+            # These current-session headers are ownership context for workflow
+            # controls such as test slots and PR links; they are injected by
+            # infrastructure, not supplied by the model. Keep the older origin
+            # header scoped to mcp-tank-operator handoff/avatar semantics.
             static_headers = None
-            if port == TANK_OPERATOR_MCP_PORT and ORIGIN_SESSION_ID:
-                static_headers = {ORIGIN_SESSION_FORWARD_HEADER: ORIGIN_SESSION_ID}
+            if port in (TANK_OPERATOR_MCP_PORT, GLIMMUNG_MCP_PORT) and ORIGIN_SESSION_ID:
+                static_headers = {
+                    CALLER_SYSTEM_FORWARD_HEADER: "tank-operator",
+                    CALLER_KIND_FORWARD_HEADER: "session",
+                    CALLER_SESSION_ID_FORWARD_HEADER: ORIGIN_SESSION_ID,
+                }
+                if SESSION_SCOPE:
+                    static_headers[CALLER_SESSION_SCOPE_FORWARD_HEADER] = SESSION_SCOPE
+                if port == TANK_OPERATOR_MCP_PORT:
+                    static_headers[ORIGIN_SESSION_FORWARD_HEADER] = ORIGIN_SESSION_ID
 
             # The SpireLens upstream is on the tailnet; route it through the
             # tailscaled outbound HTTP proxy. Every other upstream is an

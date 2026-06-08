@@ -787,24 +787,25 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	})
 	mcpProxyEnv := []any{
 		map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
-		// Originating session id forwarded as
-		// X-Tank-Origin-Session-Id on outbound calls to
-		// mcp-tank-operator. mcp-tank-operator threads it
-		// onto handoff messages so the orchestrator stamps
-		// the persisted user_message.created event and the
-		// frontend renders the parent session's avatar on
-		// the user bubble in the target session. Sourced
-		// from the same downward-API path the runners use
-		// (metadata.labels['tank-operator/session-id']) so
-		// the sidecar agrees with the runner on which
-		// session it lives in. Absent SESSION_ID, the
-		// proxy omits the header and the orchestrator
-		// falls back to the human-Gravatar rendering.
+		// Session identity forwarded by mcp-auth-proxy on outbound calls to
+		// Tank/Glimmung MCP servers. SESSION_ID still feeds the older
+		// X-Tank-Origin-Session-Id handoff-avatar path for mcp-tank-operator;
+		// together, SESSION_ID + SESSION_SCOPE also feed caller-context
+		// headers that let workflow tools bind to the current session without
+		// asking the model to restate its own id.
 		map[string]any{
 			"name": "SESSION_ID",
 			"valueFrom": map[string]any{
 				"fieldRef": map[string]any{
 					"fieldPath": "metadata.labels['tank-operator/session-id']",
+				},
+			},
+		},
+		map[string]any{
+			"name": "SESSION_SCOPE",
+			"valueFrom": map[string]any{
+				"fieldRef": map[string]any{
+					"fieldPath": "metadata.labels['tank-operator/session-scope']",
 				},
 			},
 		},
