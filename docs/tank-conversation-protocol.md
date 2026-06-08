@@ -510,6 +510,23 @@ Codex SDK adapter:
 | `turn.failed` or `error` | `turn.failed` | Unless adapter classifies it as abort/interrupt. |
 | Abort from user interrupt | `turn.interrupted` | Distinct from provider failure. |
 
+Antigravity transcript adapter:
+
+| Provider transcript step | Tank event | Notes |
+| --- | --- | --- |
+| JetStream `submit_turn` command | `user_message.created`, `turn.submitted` | Backend publishes these events at the submit boundary; runner duplicate publishes are deduped by event id. `client_nonce` is required. |
+| First mapped provider step for a turn | `turn.started` | agy writes append-only JSONL transcript files instead of streaming a first-class SDK event. The runner synthesizes the Tank turn start from the first mapped step. |
+| `source=USER_EXPLICIT` | ignored | Tank owns the durable user row. Provider echoes must not enter the transcript. |
+| `source=SYSTEM` history/context steps | ignored | Injected context is not a user-visible transcript item. |
+| `source=SYSTEM`, `type=ERROR_MESSAGE` | `item.failed` | agy uses this shape as the terminal result for invalid provider tool calls, such as disabled MCP tools or invalid artifact paths. It must close the matching pending tool item; dropping it leaves stale pending state and causes later tool results to attach to the wrong title. |
+| `source=MODEL`, `type=PLANNER_RESPONSE`, `tool_calls[]` | `item.started` | Each tool call opens a tool item. Provider item ids include the agy conversation id when available because one root turn can append subagent transcript files with duplicate `step_index` values. |
+| `source=MODEL` tool result step with non-error status | `item.completed` | Completes the matching pending tool item in the same agy conversation. |
+| `source=MODEL` tool result step with `status=ERROR` | `item.failed` | Tool execution failure is item-scoped and does not fail the whole session. |
+| `source=MODEL`, `type=PLANNER_RESPONSE` prose without tool calls | `item.completed` | Assistant message item; the latest such message is the final-answer candidate for `turn.completed`. |
+| agy process success | `turn.completed` | Include usage when loadCodeAssist reports it. |
+| agy process failure | `turn.failed` | Provider/process failure, not a user interrupt. |
+| User interrupt / runner shutdown | `turn.interrupted` | Distinct from provider failure. |
+
 ## Backend API Sketch
 
 History reads:

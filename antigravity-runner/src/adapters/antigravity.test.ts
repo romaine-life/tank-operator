@@ -150,3 +150,116 @@ test("re-feeding a step is idempotent (tailing a growing file)", () => {
   assert.ok(first.length > 0);
   assert.equal(second.length, 0);
 });
+
+test("SYSTEM ERROR_MESSAGE closes the failed tool instead of poisoning FIFO", () => {
+  const events = runTranscript(loadFixture("system-error-tool-turn.jsonl"));
+  const failed = events.find((e) => e.type === "item.failed");
+  assert.ok(failed, "invalid provider tool call should emit item.failed");
+  assert.equal((failed.payload as { title?: string }).title, "Checking out test slot");
+  assert.deepEqual((failed.payload as { outcome?: unknown }).outcome, {
+    kind: "execution_failed",
+    reason: "provider_item_error",
+  });
+  assert.match(
+    String((failed.payload as { error?: string }).error ?? ""),
+    /checkout_test_slot is not enabled/,
+  );
+
+  const toolCompleted = events.filter(
+    (e) =>
+      e.type === "item.completed" &&
+      (e.payload as { kind?: string }).kind === "tool",
+  );
+  assert.equal(toolCompleted.length, 1);
+  const env = toolCompleted[0]!;
+  assert.equal((env.payload as { title?: string }).title, "Running env");
+  assert.match(String((env.payload as { text?: string }).text ?? ""), /PWD=\/workspace/);
+
+  const failedStart = events.find(
+    (e) =>
+      e.type === "item.started" &&
+      e.provider_item_id === failed.provider_item_id,
+  );
+  assert.equal(failedStart?.timeline_id, failed.timeline_id);
+});
+
+test("conversation id scopes duplicate Antigravity step indexes", () => {
+  const events = runTranscript([
+    {
+      step_index: 1,
+      conversation_id: "root",
+      source: "MODEL",
+      type: "PLANNER_RESPONSE",
+      status: "DONE",
+      tool_calls: [
+        {
+          name: "run_command",
+          args: { toolSummary: "Root command", CommandLine: "pwd" },
+        },
+      ],
+    },
+    {
+      step_index: 1,
+      conversation_id: "subagent",
+      source: "MODEL",
+      type: "PLANNER_RESPONSE",
+      status: "DONE",
+      tool_calls: [
+        {
+          name: "run_command",
+          args: { toolSummary: "Subagent command", CommandLine: "pwd" },
+        },
+      ],
+    },
+    {
+      step_index: 2,
+      conversation_id: "root",
+      source: "MODEL",
+      type: "RUN_COMMAND",
+      status: "DONE",
+      content: "root output",
+    },
+    {
+      step_index: 2,
+      conversation_id: "subagent",
+      source: "MODEL",
+      type: "RUN_COMMAND",
+      status: "DONE",
+      content: "subagent output",
+    },
+  ]);
+
+  const starts = events.filter((e) => e.type === "item.started");
+  const completed = events.filter(
+    (e) =>
+      e.type === "item.completed" &&
+      (e.payload as { kind?: string }).kind === "tool",
+  );
+  assert.equal(starts.length, 2);
+  assert.equal(completed.length, 2);
+  assert.notEqual(starts[0]!.provider_item_id, starts[1]!.provider_item_id);
+  assert.equal((completed[0]!.payload as { title?: string }).title, "Root command");
+  assert.equal(
+    (completed[1]!.payload as { title?: string }).title,
+    "Subagent command",
+  );
+});
+
+test("adapter reports unclosed pending tools at turn terminal", () => {
+  const observed: Array<{ kind: string; count: number | undefined }> = [];
+  const adapter = new AntigravityTranscriptAdapter("42", {
+    recordCorrelation: (kind, count) => observed.push({ kind, count }),
+  });
+  adapter.stepEvents(TURN, {
+    step_index: 1,
+    conversation_id: "root",
+    source: "MODEL",
+    type: "PLANNER_RESPONSE",
+    status: "DONE",
+    tool_calls: [{ name: "run_command", args: { toolSummary: "Never closes" } }],
+  });
+  adapter.completeTurn(TURN);
+  assert.deepEqual(observed, [
+    { kind: "unclosed_tool_at_terminal", count: 1 },
+  ]);
+});
