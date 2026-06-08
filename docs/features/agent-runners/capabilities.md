@@ -72,12 +72,16 @@ Evidence:
 Status: in progress
 
 Intent:
-When a Claude session backgrounds a task (`run_in_background`) and then ends its
-turn, the task finishing later must re-invoke the agent — the base Bash tool's
-"re-invokes you when it exits" promise. Before this, a task-lifecycle SDK frame
-never started a turn, so a task that finished while the session was idle left the
-follow-up silently stranded (the originating incident: a session that backgrounded
-a "Wait for CI" task, ended its turn, and never woke).
+When a session backgrounds a provider-owned task and then ends its turn, the
+task finishing later must re-invoke the agent through Tank-owned durable state.
+Claude uses SDK `run_in_background` lifecycle frames. Antigravity uses `agy -p`
+`RUN_COMMAND` transcript records that can outlive the print-mode process. Before
+this, a task-lifecycle SDK frame or Antigravity provider-local completion event
+could finish while the session was idle and leave the follow-up silently
+stranded (originating incidents: a Claude session that backgrounded "Wait for
+CI" and never woke; Antigravity sessions 714/716/719 on 2026-06-08 that emitted
+`RUN_COMMAND status=RUNNING`, said they would wait, and then had no durable
+resume source after `agy -p` exited).
 
 Affected contracts:
 - Agent Runners
@@ -85,6 +89,11 @@ Affected contracts:
 Contract impact:
 - Wakes go through the same backend-owned turn boundary as a user turn
   (`source=background-task`); the runner never fabricates a turn.
+- Antigravity provider-local task completion messages are only sufficient while
+  the same `agy` process is still active. If `agy -p` exits with an unfinished
+  `RUN_COMMAND` background task, the Antigravity runner adopts that task,
+  monitors its terminal state from the provider task id/log/process metadata,
+  and registers the same durable background wake row as Claude.
 - Idempotent per task id via the durable `session_background_task_wakes` row
   (`wake_id = sha256(tank_session_id, provider, task_id)`), so SDK frame repeats
   and runner restarts cannot double-wake — "command redelivery must be idempotent
@@ -97,14 +106,20 @@ Contract impact:
 Evidence:
 - Backend: `backend-go/cmd/tank-operator/background_task_wakes_test.go`
   (durable turn boundary + `source=background-task`, defer-on-awaiting-input,
-  fail-on-inactive, `sdkTurnSource`, turn-id-safe nonce);
+  fail-on-inactive, Claude + Antigravity provider gate, `sdkTurnSource`,
+  turn-id-safe nonce);
   `backend-go/internal/pgstore/background_task_wakes.go` (idempotent `Register`).
 - Runner: `agent-runner/src/runner.test.ts`
   (register-once-when-idle, skip-when-active, ignore user-stop/lifecycle-start);
-  `agent-runner/src/adapters/claude.test.ts` (natural-vs-user terminal split).
+  `agent-runner/src/adapters/claude.test.ts` (natural-vs-user terminal split);
+  `antigravity-runner/src/backgroundTasks.test.ts` (extract
+  `RUN_COMMAND RUNNING`, suppress provider-completed tasks, register a durable
+  wake for unfinished tasks at provider exit).
 - Metrics: `tank_runner_background_task_wake_total{result}`,
   `tank_background_task_wake_register_total`,
-  `tank_background_task_wake_fire_total`, `tank_background_task_wakes_due`.
+  `tank_background_task_wake_fire_total`, `tank_background_task_wakes_due`,
+  `tank_antigravity_runner_background_task_wake_register_total{result}`,
+  `tank_antigravity_runner_background_task_observation_total{kind}`.
 - Durable schema: migrations 0121–0124 (`session_background_task_wakes`).
 
 ## Provider rate-limit retry-stall terminal

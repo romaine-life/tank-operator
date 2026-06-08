@@ -41,10 +41,17 @@ import {
 } from "../../runner-shared/conversation-builders.js";
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js";
+import { registerBackgroundTaskWake } from "../../runner-shared/backgroundTaskWake.js";
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
+import {
+  AntigravityBackgroundTaskTracker,
+  type BackgroundTaskWakePayload,
+} from "./backgroundTasks.js";
 import {
   agyStepTotal,
   agyAdapterCorrelationTotal,
+  backgroundTaskObservationTotal,
+  backgroundTaskWakeRegisterTotal,
   agyDiagnosticTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
@@ -141,6 +148,7 @@ export class Runner {
   private readonly commands: SessionCommandBus;
   private readonly adapter: AntigravityTranscriptAdapter;
   private readonly driver: AgyDriver;
+  private readonly backgroundTasks: AntigravityBackgroundTaskTracker;
   private readonly queue = new AsyncQueue<SubmitRecord>();
   private readonly orphanInterrupts = new Map<string, number>();
   private active: ActiveTurn | null = null;
@@ -160,13 +168,18 @@ export class Runner {
         transcriptEventSourceTotal.labels(result).inc();
       },
     });
+    this.backgroundTasks = new AntigravityBackgroundTaskTracker(cfg.agyHome, {
+      record: (kind) => backgroundTaskObservationTotal.labels(kind).inc(),
+    });
   }
 
   async run(signal: AbortSignal): Promise<void> {
     signal.addEventListener("abort", () => {
       this.queue.close();
       this.active?.abort.abort();
+      this.backgroundTasks.close();
     });
+    this.backgroundTasks.start((payload) => this.registerBackgroundWake(payload));
     await this.commands.startControlConsumer(async (rec) => {
       this.handleControl(rec as SubmitRecord);
     }, signal);
@@ -345,6 +358,7 @@ export class Runner {
                 parkNativeSchedule();
                 return;
               }
+              await this.backgroundTasks.observeStep(step);
               for (const ev of this.adapter.stepEvents(turn, step)) {
                 await this.publish(ev);
               }
@@ -365,6 +379,7 @@ export class Runner {
         agyDiagnosticTotal.labels(kind).inc();
       }
       this.hasConversation = true;
+      await this.backgroundTasks.adoptAfterProviderExit();
 
       const terminal = classifyAgyTerminal(
         result,
@@ -544,6 +559,22 @@ export class Runner {
     } catch (err) {
       scheduledWakeupRegisterTotal.labels("failed").inc();
       console.error("antigravity scheduled wakeup register failed:", err);
+      return false;
+    }
+  }
+
+  private async registerBackgroundWake(
+    payload: BackgroundTaskWakePayload,
+  ): Promise<boolean> {
+    try {
+      const registered = await registerBackgroundTaskWake(this.cfg, payload);
+      backgroundTaskWakeRegisterTotal
+        .labels(registered ? "ok" : "disabled")
+        .inc();
+      return registered;
+    } catch (err) {
+      backgroundTaskWakeRegisterTotal.labels("failed").inc();
+      console.error("antigravity background task wake register failed:", err);
       return false;
     }
   }

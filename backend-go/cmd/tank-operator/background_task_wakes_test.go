@@ -169,6 +169,17 @@ func TestSdkTurnSourceIncludesBackgroundTask(t *testing.T) {
 	}
 }
 
+func TestSupportsBackgroundTaskWakesIncludesAntigravity(t *testing.T) {
+	for _, provider := range []string{"claude", "antigravity"} {
+		if !supportsBackgroundTaskWakes(provider) {
+			t.Fatalf("supportsBackgroundTaskWakes(%q) = false, want true", provider)
+		}
+	}
+	if supportsBackgroundTaskWakes("codex") {
+		t.Fatal("supportsBackgroundTaskWakes(codex) = true, want false")
+	}
+}
+
 func TestBuildBackgroundTaskWakePromptIncludesTaskContext(t *testing.T) {
 	p := buildBackgroundTaskWakePrompt("taskX", "completed", "Wait for CI", "all green", "Bash", "")
 	for _, want := range []string{"taskX", "completed", "Wait for CI", "all green", "BashOutput"} {

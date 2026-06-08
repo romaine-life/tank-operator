@@ -721,36 +721,38 @@ rows into Background -> Scheduled entries so a scheduled continuation is
 visually confirmable even when its original tool row has scrolled out of the
 loaded transcript window.
 
-A Claude background task (`run_in_background`) that finishes while the session
-has no active turn is resumed the same backend-owned way. A task-lifecycle SDK
-frame never starts a turn, so without this the base Bash tool's "re-invokes you
-when it exits" follow-up is silently stranded once the launching turn has ended.
-The agent-runner registers the natural terminal (`completed`/`failed`/`exited` —
-never a user-cancelled `stopped`/`cancelled`) through
+A provider background task that finishes while the session has no active turn
+is resumed the same backend-owned way. Claude registers SDK
+`run_in_background` task-lifecycle terminals; Antigravity registers `agy -p`
+`RUN_COMMAND` background tasks that remain unfinished when the provider process
+exits. Provider-local task callbacks are not durable state: if the active
+runtime is gone, the runner must either register a Tank-owned wake or record a
+durable failure. Runners register the natural terminal through
 `POST /api/internal/sessions/{session_id}/background-task-wakes`. The task id is
 the idempotency key: the durable row `session_background_task_wakes` is keyed by
-`sha256(tank_session_id, provider, task_id)`, so an SDK frame repeat or a runner
-restart cannot double-wake. The orchestrator claims due rows and — unlike a
-scheduled wakeup — re-checks session liveness before firing: it skips and
-retries while the session is awaiting an AskUserQuestion answer (`needs_input`),
-so the wake never clobbers a pending question; it fails the wake durably if the
-session is no longer `Active`; otherwise it writes a normal `turn.submitted`
-boundary event without a synthetic `user_message.created` prompt and publishes
-`submit_turn` with `source=background-task`. The `turn.submitted` event remains
-`source=tank` per the event schema and carries `payload.source=background-task`
-as provenance plus `payload.prompt` as the existing system-user wake text for
-Turn activity projection. The wake turn is a continuation mechanic inside the
-simulated turn: its activity shell stays in the Turns view, not the settled main
-transcript, and its wake prompt is folded into the originating Turn activity as
-an `authorKind=system` user-side message. The earlier turn that parked on the still
+`sha256(tank_session_id, provider, task_id)`, so an SDK frame repeat,
+Antigravity task re-observation, or runner restart cannot double-wake. The
+orchestrator claims due rows and — unlike a scheduled wakeup — re-checks
+session liveness before firing: it skips and retries while the session is
+awaiting an AskUserQuestion answer (`needs_input`), so the wake never clobbers a
+pending question; it fails the wake durably if the session is no longer
+`Active`; otherwise it writes a normal `turn.submitted` boundary event without a
+synthetic `user_message.created` prompt and publishes `submit_turn` with
+`source=background-task`. The `turn.submitted` event remains `source=tank` per
+the event schema and carries `payload.source=background-task` as provenance plus
+`payload.prompt` as the existing system-user wake text for Turn activity
+projection. The wake turn is a continuation mechanic inside the simulated turn:
+its activity shell stays in the Turns view, not the settled main transcript, and
+its wake prompt is folded into the originating Turn activity as an
+`authorKind=system` user-side message. The earlier turn that parked on the still
 running background task is also continuation material: its assistant prose and
 background-task row stay in Turn activity rather than becoming a main transcript
 answer. If the resumed agent reaches a true final answer, that assistant prose
 is promoted only through the normal
-`turn.completed.payload.final_answer.timeline_ids` marker. Because each enqueue stamps a fresh
-`order_key` (`event_id` is indexed, not unique, so separate enqueues do not
-collapse), the durable wake row — not the event ledger — is what makes the wake
-fire exactly once.
+`turn.completed.payload.final_answer.timeline_ids` marker. Because each enqueue
+stamps a fresh `order_key` (`event_id` is indexed, not unique, so separate
+enqueues do not collapse), the durable wake row — not the event ledger — is what
+makes the wake fire exactly once.
 
 The UI consumes durable transcript delivery from
 `GET /api/sessions/{session_id}/events`. The stream emits `transcript-rows`

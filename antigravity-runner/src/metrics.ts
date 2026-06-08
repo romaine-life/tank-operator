@@ -66,6 +66,20 @@ export const scheduledWakeupRegisterTotal = new Counter({
   registers: [registry],
 });
 
+export const backgroundTaskWakeRegisterTotal = new Counter({
+  name: "tank_antigravity_runner_background_task_wake_register_total",
+  help: "Antigravity background task wake registrations attempted against the orchestrator durable wakeup API.",
+  labelNames: ["result"] as const,
+  registers: [registry],
+});
+
+export const backgroundTaskObservationTotal = new Counter({
+  name: "tank_antigravity_runner_background_task_observation_total",
+  help: "Antigravity run_command background task lifecycle observations.",
+  labelNames: ["kind"] as const,
+  registers: [registry],
+});
+
 export const scheduleIntentTotal = new Counter({
   name: "tank_antigravity_runner_schedule_intent_total",
   help: "Antigravity schedule-intent observations before durable wakeup registration.",

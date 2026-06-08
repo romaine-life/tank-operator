@@ -21,13 +21,14 @@ const (
 	backgroundTaskWakeClaimStaleAfter = 2 * time.Minute
 )
 
-// handleInternalRegisterBackgroundTaskWake records that a Claude background
-// (run_in_background) task reached a natural terminal while its session had no
-// active turn. The base Bash tool promises "re-invokes you when it exits", but
-// a task-lifecycle SDK frame never starts a turn, so without this the follow-up
-// is silently stranded. The runner registers the terminal; the orchestrator's
-// fire loop later submits a system turn through the same backend-owned boundary
-// as a user turn (source=background-task), mirroring ScheduleWakeup.
+// handleInternalRegisterBackgroundTaskWake records that a provider background
+// task reached a natural terminal while its session had no active turn. Claude
+// SDK sessions use this for run_in_background shell-task lifecycle frames;
+// Antigravity sessions use it for agy -p RUN_COMMAND background tasks after the
+// provider process exits. In both cases, the runner registers the terminal; the
+// orchestrator's fire loop later submits a system turn through the same
+// backend-owned boundary as a user turn (source=background-task), mirroring
+// ScheduleWakeup.
 func (s *appServer) handleInternalRegisterBackgroundTaskWake(w http.ResponseWriter, r *http.Request) {
 	caller, ok := s.requireInternalSessionPodCaller(w, r)
 	if !ok {
@@ -82,9 +83,9 @@ func (s *appServer) handleInternalRegisterBackgroundTaskWake(w http.ResponseWrit
 		return
 	}
 	provider, ok := sdkProviderForMode(info.Mode)
-	if !ok || provider != "claude" {
+	if !ok || !supportsBackgroundTaskWakes(provider) {
 		recordBackgroundTaskWakeRegister("unknown", "bad_request")
-		writeError(w, http.StatusBadRequest, "background task wakes are only supported for Claude SDK sessions")
+		writeError(w, http.StatusBadRequest, "background task wakes are only supported for Claude and Antigravity sessions")
 		return
 	}
 
@@ -117,6 +118,15 @@ func (s *appServer) handleInternalRegisterBackgroundTaskWake(w http.ResponseWrit
 		"client_nonce": row.ClientNonce,
 		"due_at":       row.DueAt.Format(time.RFC3339Nano),
 	})
+}
+
+func supportsBackgroundTaskWakes(provider string) bool {
+	switch strings.TrimSpace(provider) {
+	case "claude", "antigravity":
+		return true
+	default:
+		return false
+	}
 }
 
 // buildBackgroundTaskWakePrompt is the self-grounding wake turn prompt. The

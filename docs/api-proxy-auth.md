@@ -444,6 +444,25 @@ What is antigravity-specific (implementation detail, not architecture):
   and exports `SSL_CERT_FILE` — the Go analog of claude's `NODE_EXTRA_CA_CERTS`
   / codex's `CODEX_CA_CERTIFICATE`.
 
+Runtime boundary:
+
+- The production Antigravity GUI runner drives the installed `agy` CLI in
+  print mode (`agy -p` / `agy --continue`) and tails the CLI's emitted JSONL
+  transcript under `~/.gemini/antigravity-cli`. That path is compatible with
+  the host-aliased `cloudcode-pa.googleapis.com` proxy contract above.
+- Google's Python SDK `localharness` path is **not** a drop-in replacement for
+  Tank's proxied Antigravity runner. Unlike the Claude/Codex SDKs Tank uses,
+  the Antigravity SDK does not merely wrap the installed CLI and mirror its
+  JSONL. It starts a separate harness/runtime with its own connection and
+  Gemini API / Vertex-style auth assumptions. Until that harness is proven to
+  support Tank's placeholder-token + host-alias auth-proxy model, do not propose
+  it as the production runner path.
+- Durable waits must therefore be Tank-owned at the `agy` integration boundary:
+  native Antigravity `schedule` calls become `session_scheduled_wakeups`, and
+  `RUN_COMMAND` background tasks that outlive `agy -p` become
+  `session_background_task_wakes`. Provider-local in-memory task notifications
+  are adapter input only, not durable state.
+
 Re-seeding the chain (the recovery path) is the `antigravity_config` wizard
 mode: it is the one antigravity mode **not** routed through the proxy, so the
 interactive Google/Ultra login reaches real Google; `doSaveCredentials` then
