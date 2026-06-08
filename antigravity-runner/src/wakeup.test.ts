@@ -59,6 +59,35 @@ test("ignores malformed schedule calls instead of registering broken wakes", () 
   });
 });
 
+test("ignores in-progress schedule calls until the done transition", () => {
+  const active = {
+    step_index: 7,
+    source: "MODEL",
+    type: "PLANNER_RESPONSE",
+    status: "IN_PROGRESS",
+    tool_calls: [
+      {
+        name: "schedule",
+        args: { DurationSeconds: "5", Prompt: "Check back." },
+      },
+    ],
+  };
+
+  assert.deepEqual(inspectScheduleWakeups(active), {
+    wakeups: [],
+    scheduleCallCount: 0,
+    malformedScheduleCallCount: 0,
+  });
+
+  assert.deepEqual(extractScheduleWakeups({ ...active, status: "DONE" }), [
+    {
+      delayMs: 5_000,
+      prompt: "Check back.",
+      providerItemID: "tool-7-0",
+    },
+  ]);
+});
+
 test("classifies Antigravity schedule acknowledgement versus native wake text", () => {
   const ack = {
     step_index: 4,
@@ -84,6 +113,16 @@ test("classifies Antigravity schedule acknowledgement versus native wake text", 
 
   assert.equal(isAssistantPlannerTextStep(ack), true);
   assert.equal(isAssistantPlannerTextStep(scheduleCall), false);
+  assert.equal(
+    isAssistantPlannerTextStep({
+      step_index: 6,
+      source: "MODEL",
+      type: "PLANNER_RESPONSE",
+      status: "IN_PROGRESS",
+      content: "I have set the wake timer.",
+    }),
+    false,
+  );
   assert.equal(
     isNativeScheduleWakeResponse(nativeWake, ["I am awake from the timer."]),
     true,

@@ -116,6 +116,69 @@ test("agy diagnostics classify auxiliary 401s separately from provider failures"
   );
 });
 
+test("agy executor 500 after tool output is a durable failure", () => {
+  const terminal = classifyAgyTerminal(
+    {
+      exitCode: 0,
+      killed: false,
+      stdout: "",
+      stderr: [
+        "agent executor error: UNKNOWN (code 500): Unknown Error.",
+        "PlannerResponse without ModifiedResponse encountered",
+      ].join("\n"),
+    },
+    124,
+    false,
+  );
+
+  assert.deepEqual(terminal.kind, "failed");
+  assert.equal(
+    terminal.kind === "failed" ? terminal.metricReason : "",
+    "provider_executor_error",
+  );
+  assert.match(
+    terminal.kind === "failed" ? terminal.reason : "",
+    /provider_executor_error/,
+  );
+});
+
+test("agy success with tool steps still requires a final answer", () => {
+  const terminal = classifyAgyTerminal(
+    {
+      exitCode: 0,
+      killed: false,
+      stdout: "",
+      stderr: "",
+    },
+    124,
+    false,
+    { hasFinalAnswer: false },
+  );
+
+  assert.deepEqual(terminal.kind, "failed");
+  assert.equal(
+    terminal.kind === "failed" ? terminal.metricReason : "",
+    "provider_no_final_answer",
+  );
+});
+
+test("native schedule parking may complete without final answer", () => {
+  assert.deepEqual(
+    classifyAgyTerminal(
+      {
+        exitCode: 0,
+        killed: false,
+        stdout: "",
+        stderr: "",
+      },
+      12,
+      false,
+      { hasFinalAnswer: false, allowNoFinalAnswer: true },
+    ),
+    { kind: "completed" },
+  );
+});
+
 test("Antigravity skill prompt expansion embeds hydrated SKILL.md", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "agy-skills-"));
   try {
@@ -169,7 +232,7 @@ test("interrupted agy turn remains interrupted", () => {
   );
 });
 
-test("agy success requires observed transcript steps", () => {
+test("agy success requires observed transcript steps and a final answer", () => {
   assert.deepEqual(
     classifyAgyTerminal(
       {
@@ -180,6 +243,7 @@ test("agy success requires observed transcript steps", () => {
       },
       1,
       false,
+      { hasFinalAnswer: true },
     ),
     { kind: "completed" },
   );

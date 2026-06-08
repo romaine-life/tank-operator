@@ -8,6 +8,7 @@ import {
   registry,
   scheduleIntentTotal,
   startMetricsServer,
+  transcriptEventSourceTotal,
 } from "./metrics.js";
 
 // The metrics surface is a contract: the orchestrator's alerts and the
@@ -35,10 +36,26 @@ test("the /metrics endpoint serves the tank_antigravity_runner_ counters", async
     assert.match(body, /tank_antigravity_runner_agy_diagnostic_total/);
     assert.match(body, /tank_antigravity_runner_agy_adapter_correlation_total/);
     assert.match(body, /tank_antigravity_runner_schedule_intent_total/);
+    assert.match(
+      body,
+      /tank_antigravity_runner_transcript_event_source_total/,
+    );
   } finally {
     server.close();
     await once(server, "close");
   }
+});
+
+test("transcript event-source health is recorded in bounded buckets", async () => {
+  await registry.resetMetrics();
+
+  transcriptEventSourceTotal.labels("error").inc();
+
+  const dump = await registry.metrics();
+  assert.match(
+    dump,
+    /tank_antigravity_runner_transcript_event_source_total\{result="error"\} 1/,
+  );
 });
 
 test("the metrics server answers /healthz and 404s unknown paths", async () => {

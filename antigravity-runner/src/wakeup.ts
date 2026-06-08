@@ -29,6 +29,10 @@ function scheduleDelayMs(value: unknown): number | null {
   return Math.floor(n * 1000);
 }
 
+function isDone(step: AgyStep): boolean {
+  return String(step.status ?? "").trim().toUpperCase() === "DONE";
+}
+
 export function inspectScheduleWakeups(
   step: AgyStep,
 ): AntigravityScheduleInspection {
@@ -41,6 +45,7 @@ export function inspectScheduleWakeups(
   if (String(step.type ?? "").trim().toUpperCase() !== "PLANNER_RESPONSE") {
     return empty;
   }
+  if (!isDone(step)) return empty;
   if (!Array.isArray(step.tool_calls)) return empty;
 
   const out: AntigravityScheduleWakeup[] = [];
@@ -92,6 +97,7 @@ export function isAssistantPlannerTextStep(step: AgyStep): boolean {
   if (String(step.type ?? "").trim().toUpperCase() !== "PLANNER_RESPONSE") {
     return false;
   }
+  if (!isDone(step)) return false;
   if (Array.isArray(step.tool_calls) && step.tool_calls.length > 0) return false;
   return String(step.content ?? "").trim().length > 0;
 }

@@ -1261,7 +1261,34 @@ spec:
               auth failures; real Code Assist auth failures surface through
               tank_api_proxy_upstream_401_total{provider="antigravity"} or
               provider_error reasons such as provider_auth_failed /
-              skill_missing.
+              skill_missing. provider_executor_error names agy terminal
+              executor errors such as UNKNOWN (code 500) /
+              PlannerResponse without ModifiedResponse; provider_no_final_answer
+              names a normal-looking agy exit that produced tool activity but
+              no assistant final answer, and should be investigated as a
+              provider/runner terminal-classification incident rather than a UI
+              projection issue. transcript_event_source_unavailable /
+              transcript_event_source_error mean the local file-backed JSONL
+              event source failed; inspect
+              tank_antigravity_runner_transcript_event_source_total and the
+              antigravity-runner logs before blaming the frontend projection.
+
+        - alert: TankAntigravityTranscriptEventSourceFailure
+          expr: increase(tank_antigravity_runner_transcript_event_source_total{result=~"unavailable|error"}[15m]) > 0
+          for: 2m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Antigravity transcript event source failed"
+            runbook: |
+              The antigravity-runner could not watch agy's JSONL transcript
+              source, or the watcher errored while a turn was running. The
+              runner should fail the affected turn with provider_error reason
+              transcript_event_source_unavailable or
+              transcript_event_source_error instead of silently degrading live
+              updates. Inspect the session pod filesystem under
+              /home/node/.gemini/antigravity-cli/brain and the runner logs for
+              "antigravity transcript watcher".
 
         - alert: TankAntigravitySkillMissing
           expr: increase(tank_antigravity_runner_provider_error_total{reason="skill_missing"}[15m]) > 0

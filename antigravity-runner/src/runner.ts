@@ -19,7 +19,10 @@ import {
   type AgyStep,
   type AntigravityTurn,
 } from "./adapters/antigravity.js";
-import { AgyDriver } from "./driver.js";
+import {
+  AgyDriver,
+  TranscriptEventSourceUnavailableError,
+} from "./driver.js";
 import type { Config } from "./config.js";
 import { expandSkillPrompt } from "./skills.js";
 import { SessionEventSink } from "./sessionEvents.js";
@@ -50,6 +53,7 @@ import {
   providerErrorTotal,
   scheduleIntentTotal,
   scheduledWakeupRegisterTotal,
+  transcriptEventSourceTotal,
   turnDurationSeconds,
   turnTerminalTotal,
 } from "./metrics.js";
@@ -151,7 +155,11 @@ export class Runner {
         agyAdapterCorrelationTotal.labels(kind).inc(count);
       },
     });
-    this.driver = new AgyDriver(cfg.agyHome);
+    this.driver = new AgyDriver(cfg.agyHome, "agy", {
+      recordTranscriptEventSource: (result) => {
+        transcriptEventSourceTotal.labels(result).inc();
+      },
+    });
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -362,6 +370,10 @@ export class Runner {
         result,
         observedStepCount,
         abort.signal.aborted,
+        {
+          hasFinalAnswer: this.adapter.hasFinalAnswer(turn),
+          allowNoFinalAnswer: scheduledWakeupParked,
+        },
       );
       if (terminal.kind === "interrupted") {
         if (scheduledWakeupParked && !abort.signal.aborted) {
@@ -384,8 +396,14 @@ export class Runner {
         await this.publishTerminal(this.adapter.completeTurn(turn));
       }
     } catch (err) {
-      providerErrorTotal.labels("exception").inc();
-      await this.publishTerminal(this.adapter.failTurn(turn, String(err)));
+      const reason =
+        err instanceof TranscriptEventSourceUnavailableError
+          ? err.reason
+          : "exception";
+      providerErrorTotal.labels(reason).inc();
+      await this.publishTerminal(
+        this.adapter.failTurn(turn, reason === "exception" ? String(err) : reason),
+      );
     } finally {
       endTimer();
       stopHeartbeat();
@@ -575,6 +593,10 @@ export function classifyAgyTerminal(
   },
   observedStepCount: number,
   aborted: boolean,
+  options: {
+    hasFinalAnswer?: boolean;
+    allowNoFinalAnswer?: boolean;
+  } = {},
 ): AgyTerminalClassification {
   if (result.killed || aborted) return { kind: "interrupted" };
   if (result.exitCode !== 0) {
@@ -582,6 +604,14 @@ export function classifyAgyTerminal(
       kind: "failed",
       metricReason: "nonzero_exit",
       reason: agyFailReason(result.exitCode, result.stderr),
+    };
+  }
+  const providerFailure = agyProviderFailureMetric(result);
+  if (providerFailure) {
+    return {
+      kind: "failed",
+      metricReason: providerFailure,
+      reason: agySemanticFailReason(providerFailure, result),
     };
   }
   if (observedStepCount <= 0) {
@@ -592,7 +622,30 @@ export function classifyAgyTerminal(
       reason: agySemanticFailReason(metricReason, result),
     };
   }
+  if (options.hasFinalAnswer === false && !options.allowNoFinalAnswer) {
+    const metricReason = "provider_no_final_answer";
+    return {
+      kind: "failed",
+      metricReason,
+      reason: agySemanticFailReason(metricReason, result),
+    };
+  }
   return { kind: "completed" };
+}
+
+function agyProviderFailureMetric(result: {
+  stdout: string;
+  stderr: string;
+}): string | null {
+  const text = `${result.stderr}\n${result.stdout}`.toLowerCase();
+  if (
+    text.includes("agent executor error") ||
+    text.includes("plannerresponse without modifiedresponse") ||
+    text.includes("unknown (code 500)")
+  ) {
+    return "provider_executor_error";
+  }
+  return null;
 }
 
 function agySemanticFailureMetric(result: {

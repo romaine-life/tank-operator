@@ -21,11 +21,13 @@
 // Mapping (docs/tank-conversation-protocol.md):
 //   USER_EXPLICIT / SYSTEM history    -> dropped (Tank owns user_message.created)
 //   first MODEL step                  -> turn.started
-//   PLANNER_RESPONSE + tool_calls     -> item.started (actor=tool) per call
-//   tool result step (CODE_ACTION,…)  -> item.completed/item.failed for the
-//                                        matching tool
-//   SYSTEM ERROR_MESSAGE              -> item.failed for the matching tool
-//   PLANNER_RESPONSE + content        -> assistant item.completed; last one is
+//   PLANNER_RESPONSE + DONE + tool_calls
+//                                      -> item.started (actor=tool) per call
+//   settled tool result step (CODE_ACTION,…)
+//                                      -> item.completed/item.failed for the
+//                                         matching tool
+//   settled SYSTEM ERROR_MESSAGE       -> item.failed for the matching tool
+//   PLANNER_RESPONSE + DONE + content  -> assistant item.completed; last one is
 //                                        the turn's final answer
 //   (turn end)                        -> turn.completed{final_answer, usage}
 
@@ -145,8 +147,6 @@ export class AntigravityTranscriptAdapter {
 
   /** Map one agy step to zero or more Tank events. */
   stepEvents(turn: AntigravityTurn, step: AgyStep): TankConversationEvent[] {
-    if (!this.markSeen(turn, step)) return [];
-
     const source = upper(step.source);
     const type = upper(step.type);
     // The user prompt is owned by Tank's durable user_message.created; agy's
@@ -177,18 +177,24 @@ export class AntigravityTranscriptAdapter {
     const toolCalls = Array.isArray(step.tool_calls) ? step.tool_calls : [];
 
     if (source === "SYSTEM" && type === "ERROR_MESSAGE") {
+      if (!isSettled(step)) return events;
+      if (!this.markSeen(turn, step)) return events;
       events.push(...this.closeToolResult(turn, step));
       return events;
     }
 
     if (type === "PLANNER_RESPONSE" && toolCalls.length > 0) {
+      if (!isDone(step)) return events;
+      if (!this.markSeen(turn, step)) return events;
       events.push(...this.openToolCalls(turn, step, toolCalls));
       return events;
     }
 
     if (type === "PLANNER_RESPONSE") {
-      // A planner step with prose and no tools: an assistant message. The
-      // last such step in a turn is the settled final answer.
+      if (!isCompleteAssistantResponse(step)) return events;
+      if (!this.markSeen(turn, step)) return events;
+      // A done planner step with prose and no tools: an assistant message.
+      // The last such step in a turn is the settled final answer.
       events.push(this.assistantMessage(turn, step));
       return events;
     }
@@ -197,6 +203,8 @@ export class AntigravityTranscriptAdapter {
     // result of a tool the planner invoked. Complete the matching open tool
     // item; if none is open (defensive — agy normally pairs them), surface a
     // self-contained completed tool item rather than silently dropping it.
+    if (!isSettled(step)) return events;
+    if (!this.markSeen(turn, step)) return events;
     events.push(...this.closeToolResult(turn, step));
     return events;
   }
@@ -230,6 +238,17 @@ export class AntigravityTranscriptAdapter {
     }) as TankConversationEvent;
     this.clearTurn(turn.turnID);
     return event;
+  }
+
+  /** True once this turn has assistant prose that can be promoted as final. */
+  hasFinalAnswer(turn: AntigravityTurn): boolean {
+    const final = this.finalAnswer.get(turn.turnID);
+    return (
+      Array.isArray(final?.timelineIDs) &&
+      final.timelineIDs.length > 0 &&
+      Array.isArray(final.providerItemIDs) &&
+      final.providerItemIDs.length > 0
+    );
   }
 
   /** Terminal event for a turn that failed (agy nonzero exit / error). */
@@ -401,10 +420,12 @@ export class AntigravityTranscriptAdapter {
     }) as TankConversationEvent;
     // The most recent assistant prose step is the running final-answer
     // candidate; it is promoted by completeTurn() at the turn terminal.
-    this.finalAnswer.set(turn.turnID, {
-      timelineIDs: [event.timeline_id as string],
-      providerItemIDs: [providerItemID],
-    });
+    if (text.trim()) {
+      this.finalAnswer.set(turn.turnID, {
+        timelineIDs: [event.timeline_id as string],
+        providerItemIDs: [providerItemID],
+      });
+    }
     return event;
   }
 
@@ -454,11 +475,33 @@ function keyBelongsToTurn(key: string, turnID: string): boolean {
 }
 
 function isToolResultFailure(step: AgyStep): boolean {
-  return upper(step.status) === "ERROR" || upper(step.type) === "ERROR_MESSAGE";
+  return (
+    upper(step.status) === "ERROR" ||
+    upper(step.status) === "TERMINAL_ERROR" ||
+    upper(step.type) === "ERROR_MESSAGE"
+  );
 }
 
 function resultErrorText(step: AgyStep): string {
   const text = stepText(step).trim();
   if (!text) return `${step.type ?? "tool"} failed`;
   return text.length > 1000 ? `${text.slice(0, 1000)}...` : text;
+}
+
+function isDone(step: AgyStep): boolean {
+  return upper(step.status) === "DONE";
+}
+
+function isSettled(step: AgyStep): boolean {
+  const status = upper(step.status);
+  return status === "DONE" || status === "ERROR" || status === "TERMINAL_ERROR";
+}
+
+function isCompleteAssistantResponse(step: AgyStep): boolean {
+  return (
+    upper(step.source) === "MODEL" &&
+    upper(step.type) === "PLANNER_RESPONSE" &&
+    isDone(step) &&
+    stepText(step).trim().length > 0
+  );
 }

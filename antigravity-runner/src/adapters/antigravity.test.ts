@@ -136,6 +136,118 @@ test("tool started/completed share a timeline id; final answer is the last prose
   assert.ok((completedTurn.payload as { usage?: unknown }).usage);
 });
 
+test("final answer state requires done non-empty assistant prose", () => {
+  const adapter = new AntigravityTranscriptAdapter("42");
+  const active = adapter.stepEvents(TURN, {
+    step_index: 1,
+    source: "MODEL",
+    type: "PLANNER_RESPONSE",
+    status: "IN_PROGRESS",
+    content: "Partial...",
+  });
+  assert.deepEqual(
+    active.map((event) => event.type),
+    ["turn.started"],
+  );
+  assert.equal(adapter.hasFinalAnswer(TURN), false);
+
+  const empty = adapter.stepEvents(TURN, {
+    step_index: 2,
+    source: "MODEL",
+    type: "PLANNER_RESPONSE",
+    status: "DONE",
+    content: "",
+  });
+  assert.deepEqual(empty, []);
+  assert.equal(adapter.hasFinalAnswer(TURN), false);
+
+  const done = adapter.stepEvents(TURN, {
+    step_index: 1,
+    source: "MODEL",
+    type: "PLANNER_RESPONSE",
+    status: "DONE",
+    content: "Done.",
+  });
+  assert.equal(done.length, 1);
+  assert.equal(done[0]!.type, "item.completed");
+  assert.equal(adapter.hasFinalAnswer(TURN), true);
+});
+
+test("in-progress tool call does not consume the later done transition", () => {
+  const adapter = new AntigravityTranscriptAdapter("42");
+  const active = adapter.stepEvents(TURN, {
+    step_index: 10,
+    source: "MODEL",
+    type: "PLANNER_RESPONSE",
+    status: "IN_PROGRESS",
+    tool_calls: [
+      {
+        name: "run_command",
+        args: { CommandLine: "pwd", toolSummary: "Run pwd" },
+      },
+    ],
+  });
+  assert.deepEqual(
+    active.map((event) => event.type),
+    ["turn.started"],
+  );
+
+  const done = adapter.stepEvents(TURN, {
+    step_index: 10,
+    source: "MODEL",
+    type: "PLANNER_RESPONSE",
+    status: "DONE",
+    tool_calls: [
+      {
+        name: "run_command",
+        args: { CommandLine: "pwd", toolSummary: "Run pwd" },
+      },
+    ],
+  });
+  assert.equal(done.length, 1);
+  assert.equal(done[0]!.type, "item.started");
+  assert.equal((done[0]!.payload as { title?: string }).title, "Run pwd");
+});
+
+test("in-progress tool result does not close the pending tool", () => {
+  const adapter = new AntigravityTranscriptAdapter("42");
+  adapter.stepEvents(TURN, {
+    step_index: 1,
+    source: "MODEL",
+    type: "PLANNER_RESPONSE",
+    status: "DONE",
+    tool_calls: [
+      {
+        name: "run_command",
+        args: { CommandLine: "pwd", toolSummary: "Run pwd" },
+      },
+    ],
+  });
+
+  const activeResult = adapter.stepEvents(TURN, {
+    step_index: 2,
+    source: "MODEL",
+    type: "RUN_COMMAND",
+    status: "IN_PROGRESS",
+    content: "partial output",
+  });
+  assert.deepEqual(activeResult, []);
+
+  const doneResult = adapter.stepEvents(TURN, {
+    step_index: 2,
+    source: "MODEL",
+    type: "RUN_COMMAND",
+    status: "DONE",
+    content: "final output",
+  });
+  assert.equal(doneResult.length, 1);
+  assert.equal(doneResult[0]!.type, "item.completed");
+  assert.equal(
+    (doneResult[0]!.payload as { text?: string }).text,
+    "final output",
+  );
+});
+
 test("re-feeding a step is idempotent (tailing a growing file)", () => {
   const adapter = new AntigravityTranscriptAdapter("42");
   const step: AgyStep = {
