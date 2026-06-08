@@ -28,8 +28,11 @@ FROM golang:1.26-alpine AS tank-supervisor-build
 WORKDIR /src
 COPY backend-go/go.mod backend-go/go.sum ./
 RUN go mod download
+COPY backend-go/internal ./internal
 COPY backend-go/cmd/tank-supervisor ./cmd/tank-supervisor
+COPY backend-go/cmd/antigravity-runner ./cmd/antigravity-runner
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tank-supervisor ./cmd/tank-supervisor
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/antigravity-cli-runner ./cmd/antigravity-runner
 
 # Stage 1: build the antigravity-runner (TS -> JS + production node_modules).
 # Build context is the repo root (docker-build-check.yaml sets context: .).
@@ -105,6 +108,7 @@ COPY runner-shared /opt/runner-shared
 # while SIGHUP restarts prefer /var/run/antigravity-runner-hot/dist when a
 # Glimmung hot-swap has populated it.
 COPY --from=tank-supervisor-build /out/tank-supervisor /app/tank-supervisor
+COPY --from=tank-supervisor-build /out/antigravity-cli-runner /opt/tank/antigravity-cli-runner
 RUN cat > /app/antigravity-runner-launch-binary.sh <<'EOF' && chmod 0755 /app/antigravity-runner-launch-binary.sh
 #!/bin/sh
 if [ ! -e /var/run/antigravity-runner-hot/node_modules ]; then

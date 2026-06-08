@@ -258,6 +258,7 @@ var noClaudeHijackModes = map[string]bool{
 	CodexAppServerMode:    true,
 	AntigravityConfigMode: true,
 	AntigravityGUIMode:    true,
+	AntigravityCLIMode:    true,
 }
 
 type ManifestOptions struct {
@@ -345,7 +346,7 @@ func IsCodexMode(mode string) bool {
 // credential-mint terminal mode and the GUI chat mode.
 func IsAntigravityMode(mode string) bool {
 	switch NormalizeSessionMode(mode) {
-	case AntigravityConfigMode, AntigravityGUIMode:
+	case AntigravityConfigMode, AntigravityGUIMode, AntigravityCLIMode:
 		return true
 	default:
 		return false
@@ -632,7 +633,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Codex GUI modes use codex-runner. Both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
 	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
-	wantAntigravityRunner := mode == AntigravityGUIMode
+	wantAntigravityRunner := mode == AntigravityGUIMode || mode == AntigravityCLIMode
 	wantSDKRunner := wantAgentRunner || wantCodexRunner || wantAntigravityRunner
 	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
@@ -759,7 +760,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// below (agy runs in that container, so SSL_CERT_FILE belongs there, not on
 	// the sandbox-agent container). Only the GUI mode is hijacked;
 	// antigravity_config must reach real Google to complete the login.
-	if mode == AntigravityGUIMode && opts.AntigravityAPIProxyIP != "" {
+	if (mode == AntigravityGUIMode || mode == AntigravityCLIMode) && opts.AntigravityAPIProxyIP != "" {
 		hostAliases = append(hostAliases, map[string]any{
 			"ip":        opts.AntigravityAPIProxyIP,
 			"hostnames": []any{"cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"},
@@ -1158,11 +1159,15 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "GLIMMUNG_SUPERVISOR_RESTART_ENABLED", "value": "true"},
 			)
 		}
+		command := []any{"bash", "/opt/tank/antigravity-runner-launch.sh"}
+		if mode == AntigravityCLIMode {
+			command = []any{"/opt/tank/antigravity-cli-runner"}
+		}
 		antigravityRunnerContainer := map[string]any{
 			"name":            "antigravity-runner",
 			"image":           sessionImage,
 			"imagePullPolicy": "Always",
-			"command":         []any{"bash", "/opt/tank/antigravity-runner-launch.sh"},
+			"command":         command,
 			"env":             antigravityRunnerEnv,
 			"volumeMounts":    runnerVolumeMounts,
 			"ports": []any{
