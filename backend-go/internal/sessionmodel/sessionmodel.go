@@ -1084,10 +1084,11 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// leaf via SSL_CERT_FILE (a system-bundle + oauth-gateway-ca concat built
 	// by the launch script), not NODE_EXTRA_CA_CERTS.
 	if wantAntigravityRunner {
-		// The runner drives agy + the session bus. agy owns its MCP config, so
-		// Antigravity still does not consume Tank's mcp.json, but the runner
-		// mounts the session-config bundle to hydrate Tank skills and expand
-		// skill turns into explicit prompt context for Gemini.
+		// The runner drives agy + the session bus. The launch script copies
+		// Tank's canonical mcp.json into agy's native
+		// ~/.gemini/config/mcp_config.json before the first turn, and mounts
+		// the session-config bundle to hydrate Tank skills and expand skill
+		// turns into explicit prompt context for Gemini.
 		runnerVolumeMounts := []any{
 			map[string]any{"name": "workspace", "mountPath": "/workspace"},
 			map[string]any{"name": "session-config", "mountPath": SessionConfigDirMount, "readOnly": true},

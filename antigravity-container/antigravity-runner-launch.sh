@@ -17,6 +17,7 @@
 set -euo pipefail
 
 AGY_HOME="${HOME}/.gemini/antigravity-cli"
+TANK_SESSION_CONFIG_DIR="${TANK_SESSION_CONFIG_DIR:-/opt/tank/session-config}"
 mkdir -p "${AGY_HOME}"
 
 # Placeholder OAuth token. access_token == the proxy's injection discriminator
@@ -28,6 +29,28 @@ cat > "${AGY_HOME}/antigravity-oauth-token" <<'EOF'
 {"token":{"access_token":"managed-by-tank-operator","token_type":"Bearer","expiry":"2099-01-01T00:00:00Z"},"auth_method":"consumer"}
 EOF
 chmod 600 "${AGY_HOME}/antigravity-oauth-token"
+
+# Antigravity's current CLI config root is ~/.gemini/config. On first run agy
+# migrates from ~/.gemini/antigravity-cli into that root, but a prewritten
+# mcp_config.json there is preserved and loaded before tool discovery. Tank's
+# canonical MCP surface is the chart-managed mcp.json, so fail the runner if it
+# is absent instead of starting an agent with silently missing MCP tools.
+MCP_SOURCE="${TANK_SESSION_CONFIG_DIR}/mcp.json"
+AGY_MCP_CONFIG_DIR="${HOME}/.gemini/config"
+AGY_MCP_CONFIG="${AGY_MCP_CONFIG_DIR}/mcp_config.json"
+if [ ! -s "${MCP_SOURCE}" ]; then
+  echo "antigravity-runner-launch: required MCP config missing or empty at '${MCP_SOURCE}'" >&2
+  exit 1
+fi
+if ! jq -e 'has("mcpServers") and (.mcpServers | type == "object")' "${MCP_SOURCE}" >/dev/null; then
+  echo "antigravity-runner-launch: MCP config at '${MCP_SOURCE}' is not a valid mcpServers document" >&2
+  exit 1
+fi
+mkdir -p "${AGY_MCP_CONFIG_DIR}"
+tmp_mcp="${AGY_MCP_CONFIG}.tmp.$$"
+jq '.' "${MCP_SOURCE}" > "${tmp_mcp}"
+chmod 600 "${tmp_mcp}"
+mv "${tmp_mcp}" "${AGY_MCP_CONFIG}"
 
 # Trust the antigravity-api-proxy leaf. SSL_CERT_FILE replaces Go's default
 # bundle, so we must concatenate the system roots (for any genuine TLS agy does
@@ -46,8 +69,8 @@ else
   echo "antigravity-runner-launch: no oauth-gateway CA at '${CA}'; agy will not trust the proxy leaf" >&2
 fi
 
-if [ -f /opt/tank/session-config/install-tank-skills.sh ]; then
-  sh /opt/tank/session-config/install-tank-skills.sh || true
+if [ -f "${TANK_SESSION_CONFIG_DIR}/install-tank-skills.sh" ]; then
+  sh "${TANK_SESSION_CONFIG_DIR}/install-tank-skills.sh" || true
 fi
 
 # In test-slot mode the pod spec sets GLIMMUNG_SUPERVISOR_CHILD, and the
