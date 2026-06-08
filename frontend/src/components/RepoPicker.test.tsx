@@ -83,28 +83,17 @@ test("the + affordance adds a repo additively without Shift", () => {
   expect(onSelect).toHaveBeenCalledWith("romaine-life/glimmung", "additive");
 });
 
-test("an already-staged shortcut stays selectable; its + is disabled", () => {
-  const { onSelect } = setup({
+test("an already-staged shortcut does not appear in the pinned preview list", () => {
+  setup({
     pinned: ["romaine-life/tank-operator"],
     selected: ["romaine-life/tank-operator"],
   });
 
-  const chip = screen.getByRole("button", {
-    name: /Select pinned repository 1: romaine-life\/tank-operator/,
-  });
-  // Staged repos read as selected but remain clickable: a plain click narrows
-  // the selection back down to just this repo.
-  expect(chip).toBeEnabled();
-  expect(chip).toHaveAttribute("aria-pressed", "true");
-  fireEvent.click(chip);
-  expect(onSelect).toHaveBeenCalledWith("romaine-life/tank-operator", "exclusive");
-
-  // The "+" is disabled because additive-adding a staged repo is a no-op.
   expect(
-    screen.getByRole("button", {
-      name: "romaine-life/tank-operator already selected",
+    screen.queryByRole("button", {
+      name: /Select pinned repository \d+: romaine-life\/tank-operator/,
     }),
-  ).toBeDisabled();
+  ).toBeNull();
 });
 
 test("panel suggestion chips follow the same exclusive/additive model", () => {
@@ -135,6 +124,13 @@ test("panel suggestion chips follow the same exclusive/additive model", () => {
   expect(stagedChip).toBeEnabled();
   fireEvent.click(stagedChip);
   expect(onSelect).toHaveBeenLastCalledWith("romaine-life/tank-operator", "exclusive");
+
+  // The "+" button is disabled because additive-adding a staged repo is a no-op.
+  expect(
+    screen.getByRole("button", {
+      name: "romaine-life/tank-operator already selected",
+    }),
+  ).toBeDisabled();
 });
 
 test("the manual typed-entry Add stays a distinct additive action", () => {
