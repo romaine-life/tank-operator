@@ -182,3 +182,40 @@ Evidence:
 - Metrics: `tank_api_proxy_*{provider="antigravity"}` (scraped via the
   `tank-api-proxy` ServiceMonitor; the provider-generic `TankApiProxy*` alerts
   cover it).
+
+## Antigravity native MCP config
+
+Status: in progress
+
+Intent:
+Give `antigravity_gui` the same Tank MCP surface as Claude and Codex GUI
+sessions. The pod-level `mcp-auth-proxy` sidecar and chart-managed
+`mcp.json` are not sufficient by themselves: `agy` discovers MCP servers from
+its native config file, `~/.gemini/config/mcp_config.json`.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+
+Contract impact:
+- `antigravity_gui` runner startup copies the mounted
+  `/opt/tank/session-config/mcp.json` into
+  `$HOME/.gemini/config/mcp_config.json` before the first `agy` turn.
+- The launch script validates the source is a JSON document with an
+  `mcpServers` object and fails the runner if the mounted config is missing or
+  malformed. Starting an Antigravity runner without MCP tools is a startup
+  failure, not a degraded mode.
+- The runtime authority remains the chart-managed session config plus the
+  `mcp-auth-proxy` sidecar. No MCP bearer or upstream credential is written into
+  Antigravity's config; it contains only localhost proxy URLs.
+
+Evidence:
+- Live-binary proof against the pinned `agy` image: with only
+  `~/.gemini/config/mcp_config.json` populated in an isolated HOME, `agy`
+  initialized a fake HTTP MCP server and issued `tools/list`.
+- `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
+  (`TestAntigravityRunnerLaunchSeedsNativeMCPConfig` and
+  `TestAntigravityRunnerLaunchFailsWithoutMCPConfig` /
+  `TestAntigravityRunnerLaunchFailsWithMalformedMCPConfig`) asserts the launch
+  script materializes the native MCP config and fails before runner exec when
+  `mcp.json` is absent or malformed.

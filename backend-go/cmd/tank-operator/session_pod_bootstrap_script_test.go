@@ -214,13 +214,143 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 			}
 
 			if tc.mode == "claude_gui" {
-				// Defensive: no-seeding modes really must not write to HOME.
-				entries, _ := os.ReadDir(home)
-				if len(entries) > 0 {
-					t.Errorf("non-wizard mode wrote to HOME: %v", entries)
+				// Non-wizard modes still get the shared git template
+				// bootstrap. They must not receive provider wizard config.
+				for _, suffix := range []string{
+					".codex/config.toml",
+					".claude/settings.json",
+					".claude.json",
+				} {
+					path := filepath.Join(home, suffix)
+					if _, err := os.Stat(path); !os.IsNotExist(err) {
+						t.Errorf("non-wizard mode wrote provider seed %s: %v", path, err)
+					}
 				}
 			}
 		})
+	}
+}
+
+func TestAntigravityRunnerLaunchSeedsNativeMCPConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("antigravity launch script test runs on POSIX only")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("antigravity launch script requires jq")
+	}
+
+	scriptPath, err := filepath.Abs("../../../antigravity-container/antigravity-runner-launch.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	home := t.TempDir()
+	configDir := t.TempDir()
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatalf("mkdir fake bin: %v", err)
+	}
+	nodeLog := filepath.Join(t.TempDir(), "node.log")
+
+	if err := os.WriteFile(filepath.Join(configDir, "mcp.json"), []byte(`{
+  "mcpServers": {
+    "glimmung": {"type": "http", "url": "http://127.0.0.1:9995/"},
+    "github": {"type": "http", "url": "http://127.0.0.1:9992/"}
+  }
+}`), 0o644); err != nil {
+		t.Fatalf("write mcp config: %v", err)
+	}
+	writeExecutable(t, filepath.Join(fakeBin, "node"), `#!/bin/sh
+printf '%s\n' "$*" > "$FAKE_NODE_LOG"
+exit 0
+`)
+
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TANK_SESSION_CONFIG_DIR="+configDir,
+		"FAKE_NODE_LOG="+nodeLog,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed: %v\noutput:\n%s", err, string(out))
+	}
+
+	assertFileContains(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"), `"glimmung"`)
+	assertFileContains(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"), `"http://127.0.0.1:9995/"`)
+	assertFileContains(t, filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"), `"access_token":"managed-by-tank-operator"`)
+	assertFileContains(t, nodeLog, "/opt/antigravity-runner/dist/index.js")
+}
+
+func TestAntigravityRunnerLaunchFailsWithoutMCPConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("antigravity launch script test runs on POSIX only")
+	}
+
+	scriptPath, err := filepath.Abs("../../../antigravity-container/antigravity-runner-launch.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	home := t.TempDir()
+	configDir := t.TempDir()
+	fakeBin := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
+		t.Fatalf("mkdir fake bin: %v", err)
+	}
+	nodeLog := filepath.Join(t.TempDir(), "node.log")
+	writeExecutable(t, filepath.Join(fakeBin, "node"), `#!/bin/sh
+printf '%s\n' "$*" > "$FAKE_NODE_LOG"
+exit 0
+`)
+
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+		"TANK_SESSION_CONFIG_DIR="+configDir,
+		"FAKE_NODE_LOG="+nodeLog,
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("script unexpectedly succeeded without mcp.json\noutput:\n%s", string(out))
+	}
+	if !strings.Contains(string(out), "required MCP config missing or empty") {
+		t.Fatalf("script output missing MCP failure reason:\n%s", string(out))
+	}
+	if _, err := os.Stat(nodeLog); !os.IsNotExist(err) {
+		t.Fatalf("node should not run when MCP config is missing, stat err: %v", err)
+	}
+}
+
+func TestAntigravityRunnerLaunchFailsWithMalformedMCPConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("antigravity launch script test runs on POSIX only")
+	}
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("antigravity launch script requires jq")
+	}
+
+	scriptPath, err := filepath.Abs("../../../antigravity-container/antigravity-runner-launch.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	home := t.TempDir()
+	configDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(configDir, "mcp.json"), []byte(`{"notMcpServers":{}}`), 0o644); err != nil {
+		t.Fatalf("write malformed mcp config: %v", err)
+	}
+
+	cmd := exec.Command("bash", scriptPath)
+	cmd.Env = append(os.Environ(),
+		"HOME="+home,
+		"TANK_SESSION_CONFIG_DIR="+configDir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("script unexpectedly succeeded with malformed mcp.json\noutput:\n%s", string(out))
+	}
+	if !strings.Contains(string(out), "is not a valid mcpServers document") {
+		t.Fatalf("script output missing malformed MCP reason:\n%s", string(out))
 	}
 }
 
