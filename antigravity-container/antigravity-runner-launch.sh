@@ -18,7 +18,23 @@ set -euo pipefail
 
 AGY_HOME="${HOME}/.gemini/antigravity-cli"
 TANK_SESSION_CONFIG_DIR="${TANK_SESSION_CONFIG_DIR:-/opt/tank/session-config}"
-mkdir -p "${AGY_HOME}"
+mkdir -p "${AGY_HOME}/cache"
+mkdir -p "${HOME}/.gemini/config"
+touch "${HOME}/.gemini/config/.migrated"
+
+cat > "${AGY_HOME}/settings.json" <<'EOF'
+{
+  "colorScheme": "dark"
+}
+EOF
+
+cat > "${AGY_HOME}/cache/onboarding.json" <<'EOF'
+{
+  "consumerOnboardingComplete": true,
+  "enterpriseOnboardingComplete": false,
+  "onboardingComplete": true
+}
+EOF
 
 # Placeholder OAuth token. access_token == the proxy's injection discriminator
 # ("Bearer managed-by-tank-operator"); the far-future expiry stops agy from
