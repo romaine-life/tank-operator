@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -138,7 +139,24 @@ func main() {
 	defer func() { _ = ptmx.Close() }()
 
 	go func() {
-		io.Copy(os.Stdout, ptmx)
+		buf := make([]byte, 1024)
+		for {
+			n, err := ptmx.Read(buf)
+			if err != nil {
+				break
+			}
+			os.Stdout.Write(buf[:n])
+			if bytes.Contains(buf[:n], []byte("Terms of Service")) {
+				slog.Info("Detected Terms of Service screen, auto-accepting...")
+				// Press Next (\r), wait a beat, then press Right Arrow (\x1b[C) to select Done, then Enter (\r)
+				go func() {
+					time.Sleep(500 * time.Millisecond)
+					ptmx.WriteString("\r")
+					time.Sleep(500 * time.Millisecond)
+					ptmx.WriteString("\x1b[C\r")
+				}()
+			}
+		}
 	}()
 
 	var wg sync.WaitGroup
