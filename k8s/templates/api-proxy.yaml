@@ -668,6 +668,9 @@ spec:
   dnsNames:
     - cloudcode-pa.googleapis.com
     - daily-cloudcode-pa.googleapis.com
+    - play.googleapis.com
+    - www.googleapis.com
+    - oauth2.googleapis.com
   issuerRef:
     name: claude-oauth-ca-issuer
     kind: Issuer
@@ -758,11 +761,55 @@ data:
                       name: cloudcode
                       virtual_hosts:
                         - name: cloudcode
-                          domains: ["*"]
+                          domains:
+                            - "cloudcode-pa.googleapis.com"
+                            - "daily-cloudcode-pa.googleapis.com"
                           routes:
                             - match: { prefix: "/" }
                               route:
                                 cluster: cloudcode_api
+                                timeout: 600s
+                                retry_policy:
+                                  retry_on: "retriable-status-codes"
+                                  retriable_status_codes: [401]
+                                  num_retries: 1
+                                  per_try_timeout: 600s
+                                auto_host_rewrite: true
+                        - name: www_google
+                          domains:
+                            - "www.googleapis.com"
+                          routes:
+                            - match: { prefix: "/" }
+                              route:
+                                cluster: www_api
+                                timeout: 600s
+                                retry_policy:
+                                  retry_on: "retriable-status-codes"
+                                  retriable_status_codes: [401]
+                                  num_retries: 1
+                                  per_try_timeout: 600s
+                                auto_host_rewrite: true
+                        - name: play_google
+                          domains:
+                            - "play.googleapis.com"
+                          routes:
+                            - match: { prefix: "/" }
+                              route:
+                                cluster: play_api
+                                timeout: 600s
+                                retry_policy:
+                                  retry_on: "retriable-status-codes"
+                                  retriable_status_codes: [401]
+                                  num_retries: 1
+                                  per_try_timeout: 600s
+                                auto_host_rewrite: true
+                        - name: oauth2_google
+                          domains:
+                            - "oauth2.googleapis.com"
+                          routes:
+                            - match: { prefix: "/" }
+                              route:
+                                cluster: oauth2_api
                                 timeout: 600s
                                 retry_policy:
                                   retry_on: "retriable-status-codes"
@@ -795,6 +842,75 @@ data:
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
               sni: cloudcode-pa.googleapis.com
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /etc/ssl/certs/ca-certificates.crt
+        - name: www_api
+          type: LOGICAL_DNS
+          connect_timeout: 5s
+          dns_lookup_family: V4_ONLY
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: www_api
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: www.googleapis.com
+                          port_value: 443
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: www.googleapis.com
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /etc/ssl/certs/ca-certificates.crt
+        - name: play_api
+          type: LOGICAL_DNS
+          connect_timeout: 5s
+          dns_lookup_family: V4_ONLY
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: play_api
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: play.googleapis.com
+                          port_value: 443
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: play.googleapis.com
+              common_tls_context:
+                validation_context:
+                  trusted_ca:
+                    filename: /etc/ssl/certs/ca-certificates.crt
+        - name: oauth2_api
+          type: LOGICAL_DNS
+          connect_timeout: 5s
+          dns_lookup_family: V4_ONLY
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: oauth2_api
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: oauth2.googleapis.com
+                          port_value: 443
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.UpstreamTlsContext
+              sni: oauth2.googleapis.com
               common_tls_context:
                 validation_context:
                   trusted_ca:

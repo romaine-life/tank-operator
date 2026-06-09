@@ -763,7 +763,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	if (mode == AntigravityGUIMode || mode == AntigravityCLIMode) && opts.AntigravityAPIProxyIP != "" {
 		hostAliases = append(hostAliases, map[string]any{
 			"ip":        opts.AntigravityAPIProxyIP,
-			"hostnames": []any{"cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"},
+			"hostnames": []any{"cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com", "play.googleapis.com", "www.googleapis.com", "oauth2.googleapis.com"},
 		})
 		if mode == AntigravityCLIMode && opts.OAuthGatewayCAConfigMap != "" {
 			claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
