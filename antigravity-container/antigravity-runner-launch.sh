@@ -20,7 +20,7 @@ AGY_HOME="${HOME}/.gemini/antigravity-cli"
 TANK_SESSION_CONFIG_DIR="${TANK_SESSION_CONFIG_DIR:-/opt/tank/session-config}"
 mkdir -p "${AGY_HOME}/cache"
 mkdir -p "${HOME}/.gemini/config"
-touch "${HOME}/.gemini/config/.migrated"
+
 
 cat > "${AGY_HOME}/settings.json" <<'EOF'
 {
