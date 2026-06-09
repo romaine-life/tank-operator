@@ -1160,9 +1160,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			)
 		}
 		command := []any{"bash", "/opt/tank/antigravity-runner-launch.sh"}
-		if mode == AntigravityCLIMode {
-			command = []any{"/opt/tank/antigravity-cli-runner"}
-		}
 		antigravityRunnerContainer := map[string]any{
 			"name":            "antigravity-runner",
 			"image":           sessionImage,

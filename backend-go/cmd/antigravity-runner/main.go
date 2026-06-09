@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/creack/pty"
+	"github.com/fsnotify/fsnotify"
 	"io"
 	"log/slog"
 	"os"
@@ -62,10 +64,11 @@ type finalAnswer struct {
 }
 
 type turnRun struct {
-	builder     eventBuilder
-	publish     func(map[string]any) error
-	turnID      string
-	clientNonce string
+	builder      eventBuilder
+	publish      func(map[string]any) error
+	turnID       string
+	clientNonce  string
+	turnComplete chan struct{}
 
 	mu             sync.Mutex
 	started        bool
@@ -122,12 +125,27 @@ func main() {
 		return publishEvent(nc, cfg.sessionStorageKey, event)
 	}
 	active := &activeProcess{}
+	agyArgs := []string{"--dangerously-skip-permissions"}
+	runCmd := exec.Command("agy", agyArgs...)
+	runCmd.Dir = cfg.workspace
+	runCmd.Env = os.Environ()
+
+	ptmx, err := pty.Start(runCmd)
+	if err != nil {
+		slog.Error("Failed to start agy pty", "error", err)
+		os.Exit(1)
+	}
+	defer func() { _ = ptmx.Close() }()
+
+	go func() {
+		io.Copy(io.Discard, ptmx)
+	}()
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		runDataConsumer(ctx, js, cfg, builder, publisher, active)
+		runDataConsumer(ctx, js, cfg, builder, publisher, active, ptmx)
 	}()
 	go func() {
 		defer wg.Done()
@@ -197,7 +215,7 @@ func connectNATS(cfg runnerConfig) (*nats.Conn, error) {
 	return nats.Connect(cfg.natsURL, opts...)
 }
 
-func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess) {
+func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, ptmx *os.File) {
 	commandSubject := sessionbus.CommandSubject(cfg.sessionStorageKey, provider)
 	consumerName := "antigravity_cli_data_" + sessionbus.StorageToken(cfg.sessionStorageKey)
 
@@ -231,7 +249,7 @@ func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConf
 		conversationMu.Lock()
 		continueConversation := conversationStarted
 		conversationMu.Unlock()
-		started, err := handleSubmitTurn(ctx, cfg, builder, publisher, active, msg, command, continueConversation)
+		started, err := handleSubmitTurn(ctx, cfg, builder, publisher, active, msg, command, continueConversation, ptmx)
 		if started {
 			conversationMu.Lock()
 			conversationStarted = true
@@ -290,7 +308,7 @@ func runControlConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerC
 	consumeCtx.Stop()
 }
 
-func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, msg jetstream.Msg, command sessionbus.Command, continueConversation bool) (bool, error) {
+func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, msg jetstream.Msg, command sessionbus.Command, continueConversation bool, ptmx *os.File) (bool, error) {
 	turnID := command.TurnID
 	if turnID == "" {
 		turnID = "turn_" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -308,39 +326,22 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 	stopHeartbeat := startHeartbeat(ctx, msg)
 	defer stopHeartbeat()
 
-	args := []string{"--dangerously-skip-permissions"}
-	if continueConversation {
-		args = append(args, "--continue")
-	}
-	if command.Model != "" {
-		args = append(args, "--model", command.Model)
-	}
-	args = append(args, "-p", command.Prompt)
-	cmd := exec.CommandContext(ctx, "agy", args...)
-	cmd.Dir = cfg.workspace
-	cmd.Env = os.Environ()
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
-
-	if err := cmd.Start(); err != nil {
+	_, err := ptmx.WriteString(command.Prompt + "\n")
+	if err != nil {
 		_ = publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnFailed), "failed_to_start"))
 		_ = msg.Ack()
 		return false, nil
 	}
-	active.set(cmd, turnID)
-	defer active.clear(cmd)
-
-	logProcessOutput(ctx, "stdout", stdout)
-	logProcessOutput(ctx, "stderr", stderr)
 
 	doneTailing := make(chan struct{})
 	tailErrors := make(chan error, 1)
 	go tailTranscripts(ctx, cfg.agyHome, run, doneTailing, tailErrors)
 
-	waitErr := cmd.Wait()
+	<-run.turnComplete
+	var waitErr error
 	close(doneTailing)
 	tailErr := <-tailErrors
-	interrupted := active.wasInterrupted(turnID)
+	interrupted := false
 
 	var terminalErr error
 	switch {
@@ -439,11 +440,12 @@ func (a *activeProcess) wasInterrupted(turnID string) bool {
 
 func newTurnRun(builder eventBuilder, publisher func(map[string]any) error, turnID, clientNonce string) *turnRun {
 	return &turnRun{
-		builder:     builder,
-		publish:     publisher,
-		turnID:      turnID,
-		clientNonce: clientNonce,
-		seen:        map[string]struct{}{},
+		builder:      builder,
+		publish:      publisher,
+		turnID:       turnID,
+		clientNonce:  clientNonce,
+		turnComplete: make(chan struct{}),
+		seen:         map[string]struct{}{},
 	}
 }
 
@@ -497,6 +499,7 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 	r.mu.Lock()
 	r.final = finalAnswer{timelineID: timelineID, providerItemID: providerID}
 	r.mu.Unlock()
+	close(r.turnComplete)
 	return nil
 }
 
@@ -678,6 +681,26 @@ func tailTranscripts(ctx context.Context, agyHome string, run *turnRun, done <-c
 	defer close(errorsOut)
 	offsets := map[string]int64{}
 	brainDir := filepath.Join(agyHome, "brain")
+
+	os.MkdirAll(brainDir, 0755)
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		errorsOut <- err
+		return
+	}
+	defer watcher.Close()
+
+	watchAll := func(dir string) {
+		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.IsDir() {
+				watcher.Add(path)
+			}
+			return nil
+		})
+	}
+	watchAll(brainDir)
+
 	_ = filepath.Walk(brainDir, func(path string, info os.FileInfo, err error) error {
 		if err == nil && !info.IsDir() && strings.HasSuffix(path, "transcript_full.jsonl") {
 			offsets[path] = info.Size()
@@ -685,20 +708,36 @@ func tailTranscripts(ctx context.Context, agyHome string, run *turnRun, done <-c
 		return nil
 	})
 
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
+	sweepTranscripts(brainDir, offsets, run)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-done:
-			errorsOut <- sweepTranscripts(brainDir, offsets, run)
+			if err := sweepTranscripts(brainDir, offsets, run); err != nil {
+				errorsOut <- err
+			}
 			return
-		case <-ticker.C:
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Has(fsnotify.Create) {
+				info, err := os.Stat(event.Name)
+				if err == nil && info.IsDir() {
+					watchAll(event.Name)
+				}
+			}
 			if err := sweepTranscripts(brainDir, offsets, run); err != nil {
 				errorsOut <- err
 				return
 			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			slog.Error("fsnotify error", "error", err)
 		}
 	}
 }
