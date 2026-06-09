@@ -1349,7 +1349,7 @@ func TestAnswerSessionTurnRejectsEmptyAnswers(t *testing.T) {
 
 func TestEnqueueSessionTurnRejectsMissingSDKRunner(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-65", "65", "user@example.com", sessionmodel.ClaudeGUIMode, "claude"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-65", "65", "user@example.com", sessionmodel.ClaudeGUIMode, "sandbox"))
 	req := authedTurnRequest(t, "65", `{"client_nonce":"turn-no-runner","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 

@@ -171,7 +171,7 @@ func TestPodManifestSpireLensCapabilityWiresTailnetMCP(t *testing.T) {
 	}
 	spec := manifest["spec"].(map[string]any)
 	containers := spec["containers"].([]any)
-	claude := findContainer(t, containers, "claude")
+	claude := findContainer(t, containers, "sandbox")
 	claudeEnv := containerEnv(claude)
 	if got, want := claudeEnv["SPIRELENS_MCP_ENABLED"], "true"; got != want {
 		t.Fatalf("SPIRELENS_MCP_ENABLED = %v, want %q", got, want)
@@ -247,7 +247,7 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 		t.Fatalf("mcp-auth-proxy SESSION_SCOPE fieldPath = %v, want %q", got, want)
 	}
 	claude := containers[1].(map[string]any)
-	if got, want := claude["name"], "claude"; got != want {
+	if got, want := claude["name"], "sandbox"; got != want {
 		t.Fatalf("main container name = %v, want %q", got, want)
 	}
 	if got, want := claude["image"], "codex-image"; got != want {
@@ -306,7 +306,7 @@ func TestPodManifestAntigravityConfigUsesGlibcImageWithoutSidecar(t *testing.T) 
 		t.Fatalf("container count = %d, want %d (claude only; no mcp-auth-proxy, no runner)", got, want)
 	}
 	claude := containers[0].(map[string]any)
-	if got, want := claude["name"], "claude"; got != want {
+	if got, want := claude["name"], "sandbox"; got != want {
 		t.Fatalf("sole container name = %v, want %q", got, want)
 	}
 	// Stamps the dedicated glibc image, not SessionImage/CodexSessionImage.
@@ -503,7 +503,7 @@ func TestPodManifestCodexUsesAPIProxyWithoutCredentialSecret(t *testing.T) {
 	assertVolume(t, spec["volumes"].([]any), "oauth-gateway-ca")
 
 	containers := spec["containers"].([]any)
-	claudeEnv := containerEnv(findContainer(t, containers, "claude"))
+	claudeEnv := containerEnv(findContainer(t, containers, "sandbox"))
 	if got, want := claudeEnv["CODEX_CA_CERTIFICATE"], "/etc/oauth-gateway-ca/ca.crt"; got != want {
 		t.Fatalf("claude CODEX_CA_CERTIFICATE = %v, want %q", got, want)
 	}
@@ -729,7 +729,7 @@ func containerImages(containers []any) map[string]any {
 func claudeEnv(containers []any) map[string]any {
 	for _, item := range containers {
 		container := item.(map[string]any)
-		if container["name"] != "claude" {
+		if container["name"] != "sandbox" {
 			continue
 		}
 		return containerEnv(container)
@@ -1101,7 +1101,7 @@ func containerEnv(container map[string]any) map[string]any {
 func claudeCommand(containers []any) []any {
 	for _, item := range containers {
 		container := item.(map[string]any)
-		if container["name"] == "claude" {
+		if container["name"] == "sandbox" {
 			return container["command"].([]any)
 		}
 	}

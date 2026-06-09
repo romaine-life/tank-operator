@@ -300,7 +300,7 @@ func readySessionPod(name string) *corev1.Pod {
 				{Type: corev1.ContainersReady, Status: corev1.ConditionTrue},
 			},
 			ContainerStatuses: []corev1.ContainerStatus{
-				{Name: "claude", Ready: true, RestartCount: 1},
+				{Name: "sandbox", Ready: true, RestartCount: 1},
 			},
 		},
 	}

@@ -27,13 +27,13 @@
       "TANK_SESSION_MODE": "codex_gui"
     },
     "container_images": {
-      "claude": "romainecr.azurecr.io/codex-container:latest",
+      "sandbox": "romainecr.azurecr.io/codex-container:latest",
       "codex-runner": "romainecr.azurecr.io/codex-container:latest",
       "mcp-auth-proxy": "romainecr.azurecr.io/codex-container:latest"
     },
     "container_names": [
       "mcp-auth-proxy",
-      "claude",
+      "sandbox",
       "codex-runner"
     ],
     "input": {

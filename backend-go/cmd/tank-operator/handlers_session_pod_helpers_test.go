@@ -38,7 +38,7 @@ func activitySessionPod(id, owner string) *corev1.Pod {
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{
 				{Name: "mcp-auth-proxy"},
-				{Name: "claude", Ports: []corev1.ContainerPort{{Name: "sandbox-agent", ContainerPort: 2468}}},
+				{Name: "sandbox", Ports: []corev1.ContainerPort{{Name: "sandbox-agent", ContainerPort: 2468}}},
 				{Name: "codex-runner"},
 			},
 		},
@@ -51,7 +51,7 @@ func activitySessionPod(id, owner string) *corev1.Pod {
 			}},
 			ContainerStatuses: []corev1.ContainerStatus{
 				{Name: "mcp-auth-proxy", Ready: true},
-				{Name: "claude", Ready: true},
+				{Name: "sandbox", Ready: true},
 				{Name: "codex-runner", Ready: true},
 			},
 		},

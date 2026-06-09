@@ -340,7 +340,7 @@ func TestManagerCreateThreadsSpireLensCapabilityIntoPodManifest(t *testing.T) {
 	if got, want := pod.Annotations[capabilitiesAnnotation], `["spirelens_mcp"]`; got != want {
 		t.Fatalf("pod capabilities annotation = %q, want %q", got, want)
 	}
-	claudeEnv := containerEnvMap(t, pod, "claude")
+	claudeEnv := containerEnvMap(t, pod, "sandbox")
 	if got, want := claudeEnv["SPIRELENS_MCP_ENABLED"], "true"; got != want {
 		t.Fatalf("SPIRELENS_MCP_ENABLED = %q, want %q", got, want)
 	}

@@ -775,7 +775,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	claudeContainer := map[string]any{
-		"name":            "claude",
+		"name":            "sandbox",
 		"image":           sessionImage,
 		"imagePullPolicy": "Always",
 		"command": []any{
