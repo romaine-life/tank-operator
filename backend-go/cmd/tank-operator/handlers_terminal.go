@@ -58,7 +58,7 @@ func cliProcessLaunchForMode(mode string) sandboxProcessCreate {
 		// save-credentials button harvests.
 		base.Args = []string{"-lc", "agy; exec bash"}
 	case sessionmodel.AntigravityCLIMode:
-		base.Args = []string{"-lc", "agy -p; exec bash"}
+		base.Args = []string{"-lc", "agy; exec bash"}
 	default:
 		base.Args = []string{"-l"}
 	}
