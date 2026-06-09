@@ -1,3 +1,12 @@
+/*
+WARNING: TestPTYRunnerArchitectureConstraint is an explicit structural constraint check.
+DO NOT remove or disable this test, and DO NOT modify it to permit websocket, gRPC,
+or localharness references/imports in main.go.
+
+This test is designed to prevent agents and developers from short-circuiting the PTY wrapper
+architecture (which is a hard production requirement due to agy's CLI-only nature and consumer OAuth).
+*/
+
 package main
 
 import (
