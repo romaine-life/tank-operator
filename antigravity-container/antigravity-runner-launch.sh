@@ -22,8 +22,27 @@ mkdir -p "${AGY_HOME}/cache"
 mkdir -p "${HOME}/.gemini/config"
 mkdir -p "${HOME}/.gemini/cache"
 
-touch "${HOME}/.gemini/config/.migrated"
+# Seed legacy directory (so interactive CLI finds its UI theme/onboarding)
+cat > "${AGY_HOME}/settings.json" <<'EOF'
+{
+  "colorScheme": "dark"
+}
+EOF
 
+cat > "${AGY_HOME}/cache/onboarding.json" <<'EOF'
+{
+  "consumerOnboardingComplete": true,
+  "enterpriseOnboardingComplete": false,
+  "onboardingComplete": true
+}
+EOF
+
+cat > "${AGY_HOME}/antigravity-oauth-token" <<'EOF'
+{"token":{"access_token":"managed-by-tank-operator","token_type":"Bearer","expiry":"2099-01-01T00:00:00Z"},"auth_method":"consumer"}
+EOF
+chmod 600 "${AGY_HOME}/antigravity-oauth-token"
+
+# Seed new directory (so core runner & subcommands find auth/onboarding)
 cat > "${HOME}/.gemini/config/settings.json" <<'EOF'
 {
   "colorScheme": "dark"
@@ -38,15 +57,12 @@ cat > "${HOME}/.gemini/cache/onboarding.json" <<'EOF'
 }
 EOF
 
-# Placeholder OAuth token. access_token == the proxy's injection discriminator
-# ("Bearer managed-by-tank-operator"); the far-future expiry stops agy from
-# refreshing; no refresh_token is present so a compromised agy has nothing
-# durable to exfiltrate. Shape matches the real harvest blob
-# ({token:{...}, auth_method}) so agy parses it.
-cat > "${AGY_HOME}/antigravity-oauth-token" <<'EOF'
+cat > "${HOME}/.gemini/config/antigravity-oauth-token" <<'EOF'
 {"token":{"access_token":"managed-by-tank-operator","token_type":"Bearer","expiry":"2099-01-01T00:00:00Z"},"auth_method":"consumer"}
 EOF
-chmod 600 "${AGY_HOME}/antigravity-oauth-token"
+chmod 600 "${HOME}/.gemini/config/antigravity-oauth-token"
+
+touch "${HOME}/.gemini/config/.migrated"
 
 # Antigravity's current CLI config root is ~/.gemini/config. On first run agy
 # migrates from ~/.gemini/antigravity-cli into that root, but a prewritten
