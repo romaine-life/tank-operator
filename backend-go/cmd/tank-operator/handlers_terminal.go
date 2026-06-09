@@ -57,6 +57,8 @@ func cliProcessLaunchForMode(mode string) sandboxProcessCreate {
 		// to ~/.gemini/antigravity-cli/antigravity-oauth-token, which the
 		// save-credentials button harvests.
 		base.Args = []string{"-lc", "agy; exec bash"}
+	case sessionmodel.AntigravityCLIMode:
+		base.Args = []string{"-lc", "agy -p; exec bash"}
 	default:
 		base.Args = []string{"-l"}
 	}
