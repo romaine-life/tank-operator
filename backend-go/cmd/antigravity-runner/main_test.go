@@ -2,9 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
 	"strings"
 	"testing"
 
+	"github.com/creack/pty"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 )
 
@@ -138,3 +143,59 @@ func TestContentTextHandlesAntigravityShapes(t *testing.T) {
 		})
 	}
 }
+
+func TestPTYRunnerArchitectureConstraint(t *testing.T) {
+	// Assert that we import github.com/creack/pty and use it (to prevent compile error on the import itself)
+	_ = pty.Start
+
+	content, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read main.go: %v", err)
+	}
+	code := string(content)
+
+	// 1. Must import github.com/creack/pty
+	if !strings.Contains(code, `"github.com/creack/pty"`) {
+		t.Error("Architecture violation: main.go must import \"github.com/creack/pty\"")
+	}
+
+	// 2. Must call pty.Start
+	if !strings.Contains(code, "pty.Start(") {
+		t.Error("Architecture violation: main.go must call pty.Start(runCmd) to wrap the agy CLI in a PTY")
+	}
+
+	// 3. Must not call raw runCmd.Start() or runCmd.Run()
+	if strings.Contains(code, "runCmd.Start(") || strings.Contains(code, "runCmd.Run(") {
+		t.Error("Architecture violation: main.go must not run agy directly via runCmd.Start() or runCmd.Run(), it must be wrapped in a PTY")
+	}
+
+	// Parse main.go into AST to check for forbidden imports, identifiers, and literals (ignoring comments)
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("failed to parse main.go: %v", err)
+	}
+
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.ImportSpec:
+			path := x.Path.Value
+			if strings.Contains(path, "websocket") || strings.Contains(path, "grpc") {
+				t.Errorf("Architecture violation: main.go imports forbidden package %s", path)
+			}
+			if strings.Contains(path, "localharness") {
+				t.Errorf("Architecture violation: main.go imports localharness package %s", path)
+			}
+		case *ast.Ident:
+			if strings.Contains(strings.ToLower(x.Name), "localharness") {
+				t.Errorf("Architecture violation: main.go references localharness identifier: %s", x.Name)
+			}
+		case *ast.BasicLit:
+			if x.Kind == token.STRING && strings.Contains(strings.ToLower(x.Value), "localharness") {
+				t.Errorf("Architecture violation: main.go contains localharness in string literal: %s", x.Value)
+			}
+		}
+		return true
+	})
+}
+

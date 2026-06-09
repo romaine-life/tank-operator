@@ -950,13 +950,24 @@ for await (const filePath of walk(repoRoot)) {
   }
 }
 
+// Enforce that the antigravity-runner MUST use the PTY wrapper to run the agy binary.
+try {
+  const runnerMainPath = path.join(repoRoot, "backend-go/cmd/antigravity-runner/main.go");
+  const runnerMainText = await fs.readFile(runnerMainPath, "utf8");
+  if (!runnerMainText.includes("pty.Start(")) {
+    failures.push("backend-go/cmd/antigravity-runner/main.go: Architecture violation: antigravity-runner must use pty.Start() to wrap the agy binary in a pseudo-terminal (PTY) to prevent hangs.");
+  }
+} catch (err) {
+  failures.push(`backend-go/cmd/antigravity-runner/main.go: Could not read runner main file: ${err.message}`);
+}
+
 if (failures.length > 0) {
-  console.error("Removed chat runtime surface detected:");
+  console.error("Removed chat runtime surface or architecture violations detected:");
   for (const failure of failures) console.error(`- ${failure}`);
   process.exit(1);
 }
 
-console.log("No removed chat runtime surfaces found.");
+console.log("No removed chat runtime surfaces or architecture violations found.");
 
 async function* walk(dir) {
   const entries = await fs.readdir(dir, { withFileTypes: true });

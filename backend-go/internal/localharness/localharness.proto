@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package localharness;
+option go_package = "github.com/romaine-life/tank-operator/backend-go/internal/localharness";
+
+message ClientInfo {
+  string language = 1;
+  string version = 2;
+  string language_version = 3;
+}
+
+message InputConfig {
+  string storage_directory = 1;
+  uint32 port = 2;
+  string bind_address = 3;
+  ClientInfo client_info = 4;
+}
+
+message OutputConfig {
+  int32 port = 1;
+  string api_key = 2;
+}
