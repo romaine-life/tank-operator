@@ -1,5 +1,5 @@
 // Package kubeexec provides Kubernetes pod exec helpers for session pods.
-// Session pods are multi-container; all exec calls target container="claude".
+// Session pods are multi-container; all exec calls target container="sandbox".
 package kubeexec
 
 import (
@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	sessionContainer       = "claude"
+	sessionContainer       = "sandbox"
 	detachedLaunchAttempts = 3
 	keepaliveInterval      = 30 * time.Second
 )
