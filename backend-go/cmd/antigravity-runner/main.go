@@ -1,13 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
-	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/creack/pty"
+	"github.com/fsnotify/fsnotify"
 	"io"
 	"log/slog"
 	"os"
@@ -21,13 +23,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
-	"github.com/romaine-life/tank-operator/backend-go/internal/localharness"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
-	"google.golang.org/protobuf/proto"
 )
 
 const provider = "antigravity"
@@ -126,152 +125,27 @@ func main() {
 		return publishEvent(nc, cfg.sessionStorageKey, event)
 	}
 	active := &activeProcess{}
-	
-	// Spawn agy without -p
 	agyArgs := []string{"--dangerously-skip-permissions"}
-	runCmd := exec.CommandContext(ctx, "agy", agyArgs...)
+	runCmd := exec.Command("agy", agyArgs...)
 	runCmd.Dir = cfg.workspace
 	runCmd.Env = os.Environ()
 
-	stdin, err := runCmd.StdinPipe()
+	ptmx, err := pty.Start(runCmd)
 	if err != nil {
-		slog.Error("Failed to create stdin pipe", "error", err)
+		slog.Error("Failed to start agy pty", "error", err)
 		os.Exit(1)
 	}
-	stdout, err := runCmd.StdoutPipe()
-	if err != nil {
-		slog.Error("Failed to create stdout pipe", "error", err)
-		os.Exit(1)
-	}
-	runCmd.Stderr = os.Stderr
+	defer func() { _ = ptmx.Close() }()
 
-	if err := runCmd.Start(); err != nil {
-		slog.Error("Failed to start agy", "error", err)
-		os.Exit(1)
-	}
-	active.set(runCmd, "")
-
-	// 1. Write InputConfig to stdin
-	inputConfig := &localharness.InputConfig{
-		StorageDirectory: cfg.agyHome,
-		ClientInfo: &localharness.ClientInfo{
-			Language:        "go",
-			Version:         "1.0.0",
-			LanguageVersion: "1.22",
-		},
-	}
-	b, err := proto.Marshal(inputConfig)
-	if err != nil {
-		slog.Error("Failed to marshal InputConfig", "error", err)
-		os.Exit(1)
-	}
-	sizeBuf := make([]byte, 4)
-	binary.LittleEndian.PutUint32(sizeBuf, uint32(len(b)))
-	if _, err := stdin.Write(sizeBuf); err != nil {
-		slog.Error("Failed to write InputConfig size", "error", err)
-		os.Exit(1)
-	}
-	if _, err := stdin.Write(b); err != nil {
-		slog.Error("Failed to write InputConfig body", "error", err)
-		os.Exit(1)
-	}
-
-	// 2. Read OutputConfig from stdout
-	if _, err := io.ReadFull(stdout, sizeBuf); err != nil {
-		slog.Error("Failed to read OutputConfig size", "error", err)
-		os.Exit(1)
-	}
-	size := binary.LittleEndian.Uint32(sizeBuf)
-	outBuf := make([]byte, size)
-	if _, err := io.ReadFull(stdout, outBuf); err != nil {
-		slog.Error("Failed to read OutputConfig body", "error", err)
-		os.Exit(1)
-	}
-	outputConfig := &localharness.OutputConfig{}
-	if err := proto.Unmarshal(outBuf, outputConfig); err != nil {
-		slog.Error("Failed to unmarshal OutputConfig", "error", err)
-		os.Exit(1)
-	}
-
-	wsURL := fmt.Sprintf("ws://127.0.0.1:%d/", outputConfig.Port)
-	slog.Info("Connecting to localharness", "url", wsURL)
-
-	headers := map[string][]string{
-		"x-goog-api-key": {outputConfig.ApiKey},
-	}
-	dialer := websocket.DefaultDialer
-	ws, _, err := dialer.Dial(wsURL, headers)
-	if err != nil {
-		slog.Error("Failed to connect to localharness websocket", "error", err)
-		os.Exit(1)
-	}
-	defer ws.Close()
-
-	// 3. Send InitializeConversationEvent
-	initMsg := map[string]any{
-		"initialize_conversation": map[string]any{
-			"config": map[string]any{
-				"is_resume": false,
-			},
-		},
-	}
-	if err := ws.WriteJSON(initMsg); err != nil {
-		slog.Error("Failed to send initialize_conversation", "error", err)
-		os.Exit(1)
-	}
+	go func() {
+		io.Copy(os.Stdout, ptmx)
+	}()
 
 	var wg sync.WaitGroup
 	wg.Add(2)
-	
-	// Create a global current run pointer so the websocket reader can emit to it
-	var currentRunMu sync.Mutex
-	var currentRun *turnRun
-
-	// Consumer for the websocket
 	go func() {
 		defer wg.Done()
-		for {
-			_, msg, err := ws.ReadMessage()
-			if err != nil {
-				slog.Error("websocket read error", "error", err)
-				cancel()
-				return
-			}
-			
-			var outputEvent map[string]any
-			if err := json.Unmarshal(msg, &outputEvent); err != nil {
-				continue
-			}
-
-			currentRunMu.Lock()
-			run := currentRun
-			currentRunMu.Unlock()
-			
-			if run == nil {
-				continue
-			}
-
-			var stepUpdate any
-			var ok bool
-			if stepUpdate, ok = outputEvent["step_update"]; !ok {
-				stepUpdate, ok = outputEvent["stepUpdate"]
-			}
-
-			if ok {
-				if suMap, isMap := stepUpdate.(map[string]any); isMap {
-					// Parse it into an AgyStep
-					b, _ := json.Marshal(suMap)
-					var step AgyStep
-					_ = json.Unmarshal(b, &step)
-					_ = run.observeStep("ws", string(msg), step)
-				}
-			}
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		runDataConsumer(ctx, js, cfg, builder, publisher, active, ws, &currentRun, &currentRunMu)
+		runDataConsumer(ctx, js, cfg, builder, publisher, active, ptmx)
 	}()
 	go func() {
 		defer wg.Done()
@@ -341,7 +215,7 @@ func connectNATS(cfg runnerConfig) (*nats.Conn, error) {
 	return nats.Connect(cfg.natsURL, opts...)
 }
 
-func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, ws *websocket.Conn, currentRun **turnRun, currentRunMu *sync.Mutex) {
+func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, ptmx *os.File) {
 	commandSubject := sessionbus.CommandSubject(cfg.sessionStorageKey, provider)
 	consumerName := "antigravity_cli_data_" + sessionbus.StorageToken(cfg.sessionStorageKey)
 
@@ -375,7 +249,7 @@ func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConf
 		conversationMu.Lock()
 		continueConversation := conversationStarted
 		conversationMu.Unlock()
-		started, err := handleSubmitTurn(ctx, cfg, builder, publisher, active, msg, command, continueConversation, ws, currentRun, currentRunMu)
+		started, err := handleSubmitTurn(ctx, cfg, builder, publisher, active, msg, command, continueConversation, ptmx)
 		if started {
 			conversationMu.Lock()
 			conversationStarted = true
@@ -434,7 +308,7 @@ func runControlConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerC
 	consumeCtx.Stop()
 }
 
-func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, msg jetstream.Msg, command sessionbus.Command, continueConversation bool, ws *websocket.Conn, currentRun **turnRun, currentRunMu *sync.Mutex) (bool, error) {
+func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, msg jetstream.Msg, command sessionbus.Command, continueConversation bool, ptmx *os.File) (bool, error) {
 	turnID := command.TurnID
 	if turnID == "" {
 		turnID = "turn_" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -449,41 +323,39 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 		return false, err
 	}
 
-	currentRunMu.Lock()
-	*currentRun = run
-	currentRunMu.Unlock()
-
 	stopHeartbeat := startHeartbeat(ctx, msg)
 	defer stopHeartbeat()
 
-	promptMsg := map[string]any{
-		"user_input": map[string]any{
-			"text": command.Prompt,
-		},
-	}
-	if err := ws.WriteJSON(promptMsg); err != nil {
+	_, err := ptmx.WriteString(command.Prompt + "\r")
+	if err != nil {
 		_ = publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnFailed), "failed_to_start"))
 		_ = msg.Ack()
 		return false, nil
 	}
 
+	doneTailing := make(chan struct{})
+	tailErrors := make(chan error, 1)
+	go tailTranscripts(ctx, cfg.agyHome, run, doneTailing, tailErrors)
+
 	<-run.turnComplete
+	var waitErr error
+	close(doneTailing)
+	tailErr := <-tailErrors
 	interrupted := false
 
 	var terminalErr error
 	switch {
+	case tailErr != nil:
+		terminalErr = tailErr
 	case interrupted:
 		terminalErr = run.finishInterrupted()
+	case waitErr != nil:
+		terminalErr = run.finishFailed("agy_exit_error")
 	case run.providerFailed != "":
 		terminalErr = run.finishFailed("provider_error")
 	default:
 		terminalErr = run.finishCompleted()
 	}
-	
-	currentRunMu.Lock()
-	*currentRun = nil
-	currentRunMu.Unlock()
-
 	if terminalErr != nil {
 		return true, terminalErr
 	}
@@ -510,6 +382,24 @@ func startHeartbeat(ctx context.Context, msg jetstream.Msg) func() {
 		}
 	}()
 	return func() { close(stop) }
+}
+
+func logProcessOutput(ctx context.Context, name string, reader io.Reader) {
+	if reader == nil {
+		return
+	}
+	go func() {
+		scanner := bufio.NewScanner(reader)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+		for scanner.Scan() {
+			select {
+			case <-ctx.Done():
+				return
+			default:
+				slog.Debug("agy output", "stream", name, "line", scanner.Text())
+			}
+		}
+	}()
 }
 
 func (a *activeProcess) set(cmd *exec.Cmd, turnID string) {
@@ -609,13 +499,7 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 	r.mu.Lock()
 	r.final = finalAnswer{timelineID: timelineID, providerItemID: providerID}
 	r.mu.Unlock()
-	
-	// signal completion, but don't panic if closed twice
-	select {
-	case <-r.turnComplete:
-	default:
-		close(r.turnComplete)
-	}
+	close(r.turnComplete)
 	return nil
 }
 
@@ -793,6 +677,116 @@ func publishEvent(nc *nats.Conn, sessionStorageKey string, event map[string]any)
 	return nc.FlushTimeout(5 * time.Second)
 }
 
+func tailTranscripts(ctx context.Context, agyHome string, run *turnRun, done <-chan struct{}, errorsOut chan<- error) {
+	defer close(errorsOut)
+	offsets := map[string]int64{}
+	brainDir := filepath.Join(agyHome, "brain")
+
+	os.MkdirAll(brainDir, 0755)
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		errorsOut <- err
+		return
+	}
+	defer watcher.Close()
+
+	watchAll := func(dir string) {
+		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.IsDir() {
+				watcher.Add(path)
+			}
+			return nil
+		})
+	}
+	watchAll(brainDir)
+
+	_ = filepath.Walk(brainDir, func(path string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() && strings.HasSuffix(path, "transcript_full.jsonl") {
+			offsets[path] = info.Size()
+		}
+		return nil
+	})
+
+	sweepTranscripts(brainDir, offsets, run)
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-done:
+			if err := sweepTranscripts(brainDir, offsets, run); err != nil {
+				errorsOut <- err
+			}
+			return
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Has(fsnotify.Create) {
+				info, err := os.Stat(event.Name)
+				if err == nil && info.IsDir() {
+					watchAll(event.Name)
+				}
+			}
+			if err := sweepTranscripts(brainDir, offsets, run); err != nil {
+				errorsOut <- err
+				return
+			}
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			slog.Error("fsnotify error", "error", err)
+		}
+	}
+}
+
+func sweepTranscripts(brainDir string, offsets map[string]int64, run *turnRun) error {
+	return filepath.Walk(brainDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, "transcript_full.jsonl") {
+			return nil
+		}
+		size := info.Size()
+		offset := offsets[path]
+		if size < offset {
+			offset = 0
+		}
+		if size <= offset {
+			return nil
+		}
+
+		file, err := os.Open(path)
+		if err != nil {
+			return nil
+		}
+		defer file.Close()
+		if _, err := file.Seek(offset, io.SeekStart); err != nil {
+			return err
+		}
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			var step AgyStep
+			if err := json.Unmarshal([]byte(line), &step); err != nil {
+				continue
+			}
+			if err := run.observeStep(path, line, step); err != nil {
+				return err
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return err
+		}
+		offsets[path] = size
+		return nil
+	})
+}
+
 func providerStepID(path, line string, step AgyStep) string {
 	if strings.TrimSpace(step.ConversationID) != "" || step.StepIndex != 0 || strings.TrimSpace(step.Type) != "" {
 		return fmt.Sprintf("agy:%s:%d:%s:%s", stableIDPart(firstNonEmpty(step.ConversationID, path)), step.StepIndex, strings.ToLower(step.Source), strings.ToLower(step.Type))
@@ -803,7 +797,6 @@ func providerStepID(path, line string, step AgyStep) string {
 func itemTimelineID(turnID, providerItemID string) string {
 	return turnID + ":item:" + stableIDPart(providerItemID)
 }
-
 
 func contentText(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
