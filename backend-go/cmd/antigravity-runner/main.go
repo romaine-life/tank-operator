@@ -1,5 +1,18 @@
 package main
 
+/*
+WARNING: DO NOT RIP OUT THE PTY RUNNER OR REPLACE IT WITH WEBSOCKET/PROTOBUF PROTOCOLS.
+
+Although the Google Antigravity Python SDK communicates with `localharness` via a Protobuf/WebSocket protocol,
+the `agy` CLI binary used in this container does NOT support that protocol (it is strictly a human-facing terminal UI).
+
+We are forced to use the `agy` CLI binary because the closed-source `localharness` binary only supports GCP Service
+Accounts and does not support consumer OAuth tokens (which we proxy-route).
+
+Therefore, this runner MUST run `agy` inside a pseudo-terminal (PTY) and scrape/extract events by tailing the transcript
+using fsnotify. Do not attempt to refactor this to use gRPC, Protobuf, or WebSockets directly with `agy`.
+*/
+
 import (
 	"bufio"
 	"bytes"
