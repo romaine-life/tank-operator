@@ -39,8 +39,8 @@ FROM node:20-bookworm-slim AS runtime
 
 # Pinned Antigravity CLI release. Bump these together; the manifest + chart
 # never fetch at runtime.
-ARG AGY_BUILD=1.0.5-5009297080451072
-ARG AGY_SHA512=72082d89ea71e101c7beb1630241428d53f68c702995897a2bbf55f162a9f71c8d2d7f98e7b310449cfbdb0b053f6e1b869c1f8d9fb23c95851e980d563d8924
+ARG AGY_BUILD=1.0.6-6458082025406464
+ARG AGY_SHA512=1b57977be08398b0344ef5019089683c0aae9829545cdf3056c9a1d02b949ea98db6e643ef96ef4f6877654f4d48d5267035ef8a27652a8e023f65b91c06df76
 ARG SANDBOX_AGENT_VERSION=0.4.2
 
 # python3 + pip are for the mcp-auth-proxy sidecar (a Python package shared with
