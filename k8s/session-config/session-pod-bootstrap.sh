@@ -161,4 +161,24 @@ JSON
 {"hasCompletedOnboarding": true}
 JSON
     ;;
+  antigravity_cli | antigravity_gui)
+    AGY_HOME="${HOME}/.gemini/antigravity-cli"
+    mkdir -p "${AGY_HOME}"
+    cat > "${AGY_HOME}/antigravity-oauth-token" <<'EOF'
+{"token":{"access_token":"managed-by-tank-operator","token_type":"Bearer","expiry":"2099-01-01T00:00:00Z"},"auth_method":"consumer"}
+EOF
+    chmod 600 "${AGY_HOME}/antigravity-oauth-token"
+
+    CA="/etc/oauth-gateway-ca/ca.crt"
+    if [ -f "${CA}" ]; then
+      BUNDLE="${AGY_HOME}/ca-bundle.crt"
+      SYS_BUNDLE=/etc/ssl/certs/ca-certificates.crt
+      if [ -f "${SYS_BUNDLE}" ]; then
+        cat "${SYS_BUNDLE}" "${CA}" > "${BUNDLE}"
+      else
+        cp "${CA}" "${BUNDLE}"
+      fi
+      echo "export SSL_CERT_FILE=${BUNDLE}" >> "${HOME}/.bash_profile"
+    fi
+    ;;
 esac
