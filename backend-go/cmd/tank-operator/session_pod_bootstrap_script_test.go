@@ -344,8 +344,8 @@ func TestAntigravityRunnerLaunchSeedsNativeMCPConfig(t *testing.T) {
 }`), 0o644); err != nil {
 		t.Fatalf("write mcp config: %v", err)
 	}
-	writeExecutable(t, filepath.Join(fakeBin, "node"), `#!/bin/sh
-printf '%s\n' "$*" > "$FAKE_NODE_LOG"
+	writeExecutable(t, filepath.Join(fakeBin, "runner"), `#!/bin/sh
+printf 'runner executed\n' > "$FAKE_NODE_LOG"
 exit 0
 `)
 
@@ -355,6 +355,7 @@ exit 0
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"TANK_SESSION_CONFIG_DIR="+configDir,
 		"FAKE_NODE_LOG="+nodeLog,
+		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -364,7 +365,7 @@ exit 0
 	assertFileContains(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"), `"glimmung"`)
 	assertFileContains(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"), `"http://127.0.0.1:9995/"`)
 	assertFileContains(t, filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"), `"access_token":"managed-by-tank-operator"`)
-	assertFileContains(t, nodeLog, "/opt/antigravity-runner/dist/index.js")
+	assertFileContains(t, nodeLog, "runner executed")
 }
 
 func TestAntigravityRunnerLaunchFailsWithoutMCPConfig(t *testing.T) {
@@ -383,8 +384,8 @@ func TestAntigravityRunnerLaunchFailsWithoutMCPConfig(t *testing.T) {
 		t.Fatalf("mkdir fake bin: %v", err)
 	}
 	nodeLog := filepath.Join(t.TempDir(), "node.log")
-	writeExecutable(t, filepath.Join(fakeBin, "node"), `#!/bin/sh
-printf '%s\n' "$*" > "$FAKE_NODE_LOG"
+	writeExecutable(t, filepath.Join(fakeBin, "runner"), `#!/bin/sh
+printf 'runner executed\n' > "$FAKE_NODE_LOG"
 exit 0
 `)
 
@@ -394,6 +395,7 @@ exit 0
 		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"TANK_SESSION_CONFIG_DIR="+configDir,
 		"FAKE_NODE_LOG="+nodeLog,
+		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
 	)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -403,7 +405,7 @@ exit 0
 		t.Fatalf("script output missing MCP failure reason:\n%s", string(out))
 	}
 	if _, err := os.Stat(nodeLog); !os.IsNotExist(err) {
-		t.Fatalf("node should not run when MCP config is missing, stat err: %v", err)
+		t.Fatalf("runner should not run when MCP config is missing, stat err: %v", err)
 	}
 }
 

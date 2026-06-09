@@ -79,4 +79,4 @@ fi
 if [ -n "${GLIMMUNG_SUPERVISOR_CHILD:-}" ] && [ -x /app/tank-supervisor ]; then
   exec /app/tank-supervisor
 fi
-exec /opt/tank/antigravity-cli-runner
+exec "${ANTIGRAVITY_RUNNER_BIN:-/opt/tank/antigravity-cli-runner}"

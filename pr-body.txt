@@ -1,7 +1,9 @@
-Adds the Go-based antigravity-runner JetStream wrapper, integrates it with the session pod definitions, and registers the mode toggles in the frontend UI.
+Refactors the Go runner to maintain a continuous agy process via PTY and uses fsnotify for event-driven transcript tailing. Deletes the legacy TS runner and all associated compatibility logic in accordance with the north-star policy.
 
 ## Feature Contracts
+
 Affected contracts:
 - [x] None
 
-Evidence: This is an internal spike for a harness runner alternative. No existing feature contracts are affected.
+Evidence:
+Tested functionality end-to-end locally using kubectl. Background execution timers and event handling work correctly with the new persistent runner setup.
