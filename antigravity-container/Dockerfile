@@ -34,19 +34,7 @@ COPY backend-go/cmd/antigravity-runner ./cmd/antigravity-runner
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tank-supervisor ./cmd/tank-supervisor
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/antigravity-cli-runner ./cmd/antigravity-runner
 
-# Stage 1: build the antigravity-runner (TS -> JS + production node_modules).
-# Build context is the repo root (docker-build-check.yaml sets context: .).
-FROM node:20-bookworm-slim AS antigravity-runner-build
-WORKDIR /src/antigravity-runner
-COPY antigravity-runner/package.json antigravity-runner/package-lock.json* ./
-RUN npm ci --no-audit --no-fund
-COPY antigravity-runner/tsconfig.json ./
-COPY antigravity-runner/src ./src
-COPY runner-shared /src/runner-shared
-RUN npx tsc
-RUN npm prune --omit=dev
-
-# Stage 2: runtime image.
+# Stage 1: runtime image.
 FROM node:20-bookworm-slim AS runtime
 
 # Pinned Antigravity CLI release. Bump these together; the manifest + chart
@@ -94,30 +82,12 @@ RUN curl -fsSL "https://storage.googleapis.com/antigravity-public/antigravity-cl
 COPY claude-container/mcp-auth-proxy /opt/mcp-auth-proxy
 RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
 
-# antigravity-runner: long-lived pod-side process that drives agy and publishes
-# canonical Tank conversation events. Entrypoint launched by
-# /opt/tank/antigravity-runner-launch.sh -> node /opt/antigravity-runner/dist/index.js.
-# The compiled dist imports ../../runner-shared, which resolves to /opt/runner-shared.
-COPY --from=antigravity-runner-build /src/antigravity-runner/dist /opt/antigravity-runner/dist
-COPY --from=antigravity-runner-build /src/antigravity-runner/node_modules /opt/antigravity-runner/node_modules
-COPY --from=antigravity-runner-build /src/antigravity-runner/package.json /opt/antigravity-runner/package.json
-COPY runner-shared /opt/runner-shared
-
 # tank-supervisor + baked launch shim for test-slot antigravity-runner hot-swap.
-# The baked shim is hot-aware: fresh pods run /opt/antigravity-runner/dist,
-# while SIGHUP restarts prefer /var/run/antigravity-runner-hot/dist when a
-# Glimmung hot-swap has populated it.
 COPY --from=tank-supervisor-build /out/tank-supervisor /app/tank-supervisor
 COPY --from=tank-supervisor-build /out/antigravity-cli-runner /opt/tank/antigravity-cli-runner
 RUN cat > /app/antigravity-runner-launch-binary.sh <<'EOF' && chmod 0755 /app/antigravity-runner-launch-binary.sh
 #!/bin/sh
-if [ ! -e /var/run/antigravity-runner-hot/node_modules ]; then
-  ln -sfn /opt/antigravity-runner/node_modules /var/run/antigravity-runner-hot/node_modules
-fi
-if [ -f /var/run/antigravity-runner-hot/dist/index.js ]; then
-  exec node /var/run/antigravity-runner-hot/dist/index.js
-fi
-exec node /opt/antigravity-runner/dist/index.js
+exec /opt/tank/antigravity-cli-runner
 EOF
 
 # Baked antigravity-runner launch script — self-contained, no session-ConfigMap

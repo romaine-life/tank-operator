@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log/slog"
 	"os"
@@ -16,6 +15,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/creack/pty"
+	"github.com/fsnotify/fsnotify"
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
@@ -23,11 +24,12 @@ import (
 )
 
 type AgyStep struct {
-	StepIndex     int    `json:"step_index"`
-	Source        string `json:"source"`
-	Type          string `json:"type"`
-	Status        string `json:"status"`
-	Content       string `json:"content"`
+	StepIndex      int    `json:"step_index"`
+	Source         string `json:"source"`
+	Type           string `json:"type"`
+	Status         string `json:"status"`
+	Content        string `json:"content"`
+	ToolCalls      []any  `json:"tool_calls"`
 	TranscriptPath string `json:"transcript_path,omitempty"`
 	ConversationID string `json:"conversation_id,omitempty"`
 }
@@ -42,6 +44,15 @@ type TankConversationEvent struct {
 	Timestamp   string `json:"timestamp"`
 
 	Payload map[string]any `json:"payload"`
+}
+
+type TurnState struct {
+	mu           sync.Mutex
+	SessionID    string
+	TurnID       string
+	ClientNonce  string
+	Active       bool
+	TurnComplete chan struct{}
 }
 
 func main() {
@@ -101,14 +112,30 @@ func main() {
 		agyHome = filepath.Join(homeDir, ".gemini", "antigravity-cli")
 	}
 
-	var hasConversation bool
 	var wg sync.WaitGroup
+
+	// Start long-lived agy process
+	runCmd := exec.CommandContext(ctx, "agy", "--dangerously-skip-permissions")
+	ptmx, err := pty.Start(runCmd)
+	if err != nil {
+		slog.Error("Failed to start agy pty", "error", err)
+		os.Exit(1)
+	}
+	defer ptmx.Close()
+
+	// Discard pty output so it doesn't block
+	go io.Copy(io.Discard, ptmx)
+
+	turnState := &TurnState{}
+
+	// Start tailing transcripts in the background continuously
+	go tailTranscripts(ctx, agyHome, nc, sessionStorageKey, turnState)
 
 	// Data-Plane Consumer
 	go func() {
 		commandSubject := sessionbus.CommandSubject(sessionStorageKey, provider)
 		consumerName := "antigravity_data_" + sessionbus.StorageToken(sessionStorageKey)
-		
+
 		consumer, err := js.CreateOrUpdateConsumer(ctx, "TANK_SESSION_BUS", jetstream.ConsumerConfig{
 			Durable:       consumerName,
 			Name:          consumerName,
@@ -130,13 +157,22 @@ func main() {
 				return
 			}
 			slog.Info("Received data-plane command", "type", command.Type)
-			
+
 			if command.Type == sessionbus.CommandSubmitTurn {
 				clientNonce := command.ClientNonce
 				turnID := command.TurnID
 				if turnID == "" {
 					turnID = "turn_" + strings.ReplaceAll(uuid.New().String(), "-", "")
 				}
+
+				turnState.mu.Lock()
+				turnState.SessionID = sessionID
+				turnState.TurnID = turnID
+				turnState.ClientNonce = clientNonce
+				turnState.Active = true
+				turnState.TurnComplete = make(chan struct{})
+				turnCompChan := turnState.TurnComplete
+				turnState.mu.Unlock()
 
 				// Publish turn.claimed
 				publishEvent(nc, sessionStorageKey, TankConversationEvent{
@@ -165,17 +201,8 @@ func main() {
 					}
 				}()
 
-				// Run agy subprocess
-				args := []string{"--dangerously-skip-permissions"}
-				if hasConversation {
-					args = append(args, "--continue")
-				}
-				args = append(args, "-p", command.Prompt)
-
-				runCmd := exec.CommandContext(ctx, "agy", args...)
-				slog.Info("Running agy", "args", args)
-
-				err := runCmd.Start()
+				// Send prompt to agy
+				_, err := ptmx.WriteString(command.Prompt + "\n")
 				if err != nil {
 					publishEvent(nc, sessionStorageKey, TankConversationEvent{
 						EventID:     "evt_" + strings.ReplaceAll(uuid.New().String(), "-", ""),
@@ -185,46 +212,15 @@ func main() {
 						Type:        "turn.failed",
 						Source:      provider,
 						Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
-						Payload:     map[string]any{"reason": "failed_to_start"},
+						Payload:     map[string]any{"reason": "failed_to_write_to_agy"},
 					})
 					close(stopHeartbeat)
 					msg.Ack()
 					return
 				}
 
-				// Tail transcripts while agy runs
-				doneTailing := make(chan struct{})
-				go tailTranscripts(ctx, agyHome, nc, sessionStorageKey, sessionID, turnID, clientNonce, doneTailing)
-
-				err = runCmd.Wait()
-				close(doneTailing)
-				
-				hasConversation = true
-
-				if err != nil {
-					publishEvent(nc, sessionStorageKey, TankConversationEvent{
-						EventID:     "evt_" + strings.ReplaceAll(uuid.New().String(), "-", ""),
-						SessionID:   sessionID,
-						TurnID:      turnID,
-						ClientNonce: clientNonce,
-						Type:        "turn.failed",
-						Source:      provider,
-						Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
-						Payload:     map[string]any{"reason": fmt.Sprintf("agy_exit_error: %v", err)},
-					})
-				} else {
-					publishEvent(nc, sessionStorageKey, TankConversationEvent{
-						EventID:     "evt_" + strings.ReplaceAll(uuid.New().String(), "-", ""),
-						SessionID:   sessionID,
-						TurnID:      turnID,
-						ClientNonce: clientNonce,
-						Type:        "turn.completed",
-						Source:      provider,
-						Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
-						Payload:     map[string]any{},
-					})
-				}
-
+				// Wait for turn completion
+				<-turnCompChan
 				close(stopHeartbeat)
 				msg.Ack()
 			} else {
@@ -241,7 +237,7 @@ func main() {
 	go func() {
 		controlSubject := sessionbus.ControlSubject(sessionStorageKey, provider)
 		consumerName := "antigravity_control_" + sessionbus.StorageToken(sessionStorageKey)
-		
+
 		consumer, err := js.CreateOrUpdateConsumer(ctx, "TANK_SESSION_BUS", jetstream.ConsumerConfig{
 			Durable:       consumerName,
 			Name:          consumerName,
@@ -276,36 +272,69 @@ func publishEvent(nc *nats.Conn, sessionStorageKey string, event TankConversatio
 	nc.Publish(eventSubject, b)
 }
 
-func tailTranscripts(ctx context.Context, agyHome string, nc *nats.Conn, sessionStorageKey, sessionID, turnID, clientNonce string, done <-chan struct{}) {
+func tailTranscripts(ctx context.Context, agyHome string, nc *nats.Conn, sessionStorageKey string, turnState *TurnState) {
 	offsets := make(map[string]int64)
-	
-	// Pre-snapshot existing sizes
-	brainDir := filepath.Join(agyHome, "brain")
-	filepath.Walk(brainDir, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() && strings.HasSuffix(path, "transcript_full.jsonl") {
-			offsets[path] = info.Size()
-		}
-		return nil
-	})
 
-	ticker := time.NewTicker(200 * time.Millisecond)
-	defer ticker.Stop()
+	brainDir := filepath.Join(agyHome, "brain")
+
+	os.MkdirAll(brainDir, 0755)
+
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		slog.Error("Failed to create fsnotify watcher", "error", err)
+		return
+	}
+	defer watcher.Close()
+
+	watchAll := func(dir string) {
+		filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && info.IsDir() {
+				watcher.Add(path)
+			}
+			return nil
+		})
+	}
+	watchAll(brainDir)
+
+	// Do an initial sweep to catch anything written before watcher started
+	sweepTranscripts(brainDir, offsets, nc, sessionStorageKey, turnState)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-done:
-			// One last sweep
-			sweepTranscripts(brainDir, offsets, nc, sessionStorageKey, sessionID, turnID, clientNonce)
-			return
-		case <-ticker.C:
-			sweepTranscripts(brainDir, offsets, nc, sessionStorageKey, sessionID, turnID, clientNonce)
+		case event, ok := <-watcher.Events:
+			if !ok {
+				return
+			}
+			if event.Has(fsnotify.Create) {
+				info, err := os.Stat(event.Name)
+				if err == nil && info.IsDir() {
+					watchAll(event.Name)
+				}
+			}
+			sweepTranscripts(brainDir, offsets, nc, sessionStorageKey, turnState)
+		case err, ok := <-watcher.Errors:
+			if !ok {
+				return
+			}
+			slog.Error("fsnotify error", "error", err)
 		}
 	}
 }
 
-func sweepTranscripts(brainDir string, offsets map[string]int64, nc *nats.Conn, sessionStorageKey, sessionID, turnID, clientNonce string) {
+func sweepTranscripts(brainDir string, offsets map[string]int64, nc *nats.Conn, sessionStorageKey string, turnState *TurnState) {
+	turnState.mu.Lock()
+	if !turnState.Active {
+		turnState.mu.Unlock()
+		return
+	}
+	sessionID := turnState.SessionID
+	turnID := turnState.TurnID
+	clientNonce := turnState.ClientNonce
+	turnCompChan := turnState.TurnComplete
+	turnState.mu.Unlock()
+
 	filepath.Walk(brainDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, "transcript_full.jsonl") {
 			return nil
@@ -334,7 +363,7 @@ func sweepTranscripts(brainDir string, offsets map[string]int64, nc *nats.Conn, 
 			if strings.TrimSpace(line) == "" {
 				continue
 			}
-			
+
 			var step AgyStep
 			if err := json.Unmarshal([]byte(line), &step); err == nil {
 				// Convert to TankConversationEvent and publish
@@ -349,7 +378,7 @@ func sweepTranscripts(brainDir string, offsets map[string]int64, nc *nats.Conn, 
 					Payload: map[string]any{
 						"type": "provider_output",
 						"output": map[string]any{
-							"type": "text",
+							"type":    "text",
 							"content": step.Content,
 						},
 					},
@@ -357,6 +386,26 @@ func sweepTranscripts(brainDir string, offsets map[string]int64, nc *nats.Conn, 
 				// If it's a planner response or something that has content
 				if step.Type == "PLANNER_RESPONSE" || step.Source == "SYSTEM" {
 					publishEvent(nc, sessionStorageKey, evt)
+				}
+
+				// Check if the turn is fully complete
+				if step.Type == "PLANNER_RESPONSE" && step.Status == "DONE" && len(step.ToolCalls) == 0 {
+					turnState.mu.Lock()
+					if turnState.Active && turnState.TurnID == turnID {
+						turnState.Active = false
+						publishEvent(nc, sessionStorageKey, TankConversationEvent{
+							EventID:     "evt_" + strings.ReplaceAll(uuid.New().String(), "-", ""),
+							SessionID:   sessionID,
+							TurnID:      turnID,
+							ClientNonce: clientNonce,
+							Type:        "turn.completed",
+							Source:      "antigravity",
+							Timestamp:   time.Now().UTC().Format(time.RFC3339Nano),
+							Payload:     map[string]any{},
+						})
+						close(turnCompChan)
+					}
+					turnState.mu.Unlock()
 				}
 			}
 		}

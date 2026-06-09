@@ -44,7 +44,6 @@ const (
 	// the real refresh token never lands on the model-readable filesystem — the
 	// same shape claude_gui / codex_gui use. See docs/api-proxy-auth.md.
 	AntigravityGUIMode    = "antigravity_gui"
-	AntigravityCLIMode    = "antigravity_cli"
 	DefaultSessionMode    = ClaudeGUIMode
 	GeminiRunnerMetricsPort = 9097
 	MaxNameLength         = 80
@@ -96,7 +95,6 @@ var (
 		CodexAppServerMode:    {},
 
 		AntigravityConfigMode: {},
-		AntigravityCLIMode:    {},
 		AntigravityGUIMode:    {},
 	}
 
@@ -258,7 +256,6 @@ var noClaudeHijackModes = map[string]bool{
 	CodexAppServerMode:    true,
 	AntigravityConfigMode: true,
 	AntigravityGUIMode:    true,
-	AntigravityCLIMode:    true,
 }
 
 type ManifestOptions struct {
@@ -346,7 +343,7 @@ func IsCodexMode(mode string) bool {
 // credential-mint terminal mode and the GUI chat mode.
 func IsAntigravityMode(mode string) bool {
 	switch NormalizeSessionMode(mode) {
-	case AntigravityConfigMode, AntigravityGUIMode, AntigravityCLIMode:
+	case AntigravityConfigMode, AntigravityGUIMode:
 		return true
 	default:
 		return false
@@ -633,7 +630,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Codex GUI modes use codex-runner. Both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
 	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
-	wantAntigravityRunner := mode == AntigravityGUIMode || mode == AntigravityCLIMode
+	wantAntigravityRunner := mode == AntigravityGUIMode
 	wantSDKRunner := wantAgentRunner || wantCodexRunner || wantAntigravityRunner
 	if wantSDKRunner {
 		volumes = append(volumes, map[string]any{
@@ -760,7 +757,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// below (agy runs in that container, so SSL_CERT_FILE belongs there, not on
 	// the sandbox-agent container). Only the GUI mode is hijacked;
 	// antigravity_config must reach real Google to complete the login.
-	if (mode == AntigravityGUIMode || mode == AntigravityCLIMode) && opts.AntigravityAPIProxyIP != "" {
+	if mode == AntigravityGUIMode && opts.AntigravityAPIProxyIP != "" {
 		hostAliases = append(hostAliases, map[string]any{
 			"ip":        opts.AntigravityAPIProxyIP,
 			"hostnames": []any{"cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"},
@@ -1160,9 +1157,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			)
 		}
 		command := []any{"bash", "/opt/tank/antigravity-runner-launch.sh"}
-		if mode == AntigravityCLIMode {
-			command = []any{"/opt/tank/antigravity-cli-runner"}
-		}
 		antigravityRunnerContainer := map[string]any{
 			"name":            "antigravity-runner",
 			"image":           sessionImage,

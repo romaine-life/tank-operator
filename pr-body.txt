@@ -1,0 +1,7 @@
+Adds the Go-based antigravity-runner JetStream wrapper, integrates it with the session pod definitions, and registers the mode toggles in the frontend UI.
+
+## Feature Contracts
+Affected contracts:
+- [x] None
+
+Evidence: This is an internal spike for a harness runner alternative. No existing feature contracts are affected.
