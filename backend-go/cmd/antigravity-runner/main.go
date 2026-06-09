@@ -138,7 +138,7 @@ func main() {
 	defer func() { _ = ptmx.Close() }()
 
 	go func() {
-		io.Copy(io.Discard, ptmx)
+		io.Copy(os.Stdout, ptmx)
 	}()
 
 	var wg sync.WaitGroup
@@ -326,7 +326,7 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 	stopHeartbeat := startHeartbeat(ctx, msg)
 	defer stopHeartbeat()
 
-	_, err := ptmx.WriteString(command.Prompt + "\n")
+	_, err := ptmx.WriteString(command.Prompt + "\r")
 	if err != nil {
 		_ = publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnFailed), "failed_to_start"))
 		_ = msg.Ack()
