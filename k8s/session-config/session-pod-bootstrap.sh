@@ -163,7 +163,24 @@ JSON
     ;;
   antigravity_cli | antigravity_gui)
     AGY_HOME="${HOME}/.gemini/antigravity-cli"
-    mkdir -p "${AGY_HOME}"
+    mkdir -p "${AGY_HOME}/cache"
+    mkdir -p "${HOME}/.gemini/config"
+    touch "${HOME}/.gemini/config/.migrated"
+
+    cat > "${AGY_HOME}/settings.json" <<'EOF'
+{
+  "colorScheme": "dark"
+}
+EOF
+
+    cat > "${AGY_HOME}/cache/onboarding.json" <<'EOF'
+{
+  "consumerOnboardingComplete": true,
+  "enterpriseOnboardingComplete": false,
+  "onboardingComplete": true
+}
+EOF
+
     cat > "${AGY_HOME}/antigravity-oauth-token" <<'EOF'
 {"token":{"access_token":"managed-by-tank-operator","token_type":"Bearer","expiry":"2099-01-01T00:00:00Z"},"auth_method":"consumer"}
 EOF
