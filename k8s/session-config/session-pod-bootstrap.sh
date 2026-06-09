@@ -164,6 +164,8 @@ JSON
   antigravity_cli | antigravity_gui)
     AGY_HOME="${HOME}/.gemini/antigravity-cli"
     mkdir -p "${AGY_HOME}/cache"
+    mkdir -p "${HOME}/.gemini/config"
+    touch "${HOME}/.gemini/config/.migrated"
 
     cat > "${AGY_HOME}/settings.json" <<'EOF'
 {
