@@ -23368,9 +23368,15 @@ function AuthenticatedApp() {
                               <button
                                 key={interaction}
                                 className={`home-choice${selected ? " is-selected" : ""}`}
-                                onClick={() =>
-                                  selectDefaultInteraction(interaction)
-                                }
+                                onClick={() => {
+                                  if (interaction === "cli" && selected) {
+                                    void createSession(
+                                      defaultModeFor(selectedProvider, "cli"),
+                                    );
+                                  } else {
+                                    selectDefaultInteraction(interaction);
+                                  }
+                                }}
                                 disabled={busy || unavailable}
                                 aria-pressed={selected}
                                 title={
@@ -23383,7 +23389,11 @@ function AuthenticatedApp() {
                                   interaction={interaction}
                                   className="home-choice-icon"
                                 />
-                                <span>{INTERACTION_LABELS[interaction]}</span>
+                                <span>
+                                  {interaction === "cli" && selected
+                                    ? "Launch CLI"
+                                    : INTERACTION_LABELS[interaction]}
+                                </span>
                               </button>
                             );
                           })}
@@ -23551,35 +23561,7 @@ function AuthenticatedApp() {
                               </span>
                             </button>
                           )}
-                          {/* Credential-mint sessions remain a setup shortcut
-                              even though Antigravity GUI is selectable through
-                              the provider picker. */}
-                          {configMode !== "antigravity_config" && (
-                            <button
-                              className="home-quick-action"
-                              onClick={() => createSession("antigravity_config")}
-                              disabled={
-                                busy ||
-                                !createModeAllowedByRunOptions(
-                                  "antigravity_config",
-                                  sessionRunOptions,
-                                )
-                              }
-                            >
-                              <ProviderIcon
-                                provider="antigravity"
-                                className="home-quick-icon"
-                              />
-                              <span className="home-quick-main">
-                                <span className="home-quick-title">
-                                  {MODE_LABELS["antigravity_config"]}
-                                </span>
-                                <span className="home-quick-sub">
-                                  {MODE_HINTS["antigravity_config"]}
-                                </span>
-                              </span>
-                            </button>
-                          )}
+
                         </div>
                         {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
                           <RepoPicker
