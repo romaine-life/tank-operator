@@ -8,6 +8,7 @@ metadata:
     app.kubernetes.io/name: tank-operator
 spec:
   replicas: {{ .Values.orchestrator.replicas }}
+  revisionHistoryLimit: 0
   strategy:
     type: RollingUpdate
     rollingUpdate:
