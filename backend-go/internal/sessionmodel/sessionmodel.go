@@ -765,6 +765,13 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"ip":        opts.AntigravityAPIProxyIP,
 			"hostnames": []any{"cloudcode-pa.googleapis.com", "daily-cloudcode-pa.googleapis.com"},
 		})
+		if mode == AntigravityCLIMode && opts.OAuthGatewayCAConfigMap != "" {
+			claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+				"name":      "oauth-gateway-ca",
+				"mountPath": "/etc/oauth-gateway-ca",
+				"readOnly":  true,
+			})
+		}
 	}
 
 	claudeContainer := map[string]any{
