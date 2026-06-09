@@ -23554,30 +23554,32 @@ function AuthenticatedApp() {
                           {/* Credential-mint sessions remain a setup shortcut
                               even though Antigravity GUI is selectable through
                               the provider picker. */}
-                          <button
-                            className="home-quick-action"
-                            onClick={() => createSession("antigravity_config")}
-                            disabled={
-                              busy ||
-                              !createModeAllowedByRunOptions(
-                                "antigravity_config",
-                                sessionRunOptions,
-                              )
-                            }
-                          >
-                            <ProviderIcon
-                              provider="antigravity"
-                              className="home-quick-icon"
-                            />
-                            <span className="home-quick-main">
-                              <span className="home-quick-title">
-                                {MODE_LABELS["antigravity_config"]}
+                          {configMode !== "antigravity_config" && (
+                            <button
+                              className="home-quick-action"
+                              onClick={() => createSession("antigravity_config")}
+                              disabled={
+                                busy ||
+                                !createModeAllowedByRunOptions(
+                                  "antigravity_config",
+                                  sessionRunOptions,
+                                )
+                              }
+                            >
+                              <ProviderIcon
+                                provider="antigravity"
+                                className="home-quick-icon"
+                              />
+                              <span className="home-quick-main">
+                                <span className="home-quick-title">
+                                  {MODE_LABELS["antigravity_config"]}
+                                </span>
+                                <span className="home-quick-sub">
+                                  {MODE_HINTS["antigravity_config"]}
+                                </span>
                               </span>
-                              <span className="home-quick-sub">
-                                {MODE_HINTS["antigravity_config"]}
-                              </span>
-                            </span>
-                          </button>
+                            </button>
+                          )}
                         </div>
                         {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
                           <RepoPicker
