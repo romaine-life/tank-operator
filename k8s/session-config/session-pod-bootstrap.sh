@@ -165,15 +165,17 @@ JSON
     AGY_HOME="${HOME}/.gemini/antigravity-cli"
     mkdir -p "${AGY_HOME}/cache"
     mkdir -p "${HOME}/.gemini/config"
+    mkdir -p "${HOME}/.gemini/cache"
 
+    touch "${HOME}/.gemini/config/.migrated"
 
-    cat > "${AGY_HOME}/settings.json" <<'EOF'
+    cat > "${HOME}/.gemini/config/settings.json" <<'EOF'
 {
   "colorScheme": "dark"
 }
 EOF
 
-    cat > "${AGY_HOME}/cache/onboarding.json" <<'EOF'
+    cat > "${HOME}/.gemini/cache/onboarding.json" <<'EOF'
 {
   "consumerOnboardingComplete": true,
   "enterpriseOnboardingComplete": false,
