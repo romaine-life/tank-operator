@@ -33,13 +33,11 @@ func sessionRunOptions() sessionRunOptionsResponse {
 			sessionmodel.CodexConfigMode,
 			sessionmodel.AntigravityConfigMode,
 			sessionmodel.AntigravityGUIMode,
-			sessionmodel.AntigravityCLIMode,
 		},
 		SDKChatModes: []sessionRunOptionMode{
 			{Mode: sessionmodel.ClaudeGUIMode, Provider: "claude"},
 			{Mode: sessionmodel.CodexGUIMode, Provider: "codex"},
 			{Mode: sessionmodel.AntigravityGUIMode, Provider: "antigravity"},
-			{Mode: sessionmodel.AntigravityCLIMode, Provider: "antigravity"},
 		},
 		RetiredCreateModes: map[string]string{
 			sessionmodel.CodexExecGUIMode:   "use " + sessionmodel.CodexGUIMode,
