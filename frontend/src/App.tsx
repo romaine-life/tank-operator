@@ -824,6 +824,7 @@ const MODE_LABELS: Record<SessionMode, string> = {
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
   antigravity_config: "Antigravity config",
+  antigravity_cli: "Antigravity Legacy (-p)",
   antigravity_gui: "Antigravity GUI",
 };
 
@@ -840,6 +841,7 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   codex_app_server: "codex-app",
   codex_config: "codex-cfg",
   antigravity_config: "agy-cfg",
+  antigravity_cli: "agv-legacy",
   antigravity_gui: "agy-gui",
 };
 
@@ -924,6 +926,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_app_server: "Retired Codex app-server alias",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   antigravity_config: "agy login (paste code) · seeds KV for Antigravity",
+  antigravity_cli: "Uses antigravity with -p",
   antigravity_gui: "GUI chat pane for Gemini-Ultra (agy)",
 };
 
@@ -18054,6 +18057,85 @@ function ChatPane({
     session.mode,
     slashOpen,
     transcriptScrollEl,
+    visible,
+  ]);
+
+  // Pressing Left or Right arrow keys on the focused Turns transcript navigates
+  // to the previous/next activity page or the previous/next turn.
+  useEffect(() => {
+    if (!visible || activeTab !== "turns" || !transcriptScrollEl) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (
+        e.isComposing ||
+        e.altKey ||
+        e.ctrlKey ||
+        e.metaKey ||
+        e.shiftKey ||
+        e.target !== transcriptScrollEl ||
+        slashOpen ||
+        mentionOpen ||
+        mcpOpen
+      ) {
+        return;
+      }
+      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+      if (!effectiveSelectedTurnId) return;
+
+      const pageInfo = turnActivityPageInfo[effectiveSelectedTurnId];
+      const pagerState = turnActivityPagerState(pageInfo);
+      const turnIds = turnViewItems.map((turn) => turn.turnId);
+      const turnNav = turnViewTurnNavigation(turnIds, effectiveSelectedTurnId);
+
+      if (e.key === "ArrowLeft") {
+        if (pagerState.canPageOlder) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          selectTurnActivityPage(effectiveSelectedTurnId, pagerState.olderPage);
+        } else if (turnNav.canPrev && turnNav.prevTurnId) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          const prevPageInfo = turnActivityPageInfo[turnNav.prevTurnId];
+          if (prevPageInfo && prevPageInfo.pageCount > 0) {
+            selectedTurnPageRef.current = {
+              ...selectedTurnPageRef.current,
+              [turnNav.prevTurnId]: prevPageInfo.pageCount,
+            };
+          } else {
+            const nextSelectedPages = { ...selectedTurnPageRef.current };
+            delete nextSelectedPages[turnNav.prevTurnId];
+            selectedTurnPageRef.current = nextSelectedPages;
+          }
+          selectTurnViewTurn(turnNav.prevTurnId);
+        }
+      } else if (e.key === "ArrowRight") {
+        if (pagerState.canPageNewer) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          selectTurnActivityPage(effectiveSelectedTurnId, pagerState.newerPage);
+        } else if (turnNav.canNext && turnNav.nextTurnId) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+          selectedTurnPageRef.current = {
+            ...selectedTurnPageRef.current,
+            [turnNav.nextTurnId]: 1,
+          };
+          selectTurnViewTurn(turnNav.nextTurnId);
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [
+    activeTab,
+    effectiveSelectedTurnId,
+    mcpOpen,
+    mentionOpen,
+    slashOpen,
+    transcriptScrollEl,
+    turnActivityPageInfo,
+    turnViewItems,
+    selectTurnActivityPage,
+    selectTurnViewTurn,
     visible,
   ]);
   const codexBackgroundStopAvailable = isCodexRunMode(session.mode);
