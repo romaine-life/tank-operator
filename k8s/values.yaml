@@ -59,7 +59,7 @@ session:
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-feba6fdc764a83fe69eab7c0616a2cb3cced2195772b0976b629cc274f5b71f1
+  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-1309f28b71ecfe71f7ce6171f735f078cc64e223eceb43b914445fec1c65b782
   # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
   # orchestrator namespace where the antigravity-api-proxy mounts it; agy
   # session pods never mount it (they get a placeholder + proxy injection).
