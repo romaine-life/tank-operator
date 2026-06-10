@@ -1574,7 +1574,7 @@ func TestStopBackgroundTaskPublishesControlCommand(t *testing.T) {
 	}
 }
 
-func TestStopBackgroundTaskRejectsClaudeSession(t *testing.T) {
+func TestStopBackgroundTaskAcceptsClaudeSession(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	req := authedBackgroundStopRequest(t, "64", "task-123", `{"turn_id":"turn-abc"}`)
@@ -1582,11 +1582,11 @@ func TestStopBackgroundTaskRejectsClaudeSession(t *testing.T) {
 
 	app.handleStopBackgroundTask(resp, req)
 
-	if resp.Code != http.StatusBadRequest {
+	if resp.Code != http.StatusAccepted {
 		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
 	}
-	if len(bus.commands) != 0 {
-		t.Fatalf("published commands = %d, want 0", len(bus.commands))
+	if len(bus.commands) != 1 {
+		t.Fatalf("published commands = %d, want 1", len(bus.commands))
 	}
 }
 

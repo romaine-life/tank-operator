@@ -82,9 +82,9 @@ func (s *appServer) handleInternalRegisterBackgroundTaskWake(w http.ResponseWrit
 		return
 	}
 	provider, ok := sdkProviderForMode(info.Mode)
-	if !ok || provider != "claude" {
+	if !ok {
 		recordBackgroundTaskWakeRegister("unknown", "bad_request")
-		writeError(w, http.StatusBadRequest, "background task wakes are only supported for Claude SDK sessions")
+		writeError(w, http.StatusBadRequest, "session mode does not support background task wakes")
 		return
 	}
 
