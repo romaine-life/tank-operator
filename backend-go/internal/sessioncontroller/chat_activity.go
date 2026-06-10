@@ -424,7 +424,7 @@ func (e *ChatActivityEmitter) RefreshSessionActivity(ctx context.Context, owner,
 	if resolvedLateInterrupt {
 		metrics.RecordActivityLateInterruptIgnored(next.Status)
 	}
-	next, err = e.applyScheduledWakeOverride(ctx, publicID, next)
+	next, err = e.applyScheduledWakeOverride(ctx, publicID, next, foldStats.BackgroundWorkPending)
 	if err != nil {
 		metrics.RecordActivityFailure()
 		return err
@@ -535,19 +535,28 @@ func (e *ChatActivityEmitter) applyScheduledWakeOverride(
 	ctx context.Context,
 	publicID string,
 	summary sessionactivity.ActivitySummary,
+	backgroundWorkPending bool,
 ) (sessionactivity.ActivitySummary, error) {
 	if summary.Status != "ready" && summary.Status != "scheduled" {
 		return summary, nil
 	}
-	if e.Wakes == nil {
-		if summary.Status == "scheduled" {
-			summary.Status = "ready"
+	// Two independent sources can park a would-be-ready turn into the non-summoning
+	// "scheduled" status, unified here so the bidirectional fold stays correct:
+	// (1) a Tank-owned wake row (ScheduleWakeup / background-task wake) for
+	// Claude/Codex, read from the durable wake tables; (2) the runner's
+	// payload.background_work_pending on the latest turn.completed for a
+	// self-managing agent (antigravity), which owns and fires its own work and so has
+	// no Tank wake row. A nil checker (degraded boot before Postgres) never strands a
+	// session in "scheduled" — pending stays false unless the runner annotated it.
+	// See docs/scheduled-turn-continuity.md and
+	// backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+	pending := backgroundWorkPending
+	if !pending && e.Wakes != nil {
+		wakePending, err := e.Wakes.HasPendingWake(ctx, e.Scope, publicID)
+		if err != nil {
+			return summary, fmt.Errorf("chat-activity emitter: pending-wake check for %q: %w", publicID, err)
 		}
-		return summary, nil
-	}
-	pending, err := e.Wakes.HasPendingWake(ctx, e.Scope, publicID)
-	if err != nil {
-		return summary, fmt.Errorf("chat-activity emitter: pending-wake check for %q: %w", publicID, err)
+		pending = wakePending
 	}
 	if pending && summary.Status == "ready" {
 		summary.Status = "scheduled"

@@ -37,7 +37,8 @@ func TestEventBuilderEmitsSchemaValidTurnEvents(t *testing.T) {
 		builder.turnEvent("turn-1", "nonce-1", string(conversation.EventTurnClaimed), ""),
 		builder.turnEvent("turn-1", "nonce-1", string(conversation.EventTurnStarted), "agy:step:1"),
 		builder.assistantMessageEvent("turn-1", final.providerItemID, final.timelineID, "done"),
-		builder.turnCompletedEvent("turn-1", "nonce-1", final, nil),
+		builder.turnCompletedEvent("turn-1", "nonce-1", final, nil, false),
+		builder.turnCompletedEvent("turn-1b", "nonce-1b", final, nil, true),
 		builder.turnEvent("turn-2", "nonce-2", string(conversation.EventTurnFailed), "provider_no_final_answer"),
 		builder.turnEvent("turn-3", "nonce-3", string(conversation.EventTurnInterrupted), "user_interrupted"),
 		builder.itemEvent("turn-4", "agy:error:1", string(conversation.EventItemFailed), string(conversation.ActorRunner), map[string]any{

@@ -36,7 +36,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -105,12 +104,19 @@ type runnerState struct {
 	currentRun    *turnRun
 	pendingSteps  []parsedStep
 	wakeRequested bool
-	// scheduledWakeups counts durable Tank scheduled wakeups registered for this
-	// session. When > 0, agy's own native timer/background echoes must not also
-	// drive a background-task wake (Tank already owns the resume). Atomic so it can
-	// be read from the idle tail path without taking mu, which observeStep callers
-	// already hold.
-	scheduledWakeups atomic.Int64
+
+	// pendingTasks is the background-work pending-set: agy task ids that emitted a
+	// "running as a background task with task id: X" RUNNING marker and have not yet
+	// emitted a matching SYSTEM_MESSAGE sender=X completion. A non-empty set means
+	// agy has work in flight, so a turn.completed that lands now is mid-work and the
+	// user-facing-turn projection must not summon. See ARCHITECTURE.md.
+	pendingTasks map[string]struct{}
+	// lastCompletedTask is the most recently completed background task id (raw, as
+	// agy writes it). It attributes the next idle self-continuation to the task that
+	// triggered it, so the relay turn folds into the originating user-facing turn.
+	// Consumed (cleared) when a relay is dispatched; an empty value at a
+	// self-continuation is the forbidden untracked-self-wake signature.
+	lastCompletedTask string
 }
 
 type parsedStep struct {
@@ -120,30 +126,47 @@ type parsedStep struct {
 }
 
 func (s *runnerState) handleStep(path, line string, step AgyStep, cfg runnerConfig) error {
-	if !isRelevantStep(step) {
-		return nil
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Track the background-work pending-set for every step BEFORE the relevance
+	// filter: a SYSTEM_MESSAGE task completion is not always a publishable step, but
+	// it must still clear the pending-set so the user-facing-turn projection summons
+	// at the right terminal. See ARCHITECTURE.md → "How background work pending?".
+	s.noteTaskSignalLocked(step)
+
+	if !isRelevantStep(step) {
+		return nil
+	}
 	if s.currentRun != nil {
 		return s.currentRun.observeStep(path, line, step)
 	}
 
+	// Idle: buffer the step so the turn that attaches replays it. A MODEL step while
+	// no turn is active is agy self-continuing — one of its tracked tasks fired and it
+	// resumed itself with no Tank clock. Relay it: ask the backend (the sole author of
+	// turn boundaries) to open a turn; its submit_turn (source=agent-continuation)
+	// lands on the data consumer, handleSubmitTurn attaches a turnRun WITHOUT
+	// re-prompting the PTY, and these buffered steps replay into it. The runner only
+	// observes and relays — it never owns or fires a clock for agy.
 	s.pendingSteps = append(s.pendingSteps, parsedStep{path: path, line: line, step: step})
-	if !s.wakeRequested {
-		if s.scheduledWakeups.Load() > 0 && isNativeTimerEchoStep(step) {
-			// A durable Tank scheduled wakeup already owns this session's resume;
-			// don't double-wake via the background-task path on agy's native timer echo.
-			slog.Info("parking native antigravity timer echo; scheduled wakeup owns the resume", "type", step.Type)
-			return nil
-		}
+	if !s.wakeRequested && strings.EqualFold(step.Source, "MODEL") {
 		s.wakeRequested = true
-		taskID := providerStepID(path, line, step)
+		taskID := strings.TrimSpace(s.lastCompletedTask)
+		s.lastCompletedTask = ""
+		if taskID == "" {
+			// A self-continuation with no preceding tracked task completion is the
+			// forbidden untracked-self-wake signature. Relay it anyway so work is not
+			// stranded, but surface it loudly — the jsonl pending-set is the primary
+			// guard and a gap here is a bug to fix, not to swallow (ARCHITECTURE.md).
+			taskID = providerStepID(path, line, step)
+			slog.Warn("antigravity self-continuation with no tracked task completion (possible untracked self-wake)",
+				"derived_task_id", taskID, "type", step.Type)
+		}
+		summary := clipText(contentText(step.Content), 500)
 		go func() {
-			err := registerBackgroundTaskWake(cfg, taskID, "Antigravity background activity detected")
-			if err != nil {
-				slog.Error("failed to register background task wake", "error", err)
+			if err := registerAgentContinuation(cfg, stableIDPart(taskID), summary); err != nil {
+				slog.Error("antigravity agent-continuation relay failed", "task_id", taskID, "error", err)
 			}
 		}()
 	}
@@ -169,6 +192,68 @@ func (s *runnerState) detachTurn(run *turnRun) {
 	}
 }
 
+// backgroundTaskStartPattern matches agy's RUNNING marker
+// ("Tool is running as a background task with task id: <X>"); backgroundTaskDonePattern
+// matches the completion ("... sender=<X> ..."). agy routes ALL background work —
+// schedule timers, run_command builds/shells, and anything else — through this one
+// uniform task framework, correlated by task id. See ARCHITECTURE.md.
+var (
+	backgroundTaskStartPattern = regexp.MustCompile(`background task with task id:\s*(\S+)`)
+	backgroundTaskDonePattern  = regexp.MustCompile(`sender=(\S+)`)
+)
+
+// noteTaskSignalLocked maintains the background-work pending-set from agy's jsonl.
+// It is called for every step under s.mu, before the relevance filter, so a
+// completion that is otherwise non-publishable still clears the set. The RUNNING
+// marker always lands before the SDK turn.completed, so at the terminal the runner
+// already knows whether work is pending — no race.
+func (s *runnerState) noteTaskSignalLocked(step AgyStep) {
+	if strings.EqualFold(step.Source, "MODEL") {
+		if !strings.EqualFold(step.Status, "RUNNING") {
+			return
+		}
+		if m := backgroundTaskStartPattern.FindStringSubmatch(contentText(step.Content)); m != nil {
+			if id := trimTaskID(m[1]); id != "" {
+				if s.pendingTasks == nil {
+					s.pendingTasks = map[string]struct{}{}
+				}
+				s.pendingTasks[id] = struct{}{}
+			}
+		}
+		return
+	}
+	if strings.EqualFold(step.Source, "SYSTEM") {
+		if m := backgroundTaskDonePattern.FindStringSubmatch(contentText(step.Content)); m != nil {
+			if id := trimTaskID(m[1]); id != "" {
+				delete(s.pendingTasks, id)
+				s.lastCompletedTask = id
+			}
+		}
+	}
+}
+
+// backgroundWorkPending reports whether agy has any tracked background task still
+// in flight. Read at a turn terminal to stamp turn.completed.background_work_pending.
+func (s *runnerState) backgroundWorkPending() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.pendingTasks) > 0
+}
+
+// trimTaskID strips trailing sentence punctuation a regex \S+ may capture around an
+// agy task id (the id charset itself never ends in these).
+func trimTaskID(raw string) string {
+	return strings.TrimRight(strings.TrimSpace(raw), ".,;\"'`")
+}
+
+func clipText(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return strings.TrimSpace(s[:max])
+}
+
 type turnRun struct {
 	builder      eventBuilder
 	publish      func(map[string]any) error
@@ -184,14 +269,9 @@ type turnRun struct {
 	pendingTools    []pendingTool
 	cumulativeUsage *AgyUsage
 
-	// state is the shared session runner state (for the scheduled-wakeup parking
-	// signal). scheduleRegister registers a durable Tank scheduled wakeup with the
-	// orchestrator; it is nil in tests that don't exercise registration.
-	state            *runnerState
-	scheduleRegister func(providerItemID string, delayMs int64, prompt, scheduledTurnID string) (bool, error)
-	// scheduleSeen records that the agent emitted a `schedule` tool call this turn,
-	// which suppresses the wait-intent-without-schedule diagnostic.
-	scheduleSeen bool
+	// state is the shared session runner state. The relay reads its background-work
+	// pending-set to stamp background_work_pending on this turn's terminal.
+	state *runnerState
 }
 
 type activeProcess struct {
@@ -355,229 +435,59 @@ func operatorTokenPath() string {
 	return "/var/run/secrets/tank-operator/token"
 }
 
-func registerBackgroundTaskWake(cfg runnerConfig, taskID string, summary string) error {
-	baseURL := operatorBaseURL()
-	tokenPath := operatorTokenPath()
-	if cfg.sessionID == "" {
+// registerAgentContinuation asks the orchestrator to author a durable turn
+// boundary for agy's idle self-continuation. The backend is the SOLE producer of
+// turn.submitted, so the runner cannot open the turn itself; it relays agy's
+// already-emitted steps into the turn the backend opens (source=agent-continuation),
+// without re-prompting the PTY. The endpoint is idempotent and keyed by a
+// deterministic per-task nonce, so this retries safely until accepted; a 4xx is a
+// permanent rejection and stops the loop. This is the antigravity peer of the
+// Claude background-task wake — except the trigger is agy's OWN continuation, never
+// a Tank clock. See ARCHITECTURE.md.
+func registerAgentContinuation(cfg runnerConfig, taskID, summary string) error {
+	if cfg.sessionID == "" || strings.TrimSpace(taskID) == "" {
 		return nil
 	}
-	tokenBytes, err := os.ReadFile(tokenPath)
-	if err != nil {
-		return err
-	}
-	token := strings.TrimSpace(string(tokenBytes))
-	url := fmt.Sprintf("%s/api/internal/sessions/%s/background-task-wakes", baseURL, cfg.sessionID)
+	url := fmt.Sprintf("%s/api/internal/sessions/%s/agent-continuation", operatorBaseURL(), cfg.sessionID)
+	body, _ := json.Marshal(map[string]any{"task_id": taskID, "summary": summary})
 
-	payload := map[string]any{
-		"task_id":        taskID,
-		"status":         "completed",
-		"description":    "Antigravity background process finished",
-		"summary":        summary,
-		"last_tool_name": "agy",
-	}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("background task wake register failed: %d", resp.StatusCode)
-	}
-	return nil
-}
-
-// registerScheduledWakeup registers a durable Tank scheduled wakeup with the
-// orchestrator. It is the antigravity peer of the Claude runner's ScheduleWakeup
-// registration: the orchestrator owns the durable timer row and resumes the
-// session through the same backend turn boundary as a user turn. The endpoint and
-// payload mirror the Claude path (POST /scheduled-wakeups), and the orchestrator's
-// supportsScheduledWakeups() already accepts the antigravity provider.
-// registerScheduledWakeup returns (registered, err): registered is true only when
-// the orchestrator accepted the durable wakeup (2xx). A false/nil result is a
-// deliberate skip (missing session/item/prompt) and is logged, so a no-op can
-// never again masquerade as success.
-func registerScheduledWakeup(cfg runnerConfig, providerItemID string, delayMs int64, prompt, scheduledTurnID string) (bool, error) {
-	baseURL := operatorBaseURL()
-	tokenPath := operatorTokenPath()
-	prompt = strings.TrimSpace(prompt)
-	providerItemID = strings.TrimSpace(providerItemID)
-	if cfg.sessionID == "" || providerItemID == "" || prompt == "" {
-		slog.Warn("antigravity scheduled wakeup registration skipped: missing session/item/prompt",
-			"session_id", cfg.sessionID, "provider_item_id", providerItemID, "has_prompt", prompt != "")
-		return false, nil
-	}
-	if delayMs < 0 {
-		delayMs = 0
-	}
-	tokenBytes, err := os.ReadFile(tokenPath)
-	if err != nil {
-		return false, err
-	}
-	token := strings.TrimSpace(string(tokenBytes))
-	url := fmt.Sprintf("%s/api/internal/sessions/%s/scheduled-wakeups", baseURL, cfg.sessionID)
-
-	payload := map[string]any{
-		"delay_ms":         delayMs,
-		"prompt":           prompt,
-		"provider_item_id": providerItemID,
-	}
-	if scheduledTurnID = strings.TrimSpace(scheduledTurnID); scheduledTurnID != "" {
-		payload["scheduled_turn_id"] = scheduledTurnID
-	}
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
-	if err != nil {
-		return false, err
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return false, fmt.Errorf("scheduled wakeup register failed: %d", resp.StatusCode)
-	}
-	return true, nil
-}
-
-// maybeRegisterScheduleWakeup ports the deleted antigravity-runner/src/wakeup.ts.
-// agy expresses a timer as a `schedule` tool call carrying DurationSeconds + a
-// continuation Prompt (e.g. {"DurationSeconds":"5","Prompt":"..."}). The runner
-// registers a durable Tank scheduled wakeup so the orchestrator owns the timer and
-// resumes the session at due time — the same shape Claude uses. Without this the
-// schedule tool is rendered as a cosmetic item and the session never wakes (the
-// regression introduced when the runner was rewritten in Go, #996).
-func (r *turnRun) maybeRegisterScheduleWakeup(providerItemID string, tc AgyToolCall) {
-	if !strings.EqualFold(strings.TrimSpace(tc.Name), "schedule") {
-		return
-	}
-	r.mu.Lock()
-	r.scheduleSeen = true
-	r.mu.Unlock()
-
-	delayMs, prompt, ok := parseScheduleWakeup(tc)
-	if !ok {
-		slog.Warn("antigravity malformed schedule tool call", "turn_id", r.turnID, "provider_item_id", providerItemID)
-		return
-	}
-	reg := r.scheduleRegister
-	if reg == nil {
-		return
-	}
-	st := r.state
-	turnID := r.turnID
-	go func() {
-		registered, err := reg(providerItemID, delayMs, prompt, turnID)
+	var lastErr error
+	backoff := 500 * time.Millisecond
+	for attempt := 0; attempt < 6; attempt++ {
+		if attempt > 0 {
+			time.Sleep(backoff)
+			if backoff < 8*time.Second {
+				backoff *= 2
+			}
+		}
+		tokenBytes, err := os.ReadFile(operatorTokenPath())
 		if err != nil {
-			slog.Error("antigravity scheduled wakeup register failed", "error", err, "turn_id", turnID, "provider_item_id", providerItemID)
-			return
+			lastErr = err
+			continue
 		}
-		if !registered {
-			return
-		}
-		slog.Info("antigravity scheduled wakeup registered", "turn_id", turnID, "provider_item_id", providerItemID, "delay_ms", delayMs)
-		if st != nil {
-			st.scheduledWakeups.Add(1)
-		}
-	}()
-}
-
-// warnIfWaitWithoutSchedule surfaces the model-reliability gap where Gemini narrates
-// that it will wait but never emitted a `schedule` tool call, so no timer can be
-// registered. This is a diagnostic signal (the runner behaved correctly), not a
-// runner bug, and mirrors the TS runner's wait_text_without_schedule counter.
-func (r *turnRun) warnIfWaitWithoutSchedule(text string) {
-	r.mu.Lock()
-	seen := r.scheduleSeen
-	r.mu.Unlock()
-	if seen {
-		return
-	}
-	if isWaitIntentText(text) {
-		slog.Warn("antigravity wait intent without schedule tool call", "turn_id", r.turnID)
-	}
-}
-
-// parseScheduleWakeup extracts the delay and continuation prompt from an agy
-// `schedule` tool call. DurationSeconds is emitted as a JSON string ("5") but a
-// number is tolerated. A malformed call (no/negative duration, empty prompt) yields
-// ok=false so the caller can count it without registering a bad timer.
-func parseScheduleWakeup(tc AgyToolCall) (int64, string, bool) {
-	if len(tc.Args) == 0 {
-		return 0, "", false
-	}
-	var args struct {
-		DurationSeconds json.RawMessage `json:"DurationSeconds"`
-		Prompt          string          `json:"Prompt"`
-	}
-	if err := json.Unmarshal(tc.Args, &args); err != nil {
-		return 0, "", false
-	}
-	seconds, ok := parseFlexibleSeconds(args.DurationSeconds)
-	if !ok || seconds < 0 {
-		return 0, "", false
-	}
-	prompt := strings.TrimSpace(args.Prompt)
-	if prompt == "" {
-		return 0, "", false
-	}
-	return int64(seconds * 1000), prompt, true
-}
-
-func parseFlexibleSeconds(raw json.RawMessage) (float64, bool) {
-	if len(raw) == 0 || string(raw) == "null" {
-		return 0, false
-	}
-	var asString string
-	if err := json.Unmarshal(raw, &asString); err == nil {
-		f, err := strconv.ParseFloat(strings.TrimSpace(asString), 64)
+		req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 		if err != nil {
-			return 0, false
+			return err
 		}
-		return f, true
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tokenBytes)))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+			return nil
+		}
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			// A bad task id / non-antigravity session won't fix on retry.
+			return fmt.Errorf("agent-continuation rejected: %d", resp.StatusCode)
+		}
+		lastErr = fmt.Errorf("agent-continuation failed: %d", resp.StatusCode)
 	}
-	var asNumber float64
-	if err := json.Unmarshal(raw, &asNumber); err == nil {
-		return asNumber, true
-	}
-	return 0, false
-}
-
-var scheduleWaitIntentPattern = regexp.MustCompile(`\bi(?:'ll| will| am)\s+(?:now\s+)?wait\b|\bi\s+am\s+waiting\b|\bi(?:'ll| will)\s+check\s+back\b|\bwait(?:ing)?\s+for\b`)
-
-func normalizeScheduleText(value string) string {
-	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
-}
-
-func isWaitIntentText(text string) bool {
-	norm := normalizeScheduleText(text)
-	if norm == "" {
-		return false
-	}
-	return scheduleWaitIntentPattern.MatchString(norm)
-}
-
-// isNativeTimerEchoStep reports whether an idle agy step is agy's own native
-// timer/background firing (a SYSTEM timer/schedule/background/wake step). When a
-// durable Tank scheduled wakeup is already pending, this echo must not also drive a
-// background-task wake, or the session would be resumed twice.
-func isNativeTimerEchoStep(step AgyStep) bool {
-	if !strings.EqualFold(step.Source, "SYSTEM") {
-		return false
-	}
-	typ := strings.ToLower(step.Type)
-	return strings.Contains(typ, "timer") || strings.Contains(typ, "schedule") || strings.Contains(typ, "background") || strings.Contains(typ, "wake")
+	return lastErr
 }
 
 func loadConfig() (runnerConfig, error) {
@@ -748,9 +658,6 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 
 	run := newTurnRun(builder, publisher, turnID, clientNonce)
 	run.state = state
-	run.scheduleRegister = func(providerItemID string, delayMs int64, prompt, scheduledTurnID string) (bool, error) {
-		return registerScheduledWakeup(cfg, providerItemID, delayMs, prompt, scheduledTurnID)
-	}
 	if err := publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnClaimed), "")); err != nil {
 		return false, err
 	}
@@ -758,11 +665,16 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 	stopHeartbeat := startHeartbeat(ctx, msg)
 	defer stopHeartbeat()
 
-	_, err := ptmx.WriteString(command.Prompt + "\r")
-	if err != nil {
-		_ = publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnFailed), "failed_to_start"))
-		_ = msg.Ack()
-		return false, nil
+	// An agent-continuation turn relays agy's OWN idle self-continuation: agy already
+	// emitted the steps (buffered in pendingSteps) before this backend-authored
+	// boundary arrived. Re-prompting the PTY would inject a phantom user turn, so skip
+	// the write and let attachTurn replay the buffered steps into this turn.
+	if command.Source != string(conversation.TurnSubmittedSourceAgentContinuation) {
+		if _, err := ptmx.WriteString(command.Prompt + "\r"); err != nil {
+			_ = publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnFailed), "failed_to_start"))
+			_ = msg.Ack()
+			return false, nil
+		}
 	}
 
 	state.attachTurn(run)
@@ -977,8 +889,6 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 				r.mu.Lock()
 				r.pendingTools = append(r.pendingTools, pendingTool{id: toolID, name: tc.Name})
 				r.mu.Unlock()
-
-				r.maybeRegisterScheduleWakeup(toolID, tc)
 			}
 			return nil
 		}
@@ -1047,7 +957,6 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 				r.mu.Unlock()
 			}
 			if strings.EqualFold(step.Status, "DONE") {
-				r.warnIfWaitWithoutSchedule(text)
 				close(r.turnComplete)
 			}
 			return nil
@@ -1079,7 +988,12 @@ func (r *turnRun) finishCompleted() error {
 	if final.timelineID == "" {
 		return r.finishFailed("provider_no_final_answer")
 	}
-	return r.publish(r.builder.turnCompletedEvent(r.turnID, r.clientNonce, final, usage))
+	// background_work_pending stamps whether agy still has a tracked background task
+	// in flight at this SDK terminal. The user-facing-turn projection folds a
+	// would-be-ready terminal to the non-summoning scheduled status when it is set, so
+	// the human is not summoned mid-wait. Nil state ⇒ false (no tracked work).
+	backgroundWorkPending := r.state != nil && r.state.backgroundWorkPending()
+	return r.publish(r.builder.turnCompletedEvent(r.turnID, r.clientNonce, final, usage, backgroundWorkPending))
 }
 
 func (r *turnRun) finishFailed(reason string) error {
@@ -1200,12 +1114,13 @@ func (b eventBuilder) turnEvent(turnID, clientNonce, eventType, reason string) m
 	return b.stamp(event)
 }
 
-func (b eventBuilder) turnCompletedEvent(turnID, clientNonce string, final finalAnswer, usage *AgyUsage) map[string]any {
+func (b eventBuilder) turnCompletedEvent(turnID, clientNonce string, final finalAnswer, usage *AgyUsage, backgroundWorkPending bool) map[string]any {
 	payload := map[string]any{
 		"final_answer": map[string]any{
 			"timeline_ids":      []string{final.timelineID},
 			"provider_item_ids": []string{final.providerItemID},
 		},
+		"background_work_pending": backgroundWorkPending,
 	}
 	if usage != nil {
 		payload["usage"] = map[string]any{
