@@ -8,7 +8,7 @@ on:
       - 'antigravity-container/**'
       - 'agent-runner/**'
       - 'codex-runner/**'
-      - 'antigravity-runner/**'
+      - 'backend-go/cmd/antigravity-runner/**'
       - 'runner-shared/**'
       - 'scripts/image-fingerprint.sh'
       - '.github/workflows/session-images-build.yml'
