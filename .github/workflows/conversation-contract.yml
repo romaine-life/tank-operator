@@ -11,7 +11,7 @@ on:
       - 'backend-go/cmd/tank-operator/handlers_turns.go'
       - 'backend-go/cmd/tank-operator/handlers_turns_test.go'
       - 'frontend/src/**'
-      - 'agent-runner/src/**'
+      - 'claude-runner/src/**'
       - 'codex-runner/src/**'
       - 'runner-shared/**'
       - 'scripts/check-tank-conversation-contract.mjs'
@@ -27,7 +27,7 @@ on:
       - 'backend-go/cmd/tank-operator/handlers_turns.go'
       - 'backend-go/cmd/tank-operator/handlers_turns_test.go'
       - 'frontend/src/**'
-      - 'agent-runner/src/**'
+      - 'claude-runner/src/**'
       - 'codex-runner/src/**'
       - 'runner-shared/**'
       - 'scripts/check-tank-conversation-contract.mjs'
@@ -55,8 +55,8 @@ jobs:
       - name: Install frontend dependencies
         run: npm ci --prefix frontend
 
-      - name: Install agent-runner dependencies
-        run: npm ci --prefix agent-runner
+      - name: Install claude-runner dependencies
+        run: npm ci --prefix claude-runner
 
       - name: Install codex-runner dependencies
         run: npm ci --prefix codex-runner
@@ -67,10 +67,10 @@ jobs:
       - name: Test frontend projection contract
         run: npm test --prefix frontend
 
-      - name: Test agent-runner contract
+      - name: Test claude-runner contract
         run: |
-          npm run build --prefix agent-runner
-          npm test --prefix agent-runner
+          npm run build --prefix claude-runner
+          npm test --prefix claude-runner
 
       - name: Test codex-runner contract
         run: |

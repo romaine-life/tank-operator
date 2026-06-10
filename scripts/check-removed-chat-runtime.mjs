@@ -76,7 +76,7 @@ const ignoredRelativePaths = new Set([
   // backend-go/internal/sessionbus/subjects_test.go (which uses string
   // concat and doesn't trip the guard) — TS string concat isn't as
   // idiomatic, so the test pins the literal directly.
-  "agent-runner/src/sessionbus/sessionBusSubjects.test.ts",
+  "claude-runner/src/sessionbus/sessionBusSubjects.test.ts",
   // navigationMode module — names the retired symbols in the
   // explanatory module header (the comment block that documents
   // which bug class the module was created to retire). Same
@@ -194,7 +194,7 @@ const blocked = [
   { name: "removed local stampEventID stamper", pattern: /\bstampEventID\b/ },
   { name: "removed phantom canonical tank.user_message type", pattern: /\btank\.user_message\b/ },
   { name: "duplicate codex-runner conversation contract", pattern: /codex-runner\/src\/conversation\.ts\b/ },
-  { name: "duplicate agent-runner conversation contract", pattern: /agent-runner\/src\/conversation\.ts\b/ },
+  { name: "duplicate claude-runner conversation contract", pattern: /claude-runner\/src\/conversation\.ts\b/ },
   { name: "duplicate frontend tankConversation contract", pattern: /frontend\/src\/tankConversation\.ts\b/ },
   // Phantom Tank event types: schema/code surface that no production code
   // ever emitted. They became maintenance debt with no live emitter, so
@@ -234,7 +234,7 @@ const blocked = [
   { name: "removed Cosmos env var", pattern: /\bCOSMOS_ENDPOINT\b|\bCOSMOS_DATABASE\b|\bCOSMOS_SESSION_EVENTS_CONTAINER\b|\bCOSMOS_PROFILES_CONTAINER\b/ },
   { name: "removed Cosmos cleanup scripts", pattern: /scripts\/(audit-session-events|clean-session-events|migrate-session-events-timeline-id)\.py\b/ },
   // NATS-delayed ScheduleWakeup was replaced by a pod-local setTimeout
-  // in the agent-runner during the #457 session bus refactor. The old
+  // in the claude-runner during the #457 session bus refactor. The old
   // path published a scheduled command via JetStream's AllowMsgSchedules
   // feature; block reintroduction so a future refactor doesn't recreate
   // the durable scheduler the inspirations doc explicitly scoped out.

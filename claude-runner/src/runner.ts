@@ -825,7 +825,7 @@ export class Runner {
     optionsPinnedTotal.labels(model, effort).inc();
     console.log(
       JSON.stringify({
-        msg: "agent-runner pinning SDK options from first turn",
+        msg: "claude-runner pinning SDK options from first turn",
         model,
         effort,
         source_command_id: record.id,
@@ -852,7 +852,7 @@ export class Runner {
       // policy.
       canUseTool: this.canUseTool,
       // Resume an on-disk JSONL if one exists from a prior process
-      // life (e.g., agent-runner restart within the same pod).
+      // life (e.g., claude-runner restart within the same pod).
       // First boot with no JSONL: no-op.
       continue: true,
       // include_partial_messages keeps the typewriter effect — the SPA

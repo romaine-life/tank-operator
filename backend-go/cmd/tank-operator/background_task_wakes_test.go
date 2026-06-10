@@ -76,7 +76,7 @@ func backgroundWakeRow() pgstore.BackgroundTaskWake {
 
 func TestFireBackgroundTaskWakeUsesDurableTurnBoundary(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "claude-runner"))
 	wakes := &fakeBackgroundTaskWakeStore{}
 	app.backgroundTaskWakes = wakes
 	app.sessionEvents = &recordingSessionEventStore{}
@@ -121,7 +121,7 @@ func TestFireBackgroundTaskWakeUsesDurableTurnBoundary(t *testing.T) {
 
 func TestFireBackgroundTaskWakeDefersWhenAwaitingInput(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "claude-runner"))
 	wakes := &fakeBackgroundTaskWakeStore{}
 	app.backgroundTaskWakes = wakes
 	app.sessionEvents = &recordingSessionEventStore{}

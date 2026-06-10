@@ -621,10 +621,10 @@ const CHECKS = [
     pattern: /isInterruptCommand\(command\)[\s\S]{0,400}?record\.ack\(\)/,
   },
   {
-    id: "agent-runner-starts-control-consumer",
+    id: "claude-runner-starts-control-consumer",
     from: "Control plane",
-    file: "agent-runner/src/runner.ts",
-    description: "agent-runner Runner.run() starts the control consumer alongside the command consumer",
+    file: "claude-runner/src/runner.ts",
+    description: "claude-runner Runner.run() starts the control consumer alongside the command consumer",
     kind: "grep-present",
     pattern: /this\.startControlConsumer\(signal\)/,
   },
@@ -637,10 +637,10 @@ const CHECKS = [
     pattern: /this\.startControlConsumer\(signal\)/,
   },
   {
-    id: "agent-runner-command-consumer-no-interrupt-dispatch",
+    id: "claude-runner-command-consumer-no-interrupt-dispatch",
     from: "Control plane",
-    file: "agent-runner/src/runner.ts",
-    description: "agent-runner startCommandConsumer body does NOT dispatch interrupts (control plane is the only path)",
+    file: "claude-runner/src/runner.ts",
+    description: "claude-runner startCommandConsumer body does NOT dispatch interrupts (control plane is the only path)",
     kind: "order-in-function-absent",
     functionName: "startCommandConsumer",
     absentPattern: /acceptInterrupt/,
@@ -655,10 +655,10 @@ const CHECKS = [
     absentPattern: /acceptInterrupt/,
   },
   {
-    id: "agent-runner-control-consumer-dispatches-interrupt",
+    id: "claude-runner-control-consumer-dispatches-interrupt",
     from: "Control plane",
-    file: "agent-runner/src/runner.ts",
-    description: "agent-runner startControlConsumer body dispatches interrupts to acceptInterrupt",
+    file: "claude-runner/src/runner.ts",
+    description: "claude-runner startControlConsumer body dispatches interrupts to acceptInterrupt",
     kind: "grep-present",
     pattern: /private startControlConsumer\([\s\S]{0,1200}?isInterruptCommand\(record\)[\s\S]{0,400}?acceptInterrupt\(record\)/,
   },
@@ -707,10 +707,10 @@ const CHECKS = [
     pattern: /func TestSubjectForCommandRoutesDataPlane\b/,
   },
   {
-    id: "test-agent-runner-interrupt-during-submit",
+    id: "test-claude-runner-interrupt-during-submit",
     from: "Tests",
-    file: "agent-runner/src/runner.test.ts",
-    description: "agent-runner has a regression test that interrupt dispatch is independent of an in-flight submit (the load-bearing property the split establishes)",
+    file: "claude-runner/src/runner.test.ts",
+    description: "claude-runner has a regression test that interrupt dispatch is independent of an in-flight submit (the load-bearing property the split establishes)",
     kind: "grep-present",
     pattern: /interrupt.*(?:during|while).*submit|dispatchInterruptIndependentlyOfSubmit/i,
   },
@@ -777,7 +777,7 @@ const CHECKS = [
   {
     id: "runner-interrupt-outcome-counter",
     from: "Four-outcome contract (post-#532)",
-    file: "agent-runner/src/metrics.ts",
+    file: "claude-runner/src/metrics.ts",
     description: "tank_runner_interrupt_outcome_total counter is registered with the outcome label",
     kind: "grep-present",
     pattern: /name:\s*"tank_runner_interrupt_outcome_total"[\s\S]{0,400}?labelNames:\s*\[\s*"outcome"\s*\]/,
@@ -785,7 +785,7 @@ const CHECKS = [
   {
     id: "runner-pending-interrupts-buffer",
     from: "Four-outcome contract (post-#532)",
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     description: "pendingInterrupts buffer exists so an interrupt arriving before its submit_turn is not silently dropped",
     kind: "grep-present",
     pattern: /pendingInterrupts:\s*BufferedInterrupt\[\]/,
@@ -793,7 +793,7 @@ const CHECKS = [
   {
     id: "runner-buffer-drain-helper",
     from: "Four-outcome contract (post-#532)",
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     description: "drainPendingInterruptsFor applies pre-arrived stops at submit_turn dispatch time",
     kind: "grep-present",
     pattern: /drainPendingInterruptsFor\(turn:\s*PendingTurn\)/,
@@ -801,7 +801,7 @@ const CHECKS = [
   {
     id: "runner-sdk-interrupt-first",
     from: "Four-outcome contract (post-#532)",
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     description: "applyInterruptToTurn calls sdkQuery.interrupt() BEFORE publishing the durable terminal (load-bearing ordering)",
     kind: "grep-present",
     // signalStopToSdk() wraps the sdkQuery.interrupt() call; it must appear
@@ -811,7 +811,7 @@ const CHECKS = [
   {
     id: "runner-publish-retry-fallback",
     from: "Four-outcome contract (post-#532)",
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     description: "applyInterruptToTurn falls back to turn.failed{publish_interrupt_failed} when turn.interrupted publish exhausts retries",
     kind: "grep-present",
     pattern: /publish_interrupt_failed/,
@@ -819,7 +819,7 @@ const CHECKS = [
   {
     id: "runner-orphan-terminal",
     from: "Four-outcome contract (post-#532)",
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     description: "expireBufferedInterrupt emits turn.failed{interrupt_orphaned} so a buffered interrupt without a matching submit_turn resolves to a durable terminal",
     kind: "grep-present",
     pattern: /interrupt_orphaned/,
@@ -827,7 +827,7 @@ const CHECKS = [
   {
     id: "runner-no-silent-not-found",
     from: "Four-outcome contract (post-#532)",
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     description: "acceptInterrupt does NOT return silently with 'not_found' (the pre-#532 silent-stranding path)",
     kind: "grep-absent",
     // The shutdown-path interruptActiveTurn still uses InterruptOutcome
@@ -880,7 +880,7 @@ const CHECKS = [
 
   // ────────────────────── Four-outcome contract: codex-runner side (PR 2 of #532) ──────────────────────
   //
-  // codex-runner mirrors agent-runner's buffer-and-apply shape. The codex
+  // codex-runner mirrors claude-runner's buffer-and-apply shape. The codex
   // runner's interrupt flow uses two buffers (pendingInterrupts for the
   // case where the submit_turn is already tracked; orphanInterrupts for
   // the pre-submit race that pre-#532 silently ack'd). The checks below
@@ -984,10 +984,10 @@ const CHECKS = [
     pattern: /publishEvent\(event[\s\S]{0,800}?truncateEventIfOversized/,
   },
   {
-    id: "agent-runner-dispatch-truncates",
+    id: "claude-runner-dispatch-truncates",
     from: "Oversized-event truncation (PR 3 of #532)",
-    file: "agent-runner/src/runner.ts",
-    description: "agent-runner's dispatch() runs truncateEventIfOversized before sink.upsert and increments the counter",
+    file: "claude-runner/src/runner.ts",
+    description: "claude-runner's dispatch() runs truncateEventIfOversized before sink.upsert and increments the counter",
     kind: "grep-present",
     pattern: /dispatch[\s\S]{0,1200}?truncateEventIfOversized[\s\S]{0,400}?eventTruncatedTotal/,
   },
@@ -1000,9 +1000,9 @@ const CHECKS = [
     pattern: /dispatch[\s\S]{0,1200}?truncateEventIfOversized[\s\S]{0,400}?eventTruncatedTotal/,
   },
   {
-    id: "agent-runner-truncated-counter",
+    id: "claude-runner-truncated-counter",
     from: "Oversized-event truncation (PR 3 of #532)",
-    file: "agent-runner/src/metrics.ts",
+    file: "claude-runner/src/metrics.ts",
     description: "tank_runner_event_truncated_total counter is registered with event_type + severity labels",
     kind: "grep-present",
     pattern: /name:\s*"tank_runner_event_truncated_total"[\s\S]{0,400}?labelNames:\s*\[\s*"event_type",\s*"severity"\s*\]/,

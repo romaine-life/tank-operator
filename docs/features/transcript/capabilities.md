@@ -232,8 +232,8 @@ Evidence:
   `schemas/tank-conversation-event.fixtures.json` carries the canonical fixture
   validated by `scripts/check-tank-conversation-contract.mjs` and the Go
   contract test.
-- Producer: `agent-runner/src/adapters/claude.ts` maps
-  `system/compact_boundary`; `agent-runner/src/adapters/claude.test.ts` pins
+- Producer: `claude-runner/src/adapters/claude.ts` maps
+  `system/compact_boundary`; `claude-runner/src/adapters/claude.test.ts` pins
   the mapping and the malformed-metadata default.
 - Producer: `codex-runner/src/appServerTransport.ts` maps the Codex App Server
   `thread/compacted` notification and generated `contextCompaction` item
@@ -245,7 +245,7 @@ Evidence:
   (`TestProjectTranscriptEventsRecordsContextCompactedAsTurnActivity`) proves it
   is recorded as a turn-activity child folded into the shell and is absent from
   the settled transcript — the guard against the promotion path returning.
-- Observability: `agent-runner/src/metrics.ts` →
+- Observability: `claude-runner/src/metrics.ts` →
   `tank_runner_unmapped_provider_event_total`.
 
 Codex-specific notes:

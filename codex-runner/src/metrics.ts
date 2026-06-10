@@ -5,7 +5,7 @@
 // session-pod blows up Prometheus active series at scale.
 //
 // The single mutable label is `mode`, set to "codex" here. The
-// agent-runner ships an identical module with `mode: "claude"`.
+// claude-runner ships an identical module with `mode: "claude"`.
 
 import { Counter, Gauge, Histogram, Registry, collectDefaultMetrics } from "prom-client";
 import { createServer, type Server } from "node:http";
@@ -67,7 +67,7 @@ export const itemOutcomeTotal = new Counter({
   registers: [registry],
 });
 
-// unmappedProviderEventTotal — sibling of the agent-runner counter. On the
+// unmappedProviderEventTotal — sibling of the claude-runner counter. On the
 // codex runner the unit is an app-server JSONRPC notification method that
 // handleNotification recognized no branch for (type=method, subtype="none").
 // Same name + labels as the claude runner (the `mode` default label
@@ -83,11 +83,11 @@ export const unmappedProviderEventTotal = new Counter({
 });
 
 // interruptOutcomeTotal records the disposition of every `interrupt_turn`
-// command this runner accepts. Sibling of the agent-runner counter
+// command this runner accepts. Sibling of the claude-runner counter
 // shipped with #535 (PR 1 of #532); same labels and same four-outcome
 // contract so the per-stop SLO alert can sum across both runners.
 //
-// See agent-runner/src/metrics.ts for the bucket-by-bucket docstring;
+// See claude-runner/src/metrics.ts for the bucket-by-bucket docstring;
 // the contract is also pinned in
 // docs/tank-conversation-protocol.md → "Four-outcome contract on the
 // runner side". The codex-runner's mapping to the buckets:
@@ -132,7 +132,7 @@ export const natsPublishFailureTotal = new Counter({
   registers: [registry],
 });
 
-// eventTruncatedTotal — see agent-runner/src/metrics.ts for the
+// eventTruncatedTotal — see claude-runner/src/metrics.ts for the
 // docstring. Sibling counter; the mode label distinguishes runners.
 // Bucketed by event_type so the operator can see "huge Read tool
 // outputs" vs. "huge assistant.message.text" at a glance. Per #532

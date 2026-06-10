@@ -860,7 +860,7 @@ func validVisibility(visibility Visibility) bool {
 // (sessionbus.persistOneEvent) and the backend-direct path
 // (cmd/tank-operator.persistBackendEvent) filter on this predicate
 // before incrementing tank_turn_lifecycle_total. See
-// docs/features/agent-runners/contract.md → Observability.
+// docs/features/claude-runners/contract.md → Observability.
 func IsTurnLifecycleEvent(eventType EventType) bool {
 	if eventType == EventTurnSubmitted {
 		return true

@@ -189,7 +189,7 @@ func (b *recordingSessionBus) SubscribePinnedReposUpdates(context.Context, strin
 
 func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	app.turns = fakeSessionTurnStore{
 		byTurnID: map[string]int64{
 			conversation.TurnIDForClientNonce("turn-abc_123"): 42,
@@ -246,7 +246,7 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	if got.Prompt != "/test\n\nhello sdk" || got.Model != "claude-sonnet-4-6" || got.PermissionMode != "bypassPermissions" || got.SkillName != "test" || !got.FollowUp {
 		t.Fatalf("record payload fields = %#v", got)
 	}
-	// Effort is a load-bearing field on submit_turn: the agent-runner pins
+	// Effort is a load-bearing field on submit_turn: the claude-runner pins
 	// it into SDK Options at pod boot from the first turn, and we want the
 	// allowlist value to survive the round-trip from request body to bus
 	// command. Mirror of the model/permission_mode assertion above.
@@ -257,7 +257,7 @@ func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 
 func TestEnqueueSessionTurnDoesNotFailWhenTurnNumberLookupFails(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	app.turns = fakeSessionTurnStore{err: errors.New("turn number store unavailable")}
 	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-number-miss","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
@@ -284,7 +284,7 @@ func TestEnqueueSessionTurnDoesNotFailWhenTurnNumberLookupFails(t *testing.T) {
 
 func TestEnqueueSessionTurnSeparatesDisplayTextFromRunnerPrompt(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	body := `{
 		"client_nonce":"turn-attach_123",
 		"prompt":"compare these\n\nAttachments:\n- /workspace/screenshots/1.png",
@@ -344,7 +344,7 @@ func TestEnqueueSessionTurnUsesSessionOwnedRunConfig(t *testing.T) {
 		t,
 		bus,
 		registry,
-		sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"),
+		sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"),
 	)
 	req := authedTurnRequest(t, "63", `{
 		"client_nonce":"turn-session-config",
@@ -724,7 +724,7 @@ func TestCreateSessionInitialTurnDeferredReusesUserMessage(t *testing.T) {
 
 func TestEnqueueSessionTurnRejectsExistingUserMessageWithoutLaunchRow(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	req := authedTurnRequest(t, "63", `{
 		"client_nonce":"turn-missing-user",
 		"prompt":"hello",
@@ -770,7 +770,7 @@ func TestCreateSessionInitialTurnFailureRollsBackCreatedPod(t *testing.T) {
 
 func TestEnqueueSessionTurnStampsOriginSessionID(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	body := `{"client_nonce":"turn-origin","prompt":"forked prompt","origin_session_id":"42"}`
 	req := authedTurnRequest(t, "63", body)
 	resp := httptest.NewRecorder()
@@ -820,7 +820,7 @@ func TestAuthorKindForUser(t *testing.T) {
 }
 
 // TestEnqueueSessionTurnRejectsInvalidEffort pins the allowlist enforcement
-// at the choke point. The agent-runner trusts whatever lands on the wire
+// at the choke point. The claude-runner trusts whatever lands on the wire
 // (it casts the string to EffortLevel without re-validating), so a typo
 // or stale UI value MUST be rejected here loudly with a 400 — silently
 // dropping it would either (a) hide a frontend regression or (b) get
@@ -829,7 +829,7 @@ func TestAuthorKindForUser(t *testing.T) {
 // effect" from a user's perspective.
 func TestEnqueueSessionTurnRejectsInvalidEffort(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-bad-effort","prompt":"hello","effort":"bogus"}`)
 	resp := httptest.NewRecorder()
 
@@ -991,7 +991,7 @@ func TestEnqueueSessionTurnRejectsCodexMaxEffort(t *testing.T) {
 // enforce-but-don't-require keeps the wire shape additive across providers.
 func TestEnqueueSessionTurnAllowsEmptyEffort(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-no-effort","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -1010,7 +1010,7 @@ func TestEnqueueSessionTurnAllowsEmptyEffort(t *testing.T) {
 
 func TestEnqueueSessionTurnRejectsSkillPromptMismatch(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	req := authedTurnRequest(t, "63", `{"client_nonce":"turn-skill","prompt":"hello","skill_name":"test"}`)
 	resp := httptest.NewRecorder()
 
@@ -1163,7 +1163,7 @@ func awaitingInputEvent(turnID string, questions ...string) map[string]any {
 
 func TestAnswerSessionTurnPublishesInputReply(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	app.sessionEvents = &recordingSessionEventStore{
 		turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "Which auth method should we use?")},
 	}
@@ -1265,7 +1265,7 @@ func TestAnswerSessionTurnRejectsTurnNotAwaitingInput(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			bus := &recordingSessionBus{}
-			app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+			app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 			app.sessionEvents = &recordingSessionEventStore{turnEvents: tc.events}
 			body := `{"provider_item_id":"toolu_123","timeline_id":"turn-question_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
 			req := authedAnswerRequest(t, "63", answerTestQuestionTurnID, body)
@@ -1288,7 +1288,7 @@ func TestAnswerSessionTurnRejectsTurnNotAwaitingInput(t *testing.T) {
 // same asking turn derive the same client_nonce and command id.
 func TestAnswerSessionTurnDoubleSubmitSharesDeterministicNonce(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "Pick one")}}
 	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-question_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
 
@@ -1313,7 +1313,7 @@ func TestAnswerSessionTurnDoubleSubmitSharesDeterministicNonce(t *testing.T) {
 
 func TestAnswerSessionTurnRejectsMissingTarget(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "Pick one")}}
 	body := `{"provider_item_id":"","timeline_id":"turn-question_123:item:toolu_123","answers":{"Pick one":["OAuth"]}}`
 	req := authedAnswerRequest(t, "63", answerTestQuestionTurnID, body)
@@ -1331,7 +1331,7 @@ func TestAnswerSessionTurnRejectsMissingTarget(t *testing.T) {
 
 func TestAnswerSessionTurnRejectsEmptyAnswers(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	app.sessionEvents = &recordingSessionEventStore{turnEvents: []map[string]any{awaitingInputEvent(answerTestQuestionTurnID, "Pick one")}}
 	body := `{"provider_item_id":"toolu_123","timeline_id":"turn-question_123:item:toolu_123","answers":{}}`
 	req := authedAnswerRequest(t, "63", answerTestQuestionTurnID, body)
@@ -1365,7 +1365,7 @@ func TestEnqueueSessionTurnRejectsMissingSDKRunner(t *testing.T) {
 
 func TestEnqueueSessionTurnValidatesClientNonce(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-66", "66", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-66", "66", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	req := authedTurnRequest(t, "66", `{"client_nonce":"bad/slash","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -1378,7 +1378,7 @@ func TestEnqueueSessionTurnValidatesClientNonce(t *testing.T) {
 
 func TestEnqueueSessionTurnSurfacesSessionBusFailure(t *testing.T) {
 	bus := &recordingSessionBus{err: errors.New("nats down")}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-67", "67", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-67", "67", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	req := authedTurnRequest(t, "67", `{"client_nonce":"turn-fail","prompt":"hello"}`)
 	resp := httptest.NewRecorder()
 
@@ -1396,7 +1396,7 @@ func TestEnqueueSessionTurnSurfacesSessionBusFailure(t *testing.T) {
 // break the refresh-after-stop projection contract.
 func TestInterruptPersistsRequestedEventBeforeCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-70", "70", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-70", "70", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	req := authedInterruptRequest(t, "70", "turn-active_123")
 	resp := httptest.NewRecorder()
 
@@ -1473,7 +1473,7 @@ func TestInterruptAlreadyTerminalRefreshesActivityWithoutStopRequest(t *testing.
 // carry a side-effect that the durable ledger doesn't record.
 func TestInterruptPersistFailureBlocksCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-71", "71", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-71", "71", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	app.sessionEvents = &recordingSessionEventStore{err: errors.New("postgres unavailable")}
 	req := authedInterruptRequest(t, "71", "turn-active_123")
 	resp := httptest.NewRecorder()
@@ -1495,7 +1495,7 @@ func TestInterruptPersistFailureBlocksCommand(t *testing.T) {
 // as transcript evidence that the user did press Stop.
 func TestInterruptPublishFailureLeavesRequestedEventAndCommandFailed(t *testing.T) {
 	bus := &recordingSessionBus{err: errors.New("nats down")}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-72", "72", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-72", "72", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	req := authedInterruptRequest(t, "72", "turn-active_123")
 	resp := httptest.NewRecorder()
 
@@ -1521,7 +1521,7 @@ func TestInterruptPublishFailureLeavesRequestedEventAndCommandFailed(t *testing.
 // call, but the reducer only sees one chip on replay.
 func TestInterruptIsIdempotentByEventID(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-73", "73", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-73", "73", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 
 	for i := 0; i < 2; i++ {
 		req := authedInterruptRequest(t, "73", "turn-active_123")
@@ -1576,7 +1576,7 @@ func TestStopBackgroundTaskPublishesControlCommand(t *testing.T) {
 
 func TestStopBackgroundTaskRejectsClaudeSession(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.ClaudeGUIMode, "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-64", "64", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
 	req := authedBackgroundStopRequest(t, "64", "task-123", `{"turn_id":"turn-abc"}`)
 	resp := httptest.NewRecorder()
 

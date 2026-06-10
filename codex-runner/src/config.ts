@@ -1,4 +1,4 @@
-// Runtime config sourced from env vars. Mirrors agent-runner/src/config.ts:
+// Runtime config sourced from env vars. Mirrors claude-runner/src/config.ts:
 // same downward-API + scoped event ledger plumbing, different SDK underneath.
 //
 // Auth path: codex-sdk wraps the codex CLI subprocess, which reads

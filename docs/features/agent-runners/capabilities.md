@@ -1,6 +1,6 @@
 # Agent Runners Capabilities
 
-This ledger names user-facing behavior under the agent-runners feature area. It
+This ledger names user-facing behavior under the claude-runners feature area. It
 is not a backlog. Add entries only when the behavior needs a stable handle for
 planning, review, tests, incident follow-up, or retirement.
 
@@ -99,9 +99,9 @@ Evidence:
   (durable turn boundary + `source=background-task`, defer-on-awaiting-input,
   fail-on-inactive, `sdkTurnSource`, turn-id-safe nonce);
   `backend-go/internal/pgstore/background_task_wakes.go` (idempotent `Register`).
-- Runner: `agent-runner/src/runner.test.ts`
+- Runner: `claude-runner/src/runner.test.ts`
   (register-once-when-idle, skip-when-active, ignore user-stop/lifecycle-start);
-  `agent-runner/src/adapters/claude.test.ts` (natural-vs-user terminal split).
+  `claude-runner/src/adapters/claude.test.ts` (natural-vs-user terminal split).
 - Metrics: `tank_runner_background_task_wake_total{result}`,
   `tank_background_task_wake_register_total`,
   `tank_background_task_wake_fire_total`, `tank_background_task_wakes_due`.
@@ -146,7 +146,7 @@ Contract impact:
   terminal is the orchestrator-side stall detector (session-lifecycle, Stage 2).
 
 Evidence:
-- Runner: `agent-runner/src/runner.test.ts` (rate_limit stall → one durable
+- Runner: `claude-runner/src/runner.test.ts` (rate_limit stall → one durable
   terminal + ack + released turn; progress resets the window; `overloaded`
   observed-not-failed); `classifyApiRetryError` unit behavior.
 - Metrics: `tank_runner_provider_api_retry_total{error}` and

@@ -1,4 +1,4 @@
-// tank-agent-runner is the pod-side process that drives
+// tank-claude-runner is the pod-side process that drives
 // @anthropic-ai/claude-agent-sdk for one session pod's lifetime and publishes
 // canonical transcript events to the session bus.
 
@@ -17,7 +17,7 @@ async function main(): Promise<void> {
   const cfg = loadConfig();
   console.log(
     JSON.stringify({
-      msg: "agent-runner starting",
+      msg: "claude-runner starting",
       session_id: cfg.sessionId,
       owner_email: cfg.ownerEmail,
       nats_url: cfg.natsURL,
@@ -63,6 +63,6 @@ function parseMetricsPort(raw: string | undefined): number {
 }
 
 main().catch((err) => {
-  console.error("agent-runner exited with error:", err);
+  console.error("claude-runner exited with error:", err);
   process.exit(1);
 });

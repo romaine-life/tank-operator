@@ -218,37 +218,37 @@ const required = [
   },
 
   {
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     name: "Claude runner records AskUserQuestion handoff",
     pattern: /\bpauseTurnForInput\b/,
   },
   {
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     name: "Claude runner accepts input_reply",
     pattern: /\bacceptInputReply\b[\s\S]{0,1600}answersForClaudeInput/,
   },
   {
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     name: "Claude runner rotates resumed provider output to continuation turn",
     pattern: /\brotateTurnForInputReply\b[\s\S]{0,700}turnIDForClientNonce/,
   },
   {
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     name: "Claude runner delivers answer annotations to provider",
     pattern: /answersForClaudeInput\(record\.answers,\s*record\.annotations\)/,
   },
   {
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     name: "Claude runner treats Other as a synthetic free-form label",
     pattern: /label\.toLowerCase\(\)\s*!==\s*"other"/,
   },
   {
-    file: "agent-runner/src/runner.ts",
+    file: "claude-runner/src/runner.ts",
     name: "Claude runner counts input_reply answer shape",
     pattern: /inputReplyAnswerShapeTotal[\s\S]{0,120}\.labels[\s\S]{0,120}inputReplyAnswerShape/,
   },
   {
-    file: "agent-runner/src/adapters/claude.ts",
+    file: "claude-runner/src/adapters/claude.ts",
     name: "Claude adapter normalizes questions via claudeQuestionsToTankShape",
     pattern: /\bclaudeQuestionsToTankShape\b/,
   },

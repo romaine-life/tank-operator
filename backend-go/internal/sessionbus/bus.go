@@ -97,7 +97,7 @@ type PersisterMetrics interface {
 	// plus the four terminal types (turn.completed / turn.failed /
 	// turn.command_failed / turn.interrupted). The submitted-vs-terminal
 	// divergence is the silent-stranding observability surface per
-	// docs/features/agent-runners/contract.md → Observability ("Silent
+	// docs/features/claude-runners/contract.md → Observability ("Silent
 	// strandings, where a requested action has no terminal event, are a
 	// counted bug class"). The TankTurnSilentStranding alert in
 	// k8s/templates/observability.yaml fires when submitted outruns

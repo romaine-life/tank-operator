@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - 'agent-container/**'
-      - 'agent-runner/**'
+      - 'claude-runner/**'
       - 'api-proxy/**'
       - 'backend-go/**'
       - 'codex-runner/**'
@@ -24,7 +24,7 @@ on:
     branches: [main]
     paths:
       - 'agent-container/**'
-      - 'agent-runner/**'
+      - 'claude-runner/**'
       - 'api-proxy/**'
       - 'backend-go/**'
       - 'codex-runner/**'

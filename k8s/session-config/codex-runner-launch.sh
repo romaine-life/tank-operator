@@ -1,6 +1,6 @@
 #!/bin/sh
 # Pod-side launch shim for the codex-runner Node service. Sibling of
-# agent-runner-launch.sh: same shape, codex-specific credential setup
+# claude-runner-launch.sh: same shape, codex-specific credential setup
 # instead of claude-specific.
 #
 # Codex auth path: write a synthetic chatgptAuthTokens auth.json whose

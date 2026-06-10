@@ -17,7 +17,7 @@
 // (10m) sits deliberately above 240s so a turn the runner-side
 // terminal would have resolved never appears here — only the genuine
 // wedge (fully-wedged/crashed runner, or a stall class the runner
-// cannot see) does. Inspect the listed session_id's agent-runner logs
+// cannot see) does. Inspect the listed session_id's claude-runner logs
 // and session_events to localize the cause.
 //
 // Auth: Tank admin power required. Emits a structured slog audit line
@@ -167,7 +167,7 @@ default threshold (600s) sits above the runner's 240s terminal so a
 turn the runner-side terminal would have resolved never appears here.
 
 To localize the cause for a listed session_id, read that session's
-agent-runner logs and its session_events ledger. Each row carries
+claude-runner logs and its session_events ledger. Each row carries
 stuck_seconds (how long it has been accepted-but-unprogressed) and the
 last provider_rate_limit_status the runner reported, if any.
 

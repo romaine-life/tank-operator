@@ -349,8 +349,8 @@ function requiresBranchImage(file) {
   const base = path.posix.basename(file);
   if (base === "Dockerfile" || base === ".dockerignore") return true;
   if (isSessionPodInput(file)) return true;
-  if (/^(agent-runner|codex-runner|antigravity-runner)\/(?:package|package-lock)\.json$/.test(file)) return true;
-  if (/^(agent-runner|codex-runner|antigravity-runner)\/(?:pnpm-lock\.yaml|yarn\.lock)$/.test(file)) return true;
+  if (/^(claude-runner|codex-runner|antigravity-runner)\/(?:package|package-lock)\.json$/.test(file)) return true;
+  if (/^(claude-runner|codex-runner|antigravity-runner)\/(?:pnpm-lock\.yaml|yarn\.lock)$/.test(file)) return true;
   if (/^k8s\/.*\.(ya?ml|json)$/.test(file)) return true;
   return false;
 }
@@ -381,7 +381,7 @@ function isBackend(file) {
 }
 
 function isAgentRunner(file) {
-  return file.startsWith("agent-runner/src/") || file.startsWith("agent-runner/test/");
+  return file.startsWith("claude-runner/src/") || file.startsWith("claude-runner/test/");
 }
 
 function isCodexRunner(file) {
@@ -401,7 +401,7 @@ function isSessionBusContract(file) {
     file.startsWith("backend-go/internal/sessionbus/") ||
     file === "runner-shared/sessionBus.js" ||
     file === "runner-shared/sessionBus.d.ts" ||
-    file === "agent-runner/src/sessionBus.ts" ||
+    file === "claude-runner/src/sessionBus.ts" ||
     file === "codex-runner/src/sessionBus.ts" ||
     file === "antigravity-runner/src/sessionBus.ts" ||
     file === "backend-go/cmd/tank-operator/handlers_turns.go" ||
@@ -478,7 +478,7 @@ function runSelfTests() {
     CLASS_IMAGE,
   );
   assert.equal(
-    c(["agent-runner/package-lock.json"], { artifactKind: "agent_runner", validationTarget: "existing_session" }).classification,
+    c(["claude-runner/package-lock.json"], { artifactKind: "agent_runner", validationTarget: "existing_session" }).classification,
     CLASS_IMAGE,
   );
   assert.equal(c(["docs/testing.md"], { artifactKind: "auto", validationTarget: "full_runtime" }).classification, CLASS_FAITHFUL);

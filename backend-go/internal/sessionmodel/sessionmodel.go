@@ -235,7 +235,7 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 	{"default-claude.md", "/workspace/CLAUDE.md"},
 	{"default-claude.md", "/workspace/AGENTS.md"},
 	{"write-glimmung-context.sh", "/opt/tank/write-glimmung-context.sh"},
-	{"agent-runner-launch.sh", "/opt/tank/agent-runner-launch.sh"},
+	{"claude-runner-launch.sh", "/opt/tank/claude-runner-launch.sh"},
 	{"codex-runner-launch.sh", "/opt/tank/codex-runner-launch.sh"},
 	{"repo-cloner.sh", "/opt/tank/repo-cloner.sh"},
 	{"session-pod-bootstrap.sh", "/opt/tank/session-pod-bootstrap.sh"},
@@ -630,7 +630,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// SDK runner sidecar. Without this, the agent's writes wouldn't be
 	// visible in the in-browser terminal and vice versa. emptyDir lives
 	// for the pod's lifetime, matching today's "pod restart loses
-	// workspace state" semantics. claude_gui uses agent-runner;
+	// workspace state" semantics. claude_gui uses claude-runner;
 	// Codex GUI modes use codex-runner. Both need the shared mount.
 	wantAgentRunner := mode == ClaudeGUIMode
 	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
@@ -856,7 +856,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 	containers = append(containers, claudeContainer)
 
-	// SDK agent-runner sidecar - claude_gui only. Shares /workspace
+	// SDK claude-runner sidecar - claude_gui only. Shares /workspace
 	// with the claude container via the emptyDir above so the agent's
 	// edits show up in the terminal pane. Same image (binary baked in
 	// via the Dockerfile multi-stage build); different command + env.
@@ -930,42 +930,42 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(AgentRunnerMetricsPort),
 		})
 
-		// Test-slot agent-runner hot-swap wiring. Gated on
+		// Test-slot claude-runner hot-swap wiring. Gated on
 		// opts.HotSwapAgentRunner so production session pods see no
 		// behavioral change. When enabled:
 		//   - GLIMMUNG_SUPERVISOR_CHILD points at the baked launch shim
-		//     (/app/agent-runner-launch-binary.sh) which exec node from
-		//     the baked /opt/agent-runner/dist path.
+		//     (/app/claude-runner-launch-binary.sh) which exec node from
+		//     the baked /opt/claude-runner/dist path.
 		//   - GLIMMUNG_SUPERVISOR_HOT_ARTIFACT points at the writable
 		//     shim path; the hot-swap operator writes a sibling shim and
-		//     the new dist to /var/run/agent-runner-hot/. The supervisor's
+		//     the new dist to /var/run/claude-runner-hot/. The supervisor's
 		//     existing "hot-if-present, baked-if-missing" resolution
 		//     picks the right shim with zero supervisor code change.
-		//   - The agent-runner-launch.sh script branches on the env var
+		//   - The claude-runner-launch.sh script branches on the env var
 		//     and exec's /app/tank-supervisor instead of node, putting
 		//     the supervisor at PID 1 in the container.
 		// See scripts/check-session-pod-hot-swap-migration.mjs.
 		if opts.HotSwapAgentRunner {
 			volumes = append(volumes, map[string]any{
-				"name":     "agent-runner-hot",
+				"name":     "claude-runner-hot",
 				"emptyDir": map[string]any{},
 			})
 			runnerVolumeMounts = append(runnerVolumeMounts, map[string]any{
-				"name":      "agent-runner-hot",
-				"mountPath": "/var/run/agent-runner-hot",
+				"name":      "claude-runner-hot",
+				"mountPath": "/var/run/claude-runner-hot",
 			})
 			runnerEnv = append(runnerEnv,
-				map[string]any{"name": "GLIMMUNG_SUPERVISOR_CHILD", "value": "/app/agent-runner-launch-binary.sh"},
-				map[string]any{"name": "GLIMMUNG_SUPERVISOR_HOT_ARTIFACT", "value": "/var/run/agent-runner-hot/agent-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_CHILD", "value": "/app/claude-runner-launch-binary.sh"},
+				map[string]any{"name": "GLIMMUNG_SUPERVISOR_HOT_ARTIFACT", "value": "/var/run/claude-runner-hot/claude-runner-launch-binary.sh"},
 				map[string]any{"name": "GLIMMUNG_SUPERVISOR_RESTART_ENABLED", "value": "true"},
 			)
 		}
 
 		runnerContainer := map[string]any{
-			"name":            "agent-runner",
+			"name":            "claude-runner",
 			"image":           sessionImage,
 			"imagePullPolicy": "Always",
-			"command":         []any{"bash", "/opt/tank/agent-runner-launch.sh"},
+			"command":         []any{"bash", "/opt/tank/claude-runner-launch.sh"},
 			"env":             runnerEnv,
 			"volumeMounts":    runnerVolumeMounts,
 			"ports": []any{
@@ -976,7 +976,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		containers = append(containers, runnerContainer)
 	}
 
-	// Codex-runner sidecar. Sibling of agent-runner:
+	// Codex-runner sidecar. Sibling of claude-runner:
 	// same workspace mount and same session-bus command/event contract
 	// (only one runner per pod, never both). Different SDK underneath. Auth is
 	// a pod-local placeholder auth.json plus codex-api-proxy injection;
@@ -1357,7 +1357,7 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 // misbehaving session can't blast its noisy neighbors.
 //
 // Memory budgets are calibrated against observed steady-state usage
-// from the 7-day sample around the eviction (agent-runner at ~150-300
+// from the 7-day sample around the eviction (claude-runner at ~150-300
 // MiB steady, ~795 MiB at the failure point; claude/sandbox-agent at
 // ~14 MiB; mcp-auth-proxy at ~27 MiB). Limits leave 4-5x headroom on
 // every container so normal-but-bursty sessions don't OOMKill.
@@ -1370,8 +1370,8 @@ func withManifestDefaults(opts ManifestOptions) ManifestOptions {
 // CPU requests were retuned 2026-05 after FailedScheduling pressure on
 // the 3-node Standard_B2s_v2 cluster (prod sessions + 10 test slots
 // sharing one node pool). Per-pod sample across the live namespaces:
-// idle session pods drew ~10m total (agent-runner ~9m, sandbox-agent
-// ~0m, mcp-auth-proxy ~1m); active turns peaked ~120m on agent-runner.
+// idle session pods drew ~10m total (claude-runner ~9m, sandbox-agent
+// ~0m, mcp-auth-proxy ~1m); active turns peaked ~120m on claude-runner.
 // The prior 100m/50m/25m=175m budget packed every pod as if it were
 // active, blocking new sessions from scheduling even though actual node
 // CPU sat under 35%. Lowered to 50m/25m/10m=85m: ~5x headroom over

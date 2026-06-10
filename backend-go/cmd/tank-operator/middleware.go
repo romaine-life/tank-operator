@@ -113,7 +113,7 @@ func allowedModelsForProvider(provider string) []string {
 // that mapping intact.
 //
 // sessionRunOptions() advertises these values to the frontend and MCP. Keep
-// the defaults in lockstep with agent-runner/src/runner.ts DEFAULT_EFFORT.
+// the defaults in lockstep with claude-runner/src/runner.ts DEFAULT_EFFORT.
 // The runner does NOT re-validate (it trusts whatever lands on the wire) so
 // this is the single point of allowlist enforcement.
 var providerEfforts = map[string][]string{

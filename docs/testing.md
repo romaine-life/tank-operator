@@ -239,7 +239,7 @@ Two steps:
    ```sh
    # the codex-container tag your branch will produce
    scripts/image-fingerprint.sh --image codex --dockerfile claude-container/Dockerfile \
-     --context . --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared'
+     --context . --paths 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy claude-runner codex-runner runner-shared'
    # build it for the branch (no-op/cache hit if the fingerprint already exists)
    mcp__github__.dispatch_workflow(
      owner="romaine-life",

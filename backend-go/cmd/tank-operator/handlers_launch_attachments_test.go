@@ -86,7 +86,7 @@ func stageReq(t *testing.T, sessionID, ordinal, clientNonce, name, body string) 
 }
 
 func TestStageLaunchAttachmentStagesAndFlipsReady(t *testing.T) {
-	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "agent-runner"))
+	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "claude-runner"))
 	fake := &fakePendingLaunchStore{launch: &pgstore.PendingLaunchTurn{TurnID: conversation.TurnIDForClientNonce("launchseven00"), AttachmentCount: 2}}
 	app.pendingLaunch = fake
 
@@ -121,7 +121,7 @@ func TestStageLaunchAttachmentStagesAndFlipsReady(t *testing.T) {
 }
 
 func TestStageLaunchAttachmentValidationAndErrors(t *testing.T) {
-	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "agent-runner"))
+	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "claude-runner"))
 	app.pendingLaunch = &fakePendingLaunchStore{launch: &pgstore.PendingLaunchTurn{TurnID: conversation.TurnIDForClientNonce("launchseven00"), AttachmentCount: 2}}
 
 	cases := []struct {
@@ -149,7 +149,7 @@ func TestStageLaunchAttachmentValidationAndErrors(t *testing.T) {
 }
 
 func TestStageLaunchAttachmentConflictWhenNotAccepting(t *testing.T) {
-	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "agent-runner"))
+	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "claude-runner"))
 	app.pendingLaunch = &fakePendingLaunchStore{
 		launch:    &pgstore.PendingLaunchTurn{TurnID: conversation.TurnIDForClientNonce("launchseven00"), AttachmentCount: 2},
 		notAccept: true,
@@ -162,7 +162,7 @@ func TestStageLaunchAttachmentConflictWhenNotAccepting(t *testing.T) {
 }
 
 func TestStageLaunchAttachmentUnavailableWhenStoreNil(t *testing.T) {
-	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "agent-runner"))
+	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-700", "700", "user@example.com", "claude_gui", "claude-runner"))
 	app.pendingLaunch = nil
 	rec := httptest.NewRecorder()
 	app.handleStageLaunchAttachment(rec, stageReq(t, "700", "0", "launchseven00", "a.zip", "aaa"))

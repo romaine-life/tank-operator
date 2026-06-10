@@ -1,5 +1,5 @@
 // Long-lived codex runner — drives one codex thread for the pod's
-// lifetime via @openai/codex-sdk. Sibling of agent-runner/src/runner.ts
+// lifetime via @openai/codex-sdk. Sibling of claude-runner/src/runner.ts
 // with a different inner loop shape:
 //
 //   claude SDK: query() iterates an AsyncIterable of user messages,
@@ -80,7 +80,7 @@ import {
 // INTERRUPT_BUFFER_MS bounds how long an interrupt_turn record can sit
 // in orphanInterrupts waiting for a matching submit_turn before the
 // runner gives up and emits turn.failed{interrupt_orphaned}. Mirrors
-// agent-runner's constant of the same name; documented in
+// claude-runner's constant of the same name; documented in
 // docs/tank-conversation-protocol.md → "Four-outcome contract on the
 // runner side" and romaine-life/tank-operator#532.
 const INTERRUPT_BUFFER_MS = parsePositiveEnvInt(
@@ -90,7 +90,7 @@ const INTERRUPT_BUFFER_MS = parsePositiveEnvInt(
 
 // TERMINAL_PUBLISH_* bound how hard we retry a durable terminal publish
 // (turn.interrupted, or the turn.failed{publish_interrupt_failed}
-// fallback). Same defaults as agent-runner so an env-override applies
+// fallback). Same defaults as claude-runner so an env-override applies
 // uniformly across both runners in the same pod image. See #532.
 const TERMINAL_PUBLISH_ATTEMPTS = parsePositiveEnvInt(
   process.env.SESSION_TERMINAL_PUBLISH_ATTEMPTS,
@@ -155,7 +155,7 @@ function inputReplyAnswerShape(
 }
 
 // AsyncQueue — one writer, one consumer. Session commands push; the
-// run loop awaits the next value. Same shape as agent-runner's queue.
+// run loop awaits the next value. Same shape as claude-runner's queue.
 class AsyncQueue<T> {
   private readonly items: T[] = [];
   private waiters: ((v: IteratorResult<T>) => void)[] = [];
@@ -212,7 +212,7 @@ export async function dispatch(
     // Live-only or otherwise non-durable Tank events are not persisted.
     return true;
   }
-  // Stage 3 of romaine-life/tank-operator#532: see agent-runner's dispatch
+  // Stage 3 of romaine-life/tank-operator#532: see claude-runner's dispatch
   // for the contract. Codex tool outputs can easily exceed NATS's 1 MiB
   // max_payload (large stdout, generated patches, etc.). Truncate before
   // publish so a single oversized event doesn't fail the publish and
