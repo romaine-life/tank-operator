@@ -62,6 +62,12 @@ const (
 	TurnSubmittedSourceScheduleWakeup TurnSubmittedSource = "schedule-wakeup"
 	TurnSubmittedSourceBackgroundTask TurnSubmittedSource = "background-task"
 	TurnSubmittedSourceLaunchDispatch TurnSubmittedSource = "launch-dispatch"
+	// TurnSubmittedSourceAgentContinuation marks a relay turn the antigravity
+	// runner asked the backend to open because agy self-continued after its own
+	// background task finished — NOT a Tank-fired wake. The runner relays agy's
+	// already-emitted output; the PTY is not re-prompted. The turn id reuses the
+	// turn_bgtask- prefix so it folds into the originating user-facing turn.
+	TurnSubmittedSourceAgentContinuation TurnSubmittedSource = "agent-continuation"
 )
 
 type Visibility string
@@ -838,7 +844,8 @@ func validTurnSubmittedSource(source TurnSubmittedSource) bool {
 	switch source {
 	case TurnSubmittedSourceScheduleWakeup,
 		TurnSubmittedSourceBackgroundTask,
-		TurnSubmittedSourceLaunchDispatch:
+		TurnSubmittedSourceLaunchDispatch,
+		TurnSubmittedSourceAgentContinuation:
 		return true
 	default:
 		return false

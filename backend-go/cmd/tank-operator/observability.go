@@ -626,6 +626,19 @@ var backgroundTaskWakeRegisterTotal = promauto.NewCounterVec(
 	[]string{"provider", "result"},
 )
 
+// agentContinuationTotal counts the relay endpoint that opens a durable turn
+// boundary for a self-continuing antigravity session (agy fired its own task and
+// emitted the continuation; the runner asks the backend to author the turn it
+// then relays into). This is the antigravity peer of the background-task-wake
+// fire path — observability for "did agy's self-continuation get a durable turn?".
+var agentContinuationTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_agent_continuation_total",
+		Help: "Self-continuation relay turns opened by the orchestrator for self-managing agents (antigravity), labeled by provider and bounded result.",
+	},
+	[]string{"provider", "result"},
+)
+
 var backgroundTaskWakeFireTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_background_task_wake_fire_total",
@@ -703,6 +716,13 @@ func recordBackgroundTaskWakeRegister(provider, result string) {
 	backgroundTaskWakeRegisterTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),
 		backgroundTaskWakeRegisterResultLabel(result),
+	).Inc()
+}
+
+func recordAgentContinuation(provider, result string) {
+	agentContinuationTotal.WithLabelValues(
+		sessionRuntimeConfigProviderLabel(provider),
+		agentContinuationResultLabel(result),
 	).Inc()
 }
 
@@ -939,6 +959,15 @@ func scheduledWakeupFireResultLabel(result string) string {
 func backgroundTaskWakeRegisterResultLabel(result string) string {
 	switch result {
 	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "manager_unavailable", "store_error":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func agentContinuationResultLabel(result string) string {
+	switch result {
+	case "ok", "already_open", "bad_request", "forbidden", "not_found", "manager_unavailable", "enqueue_failed", "rejected_non_antigravity":
 		return result
 	default:
 		return "other"
