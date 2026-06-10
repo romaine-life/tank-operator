@@ -85,8 +85,20 @@ RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
 # tank-supervisor + baked launch shim for test-slot antigravity-runner hot-swap.
 COPY --from=tank-supervisor-build /out/tank-supervisor /app/tank-supervisor
 COPY --from=tank-supervisor-build /out/antigravity-cli-runner /opt/tank/antigravity-cli-runner
+# The baked shim is itself hot-aware (mirrors the claude/codex shims in
+# claude-container/Dockerfile): prefer the hot-swapped runner binary the
+# apply_test_slot_hot_swap Job tar-streams into /var/run/antigravity-runner-hot,
+# else the baked binary. The supervisor runs this shim as GLIMMUNG_SUPERVISOR_CHILD,
+# so a SIGHUP after a swap re-resolves to the freshly built binary with no
+# supervisor change. The antigravity_runner artifact is a single static Go binary
+# (CGO_ENABLED=0), so unlike the node runners it needs no sibling node_modules
+# symlink — the binary is self-contained. The literal baked-path exec stays last
+# so fresh-pod boot (before any hot-swap) is unchanged.
 RUN cat > /app/antigravity-runner-launch-binary.sh <<'EOF' && chmod 0755 /app/antigravity-runner-launch-binary.sh
 #!/bin/sh
+if [ -x /var/run/antigravity-runner-hot/antigravity-cli-runner ]; then
+  exec /var/run/antigravity-runner-hot/antigravity-cli-runner
+fi
 exec /opt/tank/antigravity-cli-runner
 EOF
 

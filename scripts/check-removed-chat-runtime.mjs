@@ -983,6 +983,17 @@ try {
   if (!runnerMainText.includes("/agent-continuation")) {
     failures.push("backend-go/cmd/antigravity-runner/main.go: antigravity self-continuation contract: the runner must POST /agent-continuation to relay agy's idle self-continuation (ARCHITECTURE.md).");
   }
+
+  // Retired ToS auto-accept: the runner must not sniff PTY stdout for
+  // consent screens and replay keystrokes (it raced real turn input and
+  // broke on TUI copy changes). Onboarding/consent state is seeded by
+  // antigravity-container/antigravity-runner-launch.sh into both agy config
+  // dirs; extend the seeded config files instead of scripting the TUI.
+  for (const signature of ["Terms of Service", "\\x1b["]) {
+    if (runnerMainText.includes(signature)) {
+      failures.push(`backend-go/cmd/antigravity-runner/main.go: Architecture violation: retired TUI keystroke scripting reintroduced (${JSON.stringify(signature)}); seed onboarding state in antigravity-runner-launch.sh instead.`);
+    }
+  }
 } catch (err) {
   failures.push(`backend-go/cmd/antigravity-runner/main.go: Could not read runner main file: ${err.message}`);
 }

@@ -203,8 +203,8 @@ Project metadata for Glimmung:
     "antigravity_runner": {
       "enabled": true,
       "strategy": "supervisor",
-      "build_command": "cd antigravity-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/antigravity-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/antigravity-runner-hot/runner-shared/|g' {} +",
-      "source": "antigravity-runner/hot",
+      "build_command": "export DEBIAN_FRONTEND=noninteractive && apt-get update -qq && apt-get install -y -qq --no-install-recommends curl ca-certificates && curl -fsSL https://go.dev/dl/go1.26.0.linux-amd64.tar.gz -o /tmp/go.tgz && rm -rf /usr/local/go && tar -C /usr/local -xzf /tmp/go.tgz && export PATH=/usr/local/go/bin:$PATH && rm -rf antigravity-runner-hot && mkdir -p antigravity-runner-hot && cd backend-go && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o ../antigravity-runner-hot/antigravity-cli-runner ./cmd/antigravity-runner",
+      "source": "antigravity-runner-hot",
       "target": "/var/run/antigravity-runner-hot",
       "restart": "SIGHUP",
       "container": "antigravity-runner",
@@ -214,6 +214,14 @@ Project metadata for Glimmung:
   }
 }
 ```
+
+The `antigravity_runner` builder is a Node image that installs the Go
+toolchain at build time, not a stock `golang:` image. The shared
+`fidelity_classifier` (`node scripts/classify-tank-test-fidelity.mjs`) runs in
+the builder *before* the build command, so the builder image must carry `node`,
+while compiling the Go runner needs `go` — and no stock image ships both. A
+dedicated go+node builder image baked to ACR would be a cleaner future
+replacement for the install-at-build-time step.
 
 Auth: Microsoft sign-in is delegated to auth.romaine.life. The SPA fetches
 an auth.romaine.life JWT (silent if the `.romaine.life` session cookie is

@@ -362,6 +362,17 @@ func TestPTYRunnerArchitectureConstraint(t *testing.T) {
 			if x.Kind == token.STRING && strings.Contains(strings.ToLower(x.Value), "localharness") {
 				t.Errorf("Architecture violation: main.go contains localharness in string literal: %s", x.Value)
 			}
+			// Retired ToS auto-accept: the runner must not sniff PTY
+			// stdout for consent screens and replay keystrokes.
+			// Onboarding state is seeded by
+			// antigravity-container/antigravity-runner-launch.sh; extend
+			// the seeded config files instead of scripting the TUI.
+			if x.Kind == token.STRING && strings.Contains(strings.ToLower(x.Value), "terms of service") {
+				t.Errorf("Architecture violation: main.go reintroduces ToS-screen sniffing in string literal: %s", x.Value)
+			}
+			if x.Kind == token.STRING && strings.Contains(x.Value, `\x1b[`) {
+				t.Errorf("Architecture violation: main.go reintroduces TUI keystroke/escape scripting in string literal: %s", x.Value)
+			}
 		}
 		return true
 	})

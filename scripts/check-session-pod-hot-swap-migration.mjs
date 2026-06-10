@@ -209,6 +209,79 @@ const CHECKS = [
     kind: "grep-present",
     pattern: /"codex_runner"[\s\S]{0,1200}?"pod_selector"\s*:\s*"tank-operator\/session-id,tank-operator\/mode in \(codex_gui,codex_exec_gui,codex_app_server\)"/,
   },
+
+  // antigravity_runner is a single static Go binary (CGO_ENABLED=0), NOT a
+  // node dist bundle — so its sub-contract compiles with `go build` and ships
+  // no runner-shared. The runner was rewritten in Go (backend-go/cmd/
+  // antigravity-runner); the Node-era contract that survived the rewrite is
+  // what these checks pin out of regression. The builder is a node image that
+  // installs Go at build time (not a stock golang image): the shared node
+  // fidelity_classifier runs in the builder before the build command, and no
+  // stock image ships both node and go.
+  {
+    id: "readme-antigravity-runner-go-build",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "antigravity_runner build command compiles the Go runner (go build ./cmd/antigravity-runner), not an npm bundle",
+    kind: "grep-present",
+    pattern: /"antigravity_runner"[\s\S]{0,500}?"build_command"[\s\S]{0,500}?go build[\s\S]{0,300}?\.\/cmd\/antigravity-runner/,
+  },
+  {
+    id: "readme-antigravity-runner-source",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "antigravity_runner source is the Go build-output dir antigravity-runner-hot",
+    kind: "grep-present",
+    pattern: /"antigravity_runner"[\s\S]{0,900}?"source"\s*:\s*"antigravity-runner-hot"/,
+  },
+  {
+    id: "readme-antigravity-runner-target",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "antigravity_runner target is /var/run/antigravity-runner-hot (matches the orchestrator hot volume mount)",
+    kind: "grep-present",
+    pattern: /"antigravity_runner"[\s\S]{0,900}?"target"\s*:\s*"\/var\/run\/antigravity-runner-hot"/,
+  },
+  {
+    id: "readme-antigravity-runner-selector-mode",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "antigravity_runner pod selector is narrowed to antigravity_gui session pods",
+    kind: "grep-present",
+    pattern: /"antigravity_runner"[\s\S]{0,1200}?"pod_selector"\s*:\s*"tank-operator\/session-id,tank-operator\/mode=antigravity_gui"/,
+  },
+  {
+    id: "readme-antigravity-runner-builder-node",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "antigravity_runner builder_image is a node image — the shared node fidelity_classifier runs in the builder before the build, so a stock golang image (no node) cannot run the build",
+    kind: "grep-present",
+    pattern: /"antigravity_runner"[\s\S]{0,1600}?"builder_image"\s*:\s*"node:/,
+  },
+  {
+    id: "readme-antigravity-runner-installs-go",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "antigravity_runner build command installs the Go toolchain (the builder is a node image, so the Go runner build pulls go at build time)",
+    kind: "grep-present",
+    pattern: /"antigravity_runner"[\s\S]{0,500}?"build_command"[\s\S]{0,500}?go\.dev\/dl\/go[\s\S]{0,600}?go build[\s\S]{0,300}?\.\/cmd\/antigravity-runner/,
+  },
+  {
+    id: "antigravity-image-hot-aware-shim",
+    from: "Checkbox 1: hot-swap works",
+    file: "antigravity-container/Dockerfile",
+    description: "antigravity baked launch shim is hot-aware: prefers /var/run/antigravity-runner-hot/antigravity-cli-runner when the apply-hot-swap Job has delivered one",
+    kind: "grep-present",
+    pattern: /if \[ -x \/var\/run\/antigravity-runner-hot\/antigravity-cli-runner \]/,
+  },
+  {
+    id: "sessionmodel-test-slot-mode-attaches-antigravity-volume",
+    from: "Checkbox 1: hot-swap works",
+    file: "backend-go/internal/sessionmodel/sessionmodel_test.go",
+    description: "sessionmodel test asserts: with testEnv enabled, antigravity-runner container gets antigravity-runner-hot volumeMount + supervisor env vars",
+    kind: "grep-present",
+    pattern: /TestPodManifestSlotModeAttachesAntigravityRunnerHotSwap|testEnv[^\n]{0,200}antigravity-runner-hot/,
+  },
   {
     id: "sessionmodel-test-slot-mode-attaches-volume",
     from: "Checkbox 1: hot-swap works",
