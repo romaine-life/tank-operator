@@ -6810,6 +6810,24 @@ button:disabled {
   background: var(--bg-base, #0a0a0a) !important;
 }
 
+.run-process-terminal textarea {
+  position: absolute !important;
+  opacity: 0 !important;
+  left: -9999px !important;
+  top: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
+  z-index: -10 !important;
+  background: transparent !important;
+  color: transparent !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  resize: none !important;
+  pointer-events: none !important;
+  caret-color: transparent !important;
+}
+
 .run-shell-loading,
 .run-shell-error {
   height: 100%;
