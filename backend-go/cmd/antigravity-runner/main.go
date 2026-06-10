@@ -878,6 +878,12 @@ func isRelevantStep(step AgyStep) bool {
 		if strings.Contains(typ, "wake") || strings.Contains(typ, "timer") || strings.Contains(typ, "background") || strings.Contains(typ, "schedule") {
 			return true
 		}
+		if typ == "system_message" {
+			contentStr := strings.ToLower(string(step.Content))
+			if strings.Contains(contentStr, "[message]") && (strings.Contains(contentStr, "task") || strings.Contains(contentStr, "timer")) {
+				return true
+			}
+		}
 		return false
 	}
 	if strings.EqualFold(step.Source, "MODEL") || strings.EqualFold(step.Source, "TOOL") || strings.EqualFold(step.Source, "ENVIRONMENT") || strings.EqualFold(step.Source, "BACKGROUND_TASK") {
