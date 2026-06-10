@@ -31,6 +31,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -45,6 +46,19 @@ import (
 
 const provider = "antigravity"
 
+type AgyToolCall struct {
+	Name        string          `json:"name"`
+	Args        json.RawMessage `json:"args"`
+	ToolAction  string          `json:"toolAction,omitempty"`
+	ToolSummary string          `json:"toolSummary,omitempty"`
+}
+
+type AgyUsage struct {
+	InputTokens  int64 `json:"input_tokens,omitempty"`
+	OutputTokens int64 `json:"output_tokens,omitempty"`
+	TotalTokens  int64 `json:"total_tokens,omitempty"`
+}
+
 type AgyStep struct {
 	StepIndex      int               `json:"step_index"`
 	Source         string            `json:"source"`
@@ -53,6 +67,7 @@ type AgyStep struct {
 	Content        json.RawMessage   `json:"content"`
 	ToolCalls      []json.RawMessage `json:"tool_calls"`
 	ConversationID string            `json:"conversation_id,omitempty"`
+	Usage          *AgyUsage         `json:"usage,omitempty"`
 }
 
 type runnerConfig struct {
@@ -77,18 +92,25 @@ type finalAnswer struct {
 	providerItemID string
 }
 
-type turnRun struct {
-	builder      eventBuilder
-	publish      func(map[string]any) error
-	turnID       string
-	clientNonce  string
-	turnComplete chan struct{}
+type pendingTool struct {
+	id   string
+	name string
+}
 
-	mu             sync.Mutex
-	started        bool
-	seen           map[string]struct{}
-	final          finalAnswer
-	providerFailed string
+type turnRun struct {
+	builder         eventBuilder
+	publish         func(map[string]any) error
+	turnID          string
+	clientNonce     string
+	turnComplete    chan struct{}
+
+	mu              sync.Mutex
+	started         bool
+	seen            map[string]struct{}
+	final           finalAnswer
+	providerFailed  string
+	pendingTools    []pendingTool
+	cumulativeUsage *AgyUsage
 }
 
 type activeProcess struct {
@@ -150,6 +172,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer func() { _ = ptmx.Close() }()
+	active.cmd = runCmd
 
 	go func() {
 		buf := make([]byte, 1024)
@@ -385,6 +408,9 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 		clientNonce = turnID
 	}
 
+	active.set(active.cmd, turnID)
+	defer active.clear(active.cmd)
+
 	run := newTurnRun(builder, publisher, turnID, clientNonce)
 	if err := publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnClaimed), "")); err != nil {
 		return false, err
@@ -408,7 +434,7 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 	var waitErr error
 	close(doneTailing)
 	tailErr := <-tailErrors
-	interrupted := false
+	interrupted := active.wasInterrupted(turnID)
 
 	var terminalErr error
 	switch {
@@ -535,18 +561,40 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 		return err
 	}
 
-	text := contentText(step.Content)
-	if strings.EqualFold(step.Source, "SYSTEM") && strings.EqualFold(step.Type, "ERROR_MESSAGE") {
+	// 1. Process usage first if present
+	if usage := extractUsage(step); usage != nil {
 		r.mu.Lock()
-		if text != "" {
-			r.providerFailed = text
-		} else {
-			r.providerFailed = "system_error"
+		r.cumulativeUsage = usage
+		r.mu.Unlock()
+
+		usageEvent := r.builder.turnUsageEvent(r.turnID, r.clientNonce, providerID, usage)
+		if err := r.publish(usageEvent); err != nil {
+			return err
+		}
+	}
+
+	text := contentText(step.Content)
+
+	// 2. Process system error messages
+	if strings.EqualFold(step.Source, "SYSTEM") && strings.EqualFold(step.Type, "ERROR_MESSAGE") {
+		var targetToolID string
+		r.mu.Lock()
+		if len(r.pendingTools) > 0 {
+			// Match and close the last pending tool call (LIFO)
+			lastTool := r.pendingTools[len(r.pendingTools)-1]
+			targetToolID = lastTool.id
+			r.pendingTools = r.pendingTools[:len(r.pendingTools)-1]
 		}
 		r.mu.Unlock()
-		return r.publish(r.builder.itemEvent(r.turnID, providerID, string(conversation.EventItemFailed), string(conversation.ActorRunner), map[string]any{
-			"kind": "system_error",
-			"text": firstNonEmpty(text, "Antigravity reported an error."),
+
+		if targetToolID == "" {
+			targetToolID = providerID
+		}
+
+		return r.publish(r.builder.itemEvent(r.turnID, targetToolID, string(conversation.EventItemFailed), string(conversation.ActorRunner), map[string]any{
+			"kind":     "system_error",
+			"text":     firstNonEmpty(text, "Antigravity reported an error."),
+			"is_error": true,
 			"outcome": map[string]any{
 				"kind":   "execution_failed",
 				"reason": "provider_item_error",
@@ -554,19 +602,124 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 		}))
 	}
 
-	if !strings.EqualFold(step.Type, "PLANNER_RESPONSE") || !strings.EqualFold(step.Status, "DONE") || text == "" || len(step.ToolCalls) > 0 {
-		return nil
+	// 3. Process model steps
+	if strings.EqualFold(step.Source, "MODEL") {
+		// Tool call generation
+		if len(step.ToolCalls) > 0 {
+			if text != "" {
+				msgID := providerID + ":text"
+				timelineID := itemTimelineID(r.turnID, msgID)
+				event := r.builder.itemEvent(r.turnID, msgID, string(conversation.EventItemCompleted), string(conversation.ActorAssistant), map[string]any{
+					"kind": "message",
+					"text": text,
+				})
+				if err := r.publish(event); err != nil {
+					return err
+				}
+				r.mu.Lock()
+				r.final = finalAnswer{timelineID: timelineID, providerItemID: msgID}
+				r.mu.Unlock()
+			}
+
+			for i, rawCall := range step.ToolCalls {
+				var tc AgyToolCall
+				if err := json.Unmarshal(rawCall, &tc); err != nil {
+					continue
+				}
+				toolID := fmt.Sprintf("%s:tool:%s", providerID, strconv.Itoa(i))
+				title := tc.ToolSummary
+				if title == "" {
+					title = tc.ToolAction
+				}
+				if title == "" {
+					title = tc.Name
+				}
+				event := r.builder.itemEvent(r.turnID, toolID, string(conversation.EventItemStarted), string(conversation.ActorTool), map[string]any{
+					"kind":  "tool",
+					"title": title,
+					"name":  tc.Name,
+					"input": tc.Args,
+				})
+				if err := r.publish(event); err != nil {
+					return err
+				}
+				r.mu.Lock()
+				r.pendingTools = append(r.pendingTools, pendingTool{id: toolID, name: tc.Name})
+				r.mu.Unlock()
+			}
+			return nil
+		}
+
+		// Tool result steps
+		if !strings.EqualFold(step.Type, "PLANNER_RESPONSE") {
+			var targetToolID string
+			r.mu.Lock()
+			matchIdx := -1
+			for idx, pt := range r.pendingTools {
+				if strings.EqualFold(pt.name, step.Type) {
+					matchIdx = idx
+					break
+				}
+			}
+			if matchIdx >= 0 {
+				targetToolID = r.pendingTools[matchIdx].id
+				r.pendingTools = append(r.pendingTools[:matchIdx], r.pendingTools[matchIdx+1:]...)
+			} else if len(r.pendingTools) > 0 {
+				targetToolID = r.pendingTools[0].id
+				r.pendingTools = r.pendingTools[1:]
+			}
+			r.mu.Unlock()
+
+			if targetToolID == "" {
+				targetToolID = providerID
+			}
+
+			isError := strings.EqualFold(step.Status, "ERROR")
+			eventType := string(conversation.EventItemCompleted)
+			var outcome map[string]any
+			if isError {
+				eventType = string(conversation.EventItemFailed)
+				outcome = map[string]any{
+					"kind":   "execution_failed",
+					"reason": "provider_item_error",
+				}
+			} else {
+				outcome = map[string]any{
+					"kind": "ok",
+				}
+			}
+
+			event := r.builder.itemEvent(r.turnID, targetToolID, eventType, string(conversation.ActorTool), map[string]any{
+				"kind":     "tool_result",
+				"output":   text,
+				"is_error": isError,
+				"outcome":  outcome,
+			})
+			return r.publish(event)
+		}
+
+		// Assistant Prose
+		if strings.EqualFold(step.Type, "PLANNER_RESPONSE") && len(step.ToolCalls) == 0 {
+			timelineID := itemTimelineID(r.turnID, providerID)
+			if text != "" {
+				event := r.builder.itemEvent(r.turnID, providerID, string(conversation.EventItemCompleted), string(conversation.ActorAssistant), map[string]any{
+					"kind": "message",
+					"text": text,
+				})
+				if err := r.publish(event); err != nil {
+					return err
+				}
+				r.mu.Lock()
+				r.final = finalAnswer{timelineID: timelineID, providerItemID: providerID}
+				r.mu.Unlock()
+			}
+			if strings.EqualFold(step.Status, "DONE") {
+				close(r.turnComplete)
+			}
+			return nil
+		}
 	}
 
-	timelineID := itemTimelineID(r.turnID, providerID)
-	event := r.builder.assistantMessageEvent(r.turnID, providerID, timelineID, text)
-	if err := r.publish(event); err != nil {
-		return err
-	}
-	r.mu.Lock()
-	r.final = finalAnswer{timelineID: timelineID, providerItemID: providerID}
-	r.mu.Unlock()
-	close(r.turnComplete)
 	return nil
 }
 
@@ -587,35 +740,91 @@ func (r *turnRun) finishCompleted() error {
 	}
 	r.mu.Lock()
 	final := r.final
+	usage := r.cumulativeUsage
 	r.mu.Unlock()
 	if final.timelineID == "" {
 		return r.finishFailed("provider_no_final_answer")
 	}
-	return r.publish(r.builder.turnCompletedEvent(r.turnID, r.clientNonce, final))
+	return r.publish(r.builder.turnCompletedEvent(r.turnID, r.clientNonce, final, usage))
 }
 
 func (r *turnRun) finishFailed(reason string) error {
 	if err := r.ensureStarted("runner_terminal"); err != nil {
 		return err
 	}
-	return r.publish(r.builder.turnEvent(r.turnID, r.clientNonce, string(conversation.EventTurnFailed), reason))
+	r.mu.Lock()
+	usage := r.cumulativeUsage
+	r.mu.Unlock()
+	return r.publish(r.builder.turnFailedEvent(r.turnID, r.clientNonce, reason, usage))
 }
 
 func (r *turnRun) finishInterrupted() error {
 	if err := r.ensureStarted("runner_terminal"); err != nil {
 		return err
 	}
-	return r.publish(r.builder.turnEvent(r.turnID, r.clientNonce, string(conversation.EventTurnInterrupted), "user_interrupted"))
+	r.mu.Lock()
+	usage := r.cumulativeUsage
+	r.mu.Unlock()
+	return r.publish(r.builder.turnInterruptedEvent(r.turnID, r.clientNonce, usage))
 }
 
 func isRelevantStep(step AgyStep) bool {
 	if strings.EqualFold(step.Source, "USER_EXPLICIT") {
 		return false
 	}
-	if strings.EqualFold(step.Source, "SYSTEM") && strings.EqualFold(step.Type, "ERROR_MESSAGE") {
+	if extractUsage(step) != nil {
 		return true
 	}
-	return strings.EqualFold(step.Type, "PLANNER_RESPONSE")
+	if strings.EqualFold(step.Source, "SYSTEM") {
+		return strings.EqualFold(step.Type, "ERROR_MESSAGE") || strings.EqualFold(step.Type, "loadCodeAssist")
+	}
+	if strings.EqualFold(step.Source, "MODEL") {
+		return true
+	}
+	return false
+}
+
+func extractUsage(step AgyStep) *AgyUsage {
+	if step.Usage != nil {
+		return step.Usage
+	}
+	if len(step.Content) > 0 && string(step.Content) != "null" {
+		var contentMap map[string]any
+		if err := json.Unmarshal(step.Content, &contentMap); err == nil {
+			if u, ok := contentMap["usage"].(map[string]any); ok {
+				var usage AgyUsage
+				if it, ok := u["input_tokens"].(float64); ok {
+					usage.InputTokens = int64(it)
+				} else if it, ok := u["prompt_tokens"].(float64); ok {
+					usage.InputTokens = int64(it)
+				}
+				if ot, ok := u["output_tokens"].(float64); ok {
+					usage.OutputTokens = int64(ot)
+				} else if ot, ok := u["completion_tokens"].(float64); ok {
+					usage.OutputTokens = int64(ot)
+				}
+				if tt, ok := u["total_tokens"].(float64); ok {
+					usage.TotalTokens = int64(tt)
+				}
+				if usage.TotalTokens == 0 {
+					usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+				}
+				if usage.InputTokens > 0 || usage.OutputTokens > 0 {
+					return &usage
+				}
+			}
+		}
+	}
+	if strings.EqualFold(step.Type, "loadCodeAssist") && len(step.Content) > 0 {
+		var usage AgyUsage
+		if err := json.Unmarshal(step.Content, &usage); err == nil && (usage.InputTokens > 0 || usage.OutputTokens > 0) {
+			if usage.TotalTokens == 0 {
+				usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+			}
+			return &usage
+		}
+	}
+	return nil
 }
 
 func (b eventBuilder) turnEvent(turnID, clientNonce, eventType, reason string) map[string]any {
@@ -644,7 +853,24 @@ func (b eventBuilder) turnEvent(turnID, clientNonce, eventType, reason string) m
 	return b.stamp(event)
 }
 
-func (b eventBuilder) turnCompletedEvent(turnID, clientNonce string, final finalAnswer) map[string]any {
+func (b eventBuilder) turnCompletedEvent(turnID, clientNonce string, final finalAnswer, usage *AgyUsage) map[string]any {
+	payload := map[string]any{
+		"final_answer": map[string]any{
+			"timeline_ids":      []string{final.timelineID},
+			"provider_item_ids": []string{final.providerItemID},
+		},
+	}
+	if usage != nil {
+		payload["usage"] = map[string]any{
+			"input_tokens":  usage.InputTokens,
+			"output_tokens": usage.OutputTokens,
+			"total_tokens":  usage.TotalTokens,
+		}
+		payload["usage_observation"] = map[string]any{
+			"usage_source":       "loadCodeAssist",
+			"terminal_had_usage": true,
+		}
+	}
 	return b.stamp(map[string]any{
 		"event_id":        turnID + ":turn.completed:runner",
 		"conversation_id": b.sessionID,
@@ -659,12 +885,102 @@ func (b eventBuilder) turnCompletedEvent(turnID, clientNonce string, final final
 			"runtime": provider,
 		},
 		"visibility": string(conversation.VisibilityDurable),
+		"payload":    payload,
+	})
+}
+
+func (b eventBuilder) turnUsageEvent(turnID, clientNonce, providerItemID string, usage *AgyUsage) map[string]any {
+	return b.stamp(map[string]any{
+		"event_id":        turnID + ":turn.usage:" + stableIDPart(providerItemID),
+		"conversation_id": b.sessionID,
+		"session_id":      b.sessionID,
+		"turn_id":         turnID,
+		"client_nonce":    clientNonce,
+		"actor":           string(conversation.ActorRunner),
+		"source":          provider,
+		"type":            string(conversation.EventTurnUsage),
+		"producer": map[string]any{
+			"name":    provider + "-runner",
+			"runtime": provider,
+		},
+		"visibility": string(conversation.VisibilityDurable),
 		"payload": map[string]any{
-			"final_answer": map[string]any{
-				"timeline_ids":      []string{final.timelineID},
-				"provider_item_ids": []string{final.providerItemID},
+			"usage": map[string]any{
+				"input_tokens":  usage.InputTokens,
+				"output_tokens": usage.OutputTokens,
+				"total_tokens":  usage.TotalTokens,
+			},
+			"usage_observation": map[string]any{
+				"usage_source":       "loadCodeAssist",
+				"terminal_had_usage": false,
 			},
 		},
+	})
+}
+
+func (b eventBuilder) turnFailedEvent(turnID, clientNonce, reason string, usage *AgyUsage) map[string]any {
+	payload := map[string]any{
+		"reason": reason,
+	}
+	if usage != nil {
+		payload["usage"] = map[string]any{
+			"input_tokens":  usage.InputTokens,
+			"output_tokens": usage.OutputTokens,
+			"total_tokens":  usage.TotalTokens,
+		}
+		payload["usage_observation"] = map[string]any{
+			"usage_source":       "loadCodeAssist",
+			"terminal_had_usage": true,
+		}
+	}
+	return b.stamp(map[string]any{
+		"event_id":        turnID + ":turn.failed:runner",
+		"conversation_id": b.sessionID,
+		"session_id":      b.sessionID,
+		"turn_id":         turnID,
+		"client_nonce":    clientNonce,
+		"actor":           string(conversation.ActorRunner),
+		"source":          provider,
+		"type":            string(conversation.EventTurnFailed),
+		"producer": map[string]any{
+			"name":    provider + "-runner",
+			"runtime": provider,
+		},
+		"visibility": string(conversation.VisibilityDurable),
+		"payload":    payload,
+	})
+}
+
+func (b eventBuilder) turnInterruptedEvent(turnID, clientNonce string, usage *AgyUsage) map[string]any {
+	payload := map[string]any{
+		"reason": "user_interrupted",
+	}
+	if usage != nil {
+		payload["usage"] = map[string]any{
+			"input_tokens":  usage.InputTokens,
+			"output_tokens": usage.OutputTokens,
+			"total_tokens":  usage.TotalTokens,
+		}
+		payload["usage_observation"] = map[string]any{
+			"usage_source":       "loadCodeAssist",
+			"terminal_had_usage": true,
+		}
+	}
+	return b.stamp(map[string]any{
+		"event_id":        turnID + ":turn.interrupted:runner",
+		"conversation_id": b.sessionID,
+		"session_id":      b.sessionID,
+		"turn_id":         turnID,
+		"client_nonce":    clientNonce,
+		"actor":           string(conversation.ActorRunner),
+		"source":          provider,
+		"type":            string(conversation.EventTurnInterrupted),
+		"producer": map[string]any{
+			"name":    provider + "-runner",
+			"runtime": provider,
+		},
+		"visibility": string(conversation.VisibilityDurable),
+		"payload":    payload,
 	})
 }
 
