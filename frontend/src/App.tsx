@@ -917,7 +917,7 @@ const PROVIDER_QUOTA_WINDOW_DEFS: Record<
 
 const MODE_HINTS: Record<SessionMode, string> = {
   claude_cli: "Uses claude.ai login",
-  claude_gui: "GUI chat pane for claude -p output",
+  claude_gui: "GUI chat pane for the Claude Agent SDK",
   api_key: "Legacy Claude API-key session",
   config: "Log in once · seeds KV for future sessions",
   codex_cli: "Uses ChatGPT login from KV",
@@ -926,7 +926,7 @@ const MODE_HINTS: Record<SessionMode, string> = {
   codex_app_server: "Retired Codex app-server alias",
   codex_config: "codex login --device-auth · seeds KV for Codex",
   antigravity_config: "agy login (paste code) · seeds KV for Antigravity",
-  antigravity_cli: "Uses antigravity with -p",
+  antigravity_cli: "Terminal agy session · Google login from KV",
   antigravity_gui: "GUI chat pane for Gemini-Ultra (agy)",
 };
 
