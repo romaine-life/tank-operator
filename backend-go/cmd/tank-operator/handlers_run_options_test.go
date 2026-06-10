@@ -36,7 +36,7 @@ func TestSessionRunOptionsExposeTankOwnedCreateAndRunConfig(t *testing.T) {
 	if slices.Contains(codexModels, "gpt-5.3-codex") {
 		t.Fatalf("codex models = %v", codexModels)
 	}
-	if want := []string{"claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"}; !slices.Equal(opts.Models["claude"], want) {
+	if want := []string{"claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5", "claude-fable-5"}; !slices.Equal(opts.Models["claude"], want) {
 		t.Fatalf("claude models = %v, want %v", opts.Models["claude"], want)
 	}
 	if want := []string{"Gemini 3.1 Pro", "Gemini 3.5 Flash (Medium)"}; !slices.Equal(opts.Models["antigravity"], want) {

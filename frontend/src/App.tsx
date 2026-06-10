@@ -2873,6 +2873,25 @@ function IconKebab() {
   );
 }
 
+function IconChevronDown({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 6l4 4 4-4" />
+    </svg>
+  );
+}
+
 function IconClose() {
   return (
     <svg
@@ -4518,6 +4537,7 @@ const MODEL_LABELS: Record<string, string> = {
   "claude-opus-4-7": "Claude · Opus 4.7",
   "claude-sonnet-4-6": "Claude · Sonnet 4.6",
   "claude-haiku-4-5": "Claude · Haiku 4.5",
+  "claude-fable-5": "Claude · Fable 5",
   "gpt-5.5": "Codex · GPT-5.5",
   "gpt-5.4": "Codex · GPT-5.4",
   "gpt-5.4-mini": "Codex · GPT-5.4 Mini",
@@ -20221,6 +20241,7 @@ function AuthenticatedApp() {
   const lastSoundedOrderKeyRef = useRef<Map<string, string>>(new Map());
   const activeRef = useRef<string | null>(null);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [homeModelMenuOpen, setHomeModelMenuOpen] = useState(false);
   const [defaultInteraction, setDefaultInteraction] =
     useState<SessionInteraction>(readDefaultInteraction);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -21123,6 +21144,20 @@ function AuthenticatedApp() {
     document.addEventListener("mousedown", close);
     return () => document.removeEventListener("mousedown", close);
   }, [profileMenuOpen]);
+
+  // Close the home model dropdown on an outside click. Same `data-menu`
+  // routing as the profile menu so one listener handles each open menu.
+  useEffect(() => {
+    if (!homeModelMenuOpen) return;
+    const close = (e: MouseEvent) => {
+      const target = e.target as HTMLElement | null;
+      const root = target?.closest("[data-menu]") as HTMLElement | null;
+      if (root?.dataset.menu === "home-model") return;
+      setHomeModelMenuOpen(false);
+    };
+    document.addEventListener("mousedown", close);
+    return () => document.removeEventListener("mousedown", close);
+  }, [homeModelMenuOpen]);
 
   // refresh re-fetches the per-owner session snapshot from
   // /api/sessions and hydrates BOTH the sessions list and the
@@ -23451,40 +23486,87 @@ function AuthenticatedApp() {
                               </span>
                             </div>
                             <div
-                              className="home-model-list"
-                              role="group"
-                              aria-label="model"
+                              className="home-model-select"
+                              data-menu="home-model"
                             >
-                              {homeModelOptions.map((model) => {
-                                const selected =
-                                  model.id === selectedHomeModelId;
-                                return (
-                                  <button
-                                    key={model.id}
-                                    className={`home-model${selected ? " is-selected" : ""}`}
-                                    onClick={() => {
-                                      if (selectedProvider === "anthropic") {
-                                        setRunPref("claudeModelId", model.id);
-                                      } else if (selectedProvider === "codex") {
-                                        setRunPref("codexModelId", model.id);
-                                      } else if (
-                                        selectedProvider === "antigravity"
-                                      ) {
-                                        setRunPref(
-                                          "antigravityModelId",
-                                          model.id,
-                                        );
-                                      }
-                                    }}
-                                    disabled={busy || !runOptionsReadyForHome}
-                                    aria-pressed={selected}
-                                  >
-                                    <span className="home-model-title">
-                                      {model.label}
-                                    </span>
-                                  </button>
-                                );
-                              })}
+                              <button
+                                type="button"
+                                className="home-model-trigger"
+                                onClick={() =>
+                                  setHomeModelMenuOpen((v) => !v)
+                                }
+                                disabled={busy || !runOptionsReadyForHome}
+                                aria-haspopup="listbox"
+                                aria-expanded={homeModelMenuOpen}
+                              >
+                                <span className="home-model-title">
+                                  {homeModelOptions.find(
+                                    (model) =>
+                                      model.id === selectedHomeModelId,
+                                  )?.label ??
+                                    selectedHomeModelId ??
+                                    "Select model"}
+                                </span>
+                                <IconChevronDown className="home-model-trigger-icon" />
+                              </button>
+                              {homeModelMenuOpen && (
+                                <ul
+                                  className="dropdown home-model-menu"
+                                  role="listbox"
+                                  aria-label="model"
+                                >
+                                  {homeModelOptions.map((model) => {
+                                    const selected =
+                                      model.id === selectedHomeModelId;
+                                    return (
+                                      <li
+                                        key={model.id}
+                                        role="option"
+                                        aria-selected={selected}
+                                      >
+                                        <button
+                                          type="button"
+                                          className={
+                                            selected ? "is-selected" : undefined
+                                          }
+                                          onClick={() => {
+                                            if (
+                                              selectedProvider === "anthropic"
+                                            ) {
+                                              setRunPref(
+                                                "claudeModelId",
+                                                model.id,
+                                              );
+                                            } else if (
+                                              selectedProvider === "codex"
+                                            ) {
+                                              setRunPref(
+                                                "codexModelId",
+                                                model.id,
+                                              );
+                                            } else if (
+                                              selectedProvider === "antigravity"
+                                            ) {
+                                              setRunPref(
+                                                "antigravityModelId",
+                                                model.id,
+                                              );
+                                            }
+                                            setHomeModelMenuOpen(false);
+                                          }}
+                                          disabled={
+                                            busy || !runOptionsReadyForHome
+                                          }
+                                        >
+                                          <span className="home-model-title">
+                                            {model.label}
+                                          </span>
+                                        </button>
+                                      </li>
+                                    );
+                                  })}
+                                </ul>
+                              )}
                             </div>
                             {(selectedProvider === "anthropic" ||
                               selectedProvider === "codex") && (
