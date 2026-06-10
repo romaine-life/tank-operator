@@ -172,6 +172,13 @@ func main() {
 		}
 	}()
 
+	readyCtx, readyCancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer readyCancel()
+	if err := waitForCliReady(readyCtx, cfg.agyHome); err != nil {
+		slog.Error("agy CLI failed to become ready", "error", err)
+		os.Exit(1)
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
@@ -185,6 +192,35 @@ func main() {
 	wg.Wait()
 	slog.Info("antigravity cli runner exited")
 }
+
+func waitForCliReady(ctx context.Context, agyHome string) error {
+	logPath := filepath.Join(agyHome, "cli.log")
+	slog.Info("waiting for agy CLI to be ready...", "log_path", logPath)
+
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			data, err := os.ReadFile(logPath)
+			if err != nil {
+				if os.IsNotExist(err) {
+					continue
+				}
+				slog.Debug("failed to read agy log path", "error", err)
+				continue
+			}
+			if bytes.Contains(data, []byte("CLI ready for user input")) {
+				slog.Info("agy CLI is ready for user input")
+				return nil
+			}
+		}
+	}
+}
+
 
 func loadConfig() (runnerConfig, error) {
 	storageKey := firstEnv("TANK_SESSION_STORAGE_KEY", "SESSION_STORAGE_KEY")
