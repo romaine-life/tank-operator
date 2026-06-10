@@ -67,6 +67,56 @@ Evidence:
   event-source failure reasons documented in `docs/observability.md` and the
   Antigravity provider-error alert runbook.
 
+## Antigravity scheduled-wakeup (timer) registration
+
+Status: in progress
+
+Intent:
+When an Antigravity (`agy`) session sets a timer, agy emits a `schedule` tool call
+carrying `DurationSeconds` + a continuation `Prompt`. The runner must register a
+durable Tank scheduled wakeup so the orchestrator owns the timer and resumes the
+session at due time — the same shape as Claude `ScheduleWakeup`. Originating
+incident: session 781 on 2026-06-10 ("set a timer ... wait 5 seconds") emitted the
+`schedule` tool call (`DurationSeconds:"5"`), but the Go runner rendered it as a
+cosmetic tool item and registered nothing — no `session_scheduled_wakeups` row, the
+Background → Scheduled surface stayed empty, and the session never woke (the user
+re-prompted and the model then confabulated "the timer expired"). Regression window:
+Antigravity scheduled wakeups fired reliably through 2026-06-08 21:03 (TS runner,
+#977); the Go runner rewrite (#996) dropped the `wakeup.ts` detection/registration
+and kept only the background-task-wake path.
+
+Affected contracts:
+- Agent Runners
+
+Contract impact:
+- Restores conformance with "Claude `ScheduleWakeup` and Antigravity `schedule` tool
+  calls are registered by the runner with the backend; the orchestrator later submits
+  the wakeup through the same backend-owned turn boundary as a user turn." The Go
+  rewrite had regressed away from this written contract.
+- Idempotent per provider item id (the agy tool's stable step id): the orchestrator's
+  `session_scheduled_wakeups` `ON CONFLICT` no-op means a redelivered or repeated
+  schedule step cannot create a second timer.
+- Tank owns the single wake: once a scheduled wakeup is registered, agy's own native
+  timer/background echo is parked (the idle background-task-wake path is suppressed for
+  SYSTEM timer/schedule/background/wake steps) so the session is not resumed twice.
+- The model-reliability gap is observable, not silent: when agy narrates waiting but
+  emits no `schedule` tool call, the runner logs `antigravity wait intent without
+  schedule tool call` rather than appearing to silently drop a timer.
+
+Evidence:
+- Runner: `backend-go/cmd/antigravity-runner/schedule_wakeup_test.go` (a `schedule`
+  step with DurationSeconds/Prompt registers a durable wakeup carrying the turn-scoped
+  provider item id; malformed/negative/empty args register nothing; native timer echo
+  is parked while a scheduled wakeup is pending; wait-intent text detection).
+- Runner registration: `registerScheduledWakeup` POSTs
+  `/api/internal/sessions/{id}/scheduled-wakeups`, mirroring the Claude path and reusing
+  the existing `registerBackgroundTaskWake` SA-token / `TANK_OPERATOR_INTERNAL_URL`
+  plumbing.
+- Backend (unchanged, already provider-agnostic): `handleInternalRegisterScheduledWakeup`
+  + `supportsScheduledWakeups("antigravity")` + the fire loop in
+  `backend-go/cmd/tank-operator/scheduled_wakeups.go`; durable rows fired for antigravity
+  sessions through 2026-06-08 (`session_scheduled_wakeups`).
+
 ## Background-task completion wake
 
 Status: in progress

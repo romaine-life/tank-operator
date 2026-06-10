@@ -36,6 +36,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -104,6 +105,12 @@ type runnerState struct {
 	currentRun    *turnRun
 	pendingSteps  []parsedStep
 	wakeRequested bool
+	// scheduledWakeups counts durable Tank scheduled wakeups registered for this
+	// session. When > 0, agy's own native timer/background echoes must not also
+	// drive a background-task wake (Tank already owns the resume). Atomic so it can
+	// be read from the idle tail path without taking mu, which observeStep callers
+	// already hold.
+	scheduledWakeups atomic.Int64
 }
 
 type parsedStep struct {
@@ -125,6 +132,12 @@ func (s *runnerState) handleStep(path, line string, step AgyStep, cfg runnerConf
 
 	s.pendingSteps = append(s.pendingSteps, parsedStep{path: path, line: line, step: step})
 	if !s.wakeRequested {
+		if s.scheduledWakeups.Load() > 0 && isNativeTimerEchoStep(step) {
+			// A durable Tank scheduled wakeup already owns this session's resume;
+			// don't double-wake via the background-task path on agy's native timer echo.
+			slog.Info("parking native antigravity timer echo; scheduled wakeup owns the resume", "type", step.Type)
+			return nil
+		}
 		s.wakeRequested = true
 		taskID := providerStepID(path, line, step)
 		go func() {
@@ -157,11 +170,11 @@ func (s *runnerState) detachTurn(run *turnRun) {
 }
 
 type turnRun struct {
-	builder         eventBuilder
-	publish         func(map[string]any) error
-	turnID          string
-	clientNonce     string
-	turnComplete    chan struct{}
+	builder      eventBuilder
+	publish      func(map[string]any) error
+	turnID       string
+	clientNonce  string
+	turnComplete chan struct{}
 
 	mu              sync.Mutex
 	started         bool
@@ -170,6 +183,15 @@ type turnRun struct {
 	providerFailed  string
 	pendingTools    []pendingTool
 	cumulativeUsage *AgyUsage
+
+	// state is the shared session runner state (for the scheduled-wakeup parking
+	// signal). scheduleRegister registers a durable Tank scheduled wakeup with the
+	// orchestrator; it is nil in tests that don't exercise registration.
+	state            *runnerState
+	scheduleRegister func(providerItemID string, delayMs int64, prompt, scheduledTurnID string) error
+	// scheduleSeen records that the agent emitted a `schedule` tool call this turn,
+	// which suppresses the wait-intent-without-schedule diagnostic.
+	scheduleSeen bool
 }
 
 type activeProcess struct {
@@ -348,6 +370,182 @@ func registerBackgroundTaskWake(cfg runnerConfig, taskID string, summary string)
 	return nil
 }
 
+// registerScheduledWakeup registers a durable Tank scheduled wakeup with the
+// orchestrator. It is the antigravity peer of the Claude runner's ScheduleWakeup
+// registration: the orchestrator owns the durable timer row and resumes the
+// session through the same backend turn boundary as a user turn. The endpoint and
+// payload mirror the Claude path (POST /scheduled-wakeups), and the orchestrator's
+// supportsScheduledWakeups() already accepts the antigravity provider.
+func registerScheduledWakeup(cfg runnerConfig, providerItemID string, delayMs int64, prompt, scheduledTurnID string) error {
+	baseURL := strings.TrimRight(firstEnv("TANK_OPERATOR_INTERNAL_URL", "OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local"), "/")
+	tokenPath := firstEnv("OPERATOR_TOKEN_PATH", "/var/run/secrets/kubernetes.io/serviceaccount/token")
+	prompt = strings.TrimSpace(prompt)
+	providerItemID = strings.TrimSpace(providerItemID)
+	if baseURL == "" || tokenPath == "" || cfg.sessionID == "" || providerItemID == "" || prompt == "" {
+		return nil
+	}
+	if delayMs < 0 {
+		delayMs = 0
+	}
+	tokenBytes, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return err
+	}
+	token := strings.TrimSpace(string(tokenBytes))
+	url := fmt.Sprintf("%s/api/internal/sessions/%s/scheduled-wakeups", baseURL, cfg.sessionID)
+
+	payload := map[string]any{
+		"delay_ms":         delayMs,
+		"prompt":           prompt,
+		"provider_item_id": providerItemID,
+	}
+	if scheduledTurnID = strings.TrimSpace(scheduledTurnID); scheduledTurnID != "" {
+		payload["scheduled_turn_id"] = scheduledTurnID
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("scheduled wakeup register failed: %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// maybeRegisterScheduleWakeup ports the deleted antigravity-runner/src/wakeup.ts.
+// agy expresses a timer as a `schedule` tool call carrying DurationSeconds + a
+// continuation Prompt (e.g. {"DurationSeconds":"5","Prompt":"..."}). The runner
+// registers a durable Tank scheduled wakeup so the orchestrator owns the timer and
+// resumes the session at due time — the same shape Claude uses. Without this the
+// schedule tool is rendered as a cosmetic item and the session never wakes (the
+// regression introduced when the runner was rewritten in Go, #996).
+func (r *turnRun) maybeRegisterScheduleWakeup(providerItemID string, tc AgyToolCall) {
+	if !strings.EqualFold(strings.TrimSpace(tc.Name), "schedule") {
+		return
+	}
+	r.mu.Lock()
+	r.scheduleSeen = true
+	r.mu.Unlock()
+
+	delayMs, prompt, ok := parseScheduleWakeup(tc)
+	if !ok {
+		slog.Warn("antigravity malformed schedule tool call", "turn_id", r.turnID, "provider_item_id", providerItemID)
+		return
+	}
+	reg := r.scheduleRegister
+	if reg == nil {
+		return
+	}
+	st := r.state
+	turnID := r.turnID
+	go func() {
+		if err := reg(providerItemID, delayMs, prompt, turnID); err != nil {
+			slog.Error("antigravity scheduled wakeup register failed", "error", err, "turn_id", turnID, "provider_item_id", providerItemID)
+			return
+		}
+		slog.Info("antigravity scheduled wakeup registered", "turn_id", turnID, "provider_item_id", providerItemID, "delay_ms", delayMs)
+		if st != nil {
+			st.scheduledWakeups.Add(1)
+		}
+	}()
+}
+
+// warnIfWaitWithoutSchedule surfaces the model-reliability gap where Gemini narrates
+// that it will wait but never emitted a `schedule` tool call, so no timer can be
+// registered. This is a diagnostic signal (the runner behaved correctly), not a
+// runner bug, and mirrors the TS runner's wait_text_without_schedule counter.
+func (r *turnRun) warnIfWaitWithoutSchedule(text string) {
+	r.mu.Lock()
+	seen := r.scheduleSeen
+	r.mu.Unlock()
+	if seen {
+		return
+	}
+	if isWaitIntentText(text) {
+		slog.Warn("antigravity wait intent without schedule tool call", "turn_id", r.turnID)
+	}
+}
+
+// parseScheduleWakeup extracts the delay and continuation prompt from an agy
+// `schedule` tool call. DurationSeconds is emitted as a JSON string ("5") but a
+// number is tolerated. A malformed call (no/negative duration, empty prompt) yields
+// ok=false so the caller can count it without registering a bad timer.
+func parseScheduleWakeup(tc AgyToolCall) (int64, string, bool) {
+	if len(tc.Args) == 0 {
+		return 0, "", false
+	}
+	var args struct {
+		DurationSeconds json.RawMessage `json:"DurationSeconds"`
+		Prompt          string          `json:"Prompt"`
+	}
+	if err := json.Unmarshal(tc.Args, &args); err != nil {
+		return 0, "", false
+	}
+	seconds, ok := parseFlexibleSeconds(args.DurationSeconds)
+	if !ok || seconds < 0 {
+		return 0, "", false
+	}
+	prompt := strings.TrimSpace(args.Prompt)
+	if prompt == "" {
+		return 0, "", false
+	}
+	return int64(seconds * 1000), prompt, true
+}
+
+func parseFlexibleSeconds(raw json.RawMessage) (float64, bool) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return 0, false
+	}
+	var asString string
+	if err := json.Unmarshal(raw, &asString); err == nil {
+		f, err := strconv.ParseFloat(strings.TrimSpace(asString), 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	}
+	var asNumber float64
+	if err := json.Unmarshal(raw, &asNumber); err == nil {
+		return asNumber, true
+	}
+	return 0, false
+}
+
+var scheduleWaitIntentPattern = regexp.MustCompile(`\bi(?:'ll| will| am)\s+(?:now\s+)?wait\b|\bi\s+am\s+waiting\b|\bi(?:'ll| will)\s+check\s+back\b|\bwait(?:ing)?\s+for\b`)
+
+func normalizeScheduleText(value string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(value))), " ")
+}
+
+func isWaitIntentText(text string) bool {
+	norm := normalizeScheduleText(text)
+	if norm == "" {
+		return false
+	}
+	return scheduleWaitIntentPattern.MatchString(norm)
+}
+
+// isNativeTimerEchoStep reports whether an idle agy step is agy's own native
+// timer/background firing (a SYSTEM timer/schedule/background/wake step). When a
+// durable Tank scheduled wakeup is already pending, this echo must not also drive a
+// background-task wake, or the session would be resumed twice.
+func isNativeTimerEchoStep(step AgyStep) bool {
+	if !strings.EqualFold(step.Source, "SYSTEM") {
+		return false
+	}
+	typ := strings.ToLower(step.Type)
+	return strings.Contains(typ, "timer") || strings.Contains(typ, "schedule") || strings.Contains(typ, "background") || strings.Contains(typ, "wake")
+}
+
 func loadConfig() (runnerConfig, error) {
 	storageKey := firstEnv("TANK_SESSION_STORAGE_KEY", "SESSION_STORAGE_KEY")
 	sessionID := firstEnv("SESSION_ID", "TANK_SESSION_ID")
@@ -515,6 +713,10 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 	defer active.clear(active.cmd)
 
 	run := newTurnRun(builder, publisher, turnID, clientNonce)
+	run.state = state
+	run.scheduleRegister = func(providerItemID string, delayMs int64, prompt, scheduledTurnID string) error {
+		return registerScheduledWakeup(cfg, providerItemID, delayMs, prompt, scheduledTurnID)
+	}
 	if err := publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnClaimed), "")); err != nil {
 		return false, err
 	}
@@ -741,6 +943,8 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 				r.mu.Lock()
 				r.pendingTools = append(r.pendingTools, pendingTool{id: toolID, name: tc.Name})
 				r.mu.Unlock()
+
+				r.maybeRegisterScheduleWakeup(toolID, tc)
 			}
 			return nil
 		}
@@ -809,6 +1013,7 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 				r.mu.Unlock()
 			}
 			if strings.EqualFold(step.Status, "DONE") {
+				r.warnIfWaitWithoutSchedule(text)
 				close(r.turnComplete)
 			}
 			return nil
@@ -1167,7 +1372,6 @@ func publishEvent(nc *nats.Conn, sessionStorageKey string, event map[string]any)
 	}
 	return nc.FlushTimeout(5 * time.Second)
 }
-
 
 func tailTranscripts(ctx context.Context, cfg runnerConfig, state *runnerState) {
 	offsets := map[string]int64{}
