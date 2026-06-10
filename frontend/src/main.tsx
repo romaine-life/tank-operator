@@ -28,6 +28,7 @@ import { StyleguideToolIcons } from "./styleguide/tool-icons";
 import { StyleguideType } from "./styleguide/type";
 import { StyleguideWelcomeCard } from "./styleguide/welcome-card";
 import "./fonts.css";
+import "./xterm.css";
 import "./index.css";
 
 if (typeof document !== "undefined") {
