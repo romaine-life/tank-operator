@@ -188,7 +188,7 @@ type turnRun struct {
 	// signal). scheduleRegister registers a durable Tank scheduled wakeup with the
 	// orchestrator; it is nil in tests that don't exercise registration.
 	state            *runnerState
-	scheduleRegister func(providerItemID string, delayMs int64, prompt, scheduledTurnID string) error
+	scheduleRegister func(providerItemID string, delayMs int64, prompt, scheduledTurnID string) (bool, error)
 	// scheduleSeen records that the agent emitted a `schedule` tool call this turn,
 	// which suppresses the wait-intent-without-schedule diagnostic.
 	scheduleSeen bool
@@ -331,10 +331,34 @@ func waitForCliReady(ctx context.Context, agyHome string) error {
 	}
 }
 
+// operatorBaseURL resolves the orchestrator's internal base URL. firstEnv treats
+// every argument as an env var NAME, so hardcoded defaults must NOT be passed to
+// it — a default string handed to firstEnv is looked up as an (absent) env var
+// and yields "". operatorTokenPath made exactly that mistake before this fix,
+// returning "" and silently disabling wake registration via the early return.
+func operatorBaseURL() string {
+	if v := firstEnv("TANK_OPERATOR_INTERNAL_URL", "OPERATOR_INTERNAL_URL"); v != "" {
+		return strings.TrimRight(v, "/")
+	}
+	return "http://tank-operator.tank-operator.svc.cluster.local"
+}
+
+// operatorTokenPath resolves the SA-token path the orchestrator's
+// requireInternalSessionPodCaller accepts: the projected token with audience
+// "tank-operator" (mounted by the pod and advertised via TANK_OPERATOR_TOKEN_PATH),
+// NOT the default kube API service-account token. Sending the kube token gets the
+// registration rejected by the audience check.
+func operatorTokenPath() string {
+	if v := firstEnv("TANK_OPERATOR_TOKEN_PATH", "OPERATOR_TOKEN_PATH"); v != "" {
+		return v
+	}
+	return "/var/run/secrets/tank-operator/token"
+}
+
 func registerBackgroundTaskWake(cfg runnerConfig, taskID string, summary string) error {
-	baseURL := strings.TrimRight(firstEnv("TANK_OPERATOR_INTERNAL_URL", "OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local"), "/")
-	tokenPath := firstEnv("OPERATOR_TOKEN_PATH", "/var/run/secrets/kubernetes.io/serviceaccount/token")
-	if baseURL == "" || tokenPath == "" || cfg.sessionID == "" {
+	baseURL := operatorBaseURL()
+	tokenPath := operatorTokenPath()
+	if cfg.sessionID == "" {
 		return nil
 	}
 	tokenBytes, err := os.ReadFile(tokenPath)
@@ -376,20 +400,26 @@ func registerBackgroundTaskWake(cfg runnerConfig, taskID string, summary string)
 // session through the same backend turn boundary as a user turn. The endpoint and
 // payload mirror the Claude path (POST /scheduled-wakeups), and the orchestrator's
 // supportsScheduledWakeups() already accepts the antigravity provider.
-func registerScheduledWakeup(cfg runnerConfig, providerItemID string, delayMs int64, prompt, scheduledTurnID string) error {
-	baseURL := strings.TrimRight(firstEnv("TANK_OPERATOR_INTERNAL_URL", "OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local"), "/")
-	tokenPath := firstEnv("OPERATOR_TOKEN_PATH", "/var/run/secrets/kubernetes.io/serviceaccount/token")
+// registerScheduledWakeup returns (registered, err): registered is true only when
+// the orchestrator accepted the durable wakeup (2xx). A false/nil result is a
+// deliberate skip (missing session/item/prompt) and is logged, so a no-op can
+// never again masquerade as success.
+func registerScheduledWakeup(cfg runnerConfig, providerItemID string, delayMs int64, prompt, scheduledTurnID string) (bool, error) {
+	baseURL := operatorBaseURL()
+	tokenPath := operatorTokenPath()
 	prompt = strings.TrimSpace(prompt)
 	providerItemID = strings.TrimSpace(providerItemID)
-	if baseURL == "" || tokenPath == "" || cfg.sessionID == "" || providerItemID == "" || prompt == "" {
-		return nil
+	if cfg.sessionID == "" || providerItemID == "" || prompt == "" {
+		slog.Warn("antigravity scheduled wakeup registration skipped: missing session/item/prompt",
+			"session_id", cfg.sessionID, "provider_item_id", providerItemID, "has_prompt", prompt != "")
+		return false, nil
 	}
 	if delayMs < 0 {
 		delayMs = 0
 	}
 	tokenBytes, err := os.ReadFile(tokenPath)
 	if err != nil {
-		return err
+		return false, err
 	}
 	token := strings.TrimSpace(string(tokenBytes))
 	url := fmt.Sprintf("%s/api/internal/sessions/%s/scheduled-wakeups", baseURL, cfg.sessionID)
@@ -405,20 +435,20 @@ func registerScheduledWakeup(cfg runnerConfig, providerItemID string, delayMs in
 	body, _ := json.Marshal(payload)
 	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
 	if err != nil {
-		return err
+		return false, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return fmt.Errorf("scheduled wakeup register failed: %d", resp.StatusCode)
+		return false, fmt.Errorf("scheduled wakeup register failed: %d", resp.StatusCode)
 	}
-	return nil
+	return true, nil
 }
 
 // maybeRegisterScheduleWakeup ports the deleted antigravity-runner/src/wakeup.ts.
@@ -448,8 +478,12 @@ func (r *turnRun) maybeRegisterScheduleWakeup(providerItemID string, tc AgyToolC
 	st := r.state
 	turnID := r.turnID
 	go func() {
-		if err := reg(providerItemID, delayMs, prompt, turnID); err != nil {
+		registered, err := reg(providerItemID, delayMs, prompt, turnID)
+		if err != nil {
 			slog.Error("antigravity scheduled wakeup register failed", "error", err, "turn_id", turnID, "provider_item_id", providerItemID)
+			return
+		}
+		if !registered {
 			return
 		}
 		slog.Info("antigravity scheduled wakeup registered", "turn_id", turnID, "provider_item_id", providerItemID, "delay_ms", delayMs)
@@ -714,7 +748,7 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 
 	run := newTurnRun(builder, publisher, turnID, clientNonce)
 	run.state = state
-	run.scheduleRegister = func(providerItemID string, delayMs int64, prompt, scheduledTurnID string) error {
+	run.scheduleRegister = func(providerItemID string, delayMs int64, prompt, scheduledTurnID string) (bool, error) {
 		return registerScheduledWakeup(cfg, providerItemID, delayMs, prompt, scheduledTurnID)
 	}
 	if err := publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnClaimed), "")); err != nil {

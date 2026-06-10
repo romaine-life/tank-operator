@@ -61,9 +61,9 @@ func TestObserveStepRegistersAntigravityScheduleWakeup(t *testing.T) {
 
 	run := newTurnRun(builder, func(map[string]any) error { return nil }, "turn-sched", "nonce-sched")
 	run.state = state
-	run.scheduleRegister = func(providerItemID string, delayMs int64, prompt, scheduledTurnID string) error {
+	run.scheduleRegister = func(providerItemID string, delayMs int64, prompt, scheduledTurnID string) (bool, error) {
 		calls <- regCall{providerItemID, delayMs, prompt, scheduledTurnID}
-		return nil
+		return true, nil
 	}
 
 	line := `{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"schedule","args":{"DurationSeconds":"5","Prompt":"Timer of 5 seconds has expired."}}]}`
@@ -98,9 +98,9 @@ func TestObserveStepIgnoresNonScheduleTool(t *testing.T) {
 	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
 	run := newTurnRun(builder, func(map[string]any) error { return nil }, "turn-x", "nonce-x")
 	run.state = &runnerState{}
-	run.scheduleRegister = func(string, int64, string, string) error {
+	run.scheduleRegister = func(string, int64, string, string) (bool, error) {
 		t.Fatal("scheduleRegister must not fire for a non-schedule tool")
-		return nil
+		return false, nil
 	}
 	line := `{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"read_file","args":{"path":"x"}}]}`
 	var step AgyStep
@@ -159,6 +159,33 @@ func TestIsNativeTimerEchoStep(t *testing.T) {
 		if isNativeTimerEchoStep(s) {
 			t.Errorf("did not expect native timer echo for %+v", s)
 		}
+	}
+}
+
+// TestOperatorEndpointResolution guards the firstEnv-misuse bug that silently
+// disabled wake registration: hardcoded defaults must NOT be passed to firstEnv
+// (which treats every arg as an env var NAME). The token path must resolve to the
+// tank-operator-audience token, never "" and never the kube SA token.
+func TestOperatorEndpointResolution(t *testing.T) {
+	t.Setenv("TANK_OPERATOR_TOKEN_PATH", "/var/run/secrets/tank-operator/token")
+	t.Setenv("TANK_OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator-slot-9.svc.cluster.local/")
+	if got := operatorTokenPath(); got != "/var/run/secrets/tank-operator/token" {
+		t.Fatalf("operatorTokenPath = %q, want the pod-advertised tank-operator token path", got)
+	}
+	if got := operatorBaseURL(); got != "http://tank-operator.tank-operator-slot-9.svc.cluster.local" {
+		t.Fatalf("operatorBaseURL = %q, want the env URL with the trailing slash stripped", got)
+	}
+}
+
+func TestOperatorTokenPathDefaultsToTankAudienceToken(t *testing.T) {
+	t.Setenv("TANK_OPERATOR_TOKEN_PATH", "")
+	t.Setenv("OPERATOR_TOKEN_PATH", "")
+	got := operatorTokenPath()
+	if got == "" {
+		t.Fatal("operatorTokenPath returned empty — this is the bug that tripped the early return and skipped the POST")
+	}
+	if got != "/var/run/secrets/tank-operator/token" {
+		t.Fatalf("default operatorTokenPath = %q, want the tank-operator-audience token (not the kube SA token)", got)
 	}
 }
 
