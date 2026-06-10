@@ -222,3 +222,8 @@ EOF
     fi
     ;;
 esac
+
+# Ensure TERM is always set to xterm-256color in interactive shell sessions
+echo "export TERM=xterm-256color" >> "${HOME}/.bashrc"
+echo "export TERM=xterm-256color" >> "${HOME}/.bash_profile"
+
