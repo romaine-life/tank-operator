@@ -126,14 +126,21 @@ func TestCancelPendingWakesForSession(t *testing.T) {
 	}
 }
 
-func TestSupportsScheduledWakeupsIncludesAntigravity(t *testing.T) {
-	for _, provider := range []string{"claude", "antigravity"} {
-		if !supportsScheduledWakeups(provider) {
-			t.Fatalf("supportsScheduledWakeups(%q) = false, want true", provider)
-		}
+// TestSupportsScheduledWakeupsRejectsAntigravity pins the long-running-agent
+// harness contract on the orchestrator: only Claude is fired by the scheduled-wakeup
+// loop. Antigravity self-continues natively (agy fires its own timer/task and emits
+// the continuation), so Tank must NOT own a clock for it — that double-wakes a
+// self-managing agent and is the trap that cost ~20 prior attempts. The runner
+// relays agy's self-continuation through /agent-continuation instead. See
+// backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+func TestSupportsScheduledWakeupsRejectsAntigravity(t *testing.T) {
+	if !supportsScheduledWakeups("claude") {
+		t.Fatal("supportsScheduledWakeups(claude) = false, want true")
 	}
-	if supportsScheduledWakeups("codex") {
-		t.Fatal("supportsScheduledWakeups(codex) = true, want false")
+	for _, provider := range []string{"antigravity", "codex", ""} {
+		if supportsScheduledWakeups(provider) {
+			t.Fatalf("supportsScheduledWakeups(%q) = true, want false (only claude is fired by Tank)", provider)
+		}
 	}
 }
 
@@ -214,84 +221,6 @@ func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 	}
 	if got, _ := wakeupPayload["wakeup_id"].(string); got != row.WakeupID {
 		t.Fatalf("scheduled_wakeup.updated payload.wakeup_id = %q, want %q", got, row.WakeupID)
-	}
-}
-
-func TestFireAntigravityScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
-	bus := &recordingSessionBus{}
-	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
-		ID:      "88",
-		Email:   "user@example.com",
-		Mode:    sessionmodel.AntigravityGUIMode,
-		Visible: true,
-		Model:   "Gemini 3.5 Flash (Medium)",
-	})
-	app := testTurnsAppWithRegistry(t, bus, registry, sdkSessionPod("session-88", "88", "user@example.com", "antigravity_gui", "antigravity-runner"))
-	schedules := &fakeScheduledWakeupStore{}
-	app.scheduledWakeups = schedules
-	app.sessionEvents = &recordingSessionEventStore{}
-	row := pgstore.ScheduledWakeup{
-		WakeupID:          "wakeup_agy",
-		SessionScope:      "default",
-		SessionID:         "88",
-		TankSessionID:     "88",
-		OwnerEmail:        "user@example.com",
-		Provider:          "antigravity",
-		Prompt:            "check if the build finished",
-		ClientNonce:       "schedule_wakeup-wakeup_agy",
-		ProviderItemID:    "tool-17-0",
-		ScheduledAt:       time.Date(2026, 6, 7, 6, 40, 0, 0, time.UTC),
-		DueAt:             time.Date(2026, 6, 7, 6, 42, 34, 0, time.UTC),
-		SessionStatus:     "Active",
-		SessionTerminated: false,
-	}
-
-	if err := app.fireScheduledWakeup(context.Background(), row, time.Date(2026, 6, 7, 6, 42, 34, 0, time.UTC)); err != nil {
-		t.Fatalf("fireScheduledWakeup returned error: %v", err)
-	}
-	if schedules.firedID != row.WakeupID || schedules.firedTurn != "turn_schedule_wakeup-wakeup_agy" {
-		t.Fatalf("fired = (%q, %q), want (%q, turn_schedule_wakeup-wakeup_agy)", schedules.firedID, schedules.firedTurn, row.WakeupID)
-	}
-	if len(bus.commands) != 1 {
-		t.Fatalf("published commands = %d, want 1", len(bus.commands))
-	}
-	cmd := bus.commands[0]
-	if cmd.Provider != "antigravity" || cmd.Source != "schedule-wakeup" || cmd.ClientNonce != row.ClientNonce || cmd.Prompt != row.Prompt {
-		t.Fatalf("command = %+v", cmd)
-	}
-	events := app.sessionEvents.(*recordingSessionEventStore).upserts
-	if len(events) != 3 {
-		t.Fatalf("event upserts = %d, want 3", len(events))
-	}
-	if got, _ := events[0]["type"].(string); got != "user_message.created" {
-		t.Fatalf("first event type = %q", got)
-	}
-	if got, _ := events[0]["author_kind"].(string); got != "system" {
-		t.Fatalf("author_kind = %q, want system", got)
-	}
-	if got, _ := events[2]["type"].(string); got != "scheduled_wakeup.updated" {
-		t.Fatalf("third event type = %q", got)
-	}
-	userPayload, _ := events[0]["payload"].(map[string]any)
-	if got, _ := userPayload["text"].(string); got != "Timer went off!" {
-		t.Fatalf("user_message.created payload.text = %q, want timer announcement", got)
-	}
-	if got, _ := userPayload["source"].(string); got != "schedule-wakeup" {
-		t.Fatalf("user_message.created payload.source = %q, want schedule-wakeup", got)
-	}
-	if got, _ := userPayload["prompt"].(string); got != row.Prompt {
-		t.Fatalf("user_message.created payload.prompt = %q, want wake prompt", got)
-	}
-	submitPayload, _ := events[1]["payload"].(map[string]any)
-	if got, _ := submitPayload["source"].(string); got != "schedule-wakeup" {
-		t.Fatalf("turn.submitted payload.source = %q, want schedule-wakeup", got)
-	}
-	if got, _ := submitPayload["prompt"].(string); got != row.Prompt {
-		t.Fatalf("turn.submitted payload.prompt = %q, want wake prompt", got)
-	}
-	wakeupPayload, _ := events[2]["payload"].(map[string]any)
-	if got, _ := wakeupPayload["status"].(string); got != "fired" {
-		t.Fatalf("scheduled_wakeup.updated payload.status = %q, want fired", got)
 	}
 }
 

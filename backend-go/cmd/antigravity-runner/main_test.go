@@ -37,7 +37,8 @@ func TestEventBuilderEmitsSchemaValidTurnEvents(t *testing.T) {
 		builder.turnEvent("turn-1", "nonce-1", string(conversation.EventTurnClaimed), ""),
 		builder.turnEvent("turn-1", "nonce-1", string(conversation.EventTurnStarted), "agy:step:1"),
 		builder.assistantMessageEvent("turn-1", final.providerItemID, final.timelineID, "done"),
-		builder.turnCompletedEvent("turn-1", "nonce-1", final, nil),
+		builder.turnCompletedEvent("turn-1", "nonce-1", final, nil, false),
+		builder.turnCompletedEvent("turn-1b", "nonce-1b", final, nil, true),
 		builder.turnEvent("turn-2", "nonce-2", string(conversation.EventTurnFailed), "provider_no_final_answer"),
 		builder.turnEvent("turn-3", "nonce-3", string(conversation.EventTurnInterrupted), "user_interrupted"),
 		builder.itemEvent("turn-4", "agy:error:1", string(conversation.EventItemFailed), string(conversation.ActorRunner), map[string]any{
@@ -253,7 +254,7 @@ func TestTurnRunToolAndTokenUsageParity(t *testing.T) {
 	// Verify turnCompleted has final answer and token usage
 	completed := events[8]
 	completedPayload := completed["payload"].(map[string]any)
-	
+
 	finalAnswer := completedPayload["final_answer"].(map[string]any)
 	if len(finalAnswer["timeline_ids"].([]string)) != 1 {
 		t.Errorf("timeline_ids length = %d, want 1", len(finalAnswer["timeline_ids"].([]string)))
@@ -377,3 +378,159 @@ func TestPTYRunnerArchitectureConstraint(t *testing.T) {
 	})
 }
 
+// TestRunnerSelfContinuationContract pins the long-running-agent harness contract
+// at the code level: the antigravity-runner must NOT own or fire a Tank clock for
+// agy. agy self-continues (it fires its own timer/build task and emits the
+// continuation); the runner OBSERVES that and RELAYS it via /agent-continuation.
+// Reintroducing a scheduled-wakeup / background-task-wake registration from the
+// runner is the puppeteer regression that cost ~20 prior attempts. AST-based so the
+// contract's prose references in code comments don't trip it. See ARCHITECTURE.md.
+func TestRunnerSelfContinuationContract(t *testing.T) {
+	content, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("failed to read main.go: %v", err)
+	}
+	code := string(content)
+
+	fset := token.NewFileSet()
+	node, err := parser.ParseFile(fset, "main.go", nil, 0)
+	if err != nil {
+		t.Fatalf("failed to parse main.go: %v", err)
+	}
+
+	forbiddenIdents := map[string]string{
+		"registerScheduledWakeup":     "Tank-owned scheduled-wakeup registration",
+		"registerBackgroundTaskWake":  "Tank-owned background-task-wake registration",
+		"maybeRegisterScheduleWakeup": "schedule-tool timer inject",
+		"isNativeTimerEchoStep":       "native-timer-echo parking heuristic",
+		"parseScheduleWakeup":         "schedule-tool duration parser (inject)",
+		"warnIfWaitWithoutSchedule":   "wait-intent-without-schedule inject diagnostic",
+	}
+	ast.Inspect(node, func(n ast.Node) bool {
+		switch x := n.(type) {
+		case *ast.Ident:
+			if why, bad := forbiddenIdents[x.Name]; bad {
+				t.Errorf("self-continuation contract violation: identifier %q (%s) — agy self-continues; relay via /agent-continuation, never a Tank-owned wake", x.Name, why)
+			}
+		case *ast.BasicLit:
+			if x.Kind == token.STRING {
+				lit := strings.ToLower(x.Value)
+				if strings.Contains(lit, "/scheduled-wakeups") || strings.Contains(lit, "/background-task-wakes") {
+					t.Errorf("self-continuation contract violation: string literal %s posts a Tank wake endpoint — the runner must only POST /agent-continuation", x.Value)
+				}
+			}
+		}
+		return true
+	})
+
+	// Positive: the relay endpoint must be present (the observe-and-relay path).
+	if !strings.Contains(code, "/agent-continuation") {
+		t.Error("self-continuation contract: main.go must POST /agent-continuation to relay agy's idle self-continuation")
+	}
+}
+
+// TestNoteTaskSignalTracksPendingSet pins the background-work pending-set: agy's
+// uniform jsonl signal (a MODEL status=RUNNING "background task with task id: X"
+// marker adds X; a SYSTEM_MESSAGE sender=X completion removes X). The set drives
+// whether a turn.completed lands mid-work. See ARCHITECTURE.md.
+func TestNoteTaskSignalTracksPendingSet(t *testing.T) {
+	st := &runnerState{}
+	note := func(step AgyStep) {
+		st.mu.Lock()
+		st.noteTaskSignalLocked(step)
+		st.mu.Unlock()
+	}
+	running := func(id string) AgyStep {
+		return AgyStep{Source: "MODEL", Type: "GENERIC", Status: "RUNNING",
+			Content: json.RawMessage(`"Tool is running as a background task with task id: ` + id + `"`)}
+	}
+	done := func(id string) AgyStep {
+		return AgyStep{Source: "SYSTEM", Type: "SYSTEM_MESSAGE",
+			Content: json.RawMessage(`"[message] sender=` + id + ` finished with result: ok"`)}
+	}
+
+	note(running("conv/task-1"))
+	if !st.backgroundWorkPending() {
+		t.Fatal("task-1 should be pending after its RUNNING marker")
+	}
+	note(running("conv/task-2"))
+	note(done("conv/task-1"))
+	if !st.backgroundWorkPending() {
+		t.Fatal("task-2 should still be pending after only task-1 completed")
+	}
+	note(done("conv/task-2"))
+	if st.backgroundWorkPending() {
+		t.Fatal("no work should be pending after both tasks completed")
+	}
+	st.mu.Lock()
+	last := st.lastCompletedTask
+	st.mu.Unlock()
+	if last != "conv/task-2" {
+		t.Fatalf("lastCompletedTask = %q, want conv/task-2", last)
+	}
+
+	// Ordinary MODEL prose (not a RUNNING marker) must not add a phantom task.
+	note(AgyStep{Source: "MODEL", Type: "PLANNER_RESPONSE", Status: "DONE",
+		Content: json.RawMessage(`"just talking, no task here"`)})
+	if st.backgroundWorkPending() {
+		t.Fatal("ordinary prose must not add a background task")
+	}
+}
+
+// TestTurnCompletedStampsBackgroundWorkPending proves the runner stamps
+// turn.completed.background_work_pending from the pending-set at the terminal: a
+// turn whose work is still in flight folds to the non-summoning "scheduled" status;
+// an idle terminal summons.
+func TestTurnCompletedStampsBackgroundWorkPending(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		pending bool
+	}{
+		{"work pending -> stamped true", true},
+		{"no work pending -> stamped false", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := &runnerState{}
+			if tc.pending {
+				st.mu.Lock()
+				st.noteTaskSignalLocked(AgyStep{Source: "MODEL", Status: "RUNNING",
+					Content: json.RawMessage(`"Tool is running as a background task with task id: t1"`)})
+				st.mu.Unlock()
+			}
+			var published []map[string]any
+			publish := func(e map[string]any) error {
+				published = append(published, e)
+				return nil
+			}
+			run := newTurnRun(eventBuilder{sessionID: "63"}, publish, "turn_x", "nonce_x")
+			run.state = st
+
+			step := AgyStep{Source: "MODEL", Type: "PLANNER_RESPONSE", Status: "DONE",
+				Content: json.RawMessage(`"all done, reporting back"`)}
+			if err := run.observeStep("p", "l", step); err != nil {
+				t.Fatalf("observeStep: %v", err)
+			}
+			<-run.turnComplete
+			if err := run.finishCompleted(); err != nil {
+				t.Fatalf("finishCompleted: %v", err)
+			}
+
+			var completed map[string]any
+			for _, e := range published {
+				if e["type"] == string(conversation.EventTurnCompleted) {
+					completed = e
+				}
+			}
+			if completed == nil {
+				t.Fatal("no turn.completed event was published")
+			}
+			payload, _ := completed["payload"].(map[string]any)
+			if payload == nil {
+				t.Fatal("turn.completed has no payload")
+			}
+			if got, _ := payload["background_work_pending"].(bool); got != tc.pending {
+				t.Fatalf("background_work_pending = %v, want %v", got, tc.pending)
+			}
+		})
+	}
+}

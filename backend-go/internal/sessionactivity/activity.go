@@ -33,6 +33,13 @@ type ActivitySummary struct {
 // bounded observability at the caller.
 type ActivityFoldStats struct {
 	LateInterruptIgnoredStatuses []string
+	// BackgroundWorkPending is true when the final lifecycle terminal in this fold
+	// is a turn.completed carrying payload.background_work_pending=true — a
+	// self-managing agent (antigravity) reporting it still has a background task in
+	// flight. The emitter folds a would-be-"ready" terminal into the non-summoning
+	// "scheduled" status when set, the same projection the Tank wake tables drive for
+	// Claude/Codex. See docs/scheduled-turn-continuity.md.
+	BackgroundWorkPending bool
 }
 
 // DeriveActivitySummary applies the chat-event lifecycle fold the sidebar
@@ -80,6 +87,10 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 		out = *prior
 	}
 	terminalTurns := map[string]bool{}
+	// bgPendingAtLastReady tracks payload.background_work_pending of the most recent
+	// ready-producing terminal so the emitter can park a self-managing agent's
+	// would-be-ready turn into the non-summoning "scheduled" status.
+	bgPendingAtLastReady := false
 	for _, event := range events {
 		orderKey := stringField(event, "order_key")
 		if orderKey != "" {
@@ -125,6 +136,7 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 			out.ActiveTurnID = nil
 			out.NeedsInput = false
 			out.Failed = false
+			bgPendingAtLastReady = backgroundWorkPendingField(event)
 		case "turn.failed", "turn.command_failed":
 			terminalTurns[stringField(event, "turn_id")] = true
 			out.Status = "error"
@@ -171,7 +183,15 @@ func DeriveActivitySummaryWithStats(prior *ActivitySummary, events []map[string]
 			out.Status = "ready"
 			out.NeedsInput = false
 			out.Failed = false
+			bgPendingAtLastReady = false
 		}
+	}
+	// background_work_pending is meaningful only at a ready terminal; a parked
+	// self-managing agent is mid-(simulated)-turn and the emitter folds it to the
+	// non-summoning "scheduled" status. Any active/failed/stopped status means the
+	// agent is not parked, so leave it false.
+	if out.Status == "ready" {
+		stats.BackgroundWorkPending = bgPendingAtLastReady
 	}
 	out.UnreadCount = unreadCount
 	if failedFromPod {
@@ -294,6 +314,19 @@ func terminalReason(event map[string]any) string {
 	}
 	reason, _ := payload["reason"].(string)
 	return strings.TrimSpace(reason)
+}
+
+// backgroundWorkPendingField reads payload.background_work_pending from a
+// turn.completed envelope. A self-managing agent (antigravity) sets it true while a
+// background task it owns is still in flight at the SDK terminal, so the projection
+// keeps the user-facing turn open (non-summoning) rather than summoning mid-wait.
+func backgroundWorkPendingField(event map[string]any) bool {
+	payload, _ := event["payload"].(map[string]any)
+	if payload == nil {
+		return false
+	}
+	pending, _ := payload["background_work_pending"].(bool)
+	return pending
 }
 
 func stringField(m map[string]any, key string) string {

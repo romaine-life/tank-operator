@@ -957,6 +957,33 @@ try {
   if (!runnerMainText.includes("pty.Start(")) {
     failures.push("backend-go/cmd/antigravity-runner/main.go: Architecture violation: antigravity-runner must use pty.Start() to wrap the agy binary in a pseudo-terminal (PTY) to prevent hangs.");
   }
+
+  // Enforce the long-running-agent harness contract: the antigravity-runner must
+  // NOT own or fire a Tank clock for agy. agy self-continues; the runner relays via
+  // /agent-continuation. Reintroducing a scheduled-wakeup / background-task-wake
+  // registration FROM THE RUNNER is the puppeteer regression that cost ~20 prior
+  // attempts. This check is scoped to the runner's main.go — /scheduled-wakeups and
+  // /background-task-wakes are legitimate orchestrator endpoints elsewhere — and the
+  // wake endpoints are matched as quoted string literals so the runner's prose
+  // comments (which name the retired path) do not trip it. See
+  // backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+  const forbiddenRunnerWakeContract = [
+    { name: "registerScheduledWakeup inject function", pattern: /\bregisterScheduledWakeup\b/ },
+    { name: "registerBackgroundTaskWake inject function", pattern: /\bregisterBackgroundTaskWake\b/ },
+    { name: "maybeRegisterScheduleWakeup timer inject", pattern: /\bmaybeRegisterScheduleWakeup\b/ },
+    { name: "scheduled-wakeups registration endpoint literal", pattern: /["'`][^"'`]*\/scheduled-wakeups\b/ },
+    { name: "background-task-wakes registration endpoint literal", pattern: /["'`][^"'`]*\/background-task-wakes\b/ },
+  ];
+  for (const rule of forbiddenRunnerWakeContract) {
+    const match = rule.pattern.exec(runnerMainText);
+    if (!match) continue;
+    const { line, column } = lineAndColumn(runnerMainText, match.index);
+    failures.push(`backend-go/cmd/antigravity-runner/main.go:${line}:${column} antigravity self-continuation contract: ${rule.name} — agy self-continues; relay via /agent-continuation, never a Tank-owned wake (ARCHITECTURE.md).`);
+  }
+  if (!runnerMainText.includes("/agent-continuation")) {
+    failures.push("backend-go/cmd/antigravity-runner/main.go: antigravity self-continuation contract: the runner must POST /agent-continuation to relay agy's idle self-continuation (ARCHITECTURE.md).");
+  }
+
   // Retired ToS auto-accept: the runner must not sniff PTY stdout for
   // consent screens and replay keystrokes (it raced real turn input and
   // broke on TUI copy changes). Onboarding/consent state is seeded by
