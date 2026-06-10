@@ -419,9 +419,9 @@ func (s *appServer) handleStopBackgroundTask(w http.ResponseWriter, r *http.Requ
 		writeError(w, http.StatusNotFound, "session not found")
 		return
 	}
-	normalizedMode := sessionmodel.NormalizeSessionMode(info.Mode)
-	if normalizedMode != sessionmodel.CodexGUIMode && normalizedMode != sessionmodel.CodexAppServerMode {
-		writeError(w, http.StatusBadRequest, "background task stop is only supported for Codex app-server transport sessions")
+	provider, ok := sdkProviderForMode(info.Mode)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "session mode does not support background task stops")
 		return
 	}
 	if s.sessionBus == nil {
@@ -437,7 +437,7 @@ func (s *appServer) handleStopBackgroundTask(w http.ResponseWriter, r *http.Requ
 		SessionID:            sessionID,
 		SessionStorageKey:    storageKey,
 		Email:                owner,
-		Provider:             "codex",
+		Provider:             provider,
 		Source:               "background-stop",
 		TurnID:               stopTurnID,
 		ClientNonce:          targetTurnID,
@@ -454,7 +454,7 @@ func (s *appServer) handleStopBackgroundTask(w http.ResponseWriter, r *http.Requ
 			Email:             owner,
 			TurnID:            stopTurnID,
 			ClientNonce:       targetTurnID,
-			Runtime:           "codex",
+			Runtime:           provider,
 			Reason:            "publish_background_stop_failed: " + err.Error(),
 			Now:               time.Now().UTC(),
 		})
