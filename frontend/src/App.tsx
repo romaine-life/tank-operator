@@ -4531,7 +4531,7 @@ const MODEL_LABELS: Record<string, string> = {
 // opting into. Keep in lockstep with:
 //   - backend-go/cmd/tank-operator/middleware.go allowedClaudeEfforts
 //     (server-side allowlist)
-//   - agent-runner/src/runner.ts DEFAULT_EFFORT (the "high" fallback)
+//   - claude-runner/src/runner.ts DEFAULT_EFFORT (the "high" fallback)
 interface EffortOption {
   id: string;
   label: string;
@@ -4835,7 +4835,7 @@ interface RunPrefs {
   // initial selectedModelId / selectedEffort state in RunPane and are
   // also written back on every change. Once a turn is submitted the
   // model + effort are sealed for that session pod's lifetime (see
-  // agent-runner/src/runner.ts and codex-runner/src/runner.ts), so these
+  // claude-runner/src/runner.ts and codex-runner/src/runner.ts), so these
   // prefs only affect the *next* session created in this browser.
   claudeModelId: string;
   claudeEffort: string;

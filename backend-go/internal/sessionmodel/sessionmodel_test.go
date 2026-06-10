@@ -551,7 +551,7 @@ func TestPodManifestCodexExecGUIUsesLegacyTransport(t *testing.T) {
 
 func TestPodManifestSDKRunnersReceiveSessionBusEnv(t *testing.T) {
 	tests := map[string]string{
-		ClaudeGUIMode: "agent-runner",
+		ClaudeGUIMode: "claude-runner",
 		CodexGUIMode:  "codex-runner",
 	}
 	for mode, runnerName := range tests {
@@ -742,8 +742,8 @@ func claudeEnv(containers []any) map[string]any {
 
 // TestPodManifestSlotModeAttachesAgentRunnerHotSwap pins Checkbox 1 of
 // scripts/check-session-pod-hot-swap-migration.mjs: with testEnv enabled
-// (HotSwapAgentRunner=true), the agent-runner container gets the writable
-// /var/run/agent-runner-hot volume, the matching volumeMount, and the
+// (HotSwapAgentRunner=true), the claude-runner container gets the writable
+// /var/run/claude-runner-hot volume, the matching volumeMount, and the
 // supervisor env vars that tell the launch script to exec tank-supervisor.
 func TestPodManifestSlotModeAttachesAgentRunnerHotSwap(t *testing.T) {
 	manifest := PodManifest("63", "user@example.com", ClaudeGUIMode, ManifestOptions{
@@ -754,29 +754,29 @@ func TestPodManifestSlotModeAttachesAgentRunnerHotSwap(t *testing.T) {
 
 	spec := manifest["spec"].(map[string]any)
 	volumes := spec["volumes"].([]any)
-	assertVolume(t, volumes, "agent-runner-hot")
+	assertVolume(t, volumes, "claude-runner-hot")
 
 	containers := spec["containers"].([]any)
-	runner := findContainer(t, containers, "agent-runner")
-	assertVolumeMount(t, runner, "agent-runner-hot")
+	runner := findContainer(t, containers, "claude-runner")
+	assertVolumeMount(t, runner, "claude-runner-hot")
 
 	mounts := runner["volumeMounts"].([]any)
 	var hotMountPath string
 	for _, m := range mounts {
 		mm := m.(map[string]any)
-		if mm["name"] == "agent-runner-hot" {
+		if mm["name"] == "claude-runner-hot" {
 			hotMountPath, _ = mm["mountPath"].(string)
 		}
 	}
-	if hotMountPath != "/var/run/agent-runner-hot" {
-		t.Fatalf("agent-runner-hot mountPath = %q, want /var/run/agent-runner-hot", hotMountPath)
+	if hotMountPath != "/var/run/claude-runner-hot" {
+		t.Fatalf("claude-runner-hot mountPath = %q, want /var/run/claude-runner-hot", hotMountPath)
 	}
 
 	env := containerEnv(runner)
-	if got, want := env["GLIMMUNG_SUPERVISOR_CHILD"], "/app/agent-runner-launch-binary.sh"; got != want {
+	if got, want := env["GLIMMUNG_SUPERVISOR_CHILD"], "/app/claude-runner-launch-binary.sh"; got != want {
 		t.Fatalf("GLIMMUNG_SUPERVISOR_CHILD = %v, want %q", got, want)
 	}
-	if got, want := env["GLIMMUNG_SUPERVISOR_HOT_ARTIFACT"], "/var/run/agent-runner-hot/agent-runner-launch-binary.sh"; got != want {
+	if got, want := env["GLIMMUNG_SUPERVISOR_HOT_ARTIFACT"], "/var/run/claude-runner-hot/claude-runner-launch-binary.sh"; got != want {
 		t.Fatalf("GLIMMUNG_SUPERVISOR_HOT_ARTIFACT = %v, want %q", got, want)
 	}
 	if got, want := env["GLIMMUNG_SUPERVISOR_RESTART_ENABLED"], "true"; got != want {
@@ -788,8 +788,8 @@ func TestPodManifestSlotModeAttachesAgentRunnerHotSwap(t *testing.T) {
 	// wiring is purely additive: command stays the same, only env + volume
 	// are new.
 	cmd := runner["command"].([]any)
-	if len(cmd) != 2 || cmd[0] != "bash" || cmd[1] != "/opt/tank/agent-runner-launch.sh" {
-		t.Fatalf("agent-runner command = %v, want [bash /opt/tank/agent-runner-launch.sh]", cmd)
+	if len(cmd) != 2 || cmd[0] != "bash" || cmd[1] != "/opt/tank/claude-runner-launch.sh" {
+		t.Fatalf("claude-runner command = %v, want [bash /opt/tank/claude-runner-launch.sh]", cmd)
 	}
 }
 
@@ -884,8 +884,8 @@ func TestPodManifestSlotModeAttachesAntigravityRunnerHotSwap(t *testing.T) {
 
 // TestPodManifestProdLeavesAgentRunnerUnchanged pins Checkbox 2 of
 // scripts/check-session-pod-hot-swap-migration.mjs: with testEnv disabled
-// (HotSwapAgentRunner=false, the default), the agent-runner container has
-// NO agent-runner-hot volume, NO volumeMount, and NO supervisor env vars.
+// (HotSwapAgentRunner=false, the default), the claude-runner container has
+// NO claude-runner-hot volume, NO volumeMount, and NO supervisor env vars.
 // Production sessions are byte-identical to pre-PR behavior.
 func TestPodManifestProdLeavesAgentRunnerUnchanged(t *testing.T) {
 	manifest := PodManifest("63", "user@example.com", ClaudeGUIMode, ManifestOptions{
@@ -896,11 +896,11 @@ func TestPodManifestProdLeavesAgentRunnerUnchanged(t *testing.T) {
 
 	spec := manifest["spec"].(map[string]any)
 	volumes := spec["volumes"].([]any)
-	assertNoVolume(t, volumes, "agent-runner-hot")
+	assertNoVolume(t, volumes, "claude-runner-hot")
 
 	containers := spec["containers"].([]any)
-	runner := findContainer(t, containers, "agent-runner")
-	assertNoVolumeMount(t, runner, "agent-runner-hot")
+	runner := findContainer(t, containers, "claude-runner")
+	assertNoVolumeMount(t, runner, "claude-runner-hot")
 
 	env := containerEnv(runner)
 	for _, name := range []string{

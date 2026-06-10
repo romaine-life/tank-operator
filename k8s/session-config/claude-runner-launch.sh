@@ -1,5 +1,5 @@
 #!/bin/sh
-# Pod-side launch shim for the agent-runner Node service.
+# Pod-side launch shim for the claude-runner Node service.
 # Performs credential setup once per pod lifetime, then execs the
 # long-lived runner that drives the SDK.
 #
@@ -31,7 +31,7 @@ EOF
 
   # Placeholder OAuth bearer. The in-cluster api-proxy hostAlias-rewrites
   # api.anthropic.com to the proxy's ClusterIP, sees this placeholder, and
-  # swaps in the real OAuth token from KV. The agent-runner / SDK never
+  # swaps in the real OAuth token from KV. The claude-runner / SDK never
   # holds the real token directly. See api-proxy/src/tank_api_proxy/server.py.
   cat > "$HOME/.claude/.credentials.json" <<'EOF'
 {
@@ -95,7 +95,7 @@ fi
 
 # Hand off to the runner. In test-slot mode (orchestrator sets
 # GLIMMUNG_SUPERVISOR_CHILD on the container), exec tank-supervisor as
-# PID 1 so the agent-runner code can be hot-swapped via SIGHUP re-exec.
+# PID 1 so the claude-runner code can be hot-swapped via SIGHUP re-exec.
 # In production, GLIMMUNG_SUPERVISOR_CHILD is unset — the supervisor
 # binary is dormant and node runs as PID 1 directly, exactly as before.
 # See scripts/check-session-pod-hot-swap-migration.mjs for the
@@ -105,4 +105,4 @@ fi
 if [ -n "${GLIMMUNG_SUPERVISOR_CHILD:-}" ] && [ -x /app/tank-supervisor ]; then
   exec /app/tank-supervisor
 fi
-exec node /opt/agent-runner/dist/index.js
+exec node /opt/claude-runner/dist/index.js

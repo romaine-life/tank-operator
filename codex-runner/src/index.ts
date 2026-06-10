@@ -1,6 +1,6 @@
 // tank-codex-runner is the pod-side process that drives @openai/codex-sdk
 // for one session pod's lifetime and publishes canonical transcript events to
-// the session bus. Mirrors agent-runner/src/index.ts with a different SDK underneath.
+// the session bus. Mirrors claude-runner/src/index.ts with a different SDK underneath.
 
 import { loadConfig } from "./config.js";
 import { startMetricsServer } from "./metrics.js";

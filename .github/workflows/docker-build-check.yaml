@@ -57,7 +57,7 @@ jobs:
             cache-ref: romainecr.azurecr.io/claude-container-build-cache:claude
             image-repo: claude-container
             fingerprint-image: claude
-            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared
+            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy claude-runner codex-runner runner-shared
           - name: session-agent-codex
             file: claude-container/Dockerfile
             context: .
@@ -65,7 +65,7 @@ jobs:
             cache-ref: romainecr.azurecr.io/codex-container-build-cache:codex
             image-repo: codex-container
             fingerprint-image: codex
-            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared
+            fingerprint-paths: claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy claude-runner codex-runner runner-shared
           # Antigravity session image — glibc (Debian) base baking the pinned
           # `agy` native binary + sandbox-agent terminal. Separate Dockerfile
           # because agy can't run on the Alpine/musl image the others share.

@@ -339,7 +339,7 @@ var (
 	// Codex turn.
 	//
 	// This is the silent-stranding observability surface named in the
-	// Agent Runners contract (docs/features/agent-runners/contract.md
+	// Agent Runners contract (docs/features/claude-runners/contract.md
 	// → Observability: "Silent strandings, where a requested action has
 	// no terminal event, are a counted bug class"). ea70777
 	// (romaine-life/tank-operator#652) — orchestrator deploy left every
@@ -1823,8 +1823,8 @@ func boundedSessionContainer(container string) string {
 	switch strings.TrimSpace(container) {
 	case "antigravity-runner":
 		return "antigravity-runner"
-	case "agent-runner":
-		return "agent-runner"
+	case "claude-runner":
+		return "claude-runner"
 	case "codex":
 		return "codex"
 	case "claude":

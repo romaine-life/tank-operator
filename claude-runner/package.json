@@ -1,5 +1,5 @@
 {
-  "name": "tank-agent-runner",
+  "name": "tank-claude-runner",
   "private": true,
   "version": "0.1.0",
   "description": "Long-lived pod-side runner that drives @anthropic-ai/claude-agent-sdk and publishes canonical events to the session bus.",

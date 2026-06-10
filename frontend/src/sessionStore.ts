@@ -96,7 +96,7 @@ export interface SessionRow {
   runtime_effort?: string;
   runtime_configured_at?: string;
   // Provider-observed live context window for this session's model, plumbed
-  // through the row from agent-runner. The composer fraction's denominator —
+  // through the row from claude-runner. The composer fraction's denominator —
   // never a frontend-assumed model table.
   runtime_context_window_tokens?: number;
   runtime_context_window_source?: string;

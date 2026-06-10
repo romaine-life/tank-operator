@@ -14,7 +14,7 @@ func TestPodHasSDKRunnerRecognizesSupportedRunnerContainers(t *testing.T) {
 	}{
 		{
 			name:       "claude agent runner",
-			containers: []corev1.Container{{Name: "mcp-auth-proxy"}, {Name: "claude"}, {Name: "agent-runner"}},
+			containers: []corev1.Container{{Name: "mcp-auth-proxy"}, {Name: "claude"}, {Name: "claude-runner"}},
 			want:       true,
 		},
 		{

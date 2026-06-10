@@ -6,7 +6,7 @@ on:
     paths:
       - 'claude-container/**'
       - 'antigravity-container/**'
-      - 'agent-runner/**'
+      - 'claude-runner/**'
       - 'codex-runner/**'
       - 'backend-go/cmd/antigravity-runner/**'
       - 'runner-shared/**'
@@ -40,12 +40,12 @@ jobs:
             image: claude-container
             dockerfile: claude-container/Dockerfile
             build_args: TANK_AGENT=claude
-            fingerprint_paths: 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared backend-go/go.mod backend-go/go.sum backend-go/internal backend-go/cmd/tank-supervisor'
+            fingerprint_paths: 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy claude-runner codex-runner runner-shared backend-go/go.mod backend-go/go.sum backend-go/internal backend-go/cmd/tank-supervisor'
           - agent: codex
             image: codex-container
             dockerfile: claude-container/Dockerfile
             build_args: TANK_AGENT=codex
-            fingerprint_paths: 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy agent-runner codex-runner runner-shared backend-go/go.mod backend-go/go.sum backend-go/internal backend-go/cmd/tank-supervisor'
+            fingerprint_paths: 'claude-container/Dockerfile .dockerignore claude-container/mcp-auth-proxy claude-runner codex-runner runner-shared backend-go/go.mod backend-go/go.sum backend-go/internal backend-go/cmd/tank-supervisor'
           # Antigravity uses its own glibc Dockerfile (agy is a glibc-only
           # native binary), so it carries no TANK_AGENT and a distinct
           # fingerprint path set.

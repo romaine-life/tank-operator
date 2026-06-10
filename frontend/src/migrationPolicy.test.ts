@@ -56,7 +56,7 @@ const installTankDocsSource = readSource(
   "../../k8s/session-config/install-tank-docs.sh",
 );
 const agentRunnerLaunchSource = readSource(
-  "../../k8s/session-config/agent-runner-launch.sh",
+  "../../k8s/session-config/claude-runner-launch.sh",
 );
 const codexRunnerLaunchSource = readSource(
   "../../k8s/session-config/codex-runner-launch.sh",

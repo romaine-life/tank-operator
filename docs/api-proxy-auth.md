@@ -348,7 +348,7 @@ The proxy sees every model call but cannot today say *which Tank session*
 caused a given upstream 429, latency spike, or `request-id`. Two facts block
 per-session attribution at this layer:
 
-- The Claude Agent SDK `Options` (agent-runner) exposes no custom-header /
+- The Claude Agent SDK `Options` (claude-runner) exposes no custom-header /
   fetch hook, so the runner cannot stamp an `x-tank-session-id` (plus owner /
   turn) header on outbound model requests. Without an inbound identity header
   the ext_proc has nothing to attribute by.

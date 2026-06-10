@@ -1,6 +1,6 @@
 # Stage 0: build tank-supervisor for in-pod test-slot hot-swap.
 # The supervisor is the same Go binary the orchestrator pod uses (see
-# backend-go/cmd/tank-supervisor/). It runs as PID 1 in the agent-runner
+# backend-go/cmd/tank-supervisor/). It runs as PID 1 in the claude-runner
 # container only when the chart enables test-slot mode; production sessions
 # don't invoke it. Building from source here (rather than COPY --from a
 # separately-built image) keeps the build self-contained — no cross-image
@@ -13,23 +13,23 @@ RUN go mod download
 COPY backend-go/cmd/tank-supervisor ./cmd/tank-supervisor
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tank-supervisor ./cmd/tank-supervisor
 
-# Stage 1: build the pod-side Phase B agent-runner from agent-runner/.
+# Stage 1: build the pod-side Phase B claude-runner from claude-runner/.
 # TypeScript compiled to JS; production node_modules baked into the
-# runtime image. Source at /repo/agent-runner/, build context is repo
+# runtime image. Source at /repo/claude-runner/, build context is repo
 # root (set by .github/workflows/claude-container-build.yml).
-FROM node:20-alpine AS agent-runner-build
-WORKDIR /src/agent-runner
-COPY agent-runner/package.json agent-runner/package-lock.json* ./
+FROM node:20-alpine AS claude-runner-build
+WORKDIR /src/claude-runner
+COPY claude-runner/package.json claude-runner/package-lock.json* ./
 RUN npm ci --no-audit --no-fund
-COPY agent-runner/tsconfig.json ./
-COPY agent-runner/src ./src
+COPY claude-runner/tsconfig.json ./
+COPY claude-runner/src ./src
 COPY runner-shared /src/runner-shared
 RUN npx tsc
 # Prune dev deps for a smaller runtime payload.
 RUN npm prune --omit=dev
 
 # Stage 1b: build the codex-runner from codex-runner/. Sibling of
-# agent-runner â€” drives @openai/codex-sdk for codex_gui sessions instead
+# claude-runner â€” drives @openai/codex-sdk for codex_gui sessions instead
 # of @anthropic-ai/claude-agent-sdk. Baked into all three session images
 # (claude/codex/pi) for build symmetry; only the codex pod spec runs it.
 FROM node:20-alpine AS codex-runner-build
@@ -162,10 +162,10 @@ RUN pip install --no-cache-dir --break-system-packages /opt/mcp-auth-proxy
 
 # Long-lived pod-side process that drives @anthropic-ai/claude-agent-sdk
 # and publishes canonical conversation events to the session bus.
-# Entrypoint: `node /opt/agent-runner/dist/index.js`.
-COPY --from=agent-runner-build /src/agent-runner/dist /opt/agent-runner/dist
-COPY --from=agent-runner-build /src/agent-runner/node_modules /opt/agent-runner/node_modules
-COPY --from=agent-runner-build /src/agent-runner/package.json /opt/agent-runner/package.json
+# Entrypoint: `node /opt/claude-runner/dist/index.js`.
+COPY --from=claude-runner-build /src/claude-runner/dist /opt/claude-runner/dist
+COPY --from=claude-runner-build /src/claude-runner/node_modules /opt/claude-runner/node_modules
+COPY --from=claude-runner-build /src/claude-runner/package.json /opt/claude-runner/package.json
 
 COPY runner-shared /opt/runner-shared
 
@@ -181,9 +181,9 @@ COPY --from=tank-supervisor-build /out/tank-supervisor /app/tank-supervisor
 #
 # Two responsibilities, both at every supervisor restart:
 #
-#  1. Ensure /var/run/agent-runner-hot/node_modules resolves. Hot-swap
-#     places only `dist/` at /var/run/agent-runner-hot/dist; node_modules
-#     remains baked at /opt/agent-runner/node_modules. ESM bare-specifier
+#  1. Ensure /var/run/claude-runner-hot/node_modules resolves. Hot-swap
+#     places only `dist/` at /var/run/claude-runner-hot/dist; node_modules
+#     remains baked at /opt/claude-runner/node_modules. ESM bare-specifier
 #     resolution walks UP from the importing file, so without a sibling
 #     `node_modules` next to the hot dist, `import "@anthropic-ai/..."`
 #     fails ERR_MODULE_NOT_FOUND. A symlink fixes that without copying
@@ -196,19 +196,19 @@ COPY --from=tank-supervisor-build /out/tank-supervisor /app/tank-supervisor
 #     hot-shim override remains supported for callers who do want a custom
 #     entrypoint, but the default baked shim is itself hot-aware.
 #
-# The fallback `exec node /opt/agent-runner/dist/index.js` remains literal
+# The fallback `exec node /opt/claude-runner/dist/index.js` remains literal
 # so scripts/check-session-pod-hot-swap-migration.mjs's regex pin still
 # matches (and so the behavior at fresh pod boot — before any hot-swap —
 # is identical to pre-change).
-RUN cat > /app/agent-runner-launch-binary.sh <<'EOF' && chmod 0755 /app/agent-runner-launch-binary.sh
+RUN cat > /app/claude-runner-launch-binary.sh <<'EOF' && chmod 0755 /app/claude-runner-launch-binary.sh
 #!/bin/sh
-if [ ! -e /var/run/agent-runner-hot/node_modules ]; then
-  ln -sfn /opt/agent-runner/node_modules /var/run/agent-runner-hot/node_modules
+if [ ! -e /var/run/claude-runner-hot/node_modules ]; then
+  ln -sfn /opt/claude-runner/node_modules /var/run/claude-runner-hot/node_modules
 fi
-if [ -f /var/run/agent-runner-hot/dist/index.js ]; then
-  exec node /var/run/agent-runner-hot/dist/index.js
+if [ -f /var/run/claude-runner-hot/dist/index.js ]; then
+  exec node /var/run/claude-runner-hot/dist/index.js
 fi
-exec node /opt/agent-runner/dist/index.js
+exec node /opt/claude-runner/dist/index.js
 EOF
 
 # Codex-runner sibling: same pattern, @openai/codex-sdk underneath.

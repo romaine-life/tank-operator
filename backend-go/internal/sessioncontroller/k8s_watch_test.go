@@ -165,7 +165,7 @@ func TestHandleUpsertEmitsFailedOnEviction(t *testing.T) {
 	evicted.Status.Reason = "Evicted"
 	evicted.Status.Message = "The node was low on resource: memory."
 	evicted.Status.ContainerStatuses = []corev1.ContainerStatus{{
-		Name: "agent-runner",
+		Name: "claude-runner",
 		State: corev1.ContainerState{
 			Terminated: &corev1.ContainerStateTerminated{ExitCode: 137, Message: "OOMKilled"},
 		},
@@ -189,8 +189,8 @@ func TestHandleUpsertEmitsFailedOnEviction(t *testing.T) {
 	if want.Payload["exit_code"] != int32(137) {
 		t.Fatalf("failedEvent payload.exit_code = %v, want 137", want.Payload["exit_code"])
 	}
-	if want.Payload["container"] != "agent-runner" {
-		t.Fatalf("failedEvent payload.container = %v, want agent-runner", want.Payload["container"])
+	if want.Payload["container"] != "claude-runner" {
+		t.Fatalf("failedEvent payload.container = %v, want claude-runner", want.Payload["container"])
 	}
 }
 
@@ -283,7 +283,7 @@ func newSessionPod(id, owner string, phase corev1.PodPhase, ready bool) *corev1.
 	readyTime := metav1.NewTime(time.Date(2026, 5, 16, 0, 0, 3, 0, time.UTC))
 	statuses := []corev1.ContainerStatus{
 		{Name: "claude", Ready: ready},
-		{Name: "agent-runner", Ready: ready},
+		{Name: "claude-runner", Ready: ready},
 		{Name: "mcp-auth-proxy", Ready: ready},
 	}
 	conditions := []corev1.PodCondition{{

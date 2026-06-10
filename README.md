@@ -181,11 +181,11 @@ Project metadata for Glimmung:
     "agent_runner": {
       "enabled": true,
       "strategy": "supervisor",
-      "build_command": "cd agent-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/agent-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/agent-runner-hot/runner-shared/|g' {} +",
-      "source": "agent-runner/hot",
-      "target": "/var/run/agent-runner-hot",
+      "build_command": "cd claude-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/claude-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/claude-runner-hot/runner-shared/|g' {} +",
+      "source": "claude-runner/hot",
+      "target": "/var/run/claude-runner-hot",
       "restart": "SIGHUP",
-      "container": "agent-runner",
+      "container": "claude-runner",
       "pod_selector": "tank-operator/session-id,tank-operator/mode=claude_gui",
       "builder_image": "node:20-alpine"
     },

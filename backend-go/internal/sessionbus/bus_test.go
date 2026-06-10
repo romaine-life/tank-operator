@@ -316,7 +316,7 @@ func TestPersistMessageDoesNotRecordTurnFailureForSuccess(t *testing.T) {
 // (so the alert's expr stays comparing the right cardinalities). The
 // silent-stranding alert in k8s/templates/observability.yaml reads this
 // counter directly — a divergence here is the prototypical ea70777-
-// shape failure surface per docs/features/agent-runners/contract.md.
+// shape failure surface per docs/features/claude-runners/contract.md.
 func TestPersistMessageRecordsTurnLifecycleCounter(t *testing.T) {
 	lifecycleTypes := []string{
 		"turn.submitted",

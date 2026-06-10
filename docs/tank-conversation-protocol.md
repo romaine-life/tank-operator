@@ -26,10 +26,10 @@ they are not UI state.
 
 The implementation has explicit durable and live boundaries:
 
-- `agent-runner/src/runner.ts` and `codex-runner/src/runner.ts` publish
+- `claude-runner/src/runner.ts` and `codex-runner/src/runner.ts` publish
   canonical transcript events to the NATS JetStream session bus before the UI
   can observe them.
-- `agent-runner/src/sessionEvents.ts` and `codex-runner/src/sessionEvents.ts`
+- `claude-runner/src/sessionEvents.ts` and `codex-runner/src/sessionEvents.ts`
   define canonical Tank event allowlists. All Tank events are durable.
 - The backend session-bus persister writes bus events to the Postgres
   `session_events` table and wakes SSE streams only after the ledger write
@@ -108,7 +108,7 @@ References:
 Every Tank event has a stable envelope. The shared JSON Schema lives at
 `schemas/tank-conversation-event.schema.json`; the single TypeScript stub
 lives at `runner-shared/conversation.{js,d.ts}` (consumed by codex-runner,
-agent-runner, and the frontend); the Go stub lives at
+claude-runner, and the frontend); the Go stub lives at
 `backend-go/internal/conversation`. The JSON Schema is the source of truth
 for `actor`, `source`, `visibility`, and event `type` enums. Changes to
 those enums must update the schema first;
@@ -465,7 +465,7 @@ bounce by construction.
 
 A provider event the runner adapter neither maps to a Tank event nor explicitly
 ignores increments `tank_runner_unmapped_provider_event_total{type,subtype}`
-(`agent-runner/src/runner.ts` → `logUnhandledSdkMessage`). This counter is the
+(`claude-runner/src/runner.ts` → `logUnhandledSdkMessage`). This counter is the
 backstop for the silent-drop class that hid compaction in the first place:
 `compact_boundary` used to fall through to `return []` with no durable event and
 no metric. Steady state is zero; a spike names the next provider event to map or
@@ -729,7 +729,7 @@ A Claude background task (`run_in_background`) that finishes while the session
 has no active turn is resumed the same backend-owned way. A task-lifecycle SDK
 frame never starts a turn, so without this the base Bash tool's "re-invokes you
 when it exits" follow-up is silently stranded once the launching turn has ended.
-The agent-runner registers the natural terminal (`completed`/`failed`/`exited` —
+The claude-runner registers the natural terminal (`completed`/`failed`/`exited` —
 never a user-cancelled `stopped`/`cancelled`) through
 `POST /api/internal/sessions/{session_id}/background-task-wakes`. The task id is
 the idempotency key: the durable row `session_background_task_wakes` is keyed by

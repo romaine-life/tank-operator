@@ -1,5 +1,5 @@
 // readClaudeCliVersion captures the Claude Code CLI version at runner boot
-// for inclusion in the agent-runner startup log line. The session image
+// for inclusion in the claude-runner startup log line. The session image
 // installs @anthropic-ai/claude-code from npm without a version pin (see
 // claude-container/Dockerfile's `npm install -g @anthropic-ai/claude-code`),
 // so the binary version floats with whatever is latest at image-build time.

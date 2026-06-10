@@ -139,7 +139,7 @@ func TestSupportsScheduledWakeupsIncludesAntigravity(t *testing.T) {
 
 func TestFireScheduledWakeupUsesDurableTurnBoundary(t *testing.T) {
 	bus := &recordingSessionBus{}
-	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "agent-runner"))
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "claude-runner"))
 	schedules := &fakeScheduledWakeupStore{}
 	app.scheduledWakeups = schedules
 	app.sessionEvents = &recordingSessionEventStore{}
@@ -337,7 +337,7 @@ func TestFireScheduledWakeupFailsInactiveSessionDurably(t *testing.T) {
 }
 
 func TestListScheduledWakeupsSurfacesDurableRows(t *testing.T) {
-	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "agent-runner"))
+	app := testTurnsApp(t, &recordingSessionBus{}, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "claude-runner"))
 	scheduledAt := time.Date(2026, 6, 3, 15, 20, 0, 0, time.UTC)
 	dueAt := scheduledAt.Add(5 * time.Minute)
 	app.scheduledWakeups = &fakeScheduledWakeupStore{rows: []pgstore.ScheduledWakeup{{

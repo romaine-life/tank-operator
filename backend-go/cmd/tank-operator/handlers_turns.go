@@ -62,7 +62,7 @@ func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, 
 	// the same call inside sessionbus.persistOneEvent so the signal
 	// works regardless of which path wrote the row. Filter on
 	// IsTurnLifecycleEvent at the call boundary so the helper just
-	// records. See docs/features/agent-runners/contract.md → Observability.
+	// records. See docs/features/claude-runners/contract.md → Observability.
 	if eventType := stringMapField(event, "type"); conversation.IsTurnLifecycleEvent(conversation.EventType(eventType)) {
 		recordTurnLifecyclePersisted(eventType)
 	}

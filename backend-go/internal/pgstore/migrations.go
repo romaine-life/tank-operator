@@ -1565,7 +1565,7 @@ var schemaMigrations = []migration{
 	  AND se.event_type = 'session.status'
 	  AND coalesce(se.payload -> 'payload' ->> 'status', '') IN ('loading', 'ready')
 	  AND coalesce(se.payload ->> 'timeline_id', '') NOT LIKE '%:provider:%'`},
-	// Latest provider rate-limit metadata reported by agent-runner. This keeps
+	// Latest provider rate-limit metadata reported by claude-runner. This keeps
 	// the admin UI tied to the provider's own rate_limit_event payload instead
 	// of forcing admins to infer current overage/retry state from transcript
 	// failures alone.

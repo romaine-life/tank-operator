@@ -162,7 +162,7 @@ what the SDK reported. The change lives in the durable Tank projection:
   `status IN ('scheduled','claiming')`); today only a scope-wide due *count*
   exists.
 - **Race** — the runner registers the wake *after* `turn.completed`
-  (`agent-runner/src/runner.ts -> registerWakeup`), so a naive fold flashes
+  (`claude-runner/src/runner.ts -> registerWakeup`), so a naive fold flashes
   `ready` before the row exists. Land the schedule intent at the terminal (emit
   it before the terminal, like `turn.awaiting_input`, or refresh the activity
   summary transactionally with the wake-row write) so the fold goes

@@ -13,7 +13,7 @@ in their own repos.
 | Orchestrator | `GET /metrics` on the orchestrator Service (port 80, named `http`) | `ServiceMonitor/tank-operator` in `k8s/templates/observability.yaml` |
 | api-proxy (Claude + Codex) | `GET /metrics` on the ext_proc sidecar port `metrics` (9100) | `ServiceMonitor/tank-api-proxy` |
 | Session-pod mcp-auth-proxy | `GET /metrics` on container port `metrics` (9990) | `PodMonitor/tank-session-pods` (endpoint `metrics`) |
-| Session-pod agent-runner | `GET /metrics` on container port `runner-metrics` (9095) | `PodMonitor/tank-session-pods` (endpoint `runner-metrics`) |
+| Session-pod claude-runner | `GET /metrics` on container port `runner-metrics` (9095) | `PodMonitor/tank-session-pods` (endpoint `runner-metrics`) |
 | Session-pod codex-runner | `GET /metrics` on container port `runner-metrics` (9096) | same PodMonitor |
 
 The kube-prometheus-stack operator in the `monitoring` namespace
@@ -706,7 +706,7 @@ Response fields:
   - `provider_rate_limit_observed_at` — RFC3339-Z timestamp of that
     observation, `""` if none.
 
-To localize a listed session, read its agent-runner logs and its
+To localize a listed session, read its claude-runner logs and its
 `session_events` ledger. The endpoint never mutates state. Emits a
 structured `slog` line per call (`caller_email`, `session_scope`,
 `threshold_seconds`, `count`) and increments
@@ -914,7 +914,7 @@ declares one rule group per subsystem:
   that can emit nothing, or a stall class the runner cannot see. The
   runbook localizes with `GET /api/debug/stuck-turns` (session_ids +
   stuck_seconds + provider rate-limit state), then reads that session's
-  agent-runner logs and `session_events`. The detector lives in
+  claude-runner logs and `session_events`. The detector lives in
   `internal/stuckturns.Sampler` (60s pass against the durable
   `sessions` table). If `tank_stuck_turn_sample_errors_total{reason}` is
   nonzero, the detector is blind and the absence of this alert cannot be
@@ -984,7 +984,7 @@ migration to managed Prometheus (Azure Monitor Workspace).
    never use a label that grows per session/user/request.
 2. Register the metric next to its peers in the appropriate file:
    - Orchestrator: `backend-go/cmd/tank-operator/observability.go`
-   - Runners: `agent-runner/src/metrics.ts` and `codex-runner/src/metrics.ts`
+   - Runners: `claude-runner/src/metrics.ts` and `codex-runner/src/metrics.ts`
    - Python services: `tank_api_proxy/metrics.py` or
      `mcp_auth_proxy/metrics.py`
 3. Add a Grafana panel if it's worth seeing on the dashboard.

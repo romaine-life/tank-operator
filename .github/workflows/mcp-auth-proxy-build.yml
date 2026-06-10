@@ -82,7 +82,7 @@ jobs:
           set -euo pipefail
           # Fingerprint covers just the package source + the Dockerfile.
           # Intentionally does NOT include claude-container/Dockerfile or
-          # the agent-runner / codex-runner trees — those are baked into
+          # the claude-runner / codex-runner trees — those are baked into
           # the session images, not this one. Changes there must not
           # cause spurious mcp-auth-proxy rebuilds.
           fingerprint="$(scripts/image-fingerprint.sh \

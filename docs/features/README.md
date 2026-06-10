@@ -18,7 +18,7 @@ runtime observation, depending on the risk.
 
 ## Contracts
 
-- [Agent Runners](agent-runners/contract.md)
+- [Agent Runners](claude-runners/contract.md)
 - [App Chrome](app-chrome/contract.md)
 - [Artifacts And Files](artifacts-and-files/contract.md)
 - [Auth And Streams](auth-and-streams/contract.md)

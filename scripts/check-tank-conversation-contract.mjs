@@ -50,7 +50,7 @@ for (const [constName, expected] of Object.entries(expectedEnums)) {
 // TANK_EVENT_TYPES const, the cutover to the shared module has regressed.
 const forbiddenLocalConstFiles = [
   "frontend/src/tankConversation.ts",
-  "agent-runner/src/conversation.ts",
+  "claude-runner/src/conversation.ts",
   "codex-runner/src/conversation.ts",
 ];
 for (const relativePath of forbiddenLocalConstFiles) {

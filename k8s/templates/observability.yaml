@@ -12,7 +12,7 @@ Counter/Histogram declarations in:
   - backend-go/cmd/tank-operator/observability.go
   - backend-go/cmd/tank-operator/middleware_http.go
   - backend-go/internal/pgstore/tracer.go
-  - agent-runner/src/metrics.ts
+  - claude-runner/src/metrics.ts
   - codex-runner/src/metrics.ts
   - api-proxy/src/tank_api_proxy/metrics.py
   - claude-container/mcp-auth-proxy/src/mcp_auth_proxy/metrics.py
@@ -761,7 +761,7 @@ spec:
 
               Localize with GET /api/debug/stuck-turns (lists the
               session_ids + stuck_seconds + provider_rate_limit_status),
-              then read that session's agent-runner logs and
+              then read that session's claude-runner logs and
               session_events.
 
               Distinguishes from TankTurnSilentStranding (aggregate
@@ -1244,7 +1244,7 @@ spec:
             severity: warning
           annotations:
             summary: "pod-side runner ({{`{{ $labels.mode }}`}}) provider errors > 0.1/s for 5m"
-            runbook: "Inspect the affected session pod's agent-runner / codex-runner logs."
+            runbook: "Inspect the affected session pod's claude-runner / codex-runner logs."
 
         - alert: TankAntigravityRunnerProviderErrorRate
           expr: rate(tank_antigravity_runner_provider_error_total[5m]) > 0.1
@@ -1404,7 +1404,7 @@ spec:
               events at the same rate. The SDK / codex Thread is likely
               ignoring the interrupt, OR the runner is failing to publish
               the terminal event. Check the affected session pod's
-              agent-runner / codex-runner logs for the "session bus publish
+              claude-runner / codex-runner logs for the "session bus publish
               failed" line and for "providerErrorTotal{operation=interrupt}".
 
         # Stage 3 (post-#532) — runner accepted an interrupt but didn't
