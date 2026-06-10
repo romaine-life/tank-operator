@@ -59,10 +59,12 @@ turns, because:
    `turn.interrupted`. A spawn-per-turn model has no stable target for
    interrupts, and the Tank Agent Runners contract requires exactly one
    durable terminal per turn.
-4. **Native long-lived behaviors.** `agy` parks native timers/background work
-   between turns (see schedule parking in
-   `docs/features/agent-runners/capabilities.md`). Those behaviors only exist
-   while the process lives.
+4. **Native long-lived behaviors.** `agy` fires its own timers and background
+   tasks and emits its own continuations between turns; the runner observes
+   and relays them (see "The long-running-agent harness contract" below and
+   the self-continuation relay capability in
+   `docs/features/agent-runners/capabilities.md`). Self-continuation only
+   exists while the process lives — a per-turn spawn has no one to continue.
 5. **One-shot mode buys nothing here.** Even in print mode, `agy` performs the
    same auth/bootstrap dance (the 30s auth timeout above), the no-TTY hang
    risk documented above has not been cleared for `-p`, and the transcript
@@ -85,6 +87,55 @@ Revisit this if any of the following ship: consumer-OAuth support in
 mode in `agy`. Any of those should replace the PTY harness the same way the
 codex exec transport was retired once the app-server transport could field
 `request_user_input`.
+
+---
+
+## Process Death Is Session-Terminal (No Revival)
+
+When the `agy` process exits — crash, OOM, or a Stop whose SIGINT turned out
+to be fatal — **the session is done by design**. This is a deliberate product
+decision (2026-06-10): restarting agy in place would resume the chat with a
+fresh process that has lost the conversation (silent amnesia), and a
+container restart via kubelet does the same thing implicitly. Neither is
+acceptable as silent behavior, and revival is explicitly not part of the
+architecture. If process death turns out to be frequent,
+`tank_antigravity_runner_process_exit_total` and
+`tank_session_provider_fatal_total` are the "how often" — design revival
+deliberately at that point instead of inheriting it from a restart policy.
+
+Mechanics, in order:
+
+1. A `cmd.Wait()` supervisor goroutine observes the exit and closes the
+   `activeProcess.exited` channel.
+2. An in-flight turn resolves through the `exitedChan()` arm of
+   `handleSubmitTurn`'s select: durable `turn.interrupted` if a Stop was in
+   flight, otherwise `turn.failed{reason:"provider_process_exited"}`. The
+   command is acked only after the terminal publishes.
+3. The runner reports `POST /api/internal/sessions/{id}/provider-fatal`
+   (projected SA token, self-session only). The orchestrator moves the
+   session row to `Failed` through the same RowWriter transition pod death
+   uses, so sidebar/activity/UI gating behave identically.
+4. The runner stays alive but **inert**: subsequent `submit_turn` commands
+   drain immediately to durable
+   `turn.failed{reason:"provider_process_unavailable"}` instead of stranding
+   un-acked in JetStream. The runner must NOT exit — a container exit would
+   trigger kubelet's restart policy and relaunch agy with amnesia, which is
+   exactly the revival this design forbids.
+
+Two related liveness bounds share the same select:
+
+- **Submit-ack watchdog** (`ANTIGRAVITY_SUBMIT_ACK_TIMEOUT_MS`, default 60s):
+  the prompt write into the PTY is fire-and-forget, so if no transcript
+  record at all appears within the window (the `USER_EXPLICIT` echo is the
+  usual first signal), the turn fails durably as `prompt_not_accepted`.
+  Deliberately no auto-retry: re-writing the prompt double-executes if agy
+  did receive the first write.
+- **Interrupt grace** (`ANTIGRAVITY_INTERRUPT_GRACE_MS`, default 10s): a Stop
+  SIGINTs agy, but if agy neither settles a DONE planner response nor exits
+  within the grace window, the runner forces the durable `turn.interrupted`
+  anyway (mirroring codex-runner's "continue with durable Stop terminal").
+  Interrupts with no active turn are ignored — SIGINTing an idle agy would
+  be a session-terminal event for no reason.
 
 ---
 

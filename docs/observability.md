@@ -331,7 +331,27 @@ All metric names are prefixed `tank_`. The full namespace:
   executor terminal error such as `UNKNOWN (code 500)` or
   `PlannerResponse without ModifiedResponse`; `reason="provider_no_final_answer"`
   means agy exited successfully after tool activity but produced no assistant
-  prose to promote as the final answer.
+  prose to promote as the final answer. `reason="provider_process_exited"`
+  means the agy process died while a turn was in flight;
+  `reason="provider_process_unavailable"` means a submit arrived after agy was
+  already gone (the inert post-fatal drain); `reason="prompt_not_accepted"`
+  means the submit-ack watchdog saw no transcript movement at all within
+  `ANTIGRAVITY_SUBMIT_ACK_TIMEOUT_MS` after the PTY prompt write.
+  `tank_antigravity_runner_process_exit_total{phase}` counts agy exits with
+  `during_turn`/`idle`; process death is session-terminal by design (no
+  revival) and this counter is the "does this come up often" input to ever
+  revisiting that decision.
+  `tank_antigravity_runner_interrupt_outcome_total{outcome}` records how Stop
+  resolved: `graceful_done` (agy settled a DONE response), `grace_forced` (the
+  `ANTIGRAVITY_INTERRUPT_GRACE_MS` window forced the durable terminal), or
+  `process_exited` (the SIGINT killed agy).
+  `tank_antigravity_runner_submit_watchdog_total{result}` records
+  `cleared`/`fired` for the submit-ack watchdog, and
+  `tank_antigravity_runner_provider_fatal_report_total{result}` records the
+  runner's provider-fatal report to the orchestrator. The orchestrator side
+  counts the same reports as `tank_session_provider_fatal_total{provider,result}`
+  on the internal provider-fatal endpoint that moves the session row to
+  Failed.
   `reason="transcript_event_source_unavailable"` and
   `reason="transcript_event_source_error"` mean the local file-backed event
   source for agy's JSONL transcript failed before or during the turn; these are

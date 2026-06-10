@@ -151,6 +151,8 @@ func deriveRowColumnChanges(event Event) (rowColumnChanges, bool) {
 		return rowColumnChanges{status: "Pending"}, true
 	case EventTypePodFailed:
 		return rowColumnChanges{status: "Failed"}, true
+	case EventTypeProviderFatal:
+		return rowColumnChanges{status: "Failed"}, true
 	case EventTypePodTerminating:
 		terminatingAt := parseRFC3339(event.OccurredAt)
 		return rowColumnChanges{status: "Failed", terminatingAt: terminatingAt}, true

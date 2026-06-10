@@ -10,16 +10,23 @@ architecture (which is a hard production requirement due to agy's CLI-only natur
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/creack/pty"
+	"github.com/nats-io/nats.go"
+	"github.com/nats-io/nats.go/jetstream"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
 )
 
 func TestEventBuilderEmitsSchemaValidTurnEvents(t *testing.T) {
@@ -376,6 +383,265 @@ func TestPTYRunnerArchitectureConstraint(t *testing.T) {
 		}
 		return true
 	})
+}
+
+
+// --- Liveness contract tests -------------------------------------------------
+//
+// Every wait in handleSubmitTurn that can resolve a turn must publish exactly
+// one durable terminal and ack the command. These tests pin each select arm:
+// agy process exit, the submit-ack watchdog, the interrupt grace window, and
+// the inert post-exit drain. The originating gap: the old wait had a single
+// exit (a DONE planner response) while the heartbeat kept the command pinned,
+// so an agy crash, swallowed prompt, or unacknowledged Stop stranded the turn
+// silently — the counted bug class.
+
+type eventLog struct {
+	mu     sync.Mutex
+	events []map[string]any
+}
+
+func (l *eventLog) publisher(event map[string]any) error {
+	if err := conversation.ValidateEventMap(event); err != nil {
+		return err
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, event)
+	return nil
+}
+
+func (l *eventLog) snapshot() []map[string]any {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]map[string]any{}, l.events...)
+}
+
+type fakeJSMsg struct {
+	mu    sync.Mutex
+	acked bool
+}
+
+func (m *fakeJSMsg) Metadata() (*jetstream.MsgMetadata, error) { return &jetstream.MsgMetadata{}, nil }
+func (m *fakeJSMsg) Data() []byte                              { return nil }
+func (m *fakeJSMsg) Headers() nats.Header                      { return nil }
+func (m *fakeJSMsg) Subject() string                           { return "" }
+func (m *fakeJSMsg) Reply() string                             { return "" }
+func (m *fakeJSMsg) DoubleAck(context.Context) error           { return nil }
+func (m *fakeJSMsg) Nak() error                                { return nil }
+func (m *fakeJSMsg) NakWithDelay(time.Duration) error          { return nil }
+func (m *fakeJSMsg) InProgress() error                         { return nil }
+func (m *fakeJSMsg) Term() error                               { return nil }
+func (m *fakeJSMsg) TermWithReason(string) error               { return nil }
+
+func (m *fakeJSMsg) Ack() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.acked = true
+	return nil
+}
+
+func (m *fakeJSMsg) wasAcked() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.acked
+}
+
+func waitUntil(t *testing.T, what string, pred func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if pred() {
+			return
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+}
+
+func livenessTestConfig() runnerConfig {
+	return runnerConfig{
+		sessionID:         "17",
+		sessionStorageKey: "17",
+		submitAckTimeout:  time.Minute,
+		interruptGrace:    time.Minute,
+	}
+}
+
+func startLivenessTurn(t *testing.T, cfg runnerConfig, active *activeProcess) (*eventLog, *fakeJSMsg, chan error) {
+	t.Helper()
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	state := &runnerState{}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = r.Close(); _ = w.Close() })
+	msg := &fakeJSMsg{}
+	command := sessionbus.Command{
+		Type:        sessionbus.CommandSubmitTurn,
+		TurnID:      "turn-1",
+		ClientNonce: "nonce-1",
+		Prompt:      "hello",
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := handleSubmitTurn(context.Background(), cfg, builder, log.publisher, active, state, msg, command, false, w)
+		done <- err
+	}()
+	return log, msg, done
+}
+
+func lastEvent(t *testing.T, log *eventLog) map[string]any {
+	t.Helper()
+	events := log.snapshot()
+	if len(events) == 0 {
+		t.Fatal("no events published")
+	}
+	return events[len(events)-1]
+}
+
+func TestHandleSubmitTurnFailsDurablyWhenAgyExits(t *testing.T) {
+	active := newActiveProcess()
+	log, msg, done := startLivenessTurn(t, livenessTestConfig(), active)
+
+	waitUntil(t, "turn claimed", func() bool { return len(log.snapshot()) >= 1 })
+	active.markExited(errors.New("agy crashed"))
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("handleSubmitTurn did not resolve after process exit")
+	}
+	last := lastEvent(t, log)
+	if last["type"] != string(conversation.EventTurnFailed) {
+		t.Fatalf("terminal type = %v, want turn.failed", last["type"])
+	}
+	if reason := last["payload"].(map[string]any)["reason"]; reason != "provider_process_exited" {
+		t.Fatalf("reason = %v, want provider_process_exited", reason)
+	}
+	if !msg.wasAcked() {
+		t.Fatal("command was not acked after durable terminal")
+	}
+}
+
+func TestHandleSubmitTurnDrainsCommandsAfterAgyExit(t *testing.T) {
+	active := newActiveProcess()
+	active.markExited(errors.New("agy crashed earlier"))
+	log, msg, done := startLivenessTurn(t, livenessTestConfig(), active)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("inert drain did not resolve")
+	}
+	last := lastEvent(t, log)
+	if last["type"] != string(conversation.EventTurnFailed) {
+		t.Fatalf("terminal type = %v, want turn.failed", last["type"])
+	}
+	if reason := last["payload"].(map[string]any)["reason"]; reason != "provider_process_unavailable" {
+		t.Fatalf("reason = %v, want provider_process_unavailable", reason)
+	}
+	if !msg.wasAcked() {
+		t.Fatal("queued command was not drained with an ack")
+	}
+}
+
+func TestHandleSubmitTurnWatchdogFailsSwallowedPrompt(t *testing.T) {
+	cfg := livenessTestConfig()
+	cfg.submitAckTimeout = 25 * time.Millisecond
+	active := newActiveProcess()
+	log, msg, done := startLivenessTurn(t, cfg, active)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("watchdog did not resolve the turn")
+	}
+	last := lastEvent(t, log)
+	if last["type"] != string(conversation.EventTurnFailed) {
+		t.Fatalf("terminal type = %v, want turn.failed", last["type"])
+	}
+	if reason := last["payload"].(map[string]any)["reason"]; reason != "prompt_not_accepted" {
+		t.Fatalf("reason = %v, want prompt_not_accepted", reason)
+	}
+	if !msg.wasAcked() {
+		t.Fatal("command was not acked after watchdog terminal")
+	}
+}
+
+func TestHandleSubmitTurnInterruptGraceForcesDurableStop(t *testing.T) {
+	cfg := livenessTestConfig()
+	cfg.interruptGrace = 25 * time.Millisecond
+	active := newActiveProcess()
+	log, msg, done := startLivenessTurn(t, cfg, active)
+
+	waitUntil(t, "turn claimed", func() bool { return len(log.snapshot()) >= 1 })
+	waitUntil(t, "interrupt accepted", func() bool {
+		_ = active.interrupt("turn-1")
+		return active.wasInterrupted("turn-1")
+	})
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("interrupt grace did not resolve the turn")
+	}
+	last := lastEvent(t, log)
+	if last["type"] != string(conversation.EventTurnInterrupted) {
+		t.Fatalf("terminal type = %v, want turn.interrupted", last["type"])
+	}
+	if !msg.wasAcked() {
+		t.Fatal("command was not acked after forced Stop terminal")
+	}
+}
+
+func TestTurnRunClassifiesExecutorErrorOnNoFinalAnswer(t *testing.T) {
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+
+	line := `{"step_index":3,"source":"SYSTEM","type":"ERROR_MESSAGE","status":"DONE","content":"agent executor error: UNKNOWN (code 500)"}`
+	var step AgyStep
+	if err := json.Unmarshal([]byte(line), &step); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.observeStep("/tmp/transcript_full.jsonl", line, step); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.finishCompleted(); err != nil {
+		t.Fatal(err)
+	}
+	last := lastEvent(t, log)
+	if last["type"] != string(conversation.EventTurnFailed) {
+		t.Fatalf("terminal type = %v, want turn.failed", last["type"])
+	}
+	if reason := last["payload"].(map[string]any)["reason"]; reason != "provider_executor_error" {
+		t.Fatalf("reason = %v, want provider_executor_error", reason)
+	}
+}
+
+func TestInterruptWithoutActiveTurnDoesNotSignalIdleAgy(t *testing.T) {
+	active := newActiveProcess()
+	if err := active.interrupt(""); err != nil {
+		t.Fatal(err)
+	}
+	if active.wasInterrupted("") {
+		t.Fatal("idle interrupt must not set the interrupted flag (it would SIGINT idle agy)")
+	}
 }
 
 // TestRunnerSelfContinuationContract pins the long-running-agent harness contract

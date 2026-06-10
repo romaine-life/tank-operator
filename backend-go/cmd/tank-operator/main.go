@@ -488,6 +488,7 @@ func main() {
 		pgPool:                       pgPool,
 		sessionImageOverridesEnabled: sessionImageOverridesEnabled,
 		sessionBus:                   sessionBus,
+		rowWriter:                    rowWriter,
 		readStates:                   readStateStore,
 		activityRefresher: &scopedSessionActivityRefresher{
 			pool:       pgPool,
