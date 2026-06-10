@@ -49,23 +49,78 @@ Contract impact:
   `provider_executor_error`; normal-looking no-answer exits are counted as
   `provider_no_final_answer`.
 
-Evidence:
-- Runner: `antigravity-runner/src/runner.test.ts` (executor 500 after tool
-  output fails, tool-only no-final-answer fails, schedule parking may complete
-  without final prose).
-- Adapter: `antigravity-runner/src/adapters/antigravity.test.ts` (final-answer
-  state requires done non-empty assistant prose; in-progress tool calls and
-  tool results do not consume the later done transition).
-- Driver: `antigravity-runner/src/driver.test.ts` (a transcript write is
-  surfaced before the fake agy process exits, proving live updates are driven
-  by events rather than process-exit reconciliation).
-- Tailer: `antigravity-runner/src/transcriptTailer.test.ts` (pre-existing
-  transcript bytes are skipped, new appended bytes are emitted, and partial
-  appended JSONL records are buffered until complete).
+Evidence (Go runner; the TS runner this entry originally cited was replaced
+by the Go spike in #994 and its test files no longer exist):
+- Runner: `backend-go/cmd/antigravity-runner/main_test.go`
+  (`TestTurnRunFailsWhenProviderProducesNoFinalAnswer` pins the no-answer
+  terminal; `TestTurnRunClassifiesExecutorErrorOnNoFinalAnswer` pins the
+  `provider_executor_error` vs `provider_no_final_answer` classification).
 - Metrics/docs: `tank_antigravity_runner_provider_error_total{reason}` with
-  `provider_executor_error`, `provider_no_final_answer`, and transcript
-  event-source failure reasons documented in `docs/observability.md` and the
-  Antigravity provider-error alert runbook.
+  `provider_executor_error` and `provider_no_final_answer` implemented and
+  documented in `docs/observability.md`.
+- Outstanding from the original TS-era scope: transcript event-source health
+  (`tank_antigravity_runner_transcript_event_source_total`,
+  `transcript_event_source_*` failure reasons) and the
+  `agy_diagnostic`/`schedule_intent` counters are documented but not yet
+  implemented in the Go runner; this entry stays in progress until they are.
+
+## Antigravity process death is session-terminal
+
+Status: in progress
+
+Intent:
+When the `agy` process exits (crash, OOM, or a Stop whose SIGINT proved
+fatal), the session is done by explicit product decision (2026-06-10): no
+in-place respawn, no container-restart revival — both resume the chat with an
+agent that silently lost the conversation. The runner instead resolves
+everything durably and the session row moves to `Failed` exactly like pod
+death. `tank_antigravity_runner_process_exit_total` /
+`tank_session_provider_fatal_total` measure how often this happens; revival
+gets designed deliberately if that rate ever matters.
+
+Affected contracts:
+- Agent Runners
+
+Contract impact:
+- An in-flight turn resolves with exactly one durable terminal when agy
+  exits: `turn.interrupted` if a Stop was in flight, else
+  `turn.failed{reason:"provider_process_exited"}` — "provider failures must
+  become durable failure events instead of silent strandings."
+- After death the runner goes inert instead of exiting: queued and new
+  `submit_turn` commands drain to durable
+  `turn.failed{reason:"provider_process_unavailable"}` with normal acks, so
+  the command queue cannot strand. The runner must not exit — kubelet's
+  restart policy would relaunch agy with amnesia (forbidden revival).
+- The runner reports `POST /api/internal/sessions/{id}/provider-fatal`
+  (projected SA token, self-session only); the orchestrator applies the
+  `session.provider_fatal` RowWriter transition → row status `Failed`, same
+  downstream behavior as `session.pod_failed`.
+- Two liveness bounds share the same turn-resolution select: the submit-ack
+  watchdog (`ANTIGRAVITY_SUBMIT_ACK_TIMEOUT_MS`, default 60s) fails a turn
+  whose PTY prompt write produced no transcript movement at all
+  (`prompt_not_accepted`, no auto-retry — a re-written prompt can
+  double-execute), and the interrupt grace window
+  (`ANTIGRAVITY_INTERRUPT_GRACE_MS`, default 10s) forces the durable
+  `turn.interrupted` when a Stop is neither settled nor fatal. Interrupts
+  with no active turn are ignored rather than SIGINTing idle agy.
+
+Evidence:
+- Runner: `backend-go/cmd/antigravity-runner/main_test.go`
+  (`TestHandleSubmitTurnFailsDurablyWhenAgyExits`,
+  `TestHandleSubmitTurnDrainsCommandsAfterAgyExit`,
+  `TestHandleSubmitTurnWatchdogFailsSwallowedPrompt`,
+  `TestHandleSubmitTurnInterruptGraceForcesDurableStop`,
+  `TestInterruptWithoutActiveTurnDoesNotSignalIdleAgy`).
+- Backend: `backend-go/internal/sessioncontroller/provider_fatal_test.go`
+  (`session.provider_fatal` derives row status `Failed`).
+- Metrics: `tank_antigravity_runner_process_exit_total{phase}`,
+  `tank_antigravity_runner_interrupt_outcome_total{outcome}`,
+  `tank_antigravity_runner_submit_watchdog_total{result}`,
+  `tank_antigravity_runner_provider_fatal_report_total{result}`,
+  `tank_session_provider_fatal_total{provider,result}` — taxonomy in
+  `docs/observability.md`.
+- Design record: `backend-go/cmd/antigravity-runner/ARCHITECTURE.md` →
+  "Process Death Is Session-Terminal (No Revival)".
 
 ## Background-task completion wake
 

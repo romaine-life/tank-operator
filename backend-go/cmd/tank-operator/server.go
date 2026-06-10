@@ -24,6 +24,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/providerhealth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessioncontroller"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionstream"
 	"github.com/romaine-life/tank-operator/backend-go/internal/store"
@@ -45,6 +46,11 @@ type appServer struct {
 	avatarUploads       avataruploads.Store
 	pgPool              *pgxpool.Pool
 	sessionBus          sessionCommandBus
+	// rowWriter is the shared session-row transition writer (same instance
+	// the K8s watch and chat-activity emitter use). The internal
+	// provider-fatal endpoint routes runner-reported agent-process death
+	// through it so the session moves to Failed exactly like pod death.
+	rowWriter           *sessioncontroller.RowWriter
 	readStates          store.ConversationReadStateStore
 	activityRefresher   sessionActivityRefresher
 	verifier            *auth.Verifier
@@ -401,6 +407,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/internal/sessions/{session_id}/runtime-config", s.handleInternalSessionRuntimeConfig)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/scheduled-wakeups", s.handleInternalRegisterScheduledWakeup)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes", s.handleInternalRegisterBackgroundTaskWake)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/provider-fatal", s.handleInternalProviderFatal)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)

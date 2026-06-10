@@ -42,11 +42,50 @@ import (
 	"github.com/google/uuid"
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
 )
 
 const provider = "antigravity"
+
+// Liveness metrics. Every wait in handleSubmitTurn that can resolve a turn
+// has a counter, so "how often does X happen" never requires log archaeology.
+// docs/observability.md carries the taxonomy entry for each name.
+var (
+	providerErrorTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_antigravity_runner_provider_error_total",
+		Help: "Durable turn.failed terminals published by the antigravity runner, by reason.",
+	}, []string{"reason"})
+	interruptOutcomeTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_antigravity_runner_interrupt_outcome_total",
+		Help: "How Stop interrupts against agy resolved (graceful_done, grace_forced, process_exited).",
+	}, []string{"outcome"})
+	processExitTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_antigravity_runner_process_exit_total",
+		Help: "agy process exits observed by the runner, by phase (during_turn, idle).",
+	}, []string{"phase"})
+	submitWatchdogTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_antigravity_runner_submit_watchdog_total",
+		Help: "Submit-ack watchdog resolutions (cleared, fired).",
+	}, []string{"result"})
+	providerFatalReportTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_antigravity_runner_provider_fatal_report_total",
+		Help: "Provider-fatal reports posted to the orchestrator, by result (ok, error).",
+	}, []string{"result"})
+)
+
+func serveMetrics(port string) {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.Handler())
+	go func() {
+		if err := http.ListenAndServe(":"+port, mux); err != nil {
+			slog.Error("metrics server exited", "port", port, "error", err)
+		}
+	}()
+}
 
 type AgyToolCall struct {
 	Name        string          `json:"name"`
@@ -81,6 +120,20 @@ type runnerConfig struct {
 	natsStream        string
 	workspace         string
 	agyHome           string
+	// submitAckTimeout bounds how long a submitted prompt may sit with no
+	// transcript movement before the turn resolves as a durable
+	// turn.failed{prompt_not_accepted}. Any new transcript record clears
+	// it (the USER_EXPLICIT prompt echo is the usual first signal). There
+	// is intentionally no auto-retry: re-writing the prompt to the PTY
+	// risks double-execution if agy did receive the first write.
+	submitAckTimeout time.Duration
+	// interruptGrace bounds how long a Stop may wait for agy to settle
+	// (DONE planner response or process exit) before the runner forces
+	// the durable turn.interrupted terminal anyway, mirroring the
+	// codex-runner's "continue with durable Stop terminal" behavior.
+	interruptGrace time.Duration
+	// metricsPort serves Prometheus /metrics (TANK_RUNNER_METRICS_PORT).
+	metricsPort string
 }
 
 type eventBuilder struct {
@@ -157,11 +210,23 @@ func (s *runnerState) detachTurn(run *turnRun) {
 }
 
 type turnRun struct {
-	builder         eventBuilder
-	publish         func(map[string]any) error
-	turnID          string
-	clientNonce     string
-	turnComplete    chan struct{}
+	builder      eventBuilder
+	publish      func(map[string]any) error
+	turnID       string
+	clientNonce  string
+	turnComplete chan struct{}
+	completeOnce sync.Once
+	// progress is closed on the first transcript record observed after
+	// submit (any record, including the USER_EXPLICIT prompt echo — the
+	// cleanest "agy received the prompt" signal). The submit-ack watchdog
+	// waits on it.
+	progress     chan struct{}
+	progressOnce sync.Once
+	// graceFired is closed when an interrupt's grace window elapses
+	// without agy settling; the turn then resolves as turn.interrupted.
+	graceFired    chan struct{}
+	graceArmOnce  sync.Once
+	graceFireOnce sync.Once
 
 	mu              sync.Mutex
 	started         bool
@@ -177,6 +242,74 @@ type activeProcess struct {
 	cmd         *exec.Cmd
 	turnID      string
 	interrupted bool
+	// onInterrupt is armed per turn by handleSubmitTurn; firing it starts
+	// the interrupt-grace countdown so a Stop that agy never acknowledges
+	// (no DONE planner response, no process exit) still resolves in a
+	// durable turn.interrupted instead of hanging the data plane.
+	onInterrupt func()
+	// exited is closed exactly once by the cmd.Wait supervisor when the
+	// agy process is gone. Process death is session-terminal by design
+	// (no revival architecture); exitErr carries the Wait error for the
+	// provider-fatal report.
+	exited   chan struct{}
+	exitOnce sync.Once
+	exitErr  error
+}
+
+func newActiveProcess() *activeProcess {
+	return &activeProcess{exited: make(chan struct{})}
+}
+
+func (a *activeProcess) beginTurn(turnID string, onInterrupt func()) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.turnID = turnID
+	a.interrupted = false
+	a.onInterrupt = onInterrupt
+}
+
+func (a *activeProcess) endTurn(turnID string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.turnID == turnID {
+		a.turnID = ""
+		a.onInterrupt = nil
+	}
+}
+
+func (a *activeProcess) markExited(err error) {
+	a.exitOnce.Do(func() {
+		a.mu.Lock()
+		a.exitErr = err
+		a.mu.Unlock()
+		close(a.exited)
+	})
+}
+
+func (a *activeProcess) exitedChan() <-chan struct{} { return a.exited }
+
+func (a *activeProcess) isDead() bool {
+	select {
+	case <-a.exited:
+		return true
+	default:
+		return false
+	}
+}
+
+// exitDetail reports the recorded Wait error as (exit code, message). A nil
+// error (clean exit 0) returns (0, ""); a non-ExitError failure returns -1.
+func (a *activeProcess) exitDetail() (int, string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.exitErr == nil {
+		return 0, ""
+	}
+	var exitErr *exec.ExitError
+	if errors.As(a.exitErr, &exitErr) {
+		return exitErr.ExitCode(), exitErr.Error()
+	}
+	return -1, a.exitErr.Error()
 }
 
 func main() {
@@ -219,7 +352,9 @@ func main() {
 	publisher := func(event map[string]any) error {
 		return publishEvent(nc, cfg.sessionStorageKey, event)
 	}
-	active := &activeProcess{}
+	serveMetrics(cfg.metricsPort)
+
+	active := newActiveProcess()
 	agyArgs := []string{"--dangerously-skip-permissions"}
 	runCmd := exec.Command("agy", agyArgs...)
 	runCmd.Dir = cfg.workspace
@@ -232,6 +367,35 @@ func main() {
 	}
 	defer func() { _ = ptmx.Close() }()
 	active.cmd = runCmd
+
+	// Process supervisor: agy death is session-terminal by design (see
+	// ARCHITECTURE.md — there is no revival architecture). When agy
+	// exits, an in-flight turn resolves through the exitedChan select arm
+	// in handleSubmitTurn, the session row moves to Failed through the
+	// orchestrator's provider-fatal endpoint, and this runner stays alive
+	// but inert so queued/new submit_turns drain to durable failures
+	// instead of stranding (a container exit would let kubelet restart
+	// agy with amnesia, which is exactly the revival we do not do).
+	go func() {
+		waitErr := runCmd.Wait()
+		phase := "idle"
+		active.mu.Lock()
+		if active.turnID != "" {
+			phase = "during_turn"
+		}
+		active.mu.Unlock()
+		active.markExited(waitErr)
+		processExitTotal.WithLabelValues(phase).Inc()
+		exitCode, detail := active.exitDetail()
+		slog.Error("agy process exited; session is provider-fatal by design",
+			"phase", phase, "exit_code", exitCode, "detail", detail)
+		if err := reportProviderFatal(cfg, "provider_process_exited", exitCode, detail); err != nil {
+			providerFatalReportTotal.WithLabelValues("error").Inc()
+			slog.Error("failed to report provider-fatal to orchestrator", "error", err)
+		} else {
+			providerFatalReportTotal.WithLabelValues("ok").Inc()
+		}
+	}()
 
 	// This loop's only job is to drain the PTY (agy blocks once the PTY
 	// buffer fills) and mirror agy's output to pod logs. Onboarding/consent
@@ -348,6 +512,62 @@ func registerBackgroundTaskWake(cfg runnerConfig, taskID string, summary string)
 	return nil
 }
 
+// reportProviderFatal tells the orchestrator the agy process is gone so the
+// session row moves to Failed (the same terminal the K8s watch applies for
+// pod death). Bounded retries because this single call is what separates
+// "session visibly done" from "session looks alive but every turn fails";
+// the per-turn durable terminals do not depend on it succeeding.
+func reportProviderFatal(cfg runnerConfig, reason string, exitCode int, message string) error {
+	baseURL := strings.TrimRight(firstNonEmpty(
+		firstEnv("TANK_OPERATOR_INTERNAL_URL", "OPERATOR_INTERNAL_URL"),
+		"http://tank-operator.tank-operator.svc.cluster.local"), "/")
+	tokenPath := firstNonEmpty(firstEnv("OPERATOR_TOKEN_PATH"),
+		"/var/run/secrets/kubernetes.io/serviceaccount/token")
+	if cfg.sessionID == "" {
+		return errors.New("provider-fatal report requires a session id")
+	}
+	payload := map[string]any{
+		"provider":  provider,
+		"reason":    reason,
+		"exit_code": exitCode,
+		"message":   message,
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/api/internal/sessions/%s/provider-fatal", baseURL, cfg.sessionID)
+
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*2) * time.Second)
+		}
+		tokenBytes, err := os.ReadFile(tokenPath)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tokenBytes)))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+			return nil
+		}
+		lastErr = fmt.Errorf("provider-fatal report failed: %d", resp.StatusCode)
+	}
+	return lastErr
+}
+
 func loadConfig() (runnerConfig, error) {
 	storageKey := firstEnv("TANK_SESSION_STORAGE_KEY", "SESSION_STORAGE_KEY")
 	sessionID := firstEnv("SESSION_ID", "TANK_SESSION_ID")
@@ -376,7 +596,23 @@ func loadConfig() (runnerConfig, error) {
 		natsStream:        sessionbus.StreamName(os.Getenv("NATS_STREAM")),
 		workspace:         firstNonEmpty(strings.TrimSpace(os.Getenv("WORKSPACE")), "/workspace"),
 		agyHome:           firstNonEmpty(firstEnv("ANTIGRAVITY_HOME", "AGY_HOME"), filepath.Join(home, ".gemini", "antigravity-cli")),
+		submitAckTimeout:  envDurationMS("ANTIGRAVITY_SUBMIT_ACK_TIMEOUT_MS", 60*time.Second),
+		interruptGrace:    envDurationMS("ANTIGRAVITY_INTERRUPT_GRACE_MS", 10*time.Second),
+		metricsPort:       firstNonEmpty(strings.TrimSpace(os.Getenv("TANK_RUNNER_METRICS_PORT")), "9097"),
 	}, nil
+}
+
+func envDurationMS(key string, fallback time.Duration) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		slog.Warn("invalid duration env, using default", "key", key, "value", raw, "default", fallback)
+		return fallback
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 func firstEnv(keys ...string) string {
@@ -511,20 +747,35 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 		clientNonce = turnID
 	}
 
-	active.set(active.cmd, turnID)
-	defer active.clear(active.cmd)
-
 	run := newTurnRun(builder, publisher, turnID, clientNonce)
 	if err := publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnClaimed), "")); err != nil {
 		return false, err
 	}
+
+	// Inert mode: agy is gone and the session is provider-fatal (marked
+	// Failed via the orchestrator). Drain the command to a durable
+	// failure instead of stranding it un-acked — "provider failures must
+	// become durable failure events instead of silent strandings."
+	if active.isDead() {
+		if err := run.finishFailed("provider_process_unavailable"); err != nil {
+			return false, err
+		}
+		if err := msg.Ack(); err != nil {
+			return false, err
+		}
+		return false, nil
+	}
+
+	grace := cfg.interruptGrace
+	active.beginTurn(turnID, func() { run.armInterruptGrace(grace) })
+	defer active.endTurn(turnID)
 
 	stopHeartbeat := startHeartbeat(ctx, msg)
 	defer stopHeartbeat()
 
 	_, err := ptmx.WriteString(command.Prompt + "\r")
 	if err != nil {
-		_ = publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnFailed), "failed_to_start"))
+		_ = run.finishFailed("failed_to_start")
 		_ = msg.Ack()
 		return false, nil
 	}
@@ -532,17 +783,54 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 	state.attachTurn(run)
 	defer state.detachTurn(run)
 
-	<-run.turnComplete
-	interrupted := active.wasInterrupted(turnID)
+	// Submit-ack watchdog: the prompt write is fire-and-forget into the
+	// PTY, so "no transcript movement at all" within the window means the
+	// prompt was swallowed (TUI focus/redraw race). Resolve durably; no
+	// auto-retry, because a re-written prompt double-executes if agy did
+	// receive the first one.
+	watchdogFired := make(chan struct{})
+	turnDone := make(chan struct{})
+	defer close(turnDone)
+	go func() {
+		select {
+		case <-run.progress:
+			submitWatchdogTotal.WithLabelValues("cleared").Inc()
+		case <-turnDone:
+		case <-time.After(cfg.submitAckTimeout):
+			select {
+			case <-run.progress:
+				submitWatchdogTotal.WithLabelValues("cleared").Inc()
+			default:
+				submitWatchdogTotal.WithLabelValues("fired").Inc()
+				close(watchdogFired)
+			}
+		}
+	}()
 
+	// Exactly one select arm resolves the turn, and every arm publishes
+	// exactly one durable terminal before the command is acked. This is
+	// the structural fix for the silent-stranding class: the old wait had
+	// a single exit (a DONE planner response) that an agy crash, a
+	// swallowed prompt, or an unacknowledged Stop could keep from ever
+	// arriving while the heartbeat kept the command pinned forever.
 	var terminalErr error
-	switch {
-	case interrupted:
-		terminalErr = run.finishInterrupted()
-	case run.providerFailed != "":
-		terminalErr = run.finishFailed("provider_error")
-	default:
-		terminalErr = run.finishCompleted()
+	select {
+	case <-run.turnComplete:
+		if active.wasInterrupted(turnID) {
+			terminalErr = run.finishInterrupted("graceful_done")
+		} else {
+			terminalErr = run.finishCompleted()
+		}
+	case <-active.exitedChan():
+		if active.wasInterrupted(turnID) {
+			terminalErr = run.finishInterrupted("process_exited")
+		} else {
+			terminalErr = run.finishFailed("provider_process_exited")
+		}
+	case <-watchdogFired:
+		terminalErr = run.finishFailed("prompt_not_accepted")
+	case <-run.graceFired:
+		terminalErr = run.finishInterrupted("grace_forced")
 	}
 	if terminalErr != nil {
 		return true, terminalErr
@@ -572,52 +860,31 @@ func startHeartbeat(ctx context.Context, msg jetstream.Msg) func() {
 	return func() { close(stop) }
 }
 
-func logProcessOutput(ctx context.Context, name string, reader io.Reader) {
-	if reader == nil {
-		return
-	}
-	go func() {
-		scanner := bufio.NewScanner(reader)
-		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-		for scanner.Scan() {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				slog.Debug("agy output", "stream", name, "line", scanner.Text())
-			}
-		}
-	}()
-}
-
-func (a *activeProcess) set(cmd *exec.Cmd, turnID string) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.cmd = cmd
-	a.turnID = turnID
-	a.interrupted = false
-}
-
-func (a *activeProcess) clear(cmd *exec.Cmd) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.cmd == cmd {
-		a.cmd = nil
-		a.turnID = ""
-	}
-}
-
 func (a *activeProcess) interrupt(targetTurnID string) error {
 	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.cmd == nil || a.cmd.Process == nil {
+	if a.turnID == "" {
+		// No active turn: nothing to interrupt. Do not SIGINT an idle
+		// agy — that would be a session-terminal event for no reason.
+		a.mu.Unlock()
 		return nil
 	}
 	if targetTurnID != "" && targetTurnID != a.turnID {
+		a.mu.Unlock()
 		return nil
 	}
 	a.interrupted = true
-	return a.cmd.Process.Signal(os.Interrupt)
+	notify := a.onInterrupt
+	cmd := a.cmd
+	a.mu.Unlock()
+	// Arm the grace countdown before signaling: even if the SIGINT is
+	// lost on a just-dead process, the turn still resolves durably.
+	if notify != nil {
+		notify()
+	}
+	if cmd == nil || cmd.Process == nil {
+		return nil
+	}
+	return cmd.Process.Signal(os.Interrupt)
 }
 
 func (a *activeProcess) wasInterrupted(turnID string) bool {
@@ -633,11 +900,35 @@ func newTurnRun(builder eventBuilder, publisher func(map[string]any) error, turn
 		turnID:       turnID,
 		clientNonce:  clientNonce,
 		turnComplete: make(chan struct{}),
+		progress:     make(chan struct{}),
+		graceFired:   make(chan struct{}),
 		seen:         map[string]struct{}{},
 	}
 }
 
+func (r *turnRun) noteProgress() {
+	r.progressOnce.Do(func() { close(r.progress) })
+}
+
+func (r *turnRun) markComplete() {
+	r.completeOnce.Do(func() { close(r.turnComplete) })
+}
+
+// armInterruptGrace starts the bounded wait between a Stop and a forced
+// durable turn.interrupted. Armed at most once per turn; firing after the
+// turn already resolved another way is harmless (the select has returned).
+func (r *turnRun) armInterruptGrace(d time.Duration) {
+	r.graceArmOnce.Do(func() {
+		time.AfterFunc(d, func() {
+			r.graceFireOnce.Do(func() { close(r.graceFired) })
+		})
+	})
+}
+
 func (r *turnRun) observeStep(path, line string, step AgyStep) error {
+	// Any transcript record — relevant or not, including the USER_EXPLICIT
+	// prompt echo — proves agy is processing; clear the submit watchdog.
+	r.noteProgress()
 	if !isRelevantStep(step) {
 		return nil
 	}
@@ -674,6 +965,12 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 	if strings.EqualFold(step.Source, "SYSTEM") && strings.EqualFold(step.Type, "ERROR_MESSAGE") {
 		var targetToolID string
 		r.mu.Lock()
+		// Remember that the provider surfaced an executor error. A turn
+		// that still produces assistant prose completes normally; one
+		// that ends with no final answer is then classified as
+		// provider_executor_error instead of provider_no_final_answer
+		// (the agent-runners capabilities ledger's distinction).
+		r.providerFailed = "provider_executor_error"
 		if len(r.pendingTools) > 0 {
 			// Match and close the last pending tool call (LIFO)
 			lastTool := r.pendingTools[len(r.pendingTools)-1]
@@ -809,7 +1106,7 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 				r.mu.Unlock()
 			}
 			if strings.EqualFold(step.Status, "DONE") {
-				close(r.turnComplete)
+				r.markComplete()
 			}
 			return nil
 		}
@@ -836,9 +1133,17 @@ func (r *turnRun) finishCompleted() error {
 	r.mu.Lock()
 	final := r.final
 	usage := r.cumulativeUsage
+	executorError := r.providerFailed
 	r.mu.Unlock()
 	if final.timelineID == "" {
-		return r.finishFailed("provider_no_final_answer")
+		// Tool activity alone is not a successful user answer. When the
+		// provider also surfaced an executor error, classify the failure
+		// as such; otherwise it is a plain no-final-answer exit.
+		reason := "provider_no_final_answer"
+		if executorError != "" {
+			reason = executorError
+		}
+		return r.finishFailed(reason)
 	}
 	return r.publish(r.builder.turnCompletedEvent(r.turnID, r.clientNonce, final, usage))
 }
@@ -850,16 +1155,18 @@ func (r *turnRun) finishFailed(reason string) error {
 	r.mu.Lock()
 	usage := r.cumulativeUsage
 	r.mu.Unlock()
+	providerErrorTotal.WithLabelValues(reason).Inc()
 	return r.publish(r.builder.turnFailedEvent(r.turnID, r.clientNonce, reason, usage))
 }
 
-func (r *turnRun) finishInterrupted() error {
+func (r *turnRun) finishInterrupted(outcome string) error {
 	if err := r.ensureStarted("runner_terminal"); err != nil {
 		return err
 	}
 	r.mu.Lock()
 	usage := r.cumulativeUsage
 	r.mu.Unlock()
+	interruptOutcomeTotal.WithLabelValues(outcome).Inc()
 	return r.publish(r.builder.turnInterruptedEvent(r.turnID, r.clientNonce, usage))
 }
 

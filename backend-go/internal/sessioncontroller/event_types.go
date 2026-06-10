@@ -43,6 +43,14 @@ const (
 	EventTypePodFailed      = "session.pod_failed"
 	EventTypePodTerminating = "session.pod_terminating"
 
+	// Provider-fatal transition reported by a pod-side runner through
+	// POST /api/internal/sessions/{id}/provider-fatal when its agent
+	// process died and the session cannot continue (e.g. the
+	// antigravity runner's agy process exited). Session death is the
+	// designed outcome — there is no revival architecture; see
+	// backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+	EventTypeProviderFatal = "session.provider_fatal"
+
 	// Chat-derived activity-summary delta written by the
 	// ChatActivityEmitter on each indicator-affecting chat event.
 	EventTypeActivityChanged = "session.activity_changed"
