@@ -211,10 +211,13 @@ const CHECKS = [
   },
 
   // antigravity_runner is a single static Go binary (CGO_ENABLED=0), NOT a
-  // node dist bundle — so its sub-contract builds with `go build` and ships
+  // node dist bundle — so its sub-contract compiles with `go build` and ships
   // no runner-shared. The runner was rewritten in Go (backend-go/cmd/
   // antigravity-runner); the Node-era contract that survived the rewrite is
-  // what these checks pin out of regression.
+  // what these checks pin out of regression. The builder is a node image that
+  // installs Go at build time (not a stock golang image): the shared node
+  // fidelity_classifier runs in the builder before the build command, and no
+  // stock image ships both node and go.
   {
     id: "readme-antigravity-runner-go-build",
     from: "Checkbox 1: hot-swap works",
@@ -248,12 +251,20 @@ const CHECKS = [
     pattern: /"antigravity_runner"[\s\S]{0,1200}?"pod_selector"\s*:\s*"tank-operator\/session-id,tank-operator\/mode=antigravity_gui"/,
   },
   {
-    id: "readme-antigravity-runner-builder-go",
+    id: "readme-antigravity-runner-builder-node",
     from: "Checkbox 1: hot-swap works",
     file: "README.md",
-    description: "antigravity_runner builder_image is a golang image (matches the antigravity-container build stage, CGO_ENABLED=0 static binary)",
+    description: "antigravity_runner builder_image is a node image — the shared node fidelity_classifier runs in the builder before the build, so a stock golang image (no node) cannot run the build",
     kind: "grep-present",
-    pattern: /"antigravity_runner"[\s\S]{0,1200}?"builder_image"\s*:\s*"golang:/,
+    pattern: /"antigravity_runner"[\s\S]{0,1600}?"builder_image"\s*:\s*"node:/,
+  },
+  {
+    id: "readme-antigravity-runner-installs-go",
+    from: "Checkbox 1: hot-swap works",
+    file: "README.md",
+    description: "antigravity_runner build command installs the Go toolchain (the builder is a node image, so the Go runner build pulls go at build time)",
+    kind: "grep-present",
+    pattern: /"antigravity_runner"[\s\S]{0,500}?"build_command"[\s\S]{0,500}?go\.dev\/dl\/go[\s\S]{0,600}?go build[\s\S]{0,300}?\.\/cmd\/antigravity-runner/,
   },
   {
     id: "antigravity-image-hot-aware-shim",
