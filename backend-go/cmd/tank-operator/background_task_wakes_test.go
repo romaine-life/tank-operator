@@ -164,6 +164,9 @@ func TestSdkTurnSourceIncludesBackgroundTask(t *testing.T) {
 	if got := sdkTurnSource("launch-dispatch"); got != "launch-dispatch" {
 		t.Fatalf("sdkTurnSource(launch-dispatch) = %q, want launch-dispatch", got)
 	}
+	if got := sdkTurnSource("agent-continuation"); got != "agent-continuation" {
+		t.Fatalf("sdkTurnSource(agent-continuation) = %q, want agent-continuation", got)
+	}
 	if got := sdkTurnSource("something-else"); got != "sdk" {
 		t.Fatalf("sdkTurnSource(something-else) = %q, want sdk", got)
 	}
@@ -186,6 +189,26 @@ func TestBackgroundTaskWakeClientNonceIsTurnIDSafe(t *testing.T) {
 		nonce := pgstore.BackgroundTaskWakeClientNonce(taskID)
 		if !turnIDPattern.MatchString(nonce) {
 			t.Fatalf("client nonce %q for task %q does not match turnIDPattern", nonce, taskID)
+		}
+	}
+}
+
+// TestProviderSelfContinues pins the realm-split predicate: only antigravity
+// self-continues, so only it is rejected by the Tank-owned wake paths (scheduled
+// wakeup, background-task wake) and accepted by the agent-continuation relay.
+// Claude/Codex are not self-continuing — Tank owns their wake rows. See
+// backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+func TestProviderSelfContinues(t *testing.T) {
+	if !providerSelfContinues("antigravity") {
+		t.Fatal("providerSelfContinues(antigravity) = false, want true")
+	}
+	// Tolerant of surrounding whitespace (matches sdkProviderForMode's trimmed output).
+	if !providerSelfContinues("  antigravity  ") {
+		t.Fatal(`providerSelfContinues("  antigravity  ") = false, want true (trimmed)`)
+	}
+	for _, provider := range []string{"claude", "codex", "", "antigravity-ish"} {
+		if providerSelfContinues(provider) {
+			t.Fatalf("providerSelfContinues(%q) = true, want false", provider)
 		}
 	}
 }

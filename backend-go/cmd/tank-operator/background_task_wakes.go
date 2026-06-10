@@ -21,6 +21,19 @@ const (
 	backgroundTaskWakeClaimStaleAfter = 2 * time.Minute
 )
 
+// providerSelfContinues reports whether a provider resumes itself after its own
+// background work (a long-running, self-managing agent) rather than needing Tank to
+// fire a wake. Antigravity (agy) does: it owns its timers/tasks and emits its own
+// continuation, which the runner relays via /agent-continuation. This is the single
+// realm-split predicate: the Tank-owned wake paths (scheduled-wakeup, background-task
+// wake) REJECT a self-continuing provider, and the agent-continuation relay ACCEPTS
+// only a self-continuing provider. Claude/Codex are not self-continuing — their SDKs
+// cannot resume without a fired turn — so Tank owns their wake rows. See
+// backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+func providerSelfContinues(provider string) bool {
+	return strings.TrimSpace(provider) == string(conversation.SourceAntigravity)
+}
+
 // handleInternalRegisterBackgroundTaskWake records that a Claude background
 // (run_in_background) task reached a natural terminal while its session had no
 // active turn. The base Bash tool promises "re-invokes you when it exits", but
@@ -87,7 +100,7 @@ func (s *appServer) handleInternalRegisterBackgroundTaskWake(w http.ResponseWrit
 		writeError(w, http.StatusBadRequest, "session mode does not support background task wakes")
 		return
 	}
-	if provider == string(conversation.SourceAntigravity) {
+	if providerSelfContinues(provider) {
 		// Antigravity self-continues natively (agy fires its own task and emits
 		// the continuation). Tank must NOT own a wake for it — that double-wakes a
 		// self-managing agent. agy's self-continuation is relayed through the
@@ -187,9 +200,9 @@ func (s *appServer) handleInternalAgentContinuation(w http.ResponseWriter, r *ht
 		return
 	}
 	provider, ok := sdkProviderForMode(info.Mode)
-	if !ok || provider != string(conversation.SourceAntigravity) {
+	if !ok || !providerSelfContinues(provider) {
 		recordAgentContinuation(provider, "rejected_non_antigravity")
-		writeError(w, http.StatusBadRequest, "agent-continuation relay is only for antigravity sessions")
+		writeError(w, http.StatusBadRequest, "agent-continuation relay is only for self-continuing (antigravity) sessions")
 		return
 	}
 

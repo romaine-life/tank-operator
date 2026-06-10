@@ -26,8 +26,10 @@ Contract impact:
   durable failure events instead of silent strandings."
 - A normal successful Antigravity turn requires assistant prose that can be
   promoted as `final_answer`; tool activity alone is not a successful user
-  answer. The explicit exception is native schedule parking, where the runner
-  interrupts agy's native timer only after durable wakeup registration.
+  answer. When agy starts background work (a `schedule` timer or a `run_command`
+  build) it narrates alongside it ("I will wait and report back"), so a
+  background-work turn still has prose to promote and its terminal carries
+  `background_work_pending=true` — see the self-continuation relay capability below.
 - The Antigravity adapter mirrors the SDK's completed-response boundary where
   possible from agy's JSONL: only a `MODEL` `PLANNER_RESPONSE` that is `DONE`
   and has non-empty text can become assistant prose. `IN_PROGRESS` records may
@@ -67,55 +69,87 @@ Evidence:
   event-source failure reasons documented in `docs/observability.md` and the
   Antigravity provider-error alert runbook.
 
-## Antigravity scheduled-wakeup (timer) registration
+## Antigravity self-continuation relay (timer + background work)
 
 Status: in progress
 
 Intent:
-When an Antigravity (`agy`) session sets a timer, agy emits a `schedule` tool call
-carrying `DurationSeconds` + a continuation `Prompt`. The runner must register a
-durable Tank scheduled wakeup so the orchestrator owns the timer and resumes the
-session at due time — the same shape as Claude `ScheduleWakeup`. Originating
-incident: session 781 on 2026-06-10 ("set a timer ... wait 5 seconds") emitted the
-`schedule` tool call (`DurationSeconds:"5"`), but the Go runner rendered it as a
-cosmetic tool item and registered nothing — no `session_scheduled_wakeups` row, the
-Background → Scheduled surface stayed empty, and the session never woke (the user
-re-prompted and the model then confabulated "the timer expired"). Regression window:
-Antigravity scheduled wakeups fired reliably through 2026-06-08 21:03 (TS runner,
-#977); the Go runner rewrite (#996) dropped the `wakeup.ts` detection/registration
-and kept only the background-task-wake path.
+Antigravity (`agy`) is the first long-running, self-managing agent in the
+codebase: one persistent process that schedules its own work (`schedule` timers,
+`run_command` builds/shells), runs it in the background, and **continues itself**
+when that work finishes — no Tank clock involved. The runner keeps agy alive,
+OBSERVES its self-continuation, and RELAYS it through a backend-authored turn
+boundary. One user request becomes one user-facing turn that spans agy's
+background work: non-summoning through the wait, summoning at the report.
+Originating saga: ~20 PRs across 2026-06 tried to make "timer waking" work by
+having Tank own and fire agy's clock (the puppeteer model). Session 781 was the
+last failure of the Go rewrite (#996), which had dropped wakeup registration; an
+earlier `firstEnv` token-path bug then made a "registered" log line lie with no
+durable row. The whole inject approach was the wrong shape — it double-wakes an
+agent that already wakes itself — and is replaced by the observe-and-relay model.
 
 Affected contracts:
 - Agent Runners
 
 Contract impact:
-- Restores conformance with "Claude `ScheduleWakeup` and Antigravity `schedule` tool
-  calls are registered by the runner with the backend; the orchestrator later submits
-  the wakeup through the same backend-owned turn boundary as a user turn." The Go
-  rewrite had regressed away from this written contract.
-- Idempotent per provider item id (the agy tool's stable step id): the orchestrator's
-  `session_scheduled_wakeups` `ON CONFLICT` no-op means a redelivered or repeated
-  schedule step cannot create a second timer.
-- Tank owns the single wake: once a scheduled wakeup is registered, agy's own native
-  timer/background echo is parked (the idle background-task-wake path is suppressed for
-  SYSTEM timer/schedule/background/wake steps) so the session is not resumed twice.
-- The model-reliability gap is observable, not silent: when agy narrates waiting but
-  emits no `schedule` tool call, the runner logs `antigravity wait intent without
-  schedule tool call` rather than appearing to silently drop a timer.
+- **Tank never owns a clock for agy.** `supportsScheduledWakeups` and the
+  background-task-wake register endpoint REJECT antigravity (the single
+  `providerSelfContinues` realm-split predicate); the runner registers no
+  `session_scheduled_wakeups` / `session_background_task_wakes` row. Those tables
+  and their fire loops are the Claude/Codex model, where the agent genuinely
+  cannot self-continue.
+- **The runner observes + relays.** agy's idle self-continuation (a `MODEL` step
+  with no active turn, after one of its tracked tasks fired) POSTs
+  `/api/internal/sessions/{id}/agent-continuation`. The backend — the sole
+  producer of `turn.submitted` — authors the boundary (`source=agent-continuation`,
+  `OmitUserMessage`) reusing the `turn_bgtask-<task>` client nonce so the relay
+  turn folds into the originating user-facing turn. `handleSubmitTurn` skips the
+  PTY write for `agent-continuation` and replays agy's already-emitted steps.
+- **User-facing-turn projection (the #906 spine).** The runner stamps
+  `turn.completed.background_work_pending` from the pending-set; the activity fold
+  folds a would-be-`ready` terminal to the non-summoning `scheduled` status when
+  it is set. `applyScheduledWakeOverride` unifies the two pending sources — the
+  Tank wake tables (Claude/Codex) OR `background_work_pending` (antigravity) — so a
+  parked agy turn reads as `scheduled` with no Tank wake row. `working → scheduled`
+  does not ring; `working → ready` (nothing pending) rings.
+- **The pending-set is the load-bearing signal.** agy routes all background work
+  through one uniform task framework: a `MODEL` `status=RUNNING`
+  "running as a background task with task id: X" marker adds X; a SYSTEM_MESSAGE
+  `sender=X` completion removes X. The RUNNING marker always lands before the SDK
+  `turn.completed`, so the runner knows at the terminal whether work is pending —
+  no race.
+- **No untracked self-wake.** agy continues only after a tracked task completion;
+  a self-continuation with no preceding completion is logged loudly (the
+  forbidden-self-wake signature) rather than silently resurrecting a closed turn.
+- **Idempotent + resurrection-safe relay.** The relay turn id is deterministic
+  per task; the endpoint re-enqueues only while no terminal exists
+  (`FindTurnTerminal`), and JetStream `WithMsgID` dedups the deterministic command
+  so a retry never double-delivers. `agent-continuation` is a self-resume source,
+  so a transient publish-fail writes no `command_failed` terminal and the runner's
+  retry recovers.
 
 Evidence:
-- Runner: `backend-go/cmd/antigravity-runner/schedule_wakeup_test.go` (a `schedule`
-  step with DurationSeconds/Prompt registers a durable wakeup carrying the turn-scoped
-  provider item id; malformed/negative/empty args register nothing; native timer echo
-  is parked while a scheduled wakeup is pending; wait-intent text detection).
-- Runner registration: `registerScheduledWakeup` POSTs
-  `/api/internal/sessions/{id}/scheduled-wakeups`, mirroring the Claude path and reusing
-  the existing `registerBackgroundTaskWake` SA-token / `TANK_OPERATOR_INTERNAL_URL`
-  plumbing.
-- Backend (unchanged, already provider-agnostic): `handleInternalRegisterScheduledWakeup`
-  + `supportsScheduledWakeups("antigravity")` + the fire loop in
-  `backend-go/cmd/tank-operator/scheduled_wakeups.go`; durable rows fired for antigravity
-  sessions through 2026-06-08 (`session_scheduled_wakeups`).
+- Runner: `backend-go/cmd/antigravity-runner/main_test.go`
+  (`TestRunnerSelfContinuationContract` AST-asserts the runner owns no Tank wake
+  and POSTs only `/agent-continuation`; `TestNoteTaskSignalTracksPendingSet`;
+  `TestTurnCompletedStampsBackgroundWorkPending`).
+- Orchestrator reject/relay: `backend-go/cmd/tank-operator/scheduled_wakeups_test.go`
+  (`TestSupportsScheduledWakeupsRejectsAntigravity`); `background_task_wakes_test.go`
+  (`TestProviderSelfContinues`, `sdkTurnSource` includes `agent-continuation`);
+  `handleInternalAgentContinuation` + the antigravity reject in
+  `handleInternalRegisterBackgroundTaskWake` (`background_task_wakes.go`).
+- Projection: `backend-go/internal/sessioncontroller/chat_activity_test.go`
+  (`TestApplyScheduledWakeOverride` background_work_pending cases park even with a
+  nil wake checker); the fold in `backend-go/internal/sessionactivity/activity.go`
+  (`ActivityFoldStats.BackgroundWorkPending`).
+- Guards: `scripts/check-removed-chat-runtime.mjs` (runner self-continuation
+  contract check — no `registerScheduledWakeup` / wake-endpoint literals in the
+  runner main.go, `/agent-continuation` present); the AST test above.
+- Metrics: `tank_agent_continuation_total{provider,result}`;
+  `tank_background_task_wake_register_total{result="rejected_antigravity"}`.
+- Contract: `backend-go/cmd/antigravity-runner/ARCHITECTURE.md`
+  ("The long-running-agent harness contract"); the `scheduled` status spine in
+  `docs/scheduled-turn-continuity.md`.
 
 ## Background-task completion wake
 
