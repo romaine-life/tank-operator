@@ -87,6 +87,16 @@ func (s *appServer) handleInternalRegisterBackgroundTaskWake(w http.ResponseWrit
 		writeError(w, http.StatusBadRequest, "session mode does not support background task wakes")
 		return
 	}
+	if provider == string(conversation.SourceAntigravity) {
+		// Antigravity self-continues natively (agy fires its own task and emits
+		// the continuation). Tank must NOT own a wake for it — that double-wakes a
+		// self-managing agent. agy's self-continuation is relayed through the
+		// agent-continuation endpoint, never the background-task-wake fire loop.
+		// See backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+		recordBackgroundTaskWakeRegister(provider, "rejected_antigravity")
+		writeError(w, http.StatusBadRequest, "antigravity sessions self-continue; background-task wakes are not used (see agent-continuation)")
+		return
+	}
 
 	prompt := buildBackgroundTaskWakePrompt(taskID, body.Status, body.Description, body.Summary, body.LastToolName, body.Error)
 	if len([]byte(prompt)) > maxSDKTurnPromptBytes {
@@ -116,6 +126,131 @@ func (s *appServer) handleInternalRegisterBackgroundTaskWake(w http.ResponseWrit
 		"wake_id":      row.WakeID,
 		"client_nonce": row.ClientNonce,
 		"due_at":       row.DueAt.Format(time.RFC3339Nano),
+	})
+}
+
+// handleInternalAgentContinuation opens a durable turn boundary for an
+// antigravity session that self-continued. agy is long-running and self-managing:
+// it fires its own timer/build task and, when that task completes, emits a fresh
+// PLANNER_RESPONSE on its own — no Tank clock involved. The runner OBSERVES that
+// idle self-continuation and asks the backend (the sole author of turn
+// boundaries) to open the turn; the runner then RELAYS agy's already-emitted
+// output into it without re-prompting the PTY. The turn reuses the
+// turn_bgtask-<task> id so it folds into the originating user-facing turn — exactly
+// like a background-task wake, except the trigger is agy's own continuation, not a
+// Tank fire loop. This is why antigravity is rejected by the scheduled-wakeup and
+// background-task-wake register paths: it self-continues, and Tank must never
+// double-wake a self-managing agent. See
+// backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+func (s *appServer) handleInternalAgentContinuation(w http.ResponseWriter, r *http.Request) {
+	caller, ok := s.requireInternalSessionPodCaller(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		recordAgentContinuation("unknown", "bad_request")
+		writeError(w, http.StatusBadRequest, "missing session_id")
+		return
+	}
+	if sessionID != caller.SessionID {
+		recordAgentContinuation("unknown", "forbidden")
+		writeError(w, http.StatusForbidden, "session target does not match caller pod")
+		return
+	}
+	if s.mgr == nil {
+		recordAgentContinuation("unknown", "manager_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "session manager unavailable")
+		return
+	}
+
+	var body struct {
+		TaskID  string `json:"task_id"`
+		Summary string `json:"summary"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		recordAgentContinuation("unknown", "bad_request")
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	taskID := strings.TrimSpace(body.TaskID)
+	if taskID == "" || !backgroundTaskIDPattern.MatchString(taskID) {
+		recordAgentContinuation("unknown", "bad_request")
+		writeError(w, http.StatusBadRequest, "task_id is required and must match background task id syntax")
+		return
+	}
+
+	info, err := s.mgr.GetRegisteredByOwner(r.Context(), caller.Email, sessionID)
+	if err != nil {
+		recordAgentContinuation("unknown", "not_found")
+		writeError(w, http.StatusNotFound, "session not found")
+		return
+	}
+	provider, ok := sdkProviderForMode(info.Mode)
+	if !ok || provider != string(conversation.SourceAntigravity) {
+		recordAgentContinuation(provider, "rejected_non_antigravity")
+		writeError(w, http.StatusBadRequest, "agent-continuation relay is only for antigravity sessions")
+		return
+	}
+
+	// Reuse the background-task wake nonce so the relay turn id is
+	// turn_bgtask-<task> and folds into the originating user-facing turn through
+	// the existing resolveBackgroundWakeOriginTurn / isBackgroundWakeTurnID path.
+	clientNonce := pgstore.BackgroundTaskWakeClientNonce(taskID)
+	if strings.TrimSpace(clientNonce) == "" {
+		recordAgentContinuation(provider, "bad_request")
+		writeError(w, http.StatusBadRequest, "could not derive continuation nonce")
+		return
+	}
+
+	// Idempotent + resurrection-safe: the relay turn id is deterministic per task.
+	// If the turn already reached a terminal (turn.completed/failed/interrupted),
+	// the relay already ran — re-opening it would resurrect a closed user-facing
+	// turn, the forbidden self-wake. Short-circuit. A merely-submitted or
+	// transiently-publish-failed turn has no terminal (agent-continuation is a
+	// self-resume source, so a failed publish writes no command_failed marker), so
+	// we fall through and re-enqueue; the deterministic command id is deduplicated
+	// by JetStream (WithMsgID), so a re-publish never double-delivers.
+	turnID := conversation.TurnIDForClientNonce(clientNonce)
+	if eventStore := s.sessionEventStoreForScope(s.sessionScope); eventStore != nil && turnID != "" {
+		if terminal, err := eventStore.FindTurnTerminal(r.Context(), sessionID, turnID); err == nil && terminal != nil {
+			recordAgentContinuation(provider, "already_open")
+			writeJSON(w, http.StatusAccepted, map[string]any{
+				"status":       "accepted",
+				"turn_id":      turnID,
+				"client_nonce": clientNonce,
+			})
+			return
+		}
+	}
+
+	// The summary is provenance only — the relay turn omits the user_message, so
+	// nothing here is rendered as a human prompt. Keep it bounded.
+	prompt := clipWakeField(strings.TrimSpace(body.Summary), 2000)
+	if prompt == "" {
+		prompt = "Antigravity background task " + taskID + " finished; the agent is continuing on its own."
+	}
+
+	resp, status, detail := s.enqueueSDKTurn(r.Context(), caller.Email, sessionID, sdkTurnRequest{
+		ClientNonce:     clientNonce,
+		RequireNonce:    true,
+		Prompt:          prompt,
+		Source:          string(conversation.TurnSubmittedSourceAgentContinuation),
+		SourceTaskID:    taskID,
+		CreatedAt:       time.Now().UTC(),
+		OmitUserMessage: true,
+		AuthorKind:      string(conversation.AuthorKindSystem),
+	})
+	if status != 0 {
+		recordAgentContinuation(provider, "enqueue_failed")
+		writeError(w, status, detail)
+		return
+	}
+	recordAgentContinuation(provider, "ok")
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"status":       "accepted",
+		"turn_id":      turnIDFromEnqueueResponse(resp),
+		"client_nonce": clientNonce,
 	})
 }
 

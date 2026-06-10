@@ -99,7 +99,7 @@ func (s *appServer) handleInternalRegisterScheduledWakeup(w http.ResponseWriter,
 	provider, ok := sdkProviderForMode(info.Mode)
 	if !ok || !supportsScheduledWakeups(provider) {
 		recordScheduledWakeupRegister("unknown", "bad_request")
-		writeError(w, http.StatusBadRequest, "scheduled wakeups are only supported for Claude and Antigravity SDK sessions")
+		writeError(w, http.StatusBadRequest, "scheduled wakeups are only supported for Claude SDK sessions")
 		return
 	}
 	now := time.Now().UTC()
@@ -135,7 +135,11 @@ func (s *appServer) handleInternalRegisterScheduledWakeup(w http.ResponseWriter,
 
 func supportsScheduledWakeups(provider string) bool {
 	switch strings.TrimSpace(provider) {
-	case "claude", "antigravity":
+	// Antigravity self-continues natively (agy fires its own timer/task and emits
+	// the continuation); Tank must not own a clock for it. Only Claude, whose SDK
+	// genuinely hands control back on ScheduleWakeup, is fired by the orchestrator.
+	// See backend-go/cmd/antigravity-runner/ARCHITECTURE.md.
+	case "claude":
 		return true
 	default:
 		return false
@@ -421,15 +425,19 @@ func (s *appServer) resolveFailedWake(ctx context.Context, owner, sessionID, tur
 	}
 }
 
-// isSelfResumeTurnSource reports whether a submitted turn is the orchestrator
-// resuming the agent on its own (a ScheduleWakeup timer or a background-task
-// wake) rather than a user or launch submission. For these the wake fire path
-// owns the away-tagged turn.command_failed on a publish failure, so
-// enqueueSDKTurn skips its generic marker to avoid a colliding deterministic
-// event_id (see resolveFailedWake / enqueueSDKTurn).
+// isSelfResumeTurnSource reports whether a submitted turn is the agent resuming
+// itself rather than a user or launch submission: a Claude ScheduleWakeup timer,
+// a Claude background-task wake, or an antigravity self-continuation relay. For
+// these, enqueueSDKTurn skips its generic turn.command_failed marker on a publish
+// failure. The schedule/background-task wake fire paths own the away-tagged
+// failure and re-fire from their durable rows; the antigravity relay is retried
+// by the runner that observed the self-continuation (and its FindTurnTerminal
+// guard re-enqueues only while no terminal exists). Writing the generic marker
+// would strand the turn at a terminal that blocks that recovery and, for the wake
+// paths, collide on the deterministic event_id and drop the away tag.
 func isSelfResumeTurnSource(source string) bool {
 	switch strings.TrimSpace(source) {
-	case "schedule-wakeup", "background-task":
+	case "schedule-wakeup", "background-task", "agent-continuation":
 		return true
 	default:
 		return false
