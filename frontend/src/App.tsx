@@ -18361,7 +18361,7 @@ function ChatPane({
         targetIsComposer: !!textarea && e.target === textarea,
         activeTab,
       });
-      if (action === "ignore") return;
+      if (action === "ignore" || isTextEntryShortcutTarget(e.target)) return;
 
       e.preventDefault();
       e.stopPropagation();
