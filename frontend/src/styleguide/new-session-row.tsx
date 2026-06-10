@@ -158,15 +158,28 @@ export function StyleguideNewSessionRow() {
                     <h3>Model</h3>
                     <span className="home-panel-meta">High</span>
                   </div>
-                  <div className="home-model-list" role="group" aria-label="model">
-                    <button className="home-model is-selected" type="button" aria-pressed="true">
-                      <span className="home-model-title">Claude Opus 4.8</span>
-                    </button>
-                    <button className="home-model" type="button" aria-pressed="false">
-                      <span className="home-model-title">Claude Opus 4.7</span>
-                    </button>
-                    <button className="home-model" type="button" aria-pressed="false">
-                      <span className="home-model-title">Claude Sonnet 4.5</span>
+                  <div className="home-model-select" data-menu="home-model">
+                    <button
+                      className="home-model-trigger"
+                      type="button"
+                      aria-haspopup="listbox"
+                      aria-expanded="false"
+                    >
+                      <span className="home-model-title">Claude · Opus 4.8</span>
+                      <svg
+                        className="home-model-trigger-icon"
+                        viewBox="0 0 16 16"
+                        width="14"
+                        height="14"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M4 6l4 4 4-4" />
+                      </svg>
                     </button>
                   </div>
                   <div className="home-effort-grid" role="group" aria-label="effort">

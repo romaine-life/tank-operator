@@ -84,6 +84,12 @@ var providerModels = map[string][]string{
 		"claude-opus-4-7",
 		"claude-sonnet-4-6",
 		"claude-haiku-4-5",
+		// Mythos-tier model (above Opus), GA 2026-06-09. Listed last and
+		// intentionally NOT the claude default: it is ~2x Opus 4.8 pricing
+		// ($10/$50 per Mtok), is only subscription-included through 2026-06-22
+		// (usage credits after), and routes ~5% of sessions to Opus 4.8 via
+		// new classifiers. Selectable, not the steady-state pick.
+		"claude-fable-5",
 	},
 	"codex": {
 		"gpt-5.5",
