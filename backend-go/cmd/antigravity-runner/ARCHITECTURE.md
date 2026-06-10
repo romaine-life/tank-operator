@@ -31,9 +31,60 @@ Our runner acts as the adapter layer (the harness) between the cluster's NATS Je
 ```
 
 1. **Prompt Ingestion**: The runner consumes `CommandSubmitTurn` from NATS, writes the prompt followed by a carriage return (`\r`) to `agy`'s PTY standard input.
-2. **Interactive Bypasses**: The runner seeds `onboarding.json` and theme settings to both the legacy and new config directories during pod bootstrap. It monitors PTY stdout to automatically click through any unexpected Terms of Service screen.
+2. **Interactive Bypasses**: The launcher (`antigravity-container/antigravity-runner-launch.sh`) seeds `onboarding.json` and theme settings to both the legacy and new config directories during pod bootstrap, so `agy` never presents onboarding/consent screens at runtime. The runner does not script the TUI: the PTY reader only drains output (agy blocks if the PTY buffer fills) and mirrors it to pod logs. If a new interactive screen appears, extend the seeded config files — do not add keystroke replay. The retired ToS auto-accept (PTY-stdout sniffing + replayed arrow/enter keys) raced real turn input and broke on TUI copy changes; its reintroduction is blocked by `TestPTYRunnerArchitectureConstraint` and `scripts/check-removed-chat-runtime.mjs`.
 3. **Transcript Scraping**: `agy` writes JSON-lines steps to `transcript_full.jsonl`. The runner tails this file via `fsnotify`.
 4. **Completion**: When the runner parses a completed `PLANNER_RESPONSE` step, it extracts the final answer, publishes `assistant_message.created` and `turn.completed` events back to NATS, and waits for the next turn.
+
+---
+
+## Why a Persistent Process (not `agy -p` per turn)
+
+`agy` has a one-shot print mode (`agy -p`), and Tank's first chat runtime (the
+May 2026 Python `exec_proxy`, removed in #437 "Remove legacy chat runtime") ran
+Claude in the equivalent shape: spawn one headless process per run, read its
+output, let it exit. The Antigravity GUI runner deliberately did not repeat
+that shape. One `agy` process starts per session pod and stays alive across
+turns, because:
+
+1. **Per-spawn bootstrap cost.** Every `agy` start re-pays CLI init plus the
+   auth handshake; first-ready takes up to 2 minutes (`waitForCliReady`), and
+   `agy -p` enforces a ~30s auth timeout (see the antigravity notes in
+   `backend-go/cmd/tank-operator/handlers_terminal.go`). Per-turn spawning
+   turns that into per-turn latency and a per-turn failure mode.
+2. **Conversation continuity.** The resident process holds the conversation.
+   One-shot turns would depend on `agy` resume semantics that have no
+   documented contract.
+3. **Mid-turn control.** Tank's Stop path delivers SIGINT to the live process
+   (`activeProcess.interrupt`) and must resolve in a durable
+   `turn.interrupted`. A spawn-per-turn model has no stable target for
+   interrupts, and the Tank Agent Runners contract requires exactly one
+   durable terminal per turn.
+4. **Native long-lived behaviors.** `agy` parks native timers/background work
+   between turns (see schedule parking in
+   `docs/features/agent-runners/capabilities.md`). Those behaviors only exist
+   while the process lives.
+5. **One-shot mode buys nothing here.** Even in print mode, `agy` performs the
+   same auth/bootstrap dance (the 30s auth timeout above), the no-TTY hang
+   risk documented above has not been cleared for `-p`, and the transcript
+   files would still be the output contract. One-shot mode gives up the
+   warm-state and control benefits without removing any of the PTY/seeding
+   machinery.
+
+This mirrors where the other providers landed: `claude-runner` holds one
+SDK-spawned `claude` process (stream-json stdio) for the pod lifetime, and
+`codex-runner` holds one `codex app-server` (JSON-RPC stdio). Antigravity sits
+one rung lower on the interface ladder — PTY-driven input plus structured
+transcript-file output — only because the structured front door
+(`localharness`) is closed-source and GCP-Service-Account-only. Note that
+`localharness` is not a cleverer way to drive the `agy` TUI: it is the same
+agent loop compiled as a headless server with an RPC front end, so no TUI
+exists in its path at all.
+
+Revisit this if any of the following ship: consumer-OAuth support in
+`localharness`, an open-source harness, or a documented headless/structured
+mode in `agy`. Any of those should replace the PTY harness the same way the
+codex exec transport was retired once the app-server transport could field
+`request_user_input`.
 
 ---
 
@@ -42,3 +93,4 @@ Our runner acts as the adapter layer (the harness) between the cluster's NATS Je
 * **DO NOT** attempt to remove the PTY wrapper.
 * **DO NOT** attempt to send binary Protobuf messages directly to `agy`'s standard input. `agy` does not speak Protobuf on stdin.
 * **DO NOT** assume `localharness` is present or can be used. We must run the raw `agy` binary and act as the harness ourselves.
+* **DO NOT** re-add PTY-stdout sniffing or keystroke replay for onboarding/consent screens. Seed the config files in the launcher instead.

@@ -233,6 +233,16 @@ func main() {
 	defer func() { _ = ptmx.Close() }()
 	active.cmd = runCmd
 
+	// This loop's only job is to drain the PTY (agy blocks once the PTY
+	// buffer fills) and mirror agy's output to pod logs. Onboarding/consent
+	// screens are prevented up-front by the launcher seeding onboarding
+	// state into both agy config dirs
+	// (antigravity-container/antigravity-runner-launch.sh). Do not re-add
+	// PTY-stdout sniffing that replays keystrokes (the retired
+	// auto-accept): it races real turn input and breaks on any TUI copy
+	// change. If a new interactive screen appears, extend the seeded
+	// config files instead. Guarded by TestPTYRunnerArchitectureConstraint
+	// and scripts/check-removed-chat-runtime.mjs.
 	go func() {
 		buf := make([]byte, 1024)
 		for {
@@ -241,16 +251,6 @@ func main() {
 				break
 			}
 			os.Stdout.Write(buf[:n])
-			if bytes.Contains(buf[:n], []byte("Terms of Service")) {
-				slog.Info("Detected Terms of Service screen, auto-accepting...")
-				// Press Next (\r), wait a beat, then press Right Arrow (\x1b[C) to select Done, then Enter (\r)
-				go func() {
-					time.Sleep(500 * time.Millisecond)
-					ptmx.WriteString("\r")
-					time.Sleep(500 * time.Millisecond)
-					ptmx.WriteString("\x1b[C\r")
-				}()
-			}
 		}
 	}()
 
