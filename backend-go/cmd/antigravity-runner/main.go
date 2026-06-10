@@ -195,7 +195,7 @@ func main() {
 
 func waitForCliReady(ctx context.Context, agyHome string) error {
 	logPath := filepath.Join(agyHome, "cli.log")
-	slog.Info("waiting for agy CLI to be ready...", "log_path", logPath)
+	slog.Info("waiting for agy CLI to complete initialization and authentication...", "log_path", logPath)
 
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
@@ -203,7 +203,7 @@ func waitForCliReady(ctx context.Context, agyHome string) error {
 	for {
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return fmt.Errorf("agy CLI failed to initialize: %w", ctx.Err())
 		case <-ticker.C:
 			data, err := os.ReadFile(logPath)
 			if err != nil {
@@ -213,8 +213,8 @@ func waitForCliReady(ctx context.Context, agyHome string) error {
 				slog.Debug("failed to read agy log path", "error", err)
 				continue
 			}
-			if bytes.Contains(data, []byte("CLI ready for user input")) {
-				slog.Info("agy CLI is ready for user input")
+			if bytes.Contains(data, []byte("Auth done received")) || bytes.Contains(data, []byte("Reloading system slash commands")) {
+				slog.Info("agy CLI is fully authenticated and ready for user input")
 				return nil
 			}
 		}
