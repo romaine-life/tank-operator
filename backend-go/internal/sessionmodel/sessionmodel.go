@@ -544,6 +544,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// Environment variables for the claude container.
 	env := []any{
 		map[string]any{"name": "SANDBOX_AGENT_PORT", "value": itoa(opts.SandboxAgentPort)},
+		map[string]any{"name": "TERM", "value": "xterm-256color"},
 		// TANK_SESSION_MODE drives session-pod-bootstrap.sh's per-mode
 		// seeding (~/.codex/config.toml, ~/.claude/settings.json, etc.).
 		// Also surfaced inside the user's shell, so `echo $TANK_SESSION_MODE`

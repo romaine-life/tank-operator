@@ -24,7 +24,8 @@
       "TANK_GLIMMUNG_RUN_REF": "",
       "TANK_GLIMMUNG_TOUCHPOINT_REF": "",
       "TANK_GLIMMUNG_VALIDATION_URL": "",
-      "TANK_SESSION_MODE": "codex_gui"
+      "TANK_SESSION_MODE": "codex_gui",
+      "TERM": "xterm-256color"
     },
     "container_images": {
       "sandbox": "romainecr.azurecr.io/codex-container:latest",
