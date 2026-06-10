@@ -53,8 +53,8 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-e33a1cd8665afb4c2d88654cee6abc3152e739373fd07ef7611a6941e5047a6d
-  codexImage: romainecr.azurecr.io/codex-container:codex-87eac1f7e9fef6a885745f0114e33429d356f49d366699106890f1508540cdfc
+  image: romainecr.azurecr.io/claude-container:claude-e565065e681ff40683bc8901389e0f9126c1bf72d79421dd4c6449057d7745d8
+  codexImage: romainecr.azurecr.io/codex-container:codex-004724ce74936a8d27004cd28660ca1459e1d6eb4f010fda0fd6f1609a289423
   # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
