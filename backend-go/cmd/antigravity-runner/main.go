@@ -26,8 +26,10 @@ import (
 	"github.com/fsnotify/fsnotify"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/exec"
+
 	"os/signal"
 	"path/filepath"
 	"regexp"
@@ -95,6 +97,63 @@ type finalAnswer struct {
 type pendingTool struct {
 	id   string
 	name string
+}
+
+type runnerState struct {
+	mu            sync.Mutex
+	currentRun    *turnRun
+	pendingSteps  []parsedStep
+	wakeRequested bool
+}
+
+type parsedStep struct {
+	path string
+	line string
+	step AgyStep
+}
+
+func (s *runnerState) handleStep(path, line string, step AgyStep, cfg runnerConfig) error {
+	if !isRelevantStep(step) {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.currentRun != nil {
+		return s.currentRun.observeStep(path, line, step)
+	}
+
+	s.pendingSteps = append(s.pendingSteps, parsedStep{path: path, line: line, step: step})
+	if !s.wakeRequested {
+		s.wakeRequested = true
+		taskID := providerStepID(path, line, step)
+		go func() {
+			err := registerBackgroundTaskWake(cfg, taskID, "Antigravity background activity detected")
+			if err != nil {
+				slog.Error("failed to register background task wake", "error", err)
+			}
+		}()
+	}
+	return nil
+}
+
+func (s *runnerState) attachTurn(run *turnRun) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.currentRun = run
+	for _, ps := range s.pendingSteps {
+		_ = run.observeStep(ps.path, ps.line, ps.step)
+	}
+	s.pendingSteps = nil
+	s.wakeRequested = false
+}
+
+func (s *runnerState) detachTurn(run *turnRun) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.currentRun == run {
+		s.currentRun = nil
+	}
 }
 
 type turnRun struct {
@@ -202,15 +261,21 @@ func main() {
 		os.Exit(1)
 	}
 
+	state := &runnerState{}
+
 	var wg sync.WaitGroup
-	wg.Add(2)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		runDataConsumer(ctx, js, cfg, builder, publisher, active, ptmx)
+		runDataConsumer(ctx, js, cfg, builder, publisher, active, state, ptmx)
 	}()
 	go func() {
 		defer wg.Done()
 		runControlConsumer(ctx, js, cfg, active)
+	}()
+	go func() {
+		defer wg.Done()
+		tailTranscripts(ctx, cfg, state)
 	}()
 	wg.Wait()
 	slog.Info("antigravity cli runner exited")
@@ -244,6 +309,44 @@ func waitForCliReady(ctx context.Context, agyHome string) error {
 	}
 }
 
+func registerBackgroundTaskWake(cfg runnerConfig, taskID string, summary string) error {
+	baseURL := strings.TrimRight(firstEnv("OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local:8080"), "/")
+	tokenPath := firstEnv("OPERATOR_TOKEN_PATH", "/var/run/secrets/kubernetes.io/serviceaccount/token")
+	if baseURL == "" || tokenPath == "" || cfg.sessionID == "" {
+		return nil
+	}
+	tokenBytes, err := os.ReadFile(tokenPath)
+	if err != nil {
+		return err
+	}
+	token := strings.TrimSpace(string(tokenBytes))
+	url := fmt.Sprintf("%s/api/internal/sessions/%s/background-task-wakes", baseURL, cfg.sessionID)
+
+	payload := map[string]any{
+		"task_id":        taskID,
+		"status":         "completed",
+		"description":    "Antigravity background process finished",
+		"summary":        summary,
+		"last_tool_name": "agy",
+	}
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequest("POST", url, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return fmt.Errorf("background task wake register failed: %d", resp.StatusCode)
+	}
+	return nil
+}
 
 func loadConfig() (runnerConfig, error) {
 	storageKey := firstEnv("TANK_SESSION_STORAGE_KEY", "SESSION_STORAGE_KEY")
@@ -305,7 +408,7 @@ func connectNATS(cfg runnerConfig) (*nats.Conn, error) {
 	return nats.Connect(cfg.natsURL, opts...)
 }
 
-func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, ptmx *os.File) {
+func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, state *runnerState, ptmx *os.File) {
 	commandSubject := sessionbus.CommandSubject(cfg.sessionStorageKey, provider)
 	consumerName := "antigravity_cli_data_" + sessionbus.StorageToken(cfg.sessionStorageKey)
 
@@ -339,7 +442,7 @@ func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConf
 		conversationMu.Lock()
 		continueConversation := conversationStarted
 		conversationMu.Unlock()
-		started, err := handleSubmitTurn(ctx, cfg, builder, publisher, active, msg, command, continueConversation, ptmx)
+		started, err := handleSubmitTurn(ctx, cfg, builder, publisher, active, state, msg, command, continueConversation, ptmx)
 		if started {
 			conversationMu.Lock()
 			conversationStarted = true
@@ -398,7 +501,7 @@ func runControlConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerC
 	consumeCtx.Stop()
 }
 
-func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, msg jetstream.Msg, command sessionbus.Command, continueConversation bool, ptmx *os.File) (bool, error) {
+func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, state *runnerState, msg jetstream.Msg, command sessionbus.Command, continueConversation bool, ptmx *os.File) (bool, error) {
 	turnID := command.TurnID
 	if turnID == "" {
 		turnID = "turn_" + strings.ReplaceAll(uuid.NewString(), "-", "")
@@ -426,24 +529,16 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 		return false, nil
 	}
 
-	doneTailing := make(chan struct{})
-	tailErrors := make(chan error, 1)
-	go tailTranscripts(ctx, cfg.agyHome, run, doneTailing, tailErrors)
+	state.attachTurn(run)
+	defer state.detachTurn(run)
 
 	<-run.turnComplete
-	var waitErr error
-	close(doneTailing)
-	tailErr := <-tailErrors
 	interrupted := active.wasInterrupted(turnID)
 
 	var terminalErr error
 	switch {
-	case tailErr != nil:
-		terminalErr = tailErr
 	case interrupted:
 		terminalErr = run.finishInterrupted()
-	case waitErr != nil:
-		terminalErr = run.finishFailed("agy_exit_error")
 	case run.providerFailed != "":
 		terminalErr = run.finishFailed("provider_error")
 	default:
@@ -1060,16 +1155,16 @@ func publishEvent(nc *nats.Conn, sessionStorageKey string, event map[string]any)
 	return nc.FlushTimeout(5 * time.Second)
 }
 
-func tailTranscripts(ctx context.Context, agyHome string, run *turnRun, done <-chan struct{}, errorsOut chan<- error) {
-	defer close(errorsOut)
+
+func tailTranscripts(ctx context.Context, cfg runnerConfig, state *runnerState) {
 	offsets := map[string]int64{}
-	brainDir := filepath.Join(agyHome, "brain")
+	brainDir := filepath.Join(cfg.agyHome, "brain")
 
 	os.MkdirAll(brainDir, 0755)
 
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
-		errorsOut <- err
+		slog.Error("failed to create fsnotify watcher", "error", err)
 		return
 	}
 	defer watcher.Close()
@@ -1084,23 +1179,10 @@ func tailTranscripts(ctx context.Context, agyHome string, run *turnRun, done <-c
 	}
 	watchAll(brainDir)
 
-	_ = filepath.Walk(brainDir, func(path string, info os.FileInfo, err error) error {
-		if err == nil && !info.IsDir() && strings.HasSuffix(path, "transcript_full.jsonl") {
-			offsets[path] = info.Size()
-		}
-		return nil
-	})
-
-	sweepTranscripts(brainDir, offsets, run)
-
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-done:
-			if err := sweepTranscripts(brainDir, offsets, run); err != nil {
-				errorsOut <- err
-			}
+			_ = sweepTranscripts(brainDir, offsets, cfg, state)
 			return
 		case event, ok := <-watcher.Events:
 			if !ok {
@@ -1112,9 +1194,8 @@ func tailTranscripts(ctx context.Context, agyHome string, run *turnRun, done <-c
 					watchAll(event.Name)
 				}
 			}
-			if err := sweepTranscripts(brainDir, offsets, run); err != nil {
-				errorsOut <- err
-				return
+			if err := sweepTranscripts(brainDir, offsets, cfg, state); err != nil {
+				slog.Error("failed to sweep transcripts", "error", err)
 			}
 		case err, ok := <-watcher.Errors:
 			if !ok {
@@ -1125,7 +1206,7 @@ func tailTranscripts(ctx context.Context, agyHome string, run *turnRun, done <-c
 	}
 }
 
-func sweepTranscripts(brainDir string, offsets map[string]int64, run *turnRun) error {
+func sweepTranscripts(brainDir string, offsets map[string]int64, cfg runnerConfig, state *runnerState) error {
 	return filepath.Walk(brainDir, func(path string, info os.FileInfo, err error) error {
 		if err != nil || info.IsDir() || !strings.HasSuffix(path, "transcript_full.jsonl") {
 			return nil
@@ -1158,7 +1239,7 @@ func sweepTranscripts(brainDir string, offsets map[string]int64, run *turnRun) e
 			if err := json.Unmarshal([]byte(line), &step); err != nil {
 				continue
 			}
-			if err := run.observeStep(path, line, step); err != nil {
+			if err := state.handleStep(path, line, step, cfg); err != nil {
 				return err
 			}
 		}
