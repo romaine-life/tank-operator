@@ -203,13 +203,13 @@ Project metadata for Glimmung:
     "antigravity_runner": {
       "enabled": true,
       "strategy": "supervisor",
-      "build_command": "cd antigravity-runner && npm ci && npm run build && rm -rf hot && mkdir -p hot && cp -R dist hot/dist && cp -R ../runner-shared hot/runner-shared && find hot/dist -name '*.js' -exec sed -i 's|\"\\.\\./\\.\\./runner-shared/|\"/var/run/antigravity-runner-hot/runner-shared/|g; s|\"\\.\\./\\.\\./\\.\\./runner-shared/|\"/var/run/antigravity-runner-hot/runner-shared/|g' {} +",
-      "source": "antigravity-runner/hot",
+      "build_command": "rm -rf antigravity-runner-hot && mkdir -p antigravity-runner-hot && cd backend-go && CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o ../antigravity-runner-hot/antigravity-cli-runner ./cmd/antigravity-runner",
+      "source": "antigravity-runner-hot",
       "target": "/var/run/antigravity-runner-hot",
       "restart": "SIGHUP",
       "container": "antigravity-runner",
       "pod_selector": "tank-operator/session-id,tank-operator/mode=antigravity_gui",
-      "builder_image": "node:20-bookworm-slim"
+      "builder_image": "golang:1.26-alpine"
     }
   }
 }
