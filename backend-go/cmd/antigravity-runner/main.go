@@ -310,7 +310,7 @@ func waitForCliReady(ctx context.Context, agyHome string) error {
 }
 
 func registerBackgroundTaskWake(cfg runnerConfig, taskID string, summary string) error {
-	baseURL := strings.TrimRight(firstEnv("OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local:8080"), "/")
+	baseURL := strings.TrimRight(firstEnv("TANK_OPERATOR_INTERNAL_URL", "OPERATOR_INTERNAL_URL", "http://tank-operator.tank-operator.svc.cluster.local"), "/")
 	tokenPath := firstEnv("OPERATOR_TOKEN_PATH", "/var/run/secrets/kubernetes.io/serviceaccount/token")
 	if baseURL == "" || tokenPath == "" || cfg.sessionID == "" {
 		return nil
