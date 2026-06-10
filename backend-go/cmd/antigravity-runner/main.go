@@ -871,9 +871,16 @@ func isRelevantStep(step AgyStep) bool {
 		return true
 	}
 	if strings.EqualFold(step.Source, "SYSTEM") {
-		return strings.EqualFold(step.Type, "ERROR_MESSAGE") || strings.EqualFold(step.Type, "loadCodeAssist")
+		typ := strings.ToLower(step.Type)
+		if typ == "error_message" || typ == "loadcodeassist" {
+			return true
+		}
+		if strings.Contains(typ, "wake") || strings.Contains(typ, "timer") || strings.Contains(typ, "background") || strings.Contains(typ, "schedule") {
+			return true
+		}
+		return false
 	}
-	if strings.EqualFold(step.Source, "MODEL") {
+	if strings.EqualFold(step.Source, "MODEL") || strings.EqualFold(step.Source, "TOOL") || strings.EqualFold(step.Source, "ENVIRONMENT") || strings.EqualFold(step.Source, "BACKGROUND_TASK") {
 		return true
 	}
 	return false
