@@ -4209,6 +4209,95 @@ button:disabled {
   white-space: nowrap;
 }
 
+.run-turn-view-combined-select {
+  width: 17rem;
+  min-width: 17rem;
+  max-width: min(17rem, calc(100vw - 2rem));
+}
+
+.run-turn-view-combined-select-menu {
+  width: 19rem;
+  min-width: 19rem;
+  max-width: min(19rem, calc(100vw - 2rem));
+}
+
+.run-turn-view-combined-trigger-label {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1-5);
+  min-width: 0;
+  width: 100%;
+}
+
+.run-turn-view-combined-trigger-turn {
+  color: var(--text-muted);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.run-turn-view-combined-trigger-page {
+  color: var(--text-primary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.run-turn-view-combined-trigger-semantic {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.run-turn-view-combined-option {
+  display: grid;
+  grid-template-columns: 1.5rem 3.5rem minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-2);
+  min-width: 0;
+  width: 100%;
+}
+
+.run-turn-view-combined-num {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--text-xs);
+}
+
+.run-turn-view-combined-turn {
+  color: var(--text-secondary);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.run-turn-view-combined-page {
+  color: var(--text-primary);
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.run-turn-view-combined-semantic {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-turn-view-nav-btn-double {
+  min-width: 2.15rem;
+}
+
+.run-turn-view-nav-btn-triple {
+  min-width: 2.5rem;
+}
+
 .run-turn-activity-event-progress,
 .run-turn-activity-total-events {
   color: var(--text-muted);
