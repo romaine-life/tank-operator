@@ -4234,6 +4234,27 @@ button:disabled {
   flex: 1 1 auto;
 }
 
+.run-turn-view-select-item.run-turn-view-combined-select-item
+  .run-turn-view-combined-option,
+.run-turn-view-select-item.run-turn-view-combined-select-item
+  .run-turn-view-combined-option * {
+  color: var(--text-body) !important;
+}
+
+.run-turn-view-select-item.run-turn-view-combined-select-item[data-highlighted]
+  .run-turn-view-combined-option,
+.run-turn-view-select-item.run-turn-view-combined-select-item[data-highlighted]
+  .run-turn-view-combined-option * {
+  color: var(--text-primary) !important;
+}
+
+.run-turn-view-select-item.run-turn-view-combined-select-item[data-state="checked"]
+  .run-turn-view-combined-option,
+.run-turn-view-select-item.run-turn-view-combined-select-item[data-state="checked"]
+  .run-turn-view-combined-option * {
+  color: var(--accent-fg) !important;
+}
+
 .run-turn-view-combined-turn {
   color: currentColor;
   font-weight: 500;
