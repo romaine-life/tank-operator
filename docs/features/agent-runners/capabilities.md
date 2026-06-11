@@ -263,7 +263,15 @@ background shell's originating turn (`runningBackgroundTasks`) so the idle
 `background_work_pending` (park, non-summoning, same #906 fold the wake
 tables drive for Claude), and the runner registers the durable wake via the
 shared `runner-shared/backgroundTaskWake.js` helper with Claude's exact
-skip-when-active + idempotent-register semantics.
+skip-when-active + idempotent-register semantics. Codex's app-server emits
+NO notification when a background command finishes (verified against the
+binary's RPC surface — `backgroundTerminals` has only `/clean`), so the
+completion source is the OS: the provider declares each shell's PID in its
+own item payload, the shell is a descendant of the app-server in the same
+container PID namespace, and the runner probes liveness (`kill(pid,0)`)
+every 5s ONLY while shells are pending — zero cost when idle, watcher
+self-stops. The synthesized exited claims no output; the wake-turn's model
+retrieves results natively from its own unified session.
 
 Original Claude intent:
 When a Claude session backgrounds a task (`run_in_background`) and then ends its

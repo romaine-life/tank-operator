@@ -51,7 +51,7 @@ export class CodexTankEventAdapter {
   // background_work_pending stamp on turn terminals.
   private readonly runningBackgroundTasks = new Map<
     string,
-    { turnID: string; providerItemID: string; command: string }
+    { turnID: string; providerItemID: string; command: string; processID: number | null }
   >();
 
   constructor(private readonly cfg: Config) {}
@@ -312,10 +312,13 @@ export class CodexTankEventAdapter {
     if (type === "shell_task.exited") {
       this.runningBackgroundTasks.delete(taskID);
     } else {
+      const rawPid = item.process_id ?? item.processId ?? taskID;
+      const pid = Number.parseInt(String(rawPid), 10);
       this.runningBackgroundTasks.set(taskID, {
         turnID: turn.turnID,
         providerItemID,
         command: typeof item.command === "string" ? item.command : "",
+        processID: Number.isInteger(pid) && pid > 0 ? pid : null,
       });
     }
     return [
@@ -338,6 +341,49 @@ export class CodexTankEventAdapter {
           exit_code: itemExitCode(item),
           duration_ms: item.duration_ms ?? item.durationMs,
           raw_item: item,
+        },
+      }),
+    ];
+  }
+
+  // pendingBackgroundTasks exposes the tracked background shells for the
+  // runner's process-exit watcher. Codex's app-server emits NO notification
+  // when a background command finishes (verified empirically against the
+  // binary's RPC surface — backgroundTerminals has only /clean), so the OS
+  // is the authoritative completion source: the provider declares the PID
+  // in its own item payload and the shell runs in this container's PID
+  // namespace.
+  pendingBackgroundTasks(): Array<{ taskID: string; processID: number | null }> {
+    return Array.from(this.runningBackgroundTasks.entries()).map(([taskID, t]) => ({
+      taskID,
+      processID: t.processID,
+    }));
+  }
+
+  // completeBackgroundShellByExit synthesizes the durable shell_task.exited
+  // for a background shell whose process was observed to have exited. No
+  // exit code or output is claimed (the provider never reported them); the
+  // wake-turn's model retrieves the output natively from its own unified
+  // session and reports it user-facing.
+  completeBackgroundShellByExit(taskID: string): TankConversationEvent[] {
+    const tracked = this.runningBackgroundTasks.get(taskID);
+    if (!tracked) return [];
+    this.runningBackgroundTasks.delete(taskID);
+    return [
+      shellTaskEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: tracked.turnID,
+        source: "codex",
+        type: "shell_task.exited",
+        taskID,
+        status: "completed",
+        providerItemID: tracked.providerItemID,
+        payload: {
+          status: "completed",
+          provider_item_id: tracked.providerItemID,
+          command: tracked.command,
+          process_id: tracked.processID === null ? undefined : String(tracked.processID),
+          completion_source: "process_exit_observed",
         },
       }),
     ];

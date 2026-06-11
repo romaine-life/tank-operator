@@ -722,6 +722,11 @@ export class Runner {
           turn.stopCommandHeartbeat = undefined;
           this.currentAbort = null;
           this.currentTurn = null;
+          // A turn that parked background shells needs the process-exit
+          // watcher running; it self-stops when nothing is pending.
+          if (this.codexAdapter.pendingBackgroundTasks().length > 0) {
+            this.ensureBackgroundPidWatcher();
+          }
           await this.completeStalePendingInterrupts(turn);
           this.interruptRequested = false;
         }
@@ -879,6 +884,82 @@ export class Runner {
   }
 
   private readonly firedBackgroundTaskWakes = new Set<string>();
+  private backgroundPidWatcher: ReturnType<typeof setInterval> | null = null;
+  // isPidAlive is injectable for tests; kill(pid, 0) probes liveness in the
+  // shared container PID namespace (EPERM = alive, ESRCH = gone).
+  isPidAlive: (pid: number) => boolean = (pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code === "EPERM";
+    }
+  };
+
+  // ensureBackgroundPidWatcher runs ONLY while background shells are
+  // pending: codex's app-server emits no completion notification for them
+  // (its backgroundTerminals RPC surface is /clean only — verified against
+  // the binary), so the OS is the completion source. The provider declared
+  // each PID in its own item payload; the shell is a descendant of the
+  // app-server in this container, so /proc liveness is authoritative.
+  // Cost story: one kill(pid,0) per pending task per tick, zero when idle.
+  private ensureBackgroundPidWatcher(): void {
+    if (this.backgroundPidWatcher) return;
+    this.backgroundPidWatcher = setInterval(() => {
+      void this.sweepBackgroundPids();
+    }, 5000);
+    this.backgroundPidWatcher.unref?.();
+  }
+
+  async sweepBackgroundPids(): Promise<void> {
+    const pending = this.codexAdapter.pendingBackgroundTasks();
+    if (pending.length === 0) {
+      if (this.backgroundPidWatcher) {
+        clearInterval(this.backgroundPidWatcher);
+        this.backgroundPidWatcher = null;
+      }
+      return;
+    }
+    for (const task of pending) {
+      if (task.processID === null) continue;
+      if (this.isPidAlive(task.processID)) continue;
+      const events = this.codexAdapter.completeBackgroundShellByExit(task.taskID);
+      for (const canonical of events) {
+        const dispatched = await dispatch(this.sink, canonical).catch((err) => {
+          console.error("background shell exit publish failed:", err);
+          return false;
+        });
+        if (!dispatched) continue;
+        await this.maybeRegisterCodexBackgroundWake(canonical);
+      }
+    }
+  }
+
+  private async maybeRegisterCodexBackgroundWake(
+    canonical: { type: string; payload?: unknown } & Record<string, unknown>,
+  ): Promise<void> {
+    if (canonical.type !== "shell_task.exited") return;
+    const taskID = String((canonical as { task_id?: unknown }).task_id ?? "").trim();
+    if (!taskID || this.firedBackgroundTaskWakes.has(taskID)) return;
+    if (this.currentAbort) return;
+    this.firedBackgroundTaskWakes.add(taskID);
+    const payload = (canonical.payload ?? {}) as Record<string, unknown>;
+    try {
+      const registered = await registerBackgroundTaskWake(this.cfg, {
+        taskID,
+        status: String(payload.status ?? "completed"),
+        summary: String(payload.command ?? ""),
+        description: String(payload.command ?? ""),
+        lastToolName: "codex",
+      });
+      backgroundTaskWakeTotal
+        .labels(registered ? "registered" : "disabled")
+        .inc();
+    } catch (err) {
+      backgroundTaskWakeTotal.labels("failed").inc();
+      console.error("background task wake register failed:", err);
+    }
+  }
 
   // handleIdleBackgroundItem is the codex half of the background-task
   // park/re-invoke/fold contract (claude's run_in_background parity): a
@@ -903,27 +984,7 @@ export class Runner {
         return false;
       });
       if (!dispatched) continue;
-      if (canonical.type !== "shell_task.exited") continue;
-      const taskID = String((canonical as { task_id?: unknown }).task_id ?? "").trim();
-      if (!taskID || this.firedBackgroundTaskWakes.has(taskID)) continue;
-      if (this.currentAbort) continue;
-      this.firedBackgroundTaskWakes.add(taskID);
-      const payload = (canonical.payload ?? {}) as Record<string, unknown>;
-      try {
-        const registered = await registerBackgroundTaskWake(this.cfg, {
-          taskID,
-          status: String(payload.status ?? "completed"),
-          summary: String(payload.command ?? ""),
-          description: String(payload.command ?? ""),
-          lastToolName: "codex",
-        });
-        backgroundTaskWakeTotal
-          .labels(registered ? "registered" : "disabled")
-          .inc();
-      } catch (err) {
-        backgroundTaskWakeTotal.labels("failed").inc();
-        console.error("background task wake register failed:", err);
-      }
+      await this.maybeRegisterCodexBackgroundWake(canonical);
     }
   }
 

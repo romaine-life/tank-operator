@@ -597,3 +597,32 @@ test("idle completion for an untracked item publishes nothing", () => {
   });
   assert.deepEqual(idle, []);
 });
+
+test("process-exit completion synthesizes exited attributed to the origin turn", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const turn = acceptedTurn({ turnID: "turn-pid-1", clientNonce: "pid-1" });
+  adapter.canonicalEventsForCodexEvent(turn, {
+    type: "item.started",
+    item: {
+      id: "item_pid_shell",
+      type: "command_execution",
+      command: "sleep 75 && echo DONE",
+      process_id: "424242",
+      source: "unifiedExecStartup",
+      status: "in_progress",
+    },
+  });
+  const pending = adapter.pendingBackgroundTasks();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.processID, 424242);
+
+  const exited = adapter.completeBackgroundShellByExit(pending[0]!.taskID);
+  assert.equal(exited.length, 1);
+  assert.equal(exited[0]!.type, "shell_task.exited");
+  assert.equal(exited[0]!.turn_id, "turn-pid-1");
+  assert.equal(exited[0]!.payload?.completion_source, "process_exit_observed");
+  assert.equal(isTankConversationEvent(stampTankEvent(exited[0]!)), true);
+  assert.deepEqual(adapter.pendingBackgroundTasks(), []);
+  // Second call is a no-op (already drained) — watcher double-fire safety.
+  assert.deepEqual(adapter.completeBackgroundShellByExit(pending[0]!.taskID), []);
+});
