@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -105,6 +106,13 @@ func TestHandleClusterHealthSummarizesNodesSessionsAndNATS(t *testing.T) {
 	if body.NATS.JetStream.StreamReplicas != 3 || body.NATS.JetStream.ExpectedStreamReplicas != 3 || body.NATS.JetStream.StreamCurrentReplicas != 3 {
 		t.Fatalf("nats stream replicas = %#v", body.NATS.JetStream)
 	}
+	if body.Upgrade.MaintenanceWindow.DurationHours != 12 || body.Upgrade.AutoUpgradeChannel != "patch" {
+		t.Fatalf("upgrade = %#v", body.Upgrade)
+	}
+	if !strings.Contains(clusterMessagesForTest(body.Messages), "1 node under memory pressure") ||
+		!strings.Contains(clusterMessagesForTest(body.Messages), "1 session pod pending") {
+		t.Fatalf("messages = %#v", body.Messages)
+	}
 }
 
 func TestCollectNATSHealthCriticalWhenMonitorUnreachable(t *testing.T) {
@@ -173,6 +181,80 @@ func TestCollectNATSHealthWarnsWhenStreamReplicasAreLagging(t *testing.T) {
 		t.Fatalf("jetstream = %#v", got.JetStream)
 	}
 	if !strings.Contains(strings.Join(got.Warnings, "\n"), "Live delivery replicas 2/3 current") {
+		t.Fatalf("warnings = %#v", got.Warnings)
+	}
+}
+
+func TestCollectNATSHealthWarnsWhenConsumersAreBacklogged(t *testing.T) {
+	nats := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/varz":
+			writeJSON(w, http.StatusOK, map[string]any{
+				"server_name":    "tank-nats-0",
+				"slow_consumers": 0,
+				"jetstream": map[string]any{
+					"config": map[string]any{"max_memory": 1000},
+					"stats":  map[string]any{"memory": 500, "reserved_memory": 500},
+					"meta":   map[string]any{"pending": 0},
+				},
+			})
+		case "/jsz":
+			if r.URL.Query().Get("consumers") != "true" {
+				t.Fatalf("jsz consumers query = %q, want true", r.URL.RawQuery)
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"memory":  500,
+				"streams": 1,
+				"config":  map[string]any{"max_memory": 1000},
+				"account_details": []map[string]any{
+					{
+						"stream_detail": []map[string]any{
+							{
+								"name": "TANK_SESSION_BUS",
+								"cluster": map[string]any{
+									"leader":   "tank-nats-0",
+									"replicas": []map[string]any{},
+								},
+								"config": map[string]any{"num_replicas": 1},
+								"state": map[string]any{
+									"messages":       200,
+									"bytes":          5000,
+									"consumer_count": 3,
+								},
+								"consumer_detail": []map[string]any{
+									{
+										"name":            "claude_default_1",
+										"num_pending":     12,
+										"num_ack_pending": 2,
+										"num_redelivered": 1,
+										"num_waiting":     0,
+										"delivered":       map[string]any{"stream_seq": 20},
+										"ack_floor":       map[string]any{"stream_seq": 8},
+									},
+									{"name": "codex_default_2", "num_pending": 4},
+								},
+							},
+						},
+					},
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer nats.Close()
+
+	got := collectNATSHealth(context.Background(), []string{nats.URL}, "TANK_SESSION_BUS", 1)
+	if got.Status != "warning" {
+		t.Fatalf("status = %q, want warning: %#v", got.Status, got)
+	}
+	if got.JetStream.ConsumerPending != 16 || got.JetStream.ConsumerAckPending != 2 || got.JetStream.ConsumerRedelivered != 1 {
+		t.Fatalf("consumer backlog = %#v", got.JetStream)
+	}
+	if got.JetStream.BackloggedConsumers != 2 || len(got.JetStream.TopConsumerBacklogs) != 2 {
+		t.Fatalf("top consumer backlog = %#v", got.JetStream)
+	}
+	if !strings.Contains(strings.Join(got.Warnings, "\n"), "consumer backlog 16 pending across 2 consumers") {
 		t.Fatalf("warnings = %#v", got.Warnings)
 	}
 }
@@ -272,6 +354,32 @@ func TestCollectNATSHealthPrefersStreamLeaderReplicaView(t *testing.T) {
 	}
 }
 
+func TestCollectUpgradeHealthDetectsMixedNodeVersionsAndMaintenanceWindow(t *testing.T) {
+	t.Setenv("AKS_MAINTENANCE_WINDOW_DAY_OF_WEEK", "Sunday")
+	t.Setenv("AKS_MAINTENANCE_WINDOW_START_TIME", "06:00")
+	t.Setenv("AKS_MAINTENANCE_WINDOW_UTC_OFFSET", "+00:00")
+	t.Setenv("AKS_MAINTENANCE_WINDOW_DURATION_HOURS", "12")
+	app := &appServer{k8s: fake.NewSimpleClientset(
+		aksNode("node-a", "v1.34.7", "AKSUbuntu-202605.01", false),
+		aksNode("node-b", "v1.34.8", "AKSUbuntu-202605.14", true),
+	)}
+	now := time.Date(2026, 6, 14, 10, 0, 0, 0, time.UTC)
+
+	got := app.collectUpgradeHealth(context.Background(), now)
+	if got.Status != "warning" || !got.Detected {
+		t.Fatalf("upgrade = %#v", got)
+	}
+	if !got.MaintenanceWindow.Active || got.MaintenanceWindow.SecondsRemaining != int64(8*time.Hour/time.Second) {
+		t.Fatalf("window = %#v", got.MaintenanceWindow)
+	}
+	if len(got.KubeletVersions) != 2 || len(got.NodeImageVersions) != 2 || len(got.UnschedulableNodes) != 1 {
+		t.Fatalf("upgrade details = %#v", got)
+	}
+	if !strings.Contains(strings.Join(got.Signals, "\n"), "mixed kubelet versions") {
+		t.Fatalf("signals = %#v", got.Signals)
+	}
+}
+
 func healthyNode(name string) *corev1.Node {
 	return &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
@@ -279,6 +387,32 @@ func healthyNode(name string) *corev1.Node {
 			{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
 		}},
 	}
+}
+
+func aksNode(name, kubeletVersion, nodeImageVersion string, unschedulable bool) *corev1.Node {
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+			Labels: map[string]string{
+				"kubernetes.azure.com/node-image-version": nodeImageVersion,
+			},
+		},
+		Spec: corev1.NodeSpec{Unschedulable: unschedulable},
+		Status: corev1.NodeStatus{
+			NodeInfo: corev1.NodeSystemInfo{KubeletVersion: kubeletVersion},
+			Conditions: []corev1.NodeCondition{
+				{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
+			},
+		},
+	}
+}
+
+func clusterMessagesForTest(messages []clusterHealthMessage) string {
+	var parts []string
+	for _, message := range messages {
+		parts = append(parts, message.Message)
+	}
+	return strings.Join(parts, "\n")
 }
 
 func memoryPressureNode(name string) *corev1.Node {
