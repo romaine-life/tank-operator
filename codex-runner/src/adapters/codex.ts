@@ -353,10 +353,11 @@ export class CodexTankEventAdapter {
   // is the authoritative completion source: the provider declares the PID
   // in its own item payload and the shell runs in this container's PID
   // namespace.
-  pendingBackgroundTasks(): Array<{ taskID: string; processID: number | null }> {
+  pendingBackgroundTasks(): Array<{ taskID: string; processID: number | null; command: string }> {
     return Array.from(this.runningBackgroundTasks.entries()).map(([taskID, t]) => ({
       taskID,
       processID: t.processID,
+      command: t.command,
     }));
   }
 
@@ -365,10 +366,14 @@ export class CodexTankEventAdapter {
   // exit code or output is claimed (the provider never reported them); the
   // wake-turn's model retrieves the output natively from its own unified
   // session and reports it user-facing.
-  completeBackgroundShellByExit(taskID: string): TankConversationEvent[] {
+  completeBackgroundShellByExit(
+    taskID: string,
+    opts: { status?: string; completionSource?: string } = {},
+  ): TankConversationEvent[] {
     const tracked = this.runningBackgroundTasks.get(taskID);
     if (!tracked) return [];
     this.runningBackgroundTasks.delete(taskID);
+    const status = opts.status ?? "completed";
     return [
       shellTaskEvent({
         sessionID: this.cfg.sessionId,
@@ -376,14 +381,14 @@ export class CodexTankEventAdapter {
         source: "codex",
         type: "shell_task.exited",
         taskID,
-        status: "completed",
+        status,
         providerItemID: tracked.providerItemID,
         payload: {
-          status: "completed",
+          status,
           provider_item_id: tracked.providerItemID,
           command: tracked.command,
           process_id: tracked.processID === null ? undefined : String(tracked.processID),
-          completion_source: "process_exit_observed",
+          completion_source: opts.completionSource ?? "process_exit_observed",
         },
       }),
     ];

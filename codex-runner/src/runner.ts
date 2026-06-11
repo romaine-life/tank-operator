@@ -22,6 +22,7 @@
 // owned by the backend (handlers_turns.go) — the runner does not publish
 // them. On error: log and keep accepting new commands.
 
+import { readdirSync, readFileSync } from "node:fs";
 import {
   Codex,
   type ModelReasoningEffort,
@@ -62,6 +63,7 @@ import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
   backgroundTaskWakeTotal,
+  backgroundWatchTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
   inputReplyAnswerShapeTotal,
@@ -885,24 +887,43 @@ export class Runner {
 
   private readonly firedBackgroundTaskWakes = new Set<string>();
   private backgroundPidWatcher: ReturnType<typeof setInterval> | null = null;
-  // isPidAlive is injectable for tests; kill(pid, 0) probes liveness in the
-  // shared container PID namespace (EPERM = alive, ESRCH = gone).
-  isPidAlive: (pid: number) => boolean = (pid) => {
+  private readonly backgroundSeenAlive = new Set<string>();
+  private readonly backgroundFirstSweepMs = new Map<string, number>();
+
+  // commandSignatureAlive is injectable for tests. Codex's reported
+  // process_id is NOT an OS pid in this container's namespace (verified
+  // live: reported 34882 while the real container pid was 555 — the exec
+  // session is sandboxed/namespaced), so liveness is detected by scanning
+  // /proc cmdlines for the provider-declared command string, which appears
+  // verbatim as `/bin/sh -c <command>`.
+  commandSignatureAlive: (command: string) => boolean = (command) => {
+    if (!command) return false;
     try {
-      process.kill(pid, 0);
-      return true;
+      for (const entry of readdirSync("/proc")) {
+        if (!/^\d+$/.test(entry)) continue;
+        let cmdline = "";
+        try {
+          cmdline = readFileSync(`/proc/${entry}/cmdline`, "utf8").replaceAll("\0", " ");
+        } catch {
+          continue;
+        }
+        if (cmdline.includes(command)) return true;
+      }
     } catch (err) {
-      return (err as NodeJS.ErrnoException).code === "EPERM";
+      console.error("background command scan failed:", err);
+      return true; // fail-open: never declare exit on scan failure
     }
+    return false;
   };
 
   // ensureBackgroundPidWatcher runs ONLY while background shells are
   // pending: codex's app-server emits no completion notification for them
   // (its backgroundTerminals RPC surface is /clean only — verified against
-  // the binary), so the OS is the completion source. The provider declared
-  // each PID in its own item payload; the shell is a descendant of the
-  // app-server in this container, so /proc liveness is authoritative.
-  // Cost story: one kill(pid,0) per pending task per tick, zero when idle.
+  // the binary), so the OS is the completion source. Exit is declared only
+  // for commands OBSERVED ALIVE at least once (never-seen-alive within the
+  // grace window resolves as unobservable: exited{status:unknown}, no wake
+  // — observed outcomes over claimed intent). Cost: one /proc cmdline scan
+  // per tick while pending, zero when idle; watcher self-stops.
   private ensureBackgroundPidWatcher(): void {
     if (this.backgroundPidWatcher) return;
     this.backgroundPidWatcher = setInterval(() => {
@@ -911,25 +932,63 @@ export class Runner {
     this.backgroundPidWatcher.unref?.();
   }
 
-  async sweepBackgroundPids(): Promise<void> {
+  async sweepBackgroundPids(nowMs: number = Date.now()): Promise<void> {
     const pending = this.codexAdapter.pendingBackgroundTasks();
     if (pending.length === 0) {
       if (this.backgroundPidWatcher) {
         clearInterval(this.backgroundPidWatcher);
         this.backgroundPidWatcher = null;
       }
+      this.backgroundSeenAlive.clear();
+      this.backgroundFirstSweepMs.clear();
       return;
     }
     for (const task of pending) {
-      if (task.processID === null) continue;
-      if (this.isPidAlive(task.processID)) continue;
-      const events = this.codexAdapter.completeBackgroundShellByExit(task.taskID);
-      for (const canonical of events) {
-        const dispatched = await dispatch(this.sink, canonical).catch((err) => {
-          console.error("background shell exit publish failed:", err);
-          return false;
+      if (!this.backgroundFirstSweepMs.has(task.taskID)) {
+        this.backgroundFirstSweepMs.set(task.taskID, nowMs);
+      }
+      const alive = this.commandSignatureAlive(task.command);
+      if (alive) {
+        this.backgroundSeenAlive.add(task.taskID);
+        continue;
+      }
+      if (this.backgroundSeenAlive.has(task.taskID)) {
+        backgroundWatchTotal.labels("completed").inc();
+        await this.publishBackgroundExit(task.taskID, {});
+        continue;
+      }
+      const firstSweep = this.backgroundFirstSweepMs.get(task.taskID) ?? nowMs;
+      if (nowMs - firstSweep > 45_000) {
+        // Never observed alive: the command signature was unobservable in
+        // this namespace. Resolve the pending state truthfully without
+        // claiming completion and without a wake.
+        backgroundWatchTotal.labels("unobservable").inc();
+        await this.publishBackgroundExit(task.taskID, {
+          status: "unknown",
+          completionSource: "unobservable",
+          skipWake: true,
         });
-        if (!dispatched) continue;
+      }
+    }
+  }
+
+  private async publishBackgroundExit(
+    taskID: string,
+    opts: { status?: string; completionSource?: string; skipWake?: boolean },
+  ): Promise<void> {
+    const events = this.codexAdapter.completeBackgroundShellByExit(taskID, {
+      status: opts.status,
+      completionSource: opts.completionSource,
+    });
+    this.backgroundSeenAlive.delete(taskID);
+    this.backgroundFirstSweepMs.delete(taskID);
+    for (const canonical of events) {
+      const dispatched = await dispatch(this.sink, canonical).catch((err) => {
+        console.error("background shell exit publish failed:", err);
+        return false;
+      });
+      if (!dispatched) continue;
+      if (!opts.skipWake) {
         await this.maybeRegisterCodexBackgroundWake(canonical);
       }
     }
