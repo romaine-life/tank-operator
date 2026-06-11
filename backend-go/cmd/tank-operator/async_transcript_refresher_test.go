@@ -142,20 +142,15 @@ func TestAsyncTranscriptRefresherCoalescesQueuedEvents(t *testing.T) {
 	}
 }
 
-// blockingFirstReadEventStore blocks the first per-turn ledger read until the
+// blockingFirstReadEventStore blocks every per-turn ledger read until the
 // gate opens, so the coalescing test can stack a queue behind an in-flight
 // refresh deterministically.
 type blockingFirstReadEventStore struct {
 	fakeSessionEventStore
-	gate      chan struct{}
-	firstOnce sync.Once
-	firstSeen chan struct{}
+	gate chan struct{}
 }
 
 func (s blockingFirstReadEventStore) EventsForTurnAfter(ctx context.Context, sessionID, turnID, afterOrderKey string, limit int) (store.SessionEventPage, error) {
-	if s.firstSeen != nil {
-		s.firstOnce.Do(func() { close(s.firstSeen) })
-	}
 	<-s.gate
 	return s.fakeSessionEventStore.EventsForTurnAfter(ctx, sessionID, turnID, afterOrderKey, limit)
 }
