@@ -288,63 +288,28 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
         <span>19:04:14</span>
         <span>19:10:26</span>
       </div>
-      <div
-        className="run-turn-view-context"
-        aria-label="Turn prompt"
-        data-collapsed="false"
-        data-context-loaded="true"
-        data-design-component="TurnPromptContext"
-        data-design-state="expanded-with-divider"
-        data-inspectable
-      >
-        <div className="run-turn-view-context-head">
-          <span className="run-turn-view-context-label">Prompt</span>
+      <div className="run-turn-view-prompt-section">
+        <div
+          className="run-turn-view-context"
+          aria-label="Turn prompt"
+          data-collapsed="false"
+          data-context-loaded="true"
+          data-section-divider="true"
+          data-design-component="TurnPromptContext"
+          data-design-state="expanded-with-divider"
+          data-inspectable
+        >
+          <div className="run-turn-view-context-head">
+            <span className="run-turn-view-context-label">Prompt</span>
+          </div>
+          <TranscriptMessage variant="user" ownedByActivity>
+            <p style={{ margin: 0 }}>
+              Please inspect the completed turn with a long initiating prompt.
+              The divider owns section collapse controls while the prompt label
+              stays as plain section chrome.
+            </p>
+          </TranscriptMessage>
         </div>
-        <TranscriptMessage variant="user" ownedByActivity>
-          <p style={{ margin: 0 }}>
-            Please inspect the completed turn with a long initiating prompt.
-            The divider owns section collapse controls while the prompt label
-            stays as plain section chrome.
-          </p>
-        </TranscriptMessage>
-      </div>
-      <div
-        className="run-turn-view-context"
-        aria-label="Turn prompt collapsed"
-        data-collapsed="true"
-        data-context-loaded="true"
-        data-design-component="TurnPromptContext"
-        data-design-state="collapsed-text-preview-controls-inline"
-        data-inspectable
-      >
-        <div className="run-turn-view-context-head">
-          <span className="run-turn-view-context-label">Prompt</span>
-        </div>
-        <TranscriptMessage variant="user" ownedByActivity compact>
-          <p style={{ margin: 0 }}>
-            Please inspect the completed turn with a long initiating prompt.
-            The collapsed preview stays visible while section controls live on
-            the divider.
-          </p>
-        </TranscriptMessage>
-      </div>
-      <div
-        className="run-turn-view-context"
-        aria-label="Turn prompt unavailable"
-        data-collapsed="false"
-        data-context-loaded="false"
-        data-design-component="TurnPromptContext"
-        data-design-state="context-unavailable-control-disabled"
-        data-inspectable
-      >
-        <div className="run-turn-view-context-head">
-          <span className="run-turn-view-context-label">Prompt</span>
-        </div>
-        <div className="run-turn-view-context-unavailable" role="status">
-          Prompt context unavailable
-        </div>
-      </div>
-      <div className="run-turn-view-body run-transcript run-transcript-claude">
         <div
           className="run-turn-activity-divider run-turn-view-activity-divider"
           data-design-component="TurnSectionDivider"
@@ -390,6 +355,11 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
             </button>
           </div>
         </div>
+      </div>
+      <div
+        className="run-turn-view-body run-transcript run-transcript-claude"
+        data-section-divider="true"
+      >
         <RunningTool highlighted={highlighted} />
         <TranscriptMessage variant="assistant" highlighted={highlighted} ownedByActivity showAssistantAvatar>
           <p style={{ margin: 0 }}>
