@@ -9075,6 +9075,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-turn-activity[data-display="divider"] {
   grid-template-columns: minmax(0, 1fr);
+  margin-block: -0.35rem;
 }
 
 .run-turn-activity-avatar {
