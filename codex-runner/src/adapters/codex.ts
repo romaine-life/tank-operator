@@ -44,6 +44,15 @@ export class CodexTankEventAdapter {
   private readonly finalAnswerByTurn = new Map<string, { timelineIDs: string[]; providerItemIDs: string[] }>();
   private readonly pendingUnifiedExecStarts = new Map<string, Record<string, unknown>>();
   private readonly promotedUnifiedExecStarts = new Set<string>();
+  // runningBackgroundTasks tracks provider background shells (unified-exec)
+  // across turn boundaries: set on shell_task.started/updated, cleared on
+  // exited. It is the origin-turn memory for idle completions (the codex
+  // half of the park/re-invoke/fold contract) and the source of the
+  // background_work_pending stamp on turn terminals.
+  private readonly runningBackgroundTasks = new Map<
+    string,
+    { turnID: string; providerItemID: string; command: string }
+  >();
 
   constructor(private readonly cfg: Config) {}
 
@@ -94,6 +103,7 @@ export class CodexTankEventAdapter {
           usageObservation: event.usage_observation,
           finalAnswer,
           providerEventID: providerID,
+          backgroundWorkPending: this.runningBackgroundTasks.size > 0,
         }),
       ];
     }
@@ -299,6 +309,15 @@ export class CodexTankEventAdapter {
         : isTerminalShellTaskStatus(status)
           ? "shell_task.exited"
           : "shell_task.updated";
+    if (type === "shell_task.exited") {
+      this.runningBackgroundTasks.delete(taskID);
+    } else {
+      this.runningBackgroundTasks.set(taskID, {
+        turnID: turn.turnID,
+        providerItemID,
+        command: typeof item.command === "string" ? item.command : "",
+      });
+    }
     return [
       shellTaskEvent({
         sessionID: this.cfg.sessionId,
@@ -322,6 +341,23 @@ export class CodexTankEventAdapter {
         },
       }),
     ];
+  }
+
+  // idleBackgroundShellEvents maps an item lifecycle notification that
+  // arrived with NO active turn (a background shell finishing after its
+  // turn ended) onto the originating turn remembered in
+  // runningBackgroundTasks. Unknown items return nothing — only shells this
+  // adapter announced get idle terminals.
+  idleBackgroundShellEvents(event: CodexEvent): TankConversationEvent[] {
+    const item = (event as { item?: Record<string, unknown> }).item;
+    if (!item || typeof item !== "object") return [];
+    const providerItemID = typeof item.id === "string" ? item.id : "";
+    if (!providerItemID) return [];
+    const taskID = codexBackgroundTaskID(item, providerItemID);
+    const tracked = this.runningBackgroundTasks.get(taskID);
+    if (!tracked) return [];
+    const originTurn: CodexAdapterTurn = { turnID: tracked.turnID, clientNonce: "", turnSeq: 0 };
+    return this.codexBackgroundShellEvents(originTurn, event, item, providerItemID);
   }
 }
 

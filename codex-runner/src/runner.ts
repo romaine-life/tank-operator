@@ -34,7 +34,7 @@ import {
   type CodexAdapterTurn,
 } from "./adapters/codex.js";
 import type { Config } from "./config.js";
-import { SessionEventSink, type StampedTankEvent } from "./sessionEvents.js";
+import { SessionEventSink, type CodexEvent, type StampedTankEvent } from "./sessionEvents.js";
 import {
   isDurableTankConversationEvent,
   normalizeClientNonce,
@@ -49,6 +49,7 @@ import {
   turnEvent,
   turnIDForClientNonce,
 } from "../../runner-shared/conversation-builders.js";
+import { registerBackgroundTaskWake } from "../../runner-shared/backgroundTaskWake.js";
 import {
   SessionCommandBus,
   isInputReplyCommand,
@@ -60,6 +61,7 @@ import {
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
+  backgroundTaskWakeTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
   inputReplyAnswerShapeTotal,
@@ -468,6 +470,9 @@ export class Runner {
             cwd: cfg.workspace,
             onRequestUserInput: (request, requestSignal) =>
               this.requestAppServerUserInput(request, requestSignal),
+            onIdleBackgroundItem: (event) => {
+              void this.handleIdleBackgroundItem(event);
+            },
             onRuntimeConfigApplied: (threadOptions) =>
               this.reportAppliedRuntimeConfig(threadOptions),
             onRuntimeContextWindowObserved: (tokens) =>
@@ -871,6 +876,55 @@ export class Runner {
         type: "turn.started",
       }),
     );
+  }
+
+  private readonly firedBackgroundTaskWakes = new Set<string>();
+
+  // handleIdleBackgroundItem is the codex half of the background-task
+  // park/re-invoke/fold contract (claude's run_in_background parity): a
+  // unified-exec shell that finishes after its turn ended arrives here via
+  // the transport's idle hook, publishes its durable shell_task terminal
+  // attributed to the ORIGINATING turn (the fold edge), and registers the
+  // durable backend wake so the agent is re-invoked — "the task finishing
+  // later must re-invoke the agent". Skip-when-active mirrors claude: an
+  // in-flight turn already observes the completion in-turn. The backend
+  // Register is idempotent; the dedupe set just avoids repeat HTTP calls.
+  private async handleIdleBackgroundItem(event: CodexEvent): Promise<void> {
+    let events;
+    try {
+      events = this.codexAdapter.idleBackgroundShellEvents(event);
+    } catch (err) {
+      console.error("idle background item mapping failed:", err);
+      return;
+    }
+    for (const canonical of events) {
+      const dispatched = await dispatch(this.sink, canonical).catch((err) => {
+        console.error("idle background shell event publish failed:", err);
+        return false;
+      });
+      if (!dispatched) continue;
+      if (canonical.type !== "shell_task.exited") continue;
+      const taskID = String((canonical as { task_id?: unknown }).task_id ?? "").trim();
+      if (!taskID || this.firedBackgroundTaskWakes.has(taskID)) continue;
+      if (this.currentAbort) continue;
+      this.firedBackgroundTaskWakes.add(taskID);
+      const payload = (canonical.payload ?? {}) as Record<string, unknown>;
+      try {
+        const registered = await registerBackgroundTaskWake(this.cfg, {
+          taskID,
+          status: String(payload.status ?? "completed"),
+          summary: String(payload.command ?? ""),
+          description: String(payload.command ?? ""),
+          lastToolName: "codex",
+        });
+        backgroundTaskWakeTotal
+          .labels(registered ? "registered" : "disabled")
+          .inc();
+      } catch (err) {
+        backgroundTaskWakeTotal.labels("failed").inc();
+        console.error("background task wake register failed:", err);
+      }
+    }
   }
 
   private async acceptStopBackgroundTask(

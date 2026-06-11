@@ -67,6 +67,7 @@ export interface TurnEventArgs {
   askingTurnID?: string;
   questionTurnID?: string;
   providerEventID?: string;
+  backgroundWorkPending?: boolean;
 }
 
 export function turnEvent(args: TurnEventArgs): TankConversationEvent;

@@ -518,3 +518,82 @@ test("ignores unknown Codex provider event types", () => {
   );
   assert.deepEqual(events, []);
 });
+
+// --- Idle background completion + park stamp (codex park/re-invoke/fold parity) ---
+//
+// A unified-exec shell that outlives its turn must (a) stamp the turn
+// terminal with background_work_pending so the session parks scheduled
+// instead of summoning, and (b) when its completion arrives with NO active
+// turn, publish shell_task.exited attributed to the ORIGINATING turn — the
+// durable fold edge that lets the later turn_bgtask wake turn fold into it.
+
+test("turn terminal stamps background_work_pending while a unified-exec shell runs", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const turn = acceptedTurn({ turnID: "turn-bg-1", clientNonce: "bg-1" });
+
+  const started = adapter.canonicalEventsForCodexEvent(turn, {
+    type: "item.started",
+    item: {
+      id: "item_bg_shell",
+      type: "command_execution",
+      command: "sleep 90 && echo DONE",
+      process_id: "proc-9",
+      source: "unifiedExecInteraction",
+      status: "in_progress",
+    },
+  });
+  assert.equal(started.length, 1);
+  assert.equal(started[0]!.type, "shell_task.started");
+  assert.equal(started[0]!.turn_id, "turn-bg-1");
+
+  const terminal = adapter.canonicalEventsForCodexEvent(turn, {
+    type: "turn.completed",
+  });
+  const completed = terminal.find((event) => event.type === "turn.completed");
+  assert.ok(completed, "turn.completed missing");
+  assert.equal(completed!.payload?.background_work_pending, true);
+
+  const idle = adapter.idleBackgroundShellEvents({
+    type: "item.completed",
+    item: {
+      id: "item_bg_shell",
+      type: "command_execution",
+      command: "sleep 90 && echo DONE",
+      process_id: "proc-9",
+      source: "unifiedExecInteraction",
+      status: "completed",
+      aggregated_output: "DONE",
+      exit_code: 0,
+    },
+  });
+  assert.equal(idle.length, 1);
+  assert.equal(idle[0]!.type, "shell_task.exited");
+  assert.equal(
+    idle[0]!.turn_id,
+    "turn-bg-1",
+    "idle completion must attribute to the originating turn (the fold edge)",
+  );
+  assert.equal(isTankConversationEvent(stampTankEvent(idle[0]!)), true);
+
+  // After the shell drained, a later terminal must not stamp pending.
+  const turn2 = acceptedTurn({ turnID: "turn-bg-2", clientNonce: "bg-2" });
+  const terminal2 = adapter.canonicalEventsForCodexEvent(turn2, {
+    type: "turn.completed",
+  });
+  const completed2 = terminal2.find((event) => event.type === "turn.completed");
+  assert.equal(completed2!.payload?.background_work_pending, false);
+});
+
+test("idle completion for an untracked item publishes nothing", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const idle = adapter.idleBackgroundShellEvents({
+    type: "item.completed",
+    item: {
+      id: "item_unknown",
+      type: "command_execution",
+      command: "echo hi",
+      status: "completed",
+    },
+  });
+  assert.deepEqual(idle, []);
+});

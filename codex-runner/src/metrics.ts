@@ -46,6 +46,13 @@ export const turnPreStartLatencySeconds = new Histogram({
   registers: [registry],
 });
 
+export const backgroundTaskWakeTotal = new Counter({
+  name: "tank_runner_background_task_wake_total",
+  help: "Background-task-completion wake registrations the runner attempted against the orchestrator durable API (result: registered|disabled|failed).",
+  labelNames: ["result"],
+  registers: [registry],
+});
+
 export const providerErrorTotal = new Counter({
   name: "tank_runner_provider_error_total",
   help: "Errors raised by the provider SDK (the query iterator or interrupt() call).",

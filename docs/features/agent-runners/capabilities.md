@@ -251,6 +251,21 @@ Evidence:
 Status: in progress
 
 Intent:
+When a session backgrounds provider work and then ends its turn, the work
+finishing later must re-invoke the agent. Two provider shapes are covered:
+Claude's `run_in_background` Bash tasks (the original), and Codex's
+unified-exec background shells (added after the antigravity fold work proved
+the rails provider-generic — tank-operator#1035 follow-up). Codex parity has
+three legs: the app-server transport surfaces idle item notifications instead
+of dropping them at the active-queue guard, the adapter remembers each
+background shell's originating turn (`runningBackgroundTasks`) so the idle
+`shell_task.exited` carries the fold edge and the turn terminal stamps
+`background_work_pending` (park, non-summoning, same #906 fold the wake
+tables drive for Claude), and the runner registers the durable wake via the
+shared `runner-shared/backgroundTaskWake.js` helper with Claude's exact
+skip-when-active + idempotent-register semantics.
+
+Original Claude intent:
 When a Claude session backgrounds a task (`run_in_background`) and then ends its
 turn, the task finishing later must re-invoke the agent — the base Bash tool's
 "re-invokes you when it exits" promise. Before this, a task-lifecycle SDK frame
@@ -278,6 +293,10 @@ Evidence:
   (durable turn boundary + `source=background-task`, defer-on-awaiting-input,
   fail-on-inactive, `sdkTurnSource`, turn-id-safe nonce);
   `backend-go/internal/pgstore/background_task_wakes.go` (idempotent `Register`).
+- Codex runner: `codex-runner/src/adapters/codex.test.ts` ("turn terminal
+  stamps background_work_pending while a unified-exec shell runs" — in-turn
+  start, pending stamp, idle exited attributed to the originating turn,
+  post-drain unstamp; untracked idle items publish nothing).
 - Runner: `claude-runner/src/runner.test.ts`
   (register-once-when-idle, skip-when-active, ignore user-stop/lifecycle-start);
   `claude-runner/src/adapters/claude.test.ts` (natural-vs-user terminal split).
