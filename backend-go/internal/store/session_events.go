@@ -21,7 +21,15 @@ import (
 // Turn activity detail reads; historical transcript navigation uses the
 // materialized session_transcript_rows read model.
 type SessionEventStore interface {
-	Upsert(ctx context.Context, event map[string]any) error
+	// Upsert writes one event row keyed by (tank_session_id, order_key).
+	// The returned bool reports whether the row was newly inserted: false
+	// means a row with that key already existed (an at-least-once
+	// redelivery or a producer republish) and was overwritten in place.
+	// The persister uses the report to skip duplicate side effects
+	// (lifecycle emit, per-event counters) without skipping the
+	// projection refresh a redelivered-after-failed-refresh event still
+	// needs.
+	Upsert(ctx context.Context, event map[string]any) (inserted bool, err error)
 	ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error)
 	HasOrderKey(ctx context.Context, tankSessionID, orderKey string) (bool, error)
 	// OrderKeyForTimelineID resolves a rendered transcript entry id
@@ -200,9 +208,9 @@ func NewPostgresSessionEventStore(pool *pgxpool.Pool, scope string) SessionEvent
 	return &postgresSessionEventStore{pool: pool, scope: scope}
 }
 
-func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string]any) error {
+func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string]any) (bool, error) {
 	if err := conversation.ValidateEventMap(event); err != nil {
-		return err
+		return false, err
 	}
 	doc := cloneSessionEventMap(event)
 	storageKey := stringField(doc, "tank_session_id")
@@ -211,7 +219,7 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 		storageKey = sessionmodel.SessionStorageKey(s.scope, publicSessionID)
 	}
 	if storageKey == "" {
-		return errMissingSessionEventField("tank_session_id")
+		return false, errMissingSessionEventField("tank_session_id")
 	}
 	id := stringField(doc, "id")
 	if id == "" {
@@ -221,11 +229,11 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 		id = stringField(doc, "event_id")
 	}
 	if id == "" {
-		return errMissingSessionEventField("id")
+		return false, errMissingSessionEventField("id")
 	}
 	orderKey := stringField(doc, "order_key")
 	if orderKey == "" {
-		return errMissingSessionEventField("order_key")
+		return false, errMissingSessionEventField("order_key")
 	}
 	doc["id"] = id
 	doc["tank_session_id"] = storageKey
@@ -234,11 +242,16 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 	}
 	payload, err := json.Marshal(doc)
 	if err != nil {
-		return err
+		return false, err
 	}
 	turnID := stringField(doc, "turn_id")
 	eventType := stringField(doc, "type")
 
+	// (xmax = 0) distinguishes a fresh insert (xmax 0) from a row the
+	// ON CONFLICT branch overwrote (xmax = the updating transaction).
+	// The DO UPDATE branch is kept deliberately: a producer republish
+	// with the same order_key wins last-write so a runner retry that
+	// enriched the payload is not silently dropped.
 	const q = `
 		INSERT INTO session_events (
 			tank_session_id, order_key, event_id, turn_id, event_type, payload
@@ -248,9 +261,13 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 			turn_id    = EXCLUDED.turn_id,
 			event_type = EXCLUDED.event_type,
 			payload    = EXCLUDED.payload
+		RETURNING (xmax = 0)
 	`
-	_, err = s.pool.Exec(ctx, q, storageKey, orderKey, id, turnID, eventType, payload)
-	return err
+	inserted := false
+	if err := s.pool.QueryRow(ctx, q, storageKey, orderKey, id, turnID, eventType, payload).Scan(&inserted); err != nil {
+		return false, err
+	}
+	return inserted, nil
 }
 
 // ListBySession reads a single bounded page of events for one session. The
@@ -830,7 +847,9 @@ func normalizeSessionEventLimit(limit int) int {
 // Stub for local dev where Postgres isn't configured.
 type StubSessionEventStore struct{}
 
-func (StubSessionEventStore) Upsert(_ context.Context, _ map[string]any) error { return nil }
+func (StubSessionEventStore) Upsert(_ context.Context, _ map[string]any) (bool, error) {
+	return false, nil
+}
 
 func (StubSessionEventStore) ListBySession(_ context.Context, _ string, _ SessionEventCursor, _ int) (SessionEventPage, error) {
 	return SessionEventPage{

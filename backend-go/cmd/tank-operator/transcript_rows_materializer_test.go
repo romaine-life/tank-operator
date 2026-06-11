@@ -68,13 +68,17 @@ func (s *recordingTranscriptRowsStore) NeedsBackfill(context.Context, string) (b
 
 type lockingTranscriptRowsStore struct {
 	recordingTranscriptRowsStore
-	t                    *testing.T
-	lockHeld             bool
-	needsBackfillTx      bool
-	needsBackfillTxCalls int
-	eventsReadUnderLock  bool
-	replaceUnderLock     bool
-	replaceSessionTx     bool
+	t                     *testing.T
+	lockHeld              bool
+	txEnters              int
+	needsBackfillTx       bool
+	needsBackfillTxCalls  int
+	eventsReadUnderLock   bool
+	replaceUnderLock      bool
+	replaceSessionTx      bool
+	replaceTurnTxCalls    int
+	replacedTurnIDs       []string
+	replaceSessionTxCalls int
 }
 
 func (s *lockingTranscriptRowsStore) WithTranscriptMaterializationTx(ctx context.Context, _ string, fn func(context.Context, pgx.Tx) error) error {
@@ -82,6 +86,7 @@ func (s *lockingTranscriptRowsStore) WithTranscriptMaterializationTx(ctx context
 		s.t.Fatal("materialization lock re-entered")
 	}
 	s.lockHeld = true
+	s.txEnters++
 	defer func() {
 		s.lockHeld = false
 	}()
@@ -96,6 +101,8 @@ func (s *lockingTranscriptRowsStore) ReplaceForTurnTx(_ context.Context, _ pgx.T
 		s.t.Fatal("ReplaceForTurnTx called before EventsForTurnTx under the same lock")
 	}
 	s.replaceUnderLock = true
+	s.replaceTurnTxCalls++
+	s.replacedTurnIDs = append(s.replacedTurnIDs, turnID)
 	s.turnID = turnID
 	s.entries = entries
 	return nil
@@ -106,6 +113,7 @@ func (s *lockingTranscriptRowsStore) ReplaceForSessionTx(context.Context, pgx.Tx
 		s.t.Fatal("ReplaceForSessionTx called outside materialization lock")
 	}
 	s.replaceSessionTx = true
+	s.replaceSessionTxCalls++
 	return nil
 }
 
@@ -126,7 +134,8 @@ func (s *lockingTranscriptRowsStore) NeedsBackfillTx(context.Context, pgx.Tx, st
 
 type txAwareSessionEventStore struct {
 	fakeSessionEventStore
-	rows *lockingTranscriptRowsStore
+	rows      *lockingTranscriptRowsStore
+	turnReads map[string]int
 }
 
 func (s txAwareSessionEventStore) EventsForTurnAfterTx(ctx context.Context, _ pgx.Tx, tankSessionID, turnID, afterOrderKey string, limit int) (store.SessionEventPage, error) {
@@ -134,6 +143,9 @@ func (s txAwareSessionEventStore) EventsForTurnAfterTx(ctx context.Context, _ pg
 		s.rows.t.Fatal("EventsForTurnAfterTx called outside materialization lock")
 	}
 	s.rows.eventsReadUnderLock = true
+	if s.turnReads != nil {
+		s.turnReads[turnID]++
+	}
 	return s.fakeSessionEventStore.EventsForTurnAfter(ctx, tankSessionID, turnID, afterOrderKey, limit)
 }
 
@@ -446,5 +458,173 @@ func TestTranscriptRowsMaterializerBackfillRechecksUnderLock(t *testing.T) {
 	}
 	if rowStore.replaceSessionTx {
 		t.Fatal("ReplaceForSessionTx called after locked freshness recheck returned fresh")
+	}
+}
+
+// TestRefreshEventBatchCoalescesOneTurnToOneRefresh pins the PR-1
+// amortization contract from tank-operator#1051 at the materializer layer:
+// a batch carrying N events of the same turn re-reads and re-projects that
+// turn exactly once, inside exactly one materialization-lock acquisition.
+// The 2026-06-11 incident cost was one full re-projection per event; this
+// test is the guard against that cost shape returning.
+func TestRefreshEventBatchCoalescesOneTurnToOneRefresh(t *testing.T) {
+	turnEvents := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "do work",
+			"display": map[string]any{"kind": "plain"},
+		}),
+		projectionTestEvent("tool-start", "002", "item.started", "tool", "codex", "turn-1", "turn-1:item:tool-1", map[string]any{
+			"kind":    "command_execution",
+			"command": "go test ./...",
+		}),
+		projectionTestEvent("tool-done", "003", "item.completed", "tool", "codex", "turn-1", "turn-1:item:tool-1", map[string]any{
+			"kind":   "command_execution",
+			"output": "ok",
+		}),
+		projectionTestEvent("usage", "004", "turn.usage", "runner", "codex", "turn-1", "", map[string]any{
+			"input_tokens": 10,
+		}),
+	}
+	rowStore := &lockingTranscriptRowsStore{t: t}
+	eventStore := txAwareSessionEventStore{
+		fakeSessionEventStore: fakeSessionEventStore{
+			pages: map[string]store.SessionEventPage{
+				"": {Events: turnEvents, FoundOldest: true, FoundNewest: true},
+			},
+		},
+		rows:      rowStore,
+		turnReads: map[string]int{},
+	}
+	materializer := transcriptRowsMaterializer{events: eventStore, rows: rowStore}
+
+	if err := materializer.RefreshEventBatch(context.Background(), turnEvents); err != nil {
+		t.Fatalf("RefreshEventBatch: %v", err)
+	}
+
+	if rowStore.replaceTurnTxCalls != 1 {
+		t.Fatalf("ReplaceForTurnTx calls = %d, want 1 (coalesced)", rowStore.replaceTurnTxCalls)
+	}
+	if eventStore.turnReads["turn-1"] != 1 {
+		t.Fatalf("turn-1 event reads = %d, want 1 (coalesced)", eventStore.turnReads["turn-1"])
+	}
+	if rowStore.txEnters != 1 {
+		t.Fatalf("materialization tx acquisitions = %d, want 1 per session batch", rowStore.txEnters)
+	}
+	if rowStore.replaceSessionTxCalls != 0 {
+		t.Fatalf("ReplaceForSessionTx calls = %d, want 0 for a plain turn batch", rowStore.replaceSessionTxCalls)
+	}
+}
+
+// TestRefreshEventBatchRefreshesEachTurnOnce extends the coalescing pin to a
+// mixed batch: events of two turns produce one refresh per distinct turn, in
+// first-seen order, still under one lock acquisition.
+func TestRefreshEventBatchRefreshesEachTurnOnce(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("a1", "001", "item.started", "tool", "codex", "turn-1", "turn-1:item:a", map[string]any{"kind": "command_execution", "command": "x"}),
+		projectionTestEvent("b1", "002", "item.started", "tool", "codex", "turn-2", "turn-2:item:b", map[string]any{"kind": "command_execution", "command": "y"}),
+		projectionTestEvent("a2", "003", "item.completed", "tool", "codex", "turn-1", "turn-1:item:a", map[string]any{"kind": "command_execution", "output": "ok"}),
+		projectionTestEvent("a3", "004", "turn.usage", "runner", "codex", "turn-1", "", map[string]any{"input_tokens": 1}),
+	}
+	rowStore := &lockingTranscriptRowsStore{t: t}
+	eventStore := txAwareSessionEventStore{
+		fakeSessionEventStore: fakeSessionEventStore{
+			pages: map[string]store.SessionEventPage{
+				"": {Events: events, FoundOldest: true, FoundNewest: true},
+			},
+		},
+		rows:      rowStore,
+		turnReads: map[string]int{},
+	}
+	materializer := transcriptRowsMaterializer{events: eventStore, rows: rowStore}
+
+	if err := materializer.RefreshEventBatch(context.Background(), events); err != nil {
+		t.Fatalf("RefreshEventBatch: %v", err)
+	}
+
+	if rowStore.replaceTurnTxCalls != 2 {
+		t.Fatalf("ReplaceForTurnTx calls = %d, want 2 (one per distinct turn)", rowStore.replaceTurnTxCalls)
+	}
+	if len(rowStore.replacedTurnIDs) != 2 || rowStore.replacedTurnIDs[0] != "turn-1" || rowStore.replacedTurnIDs[1] != "turn-2" {
+		t.Fatalf("replaced turns = %#v, want [turn-1 turn-2] in first-seen order", rowStore.replacedTurnIDs)
+	}
+	if eventStore.turnReads["turn-1"] != 1 || eventStore.turnReads["turn-2"] != 1 {
+		t.Fatalf("turn reads = %#v, want exactly 1 per turn", eventStore.turnReads)
+	}
+	if rowStore.txEnters != 1 {
+		t.Fatalf("materialization tx acquisitions = %d, want 1 per session batch", rowStore.txEnters)
+	}
+}
+
+// TestRefreshEventBatchSessionScopeEscalatesOnce pins the escalation bound:
+// a batch containing a background-wake turn (or turn.input_answered) runs
+// exactly one whole-session re-projection, regardless of how many events the
+// batch carries — never one per event, which was the #1037 cost shape that
+// collapsed the persister.
+func TestRefreshEventBatchSessionScopeEscalatesOnce(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("wake-submitted", "007", "turn.submitted", "runner", "tank", "turn_bgtask-task-ci", "", map[string]any{"status": "submitted", "source": "background-task", "task_id": "task-ci"}),
+		projectionTestEvent("wake-item", "008", "item.completed", "assistant", "claude", "turn_bgtask-task-ci", "turn_bgtask-task-ci:item:final", map[string]any{"kind": "message", "text": "CI passed."}),
+		projectionTestEvent("wake-usage", "009", "turn.usage", "runner", "claude", "turn_bgtask-task-ci", "", map[string]any{"input_tokens": 5}),
+	}
+	rowStore := &lockingTranscriptRowsStore{t: t}
+	eventStore := txAwareSessionEventStore{
+		fakeSessionEventStore: fakeSessionEventStore{
+			pages: map[string]store.SessionEventPage{
+				"": {Events: events, FoundOldest: true, FoundNewest: true},
+			},
+		},
+		rows:      rowStore,
+		turnReads: map[string]int{},
+	}
+	materializer := transcriptRowsMaterializer{events: eventStore, rows: rowStore}
+
+	if err := materializer.RefreshEventBatch(context.Background(), events); err != nil {
+		t.Fatalf("RefreshEventBatch: %v", err)
+	}
+
+	if rowStore.replaceSessionTxCalls != 1 {
+		t.Fatalf("ReplaceForSessionTx calls = %d, want exactly 1 for a wake-turn batch", rowStore.replaceSessionTxCalls)
+	}
+	if rowStore.replaceTurnTxCalls != 0 {
+		t.Fatalf("ReplaceForTurnTx calls = %d, want 0 — session re-projection covers the wake turn", rowStore.replaceTurnTxCalls)
+	}
+	if rowStore.txEnters != 1 {
+		t.Fatalf("materialization tx acquisitions = %d, want 1 per session batch", rowStore.txEnters)
+	}
+}
+
+// TestRefreshEventBatchInputAnsweredEscalatesOnce pins the same bound for the
+// AskUserQuestion answer path, which folds an answer into an earlier turn's
+// awaiting-input card and therefore needs session scope.
+func TestRefreshEventBatchInputAnsweredEscalatesOnce(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("ans", "010", "turn.input_answered", "user", "tank", "turn-1", "turn-1:item:toolu_ask:answer", map[string]any{
+			"question_timeline_id": "turn-1:item:toolu_ask",
+			"provider_item_id":     "toolu_ask",
+			"answers":              map[string]any{"Proceed?": []any{"Yes"}},
+		}),
+		projectionTestEvent("after", "011", "item.started", "tool", "codex", "turn-1", "turn-1:item:next", map[string]any{"kind": "command_execution", "command": "go on"}),
+	}
+	rowStore := &lockingTranscriptRowsStore{t: t}
+	eventStore := txAwareSessionEventStore{
+		fakeSessionEventStore: fakeSessionEventStore{
+			pages: map[string]store.SessionEventPage{
+				"": {Events: events, FoundOldest: true, FoundNewest: true},
+			},
+		},
+		rows:      rowStore,
+		turnReads: map[string]int{},
+	}
+	materializer := transcriptRowsMaterializer{events: eventStore, rows: rowStore}
+
+	if err := materializer.RefreshEventBatch(context.Background(), events); err != nil {
+		t.Fatalf("RefreshEventBatch: %v", err)
+	}
+
+	if rowStore.replaceSessionTxCalls != 1 {
+		t.Fatalf("ReplaceForSessionTx calls = %d, want exactly 1 for an input-answered batch", rowStore.replaceSessionTxCalls)
+	}
+	if rowStore.replaceTurnTxCalls != 0 {
+		t.Fatalf("ReplaceForTurnTx calls = %d, want 0 — session re-projection covers the batch", rowStore.replaceTurnTxCalls)
 	}
 }

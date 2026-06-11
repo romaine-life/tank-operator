@@ -205,8 +205,8 @@ type activityEventStore struct {
 	userMessageScans int
 }
 
-func (s *activityEventStore) Upsert(_ context.Context, _ map[string]any) error {
-	return nil
+func (s *activityEventStore) Upsert(_ context.Context, _ map[string]any) (bool, error) {
+	return true, nil
 }
 
 func (s *activityEventStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {

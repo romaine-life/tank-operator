@@ -44,12 +44,12 @@ type recordingSessionEventStore struct {
 	err           error
 }
 
-func (r *recordingSessionEventStore) Upsert(_ context.Context, event map[string]any) error {
+func (r *recordingSessionEventStore) Upsert(_ context.Context, event map[string]any) (bool, error) {
 	if r.err != nil {
-		return r.err
+		return false, r.err
 	}
 	r.upserts = append(r.upserts, event)
-	return nil
+	return true, nil
 }
 
 func (r *recordingSessionEventStore) OrderKeyForTimelineID(_ context.Context, _, timelineID string) (string, error) {
@@ -185,6 +185,10 @@ func (b *recordingSessionBus) SubscribePinnedReposUpdates(context.Context, strin
 		return b.pinnedUpdateCh, func() {}, nil
 	}
 	return make(chan struct{}), func() {}, nil
+}
+
+func (b *recordingSessionBus) PersisterDebugSnapshot() []sessionbus.PersisterQueueSnapshot {
+	return nil
 }
 
 func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {

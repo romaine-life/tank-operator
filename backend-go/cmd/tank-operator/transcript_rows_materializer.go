@@ -20,11 +20,6 @@ type transcriptRowsMaterializer struct {
 	turns  store.SessionTurnStore
 }
 
-type transcriptMaterializingEventStore struct {
-	store.SessionEventStore
-	materializer transcriptRowsMaterializer
-}
-
 type transcriptRowsMaterializationTxStore interface {
 	WithTranscriptMaterializationTx(context.Context, string, func(context.Context, pgx.Tx) error) error
 	ReplaceForTurnTx(context.Context, pgx.Tx, string, string, []map[string]any) error
@@ -93,11 +88,110 @@ func adoptLeadingSessionLifecycleTx(ctx context.Context, events transcriptEvents
 	return append(lifecycle, turnEvents...), nil
 }
 
-func (s transcriptMaterializingEventStore) Upsert(ctx context.Context, event map[string]any) error {
-	if err := s.SessionEventStore.Upsert(ctx, event); err != nil {
-		return err
+// RefreshEventBatch implements sessionbus.TranscriptRefresher: one coalesced
+// projection pass for a batch of just-persisted events. Within one session,
+// session-scope triggers (turn.input_answered, a turn whose events contain a
+// background-wake boundary) escalate the whole batch to a single session
+// re-projection; otherwise each distinct turn re-projects exactly once
+// regardless of how many of its events the batch carries, and turn-less
+// events project individually. This coalescing is the PR-1 amortization from
+// tank-operator#1051 — N flood events on one turn cost one full-turn read
+// instead of N. The remaining O(turn) read goes away with the checkpointed
+// projector (same issue, PR 2).
+func (m transcriptRowsMaterializer) RefreshEventBatch(ctx context.Context, events []map[string]any) error {
+	if m.events == nil || m.rows == nil || len(events) == 0 {
+		return nil
 	}
-	return s.materializer.RefreshEvent(ctx, event)
+	// The persister batches per session, but out-of-band callers (advisory
+	// repair, the startup reconciler) may hand a mixed batch — group
+	// defensively, preserving first-seen session order.
+	bySession := make(map[string][]map[string]any)
+	var order []string
+	for _, event := range events {
+		sessionID := transcriptMaterializerSessionID(event)
+		if sessionID == "" {
+			continue
+		}
+		if _, ok := bySession[sessionID]; !ok {
+			order = append(order, sessionID)
+		}
+		bySession[sessionID] = append(bySession[sessionID], event)
+	}
+	for _, sessionID := range order {
+		if err := m.refreshSessionBatch(ctx, sessionID, bySession[sessionID]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (m transcriptRowsMaterializer) refreshSessionBatch(ctx context.Context, sessionID string, events []map[string]any) error {
+	txRows, rowsOK := m.rows.(transcriptRowsMaterializationTxStore)
+	txEvents, eventsOK := m.events.(transcriptEventsTxStore)
+	if !rowsOK || !eventsOK {
+		// Store doubles without tx support (unit-test seams) take the
+		// per-event path; semantics are identical — coalescing is purely
+		// a cost optimization.
+		for _, event := range events {
+			if err := m.RefreshEvent(ctx, event); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	sessionScope := false
+	var noTurn []map[string]any
+	var turnOrder []string
+	seenTurn := map[string]bool{}
+	for _, event := range events {
+		if transcriptString(event, "type") == "turn.input_answered" {
+			sessionScope = true
+		}
+		turnID := transcriptString(event, "turn_id")
+		if turnID == "" {
+			noTurn = append(noTurn, event)
+			continue
+		}
+		if !seenTurn[turnID] {
+			seenTurn[turnID] = true
+			turnOrder = append(turnOrder, turnID)
+		}
+	}
+	return txRows.WithTranscriptMaterializationTx(ctx, sessionID, func(ctx context.Context, tx pgx.Tx) error {
+		if sessionScope {
+			// The session re-projection reads the whole ledger, so it
+			// already covers every turn-less and per-turn event in the
+			// batch.
+			return m.backfillSessionTx(ctx, tx, txEvents, txRows, sessionID)
+		}
+		for _, event := range noTurn {
+			projection := projectTranscriptEvents([]map[string]any{event})
+			recordTranscriptProjectionInvariantViolations(sessionID, "", []map[string]any{event}, projection.Entries)
+			if err := txRows.UpsertRowsTx(ctx, tx, sessionID, projection.Entries); err != nil {
+				return err
+			}
+		}
+		for _, turnID := range turnOrder {
+			turnEvents, err := readAllTurnEventsTx(ctx, txEvents, tx, sessionID, turnID)
+			if err != nil {
+				return err
+			}
+			if turnEventsContainBackgroundWake(turnEvents) {
+				// One session re-projection covers the remaining turns
+				// in the batch too.
+				return m.backfillSessionTx(ctx, tx, txEvents, txRows, sessionID)
+			}
+			projection := projectTranscriptEvents(turnEvents)
+			recordTranscriptProjectionInvariantViolations(sessionID, turnID, turnEvents, projection.Entries)
+			if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
+				stampTurnNumbers(sessionID, numbers, projection.Entries)
+			}
+			if err := txRows.ReplaceForTurnTx(ctx, tx, sessionID, turnID, projection.Entries); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (m transcriptRowsMaterializer) RefreshEvent(ctx context.Context, event map[string]any) error {

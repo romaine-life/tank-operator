@@ -145,6 +145,10 @@ type sessionCommandBus interface {
 	SubscribeSessionRowUpdates(ctx context.Context, email, scope string) (<-chan []byte, func(), error)
 	PublishPinnedReposUpdate(ctx context.Context, email string) error
 	SubscribePinnedReposUpdates(ctx context.Context, email string) (<-chan struct{}, func(), error)
+	// PersisterDebugSnapshot exposes the event persister's per-session
+	// queue state to GET /api/debug/persister — the per-entity localizer
+	// behind the TankSessionEventPersisterBacklog alert.
+	PersisterDebugSnapshot() []sessionbus.PersisterQueueSnapshot
 }
 
 type streamAuthTicketStore interface {
@@ -324,6 +328,11 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// here for the session_ids + stuck_seconds + provider rate-limit
 	// state of the wedged turns.
 	mux.HandleFunc("GET /api/debug/stuck-turns", s.handleDebugStuckTurns)
+	// Per-session queue state for the session-bus event persister. Pairs
+	// with the TankSessionEventPersisterBacklog alert: when the lag
+	// gauges fire, this names which session's events are queued and how
+	// stale they are.
+	mux.HandleFunc("GET /api/debug/persister", s.handleDebugPersister)
 	mux.HandleFunc("PUT /api/sessions/order", s.handleReorderSessions)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)

@@ -135,6 +135,61 @@ var (
 		Help: "Persister failures the persister chose to NAK for retry (infrastructure-side, retryable).",
 	})
 
+	// Persister dispatch observability (tank-operator#1051). This group
+	// makes the 2026-06-11 failure modes directly visible: duplicate work
+	// (redeliveries grinding both replicas), MaxDeliver exhaustion (silent
+	// ledger holes), stream truncation past the ack floor (events lost
+	// before persistence), and the upsert/refresh phase split that would
+	// have localized the 10s-per-event projection cost immediately. The
+	// gauges read JetStream consumer state, not Postgres rows, so the
+	// persister's health signal survives the persister itself failing.
+	sessionEventPersistDuplicateTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_persist_duplicate_total",
+		Help: "Upserts that found the (tank_session_id, order_key) row already present (at-least-once redelivery or producer republish).",
+	})
+	sessionEventRedeliveredTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_redelivered_total",
+		Help: "Consumed bus messages whose NumDelivered exceeded 1 — messages that outlived AckWait or were NAKed.",
+	})
+	sessionEventPersistExhaustedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_event_persist_exhausted_total",
+		Help: "MAX_DELIVERIES advisory outcomes: repaired (event persisted out of band) or failed (durable ledger hole).",
+	}, []string{"outcome"})
+	sessionEventStreamTruncationTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_stream_truncated_past_ack_floor_total",
+		Help: "Stream sequences the retention policy discarded past the persister ack floor — events lost before persistence, unrepairable.",
+	})
+	sessionEventReconcilerRepairedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_reconciler_repaired_total",
+		Help: "Events the startup reconciler persisted that no consumer delivery would ever have retried (MaxDeliver-exhausted holes).",
+	})
+	sessionEventPersistPhaseSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "tank_session_event_persist_phase_seconds",
+		Help:    "Wall time of one persister batch per phase: upsert (ledger writes) vs refresh (transcript-row projection).",
+		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30},
+	}, []string{"phase"})
+	sessionEventPersistBatchSize = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_session_event_persist_batch_size",
+		Help:    "Events per coalesced persister batch; sustained large batches mean the persister is draining a backlog.",
+		Buckets: []float64{1, 2, 4, 8, 16, 32, 64},
+	})
+	sessionEventPersisterProcessedAgeSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_event_persister_processed_event_age_seconds",
+		Help: "Age (producer wall clock) of the newest event in the persister's last completed batch — how far behind transcripts are.",
+	})
+	sessionEventPersisterPending = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_event_persister_pending",
+		Help: "Undelivered messages on the persister durable (JetStream NumPending), sampled every 10s.",
+	})
+	sessionEventPersisterAckPending = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_event_persister_ack_pending",
+		Help: "Delivered-but-unacked messages on the persister durable (JetStream NumAckPending), sampled every 10s.",
+	})
+	sessionEventPersisterQueueDepth = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_event_persister_queue_depth",
+		Help: "Messages routed to in-process per-session queues and not yet processed, sampled every 10s.",
+	})
+
 	// Durable per-turn failure surface (turn.failed / turn.command_failed).
 	// Replaces the SPA run-status pill as the "every session is failing"
 	// observability surface: with the pill removed, this counter is how
@@ -2136,6 +2191,57 @@ func (promPersisterMetrics) RecordTurnLifecyclePersisted(eventType string) {
 
 func (promPersisterMetrics) RecordTurnTerminalMissingClientNonce(source string, eventType string) {
 	recordTurnTerminalMissingClientNonce(source, eventType)
+}
+
+func (promPersisterMetrics) RecordDuplicatePersisted() {
+	sessionEventPersistDuplicateTotal.Inc()
+}
+
+func (promPersisterMetrics) RecordRedelivered() {
+	sessionEventRedeliveredTotal.Inc()
+}
+
+func (promPersisterMetrics) RecordPersistPhaseDuration(phase string, seconds float64) {
+	switch phase {
+	case "upsert", "refresh":
+	default:
+		phase = "other"
+	}
+	sessionEventPersistPhaseSeconds.WithLabelValues(phase).Observe(seconds)
+}
+
+func (promPersisterMetrics) RecordPersistBatchSize(n int) {
+	sessionEventPersistBatchSize.Observe(float64(n))
+}
+
+func (promPersisterMetrics) RecordProcessedEventAge(seconds float64) {
+	sessionEventPersisterProcessedAgeSeconds.Set(seconds)
+}
+
+func (promPersisterMetrics) RecordExhaustedRepair(outcome string) {
+	switch outcome {
+	case "repaired", "failed":
+	default:
+		outcome = "failed"
+	}
+	sessionEventPersistExhaustedTotal.WithLabelValues(outcome).Inc()
+}
+
+func (promPersisterMetrics) RecordStreamTruncationGap(missing float64) {
+	sessionEventStreamTruncationTotal.Add(missing)
+}
+
+func (promPersisterMetrics) RecordReconcilerRepairedHole() {
+	sessionEventReconcilerRepairedTotal.Inc()
+}
+
+func (promPersisterMetrics) RecordPersisterConsumerLag(pending float64, ackPending float64) {
+	sessionEventPersisterPending.Set(pending)
+	sessionEventPersisterAckPending.Set(ackPending)
+}
+
+func (promPersisterMetrics) RecordPersisterQueueDepth(depth int) {
+	sessionEventPersisterQueueDepth.Set(float64(depth))
 }
 
 // recordTurnLifecyclePersisted bumps tank_turn_lifecycle_total for the

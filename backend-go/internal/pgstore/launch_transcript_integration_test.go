@@ -93,7 +93,7 @@ func TestPostgresLaunchTranscriptOrdering(t *testing.T) {
 		event["written_at"] = eventTime.Format(time.RFC3339Nano)
 		eventID, _ := event["event_id"].(string)
 		event["order_key"] = fmt.Sprintf("%013d-%08d-%s", eventTime.UnixMilli(), i, eventID)
-		if err := eventStore.Upsert(ctx, event); err != nil {
+		if _, err := eventStore.Upsert(ctx, event); err != nil {
 			t.Fatalf("upsert launch event %d: %v", i, err)
 		}
 	}
