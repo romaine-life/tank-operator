@@ -332,6 +332,17 @@ func (m transcriptRowsMaterializer) tryFoldBatchTx(
 	return true, nil
 }
 
+// sessionResyncSlots caps CONCURRENT session-scope re-projections per pod.
+// The per-session worker isolation that keeps one session from starving
+// another also means N cold sessions (post-deploy, no fold memos yet) can
+// start N full-ledger reads simultaneously — five parallel multi-thousand-row
+// reads wedged the B1ms instance outright on the 2026-06-12 post-#1051
+// deploys: every Postgres caller timed out and the persister made zero
+// progress. One heavy read at a time is proven fine on this instance class;
+// queued workers wait here while flood-class folds (no ledger read) continue
+// unimpeded on other sessions.
+var sessionResyncSlots = make(chan struct{}, 1)
+
 // resyncSessionTx is the reference projection: re-project the whole session
 // and reseed the fold memo from the same events, in the same transaction.
 func (m transcriptRowsMaterializer) resyncSessionTx(
@@ -341,6 +352,12 @@ func (m transcriptRowsMaterializer) resyncSessionTx(
 	rowsStore transcriptRowsMaterializationTxStore,
 	sessionID string,
 ) error {
+	select {
+	case sessionResyncSlots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-sessionResyncSlots }()
 	events, err := m.backfillSessionEventsTx(ctx, tx, eventsStore, rowsStore, sessionID)
 	if err != nil {
 		return err
