@@ -1562,49 +1562,57 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 			if continuationTurns[activity.TurnID] {
 				activity.Summary["continuation"] = true
 			}
-			shellOrderKey := transcriptMapString(activity.Summary, "startOrderKey")
-			shellStartedAt := transcriptMapString(activity.Summary, "startedAt")
-			if umKey := turnUserMessageOrderKey(entries, activity.TurnID); umKey != "" && shellOrderKey <= umKey {
-				// Folded session-startup lifecycle carries order keys that predate
-				// the turn's message. The transcript row store positions a
-				// turn_activity row by activity.startOrderKey (its row cursor is
-				// startOrderKey+id), so anchor the shell's start to the turn's first
-				// real event after the message (turn.submitted/started). The
-				// lifecycle stays inside the body; only the shell's placement and
-				// reported start move to the turn's own start — never above the
-				// message it belongs to.
-				if anchor := turnFirstEntryAfter(entries, activity.TurnID, umKey); anchor != nil {
-					shellOrderKey = transcriptMapString(anchor, "orderKey")
-					activity.Summary["startOrderKey"] = shellOrderKey
-					if t := transcriptMapString(anchor, "time"); t != "" {
-						shellStartedAt = t
-						activity.Summary["startedAt"] = t
-					}
-				}
-			}
-			shell := map[string]any{
-				"id":            "turn-activity-" + activity.TurnID,
-				"kind":          "turn_activity",
-				"turnId":        activity.TurnID,
-				"time":          shellStartedAt,
-				"orderKey":      shellOrderKey,
-				"activity":      activity.Summary,
-				"activityIds":   activity.CompactedEntryIDs,
-				"sourceEventId": transcriptMapString(activity.Summary, "sourceEventId"),
-			}
-			if turnUsage := activity.Summary["turnUsage"]; turnUsage != nil {
-				shell["turnUsage"] = turnUsage
-			}
-			if usageObservation := activity.Summary["usageObservation"]; usageObservation != nil {
-				shell["usageObservation"] = usageObservation
-			}
-			out = append(out, shell)
+			out = append(out, buildTurnActivityShellRow(activity, entries))
 		}
 		if !compactedIndexes[idx] {
 			out = append(out, entry)
 		}
 	}
 	return transcriptProjection{Entries: out, ActivityBodies: bodies}
+}
+
+// buildTurnActivityShellRow builds the durable turn_activity row for one
+// turn's body. turnEntries supplies the user-message anchor lookup — entries
+// of other turns are ignored, so callers may pass the whole flat list (batch
+// pipeline) or just this turn's entries (checkpointed fold).
+func buildTurnActivityShellRow(activity turnActivityBody, turnEntries []map[string]any) map[string]any {
+	shellOrderKey := transcriptMapString(activity.Summary, "startOrderKey")
+	shellStartedAt := transcriptMapString(activity.Summary, "startedAt")
+	if umKey := turnUserMessageOrderKey(turnEntries, activity.TurnID); umKey != "" && shellOrderKey <= umKey {
+		// Folded session-startup lifecycle carries order keys that predate
+		// the turn's message. The transcript row store positions a
+		// turn_activity row by activity.startOrderKey (its row cursor is
+		// startOrderKey+id), so anchor the shell's start to the turn's first
+		// real event after the message (turn.submitted/started). The
+		// lifecycle stays inside the body; only the shell's placement and
+		// reported start move to the turn's own start — never above the
+		// message it belongs to.
+		if anchor := turnFirstEntryAfter(turnEntries, activity.TurnID, umKey); anchor != nil {
+			shellOrderKey = transcriptMapString(anchor, "orderKey")
+			activity.Summary["startOrderKey"] = shellOrderKey
+			if t := transcriptMapString(anchor, "time"); t != "" {
+				shellStartedAt = t
+				activity.Summary["startedAt"] = t
+			}
+		}
+	}
+	shell := map[string]any{
+		"id":            "turn-activity-" + activity.TurnID,
+		"kind":          "turn_activity",
+		"turnId":        activity.TurnID,
+		"time":          shellStartedAt,
+		"orderKey":      shellOrderKey,
+		"activity":      activity.Summary,
+		"activityIds":   activity.CompactedEntryIDs,
+		"sourceEventId": transcriptMapString(activity.Summary, "sourceEventId"),
+	}
+	if turnUsage := activity.Summary["turnUsage"]; turnUsage != nil {
+		shell["turnUsage"] = turnUsage
+	}
+	if usageObservation := activity.Summary["usageObservation"]; usageObservation != nil {
+		shell["usageObservation"] = usageObservation
+	}
+	return shell
 }
 
 func foldBackgroundWakeContinuationActivities(projection transcriptProjection, wakeParents map[string]string) transcriptProjection {

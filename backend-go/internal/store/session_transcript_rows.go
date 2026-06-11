@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -188,6 +189,64 @@ func (s *transcriptRowStore) needsBackfill(ctx context.Context, q transcriptRowQ
 		return false, err
 	}
 	return version != transcriptRowBackfillVersion, nil
+}
+
+// LoadFoldStateTx reads the session's checkpointed fold memo and whether the
+// fold is durably disabled for this session. A missing row is (nil, false):
+// the fold seeds on the next session-scope re-projection.
+func (s *transcriptRowStore) LoadFoldStateTx(ctx context.Context, tx pgx.Tx, tankSessionID string) ([]byte, bool, error) {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	var memo []byte
+	var disabled bool
+	err := tx.QueryRow(ctx, `
+		SELECT memo, disabled
+		FROM session_transcript_fold_state
+		WHERE tank_session_id = $1
+	`, storageKey).Scan(&memo, &disabled)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, false, nil
+		}
+		return nil, false, err
+	}
+	return memo, disabled, nil
+}
+
+func (s *transcriptRowStore) SaveFoldStateTx(ctx context.Context, tx pgx.Tx, tankSessionID string, memo []byte) error {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	_, err := tx.Exec(ctx, `
+		INSERT INTO session_transcript_fold_state (tank_session_id, memo, disabled, updated_at)
+		VALUES ($1, $2, false, now())
+		ON CONFLICT (tank_session_id) DO UPDATE
+		SET memo = EXCLUDED.memo, disabled = false, updated_at = now()
+	`, storageKey, memo)
+	return err
+}
+
+// DeleteFoldStateTx invalidates the memo: a turn-scope reference projection
+// makes it stale, and the next session-scope projection reseeds it. A
+// durably disabled row is preserved.
+func (s *transcriptRowStore) DeleteFoldStateTx(ctx context.Context, tx pgx.Tx, tankSessionID string) error {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	_, err := tx.Exec(ctx, `
+		DELETE FROM session_transcript_fold_state
+		WHERE tank_session_id = $1 AND disabled = false
+	`, storageKey)
+	return err
+}
+
+// DisableFoldTx durably opts the session out of the checkpointed fold (memo
+// over the size cap). The session batch-projects from then on — exactly the
+// pre-fold behavior — and the row pins the decision.
+func (s *transcriptRowStore) DisableFoldTx(ctx context.Context, tx pgx.Tx, tankSessionID string) error {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	_, err := tx.Exec(ctx, `
+		INSERT INTO session_transcript_fold_state (tank_session_id, memo, disabled, updated_at)
+		VALUES ($1, NULL, true, now())
+		ON CONFLICT (tank_session_id) DO UPDATE
+		SET memo = NULL, disabled = true, updated_at = now()
+	`, storageKey)
+	return err
 }
 
 func (s *transcriptRowStore) lockTranscriptMaterializationTx(ctx context.Context, tx pgx.Tx, storageKey string) error {
