@@ -53,13 +53,13 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-46ac851c545f8b6f7312a193a305831bc7ee6411d57ea292f0b2ac9efe882a54
-  codexImage: romainecr.azurecr.io/codex-container:codex-6143248b0adfb5aefbc13f21ddf0f2597f3d16dd5655c6b88b7999a2620a3f67
+  image: romainecr.azurecr.io/claude-container:claude-86d2d13f81a51e75681b42ef38aa24387d40fe020de920a27c7f7ddc42696741
+  codexImage: romainecr.azurecr.io/codex-container:codex-1812583dd3625ebcf1004ee7a03711f9d0117d57b6bc27e4dad513a470690253
   # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-58b39a652f8c722c48c6597a70475c71fd36b958d478c7c3a73dfddc946bb78f
+  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-9764cf3f2ead02579f642ca9faafc6de25985df3c16d7a3d4bf1fc7eeebf19d5
   # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
   # orchestrator namespace where the antigravity-api-proxy mounts it; agy
   # session pods never mount it (they get a placeholder + proxy injection).
