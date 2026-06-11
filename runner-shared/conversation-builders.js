@@ -118,6 +118,12 @@ export function turnEvent(args) {
   if (args.error !== undefined) payload.error = args.error;
   if (args.finalAnswer !== undefined)
     payload.final_answer = normalizeFinalAnswer(args.finalAnswer);
+  // background_work_pending stamps whether provider-tracked background work
+  // (codex unified-exec shells, agy tasks) is still in flight at this
+  // terminal; the user-facing-turn projection folds a would-be-ready
+  // terminal to the non-summoning scheduled status when set (#906 spine).
+  if (args.backgroundWorkPending !== undefined)
+    payload.background_work_pending = args.backgroundWorkPending;
   // turn.awaiting_input carries the Tank-canonical questions the agent asked
   // (the pause point for the asking turn) plus the AskUserQuestion item ids
   // the /answer endpoint targets. See docs/tank-conversation-protocol.md.

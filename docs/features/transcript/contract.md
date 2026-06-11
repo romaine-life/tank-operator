@@ -90,19 +90,32 @@ answer; it must not visibly move a rendered row from one surface to the other.
   turns. The backend must not persist the wake prompt as a main-transcript
   `user_message.created` row; it carries the text on the backend-owned
   `turn.submitted.payload.prompt` so the server projection can render the same
-  `authorKind=system` user-side message inside Turn activity. The projection
-  must keep the wake turn's activity shell out of the settled transcript. Wake
+  `authorKind=system` user-side message inside Turn activity. When the
+  originating turn is derivable, the projection keeps the wake turn's activity
+  shell out of the settled transcript and folds its body — in durable
+  order-key order — into the originating turn's shell; a wake turn whose
+  lineage cannot be derived keeps its own shell instead, because projected
+  content must never be dropped without a surviving container. Wake
   activity remains inspectable in the Turns view as part of the originating turn,
   not as a second user-visible turn. If the wake-chain reaches a true final answer, that
   assistant prose may enter the main transcript only through the same explicit
   `turn.completed.payload.final_answer.timeline_ids` promotion path as any other
   successful turn, and the projected row is owned by the originating turn while
-  retaining the wake backend turn id for audit/debug detail.
+  retaining the wake backend turn id for audit/debug detail. Across the folded
+  chain, the LAST completed terminal owns the turn-detail final answer; a
+  parked origin turn's promoted ack is superseded by its continuation and must
+  not resurface as the final answer — not even via the no-marker fallback.
 - A completed SDK turn that leaves a background task running is not a
-  user-final assistant response. Its assistant prose, background-task row, and
-  activity shell remain Turn activity material; the main transcript keeps the
+  user-final assistant response. Its assistant prose and background-task row
+  remain Turn activity material, and the main transcript keeps the
   user's message open until the background-wake continuation reaches a true
-  final answer or otherwise terminates.
+  final answer or otherwise terminates — but the parked turn KEEPS its
+  `turn_activity` shell in the settled projection, carrying
+  `activity.continuation: true`. The shell is the durable home of the
+  compacted body and the carrier of the stamped turn number; suppressing it
+  annihilates the turn's content from the durable read model (the
+  session-161 "Current turn / bare prompts" failure, replayed in
+  `transcript_projection_replay_test.go`).
 - Failed, interrupted, and otherwise non-successful turns do not have a final
   assistant answer. Their non-user activity stays in Turn activity, with terminal
   context surfaced by the Turn activity disclosure row and the terminal meta

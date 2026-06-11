@@ -46,6 +46,20 @@ export const turnPreStartLatencySeconds = new Histogram({
   registers: [registry],
 });
 
+export const backgroundWatchTotal = new Counter({
+  name: "tank_runner_background_watch_total",
+  help: "Codex background-shell watch resolutions: completed (command signature observed alive then gone), unobservable (never seen alive within the grace window — no wake registered, exited published with status unknown).",
+  labelNames: ["result"],
+  registers: [registry],
+});
+
+export const backgroundTaskWakeTotal = new Counter({
+  name: "tank_runner_background_task_wake_total",
+  help: "Background-task-completion wake registrations the runner attempted against the orchestrator durable API (result: registered|disabled|failed).",
+  labelNames: ["result"],
+  registers: [registry],
+});
+
 export const providerErrorTotal = new Counter({
   name: "tank_runner_provider_error_total",
   help: "Errors raised by the provider SDK (the query iterator or interrupt() call).",

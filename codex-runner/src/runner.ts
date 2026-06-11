@@ -22,6 +22,7 @@
 // owned by the backend (handlers_turns.go) — the runner does not publish
 // them. On error: log and keep accepting new commands.
 
+import { readdirSync, readFileSync } from "node:fs";
 import {
   Codex,
   type ModelReasoningEffort,
@@ -34,7 +35,7 @@ import {
   type CodexAdapterTurn,
 } from "./adapters/codex.js";
 import type { Config } from "./config.js";
-import { SessionEventSink, type StampedTankEvent } from "./sessionEvents.js";
+import { SessionEventSink, type CodexEvent, type StampedTankEvent } from "./sessionEvents.js";
 import {
   isDurableTankConversationEvent,
   normalizeClientNonce,
@@ -50,6 +51,11 @@ import {
   turnIDForClientNonce,
 } from "../../runner-shared/conversation-builders.js";
 import {
+  cancelBackgroundTaskWake,
+  fetchUnresolvedBackgroundTasks,
+  registerBackgroundTaskWake,
+} from "../../runner-shared/backgroundTaskWake.js";
+import {
   SessionCommandBus,
   isInputReplyCommand,
   isInterruptCommand,
@@ -60,6 +66,8 @@ import {
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
+  backgroundTaskWakeTotal,
+  backgroundWatchTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
   inputReplyAnswerShapeTotal,
@@ -468,6 +476,9 @@ export class Runner {
             cwd: cfg.workspace,
             onRequestUserInput: (request, requestSignal) =>
               this.requestAppServerUserInput(request, requestSignal),
+            onIdleBackgroundItem: (event) => {
+              void this.handleIdleBackgroundItem(event);
+            },
             onRuntimeConfigApplied: (threadOptions) =>
               this.reportAppliedRuntimeConfig(threadOptions),
             onRuntimeContextWindowObserved: (tokens) =>
@@ -508,6 +519,15 @@ export class Runner {
     // interrupt_turn behind submit_turn for the full duration of the turn).
     const stopConsumer = this.startCommandConsumer(signal);
     const stopControl = this.startControlConsumer(signal);
+    // Re-adopt background shells whose durable lifecycle is still open: a
+    // runner restart loses runningBackgroundTasks, and an unobserved shell is
+    // a stranded report. The OS is still the completion source — adopted
+    // shells rejoin the pid watcher; one that already finished during the
+    // restart gap resolves through the observed-alive-first guard as an
+    // honest unknown-status wake.
+    void this.adoptOrphanedBackgroundTasks().catch((err) => {
+      console.error("background task re-adoption failed:", err);
+    });
     const onAbort = () => {
       this.userQueue.close();
       this.currentAbort?.abort();
@@ -620,6 +640,13 @@ export class Runner {
               event as { type: string; [k: string]: unknown },
             )) {
               const dispatched = await dispatch(this.sink, canonicalEvent);
+              if (dispatched && canonicalEvent.type === "shell_task.exited") {
+                // The completion was delivered INTO this active turn — the
+                // model has the result in hand. Any pending wake for the same
+                // task (e.g. armed by an earlier premature observation) would
+                // now be a duplicate notification; retire it.
+                await this.maybeCancelDeliveredBackgroundWake(canonicalEvent);
+              }
               if (
                 dispatched &&
                 (canonicalEvent.type === "turn.completed" ||
@@ -717,6 +744,11 @@ export class Runner {
           turn.stopCommandHeartbeat = undefined;
           this.currentAbort = null;
           this.currentTurn = null;
+          // A turn that parked background shells needs the process-exit
+          // watcher running; it self-stops when nothing is pending.
+          if (this.codexAdapter.pendingBackgroundTasks().length > 0) {
+            this.ensureBackgroundPidWatcher();
+          }
           await this.completeStalePendingInterrupts(turn);
           this.interruptRequested = false;
         }
@@ -871,6 +903,246 @@ export class Runner {
         type: "turn.started",
       }),
     );
+  }
+
+  private readonly firedBackgroundTaskWakes = new Set<string>();
+  private backgroundPidWatcher: ReturnType<typeof setInterval> | null = null;
+  private readonly backgroundSeenAlive = new Set<string>();
+  private readonly backgroundFirstSweepMs = new Map<string, number>();
+
+  // commandSignatureAlive is injectable for tests. Codex's reported
+  // process_id is NOT an OS pid in this container's namespace (verified
+  // live: reported 34882 while the real container pid was 555 — the exec
+  // session is sandboxed/namespaced), so liveness is detected by scanning
+  // /proc cmdlines for the provider-declared command string, which appears
+  // verbatim as `/bin/sh -c <command>`.
+  commandSignatureAlive: (command: string) => boolean = (command) => {
+    const signature = normalizeCommandSignature(command);
+    if (!signature) return false;
+    try {
+      for (const entry of readdirSync("/proc")) {
+        if (!/^\d+$/.test(entry)) continue;
+        let cmdline = "";
+        try {
+          cmdline = readFileSync(`/proc/${entry}/cmdline`, "utf8").replaceAll("\0", " ");
+        } catch {
+          continue;
+        }
+        if (normalizeCommandSignature(cmdline).includes(signature)) return true;
+      }
+    } catch (err) {
+      console.error("background command scan failed:", err);
+      return true; // fail-open: never declare exit on scan failure
+    }
+    return false;
+  };
+
+  // ensureBackgroundPidWatcher runs ONLY while background shells are
+  // pending: codex's app-server emits no completion notification for them
+  // (its backgroundTerminals RPC surface is /clean only — verified against
+  // the binary), so the OS is the completion source. Exit is declared only
+  // for commands OBSERVED ALIVE at least once (never-seen-alive within the
+  // grace window resolves as unobservable: exited{status:unknown}, no wake
+  // — observed outcomes over claimed intent). Cost: one /proc cmdline scan
+  // per tick while pending, zero when idle; watcher self-stops.
+  private ensureBackgroundPidWatcher(): void {
+    if (this.backgroundPidWatcher) return;
+    this.backgroundPidWatcher = setInterval(() => {
+      void this.sweepBackgroundPids();
+    }, 5000);
+    this.backgroundPidWatcher.unref?.();
+  }
+
+  async sweepBackgroundPids(nowMs: number = Date.now()): Promise<void> {
+    const pending = this.codexAdapter.pendingBackgroundTasks();
+    if (pending.length === 0) {
+      if (this.backgroundPidWatcher) {
+        clearInterval(this.backgroundPidWatcher);
+        this.backgroundPidWatcher = null;
+      }
+      this.backgroundSeenAlive.clear();
+      this.backgroundFirstSweepMs.clear();
+      return;
+    }
+    for (const task of pending) {
+      if (!this.backgroundFirstSweepMs.has(task.taskID)) {
+        this.backgroundFirstSweepMs.set(task.taskID, nowMs);
+      }
+      const alive = this.commandSignatureAlive(task.command);
+      if (alive) {
+        this.backgroundSeenAlive.add(task.taskID);
+        continue;
+      }
+      if (this.backgroundSeenAlive.has(task.taskID)) {
+        backgroundWatchTotal.labels("completed").inc();
+        await this.publishBackgroundExit(task.taskID, {});
+        continue;
+      }
+      const firstSweep = this.backgroundFirstSweepMs.get(task.taskID) ?? nowMs;
+      if (nowMs - firstSweep > 45_000) {
+        // Never observed alive: the command signature was unobservable in
+        // this namespace. Resolve the pending state truthfully without
+        // claiming completion — and WAKE the agent with status "unknown" so
+        // it verifies the real state and reports. The previous skip-wake
+        // choice resolved "unobservable" into user-facing silence: the agent
+        // promised a report and the harness guaranteed it could never happen
+        // (strandings 4 and 5 of the session-161 bug museum). If the
+        // provider later surfaces the real completion, the new observation
+        // re-arms the next wake generation.
+        backgroundWatchTotal.labels("unobservable").inc();
+        await this.publishBackgroundExit(task.taskID, {
+          status: "unknown",
+          completionSource: "unobservable",
+        });
+      }
+    }
+  }
+
+  private async publishBackgroundExit(
+    taskID: string,
+    opts: { status?: string; completionSource?: string },
+  ): Promise<void> {
+    const events = this.codexAdapter.completeBackgroundShellByExit(taskID, {
+      status: opts.status,
+      completionSource: opts.completionSource,
+    });
+    this.backgroundSeenAlive.delete(taskID);
+    this.backgroundFirstSweepMs.delete(taskID);
+    for (const canonical of events) {
+      const dispatched = await dispatch(this.sink, canonical).catch((err) => {
+        console.error("background shell exit publish failed:", err);
+        return false;
+      });
+      if (!dispatched) continue;
+      await this.maybeRegisterCodexBackgroundWake(canonical);
+    }
+  }
+
+  private async maybeRegisterCodexBackgroundWake(
+    canonical: { type: string; payload?: unknown } & Record<string, unknown>,
+  ): Promise<void> {
+    if (canonical.type !== "shell_task.exited") return;
+    const taskID = String((canonical as { task_id?: unknown }).task_id ?? "").trim();
+    if (!taskID) return;
+    // The observation identity is the durable shell_task.exited event id. It
+    // is BOTH the local dedupe key (a retried publish of the same observation
+    // never re-registers) and the backend's re-arm discriminator: a NEW
+    // observation of an already-fired task — the real completion arriving
+    // after a premature watcher exit — arms the next wake generation instead
+    // of being silently swallowed. Keying this set by task id alone was the
+    // once-only burn: it blocked the corrective registration forever.
+    const observedEventID = String(
+      (canonical as { event_id?: unknown }).event_id ?? "",
+    ).trim();
+    const dedupeKey = `${taskID}${observedEventID}`;
+    if (this.firedBackgroundTaskWakes.has(dedupeKey)) return;
+    if (this.currentAbort) return;
+    this.firedBackgroundTaskWakes.add(dedupeKey);
+    const payload = (canonical.payload ?? {}) as Record<string, unknown>;
+    try {
+      const registered = await registerBackgroundTaskWake(this.cfg, {
+        taskID,
+        status: String(payload.status ?? "completed"),
+        summary: String(payload.command ?? ""),
+        description: String(payload.command ?? ""),
+        lastToolName: "codex",
+        observedEventID,
+      });
+      backgroundTaskWakeTotal
+        .labels(registered ? "registered" : "disabled")
+        .inc();
+    } catch (err) {
+      backgroundTaskWakeTotal.labels("failed").inc();
+      console.error("background task wake register failed:", err);
+    }
+  }
+
+  // adoptOrphanedBackgroundTasks re-seeds the adapter's tracked shells from
+  // the durable ledger on startup (runner restart re-adoption). Exposed with
+  // an injectable task list for tests; production fetches from the
+  // orchestrator's unresolved-background-tasks endpoint.
+  async adoptOrphanedBackgroundTasks(
+    tasks?: Array<{
+      taskID: string;
+      turnID: string;
+      command: string;
+      providerItemID: string;
+      processID: string;
+    }>,
+  ): Promise<number> {
+    const unresolved = tasks ?? (await fetchUnresolvedBackgroundTasks(this.cfg));
+    let adopted = 0;
+    for (const task of unresolved) {
+      if (!task.taskID || !task.turnID) continue;
+      const pid = Number.parseInt(String(task.processID ?? ""), 10);
+      const ok = this.codexAdapter.adoptBackgroundTask(task.taskID, {
+        turnID: task.turnID,
+        providerItemID: task.providerItemID ?? "",
+        command: task.command ?? "",
+        processID: Number.isInteger(pid) && pid > 0 ? pid : null,
+      });
+      if (!ok) continue;
+      adopted += 1;
+      backgroundWatchTotal.labels("adopted").inc();
+      console.log(
+        JSON.stringify({
+          msg: "background task re-adopted after restart",
+          task_id: task.taskID,
+          turn_id: task.turnID,
+        }),
+      );
+    }
+    if (adopted > 0) {
+      this.ensureBackgroundPidWatcher();
+    }
+    return adopted;
+  }
+
+  // maybeCancelDeliveredBackgroundWake retires the pending wake of a task
+  // whose completion was delivered into an active turn. Without this, a wake
+  // armed by an earlier observation fires after the turn and the user sees
+  // the same completion twice (the session-788 duplicate-notification
+  // systemic).
+  private async maybeCancelDeliveredBackgroundWake(
+    canonical: { type: string } & Record<string, unknown>,
+  ): Promise<void> {
+    const taskID = String((canonical as { task_id?: unknown }).task_id ?? "").trim();
+    if (!taskID) return;
+    try {
+      await cancelBackgroundTaskWake(this.cfg, {
+        taskID,
+        reason: "delivered_mid_turn",
+      });
+    } catch (err) {
+      console.error("background task wake cancel failed:", err);
+    }
+  }
+
+  // handleIdleBackgroundItem is the codex half of the background-task
+  // park/re-invoke/fold contract (claude's run_in_background parity): a
+  // unified-exec shell that finishes after its turn ended arrives here via
+  // the transport's idle hook, publishes its durable shell_task terminal
+  // attributed to the ORIGINATING turn (the fold edge), and registers the
+  // durable backend wake so the agent is re-invoked — "the task finishing
+  // later must re-invoke the agent". Skip-when-active mirrors claude: an
+  // in-flight turn already observes the completion in-turn. The backend
+  // Register is idempotent; the dedupe set just avoids repeat HTTP calls.
+  private async handleIdleBackgroundItem(event: CodexEvent): Promise<void> {
+    let events;
+    try {
+      events = this.codexAdapter.idleBackgroundShellEvents(event);
+    } catch (err) {
+      console.error("idle background item mapping failed:", err);
+      return;
+    }
+    for (const canonical of events) {
+      const dispatched = await dispatch(this.sink, canonical).catch((err) => {
+        console.error("idle background shell event publish failed:", err);
+        return false;
+      });
+      if (!dispatched) continue;
+      await this.maybeRegisterCodexBackgroundWake(canonical);
+    }
   }
 
   private async acceptStopBackgroundTask(
@@ -1316,4 +1588,21 @@ export class Runner {
       await this.markCommandTerminal(turn, "turn.failed");
     }
   }
+}
+
+
+// normalizeCommandSignature makes codex's item.command comparable against
+// /proc cmdlines: codex reports the command WITH shell quoting
+// (`/bin/sh -lc 'sleep 60 && …'`) while argv carries no quote characters
+// (verified live on slot-1 session 161 — the unquoted forms match exactly).
+// Quote-stripping plus whitespace collapse keeps the signature deterministic;
+// the observed-alive-first guard in the watcher bounds any residual fuzz.
+export function normalizeCommandSignature(value: string): string {
+  const flat = value.replaceAll(/["']/g, "").replaceAll(/\s+/g, " ").trim();
+  // Strip a leading shell wrapper on BOTH sides: codex REPORTS the command
+  // as `/bin/sh -lc '<cmd>'` but SPAWNS `/bin/sh -c <cmd>` (observed live,
+  // slot-1 session 161 — the -lc/-c flag difference broke full-string
+  // matching even after quote normalization). The inner command is the
+  // stable signature.
+  return flat.replace(/^(?:\S*\/)?(?:ba|da|z)?sh\s+-\w+\s+/, "");
 }

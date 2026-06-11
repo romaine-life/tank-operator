@@ -12,7 +12,6 @@ import (
 	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
-	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
@@ -470,26 +469,26 @@ func TestHandleSessionTurnActivityIncludesBackgroundWakeContinuation(t *testing.
 		switch {
 		case entry["kind"] == "background_task":
 			foundTask = true
-		case entry["role"] == "user" && entry["text"] == "A background task you started earlier has finished.":
+		case entry["metaKind"] == "background_task_wake":
 			foundWakePrompt = true
-			if got, want := entry["authorKind"], string(conversation.AuthorKindSystem); got != want {
-				t.Fatalf("wake prompt authorKind = %#v, want %#v: %#v", got, want, entry)
+			// The wake boundary is a META chip: the agent-directed prompt text
+			// must not render in the user's chat voice. The full prompt stays
+			// on payload.prompt as audit detail.
+			if got := entry["kind"]; got != "meta" {
+				t.Fatalf("wake chip kind = %#v, want meta: %#v", got, entry)
+			}
+			payload, _ := entry["payload"].(map[string]any)
+			if payload == nil || payload["prompt"] != "A background task you started earlier has finished." {
+				t.Fatalf("wake chip missing audit prompt payload: %#v", entry)
 			}
 			if got, want := entry["turnId"], "turn-1"; got != want {
-				t.Fatalf("wake prompt turnId = %#v, want %#v: %#v", got, want, entry)
+				t.Fatalf("wake chip turnId = %#v, want %#v: %#v", got, want, entry)
 			}
 			if got, want := entry["backendTurnId"], "turn_bgtask-task-ci"; got != want {
-				t.Fatalf("wake prompt backendTurnId = %#v, want %#v: %#v", got, want, entry)
+				t.Fatalf("wake chip backendTurnId = %#v, want %#v: %#v", got, want, entry)
 			}
-			// The frontend Turns view only renders a role=user activity row as
-			// the system-user wake bubble when it carries wakePrompt/turnOnly
-			// (isTurnActivityUserMessageEntry). Without these flags the row is
-			// dropped as an ordinary user message — the "wake never shows" bug.
-			if entry["wakePrompt"] != true {
-				t.Fatalf("wake prompt row missing wakePrompt=true (frontend would drop it): %#v", entry)
-			}
-			if entry["turnOnly"] != true {
-				t.Fatalf("wake prompt row missing turnOnly=true: %#v", entry)
+			if entry["wakePrompt"] != true || entry["turnOnly"] != true {
+				t.Fatalf("wake chip missing wakePrompt/turnOnly flags: %#v", entry)
 			}
 		case entry["role"] == "assistant" && entry["text"] == "CI passed. The branch is ready.":
 			foundWakeFinal = true
