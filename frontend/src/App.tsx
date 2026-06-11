@@ -112,7 +112,13 @@ import {
   CalendarIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronFirstIcon,
+  ChevronLastIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ChevronUpIcon,
+  ChevronsLeftIcon,
+  ChevronsRightIcon,
   ClipboardListIcon,
   Code2Icon,
   CopyIcon,
@@ -9964,11 +9970,11 @@ type TurnActivityLoadResult = {
 };
 
 type CombinedDropdownEntry = {
-  key: string; // "turnId:pageNumber"
-  index: number; // 1-based sequential numbering
+  key: string;
+  index: number;
   turnId: string;
-  turnIndex: number; // 0-based index of the turn in turns array
-  turnLabel: string; // e.g. "Turn 1"
+  turnIndex: number;
+  turnLabel: string;
   pageNumber: number;
   pageCount: number;
   directoryItem?: TurnActivityPageDirectoryItem;
@@ -10007,9 +10013,12 @@ function RunTurnViewControls({
       const loadState = turnActivityLoadsByTurn[turn.turnId];
       const snapshot = turnActivityLoadVisibleSnapshot(loadState);
       const pageInfo = snapshot?.pageInfo;
-      const pageCount = pageInfo?.pageCount && pageInfo.pageCount > 0 ? pageInfo.pageCount : 1;
+      const pageCount =
+        pageInfo?.pageCount && pageInfo.pageCount > 0 ? pageInfo.pageCount : 1;
       for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
-        const directoryItem = pageInfo?.pages?.find((p) => p.number === pageNumber);
+        const directoryItem = pageInfo?.pages?.find(
+          (page) => page.number === pageNumber,
+        );
         entries.push({
           key: `${turn.turnId}:${pageNumber}`,
           index: sequentialIndex++,
@@ -10039,29 +10048,33 @@ function RunTurnViewControls({
     if (selectedEntry.pageNumber > 1) {
       return (
         combinedEntries.find(
-          (entry) => entry.turnId === selectedEntry.turnId && entry.pageNumber === 1,
-        ) ?? null
-      );
-    } else {
-      return (
-        combinedEntries.find(
           (entry) =>
-            entry.turnIndex === selectedEntry.turnIndex - 1 &&
-            entry.pageNumber === 1,
+            entry.turnId === selectedEntry.turnId && entry.pageNumber === 1,
         ) ?? null
       );
     }
+    return (
+      combinedEntries.find(
+        (entry) =>
+          entry.turnIndex === selectedEntry.turnIndex - 1 &&
+          entry.pageNumber === 1,
+      ) ?? null
+    );
   }, [combinedEntries, selectedEntry]);
 
   const prevPageEntry = useMemo(() => {
     if (!selectedEntry || combinedEntries.length === 0) return null;
-    const idx = combinedEntries.findIndex((entry) => entry.key === selectedEntry.key);
+    const idx = combinedEntries.findIndex(
+      (entry) => entry.key === selectedEntry.key,
+    );
     return idx > 0 ? combinedEntries[idx - 1] : null;
   }, [combinedEntries, selectedEntry]);
 
   const nextPageEntry = useMemo(() => {
     if (!selectedEntry || combinedEntries.length === 0) return null;
-    const idx = combinedEntries.findIndex((entry) => entry.key === selectedEntry.key);
+    const idx = combinedEntries.findIndex(
+      (entry) => entry.key === selectedEntry.key,
+    );
     return idx >= 0 && idx < combinedEntries.length - 1
       ? combinedEntries[idx + 1]
       : null;
@@ -10115,7 +10128,7 @@ function RunTurnViewControls({
           aria-label="First page of conversation"
           title="First page of conversation"
         >
-          ‹‹‹
+          <ChevronFirstIcon size={14} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -10129,7 +10142,7 @@ function RunTurnViewControls({
           aria-label="Start of turn or previous turn"
           title="Start of turn or previous turn"
         >
-          ‹‹
+          <ChevronsLeftIcon size={14} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -10143,7 +10156,7 @@ function RunTurnViewControls({
           aria-label="Previous page"
           title="Previous page"
         >
-          ‹
+          <ChevronLeftIcon size={14} aria-hidden="true" />
         </button>
 
         <Select
@@ -10235,7 +10248,7 @@ function RunTurnViewControls({
           aria-label="Next page"
           title="Next page"
         >
-          ›
+          <ChevronRightIcon size={14} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -10249,7 +10262,7 @@ function RunTurnViewControls({
           aria-label="End of turn or next turn"
           title="End of turn or next turn"
         >
-          ››
+          <ChevronsRightIcon size={14} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -10267,7 +10280,7 @@ function RunTurnViewControls({
           aria-label="Last page of conversation"
           title="Last page of conversation"
         >
-          ›››
+          <ChevronLastIcon size={14} aria-hidden="true" />
         </button>
       </div>
 
