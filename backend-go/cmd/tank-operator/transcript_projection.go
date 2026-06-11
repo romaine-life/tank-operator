@@ -1651,7 +1651,20 @@ func isBackgroundTaskWakeTurnEvent(event map[string]any) bool {
 	if transcriptString(event, "type") != string(conversation.EventTurnSubmitted) {
 		return false
 	}
-	return transcriptPayloadString(event, "source") == string(conversation.TurnSubmittedSourceBackgroundTask)
+	switch transcriptPayloadString(event, "source") {
+	case string(conversation.TurnSubmittedSourceBackgroundTask):
+		// Claude background-task wake: Tank fired the durable wake row.
+		return true
+	case string(conversation.TurnSubmittedSourceAgentContinuation):
+		// Antigravity self-continuation relay (tank-operator#1030): agy fired
+		// its own timer/task and the runner relayed it. Same continuation
+		// semantics — the turn folds into the one that started the task and
+		// must never surface standalone. Missing from this predicate was half
+		// of tank-operator#1035 (the other half: the antigravity runner never
+		// published the durable shell_task parent edge).
+		return true
+	}
+	return false
 }
 
 func terminalProjectedActivities(entries []map[string]any, terminals map[string]turnTerminalProjection, backgroundWakeTurns map[string]bool, continuationTurns map[string]bool) []turnActivityBody {

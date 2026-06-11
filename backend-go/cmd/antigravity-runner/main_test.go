@@ -800,3 +800,111 @@ func TestTurnCompletedStampsBackgroundWorkPending(t *testing.T) {
 		})
 	}
 }
+
+// --- Durable task-lifecycle tests (tank-operator#1035) ----------------------
+//
+// agy's RUNNING / sender= task markers must publish durable shell_task.*
+// events carrying the originating turn id. That single event family feeds the
+// transcript projection's fold parent-map (turn_bgtask-<task> relay turns fold
+// into the originating turn), the continuation-turn handling, and the
+// Background-activity tab. Keeping the signal in runner memory only was the
+// root cause of session 790's standalone "I woke up" turn.
+
+func TestTaskLifecycleEventsPublishDurableFoldEdge(t *testing.T) {
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	state := &runnerState{builder: builder, publish: log.publisher}
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	state.attachTurn(run)
+	cfg := runnerConfig{sessionID: "17"}
+
+	startLine := `{"step_index":2,"source":"MODEL","type":"RUN_COMMAND","status":"RUNNING","content":"Tool is running as a background task with task id: T-9"}`
+	var startStep AgyStep
+	if err := json.Unmarshal([]byte(startLine), &startStep); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.handleStep("/tmp/t.jsonl", startLine, startStep, cfg); err != nil {
+		t.Fatal(err)
+	}
+	// The same marker re-read from agy's cumulative jsonl must not
+	// double-publish the lifecycle edge.
+	if err := state.handleStep("/tmp/t.jsonl", startLine, startStep, cfg); err != nil {
+		t.Fatal(err)
+	}
+	state.detachTurn(run)
+
+	doneLine := `{"step_index":3,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","content":"background task update sender=T-9 state=done"}`
+	var doneStep AgyStep
+	if err := json.Unmarshal([]byte(doneLine), &doneStep); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.handleStep("/tmp/t.jsonl", doneLine, doneStep, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var taskEvents []map[string]any
+	for _, event := range log.snapshot() {
+		typ, _ := event["type"].(string)
+		if strings.HasPrefix(typ, "shell_task.") {
+			taskEvents = append(taskEvents, event)
+		}
+	}
+	if len(taskEvents) != 2 {
+		t.Fatalf("shell_task events = %d, want 2 (started + exited): %#v", len(taskEvents), taskEvents)
+	}
+	wantTask := stableIDPart("T-9")
+	started, exited := taskEvents[0], taskEvents[1]
+	if started["type"] != string(conversation.EventShellTaskStarted) {
+		t.Fatalf("first task event type = %v", started["type"])
+	}
+	if exited["type"] != string(conversation.EventShellTaskExited) {
+		t.Fatalf("second task event type = %v", exited["type"])
+	}
+	for _, event := range taskEvents {
+		if event["turn_id"] != "turn-1" {
+			t.Fatalf("task event turn_id = %v, want originating turn-1 (the fold edge): %#v", event["turn_id"], event)
+		}
+		if event["task_id"] != wantTask {
+			t.Fatalf("task event task_id = %v, want %q (must match relay turn id suffix)", event["task_id"], wantTask)
+		}
+	}
+	if started["timeline_id"] != exited["timeline_id"] {
+		t.Fatalf("timeline ids differ: %v vs %v (must upsert one background row)", started["timeline_id"], exited["timeline_id"])
+	}
+	if status := started["payload"].(map[string]any)["status"]; status != "running" {
+		t.Fatalf("started status = %v", status)
+	}
+	if status := exited["payload"].(map[string]any)["status"]; status != "completed" {
+		t.Fatalf("exited status = %v", status)
+	}
+}
+
+func TestTaskLifecycleStartWhileIdlePublishesNothing(t *testing.T) {
+	// A RUNNING marker with no attached turn has no resolvable originating
+	// turn: there is nothing to fold into, so no durable edge is published
+	// (counted as orphaned_start). The pending-set still updates so
+	// background_work_pending semantics are unchanged.
+	t.Setenv("TANK_OPERATOR_INTERNAL_URL", "http://127.0.0.1:1")
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	state := &runnerState{builder: builder, publish: log.publisher}
+	cfg := runnerConfig{sessionID: "17"}
+
+	startLine := `{"step_index":2,"source":"MODEL","type":"RUN_COMMAND","status":"RUNNING","content":"Tool is running as a background task with task id: T-9"}`
+	var startStep AgyStep
+	if err := json.Unmarshal([]byte(startLine), &startStep); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.handleStep("/tmp/t.jsonl", startLine, startStep, cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range log.snapshot() {
+		typ, _ := event["type"].(string)
+		if strings.HasPrefix(typ, "shell_task.") {
+			t.Fatalf("idle task start must not publish a fold edge: %#v", event)
+		}
+	}
+	if !state.backgroundWorkPending() {
+		t.Fatal("pending-set must still track the task for background_work_pending")
+	}
+}

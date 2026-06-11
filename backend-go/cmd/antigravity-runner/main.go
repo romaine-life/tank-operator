@@ -75,6 +75,10 @@ var (
 		Name: "tank_antigravity_runner_provider_fatal_report_total",
 		Help: "Provider-fatal reports posted to the orchestrator, by result (ok, error).",
 	}, []string{"result"})
+	taskLifecycleTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_antigravity_runner_task_lifecycle_total",
+		Help: "Durable shell_task lifecycle publishes for agy-tracked background tasks (started, completed, orphaned_start, orphaned_completion, publish_error). orphaned_* means the origin-turn edge was unknowable — the fold-regression signal for tank-operator#1035.",
+	}, []string{"event"})
 )
 
 func serveMetrics(port string) {
@@ -170,6 +174,23 @@ type runnerState struct {
 	// Consumed (cleared) when a relay is dispatched; an empty value at a
 	// self-continuation is the forbidden untracked-self-wake signature.
 	lastCompletedTask string
+
+	// taskTurns remembers each tracked task's originating turn id
+	// (stableIDPart task id → turn id) so the completion event — which can
+	// arrive while idle — still lands on the originating turn.
+	// taskEventsPublished dedupes lifecycle publishes across transcript
+	// re-reads (agy's cumulative jsonl can repeat markers).
+	//
+	// Publishing these as durable shell_task.* events is what makes the
+	// agent-continuation relay FOLD: the transcript projection's
+	// backgroundTaskWakeParentTurns derives the turn_bgtask-<task> →
+	// originating-turn edge from durable task lifecycle events, and the
+	// Background-activity tab renders from the same rows. Keeping the task
+	// signal in runner memory only (the pre-#1035 state) starved both.
+	taskTurns           map[string]string
+	taskEventsPublished map[string]struct{}
+	builder             eventBuilder
+	publish             func(map[string]any) error
 }
 
 type parsedStep struct {
@@ -271,6 +292,7 @@ func (s *runnerState) noteTaskSignalLocked(step AgyStep) {
 					s.pendingTasks = map[string]struct{}{}
 				}
 				s.pendingTasks[id] = struct{}{}
+				s.publishTaskLifecycleLocked(id, string(conversation.EventShellTaskStarted), "running", contentText(step.Content))
 			}
 		}
 		return
@@ -280,8 +302,82 @@ func (s *runnerState) noteTaskSignalLocked(step AgyStep) {
 			if id := trimTaskID(m[1]); id != "" {
 				delete(s.pendingTasks, id)
 				s.lastCompletedTask = id
+				s.publishTaskLifecycleLocked(id, string(conversation.EventShellTaskExited), "completed", contentText(step.Content))
 			}
 		}
+	}
+}
+
+// publishTaskLifecycleLocked emits the durable shell_task.* edge for an
+// agy-tracked background task. Called under s.mu (matching observeStep's
+// existing under-lock publish pattern). rawID is agy's task id as written;
+// the published task_id is its stableIDPart form — the exact value
+// registerAgentContinuation sends, so the relay's turn_bgtask-<task> id
+// round-trips back to this event in the projection's parent map.
+//
+// The originating turn is the attached turn at start-signal time; the
+// completion signal can arrive while idle, so the start records the edge in
+// taskTurns for the completion to reuse. A signal with no resolvable origin
+// publishes nothing (there is no turn to fold into) and is counted as the
+// fold-regression signal instead.
+func (s *runnerState) publishTaskLifecycleLocked(rawID, eventType, status, content string) {
+	if s.publish == nil {
+		return
+	}
+	stable := stableIDPart(rawID)
+	if stable == "" {
+		return
+	}
+	originTurn := ""
+	if s.currentRun != nil {
+		originTurn = s.currentRun.turnID
+	}
+	if eventType == string(conversation.EventShellTaskStarted) {
+		if originTurn == "" {
+			taskLifecycleTotal.WithLabelValues("orphaned_start").Inc()
+			slog.Warn("agy task start signal with no attached turn; fold edge unknowable", "task_id", stable)
+			return
+		}
+		if s.taskTurns == nil {
+			s.taskTurns = map[string]string{}
+		}
+		s.taskTurns[stable] = originTurn
+	} else {
+		if known := s.taskTurns[stable]; known != "" {
+			originTurn = known
+		}
+		if originTurn == "" {
+			taskLifecycleTotal.WithLabelValues("orphaned_completion").Inc()
+			slog.Warn("agy task completion signal for untracked task; fold edge unknowable", "task_id", stable)
+			return
+		}
+	}
+	dedupe := stable + ":" + eventType
+	if _, done := s.taskEventsPublished[dedupe]; done {
+		return
+	}
+	if s.taskEventsPublished == nil {
+		s.taskEventsPublished = map[string]struct{}{}
+	}
+	s.taskEventsPublished[dedupe] = struct{}{}
+
+	payload := map[string]any{
+		"kind":           "shell_task",
+		"task_id":        stable,
+		"status":         status,
+		"summary":        clipText(content, 200),
+		"last_tool_name": "agy",
+	}
+	event := s.builder.shellTaskEvent(originTurn, stable, eventType, payload)
+	if err := s.publish(event); err != nil {
+		taskLifecycleTotal.WithLabelValues("publish_error").Inc()
+		slog.Error("failed to publish agy task lifecycle event", "task_id", stable, "type", eventType, "error", err)
+		return
+	}
+	if eventType == string(conversation.EventShellTaskStarted) {
+		taskLifecycleTotal.WithLabelValues("started").Inc()
+	} else {
+		taskLifecycleTotal.WithLabelValues("completed").Inc()
 	}
 }
 
@@ -527,7 +623,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	state := &runnerState{}
+	state := &runnerState{builder: builder, publish: publisher}
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -1579,6 +1675,36 @@ func (b eventBuilder) assistantMessageEvent(turnID, providerItemID, timelineID, 
 			"message": map[string]any{"role": "assistant", "content": text},
 			"display": map[string]any{"kind": "plain"},
 		},
+	})
+}
+
+// shellTaskEvent is the durable lifecycle envelope for an agy-tracked
+// background task (timer, build, anything agy routes through its task
+// framework). One event family serves two consumers: the transcript
+// projection's backgroundTaskWakeParentTurns derives the
+// turn_bgtask-<task> → originating-turn fold edge from it, and the
+// Background-activity tab renders it. taskID must already be the
+// stableIDPart form so it matches the relay's turn id suffix.
+func (b eventBuilder) shellTaskEvent(turnID, taskID, eventType string, payload map[string]any) map[string]any {
+	return b.stamp(map[string]any{
+		"event_id":         turnID + ":" + eventType + ":" + taskID,
+		"conversation_id":  b.sessionID,
+		"session_id":       b.sessionID,
+		"turn_id":          turnID,
+		"timeline_id":      turnID + ":shell_task:" + taskID,
+		"task_id":          taskID,
+		"provider_item_id": taskID,
+		"parent_id":        turnID,
+		"actor":            "tool",
+		"source":           provider,
+		"type":             eventType,
+		"producer": map[string]any{
+			"name":              provider + "-runner",
+			"runtime":           provider,
+			"provider_event_id": taskID,
+		},
+		"visibility": string(conversation.VisibilityDurable),
+		"payload":    payload,
 	})
 }
 
