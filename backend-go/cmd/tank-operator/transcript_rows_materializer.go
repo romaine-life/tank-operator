@@ -39,6 +39,33 @@ type transcriptEventsTxStore interface {
 	ListBySessionTx(context.Context, pgx.Tx, string, store.SessionEventCursor, int) (store.SessionEventPage, error)
 }
 
+// materializationTxSlots caps CONCURRENT materialization transactions per
+// pod. The pool is deliberately MaxConns=4 (shared Azure Flex Server
+// connection budget, internal/pgstore/client.go); per-session persister
+// workers can otherwise open more transactions than the pool holds, and on
+// cold start (post-deploy, no fold memos) every big session begins a
+// full-ledger re-projection at once — which wedged the B1ms outright on the
+// 2026-06-12 post-#1051 deploys (pending frozen at 1893, every Postgres
+// caller timing out). The first attempt gated INSIDE the transaction, which
+// deadlocked through the pool: waiters held idle-in-transaction connections
+// while the slot holder starved for one. The gate therefore lives strictly
+// BEFORE the transaction opens: at most two materialization transactions
+// exist at once (folds are milliseconds; heavy resyncs serialize), and the
+// remaining pool connections keep samplers and handlers alive.
+var materializationTxSlots = make(chan struct{}, 2)
+
+// withMaterializationTx is the gated wrapper every materialization
+// transaction must go through.
+func withMaterializationTx(ctx context.Context, txRows transcriptRowsMaterializationTxStore, sessionID string, fn func(context.Context, pgx.Tx) error) error {
+	select {
+	case materializationTxSlots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-materializationTxSlots }()
+	return txRows.WithTranscriptMaterializationTx(ctx, sessionID, fn)
+}
+
 // readAllTurnEventsTx reads every event of a turn in ASC order inside a tx by
 // paging the turn-scoped cursor to exhaustion. The materializer folds the
 // COMPLETE turn so the stored turn-activity shell's terminal/active status can
@@ -174,7 +201,7 @@ func (m transcriptRowsMaterializer) refreshSessionBatch(ctx context.Context, ses
 			turnOrder = append(turnOrder, turnID)
 		}
 	}
-	return txRows.WithTranscriptMaterializationTx(ctx, sessionID, func(ctx context.Context, tx pgx.Tx) error {
+	return withMaterializationTx(ctx, txRows, sessionID, func(ctx context.Context, tx pgx.Tx) error {
 		// Checkpointed fold (tank-operator#1051 B2+B3): when the session has
 		// a live memo and every event in the batch is flood-class, advance
 		// the memo and rewrite only the changed shell rows — no ledger read
@@ -332,17 +359,6 @@ func (m transcriptRowsMaterializer) tryFoldBatchTx(
 	return true, nil
 }
 
-// sessionResyncSlots caps CONCURRENT session-scope re-projections per pod.
-// The per-session worker isolation that keeps one session from starving
-// another also means N cold sessions (post-deploy, no fold memos yet) can
-// start N full-ledger reads simultaneously — five parallel multi-thousand-row
-// reads wedged the B1ms instance outright on the 2026-06-12 post-#1051
-// deploys: every Postgres caller timed out and the persister made zero
-// progress. One heavy read at a time is proven fine on this instance class;
-// queued workers wait here while flood-class folds (no ledger read) continue
-// unimpeded on other sessions.
-var sessionResyncSlots = make(chan struct{}, 1)
-
 // resyncSessionTx is the reference projection: re-project the whole session
 // and reseed the fold memo from the same events, in the same transaction.
 func (m transcriptRowsMaterializer) resyncSessionTx(
@@ -352,12 +368,6 @@ func (m transcriptRowsMaterializer) resyncSessionTx(
 	rowsStore transcriptRowsMaterializationTxStore,
 	sessionID string,
 ) error {
-	select {
-	case sessionResyncSlots <- struct{}{}:
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-	defer func() { <-sessionResyncSlots }()
 	events, err := m.backfillSessionEventsTx(ctx, tx, eventsStore, rowsStore, sessionID)
 	if err != nil {
 		return err
@@ -383,7 +393,7 @@ func (m transcriptRowsMaterializer) RefreshEvent(ctx context.Context, event map[
 	turnID := transcriptString(event, "turn_id")
 	if txRows, ok := m.rows.(transcriptRowsMaterializationTxStore); ok {
 		if txEvents, ok := m.events.(transcriptEventsTxStore); ok {
-			return txRows.WithTranscriptMaterializationTx(ctx, sessionID, func(ctx context.Context, tx pgx.Tx) error {
+			return withMaterializationTx(ctx, txRows, sessionID, func(ctx context.Context, tx pgx.Tx) error {
 				return m.refreshEventTx(ctx, tx, txEvents, txRows, sessionID, turnID, event)
 			})
 		}
@@ -518,7 +528,7 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 	if txRows, ok := m.rows.(transcriptRowsMaterializationTxStore); ok {
 		if txEvents, ok := m.events.(transcriptEventsTxStore); ok {
 			backfilled := false
-			err := txRows.WithTranscriptMaterializationTx(ctx, sessionID, func(ctx context.Context, tx pgx.Tx) error {
+			err := withMaterializationTx(ctx, txRows, sessionID, func(ctx context.Context, tx pgx.Tx) error {
 				needed, err := txRows.NeedsBackfillTx(ctx, tx, sessionID)
 				if err != nil || !needed {
 					return err
