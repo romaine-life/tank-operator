@@ -940,16 +940,19 @@ func TestTaskLifecycleStartWhileIdleDefersToAttachingTurn(t *testing.T) {
 	}
 }
 
-// --- Cumulative-transcript replay tests (session 791) ------------------------
+// --- Transcript-rewrite replay tests (session 791) ----------------------------
 //
-// agy's transcript_full.jsonl is cumulative: a burst can re-emit the entire
-// prior step history, and a file rewrite shrinks the file so the tailer's byte
-// cursor resets and replays the whole file. Step dedupe must therefore be
-// SESSION-scoped. Per-turn dedupe (the pre-fix state) re-published every
-// historical step under each later turn's id: session 791's ledger carried
-// turn 1's "schedule 5s timer" items under four turn_ids, per-turn item counts
-// grew cumulatively (2 → 35 → 270 → 282), and expanding turn N in the Turns
-// view showed the content of turns 1..N.
+// agy performs its larger transcript writes as an in-place truncate +
+// byte-identical full rewrite (verified live, probe session 799). When a
+// sweep's stat lands inside that sub-second window, the byte cursor rewinds
+// and the ENTIRE prior history re-arrives through the tailer. Step dedupe must
+// therefore be SESSION-scoped. Per-turn dedupe (the pre-fix state)
+// re-published every historical step under whatever turn was live at the
+// race: session 791's ledger carried turn 1's "schedule 5s timer" items under
+// four turn_ids, per-turn item counts grew cumulatively (2 → 35 → 270 → 282),
+// and expanding turn N in the Turns view showed the content of turns 1..N.
+// These tests feed the post-rewind byte stream (history + new steps) through
+// handleStep exactly as sweepTranscripts would deliver it.
 
 func TestCumulativeTranscriptReplayDoesNotReattributeStepsAcrossTurns(t *testing.T) {
 	builder := eventBuilder{sessionID: "791", sessionStorageKey: "791"}
@@ -983,8 +986,8 @@ func TestCumulativeTranscriptReplayDoesNotReattributeStepsAcrossTurns(t *testing
 	state.detachTurn(run1)
 	turn1EventCount := len(log.snapshot())
 
-	// Turn 2: agy re-emits the FULL history (cumulative jsonl / rewound byte
-	// cursor) ahead of the turn's own new steps.
+	// Turn 2: a mid-turn rewrite rewinds the byte cursor, so the FULL history
+	// re-arrives ahead of the turn's own new steps.
 	turn2Burst := []string{
 		`{"step_index":4,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Looking at the board.","tool_calls":[{"name":"view_file","args":{"AbsolutePath":"/workspace/board.txt"}}]}`,
 		`{"step_index":5,"source":"MODEL","type":"view_file","status":"DONE","content":"board contents"}`,
@@ -1050,7 +1053,7 @@ func TestCumulativeTranscriptReplayDoesNotReattributeStepsAcrossTurns(t *testing
 }
 
 func TestIdleCumulativeReplayDoesNotBufferOrManufactureContinuation(t *testing.T) {
-	// A cumulative rewrite can also land while NO turn is active. Replayed
+	// A rewrite-rewind replay can also land while NO turn is active. Replayed
 	// history must not be re-buffered into the next attaching turn and — the
 	// phantom-relay hazard — a replayed MODEL step must not request an
 	// agent-continuation: only a genuinely NEW idle MODEL step is agy
@@ -1078,7 +1081,7 @@ func TestIdleCumulativeReplayDoesNotBufferOrManufactureContinuation(t *testing.T
 	feed(prose)
 	state.detachTurn(run1)
 
-	// Idle cumulative rewrite replays the already-published step.
+	// An idle rewrite-rewind replays the already-published step.
 	feed(prose)
 	state.mu.Lock()
 	buffered, woke := len(state.pendingSteps), state.wakeRequested

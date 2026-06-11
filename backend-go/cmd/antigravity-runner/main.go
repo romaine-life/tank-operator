@@ -85,7 +85,7 @@ var (
 	}, []string{"event"})
 	stepReplaySuppressedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tank_antigravity_runner_step_replay_suppressed_total",
-		Help: "Transcript steps skipped because the (provider step, status) pair was already observed earlier in this session. agy's cumulative jsonl re-emits prior history, so replays are expected and large; context=turn (suppressed while a turn was active) or idle (suppressed between turns, where an unsuppressed replay would re-buffer history or manufacture a phantom self-continuation relay). A session whose later turns re-publish earlier turns' items in session_events while this counter stays flat is the regression signature for the session-791 re-attribution bug.",
+		Help: "Transcript steps skipped because the (provider step, status) pair was already observed earlier in this session. agy rewrites transcript_full.jsonl in place (truncate + byte-identical full rewrite, verified live on session 799); when a sweep's stat lands inside the rewrite window the byte cursor rewinds to 0 and the whole history re-arrives. Replay is therefore an intermittent race correlated with large step outputs: zero on light sessions, frequent on heavy ones. context=turn (suppressed while a turn was active) or idle (suppressed between turns, where an unsuppressed replay would re-buffer history or manufacture a phantom self-continuation relay). Cross-turn duplicate items in session_events while this counter stays flat is the regression signature for the session-791 re-attribution bug.",
 	}, []string{"context"})
 )
 
@@ -198,13 +198,16 @@ type runnerState struct {
 	lastCompletedTask string
 
 	// seenSteps is the SESSION-scoped step dedupe set, keyed by
-	// stepSeenKey (providerStepID + status). agy's transcript_full.jsonl is
-	// cumulative: a burst can re-emit the entire prior step history, and a
-	// file rewrite shrinks the file so sweepTranscripts resets its byte
-	// cursor and replays the whole file. Dedupe scoped to one turn (the
-	// pre-fix state) re-published every historical step under each later
-	// turn's id, so session_events accumulated per-turn copies of the whole
-	// conversation and expanding turn N showed turns 1..N (session 791).
+	// stepSeenKey (providerStepID + status). agy does its larger writes to
+	// transcript_full.jsonl as an in-place truncate + full rewrite (same
+	// inode, byte-identical prefix — watched live on session 799); when a
+	// sweep's stat lands inside that sub-second window, size < offset
+	// rewinds the byte cursor and the ENTIRE history re-arrives through
+	// the tailer. Dedupe scoped to one turn (the pre-fix state)
+	// re-published every historical step under whatever turn was live at
+	// the race, so session_events accumulated per-turn copies of the whole
+	// conversation and expanding turn N showed turns 1..N (sessions
+	// 791/792/793).
 	// A (step, status) pair is durable under the turn that FIRST observed
 	// it and must never publish again. Guarded by its own mutex because
 	// observeStep runs both under s.mu (handleStep, attachTurn) and bare in
@@ -488,10 +491,11 @@ func (s *runnerState) backgroundWorkPending() bool {
 // stepSeenKey is the session-scoped dedupe identity of one transcript step
 // observation: the stable provider step id plus the step's status, so a
 // RUNNING→DONE transition publishes both edges while any re-read of an
-// already-observed (step, status) pair — agy's cumulative jsonl re-emits the
-// whole history — is suppressed. The identity (and the ToUpper status
-// normalization) is exactly what the retired per-turn seen map used; only the
-// scope changed, because per-turn scope re-attributed history to later turns.
+// already-observed (step, status) pair — the whole history re-arrives when a
+// sweep stats agy's transcript mid-rewrite and rewinds the cursor — is
+// suppressed. The identity (and the ToUpper status normalization) is exactly
+// what the retired per-turn seen map used; only the scope changed, because
+// per-turn scope re-attributed history to later turns.
 func stepSeenKey(providerID, status string) string {
 	return providerID + ":" + strings.ToUpper(status)
 }
@@ -571,7 +575,7 @@ type turnRun struct {
 	// state is the shared session runner state. The relay reads its background-work
 	// pending-set to stamp background_work_pending on this turn's terminal, and
 	// observeStep consults its SESSION-scoped seenSteps set — per-turn dedupe
-	// re-published agy's cumulative history under every later turn (session 791).
+	// re-published replayed history under every later turn (session 791).
 	state *runnerState
 }
 
@@ -1284,8 +1288,9 @@ func (a *activeProcess) wasInterrupted(turnID string) bool {
 
 // newTurnRun binds a turn to the shared session state. state is a required
 // dependency, not an option: observeStep dedupes against the session-scoped
-// seenSteps set (agy's cumulative jsonl re-emits prior turns' history), and a
-// run without it would re-attribute that history to its own turn id.
+// seenSteps set (an agy in-place transcript rewrite can re-deliver prior
+// turns' history through the tailer), and a run without it would re-attribute
+// that history to its own turn id.
 func newTurnRun(builder eventBuilder, publisher func(map[string]any) error, turnID, clientNonce string, state *runnerState) *turnRun {
 	return &turnRun{
 		builder:      builder,
@@ -1338,14 +1343,15 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 	}
 	providerID := providerStepID(path, line, step)
 
-	// Session-scoped dedupe: agy's cumulative jsonl re-emits the entire prior
-	// history (and a file rewrite replays the whole file through the tailer),
-	// so a (step, status) pair publishes only on its FIRST observation this
-	// session — under the turn that was live when it genuinely happened. The
-	// settle-cancel and noteProgress above still run for replayed bytes (real
-	// transcript movement); only the durable publish is suppressed. Per-turn
-	// dedupe here re-published all history under every later turn's id, which
-	// is how expanding turn N came to show turns 1..N (session 791).
+	// Session-scoped dedupe: an agy in-place transcript rewrite can rewind
+	// the tailer's byte cursor and re-deliver the entire prior history (see
+	// runnerState.seenSteps), so a (step, status) pair publishes only on its
+	// FIRST observation this session — under the turn that was live when it
+	// genuinely happened. The settle-cancel and noteProgress above still run
+	// for replayed bytes (real transcript movement); only the durable publish
+	// is suppressed. Per-turn dedupe here re-published all history under
+	// whatever turn was live at the replay, which is how expanding turn N
+	// came to show turns 1..N (session 791).
 	if !r.state.markStepObserved(stepSeenKey(providerID, step.Status)) {
 		stepReplaySuppressedTotal.WithLabelValues("turn").Inc()
 		return nil
@@ -2014,6 +2020,15 @@ func sweepTranscripts(brainDir string, offsets map[string]int64, cfg runnerConfi
 		size := info.Size()
 		offset := offsets[path]
 		if size < offset {
+			// agy performs its larger transcript writes as an in-place
+			// truncate + full rewrite (same inode, byte-identical prefix —
+			// verified live, session 799). A stat that lands inside that
+			// sub-second window sees a transiently small file; rewinding to
+			// 0 re-reads the whole file once the rewrite settles. The replay
+			// this causes is discharged by the session-scoped seenSteps
+			// dedupe — never remove the rewind without it, and never assume
+			// the prefix is stable enough to resume mid-file: that bets
+			// correctness on an undocumented invariant of a closed binary.
 			offset = 0
 		}
 		if size <= offset {
