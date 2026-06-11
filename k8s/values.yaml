@@ -242,6 +242,15 @@ sessionBus:
   # sessions namespaces so clients can connect.
   url: nats://tank-nats.nats.svc.cluster.local:4222
 
+clusterMaintenance:
+  autoUpgradeChannel: patch
+  nodeOSUpgradeChannel: NodeImage
+  autoUpgradeWindow:
+    dayOfWeek: Sunday
+    startTime: "06:00"
+    utcOffset: "+00:00"
+    durationHours: 12
+
 # GitHub App slug used for the install URL the orchestrator redirects users
 # to (#57 stage 2). The App's Setup URL must be configured to point at
 # https://<hostname>/api/github/install/callback in the GitHub UI for

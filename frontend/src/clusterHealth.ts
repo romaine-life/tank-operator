@@ -7,6 +7,14 @@ export interface ClusterHealthResponse {
   nodes: ClusterNodeHealth;
   sessions: ClusterSessionPodHealth;
   nats: ClusterNATSHealth;
+  upgrade: ClusterUpgradeHealth;
+  messages: ClusterHealthMessage[];
+}
+
+export interface ClusterHealthMessage {
+  severity: ClusterHealthStatus;
+  surface: string;
+  message: string;
 }
 
 export interface ClusterNodeHealth {
@@ -65,6 +73,54 @@ export interface ClusterJetStreamHealth {
   stream_messages: number;
   stream_bytes: number;
   stream_consumers: number;
+  consumer_pending: number;
+  consumer_ack_pending: number;
+  consumer_redelivered: number;
+  backlogged_consumers: number;
+  ack_pending_consumers: number;
+  redelivering_consumers: number;
+  top_consumer_backlogs?: ClusterJetStreamConsumerBacklog[];
+}
+
+export interface ClusterJetStreamConsumerBacklog {
+  name: string;
+  pending: number;
+  ack_pending: number;
+  redelivered: number;
+  waiting: number;
+  delivered_stream_seq: number;
+  ack_floor_stream_seq: number;
+}
+
+export interface ClusterUpgradeHealth {
+  status: ClusterHealthStatus;
+  detected: boolean;
+  summary: string;
+  auto_upgrade_channel: string;
+  node_os_upgrade_channel: string;
+  maintenance_window: ClusterMaintenanceWindow;
+  signals?: string[];
+  kubelet_versions?: ClusterVersionCount[];
+  node_image_versions?: ClusterVersionCount[];
+  unschedulable_nodes?: string[];
+  deleting_nodes?: string[];
+  error?: string;
+}
+
+export interface ClusterMaintenanceWindow {
+  day_of_week: string;
+  start_time: string;
+  utc_offset: string;
+  duration_hours: number;
+  active: boolean;
+  current_started_at?: string;
+  current_ends_at?: string;
+  seconds_remaining?: number;
+}
+
+export interface ClusterVersionCount {
+  version: string;
+  count: number;
 }
 
 export function clusterHealthHeadline(health: ClusterHealthResponse | null): string {
@@ -96,12 +152,25 @@ export function clusterHealthIssueText(health: ClusterHealthResponse | null): st
     if (health.nodes.unschedulable > 0) return `${health.nodes.unschedulable} node${health.nodes.unschedulable === 1 ? "" : "s"} unschedulable`;
   }
   if (health.nats.status === "warning") return health.nats.warnings?.[0] || "NATS degraded";
+  if (health.upgrade?.status === "warning") return health.upgrade.summary || "AKS upgrade activity detected";
   if (health.sessions.status === "warning") {
     if (health.sessions.pending > 0) return `${health.sessions.pending} session pod${health.sessions.pending === 1 ? "" : "s"} pending`;
     if (health.sessions.not_ready > 0) return `${health.sessions.not_ready} session pod${health.sessions.not_ready === 1 ? "" : "s"} not ready`;
   }
   if (health.status === "unknown") return "health partially unavailable";
   return "all checks passing";
+}
+
+export function clusterHealthMessages(health: ClusterHealthResponse | null): ClusterHealthMessage[] {
+  if (!health) return [];
+  if (Array.isArray(health.messages) && health.messages.length > 0) return health.messages;
+  return [
+    {
+      severity: health.status,
+      surface: "Cluster",
+      message: clusterHealthIssueText(health),
+    },
+  ];
 }
 
 export function clusterHealthNatsReachabilityLabel(nats: ClusterNATSHealth | undefined): string {

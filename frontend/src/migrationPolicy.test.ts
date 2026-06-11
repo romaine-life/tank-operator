@@ -115,7 +115,7 @@ test("App-root holds no periodic React state setters (cascade-prone pattern)", (
   //      timeService at minute/second granularity, re-rendering only
   //      the row whose bucket changed.
   //   2. `clusterHealth*` + `loadClusterHealth` + 30s setInterval →
-  //      ClusterHealthWidget now owns its own state and polling.
+  //      ClusterHealthScreen now owns its own state and polling.
   //
   // Re-introducing either pattern restores the cascading-rerender
   // failure mode; this guard catches it at PR time. If a future
@@ -544,7 +544,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   expect(appRoutesSource).toMatch(
     /export type SessionRouteTab =[\s\S]*?"turns"[\s\S]*?"chat"[\s\S]*?"static"[\s\S]*?"session-data"[\s\S]*?"files"[\s\S]*?"background"/,
   );
-  expect(appRoutesSource.includes('export type AppRouteTab = "settings" | "help";')).toBe(true);
+  expect(appRoutesSource.includes('export type AppRouteTab = "settings" | "help" | "cluster";')).toBe(true);
   expect(appRoutesSource.includes("readAppRouteFromPathname")).toBe(true);
   expect(appRoutesSource.includes("buildAppRouteUrl")).toBe(true);
   expect(appRoutesSource.includes('url.pathname = "/new";')).toBe(true);
@@ -554,6 +554,7 @@ test("turn internals move out of the transcript into a turn view", () => {
           'replaceAppRoute("settings", homeSettingsTab, homeAdminView)',
         )).toBe(true);
   expect(appSource.includes('replaceAppRoute("help")')).toBe(true);
+  expect(appSource.includes('replaceAppRoute("cluster")')).toBe(true);
   expect(appSource.includes('setActiveTab("turns")')).toBe(true);
   // The turns route write threads both the durable turn number AND the page
   // ordinal so /turns/{n}/pages/{p} is deep-linkable; the call is multi-line.
