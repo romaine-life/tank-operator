@@ -23077,17 +23077,6 @@ function AuthenticatedApp() {
           <span className="run-connection-label">{activeConnectionLabel}</span>
         </span>
       )}
-      {!useHomeTitleChrome && activeWorkspaceSession?.status === "Failed" && (
-        <span
-          className="run-connection-pill run-connection-pill-failed"
-          role="status"
-          aria-live="polite"
-        >
-          <span className="run-connection-label run-connection-label-failed">
-            Environment Stopped
-          </span>
-        </span>
-      )}
       {!useHomeTitleChrome && activeRefreshFlash && (
         <span
           className="run-connection-pill run-refresh-pill"
@@ -23176,7 +23165,7 @@ function AuthenticatedApp() {
                 <li
                   key={s.id}
                   data-session-id={s.id}
-                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${s.status === "Failed" ? " is-failed" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
                   draggable={!isClosing && !readOnlySessionView && !isCompact}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
                   onDragOver={(e) => dragSessionOver(s.id, e)}
