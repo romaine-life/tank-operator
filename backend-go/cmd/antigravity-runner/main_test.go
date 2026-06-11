@@ -892,6 +892,12 @@ func TestTaskLifecycleStartWhileIdleDefersToAttachingTurn(t *testing.T) {
 	state := &runnerState{builder: builder, publish: log.publisher}
 	cfg := runnerConfig{sessionID: "17"}
 
+	// turn-1 is the answer-first asking turn: it attaches, completes
+	// ("I'll set a timer"), and detaches BEFORE the tool call runs.
+	asking := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	state.attachTurn(asking)
+	state.detachTurn(asking)
+
 	startLine := `{"step_index":2,"source":"MODEL","type":"RUN_COMMAND","status":"RUNNING","content":"Tool is running as a background task with task id: T-9"}`
 	var startStep AgyStep
 	if err := json.Unmarshal([]byte(startLine), &startStep); err != nil {
@@ -923,8 +929,12 @@ func TestTaskLifecycleStartWhileIdleDefersToAttachingTurn(t *testing.T) {
 	if started == nil {
 		t.Fatal("attachTurn must flush the deferred shell_task.started edge")
 	}
-	if started["turn_id"] != "turn_bgtask-T-9" {
-		t.Fatalf("deferred edge turn_id = %v, want the attaching turn", started["turn_id"])
+	// Causal-adjacency attribution: the idle-started task belongs to the
+	// turn that had just closed (turn-1, the answer-first asking turn),
+	// NOT the relay turn that happens to attach next — so the fire relay
+	// folds directly to the user-visible turn.
+	if started["turn_id"] != "turn-1" {
+		t.Fatalf("deferred edge turn_id = %v, want last completed turn-1", started["turn_id"])
 	}
 	if started["task_id"] != stableIDPart("T-9") {
 		t.Fatalf("deferred edge task_id = %v", started["task_id"])

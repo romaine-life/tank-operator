@@ -198,8 +198,16 @@ type runnerState struct {
 	// chain walker collapses relay-origin tasks to the originating
 	// user-visible turn.
 	pendingTaskStarts []pendingTaskStart
-	builder           eventBuilder
-	publish           func(map[string]any) error
+	// lastCompletedTurnID is the causal-adjacency attribution for idle
+	// task starts (the answer-first sequence): agy never acts idle
+	// spontaneously — idle activity is downstream of the last exchange —
+	// so a task started in the idle gap belongs to the turn that just
+	// closed. The irreducible ambiguity is a new user turn racing the
+	// same seconds-wide gap; that fails soft (content attributes one
+	// turn early, never lost).
+	lastCompletedTurnID string
+	builder             eventBuilder
+	publish             func(map[string]any) error
 }
 
 type pendingTaskStart struct {
@@ -266,10 +274,17 @@ func (s *runnerState) attachTurn(run *turnRun) {
 	defer s.mu.Unlock()
 	s.currentRun = run
 	// Flush idle-buffered task starts FIRST so the durable started edge
-	// precedes the replayed step items, attributed to this attaching turn
-	// (the turn that carries the work).
+	// precedes the replayed step items. Causal-adjacency attribution: an
+	// idle-started task belongs to the turn that had just closed when it
+	// started (the answer-first sequence — agy says "I'll set a timer",
+	// the turn completes, THEN the tool call runs). Fall back to the
+	// attaching turn when no prior turn exists.
 	for _, pts := range s.pendingTaskStarts {
-		s.publishTaskLifecycleLocked(pts.rawID, string(conversation.EventShellTaskStarted), "running", pts.content)
+		origin := s.lastCompletedTurnID
+		if origin == "" {
+			origin = run.turnID
+		}
+		s.publishTaskLifecycleWithOriginLocked(origin, pts.rawID, string(conversation.EventShellTaskStarted), "running", pts.content)
 	}
 	s.pendingTaskStarts = nil
 	for _, ps := range s.pendingSteps {
@@ -284,6 +299,7 @@ func (s *runnerState) detachTurn(run *turnRun) {
 	defer s.mu.Unlock()
 	if s.currentRun == run {
 		s.currentRun = nil
+		s.lastCompletedTurnID = run.turnID
 	}
 }
 
@@ -346,6 +362,10 @@ func (s *runnerState) noteTaskSignalLocked(step AgyStep) {
 // publishes nothing (there is no turn to fold into) and is counted as the
 // fold-regression signal instead.
 func (s *runnerState) publishTaskLifecycleLocked(rawID, eventType, status, content string) {
+	s.publishTaskLifecycleWithOriginLocked("", rawID, eventType, status, content)
+}
+
+func (s *runnerState) publishTaskLifecycleWithOriginLocked(originHint, rawID, eventType, status, content string) {
 	if s.publish == nil {
 		return
 	}
@@ -353,8 +373,8 @@ func (s *runnerState) publishTaskLifecycleLocked(rawID, eventType, status, conte
 	if stable == "" {
 		return
 	}
-	originTurn := ""
-	if s.currentRun != nil {
+	originTurn := originHint
+	if originTurn == "" && s.currentRun != nil {
 		originTurn = s.currentRun.turnID
 	}
 	if eventType == string(conversation.EventShellTaskStarted) {
@@ -1806,6 +1826,22 @@ func tailTranscripts(ctx context.Context, cfg runnerConfig, state *runnerState) 
 		})
 	}
 	watchAll(brainDir)
+
+	// Skip pre-existing transcript bytes. A restarted runner (container
+	// restart, crash recovery, hot-swap) must not replay historical steps
+	// into the current conversation: replayed RUNNING/sender= task markers
+	// mis-attribute durable task edges to whatever turn is active and burn
+	// the self-continuation relay latch on stale steps (observed live on
+	// slot-1 session 159, tank-operator#1035). This is the tailer
+	// contract the TS-era ledger entry named: pre-existing bytes are
+	// skipped, new appended bytes are emitted.
+	_ = filepath.Walk(brainDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, "transcript_full.jsonl") {
+			return nil
+		}
+		offsets[path] = info.Size()
+		return nil
+	})
 
 	for {
 		select {
