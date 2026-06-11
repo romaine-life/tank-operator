@@ -897,7 +897,8 @@ export class Runner {
   // /proc cmdlines for the provider-declared command string, which appears
   // verbatim as `/bin/sh -c <command>`.
   commandSignatureAlive: (command: string) => boolean = (command) => {
-    if (!command) return false;
+    const signature = normalizeCommandSignature(command);
+    if (!signature) return false;
     try {
       for (const entry of readdirSync("/proc")) {
         if (!/^\d+$/.test(entry)) continue;
@@ -907,7 +908,7 @@ export class Runner {
         } catch {
           continue;
         }
-        if (cmdline.includes(command)) return true;
+        if (normalizeCommandSignature(cmdline).includes(signature)) return true;
       }
     } catch (err) {
       console.error("background command scan failed:", err);
@@ -1490,4 +1491,15 @@ export class Runner {
       await this.markCommandTerminal(turn, "turn.failed");
     }
   }
+}
+
+
+// normalizeCommandSignature makes codex's item.command comparable against
+// /proc cmdlines: codex reports the command WITH shell quoting
+// (`/bin/sh -lc 'sleep 60 && …'`) while argv carries no quote characters
+// (verified live on slot-1 session 161 — the unquoted forms match exactly).
+// Quote-stripping plus whitespace collapse keeps the signature deterministic;
+// the observed-alive-first guard in the watcher bounds any residual fuzz.
+export function normalizeCommandSignature(value: string): string {
+  return value.replaceAll(/["']/g, "").replaceAll(/\s+/g, " ").trim();
 }

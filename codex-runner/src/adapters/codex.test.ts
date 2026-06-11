@@ -633,3 +633,13 @@ test("process-exit completion synthesizes exited attributed to the origin turn",
   // Second call is a no-op (already drained) — watcher double-fire safety.
   assert.deepEqual(adapter.completeBackgroundShellByExit(pending[0]!.taskID), []);
 });
+
+test("command signatures normalize shell quoting for /proc matching", async () => {
+  const { normalizeCommandSignature } = await import("../runner.js");
+  const reported = "/bin/sh -lc 'sleep 60 && echo FINAL_ROUND_DONE'";
+  const cmdline = "/bin/sh -lc sleep 60 && echo FINAL_ROUND_DONE ";
+  assert.equal(
+    normalizeCommandSignature(cmdline).includes(normalizeCommandSignature(reported)),
+    true,
+  );
+});
