@@ -371,6 +371,49 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
   );
 }
 
+function TurnPromptStateSpecimens() {
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
+      <div
+        className="run-turn-view-context"
+        aria-label="Turn prompt collapsed"
+        data-collapsed="true"
+        data-context-loaded="true"
+        data-design-component="TurnPromptContext"
+        data-design-state="collapsed-text-preview-controls-inline"
+        data-inspectable
+      >
+        <div className="run-turn-view-context-head">
+          <span className="run-turn-view-context-label">Prompt</span>
+        </div>
+        <TranscriptMessage variant="user" ownedByActivity compact>
+          <p style={{ margin: 0 }}>
+            Please inspect the completed turn with a long initiating prompt.
+            The collapsed preview stays visible while section controls live on
+            the divider.
+          </p>
+        </TranscriptMessage>
+      </div>
+      <div
+        className="run-turn-view-context"
+        aria-label="Turn prompt unavailable"
+        data-collapsed="false"
+        data-context-loaded="false"
+        data-design-component="TurnPromptContext"
+        data-design-state="context-unavailable-control-disabled"
+        data-inspectable
+      >
+        <div className="run-turn-view-context-head">
+          <span className="run-turn-view-context-label">Prompt</span>
+        </div>
+        <div className="run-turn-view-context-unavailable" role="status">
+          Prompt context unavailable
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TranscriptSpecimen({
   highlightTarget,
 }: {
@@ -617,6 +660,13 @@ export function StyleguidePortfolioTranscript() {
               />
             </div>
           </div>
+        </section>
+
+        <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
+          <h2 style={{ margin: 0, color: "var(--text-primary)", fontSize: "var(--text-lg)" }}>
+            turn prompt states
+          </h2>
+          <TurnPromptStateSpecimens />
         </section>
 
         <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
