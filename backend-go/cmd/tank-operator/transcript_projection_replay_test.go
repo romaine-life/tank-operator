@@ -175,17 +175,35 @@ func assertReplayDurableHomes(t *testing.T, fixture string) (transcriptProjectio
 		}
 	}
 
-	// Every real turn that reached a terminal and did real work keeps exactly
-	// one activity shell — parked turns included. The shell is what carries the
-	// stamped turn number and makes the compacted body reachable; suppressing
-	// it is how turns 2-7 of session 161 rendered as "Current turn" with no
-	// content.
-	for _, turnID := range facts.realTurnOrder {
-		if !facts.terminalTurns[turnID] {
+	// No compacted body without a surviving container: whenever the projection
+	// compacts content into a turn's activity body, the shell that names that
+	// body must survive into the settled projection — except for wake turns
+	// whose body folds into a known originating turn (the parent's shell is
+	// then the container). Suppressing a shell whose body holds content is the
+	// annihilation this replay pins.
+	wakeParents := backgroundWakeParentTurnsFromEvents(events)
+	for turnID, body := range projection.ActivityBodies {
+		if len(body.CompactedEntryIDs) == 0 {
+			continue
+		}
+		if wakeParents[turnID] != "" {
 			continue
 		}
 		if !shellTurnIDs[turnID] {
-			t.Errorf("real terminal turn %s has no turn_activity shell in the settled projection", turnID)
+			t.Errorf("turn %s compacted %d entries but has no surviving turn_activity shell", turnID, len(body.CompactedEntryIDs))
+		}
+	}
+
+	// Every real turn that originated a background shell task and reached a
+	// terminal keeps its shell — parked is a state on the shell, not grounds
+	// for suppression. This is what carries the stamped turn number; dropping
+	// it is how turns 2-7 of session 161 rendered as "Current turn".
+	for taskID, turnID := range facts.taskTurns {
+		if isBackgroundWakeTurnID(turnID) || !facts.terminalTurns[turnID] {
+			continue
+		}
+		if !shellTurnIDs[turnID] {
+			t.Errorf("parked turn %s (task %s) has no turn_activity shell in the settled projection", turnID, taskID)
 		}
 	}
 
@@ -201,7 +219,6 @@ func assertReplayDurableHomes(t *testing.T, fixture string) (transcriptProjectio
 
 	// Wake turns with a derivable originating turn must not surface as
 	// standalone settled turns; their content re-homes onto the parent.
-	wakeParents := backgroundWakeParentTurnsFromEvents(events)
 	for _, entry := range projection.Entries {
 		turnID := transcriptMapString(entry, "turnId")
 		if parent := wakeParents[turnID]; parent != "" {

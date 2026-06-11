@@ -10262,6 +10262,12 @@ function buildTurnViewItems(
   const order = new Map<string, number>();
   const shells = new Map<string, TranscriptEntry>();
   const rawEntries = new Map<string, TranscriptEntry[]>();
+  // Durable turn numbers harvested from EVERY row carrying one — including
+  // plain user-message rows, which are excluded from the activity buckets
+  // below. A turn whose only durable row is its user message (the session-161
+  // shape) must still resolve "Turn N" instead of the "Current turn"
+  // fallback label.
+  const numbers = new Map<string, number>();
   const costRowsByTurn = new Map<string, Map<string, TranscriptEntry>>();
   const addCostRow = (entry: TranscriptEntry) => {
     const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
@@ -10278,6 +10284,8 @@ function buildTurnViewItems(
     if (!turnId) return;
     addCostRow(entry);
     if (!order.has(turnId)) order.set(turnId, index);
+    if (!numbers.has(turnId) && typeof entry.turnNumber === "number")
+      numbers.set(turnId, entry.turnNumber);
     if (isTurnActivityEntry(entry)) {
       shells.set(turnId, entry);
       return;
@@ -10290,11 +10298,14 @@ function buildTurnViewItems(
     const questionTurnId = entry.awaitingInput?.questionTurnId?.trim() ?? "";
     if (questionTurnId && !order.has(questionTurnId)) {
       order.set(questionTurnId, index + 0.01);
+      const questionTurnNumber = entry.awaitingInput?.questionTurnNumber;
+      if (typeof questionTurnNumber === "number" && !numbers.has(questionTurnId))
+        numbers.set(questionTurnId, questionTurnNumber);
       const questionBucket = rawEntries.get(questionTurnId) ?? [];
       questionBucket.push({
         ...entry,
         turnId: questionTurnId,
-        turnNumber: entry.awaitingInput?.questionTurnNumber,
+        turnNumber: questionTurnNumber,
       });
       rawEntries.set(questionTurnId, questionBucket);
     }
@@ -10314,13 +10325,7 @@ function buildTurnViewItems(
       const turnNumber =
         typeof shell?.turnNumber === "number"
           ? shell.turnNumber
-          : typeof rawTurnEntries.find(
-                (entry) => typeof entry.turnNumber === "number",
-              )?.turnNumber === "number"
-            ? rawTurnEntries.find(
-                (entry) => typeof entry.turnNumber === "number",
-              )!.turnNumber!
-            : null;
+          : (numbers.get(turnId) ?? null);
       const loadedEntries = activityEntriesByTurn[turnId];
       const turnEntries = loadedEntries ?? rawTurnEntries;
       const shellSummary = shell?.activity;

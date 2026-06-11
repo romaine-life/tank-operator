@@ -482,7 +482,7 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 		shell = cloneAnyMap(activityBody.Summary)
 		status = activityBody.Status
 	}
-	finalAnswerEntries := turnFinalAnswerEntries(activityBody.Entries, turnID, finalAnswerIDs, turnHasCompletedTerminal(events))
+	finalAnswerEntries := turnFinalAnswerEntries(activityBody.Entries, turnID, finalAnswerIDs, turnHasCompletedTerminal(events), turnCompletedTerminalCount(events) > 1)
 	finalAnswerIDs = mergeFinalAnswerEntryIDs(finalAnswerIDs, finalAnswerEntries)
 	collapse := turnActivityCollapseSummary(activityBody, finalAnswerEntries, finalAnswerIDs)
 	live := turnPageStatusIsLive(status)
@@ -542,12 +542,23 @@ func projectTurnPages(turnID string, events []map[string]any) turnPagesProjectio
 	}
 }
 
+// finalAnswerIDsFromTurnEvents resolves the turn-detail final answer for a
+// turn's COMBINED event set (the origin turn plus its folded wake-continuation
+// chain). The chain's LAST completed terminal owns the final answer: a parked
+// origin turn's promoted ack ("I'll report when it completes") is not the
+// user-final response — the continuation supersedes it. Unioning ids across
+// every terminal rendered the superseded ack as the page's final answer,
+// below (and visually replacing) the later wake content — the session-161
+// "the fold replaced the turn's answer" defect. When the last completed link
+// promoted nothing, the turn has no true final answer and the page shows the
+// chronological body only.
 func finalAnswerIDsFromTurnEvents(events []map[string]any) map[string]bool {
-	out := map[string]bool{}
+	var out map[string]bool
 	for _, event := range orderedTranscriptEvents(events) {
 		if transcriptString(event, "type") != string(conversation.EventTurnCompleted) {
 			continue
 		}
+		out = map[string]bool{}
 		for id := range projectionFinalAnswerIDs(event) {
 			out[id] = true
 		}
@@ -567,7 +578,20 @@ func turnHasCompletedTerminal(events []map[string]any) bool {
 	return false
 }
 
-func turnFinalAnswerEntries(entries []map[string]any, turnID string, finalAnswerIDs map[string]bool, completed bool) []map[string]any {
+// turnCompletedTerminalCount counts completed terminals across the combined
+// origin+continuation event set. More than one means this is a folded
+// continuation chain.
+func turnCompletedTerminalCount(events []map[string]any) int {
+	count := 0
+	for _, event := range events {
+		if transcriptString(event, "type") == string(conversation.EventTurnCompleted) {
+			count++
+		}
+	}
+	return count
+}
+
+func turnFinalAnswerEntries(entries []map[string]any, turnID string, finalAnswerIDs map[string]bool, completed bool, chained bool) []map[string]any {
 	var out []map[string]any
 	var fallback map[string]any
 	for _, entry := range entries {
@@ -577,7 +601,13 @@ func turnFinalAnswerEntries(entries []map[string]any, turnID string, finalAnswer
 		if !isProjectedAssistantMessage(entry) {
 			continue
 		}
-		if len(finalAnswerIDs) == 0 && completed && !isProjectionAwaitingInputEntry(entry) {
+		// The no-marker fallback exists for single-terminal turns from ledgers
+		// that predate explicit final-answer promotion. It must never apply to
+		// a folded continuation chain: when the chain's last link promoted
+		// nothing, resurrecting an earlier (superseded) ack as the "final
+		// answer" is exactly the answer-replacement confusion this projection
+		// exists to prevent.
+		if len(finalAnswerIDs) == 0 && completed && !chained && !isProjectionAwaitingInputEntry(entry) {
 			fallback = entry
 			continue
 		}

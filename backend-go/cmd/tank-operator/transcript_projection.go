@@ -195,7 +195,7 @@ func projectTranscriptEvents(events []map[string]any) transcriptProjection {
 	flat := state.projectFlatEntries()
 	assignSessionStatusOwnership(flat)
 	flat = dropOrphanSessionLifecycle(flat)
-	projection := compactProjectedTranscript(flat, state.activeTurnID, state.runStatus, state.turnTerminals, state.backgroundWakeTurns, state.continuationTurns)
+	projection := compactProjectedTranscript(flat, state.activeTurnID, state.runStatus, state.turnTerminals, state.backgroundWakeTurns, state.continuationTurns, state.backgroundWakeParents)
 	projection = foldBackgroundWakeContinuationActivities(projection, state.backgroundWakeParents)
 	projection.Entries = filterMainTranscriptQuestionTurnRows(projection.Entries)
 	return projection
@@ -1469,7 +1469,7 @@ func annotateProjectionTerminal(entry map[string]any, terminals map[string]turnT
 	return out
 }
 
-func compactProjectedTranscript(entries []map[string]any, activeTurnID string, runStatus string, terminals map[string]turnTerminalProjection, backgroundWakeTurns map[string]bool, continuationTurns map[string]bool) transcriptProjection {
+func compactProjectedTranscript(entries []map[string]any, activeTurnID string, runStatus string, terminals map[string]turnTerminalProjection, backgroundWakeTurns map[string]bool, continuationTurns map[string]bool, wakeParents map[string]string) transcriptProjection {
 	handoffActivities := awaitingInputHandoffProjectedActivities(entries, terminals)
 	for _, activity := range handoffActivities {
 		if activity.TurnID == activeTurnID {
@@ -1513,8 +1513,21 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 	out := make([]map[string]any, 0, len(entries))
 	for idx, entry := range entries {
 		if activity, ok := activityByInsertIndex[idx]; ok {
-			if backgroundWakeTurns[activity.TurnID] || continuationTurns[activity.TurnID] {
+			// A wake/continuation turn whose originating turn is known never
+			// surfaces its own shell: its body folds into the originating
+			// turn's shell (foldBackgroundWakeContinuationActivities), which is
+			// that content's durable home. Every other turn — including a
+			// parked origin turn whose background task outlived the terminal,
+			// and a wake turn whose parent edge cannot be derived — emits its
+			// shell. Suppressing a shell whose body has no surviving container
+			// is how parked turns' content was annihilated from the durable
+			// read model (the session-161 bug museum): "parked" is a state on
+			// the shell, not grounds for suppression.
+			if backgroundWakeTurns[activity.TurnID] && wakeParents[activity.TurnID] != "" {
 				continue
+			}
+			if continuationTurns[activity.TurnID] {
+				activity.Summary["continuation"] = true
 			}
 			shellOrderKey := transcriptMapString(activity.Summary, "startOrderKey")
 			shellStartedAt := transcriptMapString(activity.Summary, "startedAt")
@@ -1568,6 +1581,54 @@ func foldBackgroundWakeContinuationActivities(projection transcriptProjection, w
 	out := projection
 	out.Entries = reassignBackgroundWakeProjectedEntries(projection.Entries, wakeParents)
 	out.ActivityBodies = mergeBackgroundWakeActivityBodies(projection.ActivityBodies, wakeParents)
+	out.Entries = refreshFoldedParentShells(out.Entries, out.ActivityBodies, wakeParents)
+	return out
+}
+
+// refreshFoldedParentShells rewrites the emitted shell row of every turn that
+// absorbed a wake/continuation body so the durable shell reflects the merged
+// truth — counts, compacted child ids, and the end of the turn's activity span
+// extend through the folded continuation. The shell's placement fields
+// (orderKey/time) and its anchored start (which compactProjectedTranscript may
+// have moved below the turn's user message) are deliberately preserved.
+func refreshFoldedParentShells(entries []map[string]any, bodies map[string]turnActivityBody, wakeParents map[string]string) []map[string]any {
+	parents := map[string]bool{}
+	for _, parent := range wakeParents {
+		if parent != "" {
+			parents[parent] = true
+		}
+	}
+	if len(parents) == 0 {
+		return entries
+	}
+	out := make([]map[string]any, 0, len(entries))
+	for _, entry := range entries {
+		turnID := transcriptMapString(entry, "turnId")
+		if transcriptMapString(entry, "kind") != "turn_activity" || !parents[turnID] {
+			out = append(out, entry)
+			continue
+		}
+		body, ok := bodies[turnID]
+		if !ok {
+			out = append(out, entry)
+			continue
+		}
+		next := cloneAnyMap(entry)
+		summary := cloneAnyMap(body.Summary)
+		if prior, ok := entry["activity"].(map[string]any); ok {
+			for _, anchored := range []string{"startOrderKey", "startedAt", "sourceEventId"} {
+				if v := transcriptMapString(prior, anchored); v != "" {
+					summary[anchored] = v
+				}
+			}
+			if prior["continuation"] == true {
+				summary["continuation"] = true
+			}
+		}
+		next["activity"] = summary
+		next["activityIds"] = append([]string(nil), body.CompactedEntryIDs...)
+		out = append(out, next)
+	}
 	return out
 }
 
@@ -1610,6 +1671,12 @@ func mergeBackgroundWakeActivityBodies(bodies map[string]turnActivityBody, wakeP
 		}
 		mergedEntries := append([]map[string]any{}, parentBody.Entries...)
 		mergedEntries = append(mergedEntries, reassignBackgroundWakeProjectedEntries(wakeBody.Entries, map[string]string{wakeTurnID: parentTurnID})...)
+		// The folded body must read chronologically: a wake notice that fired
+		// at T+90s renders after the ack the turn gave at T, never above it.
+		// Append order is not a contract; the durable order keys are.
+		sort.SliceStable(mergedEntries, func(i, j int) bool {
+			return transcriptMapString(mergedEntries[i], "orderKey") < transcriptMapString(mergedEntries[j], "orderKey")
+		})
 		compactedEntries := compactedEntriesForIDs(mergedEntries, append(parentBody.CompactedEntryIDs, wakeBody.CompactedEntryIDs...))
 		merged := makeTurnActivityBody(parentTurnID, parentBody.Status, mergedEntries, compactedEntries, transcriptMapBool(parentBody.Summary, "active"))
 		if parentBody.Status == "needs_input" {

@@ -1134,8 +1134,19 @@ func TestProjectTranscriptEventsKeepsBackgroundTaskWakeMechanicsOutOfMainTranscr
 	}
 
 	projection := projectTranscriptEvents(events)
-	if got, want := len(projection.Entries), 0; got != want {
+	// This wake turn has no derivable originating turn (no shell_task lineage
+	// in the ledger), so it cannot fold anywhere. Fail-soft: its collapsed
+	// activity shell survives as the body's container — content is never
+	// dropped without a surviving home — while the wake prompt and tool
+	// mechanics stay inside the body, never as settled transcript rows.
+	if got, want := len(projection.Entries), 1; got != want {
 		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	if got := transcriptMapString(projection.Entries[0], "kind"); got != "turn_activity" {
+		t.Fatalf("orphan wake container kind = %q, want turn_activity shell: %#v", got, projection.Entries[0])
+	}
+	if got, want := transcriptMapString(projection.Entries[0], "turnId"), "turn_bgtask-bocpzxcm3"; got != want {
+		t.Fatalf("orphan wake shell turnId = %q, want %q", got, want)
 	}
 	body, ok := projection.ActivityBodies["turn_bgtask-bocpzxcm3"]
 	if !ok {
@@ -1168,17 +1179,18 @@ func TestProjectTranscriptEventsPromotesFinalAnswerFromBackgroundTaskWake(t *tes
 	}
 
 	projection := projectTranscriptEvents(events)
-	if got, want := len(projection.Entries), 1; got != want {
+	// No derivable originating turn (no task lineage), so the wake keeps its
+	// own shell as the body's container; the explicitly promoted final answer
+	// is the only settled message row.
+	if got, want := len(projection.Entries), 2; got != want {
 		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
 	}
-	entry := projection.Entries[0]
-	if entry["kind"] != "message" || entry["role"] != "assistant" {
-		t.Fatalf("background wake final answer should be the only settled transcript row, got: %#v", entry)
+	if got := transcriptMapString(projection.Entries[0], "kind"); got != "turn_activity" {
+		t.Fatalf("first entry kind = %q, want orphan wake shell: %#v", got, projection.Entries[0])
 	}
-	for _, entry := range projection.Entries {
-		if entry["kind"] == "turn_activity" {
-			t.Fatalf("background-task wake activity shell leaked into main transcript: %#v", entry)
-		}
+	entry := projection.Entries[1]
+	if entry["kind"] != "message" || entry["role"] != "assistant" {
+		t.Fatalf("background wake final answer should be the only settled message row, got: %#v", entry)
 	}
 	body, ok := projection.ActivityBodies["turn_bgtask-bocpzxcm3"]
 	if !ok {
@@ -1227,7 +1239,10 @@ func TestProjectTranscriptEventsHidesBackgroundContinuationTurnFromMainTranscrip
 	}
 
 	projection := projectTranscriptEvents(events)
-	if got, want := len(projection.Entries), 2; got != want {
+	// The parked origin turn keeps its activity shell — parked is a state on
+	// the shell, not grounds for suppression (the session-161 annihilation).
+	// Settled rows: user message, origin shell, folded wake final answer.
+	if got, want := len(projection.Entries), 3; got != want {
 		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
 	}
 	if got, want := projection.Entries[0]["role"], "user"; got != want {
@@ -1236,25 +1251,36 @@ func TestProjectTranscriptEventsHidesBackgroundContinuationTurnFromMainTranscrip
 	if got := transcriptMapString(projection.Entries[0], "text"); !strings.Contains(got, "Run CI") {
 		t.Fatalf("first entry text = %q, want original user message", got)
 	}
-	if got, want := projection.Entries[1]["role"], "assistant"; got != want {
-		t.Fatalf("second entry role = %#v, want %#v: %#v", got, want, projection.Entries[1])
-	}
-	if got := transcriptMapString(projection.Entries[1], "text"); got != "CI passed. The branch is ready." {
-		t.Fatalf("second entry text = %q, want wake final answer", got)
+	if got := transcriptMapString(projection.Entries[1], "kind"); got != "turn_activity" {
+		t.Fatalf("second entry kind = %q, want parked origin shell: %#v", got, projection.Entries[1])
 	}
 	if got, want := transcriptMapString(projection.Entries[1], "turnId"), "turn-1"; got != want {
-		t.Fatalf("wake final projected turnId = %q, want parent %q: %#v", got, want, projection.Entries[1])
+		t.Fatalf("origin shell turnId = %q, want %q", got, want)
 	}
-	if got, want := transcriptMapString(projection.Entries[1], "backendTurnId"), "turn_bgtask-task-ci"; got != want {
-		t.Fatalf("wake final backendTurnId = %q, want wake turn %q: %#v", got, want, projection.Entries[1])
+	if shellActivity, ok := projection.Entries[1]["activity"].(map[string]any); !ok || shellActivity["continuation"] != true {
+		t.Fatalf("parked origin shell must carry continuation state: %#v", projection.Entries[1])
+	}
+	if got, want := projection.Entries[2]["role"], "assistant"; got != want {
+		t.Fatalf("third entry role = %#v, want %#v: %#v", got, want, projection.Entries[2])
+	}
+	if got := transcriptMapString(projection.Entries[2], "text"); got != "CI passed. The branch is ready." {
+		t.Fatalf("third entry text = %q, want wake final answer", got)
+	}
+	if got, want := transcriptMapString(projection.Entries[2], "turnId"), "turn-1"; got != want {
+		t.Fatalf("wake final projected turnId = %q, want parent %q: %#v", got, want, projection.Entries[2])
+	}
+	if got, want := transcriptMapString(projection.Entries[2], "backendTurnId"), "turn_bgtask-task-ci"; got != want {
+		t.Fatalf("wake final backendTurnId = %q, want wake turn %q: %#v", got, want, projection.Entries[2])
 	}
 	for _, entry := range projection.Entries {
 		text := transcriptMapString(entry, "text")
 		if strings.Contains(text, "wait for CI") ||
 			strings.Contains(text, "background task you started earlier") ||
-			entry["kind"] == "background_task" ||
-			entry["kind"] == "turn_activity" {
+			entry["kind"] == "background_task" {
 			t.Fatalf("continuation mechanics leaked into main transcript: %#v", entry)
+		}
+		if entry["kind"] == "turn_activity" && transcriptMapString(entry, "turnId") != "turn-1" {
+			t.Fatalf("wake turn leaked its own activity shell into main transcript: %#v", entry)
 		}
 	}
 	body, ok := projection.ActivityBodies["turn-1"]
@@ -1335,14 +1361,18 @@ func TestProjectTranscriptEventsFoldsHashedBackgroundWakeTurnIntoParent(t *testi
 	}
 
 	projection := projectTranscriptEvents(events)
-	if got, want := len(projection.Entries), 2; got != want {
+	// user message, parked origin shell, folded wake final answer.
+	if got, want := len(projection.Entries), 3; got != want {
 		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
 	}
-	if got, want := transcriptMapString(projection.Entries[1], "turnId"), "turn-1"; got != want {
-		t.Fatalf("wake final projected turnId = %q, want parent %q: %#v", got, want, projection.Entries[1])
+	if got := transcriptMapString(projection.Entries[1], "kind"); got != "turn_activity" {
+		t.Fatalf("second entry kind = %q, want parked origin shell: %#v", got, projection.Entries[1])
 	}
-	if got, want := transcriptMapString(projection.Entries[1], "backendTurnId"), wakeTurnID; got != want {
-		t.Fatalf("wake final backendTurnId = %q, want wake turn %q: %#v", got, want, projection.Entries[1])
+	if got, want := transcriptMapString(projection.Entries[2], "turnId"), "turn-1"; got != want {
+		t.Fatalf("wake final projected turnId = %q, want parent %q: %#v", got, want, projection.Entries[2])
+	}
+	if got, want := transcriptMapString(projection.Entries[2], "backendTurnId"), wakeTurnID; got != want {
+		t.Fatalf("wake final backendTurnId = %q, want wake turn %q: %#v", got, want, projection.Entries[2])
 	}
 	if _, ok := projection.ActivityBodies[wakeTurnID]; ok {
 		t.Fatalf("hashed wake body should be folded into parent: %#v", projection.ActivityBodies)
@@ -1419,7 +1449,9 @@ func TestProjectTranscriptEventsCollapsesChainedBackgroundWakeIntoOriginTurn(t *
 		t.Fatalf("final answer backendTurnId = %q, want %q: %#v", got, want, last)
 	}
 	for _, entry := range projection.Entries {
-		if entry["kind"] == "turn_activity" {
+		// The parked origin turn keeps its own shell; no wake turn in the
+		// chain may leak one.
+		if entry["kind"] == "turn_activity" && transcriptMapString(entry, "turnId") != "turn-1" {
 			t.Fatalf("chained wake leaked an activity shell into the main transcript: %#v", entry)
 		}
 		text := transcriptMapString(entry, "text")
@@ -1620,11 +1652,20 @@ func TestProjectTranscriptEventsHidesFailedBackgroundWakeContinuationFromMainTra
 	}
 
 	projection := projectTranscriptEvents(events)
-	if got, want := len(projection.Entries), 1; got != want {
-		t.Fatalf("projected entries = %d, want only original user row: %#v", got, projection.Entries)
+	// The failed wake's prose never settles; the user row plus the parked
+	// origin turn's shell (the durable home of the wake's failure context)
+	// are the only settled rows.
+	if got, want := len(projection.Entries), 2; got != want {
+		t.Fatalf("projected entries = %d, want user row + parked origin shell: %#v", got, projection.Entries)
 	}
 	if got, want := projection.Entries[0]["role"], "user"; got != want {
-		t.Fatalf("remaining row role = %#v, want %#v: %#v", got, want, projection.Entries[0])
+		t.Fatalf("first row role = %#v, want %#v: %#v", got, want, projection.Entries[0])
+	}
+	if got := transcriptMapString(projection.Entries[1], "kind"); got != "turn_activity" {
+		t.Fatalf("second entry kind = %q, want parked origin shell: %#v", got, projection.Entries[1])
+	}
+	if got, want := transcriptMapString(projection.Entries[1], "turnId"), "turn-1"; got != want {
+		t.Fatalf("origin shell turnId = %q, want %q", got, want)
 	}
 	body, ok := projection.ActivityBodies["turn-1"]
 	if !ok {
@@ -1724,14 +1765,18 @@ func TestProjectTranscriptEventsFoldsAgentContinuationTurnIntoOriginatingTurn(t 
 	}
 
 	projection := projectTranscriptEvents(events)
-	if got, want := len(projection.Entries), 2; got != want {
+	// user message, parked origin shell, folded relay final answer.
+	if got, want := len(projection.Entries), 3; got != want {
 		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
 	}
-	if got, want := transcriptMapString(projection.Entries[1], "turnId"), "turn-1"; got != want {
-		t.Fatalf("relay final projected turnId = %q, want originating %q: %#v", got, want, projection.Entries[1])
+	if got := transcriptMapString(projection.Entries[1], "kind"); got != "turn_activity" {
+		t.Fatalf("second entry kind = %q, want parked origin shell: %#v", got, projection.Entries[1])
 	}
-	if got, want := transcriptMapString(projection.Entries[1], "backendTurnId"), wakeTurnID; got != want {
-		t.Fatalf("relay final backendTurnId = %q, want relay turn %q: %#v", got, want, projection.Entries[1])
+	if got, want := transcriptMapString(projection.Entries[2], "turnId"), "turn-1"; got != want {
+		t.Fatalf("relay final projected turnId = %q, want originating %q: %#v", got, want, projection.Entries[2])
+	}
+	if got, want := transcriptMapString(projection.Entries[2], "backendTurnId"), wakeTurnID; got != want {
+		t.Fatalf("relay final backendTurnId = %q, want relay turn %q: %#v", got, want, projection.Entries[2])
 	}
 	if _, ok := projection.ActivityBodies[wakeTurnID]; ok {
 		t.Fatalf("agent-continuation relay must not surface as a standalone turn: %#v", projection.ActivityBodies)

@@ -536,3 +536,73 @@ func TestProjectTurnPagesLegacySameTurnAwaitingInputStillShowsInvocationMarkerPa
 		t.Fatalf("default page = %d, want pending question page 2", got)
 	}
 }
+
+// TestProjectTurnPagesChainFinalAnswerIsLastTerminals pins the session-161
+// page-layer defect: a parked origin turn's promoted ack ("I'll report when it
+// completes") was rendered as the page's final answer below — and visually
+// replacing — the later wake content, because final-answer ids were unioned
+// across every terminal in the folded chain. The chain's LAST completed
+// terminal owns the final answer; when that link promoted nothing, the turn
+// has no final answer and no fallback may resurrect the superseded ack.
+func TestProjectTurnPagesChainFinalAnswerIsLastTerminals(t *testing.T) {
+	mkEvents := func(wakeFinalAnswer bool) []map[string]any {
+		wakeTurnID := "turn_bgtask-task-ci"
+		wakeTerminalPayload := map[string]any{}
+		if wakeFinalAnswer {
+			wakeTerminalPayload = projectionFinalAnswerPayload(wakeTurnID + ":item:final")
+		}
+		return []map[string]any{
+			projectionTestEvent("user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+				"text": "Run CI and tell me when it passes.",
+			}),
+			projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+			projectionTestEvent("task-started", "003", "shell_task.started", "tool", "claude", "turn-1", "turn-1:task:ci", map[string]any{
+				"task_id": "task-ci", "status": "running", "summary": "CI check",
+			}),
+			projectionTestEvent("ack", "004", "item.completed", "assistant", "claude", "turn-1", "turn-1:item:ack", map[string]any{
+				"kind": "message", "text": "Started. I'll report when it completes.",
+			}),
+			projectionTestEvent("turn-terminal", "005", "turn.completed", "runner", "claude", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:ack")),
+			projectionTestEvent("task-exited", "006", "shell_task.exited", "tool", "claude", "turn-1", "turn-1:task:ci", map[string]any{
+				"task_id": "task-ci", "status": "completed", "summary": "CI passed",
+			}),
+			projectionTestEvent("wake-submitted", "007", "turn.submitted", "runner", "tank", wakeTurnID, "", map[string]any{"status": "submitted", "source": "background-task", "task_id": "task-ci", "prompt": "A background task you started earlier has finished."}),
+			projectionTestEvent("wake-final", "008", "item.completed", "assistant", "claude", wakeTurnID, wakeTurnID+":item:final", map[string]any{
+				"kind": "message", "text": "CI passed. The branch is ready.",
+			}),
+			projectionTestEvent("wake-terminal", "009", "turn.completed", "runner", "claude", wakeTurnID, "", wakeTerminalPayload),
+		}
+	}
+
+	// Chain whose last link promoted a real final answer: that answer — never
+	// the superseded ack — is the page's final answer.
+	projection := projectTurnPages("turn-1", mkEvents(true))
+	if got, want := len(projection.FinalAnswerEntries), 1; got != want {
+		t.Fatalf("final answer entries = %d, want %d: %#v", got, want, projection.FinalAnswerEntries)
+	}
+	if got, want := transcriptMapString(projection.FinalAnswerEntries[0], "text"), "CI passed. The branch is ready."; got != want {
+		t.Fatalf("final answer text = %q, want wake chain final %q", got, want)
+	}
+
+	// Chain whose last link promoted nothing (the empty codex wake replies of
+	// session 161): no final answer, and no fallback resurrection of the ack.
+	projection = projectTurnPages("turn-1", mkEvents(false))
+	if got := len(projection.FinalAnswerEntries); got != 0 {
+		t.Fatalf("final answer entries = %d, want none (superseded ack must not resurrect): %#v", got, projection.FinalAnswerEntries)
+	}
+
+	// The body still reads chronologically: ack before wake prompt.
+	body := projection.Pages[len(projection.Pages)-1].Entries
+	ackIdx, promptIdx := -1, -1
+	for i, entry := range body {
+		switch transcriptMapString(entry, "text") {
+		case "Started. I'll report when it completes.":
+			ackIdx = i
+		case "A background task you started earlier has finished.":
+			promptIdx = i
+		}
+	}
+	if ackIdx == -1 || promptIdx == -1 || ackIdx > promptIdx {
+		t.Fatalf("page body not chronological (ack=%d prompt=%d): %#v", ackIdx, promptIdx, body)
+	}
+}
