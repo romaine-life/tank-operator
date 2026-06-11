@@ -671,6 +671,25 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
         )).toBe(true);
 });
 
+test("thinking bubble click expands the matching agent activity details", () => {
+  expect(appSource.includes("onActivate?: (turnId: string) => void")).toBe(
+    true,
+  );
+  expect(appSource.includes('const actionLabel = needsInput ? "Answer in Turns" : "Show agent activity";')).toBe(true);
+  expect(appSource).toMatch(
+    /if \(onActivate\) \{[\s\S]{0,90}onActivate\(turnId\);[\s\S]{0,40}return;[\s\S]{0,60}\}/,
+  );
+  expect(appSource).toMatch(
+    /group\.status === "needs_input"[\s\S]{0,180}setCollapsedActivityTurnIds\(\(prev\) =>[\s\S]{0,220}\[selected\.turnId\]: false/,
+  );
+  expect(appSource).toMatch(
+    /candidate\.kind === "activity" && candidate\.turnId === g\.turnId/,
+  );
+  expect(appSource).toMatch(
+    /g\.status !== "needs_input" && activityGroup\?\.kind === "activity"[\s\S]{0,180}onActivityOpen\?\.\(g\.turnId\)[\s\S]{0,140}setActivityOpen\(entryGroupKey\(activityGroup\), true\)/,
+  );
+});
+
 test("turn view entry points open at the turn bottom", () => {
   expect(appSource.includes('type TurnViewScrollAnchor = "bottom" | "top"')).toBe(true);
   expect(appSource.includes(
