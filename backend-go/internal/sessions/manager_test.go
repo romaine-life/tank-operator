@@ -227,6 +227,50 @@ func TestManagerCreateThreadsSelectedReposIntoPodManifest(t *testing.T) {
 	}
 }
 
+func TestManagerCreateStoresResolvedSessionImage(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	registry := &managerTestRegistry{
+		avatarAssignment: sessionmodel.SessionAvatarAssignment{
+			AgentAvatarID:  "agent-1",
+			SystemAvatarID: "system-1",
+		},
+	}
+	overrides := &fakeImageOverrides{claude: branchClaude, codex: branchCodex, ok: true}
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, registry, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			SessionImage:      pinnedClaude,
+			CodexSessionImage: pinnedCodex,
+			SessionScope:      "tank-operator-slot-1",
+		},
+		ImageOverrides: overrides,
+	})
+
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.CodexGUIMode,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.SessionImage; got != branchCodex {
+		t.Fatalf("Info.SessionImage = %q, want %q", got, branchCodex)
+	}
+	record, ok, err := registry.Get(context.Background(), "nelson@romaine.life", info.ID)
+	if err != nil || !ok {
+		t.Fatalf("registry get ok=%v err=%v", ok, err)
+	}
+	if got := record.SessionImage; got != branchCodex {
+		t.Fatalf("registry SessionImage = %q, want %q", got, branchCodex)
+	}
+	pod, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sandboxImage(pod); got != branchCodex {
+		t.Fatalf("sandbox image = %q, want %q", got, branchCodex)
+	}
+}
+
 func TestManagerCreateAttachesBugLabel(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	registry := &managerTestRegistry{
@@ -723,6 +767,18 @@ type recordingRowEmitter struct {
 
 func (r *recordingRowEmitter) PublishCurrentRow(_ context.Context, _ string, sessionID string) {
 	r.ids = append(r.ids, sessionID)
+}
+
+func sandboxImage(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	for _, container := range pod.Spec.Containers {
+		if container.Name == "sandbox" {
+			return container.Image
+		}
+	}
+	return ""
 }
 
 type managerTestRegistry struct {

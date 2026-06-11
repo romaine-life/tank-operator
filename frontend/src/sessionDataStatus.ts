@@ -7,6 +7,7 @@ export type SessionDataStatusId =
   | "transcript"
   | "test"
   | "context"
+  | "session_image"
   | "rollout"
   | "pull_request"
   | "bug_report"
@@ -33,6 +34,7 @@ interface SessionDataStatusInput {
   } | null;
   repos?: string[] | null;
   clone_state?: Record<string, unknown> | null;
+  session_image?: string | null;
   bug_label?: {
     display_name?: string;
     name?: string;
@@ -55,6 +57,7 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
   const compactions = nonNegativeInteger(session.compaction_count);
   const contextWindow = nonNegativeInteger(session.runtime_context_window_tokens);
   const contextSource = trimOptionalString(session.runtime_context_window_source);
+  const sessionImage = trimOptionalString(session.session_image);
   const bugLabels = Array.isArray(session.bug_labels)
     ? session.bug_labels
         .map((label) =>
@@ -98,6 +101,13 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
       status: compactions > 0 ? "Compacted" : contextWindow > 0 ? "Observed" : "Unknown",
       detail: contextDetail(compactions, contextWindow, contextSource),
       tone: compactions > 0 ? "warning" : contextWindow > 0 ? "info" : "muted",
+    },
+    {
+      id: "session_image",
+      label: "Session image",
+      status: sessionImage ? imageTag(sessionImage) : "Unknown",
+      detail: sessionImage ?? "Created before image tracking",
+      tone: sessionImage ? "info" : "muted",
     },
     {
       id: "rollout",
@@ -158,6 +168,15 @@ function pullRequestDetail(url: string): string {
     // Fall back to the raw trimmed value below.
   }
   return url;
+}
+
+function imageTag(image: string): string {
+  const lastSlash = image.lastIndexOf("/");
+  const lastColon = image.lastIndexOf(":");
+  if (lastColon > lastSlash && lastColon < image.length - 1) {
+    return image.slice(lastColon + 1);
+  }
+  return image;
 }
 
 function linkedRepoStatus(

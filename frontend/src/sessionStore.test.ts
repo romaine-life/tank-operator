@@ -317,6 +317,7 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
       name: "session-8",
       visible: true,
       status: "Active",
+      session_image: "romainecr.azurecr.io/claude-container:claude-abc",
       model: "gpt-5.5",
       effort: "xhigh",
       runtime_model: "gpt-5.5",
@@ -331,6 +332,7 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
   expect(good, "valid payload must parse").toBeTruthy();
   expect(good!.row.id).toBe("8");
   expect(good!.row.name).toBe("session-8");
+  expect(good!.row.session_image).toBe("romainecr.azurecr.io/claude-container:claude-abc");
   expect(good!.row.model).toBe("gpt-5.5");
   expect(good!.row.effort).toBe("xhigh");
   expect(good!.row.runtime_model).toBe("gpt-5.5");

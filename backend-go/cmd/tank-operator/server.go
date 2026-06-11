@@ -34,18 +34,18 @@ const designSelectionConfigMapName = "tank-design-selection"
 
 // appServer holds shared application state for all handlers.
 type appServer struct {
-	k8s                 kubernetes.Interface
-	restCfg             *rest.Config
-	mgr                 *sessions.Manager
-	profiles            profilesStore
-	sessionEvents       store.SessionEventStore
-	transcriptRows      store.SessionTranscriptRowStore
-	turns               store.SessionTurnStore
-	avatars             avatarassets.Store
-	avatarImages        avatarassets.ImageStore
-	avatarUploads       avataruploads.Store
-	pgPool              *pgxpool.Pool
-	sessionBus          sessionCommandBus
+	k8s            kubernetes.Interface
+	restCfg        *rest.Config
+	mgr            *sessions.Manager
+	profiles       profilesStore
+	sessionEvents  store.SessionEventStore
+	transcriptRows store.SessionTranscriptRowStore
+	turns          store.SessionTurnStore
+	avatars        avatarassets.Store
+	avatarImages   avatarassets.ImageStore
+	avatarUploads  avataruploads.Store
+	pgPool         *pgxpool.Pool
+	sessionBus     sessionCommandBus
 	// rowWriter is the shared session-row transition writer (same instance
 	// the K8s watch and chat-activity emitter use). The internal
 	// provider-fatal endpoint routes runner-reported agent-process death
@@ -243,6 +243,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/admin/avatars/{avatar_id}", s.handleUpdateAvatar)
 	mux.HandleFunc("PATCH /api/admin/avatars/{avatar_id}/kind", s.handleUpdateAvatarKind)
 	mux.HandleFunc("DELETE /api/admin/avatars/{avatar_id}", s.handleDeleteAvatar)
+	mux.HandleFunc("GET /api/admin/app-version", s.handleAdminAppVersion)
 	mux.HandleFunc("GET /api/admin/session-report", s.handleAdminSessionReport)
 	mux.HandleFunc("POST /api/admin/session-report-shares", s.handleCreateSessionReportShare)
 	// Admin-only durable support surface for avatar upload failures. The

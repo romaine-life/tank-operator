@@ -111,6 +111,11 @@ type SessionRecord struct {
 	Mode    string
 	Scope   string
 	PodName string
+	// SessionImage is the full sandbox/session image reference chosen at
+	// create time after applying any test-slot image override. It is durable
+	// session metadata; clients should display it as "what this session booted
+	// from" rather than recomputing from today's chart values.
+	SessionImage string
 	// Name is the session's human-facing title. It is always present
 	// (NON-NULL): Manager.Create assigns the canonical SessionDisplayName
 	// default when the user supplies none, and SetName reassigns that
@@ -357,6 +362,19 @@ func IsAntigravityMode(mode string) bool {
 	}
 }
 
+// ResolvedSessionImage returns the sandbox image a session mode uses from the
+// already-resolved manifest options. Callers must invoke any override resolver
+// before calling this when they need the create-time truth.
+func ResolvedSessionImage(mode string, opts ManifestOptions) string {
+	if IsAntigravityMode(mode) {
+		return opts.AntigravitySessionImage
+	}
+	if IsCodexMode(mode) {
+		return opts.CodexSessionImage
+	}
+	return opts.SessionImage
+}
+
 func NormalizeSessionCapabilities(in []string) ([]string, error) {
 	if len(in) == 0 {
 		return []string{}, nil
@@ -529,13 +547,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	storageKey := SessionStorageKey(opts.SessionScope, sessionID)
 	argoTrackingID := opts.ArgoCDTrackingApp + ":/Pod:" + opts.SessionsNamespace + "/" + podName
 
-	sessionImage := opts.SessionImage
-	if IsAntigravityMode(mode) {
-		sessionImage = opts.AntigravitySessionImage
-	}
-	if IsCodexMode(mode) {
-		sessionImage = opts.CodexSessionImage
-	}
+	sessionImage := ResolvedSessionImage(mode, opts)
 
 	// Build configmap volume mounts for both containers.
 	spireLensMCPEnabled := HasSessionCapability(opts.Capabilities, SessionCapabilitySpireLensMCP)

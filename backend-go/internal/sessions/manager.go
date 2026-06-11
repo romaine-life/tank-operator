@@ -462,6 +462,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.Model = model
 	manifestOpts.Effort = effort
 	m.applyImageOverride(ctx, &manifestOpts, mode)
+	sessionImage := sessionmodel.ResolvedSessionImage(mode, manifestOpts)
 
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)
@@ -502,6 +503,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			Mode:           mode,
 			Scope:          m.manifestOpts.SessionScope,
 			PodName:        podName,
+			SessionImage:   sessionImage,
 			Visible:        true,
 			Name:           storedName,
 			RequestedAt:    requestedAt,
@@ -563,6 +565,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		Owner:          owner,
 		Status:         "Pending",
 		Mode:           mode,
+		SessionImage:   sessionImage,
 		RequestedAt:    &requestedAt,
 		CreatedAt:      createdAt,
 		Name:           storedName,
@@ -585,6 +588,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			Mode:           mode,
 			Scope:          m.manifestOpts.SessionScope,
 			PodName:        podName,
+			SessionImage:   sessionImage,
 			Visible:        true,
 			Name:           storedName,
 			RequestedAt:    requestedAt,
@@ -683,7 +687,7 @@ func (m *Manager) SetName(ctx context.Context, owner, sessionID string, name *st
 }
 
 // SetOpenTarget persists the legacy durable per-session sidebar open-target
-// preference ('' / 'chat' / 'turns'). Like SetBugLabel it is registry-only UI
+// preference (empty string / 'chat' / 'turns'). Like SetBugLabel it is registry-only UI
 // state, so no pod annotation is patched. Validation lives in the HTTP handler;
 // the manager just persists the value, publishes the updated row, and returns the refreshed
 // Info the same way SetName's tail does.
