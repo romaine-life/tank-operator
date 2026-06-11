@@ -46,7 +46,8 @@ export function claudeUserMessageText(content: unknown): string {
 }
 
 export function startsClaudeTurn(event: ClaudeProviderEvent): boolean {
-  return event.type === "assistant" || event.type === "user" || event.type === "result";
+  return event.type === "assistant" || event.type === "user" || event.type === "result" ||
+    (event.type === "system" && event.subtype === "thinking_tokens");
 }
 
 export function canonicalEventsForClaudeMessage(

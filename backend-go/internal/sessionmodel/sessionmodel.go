@@ -1211,9 +1211,10 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// per-session exchange path; stamp them at pod creation time so the
 	// MCP auth proxy sidecar can mint service JWTs immediately.
 	annotations := map[string]any{
-		"tank-operator/owner-email":      owner,
-		"tank-operator/session-id":       sessionID,
-		"argocd.argoproj.io/tracking-id": argoTrackingID,
+		"tank-operator/owner-email":                      owner,
+		"tank-operator/session-id":                       sessionID,
+		"argocd.argoproj.io/tracking-id":                 argoTrackingID,
+		"cluster-autoscaler.kubernetes.io/safe-to-evict": "false",
 	}
 	if len(opts.Capabilities) > 0 {
 		raw, _ := json.Marshal(opts.Capabilities)
