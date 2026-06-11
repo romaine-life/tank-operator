@@ -2411,6 +2411,28 @@ func recordTranscriptFoldDuration(d time.Duration) {
 	transcriptFoldDurationSeconds.Observe(d.Seconds())
 }
 
+// Production shadow-compare of the checkpointed fold (#1051 B5): sampled
+// folded batches re-derive their written shells from the reference
+// projection. divergence means the fold wrote rows the reference disagrees
+// with — auto-healed in the same transaction, but the class must page:
+// TankTranscriptFoldShadowDivergence.
+var transcriptFoldShadowTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_transcript_fold_shadow_total",
+		Help: "Sampled fold-vs-reference shadow comparisons, labeled by bounded result (match, divergence).",
+	},
+	[]string{"result"},
+)
+
+func recordTranscriptFoldShadow(result string) {
+	switch result {
+	case "match", "divergence":
+	default:
+		result = "other"
+	}
+	transcriptFoldShadowTotal.WithLabelValues(result).Inc()
+}
+
 // recordTurnActivityPages observes the page count and total event count of a
 // turn-activity projection so long-turn frequency (the pagination trigger) is
 // visible without high-cardinality labels.
