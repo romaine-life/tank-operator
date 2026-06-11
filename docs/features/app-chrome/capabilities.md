@@ -165,14 +165,14 @@ Evidence:
 - `frontend/src/migrationPolicy.test.ts` pins that the pill remains in title
   chrome rather than the transcript/composer flow.
 
-## Cluster Health Sidebar Surface
+## Cluster Health Top-Right Surface
 
 Status: active
 
 Intent:
-Expose cluster-level causes of Tank instability directly in the persistent
-sidebar: Kubernetes node readiness/pressure, Tank session pod readiness, and
-NATS JetStream pressure/quorum risk.
+Expose cluster-level causes of Tank instability from the top-right overflow
+menu's Cluster page: Kubernetes node readiness/pressure, Tank session pod
+readiness, NATS JetStream pressure/quorum risk, and AKS upgrade-window signals.
 
 Affected contracts:
 - App Chrome
@@ -182,20 +182,25 @@ Affected contracts:
 Contract impact:
 - The surface reads live backend-owned health state, not browser-local
   inference.
-- Failure to load health is visible in the sidebar and retryable without
+- Failure to load health is visible in the Cluster page and retryable without
   devtools.
-- NATS health includes both transport reachability and JetStream pressure
-  signals so the 2026-05-25 "publish dies when NATS stalls" shape is visible
-  before a user has to infer it from failed turns.
+- NATS health includes transport reachability, JetStream pressure, durable
+  consumer count, and consumer backlog signals so the 2026-05-25 "publish dies
+  when NATS stalls" shape and later stream-backlog incidents are visible before
+  a user has to infer them from failed turns.
 - JetStream stream health distinguishes configured replicas from current
   replicas. The sidebar must not treat the server-local `/jsz`
   `cluster.replicas` array length as the configured stream count, because that
   array omits the local raft participant and can make a healthy stream look
   like `2/3`.
 
+- AKS upgrade status includes the configured maintenance window, whether the
+  current time is inside it, how much window time remains, and in-cluster
+  upgrade signals such as cordoned/deleting nodes and mixed node versions.
+
 Evidence:
 - PRs changing this surface should verify `GET /api/cluster-health`, the
-  sidebar render path, and Helm RBAC/env wiring.
+  top-right Cluster render path, and Helm RBAC/env wiring.
 - PRs adding or removing health dimensions should cite the Observability
   contract and explain which failure mode remains visible.
 

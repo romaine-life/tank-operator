@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -15,7 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-const clusterHealthDescription = "Authenticated cluster-health snapshot for the Tank home/sidebar surface. It summarizes Kubernetes node readiness, Tank session pod readiness, and NATS JetStream pressure so cluster-level failure modes are visible without browser devtools."
+const clusterHealthDescription = "Authenticated cluster-health snapshot for Tank's cluster page. It summarizes Kubernetes node readiness, Tank session pod readiness, NATS JetStream pressure, and AKS upgrade-window signals so cluster-level failure modes are visible without browser devtools."
 
 type clusterHealthResponse struct {
 	Description string                  `json:"description"`
@@ -24,6 +25,14 @@ type clusterHealthResponse struct {
 	Nodes       clusterNodeHealth       `json:"nodes"`
 	Sessions    clusterSessionPodHealth `json:"sessions"`
 	NATS        clusterNATSHealth       `json:"nats"`
+	Upgrade     clusterUpgradeHealth    `json:"upgrade"`
+	Messages    []clusterHealthMessage  `json:"messages"`
+}
+
+type clusterHealthMessage struct {
+	Severity string `json:"severity"`
+	Surface  string `json:"surface"`
+	Message  string `json:"message"`
 }
 
 type clusterNodeHealth struct {
@@ -86,9 +95,57 @@ type clusterJetStream struct {
 	StreamCurrentReplicas   int     `json:"stream_current_replicas"`
 	StreamLaggingReplicas   int     `json:"stream_lagging_replicas"`
 	streamReplicaLeaderView bool
-	StreamMessages          int64 `json:"stream_messages"`
-	StreamBytes             int64 `json:"stream_bytes"`
-	StreamConsumers         int64 `json:"stream_consumers"`
+	StreamMessages          int64                         `json:"stream_messages"`
+	StreamBytes             int64                         `json:"stream_bytes"`
+	StreamConsumers         int64                         `json:"stream_consumers"`
+	ConsumerPending         int64                         `json:"consumer_pending"`
+	ConsumerAckPending      int64                         `json:"consumer_ack_pending"`
+	ConsumerRedelivered     int64                         `json:"consumer_redelivered"`
+	BackloggedConsumers     int                           `json:"backlogged_consumers"`
+	AckPendingConsumers     int                           `json:"ack_pending_consumers"`
+	RedeliveringConsumers   int                           `json:"redelivering_consumers"`
+	TopConsumerBacklogs     []clusterJetStreamConsumerLag `json:"top_consumer_backlogs,omitempty"`
+}
+
+type clusterJetStreamConsumerLag struct {
+	Name         string `json:"name"`
+	Pending      int64  `json:"pending"`
+	AckPending   int64  `json:"ack_pending"`
+	Redelivered  int64  `json:"redelivered"`
+	Waiting      int64  `json:"waiting"`
+	DeliveredSeq int64  `json:"delivered_stream_seq"`
+	AckFloorSeq  int64  `json:"ack_floor_stream_seq"`
+}
+
+type clusterUpgradeHealth struct {
+	Status               string                   `json:"status"`
+	Detected             bool                     `json:"detected"`
+	Summary              string                   `json:"summary"`
+	AutoUpgradeChannel   string                   `json:"auto_upgrade_channel"`
+	NodeOSUpgradeChannel string                   `json:"node_os_upgrade_channel"`
+	MaintenanceWindow    clusterMaintenanceWindow `json:"maintenance_window"`
+	Signals              []string                 `json:"signals,omitempty"`
+	KubeletVersions      []clusterVersionCount    `json:"kubelet_versions,omitempty"`
+	NodeImageVersions    []clusterVersionCount    `json:"node_image_versions,omitempty"`
+	UnschedulableNodes   []string                 `json:"unschedulable_nodes,omitempty"`
+	DeletingNodes        []string                 `json:"deleting_nodes,omitempty"`
+	Error                string                   `json:"error,omitempty"`
+}
+
+type clusterMaintenanceWindow struct {
+	DayOfWeek        string `json:"day_of_week"`
+	StartTime        string `json:"start_time"`
+	UTCOffset        string `json:"utc_offset"`
+	DurationHours    int    `json:"duration_hours"`
+	Active           bool   `json:"active"`
+	CurrentStartedAt string `json:"current_started_at,omitempty"`
+	CurrentEndsAt    string `json:"current_ends_at,omitempty"`
+	SecondsRemaining int64  `json:"seconds_remaining,omitempty"`
+}
+
+type clusterVersionCount struct {
+	Version string `json:"version"`
+	Count   int    `json:"count"`
 }
 
 func (s *appServer) handleClusterHealth(w http.ResponseWriter, r *http.Request) {
@@ -105,14 +162,19 @@ func (s *appServer) clusterHealthSnapshot(ctx context.Context, now time.Time) cl
 	nodes := s.collectNodeHealth(ctx)
 	sessions := s.collectSessionPodHealth(ctx)
 	nats := collectNATSHealth(ctx, natsMonitorURLs(), envDefault("NATS_STREAM", "TANK_SESSION_BUS"), expectedNATSStreamReplicas())
+	upgrade := s.collectUpgradeHealth(ctx, now)
+	status := worstHealthStatus(nodes.Status, sessions.Status, nats.Status, upgrade.Status)
+	messages := clusterHealthMessages(nodes, sessions, nats, upgrade)
 
 	return clusterHealthResponse{
 		Description: clusterHealthDescription,
-		Status:      worstHealthStatus(nodes.Status, sessions.Status, nats.Status),
+		Status:      status,
 		CheckedAt:   now.Format(time.RFC3339Nano),
 		Nodes:       nodes,
 		Sessions:    sessions,
 		NATS:        nats,
+		Upgrade:     upgrade,
+		Messages:    messages,
 	}
 }
 
@@ -203,6 +265,73 @@ func (s *appServer) collectSessionPodHealth(ctx context.Context) clusterSessionP
 	return out
 }
 
+func (s *appServer) collectUpgradeHealth(ctx context.Context, now time.Time) clusterUpgradeHealth {
+	out := clusterUpgradeHealth{
+		Status:               "healthy",
+		Summary:              "no AKS upgrade signals detected",
+		AutoUpgradeChannel:   envDefault("AKS_AUTO_UPGRADE_CHANNEL", "patch"),
+		NodeOSUpgradeChannel: envDefault("AKS_NODE_OS_UPGRADE_CHANNEL", "NodeImage"),
+		MaintenanceWindow:    currentMaintenanceWindow(now),
+	}
+	if s.k8s == nil {
+		out.Status = "unknown"
+		out.Summary = "upgrade state unavailable"
+		out.Error = "kubernetes client not configured"
+		return out
+	}
+	nodes, err := s.k8s.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		out.Status = "unknown"
+		out.Summary = "upgrade state unavailable"
+		out.Error = err.Error()
+		return out
+	}
+
+	kubeletVersions := map[string]int{}
+	nodeImageVersions := map[string]int{}
+	for _, node := range nodes.Items {
+		if node.Spec.Unschedulable {
+			out.UnschedulableNodes = append(out.UnschedulableNodes, node.Name)
+		}
+		if node.DeletionTimestamp != nil {
+			out.DeletingNodes = append(out.DeletingNodes, node.Name)
+		}
+		if version := strings.TrimSpace(node.Status.NodeInfo.KubeletVersion); version != "" {
+			kubeletVersions[version]++
+		}
+		if version := strings.TrimSpace(node.Labels["kubernetes.azure.com/node-image-version"]); version != "" {
+			nodeImageVersions[version]++
+		}
+	}
+	sort.Strings(out.UnschedulableNodes)
+	sort.Strings(out.DeletingNodes)
+	out.KubeletVersions = versionCounts(kubeletVersions)
+	out.NodeImageVersions = versionCounts(nodeImageVersions)
+
+	if len(out.DeletingNodes) > 0 {
+		out.Signals = append(out.Signals, fmt.Sprintf("%d node%s deleting", len(out.DeletingNodes), plural(len(out.DeletingNodes))))
+	}
+	if len(out.UnschedulableNodes) > 0 {
+		out.Signals = append(out.Signals, fmt.Sprintf("%d node%s cordoned", len(out.UnschedulableNodes), plural(len(out.UnschedulableNodes))))
+	}
+	if len(out.KubeletVersions) > 1 {
+		out.Signals = append(out.Signals, "mixed kubelet versions")
+	}
+	if len(out.NodeImageVersions) > 1 {
+		out.Signals = append(out.Signals, "mixed node image versions")
+	}
+	if len(out.Signals) > 0 {
+		out.Status = "warning"
+		out.Detected = true
+		out.Summary = strings.Join(out.Signals, ", ")
+		return out
+	}
+	if out.MaintenanceWindow.Active {
+		out.Summary = "maintenance window is open"
+	}
+	return out
+}
+
 func collectNATSHealth(ctx context.Context, monitorURLs []string, streamName string, expectedStreamReplicas int) clusterNATSHealth {
 	out := clusterNATSHealth{
 		Status:                "healthy",
@@ -252,7 +381,7 @@ func collectNATSHealth(ctx context.Context, monitorURLs []string, streamName str
 		for _, monitor := range reachable {
 			var jsz natsJSZResponse
 			requestCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
-			err := fetchNATSJSON(requestCtx, client, monitor.url, "/jsz?streams=true&consumers=false&config=true", &jsz)
+			err := fetchNATSJSON(requestCtx, client, monitor.url, "/jsz?streams=true&consumers=true&config=true", &jsz)
 			cancel()
 			if err != nil {
 				continue
@@ -300,6 +429,20 @@ type natsJSZStreamReplica struct {
 	Current bool   `json:"current"`
 }
 
+type natsJSZConsumerDetail struct {
+	Name           string `json:"name"`
+	NumPending     int64  `json:"num_pending"`
+	NumAckPending  int64  `json:"num_ack_pending"`
+	NumRedelivered int64  `json:"num_redelivered"`
+	NumWaiting     int64  `json:"num_waiting"`
+	Delivered      struct {
+		StreamSeq int64 `json:"stream_seq"`
+	} `json:"delivered"`
+	AckFloor struct {
+		StreamSeq int64 `json:"stream_seq"`
+	} `json:"ack_floor"`
+}
+
 type natsJSZResponse struct {
 	Memory         int64 `json:"memory"`
 	ReservedMemory int64 `json:"reserved_memory"`
@@ -328,6 +471,7 @@ type natsJSZResponse struct {
 				Bytes         int64 `json:"bytes"`
 				ConsumerCount int64 `json:"consumer_count"`
 			} `json:"state"`
+			ConsumerDetail []natsJSZConsumerDetail `json:"consumer_detail"`
 		} `json:"stream_detail"`
 	} `json:"account_details"`
 }
@@ -371,11 +515,67 @@ func mergeNATSJSZ(out *clusterJetStream, jsz natsJSZResponse, streamName, localS
 			out.StreamMessages = stream.State.Messages
 			out.StreamBytes = stream.State.Bytes
 			out.StreamConsumers = stream.State.ConsumerCount
+			mergeNATSConsumerBacklog(out, stream.ConsumerDetail)
 			updateNATSMemoryUtilization(out)
 			return
 		}
 	}
 	updateNATSMemoryUtilization(out)
+}
+
+func mergeNATSConsumerBacklog(out *clusterJetStream, consumers []natsJSZConsumerDetail) {
+	var pending, ackPending, redelivered int64
+	var backlogged, acking, redelivering int
+	top := make([]clusterJetStreamConsumerLag, 0, len(consumers))
+	for _, consumer := range consumers {
+		pending += consumer.NumPending
+		ackPending += consumer.NumAckPending
+		redelivered += consumer.NumRedelivered
+		if consumer.NumPending > 0 {
+			backlogged++
+		}
+		if consumer.NumAckPending > 0 {
+			acking++
+		}
+		if consumer.NumRedelivered > 0 {
+			redelivering++
+		}
+		if consumer.NumPending > 0 || consumer.NumAckPending > 0 || consumer.NumRedelivered > 0 {
+			top = append(top, clusterJetStreamConsumerLag{
+				Name:         consumer.Name,
+				Pending:      consumer.NumPending,
+				AckPending:   consumer.NumAckPending,
+				Redelivered:  consumer.NumRedelivered,
+				Waiting:      consumer.NumWaiting,
+				DeliveredSeq: consumer.Delivered.StreamSeq,
+				AckFloorSeq:  consumer.AckFloor.StreamSeq,
+			})
+		}
+	}
+	sort.Slice(top, func(i, j int) bool {
+		left := top[i].Pending + top[i].AckPending + top[i].Redelivered
+		right := top[j].Pending + top[j].AckPending + top[j].Redelivered
+		if left == right {
+			return top[i].Name < top[j].Name
+		}
+		return left > right
+	})
+	if len(top) > 5 {
+		top = top[:5]
+	}
+	if pending > out.ConsumerPending {
+		out.ConsumerPending = pending
+		out.BackloggedConsumers = backlogged
+		out.TopConsumerBacklogs = top
+	}
+	if ackPending > out.ConsumerAckPending {
+		out.ConsumerAckPending = ackPending
+		out.AckPendingConsumers = acking
+	}
+	if redelivered > out.ConsumerRedelivered {
+		out.ConsumerRedelivered = redelivered
+		out.RedeliveringConsumers = redelivering
+	}
 }
 
 func classifyNATSHealth(out *clusterNATSHealth) string {
@@ -412,6 +612,15 @@ func classifyNATSHealth(out *clusterNATSHealth) string {
 	}
 	if out.JetStream.SlowConsumers > 0 {
 		addWarning("Live delivery has slow consumers")
+	}
+	if out.JetStream.StreamConsumers > int64(natsConsumerCountWarningThreshold()) {
+		addWarning(fmt.Sprintf("Live delivery has %d durable consumers", out.JetStream.StreamConsumers))
+	}
+	if out.JetStream.ConsumerPending > 0 {
+		addWarning(fmt.Sprintf("Live delivery consumer backlog %d pending across %d consumer%s", out.JetStream.ConsumerPending, out.JetStream.BackloggedConsumers, plural(out.JetStream.BackloggedConsumers)))
+	}
+	if out.JetStream.ConsumerRedelivered > 0 {
+		addWarning(fmt.Sprintf("Live delivery has %d redelivered message%s", out.JetStream.ConsumerRedelivered, plural64(out.JetStream.ConsumerRedelivered)))
 	}
 	if out.JetStream.ExpectedStreamReplicas > 0 {
 		switch {
@@ -463,6 +672,18 @@ func natsMonitorURLs() []string {
 	return urls
 }
 
+func natsConsumerCountWarningThreshold() int {
+	raw := strings.TrimSpace(os.Getenv("NATS_CONSUMER_COUNT_WARNING"))
+	if raw == "" {
+		return 100
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil || parsed <= 0 {
+		return 100
+	}
+	return parsed
+}
+
 func expectedNATSStreamReplicas() int {
 	raw := strings.TrimSpace(os.Getenv("NATS_STREAM_REPLICAS"))
 	if raw == "" {
@@ -473,6 +694,199 @@ func expectedNATSStreamReplicas() int {
 		return 3
 	}
 	return parsed
+}
+
+func currentMaintenanceWindow(now time.Time) clusterMaintenanceWindow {
+	day := envDefault("AKS_MAINTENANCE_WINDOW_DAY_OF_WEEK", "Sunday")
+	startTime := envDefault("AKS_MAINTENANCE_WINDOW_START_TIME", "06:00")
+	utcOffset := envDefault("AKS_MAINTENANCE_WINDOW_UTC_OFFSET", "+00:00")
+	duration := envIntDefault("AKS_MAINTENANCE_WINDOW_DURATION_HOURS", 12)
+	out := clusterMaintenanceWindow{
+		DayOfWeek:     day,
+		StartTime:     startTime,
+		UTCOffset:     utcOffset,
+		DurationHours: duration,
+	}
+	weekday, ok := parseWeekday(day)
+	if !ok || duration <= 0 {
+		return out
+	}
+	hour, minute, ok := parseHHMM(startTime)
+	if !ok {
+		return out
+	}
+	offsetSeconds, ok := parseUTCOffsetSeconds(utcOffset)
+	if !ok {
+		return out
+	}
+	location := time.FixedZone("AKS maintenance", offsetSeconds)
+	localNow := now.In(location)
+	daysSince := (int(localNow.Weekday()) - int(weekday) + 7) % 7
+	start := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), hour, minute, 0, 0, location).AddDate(0, 0, -daysSince)
+	if localNow.Before(start) {
+		start = start.AddDate(0, 0, -7)
+	}
+	end := start.Add(time.Duration(duration) * time.Hour)
+	out.CurrentStartedAt = start.UTC().Format(time.RFC3339)
+	out.CurrentEndsAt = end.UTC().Format(time.RFC3339)
+	if !localNow.Before(start) && localNow.Before(end) {
+		out.Active = true
+		out.SecondsRemaining = int64(end.Sub(localNow).Seconds())
+	}
+	return out
+}
+
+func parseWeekday(value string) (time.Weekday, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "sunday":
+		return time.Sunday, true
+	case "monday":
+		return time.Monday, true
+	case "tuesday":
+		return time.Tuesday, true
+	case "wednesday":
+		return time.Wednesday, true
+	case "thursday":
+		return time.Thursday, true
+	case "friday":
+		return time.Friday, true
+	case "saturday":
+		return time.Saturday, true
+	default:
+		return time.Sunday, false
+	}
+}
+
+func parseHHMM(value string) (int, int, bool) {
+	parts := strings.Split(strings.TrimSpace(value), ":")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	hour, errHour := strconv.Atoi(parts[0])
+	minute, errMinute := strconv.Atoi(parts[1])
+	if errHour != nil || errMinute != nil || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, 0, false
+	}
+	return hour, minute, true
+}
+
+func parseUTCOffsetSeconds(value string) (int, bool) {
+	value = strings.TrimSpace(value)
+	if value == "Z" || value == "+00:00" || value == "-00:00" {
+		return 0, true
+	}
+	if len(value) != 6 || (value[0] != '+' && value[0] != '-') || value[3] != ':' {
+		return 0, false
+	}
+	hour, errHour := strconv.Atoi(value[1:3])
+	minute, errMinute := strconv.Atoi(value[4:6])
+	if errHour != nil || errMinute != nil || hour > 23 || minute > 59 {
+		return 0, false
+	}
+	offset := (hour*60 + minute) * 60
+	if value[0] == '-' {
+		offset = -offset
+	}
+	return offset, true
+}
+
+func envIntDefault(key string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.Atoi(raw)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func versionCounts(counts map[string]int) []clusterVersionCount {
+	out := make([]clusterVersionCount, 0, len(counts))
+	for version, count := range counts {
+		out = append(out, clusterVersionCount{Version: version, Count: count})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Count == out[j].Count {
+			return out[i].Version < out[j].Version
+		}
+		return out[i].Count > out[j].Count
+	})
+	return out
+}
+
+func clusterHealthMessages(nodes clusterNodeHealth, sessions clusterSessionPodHealth, nats clusterNATSHealth, upgrade clusterUpgradeHealth) []clusterHealthMessage {
+	var out []clusterHealthMessage
+	add := func(severity, surface, message string) {
+		if strings.TrimSpace(message) == "" {
+			return
+		}
+		out = append(out, clusterHealthMessage{Severity: severity, Surface: surface, Message: message})
+	}
+	if nodes.Error != "" {
+		add("unknown", "Nodes", "node health unavailable: "+nodes.Error)
+	} else {
+		if nodes.NotReady > 0 {
+			add("warning", "Nodes", fmt.Sprintf("%d node%s not ready", nodes.NotReady, plural(nodes.NotReady)))
+		}
+		if nodes.MemoryPressureNodes > 0 {
+			add("warning", "Nodes", fmt.Sprintf("%d node%s under memory pressure", nodes.MemoryPressureNodes, plural(nodes.MemoryPressureNodes)))
+		}
+		if nodes.DiskPressureNodes > 0 {
+			add("warning", "Nodes", fmt.Sprintf("%d node%s under disk pressure", nodes.DiskPressureNodes, plural(nodes.DiskPressureNodes)))
+		}
+		if nodes.PIDPressureNodes > 0 {
+			add("warning", "Nodes", fmt.Sprintf("%d node%s under PID pressure", nodes.PIDPressureNodes, plural(nodes.PIDPressureNodes)))
+		}
+		if nodes.Unschedulable > 0 {
+			add("warning", "Nodes", fmt.Sprintf("%d node%s unschedulable", nodes.Unschedulable, plural(nodes.Unschedulable)))
+		}
+	}
+	if sessions.Error != "" {
+		add("unknown", "Sessions", "session pod health unavailable: "+sessions.Error)
+	} else {
+		if sessions.Failed > 0 {
+			add("critical", "Sessions", fmt.Sprintf("%d failed session pod%s", sessions.Failed, plural(sessions.Failed)))
+		}
+		if sessions.Pending > 0 {
+			add("warning", "Sessions", fmt.Sprintf("%d session pod%s pending", sessions.Pending, plural(sessions.Pending)))
+		}
+		if sessions.NotReady > 0 {
+			add("warning", "Sessions", fmt.Sprintf("%d session pod%s not ready", sessions.NotReady, plural(sessions.NotReady)))
+		}
+	}
+	if nats.Error != "" {
+		add(nats.Status, "NATS", nats.Error)
+	}
+	for _, warning := range nats.Warnings {
+		add("warning", "NATS", warning)
+	}
+	if upgrade.Error != "" {
+		add("unknown", "Upgrade", "upgrade state unavailable: "+upgrade.Error)
+	} else if upgrade.Detected {
+		add("warning", "Upgrade", "AKS upgrade activity detected: "+upgrade.Summary)
+	} else if upgrade.MaintenanceWindow.Active {
+		add("healthy", "Upgrade", "AKS maintenance window is open")
+	}
+	if len(out) == 0 {
+		add("healthy", "Cluster", "all checks passing")
+	}
+	return out
+}
+
+func plural(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func plural64(count int64) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func nodeConditionTrue(node corev1.Node, conditionType corev1.NodeConditionType) bool {

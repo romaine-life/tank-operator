@@ -194,6 +194,18 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.sessionBus.authSecret | quote }}
                   key: token
+            - name: AKS_AUTO_UPGRADE_CHANNEL
+              value: {{ .Values.clusterMaintenance.autoUpgradeChannel | quote }}
+            - name: AKS_NODE_OS_UPGRADE_CHANNEL
+              value: {{ .Values.clusterMaintenance.nodeOSUpgradeChannel | quote }}
+            - name: AKS_MAINTENANCE_WINDOW_DAY_OF_WEEK
+              value: {{ .Values.clusterMaintenance.autoUpgradeWindow.dayOfWeek | quote }}
+            - name: AKS_MAINTENANCE_WINDOW_START_TIME
+              value: {{ .Values.clusterMaintenance.autoUpgradeWindow.startTime | quote }}
+            - name: AKS_MAINTENANCE_WINDOW_UTC_OFFSET
+              value: {{ .Values.clusterMaintenance.autoUpgradeWindow.utcOffset | quote }}
+            - name: AKS_MAINTENANCE_WINDOW_DURATION_HOURS
+              value: {{ .Values.clusterMaintenance.autoUpgradeWindow.durationHours | quote }}
             # GitHub App slug used to build the install URL in the
             # onboarding flow (#57 stage 2). The App's Setup URL in the
             # GitHub UI must point at /api/github/install/callback for
