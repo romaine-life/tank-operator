@@ -175,6 +175,36 @@ transcript or logs — that signal should replace the window outright.
 
 ---
 
+## The Transcript Is Cumulative (session-scoped step dedupe)
+
+`agy`'s `transcript_full.jsonl` is **not an append-only event log**: bursts can
+re-emit the entire prior step history, and file rewrites shrink the file so the
+tailer's byte cursor (`sweepTranscripts`) resets to 0 and replays everything.
+Replayed bytes are *real transcript movement* (they clear the submit-ack
+watchdog and extend the settle window) but they are **not new work**.
+
+Step dedupe is therefore **session-scoped** (`runnerState.seenSteps`, keyed by
+`providerStepID` + status), never per-turn. A (step, status) pair publishes
+durable events exactly once, under the turn that first observed it. The
+per-turn dedupe this replaced re-published the whole history under every later
+turn's `turn_id`: session 791's ledger carried turn 1's items under four
+turn_ids, per-turn item counts grew cumulatively (2 → 35 → 270 → 282 — O(N²)
+ledger growth), and expanding turn N in the Turns view showed turns 1..N. The
+same guard protects the idle path: a replayed idle MODEL step must not be
+re-buffered into the next turn or manufacture a phantom self-continuation
+relay (`handleStep` checks `stepObserved` before buffering/waking; marking
+happens only at publish time in `observeStep`).
+
+The set lives in process memory on purpose: agy process death is
+session-terminal (above), so there is no restart this map must survive that
+the startup byte-cursor skip does not already cover. Task-lifecycle markers
+have their own session-scoped dedupe (`taskEventsPublished`) because they must
+be tracked even when no turn is active; the two sets are deliberate siblings.
+`tank_antigravity_runner_step_replay_suppressed_total{context}` counts
+suppressions (turn vs idle) — on a multi-turn session it should be large.
+
+---
+
 ## WARNING FOR FUTURE DEVELOPERS (AND AGENTS)
 
 * **DO NOT** attempt to remove the PTY wrapper.
