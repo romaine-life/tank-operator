@@ -879,11 +879,13 @@ func TestTaskLifecycleEventsPublishDurableFoldEdge(t *testing.T) {
 	}
 }
 
-func TestTaskLifecycleStartWhileIdlePublishesNothing(t *testing.T) {
-	// A RUNNING marker with no attached turn has no resolvable originating
-	// turn: there is nothing to fold into, so no durable edge is published
-	// (counted as orphaned_start). The pending-set still updates so
-	// background_work_pending semantics are unchanged.
+func TestTaskLifecycleStartWhileIdleDefersToAttachingTurn(t *testing.T) {
+	// agy's conversational planner DONE can close the user turn seconds
+	// before the tool call that starts the task, so the RUNNING marker
+	// lands in the idle gap (observed live: slot-1 session 159). The edge
+	// must not be orphaned: it defers and publishes when the next turn
+	// attaches — the same turn that replays the buffered steps — and the
+	// projection's wake-of-a-wake chain walker collapses the rest.
 	t.Setenv("TANK_OPERATOR_INTERNAL_URL", "http://127.0.0.1:1")
 	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
 	log := &eventLog{}
@@ -901,10 +903,30 @@ func TestTaskLifecycleStartWhileIdlePublishesNothing(t *testing.T) {
 	for _, event := range log.snapshot() {
 		typ, _ := event["type"].(string)
 		if strings.HasPrefix(typ, "shell_task.") {
-			t.Fatalf("idle task start must not publish a fold edge: %#v", event)
+			t.Fatalf("idle task start must defer, not publish immediately: %#v", event)
 		}
 	}
 	if !state.backgroundWorkPending() {
 		t.Fatal("pending-set must still track the task for background_work_pending")
+	}
+
+	relay := newTurnRun(builder, log.publisher, "turn_bgtask-T-9", "nonce-relay")
+	state.attachTurn(relay)
+	defer state.detachTurn(relay)
+
+	var started map[string]any
+	for _, event := range log.snapshot() {
+		if event["type"] == string(conversation.EventShellTaskStarted) {
+			started = event
+		}
+	}
+	if started == nil {
+		t.Fatal("attachTurn must flush the deferred shell_task.started edge")
+	}
+	if started["turn_id"] != "turn_bgtask-T-9" {
+		t.Fatalf("deferred edge turn_id = %v, want the attaching turn", started["turn_id"])
+	}
+	if started["task_id"] != stableIDPart("T-9") {
+		t.Fatalf("deferred edge task_id = %v", started["task_id"])
 	}
 }

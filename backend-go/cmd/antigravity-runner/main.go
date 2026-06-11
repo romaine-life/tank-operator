@@ -189,8 +189,22 @@ type runnerState struct {
 	// signal in runner memory only (the pre-#1035 state) starved both.
 	taskTurns           map[string]string
 	taskEventsPublished map[string]struct{}
-	builder             eventBuilder
-	publish             func(map[string]any) error
+	// pendingTaskStarts buffers RUNNING markers observed while idle. agy's
+	// conversational planner DONE can close the user turn seconds before
+	// the tool call that actually starts the task, so the start marker
+	// lands in the idle gap (observed live on slot-1, session 159). The
+	// edge publishes when the next turn attaches — the same turn that
+	// replays the buffered steps — and the projection's wake-of-a-wake
+	// chain walker collapses relay-origin tasks to the originating
+	// user-visible turn.
+	pendingTaskStarts []pendingTaskStart
+	builder           eventBuilder
+	publish           func(map[string]any) error
+}
+
+type pendingTaskStart struct {
+	rawID   string
+	content string
 }
 
 type parsedStep struct {
@@ -251,6 +265,13 @@ func (s *runnerState) attachTurn(run *turnRun) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.currentRun = run
+	// Flush idle-buffered task starts FIRST so the durable started edge
+	// precedes the replayed step items, attributed to this attaching turn
+	// (the turn that carries the work).
+	for _, pts := range s.pendingTaskStarts {
+		s.publishTaskLifecycleLocked(pts.rawID, string(conversation.EventShellTaskStarted), "running", pts.content)
+	}
+	s.pendingTaskStarts = nil
 	for _, ps := range s.pendingSteps {
 		_ = run.observeStep(ps.path, ps.line, ps.step)
 	}
@@ -292,7 +313,11 @@ func (s *runnerState) noteTaskSignalLocked(step AgyStep) {
 					s.pendingTasks = map[string]struct{}{}
 				}
 				s.pendingTasks[id] = struct{}{}
-				s.publishTaskLifecycleLocked(id, string(conversation.EventShellTaskStarted), "running", contentText(step.Content))
+				if s.currentRun == nil {
+					s.pendingTaskStarts = append(s.pendingTaskStarts, pendingTaskStart{rawID: id, content: contentText(step.Content)})
+				} else {
+					s.publishTaskLifecycleLocked(id, string(conversation.EventShellTaskStarted), "running", contentText(step.Content))
+				}
 			}
 		}
 		return
