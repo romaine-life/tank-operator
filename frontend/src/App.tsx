@@ -9901,6 +9901,7 @@ function normalizeTurnActivityPageDirectory(
 type TurnActivityPageOptionParts = {
   pageLabel: string;
   semanticLabel: string;
+  isQuestion: boolean;
   textValue: string;
 };
 
@@ -9910,7 +9911,9 @@ function turnActivityPageOptionParts(
 ): TurnActivityPageOptionParts {
   const pageLabel = `Page ${pageNumber}`;
   let semanticLabel = "Activity";
+  let isQuestion = false;
   if (directoryItem?.kind === "question") {
+    isQuestion = true;
     if (directoryItem.questionIndex && directoryItem.questionCount) {
       semanticLabel = `Question ${directoryItem.questionIndex} of ${directoryItem.questionCount}`;
     } else {
@@ -9920,6 +9923,7 @@ function turnActivityPageOptionParts(
   return {
     pageLabel,
     semanticLabel,
+    isQuestion,
     textValue: `${pageLabel} ${semanticLabel}`,
   };
 }
@@ -10183,9 +10187,13 @@ function RunTurnViewControls({
                 </span>
                 <span className="run-turn-view-combined-page">
                   <span>Page {selectedEntry.pageNumber}</span>
-                  {selectedEntryParts.semanticLabel !== "Activity" && (
-                    <span className="run-turn-view-combined-semantic">
-                      ({selectedEntryParts.semanticLabel})
+                  {selectedEntryParts.isQuestion && (
+                    <span
+                      className="run-turn-view-combined-kind"
+                      aria-label={selectedEntryParts.semanticLabel}
+                      title={selectedEntryParts.semanticLabel}
+                    >
+                      <MessageSquareIcon size={13} aria-hidden="true" />
                     </span>
                   )}
                 </span>
@@ -10217,9 +10225,13 @@ function RunTurnViewControls({
                     </span>
                     <span className="run-turn-view-combined-page">
                       <span>Page {entry.pageNumber}</span>
-                      {parts.semanticLabel !== "Activity" && (
-                        <span className="run-turn-view-combined-semantic">
-                          ({parts.semanticLabel})
+                      {parts.isQuestion && (
+                        <span
+                          className="run-turn-view-combined-kind"
+                          aria-label={parts.semanticLabel}
+                          title={parts.semanticLabel}
+                        >
+                          <MessageSquareIcon size={13} aria-hidden="true" />
                         </span>
                       )}
                     </span>

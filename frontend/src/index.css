@@ -4210,14 +4210,14 @@ button:disabled {
 }
 
 .run-turn-view-combined-select {
-  width: 13.25rem;
-  min-width: 13.25rem;
+  width: auto;
+  min-width: 10.75rem;
   max-width: min(13.25rem, calc(100vw - 2rem));
 }
 
 .run-turn-view-combined-select-menu {
-  width: 13.25rem;
-  min-width: 13.25rem;
+  width: var(--radix-select-trigger-width);
+  min-width: var(--radix-select-trigger-width);
   max-width: min(13.25rem, calc(100vw - 2rem));
 }
 
@@ -4275,13 +4275,16 @@ button:disabled {
   gap: var(--space-1-5);
 }
 
-.run-turn-view-combined-semantic {
+.run-turn-view-combined-kind {
+  align-items: center;
   color: currentColor;
-  font-size: var(--text-xs);
+  display: inline-flex;
+  flex: 0 0 auto;
   opacity: 0.72;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.run-turn-view-combined-kind svg {
+  display: block;
 }
 
 .run-turn-view-nav-btn-double {
