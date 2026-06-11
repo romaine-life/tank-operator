@@ -386,7 +386,8 @@ All metric names are prefixed `tank_`. The full namespace:
   step that says it will wait while emitting no native schedule tool call.
 - `tank_session_runtime_config_update_total` - pod-side runner reports of
   the model/effort actually applied to the provider runtime. Labels:
-  `provider` (`claude`, `codex`, `unknown`) and bounded `result`.
+  `provider` (`claude`, `codex`, `antigravity`, `unknown`) and bounded
+  `result`.
 - `tank_session_container_terminations_total{container,reason,exit_code}` —
   session pod container terminations observed by the leader-elected K8s watch.
   Labels are bounded: `reason="oom_killed"` is the runtime-death signal that a

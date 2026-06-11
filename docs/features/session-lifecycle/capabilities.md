@@ -27,6 +27,11 @@ Contract impact:
 - Tank validates create, turn, and runtime-config model/effort values against
   the same provider-owned allowlists. Rejections are hard `400` responses with
   an actionable allowed-value list instead of a silent runner default.
+- `antigravity_gui` sessions stamp the validated create-time model into the
+  pod manifest as `TANK_SESSION_MODEL`; the runner must pass that exact value
+  to `agy --model` before the first turn and echo it through the internal
+  runtime-config endpoint. Missing model env is a startup failure, not a silent
+  provider default.
 - `codex_exec_gui` and `codex_app_server` are retired create modes. Existing
   historical rows can still render as chat sessions, but new creates through
   browser, internal, or MCP paths must use `codex_gui`.
@@ -45,6 +50,12 @@ Evidence:
   `handlers_turns_test.go`, and `handlers_internal_test.go` cover retired-mode,
   unknown-mode, unsupported-model, missing-model, and unsupported-effort
   rejection paths.
+- `backend-go/internal/sessionmodel/sessionmodel_test.go` covers
+  `TANK_SESSION_MODEL` pod env stamping for `antigravity_gui`.
+- `backend-go/cmd/antigravity-runner/main_test.go` covers the required
+  `agy --model` argument and runtime-config report for the applied model.
+- `backend-go/cmd/tank-operator/observability_test.go` covers the
+  `antigravity` provider bucket for runtime-config metrics.
 - `frontend/src/modelEffortDefaults.test.ts` covers the SPA's Tank metadata
   fetch, Claude provider-key normalization, preference reconciliation, and
   create-time readiness guard.

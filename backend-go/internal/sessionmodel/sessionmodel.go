@@ -43,15 +43,15 @@ const (
 	// fix): the pod gets a placeholder + an antigravity-api-proxy host-alias so
 	// the real refresh token never lands on the model-readable filesystem — the
 	// same shape claude_gui / codex_gui use. See docs/api-proxy-auth.md.
-	AntigravityGUIMode    = "antigravity_gui"
-	AntigravityCLIMode    = "antigravity_cli"
-	DefaultSessionMode    = ClaudeGUIMode
+	AntigravityGUIMode      = "antigravity_gui"
+	AntigravityCLIMode      = "antigravity_cli"
+	DefaultSessionMode      = ClaudeGUIMode
 	GeminiRunnerMetricsPort = 9097
-	MaxNameLength         = 80
-	SessionsNamespace     = "tank-operator-sessions"
-	SessionServiceAccount = "claude-session"
-	SessionConfigMap      = "tank-session-config"
-	SandboxAgentPort      = 2468
+	MaxNameLength           = 80
+	SessionsNamespace       = "tank-operator-sessions"
+	SessionServiceAccount   = "claude-session"
+	SessionConfigMap        = "tank-session-config"
+	SandboxAgentPort        = 2468
 	// SessionCapabilitySpireLensMCP opts a pod into the SpireLens game-host
 	// MCP path. The default session surface stays cluster-local; this rare
 	// capability joins the tailnet and mounts an MCP config with
@@ -85,15 +85,15 @@ var (
 	ErrSessionOrderConflict = errors.New("session order conflict")
 
 	sessionModes = map[string]struct{}{
-		APIKeyMode:            {},
-		ClaudeCLIMode:         {},
-		ClaudeGUIMode:         {},
-		ConfigMode:            {},
-		CodexConfigMode:       {},
-		CodexCLIMode:          {},
-		CodexGUIMode:          {},
-		CodexExecGUIMode:      {},
-		CodexAppServerMode:    {},
+		APIKeyMode:         {},
+		ClaudeCLIMode:      {},
+		ClaudeGUIMode:      {},
+		ConfigMode:         {},
+		CodexConfigMode:    {},
+		CodexCLIMode:       {},
+		CodexGUIMode:       {},
+		CodexExecGUIMode:   {},
+		CodexAppServerMode: {},
 
 		AntigravityConfigMode: {},
 		AntigravityCLIMode:    {},
@@ -283,6 +283,10 @@ type ManifestOptions struct {
 	NATSURL        string
 	NATSStream     string
 	NATSAuthSecret string
+	// Model/Effort are the immutable session-owned SDK run configuration
+	// accepted at create time.
+	Model  string
+	Effort string
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
 	// Repos is the validated owner/name slug list selected at session
@@ -1145,6 +1149,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 			map[string]any{"name": "TANK_RUNNER_METRICS_PORT", "value": itoa(AntigravityRunnerMetricsPort)},
 		}
+		if strings.TrimSpace(opts.Model) != "" {
+			antigravityRunnerEnv = append(antigravityRunnerEnv, map[string]any{"name": "TANK_SESSION_MODEL", "value": strings.TrimSpace(opts.Model)})
+		}
+		if strings.TrimSpace(opts.Effort) != "" {
+			antigravityRunnerEnv = append(antigravityRunnerEnv, map[string]any{"name": "TANK_SESSION_EFFORT", "value": strings.TrimSpace(opts.Effort)})
+		}
 		if antigravityProxied {
 			// The launch script concatenates this CA with the system bundle and
 			// exports SSL_CERT_FILE so the Go-based agy trusts the proxy leaf.
@@ -1182,7 +1192,6 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		}
 		containers = append(containers, antigravityRunnerContainer)
 	}
-
 
 	spec := map[string]any{
 		"serviceAccountName": opts.SessionServiceAccount,
