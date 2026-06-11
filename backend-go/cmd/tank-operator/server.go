@@ -41,6 +41,11 @@ type appServer struct {
 	sessionEvents  store.SessionEventStore
 	transcriptRows store.SessionTranscriptRowStore
 	turns          store.SessionTurnStore
+	// transcriptRefresher is the per-session async projection worker for the
+	// backend-direct write path (async_transcript_refresher.go). Nil in
+	// degraded boots and test fixtures; persistBackendEvent then skips
+	// projection (on-read resync covers it) and wakes SSE inline.
+	transcriptRefresher *asyncTranscriptRefresher
 	avatars        avatarassets.Store
 	avatarImages   avatarassets.ImageStore
 	avatarUploads  avataruploads.Store

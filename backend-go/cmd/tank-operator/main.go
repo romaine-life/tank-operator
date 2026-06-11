@@ -478,6 +478,12 @@ func main() {
 		sessionEvents:                sessionEventsStore,
 		transcriptRows:               transcriptRowsStore,
 		turns:                        turnsStore,
+		transcriptRefresher: newAsyncTranscriptRefresher(ctx, transcriptMaterializer, func(storageKey string) {
+			if err := sessionBus.PublishSessionEventWake(context.Background(), storageKey); err != nil {
+				slog.Warn("backend async refresh wake publish failed",
+					"storage_key", storageKey, "error", err)
+			}
+		}),
 		avatars:                      avatarStore,
 		avatarImages:                 avatarImageStore,
 		avatarUploads:                avatarUploadAttemptStore,
