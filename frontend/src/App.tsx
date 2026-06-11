@@ -11661,122 +11661,122 @@ function RunTurnActivityScreen({
               </span>
             </div>
           )}
-          {selected && showTurnSectionDivider && (
-            <div className="run-turn-activity-divider run-turn-view-activity-divider">
-              <div
-                className="run-turn-activity-divider-controls"
-                role="group"
-                aria-label="Turn section collapse controls"
-              >
-                <button
-                  type="button"
-                  className="run-turn-activity-divider-toggle"
-                  data-direction="up"
-                  disabled={!canTogglePromptContext}
-                  onClick={() => {
-                    if (!canTogglePromptContext) return;
-                    setCollapsedContextTurnIds((prev) => ({
-                      ...prev,
-                      [selected.turnId]: !selectedTurnContextCollapsed,
-                    }));
-                  }}
-                  aria-expanded={!selectedTurnContextCollapsed}
-                  aria-label={
-                    canTogglePromptContext
-                      ? selectedTurnContextCollapsed
-                        ? "Expand user message"
-                        : "Collapse user message"
-                      : "No user message to collapse"
-                  }
-                  title={
-                    canTogglePromptContext
-                      ? selectedTurnContextCollapsed
-                        ? "Expand user message"
-                        : "Collapse user message"
-                      : "No user message to collapse"
-                  }
-                >
-                  {canTogglePromptContext && selectedTurnContextCollapsed ? (
-                    <PlusIcon
-                      size={11}
-                      strokeWidth={2.4}
-                      aria-hidden="true"
-                    />
-                  ) : canTogglePromptContext ? (
-                    <MinusIcon
-                      size={11}
-                      strokeWidth={2.4}
-                      aria-hidden="true"
-                    />
-                  ) : null}
-                  <ChevronUpIcon
-                    className="run-turn-activity-divider-toggle-chevron"
-                    size={13}
-                    strokeWidth={2.3}
-                    aria-hidden="true"
-                  />
-                </button>
-                <button
-                  type="button"
-                  className="run-turn-activity-divider-toggle"
-                  data-direction="down"
-                  disabled={!canToggleDetailActivity}
-                  onClick={() => {
-                    if (!canToggleDetailActivity) return;
-                    setCollapsedActivityTurnIds((prev) => ({
-                      ...prev,
-                      [selected.turnId]: !detailActivityCollapsed,
-                    }));
-                  }}
-                  aria-expanded={!detailActivityCollapsed}
-                  aria-label={
-                    canToggleDetailActivity
-                      ? detailActivityCollapsed
-                        ? "Expand agent activity"
-                        : "Collapse agent activity"
-                      : hasFinalDetailResponse
-                        ? "No agent activity to collapse"
-                        : "No final answer to isolate"
-                  }
-                  title={
-                    canToggleDetailActivity
-                      ? detailActivityCollapsed
-                        ? "Expand agent activity"
-                        : "Collapse agent activity"
-                      : hasFinalDetailResponse
-                        ? "No agent activity to collapse"
-                        : "No final answer to isolate"
-                  }
-                >
-                  {canToggleDetailActivity && detailActivityCollapsed ? (
-                    <PlusIcon
-                      size={11}
-                      strokeWidth={2.4}
-                      aria-hidden="true"
-                    />
-                  ) : canToggleDetailActivity ? (
-                    <MinusIcon
-                      size={11}
-                      strokeWidth={2.4}
-                      aria-hidden="true"
-                    />
-                  ) : null}
-                  <ChevronDownIcon
-                    className="run-turn-activity-divider-toggle-chevron"
-                    size={13}
-                    strokeWidth={2.3}
-                    aria-hidden="true"
-                  />
-                </button>
-              </div>
-            </div>
-          )}
           <div
             className="run-turn-view-body run-transcript run-transcript-claude"
             data-page-kind={selectedPageInfo?.kind ?? "activity"}
             onCopy={handleTranscriptCopy}
             ref={bodyRef}
           >
+            {selected && showTurnSectionDivider && (
+              <div className="run-turn-activity-divider run-turn-view-activity-divider">
+                <div
+                  className="run-turn-activity-divider-controls"
+                  role="group"
+                  aria-label="Turn section collapse controls"
+                >
+                  <button
+                    type="button"
+                    className="run-turn-activity-divider-toggle"
+                    data-direction="up"
+                    disabled={!canTogglePromptContext}
+                    onClick={() => {
+                      if (!canTogglePromptContext) return;
+                      setCollapsedContextTurnIds((prev) => ({
+                        ...prev,
+                        [selected.turnId]: !selectedTurnContextCollapsed,
+                      }));
+                    }}
+                    aria-expanded={!selectedTurnContextCollapsed}
+                    aria-label={
+                      canTogglePromptContext
+                        ? selectedTurnContextCollapsed
+                          ? "Expand user message"
+                          : "Collapse user message"
+                        : "No user message to collapse"
+                    }
+                    title={
+                      canTogglePromptContext
+                        ? selectedTurnContextCollapsed
+                          ? "Expand user message"
+                          : "Collapse user message"
+                        : "No user message to collapse"
+                    }
+                  >
+                    {canTogglePromptContext && selectedTurnContextCollapsed ? (
+                      <PlusIcon
+                        size={11}
+                        strokeWidth={2.4}
+                        aria-hidden="true"
+                      />
+                    ) : canTogglePromptContext ? (
+                      <MinusIcon
+                        size={11}
+                        strokeWidth={2.4}
+                        aria-hidden="true"
+                      />
+                    ) : null}
+                    <ChevronUpIcon
+                      className="run-turn-activity-divider-toggle-chevron"
+                      size={13}
+                      strokeWidth={2.3}
+                      aria-hidden="true"
+                    />
+                  </button>
+                  <button
+                    type="button"
+                    className="run-turn-activity-divider-toggle"
+                    data-direction="down"
+                    disabled={!canToggleDetailActivity}
+                    onClick={() => {
+                      if (!canToggleDetailActivity) return;
+                      setCollapsedActivityTurnIds((prev) => ({
+                        ...prev,
+                        [selected.turnId]: !detailActivityCollapsed,
+                      }));
+                    }}
+                    aria-expanded={!detailActivityCollapsed}
+                    aria-label={
+                      canToggleDetailActivity
+                        ? detailActivityCollapsed
+                          ? "Expand agent activity"
+                          : "Collapse agent activity"
+                        : hasFinalDetailResponse
+                          ? "No agent activity to collapse"
+                          : "No final answer to isolate"
+                    }
+                    title={
+                      canToggleDetailActivity
+                        ? detailActivityCollapsed
+                          ? "Expand agent activity"
+                          : "Collapse agent activity"
+                        : hasFinalDetailResponse
+                          ? "No agent activity to collapse"
+                          : "No final answer to isolate"
+                    }
+                  >
+                    {canToggleDetailActivity && detailActivityCollapsed ? (
+                      <PlusIcon
+                        size={11}
+                        strokeWidth={2.4}
+                        aria-hidden="true"
+                      />
+                    ) : canToggleDetailActivity ? (
+                      <MinusIcon
+                        size={11}
+                        strokeWidth={2.4}
+                        aria-hidden="true"
+                      />
+                    ) : null}
+                    <ChevronDownIcon
+                      className="run-turn-activity-divider-toggle-chevron"
+                      size={13}
+                      strokeWidth={2.3}
+                      aria-hidden="true"
+                    />
+                  </button>
+                </div>
+              </div>
+            )}
             {selected && refreshProblem ? (
               <div className="run-turn-view-alert" role="alert">
                 <AlertCircleIcon size={14} strokeWidth={2} aria-hidden="true" />
