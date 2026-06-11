@@ -612,6 +612,13 @@ test("process-exit completion synthesizes exited attributed to the origin turn",
       status: "in_progress",
     },
   });
+  // Startup items defer until turn-end promotion (the live session-161
+  // shape: shell_task.started and the bwp-stamped terminal land together).
+  const terminal = adapter.canonicalEventsForCodexEvent(turn, { type: "turn.completed" });
+  assert.equal(
+    terminal.find((event) => event.type === "turn.completed")?.payload?.background_work_pending,
+    true,
+  );
   const pending = adapter.pendingBackgroundTasks();
   assert.equal(pending.length, 1);
   assert.equal(pending[0]!.processID, 424242);
