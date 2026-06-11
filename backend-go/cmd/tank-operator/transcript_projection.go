@@ -556,6 +556,14 @@ func (s *projectionState) applyBackgroundWakePrompt(event map[string]any) {
 	taskID := strings.TrimSpace(transcriptPayloadString(event, "task_id"))
 	title := "Background task finished — agent re-invoked"
 	detail := "Tank re-invoked the agent to pick up the result and report the outcome."
+	if strings.HasPrefix(text, backgroundWakeLostObservabilityPromptPrefix) {
+		// The unknown-status wake (lost observability / runner restart) must
+		// not claim the task finished — nobody observed that. The composer
+		// (buildBackgroundTaskWakePromptForProvider) and this prefix are
+		// pinned together by test.
+		title = "Background task lost from view — agent re-invoked"
+		detail = "Tank could no longer observe the task and re-invoked the agent to verify its real state and report."
+	}
 	if transcriptPayloadString(event, "source") == string(conversation.TurnSubmittedSourceAgentContinuation) {
 		title = "Agent continued on its own"
 		detail = "The agent resumed by itself after its background task finished."
@@ -2980,3 +2988,10 @@ func existingScheduledWakeupAny(item *projectionScheduledWakeup, field string) a
 		return nil
 	}
 }
+
+// backgroundWakeLostObservabilityPromptPrefix is the opening sentence of the
+// unknown-status wake prompt (buildBackgroundTaskWakePromptForProvider). The
+// projection keys the wake chip's title off it so a lost-observability wake
+// never renders as "task finished". Composer and projection are pinned
+// together by TestBackgroundWakeChipTitleTracksLostObservability.
+const backgroundWakeLostObservabilityPromptPrefix = "Tank lost the ability to observe"

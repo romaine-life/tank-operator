@@ -332,3 +332,31 @@ func TestProjectUnresolvedBackgroundTasks(t *testing.T) {
 		t.Fatalf("started_event_id = %#v, want started-a", got["started_event_id"])
 	}
 }
+
+// TestBackgroundWakeChipTitleTracksLostObservability pins the composer and
+// the projection chip together: the unknown-status prompt opens with the
+// lost-observability prefix the chip keys on, and the chip then refuses to
+// claim the task finished.
+func TestBackgroundWakeChipTitleTracksLostObservability(t *testing.T) {
+	row := backgroundWakeRow()
+	row.TaskStatus = "unknown"
+	prompt := buildBackgroundTaskWakePromptForProvider(row)
+	if !strings.HasPrefix(prompt, backgroundWakeLostObservabilityPromptPrefix) {
+		t.Fatalf("unknown-status prompt does not open with the chip prefix %q:\n%s", backgroundWakeLostObservabilityPromptPrefix, prompt)
+	}
+
+	events := []map[string]any{
+		projectionTestEvent("wake-submitted", "001", "turn.submitted", "runner", "tank", "turn_bgtask-x", "", map[string]any{
+			"status": "submitted", "source": "background-task", "task_id": "x", "prompt": prompt,
+		}),
+	}
+	projection := projectTranscriptEvents(events)
+	body, ok := projection.ActivityBodies["turn_bgtask-x"]
+	if !ok || len(body.Entries) == 0 {
+		t.Fatalf("wake body missing: %#v", projection.ActivityBodies)
+	}
+	meta, _ := body.Entries[0]["meta"].(map[string]any)
+	if meta == nil || meta["title"] != "Background task lost from view — agent re-invoked" {
+		t.Fatalf("chip title = %#v, want lost-from-view title", meta)
+	}
+}
