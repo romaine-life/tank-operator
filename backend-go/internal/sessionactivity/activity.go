@@ -296,11 +296,18 @@ func canTransitionToStopping(status string) bool {
 const (
 	AwayErrorReasonScheduledWakeup    = "schedule_wakeup_fire_failed"
 	AwayErrorReasonBackgroundTaskWake = "background_task_wake_fire_failed"
+	// AwayErrorReasonStrandedContinuation marks a continuation turn (a
+	// background-task wake, scheduled wakeup, or agent-continuation) whose
+	// submit_turn command was durably recorded but lost before any runner
+	// progress — swept to a terminal by the stranded-turn sweep. Same
+	// user-trust shape as the fire-failed reasons above: the agent promised
+	// to resume while the user was away, and the resume silently died.
+	AwayErrorReasonStrandedContinuation = "stranded_continuation_swept"
 )
 
 func isAwayErrorReason(reason string) bool {
 	switch strings.TrimSpace(reason) {
-	case AwayErrorReasonScheduledWakeup, AwayErrorReasonBackgroundTaskWake:
+	case AwayErrorReasonScheduledWakeup, AwayErrorReasonBackgroundTaskWake, AwayErrorReasonStrandedContinuation:
 		return true
 	default:
 		return false

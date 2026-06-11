@@ -36,6 +36,10 @@ func (f *fakeDebugSessionEventLedgerStore) ShellTaskEvents(context.Context, stri
 	return nil, nil
 }
 
+func (f *fakeDebugSessionEventLedgerStore) FindStrandedTurns(context.Context, time.Time, time.Time, time.Time, int) ([]store.StrandedTurn, error) {
+	return nil, nil
+}
+
 func (f *fakeDebugSessionEventLedgerStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
 	return nil, nil
 }

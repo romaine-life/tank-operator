@@ -550,6 +550,19 @@ func main() {
 			}
 		}()
 	}
+	// Command-plane four-outcome backstop (#1051 PR 4): a dispatched turn
+	// whose submit_turn command or runner died gets a durable
+	// turn.command_failed once the whole session has been silent past the
+	// stranding floors. Without this, a lost command is a permanent
+	// "submitted"/"streaming" ghost only diagnosable with kubectl — the
+	// 2026-06-11 incident stranded five sessions exactly this way.
+	if pgPool != nil {
+		go func() {
+			if err := runStrandedTurnSweepLoop(ctx, srv, strandedTurnSweepInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("stranded turn sweep loop stopped", "error", err)
+			}
+		}()
+	}
 	// Backend-owned dispatch of durable attachment launches (#865): claim ready
 	// launches whose pod is Active, materialize the staged bytes into the
 	// workspace, and publish submit_turn — so the launch is delivered even if

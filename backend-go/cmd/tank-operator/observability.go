@@ -818,6 +818,28 @@ func recordStrandedLaunchSwept(result string) {
 	strandedLaunchSweptTotal.WithLabelValues(result).Inc()
 }
 
+// Stranded-turn sweep: the command-plane four-outcome backstop
+// (tank-operator#1051 PR 4). result="failed" means a durable terminal was
+// written for a turn nothing else would ever have terminaled; sustained
+// nonzero rate means submit_turn commands or runners are dying and pages via
+// TankStrandedTurnsSwept.
+var strandedTurnSweptTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_stranded_turn_swept_total",
+		Help: "Dispatched-but-stranded turns the stranded-turn sweep observed, labeled by bounded result (failed, deferred_progressed, skipped_incomplete, persist_error).",
+	},
+	[]string{"result"},
+)
+
+func recordStrandedTurnSwept(result string) {
+	switch result {
+	case "failed", "deferred_progressed", "skipped_incomplete", "persist_error":
+	default:
+		result = "other"
+	}
+	strandedTurnSweptTotal.WithLabelValues(result).Inc()
+}
+
 var launchAttachmentStagedTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_launch_attachment_staged_total",

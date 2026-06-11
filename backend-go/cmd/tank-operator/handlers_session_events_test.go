@@ -37,6 +37,10 @@ func (s fakeSessionEventStore) CountUserMessages(_ context.Context, _ string) (i
 	return 0, nil
 }
 
+func (s fakeSessionEventStore) FindStrandedTurns(context.Context, time.Time, time.Time, time.Time, int) ([]store.StrandedTurn, error) {
+	return nil, nil
+}
+
 func (s fakeSessionEventStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
 	return nil, nil
 }

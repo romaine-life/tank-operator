@@ -209,6 +209,10 @@ func (s *activityEventStore) Upsert(_ context.Context, _ map[string]any) (bool, 
 	return true, nil
 }
 
+func (s *activityEventStore) FindStrandedTurns(context.Context, time.Time, time.Time, time.Time, int) ([]store.StrandedTurn, error) {
+	return nil, nil
+}
+
 func (s *activityEventStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
 	return nil, nil
 }

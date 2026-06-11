@@ -100,6 +100,17 @@ type SessionEventStore interface {
 	// keeps the scan off the deep history. Returns at most `limit` rows, ASC
 	// by created_at (oldest strands first).
 	FindStrandedLaunchTurns(ctx context.Context, olderThan, notBefore time.Time, limit int) ([]StrandedLaunchTurn, error)
+	// FindStrandedTurns returns dispatched turns that stranded mid-lifecycle:
+	// a turn.submitted in [notBefore, olderThan) with no terminal event, in a
+	// session that has been completely quiet since quietSince. The quiet
+	// predicate is the false-positive guard — a turn legitimately queued
+	// behind a long-running turn, or itself mid-work, lives in a session that
+	// keeps producing events; a session with zero events for the whole quiet
+	// window cannot be making progress on anything. Progressed reports
+	// whether the runner ever claimed/started the turn, so the sweep can
+	// apply a longer age floor to mid-turn strands than to never-claimed
+	// ones. Backs cmd/tank-operator/stranded_turn_sweep.go.
+	FindStrandedTurns(ctx context.Context, olderThan, quietSince, notBefore time.Time, limit int) ([]StrandedTurn, error)
 }
 
 // StrandedLaunchTurn is one never-dispatched launch turn — exactly the fields
@@ -113,6 +124,23 @@ type StrandedLaunchTurn struct {
 	ClientNonce   string
 	Email         string
 	Runtime       string
+	CreatedAt     time.Time
+}
+
+// StrandedTurn is one dispatched-but-stranded turn: durably submitted, no
+// terminal, in a fully quiet session. Source carries the submit's
+// payload.source (e.g. "background-task", "schedule-wakeup") so the sweep can
+// classify continuation strands as away-errors; Progressed reports whether a
+// runner ever claimed/started the turn.
+type StrandedTurn struct {
+	TankSessionID string
+	SessionID     string
+	TurnID        string
+	ClientNonce   string
+	Email         string
+	Runtime       string
+	Source        string
+	Progressed    bool
 	CreatedAt     time.Time
 }
 
@@ -574,6 +602,91 @@ func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context,
 	return out, nil
 }
 
+// FindStrandedTurns scans for turn.submitted rows in [notBefore, olderThan)
+// whose turn has no terminal event of any kind and whose session has been
+// completely silent since quietSince. The created_at predicates ride the
+// session_events_created_at index and the per-turn / per-session NOT EXISTS
+// subqueries ride the (tank_session_id, turn_id, order_key) and
+// (tank_session_id, created_at-capable) paths, so the outer pass is a bounded
+// time-window scan. Cross-session by design — the sweep addresses every
+// owner/scope from the per-row payload.
+func (s *postgresSessionEventStore) FindStrandedTurns(ctx context.Context, olderThan, quietSince, notBefore time.Time, limit int) ([]StrandedTurn, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	const q = `
+		SELECT
+			e.tank_session_id,
+			COALESCE(e.payload ->> 'session_id', '')             AS session_id,
+			e.turn_id,
+			COALESCE(e.payload ->> 'client_nonce', '')           AS client_nonce,
+			COALESCE(e.payload ->> 'email', '')                  AS email,
+			COALESCE(e.payload ->> 'runtime', '')                AS runtime,
+			COALESCE(e.payload -> 'payload' ->> 'source', '')    AS source,
+			EXISTS (
+				SELECT 1
+				FROM session_events p
+				WHERE p.tank_session_id = e.tank_session_id
+					AND p.turn_id = e.turn_id
+					AND p.event_type IN ('turn.claimed', 'turn.started')
+			) AS progressed,
+			e.created_at
+		FROM session_events e
+		WHERE e.event_type = 'turn.submitted'
+			AND e.turn_id IS NOT NULL
+			AND e.created_at < $1
+			AND e.created_at >= $2
+			AND NOT EXISTS (
+				SELECT 1
+				FROM session_events t
+				WHERE t.tank_session_id = e.tank_session_id
+					AND t.turn_id = e.turn_id
+					AND t.event_type IN ('turn.completed', 'turn.failed', 'turn.command_failed', 'turn.interrupted')
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM session_events quiet
+				WHERE quiet.tank_session_id = e.tank_session_id
+					AND quiet.created_at >= $3
+			)
+		ORDER BY e.created_at ASC
+		LIMIT $4
+	`
+	rows, err := s.pool.Query(ctx, q,
+		olderThan.UTC(),
+		notBefore.UTC(),
+		quietSince.UTC(),
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]StrandedTurn, 0, limit)
+	for rows.Next() {
+		var row StrandedTurn
+		if err := rows.Scan(
+			&row.TankSessionID,
+			&row.SessionID,
+			&row.TurnID,
+			&row.ClientNonce,
+			&row.Email,
+			&row.Runtime,
+			&row.Source,
+			&row.Progressed,
+			&row.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // LatestLifecycleEvents returns up to `limit` recent lifecycle events
 // (the turn.* lifecycle set, including turn.awaiting_input) for one session, ascending by
 // order_key. Postgres returns the slice DESC LIMIT N and we reverse in Go;
@@ -888,6 +1001,10 @@ func (StubSessionEventStore) FindTurnTerminal(_ context.Context, _, _ string) (m
 }
 
 func (StubSessionEventStore) FindStrandedLaunchTurns(_ context.Context, _, _ time.Time, _ int) ([]StrandedLaunchTurn, error) {
+	return nil, nil
+}
+
+func (StubSessionEventStore) FindStrandedTurns(_ context.Context, _, _, _ time.Time, _ int) ([]StrandedTurn, error) {
 	return nil, nil
 }
 

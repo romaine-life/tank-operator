@@ -60,6 +60,17 @@ All metric names are prefixed `tank_`. The full namespace:
   queues), and `_processed_event_age_seconds` (how far behind users'
   transcripts are). Per-session detail lives in
   `GET /api/debug/persister`, never in labels.
+- `tank_stranded_turn_swept_total{result}` — the command-plane
+  four-outcome backstop (tank-operator#1051 PR 4): dispatched turns whose
+  submit_turn command or runner died silently, swept to a durable
+  `turn.command_failed` once the whole session has been quiet past the
+  stranding floors. Bounded `result`: `failed` (terminal written — pages
+  via `TankStrandedTurnsSwept`, because each one is a real delivery loss),
+  `deferred_progressed` (claimed turn younger than the mid-turn floor,
+  re-checked next tick), `skipped_incomplete`, `persist_error`.
+  Per-sweep detail (session, turn, progressed, source) is in the
+  "stranded turn swept to durable terminal" slog line. Pairs with
+  `tank_stranded_launch_swept_total`, the create-flow equivalent.
 - `tank_stream_auth_ticket_total` — browser EventSource stream-ticket
   create/validate attempts. Labels: `operation` (`create`, `validate`),
   `stream` (`session-list`, `session-events`), and bounded `result`.

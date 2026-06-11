@@ -851,6 +851,34 @@ spec:
               persister ack floor"), then assess which sessions lost
               events via the per-session order_key continuity.
 
+        # Stranded-turn sweep activity. The sweep is the command-plane
+        # four-outcome backstop: it terminals turns whose submit_turn
+        # command or runner died silently. Each swept turn is a real
+        # delivery loss the user experienced as a frozen chip, so any
+        # sweep activity warrants a look at WHY commands are dying.
+        - alert: TankStrandedTurnsSwept
+          expr: sum(increase(tank_stranded_turn_swept_total{result="failed"}[30m])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "the stranded-turn sweep is terminaling turns — submit commands or runners are dying"
+            runbook: |
+              The sweep wrote durable turn.command_failed terminals for
+              turns that were durably submitted but never finished, in
+              sessions silent past the stranding floors. The terminal
+              itself is correct recovery; this alert is about the cause.
+              The slog line "stranded turn swept to durable terminal"
+              carries session_id, turn_id, progressed, and source per
+              sweep. progressed=false means no runner ever claimed the
+              command (runner-consumer MaxDeliver exhaustion, dead runner
+              process, or a publish that never landed — check the
+              command-publish failure counter and the runner pod's
+              restart count); progressed=true means a runner died
+              mid-turn (check that pod's previous-container logs). A
+              burst right after deploying the sweep is expected drain of
+              historical strands; a steady rate afterward is live command
+              loss.
+
         # Background-task wake fire failures. A Claude run_in_background task
         # that finishes while the session is idle registers a durable wake in
         # session_background_task_wakes; the orchestrator fire loop turns it
