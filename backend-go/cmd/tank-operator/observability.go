@@ -2305,6 +2305,11 @@ func transcriptRowMaterializationTriggerLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
 	case "on_demand":
 		return "on_demand"
+	case "backend_async":
+		// The backend-direct write path's per-session async refresh worker
+		// (async_transcript_refresher.go) — the projection work that used to
+		// run inline in HTTP handlers.
+		return "backend_async"
 	default:
 		return "unknown"
 	}
@@ -2312,7 +2317,7 @@ func transcriptRowMaterializationTriggerLabel(raw string) string {
 
 func transcriptRowMaterializationResultLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
-	case "fresh", "backfilled", "failed", "timeout":
+	case "fresh", "backfilled", "refreshed", "failed", "timeout":
 		return strings.TrimSpace(raw)
 	default:
 		return "unknown"
