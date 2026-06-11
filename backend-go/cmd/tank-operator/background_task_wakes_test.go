@@ -225,6 +225,9 @@ func TestBuildBackgroundTaskWakePromptIsProviderAwareAndDemandsReport(t *testing
 	if strings.Contains(unknown, "has finished while this session was idle") {
 		t.Fatalf("unknown-status prompt claims completion:\n%s", unknown)
 	}
+	if !strings.Contains(unknown, "you will be re-invoked once more") {
+		t.Fatalf("codex unknown-status prompt missing the re-arm follow-up note:\n%s", unknown)
+	}
 
 	// A re-armed generation says so: the agent should know the earlier
 	// notification may have been premature.
@@ -343,6 +346,13 @@ func TestBackgroundWakeChipTitleTracksLostObservability(t *testing.T) {
 	prompt := buildBackgroundTaskWakePromptForProvider(row)
 	if !strings.HasPrefix(prompt, backgroundWakeLostObservabilityPromptPrefix) {
 		t.Fatalf("unknown-status prompt does not open with the chip prefix %q:\n%s", backgroundWakeLostObservabilityPromptPrefix, prompt)
+	}
+	// No observer remains for claude after a restart closure: the prompt must
+	// forbid the model from promising a follow-up report the harness can
+	// never deliver — "I'll report when it finishes" was the residual lie of
+	// the slot-6 restart round.
+	if !strings.Contains(prompt, "do not promise an automatic follow-up report") {
+		t.Fatalf("claude unknown-status prompt missing the no-follow-up instruction:\n%s", prompt)
 	}
 
 	events := []map[string]any{

@@ -377,6 +377,21 @@ func buildBackgroundTaskWakePromptForProvider(row pgstore.BackgroundTaskWake) st
 		}
 	}
 	b.WriteString("continue any work that was waiting on it. Always end by reporting the task's outcome to the user in one or two sentences — the user was promised this report when the task was started. Do not end the turn silently.")
+	if status == "unknown" {
+		// An honest report must not contain a promise the harness cannot
+		// keep. Whether a follow-up can arrive depends on who can still
+		// observe the task: codex keeps observation sources (a later real
+		// completion re-arms the next wake generation), while claude's
+		// unknown means the observer is gone for good (the runner restart
+		// severed the SDK task registry) — the slot-6 restart round's woken
+		// agent answered "I'll report when it finishes", a promise nothing
+		// could deliver.
+		if strings.TrimSpace(row.Provider) == string(conversation.SourceCodex) {
+			b.WriteString(" If the task is still running, say so plainly; should Tank later observe its real completion, you will be re-invoked once more.")
+		} else {
+			b.WriteString(" Tank can no longer track this task, so no further automatic notification will arrive for it — report its current observed state and do not promise an automatic follow-up report.")
+		}
+	}
 	return b.String()
 }
 
