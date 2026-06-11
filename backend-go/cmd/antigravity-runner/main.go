@@ -132,6 +132,8 @@ type runnerConfig struct {
 	natsStream        string
 	workspace         string
 	agyHome           string
+	model             string
+	effort            string
 	// submitAckTimeout bounds how long a submitted prompt may sit with no
 	// transcript movement before the turn resolves as a durable
 	// turn.failed{prompt_not_accepted}. Any new transcript record clears
@@ -697,7 +699,11 @@ func main() {
 	serveMetrics(cfg.metricsPort)
 
 	active := newActiveProcess()
-	agyArgs := []string{"--dangerously-skip-permissions"}
+	agyArgs, err := agyArgsForConfig(cfg)
+	if err != nil {
+		slog.Error("invalid antigravity runtime config", "error", err)
+		os.Exit(1)
+	}
 	runCmd := exec.Command("agy", agyArgs...)
 	runCmd.Dir = cfg.workspace
 	runCmd.Env = os.Environ()
@@ -766,6 +772,9 @@ func main() {
 		slog.Error("agy CLI failed to become ready", "error", err)
 		os.Exit(1)
 	}
+	if err := reportRuntimeConfig(cfg); err != nil {
+		slog.Error("failed to report antigravity runtime config", "error", err, "model", cfg.model)
+	}
 
 	state := &runnerState{builder: builder, publish: publisher}
 
@@ -813,6 +822,14 @@ func waitForCliReady(ctx context.Context, agyHome string) error {
 			}
 		}
 	}
+}
+
+func agyArgsForConfig(cfg runnerConfig) ([]string, error) {
+	model := strings.TrimSpace(cfg.model)
+	if model == "" {
+		return nil, errors.New("TANK_SESSION_MODEL is required for antigravity_gui")
+	}
+	return []string{"--dangerously-skip-permissions", "--model", model}, nil
 }
 
 // operatorBaseURL resolves the orchestrator's internal base URL. firstEnv treats
@@ -947,6 +964,60 @@ func reportProviderFatal(cfg runnerConfig, reason string, exitCode int, message 
 	return lastErr
 }
 
+func reportRuntimeConfig(cfg runnerConfig) error {
+	baseURL := operatorBaseURL()
+	tokenPath := operatorTokenPath()
+	model := strings.TrimSpace(cfg.model)
+	if cfg.sessionID == "" {
+		return errors.New("runtime config report requires a session id")
+	}
+	if model == "" {
+		return errors.New("runtime config report requires a model")
+	}
+	payload := map[string]any{"model": model}
+	if effort := strings.TrimSpace(cfg.effort); effort != "" {
+		payload["effort"] = effort
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	url := fmt.Sprintf("%s/api/internal/sessions/%s/runtime-config", baseURL, cfg.sessionID)
+
+	var lastErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(time.Duration(attempt*2) * time.Second)
+		}
+		tokenBytes, err := os.ReadFile(tokenPath)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		req, err := http.NewRequest(http.MethodPut, url, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tokenBytes)))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+			return nil
+		}
+		lastErr = fmt.Errorf("runtime config report failed: %d", resp.StatusCode)
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			return lastErr
+		}
+	}
+	return lastErr
+}
+
 func loadConfig() (runnerConfig, error) {
 	storageKey := firstEnv("TANK_SESSION_STORAGE_KEY", "SESSION_STORAGE_KEY")
 	sessionID := firstEnv("SESSION_ID", "TANK_SESSION_ID")
@@ -975,6 +1046,8 @@ func loadConfig() (runnerConfig, error) {
 		natsStream:        sessionbus.StreamName(os.Getenv("NATS_STREAM")),
 		workspace:         firstNonEmpty(strings.TrimSpace(os.Getenv("WORKSPACE")), "/workspace"),
 		agyHome:           firstNonEmpty(firstEnv("ANTIGRAVITY_HOME", "AGY_HOME"), filepath.Join(home, ".gemini", "antigravity-cli")),
+		model:             strings.TrimSpace(os.Getenv("TANK_SESSION_MODEL")),
+		effort:            strings.TrimSpace(os.Getenv("TANK_SESSION_EFFORT")),
 		submitAckTimeout:  envDurationMS("ANTIGRAVITY_SUBMIT_ACK_TIMEOUT_MS", 60*time.Second),
 		interruptGrace:    envDurationMS("ANTIGRAVITY_INTERRUPT_GRACE_MS", 10*time.Second),
 		turnSettle:        envDurationMS("ANTIGRAVITY_TURN_SETTLE_MS", 2*time.Second),

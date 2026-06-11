@@ -30,10 +30,16 @@ Our runner acts as the adapter layer (the harness) between the cluster's NATS Je
                +---------------------------------+
 ```
 
-1. **Prompt Ingestion**: The runner consumes `CommandSubmitTurn` from NATS, writes the prompt followed by a carriage return (`\r`) to `agy`'s PTY standard input.
-2. **Interactive Bypasses**: The launcher (`antigravity-container/antigravity-runner-launch.sh`) seeds `onboarding.json` and theme settings to both the legacy and new config directories during pod bootstrap, so `agy` never presents onboarding/consent screens at runtime. The runner does not script the TUI: the PTY reader only drains output (agy blocks if the PTY buffer fills) and mirrors it to pod logs. If a new interactive screen appears, extend the seeded config files — do not add keystroke replay. The retired ToS auto-accept (PTY-stdout sniffing + replayed arrow/enter keys) raced real turn input and broke on TUI copy changes; its reintroduction is blocked by `TestPTYRunnerArchitectureConstraint` and `scripts/check-removed-chat-runtime.mjs`.
-3. **Transcript Scraping**: `agy` writes JSON-lines steps to `transcript_full.jsonl`. The runner tails this file via `fsnotify`.
-4. **Completion**: When the runner parses a completed `PLANNER_RESPONSE` step, it extracts the final answer, publishes `assistant_message.created` and `turn.completed` events back to NATS, and waits for the next turn.
+1. **Model selection**: The orchestrator stamps the validated create-time
+   session model into the pod manifest as `TANK_SESSION_MODEL`. The runner
+   starts the resident process with `agy --model <TANK_SESSION_MODEL>` before
+   the first turn and reports the applied value through Tank's internal
+   runtime-config endpoint. Missing model env is a startup error; Antigravity
+   sessions must not silently inherit a provider default.
+2. **Prompt Ingestion**: The runner consumes `CommandSubmitTurn` from NATS, writes the prompt followed by a carriage return (`\r`) to `agy`'s PTY standard input.
+3. **Interactive Bypasses**: The launcher (`antigravity-container/antigravity-runner-launch.sh`) seeds `onboarding.json` and theme settings to both the legacy and new config directories during pod bootstrap, so `agy` never presents onboarding/consent screens at runtime. The runner does not script the TUI: the PTY reader only drains output (agy blocks if the PTY buffer fills) and mirrors it to pod logs. If a new interactive screen appears, extend the seeded config files — do not add keystroke replay. The retired ToS auto-accept (PTY-stdout sniffing + replayed arrow/enter keys) raced real turn input and broke on TUI copy changes; its reintroduction is blocked by `TestPTYRunnerArchitectureConstraint` and `scripts/check-removed-chat-runtime.mjs`.
+4. **Transcript Scraping**: `agy` writes JSON-lines steps to `transcript_full.jsonl`. The runner tails this file via `fsnotify`.
+5. **Completion**: When the runner parses a completed `PLANNER_RESPONSE` step, it extracts the final answer, publishes `assistant_message.created` and `turn.completed` events back to NATS, and waits for the next turn.
 
 ---
 

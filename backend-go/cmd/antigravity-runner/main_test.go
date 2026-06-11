@@ -16,6 +16,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -385,7 +387,6 @@ func TestPTYRunnerArchitectureConstraint(t *testing.T) {
 	})
 }
 
-
 // --- Liveness contract tests -------------------------------------------------
 //
 // Every wait in handleSubmitTurn that can resolve a turn must publish exactly
@@ -457,6 +458,68 @@ func waitUntil(t *testing.T, what string, pred func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestAgyArgsForConfigRequireConcreteModel(t *testing.T) {
+	if _, err := agyArgsForConfig(runnerConfig{}); err == nil {
+		t.Fatal("agyArgsForConfig accepted an empty model")
+	}
+}
+
+func TestAgyArgsForConfigPassesSessionModel(t *testing.T) {
+	args, err := agyArgsForConfig(runnerConfig{model: "Gemini 3.1 Pro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--dangerously-skip-permissions", "--model", "Gemini 3.1 Pro"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}
+
+func TestReportRuntimeConfigPostsAppliedModel(t *testing.T) {
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("session-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotAuth string
+	var gotPath string
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		if r.Method != http.MethodPut {
+			t.Fatalf("method = %s, want PUT", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv("TANK_OPERATOR_INTERNAL_URL", server.URL)
+	t.Setenv("TANK_OPERATOR_TOKEN_PATH", tokenFile)
+
+	err := reportRuntimeConfig(runnerConfig{
+		sessionID: "791",
+		model:     "Gemini 3.1 Pro",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer session-token" {
+		t.Fatalf("Authorization = %q", gotAuth)
+	}
+	if gotPath != "/api/internal/sessions/791/runtime-config" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if gotBody["model"] != "Gemini 3.1 Pro" {
+		t.Fatalf("body = %#v", gotBody)
+	}
+	if _, present := gotBody["effort"]; present {
+		t.Fatalf("antigravity runtime report should not include empty effort: %#v", gotBody)
+	}
 }
 
 func livenessTestConfig() runnerConfig {

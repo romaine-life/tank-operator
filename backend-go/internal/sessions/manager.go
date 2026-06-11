@@ -459,6 +459,8 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.Repos = repos
 	manifestOpts.Name = &storedName
 	manifestOpts.Capabilities = capabilities
+	manifestOpts.Model = model
+	manifestOpts.Effort = effort
 	m.applyImageOverride(ctx, &manifestOpts, mode)
 
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)

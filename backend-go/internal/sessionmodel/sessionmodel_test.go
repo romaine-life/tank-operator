@@ -332,6 +332,7 @@ func TestPodManifestAntigravityGUIRunnerProxiedNoCredMount(t *testing.T) {
 		AntigravitySessionImage: "antigravity-image",
 		NATSAuthSecret:          "tank-nats-auth",
 		AntigravityAPIProxyIP:   "10.0.0.42",
+		Model:                   "Gemini 3.1 Pro",
 	})
 
 	if got, want := manifest["metadata"].(map[string]any)["labels"].(map[string]any)["tank-operator/mode"], AntigravityGUIMode; got != want {
@@ -348,6 +349,10 @@ func TestPodManifestAntigravityGUIRunnerProxiedNoCredMount(t *testing.T) {
 	runner := findContainer(t, containers, "antigravity-runner")
 	if got, want := runner["image"], "antigravity-image"; got != want {
 		t.Fatalf("antigravity-runner image = %v, want %q", got, want)
+	}
+	env := containerEnv(runner)
+	if got, want := env["TANK_SESSION_MODEL"], "Gemini 3.1 Pro"; got != want {
+		t.Fatalf("TANK_SESSION_MODEL = %v, want %q", got, want)
 	}
 	cmd := runner["command"].([]any)
 	if got, want := cmd[len(cmd)-1], "/opt/tank/antigravity-runner-launch.sh"; got != want {

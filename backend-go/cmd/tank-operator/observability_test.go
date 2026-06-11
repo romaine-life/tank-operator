@@ -177,6 +177,18 @@ func TestStreamAuthTicketResultLabelKeepsClientCancelOutOfStoreErrors(t *testing
 	}
 }
 
+func TestSessionRuntimeConfigProviderLabelIncludesAntigravity(t *testing.T) {
+	for _, provider := range []string{"claude", "codex", "antigravity"} {
+		if got := sessionRuntimeConfigProviderLabel(provider); got != provider {
+			t.Fatalf("sessionRuntimeConfigProviderLabel(%q) = %q, want %q", provider, got, provider)
+		}
+	}
+
+	if got := sessionRuntimeConfigProviderLabel("gemini"); got != "unknown" {
+		t.Fatalf("sessionRuntimeConfigProviderLabel(unknown) = %q, want unknown", got)
+	}
+}
+
 // TestStatusClass covers the bucket boundaries the HTTP middleware uses
 // when labeling the request counter.
 func TestStatusClass(t *testing.T) {
