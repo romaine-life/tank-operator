@@ -636,8 +636,10 @@ test("process-exit completion synthesizes exited attributed to the origin turn",
 
 test("command signatures normalize shell quoting for /proc matching", async () => {
   const { normalizeCommandSignature } = await import("../runner.js");
+  // The live shapes from slot-1 session 161: codex REPORTS -lc with
+  // quotes; the spawned process's argv is -c without quotes.
   const reported = "/bin/sh -lc 'sleep 60 && echo FINAL_ROUND_DONE'";
-  const cmdline = "/bin/sh -lc sleep 60 && echo FINAL_ROUND_DONE ";
+  const cmdline = "/bin/sh -c sleep 60 && echo FINAL_ROUND_DONE ";
   assert.equal(
     normalizeCommandSignature(cmdline).includes(normalizeCommandSignature(reported)),
     true,

@@ -1501,5 +1501,11 @@ export class Runner {
 // Quote-stripping plus whitespace collapse keeps the signature deterministic;
 // the observed-alive-first guard in the watcher bounds any residual fuzz.
 export function normalizeCommandSignature(value: string): string {
-  return value.replaceAll(/["']/g, "").replaceAll(/\s+/g, " ").trim();
+  const flat = value.replaceAll(/["']/g, "").replaceAll(/\s+/g, " ").trim();
+  // Strip a leading shell wrapper on BOTH sides: codex REPORTS the command
+  // as `/bin/sh -lc '<cmd>'` but SPAWNS `/bin/sh -c <cmd>` (observed live,
+  // slot-1 session 161 — the -lc/-c flag difference broke full-string
+  // matching even after quote normalization). The inner command is the
+  // stable signature.
+  return flat.replace(/^(?:\S*\/)?(?:ba|da|z)?sh\s+-\w+\s+/, "");
 }
