@@ -381,13 +381,27 @@ func (t *transitionTracker) emitCurrentConditions(ctx context.Context, owner, se
 // K8s-watch row write on pod-fully-gone — by the time the informer
 // fires, Manager has already published the deleted-row update, and
 // any pod-terminating row update fired during graceful shutdown.
-func (t *transitionTracker) handleDelete(_ context.Context, pod *corev1.Pod) {
+func (t *transitionTracker) handleDelete(ctx context.Context, pod *corev1.Pod) {
 	if !isManagedSessionPod(pod) {
 		return
 	}
 	t.mu.Lock()
 	delete(t.last, pod.UID)
 	t.mu.Unlock()
+
+	owner := ownerEmail(pod)
+	sessionID := sessionID(pod)
+	if owner != "" && sessionID != "" && t.writer != nil && t.writer.Pool != nil {
+		var visible bool
+		err := t.writer.Pool.QueryRow(ctx, "SELECT visible FROM sessions WHERE email = $1 AND session_scope = $2 AND session_id = $3", owner, t.scope, sessionID).Scan(&visible)
+		if err == nil && visible {
+			slog.Warn("sessioncontroller k8s-watch: session pod deleted unexpectedly while session is still visible, marking session Failed",
+				"session_id", sessionID,
+				"pod", pod.Name,
+			)
+			t.emit(ctx, failedEvent(t.scope, owner, sessionID, pod, "PodDeleted"))
+		}
+	}
 }
 
 func (t *transitionTracker) emit(ctx context.Context, event Event) {
