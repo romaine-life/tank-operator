@@ -187,6 +187,10 @@ func (b *recordingSessionBus) SubscribePinnedReposUpdates(context.Context, strin
 	return make(chan struct{}), func() {}, nil
 }
 
+func (b *recordingSessionBus) PersisterDebugSnapshot() []sessionbus.PersisterQueueSnapshot {
+	return nil
+}
+
 func TestEnqueueSessionTurnPublishesSDKCommand(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))

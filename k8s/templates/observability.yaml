@@ -768,6 +768,89 @@ spec:
               submitted-vs-terminal rate) by being per-session and
               durable-state-based.
 
+        # Persister backlog. The session-bus persister owns every durable
+        # transcript write: when it falls behind, every session's UI
+        # freezes at once while runners keep working invisibly — the
+        # 2026-06-11 incident (tank-operator#1051). Both gauges read
+        # JetStream consumer state, not Postgres rows, so this signal
+        # survives the persister itself failing — the persist-fed alerts
+        # (TankTurnSilentStranding, stop-chain) are blinded by exactly
+        # the failure this one detects.
+        - alert: TankSessionEventPersisterBacklog
+          expr: |
+            tank_session_event_persister_pending > 100
+              or tank_session_event_persister_processed_event_age_seconds > 60
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "session-event persister is falling behind — transcripts are stale for every session"
+            runbook: |
+              The persister durable has a sustained undelivered backlog or
+              is processing events whose producer timestamps are over a
+              minute old. Users see every session frozen mid-turn while
+              runners continue working.
+
+              Localize with GET /api/debug/persister (per-session queue
+              depths and ages) and the phase split in
+              tank_session_event_persist_phase_seconds: a slow "refresh"
+              phase means the transcript-row projection is the cost (the
+              #1051 shape — check for a session with a giant turn); a slow
+              "upsert" phase means Postgres itself (check
+              TankPgQueryP99High). Sustained
+              tank_session_event_redelivered_total growth alongside means
+              messages are outliving AckWait and both replicas are
+              duplicating work.
+
+        # MaxDeliver exhaustion. A message that exhausts its deliveries is
+        # never redelivered to the durable — without the advisory repair
+        # path this is a silent, permanent transcript hole (the counted
+        # bug class in docs/diagnostic-discipline.md §8). outcome="failed"
+        # means the out-of-band repair ALSO failed and the hole is real
+        # until the next startup reconciler pass.
+        - alert: TankSessionEventPersistExhausted
+          expr: sum(increase(tank_session_event_persist_exhausted_total[15m])) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "session events exhausted MaxDeliver — ledger holes are being repaired or lost"
+            runbook: |
+              JetStream gave up redelivering one or more session events to
+              the persister (MaxDeliver exhausted). outcome="repaired"
+              rows were persisted out of band by the advisory handler;
+              outcome="failed" rows are durable ledger holes until an
+              orchestrator restart runs the reconciler
+              (tank_session_event_reconciler_repaired_total counts its
+              repairs). Root-cause the exhaustion itself via the persister
+              backlog runbook above — exhaustion only happens when
+              processing latency exceeded AckWait for 20 consecutive
+              deliveries.
+
+        # Stream truncation past the persister ack floor: retention
+        # (discard=old, max_msgs/max_age) deleted events the persister
+        # never persisted. Unrepairable — the events exist nowhere.
+        # Steady-state expectation is zero forever; any increase means a
+        # backlog was left unaddressed long enough for retention to eat
+        # unpersisted history.
+        - alert: TankSessionEventStreamTruncated
+          expr: increase(tank_session_event_stream_truncated_past_ack_floor_total[1h]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "stream retention discarded events before the persister stored them — permanent ledger loss"
+            runbook: |
+              The TANK_SESSION_BUS stream's first sequence moved past the
+              persister consumer's ack floor: retention deleted messages
+              that were never written to session_events. The transcript
+              ledger is permanently missing those events. This only
+              happens after a long-unaddressed persister backlog
+              (TankSessionEventPersisterBacklog fires first, hours
+              earlier). Quantify the gap from the counter value and the
+              reconciler's startup log line ("stream truncated past
+              persister ack floor"), then assess which sessions lost
+              events via the per-session order_key continuity.
+
         # Background-task wake fire failures. A Claude run_in_background task
         # that finishes while the session is idle registers a durable wake in
         # session_background_task_wakes; the orchestrator fire loop turns it

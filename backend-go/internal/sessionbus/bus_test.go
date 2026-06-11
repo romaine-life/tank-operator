@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -42,7 +43,11 @@ func (r *recordingRefresher) RefreshEventBatch(_ context.Context, events []map[s
 	return nil
 }
 
+// recordingMetrics is mutex-guarded because the integration tests run it
+// under the dispatcher's concurrent workers; the unit tests are synchronous
+// and pay only an uncontended lock.
 type recordingMetrics struct {
+	mu                   sync.Mutex
 	schemaRejected       int
 	transientFailure     int
 	turnFailureRecorded  []turnFailureRecord
@@ -63,46 +68,98 @@ type turnFailureRecord struct {
 	reason string
 }
 
-func (m *recordingMetrics) RecordSchemaRejected()   { m.schemaRejected++ }
-func (m *recordingMetrics) RecordTransientFailure() { m.transientFailure++ }
+func (m *recordingMetrics) RecordSchemaRejected() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.schemaRejected++
+}
+func (m *recordingMetrics) RecordTransientFailure() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.transientFailure++
+}
 func (m *recordingMetrics) RecordTurnFailurePersisted(source string, reason string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.turnFailureRecorded = append(m.turnFailureRecorded, turnFailureRecord{source: source, reason: reason})
 }
 func (m *recordingMetrics) RecordTurnLifecyclePersisted(eventType string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.turnLifecycle == nil {
 		m.turnLifecycle = map[string]int{}
 	}
 	m.turnLifecycle[eventType]++
 }
 func (m *recordingMetrics) RecordTurnTerminalMissingClientNonce(source string, eventType string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.missingTerminalNonce = append(m.missingTerminalNonce, missingTerminalNonceRecord{
 		source:    source,
 		eventType: eventType,
 	})
 }
-func (m *recordingMetrics) RecordDuplicatePersisted() { m.duplicates++ }
-func (m *recordingMetrics) RecordRedelivered()        { m.redelivered++ }
+func (m *recordingMetrics) RecordDuplicatePersisted() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.duplicates++
+}
+func (m *recordingMetrics) RecordRedelivered() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.redelivered++
+}
 func (m *recordingMetrics) RecordPersistPhaseDuration(phase string, _ float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.phaseDurations == nil {
 		m.phaseDurations = map[string]int{}
 	}
 	m.phaseDurations[phase]++
 }
-func (m *recordingMetrics) RecordPersistBatchSize(n int) { m.batchSizes = append(m.batchSizes, n) }
+func (m *recordingMetrics) RecordPersistBatchSize(n int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.batchSizes = append(m.batchSizes, n)
+}
 func (m *recordingMetrics) RecordProcessedEventAge(seconds float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.processedAges = append(m.processedAges, seconds)
 }
 func (m *recordingMetrics) RecordExhaustedRepair(outcome string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.exhausted == nil {
 		m.exhausted = map[string]int{}
 	}
 	m.exhausted[outcome]++
 }
-func (m *recordingMetrics) RecordStreamTruncationGap(missing float64) { m.truncationGap += missing }
-func (m *recordingMetrics) RecordReconcilerRepairedHole()             { m.reconcilerRepaired++ }
+func (m *recordingMetrics) RecordStreamTruncationGap(missing float64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.truncationGap += missing
+}
+func (m *recordingMetrics) RecordReconcilerRepairedHole() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.reconcilerRepaired++
+}
 func (m *recordingMetrics) RecordPersisterConsumerLag(float64, float64) {
 }
 func (m *recordingMetrics) RecordPersisterQueueDepth(int) {}
+
+func (m *recordingMetrics) exhaustedCount(outcome string) int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.exhausted[outcome]
+}
+
+func (m *recordingMetrics) reconcilerRepairedCount() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.reconcilerRepaired
+}
 
 type missingTerminalNonceRecord struct {
 	source    string

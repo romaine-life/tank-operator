@@ -118,6 +118,22 @@ data:
             {
               "expr": "rate(tank_session_event_persist_transient_failure_total[5m])",
               "legendFormat": "transient failure"
+            },
+            {
+              "expr": "rate(tank_session_event_redelivered_total[5m])",
+              "legendFormat": "redelivered"
+            },
+            {
+              "expr": "rate(tank_session_event_persist_duplicate_total[5m])",
+              "legendFormat": "duplicate upsert"
+            },
+            {
+              "expr": "rate(tank_session_event_persist_exhausted_total[5m])",
+              "legendFormat": "max-deliver exhausted ({{`{{ outcome }}`}})"
+            },
+            {
+              "expr": "rate(tank_session_event_stream_truncated_past_ack_floor_total[5m])",
+              "legendFormat": "stream truncated past ack floor"
             }
           ]
         },
@@ -464,6 +480,50 @@ data:
             {
               "expr": "sum by (reason) (rate(tank_conversation_read_cursor_sample_errors_total[5m]))",
               "legendFormat": "sampler error {{`{{ reason }}`}}"
+            }
+          ]
+        },
+        {
+          "id": 29,
+          "title": "Session-event persister lag (alert source)",
+          "description": "Backlog and staleness of the durable transcript pipeline. pending/ack-pending read JetStream consumer state so the signal survives the persister itself failing; processed-event age is how far behind users' transcripts are. TankSessionEventPersisterBacklog pages from these. Per-session localization: GET /api/debug/persister.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 12, "y": 120 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "tank_session_event_persister_pending",
+              "legendFormat": "pending (undelivered)"
+            },
+            {
+              "expr": "tank_session_event_persister_ack_pending",
+              "legendFormat": "ack-pending (in flight)"
+            },
+            {
+              "expr": "tank_session_event_persister_queue_depth",
+              "legendFormat": "in-process queue depth"
+            },
+            {
+              "expr": "tank_session_event_persister_processed_event_age_seconds",
+              "legendFormat": "processed event age (s)"
+            }
+          ]
+        },
+        {
+          "id": 30,
+          "title": "Session-event persister batch phases (p95)",
+          "description": "Per-batch wall time split by phase. A slow refresh phase means the transcript-row projection is the cost (the #1051 shape: a session with a giant turn); a slow upsert phase means Postgres. Batch size growth means backlog draining.",
+          "type": "timeseries",
+          "gridPos": { "h": 8, "w": 12, "x": 0, "y": 128 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum by (le, phase) (rate(tank_session_event_persist_phase_seconds_bucket[5m])))",
+              "legendFormat": "{{`{{ phase }}`}} p95"
+            },
+            {
+              "expr": "histogram_quantile(0.95, sum by (le) (rate(tank_session_event_persist_batch_size_bucket[5m])))",
+              "legendFormat": "batch size p95"
             }
           ]
         },
