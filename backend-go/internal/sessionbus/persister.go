@@ -671,7 +671,17 @@ func (d *persistDispatcher) sampleLoop(ctx context.Context, consumer jetstream.C
 			continue
 		}
 		d.metrics.RecordPersisterConsumerLag(float64(info.NumPending), float64(info.NumAckPending))
-		d.metrics.RecordPersisterQueueDepth(d.queueDepth())
+		queueDepth := d.queueDepth()
+		d.metrics.RecordPersisterQueueDepth(queueDepth)
+		// The processed-event-age gauge is set per completed batch, so with
+		// zero traffic it freezes at the last batch's value — after a
+		// backlog drain that frozen value is hours, and the backlog alert
+		// pages on a healthy idle persister (observed on the #1051 deploy
+		// itself). Nothing pending anywhere means transcripts are current:
+		// say so.
+		if info.NumPending == 0 && info.NumAckPending == 0 && queueDepth == 0 {
+			d.metrics.RecordProcessedEventAge(0)
+		}
 	}
 }
 
