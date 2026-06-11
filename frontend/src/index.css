@@ -4216,63 +4216,35 @@ button:disabled {
 }
 
 .run-turn-view-combined-select-menu {
-  width: 19rem;
-  min-width: 19rem;
-  max-width: min(19rem, calc(100vw - 2rem));
-}
-
-.run-turn-view-combined-trigger-label {
-  display: flex;
-  align-items: center;
-  gap: var(--space-1-5);
-  min-width: 0;
-  width: 100%;
-}
-
-.run-turn-view-combined-trigger-turn {
-  color: var(--text-muted);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.run-turn-view-combined-trigger-page {
-  color: var(--text-primary);
-  font-weight: 500;
-  white-space: nowrap;
-}
-
-.run-turn-view-combined-trigger-semantic {
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
+  width: 17rem;
+  min-width: 17rem;
+  max-width: min(17rem, calc(100vw - 2rem));
 }
 
 .run-turn-view-combined-option {
   display: grid;
-  grid-template-columns: 1.5rem 3.5rem minmax(0, 1fr);
+  grid-template-columns: minmax(4.15rem, max-content) minmax(0, 1fr);
   align-items: center;
-  column-gap: var(--space-2);
+  column-gap: var(--space-3);
   min-width: 0;
   width: 100%;
 }
 
-.run-turn-view-combined-num {
-  color: var(--text-muted);
-  font-variant-numeric: tabular-nums;
-  font-size: var(--text-xs);
+.run-turn-view-combined-option-trigger {
+  flex: 1 1 auto;
 }
 
 .run-turn-view-combined-turn {
-  color: var(--text-secondary);
+  color: currentColor;
   font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .run-turn-view-combined-page {
-  color: var(--text-primary);
+  color: currentColor;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -4283,8 +4255,9 @@ button:disabled {
 }
 
 .run-turn-view-combined-semantic {
-  color: var(--text-muted);
+  color: currentColor;
   font-size: var(--text-xs);
+  opacity: 0.72;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

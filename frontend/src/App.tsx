@@ -9971,7 +9971,6 @@ type TurnActivityLoadResult = {
 
 type CombinedDropdownEntry = {
   key: string;
-  index: number;
   turnId: string;
   turnIndex: number;
   turnLabel: string;
@@ -10008,7 +10007,6 @@ function RunTurnViewControls({
 
   const combinedEntries = useMemo(() => {
     const entries: CombinedDropdownEntry[] = [];
-    let sequentialIndex = 1;
     turns.forEach((turn, turnIndex) => {
       const loadState = turnActivityLoadsByTurn[turn.turnId];
       const snapshot = turnActivityLoadVisibleSnapshot(loadState);
@@ -10021,7 +10019,6 @@ function RunTurnViewControls({
         );
         entries.push({
           key: `${turn.turnId}:${pageNumber}`,
-          index: sequentialIndex++,
           turnId: turn.turnId,
           turnIndex,
           turnLabel: turn.label,
@@ -10042,6 +10039,12 @@ function RunTurnViewControls({
       null
     );
   }, [combinedEntries, selectedKey]);
+  const selectedEntryParts = selectedEntry
+    ? turnActivityPageOptionParts(
+        selectedEntry.pageNumber,
+        selectedEntry.directoryItem,
+      )
+    : null;
 
   const prevTurnStartEntry = useMemo(() => {
     if (!selectedEntry || combinedEntries.length === 0) return null;
@@ -10173,25 +10176,19 @@ function RunTurnViewControls({
             aria-label="Select turn and page"
             title="Select turn and page"
           >
-            {selectedEntry ? (
-              <span className="run-turn-view-combined-trigger-label">
-                <span className="run-turn-view-combined-trigger-turn">
+            {selectedEntry && selectedEntryParts ? (
+              <span className="run-turn-view-combined-option run-turn-view-combined-option-trigger">
+                <span className="run-turn-view-combined-turn">
                   {selectedEntry.turnLabel}
                 </span>
-                <span className="run-turn-view-combined-trigger-page">
-                  Page {selectedEntry.pageNumber}
-                </span>
-                {(() => {
-                  const parts = turnActivityPageOptionParts(
-                    selectedEntry.pageNumber,
-                    selectedEntry.directoryItem,
-                  );
-                  return parts.semanticLabel !== "Activity" ? (
-                    <span className="run-turn-view-combined-trigger-semantic">
-                      ({parts.semanticLabel})
+                <span className="run-turn-view-combined-page">
+                  <span>Page {selectedEntry.pageNumber}</span>
+                  {selectedEntryParts.semanticLabel !== "Activity" && (
+                    <span className="run-turn-view-combined-semantic">
+                      ({selectedEntryParts.semanticLabel})
                     </span>
-                  ) : null;
-                })()}
+                  )}
+                </span>
               </span>
             ) : (
               <SelectValue placeholder="No turns" />
@@ -10215,9 +10212,6 @@ function RunTurnViewControls({
                   className="run-turn-view-select-item run-turn-view-combined-select-item"
                 >
                   <div className="run-turn-view-combined-option">
-                    <span className="run-turn-view-combined-num">
-                      {entry.index}
-                    </span>
                     <span className="run-turn-view-combined-turn">
                       {entry.turnLabel}
                     </span>
