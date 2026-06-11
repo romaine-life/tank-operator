@@ -1031,7 +1031,9 @@ export class Runner {
     // after a premature watcher exit — arms the next wake generation instead
     // of being silently swallowed. Keying this set by task id alone was the
     // once-only burn: it blocked the corrective registration forever.
-    const observedEventID = String((canonical as { id?: unknown }).id ?? "").trim();
+    const observedEventID = String(
+      (canonical as { event_id?: unknown }).event_id ?? "",
+    ).trim();
     const dedupeKey = `${taskID}${observedEventID}`;
     if (this.firedBackgroundTaskWakes.has(dedupeKey)) return;
     if (this.currentAbort) return;
