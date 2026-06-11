@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,25 +32,31 @@ const (
 )
 
 type BackgroundTaskWake struct {
-	WakeID            string
-	SessionScope      string
-	SessionID         string
-	TankSessionID     string
-	OwnerEmail        string
-	Provider          string
-	TaskID            string
-	TaskStatus        string
-	Prompt            string
-	ClientNonce       string
-	RegisteredAt      time.Time
-	DueAt             time.Time
-	Status            BackgroundTaskWakeStatus
-	AttemptCount      int
-	FiredTurnID       string
-	LastError         string
-	SessionStatus     string
-	SessionTerminated bool
-	SessionNeedsInput bool
+	WakeID                string
+	SessionScope          string
+	SessionID             string
+	TankSessionID         string
+	OwnerEmail            string
+	Provider              string
+	TaskID                string
+	TaskStatus            string
+	TaskDescription       string
+	TaskSummary           string
+	TaskLastTool          string
+	TaskError             string
+	ObservedEventID       string
+	Generation            int
+	ClientNonce           string
+	RegisteredAt          time.Time
+	DueAt                 time.Time
+	Status                BackgroundTaskWakeStatus
+	AttemptCount          int
+	FiredTurnID           string
+	LastError             string
+	SessionStatus         string
+	SessionTerminated     bool
+	SessionNeedsInput     bool
+	SessionActivityStatus string
 }
 
 type RegisterBackgroundTaskWakeRequest struct {
@@ -59,9 +66,39 @@ type RegisterBackgroundTaskWakeRequest struct {
 	Provider     string
 	TaskID       string
 	TaskStatus   string
-	Prompt       string
-	RegisteredAt time.Time
+	Description  string
+	Summary      string
+	LastToolName string
+	Error        string
+	// ObservedEventID is the durable shell_task.exited event id whose
+	// observation registered this wake. It is the re-arm discriminator: a
+	// re-registration carrying the SAME observation is a duplicate (runner
+	// retry, restart re-adoption); a DIFFERENT observation of an
+	// already-fired task arms the next wake generation (the real completion
+	// arriving after a premature fire).
+	ObservedEventID string
+	RegisteredAt    time.Time
 }
+
+// BackgroundTaskWakeRegisterOutcome names what Register decided, for metrics
+// and the runner-facing response.
+type BackgroundTaskWakeRegisterOutcome string
+
+const (
+	BackgroundTaskWakeRegisterScheduled        BackgroundTaskWakeRegisterOutcome = "scheduled"
+	BackgroundTaskWakeRegisterPendingUpdated   BackgroundTaskWakeRegisterOutcome = "pending_updated"
+	BackgroundTaskWakeRegisterDuplicate        BackgroundTaskWakeRegisterOutcome = "duplicate_observation"
+	BackgroundTaskWakeRegisterRearmed          BackgroundTaskWakeRegisterOutcome = "rearmed"
+	BackgroundTaskWakeRegisterGenerationCapped BackgroundTaskWakeRegisterOutcome = "generation_capped"
+	BackgroundTaskWakeRegisterTerminalNoop     BackgroundTaskWakeRegisterOutcome = "terminal_noop"
+)
+
+// maxBackgroundTaskWakeGenerations bounds re-arming: a task whose observer
+// flaps (fires, re-observes, fires again) gets at most this many wake
+// generations before further observations are ignored. The cap exists so a
+// pathological liveness source cannot turn one task into an unbounded wake
+// stream; reaching it is counted, never silent.
+const maxBackgroundTaskWakeGenerations = 3
 
 type BackgroundTaskWakeStore struct {
 	pool  *pgxpool.Pool
@@ -76,14 +113,26 @@ func NewBackgroundTaskWakeStore(pool *pgxpool.Pool, scope string) *BackgroundTas
 	return &BackgroundTaskWakeStore{pool: pool, scope: scope}
 }
 
-// BackgroundTaskWakeID is the idempotency key: one finished background task
-// yields at most one wake row per (session, provider, task).
+// BackgroundTaskWakeID is the idempotency key of the FIRST wake generation:
+// one finished background task yields at most one wake row per (session,
+// provider, task, generation).
 func BackgroundTaskWakeID(tankSessionID, provider, taskID string) string {
-	h := sha256.Sum256([]byte(strings.Join([]string{
+	return BackgroundTaskWakeIDForGeneration(tankSessionID, provider, taskID, 1)
+}
+
+// BackgroundTaskWakeIDForGeneration derives the wake row id for a given
+// generation. Generation 1 keeps the historical id shape so pre-generation
+// rows remain the gen-1 rows they always were.
+func BackgroundTaskWakeIDForGeneration(tankSessionID, provider, taskID string, generation int) string {
+	parts := []string{
 		strings.TrimSpace(tankSessionID),
 		strings.TrimSpace(provider),
 		strings.TrimSpace(taskID),
-	}, "\x1f")))
+	}
+	if generation > 1 {
+		parts = append(parts, "g"+strconv.Itoa(generation))
+	}
+	h := sha256.Sum256([]byte(strings.Join(parts, "\x1f")))
 	return "bgwake_" + hex.EncodeToString(h[:])[:32]
 }
 
@@ -108,9 +157,43 @@ func BackgroundTaskWakeClientNonce(taskID string) string {
 	return "bgtask-" + hex.EncodeToString(h[:])[:32]
 }
 
-func (s *BackgroundTaskWakeStore) Register(ctx context.Context, req RegisterBackgroundTaskWakeRequest) (BackgroundTaskWake, error) {
+// BackgroundTaskWakeClientNonceForGeneration derives the wake turn nonce for a
+// generation. Generation 1 keeps the historical nonce (turn_bgtask-<task>);
+// later generations append -g<N> so each re-armed wake opens its own
+// deterministic turn while the projection still folds it into the originating
+// turn through the turn.submitted payload task_id edge.
+func BackgroundTaskWakeClientNonceForGeneration(taskID string, generation int) string {
+	base := BackgroundTaskWakeClientNonce(taskID)
+	if base == "" || generation <= 1 {
+		return base
+	}
+	suffix := "-g" + strconv.Itoa(generation)
+	if len(base+suffix) <= 80 {
+		return base + suffix
+	}
+	h := sha256.Sum256([]byte(strings.TrimSpace(taskID)))
+	return "bgtask-" + hex.EncodeToString(h[:])[:32] + suffix
+}
+
+// backgroundTaskWakeRowColumns is the canonical SELECT/RETURNING column list
+// for wake rows that are not joined against session state.
+const backgroundTaskWakeRowColumns = `wake_id, session_scope, session_id, tank_session_id, owner_email,
+	provider, task_id, task_status, task_description, task_summary, task_last_tool, task_error,
+	observed_event_id, generation, client_nonce,
+	registered_at, due_at, status, attempt_count, fired_turn_id, last_error,
+	NULL::text AS session_status, NULL::boolean AS session_terminated,
+	NULL::boolean AS session_needs_input, NULL::text AS session_activity_status`
+
+// Register records a finished-task observation and decides what it means:
+// schedule the first wake, refresh a still-pending wake's task facts,
+// ignore a duplicate of an already-acted-on observation, or — when a NEW
+// observation (different durable shell_task.exited event id) arrives for a
+// task whose wake already fired — arm the next wake generation, so a
+// premature fire does not permanently burn the task's only report. Latest
+// terminal rows in failed/cancelled are never resurrected.
+func (s *BackgroundTaskWakeStore) Register(ctx context.Context, req RegisterBackgroundTaskWakeRequest) (BackgroundTaskWake, BackgroundTaskWakeRegisterOutcome, error) {
 	if s == nil || s.pool == nil {
-		return BackgroundTaskWake{}, errors.New("background task wake store unavailable")
+		return BackgroundTaskWake{}, "", errors.New("background task wake store unavailable")
 	}
 	req.SessionScope = strings.TrimSpace(req.SessionScope)
 	if req.SessionScope == "" {
@@ -121,41 +204,107 @@ func (s *BackgroundTaskWakeStore) Register(ctx context.Context, req RegisterBack
 	req.Provider = strings.TrimSpace(req.Provider)
 	req.TaskID = strings.TrimSpace(req.TaskID)
 	req.TaskStatus = strings.TrimSpace(req.TaskStatus)
-	req.Prompt = strings.TrimSpace(req.Prompt)
+	req.Description = strings.TrimSpace(req.Description)
+	req.Summary = strings.TrimSpace(req.Summary)
+	req.LastToolName = strings.TrimSpace(req.LastToolName)
+	req.Error = strings.TrimSpace(req.Error)
+	req.ObservedEventID = strings.TrimSpace(req.ObservedEventID)
 	if req.RegisteredAt.IsZero() {
 		req.RegisteredAt = time.Now()
 	}
 	req.RegisteredAt = req.RegisteredAt.UTC()
 	tankSessionID := sessionmodel.SessionStorageKey(req.SessionScope, req.SessionID)
-	wakeID := BackgroundTaskWakeID(tankSessionID, req.Provider, req.TaskID)
-	clientNonce := BackgroundTaskWakeClientNonce(req.TaskID)
 
-	// ON CONFLICT is a pure no-op (re-registering the same finished task is
-	// ignored, never resurrecting a fired/failed row). This is the durable
-	// idempotency the in-process Set cannot provide across runner restart.
-	const q = `
-		INSERT INTO session_background_task_wakes (
-			wake_id, session_scope, session_id, tank_session_id, owner_email,
-			provider, task_id, task_status, prompt, client_nonce,
-			registered_at, due_at, status, updated_at
-		) VALUES (
-			$1, $2, $3, $4, $5,
-			$6, $7, $8, $9, $10,
-			$11, $11, 'scheduled', now()
-		)
-		ON CONFLICT (wake_id) DO UPDATE
-		SET updated_at = session_background_task_wakes.updated_at
-		RETURNING wake_id, session_scope, session_id, tank_session_id, owner_email,
-			provider, task_id, task_status, prompt, client_nonce,
-			registered_at, due_at, status, attempt_count, fired_turn_id, last_error,
-			NULL::text AS session_status, NULL::boolean AS session_terminated,
-			NULL::boolean AS session_needs_input
-	`
-	return scanBackgroundTaskWake(s.pool.QueryRow(ctx, q,
-		wakeID, req.SessionScope, req.SessionID, tankSessionID, req.OwnerEmail,
-		req.Provider, req.TaskID, req.TaskStatus, req.Prompt, clientNonce,
-		req.RegisteredAt,
-	))
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return BackgroundTaskWake{}, "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	latest, err := scanBackgroundTaskWake(tx.QueryRow(ctx, `
+		SELECT `+backgroundTaskWakeRowColumns+`
+		FROM session_background_task_wakes
+		WHERE tank_session_id = $1 AND task_id = $2
+		ORDER BY generation DESC
+		LIMIT 1
+		FOR UPDATE
+	`, tankSessionID, req.TaskID))
+	haveLatest := true
+	if errors.Is(err, pgx.ErrNoRows) {
+		haveLatest = false
+	} else if err != nil {
+		return BackgroundTaskWake{}, "", err
+	}
+
+	insertGeneration := func(generation int) (BackgroundTaskWake, error) {
+		wakeID := BackgroundTaskWakeIDForGeneration(tankSessionID, req.Provider, req.TaskID, generation)
+		clientNonce := BackgroundTaskWakeClientNonceForGeneration(req.TaskID, generation)
+		return scanBackgroundTaskWake(tx.QueryRow(ctx, `
+			INSERT INTO session_background_task_wakes (
+				wake_id, session_scope, session_id, tank_session_id, owner_email,
+				provider, task_id, task_status, task_description, task_summary,
+				task_last_tool, task_error, observed_event_id, generation, client_nonce,
+				registered_at, due_at, status, updated_at
+			) VALUES (
+				$1, $2, $3, $4, $5,
+				$6, $7, $8, $9, $10,
+				$11, $12, $13, $14, $15,
+				$16, $16, 'scheduled', now()
+			)
+			ON CONFLICT (wake_id) DO UPDATE
+			SET updated_at = session_background_task_wakes.updated_at
+			RETURNING `+backgroundTaskWakeRowColumns,
+			wakeID, req.SessionScope, req.SessionID, tankSessionID, req.OwnerEmail,
+			req.Provider, req.TaskID, req.TaskStatus, req.Description, req.Summary,
+			req.LastToolName, req.Error, req.ObservedEventID, generation, clientNonce,
+			req.RegisteredAt,
+		))
+	}
+
+	var row BackgroundTaskWake
+	var outcome BackgroundTaskWakeRegisterOutcome
+	switch {
+	case !haveLatest:
+		row, err = insertGeneration(1)
+		outcome = BackgroundTaskWakeRegisterScheduled
+	case latest.Status == BackgroundTaskWakeScheduled || latest.Status == BackgroundTaskWakeClaiming:
+		// Still pending: refresh the task facts so the fire-time prompt
+		// reflects the freshest observation, without touching the lifecycle.
+		row, err = scanBackgroundTaskWake(tx.QueryRow(ctx, `
+			UPDATE session_background_task_wakes
+			SET task_status = $2, task_description = $3, task_summary = $4,
+				task_last_tool = $5, task_error = $6,
+				observed_event_id = CASE WHEN $7 <> '' THEN $7 ELSE observed_event_id END,
+				updated_at = now()
+			WHERE wake_id = $1
+			RETURNING `+backgroundTaskWakeRowColumns,
+			latest.WakeID, req.TaskStatus, req.Description, req.Summary,
+			req.LastToolName, req.Error, req.ObservedEventID,
+		))
+		outcome = BackgroundTaskWakeRegisterPendingUpdated
+	case latest.Status == BackgroundTaskWakeFired:
+		switch {
+		case req.ObservedEventID == "" || latest.ObservedEventID == "" || req.ObservedEventID == latest.ObservedEventID:
+			// Same observation (or an observation identity is missing on
+			// either side, where re-arming would be guesswork): duplicate.
+			row, outcome = latest, BackgroundTaskWakeRegisterDuplicate
+		case latest.Generation >= maxBackgroundTaskWakeGenerations:
+			row, outcome = latest, BackgroundTaskWakeRegisterGenerationCapped
+		default:
+			row, err = insertGeneration(latest.Generation + 1)
+			outcome = BackgroundTaskWakeRegisterRearmed
+		}
+	default:
+		// failed/cancelled: terminal by decision; never resurrected.
+		row, outcome = latest, BackgroundTaskWakeRegisterTerminalNoop
+	}
+	if err != nil {
+		return BackgroundTaskWake{}, "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return BackgroundTaskWake{}, "", err
+	}
+	return row, outcome, nil
 }
 
 func (s *BackgroundTaskWakeStore) ClaimDue(ctx context.Context, now time.Time, limit int, staleAfter time.Duration) ([]BackgroundTaskWake, error) {
@@ -190,14 +339,17 @@ func (s *BackgroundTaskWakeStore) ClaimDue(ctx context.Context, now time.Time, l
 		FROM due
 		WHERE bw.wake_id = due.wake_id
 		RETURNING bw.wake_id, bw.session_scope, bw.session_id, bw.tank_session_id, bw.owner_email,
-			bw.provider, bw.task_id, bw.task_status, bw.prompt, bw.client_nonce,
+			bw.provider, bw.task_id, bw.task_status, bw.task_description, bw.task_summary,
+			bw.task_last_tool, bw.task_error, bw.observed_event_id, bw.generation, bw.client_nonce,
 			bw.registered_at, bw.due_at, bw.status, bw.attempt_count, bw.fired_turn_id, bw.last_error,
 			COALESCE((SELECT status FROM sessions sess
 				WHERE sess.email = bw.owner_email AND sess.session_scope = bw.session_scope AND sess.session_id = bw.session_id), '') AS session_status,
 			COALESCE((SELECT terminating_at IS NOT NULL FROM sessions sess
 				WHERE sess.email = bw.owner_email AND sess.session_scope = bw.session_scope AND sess.session_id = bw.session_id), true) AS session_terminated,
 			COALESCE((SELECT (activity_summary->>'needs_input')::boolean FROM sessions sess
-				WHERE sess.email = bw.owner_email AND sess.session_scope = bw.session_scope AND sess.session_id = bw.session_id), false) AS session_needs_input
+				WHERE sess.email = bw.owner_email AND sess.session_scope = bw.session_scope AND sess.session_id = bw.session_id), false) AS session_needs_input,
+			COALESCE((SELECT activity_summary->>'status' FROM sessions sess
+				WHERE sess.email = bw.owner_email AND sess.session_scope = bw.session_scope AND sess.session_id = bw.session_id), '') AS session_activity_status
 	`
 	rows, err := s.pool.Query(ctx, q, s.scope, now.UTC(), limit, staleAfter.Seconds())
 	if err != nil {
@@ -340,6 +492,37 @@ func (s *BackgroundTaskWakeStore) CancelPendingForSession(ctx context.Context, s
 	return tag.RowsAffected(), nil
 }
 
+// CancelPendingForTask cancels the still-pending wake generations of ONE task.
+// It is the delivered-mid-turn path: when the runner observes that the task's
+// completion was already delivered into an active turn (the model has seen it
+// and can act on it), any pending wake would be a duplicate notification —
+// the session-788 "the same completion arrived as both a mid-turn notification
+// and a new turn" defect. The reason lands in last_error for audit (cancelled
+// is a decision, not an error).
+func (s *BackgroundTaskWakeStore) CancelPendingForTask(ctx context.Context, sessionScope, sessionID, taskID, reason string) (int64, error) {
+	if s == nil || s.pool == nil {
+		return 0, errors.New("background task wake store unavailable")
+	}
+	sessionScope = strings.TrimSpace(sessionScope)
+	if sessionScope == "" {
+		sessionScope = s.scope
+	}
+	sessionID = strings.TrimSpace(sessionID)
+	taskID = strings.TrimSpace(taskID)
+	if sessionID == "" || taskID == "" {
+		return 0, nil
+	}
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE session_background_task_wakes
+		SET status = 'cancelled', locked_at = NULL, last_error = left($4, 2000), updated_at = now()
+		WHERE session_scope = $1 AND session_id = $2 AND task_id = $3 AND status IN ('scheduled', 'claiming')
+	`, sessionScope, sessionID, taskID, strings.TrimSpace(reason))
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
 type backgroundTaskWakeScanner interface {
 	Scan(dest ...any) error
 }
@@ -350,6 +533,7 @@ func scanBackgroundTaskWake(row backgroundTaskWakeScanner) (BackgroundTaskWake, 
 	var sessionStatus *string
 	var sessionTerminated *bool
 	var sessionNeedsInput *bool
+	var sessionActivityStatus *string
 	err := row.Scan(
 		&out.WakeID,
 		&out.SessionScope,
@@ -359,7 +543,12 @@ func scanBackgroundTaskWake(row backgroundTaskWakeScanner) (BackgroundTaskWake, 
 		&out.Provider,
 		&out.TaskID,
 		&out.TaskStatus,
-		&out.Prompt,
+		&out.TaskDescription,
+		&out.TaskSummary,
+		&out.TaskLastTool,
+		&out.TaskError,
+		&out.ObservedEventID,
+		&out.Generation,
 		&out.ClientNonce,
 		&out.RegisteredAt,
 		&out.DueAt,
@@ -370,6 +559,7 @@ func scanBackgroundTaskWake(row backgroundTaskWakeScanner) (BackgroundTaskWake, 
 		&sessionStatus,
 		&sessionTerminated,
 		&sessionNeedsInput,
+		&sessionActivityStatus,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return BackgroundTaskWake{}, err
@@ -386,6 +576,9 @@ func scanBackgroundTaskWake(row backgroundTaskWakeScanner) (BackgroundTaskWake, 
 	}
 	if sessionNeedsInput != nil {
 		out.SessionNeedsInput = *sessionNeedsInput
+	}
+	if sessionActivityStatus != nil {
+		out.SessionActivityStatus = *sessionActivityStatus
 	}
 	return out, nil
 }

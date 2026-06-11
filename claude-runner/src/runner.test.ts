@@ -252,7 +252,7 @@ function runnerConfig() {
 // without any network call.
 test("maybeRegisterBackgroundTaskWake registers an idle natural terminal exactly once", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    maybeRegisterBackgroundTaskWake: (e: unknown, observedEventID: string) => Promise<void>;
     activeTurn: unknown;
     firedBackgroundTaskWakes: Set<string>;
   };
@@ -265,17 +265,27 @@ test("maybeRegisterBackgroundTaskWake registers an idle natural terminal exactly
     uuid: "u-1",
   };
 
-  await runner.maybeRegisterBackgroundTaskWake(terminal);
-  assert.equal(runner.firedBackgroundTaskWakes.has("task-idle"), true);
+  await runner.maybeRegisterBackgroundTaskWake(terminal, "evt-1");
+  assert.equal(
+    runner.firedBackgroundTaskWakes.has("task-idle\u001fevt-1"),
+    true,
+  );
 
-  // A repeated terminal frame for the same task must not re-register.
-  await runner.maybeRegisterBackgroundTaskWake(terminal);
+  // A repeated terminal frame of the SAME observation must not re-register.
+  await runner.maybeRegisterBackgroundTaskWake(terminal, "evt-1");
   assert.equal(runner.firedBackgroundTaskWakes.size, 1);
+
+  // A NEW observation of the same task (the real completion after a
+  // premature fire) is a fresh registration — the backend decides whether it
+  // re-arms the next wake generation. Task-id-only dedupe was the once-only
+  // wake burn.
+  await runner.maybeRegisterBackgroundTaskWake(terminal, "evt-2");
+  assert.equal(runner.firedBackgroundTaskWakes.size, 2);
 });
 
 test("maybeRegisterBackgroundTaskWake skips when a turn is active", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    maybeRegisterBackgroundTaskWake: (e: unknown, observedEventID: string) => Promise<void>;
     activeTurn: unknown;
     firedBackgroundTaskWakes: Set<string>;
   };
@@ -284,19 +294,22 @@ test("maybeRegisterBackgroundTaskWake skips when a turn is active", async () => 
     clientNonce: "turn-active",
     terminalEmitted: false,
   };
-  await runner.maybeRegisterBackgroundTaskWake({
-    type: "system",
-    subtype: "task_notification",
-    task_id: "task-bound",
-    status: "completed",
-  });
+  await runner.maybeRegisterBackgroundTaskWake(
+    {
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-bound",
+      status: "completed",
+    },
+    "evt-bound",
+  );
   // The active turn receives the bound shell_task.exited in-turn; no wake needed.
-  assert.equal(runner.firedBackgroundTaskWakes.has("task-bound"), false);
+  assert.equal(runner.firedBackgroundTaskWakes.size, 0);
 });
 
 test("maybeRegisterBackgroundTaskWake registers when active turn is already terminal", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    maybeRegisterBackgroundTaskWake: (e: unknown, observedEventID: string) => Promise<void>;
     activeTurn: unknown;
     firedBackgroundTaskWakes: Set<string>;
   };
@@ -305,18 +318,24 @@ test("maybeRegisterBackgroundTaskWake registers when active turn is already term
     clientNonce: "turn-terminal",
     terminalEmitted: true,
   };
-  await runner.maybeRegisterBackgroundTaskWake({
-    type: "system",
-    subtype: "task_notification",
-    task_id: "task-terminal",
-    status: "completed",
-  });
-  assert.equal(runner.firedBackgroundTaskWakes.has("task-terminal"), true);
+  await runner.maybeRegisterBackgroundTaskWake(
+    {
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-terminal",
+      status: "completed",
+    },
+    "evt-terminal",
+  );
+  assert.equal(
+    runner.firedBackgroundTaskWakes.has("task-terminal\u001fevt-terminal"),
+    true,
+  );
 });
 
 test("maybeRegisterBackgroundTaskWake ignores user stops and lifecycle starts", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    maybeRegisterBackgroundTaskWake: (e: unknown, observedEventID: string) => Promise<void>;
     activeTurn: unknown;
     firedBackgroundTaskWakes: Set<string>;
   };
@@ -326,13 +345,13 @@ test("maybeRegisterBackgroundTaskWake ignores user stops and lifecycle starts", 
     subtype: "task_notification",
     task_id: "task-cancel",
     status: "cancelled",
-  });
+  }, "");
   await runner.maybeRegisterBackgroundTaskWake({
     type: "system",
     subtype: "task_started",
     task_id: "task-start",
     status: "running",
-  });
+  }, "");
   assert.equal(runner.firedBackgroundTaskWakes.size, 0);
 });
 

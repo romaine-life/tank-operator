@@ -591,18 +591,18 @@ func TestProjectTurnPagesChainFinalAnswerIsLastTerminals(t *testing.T) {
 		t.Fatalf("final answer entries = %d, want none (superseded ack must not resurrect): %#v", got, projection.FinalAnswerEntries)
 	}
 
-	// The body still reads chronologically: ack before wake prompt.
+	// The body still reads chronologically: ack before the wake chip.
 	body := projection.Pages[len(projection.Pages)-1].Entries
 	ackIdx, promptIdx := -1, -1
 	for i, entry := range body {
-		switch transcriptMapString(entry, "text") {
-		case "Started. I'll report when it completes.":
+		if transcriptMapString(entry, "text") == "Started. I'll report when it completes." {
 			ackIdx = i
-		case "A background task you started earlier has finished.":
+		}
+		if isBackgroundWakeChip(entry, "A background task you started earlier has finished.") {
 			promptIdx = i
 		}
 	}
 	if ackIdx == -1 || promptIdx == -1 || ackIdx > promptIdx {
-		t.Fatalf("page body not chronological (ack=%d prompt=%d): %#v", ackIdx, promptIdx, body)
+		t.Fatalf("page body not chronological (ack=%d chip=%d): %#v", ackIdx, promptIdx, body)
 	}
 }

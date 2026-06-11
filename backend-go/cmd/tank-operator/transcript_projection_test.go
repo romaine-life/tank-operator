@@ -1155,11 +1155,11 @@ func TestProjectTranscriptEventsKeepsBackgroundTaskWakeMechanicsOutOfMainTranscr
 	if got, want := len(body.Entries), 2; got != want {
 		t.Fatalf("activity body entries = %d, want %d: %#v", got, want, body.Entries)
 	}
-	if got := transcriptMapString(body.Entries[0], "text"); got != "A background task you started earlier has finished." {
-		t.Fatalf("first activity entry text = %q, want wake prompt: %#v", got, body.Entries)
+	if !isBackgroundWakeChip(body.Entries[0], "A background task you started earlier has finished.") {
+		t.Fatalf("first activity entry is not the wake meta chip: %#v", body.Entries[0])
 	}
-	if got := transcriptMapString(body.Entries[0], "authorKind"); got != string(conversation.AuthorKindSystem) {
-		t.Fatalf("wake prompt authorKind = %q, want system: %#v", got, body.Entries[0])
+	if got := transcriptMapString(body.Entries[0], "kind"); got != "meta" {
+		t.Fatalf("wake boundary kind = %q, want meta chip — the agent-directed prompt must not render as a user bubble: %#v", got, body.Entries[0])
 	}
 }
 
@@ -1199,11 +1199,8 @@ func TestProjectTranscriptEventsPromotesFinalAnswerFromBackgroundTaskWake(t *tes
 	if got, want := len(body.Entries), 3; got != want {
 		t.Fatalf("activity body entries = %d, want %d: %#v", got, want, body.Entries)
 	}
-	if got := transcriptMapString(body.Entries[0], "text"); got != "A background task you started earlier has finished." {
-		t.Fatalf("first activity entry text = %q, want wake prompt: %#v", got, body.Entries)
-	}
-	if got := transcriptMapString(body.Entries[0], "authorKind"); got != string(conversation.AuthorKindSystem) {
-		t.Fatalf("wake prompt authorKind = %q, want system: %#v", got, body.Entries[0])
+	if !isBackgroundWakeChip(body.Entries[0], "A background task you started earlier has finished.") {
+		t.Fatalf("first activity entry is not the wake meta chip: %#v", body.Entries[0])
 	}
 }
 
@@ -1299,16 +1296,13 @@ func TestProjectTranscriptEventsHidesBackgroundContinuationTurnFromMainTranscrip
 	foundWakeFinal := false
 	foundWakePrompt := false
 	for _, entry := range body.Entries {
-		if transcriptMapString(entry, "text") == "A background task you started earlier has finished." {
+		if isBackgroundWakeChip(entry, "A background task you started earlier has finished.") {
 			foundWakePrompt = true
-			if got, want := transcriptMapString(entry, "authorKind"), string(conversation.AuthorKindSystem); got != want {
-				t.Fatalf("wake prompt authorKind = %q, want %q: %#v", got, want, entry)
-			}
 			if got, want := transcriptMapString(entry, "turnId"), "turn-1"; got != want {
-				t.Fatalf("wake prompt turnId = %q, want parent %q: %#v", got, want, entry)
+				t.Fatalf("wake chip turnId = %q, want parent %q: %#v", got, want, entry)
 			}
 			if got, want := transcriptMapString(entry, "backendTurnId"), "turn_bgtask-task-ci"; got != want {
-				t.Fatalf("wake prompt backendTurnId = %q, want %q: %#v", got, want, entry)
+				t.Fatalf("wake chip backendTurnId = %q, want %q: %#v", got, want, entry)
 			}
 		}
 		if transcriptMapString(entry, "text") == "CI passed. The branch is ready." {
@@ -1322,7 +1316,7 @@ func TestProjectTranscriptEventsHidesBackgroundContinuationTurnFromMainTranscrip
 		t.Fatalf("parent activity body missing wake final: %#v", body.Entries)
 	}
 	if !foundWakePrompt {
-		t.Fatalf("parent activity body missing wake prompt: %#v", body.Entries)
+		t.Fatalf("parent activity body missing wake chip: %#v", body.Entries)
 	}
 }
 
@@ -1477,11 +1471,11 @@ func TestProjectTranscriptEventsCollapsesChainedBackgroundWakeIntoOriginTurn(t *
 	// by the origin turn; the duplicated tasky fire does NOT stack a second copy.
 	countX, countY := 0, 0
 	for _, entry := range body.Entries {
-		switch transcriptMapString(entry, "text") {
-		case promptX:
+		switch {
+		case isBackgroundWakeChip(entry, promptX):
 			countX++
 			assertChainedWakePrompt(t, entry, wakeTurnX)
-		case promptY:
+		case isBackgroundWakeChip(entry, promptY):
 			countY++
 			assertChainedWakePrompt(t, entry, wakeTurnY)
 		}
@@ -1608,14 +1602,14 @@ func TestProjectTranscriptEventsProjectsScheduledWakeupLifecycleForBackground(t 
 
 func assertChainedWakePrompt(t *testing.T, entry map[string]any, wakeTurnID string) {
 	t.Helper()
-	if got, want := transcriptMapString(entry, "authorKind"), string(conversation.AuthorKindSystem); got != want {
-		t.Fatalf("wake prompt authorKind = %q, want %q: %#v", got, want, entry)
+	if got, want := transcriptMapString(entry, "metaKind"), "background_task_wake"; got != want {
+		t.Fatalf("wake chip metaKind = %q, want %q: %#v", got, want, entry)
 	}
 	if got, want := transcriptMapString(entry, "turnId"), "turn-1"; got != want {
-		t.Fatalf("wake prompt turnId = %q, want origin turn-1: %#v", got, entry)
+		t.Fatalf("wake chip turnId = %q, want origin turn-1: %#v", got, entry)
 	}
 	if got, want := transcriptMapString(entry, "backendTurnId"), wakeTurnID; got != want {
-		t.Fatalf("wake prompt backendTurnId = %q, want %q: %#v", got, want, entry)
+		t.Fatalf("wake chip backendTurnId = %q, want %q: %#v", got, want, entry)
 	}
 }
 
@@ -1677,7 +1671,7 @@ func TestProjectTranscriptEventsHidesFailedBackgroundWakeContinuationFromMainTra
 	foundWakePrompt := false
 	foundFailedMeta := false
 	for _, entry := range body.Entries {
-		if transcriptMapString(entry, "text") == "A background task you started earlier has finished." {
+		if isBackgroundWakeChip(entry, "A background task you started earlier has finished.") {
 			foundWakePrompt = true
 		}
 		if transcriptMapString(entry, "kind") == "meta" && transcriptMapString(transcriptMap(entry, "meta"), "title") == "Turn failed" {
@@ -1784,4 +1778,19 @@ func TestProjectTranscriptEventsFoldsAgentContinuationTurnIntoOriginatingTurn(t 
 	if _, ok := projection.ActivityBodies["turn-1"]; !ok {
 		t.Fatalf("originating turn body missing after fold: %#v", projection.ActivityBodies)
 	}
+}
+
+// isBackgroundWakeChip matches the wake/continuation boundary META chip: the
+// agent-directed prompt lives on payload.prompt (audit detail), never as
+// user-bubble text.
+func isBackgroundWakeChip(entry map[string]any, wantPrompt string) bool {
+	if transcriptMapString(entry, "metaKind") != "background_task_wake" {
+		return false
+	}
+	payload, _ := entry["payload"].(map[string]any)
+	if payload == nil {
+		return false
+	}
+	got, _ := payload["prompt"].(string)
+	return got == wantPrompt
 }

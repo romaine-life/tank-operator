@@ -647,6 +647,17 @@ var backgroundTaskWakeFireTotal = promauto.NewCounterVec(
 	[]string{"provider", "result"},
 )
 
+// backgroundTaskWakeCancelTotal counts the delivered-mid-turn cancel path: a
+// runner observed a task completion delivered into an active turn and asked the
+// orchestrator to cancel the now-duplicate pending wake.
+var backgroundTaskWakeCancelTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_background_task_wake_cancel_total",
+		Help: "Background-task wake cancellations requested by runners (completion already delivered mid-turn), labeled by bounded result.",
+	},
+	[]string{"result"},
+)
+
 var backgroundTaskWakesDue = promauto.NewGauge(prometheus.GaugeOpts{
 	Name: "tank_background_task_wakes_due",
 	Help: "Durable background-task wake rows in this scope that are due and not terminal.",
@@ -958,7 +969,26 @@ func scheduledWakeupFireResultLabel(result string) string {
 
 func backgroundTaskWakeRegisterResultLabel(result string) string {
 	switch result {
-	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "manager_unavailable", "store_error":
+	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "manager_unavailable", "store_error",
+		"rejected_antigravity",
+		// Register outcomes (pgstore.BackgroundTaskWakeRegisterOutcome): the
+		// generation machinery's decisions are first-class signals —
+		// "rearmed" measures how often a premature fire needed repair, and
+		// "generation_capped" is the flapping-observer alarm.
+		"scheduled", "pending_updated", "duplicate_observation", "rearmed", "generation_capped", "terminal_noop":
+		return result
+	default:
+		return "other"
+	}
+}
+
+func recordBackgroundTaskWakeCancel(result string) {
+	backgroundTaskWakeCancelTotal.WithLabelValues(backgroundTaskWakeCancelResultLabel(result)).Inc()
+}
+
+func backgroundTaskWakeCancelResultLabel(result string) string {
+	switch result {
+	case "cancelled", "none_pending", "bad_request", "forbidden", "store_unavailable", "store_error":
 		return result
 	default:
 		return "other"
@@ -976,7 +1006,7 @@ func agentContinuationResultLabel(result string) string {
 
 func backgroundTaskWakeFireResultLabel(result string) string {
 	switch result {
-	case "ok", "deferred_needs_input", "already_fired", "session_not_found", "session_not_active", "enqueue_failed", "store_error", "failed":
+	case "ok", "deferred_needs_input", "deferred_active_turn", "already_fired", "session_not_found", "session_not_active", "enqueue_failed", "store_error", "failed":
 		return result
 	default:
 		return "other"

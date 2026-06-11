@@ -50,7 +50,10 @@ import {
   turnEvent,
   turnIDForClientNonce,
 } from "../../runner-shared/conversation-builders.js";
-import { registerBackgroundTaskWake } from "../../runner-shared/backgroundTaskWake.js";
+import {
+  cancelBackgroundTaskWake,
+  registerBackgroundTaskWake,
+} from "../../runner-shared/backgroundTaskWake.js";
 import {
   SessionCommandBus,
   isInputReplyCommand,
@@ -627,6 +630,13 @@ export class Runner {
               event as { type: string; [k: string]: unknown },
             )) {
               const dispatched = await dispatch(this.sink, canonicalEvent);
+              if (dispatched && canonicalEvent.type === "shell_task.exited") {
+                // The completion was delivered INTO this active turn — the
+                // model has the result in hand. Any pending wake for the same
+                // task (e.g. armed by an earlier premature observation) would
+                // now be a duplicate notification; retire it.
+                await this.maybeCancelDeliveredBackgroundWake(canonicalEvent);
+              }
               if (
                 dispatched &&
                 (canonicalEvent.type === "turn.completed" ||
@@ -962,12 +972,17 @@ export class Runner {
       if (nowMs - firstSweep > 45_000) {
         // Never observed alive: the command signature was unobservable in
         // this namespace. Resolve the pending state truthfully without
-        // claiming completion and without a wake.
+        // claiming completion — and WAKE the agent with status "unknown" so
+        // it verifies the real state and reports. The previous skip-wake
+        // choice resolved "unobservable" into user-facing silence: the agent
+        // promised a report and the harness guaranteed it could never happen
+        // (strandings 4 and 5 of the session-161 bug museum). If the
+        // provider later surfaces the real completion, the new observation
+        // re-arms the next wake generation.
         backgroundWatchTotal.labels("unobservable").inc();
         await this.publishBackgroundExit(task.taskID, {
           status: "unknown",
           completionSource: "unobservable",
-          skipWake: true,
         });
       }
     }
@@ -975,7 +990,7 @@ export class Runner {
 
   private async publishBackgroundExit(
     taskID: string,
-    opts: { status?: string; completionSource?: string; skipWake?: boolean },
+    opts: { status?: string; completionSource?: string },
   ): Promise<void> {
     const events = this.codexAdapter.completeBackgroundShellByExit(taskID, {
       status: opts.status,
@@ -989,9 +1004,7 @@ export class Runner {
         return false;
       });
       if (!dispatched) continue;
-      if (!opts.skipWake) {
-        await this.maybeRegisterCodexBackgroundWake(canonical);
-      }
+      await this.maybeRegisterCodexBackgroundWake(canonical);
     }
   }
 
@@ -1000,9 +1013,19 @@ export class Runner {
   ): Promise<void> {
     if (canonical.type !== "shell_task.exited") return;
     const taskID = String((canonical as { task_id?: unknown }).task_id ?? "").trim();
-    if (!taskID || this.firedBackgroundTaskWakes.has(taskID)) return;
+    if (!taskID) return;
+    // The observation identity is the durable shell_task.exited event id. It
+    // is BOTH the local dedupe key (a retried publish of the same observation
+    // never re-registers) and the backend's re-arm discriminator: a NEW
+    // observation of an already-fired task — the real completion arriving
+    // after a premature watcher exit — arms the next wake generation instead
+    // of being silently swallowed. Keying this set by task id alone was the
+    // once-only burn: it blocked the corrective registration forever.
+    const observedEventID = String((canonical as { id?: unknown }).id ?? "").trim();
+    const dedupeKey = `${taskID}${observedEventID}`;
+    if (this.firedBackgroundTaskWakes.has(dedupeKey)) return;
     if (this.currentAbort) return;
-    this.firedBackgroundTaskWakes.add(taskID);
+    this.firedBackgroundTaskWakes.add(dedupeKey);
     const payload = (canonical.payload ?? {}) as Record<string, unknown>;
     try {
       const registered = await registerBackgroundTaskWake(this.cfg, {
@@ -1011,6 +1034,7 @@ export class Runner {
         summary: String(payload.command ?? ""),
         description: String(payload.command ?? ""),
         lastToolName: "codex",
+        observedEventID,
       });
       backgroundTaskWakeTotal
         .labels(registered ? "registered" : "disabled")
@@ -1018,6 +1042,26 @@ export class Runner {
     } catch (err) {
       backgroundTaskWakeTotal.labels("failed").inc();
       console.error("background task wake register failed:", err);
+    }
+  }
+
+  // maybeCancelDeliveredBackgroundWake retires the pending wake of a task
+  // whose completion was delivered into an active turn. Without this, a wake
+  // armed by an earlier observation fires after the turn and the user sees
+  // the same completion twice (the session-788 duplicate-notification
+  // systemic).
+  private async maybeCancelDeliveredBackgroundWake(
+    canonical: { type: string } & Record<string, unknown>,
+  ): Promise<void> {
+    const taskID = String((canonical as { task_id?: unknown }).task_id ?? "").trim();
+    if (!taskID) return;
+    try {
+      await cancelBackgroundTaskWake(this.cfg, {
+        taskID,
+        reason: "delivered_mid_turn",
+      });
+    } catch (err) {
+      console.error("background task wake cancel failed:", err);
     }
   }
 

@@ -53,6 +53,20 @@ export class CodexTankEventAdapter {
     string,
     { turnID: string; providerItemID: string; command: string; processID: number | null }
   >();
+  // exitedBackgroundTasks remembers recently-exited shells (bounded FIFO).
+  // It exists for the corrective observation: when the pid-watcher declared
+  // an exit prematurely (or resolved a shell unobservable) and the provider
+  // LATER surfaces the real completion as an idle item notification, the
+  // task is no longer in runningBackgroundTasks — dropping that notification
+  // here is what made a premature wake permanently unrecoverable. The
+  // tombstone lets the late observation publish a corrective
+  // shell_task.exited on the originating turn, which re-arms the next wake
+  // generation.
+  private readonly exitedBackgroundTasks = new Map<
+    string,
+    { turnID: string; providerItemID: string; command: string; processID: number | null }
+  >();
+  private static readonly maxExitedBackgroundTasks = 64;
 
   constructor(private readonly cfg: Config) {}
 
@@ -310,7 +324,7 @@ export class CodexTankEventAdapter {
           ? "shell_task.exited"
           : "shell_task.updated";
     if (type === "shell_task.exited") {
-      this.runningBackgroundTasks.delete(taskID);
+      this.tombstoneBackgroundTask(taskID);
     } else {
       const rawPid = item.process_id ?? item.processId ?? taskID;
       const pid = Number.parseInt(String(rawPid), 10);
@@ -372,7 +386,7 @@ export class CodexTankEventAdapter {
   ): TankConversationEvent[] {
     const tracked = this.runningBackgroundTasks.get(taskID);
     if (!tracked) return [];
-    this.runningBackgroundTasks.delete(taskID);
+    this.tombstoneBackgroundTask(taskID);
     const status = opts.status ?? "completed";
     return [
       shellTaskEvent({
@@ -397,18 +411,37 @@ export class CodexTankEventAdapter {
   // idleBackgroundShellEvents maps an item lifecycle notification that
   // arrived with NO active turn (a background shell finishing after its
   // turn ended) onto the originating turn remembered in
-  // runningBackgroundTasks. Unknown items return nothing — only shells this
-  // adapter announced get idle terminals.
+  // runningBackgroundTasks — or, for a task the watcher already force-exited
+  // (premature exit / unobservable), in the exited tombstones: that late
+  // notification is the CORRECTIVE observation, and publishing it (with a
+  // fresh event id) is what re-arms the next wake generation. Unknown items
+  // return nothing — only shells this adapter announced get idle terminals.
   idleBackgroundShellEvents(event: CodexEvent): TankConversationEvent[] {
     const item = (event as { item?: Record<string, unknown> }).item;
     if (!item || typeof item !== "object") return [];
     const providerItemID = typeof item.id === "string" ? item.id : "";
     if (!providerItemID) return [];
     const taskID = codexBackgroundTaskID(item, providerItemID);
-    const tracked = this.runningBackgroundTasks.get(taskID);
+    const tracked =
+      this.runningBackgroundTasks.get(taskID) ?? this.exitedBackgroundTasks.get(taskID);
     if (!tracked) return [];
     const originTurn: CodexAdapterTurn = { turnID: tracked.turnID, clientNonce: "", turnSeq: 0 };
     return this.codexBackgroundShellEvents(originTurn, event, item, providerItemID);
+  }
+
+  // tombstoneBackgroundTask moves a tracked shell into the bounded
+  // exited-tombstone memory (see exitedBackgroundTasks).
+  private tombstoneBackgroundTask(taskID: string): void {
+    const tracked = this.runningBackgroundTasks.get(taskID);
+    this.runningBackgroundTasks.delete(taskID);
+    if (!tracked) return;
+    this.exitedBackgroundTasks.delete(taskID);
+    this.exitedBackgroundTasks.set(taskID, tracked);
+    while (this.exitedBackgroundTasks.size > CodexTankEventAdapter.maxExitedBackgroundTasks) {
+      const oldest = this.exitedBackgroundTasks.keys().next().value;
+      if (oldest === undefined) break;
+      this.exitedBackgroundTasks.delete(oldest);
+    }
   }
 }
 

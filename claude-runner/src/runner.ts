@@ -82,7 +82,10 @@ import {
 } from "./metrics.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js";
-import { registerBackgroundTaskWake } from "../../runner-shared/backgroundTaskWake.js";
+import {
+  cancelBackgroundTaskWake,
+  registerBackgroundTaskWake,
+} from "../../runner-shared/backgroundTaskWake.js";
 
 // Pull a single dispatch out as a free function so the session-bus publish
 // contract is testable without spinning up a Runner. The sink only accepts
@@ -1006,9 +1009,17 @@ export class Runner {
       logUnhandledSdkMessage(message);
     }
 
+    let observedShellTaskExitEventID = "";
     for (const event of canonicalEvents) {
       this.rememberClaudeTaskOwner(event, adapterTurn ?? activeTurn);
       const dispatched = await dispatch(this.sink, event);
+      if (dispatched && event.type === "shell_task.exited") {
+        // The durable observation identity of this terminal — the wake
+        // registration's re-arm discriminator.
+        observedShellTaskExitEventID = String(
+          (event as { event_id?: unknown }).event_id ?? "",
+        );
+      }
       if (
         event.type === "turn.completed" ||
         event.type === "turn.failed" ||
@@ -1037,7 +1048,10 @@ export class Runner {
       await this.registerWakeup(wakeup, activeTurn?.turnID ?? "");
     }
 
-    await this.maybeRegisterBackgroundTaskWake(providerEvent);
+    await this.maybeRegisterBackgroundTaskWake(
+      providerEvent,
+      observedShellTaskExitEventID,
+    );
   }
 
   private reportProviderRateLimitInfo(message: ClaudeProviderEvent): Record<string, unknown> | null {
@@ -2166,14 +2180,38 @@ export class Runner {
   // idle race (a pending turn about to start) is one harmless extra wake.
   private async maybeRegisterBackgroundTaskWake(
     event: ClaudeProviderEvent,
+    observedEventID: string,
   ): Promise<void> {
     const terminal = claudeTerminalBackgroundTask(event);
     if (!terminal) return;
-    if (this.activeTurn && !this.activeTurn.terminalEmitted) return;
-    if (this.firedBackgroundTaskWakes.has(terminal.taskID)) return;
-    this.firedBackgroundTaskWakes.add(terminal.taskID);
+    if (this.activeTurn && !this.activeTurn.terminalEmitted) {
+      // The completion was delivered INTO this active turn — the model has
+      // the result in hand and can act on it now. No wake is needed, and any
+      // PENDING wake for the same task (armed by an earlier observation, or
+      // re-adopted across a restart) would be a duplicate notification once
+      // this turn ends; retire it.
+      try {
+        await cancelBackgroundTaskWake(this.cfg, {
+          taskID: terminal.taskID,
+          reason: "delivered_mid_turn",
+        });
+      } catch (err) {
+        console.error("background task wake cancel failed:", err);
+      }
+      return;
+    }
+    // Dedupe by observation identity, not task id: a task-id-only key blocked
+    // the corrective registration after a premature fire forever (the
+    // once-only wake burn). The backend dedupes same-observation re-registers
+    // durably; this set only avoids repeat HTTP calls.
+    const dedupeKey = `${terminal.taskID}${observedEventID}`;
+    if (this.firedBackgroundTaskWakes.has(dedupeKey)) return;
+    this.firedBackgroundTaskWakes.add(dedupeKey);
     try {
-      const registered = await registerBackgroundTaskWake(this.cfg, terminal);
+      const registered = await registerBackgroundTaskWake(this.cfg, {
+        ...terminal,
+        observedEventID,
+      });
       backgroundTaskWakeTotal
         .labels(registered ? "registered" : "disabled")
         .inc();

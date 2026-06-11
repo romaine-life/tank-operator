@@ -1727,6 +1727,28 @@ var schemaMigrations = []migration{
 	{ID: "0140", SQL: `CREATE INDEX IF NOT EXISTS session_events_shell_task
 		ON session_events (tank_session_id, order_key)
 		WHERE event_type IN ('shell_task.started', 'shell_task.updated', 'shell_task.exited')`},
+
+	// 0141-0143: background-task wake rework. The wake row stores the
+	// STRUCTURED task facts and the identity of the durable observation
+	// (shell_task.exited event id) that registered it; the agent-facing prompt
+	// is composed provider-aware at FIRE time, so the stored-prompt column is
+	// retired (its Claude-idiomatic text was sent verbatim to codex, which
+	// produced zero fulfilled reports across every fired wake of the
+	// session-161 bug museum). Generations make a wake re-armable: a premature
+	// fire (wrong liveness observation) no longer permanently burns the task's
+	// only wake — a later observation with a different event id arms the next
+	// generation, capped to keep a flapping observer bounded.
+	{ID: "0141", SQL: `ALTER TABLE session_background_task_wakes
+		ADD COLUMN IF NOT EXISTS task_description text NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS task_summary text NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS task_last_tool text NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS task_error text NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS observed_event_id text NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS generation integer NOT NULL DEFAULT 1`},
+	{ID: "0142", SQL: `DROP INDEX IF EXISTS session_background_task_wakes_task;
+		CREATE UNIQUE INDEX IF NOT EXISTS session_background_task_wakes_task_generation
+		ON session_background_task_wakes (tank_session_id, task_id, generation)`},
+	{ID: "0143", SQL: `ALTER TABLE session_background_task_wakes DROP COLUMN IF EXISTS prompt`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

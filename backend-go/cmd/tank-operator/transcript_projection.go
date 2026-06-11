@@ -540,20 +540,45 @@ func (s *projectionState) applySessionStatus(event map[string]any) {
 	})
 }
 
+// applyBackgroundWakePrompt records the wake/continuation boundary as a META
+// chip, not a user message. The prompt text on turn.submitted.payload.prompt
+// is AGENT-DIRECTED harness instruction ("Review the task's output…"); a
+// prior design rendered it as a system-authored user bubble, which put raw
+// operational instructions in the user's chat voice — the "wake-notice prose
+// rendered raw" defect. The chip names what happened in user terms; the full
+// agent prompt stays on the entry payload as audit/debug detail.
 func (s *projectionState) applyBackgroundWakePrompt(event map[string]any) {
 	turnID := transcriptString(event, "turn_id")
 	text := strings.TrimSpace(transcriptPayloadString(event, "prompt"))
 	if turnID == "" || text == "" {
 		return
 	}
+	taskID := strings.TrimSpace(transcriptPayloadString(event, "task_id"))
+	title := "Background task finished — agent re-invoked"
+	detail := "Tank re-invoked the agent to pick up the result and report the outcome."
+	if transcriptPayloadString(event, "source") == string(conversation.TurnSubmittedSourceAgentContinuation) {
+		title = "Agent continued on its own"
+		detail = "The agent resumed by itself after its background task finished."
+	}
+	if taskID != "" {
+		detail = "Task " + taskID + ": " + detail
+	}
+	payload := map[string]any{"prompt": text}
+	if taskID != "" {
+		payload["task_id"] = taskID
+	}
 	entry := map[string]any{
-		"id":            transcriptString(event, "event_id") + ":wake_prompt",
-		"kind":          "message",
-		"role":          "user",
-		"authorKind":    string(conversation.AuthorKindSystem),
-		"turnId":        turnID,
+		"id":       transcriptString(event, "event_id") + ":wake_prompt",
+		"kind":     "meta",
+		"metaKind": "background_task_wake",
+		"turnId":   turnID,
+		"meta": map[string]any{
+			"title":    title,
+			"detail":   detail,
+			"severity": "info",
+		},
+		"payload":       payload,
 		"clientNonce":   transcriptString(event, "client_nonce"),
-		"text":          text,
 		"time":          transcriptString(event, "created_at"),
 		"sourceEventId": transcriptString(event, "event_id"),
 		"orderKey":      transcriptString(event, "order_key"),

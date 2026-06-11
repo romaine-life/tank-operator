@@ -286,9 +286,16 @@ Contract impact:
   is that content's durable home. A wake turn whose lineage cannot be derived
   keeps its own shell instead (fail-soft); projected content is never dropped
   without a surviving container.
-- The background wake `turn.submitted.payload.prompt` projects as the same
-  prominent system-user message the user previously saw in the main transcript,
-  but only inside Turn activity. It is not replaced by a generic tool/meta row.
+- The background wake boundary projects as a `meta` chip
+  (`metaKind: background_task_wake`) inside Turn activity — "Background task
+  finished — agent re-invoked" (or "Agent continued on its own" for the
+  antigravity self-continuation relay) — never as a user-side message bubble.
+  The `turn.submitted.payload.prompt` text is AGENT-DIRECTED harness
+  instruction; rendering it raw in the user's chat voice was the "wake-notice
+  prose rendered raw" defect. The full prompt stays on the chip's
+  `payload.prompt` as audit/debug detail, and the chip keeps the
+  `wakePrompt`/`turnOnly` flags so it stays always-visible when a completed
+  turn's activity collapses.
 - The turn that parked on a still-running background task KEEPS its activity
   shell in the settled projection — parked is a state on the shell
   (`activity.continuation: true`), not grounds for suppression. The shell is

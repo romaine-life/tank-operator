@@ -287,20 +287,53 @@ Affected contracts:
 Contract impact:
 - Wakes go through the same backend-owned turn boundary as a user turn
   (`source=background-task`); the runner never fabricates a turn.
-- Idempotent per task id via the durable `session_background_task_wakes` row
-  (`wake_id = sha256(tank_session_id, provider, task_id)`), so SDK frame repeats
-  and runner restarts cannot double-wake — "command redelivery must be idempotent
-  through command keys, turn IDs, or provider item IDs."
+- The wake row stores STRUCTURED task facts (status, description, summary,
+  last tool, error) plus the durable `observed_event_id` of the
+  `shell_task.exited` observation that registered it. The agent-facing prompt
+  is composed AT FIRE TIME, in the provider's own tool idiom
+  (`buildBackgroundTaskWakePromptForProvider`): codex is never pointed at
+  BashOutput/TaskOutput. The prompt DEMANDS a user-facing report — the
+  session-161 bug museum proved the frozen Claude-shaped prompt with an
+  "end without taking action" escape produced zero fulfilled reports across
+  every fired wake.
+- Idempotent per OBSERVATION, re-armable per task: same observation
+  re-registered (SDK frame repeats, runner restarts) is a durable no-op; a
+  NEW observation of an already-fired task arms the next wake generation
+  (`wake_id`/nonce gain a `-g<N>` suffix; the fold derives the originating
+  turn from the payload task_id either way), so a premature fire no longer
+  permanently burns the task's only report. Generations are capped
+  (`generation_capped` is the flapping-observer alarm); `failed`/`cancelled`
+  rows are never resurrected.
+- `unobservable` no longer resolves to user-facing silence: the runner
+  registers the wake with status `unknown`, and the prompt states that
+  observability was lost and demands the agent verify the real state and
+  report. A later real observation re-arms the next generation with the
+  truth.
+- Delivered-mid-turn dedupe: when a runner observes a task's completion
+  delivered INTO an active turn, it cancels the task's pending wake
+  (`POST …/background-task-wakes/cancel`), and the fire loop soft-defers
+  while the session's durable activity says a turn is in flight
+  (`deferred_active_turn`) — one completion must never arrive as both a
+  mid-turn notification and a later wake turn.
 - Must not clobber an in-flight question: the fire loop defers (release + retry)
   while the session's durable activity is `needs_input` (an AskUserQuestion
   awaiting an answer).
 - Closes a "silent stranding" — a counted bug class — rather than adding one.
+- Codex corrective observations survive force-exits: the adapter tombstones
+  recently-exited shells so a late idle item notification for a task the
+  pid-watcher already exited still publishes a corrective `shell_task.exited`
+  on the originating turn (the observation that re-arms the wake).
 
 Evidence:
 - Backend: `backend-go/cmd/tank-operator/background_task_wakes_test.go`
-  (durable turn boundary + `source=background-task`, defer-on-awaiting-input,
+  (durable turn boundary + `source=background-task`, fire-time provider-aware
+  prompt incl. demand-report / codex-idiom / unknown-status / generation-note
+  assertions, defer-on-awaiting-input, defer-on-active-turn,
   fail-on-inactive, `sdkTurnSource`, turn-id-safe nonce);
-  `backend-go/internal/pgstore/background_task_wakes.go` (idempotent `Register`).
+  `backend-go/internal/pgstore/background_task_wakes_integration_test.go`
+  (`TestPostgresBackgroundTaskWakeGenerationsRearmAfterPrematureFire`: re-arm
+  on new observation, duplicate no-op, generation cap, cancel-for-task,
+  no resurrection after cancel).
 - Codex runner: `codex-runner/src/adapters/codex.test.ts` ("turn terminal
   stamps background_work_pending while a unified-exec shell runs" — in-turn
   start, pending stamp, idle exited attributed to the originating turn,

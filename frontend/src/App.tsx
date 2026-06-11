@@ -462,7 +462,15 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // sandbox-agent SDK). renderItem branches on metaKind before falling
   // through to the generic RunMetaBlock. Server projection sets metaKind on
   // rows it surfaces specially in chat — see transcript_projection.go.
-  metaKind?: "awaiting_input" | "turn_usage" | "context_compacted";
+  // background_task_wake is the wake/continuation boundary chip: it renders
+  // through the generic RunMetaBlock (title + detail), while the agent-facing
+  // wake prompt stays on payload.prompt as audit detail — agent-directed
+  // instructions never render in the user's chat voice.
+  metaKind?:
+    | "awaiting_input"
+    | "turn_usage"
+    | "context_compacted"
+    | "background_task_wake";
   // For `awaiting_input` rows inside Turn activity: the Tank-canonical
   // questions plus the target ids the Turns question page posts to /answer.
   // `answered` is durable — set once a later turn.input_answered event
