@@ -8938,6 +8938,16 @@ textarea.run-files-viewer-editor:focus {
   }
 }
 
+/* Failed session environment indicator pill. Uses a red/error color theme. */
+.run-connection-pill-failed {
+  border-color: rgba(248, 113, 113, 0.38);
+  background: linear-gradient(180deg, rgba(127, 29, 29, 0.22), rgba(127, 29, 29, 0.1));
+}
+
+.run-connection-label-failed {
+  color: #fca5a5;
+}
+
 /* "Load earlier messages" pill — sits at the top of the transcript when
    the loaded window doesn't yet include the head of the ledger. */
 .run-transcript-load-older {

@@ -22,6 +22,7 @@ export interface SessionDataStatusRow {
 }
 
 interface SessionDataStatusInput {
+  status?: string;
   test_state?: {
     active?: boolean;
     slot_index?: number | null;
@@ -78,9 +79,9 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
     {
       id: "transcript",
       label: "Main transcript",
-      status: "Available",
-      detail: "Full conversation timeline",
-      tone: "info",
+      status: session.status === "Failed" ? "Stopped" : "Available",
+      detail: session.status === "Failed" ? "Session container crashed or terminated" : "Full conversation timeline",
+      tone: session.status === "Failed" ? "danger" : "info",
     },
     {
       id: "test",
