@@ -26,3 +26,19 @@ export function cancelBackgroundTaskWake(
     reason?: string;
   },
 ): Promise<boolean>;
+
+export interface UnresolvedBackgroundTask {
+  taskID: string;
+  turnID: string;
+  status: string;
+  command: string;
+  providerItemID: string;
+  processID: string;
+  description: string;
+  summary: string;
+  startedEventID: string;
+}
+
+export function fetchUnresolvedBackgroundTasks(
+  cfg: SessionBusConfig,
+): Promise<UnresolvedBackgroundTask[]>;

@@ -45,6 +45,7 @@ import {
 import {
   askUserQuestionHandoffEvents,
   itemTimelineID,
+  shellTaskEvent,
   stampTankEvent,
   turnEvent,
   turnIDForClientNonce,
@@ -84,6 +85,7 @@ import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js";
 import {
   cancelBackgroundTaskWake,
+  fetchUnresolvedBackgroundTasks,
   registerBackgroundTaskWake,
 } from "../../runner-shared/backgroundTaskWake.js";
 
@@ -750,6 +752,17 @@ export class Runner {
     // exactly the regression the split fixes.
     const stopConsumer = this.startCommandConsumer(signal);
     const stopControl = this.startControlConsumer(signal);
+    // Close background tasks orphaned by a runner restart, honestly. The SDK
+    // task registry is process state: after a restart no lifecycle frame for
+    // a pre-restart run_in_background task will ever arrive, so its durable
+    // lifecycle would stay open forever and its promised report would never
+    // happen (the counted silent-stranding class). Each orphan gets a
+    // corrective shell_task.exited{status:unknown, completion_source:
+    // runner_restart} on its originating turn plus a wake that tells the
+    // agent observability was lost and demands it verify and report.
+    void this.adoptOrphanedBackgroundTasks().catch((err) => {
+      console.error("background task re-adoption failed:", err);
+    });
     const onAbort = () => {
       // Unblock sdkReady so the await below returns even if no turn ever
       // arrived. The signal.aborted check after the wait short-circuits
@@ -2221,6 +2234,56 @@ export class Runner {
     }
   }
 
+  // adoptOrphanedBackgroundTasks closes the durable lifecycle of tasks a
+  // runner restart orphaned. Exposed with an injectable task list for tests;
+  // production fetches from the orchestrator's unresolved endpoint.
+  async adoptOrphanedBackgroundTasks(
+    tasks?: Array<{
+      taskID: string;
+      turnID: string;
+      description: string;
+      summary: string;
+      startedEventID: string;
+    }>,
+  ): Promise<number> {
+    const unresolved = tasks ?? (await fetchUnresolvedBackgroundTasks(this.cfg));
+    let closed = 0;
+    for (const task of unresolved) {
+      if (!task.taskID || !task.turnID) continue;
+      const exited = claudeRestartClosureEvent(this.cfg, task);
+      const dispatched = await dispatch(this.sink, exited).catch((err) => {
+        console.error("restart closure publish failed:", err);
+        return false;
+      });
+      if (!dispatched) continue;
+      closed += 1;
+      try {
+        const registered = await registerBackgroundTaskWake(this.cfg, {
+          taskID: task.taskID,
+          status: "unknown",
+          description: task.description ?? "",
+          summary: task.summary ?? "",
+          lastToolName: "Bash",
+          error:
+            "The runner restarted while this task was running; its output is no longer retrievable through BashOutput/TaskOutput. Verify the task's effects directly.",
+          // Stable per orphaned run: repeated restarts re-derive the same
+          // observation from the same started event, so they dedupe instead
+          // of stacking wake generations.
+          observedEventID: String(
+            (exited as { event_id?: unknown }).event_id ?? "",
+          ),
+        });
+        backgroundTaskWakeTotal
+          .labels(registered ? "registered" : "disabled")
+          .inc();
+      } catch (err) {
+        backgroundTaskWakeTotal.labels("failed").inc();
+        console.error("restart closure wake register failed:", err);
+      }
+    }
+    return closed;
+  }
+
   private async finalizeCommandIfAlreadyTerminal(
     record: SessionCommandRecord,
     clientNonce: string,
@@ -2272,4 +2335,31 @@ function parseOptionalTimestampMs(value: unknown): number | undefined {
   if (typeof value !== "string" || !value.trim()) return undefined;
   const parsed = Date.parse(value);
   return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+// claudeRestartClosureEvent builds the corrective shell_task.exited that
+// closes a task orphaned by a runner restart. status=unknown — the restart
+// severed the SDK task registry, so completion was never observed and must
+// not be claimed. The event id is deterministic in the orphaned run's
+// started_event_id, so repeated restarts re-derive the SAME observation and
+// the wake registration dedupes instead of stacking generations.
+export function claudeRestartClosureEvent(
+  cfg: Config,
+  task: { taskID: string; turnID: string; startedEventID: string },
+): TankConversationEvent {
+  return shellTaskEvent({
+    sessionID: cfg.sessionId,
+    turnID: task.turnID,
+    source: "claude",
+    type: "shell_task.exited",
+    taskID: task.taskID,
+    status: "unknown",
+    payload: {
+      status: "unknown",
+      completion_source: "runner_restart",
+      started_event_id: task.startedEventID,
+      error:
+        "runner restarted while this task was running; completion was never observed",
+    },
+  }) as TankConversationEvent;
 }

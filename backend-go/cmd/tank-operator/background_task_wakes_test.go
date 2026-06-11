@@ -299,3 +299,36 @@ func TestProviderSelfContinues(t *testing.T) {
 		}
 	}
 }
+
+// TestProjectUnresolvedBackgroundTasks pins the runner-restart re-adoption
+// feed: a started task with no exited is listed with the fields a runner
+// needs; an exited task is not; a task whose exit arrived before a later
+// restart never resurfaces.
+func TestProjectUnresolvedBackgroundTasks(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("started-a", "001", "shell_task.started", "tool", "codex", "turn-1", "turn-1:shell_task:taska", map[string]any{
+			"task_id": "taska", "status": "running",
+			"command": "/bin/sh -lc 'sleep 600'", "process_id": "4242",
+		}),
+		projectionTestEvent("started-b", "002", "shell_task.started", "tool", "claude", "turn-2", "turn-2:shell_task:taskb", map[string]any{
+			"task_id": "taskb", "status": "running", "description": "Wait for CI",
+		}),
+		projectionTestEvent("exited-b", "003", "shell_task.exited", "tool", "claude", "turn-2", "turn-2:shell_task:taskb", map[string]any{
+			"task_id": "taskb", "status": "completed",
+		}),
+	}
+	out := projectUnresolvedBackgroundTasks(events)
+	if len(out) != 1 {
+		t.Fatalf("unresolved tasks = %d, want 1: %#v", len(out), out)
+	}
+	got := out[0]
+	if got["task_id"] != "taska" || got["turn_id"] != "turn-1" {
+		t.Fatalf("unresolved task identity = %#v", got)
+	}
+	if got["command"] != "/bin/sh -lc 'sleep 600'" || got["process_id"] != "4242" {
+		t.Fatalf("unresolved task facts = %#v", got)
+	}
+	if got["started_event_id"] != "started-a" {
+		t.Fatalf("started_event_id = %#v, want started-a", got["started_event_id"])
+	}
+}

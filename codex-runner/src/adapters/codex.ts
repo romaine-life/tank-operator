@@ -429,6 +429,24 @@ export class CodexTankEventAdapter {
     return this.codexBackgroundShellEvents(originTurn, event, item, providerItemID);
   }
 
+  // adoptBackgroundTask re-seeds a shell into runningBackgroundTasks from the
+  // durable ledger after a runner restart. Tracked tasks are process memory;
+  // without re-adoption a restart orphaned them — the completion was never
+  // observed, the wake never registered, the agent never re-invoked (the
+  // session-161 turn-2 stranding, unrepairable after the fact). The adopted
+  // shell rejoins the pid watcher and the idle-notification path exactly like
+  // a live-tracked one.
+  adoptBackgroundTask(
+    taskID: string,
+    tracked: { turnID: string; providerItemID: string; command: string; processID: number | null },
+  ): boolean {
+    if (!taskID || this.runningBackgroundTasks.has(taskID) || this.exitedBackgroundTasks.has(taskID)) {
+      return false;
+    }
+    this.runningBackgroundTasks.set(taskID, tracked);
+    return true;
+  }
+
   // tombstoneBackgroundTask moves a tracked shell into the bounded
   // exited-tombstone memory (see exitedBackgroundTasks).
   private tombstoneBackgroundTask(taskID: string): void {

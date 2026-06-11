@@ -75,3 +75,36 @@ export async function cancelBackgroundTaskWake(cfg, payload) {
     }
     return true;
 }
+
+// fetchUnresolvedBackgroundTasks reads the session's still-open background
+// shell tasks from the durable ledger (shell_task.started with no exited) for
+// runner-restart re-adoption: tracked tasks live in process memory, so without
+// this a restart orphaned them — the counted silent-stranding class.
+export async function fetchUnresolvedBackgroundTasks(cfg) {
+    const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
+    const tokenPath = cfg.operatorTokenPath || "";
+    if (!baseURL || !tokenPath || !cfg.sessionId) {
+        return [];
+    }
+    const token = (await readFile(tokenPath, "utf8")).trim();
+    const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/background-tasks/unresolved`;
+    const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+        throw new Error(`unresolved background tasks fetch failed: ${response.status}`);
+    }
+    const body = await response.json();
+    const tasks = Array.isArray(body?.background_tasks) ? body.background_tasks : [];
+    return tasks.map((task) => ({
+        taskID: String(task?.task_id ?? ""),
+        turnID: String(task?.turn_id ?? ""),
+        status: String(task?.status ?? ""),
+        command: String(task?.command ?? ""),
+        providerItemID: String(task?.provider_item_id ?? ""),
+        processID: String(task?.process_id ?? ""),
+        description: String(task?.description ?? ""),
+        summary: String(task?.summary ?? ""),
+        startedEventID: String(task?.started_event_id ?? ""),
+    })).filter((task) => task.taskID !== "");
+}

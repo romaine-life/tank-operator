@@ -323,6 +323,20 @@ Contract impact:
   recently-exited shells so a late idle item notification for a task the
   pid-watcher already exited still publishes a corrective `shell_task.exited`
   on the originating turn (the observation that re-arms the wake).
+- Runner restart no longer orphans tracked tasks. Tracked tasks are process
+  memory; on boot each runner reads its own durable open lifecycles
+  (`GET /api/internal/sessions/{id}/background-tasks/unresolved` —
+  shell_task.started with no exited) and re-adopts, provider-correctly:
+  codex re-seeds its pid watcher (the shells are real OS processes it can
+  still observe; one that finished during the restart gap resolves through
+  the observed-alive-first guard as an honest unknown wake); claude CLOSES
+  the orphans honestly — its SDK task registry is severed by the restart, so
+  it publishes a corrective `shell_task.exited{status: unknown,
+  completion_source: runner_restart}` on the originating turn with a
+  deterministic event id (repeated restarts dedupe instead of stacking wake
+  generations) and registers the unknown-status wake demanding the agent
+  verify and report. Antigravity needs no re-adoption: agy process death is
+  session-terminal by design (#1034).
 
 Evidence:
 - Backend: `backend-go/cmd/tank-operator/background_task_wakes_test.go`

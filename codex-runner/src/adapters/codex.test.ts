@@ -645,3 +645,49 @@ test("command signatures normalize shell quoting for /proc matching", async () =
     true,
   );
 });
+
+test("adoptBackgroundTask re-seeds a restart-orphaned shell into the watcher and idle paths", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+
+  assert.equal(
+    adapter.adoptBackgroundTask("777", {
+      turnID: "turn-origin",
+      providerItemID: "call_adopted",
+      command: "/bin/sh -lc 'sleep 600'",
+      processID: 777,
+    }),
+    true,
+  );
+  // Adopted shells are watcher-visible like live-tracked ones.
+  const pending = adapter.pendingBackgroundTasks();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].taskID, "777");
+  assert.equal(pending[0].command, "/bin/sh -lc 'sleep 600'");
+
+  // Double adoption is a no-op.
+  assert.equal(
+    adapter.adoptBackgroundTask("777", {
+      turnID: "turn-other",
+      providerItemID: "x",
+      command: "y",
+      processID: null,
+    }),
+    false,
+  );
+
+  // A late idle item notification for the adopted task maps onto the
+  // ORIGINATING turn — the fold edge survives the restart.
+  const events = adapter.idleBackgroundShellEvents({
+    type: "item.completed",
+    item: {
+      id: "call_adopted",
+      type: "command_execution",
+      command: "/bin/sh -lc 'sleep 600'",
+      status: "completed",
+      process_id: "777",
+    },
+  } as never);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "shell_task.exited");
+  assert.equal(events[0].turn_id, "turn-origin");
+});

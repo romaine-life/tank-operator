@@ -582,3 +582,118 @@ func (s *appServer) handleListSessionBackgroundTasks(w http.ResponseWriter, r *h
 	recordSessionBackgroundTasksList("ok")
 	writeJSON(w, http.StatusOK, map[string]any{"background_tasks": tasks})
 }
+
+// handleInternalUnresolvedBackgroundTasks lists the session's background shell
+// tasks whose durable lifecycle is still open — a shell_task.started with no
+// shell_task.exited. It exists for runner restart re-adoption: tracked tasks
+// live in runner process memory, so a restart used to orphan them (the
+// session-161 turn-2 stranding class, unrepairable after the fact). On boot a
+// runner reads this list from the ledger — its own durable shell_task.started
+// rows — and re-adopts: codex re-seeds its process watcher (the commands are
+// real OS processes it can still observe); claude closes the orphans honestly
+// (its SDK task registry is severed by the restart) and wakes the agent to
+// verify and report. Antigravity needs no re-adoption: agy process death is
+// session-terminal by design (#1034).
+func (s *appServer) handleInternalUnresolvedBackgroundTasks(w http.ResponseWriter, r *http.Request) {
+	caller, ok := s.requireInternalSessionPodCaller(w, r)
+	if !ok {
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" || sessionID != caller.SessionID {
+		writeError(w, http.StatusForbidden, "session target does not match caller pod")
+		return
+	}
+	eventStore := s.sessionEventStoreForScope(s.sessionScope)
+	if eventStore == nil {
+		writeError(w, http.StatusServiceUnavailable, "session event store unavailable")
+		return
+	}
+	events, err := eventStore.ShellTaskEvents(r.Context(), sessionID)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"background_tasks": projectUnresolvedBackgroundTasks(events),
+	})
+}
+
+// projectUnresolvedBackgroundTasks reduces a session's shell_task.* ledger to
+// the tasks whose latest lifecycle is still open (started/updated with no
+// exited), carrying the fields a runner needs to re-adopt them.
+func projectUnresolvedBackgroundTasks(events []map[string]any) []map[string]any {
+	type record struct {
+		startedEventID string
+		turnID         string
+		command        string
+		providerItemID string
+		processID      string
+		status         string
+		description    string
+		summary        string
+		exited         bool
+	}
+	order := []string{}
+	records := map[string]*record{}
+	for _, event := range orderedTranscriptEvents(events) {
+		taskID := strings.TrimSpace(transcriptString(event, "task_id"))
+		if taskID == "" {
+			taskID = strings.TrimSpace(transcriptPayloadString(event, "task_id"))
+		}
+		if taskID == "" {
+			continue
+		}
+		rec := records[taskID]
+		if rec == nil {
+			rec = &record{}
+			records[taskID] = rec
+			order = append(order, taskID)
+		}
+		switch transcriptString(event, "type") {
+		case "shell_task.started":
+			rec.startedEventID = transcriptString(event, "event_id")
+			rec.turnID = transcriptString(event, "turn_id")
+			rec.exited = false
+		case "shell_task.exited":
+			rec.exited = true
+		}
+		if v := transcriptPayloadString(event, "command"); v != "" {
+			rec.command = v
+		}
+		if v := projectionFirstNonEmpty(transcriptString(event, "provider_item_id"), transcriptPayloadString(event, "provider_item_id")); v != "" {
+			rec.providerItemID = v
+		}
+		if v := transcriptPayloadString(event, "process_id"); v != "" {
+			rec.processID = v
+		}
+		if v := transcriptPayloadString(event, "status"); v != "" && !rec.exited {
+			rec.status = v
+		}
+		if v := transcriptPayloadString(event, "description"); v != "" {
+			rec.description = v
+		}
+		if v := transcriptPayloadString(event, "summary"); v != "" {
+			rec.summary = v
+		}
+	}
+	out := make([]map[string]any, 0, len(order))
+	for _, taskID := range order {
+		rec := records[taskID]
+		if rec == nil || rec.exited || rec.startedEventID == "" {
+			continue
+		}
+		out = append(out, map[string]any{
+			"task_id":          taskID,
+			"turn_id":          rec.turnID,
+			"status":           rec.status,
+			"command":          rec.command,
+			"provider_item_id": rec.providerItemID,
+			"process_id":       rec.processID,
+			"description":      rec.description,
+			"summary":          rec.summary,
+			"started_event_id": rec.startedEventID,
+		})
+	}
+	return out
+}

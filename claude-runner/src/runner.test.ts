@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   claudeRateLimitEventIsTerminal,
   claudeRateLimitInfo,
+  claudeRestartClosureEvent,
   classifyProviderFailure,
   dispatch,
   logUnhandledSdkMessage,
@@ -1836,4 +1837,29 @@ test("truncateEventIfOversized drops payload entirely when string truncation can
   assert.equal(result.event.type, "item.completed");
   assert.equal(result.event.event_id, "e1");
   assert.equal(result.event.turn_id, "t1");
+});
+
+test("claudeRestartClosureEvent closes an orphaned task honestly and deterministically", () => {
+  const cfg = runnerConfig();
+  const task = {
+    taskID: "task-orphan",
+    turnID: "turn-origin",
+    startedEventID: "turn-origin:shell_task.started:abc",
+  };
+  const first = claudeRestartClosureEvent(cfg, task);
+  assert.equal(first.type, "shell_task.exited");
+  assert.equal(first.turn_id, "turn-origin");
+  // Honest closure: the restart severed the SDK task registry, so completion
+  // was never observed and must not be claimed.
+  assert.equal((first.payload as { status?: string }).status, "unknown");
+  assert.equal(
+    (first.payload as { completion_source?: string }).completion_source,
+    "runner_restart",
+  );
+  // Deterministic observation identity: a second restart re-derives the SAME
+  // event id, so the wake registration dedupes instead of stacking
+  // generations.
+  const second = claudeRestartClosureEvent(cfg, task);
+  assert.equal(first.event_id, second.event_id);
+  assert.ok(String(first.event_id ?? "").length > 0);
 });

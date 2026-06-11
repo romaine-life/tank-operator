@@ -52,6 +52,7 @@ import {
 } from "../../runner-shared/conversation-builders.js";
 import {
   cancelBackgroundTaskWake,
+  fetchUnresolvedBackgroundTasks,
   registerBackgroundTaskWake,
 } from "../../runner-shared/backgroundTaskWake.js";
 import {
@@ -518,6 +519,15 @@ export class Runner {
     // interrupt_turn behind submit_turn for the full duration of the turn).
     const stopConsumer = this.startCommandConsumer(signal);
     const stopControl = this.startControlConsumer(signal);
+    // Re-adopt background shells whose durable lifecycle is still open: a
+    // runner restart loses runningBackgroundTasks, and an unobserved shell is
+    // a stranded report. The OS is still the completion source — adopted
+    // shells rejoin the pid watcher; one that already finished during the
+    // restart gap resolves through the observed-alive-first guard as an
+    // honest unknown-status wake.
+    void this.adoptOrphanedBackgroundTasks().catch((err) => {
+      console.error("background task re-adoption failed:", err);
+    });
     const onAbort = () => {
       this.userQueue.close();
       this.currentAbort?.abort();
@@ -1043,6 +1053,47 @@ export class Runner {
       backgroundTaskWakeTotal.labels("failed").inc();
       console.error("background task wake register failed:", err);
     }
+  }
+
+  // adoptOrphanedBackgroundTasks re-seeds the adapter's tracked shells from
+  // the durable ledger on startup (runner restart re-adoption). Exposed with
+  // an injectable task list for tests; production fetches from the
+  // orchestrator's unresolved-background-tasks endpoint.
+  async adoptOrphanedBackgroundTasks(
+    tasks?: Array<{
+      taskID: string;
+      turnID: string;
+      command: string;
+      providerItemID: string;
+      processID: string;
+    }>,
+  ): Promise<number> {
+    const unresolved = tasks ?? (await fetchUnresolvedBackgroundTasks(this.cfg));
+    let adopted = 0;
+    for (const task of unresolved) {
+      if (!task.taskID || !task.turnID) continue;
+      const pid = Number.parseInt(String(task.processID ?? ""), 10);
+      const ok = this.codexAdapter.adoptBackgroundTask(task.taskID, {
+        turnID: task.turnID,
+        providerItemID: task.providerItemID ?? "",
+        command: task.command ?? "",
+        processID: Number.isInteger(pid) && pid > 0 ? pid : null,
+      });
+      if (!ok) continue;
+      adopted += 1;
+      backgroundWatchTotal.labels("adopted").inc();
+      console.log(
+        JSON.stringify({
+          msg: "background task re-adopted after restart",
+          task_id: task.taskID,
+          turn_id: task.turnID,
+        }),
+      );
+    }
+    if (adopted > 0) {
+      this.ensureBackgroundPidWatcher();
+    }
+    return adopted;
   }
 
   // maybeCancelDeliveredBackgroundWake retires the pending wake of a task
