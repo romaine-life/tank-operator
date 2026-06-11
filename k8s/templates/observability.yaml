@@ -861,6 +861,33 @@ spec:
               persister ack floor"), then assess which sessions lost
               events via the per-session order_key continuity.
 
+        # Checkpointed-fold shadow divergence. Sampled folded batches
+        # re-derive their written shells from the reference projection;
+        # a divergence means the fold wrote rows the reference disagrees
+        # with. It is auto-healed in the same transaction (the reference
+        # re-projection overwrites and reseeds), so users never keep the
+        # wrong rows — but the defect class must page, because every
+        # unsampled fold batch with the same shape went uncorrected
+        # until its next resync.
+        - alert: TankTranscriptFoldShadowDivergence
+          expr: sum(increase(tank_transcript_fold_shadow_total{result="divergence"}[1h])) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "checkpointed-fold shadow compare diverged from the reference projection"
+            runbook: |
+              The slog.Error "transcript fold shadow divergence" names the
+              session and row ids. Reproduce by replaying that session's
+              ledger through TestFoldCheckpointEquivalenceOverFixtures-style
+              prefix replay (capture the ledger via
+              GET /api/debug/session-event-ledger, add it as a fixture).
+              Mitigate immediately by disabling the fold for the affected
+              session (UPDATE session_transcript_fold_state SET memo=NULL,
+              disabled=true WHERE tank_session_id='<id>') or fleet-wide by
+              deleting all fold state — the reference pipeline is the
+              always-correct fallback-free path and serves every read
+              shape on its own.
+
         # Stranded-turn sweep activity. The sweep is the command-plane
         # four-outcome backstop: it terminals turns whose submit_turn
         # command or runner died silently. Each swept turn is a real

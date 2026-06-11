@@ -315,6 +315,20 @@ func (m transcriptRowsMaterializer) tryFoldBatchTx(
 	}
 	recordTranscriptFold("folded")
 	recordTranscriptFoldDuration(time.Since(started))
+	// Production shadow-compare (tank-operator#1051 B5): on a sampled
+	// fraction of folded batches, re-derive the written shells from a full
+	// reference projection and diff. A divergence is counted, paged
+	// (TankTranscriptFoldShadowDivergence), and healed in this same
+	// transaction by the reference re-projection — the user never sees the
+	// wrong rows beyond this batch. The fixture harness proves equivalence
+	// for known shapes; the shadow is the net for shapes production invents.
+	if transcriptFoldShadowDue() {
+		if txEvents, ok := m.events.(transcriptEventsTxStore); ok {
+			if err := m.shadowCompareFoldTx(ctx, tx, txEvents, txRows, sessionID, rows); err != nil {
+				return false, err
+			}
+		}
+	}
 	return true, nil
 }
 
