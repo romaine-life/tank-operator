@@ -525,7 +525,15 @@ func stampTurnNumbers(sessionID string, numbers map[string]int64, entries []map[
 			}
 		}
 		if transcriptMapString(entry, "kind") == "turn_activity" {
-			if _, ok := numbers[turnID]; !ok {
+			// Background-wake continuation turns are unnumbered BY DESIGN:
+			// migration 0139 excludes them from the allocator because
+			// numbering them minted separately navigable /turns/{n} for
+			// continuation mechanics (the session-655 turn 56/57 defect).
+			// Counting them here made TankTurnNumberMissing fire on intended
+			// state — 12 standing false alerts during the 2026-06-11
+			// incident, drowning the real signal the alert exists for
+			// (allocation-trigger regressions on user-visible turns).
+			if _, ok := numbers[turnID]; !ok && !isBackgroundWakeTurnID(turnID) {
 				recordTurnNumberMissing("materialize")
 				slog.Warn("durable turn number missing for materialized shell",
 					"session_id", sessionID,
