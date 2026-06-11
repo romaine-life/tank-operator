@@ -50,6 +50,8 @@ spec:
               value: {{ include "tank-operator.sessionsNamespace" . | quote }}
             - name: DESIGN_SELECTION_NAMESPACE
               value: {{ include "tank-operator.orchestratorNamespace" . | quote }}
+            - name: TANK_OPERATOR_IMAGE
+              value: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
             - name: SESSION_IMAGE
               value: {{ .Values.session.image | quote }}
             - name: CODEX_SESSION_IMAGE

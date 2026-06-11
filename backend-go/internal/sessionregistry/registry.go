@@ -49,6 +49,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 	}
 	const q = `
 		SELECT sessions.session_id, sessions.mode, sessions.pod_name, sessions.name, sessions.visible,
+			sessions.session_image,
 			COALESCE(to_char(sessions.requested_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
 			COALESCE(to_char(sessions.created_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
 			COALESCE(to_char(sessions.updated_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at,
@@ -116,26 +117,27 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 	var records []sessionmodel.SessionRecord
 	for rows.Next() {
 		var (
-			sessionID, mode, podName, requestedAt, createdAt, updatedAt   string
-			status, readyAt, terminatingAt                                string
-			name                                                          string
-			visible                                                       bool
-			activitySummary, testState, rolloutState, cloneState          []byte
-			providerRateLimitInfo                                         []byte
-			repos, capabilities                                           []string
-			model, effort, runtimeModel, runtimeEffort, runtimeAt         string
-			runtimeContextWindowSource, runtimeContextWindowObservedAt    string
-			providerRateLimitObservedAt                                   string
-			openTarget                                                    string
-			agentAvatarID, systemAvatarID                                 string
-			runtimeContextWindowTokens, compactionCount, userMessageCount int64
-			sidebarPosition, rowVersion                                   int64
-			bugLabelID                                                    sql.NullInt64
-			bugLabelName, bugLabelSlug                                    sql.NullString
-			bugLabelsRaw                                                  []byte
+			sessionID, mode, podName, sessionImage, requestedAt, createdAt, updatedAt string
+			status, readyAt, terminatingAt                                            string
+			name                                                                      string
+			visible                                                                   bool
+			activitySummary, testState, rolloutState, cloneState                      []byte
+			providerRateLimitInfo                                                     []byte
+			repos, capabilities                                                       []string
+			model, effort, runtimeModel, runtimeEffort, runtimeAt                     string
+			runtimeContextWindowSource, runtimeContextWindowObservedAt                string
+			providerRateLimitObservedAt                                               string
+			openTarget                                                                string
+			agentAvatarID, systemAvatarID                                             string
+			runtimeContextWindowTokens, compactionCount, userMessageCount             int64
+			sidebarPosition, rowVersion                                               int64
+			bugLabelID                                                                sql.NullInt64
+			bugLabelName, bugLabelSlug                                                sql.NullString
+			bugLabelsRaw                                                              []byte
 		)
 		if err := rows.Scan(
 			&sessionID, &mode, &podName, &name, &visible,
+			&sessionImage,
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
@@ -165,6 +167,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			Mode:                           mode,
 			Scope:                          s.scope,
 			PodName:                        podName,
+			SessionImage:                   sessionImage,
 			Name:                           name,
 			Visible:                        visible,
 			RequestedAt:                    requestedAt,

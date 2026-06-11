@@ -1634,11 +1634,11 @@ var schemaMigrations = []migration{
 		ALTER TABLE sessions ALTER COLUMN name SET NOT NULL;
 	END $$`},
 
-		// user_message_count: durable per-session count of user_message.created
-		// events (one per human back-and-forth). Kept as durable row metadata for
-		// diagnostics and compatibility. Mirrors compaction_count (0125/0126): the
-		// chat-activity emitter recomputes it with a bounded COUNT over the partial
-		// index below on each user_message.created upsert
+	// user_message_count: durable per-session count of user_message.created
+	// events (one per human back-and-forth). Kept as durable row metadata for
+	// diagnostics and compatibility. Mirrors compaction_count (0125/0126): the
+	// chat-activity emitter recomputes it with a bounded COUNT over the partial
+	// index below on each user_message.created upsert
 	// (recompute-and-compare, so an at-least-once redelivery is a no-op rather
 	// than a double-count). The index is keyed on (tank_session_id) for the
 	// per-session count — distinct from the (created_at)-keyed
@@ -1650,10 +1650,10 @@ var schemaMigrations = []migration{
 		ON session_events (tank_session_id)
 		WHERE event_type = 'user_message.created'`},
 
-		// open_target: legacy durable per-session sidebar open-target preference
-		// (''/chat/turns). The frontend no longer uses it for session-open defaults,
-		// but the column remains on the row wire for compatibility with existing
-		// clients and historical rows.
+	// open_target: legacy durable per-session sidebar open-target preference
+	// (''/chat/turns). The frontend no longer uses it for session-open defaults,
+	// but the column remains on the row wire for compatibility with existing
+	// clients and historical rows.
 	{ID: "0137", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS open_target text NOT NULL DEFAULT ''`},
 
@@ -1727,6 +1727,13 @@ var schemaMigrations = []migration{
 	{ID: "0140", SQL: `CREATE INDEX IF NOT EXISTS session_events_shell_task
 		ON session_events (tank_session_id, order_key)
 		WHERE event_type IN ('shell_task.started', 'shell_task.updated', 'shell_task.exited')`},
+
+	// The resolved sandbox/session image is session-owned metadata. Store the
+	// full image reference stamped at create time after any test-slot override
+	// is applied so the Session data screen can explain what an existing
+	// session booted from without reading a live pod.
+	{ID: "0141", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS session_image text NOT NULL DEFAULT ''`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

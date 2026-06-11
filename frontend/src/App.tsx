@@ -743,6 +743,7 @@ interface Session {
   owner: string;
   status: string;
   mode: SessionMode;
+  session_image?: string;
   requested_at: string | null;
   created_at: string | null;
   ready_at: string | null;
@@ -1367,6 +1368,8 @@ function normalizeSession(session: Session): Session {
   // rows, older snapshots) without re-deriving a client-side slug.
   next.name =
     typeof session.name === "string" && session.name ? session.name : "";
+  next.session_image =
+    typeof session.session_image === "string" ? session.session_image : "";
   // Defend against degraded snapshots (older server, infoFromPod
   // fallback, hand-rolled JSON in tests): repos must always be an
   // array so downstream renderers can `.map` without a guard.
@@ -1548,6 +1551,21 @@ interface AdminObservabilityAlert {
   active_at?: string;
 }
 
+interface AdminVersionImage {
+  image: string;
+  tag?: string;
+}
+
+interface AdminAppVersion {
+  app_image: AdminVersionImage;
+  session_image: AdminVersionImage;
+  codex_session_image: AdminVersionImage;
+  antigravity_session_image: AdminVersionImage;
+  session_scope: string;
+  pod_name?: string;
+  fetched_at: string;
+}
+
 interface AdminSettingsControls {
   visible: boolean;
   canViewProdSessions: boolean;
@@ -1560,7 +1578,13 @@ interface AdminSettingsControls {
     loading: boolean;
     error: string | null;
   };
+  version: {
+    summary: AdminAppVersion | null;
+    loading: boolean;
+    error: string | null;
+  };
   onRefreshObservability: () => void;
+  onRefreshVersion: () => void;
   onAvatarCatalogChanged: () => Promise<void>;
   onViewingProdSessionsChange: (value: boolean) => void;
 }
@@ -12672,6 +12696,75 @@ function formatMetricCount(value: number): string {
   return value.toFixed(value < 1 ? 2 : 1).replace(/\.0$/, "");
 }
 
+function AdminVersionPanel({
+  state,
+  onRefresh,
+}: {
+  state: AdminSettingsControls["version"];
+  onRefresh: () => void;
+}) {
+  const rows = state.summary
+    ? [
+        ["App", versionImageLabel(state.summary.app_image)],
+        ["Claude sessions", versionImageLabel(state.summary.session_image)],
+        ["Codex sessions", versionImageLabel(state.summary.codex_session_image)],
+        [
+          "Antigravity sessions",
+          versionImageLabel(state.summary.antigravity_session_image),
+        ],
+        ["Scope", state.summary.session_scope],
+        ["Pod", state.summary.pod_name || "unknown"],
+      ]
+    : [];
+  return (
+    <div className="run-settings-rate-limit">
+      <div className="run-settings-diagnostics-head">
+        <span className="run-settings-link-label">
+          <InfoIcon className="run-settings-link-icon" aria-hidden="true" />
+          <span>App version</span>
+        </span>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={onRefresh}
+          title="Refresh app version"
+          aria-label="Refresh app version"
+          disabled={state.loading}
+        >
+          <RotateCcwIcon
+            aria-hidden="true"
+            className={state.loading ? "cluster-health-spin" : undefined}
+          />
+        </button>
+      </div>
+      {state.error ? (
+        <div className="run-settings-observability-note" role="status">
+          {state.error}
+        </div>
+      ) : rows.length > 0 ? (
+        <div className="run-settings-rate-limit-grid">
+          {rows.map(([label, value]) => (
+            <div className="run-settings-rate-limit-row" key={label}>
+              <span>{label}</span>
+              <span title={value}>{value}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="run-settings-observability-note" role="status">
+          {state.loading ? "Loading version..." : "Version unavailable"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function versionImageLabel(image: AdminVersionImage | null | undefined): string {
+  const tag = image?.tag?.trim();
+  const ref = image?.image?.trim();
+  return tag || ref || "unknown";
+}
+
 const PROVIDER_RATE_LIMIT_LABELS: Record<string, string> = {
   provider: "Provider",
   status: "Status",
@@ -13239,6 +13332,10 @@ function RunSettingsPanel({
           <>
             <section className="run-settings-section">
               <h2 className="run-settings-title">Admin Controls</h2>
+              <AdminVersionPanel
+                state={adminControls.version}
+                onRefresh={adminControls.onRefreshVersion}
+              />
               <button
                 type="button"
                 className="run-settings-link"
@@ -20649,6 +20746,12 @@ function AuthenticatedApp() {
   const [adminObservabilityError, setAdminObservabilityError] = useState<
     string | null
   >(null);
+  const [adminVersionSummary, setAdminVersionSummary] =
+    useState<AdminAppVersion | null>(null);
+  const [adminVersionLoading, setAdminVersionLoading] = useState(false);
+  const [adminVersionError, setAdminVersionError] = useState<string | null>(
+    null,
+  );
   const refreshAdminObservability = useCallback(async () => {
     if (!hasAdminAccess) return;
     setAdminObservabilityLoading(true);
@@ -20666,19 +20769,41 @@ function AuthenticatedApp() {
       setAdminObservabilityLoading(false);
     }
   }, [hasAdminAccess]);
+  const refreshAdminVersion = useCallback(async () => {
+    if (!hasAdminAccess) return;
+    setAdminVersionLoading(true);
+    try {
+      const res = await authedFetch("/api/admin/app-version");
+      if (!res.ok) {
+        throw new Error(`app version returned ${res.status}`);
+      }
+      const body = (await res.json()) as AdminAppVersion;
+      setAdminVersionSummary(body);
+      setAdminVersionError(null);
+    } catch (err) {
+      setAdminVersionError(errorMessage(err));
+    } finally {
+      setAdminVersionLoading(false);
+    }
+  }, [hasAdminAccess]);
   useEffect(() => {
     if (!hasAdminAccess) {
       setAdminObservabilitySummary(null);
       setAdminObservabilityError(null);
       setAdminObservabilityLoading(false);
+      setAdminVersionSummary(null);
+      setAdminVersionError(null);
+      setAdminVersionLoading(false);
       return;
     }
     void refreshAdminObservability();
+    void refreshAdminVersion();
     const id = window.setInterval(() => {
       void refreshAdminObservability();
+      void refreshAdminVersion();
     }, 30_000);
     return () => window.clearInterval(id);
-  }, [hasAdminAccess, refreshAdminObservability]);
+  }, [hasAdminAccess, refreshAdminObservability, refreshAdminVersion]);
   const canViewProdSessions =
     hasAdminAccess && currentSessionScope !== PROD_SESSION_SCOPE;
   const effectiveSessionScope =
@@ -20707,7 +20832,13 @@ function AuthenticatedApp() {
           loading: adminObservabilityLoading,
           error: adminObservabilityError,
         },
+        version: {
+          summary: adminVersionSummary,
+          loading: adminVersionLoading,
+          error: adminVersionError,
+        },
         onRefreshObservability: refreshAdminObservability,
+        onRefreshVersion: refreshAdminVersion,
         onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
         onViewingProdSessionsChange: (value: boolean) => {
           const next = value ? PROD_SESSION_SCOPE : "";
@@ -21343,6 +21474,7 @@ function AuthenticatedApp() {
       owner: row.owner,
       status: row.status,
       mode: row.mode as SessionMode,
+      session_image: row.session_image ?? "",
       requested_at: row.requested_at ?? null,
       created_at: row.created_at ?? null,
       ready_at: row.ready_at ?? null,
@@ -21396,6 +21528,8 @@ function AuthenticatedApp() {
       mode: String(raw.mode ?? "claude_gui"),
       session_scope: normalizeSessionScopeValue(raw.session_scope),
       pod_name: raw.pod_name ?? undefined,
+      session_image:
+        typeof raw.session_image === "string" ? raw.session_image : undefined,
       // name is the server-canonical title. Always present on the snapshot
       // wire; fall back to the empty string only to keep the type honest for
       // degraded payloads — there is no client-side slug re-derivation any more.

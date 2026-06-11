@@ -36,6 +36,7 @@ type Info struct {
 	Owner        string  `json:"owner"`
 	Status       string  `json:"status"`
 	Mode         string  `json:"mode"`
+	SessionImage string  `json:"session_image,omitempty"`
 	RequestedAt  *string `json:"requested_at"`
 	CreatedAt    *string `json:"created_at"`
 	ReadyAt      *string `json:"ready_at"`
@@ -276,6 +277,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		Owner:                          owner,
 		Status:                         status,
 		Mode:                           sessionmodel.NormalizeSessionMode(record.Mode),
+		SessionImage:                   record.SessionImage,
 		RequestedAt:                    firstString(record.RequestedAt, record.CreatedAt),
 		CreatedAt:                      optionalString(record.CreatedAt),
 		ReadyAt:                        optionalString(record.ReadyAt),
@@ -359,6 +361,7 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		Owner:        owner,
 		Status:       "Pending",
 		Mode:         sessionmodel.NormalizeSessionMode(pod.Labels["tank-operator/mode"]),
+		SessionImage: podSandboxImage(pod),
 		RequestedAt:  createdAt,
 		CreatedAt:    createdAt,
 		ReadyAt:      readyAt,
@@ -373,6 +376,18 @@ func infoFromPod(owner string, pod *corev1.Pod) Info {
 		Repos:        []string{},
 		Capabilities: annotationStringList(pod.Annotations, capabilitiesAnnotation),
 	}
+}
+
+func podSandboxImage(pod *corev1.Pod) string {
+	if pod == nil {
+		return ""
+	}
+	for _, container := range pod.Spec.Containers {
+		if container.Name == "sandbox" {
+			return container.Image
+		}
+	}
+	return ""
 }
 
 func optionalString(value string) *string {
