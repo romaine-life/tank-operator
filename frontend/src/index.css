@@ -4210,6 +4210,92 @@ button:disabled {
   white-space: nowrap;
 }
 
+.run-turn-view-combined-select {
+  width: auto;
+  min-width: 10.75rem;
+  max-width: min(13.25rem, calc(100vw - 2rem));
+}
+
+.run-turn-view-combined-select-menu {
+  width: var(--radix-select-trigger-width);
+  min-width: var(--radix-select-trigger-width);
+  max-width: min(13.25rem, calc(100vw - 2rem));
+}
+
+.run-turn-view-combined-option {
+  display: grid;
+  grid-template-columns: minmax(5.25ch, max-content) minmax(0, 1fr);
+  align-items: center;
+  column-gap: var(--space-3);
+  min-width: 0;
+  width: 100%;
+}
+
+.run-turn-view-combined-option-trigger {
+  flex: 1 1 auto;
+}
+
+.run-turn-view-select-item.run-turn-view-combined-select-item
+  .run-turn-view-combined-option,
+.run-turn-view-select-item.run-turn-view-combined-select-item
+  .run-turn-view-combined-option * {
+  color: var(--text-body) !important;
+}
+
+.run-turn-view-select-item.run-turn-view-combined-select-item[data-highlighted]
+  .run-turn-view-combined-option,
+.run-turn-view-select-item.run-turn-view-combined-select-item[data-highlighted]
+  .run-turn-view-combined-option * {
+  color: var(--text-primary) !important;
+}
+
+.run-turn-view-select-item.run-turn-view-combined-select-item[data-state="checked"]
+  .run-turn-view-combined-option,
+.run-turn-view-select-item.run-turn-view-combined-select-item[data-state="checked"]
+  .run-turn-view-combined-option * {
+  color: var(--accent-fg) !important;
+}
+
+.run-turn-view-combined-turn {
+  color: currentColor;
+  font-weight: 500;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-turn-view-combined-page {
+  color: currentColor;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1-5);
+}
+
+.run-turn-view-combined-kind {
+  align-items: center;
+  color: currentColor;
+  display: inline-flex;
+  flex: 0 0 auto;
+  opacity: 0.72;
+}
+
+.run-turn-view-combined-kind svg {
+  display: block;
+}
+
+.run-turn-view-nav-btn-double {
+  min-width: 2.15rem;
+}
+
+.run-turn-view-nav-btn-triple {
+  min-width: 2.5rem;
+}
+
 .run-turn-activity-event-progress,
 .run-turn-activity-total-events {
   color: var(--text-muted);
