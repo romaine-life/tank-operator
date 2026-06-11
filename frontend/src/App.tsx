@@ -10738,6 +10738,7 @@ function RunTurnThinkingBubble({
   lastActivityAt,
   avatar,
   onOpenTurn,
+  onActivate,
 }: {
   userKey: string;
   turnId: string;
@@ -10745,8 +10746,10 @@ function RunTurnThinkingBubble({
   lastActivityAt?: string;
   avatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  onActivate?: (turnId: string) => void;
 }) {
   const needsInput = status === "needs_input";
+  const actionLabel = needsInput ? "Answer in Turns" : "Show agent activity";
   return (
     <div
       className="run-transcript-message run-turn-thinking"
@@ -10762,11 +10765,15 @@ function RunTurnThinkingBubble({
       <button
         type="button"
         className="run-transcript-message-content run-turn-thinking-content"
-        title={needsInput ? "Answer in Turns" : "Open turn"}
-        aria-label={needsInput ? "Answer in Turns" : "Open turn"}
-        onClick={() =>
-          onOpenTurn?.(turnId, { anchor: needsInput ? "top" : "bottom" })
-        }
+        title={actionLabel}
+        aria-label={actionLabel}
+        onClick={() => {
+          if (onActivate) {
+            onActivate(turnId);
+            return;
+          }
+          onOpenTurn?.(turnId, { anchor: needsInput ? "top" : "bottom" });
+        }}
       >
         <span className="run-turn-thinking-lines">
           <span
@@ -11484,6 +11491,18 @@ function RunTurnActivityScreen({
           status={group.status}
           lastActivityAt={group.lastActivityAt}
           avatar={avatar}
+          onActivate={
+            group.status === "needs_input"
+              ? undefined
+              : () => {
+                  if (!selected) return;
+                  setCollapsedActivityTurnIds((prev) =>
+                    prev[selected.turnId] === false
+                      ? prev
+                      : { ...prev, [selected.turnId]: false },
+                  );
+                }
+          }
         />
       );
     }
@@ -12322,6 +12341,10 @@ export function RunMessages({
         );
       }
       if (g.kind === "thinking") {
+        const activityGroup = groups.find(
+          (candidate) =>
+            candidate.kind === "activity" && candidate.turnId === g.turnId,
+        );
         return (
           <RunTurnThinkingBubble
             userKey={userKey}
@@ -12330,6 +12353,14 @@ export function RunMessages({
             lastActivityAt={g.lastActivityAt}
             avatar={avatar}
             onOpenTurn={onOpenTurn}
+            onActivate={
+              g.status !== "needs_input" && activityGroup?.kind === "activity"
+                ? () => {
+                    if (activityGroup.shell) onActivityOpen?.(g.turnId);
+                    setActivityOpen(entryGroupKey(activityGroup), true);
+                  }
+                : undefined
+            }
           />
         );
       }
