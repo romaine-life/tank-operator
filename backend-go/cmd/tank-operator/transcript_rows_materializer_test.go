@@ -240,10 +240,13 @@ func TestTranscriptRowsMaterializerRefreshesWholeSessionForBackgroundWakeTurn(t 
 	if rowStore.sessionID != "63" {
 		t.Fatalf("sessionID = %q, want full-session replacement for wake turn", rowStore.sessionID)
 	}
-	if got, want := len(rowStore.sessionEntries), 2; got != want {
-		t.Fatalf("session entries = %d, want user + resumed final: %#v", got, rowStore.sessionEntries)
+	if got, want := len(rowStore.sessionEntries), 3; got != want {
+		t.Fatalf("session entries = %d, want user + parked origin shell + resumed final: %#v", got, rowStore.sessionEntries)
 	}
-	final := rowStore.sessionEntries[1]
+	if got := transcriptMapString(rowStore.sessionEntries[1], "kind"); got != "turn_activity" {
+		t.Fatalf("second session entry kind = %q, want parked origin shell: %#v", got, rowStore.sessionEntries[1])
+	}
+	final := rowStore.sessionEntries[2]
 	if got, want := transcriptMapString(final, "turnId"), "turn-1"; got != want {
 		t.Fatalf("final turnId = %q, want parent: %#v", got, final)
 	}

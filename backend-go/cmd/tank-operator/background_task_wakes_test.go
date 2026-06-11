@@ -18,11 +18,12 @@ type fakeBackgroundTaskWakeStore struct {
 	releasedID      string
 	cancelCalls     int
 	cancelSessionID string
+	cancelTaskID    string
 	cancelReturn    int64
 }
 
-func (f *fakeBackgroundTaskWakeStore) Register(context.Context, pgstore.RegisterBackgroundTaskWakeRequest) (pgstore.BackgroundTaskWake, error) {
-	return pgstore.BackgroundTaskWake{}, nil
+func (f *fakeBackgroundTaskWakeStore) Register(context.Context, pgstore.RegisterBackgroundTaskWakeRequest) (pgstore.BackgroundTaskWake, pgstore.BackgroundTaskWakeRegisterOutcome, error) {
+	return pgstore.BackgroundTaskWake{}, pgstore.BackgroundTaskWakeRegisterScheduled, nil
 }
 
 func (f *fakeBackgroundTaskWakeStore) ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.BackgroundTaskWake, error) {
@@ -56,6 +57,13 @@ func (f *fakeBackgroundTaskWakeStore) CancelPendingForSession(_ context.Context,
 	return f.cancelReturn, nil
 }
 
+func (f *fakeBackgroundTaskWakeStore) CancelPendingForTask(_ context.Context, _, sessionID, taskID, _ string) (int64, error) {
+	f.cancelCalls++
+	f.cancelSessionID = sessionID
+	f.cancelTaskID = taskID
+	return f.cancelReturn, nil
+}
+
 func backgroundWakeRow() pgstore.BackgroundTaskWake {
 	return pgstore.BackgroundTaskWake{
 		WakeID:            "bgwake_abc",
@@ -66,7 +74,10 @@ func backgroundWakeRow() pgstore.BackgroundTaskWake {
 		Provider:          "claude",
 		TaskID:            "bocpzxcm3",
 		TaskStatus:        "completed",
-		Prompt:            "A background task you started earlier has finished.",
+		TaskDescription:   "Wait for CI",
+		TaskSummary:       "all green",
+		TaskLastTool:      "Bash",
+		Generation:        1,
 		ClientNonce:       "bgtask-bocpzxcm3",
 		SessionStatus:     "Active",
 		SessionTerminated: false,
@@ -95,8 +106,13 @@ func TestFireBackgroundTaskWakeUsesDurableTurnBoundary(t *testing.T) {
 		t.Fatalf("published commands = %d, want 1", len(bus.commands))
 	}
 	cmd := bus.commands[0]
-	if cmd.Source != "background-task" || cmd.ClientNonce != row.ClientNonce || cmd.Prompt != row.Prompt {
+	if cmd.Source != "background-task" || cmd.ClientNonce != row.ClientNonce {
 		t.Fatalf("command = %+v", cmd)
+	}
+	// The prompt is composed provider-aware at fire time from the row's
+	// structured task facts.
+	if want := buildBackgroundTaskWakePromptForProvider(row); cmd.Prompt != want {
+		t.Fatalf("command prompt = %q, want fire-time composed prompt %q", cmd.Prompt, want)
 	}
 	events := app.sessionEvents.(*recordingSessionEventStore).upserts
 	if len(events) != 1 {
@@ -109,8 +125,8 @@ func TestFireBackgroundTaskWakeUsesDurableTurnBoundary(t *testing.T) {
 	if got, _ := payload["source"].(string); got != "background-task" {
 		t.Fatalf("turn.submitted payload.source = %q, want background-task", got)
 	}
-	if got, _ := payload["prompt"].(string); got != row.Prompt {
-		t.Fatalf("turn.submitted payload.prompt = %q, want wake prompt", got)
+	if got, _ := payload["prompt"].(string); got != buildBackgroundTaskWakePromptForProvider(row) {
+		t.Fatalf("turn.submitted payload.prompt = %q, want fire-time composed wake prompt", got)
 	}
 	for _, event := range events {
 		if got, _ := event["type"].(string); got == "user_message.created" {
@@ -172,11 +188,85 @@ func TestSdkTurnSourceIncludesBackgroundTask(t *testing.T) {
 	}
 }
 
-func TestBuildBackgroundTaskWakePromptIncludesTaskContext(t *testing.T) {
-	p := buildBackgroundTaskWakePrompt("taskX", "completed", "Wait for CI", "all green", "Bash", "")
-	for _, want := range []string{"taskX", "completed", "Wait for CI", "all green", "BashOutput"} {
-		if !strings.Contains(p, want) {
-			t.Fatalf("prompt missing %q:\n%s", want, p)
+func TestBuildBackgroundTaskWakePromptIsProviderAwareAndDemandsReport(t *testing.T) {
+	row := backgroundWakeRow()
+	row.TaskID = "taskX"
+
+	claude := buildBackgroundTaskWakePromptForProvider(row)
+	for _, want := range []string{"taskX", "completed", "Wait for CI", "all green", "BashOutput", "reporting the task's outcome", "Do not end the turn silently"} {
+		if !strings.Contains(claude, want) {
+			t.Fatalf("claude prompt missing %q:\n%s", want, claude)
+		}
+	}
+
+	// Codex has no BashOutput/TaskOutput tools; sending Claude tool names plus
+	// an "end without taking action" escape produced zero fulfilled reports
+	// across every fired wake of the session-161 bug museum.
+	row.Provider = "codex"
+	codex := buildBackgroundTaskWakePromptForProvider(row)
+	if strings.Contains(codex, "BashOutput") || strings.Contains(codex, "TaskOutput") {
+		t.Fatalf("codex prompt names Claude tools:\n%s", codex)
+	}
+	for _, want := range []string{"taskX", "your shell", "reporting the task's outcome", "Do not end the turn silently"} {
+		if !strings.Contains(codex, want) {
+			t.Fatalf("codex prompt missing %q:\n%s", want, codex)
+		}
+	}
+	if strings.Contains(codex, "end the turn without taking action") {
+		t.Fatalf("codex prompt kept the silent-obedience escape:\n%s", codex)
+	}
+
+	// Unknown status = observability honestly lost, never claimed completion.
+	row.TaskStatus = "unknown"
+	unknown := buildBackgroundTaskWakePromptForProvider(row)
+	if !strings.Contains(unknown, "lost the ability to observe") {
+		t.Fatalf("unknown-status prompt does not state lost observability:\n%s", unknown)
+	}
+	if strings.Contains(unknown, "has finished while this session was idle") {
+		t.Fatalf("unknown-status prompt claims completion:\n%s", unknown)
+	}
+	if !strings.Contains(unknown, "you will be re-invoked once more") {
+		t.Fatalf("codex unknown-status prompt missing the re-arm follow-up note:\n%s", unknown)
+	}
+
+	// A re-armed generation says so: the agent should know the earlier
+	// notification may have been premature.
+	row.TaskStatus = "completed"
+	row.Generation = 2
+	rearmed := buildBackgroundTaskWakePromptForProvider(row)
+	if !strings.Contains(rearmed, "premature") {
+		t.Fatalf("generation-2 prompt missing premature-observation note:\n%s", rearmed)
+	}
+}
+
+func TestFireBackgroundTaskWakeDefersWhileTurnActive(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", "claude_gui", "claude-runner"))
+	wakes := &fakeBackgroundTaskWakeStore{}
+	app.backgroundTaskWakes = wakes
+	app.sessionEvents = &recordingSessionEventStore{}
+	row := backgroundWakeRow()
+	row.SessionActivityStatus = "streaming"
+
+	if err := app.fireBackgroundTaskWake(context.Background(), row, time.Now().UTC()); err != nil {
+		t.Fatalf("fireBackgroundTaskWake returned error: %v", err)
+	}
+	if wakes.releasedID != row.WakeID {
+		t.Fatalf("released id = %q, want %q (must defer while a turn is in flight)", wakes.releasedID, row.WakeID)
+	}
+	if wakes.firedID != "" || len(bus.commands) != 0 {
+		t.Fatalf("fired id = %q commands = %d, want deferred fire", wakes.firedID, len(bus.commands))
+	}
+
+	// ready / scheduled / empty statuses do not block.
+	for _, status := range []string{"", "ready", "scheduled", "error", "stopped", "needs_input"} {
+		if backgroundTaskWakeActivityStatusBlocksFire(status) {
+			t.Fatalf("activity status %q must not block wake fire", status)
+		}
+	}
+	for _, status := range []string{"submitted", "claimed", "streaming", "stopping"} {
+		if !backgroundTaskWakeActivityStatusBlocksFire(status) {
+			t.Fatalf("activity status %q must block wake fire", status)
 		}
 	}
 }
@@ -210,5 +300,73 @@ func TestProviderSelfContinues(t *testing.T) {
 		if providerSelfContinues(provider) {
 			t.Fatalf("providerSelfContinues(%q) = true, want false", provider)
 		}
+	}
+}
+
+// TestProjectUnresolvedBackgroundTasks pins the runner-restart re-adoption
+// feed: a started task with no exited is listed with the fields a runner
+// needs; an exited task is not; a task whose exit arrived before a later
+// restart never resurfaces.
+func TestProjectUnresolvedBackgroundTasks(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("started-a", "001", "shell_task.started", "tool", "codex", "turn-1", "turn-1:shell_task:taska", map[string]any{
+			"task_id": "taska", "status": "running",
+			"command": "/bin/sh -lc 'sleep 600'", "process_id": "4242",
+		}),
+		projectionTestEvent("started-b", "002", "shell_task.started", "tool", "claude", "turn-2", "turn-2:shell_task:taskb", map[string]any{
+			"task_id": "taskb", "status": "running", "description": "Wait for CI",
+		}),
+		projectionTestEvent("exited-b", "003", "shell_task.exited", "tool", "claude", "turn-2", "turn-2:shell_task:taskb", map[string]any{
+			"task_id": "taskb", "status": "completed",
+		}),
+	}
+	out := projectUnresolvedBackgroundTasks(events)
+	if len(out) != 1 {
+		t.Fatalf("unresolved tasks = %d, want 1: %#v", len(out), out)
+	}
+	got := out[0]
+	if got["task_id"] != "taska" || got["turn_id"] != "turn-1" {
+		t.Fatalf("unresolved task identity = %#v", got)
+	}
+	if got["command"] != "/bin/sh -lc 'sleep 600'" || got["process_id"] != "4242" {
+		t.Fatalf("unresolved task facts = %#v", got)
+	}
+	if got["started_event_id"] != "started-a" {
+		t.Fatalf("started_event_id = %#v, want started-a", got["started_event_id"])
+	}
+}
+
+// TestBackgroundWakeChipTitleTracksLostObservability pins the composer and
+// the projection chip together: the unknown-status prompt opens with the
+// lost-observability prefix the chip keys on, and the chip then refuses to
+// claim the task finished.
+func TestBackgroundWakeChipTitleTracksLostObservability(t *testing.T) {
+	row := backgroundWakeRow()
+	row.TaskStatus = "unknown"
+	prompt := buildBackgroundTaskWakePromptForProvider(row)
+	if !strings.HasPrefix(prompt, backgroundWakeLostObservabilityPromptPrefix) {
+		t.Fatalf("unknown-status prompt does not open with the chip prefix %q:\n%s", backgroundWakeLostObservabilityPromptPrefix, prompt)
+	}
+	// No observer remains for claude after a restart closure: the prompt must
+	// forbid the model from promising a follow-up report the harness can
+	// never deliver — "I'll report when it finishes" was the residual lie of
+	// the slot-6 restart round.
+	if !strings.Contains(prompt, "do not promise an automatic follow-up report") {
+		t.Fatalf("claude unknown-status prompt missing the no-follow-up instruction:\n%s", prompt)
+	}
+
+	events := []map[string]any{
+		projectionTestEvent("wake-submitted", "001", "turn.submitted", "runner", "tank", "turn_bgtask-x", "", map[string]any{
+			"status": "submitted", "source": "background-task", "task_id": "x", "prompt": prompt,
+		}),
+	}
+	projection := projectTranscriptEvents(events)
+	body, ok := projection.ActivityBodies["turn_bgtask-x"]
+	if !ok || len(body.Entries) == 0 {
+		t.Fatalf("wake body missing: %#v", projection.ActivityBodies)
+	}
+	meta, _ := body.Entries[0]["meta"].(map[string]any)
+	if meta == nil || meta["title"] != "Background task lost from view — agent re-invoked" {
+		t.Fatalf("chip title = %#v, want lost-from-view title", meta)
 	}
 }

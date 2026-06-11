@@ -44,6 +44,29 @@ export class CodexTankEventAdapter {
   private readonly finalAnswerByTurn = new Map<string, { timelineIDs: string[]; providerItemIDs: string[] }>();
   private readonly pendingUnifiedExecStarts = new Map<string, Record<string, unknown>>();
   private readonly promotedUnifiedExecStarts = new Set<string>();
+  // runningBackgroundTasks tracks provider background shells (unified-exec)
+  // across turn boundaries: set on shell_task.started/updated, cleared on
+  // exited. It is the origin-turn memory for idle completions (the codex
+  // half of the park/re-invoke/fold contract) and the source of the
+  // background_work_pending stamp on turn terminals.
+  private readonly runningBackgroundTasks = new Map<
+    string,
+    { turnID: string; providerItemID: string; command: string; processID: number | null }
+  >();
+  // exitedBackgroundTasks remembers recently-exited shells (bounded FIFO).
+  // It exists for the corrective observation: when the pid-watcher declared
+  // an exit prematurely (or resolved a shell unobservable) and the provider
+  // LATER surfaces the real completion as an idle item notification, the
+  // task is no longer in runningBackgroundTasks — dropping that notification
+  // here is what made a premature wake permanently unrecoverable. The
+  // tombstone lets the late observation publish a corrective
+  // shell_task.exited on the originating turn, which re-arms the next wake
+  // generation.
+  private readonly exitedBackgroundTasks = new Map<
+    string,
+    { turnID: string; providerItemID: string; command: string; processID: number | null }
+  >();
+  private static readonly maxExitedBackgroundTasks = 64;
 
   constructor(private readonly cfg: Config) {}
 
@@ -94,6 +117,7 @@ export class CodexTankEventAdapter {
           usageObservation: event.usage_observation,
           finalAnswer,
           providerEventID: providerID,
+          backgroundWorkPending: this.runningBackgroundTasks.size > 0,
         }),
       ];
     }
@@ -299,6 +323,18 @@ export class CodexTankEventAdapter {
         : isTerminalShellTaskStatus(status)
           ? "shell_task.exited"
           : "shell_task.updated";
+    if (type === "shell_task.exited") {
+      this.tombstoneBackgroundTask(taskID);
+    } else {
+      const rawPid = item.process_id ?? item.processId ?? taskID;
+      const pid = Number.parseInt(String(rawPid), 10);
+      this.runningBackgroundTasks.set(taskID, {
+        turnID: turn.turnID,
+        providerItemID,
+        command: typeof item.command === "string" ? item.command : "",
+        processID: Number.isInteger(pid) && pid > 0 ? pid : null,
+      });
+    }
     return [
       shellTaskEvent({
         sessionID: this.cfg.sessionId,
@@ -322,6 +358,108 @@ export class CodexTankEventAdapter {
         },
       }),
     ];
+  }
+
+  // pendingBackgroundTasks exposes the tracked background shells for the
+  // runner's process-exit watcher. Codex's app-server emits NO notification
+  // when a background command finishes (verified empirically against the
+  // binary's RPC surface — backgroundTerminals has only /clean), so the OS
+  // is the authoritative completion source: the provider declares the PID
+  // in its own item payload and the shell runs in this container's PID
+  // namespace.
+  pendingBackgroundTasks(): Array<{ taskID: string; processID: number | null; command: string }> {
+    return Array.from(this.runningBackgroundTasks.entries()).map(([taskID, t]) => ({
+      taskID,
+      processID: t.processID,
+      command: t.command,
+    }));
+  }
+
+  // completeBackgroundShellByExit synthesizes the durable shell_task.exited
+  // for a background shell whose process was observed to have exited. No
+  // exit code or output is claimed (the provider never reported them); the
+  // wake-turn's model retrieves the output natively from its own unified
+  // session and reports it user-facing.
+  completeBackgroundShellByExit(
+    taskID: string,
+    opts: { status?: string; completionSource?: string } = {},
+  ): TankConversationEvent[] {
+    const tracked = this.runningBackgroundTasks.get(taskID);
+    if (!tracked) return [];
+    this.tombstoneBackgroundTask(taskID);
+    const status = opts.status ?? "completed";
+    return [
+      shellTaskEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: tracked.turnID,
+        source: "codex",
+        type: "shell_task.exited",
+        taskID,
+        status,
+        providerItemID: tracked.providerItemID,
+        payload: {
+          status,
+          provider_item_id: tracked.providerItemID,
+          command: tracked.command,
+          process_id: tracked.processID === null ? undefined : String(tracked.processID),
+          completion_source: opts.completionSource ?? "process_exit_observed",
+        },
+      }),
+    ];
+  }
+
+  // idleBackgroundShellEvents maps an item lifecycle notification that
+  // arrived with NO active turn (a background shell finishing after its
+  // turn ended) onto the originating turn remembered in
+  // runningBackgroundTasks — or, for a task the watcher already force-exited
+  // (premature exit / unobservable), in the exited tombstones: that late
+  // notification is the CORRECTIVE observation, and publishing it (with a
+  // fresh event id) is what re-arms the next wake generation. Unknown items
+  // return nothing — only shells this adapter announced get idle terminals.
+  idleBackgroundShellEvents(event: CodexEvent): TankConversationEvent[] {
+    const item = (event as { item?: Record<string, unknown> }).item;
+    if (!item || typeof item !== "object") return [];
+    const providerItemID = typeof item.id === "string" ? item.id : "";
+    if (!providerItemID) return [];
+    const taskID = codexBackgroundTaskID(item, providerItemID);
+    const tracked =
+      this.runningBackgroundTasks.get(taskID) ?? this.exitedBackgroundTasks.get(taskID);
+    if (!tracked) return [];
+    const originTurn: CodexAdapterTurn = { turnID: tracked.turnID, clientNonce: "", turnSeq: 0 };
+    return this.codexBackgroundShellEvents(originTurn, event, item, providerItemID);
+  }
+
+  // adoptBackgroundTask re-seeds a shell into runningBackgroundTasks from the
+  // durable ledger after a runner restart. Tracked tasks are process memory;
+  // without re-adoption a restart orphaned them — the completion was never
+  // observed, the wake never registered, the agent never re-invoked (the
+  // session-161 turn-2 stranding, unrepairable after the fact). The adopted
+  // shell rejoins the pid watcher and the idle-notification path exactly like
+  // a live-tracked one.
+  adoptBackgroundTask(
+    taskID: string,
+    tracked: { turnID: string; providerItemID: string; command: string; processID: number | null },
+  ): boolean {
+    if (!taskID || this.runningBackgroundTasks.has(taskID) || this.exitedBackgroundTasks.has(taskID)) {
+      return false;
+    }
+    this.runningBackgroundTasks.set(taskID, tracked);
+    return true;
+  }
+
+  // tombstoneBackgroundTask moves a tracked shell into the bounded
+  // exited-tombstone memory (see exitedBackgroundTasks).
+  private tombstoneBackgroundTask(taskID: string): void {
+    const tracked = this.runningBackgroundTasks.get(taskID);
+    this.runningBackgroundTasks.delete(taskID);
+    if (!tracked) return;
+    this.exitedBackgroundTasks.delete(taskID);
+    this.exitedBackgroundTasks.set(taskID, tracked);
+    while (this.exitedBackgroundTasks.size > CodexTankEventAdapter.maxExitedBackgroundTasks) {
+      const oldest = this.exitedBackgroundTasks.keys().next().value;
+      if (oldest === undefined) break;
+      this.exitedBackgroundTasks.delete(oldest);
+    }
   }
 }
 

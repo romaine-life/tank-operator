@@ -281,20 +281,42 @@ Contract impact:
   `payload.source=background-task` so the server projection can recognize the
   continuation without weakening the event envelope.
 - Background wake turn-activity shells are suppressed from the settled main
-  transcript, while their activity bodies fold into the originating turn in the
-  Turns view.
-- The background wake `turn.submitted.payload.prompt` projects as the same
-  prominent system-user message the user previously saw in the main transcript,
-  but only inside Turn activity. It is not replaced by a generic tool/meta row.
-- The turn that parked on a still-running background task is also suppressed
-  from the settled main transcript: its provisional assistant prose and
-  background-task row stay in Turn activity until the background-wake
-  continuation produces the user-final response.
+  transcript whenever the originating turn is derivable: the wake body then
+  folds — in durable order-key order — into the originating turn's shell, which
+  is that content's durable home. A wake turn whose lineage cannot be derived
+  keeps its own shell instead (fail-soft); projected content is never dropped
+  without a surviving container.
+- The background wake boundary projects as a `meta` chip
+  (`metaKind: background_task_wake`) inside Turn activity — "Background task
+  finished — agent re-invoked" (or "Agent continued on its own" for the
+  antigravity self-continuation relay) — never as a user-side message bubble.
+  The `turn.submitted.payload.prompt` text is AGENT-DIRECTED harness
+  instruction; rendering it raw in the user's chat voice was the "wake-notice
+  prose rendered raw" defect. The full prompt stays on the chip's
+  `payload.prompt` as audit/debug detail, and the chip keeps the
+  `wakePrompt`/`turnOnly` flags so it stays always-visible when a completed
+  turn's activity collapses.
+- The turn that parked on a still-running background task KEEPS its activity
+  shell in the settled projection — parked is a state on the shell
+  (`activity.continuation: true`), not grounds for suppression. The shell is
+  what carries the durable stamped turn number and what makes the compacted
+  body reachable; suppressing it annihilated parked turns' content from the
+  durable read model (the tank-operator-slot-1 session-161 bug museum, whose
+  real ledger now replays in
+  `transcript_projection_replay_test.go`). The parked turn's provisional
+  assistant prose and background-task row still stay inside Turn activity —
+  they do not settle as main-transcript prose.
 - A final assistant answer from the resumed turn can still be promoted into the
   main transcript, but only through the normal
   `turn.completed.payload.final_answer.timeline_ids` marker. The promoted row is
   attributed to the originating user-visible turn and retains the wake backend
   turn id for audit/debug detail.
+- Across a folded continuation chain, the chain's LAST completed terminal owns
+  the turn-detail final answer. A parked origin turn's promoted ack is
+  superseded by its continuation; rendering it as the page's final answer below
+  later wake content is the answer-replacement defect. When the last completed
+  link promoted nothing, the turn has no final answer — no fallback may
+  resurrect the superseded ack.
 
 Evidence:
 - Walkthrough: `docs/features/transcript/background-wake-turn-flow.html`

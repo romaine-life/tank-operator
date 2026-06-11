@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   claudeRateLimitEventIsTerminal,
   claudeRateLimitInfo,
+  claudeRestartClosureEvent,
   classifyProviderFailure,
   dispatch,
   logUnhandledSdkMessage,
@@ -252,7 +253,7 @@ function runnerConfig() {
 // without any network call.
 test("maybeRegisterBackgroundTaskWake registers an idle natural terminal exactly once", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    maybeRegisterBackgroundTaskWake: (e: unknown, observedEventID: string) => Promise<void>;
     activeTurn: unknown;
     firedBackgroundTaskWakes: Set<string>;
   };
@@ -265,17 +266,27 @@ test("maybeRegisterBackgroundTaskWake registers an idle natural terminal exactly
     uuid: "u-1",
   };
 
-  await runner.maybeRegisterBackgroundTaskWake(terminal);
-  assert.equal(runner.firedBackgroundTaskWakes.has("task-idle"), true);
+  await runner.maybeRegisterBackgroundTaskWake(terminal, "evt-1");
+  assert.equal(
+    runner.firedBackgroundTaskWakes.has("task-idle\u001fevt-1"),
+    true,
+  );
 
-  // A repeated terminal frame for the same task must not re-register.
-  await runner.maybeRegisterBackgroundTaskWake(terminal);
+  // A repeated terminal frame of the SAME observation must not re-register.
+  await runner.maybeRegisterBackgroundTaskWake(terminal, "evt-1");
   assert.equal(runner.firedBackgroundTaskWakes.size, 1);
+
+  // A NEW observation of the same task (the real completion after a
+  // premature fire) is a fresh registration — the backend decides whether it
+  // re-arms the next wake generation. Task-id-only dedupe was the once-only
+  // wake burn.
+  await runner.maybeRegisterBackgroundTaskWake(terminal, "evt-2");
+  assert.equal(runner.firedBackgroundTaskWakes.size, 2);
 });
 
 test("maybeRegisterBackgroundTaskWake skips when a turn is active", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    maybeRegisterBackgroundTaskWake: (e: unknown, observedEventID: string) => Promise<void>;
     activeTurn: unknown;
     firedBackgroundTaskWakes: Set<string>;
   };
@@ -284,19 +295,22 @@ test("maybeRegisterBackgroundTaskWake skips when a turn is active", async () => 
     clientNonce: "turn-active",
     terminalEmitted: false,
   };
-  await runner.maybeRegisterBackgroundTaskWake({
-    type: "system",
-    subtype: "task_notification",
-    task_id: "task-bound",
-    status: "completed",
-  });
+  await runner.maybeRegisterBackgroundTaskWake(
+    {
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-bound",
+      status: "completed",
+    },
+    "evt-bound",
+  );
   // The active turn receives the bound shell_task.exited in-turn; no wake needed.
-  assert.equal(runner.firedBackgroundTaskWakes.has("task-bound"), false);
+  assert.equal(runner.firedBackgroundTaskWakes.size, 0);
 });
 
 test("maybeRegisterBackgroundTaskWake registers when active turn is already terminal", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    maybeRegisterBackgroundTaskWake: (e: unknown, observedEventID: string) => Promise<void>;
     activeTurn: unknown;
     firedBackgroundTaskWakes: Set<string>;
   };
@@ -305,18 +319,24 @@ test("maybeRegisterBackgroundTaskWake registers when active turn is already term
     clientNonce: "turn-terminal",
     terminalEmitted: true,
   };
-  await runner.maybeRegisterBackgroundTaskWake({
-    type: "system",
-    subtype: "task_notification",
-    task_id: "task-terminal",
-    status: "completed",
-  });
-  assert.equal(runner.firedBackgroundTaskWakes.has("task-terminal"), true);
+  await runner.maybeRegisterBackgroundTaskWake(
+    {
+      type: "system",
+      subtype: "task_notification",
+      task_id: "task-terminal",
+      status: "completed",
+    },
+    "evt-terminal",
+  );
+  assert.equal(
+    runner.firedBackgroundTaskWakes.has("task-terminal\u001fevt-terminal"),
+    true,
+  );
 });
 
 test("maybeRegisterBackgroundTaskWake ignores user stops and lifecycle starts", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    maybeRegisterBackgroundTaskWake: (e: unknown) => Promise<void>;
+    maybeRegisterBackgroundTaskWake: (e: unknown, observedEventID: string) => Promise<void>;
     activeTurn: unknown;
     firedBackgroundTaskWakes: Set<string>;
   };
@@ -326,13 +346,13 @@ test("maybeRegisterBackgroundTaskWake ignores user stops and lifecycle starts", 
     subtype: "task_notification",
     task_id: "task-cancel",
     status: "cancelled",
-  });
+  }, "");
   await runner.maybeRegisterBackgroundTaskWake({
     type: "system",
     subtype: "task_started",
     task_id: "task-start",
     status: "running",
-  });
+  }, "");
   assert.equal(runner.firedBackgroundTaskWakes.size, 0);
 });
 
@@ -1817,4 +1837,29 @@ test("truncateEventIfOversized drops payload entirely when string truncation can
   assert.equal(result.event.type, "item.completed");
   assert.equal(result.event.event_id, "e1");
   assert.equal(result.event.turn_id, "t1");
+});
+
+test("claudeRestartClosureEvent closes an orphaned task honestly and deterministically", () => {
+  const cfg = runnerConfig();
+  const task = {
+    taskID: "task-orphan",
+    turnID: "turn-origin",
+    startedEventID: "turn-origin:shell_task.started:abc",
+  };
+  const first = claudeRestartClosureEvent(cfg, task);
+  assert.equal(first.type, "shell_task.exited");
+  assert.equal(first.turn_id, "turn-origin");
+  // Honest closure: the restart severed the SDK task registry, so completion
+  // was never observed and must not be claimed.
+  assert.equal((first.payload as { status?: string }).status, "unknown");
+  assert.equal(
+    (first.payload as { completion_source?: string }).completion_source,
+    "runner_restart",
+  );
+  // Deterministic observation identity: a second restart re-derives the SAME
+  // event id, so the wake registration dedupes instead of stacking
+  // generations.
+  const second = claudeRestartClosureEvent(cfg, task);
+  assert.equal(first.event_id, second.event_id);
+  assert.ok(String(first.event_id ?? "").length > 0);
 });

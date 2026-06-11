@@ -9,5 +9,36 @@ export function registerBackgroundTaskWake(
     summary?: string;
     lastToolName?: string;
     error?: string;
+    /**
+     * Durable shell_task.exited event id whose observation registered this
+     * wake — the backend's re-arm discriminator (same observation =
+     * duplicate; new observation of a fired task = next wake generation).
+     */
+    observedEventID?: string;
   },
 ): Promise<boolean>;
+
+export function cancelBackgroundTaskWake(
+  cfg: SessionBusConfig,
+  payload: {
+    taskID: string;
+    /** Audit reason recorded on the cancelled row (default delivered_mid_turn). */
+    reason?: string;
+  },
+): Promise<boolean>;
+
+export interface UnresolvedBackgroundTask {
+  taskID: string;
+  turnID: string;
+  status: string;
+  command: string;
+  providerItemID: string;
+  processID: string;
+  description: string;
+  summary: string;
+  startedEventID: string;
+}
+
+export function fetchUnresolvedBackgroundTasks(
+  cfg: SessionBusConfig,
+): Promise<UnresolvedBackgroundTask[]>;
