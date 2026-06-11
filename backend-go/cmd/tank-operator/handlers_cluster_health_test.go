@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -104,6 +105,57 @@ func TestHandleClusterHealthSummarizesNodesSessionsAndNATS(t *testing.T) {
 	}
 	if body.NATS.JetStream.StreamReplicas != 3 || body.NATS.JetStream.ExpectedStreamReplicas != 3 || body.NATS.JetStream.StreamCurrentReplicas != 3 {
 		t.Fatalf("nats stream replicas = %#v", body.NATS.JetStream)
+	}
+	if body.Upgrade.Window.DurationHours != 12 || body.Upgrade.Window.DayOfWeek != "Sunday" {
+		t.Fatalf("upgrade window = %#v", body.Upgrade.Window)
+	}
+}
+
+func TestCollectUpgradeHealthWarnsDuringWindowAndReportsRemainingTime(t *testing.T) {
+	t.Setenv("AKS_UPGRADE_WINDOW_DAY_OF_WEEK", "Sunday")
+	t.Setenv("AKS_UPGRADE_WINDOW_START_TIME", "06:00")
+	t.Setenv("AKS_UPGRADE_WINDOW_UTC_OFFSET", "+00:00")
+	t.Setenv("AKS_UPGRADE_WINDOW_DURATION_HOURS", "12")
+	app := &appServer{
+		k8s: fake.NewSimpleClientset(aksNode("node-a", "AKSUbuntu-2204gen2containerd-202406.12.0", "v1.31.8", false)),
+	}
+
+	got := app.collectUpgradeHealth(context.Background(), time.Date(2026, 6, 14, 7, 0, 0, 0, time.UTC))
+
+	if got.State != "window_open" || got.Status != "warning" {
+		t.Fatalf("upgrade state = %#v", got)
+	}
+	if !got.Window.Active || got.Window.SecondsRemaining != 11*60*60 {
+		t.Fatalf("window = %#v", got.Window)
+	}
+}
+
+func TestCollectUpgradeHealthDetectsMixedNodeVersionsAndCordons(t *testing.T) {
+	t.Setenv("AKS_UPGRADE_WINDOW_DAY_OF_WEEK", "Sunday")
+	t.Setenv("AKS_UPGRADE_WINDOW_START_TIME", "06:00")
+	t.Setenv("AKS_UPGRADE_WINDOW_UTC_OFFSET", "+00:00")
+	t.Setenv("AKS_UPGRADE_WINDOW_DURATION_HOURS", "12")
+	app := &appServer{
+		k8s: fake.NewSimpleClientset(
+			aksNode("node-a", "AKSUbuntu-2204gen2containerd-202406.12.0", "v1.31.8", true),
+			aksNode("node-b", "AKSUbuntu-2204gen2containerd-202406.20.0", "v1.31.9", false),
+		),
+	}
+
+	got := app.collectUpgradeHealth(context.Background(), time.Date(2026, 6, 15, 7, 0, 0, 0, time.UTC))
+
+	if got.State != "active" || got.Status != "warning" {
+		t.Fatalf("upgrade state = %#v", got)
+	}
+	joined := strings.Join(got.Signals, "\n")
+	for _, want := range []string{
+		"AKS node image versions are mixed",
+		"Kubernetes kubelet versions are mixed",
+		"1 node cordoned for scheduling",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("signals = %#v, missing %q", got.Signals, want)
+		}
 	}
 }
 
@@ -279,6 +331,16 @@ func healthyNode(name string) *corev1.Node {
 			{Type: corev1.NodeReady, Status: corev1.ConditionTrue},
 		}},
 	}
+}
+
+func aksNode(name, imageVersion, kubeletVersion string, unschedulable bool) *corev1.Node {
+	node := healthyNode(name)
+	node.Labels = map[string]string{
+		"kubernetes.azure.com/node-image-version": imageVersion,
+	}
+	node.Spec.Unschedulable = unschedulable
+	node.Status.NodeInfo.KubeletVersion = kubeletVersion
+	return node
 }
 
 func memoryPressureNode(name string) *corev1.Node {

@@ -142,6 +142,7 @@ import {
   RotateCcwIcon,
   SearchIcon,
   SettingsIcon,
+  ShieldCheckIcon,
   SquareTerminalIcon,
   SquareIcon,
   SquarePenIcon,
@@ -319,6 +320,7 @@ import {
   clusterHealthIssueText,
   clusterHealthNatsReachabilityLabel,
   clusterHealthStatusClass,
+  formatDurationShort,
   type ClusterHealthResponse,
   type ClusterHealthStatus,
 } from "./clusterHealth";
@@ -3129,15 +3131,7 @@ function SessionAvatarIcon({
   return <AgentAvatarIcon avatar={avatar} className={className} />;
 }
 
-// ClusterHealthWidget owns its own polling. The 30s setInterval +
-// state setters previously lived at App-root, which cascaded a
-// full-tree re-render every 30s — observed as `correlation=idle`
-// blocks in `tank_client_long_task_duration_seconds`. Co-locating the
-// polling here keeps the re-render scoped to this widget. `enabled`
-// gates the poll (only run when the user is signed in); flipping it
-// false tears down the state so a signed-out / styleguide render
-// stays at zero work.
-function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
+function useClusterHealth(enabled: boolean) {
   const [health, setHealth] = useState<ClusterHealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -3175,6 +3169,25 @@ function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
     void load();
   }, [load]);
 
+  return { health, error, loading, onRefresh };
+}
+
+function ClusterHealthStatusIcon({
+  status,
+  loading,
+}: {
+  status: ClusterHealthStatus;
+  loading: boolean;
+}) {
+  if (loading) return <Loader2Icon className="cluster-health-spin" />;
+  if (status === "healthy") return <CheckIcon />;
+  if (status === "critical") return <AlertCircleIcon />;
+  return <ActivityIcon />;
+}
+
+function ClusterHealthScreen({ enabled }: { enabled: boolean }) {
+  const { health, error, loading, onRefresh } = useClusterHealth(enabled);
+
   const status: ClusterHealthStatus = error
     ? "unknown"
     : (health?.status ?? "unknown");
@@ -3183,54 +3196,60 @@ function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
   const nodes = health?.nodes;
   const sessions = health?.sessions;
   const nats = health?.nats;
+  const upgrade = health?.upgrade;
+  const upgradeWindow = upgrade?.window;
   return (
     <section
-      className={`cluster-health ${clusterHealthStatusClass(status)}`}
+      className={`cluster-health-page ${clusterHealthStatusClass(status)}`}
       aria-label="Cluster health"
     >
-      <div className="cluster-health-panel">
+      <div className="cluster-health-page-head">
+        <div className="cluster-health-page-title">
+          <span className="cluster-health-status" aria-hidden="true">
+            <ClusterHealthStatusIcon status={status} loading={loading} />
+          </span>
+          <div>
+            <h2>{headline}</h2>
+            <p>{issue}</p>
+          </div>
+        </div>
         <button
           type="button"
-          className="cluster-health-main"
+          className="run-settings-icon-btn"
           onClick={onRefresh}
-          title={issue}
-          aria-label={`${headline}: ${issue}`}
+          disabled={loading}
+          aria-label="Refresh cluster health"
+          title="Refresh"
         >
-          <span className="cluster-health-status" aria-hidden="true">
-            {loading ? (
-              <Loader2Icon className="cluster-health-spin" />
-            ) : status === "healthy" ? (
-              <CheckIcon />
-            ) : status === "critical" ? (
-              <AlertCircleIcon />
-            ) : (
-              <ActivityIcon />
-            )}
-          </span>
-          <span className="cluster-health-body">
-            <span className="cluster-health-title">{headline}</span>
-            <span className="cluster-health-sub">{issue}</span>
-          </span>
-          <span className="cluster-health-refresh" aria-hidden="true">
-            <RotateCcwIcon />
-          </span>
+          <RotateCcwIcon
+            className={loading ? "cluster-health-spin" : undefined}
+            aria-hidden="true"
+          />
         </button>
+      </div>
+      {error && (
+        <div className="cluster-health-page-alert" role="status">
+          {error}
+        </div>
+      )}
+      <div className="cluster-health-page-grid">
         <dl
-          className="cluster-health-metrics"
-          aria-label="Cluster health metrics"
-          aria-hidden={health ? undefined : "true"}
+          className="cluster-health-page-card cluster-health-page-metrics"
+          aria-label="Cluster health summary"
         >
-          <div className="cluster-health-metric" title="Ready Kubernetes nodes">
+          <div className="cluster-health-page-metric">
             <dt>Nodes</dt>
             <dd>
               <MonitorIcon aria-hidden="true" />
               <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
             </dd>
+            <p>
+              {nodes
+                ? `${nodes.not_ready} not ready, ${nodes.unschedulable} unschedulable`
+                : "node health loading"}
+            </p>
           </div>
-          <div
-            className="cluster-health-metric"
-            title="Ready Tank session pods"
-          >
+          <div className="cluster-health-page-metric">
             <dt>Sessions</dt>
             <dd>
               <SquareTerminalIcon aria-hidden="true" />
@@ -3238,20 +3257,117 @@ function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
                 {sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}
               </span>
             </dd>
+            <p>
+              {sessions
+                ? `${sessions.pending} pending, ${sessions.failed} failed, ${sessions.restarts} restarts`
+                : "session health loading"}
+            </p>
           </div>
-          <div
-            className="cluster-health-metric"
-            title="Reachable NATS monitors"
-          >
+          <div className="cluster-health-page-metric">
             <dt>NATS</dt>
             <dd>
               <ActivityIcon aria-hidden="true" />
               <span>{clusterHealthNatsReachabilityLabel(nats)}</span>
             </dd>
+            <p>
+              {nats?.warnings?.[0] ??
+                (nats ? "live delivery monitors reachable" : "NATS health loading")}
+            </p>
           </div>
         </dl>
+        <section className="cluster-health-page-card cluster-upgrade-card">
+          <div className="cluster-health-page-card-head">
+            <ShieldCheckIcon aria-hidden="true" />
+            <div>
+              <h3>AKS upgrade window</h3>
+              <p>{upgrade?.summary ?? "checking upgrade status"}</p>
+            </div>
+          </div>
+          <dl className="cluster-upgrade-details">
+            <div>
+              <dt>Window</dt>
+              <dd>
+                {upgradeWindow?.configured
+                  ? `${upgradeWindow.day_of_week} ${upgradeWindow.start_time} ${upgradeWindow.utc_offset}`
+                  : "not configured"}
+              </dd>
+            </div>
+            <div>
+              <dt>Duration</dt>
+              <dd>
+                {upgradeWindow?.configured
+                  ? `${upgradeWindow.duration_hours}h`
+                  : "-"}
+              </dd>
+            </div>
+            <div>
+              <dt>Remaining</dt>
+              <dd>
+                {upgradeWindow?.active &&
+                typeof upgradeWindow.seconds_remaining === "number"
+                  ? formatDurationShort(upgradeWindow.seconds_remaining)
+                  : "outside window"}
+              </dd>
+            </div>
+          </dl>
+          <div className="cluster-upgrade-signal-list">
+            <span className="cluster-health-page-kicker">Upgrade signals</span>
+            {upgrade?.signals?.length ? (
+              <ul>
+                {upgrade.signals.map((signal) => (
+                  <li key={signal}>{signal}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>No active upgrade signals.</p>
+            )}
+          </div>
+        </section>
+        <section className="cluster-health-page-card cluster-upgrade-card">
+          <div className="cluster-health-page-card-head">
+            <ListChecksIcon aria-hidden="true" />
+            <div>
+              <h3>Node versions</h3>
+              <p>Mixed versions are treated as an active upgrade signal.</p>
+            </div>
+          </div>
+          <ClusterVersionRows
+            label="Image"
+            rows={upgrade?.node_image_versions ?? []}
+          />
+          <ClusterVersionRows
+            label="Kubelet"
+            rows={upgrade?.kubelet_versions ?? []}
+          />
+        </section>
       </div>
     </section>
+  );
+}
+
+function ClusterVersionRows({
+  label,
+  rows,
+}: {
+  label: string;
+  rows: Array<{ version: string; count: number }>;
+}) {
+  return (
+    <div className="cluster-version-block">
+      <span className="cluster-health-page-kicker">{label}</span>
+      {rows.length > 0 ? (
+        <dl>
+          {rows.map((row) => (
+            <div key={`${label}-${row.version}`}>
+              <dt>{row.version}</dt>
+              <dd>{row.count}</dd>
+            </div>
+          ))}
+        </dl>
+      ) : (
+        <p>Unavailable.</p>
+      )}
+    </div>
   );
 }
 
@@ -4299,6 +4415,7 @@ type RunTab =
   | "session-data"
   | "settings"
   | "help"
+  | "cluster"
   | "static";
 type BackgroundView = "shells" | "scheduled" | "control" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
@@ -7797,6 +7914,7 @@ function RunHeaderOverflowMenu({
   background,
   files,
   sessionData,
+  cluster,
   settingsActive,
   helpActive,
   onSettings,
@@ -7807,6 +7925,7 @@ function RunHeaderOverflowMenu({
   background: RunHeaderMenuTabState;
   files: RunHeaderMenuTabState;
   sessionData: RunHeaderMenuTabState;
+  cluster: RunHeaderMenuTabState;
   settingsActive: boolean;
   helpActive: boolean;
   onSettings: () => void;
@@ -7877,6 +7996,24 @@ function RunHeaderOverflowMenu({
             aria-hidden="true"
           />
           <span>Session data</span>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={`run-tab-more-item${cluster.active ? " is-active" : ""}`}
+          disabled={cluster.disabled}
+          onSelect={cluster.onOpen}
+          title={cluster.title}
+        >
+          <ShieldCheckIcon
+            className="run-tab-more-item-icon"
+            aria-hidden="true"
+          />
+          <span>Cluster</span>
+          {triggerAttention && (
+            <span
+              className={`run-tab-alert is-${triggerAttention}`}
+              aria-hidden="true"
+            />
+          )}
         </DropdownMenuItem>
         <DropdownMenuSeparator className="run-tab-more-separator" />
         <DropdownMenuItem
@@ -15078,6 +15215,13 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
+    if (appRoute?.tab === "cluster") {
+      setActiveTab("cluster");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     const route = readSessionRouteFromPath();
     if (route?.sessionId !== session.id) return;
     if (route.tab === "turns") {
@@ -17805,6 +17949,8 @@ function ChatPane({
       replaceAppRoute("settings", settingsTab, adminView);
     } else if (activeTab === "help") {
       replaceAppRoute("help");
+    } else if (activeTab === "cluster") {
+      replaceAppRoute("cluster");
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
     } else if (activeTab === "files") {
@@ -18704,6 +18850,12 @@ function ChatPane({
                   title: "Session data",
                   onOpen: () => toggleRunTab("session-data"),
                 }}
+                cluster={{
+                  active: activeTab === "cluster",
+                  disabled: false,
+                  title: "Cluster health",
+                  onOpen: () => toggleRunTab("cluster"),
+                }}
                 settingsActive={activeTab === "settings"}
                 helpActive={activeTab === "help"}
                 onSettings={() => toggleRunTab("settings")}
@@ -19188,6 +19340,8 @@ function ChatPane({
               />
             ) : activeTab === "help" ? (
               <RunHelpScreen />
+            ) : activeTab === "cluster" ? (
+              <ClusterHealthScreen enabled={!publicView} />
             ) : activeTab === "static" ? (
               staticPagePath ? (
                 <Suspense
@@ -20628,6 +20782,10 @@ function AuthenticatedApp() {
     }
     if (homeActiveTab === "help") {
       replaceAppRoute("help");
+      return;
+    }
+    if (homeActiveTab === "cluster") {
+      replaceAppRoute("cluster");
       return;
     }
     replaceHomeRoute("chat");
@@ -23049,8 +23207,6 @@ function AuthenticatedApp() {
         </ul>
       </div>
 
-      <ClusterHealthWidget enabled={Boolean(user)} />
-
       <div className="sidebar-footer" data-menu="profile">
         <button
           className="profile"
@@ -23222,6 +23378,15 @@ function AuthenticatedApp() {
                     title: "Session data is available once the session starts",
                     onOpen: () => undefined,
                   }}
+                  cluster={{
+                    active: homeActiveTab === "cluster",
+                    disabled: false,
+                    title: "Cluster health",
+                    onOpen: () =>
+                      setHomeActiveTab((current) =>
+                        current === "cluster" ? "chat" : "cluster",
+                      ),
+                  }}
                   settingsActive={homeActiveTab === "settings"}
                   helpActive={homeActiveTab === "help"}
                   onSettings={() =>
@@ -23294,6 +23459,8 @@ function AuthenticatedApp() {
                 />
               ) : homeActiveTab === "help" ? (
                 <RunHelpScreen />
+              ) : homeActiveTab === "cluster" ? (
+                <ClusterHealthScreen enabled={Boolean(user)} />
               ) : (
                 <>
                   <div className="home-inner">

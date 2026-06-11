@@ -4,6 +4,7 @@ import {
   clusterHealthHeadline,
   clusterHealthIssueText,
   clusterHealthNatsReachabilityLabel,
+  formatDurationShort,
   type ClusterHealthResponse,
 } from "./clusterHealth";
 
@@ -61,6 +62,22 @@ function baseHealth(): ClusterHealthResponse {
         stream_consumers: 4,
       },
     },
+    upgrade: {
+      status: "healthy",
+      state: "idle",
+      summary: "No AKS upgrade signals",
+      window: {
+        configured: true,
+        label: "AKS auto-upgrade",
+        day_of_week: "Sunday",
+        start_time: "06:00",
+        utc_offset: "+00:00",
+        duration_hours: 12,
+        active: false,
+      },
+      node_image_versions: [],
+      kubelet_versions: [],
+    },
   };
 }
 
@@ -93,6 +110,30 @@ test("cluster health issue text uses a non-label healthy summary", () => {
   expect(clusterHealthIssueText(baseHealth())).toBe("all checks passing");
 });
 
+test("cluster health issue text prioritizes active AKS upgrades", () => {
+  const health = baseHealth();
+  health.status = "warning";
+  health.upgrade = {
+    status: "warning",
+    state: "active",
+    summary: "AKS upgrade signals active",
+    signals: ["node image versions are mixed"],
+    window: {
+      configured: true,
+      label: "AKS auto-upgrade",
+      day_of_week: "Sunday",
+      start_time: "06:00",
+      utc_offset: "+00:00",
+      duration_hours: 12,
+      active: true,
+      seconds_remaining: 25_200,
+    },
+  };
+  expect(clusterHealthIssueText(health)).toBe(
+    "AKS upgrade active, 7h left in window",
+  );
+});
+
 test("cluster health NATS reachability formats monitor availability", () => {
   expect(clusterHealthNatsReachabilityLabel(baseHealth().nats)).toBe("3/3");
   const health = baseHealth();
@@ -101,4 +142,10 @@ test("cluster health NATS reachability formats monitor availability", () => {
   health.nats.expected_servers = 0;
   health.nats.configured_monitor_urls = 0;
   expect(clusterHealthNatsReachabilityLabel(health.nats)).toBe("2/?");
+});
+
+test("formatDurationShort rounds up to the next minute", () => {
+  expect(formatDurationShort(59)).toBe("1m");
+  expect(formatDurationShort(3600)).toBe("1h");
+  expect(formatDurationShort(3661)).toBe("1h 2m");
 });

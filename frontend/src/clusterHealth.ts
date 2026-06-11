@@ -7,6 +7,7 @@ export interface ClusterHealthResponse {
   nodes: ClusterNodeHealth;
   sessions: ClusterSessionPodHealth;
   nats: ClusterNATSHealth;
+  upgrade?: ClusterUpgradeHealth;
 }
 
 export interface ClusterNodeHealth {
@@ -67,6 +68,34 @@ export interface ClusterJetStreamHealth {
   stream_consumers: number;
 }
 
+export interface ClusterUpgradeHealth {
+  status: ClusterHealthStatus;
+  state: "idle" | "window_open" | "active" | "unknown";
+  summary: string;
+  signals?: string[];
+  window?: ClusterUpgradeWindow;
+  node_image_versions?: ClusterUpgradeVersionCount[];
+  kubelet_versions?: ClusterUpgradeVersionCount[];
+}
+
+export interface ClusterUpgradeWindow {
+  configured: boolean;
+  label: string;
+  day_of_week: string;
+  start_time: string;
+  utc_offset: string;
+  duration_hours: number;
+  active: boolean;
+  current_window_started_at?: string;
+  current_window_ends_at?: string;
+  seconds_remaining?: number;
+}
+
+export interface ClusterUpgradeVersionCount {
+  version: string;
+  count: number;
+}
+
 export function clusterHealthHeadline(health: ClusterHealthResponse | null): string {
   switch (health?.status) {
     case "healthy":
@@ -82,6 +111,16 @@ export function clusterHealthHeadline(health: ClusterHealthResponse | null): str
 
 export function clusterHealthIssueText(health: ClusterHealthResponse | null): string {
   if (!health) return "checking nodes and NATS";
+  if (health.upgrade?.state === "active") {
+    return health.upgrade.window?.active && typeof health.upgrade.window.seconds_remaining === "number"
+      ? `AKS upgrade active, ${formatDurationShort(health.upgrade.window.seconds_remaining)} left in window`
+      : "AKS upgrade signals active";
+  }
+  if (health.upgrade?.state === "window_open") {
+    return typeof health.upgrade.window?.seconds_remaining === "number"
+      ? `AKS upgrade window open, ${formatDurationShort(health.upgrade.window.seconds_remaining)} left`
+      : "AKS upgrade window open";
+  }
   if (health.nodes.status === "critical") return "nodes unavailable";
   if (health.nats.status === "critical") return health.nats.error || "NATS unreachable";
   if (health.sessions.status === "critical") return `${health.sessions.failed} failed session pod${health.sessions.failed === 1 ? "" : "s"}`;
@@ -102,6 +141,16 @@ export function clusterHealthIssueText(health: ClusterHealthResponse | null): st
   }
   if (health.status === "unknown") return "health partially unavailable";
   return "all checks passing";
+}
+
+export function formatDurationShort(totalSeconds: number): string {
+  if (!Number.isFinite(totalSeconds) || totalSeconds <= 0) return "0m";
+  const minutes = Math.ceil(totalSeconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const mins = minutes % 60;
+  if (hours <= 0) return `${mins}m`;
+  if (mins === 0) return `${hours}h`;
+  return `${hours}h ${mins}m`;
 }
 
 export function clusterHealthNatsReachabilityLabel(nats: ClusterNATSHealth | undefined): string {

@@ -24,6 +24,7 @@ type clusterHealthResponse struct {
 	Nodes       clusterNodeHealth       `json:"nodes"`
 	Sessions    clusterSessionPodHealth `json:"sessions"`
 	NATS        clusterNATSHealth       `json:"nats"`
+	Upgrade     clusterUpgradeHealth    `json:"upgrade"`
 }
 
 type clusterNodeHealth struct {
@@ -91,6 +92,37 @@ type clusterJetStream struct {
 	StreamConsumers         int64 `json:"stream_consumers"`
 }
 
+type clusterUpgradeHealth struct {
+	Status            string                       `json:"status"`
+	State             string                       `json:"state"`
+	Summary           string                       `json:"summary"`
+	Signals           []string                     `json:"signals,omitempty"`
+	Window            clusterUpgradeWindow         `json:"window"`
+	NodeImageVersions []clusterUpgradeVersionCount `json:"node_image_versions,omitempty"`
+	KubeletVersions   []clusterUpgradeVersionCount `json:"kubelet_versions,omitempty"`
+}
+
+type clusterUpgradeWindow struct {
+	Configured              bool    `json:"configured"`
+	Label                   string  `json:"label"`
+	DayOfWeek               string  `json:"day_of_week"`
+	StartTime               string  `json:"start_time"`
+	UTCOffset               string  `json:"utc_offset"`
+	DurationHours           float64 `json:"duration_hours"`
+	Active                  bool    `json:"active"`
+	CurrentWindowStartedAt  string  `json:"current_window_started_at,omitempty"`
+	CurrentWindowEndsAt     string  `json:"current_window_ends_at,omitempty"`
+	SecondsRemaining        int64   `json:"seconds_remaining,omitempty"`
+	NextWindowStartsAt      string  `json:"next_window_starts_at,omitempty"`
+	SecondsUntilNextWindow  int64   `json:"seconds_until_next_window,omitempty"`
+	WindowComputationFailed string  `json:"error,omitempty"`
+}
+
+type clusterUpgradeVersionCount struct {
+	Version string `json:"version"`
+	Count   int    `json:"count"`
+}
+
 func (s *appServer) handleClusterHealth(w http.ResponseWriter, r *http.Request) {
 	if _, ok := s.requireAuth(w, r); !ok {
 		return
@@ -105,14 +137,16 @@ func (s *appServer) clusterHealthSnapshot(ctx context.Context, now time.Time) cl
 	nodes := s.collectNodeHealth(ctx)
 	sessions := s.collectSessionPodHealth(ctx)
 	nats := collectNATSHealth(ctx, natsMonitorURLs(), envDefault("NATS_STREAM", "TANK_SESSION_BUS"), expectedNATSStreamReplicas())
+	upgrade := s.collectUpgradeHealth(ctx, now)
 
 	return clusterHealthResponse{
 		Description: clusterHealthDescription,
-		Status:      worstHealthStatus(nodes.Status, sessions.Status, nats.Status),
+		Status:      worstHealthStatus(nodes.Status, sessions.Status, nats.Status, upgrade.Status),
 		CheckedAt:   now.Format(time.RFC3339Nano),
 		Nodes:       nodes,
 		Sessions:    sessions,
 		NATS:        nats,
+		Upgrade:     upgrade,
 	}
 }
 
@@ -203,6 +237,79 @@ func (s *appServer) collectSessionPodHealth(ctx context.Context) clusterSessionP
 	return out
 }
 
+func (s *appServer) collectUpgradeHealth(ctx context.Context, now time.Time) clusterUpgradeHealth {
+	window := currentUpgradeWindow(now)
+	out := clusterUpgradeHealth{
+		Status:  "healthy",
+		State:   "idle",
+		Summary: "No AKS upgrade signals",
+		Window:  window,
+	}
+	if window.Active {
+		out.Status = "warning"
+		out.State = "window_open"
+		out.Summary = "AKS upgrade window is open"
+	}
+	if s.k8s == nil {
+		out.Status = maxHealthStatus(out.Status, "unknown")
+		out.State = "unknown"
+		out.Summary = "AKS upgrade status unavailable"
+		out.Signals = append(out.Signals, "kubernetes client not configured")
+		return out
+	}
+	nodes, err := s.k8s.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		out.Status = maxHealthStatus(out.Status, "unknown")
+		out.State = "unknown"
+		out.Summary = "AKS upgrade status unavailable"
+		out.Signals = append(out.Signals, err.Error())
+		return out
+	}
+
+	imageVersions := map[string]int{}
+	kubeletVersions := map[string]int{}
+	cordoned := 0
+	notReady := 0
+	for _, node := range nodes.Items {
+		if version := strings.TrimSpace(node.Labels["kubernetes.azure.com/node-image-version"]); version != "" {
+			imageVersions[version]++
+		}
+		if version := strings.TrimSpace(node.Status.NodeInfo.KubeletVersion); version != "" {
+			kubeletVersions[version]++
+		}
+		if node.Spec.Unschedulable {
+			cordoned++
+		}
+		if !nodeConditionTrue(node, corev1.NodeReady) {
+			notReady++
+		}
+	}
+	out.NodeImageVersions = versionCounts(imageVersions)
+	out.KubeletVersions = versionCounts(kubeletVersions)
+	if len(imageVersions) > 1 {
+		out.Signals = append(out.Signals, "AKS node image versions are mixed")
+	}
+	if len(kubeletVersions) > 1 {
+		out.Signals = append(out.Signals, "Kubernetes kubelet versions are mixed")
+	}
+	if cordoned > 0 {
+		out.Signals = append(out.Signals, fmt.Sprintf("%d node%s cordoned for scheduling", cordoned, plural(cordoned)))
+	}
+	if notReady > 0 {
+		out.Signals = append(out.Signals, fmt.Sprintf("%d node%s not ready", notReady, plural(notReady)))
+	}
+	if len(out.Signals) > 0 {
+		out.Status = "warning"
+		out.State = "active"
+		if window.Active && window.SecondsRemaining > 0 {
+			out.Summary = fmt.Sprintf("AKS upgrade signals active; %s left in the configured window", shortDuration(time.Duration(window.SecondsRemaining)*time.Second))
+		} else {
+			out.Summary = "AKS upgrade signals active outside the configured window"
+		}
+	}
+	return out
+}
+
 func collectNATSHealth(ctx context.Context, monitorURLs []string, streamName string, expectedStreamReplicas int) clusterNATSHealth {
 	out := clusterNATSHealth{
 		Status:                "healthy",
@@ -275,6 +382,69 @@ func collectNATSHealth(ctx context.Context, monitorURLs []string, streamName str
 	if out.Status != "healthy" && len(out.Warnings) == 0 && out.Error == "" {
 		out.Warnings = append(out.Warnings, "NATS health degraded")
 	}
+	return out
+}
+
+func currentUpgradeWindow(now time.Time) clusterUpgradeWindow {
+	label := envDefault("AKS_UPGRADE_WINDOW_LABEL", "AKS auto-upgrade")
+	dayName := envDefault("AKS_UPGRADE_WINDOW_DAY_OF_WEEK", "Sunday")
+	startTime := envDefault("AKS_UPGRADE_WINDOW_START_TIME", "06:00")
+	utcOffset := envDefault("AKS_UPGRADE_WINDOW_UTC_OFFSET", "+00:00")
+	durationHours := envFloatDefault("AKS_UPGRADE_WINDOW_DURATION_HOURS", 12)
+	out := clusterUpgradeWindow{
+		Configured:    envBoolDefault("AKS_UPGRADE_WINDOW_CONFIGURED", true),
+		Label:         label,
+		DayOfWeek:     dayName,
+		StartTime:     startTime,
+		UTCOffset:     utcOffset,
+		DurationHours: durationHours,
+	}
+	if !out.Configured {
+		return out
+	}
+	weekday, ok := parseWeekday(dayName)
+	if !ok {
+		out.WindowComputationFailed = fmt.Sprintf("invalid day of week %q", dayName)
+		return out
+	}
+	startHour, startMinute, ok := parseHHMM(startTime)
+	if !ok {
+		out.WindowComputationFailed = fmt.Sprintf("invalid start time %q", startTime)
+		return out
+	}
+	offset, ok := parseUTCOffset(utcOffset)
+	if !ok {
+		out.WindowComputationFailed = fmt.Sprintf("invalid UTC offset %q", utcOffset)
+		return out
+	}
+	if durationHours <= 0 {
+		out.WindowComputationFailed = fmt.Sprintf("invalid duration %.2f", durationHours)
+		return out
+	}
+	location := time.FixedZone(utcOffset, int(offset.Seconds()))
+	localNow := now.In(location)
+	daysSince := (int(localNow.Weekday()) - int(weekday) + 7) % 7
+	startLocal := time.Date(localNow.Year(), localNow.Month(), localNow.Day(), startHour, startMinute, 0, 0, location).AddDate(0, 0, -daysSince)
+	if startLocal.After(localNow) {
+		startLocal = startLocal.AddDate(0, 0, -7)
+	}
+	duration := time.Duration(durationHours * float64(time.Hour))
+	endLocal := startLocal.Add(duration)
+	if !localNow.Before(endLocal) {
+		startLocal = startLocal.AddDate(0, 0, 7)
+		endLocal = startLocal.Add(duration)
+	}
+	startUTC := startLocal.UTC()
+	endUTC := endLocal.UTC()
+	if !now.Before(startUTC) && now.Before(endUTC) {
+		out.Active = true
+		out.CurrentWindowStartedAt = startUTC.Format(time.RFC3339)
+		out.CurrentWindowEndsAt = endUTC.Format(time.RFC3339)
+		out.SecondsRemaining = int64(endUTC.Sub(now).Seconds())
+		return out
+	}
+	out.NextWindowStartsAt = startUTC.Format(time.RFC3339)
+	out.SecondsUntilNextWindow = int64(startUTC.Sub(now).Seconds())
 	return out
 }
 
@@ -475,6 +645,72 @@ func expectedNATSStreamReplicas() int {
 	return parsed
 }
 
+func envFloatDefault(key string, fallback float64) float64 {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback
+	}
+	parsed, err := strconv.ParseFloat(raw, 64)
+	if err != nil {
+		return fallback
+	}
+	return parsed
+}
+
+func parseWeekday(raw string) (time.Weekday, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "sunday":
+		return time.Sunday, true
+	case "monday":
+		return time.Monday, true
+	case "tuesday":
+		return time.Tuesday, true
+	case "wednesday":
+		return time.Wednesday, true
+	case "thursday":
+		return time.Thursday, true
+	case "friday":
+		return time.Friday, true
+	case "saturday":
+		return time.Saturday, true
+	default:
+		return time.Sunday, false
+	}
+}
+
+func parseHHMM(raw string) (int, int, bool) {
+	parts := strings.Split(strings.TrimSpace(raw), ":")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	hour, errHour := strconv.Atoi(parts[0])
+	minute, errMinute := strconv.Atoi(parts[1])
+	if errHour != nil || errMinute != nil || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+		return 0, 0, false
+	}
+	return hour, minute, true
+}
+
+func parseUTCOffset(raw string) (time.Duration, bool) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "Z" || trimmed == "UTC" || trimmed == "+00:00" || trimmed == "-00:00" {
+		return 0, true
+	}
+	if len(trimmed) != 6 || (trimmed[0] != '+' && trimmed[0] != '-') || trimmed[3] != ':' {
+		return 0, false
+	}
+	hour, errHour := strconv.Atoi(trimmed[1:3])
+	minute, errMinute := strconv.Atoi(trimmed[4:6])
+	if errHour != nil || errMinute != nil || hour > 23 || minute > 59 {
+		return 0, false
+	}
+	offset := time.Duration(hour)*time.Hour + time.Duration(minute)*time.Minute
+	if trimmed[0] == '-' {
+		offset = -offset
+	}
+	return offset, true
+}
+
 func nodeConditionTrue(node corev1.Node, conditionType corev1.NodeConditionType) bool {
 	for _, condition := range node.Status.Conditions {
 		if condition.Type == conditionType {
@@ -536,6 +772,44 @@ func maxInt(left, right int) int {
 		return right
 	}
 	return left
+}
+
+func versionCounts(counts map[string]int) []clusterUpgradeVersionCount {
+	out := make([]clusterUpgradeVersionCount, 0, len(counts))
+	for version, count := range counts {
+		out = append(out, clusterUpgradeVersionCount{Version: version, Count: count})
+	}
+	for i := 0; i < len(out); i++ {
+		for j := i + 1; j < len(out); j++ {
+			if out[j].Version < out[i].Version {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
+func plural(count int) string {
+	if count == 1 {
+		return ""
+	}
+	return "s"
+}
+
+func shortDuration(duration time.Duration) string {
+	if duration <= 0 {
+		return "0m"
+	}
+	minutes := int64((duration + time.Minute - 1) / time.Minute)
+	hours := minutes / 60
+	mins := minutes % 60
+	if hours == 0 {
+		return fmt.Sprintf("%dm", mins)
+	}
+	if mins == 0 {
+		return fmt.Sprintf("%dh", hours)
+	}
+	return fmt.Sprintf("%dh %dm", hours, mins)
 }
 
 func streamCurrentReplicaCount(replicas []natsJSZStreamReplica, localServerName string) int {

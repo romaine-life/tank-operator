@@ -8,7 +8,7 @@ export type SessionRouteTab =
   | "files"
   | "background";
 export type HomeRouteTab = "chat";
-export type AppRouteTab = "settings" | "help";
+export type AppRouteTab = "settings" | "help" | "cluster";
 
 export type SettingsRoute = {
   settingsTab: SettingsTab;
@@ -238,6 +238,7 @@ export function readAppRouteFromPathname(pathname: string): AppRoute | null {
     };
   }
   if (parts[0] === "help") return { tab: "help", ...defaultSettingsRoute };
+  if (parts[0] === "cluster") return { tab: "cluster", ...defaultSettingsRoute };
   return null;
 }
 
@@ -304,6 +305,8 @@ export function buildAppRouteUrl(
       ? settingsPath(settingsTab, adminView)
       : tab === "help"
         ? "/help"
+        : tab === "cluster"
+          ? "/cluster"
         : "/settings"
   }`;
   url.search = "";

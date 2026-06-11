@@ -189,6 +189,18 @@ spec:
               value: {{ .Values.sessionBus.authSecret | quote }}
             - name: NATS_MONITOR_URLS
               value: {{ join "," .Values.sessionBus.monitorURLs | quote }}
+            - name: AKS_UPGRADE_WINDOW_CONFIGURED
+              value: "true"
+            - name: AKS_UPGRADE_WINDOW_LABEL
+              value: {{ .Values.clusterUpgrade.window.label | quote }}
+            - name: AKS_UPGRADE_WINDOW_DAY_OF_WEEK
+              value: {{ .Values.clusterUpgrade.window.dayOfWeek | quote }}
+            - name: AKS_UPGRADE_WINDOW_START_TIME
+              value: {{ .Values.clusterUpgrade.window.startTime | quote }}
+            - name: AKS_UPGRADE_WINDOW_UTC_OFFSET
+              value: {{ .Values.clusterUpgrade.window.utcOffset | quote }}
+            - name: AKS_UPGRADE_WINDOW_DURATION_HOURS
+              value: {{ .Values.clusterUpgrade.window.durationHours | quote }}
             - name: NATS_TOKEN
               valueFrom:
                 secretKeyRef:
