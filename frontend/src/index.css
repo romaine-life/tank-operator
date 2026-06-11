@@ -4210,20 +4210,20 @@ button:disabled {
 }
 
 .run-turn-view-combined-select {
-  width: 17rem;
-  min-width: 17rem;
-  max-width: min(17rem, calc(100vw - 2rem));
+  width: 13.25rem;
+  min-width: 13.25rem;
+  max-width: min(13.25rem, calc(100vw - 2rem));
 }
 
 .run-turn-view-combined-select-menu {
-  width: 17rem;
-  min-width: 17rem;
-  max-width: min(17rem, calc(100vw - 2rem));
+  width: 13.25rem;
+  min-width: 13.25rem;
+  max-width: min(13.25rem, calc(100vw - 2rem));
 }
 
 .run-turn-view-combined-option {
   display: grid;
-  grid-template-columns: minmax(4.15rem, max-content) minmax(0, 1fr);
+  grid-template-columns: minmax(5.25ch, max-content) minmax(0, 1fr);
   align-items: center;
   column-gap: var(--space-3);
   min-width: 0;
