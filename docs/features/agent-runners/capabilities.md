@@ -160,6 +160,23 @@ Contract impact:
   `OmitUserMessage`) reusing the `turn_bgtask-<task>` client nonce so the relay
   turn folds into the originating user-facing turn. `handleSubmitTurn` skips the
   PTY write for `agent-continuation` and replays agy's already-emitted steps.
+- **The fold edge is durable (tank-operator#1035).** Reusing the
+  `turn_bgtask-<task>` id shape is necessary but not sufficient to fold: the
+  transcript projection derives the relay → originating-turn parent edge from
+  durable `shell_task.*` lifecycle events, and only recognized
+  `turn.submitted` sources mark continuation turns. The runner therefore
+  publishes `shell_task.started` at agy's RUNNING marker (carrying the
+  originating turn id; `task_id` is the stableIDPart form so it round-trips
+  through the relay turn id) and `shell_task.exited` at the `sender=`
+  completion, and `isBackgroundTaskWakeTurnEvent` recognizes
+  `source=agent-continuation` alongside `background-task`. The same events
+  make the pending task visible at rest in the Background-activity screen
+  (it renders the `shell_task.*` ledger set). Session 790's two symptoms —
+  "nothing in background tasks" and a standalone turn for the woke-up
+  report — were both this missing edge. A signal whose originating turn is
+  unknowable publishes nothing and counts
+  `tank_antigravity_runner_task_lifecycle_total{event="orphaned_start"|"orphaned_completion"}`
+  — the fold-regression signal.
 - **User-facing-turn projection (the #906 spine).** The runner stamps
   `turn.completed.background_work_pending` from the pending-set; the activity fold
   folds a would-be-`ready` terminal to the non-summoning `scheduled` status when
@@ -167,6 +184,17 @@ Contract impact:
   Tank wake tables (Claude/Codex) OR `background_work_pending` (antigravity) — so a
   parked agy turn reads as `scheduled` with no Tank wake row. `working → scheduled`
   does not ring; `working → ready` (nothing pending) rings.
+- **Silence is the turn boundary (turn-settle window).** agy writes no
+  end-of-burst marker anywhere (verified empirically across transcripts,
+  messages/, task logs, cli.log — tank-operator#1035); its planner loop runs
+  multiple rounds per burst. The runner publishes `turn.completed` only after
+  a settled prose response plus `ANTIGRAVITY_TURN_SETTLE_MS` (default 2s) of
+  transcript silence, so the answer-first sequence stays inside one turn with
+  a correct `background_work_pending` stamp — no false `ready`/ring, no
+  untracked self-wake relay. A window miss degrades to the relay+fold
+  machinery, never to incorrectness.
+  `tank_antigravity_runner_turn_settle_total{outcome}` counts quiet vs
+  extended boundaries.
 - **The pending-set is the load-bearing signal.** agy routes all background work
   through one uniform task framework: a `MODEL` `status=RUNNING`
   "running as a background task with task id: X" marker adds X; a SYSTEM_MESSAGE
@@ -200,8 +228,20 @@ Evidence:
 - Guards: `scripts/check-removed-chat-runtime.mjs` (runner self-continuation
   contract check — no `registerScheduledWakeup` / wake-endpoint literals in the
   runner main.go, `/agent-continuation` present); the AST test above.
+- Turn settle: `backend-go/cmd/antigravity-runner/main_test.go`
+  (`TestTurnSettleKeepsAnswerFirstBurstInOneTurn` replays slot-1 round 1's
+  exact answer-first burst into one terminal;
+  `TestTurnSettleQuietCompletesAfterWindow`,
+  `TestTurnSettleZeroCompletesImmediately`).
+- Fold edge: `backend-go/cmd/antigravity-runner/main_test.go`
+  (`TestTaskLifecycleEventsPublishDurableFoldEdge`,
+  `TestTaskLifecycleStartWhileIdlePublishesNothing`);
+  `backend-go/cmd/tank-operator/transcript_projection_test.go`
+  (`TestProjectTranscriptEventsFoldsAgentContinuationTurnIntoOriginatingTurn`
+  — session 790's exact event shape folds and never surfaces standalone).
 - Metrics: `tank_agent_continuation_total{provider,result}`;
-  `tank_background_task_wake_register_total{result="rejected_antigravity"}`.
+  `tank_background_task_wake_register_total{result="rejected_antigravity"}`;
+  `tank_antigravity_runner_task_lifecycle_total{event}`.
 - Contract: `backend-go/cmd/antigravity-runner/ARCHITECTURE.md`
   ("The long-running-agent harness contract"); the `scheduled` status spine in
   `docs/scheduled-turn-continuity.md`.

@@ -800,3 +800,245 @@ func TestTurnCompletedStampsBackgroundWorkPending(t *testing.T) {
 		})
 	}
 }
+
+// --- Durable task-lifecycle tests (tank-operator#1035) ----------------------
+//
+// agy's RUNNING / sender= task markers must publish durable shell_task.*
+// events carrying the originating turn id. That single event family feeds the
+// transcript projection's fold parent-map (turn_bgtask-<task> relay turns fold
+// into the originating turn), the continuation-turn handling, and the
+// Background-activity tab. Keeping the signal in runner memory only was the
+// root cause of session 790's standalone "I woke up" turn.
+
+func TestTaskLifecycleEventsPublishDurableFoldEdge(t *testing.T) {
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	state := &runnerState{builder: builder, publish: log.publisher}
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	state.attachTurn(run)
+	cfg := runnerConfig{sessionID: "17"}
+
+	startLine := `{"step_index":2,"source":"MODEL","type":"RUN_COMMAND","status":"RUNNING","content":"Tool is running as a background task with task id: T-9"}`
+	var startStep AgyStep
+	if err := json.Unmarshal([]byte(startLine), &startStep); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.handleStep("/tmp/t.jsonl", startLine, startStep, cfg); err != nil {
+		t.Fatal(err)
+	}
+	// The same marker re-read from agy's cumulative jsonl must not
+	// double-publish the lifecycle edge.
+	if err := state.handleStep("/tmp/t.jsonl", startLine, startStep, cfg); err != nil {
+		t.Fatal(err)
+	}
+	state.detachTurn(run)
+
+	doneLine := `{"step_index":3,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","content":"background task update sender=T-9 state=done"}`
+	var doneStep AgyStep
+	if err := json.Unmarshal([]byte(doneLine), &doneStep); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.handleStep("/tmp/t.jsonl", doneLine, doneStep, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	var taskEvents []map[string]any
+	for _, event := range log.snapshot() {
+		typ, _ := event["type"].(string)
+		if strings.HasPrefix(typ, "shell_task.") {
+			taskEvents = append(taskEvents, event)
+		}
+	}
+	if len(taskEvents) != 2 {
+		t.Fatalf("shell_task events = %d, want 2 (started + exited): %#v", len(taskEvents), taskEvents)
+	}
+	wantTask := stableIDPart("T-9")
+	started, exited := taskEvents[0], taskEvents[1]
+	if started["type"] != string(conversation.EventShellTaskStarted) {
+		t.Fatalf("first task event type = %v", started["type"])
+	}
+	if exited["type"] != string(conversation.EventShellTaskExited) {
+		t.Fatalf("second task event type = %v", exited["type"])
+	}
+	for _, event := range taskEvents {
+		if event["turn_id"] != "turn-1" {
+			t.Fatalf("task event turn_id = %v, want originating turn-1 (the fold edge): %#v", event["turn_id"], event)
+		}
+		if event["task_id"] != wantTask {
+			t.Fatalf("task event task_id = %v, want %q (must match relay turn id suffix)", event["task_id"], wantTask)
+		}
+	}
+	if started["timeline_id"] != exited["timeline_id"] {
+		t.Fatalf("timeline ids differ: %v vs %v (must upsert one background row)", started["timeline_id"], exited["timeline_id"])
+	}
+	if status := started["payload"].(map[string]any)["status"]; status != "running" {
+		t.Fatalf("started status = %v", status)
+	}
+	if status := exited["payload"].(map[string]any)["status"]; status != "completed" {
+		t.Fatalf("exited status = %v", status)
+	}
+}
+
+func TestTaskLifecycleStartWhileIdleDefersToAttachingTurn(t *testing.T) {
+	// agy's conversational planner DONE can close the user turn seconds
+	// before the tool call that starts the task, so the RUNNING marker
+	// lands in the idle gap (observed live: slot-1 session 159). The edge
+	// must not be orphaned: it defers and publishes when the next turn
+	// attaches — the same turn that replays the buffered steps — and the
+	// projection's wake-of-a-wake chain walker collapses the rest.
+	t.Setenv("TANK_OPERATOR_INTERNAL_URL", "http://127.0.0.1:1")
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	state := &runnerState{builder: builder, publish: log.publisher}
+	cfg := runnerConfig{sessionID: "17"}
+
+	// turn-1 is the answer-first asking turn: it attaches, completes
+	// ("I'll set a timer"), and detaches BEFORE the tool call runs.
+	asking := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	state.attachTurn(asking)
+	state.detachTurn(asking)
+
+	startLine := `{"step_index":2,"source":"MODEL","type":"RUN_COMMAND","status":"RUNNING","content":"Tool is running as a background task with task id: T-9"}`
+	var startStep AgyStep
+	if err := json.Unmarshal([]byte(startLine), &startStep); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.handleStep("/tmp/t.jsonl", startLine, startStep, cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range log.snapshot() {
+		typ, _ := event["type"].(string)
+		if strings.HasPrefix(typ, "shell_task.") {
+			t.Fatalf("idle task start must defer, not publish immediately: %#v", event)
+		}
+	}
+	if !state.backgroundWorkPending() {
+		t.Fatal("pending-set must still track the task for background_work_pending")
+	}
+
+	relay := newTurnRun(builder, log.publisher, "turn_bgtask-T-9", "nonce-relay")
+	state.attachTurn(relay)
+	defer state.detachTurn(relay)
+
+	var started map[string]any
+	for _, event := range log.snapshot() {
+		if event["type"] == string(conversation.EventShellTaskStarted) {
+			started = event
+		}
+	}
+	if started == nil {
+		t.Fatal("attachTurn must flush the deferred shell_task.started edge")
+	}
+	// Causal-adjacency attribution: the idle-started task belongs to the
+	// turn that had just closed (turn-1, the answer-first asking turn),
+	// NOT the relay turn that happens to attach next — so the fire relay
+	// folds directly to the user-visible turn.
+	if started["turn_id"] != "turn-1" {
+		t.Fatalf("deferred edge turn_id = %v, want last completed turn-1", started["turn_id"])
+	}
+	if started["task_id"] != stableIDPart("T-9") {
+		t.Fatalf("deferred edge task_id = %v", started["task_id"])
+	}
+}
+
+// --- Turn-settle tests (silence is the boundary) -----------------------------
+
+func settleStep(t *testing.T, line string) AgyStep {
+	t.Helper()
+	var step AgyStep
+	if err := json.Unmarshal([]byte(line), &step); err != nil {
+		t.Fatal(err)
+	}
+	return step
+}
+
+func waitComplete(t *testing.T, run *turnRun, within time.Duration) bool {
+	t.Helper()
+	select {
+	case <-run.turnComplete:
+		return true
+	case <-time.After(within):
+		return false
+	}
+}
+
+// TestTurnSettleKeepsAnswerFirstBurstInOneTurn replays slot-1 round 1's exact
+// burst shape (tank-operator#1035): ack prose closes nothing, the schedule
+// tool call and RUNNING marker land inside the still-open turn, and the
+// settled prose plus silence produces the one terminal. Pre-settle, the ack
+// prose terminated the turn instantly and the work signal landed in the idle
+// gap — the answer-first false-ready/false-ring pathology.
+func TestTurnSettleKeepsAnswerFirstBurstInOneTurn(t *testing.T) {
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	run.settleDur = 60 * time.Millisecond
+
+	ack := `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"I will set a 2-minute timer now."}`
+	if err := run.observeStep("/tmp/t.jsonl", ack, settleStep(t, ack)); err != nil {
+		t.Fatal(err)
+	}
+	if waitComplete(t, run, 20*time.Millisecond) {
+		t.Fatal("ack prose must not terminate the turn before the settle window elapses")
+	}
+
+	toolCall := `{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"schedule","args":{"DurationSeconds":"120"}}]}`
+	if err := run.observeStep("/tmp/t.jsonl", toolCall, settleStep(t, toolCall)); err != nil {
+		t.Fatal(err)
+	}
+	marker := `{"step_index":4,"source":"MODEL","type":"GENERIC","status":"RUNNING","content":"Tool is running as a background task with task id: T-1"}`
+	if err := run.observeStep("/tmp/t.jsonl", marker, settleStep(t, marker)); err != nil {
+		t.Fatal(err)
+	}
+	if waitComplete(t, run, 90*time.Millisecond) {
+		t.Fatal("tool activity must keep the turn open — no settled prose has re-armed the window")
+	}
+
+	settled := `{"step_index":5,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"I have set a 2-minute timer and will now wait."}`
+	if err := run.observeStep("/tmp/t.jsonl", settled, settleStep(t, settled)); err != nil {
+		t.Fatal(err)
+	}
+	if !waitComplete(t, run, 300*time.Millisecond) {
+		t.Fatal("settled prose plus silence must terminate the turn")
+	}
+	if err := run.finishCompleted(); err != nil {
+		t.Fatal(err)
+	}
+	events := log.snapshot()
+	last := events[len(events)-1]
+	if last["type"] != string(conversation.EventTurnCompleted) {
+		t.Fatalf("terminal type = %v, want turn.completed", last["type"])
+	}
+}
+
+func TestTurnSettleQuietCompletesAfterWindow(t *testing.T) {
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	run.settleDur = 40 * time.Millisecond
+
+	prose := `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"All done."}`
+	if err := run.observeStep("/tmp/t.jsonl", prose, settleStep(t, prose)); err != nil {
+		t.Fatal(err)
+	}
+	if waitComplete(t, run, 10*time.Millisecond) {
+		t.Fatal("turn must not complete before the silence window")
+	}
+	if !waitComplete(t, run, 300*time.Millisecond) {
+		t.Fatal("turn must complete after the silence window")
+	}
+}
+
+func TestTurnSettleZeroCompletesImmediately(t *testing.T) {
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+
+	prose := `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"All done."}`
+	if err := run.observeStep("/tmp/t.jsonl", prose, settleStep(t, prose)); err != nil {
+		t.Fatal(err)
+	}
+	if !waitComplete(t, run, 50*time.Millisecond) {
+		t.Fatal("settleDur=0 must preserve immediate completion on settled prose")
+	}
+}

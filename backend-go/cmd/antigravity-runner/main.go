@@ -75,6 +75,14 @@ var (
 		Name: "tank_antigravity_runner_provider_fatal_report_total",
 		Help: "Provider-fatal reports posted to the orchestrator, by result (ok, error).",
 	}, []string{"result"})
+	turnSettleTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_antigravity_runner_turn_settle_total",
+		Help: "Turn-settle window resolutions: quiet (silence confirmed the boundary), extended (a further step canceled an armed window — the answer-first frequency signal).",
+	}, []string{"outcome"})
+	taskLifecycleTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_antigravity_runner_task_lifecycle_total",
+		Help: "Durable shell_task lifecycle publishes for agy-tracked background tasks (started, completed, orphaned_start, orphaned_completion, publish_error). orphaned_* means the origin-turn edge was unknowable — the fold-regression signal for tank-operator#1035.",
+	}, []string{"event"})
 )
 
 func serveMetrics(port string) {
@@ -127,6 +135,20 @@ type runnerConfig struct {
 	// is intentionally no auto-retry: re-writing the prompt to the PTY
 	// risks double-execution if agy did receive the first write.
 	submitAckTimeout time.Duration
+	// turnSettle is the transcript-silence window that defines agy's turn
+	// boundary. agy's planner loop runs multiple rounds per burst
+	// (ack-prose, tool calls, settled prose) and writes NO end-of-burst
+	// marker anywhere — transcript, messages/, task logs, cli.log were all
+	// read empirically (slot-1 sessions 159/160, tank-operator#1035):
+	// silence IS the provider's boundary semantics. The terminal therefore
+	// publishes only after a settled prose response has been followed by
+	// this much transcript silence, which keeps the answer-first sequence
+	// (ack closes early, tool call lands seconds later) inside ONE turn
+	// with a correct background_work_pending stamp. Observed intra-burst
+	// gaps are ~600ms; the default gives 3x margin. 0 disables (terminal
+	// on prose immediately). The prose itself streams to the user
+	// immediately — only the status transition waits.
+	turnSettle time.Duration
 	// interruptGrace bounds how long a Stop may wait for agy to settle
 	// (DONE planner response or process exit) before the runner forces
 	// the durable turn.interrupted terminal anyway, mirroring the
@@ -170,6 +192,45 @@ type runnerState struct {
 	// Consumed (cleared) when a relay is dispatched; an empty value at a
 	// self-continuation is the forbidden untracked-self-wake signature.
 	lastCompletedTask string
+
+	// taskTurns remembers each tracked task's originating turn id
+	// (stableIDPart task id → turn id) so the completion event — which can
+	// arrive while idle — still lands on the originating turn.
+	// taskEventsPublished dedupes lifecycle publishes across transcript
+	// re-reads (agy's cumulative jsonl can repeat markers).
+	//
+	// Publishing these as durable shell_task.* events is what makes the
+	// agent-continuation relay FOLD: the transcript projection's
+	// backgroundTaskWakeParentTurns derives the turn_bgtask-<task> →
+	// originating-turn edge from durable task lifecycle events, and the
+	// Background-activity tab renders from the same rows. Keeping the task
+	// signal in runner memory only (the pre-#1035 state) starved both.
+	taskTurns           map[string]string
+	taskEventsPublished map[string]struct{}
+	// pendingTaskStarts buffers RUNNING markers observed while idle. agy's
+	// conversational planner DONE can close the user turn seconds before
+	// the tool call that actually starts the task, so the start marker
+	// lands in the idle gap (observed live on slot-1, session 159). The
+	// edge publishes when the next turn attaches — the same turn that
+	// replays the buffered steps — and the projection's wake-of-a-wake
+	// chain walker collapses relay-origin tasks to the originating
+	// user-visible turn.
+	pendingTaskStarts []pendingTaskStart
+	// lastCompletedTurnID is the causal-adjacency attribution for idle
+	// task starts (the answer-first sequence): agy never acts idle
+	// spontaneously — idle activity is downstream of the last exchange —
+	// so a task started in the idle gap belongs to the turn that just
+	// closed. The irreducible ambiguity is a new user turn racing the
+	// same seconds-wide gap; that fails soft (content attributes one
+	// turn early, never lost).
+	lastCompletedTurnID string
+	builder             eventBuilder
+	publish             func(map[string]any) error
+}
+
+type pendingTaskStart struct {
+	rawID   string
+	content string
 }
 
 type parsedStep struct {
@@ -230,6 +291,20 @@ func (s *runnerState) attachTurn(run *turnRun) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.currentRun = run
+	// Flush idle-buffered task starts FIRST so the durable started edge
+	// precedes the replayed step items. Causal-adjacency attribution: an
+	// idle-started task belongs to the turn that had just closed when it
+	// started (the answer-first sequence — agy says "I'll set a timer",
+	// the turn completes, THEN the tool call runs). Fall back to the
+	// attaching turn when no prior turn exists.
+	for _, pts := range s.pendingTaskStarts {
+		origin := s.lastCompletedTurnID
+		if origin == "" {
+			origin = run.turnID
+		}
+		s.publishTaskLifecycleWithOriginLocked(origin, pts.rawID, string(conversation.EventShellTaskStarted), "running", pts.content)
+	}
+	s.pendingTaskStarts = nil
 	for _, ps := range s.pendingSteps {
 		_ = run.observeStep(ps.path, ps.line, ps.step)
 	}
@@ -242,6 +317,7 @@ func (s *runnerState) detachTurn(run *turnRun) {
 	defer s.mu.Unlock()
 	if s.currentRun == run {
 		s.currentRun = nil
+		s.lastCompletedTurnID = run.turnID
 	}
 }
 
@@ -271,6 +347,11 @@ func (s *runnerState) noteTaskSignalLocked(step AgyStep) {
 					s.pendingTasks = map[string]struct{}{}
 				}
 				s.pendingTasks[id] = struct{}{}
+				if s.currentRun == nil {
+					s.pendingTaskStarts = append(s.pendingTaskStarts, pendingTaskStart{rawID: id, content: contentText(step.Content)})
+				} else {
+					s.publishTaskLifecycleLocked(id, string(conversation.EventShellTaskStarted), "running", contentText(step.Content))
+				}
 			}
 		}
 		return
@@ -280,8 +361,86 @@ func (s *runnerState) noteTaskSignalLocked(step AgyStep) {
 			if id := trimTaskID(m[1]); id != "" {
 				delete(s.pendingTasks, id)
 				s.lastCompletedTask = id
+				s.publishTaskLifecycleLocked(id, string(conversation.EventShellTaskExited), "completed", contentText(step.Content))
 			}
 		}
+	}
+}
+
+// publishTaskLifecycleLocked emits the durable shell_task.* edge for an
+// agy-tracked background task. Called under s.mu (matching observeStep's
+// existing under-lock publish pattern). rawID is agy's task id as written;
+// the published task_id is its stableIDPart form — the exact value
+// registerAgentContinuation sends, so the relay's turn_bgtask-<task> id
+// round-trips back to this event in the projection's parent map.
+//
+// The originating turn is the attached turn at start-signal time; the
+// completion signal can arrive while idle, so the start records the edge in
+// taskTurns for the completion to reuse. A signal with no resolvable origin
+// publishes nothing (there is no turn to fold into) and is counted as the
+// fold-regression signal instead.
+func (s *runnerState) publishTaskLifecycleLocked(rawID, eventType, status, content string) {
+	s.publishTaskLifecycleWithOriginLocked("", rawID, eventType, status, content)
+}
+
+func (s *runnerState) publishTaskLifecycleWithOriginLocked(originHint, rawID, eventType, status, content string) {
+	if s.publish == nil {
+		return
+	}
+	stable := stableIDPart(rawID)
+	if stable == "" {
+		return
+	}
+	originTurn := originHint
+	if originTurn == "" && s.currentRun != nil {
+		originTurn = s.currentRun.turnID
+	}
+	if eventType == string(conversation.EventShellTaskStarted) {
+		if originTurn == "" {
+			taskLifecycleTotal.WithLabelValues("orphaned_start").Inc()
+			slog.Warn("agy task start signal with no attached turn; fold edge unknowable", "task_id", stable)
+			return
+		}
+		if s.taskTurns == nil {
+			s.taskTurns = map[string]string{}
+		}
+		s.taskTurns[stable] = originTurn
+	} else {
+		if known := s.taskTurns[stable]; known != "" {
+			originTurn = known
+		}
+		if originTurn == "" {
+			taskLifecycleTotal.WithLabelValues("orphaned_completion").Inc()
+			slog.Warn("agy task completion signal for untracked task; fold edge unknowable", "task_id", stable)
+			return
+		}
+	}
+	dedupe := stable + ":" + eventType
+	if _, done := s.taskEventsPublished[dedupe]; done {
+		return
+	}
+	if s.taskEventsPublished == nil {
+		s.taskEventsPublished = map[string]struct{}{}
+	}
+	s.taskEventsPublished[dedupe] = struct{}{}
+
+	payload := map[string]any{
+		"kind":           "shell_task",
+		"task_id":        stable,
+		"status":         status,
+		"summary":        clipText(content, 200),
+		"last_tool_name": "agy",
+	}
+	event := s.builder.shellTaskEvent(originTurn, stable, eventType, payload)
+	if err := s.publish(event); err != nil {
+		taskLifecycleTotal.WithLabelValues("publish_error").Inc()
+		slog.Error("failed to publish agy task lifecycle event", "task_id", stable, "type", eventType, "error", err)
+		return
+	}
+	if eventType == string(conversation.EventShellTaskStarted) {
+		taskLifecycleTotal.WithLabelValues("started").Inc()
+	} else {
+		taskLifecycleTotal.WithLabelValues("completed").Inc()
 	}
 }
 
@@ -325,6 +484,11 @@ type turnRun struct {
 	graceFired    chan struct{}
 	graceArmOnce  sync.Once
 	graceFireOnce sync.Once
+	// settleDur is the transcript-silence window that turns a settled
+	// prose response into the turn terminal (see runnerConfig.turnSettle).
+	// 0 means complete immediately on settled prose.
+	settleDur   time.Duration
+	settleTimer *time.Timer
 
 	mu              sync.Mutex
 	started         bool
@@ -527,7 +691,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	state := &runnerState{}
+	state := &runnerState{builder: builder, publish: publisher}
 
 	var wg sync.WaitGroup
 	wg.Add(3)
@@ -737,6 +901,7 @@ func loadConfig() (runnerConfig, error) {
 		agyHome:           firstNonEmpty(firstEnv("ANTIGRAVITY_HOME", "AGY_HOME"), filepath.Join(home, ".gemini", "antigravity-cli")),
 		submitAckTimeout:  envDurationMS("ANTIGRAVITY_SUBMIT_ACK_TIMEOUT_MS", 60*time.Second),
 		interruptGrace:    envDurationMS("ANTIGRAVITY_INTERRUPT_GRACE_MS", 10*time.Second),
+		turnSettle:        envDurationMS("ANTIGRAVITY_TURN_SETTLE_MS", 2*time.Second),
 		metricsPort:       firstNonEmpty(strings.TrimSpace(os.Getenv("TANK_RUNNER_METRICS_PORT")), "9097"),
 	}, nil
 }
@@ -888,6 +1053,7 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 
 	run := newTurnRun(builder, publisher, turnID, clientNonce)
 	run.state = state
+	run.settleDur = cfg.turnSettle
 	if err := publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnClaimed), "")); err != nil {
 		return false, err
 	}
@@ -1081,6 +1247,17 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 	// Any transcript record — relevant or not, including the USER_EXPLICIT
 	// prompt echo — proves agy is processing; clear the submit watchdog.
 	r.noteProgress()
+	// The burst is still moving: a step after a settled prose response
+	// cancels the armed boundary window (answer-first — the prose was an
+	// ack, not the end). A later settled prose re-arms it.
+	r.mu.Lock()
+	if r.settleTimer != nil {
+		if r.settleTimer.Stop() {
+			turnSettleTotal.WithLabelValues("extended").Inc()
+		}
+		r.settleTimer = nil
+	}
+	r.mu.Unlock()
 	if !isRelevantStep(step) {
 		return nil
 	}
@@ -1258,13 +1435,34 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 				r.mu.Unlock()
 			}
 			if strings.EqualFold(step.Status, "DONE") {
-				r.markComplete()
+				r.armSettle()
 			}
 			return nil
 		}
 	}
 
 	return nil
+}
+
+// armSettle starts the transcript-silence window that converts a settled
+// prose response into the turn terminal. Silence is agy's only boundary
+// signal (its planner loop knows when a burst is over but writes no marker);
+// the window keeps answer-first tool calls inside the turn so the terminal's
+// background_work_pending stamp is evaluated after the burst truly ended.
+func (r *turnRun) armSettle() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.settleDur <= 0 {
+		r.markComplete()
+		return
+	}
+	if r.settleTimer != nil {
+		r.settleTimer.Stop()
+	}
+	r.settleTimer = time.AfterFunc(r.settleDur, func() {
+		turnSettleTotal.WithLabelValues("quiet").Inc()
+		r.markComplete()
+	})
 }
 
 func (r *turnRun) ensureStarted(providerID string) error {
@@ -1582,6 +1780,36 @@ func (b eventBuilder) assistantMessageEvent(turnID, providerItemID, timelineID, 
 	})
 }
 
+// shellTaskEvent is the durable lifecycle envelope for an agy-tracked
+// background task (timer, build, anything agy routes through its task
+// framework). One event family serves two consumers: the transcript
+// projection's backgroundTaskWakeParentTurns derives the
+// turn_bgtask-<task> → originating-turn fold edge from it, and the
+// Background-activity tab renders it. taskID must already be the
+// stableIDPart form so it matches the relay's turn id suffix.
+func (b eventBuilder) shellTaskEvent(turnID, taskID, eventType string, payload map[string]any) map[string]any {
+	return b.stamp(map[string]any{
+		"event_id":         turnID + ":" + eventType + ":" + taskID,
+		"conversation_id":  b.sessionID,
+		"session_id":       b.sessionID,
+		"turn_id":          turnID,
+		"timeline_id":      turnID + ":shell_task:" + taskID,
+		"task_id":          taskID,
+		"provider_item_id": taskID,
+		"parent_id":        turnID,
+		"actor":            "tool",
+		"source":           provider,
+		"type":             eventType,
+		"producer": map[string]any{
+			"name":              provider + "-runner",
+			"runtime":           provider,
+			"provider_event_id": taskID,
+		},
+		"visibility": string(conversation.VisibilityDurable),
+		"payload":    payload,
+	})
+}
+
 func (b eventBuilder) itemEvent(turnID, providerItemID, eventType, actor string, payload map[string]any) map[string]any {
 	return b.stamp(map[string]any{
 		"event_id":         turnID + ":" + eventType + ":" + stableIDPart(providerItemID),
@@ -1655,6 +1883,22 @@ func tailTranscripts(ctx context.Context, cfg runnerConfig, state *runnerState) 
 		})
 	}
 	watchAll(brainDir)
+
+	// Skip pre-existing transcript bytes. A restarted runner (container
+	// restart, crash recovery, hot-swap) must not replay historical steps
+	// into the current conversation: replayed RUNNING/sender= task markers
+	// mis-attribute durable task edges to whatever turn is active and burn
+	// the self-continuation relay latch on stale steps (observed live on
+	// slot-1 session 159, tank-operator#1035). This is the tailer
+	// contract the TS-era ledger entry named: pre-existing bytes are
+	// skipped, new appended bytes are emitted.
+	_ = filepath.Walk(brainDir, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() || !strings.HasSuffix(path, "transcript_full.jsonl") {
+			return nil
+		}
+		offsets[path] = info.Size()
+		return nil
+	})
 
 	for {
 		select {

@@ -49,6 +49,23 @@ The implementation has explicit durable and live boundaries:
 This ADR is the live contract for the app-managed GUI chat path. Changes to
 producer, backend, or UI behavior should update this document in the same PR.
 
+## New Event Vocabulary Requires A Consumer Audit
+
+Any PR that adds an event type, a `turn.submitted` `source` value, a terminal
+payload field, or a new turn-id shape MUST enumerate every read-side consumer
+and state for each whether it consumes the new shape or is intentionally
+inert: the transcript projection (`transcript_projection.go`), the transcript
+row materializer, the turn pager, chat activity, the Background-activity
+screen, read-state cursors, and deep links. Producer-side completeness is not
+completeness. Precedent: tank-operator#1030 introduced `agent-continuation`
+turns (a new source, a new no-user-message turn shape, a new terminal flag)
+with zero read-model changes; the relay rendered as a standalone turn and the
+pending task was invisible at rest until tank-operator#1035 published the
+durable `shell_task.*` fold edge and taught `isBackgroundTaskWakeTurnEvent`
+the new source. The unwritten invariant "every turn is user-anchored" lived
+only in read-side assumptions; this section exists so the next new turn shape
+fails loudly at review time instead.
+
 ## Borrowed Constraints
 
 Re-checked on 2026-05-12:

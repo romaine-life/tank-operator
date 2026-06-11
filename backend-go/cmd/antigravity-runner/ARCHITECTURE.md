@@ -139,6 +139,42 @@ Two related liveness bounds share the same select:
 
 ---
 
+## Silence Is the Boundary (turn-settle window)
+
+`agy`'s planner loop runs multiple rounds per burst — an ack prose response,
+tool-call rounds, a settled prose response — and **writes no end-of-burst
+marker anywhere**. This was established empirically (slot-1 sessions 159/160,
+tank-operator#1035): the transcripts carry no terminal record; `messages/` is
+task-inbox read-state; task logs are per-task; `cli.log`'s only trailing line
+is a `text_drip.go` typewriter-animation debug entry. agy's loop knows when a
+burst is over and never says so. **Silence is the provider's boundary
+semantics.**
+
+The runner therefore publishes `turn.completed` only after a settled prose
+response has been followed by `ANTIGRAVITY_TURN_SETTLE_MS` (default 2s) of
+transcript silence; any further step cancels an armed window and a later
+settled prose re-arms it. Observed intra-burst gaps are ~600ms, so the default
+is ~3x margin. The prose itself streams to the user immediately — only the
+turn-status transition waits.
+
+This is what keeps the answer-first sequence ("I'll set a timer" → turn would
+have closed → schedule tool call lands seconds later) inside ONE turn: the
+task starts in-turn with clean attribution, the terminal's
+`background_work_pending` is evaluated after the burst truly ended, the
+session parks without a false `ready`/ring, and no untracked self-wake relay
+is manufactured. If agy ever pauses longer than the window mid-burst, the turn
+closes early and the continuation machinery (relay + fold + causal-adjacency
+attribution) handles it exactly as before — the window failing re-admits a
+cosmetic flicker for that turn, never incorrectness.
+`tank_antigravity_runner_turn_settle_total{outcome="extended"}` counts how
+often bursts continue past a settled prose (the answer-first frequency);
+`outcome="quiet"` counts silence-confirmed boundaries.
+
+Revisit if `agy` ever ships an explicit end-of-processing marker in its
+transcript or logs — that signal should replace the window outright.
+
+---
+
 ## WARNING FOR FUTURE DEVELOPERS (AND AGENTS)
 
 * **DO NOT** attempt to remove the PTY wrapper.

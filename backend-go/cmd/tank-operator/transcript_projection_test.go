@@ -1687,3 +1687,56 @@ func projectionFinalAnswerPayload(timelineIDs ...string) map[string]any {
 		},
 	}
 }
+
+// TestProjectTranscriptEventsFoldsAgentContinuationTurnIntoOriginatingTurn pins
+// the antigravity self-continuation fold (tank-operator#1035, session 790's
+// exact shape): agy set a timer, the turn parked, agy self-continued, and the
+// backend authored a turn_bgtask-<task> relay turn with
+// source=agent-continuation and NO user message. Pre-#1035 the relay rendered
+// as a standalone turn because (a) the antigravity runner never published the
+// durable shell_task parent edge and (b) isBackgroundTaskWakeTurnEvent only
+// recognized source=background-task.
+func TestProjectTranscriptEventsFoldsAgentContinuationTurnIntoOriginatingTurn(t *testing.T) {
+	taskID := "1f207f17-task-3"
+	wakeTurnID := "turn_bgtask-" + taskID
+	events := []map[string]any{
+		projectionTestEvent("user", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "set a 5 second timer and wait for it",
+		}),
+		projectionTestEvent("submitted", "002", "turn.submitted", "runner", "tank", "turn-1", "", map[string]any{"status": "submitted"}),
+		projectionTestEvent("task-started", "003", "shell_task.started", "tool", "antigravity", "turn-1", "turn-1:shell_task:"+taskID, map[string]any{
+			"kind": "shell_task", "task_id": taskID, "status": "running", "summary": "5 second timer", "last_tool_name": "agy",
+		}),
+		projectionTestEvent("parked-final", "004", "item.completed", "assistant", "antigravity", "turn-1", "turn-1:item:waiting", map[string]any{
+			"kind": "message", "text": "I have set a 5-second timer.",
+		}),
+		projectionTestEvent("turn-terminal", "005", "turn.completed", "runner", "antigravity", "turn-1", "", projectionFinalAnswerPayload("turn-1:item:waiting")),
+		projectionTestEvent("task-exited", "006", "shell_task.exited", "tool", "antigravity", "turn-1", "turn-1:shell_task:"+taskID, map[string]any{
+			"kind": "shell_task", "task_id": taskID, "status": "completed", "summary": "timer fired", "last_tool_name": "agy",
+		}),
+		projectionTestEvent("relay-submitted", "007", "turn.submitted", "runner", "tank", wakeTurnID, "", map[string]any{
+			"status": "submitted", "source": "agent-continuation", "task_id": taskID,
+		}),
+		projectionTestEvent("relay-final", "008", "item.completed", "assistant", "antigravity", wakeTurnID, wakeTurnID+":item:final", map[string]any{
+			"kind": "message", "text": "The 5-second timer has finished.",
+		}),
+		projectionTestEvent("relay-terminal", "009", "turn.completed", "runner", "antigravity", wakeTurnID, "", projectionFinalAnswerPayload(wakeTurnID+":item:final")),
+	}
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 2; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	if got, want := transcriptMapString(projection.Entries[1], "turnId"), "turn-1"; got != want {
+		t.Fatalf("relay final projected turnId = %q, want originating %q: %#v", got, want, projection.Entries[1])
+	}
+	if got, want := transcriptMapString(projection.Entries[1], "backendTurnId"), wakeTurnID; got != want {
+		t.Fatalf("relay final backendTurnId = %q, want relay turn %q: %#v", got, want, projection.Entries[1])
+	}
+	if _, ok := projection.ActivityBodies[wakeTurnID]; ok {
+		t.Fatalf("agent-continuation relay must not surface as a standalone turn: %#v", projection.ActivityBodies)
+	}
+	if _, ok := projection.ActivityBodies["turn-1"]; !ok {
+		t.Fatalf("originating turn body missing after fold: %#v", projection.ActivityBodies)
+	}
+}
