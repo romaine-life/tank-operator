@@ -907,7 +907,7 @@ func avatarUploadResultLabel(result string) string {
 
 func sessionRuntimeConfigProviderLabel(provider string) string {
 	switch provider {
-	case "claude", "codex":
+	case "claude", "codex", "antigravity":
 		return provider
 	default:
 		return "unknown"

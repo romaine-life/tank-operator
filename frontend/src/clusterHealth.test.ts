@@ -59,8 +59,29 @@ function baseHealth(): ClusterHealthResponse {
         stream_messages: 20,
         stream_bytes: 128,
         stream_consumers: 4,
+        consumer_pending: 0,
+        consumer_ack_pending: 0,
+        consumer_redelivered: 0,
+        backlogged_consumers: 0,
+        ack_pending_consumers: 0,
+        redelivering_consumers: 0,
       },
     },
+    upgrade: {
+      status: "healthy",
+      detected: false,
+      summary: "no AKS upgrade signals detected",
+      auto_upgrade_channel: "patch",
+      node_os_upgrade_channel: "NodeImage",
+      maintenance_window: {
+        day_of_week: "Sunday",
+        start_time: "06:00",
+        utc_offset: "+00:00",
+        duration_hours: 12,
+        active: false,
+      },
+    },
+    messages: [{ severity: "healthy", surface: "Cluster", message: "all checks passing" }],
   };
 }
 
@@ -87,6 +108,15 @@ test("cluster health issue text surfaces NATS warnings", () => {
   health.nats.status = "warning";
   health.nats.warnings = ["Live delivery replicas 2/3 current"];
   expect(clusterHealthIssueText(health)).toBe("Live delivery replicas 2/3 current");
+});
+
+test("cluster health issue text surfaces AKS upgrade warnings", () => {
+  const health = baseHealth();
+  health.status = "warning";
+  health.upgrade.status = "warning";
+  health.upgrade.detected = true;
+  health.upgrade.summary = "mixed node image versions";
+  expect(clusterHealthIssueText(health)).toBe("mixed node image versions");
 });
 
 test("cluster health issue text uses a non-label healthy summary", () => {

@@ -317,6 +317,7 @@ import { useRelativeMinutes, useRelativeSeconds } from "./timeService";
 import {
   clusterHealthHeadline,
   clusterHealthIssueText,
+  clusterHealthMessages,
   clusterHealthNatsReachabilityLabel,
   clusterHealthStatusClass,
   type ClusterHealthResponse,
@@ -3137,15 +3138,7 @@ function SessionAvatarIcon({
   return <AgentAvatarIcon avatar={avatar} className={className} />;
 }
 
-// ClusterHealthWidget owns its own polling. The 30s setInterval +
-// state setters previously lived at App-root, which cascaded a
-// full-tree re-render every 30s — observed as `correlation=idle`
-// blocks in `tank_client_long_task_duration_seconds`. Co-locating the
-// polling here keeps the re-render scoped to this widget. `enabled`
-// gates the poll (only run when the user is signed in); flipping it
-// false tears down the state so a signed-out / styleguide render
-// stays at zero work.
-function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
+function ClusterHealthScreen({ enabled }: { enabled: boolean }) {
   const [health, setHealth] = useState<ClusterHealthResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -3191,20 +3184,17 @@ function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
   const nodes = health?.nodes;
   const sessions = health?.sessions;
   const nats = health?.nats;
+  const upgrade = health?.upgrade;
+  const maintenanceWindow = upgrade?.maintenance_window;
+  const messages = clusterHealthMessages(health);
   return (
     <section
-      className={`cluster-health ${clusterHealthStatusClass(status)}`}
+      className={`cluster-screen ${clusterHealthStatusClass(status)}`}
       aria-label="Cluster health"
     >
-      <div className="cluster-health-panel">
-        <button
-          type="button"
-          className="cluster-health-main"
-          onClick={onRefresh}
-          title={issue}
-          aria-label={`${headline}: ${issue}`}
-        >
-          <span className="cluster-health-status" aria-hidden="true">
+      <div className="cluster-screen-head">
+        <div className="cluster-screen-title-wrap">
+          <span className="cluster-screen-status" aria-hidden="true">
             {loading ? (
               <Loader2Icon className="cluster-health-spin" />
             ) : status === "healthy" ? (
@@ -3215,52 +3205,167 @@ function ClusterHealthWidget({ enabled }: { enabled: boolean }) {
               <ActivityIcon />
             )}
           </span>
-          <span className="cluster-health-body">
-            <span className="cluster-health-title">{headline}</span>
-            <span className="cluster-health-sub">{issue}</span>
-          </span>
-          <span className="cluster-health-refresh" aria-hidden="true">
-            <RotateCcwIcon />
-          </span>
-        </button>
-        <dl
-          className="cluster-health-metrics"
-          aria-label="Cluster health metrics"
-          aria-hidden={health ? undefined : "true"}
+          <div>
+            <h2 className="cluster-screen-title">{headline}</h2>
+            <p className="cluster-screen-sub">{issue}</p>
+          </div>
+        </div>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={onRefresh}
+          disabled={loading}
+          title="Refresh"
+          aria-label="Refresh cluster health"
         >
-          <div className="cluster-health-metric" title="Ready Kubernetes nodes">
-            <dt>Nodes</dt>
-            <dd>
-              <MonitorIcon aria-hidden="true" />
-              <span>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</span>
-            </dd>
-          </div>
-          <div
-            className="cluster-health-metric"
-            title="Ready Tank session pods"
-          >
-            <dt>Sessions</dt>
-            <dd>
-              <SquareTerminalIcon aria-hidden="true" />
-              <span>
-                {sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}
+          <RotateCcwIcon
+            className={loading ? "cluster-health-spin" : undefined}
+            aria-hidden="true"
+          />
+        </button>
+      </div>
+      {error ? (
+        <div className="cluster-screen-alert" role="status">
+          {error}
+        </div>
+      ) : null}
+      <dl className="cluster-screen-summary" aria-label="Cluster health metrics">
+        <div>
+          <dt>Nodes</dt>
+          <dd>{nodes ? `${nodes.ready}/${nodes.total}` : "-/-"}</dd>
+        </div>
+        <div>
+          <dt>Sessions</dt>
+          <dd>{sessions ? `${sessions.ready}/${sessions.total}` : "-/-"}</dd>
+        </div>
+        <div>
+          <dt>NATS</dt>
+          <dd>{clusterHealthNatsReachabilityLabel(nats)}</dd>
+        </div>
+        <div>
+          <dt>Upgrade</dt>
+          <dd>{upgrade?.detected ? "active" : maintenanceWindow?.active ? "window open" : "idle"}</dd>
+        </div>
+      </dl>
+
+      <section className="cluster-screen-section">
+        <h3 className="cluster-screen-section-title">Messages</h3>
+        <div className="cluster-screen-message-list">
+          {messages.map((message, index) => (
+            <div
+              key={`${message.surface}-${message.message}-${index}`}
+              className={`cluster-screen-message is-${message.severity}`}
+            >
+              <span className={`cluster-screen-chip is-${message.severity}`}>
+                {message.severity}
               </span>
+              <span className="cluster-screen-message-surface">
+                {message.surface}
+              </span>
+              <span className="cluster-screen-message-text">
+                {message.message}
+              </span>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <section className="cluster-screen-section">
+        <h3 className="cluster-screen-section-title">Upgrade Window</h3>
+        <dl className="cluster-screen-detail-grid">
+          <div>
+            <dt>Auto upgrade</dt>
+            <dd>{upgrade?.auto_upgrade_channel ?? "-"}</dd>
+          </div>
+          <div>
+            <dt>Node OS</dt>
+            <dd>{upgrade?.node_os_upgrade_channel ?? "-"}</dd>
+          </div>
+          <div>
+            <dt>Schedule</dt>
+            <dd>
+              {maintenanceWindow
+                ? `${maintenanceWindow.day_of_week} ${maintenanceWindow.start_time} ${maintenanceWindow.utc_offset}, ${maintenanceWindow.duration_hours}h`
+                : "-"}
             </dd>
           </div>
-          <div
-            className="cluster-health-metric"
-            title="Reachable NATS monitors"
-          >
-            <dt>NATS</dt>
+          <div>
+            <dt>Remaining</dt>
             <dd>
-              <ActivityIcon aria-hidden="true" />
-              <span>{clusterHealthNatsReachabilityLabel(nats)}</span>
+              {maintenanceWindow?.active && maintenanceWindow.seconds_remaining != null
+                ? formatClusterDuration(maintenanceWindow.seconds_remaining)
+                : "outside window"}
             </dd>
           </div>
         </dl>
-      </div>
+        {upgrade?.detected ? (
+          <div className="cluster-screen-signal-list">
+            {(upgrade.signals ?? []).map((signal) => (
+              <span key={signal} className="cluster-screen-chip is-warning">
+                {signal}
+              </span>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="cluster-screen-section">
+        <h3 className="cluster-screen-section-title">NATS JetStream</h3>
+        <dl className="cluster-screen-detail-grid">
+          <div>
+            <dt>Stream</dt>
+            <dd>{nats?.jetstream.stream_name || "-"}</dd>
+          </div>
+          <div>
+            <dt>Replicas</dt>
+            <dd>
+              {nats
+                ? `${nats.jetstream.stream_current_replicas}/${nats.jetstream.expected_stream_replicas}`
+                : "-/-"}
+            </dd>
+          </div>
+          <div>
+            <dt>Messages</dt>
+            <dd>{formatMetricCount(nats?.jetstream.stream_messages ?? 0)}</dd>
+          </div>
+          <div>
+            <dt>Consumers</dt>
+            <dd>{formatMetricCount(nats?.jetstream.stream_consumers ?? 0)}</dd>
+          </div>
+          <div>
+            <dt>Pending</dt>
+            <dd>{formatMetricCount(nats?.jetstream.consumer_pending ?? 0)}</dd>
+          </div>
+          <div>
+            <dt>Ack pending</dt>
+            <dd>{formatMetricCount(nats?.jetstream.consumer_ack_pending ?? 0)}</dd>
+          </div>
+        </dl>
+        {(nats?.jetstream.top_consumer_backlogs?.length ?? 0) > 0 ? (
+          <div className="cluster-screen-message-list">
+            {nats?.jetstream.top_consumer_backlogs?.map((consumer) => (
+              <div key={consumer.name} className="cluster-screen-message">
+                <span className="cluster-screen-message-surface">
+                  {consumer.name}
+                </span>
+                <span className="cluster-screen-message-text">
+                  {consumer.pending} pending, {consumer.ack_pending} ack pending
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
     </section>
   );
+}
+
+function formatClusterDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "0m";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
 }
 
 function OnboardingWall({
@@ -4307,6 +4412,7 @@ type RunTab =
   | "session-data"
   | "settings"
   | "help"
+  | "cluster"
   | "static";
 type BackgroundView = "shells" | "scheduled" | "control" | "detached";
 type TurnViewScrollAnchor = "bottom" | "top";
@@ -7807,8 +7913,10 @@ function RunHeaderOverflowMenu({
   sessionData,
   settingsActive,
   helpActive,
+  clusterActive,
   onSettings,
   onHelp,
+  onCluster,
 }: {
   triggerActive: boolean;
   triggerAttention?: "critical" | "warning" | null;
@@ -7817,8 +7925,10 @@ function RunHeaderOverflowMenu({
   sessionData: RunHeaderMenuTabState;
   settingsActive: boolean;
   helpActive: boolean;
+  clusterActive: boolean;
   onSettings: () => void;
   onHelp: () => void;
+  onCluster: () => void;
 }) {
   return (
     <DropdownMenu>
@@ -7887,6 +7997,13 @@ function RunHeaderOverflowMenu({
           <span>Session data</span>
         </DropdownMenuItem>
         <DropdownMenuSeparator className="run-tab-more-separator" />
+        <DropdownMenuItem
+          className={`run-tab-more-item${clusterActive ? " is-active" : ""}`}
+          onSelect={onCluster}
+        >
+          <MonitorIcon className="run-tab-more-item-icon" aria-hidden="true" />
+          <span>Cluster</span>
+        </DropdownMenuItem>
         <DropdownMenuItem
           className={`run-tab-more-item${settingsActive ? " is-active" : ""}`}
           onSelect={onSettings}
@@ -10634,6 +10751,7 @@ function RunTurnThinkingBubble({
   lastActivityAt,
   avatar,
   onOpenTurn,
+  onActivate,
 }: {
   userKey: string;
   turnId: string;
@@ -10641,8 +10759,10 @@ function RunTurnThinkingBubble({
   lastActivityAt?: string;
   avatar: AgentAvatar | null;
   onOpenTurn?: (turnId: string, options?: TurnPageOpenOptions) => void;
+  onActivate?: (turnId: string) => void;
 }) {
   const needsInput = status === "needs_input";
+  const actionLabel = needsInput ? "Answer in Turns" : "Show agent activity";
   return (
     <div
       className="run-transcript-message run-turn-thinking"
@@ -10658,11 +10778,15 @@ function RunTurnThinkingBubble({
       <button
         type="button"
         className="run-transcript-message-content run-turn-thinking-content"
-        title={needsInput ? "Answer in Turns" : "Open turn"}
-        aria-label={needsInput ? "Answer in Turns" : "Open turn"}
-        onClick={() =>
-          onOpenTurn?.(turnId, { anchor: needsInput ? "top" : "bottom" })
-        }
+        title={actionLabel}
+        aria-label={actionLabel}
+        onClick={() => {
+          if (onActivate) {
+            onActivate(turnId);
+            return;
+          }
+          onOpenTurn?.(turnId, { anchor: needsInput ? "top" : "bottom" });
+        }}
       >
         <span className="run-turn-thinking-lines">
           <span
@@ -11380,6 +11504,18 @@ function RunTurnActivityScreen({
           status={group.status}
           lastActivityAt={group.lastActivityAt}
           avatar={avatar}
+          onActivate={
+            group.status === "needs_input"
+              ? undefined
+              : () => {
+                  if (!selected) return;
+                  setCollapsedActivityTurnIds((prev) =>
+                    prev[selected.turnId] === false
+                      ? prev
+                      : { ...prev, [selected.turnId]: false },
+                  );
+                }
+          }
         />
       );
     }
@@ -12218,6 +12354,10 @@ export function RunMessages({
         );
       }
       if (g.kind === "thinking") {
+        const activityGroup = groups.find(
+          (candidate) =>
+            candidate.kind === "activity" && candidate.turnId === g.turnId,
+        );
         return (
           <RunTurnThinkingBubble
             userKey={userKey}
@@ -12226,6 +12366,14 @@ export function RunMessages({
             lastActivityAt={g.lastActivityAt}
             avatar={avatar}
             onOpenTurn={onOpenTurn}
+            onActivate={
+              g.status !== "needs_input" && activityGroup?.kind === "activity"
+                ? () => {
+                    if (activityGroup.shell) onActivityOpen?.(g.turnId);
+                    setActivityOpen(entryGroupKey(activityGroup), true);
+                  }
+                : undefined
+            }
           />
         );
       }
@@ -15091,6 +15239,13 @@ function ChatPane({
       setSelectedTurnNumberAnchor(null);
       return;
     }
+    if (appRoute?.tab === "cluster") {
+      setActiveTab("cluster");
+      setPendingRouteTurnNumber(null);
+      setPendingTurnViewRouteAnchor(null);
+      setSelectedTurnNumberAnchor(null);
+      return;
+    }
     const route = readSessionRouteFromPath();
     if (route?.sessionId !== session.id) return;
     if (route.tab === "turns") {
@@ -17818,6 +17973,8 @@ function ChatPane({
       replaceAppRoute("settings", settingsTab, adminView);
     } else if (activeTab === "help") {
       replaceAppRoute("help");
+    } else if (activeTab === "cluster") {
+      replaceAppRoute("cluster");
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
     } else if (activeTab === "files") {
@@ -18719,8 +18876,10 @@ function ChatPane({
                 }}
                 settingsActive={activeTab === "settings"}
                 helpActive={activeTab === "help"}
+                clusterActive={activeTab === "cluster"}
                 onSettings={() => toggleRunTab("settings")}
                 onHelp={() => toggleRunTab("help")}
+                onCluster={() => toggleRunTab("cluster")}
               />
             )}
           </>
@@ -19201,6 +19360,8 @@ function ChatPane({
               />
             ) : activeTab === "help" ? (
               <RunHelpScreen />
+            ) : activeTab === "cluster" ? (
+              <ClusterHealthScreen enabled={visible} />
             ) : activeTab === "static" ? (
               staticPagePath ? (
                 <Suspense
@@ -20122,10 +20283,9 @@ function AuthenticatedApp() {
     await loadRuntimeAvatarCatalog();
     setAvatarCatalogVersion((version) => version + 1);
   }, []);
-  // Cluster-health polling lives inside ClusterHealthWidget so the
-  // 30s setInterval + its setState calls don't cascade re-renders
-  // through the App-root tree. See SessionStats above for the same
-  // pattern applied to the per-row time labels.
+  // Cluster-health polling lives inside ClusterHealthScreen, mounted only when
+  // the top-right Cluster page is open, so the 30s interval does not cascade
+  // through the App-root tree.
 
   // Reflect the active session in the URL so reloads land back on it.
   // Mirrors cloudcli's URL-tracking behaviour. Done as an effect rather
@@ -20641,6 +20801,10 @@ function AuthenticatedApp() {
     }
     if (homeActiveTab === "help") {
       replaceAppRoute("help");
+      return;
+    }
+    if (homeActiveTab === "cluster") {
+      replaceAppRoute("cluster");
       return;
     }
     replaceHomeRoute("chat");
@@ -23061,9 +23225,6 @@ function AuthenticatedApp() {
           )}
         </ul>
       </div>
-
-      <ClusterHealthWidget enabled={Boolean(user)} />
-
       <div className="sidebar-footer" data-menu="profile">
         <button
           className="profile"
@@ -23237,6 +23398,7 @@ function AuthenticatedApp() {
                   }}
                   settingsActive={homeActiveTab === "settings"}
                   helpActive={homeActiveTab === "help"}
+                  clusterActive={homeActiveTab === "cluster"}
                   onSettings={() =>
                     setHomeActiveTab((current) =>
                       current === "settings" ? "chat" : "settings",
@@ -23245,6 +23407,11 @@ function AuthenticatedApp() {
                   onHelp={() =>
                     setHomeActiveTab((current) =>
                       current === "help" ? "chat" : "help",
+                    )
+                  }
+                  onCluster={() =>
+                    setHomeActiveTab((current) =>
+                      current === "cluster" ? "chat" : "cluster",
                     )
                   }
                 />
@@ -23307,6 +23474,8 @@ function AuthenticatedApp() {
                 />
               ) : homeActiveTab === "help" ? (
                 <RunHelpScreen />
+              ) : homeActiveTab === "cluster" ? (
+                <ClusterHealthScreen enabled={Boolean(user)} />
               ) : (
                 <>
                   <div className="home-inner">

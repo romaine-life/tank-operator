@@ -202,7 +202,7 @@ test("home route urls broadcast only the new-session splash surface", () => {
   expect(buildHomeRouteUrl(current)).toBe("https://tank.example.test/new");
 });
 
-test("app route urls broadcast top-level settings and help surfaces", () => {
+test("app route urls broadcast top-level settings help and cluster surfaces", () => {
   const current = "https://tank.example.test/sessions/s-1?session=s-1#ignored";
   expect(readAppRouteFromPathname("/settings")).toEqual({
         tab: "settings",
@@ -219,6 +219,12 @@ test("app route urls broadcast top-level settings and help surfaces", () => {
         settingsTab: "preferences",
         adminView: "controls",
       });
+  expect(readAppRouteFromPathname("/cluster")).toEqual({
+        tab: "cluster",
+        settingsTab: "preferences",
+        adminView: "controls",
+      });
   expect(buildAppRouteUrl(current, "settings", "admin", "observability")).toBe("https://tank.example.test/settings/admin/observability");
   expect(buildAppRouteUrl(current, "help")).toBe("https://tank.example.test/help");
+  expect(buildAppRouteUrl(current, "cluster")).toBe("https://tank.example.test/cluster");
 });

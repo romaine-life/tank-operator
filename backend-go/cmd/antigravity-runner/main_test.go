@@ -16,6 +16,8 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -86,7 +88,7 @@ func TestTurnRunMapsPlannerResponseToAssistantAndFinalAnswer(t *testing.T) {
 		}
 		events = append(events, event)
 		return nil
-	}, "turn-1", "nonce-1")
+	}, "turn-1", "nonce-1", &runnerState{})
 
 	line := `{"step_index":7,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"hello from agy"}`
 	var step AgyStep
@@ -131,7 +133,7 @@ func TestTurnRunToolAndTokenUsageParity(t *testing.T) {
 		}
 		events = append(events, event)
 		return nil
-	}, "turn-1", "nonce-1")
+	}, "turn-1", "nonce-1", &runnerState{})
 
 	// Step 1: Model outputs prose and a tool call
 	step1JSON := `{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"I need to run a command.","tool_calls":[{"name":"run_command","args":{"CommandLine":"echo hello","Cwd":"/workspace"},"toolAction":"Running echo hello","toolSummary":"Run echo command"}]}`
@@ -286,7 +288,7 @@ func TestTurnRunFailsWhenProviderProducesNoFinalAnswer(t *testing.T) {
 		}
 		terminal = event
 		return nil
-	}, "turn-1", "nonce-1")
+	}, "turn-1", "nonce-1", &runnerState{})
 
 	if err := run.finishCompleted(); err != nil {
 		t.Fatal(err)
@@ -385,7 +387,6 @@ func TestPTYRunnerArchitectureConstraint(t *testing.T) {
 	})
 }
 
-
 // --- Liveness contract tests -------------------------------------------------
 //
 // Every wait in handleSubmitTurn that can resolve a turn must publish exactly
@@ -457,6 +458,68 @@ func waitUntil(t *testing.T, what string, pred func() bool) {
 		time.Sleep(2 * time.Millisecond)
 	}
 	t.Fatalf("timed out waiting for %s", what)
+}
+
+func TestAgyArgsForConfigRequireConcreteModel(t *testing.T) {
+	if _, err := agyArgsForConfig(runnerConfig{}); err == nil {
+		t.Fatal("agyArgsForConfig accepted an empty model")
+	}
+}
+
+func TestAgyArgsForConfigPassesSessionModel(t *testing.T) {
+	args, err := agyArgsForConfig(runnerConfig{model: "Gemini 3.1 Pro"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"--dangerously-skip-permissions", "--model", "Gemini 3.1 Pro"}
+	if strings.Join(args, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("args = %#v, want %#v", args, want)
+	}
+}
+
+func TestReportRuntimeConfigPostsAppliedModel(t *testing.T) {
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("session-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	var gotAuth string
+	var gotPath string
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		gotPath = r.URL.Path
+		if r.Method != http.MethodPut {
+			t.Fatalf("method = %s, want PUT", r.Method)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+	t.Setenv("TANK_OPERATOR_INTERNAL_URL", server.URL)
+	t.Setenv("TANK_OPERATOR_TOKEN_PATH", tokenFile)
+
+	err := reportRuntimeConfig(runnerConfig{
+		sessionID: "791",
+		model:     "Gemini 3.1 Pro",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "Bearer session-token" {
+		t.Fatalf("Authorization = %q", gotAuth)
+	}
+	if gotPath != "/api/internal/sessions/791/runtime-config" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	if gotBody["model"] != "Gemini 3.1 Pro" {
+		t.Fatalf("body = %#v", gotBody)
+	}
+	if _, present := gotBody["effort"]; present {
+		t.Fatalf("antigravity runtime report should not include empty effort: %#v", gotBody)
+	}
 }
 
 func livenessTestConfig() runnerConfig {
@@ -612,7 +675,7 @@ func TestHandleSubmitTurnInterruptGraceForcesDurableStop(t *testing.T) {
 func TestTurnRunClassifiesExecutorErrorOnNoFinalAnswer(t *testing.T) {
 	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
 	log := &eventLog{}
-	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1", &runnerState{})
 
 	line := `{"step_index":3,"source":"SYSTEM","type":"ERROR_MESSAGE","status":"DONE","content":"agent executor error: UNKNOWN (code 500)"}`
 	var step AgyStep
@@ -768,8 +831,7 @@ func TestTurnCompletedStampsBackgroundWorkPending(t *testing.T) {
 				published = append(published, e)
 				return nil
 			}
-			run := newTurnRun(eventBuilder{sessionID: "63"}, publish, "turn_x", "nonce_x")
-			run.state = st
+			run := newTurnRun(eventBuilder{sessionID: "63"}, publish, "turn_x", "nonce_x", st)
 
 			step := AgyStep{Source: "MODEL", Type: "PLANNER_RESPONSE", Status: "DONE",
 				Content: json.RawMessage(`"all done, reporting back"`)}
@@ -814,7 +876,7 @@ func TestTaskLifecycleEventsPublishDurableFoldEdge(t *testing.T) {
 	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
 	log := &eventLog{}
 	state := &runnerState{builder: builder, publish: log.publisher}
-	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1", state)
 	state.attachTurn(run)
 	cfg := runnerConfig{sessionID: "17"}
 
@@ -894,7 +956,7 @@ func TestTaskLifecycleStartWhileIdleDefersToAttachingTurn(t *testing.T) {
 
 	// turn-1 is the answer-first asking turn: it attaches, completes
 	// ("I'll set a timer"), and detaches BEFORE the tool call runs.
-	asking := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	asking := newTurnRun(builder, log.publisher, "turn-1", "nonce-1", state)
 	state.attachTurn(asking)
 	state.detachTurn(asking)
 
@@ -916,7 +978,7 @@ func TestTaskLifecycleStartWhileIdleDefersToAttachingTurn(t *testing.T) {
 		t.Fatal("pending-set must still track the task for background_work_pending")
 	}
 
-	relay := newTurnRun(builder, log.publisher, "turn_bgtask-T-9", "nonce-relay")
+	relay := newTurnRun(builder, log.publisher, "turn_bgtask-T-9", "nonce-relay", state)
 	state.attachTurn(relay)
 	defer state.detachTurn(relay)
 
@@ -938,6 +1000,173 @@ func TestTaskLifecycleStartWhileIdleDefersToAttachingTurn(t *testing.T) {
 	}
 	if started["task_id"] != stableIDPart("T-9") {
 		t.Fatalf("deferred edge task_id = %v", started["task_id"])
+	}
+}
+
+// --- Transcript-rewrite replay tests (session 791) ----------------------------
+//
+// agy performs its larger transcript writes as an in-place truncate +
+// byte-identical full rewrite (verified live, probe session 799). When a
+// sweep's stat lands inside that sub-second window, the byte cursor rewinds
+// and the ENTIRE prior history re-arrives through the tailer. Step dedupe must
+// therefore be SESSION-scoped. Per-turn dedupe (the pre-fix state)
+// re-published every historical step under whatever turn was live at the
+// race: session 791's ledger carried turn 1's "schedule 5s timer" items under
+// four turn_ids, per-turn item counts grew cumulatively (2 → 35 → 270 → 282),
+// and expanding turn N in the Turns view showed the content of turns 1..N.
+// These tests feed the post-rewind byte stream (history + new steps) through
+// handleStep exactly as sweepTranscripts would deliver it.
+
+func TestCumulativeTranscriptReplayDoesNotReattributeStepsAcrossTurns(t *testing.T) {
+	builder := eventBuilder{sessionID: "791", sessionStorageKey: "791"}
+	log := &eventLog{}
+	state := &runnerState{builder: builder, publish: log.publisher}
+	cfg := runnerConfig{sessionID: "791"}
+
+	feed := func(lines []string) {
+		t.Helper()
+		for _, line := range lines {
+			var step AgyStep
+			if err := json.Unmarshal([]byte(line), &step); err != nil {
+				t.Fatal(err)
+			}
+			if err := state.handleStep("/tmp/transcript_full.jsonl", line, step, cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// Turn 1: session 791's first-turn shape — schedule tool call, result,
+	// settled narration.
+	turn1Burst := []string{
+		`{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Setting a timer.","tool_calls":[{"name":"schedule","args":{"DurationSeconds":"5"},"toolSummary":"Timer schedule"}]}`,
+		`{"step_index":2,"source":"MODEL","type":"schedule","status":"DONE","content":"Created At: 2026-06-11T02:26:26Z"}`,
+		`{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"I have set a timer for 5 seconds."}`,
+	}
+	run1 := newTurnRun(builder, log.publisher, "turn-1", "nonce-1", state)
+	state.attachTurn(run1)
+	feed(turn1Burst)
+	state.detachTurn(run1)
+	turn1EventCount := len(log.snapshot())
+
+	// Turn 2: a mid-turn rewrite rewinds the byte cursor, so the FULL history
+	// re-arrives ahead of the turn's own new steps.
+	turn2Burst := []string{
+		`{"step_index":4,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Looking at the board.","tool_calls":[{"name":"view_file","args":{"AbsolutePath":"/workspace/board.txt"}}]}`,
+		`{"step_index":5,"source":"MODEL","type":"view_file","status":"DONE","content":"board contents"}`,
+		`{"step_index":6,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Knight to f3."}`,
+	}
+	run2 := newTurnRun(builder, log.publisher, "turn-2", "nonce-2", state)
+	state.attachTurn(run2)
+	feed(append(append([]string{}, turn1Burst...), turn2Burst...))
+	state.detachTurn(run2)
+	if err := run2.finishCompleted(); err != nil {
+		t.Fatal(err)
+	}
+
+	events := log.snapshot()
+	newEvents := events[turn1EventCount:]
+	var newItems []map[string]any
+	for _, event := range newEvents {
+		if event["turn_id"] != "turn-2" {
+			t.Fatalf("event published during turn-2 carries turn_id %v: %#v", event["turn_id"], event)
+		}
+		if typ, _ := event["type"].(string); strings.HasPrefix(typ, "item.") {
+			newItems = append(newItems, event)
+		}
+	}
+	// Turn 2's body is exactly its own steps: prose+tool call (2 items), tool
+	// result, settled prose — the replayed turn-1 history publishes nothing.
+	if len(newItems) != 4 {
+		t.Fatalf("turn-2 item events = %d, want 4 (its own steps only): %#v", len(newItems), newItems)
+	}
+	// The 791 symptom pinned directly: each turn-1 item exists ONCE in the
+	// whole session ledger, under turn-1.
+	timerProse := 0
+	for _, event := range events {
+		payload, _ := event["payload"].(map[string]any)
+		if payload == nil {
+			continue
+		}
+		if text, _ := payload["text"].(string); text == "I have set a timer for 5 seconds." {
+			timerProse++
+			if event["turn_id"] != "turn-1" {
+				t.Fatalf("turn-1 prose re-attributed to %v: %#v", event["turn_id"], event)
+			}
+		}
+	}
+	if timerProse != 1 {
+		t.Fatalf("turn-1 prose published %d times, want exactly 1", timerProse)
+	}
+	// Terminal integrity: turn-2's final answer is its own settled prose.
+	last := newEvents[len(newEvents)-1]
+	if last["type"] != string(conversation.EventTurnCompleted) {
+		t.Fatalf("last event = %v, want turn.completed", last["type"])
+	}
+	var step6 AgyStep
+	line6 := turn2Burst[len(turn2Burst)-1]
+	if err := json.Unmarshal([]byte(line6), &step6); err != nil {
+		t.Fatal(err)
+	}
+	wantTimeline := itemTimelineID("turn-2", providerStepID("/tmp/transcript_full.jsonl", line6, step6))
+	final := last["payload"].(map[string]any)["final_answer"].(map[string]any)
+	if got := final["timeline_ids"].([]string); len(got) != 1 || got[0] != wantTimeline {
+		t.Fatalf("final_answer timeline_ids = %#v, want [%s]", got, wantTimeline)
+	}
+}
+
+func TestIdleCumulativeReplayDoesNotBufferOrManufactureContinuation(t *testing.T) {
+	// A rewrite-rewind replay can also land while NO turn is active. Replayed
+	// history must not be re-buffered into the next attaching turn and — the
+	// phantom-relay hazard — a replayed MODEL step must not request an
+	// agent-continuation: only a genuinely NEW idle MODEL step is agy
+	// continuing itself (ARCHITECTURE.md → no untracked resumption).
+	t.Setenv("TANK_OPERATOR_INTERNAL_URL", "http://127.0.0.1:1")
+	builder := eventBuilder{sessionID: "791", sessionStorageKey: "791"}
+	log := &eventLog{}
+	state := &runnerState{builder: builder, publish: log.publisher}
+	cfg := runnerConfig{sessionID: "791"}
+
+	feed := func(line string) {
+		t.Helper()
+		var step AgyStep
+		if err := json.Unmarshal([]byte(line), &step); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.handleStep("/tmp/transcript_full.jsonl", line, step, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	prose := `{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"All done."}`
+	run1 := newTurnRun(builder, log.publisher, "turn-1", "nonce-1", state)
+	state.attachTurn(run1)
+	feed(prose)
+	state.detachTurn(run1)
+
+	// An idle rewrite-rewind replays the already-published step.
+	feed(prose)
+	state.mu.Lock()
+	buffered, woke := len(state.pendingSteps), state.wakeRequested
+	state.mu.Unlock()
+	if buffered != 0 {
+		t.Fatalf("replayed history buffered %d idle steps, want 0", buffered)
+	}
+	if woke {
+		t.Fatal("replayed idle MODEL step must not manufacture a self-continuation relay")
+	}
+
+	// A genuinely new idle MODEL step is agy self-continuing: buffer + relay.
+	fresh := `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"The timer has ended!"}`
+	feed(fresh)
+	state.mu.Lock()
+	buffered, woke = len(state.pendingSteps), state.wakeRequested
+	state.mu.Unlock()
+	if buffered != 1 {
+		t.Fatalf("fresh idle step buffered %d steps, want 1", buffered)
+	}
+	if !woke {
+		t.Fatal("fresh idle MODEL step must request the agent-continuation relay")
 	}
 }
 
@@ -971,7 +1200,7 @@ func waitComplete(t *testing.T, run *turnRun, within time.Duration) bool {
 func TestTurnSettleKeepsAnswerFirstBurstInOneTurn(t *testing.T) {
 	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
 	log := &eventLog{}
-	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1", &runnerState{})
 	run.settleDur = 60 * time.Millisecond
 
 	ack := `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"I will set a 2-minute timer now."}`
@@ -1014,7 +1243,7 @@ func TestTurnSettleKeepsAnswerFirstBurstInOneTurn(t *testing.T) {
 func TestTurnSettleQuietCompletesAfterWindow(t *testing.T) {
 	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
 	log := &eventLog{}
-	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1", &runnerState{})
 	run.settleDur = 40 * time.Millisecond
 
 	prose := `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"All done."}`
@@ -1032,7 +1261,7 @@ func TestTurnSettleQuietCompletesAfterWindow(t *testing.T) {
 func TestTurnSettleZeroCompletesImmediately(t *testing.T) {
 	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
 	log := &eventLog{}
-	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1", &runnerState{})
 
 	prose := `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"All done."}`
 	if err := run.observeStep("/tmp/t.jsonl", prose, settleStep(t, prose)); err != nil {

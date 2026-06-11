@@ -356,6 +356,21 @@ All metric names are prefixed `tank_`. The full namespace:
   `orphaned_start`/`orphaned_completion` (a task signal whose originating turn
   was unknowable — the agent-continuation relay for that task renders
   standalone instead of folding; tank-operator#1035) and `publish_error`.
+  `tank_antigravity_runner_step_replay_suppressed_total{context}` records
+  transcript steps skipped because the (provider step, status) pair was
+  already observed earlier in the session. agy performs its larger transcript
+  writes as an in-place truncate + byte-identical full rewrite (verified live,
+  probe session 799); when a sweep's stat lands inside that sub-second window
+  the byte cursor rewinds and the whole history re-arrives. Replay is
+  therefore an intermittent race correlated with large step outputs — zero on
+  light sessions is normal, and real workloads hit it routinely.
+  `context="turn"` is a replay suppressed while a turn was active;
+  `context="idle"` is a replay suppressed between turns, where an
+  unsuppressed replay would re-buffer history into the next turn or
+  manufacture a phantom self-continuation relay. An antigravity session whose
+  later turns re-publish earlier turns' items in `session_events` while this
+  counter stays flat is the regression signature for the session-791 turn
+  re-attribution bug (expanding turn N showed turns 1..N).
   `tank_antigravity_runner_submit_watchdog_total{result}` records
   `cleared`/`fired` for the submit-ack watchdog, and
   `tank_antigravity_runner_provider_fatal_report_total{result}` records the
@@ -386,7 +401,8 @@ All metric names are prefixed `tank_`. The full namespace:
   step that says it will wait while emitting no native schedule tool call.
 - `tank_session_runtime_config_update_total` - pod-side runner reports of
   the model/effort actually applied to the provider runtime. Labels:
-  `provider` (`claude`, `codex`, `unknown`) and bounded `result`.
+  `provider` (`claude`, `codex`, `antigravity`, `unknown`) and bounded
+  `result`.
 - `tank_session_container_terminations_total{container,reason,exit_code}` —
   session pod container terminations observed by the leader-elected K8s watch.
   Labels are bounded: `reason="oom_killed"` is the runtime-death signal that a

@@ -3,7 +3,7 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-7d3f9d843493208891346fe9e2dc8e2f4d418aea8a315a3e2862eb1f413e90e4"
+  tag: "app-b54b02e9c4febc2c84dab1301f0af0e8772f9db6e9db43869a0c6114e7b27012"
   pullPolicy: IfNotPresent
 
 # normal: regular chart render
@@ -53,13 +53,13 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-46ac851c545f8b6f7312a193a305831bc7ee6411d57ea292f0b2ac9efe882a54
-  codexImage: romainecr.azurecr.io/codex-container:codex-6143248b0adfb5aefbc13f21ddf0f2597f3d16dd5655c6b88b7999a2620a3f67
+  image: romainecr.azurecr.io/claude-container:claude-582092ad0a23b3d5f8369a90ba2700f982d080a69f66ab382d45b51534a1470e
+  codexImage: romainecr.azurecr.io/codex-container:codex-dcbfd775a6227e0658f0edc4b4c4f531f92b746b5a74d36e5daeddd4a433e605
   # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-58b39a652f8c722c48c6597a70475c71fd36b958d478c7c3a73dfddc946bb78f
+  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-a3e0fb9f87fb6376a28fb69ce0c9628c5d14352275d1661658d9d55bc2a192d4
   # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
   # orchestrator namespace where the antigravity-api-proxy mounts it; agy
   # session pods never mount it (they get a placeholder + proxy injection).
@@ -241,6 +241,15 @@ sessionBus:
   # still provisions the auth token Secret in the orchestrator and
   # sessions namespaces so clients can connect.
   url: nats://tank-nats.nats.svc.cluster.local:4222
+
+clusterMaintenance:
+  autoUpgradeChannel: patch
+  nodeOSUpgradeChannel: NodeImage
+  autoUpgradeWindow:
+    dayOfWeek: Sunday
+    startTime: "06:00"
+    utcOffset: "+00:00"
+    durationHours: 12
 
 # GitHub App slug used for the install URL the orchestrator redirects users
 # to (#57 stage 2). The App's Setup URL must be configured to point at

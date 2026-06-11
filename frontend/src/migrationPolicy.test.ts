@@ -115,7 +115,7 @@ test("App-root holds no periodic React state setters (cascade-prone pattern)", (
   //      timeService at minute/second granularity, re-rendering only
   //      the row whose bucket changed.
   //   2. `clusterHealth*` + `loadClusterHealth` + 30s setInterval →
-  //      ClusterHealthWidget now owns its own state and polling.
+  //      ClusterHealthScreen now owns its own state and polling.
   //
   // Re-introducing either pattern restores the cascading-rerender
   // failure mode; this guard catches it at PR time. If a future
@@ -544,7 +544,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   expect(appRoutesSource).toMatch(
     /export type SessionRouteTab =[\s\S]*?"turns"[\s\S]*?"chat"[\s\S]*?"static"[\s\S]*?"session-data"[\s\S]*?"files"[\s\S]*?"background"/,
   );
-  expect(appRoutesSource.includes('export type AppRouteTab = "settings" | "help";')).toBe(true);
+  expect(appRoutesSource.includes('export type AppRouteTab = "settings" | "help" | "cluster";')).toBe(true);
   expect(appRoutesSource.includes("readAppRouteFromPathname")).toBe(true);
   expect(appRoutesSource.includes("buildAppRouteUrl")).toBe(true);
   expect(appRoutesSource.includes('url.pathname = "/new";')).toBe(true);
@@ -554,6 +554,7 @@ test("turn internals move out of the transcript into a turn view", () => {
           'replaceAppRoute("settings", homeSettingsTab, homeAdminView)',
         )).toBe(true);
   expect(appSource.includes('replaceAppRoute("help")')).toBe(true);
+  expect(appSource.includes('replaceAppRoute("cluster")')).toBe(true);
   expect(appSource.includes('setActiveTab("turns")')).toBe(true);
   // The turns route write threads both the durable turn number AND the page
   // ordinal so /turns/{n}/pages/{p} is deep-linkable; the call is multi-line.
@@ -668,6 +669,25 @@ test("thinking bubble renders an elapsed-time readout while a turn is live", () 
   expect(styleguidePortfolioTranscriptSource.includes(
           "run-turn-thinking-last-activity",
         )).toBe(true);
+});
+
+test("thinking bubble click expands the matching agent activity details", () => {
+  expect(appSource.includes("onActivate?: (turnId: string) => void")).toBe(
+    true,
+  );
+  expect(appSource.includes('const actionLabel = needsInput ? "Answer in Turns" : "Show agent activity";')).toBe(true);
+  expect(appSource).toMatch(
+    /if \(onActivate\) \{[\s\S]{0,90}onActivate\(turnId\);[\s\S]{0,40}return;[\s\S]{0,60}\}/,
+  );
+  expect(appSource).toMatch(
+    /group\.status === "needs_input"[\s\S]{0,180}setCollapsedActivityTurnIds\(\(prev\) =>[\s\S]{0,220}\[selected\.turnId\]: false/,
+  );
+  expect(appSource).toMatch(
+    /candidate\.kind === "activity" && candidate\.turnId === g\.turnId/,
+  );
+  expect(appSource).toMatch(
+    /g\.status !== "needs_input" && activityGroup\?\.kind === "activity"[\s\S]{0,180}onActivityOpen\?\.\(g\.turnId\)[\s\S]{0,140}setActivityOpen\(entryGroupKey\(activityGroup\), true\)/,
+  );
 });
 
 test("turn view entry points open at the turn bottom", () => {
