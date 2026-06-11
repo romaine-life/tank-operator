@@ -19419,6 +19419,18 @@ function ChatPane({
         }
         composerAbove={
           <>
+            {session.status === "Failed" && (
+              <div
+                className="run-turn-view-alert"
+                role="alert"
+                style={{ width: "100%", maxWidth: "none", margin: "0.5rem 0" }}
+              >
+                <AlertCircleIcon size={14} aria-hidden="true" />
+                <span>
+                  <strong>Agent Environment Offline:</strong> The session environment failed to start or was terminated.
+                </span>
+              </div>
+            )}
             {dragActive && (
               <div className="run-composer-drop-overlay" aria-hidden="true">
                 Drop to attach
@@ -19651,7 +19663,11 @@ function ChatPane({
         composer={
           <ChatComposer
             className={`run-composer-runpane run-composer-interactive${readOnly ? " run-composer-readonly" : ""}`}
-            placeholder={RUN_COMPOSER_PLACEHOLDER}
+            placeholder={
+              session.status === "Failed"
+                ? "Chat input disabled: Agent environment is offline."
+                : RUN_COMPOSER_PLACEHOLDER
+            }
             onSubmit={(args) => {
               if (readOnly) return;
               handleSubmit({ text: args.text, files: [] });
@@ -19659,7 +19675,7 @@ function ChatPane({
             sendByCtrlEnter={runPrefs.sendByCtrlEnter}
             hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
             hideHint
-            disabled={readOnly}
+            disabled={readOnly || session.status === "Failed"}
             canSubmit={!readOnly && ready}
             submitStatus={submitStatus}
             onStop={cancelRun}
