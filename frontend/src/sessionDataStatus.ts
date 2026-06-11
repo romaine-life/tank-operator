@@ -35,6 +35,7 @@ interface SessionDataStatusInput {
   repos?: string[] | null;
   clone_state?: Record<string, unknown> | null;
   session_image?: string | null;
+  session_image_metadata?: Record<string, unknown> | null;
   bug_label?: {
     display_name?: string;
     name?: string;
@@ -58,6 +59,7 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
   const contextWindow = nonNegativeInteger(session.runtime_context_window_tokens);
   const contextSource = trimOptionalString(session.runtime_context_window_source);
   const sessionImage = trimOptionalString(session.session_image);
+  const sessionImageMetadata = normalizeImageMetadata(session.session_image_metadata);
   const bugLabels = Array.isArray(session.bug_labels)
     ? session.bug_labels
         .map((label) =>
@@ -105,9 +107,12 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
     {
       id: "session_image",
       label: "Session image",
-      status: sessionImage ? imageTag(sessionImage) : "Unknown",
-      detail: sessionImage ?? "Created before image tracking",
+      status: sessionImage ? imageVersionStatus(sessionImage, sessionImageMetadata) : "Unknown",
+      detail: sessionImage
+        ? imageVersionDetail(sessionImage, sessionImageMetadata)
+        : "Created before image tracking",
       tone: sessionImage ? "info" : "muted",
+      href: imageVersionHref(sessionImageMetadata),
     },
     {
       id: "rollout",
@@ -177,6 +182,56 @@ function imageTag(image: string): string {
     return image.slice(lastColon + 1);
   }
   return image;
+}
+
+function normalizeImageMetadata(raw: Record<string, unknown> | null | undefined): Record<string, string> {
+  if (!raw || typeof raw !== "object") return {};
+  const out: Record<string, string> = {};
+  for (const [key, value] of Object.entries(raw)) {
+    if (typeof value === "string" && value.trim()) {
+      out[key] = value.trim();
+    }
+  }
+  return out;
+}
+
+function imageVersionStatus(image: string, metadata: Record<string, string>): string {
+  const parts = [
+    formatBuildTimestamp(metadata.built_at),
+    shortSHA(metadata.git_sha),
+    metadata.pr_number ? `PR #${metadata.pr_number}` : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? parts.join(" / ") : imageTag(image);
+}
+
+function imageVersionDetail(image: string, metadata: Record<string, string>): string {
+  const parts = [
+    image,
+    metadata.git_ref ? `ref ${metadata.git_ref}` : "",
+    metadata.workflow_run_url ? "workflow linked" : "",
+  ].filter(Boolean);
+  return parts.join(" / ");
+}
+
+function imageVersionHref(metadata: Record<string, string>): string | undefined {
+  return metadata.pr_url || metadata.commit_url || metadata.workflow_run_url || undefined;
+}
+
+function shortSHA(sha: string | undefined): string {
+  if (!sha) return "";
+  return sha.length > 7 ? sha.slice(0, 7) : sha;
+}
+
+function formatBuildTimestamp(raw: string | undefined): string {
+  if (!raw) return "";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  const yyyy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const min = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${min} UTC`;
 }
 
 function linkedRepoStatus(

@@ -50,6 +50,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 	const q = `
 		SELECT sessions.session_id, sessions.mode, sessions.pod_name, sessions.name, sessions.visible,
 			sessions.session_image,
+			sessions.session_image_metadata,
 			COALESCE(to_char(sessions.requested_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
 			COALESCE(to_char(sessions.created_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
 			COALESCE(to_char(sessions.updated_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at,
@@ -121,6 +122,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			status, readyAt, terminatingAt                                            string
 			name                                                                      string
 			visible                                                                   bool
+			sessionImageMetadata                                                      []byte
 			activitySummary, testState, rolloutState, cloneState                      []byte
 			providerRateLimitInfo                                                     []byte
 			repos, capabilities                                                       []string
@@ -137,7 +139,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 		)
 		if err := rows.Scan(
 			&sessionID, &mode, &podName, &name, &visible,
-			&sessionImage,
+			&sessionImage, &sessionImageMetadata,
 			&requestedAt, &createdAt, &updatedAt,
 			&status, &readyAt, &terminatingAt,
 			&activitySummary, &testState, &rolloutState,
@@ -168,6 +170,7 @@ func (s *Store) List(ctx context.Context, owner string) ([]sessionmodel.SessionR
 			Scope:                          s.scope,
 			PodName:                        podName,
 			SessionImage:                   sessionImage,
+			SessionImageMetadata:           sessionmodel.DecodeImageVersionMetadata(sessionImageMetadata),
 			Name:                           name,
 			Visible:                        visible,
 			RequestedAt:                    requestedAt,

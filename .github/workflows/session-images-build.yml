@@ -193,15 +193,56 @@ jobs:
           claude_tag="$(cat session-image-tags/claude.tag)"
           codex_tag="$(cat session-image-tags/codex.tag)"
           antigravity_tag="$(cat session-image-tags/antigravity.tag)"
-          # session.image / session.codexImage / session.antigravityImage are
-          # repo:tag strings; rewrite them to the fingerprint tags the
-          # matrix above either found or pushed.
-          sed -i -E "s|^(  image: romainecr.azurecr.io/claude-container:).*$|\1${claude_tag}|" k8s/values.yaml
-          sed -i -E "s|^(  codexImage: ).*$|\1romainecr.azurecr.io/codex-container:${codex_tag}|" k8s/values.yaml
-          sed -i -E "s|^(  antigravityImage: ).*$|\1romainecr.azurecr.io/antigravity-container:${antigravity_tag}|" k8s/values.yaml
+          built_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          git_sha="$(git rev-parse HEAD)"
+          git_ref="${GITHUB_REF_NAME:-main}"
+          repository="${GITHUB_REPOSITORY}"
+          commit_url="${GITHUB_SERVER_URL}/${repository}/commit/${git_sha}"
+          workflow_run_url="${GITHUB_SERVER_URL}/${repository}/actions/runs/${GITHUB_RUN_ID}"
+          subject="$(git log -1 --pretty=%s)"
+          pr_number="$(printf '%s\n' "${subject}" | sed -nE 's/.*\(#([0-9]+)\).*/\1/p')"
+          if [[ -z "${pr_number}" ]]; then
+            pr_number="$(printf '%s\n' "${subject}" | sed -nE 's/.*[Pp]ull request #([0-9]+).*/\1/p')"
+          fi
+          pr_url=""
+          if [[ -n "${pr_number}" ]]; then
+            pr_url="${GITHUB_SERVER_URL}/${repository}/pull/${pr_number}"
+          fi
+
+          python3 scripts/update-values-yaml.py --file k8s/values.yaml \
+            --set session.image="romainecr.azurecr.io/claude-container:${claude_tag}" \
+            --set session.codexImage="romainecr.azurecr.io/codex-container:${codex_tag}" \
+            --set session.antigravityImage="romainecr.azurecr.io/antigravity-container:${antigravity_tag}" \
+            --set session.imageMetadata.claude.built_at="${built_at}" \
+            --set session.imageMetadata.claude.git_sha="${git_sha}" \
+            --set session.imageMetadata.claude.git_ref="${git_ref}" \
+            --set session.imageMetadata.claude.commit_url="${commit_url}" \
+            --set session.imageMetadata.claude.pr_number="${pr_number}" \
+            --set session.imageMetadata.claude.pr_url="${pr_url}" \
+            --set session.imageMetadata.claude.workflow_run_url="${workflow_run_url}" \
+            --set session.imageMetadata.claude.repository="${repository}" \
+            --set session.imageMetadata.claude.actor="${GITHUB_ACTOR}" \
+            --set session.imageMetadata.codex.built_at="${built_at}" \
+            --set session.imageMetadata.codex.git_sha="${git_sha}" \
+            --set session.imageMetadata.codex.git_ref="${git_ref}" \
+            --set session.imageMetadata.codex.commit_url="${commit_url}" \
+            --set session.imageMetadata.codex.pr_number="${pr_number}" \
+            --set session.imageMetadata.codex.pr_url="${pr_url}" \
+            --set session.imageMetadata.codex.workflow_run_url="${workflow_run_url}" \
+            --set session.imageMetadata.codex.repository="${repository}" \
+            --set session.imageMetadata.codex.actor="${GITHUB_ACTOR}" \
+            --set session.imageMetadata.antigravity.built_at="${built_at}" \
+            --set session.imageMetadata.antigravity.git_sha="${git_sha}" \
+            --set session.imageMetadata.antigravity.git_ref="${git_ref}" \
+            --set session.imageMetadata.antigravity.commit_url="${commit_url}" \
+            --set session.imageMetadata.antigravity.pr_number="${pr_number}" \
+            --set session.imageMetadata.antigravity.pr_url="${pr_url}" \
+            --set session.imageMetadata.antigravity.workflow_run_url="${workflow_run_url}" \
+            --set session.imageMetadata.antigravity.repository="${repository}" \
+            --set session.imageMetadata.antigravity.actor="${GITHUB_ACTOR}"
 
           if git diff --quiet k8s/values.yaml; then
-            echo "no session image tag change"
+            echo "no session image tag or metadata change"
             exit 0
           fi
 

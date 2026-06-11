@@ -5973,11 +5973,46 @@ button:disabled {
   font-size: var(--text-xs);
 }
 
-.run-settings-rate-limit-row span:last-child {
+.run-settings-rate-limit-row > span:last-child,
+.run-settings-rate-limit-row > .run-settings-version-value {
   min-width: 0;
   color: var(--text-body);
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
+}
+
+.run-settings-version-value {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.run-settings-version-label {
+  color: var(--text-body);
+}
+
+.run-settings-version-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  font-family: var(--font-sans);
+}
+
+.run-settings-version-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  color: var(--accent-fg);
+  text-decoration: none;
+}
+
+.run-settings-version-links svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.run-settings-version-detail {
+  color: var(--text-muted);
+  font-size: 0.72rem;
 }
 
 .run-settings-observability {

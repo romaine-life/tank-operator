@@ -1764,6 +1764,13 @@ var schemaMigrations = []migration{
 	// session booted from without reading a live pod.
 	{ID: "0143", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS session_image text NOT NULL DEFAULT ''`},
+
+	// Store the human-facing release metadata that describes the session image
+	// stamped at create time. Kept separate from session_image so immutable
+	// fingerprint tags stay machine-useful while the UI can show PR, commit,
+	// workflow, and build timestamp context for existing sessions.
+	{ID: "0144", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS session_image_metadata jsonb NOT NULL DEFAULT '{}'::jsonb`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

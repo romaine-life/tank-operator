@@ -52,12 +52,20 @@ spec:
               value: {{ include "tank-operator.orchestratorNamespace" . | quote }}
             - name: TANK_OPERATOR_IMAGE
               value: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+            - name: TANK_OPERATOR_IMAGE_METADATA
+              value: {{ .Values.image.metadata | default dict | toJson | quote }}
             - name: SESSION_IMAGE
               value: {{ .Values.session.image | quote }}
+            - name: SESSION_IMAGE_METADATA
+              value: {{ .Values.session.imageMetadata.claude | default dict | toJson | quote }}
             - name: CODEX_SESSION_IMAGE
               value: {{ .Values.session.codexImage | quote }}
+            - name: CODEX_SESSION_IMAGE_METADATA
+              value: {{ .Values.session.imageMetadata.codex | default dict | toJson | quote }}
             - name: ANTIGRAVITY_SESSION_IMAGE
               value: {{ .Values.session.antigravityImage | quote }}
+            - name: ANTIGRAVITY_SESSION_IMAGE_METADATA
+              value: {{ .Values.session.imageMetadata.antigravity | default dict | toJson | quote }}
             - name: SESSION_SERVICE_ACCOUNT
               value: {{ include "tank-operator.sessionServiceAccount" . | quote }}
             - name: SESSION_CONFIGMAP

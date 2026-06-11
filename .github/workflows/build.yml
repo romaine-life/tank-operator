@@ -92,13 +92,36 @@ jobs:
         if: github.ref == 'refs/heads/main'
         run: |
           tag="${{ steps.fingerprint.outputs.proof_tag }}"
-          # Targeted sed: only the line beginning with two spaces + `tag:` under image.
-          # Quote the value so YAML never reinterprets image tags. Sufficient
-          # for our single-image values.yaml — revisit if the chart grows.
-          sed -i -E "s|^(  tag: ).*$|\1\"${tag}\"|" k8s/values.yaml
+          built_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+          git_sha="$(git rev-parse HEAD)"
+          git_ref="${GITHUB_REF_NAME:-main}"
+          repository="${GITHUB_REPOSITORY}"
+          commit_url="${GITHUB_SERVER_URL}/${repository}/commit/${git_sha}"
+          workflow_run_url="${GITHUB_SERVER_URL}/${repository}/actions/runs/${GITHUB_RUN_ID}"
+          subject="$(git log -1 --pretty=%s)"
+          pr_number="$(printf '%s\n' "${subject}" | sed -nE 's/.*\(#([0-9]+)\).*/\1/p')"
+          if [[ -z "${pr_number}" ]]; then
+            pr_number="$(printf '%s\n' "${subject}" | sed -nE 's/.*[Pp]ull request #([0-9]+).*/\1/p')"
+          fi
+          pr_url=""
+          if [[ -n "${pr_number}" ]]; then
+            pr_url="${GITHUB_SERVER_URL}/${repository}/pull/${pr_number}"
+          fi
+
+          python3 scripts/update-values-yaml.py --file k8s/values.yaml \
+            --set image.tag="${tag}" \
+            --set image.metadata.built_at="${built_at}" \
+            --set image.metadata.git_sha="${git_sha}" \
+            --set image.metadata.git_ref="${git_ref}" \
+            --set image.metadata.commit_url="${commit_url}" \
+            --set image.metadata.pr_number="${pr_number}" \
+            --set image.metadata.pr_url="${pr_url}" \
+            --set image.metadata.workflow_run_url="${workflow_run_url}" \
+            --set image.metadata.repository="${repository}" \
+            --set image.metadata.actor="${GITHUB_ACTOR}"
 
           if git diff --quiet k8s/values.yaml; then
-            echo "no tag change"
+            echo "no app image tag or metadata change"
             exit 0
           fi
 
