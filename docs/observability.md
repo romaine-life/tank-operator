@@ -345,6 +345,11 @@ All metric names are prefixed `tank_`. The full namespace:
   resolved: `graceful_done` (agy settled a DONE response), `grace_forced` (the
   `ANTIGRAVITY_INTERRUPT_GRACE_MS` window forced the durable terminal), or
   `process_exited` (the SIGINT killed agy).
+  `tank_antigravity_runner_turn_settle_total{outcome}` records turn-boundary
+  settlement: `quiet` means transcript silence confirmed the terminal,
+  `extended` means a further step canceled an armed window — the answer-first
+  frequency signal that keeps the silence-window constant honest
+  (tank-operator#1035; see ARCHITECTURE.md → "Silence Is the Boundary").
   `tank_antigravity_runner_task_lifecycle_total{event}` records durable
   `shell_task.*` publishes for agy-tracked background tasks
   (`started`/`completed`), plus the fold-regression signals

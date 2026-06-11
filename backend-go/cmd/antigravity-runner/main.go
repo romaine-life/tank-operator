@@ -75,6 +75,10 @@ var (
 		Name: "tank_antigravity_runner_provider_fatal_report_total",
 		Help: "Provider-fatal reports posted to the orchestrator, by result (ok, error).",
 	}, []string{"result"})
+	turnSettleTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_antigravity_runner_turn_settle_total",
+		Help: "Turn-settle window resolutions: quiet (silence confirmed the boundary), extended (a further step canceled an armed window — the answer-first frequency signal).",
+	}, []string{"outcome"})
 	taskLifecycleTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tank_antigravity_runner_task_lifecycle_total",
 		Help: "Durable shell_task lifecycle publishes for agy-tracked background tasks (started, completed, orphaned_start, orphaned_completion, publish_error). orphaned_* means the origin-turn edge was unknowable — the fold-regression signal for tank-operator#1035.",
@@ -131,6 +135,20 @@ type runnerConfig struct {
 	// is intentionally no auto-retry: re-writing the prompt to the PTY
 	// risks double-execution if agy did receive the first write.
 	submitAckTimeout time.Duration
+	// turnSettle is the transcript-silence window that defines agy's turn
+	// boundary. agy's planner loop runs multiple rounds per burst
+	// (ack-prose, tool calls, settled prose) and writes NO end-of-burst
+	// marker anywhere — transcript, messages/, task logs, cli.log were all
+	// read empirically (slot-1 sessions 159/160, tank-operator#1035):
+	// silence IS the provider's boundary semantics. The terminal therefore
+	// publishes only after a settled prose response has been followed by
+	// this much transcript silence, which keeps the answer-first sequence
+	// (ack closes early, tool call lands seconds later) inside ONE turn
+	// with a correct background_work_pending stamp. Observed intra-burst
+	// gaps are ~600ms; the default gives 3x margin. 0 disables (terminal
+	// on prose immediately). The prose itself streams to the user
+	// immediately — only the status transition waits.
+	turnSettle time.Duration
 	// interruptGrace bounds how long a Stop may wait for agy to settle
 	// (DONE planner response or process exit) before the runner forces
 	// the durable turn.interrupted terminal anyway, mirroring the
@@ -466,6 +484,11 @@ type turnRun struct {
 	graceFired    chan struct{}
 	graceArmOnce  sync.Once
 	graceFireOnce sync.Once
+	// settleDur is the transcript-silence window that turns a settled
+	// prose response into the turn terminal (see runnerConfig.turnSettle).
+	// 0 means complete immediately on settled prose.
+	settleDur   time.Duration
+	settleTimer *time.Timer
 
 	mu              sync.Mutex
 	started         bool
@@ -878,6 +901,7 @@ func loadConfig() (runnerConfig, error) {
 		agyHome:           firstNonEmpty(firstEnv("ANTIGRAVITY_HOME", "AGY_HOME"), filepath.Join(home, ".gemini", "antigravity-cli")),
 		submitAckTimeout:  envDurationMS("ANTIGRAVITY_SUBMIT_ACK_TIMEOUT_MS", 60*time.Second),
 		interruptGrace:    envDurationMS("ANTIGRAVITY_INTERRUPT_GRACE_MS", 10*time.Second),
+		turnSettle:        envDurationMS("ANTIGRAVITY_TURN_SETTLE_MS", 2*time.Second),
 		metricsPort:       firstNonEmpty(strings.TrimSpace(os.Getenv("TANK_RUNNER_METRICS_PORT")), "9097"),
 	}, nil
 }
@@ -1029,6 +1053,7 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 
 	run := newTurnRun(builder, publisher, turnID, clientNonce)
 	run.state = state
+	run.settleDur = cfg.turnSettle
 	if err := publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnClaimed), "")); err != nil {
 		return false, err
 	}
@@ -1222,6 +1247,17 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 	// Any transcript record — relevant or not, including the USER_EXPLICIT
 	// prompt echo — proves agy is processing; clear the submit watchdog.
 	r.noteProgress()
+	// The burst is still moving: a step after a settled prose response
+	// cancels the armed boundary window (answer-first — the prose was an
+	// ack, not the end). A later settled prose re-arms it.
+	r.mu.Lock()
+	if r.settleTimer != nil {
+		if r.settleTimer.Stop() {
+			turnSettleTotal.WithLabelValues("extended").Inc()
+		}
+		r.settleTimer = nil
+	}
+	r.mu.Unlock()
 	if !isRelevantStep(step) {
 		return nil
 	}
@@ -1399,13 +1435,34 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 				r.mu.Unlock()
 			}
 			if strings.EqualFold(step.Status, "DONE") {
-				r.markComplete()
+				r.armSettle()
 			}
 			return nil
 		}
 	}
 
 	return nil
+}
+
+// armSettle starts the transcript-silence window that converts a settled
+// prose response into the turn terminal. Silence is agy's only boundary
+// signal (its planner loop knows when a burst is over but writes no marker);
+// the window keeps answer-first tool calls inside the turn so the terminal's
+// background_work_pending stamp is evaluated after the burst truly ended.
+func (r *turnRun) armSettle() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.settleDur <= 0 {
+		r.markComplete()
+		return
+	}
+	if r.settleTimer != nil {
+		r.settleTimer.Stop()
+	}
+	r.settleTimer = time.AfterFunc(r.settleDur, func() {
+		turnSettleTotal.WithLabelValues("quiet").Inc()
+		r.markComplete()
+	})
 }
 
 func (r *turnRun) ensureStarted(providerID string) error {

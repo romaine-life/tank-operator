@@ -940,3 +940,105 @@ func TestTaskLifecycleStartWhileIdleDefersToAttachingTurn(t *testing.T) {
 		t.Fatalf("deferred edge task_id = %v", started["task_id"])
 	}
 }
+
+// --- Turn-settle tests (silence is the boundary) -----------------------------
+
+func settleStep(t *testing.T, line string) AgyStep {
+	t.Helper()
+	var step AgyStep
+	if err := json.Unmarshal([]byte(line), &step); err != nil {
+		t.Fatal(err)
+	}
+	return step
+}
+
+func waitComplete(t *testing.T, run *turnRun, within time.Duration) bool {
+	t.Helper()
+	select {
+	case <-run.turnComplete:
+		return true
+	case <-time.After(within):
+		return false
+	}
+}
+
+// TestTurnSettleKeepsAnswerFirstBurstInOneTurn replays slot-1 round 1's exact
+// burst shape (tank-operator#1035): ack prose closes nothing, the schedule
+// tool call and RUNNING marker land inside the still-open turn, and the
+// settled prose plus silence produces the one terminal. Pre-settle, the ack
+// prose terminated the turn instantly and the work signal landed in the idle
+// gap — the answer-first false-ready/false-ring pathology.
+func TestTurnSettleKeepsAnswerFirstBurstInOneTurn(t *testing.T) {
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	run.settleDur = 60 * time.Millisecond
+
+	ack := `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"I will set a 2-minute timer now."}`
+	if err := run.observeStep("/tmp/t.jsonl", ack, settleStep(t, ack)); err != nil {
+		t.Fatal(err)
+	}
+	if waitComplete(t, run, 20*time.Millisecond) {
+		t.Fatal("ack prose must not terminate the turn before the settle window elapses")
+	}
+
+	toolCall := `{"step_index":3,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"schedule","args":{"DurationSeconds":"120"}}]}`
+	if err := run.observeStep("/tmp/t.jsonl", toolCall, settleStep(t, toolCall)); err != nil {
+		t.Fatal(err)
+	}
+	marker := `{"step_index":4,"source":"MODEL","type":"GENERIC","status":"RUNNING","content":"Tool is running as a background task with task id: T-1"}`
+	if err := run.observeStep("/tmp/t.jsonl", marker, settleStep(t, marker)); err != nil {
+		t.Fatal(err)
+	}
+	if waitComplete(t, run, 90*time.Millisecond) {
+		t.Fatal("tool activity must keep the turn open — no settled prose has re-armed the window")
+	}
+
+	settled := `{"step_index":5,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"I have set a 2-minute timer and will now wait."}`
+	if err := run.observeStep("/tmp/t.jsonl", settled, settleStep(t, settled)); err != nil {
+		t.Fatal(err)
+	}
+	if !waitComplete(t, run, 300*time.Millisecond) {
+		t.Fatal("settled prose plus silence must terminate the turn")
+	}
+	if err := run.finishCompleted(); err != nil {
+		t.Fatal(err)
+	}
+	events := log.snapshot()
+	last := events[len(events)-1]
+	if last["type"] != string(conversation.EventTurnCompleted) {
+		t.Fatalf("terminal type = %v, want turn.completed", last["type"])
+	}
+}
+
+func TestTurnSettleQuietCompletesAfterWindow(t *testing.T) {
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+	run.settleDur = 40 * time.Millisecond
+
+	prose := `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"All done."}`
+	if err := run.observeStep("/tmp/t.jsonl", prose, settleStep(t, prose)); err != nil {
+		t.Fatal(err)
+	}
+	if waitComplete(t, run, 10*time.Millisecond) {
+		t.Fatal("turn must not complete before the silence window")
+	}
+	if !waitComplete(t, run, 300*time.Millisecond) {
+		t.Fatal("turn must complete after the silence window")
+	}
+}
+
+func TestTurnSettleZeroCompletesImmediately(t *testing.T) {
+	builder := eventBuilder{sessionID: "17", sessionStorageKey: "17"}
+	log := &eventLog{}
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1")
+
+	prose := `{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"All done."}`
+	if err := run.observeStep("/tmp/t.jsonl", prose, settleStep(t, prose)); err != nil {
+		t.Fatal(err)
+	}
+	if !waitComplete(t, run, 50*time.Millisecond) {
+		t.Fatal("settleDur=0 must preserve immediate completion on settled prose")
+	}
+}

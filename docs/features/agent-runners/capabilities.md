@@ -184,6 +184,17 @@ Contract impact:
   Tank wake tables (Claude/Codex) OR `background_work_pending` (antigravity) — so a
   parked agy turn reads as `scheduled` with no Tank wake row. `working → scheduled`
   does not ring; `working → ready` (nothing pending) rings.
+- **Silence is the turn boundary (turn-settle window).** agy writes no
+  end-of-burst marker anywhere (verified empirically across transcripts,
+  messages/, task logs, cli.log — tank-operator#1035); its planner loop runs
+  multiple rounds per burst. The runner publishes `turn.completed` only after
+  a settled prose response plus `ANTIGRAVITY_TURN_SETTLE_MS` (default 2s) of
+  transcript silence, so the answer-first sequence stays inside one turn with
+  a correct `background_work_pending` stamp — no false `ready`/ring, no
+  untracked self-wake relay. A window miss degrades to the relay+fold
+  machinery, never to incorrectness.
+  `tank_antigravity_runner_turn_settle_total{outcome}` counts quiet vs
+  extended boundaries.
 - **The pending-set is the load-bearing signal.** agy routes all background work
   through one uniform task framework: a `MODEL` `status=RUNNING`
   "running as a background task with task id: X" marker adds X; a SYSTEM_MESSAGE
@@ -217,6 +228,11 @@ Evidence:
 - Guards: `scripts/check-removed-chat-runtime.mjs` (runner self-continuation
   contract check — no `registerScheduledWakeup` / wake-endpoint literals in the
   runner main.go, `/agent-continuation` present); the AST test above.
+- Turn settle: `backend-go/cmd/antigravity-runner/main_test.go`
+  (`TestTurnSettleKeepsAnswerFirstBurstInOneTurn` replays slot-1 round 1's
+  exact answer-first burst into one terminal;
+  `TestTurnSettleQuietCompletesAfterWindow`,
+  `TestTurnSettleZeroCompletesImmediately`).
 - Fold edge: `backend-go/cmd/antigravity-runner/main_test.go`
   (`TestTaskLifecycleEventsPublishDurableFoldEdge`,
   `TestTaskLifecycleStartWhileIdlePublishesNothing`);
