@@ -344,52 +344,52 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
           Prompt context unavailable
         </div>
       </div>
-      <div
-        className="run-turn-activity-divider run-turn-view-activity-divider"
-        data-design-component="TurnSectionDivider"
-        data-design-state="prompt-and-activity-controls-present"
-        data-inspectable
-      >
-        <div
-          className="run-turn-activity-divider-controls"
-          role="group"
-          aria-label="Turn section collapse controls"
-        >
-          <button
-            type="button"
-            className="run-turn-activity-divider-toggle"
-            data-direction="up"
-            aria-expanded={true}
-            aria-label="Collapse user message"
-            title="Collapse user message"
-          >
-            <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
-            <ChevronUpIcon
-              className="run-turn-activity-divider-toggle-chevron"
-              size={13}
-              strokeWidth={2.3}
-              aria-hidden="true"
-            />
-          </button>
-          <button
-            type="button"
-            className="run-turn-activity-divider-toggle"
-            data-direction="down"
-            aria-expanded={true}
-            aria-label="Collapse agent activity"
-            title="Collapse agent activity"
-          >
-            <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
-            <ChevronDownIcon
-              className="run-turn-activity-divider-toggle-chevron"
-              size={13}
-              strokeWidth={2.3}
-              aria-hidden="true"
-            />
-          </button>
-        </div>
-      </div>
       <div className="run-turn-view-body run-transcript run-transcript-claude">
+        <div
+          className="run-turn-activity-divider run-turn-view-activity-divider"
+          data-design-component="TurnSectionDivider"
+          data-design-state="prompt-and-activity-controls-present"
+          data-inspectable
+        >
+          <div
+            className="run-turn-activity-divider-controls"
+            role="group"
+            aria-label="Turn section collapse controls"
+          >
+            <button
+              type="button"
+              className="run-turn-activity-divider-toggle"
+              data-direction="up"
+              aria-expanded={true}
+              aria-label="Collapse user message"
+              title="Collapse user message"
+            >
+              <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
+              <ChevronUpIcon
+                className="run-turn-activity-divider-toggle-chevron"
+                size={13}
+                strokeWidth={2.3}
+                aria-hidden="true"
+              />
+            </button>
+            <button
+              type="button"
+              className="run-turn-activity-divider-toggle"
+              data-direction="down"
+              aria-expanded={true}
+              aria-label="Collapse agent activity"
+              title="Collapse agent activity"
+            >
+              <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
+              <ChevronDownIcon
+                className="run-turn-activity-divider-toggle-chevron"
+                size={13}
+                strokeWidth={2.3}
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+        </div>
         <RunningTool highlighted={highlighted} />
         <TranscriptMessage variant="assistant" highlighted={highlighted} ownedByActivity showAssistantAvatar>
           <p style={{ margin: 0 }}>
