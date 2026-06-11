@@ -246,6 +246,76 @@ Evidence:
   ("The long-running-agent harness contract"); the `scheduled` status spine in
   `docs/scheduled-turn-continuity.md`.
 
+## Antigravity transcript-rewrite replay suppression (turn re-attribution)
+
+Status: in progress
+
+Intent:
+agy performs its larger writes to `transcript_full.jsonl` as an in-place
+truncate + byte-identical full rewrite (same inode, prefix cksum-stable —
+verified live on probe session 799, agy CLI 1.0.6). When a tailer sweep's
+stat lands inside that sub-second window, `size < offset` rewinds the byte
+cursor and the entire history re-arrives — an intermittent race correlated
+with large step outputs (zero on light sessions; routine on real workloads:
+sessions 791/792/793 all hit it repeatedly). A transcript step must publish
+durable events exactly once, under the turn that first observed it.
+Originating incident: session 791 (2026-06-11, "chess shadow") — step dedupe
+was scoped to the live turn, so every replay re-published all prior history
+under whatever turn was live. Turn 1's "schedule 5s timer" items existed
+under four turn_ids, per-turn item counts grew cumulatively (2 → 35 → 270 →
+282; O(N²) ledger growth), and expanding turn N in the Turns view showed the
+content of turns 1..N. Claude/Codex runners structurally lack this class:
+they consume push streams over stdio (SDK stream-json / app-server JSON-RPC),
+exactly-once by construction; file-scraping is at-least-once by nature and
+needs this idempotency layer to discharge into the exactly-once ledger.
+
+Affected contracts:
+- Agent Runners
+- Transcript
+
+Contract impact:
+- Step dedupe is session-scoped (`runnerState.seenSteps`, keyed by
+  `providerStepID` + status) instead of per-`turnRun`. This is the
+  transcript-replay analog of "command redelivery does not duplicate
+  user-visible transcript entries", and the sibling of the task-lifecycle
+  dedupe (`taskEventsPublished`) that #1035 added for repeating task markers.
+- The idle path is guarded too: a replayed idle MODEL step is not re-buffered
+  into the next attaching turn and does not manufacture a phantom
+  agent-continuation relay — only a genuinely new idle MODEL step is agy
+  self-continuing (the no-untracked-resumption rule).
+- Replayed bytes still count as transcript movement (submit-ack watchdog
+  clears, settle window extends); only the durable publish is suppressed, so
+  turn-boundary semantics are unchanged.
+- Scoped to process memory deliberately: agy process death is
+  session-terminal (no revival), so no replay must survive a restart that the
+  tailer's startup byte-cursor skip does not already cover.
+- Pre-fix sessions' duplicated `session_events` rows were scrubbed on
+  2026-06-11 (user-approved: historic sessions are ephemeral/killable):
+  content-identical later-turn copies of item.* events deleted, transcript
+  rows re-materialized via per-session backfill-row reset — no code path
+  keeps old data alive (migration policy).
+
+Evidence:
+- Runner: `backend-go/cmd/antigravity-runner/main_test.go`
+  (`TestCumulativeTranscriptReplayDoesNotReattributeStepsAcrossTurns` replays
+  session 791's shape — full-history re-arrival under a second turn publishes
+  nothing and the second turn's final answer stays its own;
+  `TestIdleCumulativeReplayDoesNotBufferOrManufactureContinuation` pins the
+  idle buffer + phantom-relay guard).
+- Ledger diagnosis: session 791 `session_events` — same agy step ids under up
+  to 4 turn_ids, 0 of 501 step/status pairs with divergent content across
+  copies (the re-publications were byte-identical replays).
+- Writer-behavior verification (probe sessions 798/799, 2026-06-11): 0.3s
+  size/inode watcher + content snapshots through light and heavy turns —
+  monotone sizes, constant inode, cksum-identical prefixes — while the
+  durable ledger recorded a full mid-turn re-publication on the heavy turn,
+  proving the sub-second in-place truncate+rewrite race (the runner's
+  fsnotify-paced stats catch windows wall-clock samplers cannot).
+- Metrics: `tank_antigravity_runner_step_replay_suppressed_total{context}` —
+  taxonomy in `docs/observability.md`.
+- Design record: `backend-go/cmd/antigravity-runner/ARCHITECTURE.md` →
+  "The Transcript Writer Rewrites In Place (session-scoped step dedupe)".
+
 ## Background-task completion wake
 
 Status: in progress

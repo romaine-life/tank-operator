@@ -83,6 +83,10 @@ var (
 		Name: "tank_antigravity_runner_task_lifecycle_total",
 		Help: "Durable shell_task lifecycle publishes for agy-tracked background tasks (started, completed, orphaned_start, orphaned_completion, publish_error). orphaned_* means the origin-turn edge was unknowable — the fold-regression signal for tank-operator#1035.",
 	}, []string{"event"})
+	stepReplaySuppressedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_antigravity_runner_step_replay_suppressed_total",
+		Help: "Transcript steps skipped because the (provider step, status) pair was already observed earlier in this session. agy rewrites transcript_full.jsonl in place (truncate + byte-identical full rewrite, verified live on session 799); when a sweep's stat lands inside the rewrite window the byte cursor rewinds to 0 and the whole history re-arrives. Replay is therefore an intermittent race correlated with large step outputs: zero on light sessions, frequent on heavy ones. context=turn (suppressed while a turn was active) or idle (suppressed between turns, where an unsuppressed replay would re-buffer history or manufacture a phantom self-continuation relay). Cross-turn duplicate items in session_events while this counter stays flat is the regression signature for the session-791 re-attribution bug.",
+	}, []string{"context"})
 )
 
 func serveMetrics(port string) {
@@ -193,6 +197,27 @@ type runnerState struct {
 	// self-continuation is the forbidden untracked-self-wake signature.
 	lastCompletedTask string
 
+	// seenSteps is the SESSION-scoped step dedupe set, keyed by
+	// stepSeenKey (providerStepID + status). agy does its larger writes to
+	// transcript_full.jsonl as an in-place truncate + full rewrite (same
+	// inode, byte-identical prefix — watched live on session 799); when a
+	// sweep's stat lands inside that sub-second window, size < offset
+	// rewinds the byte cursor and the ENTIRE history re-arrives through
+	// the tailer. Dedupe scoped to one turn (the pre-fix state)
+	// re-published every historical step under whatever turn was live at
+	// the race, so session_events accumulated per-turn copies of the whole
+	// conversation and expanding turn N showed turns 1..N (sessions
+	// 791/792/793).
+	// A (step, status) pair is durable under the turn that FIRST observed
+	// it and must never publish again. Guarded by its own mutex because
+	// observeStep runs both under s.mu (handleStep, attachTurn) and bare in
+	// tests; session-process-scoped is sufficient because agy process death
+	// is session-terminal by design (ARCHITECTURE.md — no revival), so no
+	// replay must survive a restart that the startup byte-cursor skip does
+	// not already cover.
+	seenMu    sync.Mutex
+	seenSteps map[string]struct{}
+
 	// taskTurns remembers each tracked task's originating turn id
 	// (stableIDPart task id → turn id) so the completion event — which can
 	// arrive while idle — still lands on the originating turn.
@@ -254,6 +279,17 @@ func (s *runnerState) handleStep(path, line string, step AgyStep, cfg runnerConf
 	}
 	if s.currentRun != nil {
 		return s.currentRun.observeStep(path, line, step)
+	}
+
+	// Replayed history while idle: a (step, status) pair already durable under
+	// the turn that first observed it must not be re-buffered into the next
+	// turn, and a replayed MODEL step must not manufacture a phantom
+	// self-continuation relay (only a genuinely NEW idle MODEL step is agy
+	// continuing itself). Check-only — marking happens at publish time in
+	// observeStep, when a turn attaches and replays the buffer.
+	if s.stepObserved(stepSeenKey(providerStepID(path, line, step), step.Status)) {
+		stepReplaySuppressedTotal.WithLabelValues("idle").Inc()
+		return nil
 	}
 
 	// Idle: buffer the step so the turn that attaches replays it. A MODEL step while
@@ -452,6 +488,45 @@ func (s *runnerState) backgroundWorkPending() bool {
 	return len(s.pendingTasks) > 0
 }
 
+// stepSeenKey is the session-scoped dedupe identity of one transcript step
+// observation: the stable provider step id plus the step's status, so a
+// RUNNING→DONE transition publishes both edges while any re-read of an
+// already-observed (step, status) pair — the whole history re-arrives when a
+// sweep stats agy's transcript mid-rewrite and rewinds the cursor — is
+// suppressed. The identity (and the ToUpper status normalization) is exactly
+// what the retired per-turn seen map used; only the scope changed, because
+// per-turn scope re-attributed history to later turns.
+func stepSeenKey(providerID, status string) string {
+	return providerID + ":" + strings.ToUpper(status)
+}
+
+// markStepObserved records one (step, status) observation and reports whether
+// it is the FIRST observation this session — the only observation allowed to
+// publish. Called at publish time (observeStep), never for idle buffering.
+func (s *runnerState) markStepObserved(key string) bool {
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	if _, ok := s.seenSteps[key]; ok {
+		return false
+	}
+	if s.seenSteps == nil {
+		s.seenSteps = map[string]struct{}{}
+	}
+	s.seenSteps[key] = struct{}{}
+	return true
+}
+
+// stepObserved reports whether the (step, status) pair has already been
+// observed, without recording anything. The idle path checks (and must not
+// mark: an idle-buffered step is published only when a turn attaches and
+// replays it through observeStep, which is where marking happens).
+func (s *runnerState) stepObserved(key string) bool {
+	s.seenMu.Lock()
+	defer s.seenMu.Unlock()
+	_, ok := s.seenSteps[key]
+	return ok
+}
+
 // trimTaskID strips trailing sentence punctuation a regex \S+ may capture around an
 // agy task id (the id charset itself never ends in these).
 func trimTaskID(raw string) string {
@@ -492,14 +567,15 @@ type turnRun struct {
 
 	mu              sync.Mutex
 	started         bool
-	seen            map[string]struct{}
 	final           finalAnswer
 	providerFailed  string
 	pendingTools    []pendingTool
 	cumulativeUsage *AgyUsage
 
 	// state is the shared session runner state. The relay reads its background-work
-	// pending-set to stamp background_work_pending on this turn's terminal.
+	// pending-set to stamp background_work_pending on this turn's terminal, and
+	// observeStep consults its SESSION-scoped seenSteps set — per-turn dedupe
+	// re-published replayed history under every later turn (session 791).
 	state *runnerState
 }
 
@@ -1051,8 +1127,7 @@ func handleSubmitTurn(ctx context.Context, cfg runnerConfig, builder eventBuilde
 		clientNonce = turnID
 	}
 
-	run := newTurnRun(builder, publisher, turnID, clientNonce)
-	run.state = state
+	run := newTurnRun(builder, publisher, turnID, clientNonce, state)
 	run.settleDur = cfg.turnSettle
 	if err := publisher(builder.turnEvent(turnID, clientNonce, string(conversation.EventTurnClaimed), "")); err != nil {
 		return false, err
@@ -1211,7 +1286,12 @@ func (a *activeProcess) wasInterrupted(turnID string) bool {
 	return a.interrupted && (turnID == "" || turnID == a.turnID)
 }
 
-func newTurnRun(builder eventBuilder, publisher func(map[string]any) error, turnID, clientNonce string) *turnRun {
+// newTurnRun binds a turn to the shared session state. state is a required
+// dependency, not an option: observeStep dedupes against the session-scoped
+// seenSteps set (an agy in-place transcript rewrite can re-deliver prior
+// turns' history through the tailer), and a run without it would re-attribute
+// that history to its own turn id.
+func newTurnRun(builder eventBuilder, publisher func(map[string]any) error, turnID, clientNonce string, state *runnerState) *turnRun {
 	return &turnRun{
 		builder:      builder,
 		publish:      publisher,
@@ -1220,7 +1300,7 @@ func newTurnRun(builder eventBuilder, publisher func(map[string]any) error, turn
 		turnComplete: make(chan struct{}),
 		progress:     make(chan struct{}),
 		graceFired:   make(chan struct{}),
-		seen:         map[string]struct{}{},
+		state:        state,
 	}
 }
 
@@ -1262,15 +1342,20 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 		return nil
 	}
 	providerID := providerStepID(path, line, step)
-	seenKey := providerID + ":" + strings.ToUpper(step.Status)
 
-	r.mu.Lock()
-	if _, ok := r.seen[seenKey]; ok {
-		r.mu.Unlock()
+	// Session-scoped dedupe: an agy in-place transcript rewrite can rewind
+	// the tailer's byte cursor and re-deliver the entire prior history (see
+	// runnerState.seenSteps), so a (step, status) pair publishes only on its
+	// FIRST observation this session — under the turn that was live when it
+	// genuinely happened. The settle-cancel and noteProgress above still run
+	// for replayed bytes (real transcript movement); only the durable publish
+	// is suppressed. Per-turn dedupe here re-published all history under
+	// whatever turn was live at the replay, which is how expanding turn N
+	// came to show turns 1..N (session 791).
+	if !r.state.markStepObserved(stepSeenKey(providerID, step.Status)) {
+		stepReplaySuppressedTotal.WithLabelValues("turn").Inc()
 		return nil
 	}
-	r.seen[seenKey] = struct{}{}
-	r.mu.Unlock()
 
 	if err := r.ensureStarted(providerID); err != nil {
 		return err
@@ -1935,6 +2020,15 @@ func sweepTranscripts(brainDir string, offsets map[string]int64, cfg runnerConfi
 		size := info.Size()
 		offset := offsets[path]
 		if size < offset {
+			// agy performs its larger transcript writes as an in-place
+			// truncate + full rewrite (same inode, byte-identical prefix —
+			// verified live, session 799). A stat that lands inside that
+			// sub-second window sees a transiently small file; rewinding to
+			// 0 re-reads the whole file once the rewrite settles. The replay
+			// this causes is discharged by the session-scoped seenSteps
+			// dedupe — never remove the rewind without it, and never assume
+			// the prefix is stable enough to resume mid-file: that bets
+			// correctness on an undocumented invariant of a closed binary.
 			offset = 0
 		}
 		if size <= offset {

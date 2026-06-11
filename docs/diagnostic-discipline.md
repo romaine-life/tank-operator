@@ -102,6 +102,33 @@ When a user reports "X didn't work":
    produce code citations for your existing conclusion." Restart the
    investigation from step 1 with the new framing.
 
+## Live probes
+
+Sometimes an investigation genuinely needs a live experiment — a probe
+session, a synthetic workload, a watcher process inside a pod — because the
+behavior under study only exists at runtime.
+
+- **Run probes on a Glimmung test slot with UNCHANGED images.** A slot
+  session created with the slot's image override cleared runs exactly the
+  production code, and every instrument works the same there: `kubectl exec`
+  via the cluster path, Loki streams, ledger queries. "Test slots are for
+  branch code" is wrong as an exclusion — they are for anything that should
+  not happen in the production scope, and observing unchanged code is a
+  first-class use (`spawn_test_slot_session`, `clear_slot_session_image`).
+- **The production scope is for production-scope questions only** — which
+  orchestrator config stamped a pod, what a prod session's ledger says —
+  and those are usually answerable read-only from the durable ledger
+  without creating anything (build fingerprints in event payloads and
+  timing, image overrides in their table, restarts in Loki).
+- Probe sessions are real provider traffic on the shared account either
+  way; keep probe workloads as small as the question allows, and delete
+  probe sessions when done.
+
+The cost of ignoring this is not hypothetical: prod probes appear in the
+owner's session list, write rows into the production ledger that may need a
+post-hoc scrub, and normalize experimenting in prod when a purpose-built
+isolated environment exists one MCP call away.
+
 ## Bus / event-fabric specifics
 
 For any bug touching the NATS JetStream session bus (data plane vs. control
@@ -132,6 +159,8 @@ plane, command consumers, durable event ordering):
     checklist.
 14. Treating closed post-mortem issues as historical curiosities rather than
     extensions of the policy docs.
+15. Creating diagnostic probe sessions in the production scope when a test
+    slot running unchanged images would observe the same behavior.
 
 These all share a shape: investigating the system from the live side first,
 where evidence is loud and easy to gather, rather than from the durable
