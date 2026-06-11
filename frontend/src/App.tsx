@@ -17596,10 +17596,24 @@ function ChatPane({
     systemAvatar?.src,
     systemAvatar?.custom,
   ]);
-  const renderedEntries = useMemo(
-    () => entries.filter((entry) => !entry.backgroundOnly),
-    [entries],
-  );
+  const renderedEntries = useMemo(() => {
+    const base = entries.filter((entry) => !entry.backgroundOnly);
+    if (session.status === "Failed") {
+      base.push({
+        id: "virtual-failure-event",
+        role: "system",
+        kind: "meta",
+        time: session.created_at || new Date().toISOString(),
+        text: "Session environment terminated.",
+        meta: {
+          severity: "error",
+          title: "Environment Terminated",
+          detail: "The pod running this session crashed or was stopped. Local workspace files are no longer active, but you can fork the session to resume.",
+        },
+      } as any);
+    }
+    return base;
+  }, [entries, session.status, session.created_at]);
   useEffect(() => {
     if (publicView || !visible) {
       setScheduledWakeupEntries([]);
@@ -18359,6 +18373,27 @@ function ChatPane({
   const testActionActive = currentSkillState === "test";
   const rolloutActionActive = currentSkillState === "rollout";
   const pullRequestURL = testState?.pull_request_url?.trim() || "";
+
+  const lastUserOrAssistantEntry = useMemo(() => {
+    for (let i = entries.length - 1; i >= 0; i--) {
+      const entry = entries[i];
+      if (entry.role && entry.role !== "system" && !entry.turnOnly) {
+        return entry;
+      }
+    }
+    return entries[entries.length - 1] || null;
+  }, [entries]);
+
+  const handleAutoFork = useCallback(() => {
+    if (!lastUserOrAssistantEntry) return;
+    void onForkMessage({
+      sourceSession: session,
+      forkedEntry: lastUserOrAssistantEntry,
+      model: session.model || "",
+      effort: session.effort || "",
+    });
+  }, [onForkMessage, session, lastUserOrAssistantEntry]);
+
   const sessionDataRows = useMemo(
     () =>
       buildSessionDataStatusRows({
@@ -19807,6 +19842,32 @@ function ChatPane({
                 </div>
               </div>
             )}
+             {session.status === "Failed" && (
+              <div
+                className="run-turn-view-alert"
+                style={{
+                  margin: "var(--space-2) auto",
+                  width: "100%",
+                  maxWidth: "none",
+                  boxSizing: "border-box",
+                }}
+                role="alert"
+              >
+                <AlertCircleIcon size={14} strokeWidth={2} aria-hidden="true" />
+                <span>
+                  <strong>Session environment terminated.</strong> The container hosting this session crashed or was stopped. You can fork this session to resume.
+                </span>
+                {lastUserOrAssistantEntry && (
+                  <button
+                    type="button"
+                    className="btn-primary run-turn-view-alert-action"
+                    onClick={handleAutoFork}
+                  >
+                    Fork Session
+                  </button>
+                )}
+              </div>
+            )}
           </>
         }
         composer={
@@ -19820,7 +19881,7 @@ function ChatPane({
             sendByCtrlEnter={runPrefs.sendByCtrlEnter}
             hintSuffix={RUN_COMPOSER_HINT_SUFFIX}
             hideHint
-            disabled={readOnly}
+            disabled={readOnly || session.status === "Failed"}
             canSubmit={!readOnly && ready}
             submitStatus={submitStatus}
             onStop={cancelRun}
@@ -23135,7 +23196,7 @@ function AuthenticatedApp() {
                 <li
                   key={s.id}
                   data-session-id={s.id}
-                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
+                  className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${s.status === "Failed" ? " is-failed" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
                   draggable={!isClosing && !readOnlySessionView && !isCompact}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
                   onDragOver={(e) => dragSessionOver(s.id, e)}

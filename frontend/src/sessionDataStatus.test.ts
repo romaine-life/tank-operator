@@ -62,3 +62,15 @@ test("buildSessionDataStatusRows summarizes multiple bug labels", () => {
   expect(bugReport?.detail).toBe("checkout, transcript");
   expect(bugReport?.tone).toBe("info");
 });
+
+test("buildSessionDataStatusRows returns stopped transcript status when session status is Failed", () => {
+  const rows = buildSessionDataStatusRows({
+    status: "Failed",
+  });
+
+  const transcript = rows.find((row) => row.id === "transcript");
+  expect(transcript?.status).toBe("Stopped");
+  expect(transcript?.detail).toBe("Session container crashed or terminated");
+  expect(transcript?.tone).toBe("danger");
+});
+
