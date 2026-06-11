@@ -1090,9 +1090,10 @@ button:disabled {
   flex-direction: column;
   background: var(--bg-sidebar);
   color: var(--text-body);
-  overflow: visible;
+  overflow: hidden;
   font-size: var(--text-sm);
   min-width: 0;
+  min-height: 0;
 }
 
 /* Brand row — OWUI Sidebar.svelte:1003-1052 (without close button) */
