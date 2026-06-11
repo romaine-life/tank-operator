@@ -2376,6 +2376,41 @@ func recordTurnNumberMissing(phase string) {
 	turnNumberMissingTotal.WithLabelValues(turnNumberMissingPhaseLabel(phase)).Inc()
 }
 
+// Checkpointed transcript fold (tank-operator#1051 B2+B3). result tells the
+// story per batch attempt: folded (fast path), reseeded (session re-projection
+// rebuilt the memo), invalidated (turn-scope reference projection made the
+// memo stale), resync (a structure-class event sent the batch to the
+// reference path), disabled / disabled_size (session durably opted out),
+// load_error (fold state unreadable; reference path used).
+var transcriptFoldTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_transcript_fold_total",
+		Help: "Checkpointed transcript-fold batch outcomes, labeled by bounded result.",
+	},
+	[]string{"result"},
+)
+
+var transcriptFoldDurationSeconds = promauto.NewHistogram(
+	prometheus.HistogramOpts{
+		Name:    "tank_transcript_fold_duration_seconds",
+		Help:    "Wall time of successful checkpointed-fold batch applications (load excluded, save included).",
+		Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
+	},
+)
+
+func recordTranscriptFold(result string) {
+	switch result {
+	case "folded", "reseeded", "invalidated", "resync", "disabled", "disabled_size", "load_error":
+	default:
+		result = "other"
+	}
+	transcriptFoldTotal.WithLabelValues(result).Inc()
+}
+
+func recordTranscriptFoldDuration(d time.Duration) {
+	transcriptFoldDurationSeconds.Observe(d.Seconds())
+}
+
 // recordTurnActivityPages observes the page count and total event count of a
 // turn-activity projection so long-turn frequency (the pagination trigger) is
 // visible without high-cardinality labels.

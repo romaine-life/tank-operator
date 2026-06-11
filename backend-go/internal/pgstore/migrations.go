@@ -1764,6 +1764,19 @@ var schemaMigrations = []migration{
 	// session booted from without reading a live pod.
 	{ID: "0143", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS session_image text NOT NULL DEFAULT ''`},
+
+	// Checkpointed transcript-fold state (tank-operator#1051 B3): the bounded
+	// per-session fold memo the persister advances per flood-class event
+	// instead of re-reading the session ledger. memo=NULL with disabled=true
+	// durably opts a session out (memo over the size cap); a missing row just
+	// means the fold seeds on the next session-scope re-projection. Owned by
+	// backend-go/cmd/tank-operator/transcript_fold_checkpoint.go.
+	{ID: "0144", SQL: `CREATE TABLE IF NOT EXISTS session_transcript_fold_state (
+		tank_session_id text PRIMARY KEY,
+		memo            jsonb,
+		disabled        boolean NOT NULL DEFAULT false,
+		updated_at      timestamptz NOT NULL DEFAULT now()
+	)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

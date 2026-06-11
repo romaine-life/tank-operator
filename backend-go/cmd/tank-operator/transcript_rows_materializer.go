@@ -26,6 +26,12 @@ type transcriptRowsMaterializationTxStore interface {
 	ReplaceForSessionTx(context.Context, pgx.Tx, string, []map[string]any) error
 	UpsertRowsTx(context.Context, pgx.Tx, string, []map[string]any) error
 	NeedsBackfillTx(context.Context, pgx.Tx, string) (bool, error)
+	// Checkpointed-fold state (tank-operator#1051 B3), advanced in the same
+	// transaction as the row writes it describes.
+	LoadFoldStateTx(context.Context, pgx.Tx, string) ([]byte, bool, error)
+	SaveFoldStateTx(context.Context, pgx.Tx, string, []byte) error
+	DeleteFoldStateTx(context.Context, pgx.Tx, string) error
+	DisableFoldTx(context.Context, pgx.Tx, string) error
 }
 
 type transcriptEventsTxStore interface {
@@ -37,8 +43,9 @@ type transcriptEventsTxStore interface {
 // paging the turn-scoped cursor to exhaustion. The materializer folds the
 // COMPLETE turn so the stored turn-activity shell's terminal/active status can
 // never be a casualty of a bounded read — the bug that made a finished long
-// turn render as perpetually active. (Bounded-cost incremental re-projection of
-// only the live page is the named follow-up; correctness comes first.)
+// turn render as perpetually active. This full read is the REFERENCE path:
+// flood-class events take the checkpointed fold
+// (transcript_fold_checkpoint.go) and never reach it.
 func readAllTurnEventsTx(ctx context.Context, events transcriptEventsTxStore, tx pgx.Tx, sessionID, turnID string) ([]map[string]any, error) {
 	var all []map[string]any
 	cursor := ""
@@ -144,7 +151,17 @@ func (m transcriptRowsMaterializer) refreshSessionBatch(ctx context.Context, ses
 	var turnOrder []string
 	seenTurn := map[string]bool{}
 	for _, event := range events {
-		if transcriptString(event, "type") == "turn.input_answered" {
+		switch transcriptString(event, "type") {
+		case "turn.input_answered":
+			sessionScope = true
+		case "shell_task.started", "shell_task.updated", "shell_task.exited":
+			// Background-task lifecycle changes the wake forest, and a turn
+			// that has absorbed wake content cannot be correctly re-projected
+			// turn-scope: the per-turn read can't see the wake turns' folded
+			// entries, so a per-turn replace would silently shed the merge.
+			// (The checkpointed fold above handles flood-class shell_task
+			// updates without this escalation; this is the REFERENCE path's
+			// conservative rule.)
 			sessionScope = true
 		}
 		turnID := transcriptString(event, "turn_id")
@@ -158,11 +175,24 @@ func (m transcriptRowsMaterializer) refreshSessionBatch(ctx context.Context, ses
 		}
 	}
 	return txRows.WithTranscriptMaterializationTx(ctx, sessionID, func(ctx context.Context, tx pgx.Tx) error {
+		// Checkpointed fold (tank-operator#1051 B2+B3): when the session has
+		// a live memo and every event in the batch is flood-class, advance
+		// the memo and rewrite only the changed shell rows — no ledger read
+		// at all. The fold's own classifier rejects structure-class events
+		// (terminals, boundaries, new/exiting tasks, answers), so it gets
+		// first try unconditionally; anything outside its confident envelope
+		// falls through to the reference projection below, which reseeds or
+		// invalidates the memo. sessionScope only steers the reference path.
+		if len(turnOrder) > 0 && len(noTurn) == 0 {
+			if done, err := m.tryFoldBatchTx(ctx, tx, txRows, sessionID, events); done || err != nil {
+				return err
+			}
+		}
 		if sessionScope {
 			// The session re-projection reads the whole ledger, so it
 			// already covers every turn-less and per-turn event in the
 			// batch.
-			return m.backfillSessionTx(ctx, tx, txEvents, txRows, sessionID)
+			return m.resyncSessionTx(ctx, tx, txEvents, txRows, sessionID)
 		}
 		for _, event := range noTurn {
 			projection := projectTranscriptEvents([]map[string]any{event})
@@ -171,15 +201,16 @@ func (m transcriptRowsMaterializer) refreshSessionBatch(ctx context.Context, ses
 				return err
 			}
 		}
+		invalidatedMemo := false
 		for _, turnID := range turnOrder {
 			turnEvents, err := readAllTurnEventsTx(ctx, txEvents, tx, sessionID, turnID)
 			if err != nil {
 				return err
 			}
-			if turnEventsContainBackgroundWake(turnEvents) {
+			if turnEventsContainBackgroundWake(turnEvents) || turnEventsContainShellTask(turnEvents) {
 				// One session re-projection covers the remaining turns
 				// in the batch too.
-				return m.backfillSessionTx(ctx, tx, txEvents, txRows, sessionID)
+				return m.resyncSessionTx(ctx, tx, txEvents, txRows, sessionID)
 			}
 			projection := projectTranscriptEvents(turnEvents)
 			recordTranscriptProjectionInvariantViolations(sessionID, turnID, turnEvents, projection.Entries)
@@ -189,9 +220,125 @@ func (m transcriptRowsMaterializer) refreshSessionBatch(ctx context.Context, ses
 			if err := txRows.ReplaceForTurnTx(ctx, tx, sessionID, turnID, projection.Entries); err != nil {
 				return err
 			}
+			if !invalidatedMemo {
+				// A turn-scope reference projection changes rows the memo
+				// doesn't know about. Invalidate rather than rebuild: a
+				// rebuild needs a full session read, which is exactly the
+				// cost a turn-scope batch exists to avoid. The next
+				// session-scope projection reseeds the memo.
+				invalidatedMemo = true
+				recordTranscriptFold("invalidated")
+				if err := txRows.DeleteFoldStateTx(ctx, tx, sessionID); err != nil {
+					return err
+				}
+			}
 		}
 		return nil
 	})
+}
+
+// tryFoldBatchTx attempts the checkpointed-fold fast path. done=true means
+// the batch is fully handled (rows written, memo saved). done=false means the
+// caller must run the reference projection; the memo, if any, is left intact
+// for the reference path to invalidate or reseed.
+func (m transcriptRowsMaterializer) tryFoldBatchTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	txRows transcriptRowsMaterializationTxStore,
+	sessionID string,
+	events []map[string]any,
+) (bool, error) {
+	raw, disabled, err := txRows.LoadFoldStateTx(ctx, tx, sessionID)
+	if err != nil {
+		// The fold is an optimization; a state-read failure must not block
+		// the durable projection. The reference path still runs.
+		slog.Warn("fold state load failed; using reference projection",
+			"session_id", sessionID, "error", err)
+		recordTranscriptFold("load_error")
+		return false, nil
+	}
+	if disabled {
+		recordTranscriptFold("disabled")
+		return false, nil
+	}
+	memo := unmarshalSessionFoldMemo(raw)
+	if memo == nil {
+		return false, nil
+	}
+	// Turn-less events ride their own UpsertRows path and never touch
+	// shells; their presence alongside foldable events is fine, but they are
+	// handled by the caller, so only attempt the fold when every event in
+	// the batch carries a turn.
+	for _, event := range events {
+		if transcriptString(event, "turn_id") == "" {
+			return false, nil
+		}
+	}
+	started := time.Now()
+	changed, ok := memo.foldBatch(events)
+	if !ok {
+		recordTranscriptFold("resync")
+		return false, nil
+	}
+	// Build every changed shell BEFORE writing anything: a turn whose merged
+	// body includes a promotion-class entry sends the whole batch to the
+	// reference path, and at that point no fold writes may have landed.
+	var rows []map[string]any
+	for _, turnID := range sortedFoldTurnIDs(changed) {
+		row, emit, foldOK := memo.shellRowForTurn(turnID)
+		if !foldOK {
+			recordTranscriptFold("resync")
+			return false, nil
+		}
+		if !emit {
+			continue
+		}
+		if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
+			stampTurnNumbers(sessionID, numbers, []map[string]any{row})
+		}
+		rows = append(rows, row)
+	}
+	for _, row := range rows {
+		if err := txRows.UpsertRowsTx(ctx, tx, sessionID, []map[string]any{row}); err != nil {
+			return false, err
+		}
+	}
+	encoded, fits := marshalSessionFoldMemo(memo)
+	if !fits {
+		// The rows just written are correct; only the memo outgrew its cap.
+		// Durably opt the session out so it batch-projects from here on.
+		recordTranscriptFold("disabled_size")
+		return true, txRows.DisableFoldTx(ctx, tx, sessionID)
+	}
+	if err := txRows.SaveFoldStateTx(ctx, tx, sessionID, encoded); err != nil {
+		return false, err
+	}
+	recordTranscriptFold("folded")
+	recordTranscriptFoldDuration(time.Since(started))
+	return true, nil
+}
+
+// resyncSessionTx is the reference projection: re-project the whole session
+// and reseed the fold memo from the same events, in the same transaction.
+func (m transcriptRowsMaterializer) resyncSessionTx(
+	ctx context.Context,
+	tx pgx.Tx,
+	eventsStore transcriptEventsTxStore,
+	rowsStore transcriptRowsMaterializationTxStore,
+	sessionID string,
+) error {
+	events, err := m.backfillSessionEventsTx(ctx, tx, eventsStore, rowsStore, sessionID)
+	if err != nil {
+		return err
+	}
+	memo := buildSessionFoldMemo(events)
+	encoded, fits := marshalSessionFoldMemo(memo)
+	if !fits {
+		recordTranscriptFold("disabled_size")
+		return rowsStore.DisableFoldTx(ctx, tx, sessionID)
+	}
+	recordTranscriptFold("reseeded")
+	return rowsStore.SaveFoldStateTx(ctx, tx, sessionID, encoded)
 }
 
 func (m transcriptRowsMaterializer) RefreshEvent(ctx context.Context, event map[string]any) error {
@@ -247,27 +394,51 @@ func (m transcriptRowsMaterializer) refreshEventTx(
 		recordTranscriptProjectionInvariantViolations(sessionID, "", []map[string]any{event}, projection.Entries)
 		return rows.UpsertRowsTx(ctx, tx, sessionID, projection.Entries)
 	}
-	if transcriptString(event, "type") == "turn.input_answered" {
-		return m.backfillSessionTx(ctx, tx, events, rows, sessionID)
+	switch transcriptString(event, "type") {
+	case "turn.input_answered", "shell_task.started", "shell_task.updated", "shell_task.exited":
+		// Cross-turn structure: answers backpatch earlier turns, and
+		// background-task lifecycle changes the wake forest a per-turn
+		// replace cannot see (it would shed a parent's folded wake content).
+		return m.resyncSessionTx(ctx, tx, events, rows, sessionID)
 	}
 	turnEvents, err := readAllTurnEventsTx(ctx, events, tx, sessionID, turnID)
 	if err != nil {
 		return err
 	}
-	if turnEventsContainBackgroundWake(turnEvents) {
-		return m.backfillSessionTx(ctx, tx, events, rows, sessionID)
+	if turnEventsContainBackgroundWake(turnEvents) || turnEventsContainShellTask(turnEvents) {
+		return m.resyncSessionTx(ctx, tx, events, rows, sessionID)
 	}
 	projection := projectTranscriptEvents(turnEvents)
 	recordTranscriptProjectionInvariantViolations(sessionID, turnID, turnEvents, projection.Entries)
 	if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
-	return rows.ReplaceForTurnTx(ctx, tx, sessionID, turnID, projection.Entries)
+	if err := rows.ReplaceForTurnTx(ctx, tx, sessionID, turnID, projection.Entries); err != nil {
+		return err
+	}
+	// A turn-scope reference projection changed rows the fold memo doesn't
+	// know about; invalidate it (the next session-scope projection reseeds).
+	return rows.DeleteFoldStateTx(ctx, tx, sessionID)
 }
 
 func turnEventsContainBackgroundWake(events []map[string]any) bool {
 	for _, event := range events {
 		if isBackgroundTaskWakeTurnEvent(event) {
+			return true
+		}
+	}
+	return false
+}
+
+// turnEventsContainShellTask reports whether the turn started background
+// work. Such a turn may have wake turns folded into its shell, and a
+// turn-scope replace cannot see those wake turns' entries — re-projecting it
+// turn-scope would silently shed the merge, so callers escalate to a session
+// re-projection.
+func turnEventsContainShellTask(events []map[string]any) bool {
+	for _, event := range events {
+		switch transcriptString(event, "type") {
+		case "shell_task.started", "shell_task.updated", "shell_task.exited":
 			return true
 		}
 	}
@@ -321,7 +492,7 @@ func (m transcriptRowsMaterializer) BackfillSession(ctx context.Context, session
 				if err != nil || !needed {
 					return err
 				}
-				if err := m.backfillSessionTx(ctx, tx, txEvents, txRows, sessionID); err != nil {
+				if err := m.resyncSessionTx(ctx, tx, txEvents, txRows, sessionID); err != nil {
 					return err
 				}
 				backfilled = true
@@ -367,13 +538,16 @@ func (m transcriptRowsMaterializer) refreshSession(ctx context.Context, sessionI
 	return nil
 }
 
-func (m transcriptRowsMaterializer) backfillSessionTx(
+// backfillSessionEventsTx re-projects the whole session and returns the
+// events it read, so resyncSessionTx can reseed the fold memo from the same
+// ledger snapshot without a second read.
+func (m transcriptRowsMaterializer) backfillSessionEventsTx(
 	ctx context.Context,
 	tx pgx.Tx,
 	eventsStore transcriptEventsTxStore,
 	rowsStore transcriptRowsMaterializationTxStore,
 	sessionID string,
-) error {
+) ([]map[string]any, error) {
 	var events []map[string]any
 	cursor := ""
 	for {
@@ -381,7 +555,7 @@ func (m transcriptRowsMaterializer) backfillSessionTx(
 			AfterOrderKey: cursor,
 		}, 1000)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		events = append(events, page.Events...)
 		if page.FoundNewest || len(page.Events) == 0 || page.NextOrderKey == "" || page.NextOrderKey == cursor {
@@ -394,7 +568,10 @@ func (m transcriptRowsMaterializer) backfillSessionTx(
 	if numbers, ok := m.turnNumbersForSession(ctx, sessionID); ok {
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
-	return rowsStore.ReplaceForSessionTx(ctx, tx, sessionID, projection.Entries)
+	if err := rowsStore.ReplaceForSessionTx(ctx, tx, sessionID, projection.Entries); err != nil {
+		return nil, err
+	}
+	return events, nil
 }
 
 func transcriptRowMaterializationFailureResult(ctx context.Context, err error) string {

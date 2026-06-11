@@ -60,6 +60,18 @@ All metric names are prefixed `tank_`. The full namespace:
   queues), and `_processed_event_age_seconds` (how far behind users'
   transcripts are). Per-session detail lives in
   `GET /api/debug/persister`, never in labels.
+- `tank_transcript_fold_total{result}` + `tank_transcript_fold_duration_seconds`
+  — the checkpointed transcript fold (tank-operator#1051 B2+B3): per-batch
+  outcomes of the persist-path projection. `folded` is the fast path (no
+  ledger read); `reseeded` and `invalidated` are memo lifecycle around the
+  reference projection; `resync` means a structure-class event correctly sent
+  the batch to the reference path; `disabled`/`disabled_size` mark sessions
+  durably opted out (memo over the size cap — always batch-projected, the
+  pre-fold behavior); `load_error` means fold state was unreadable and the
+  reference path covered. A sustained zero `folded` rate on a busy
+  background-task session means the fast path stopped engaging. The
+  fixture-replay equivalence harness
+  (`TestFoldCheckpointEquivalenceOverFixtures`) is the correctness gate.
 - `tank_stranded_turn_swept_total{result}` — the command-plane
   four-outcome backstop (tank-operator#1051 PR 4): dispatched turns whose
   submit_turn command or runner died silently, swept to a durable
