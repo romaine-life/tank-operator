@@ -16,10 +16,13 @@ import (
 
 const transcriptRowCursorSeparator = "\x1f"
 
-// Bumped 7 -> 8 so every session re-backfills transcript rows after
-// background-task wake continuations became owned by the originating
-// user-visible turn instead of the backend wake turn.
-const transcriptRowBackfillVersion = 9
+// Bumped 9 -> 10 so every session re-backfills transcript rows after the
+// projection stopped annihilating parked turns: continuation (parked-origin)
+// turns keep their turn_activity shells — restoring their stamped turn
+// numbers and giving their compacted content (the acks session 161 lost) a
+// durable home — and folded wake bodies merge chronologically into the
+// originating turn's shell.
+const transcriptRowBackfillVersion = 10
 
 type SessionTranscriptRowStore interface {
 	ReplaceForTurn(ctx context.Context, tankSessionID, turnID string, entries []map[string]any) error

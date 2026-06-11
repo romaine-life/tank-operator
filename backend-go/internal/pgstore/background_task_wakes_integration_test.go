@@ -65,18 +65,22 @@ func TestPostgresBackgroundTaskWakeRegisterIsIdempotent(t *testing.T) {
 	store := NewBackgroundTaskWakeStore(pool, "default")
 
 	reg := RegisterBackgroundTaskWakeRequest{
-		SessionScope: "default",
-		SessionID:    "63",
-		OwnerEmail:   "user@example.com",
-		Provider:     "claude",
-		TaskID:       "task-1",
-		TaskStatus:   "completed",
-		Prompt:       "wake and continue",
-		RegisteredAt: time.Now().Add(-time.Minute),
+		SessionScope:    "default",
+		SessionID:       "63",
+		OwnerEmail:      "user@example.com",
+		Provider:        "claude",
+		TaskID:          "task-1",
+		TaskStatus:      "completed",
+		Description:     "wake and continue",
+		ObservedEventID: "evt-1",
+		RegisteredAt:    time.Now().Add(-time.Minute),
 	}
-	row, err := store.Register(ctx, reg)
+	row, outcome, err := store.Register(ctx, reg)
 	if err != nil {
 		t.Fatalf("register: %v", err)
+	}
+	if outcome != BackgroundTaskWakeRegisterScheduled {
+		t.Fatalf("outcome = %q, want scheduled", outcome)
 	}
 	if row.Status != BackgroundTaskWakeScheduled {
 		t.Fatalf("status = %q, want scheduled", row.Status)
@@ -87,10 +91,14 @@ func TestPostgresBackgroundTaskWakeRegisterIsIdempotent(t *testing.T) {
 	if row.WakeID == "" {
 		t.Fatal("wake_id empty")
 	}
+	if row.Generation != 1 {
+		t.Fatalf("generation = %d, want 1", row.Generation)
+	}
 
-	// Re-registering the same finished task must NOT create a second wake.
-	if _, err := store.Register(ctx, reg); err != nil {
-		t.Fatalf("re-register: %v", err)
+	// Re-registering the same finished task must NOT create a second wake; it
+	// refreshes the pending row's task facts.
+	if _, outcome, err := store.Register(ctx, reg); err != nil || outcome != BackgroundTaskWakeRegisterPendingUpdated {
+		t.Fatalf("re-register = (%q, %v), want pending_updated", outcome, err)
 	}
 
 	claimed, err := store.ClaimDue(ctx, time.Now(), 10, 2*time.Minute)
@@ -129,13 +137,13 @@ func TestPostgresBackgroundTaskWakeReleaseRequeues(t *testing.T) {
 	ctx := context.Background()
 	store := NewBackgroundTaskWakeStore(pool, "default")
 
-	row, err := store.Register(ctx, RegisterBackgroundTaskWakeRequest{
+	row, _, err := store.Register(ctx, RegisterBackgroundTaskWakeRequest{
 		SessionScope: "default",
 		SessionID:    "63",
 		OwnerEmail:   "user@example.com",
 		Provider:     "claude",
 		TaskID:       "task-2",
-		Prompt:       "wake and continue",
+		TaskStatus:   "completed",
 		RegisteredAt: time.Now().Add(-time.Minute),
 	})
 	if err != nil {
@@ -165,5 +173,93 @@ func TestPostgresBackgroundTaskWakeReleaseRequeues(t *testing.T) {
 	}
 	if found.AttemptCount != 1 {
 		t.Fatalf("attempt_count after release+reclaim = %d, want 1", found.AttemptCount)
+	}
+}
+
+// TestPostgresBackgroundTaskWakeGenerationsRearmAfterPrematureFire pins the
+// re-arm machinery end to end: a fired wake registered from observation A is
+// re-armed by a DIFFERENT observation B (the real completion arriving after a
+// premature fire), duplicates of either observation never create rows, the
+// generation cap bounds a flapping observer, and failed/cancelled rows are
+// never resurrected.
+func TestPostgresBackgroundTaskWakeGenerationsRearmAfterPrematureFire(t *testing.T) {
+	pool := newBackgroundTaskWakeTestPool(t)
+	ctx := context.Background()
+	store := NewBackgroundTaskWakeStore(pool, "default")
+
+	reg := RegisterBackgroundTaskWakeRequest{
+		SessionScope:    "default",
+		SessionID:       "63",
+		OwnerEmail:      "user@example.com",
+		Provider:        "codex",
+		TaskID:          "34882",
+		TaskStatus:      "completed",
+		Description:     "/bin/sh -lc 'sleep 60 && echo DONE'",
+		ObservedEventID: "exit-premature",
+		RegisteredAt:    time.Now().Add(-time.Minute),
+	}
+	gen1, outcome, err := store.Register(ctx, reg)
+	if err != nil || outcome != BackgroundTaskWakeRegisterScheduled {
+		t.Fatalf("gen1 register = (%q, %v)", outcome, err)
+	}
+	if err := store.MarkFired(ctx, gen1.WakeID, "turn_bgtask-34882"); err != nil {
+		t.Fatalf("fire gen1: %v", err)
+	}
+
+	// Same observation again (runner retry / restart re-adoption): duplicate.
+	if _, outcome, err := store.Register(ctx, reg); err != nil || outcome != BackgroundTaskWakeRegisterDuplicate {
+		t.Fatalf("duplicate register = (%q, %v), want duplicate_observation", outcome, err)
+	}
+
+	// A NEW observation (the real completion) arms generation 2.
+	reg.ObservedEventID = "exit-real"
+	gen2, outcome, err := store.Register(ctx, reg)
+	if err != nil || outcome != BackgroundTaskWakeRegisterRearmed {
+		t.Fatalf("re-arm register = (%q, %v), want rearmed", outcome, err)
+	}
+	if gen2.Generation != 2 || gen2.WakeID == gen1.WakeID {
+		t.Fatalf("gen2 = %+v, want generation 2 with fresh wake id", gen2)
+	}
+	if gen2.ClientNonce != "bgtask-34882-g2" {
+		t.Fatalf("gen2 nonce = %q, want bgtask-34882-g2", gen2.ClientNonce)
+	}
+	if gen2.Status != BackgroundTaskWakeScheduled {
+		t.Fatalf("gen2 status = %q, want scheduled", gen2.Status)
+	}
+
+	// Cap: fire gen2, arm gen3, fire it, then a 4th observation is capped.
+	if err := store.MarkFired(ctx, gen2.WakeID, "turn_bgtask-34882-g2"); err != nil {
+		t.Fatalf("fire gen2: %v", err)
+	}
+	reg.ObservedEventID = "exit-3"
+	gen3, outcome, err := store.Register(ctx, reg)
+	if err != nil || outcome != BackgroundTaskWakeRegisterRearmed || gen3.Generation != 3 {
+		t.Fatalf("gen3 register = (%q, gen %d, %v)", outcome, gen3.Generation, err)
+	}
+	if err := store.MarkFired(ctx, gen3.WakeID, "turn_bgtask-34882-g3"); err != nil {
+		t.Fatalf("fire gen3: %v", err)
+	}
+	reg.ObservedEventID = "exit-4"
+	if _, outcome, err := store.Register(ctx, reg); err != nil || outcome != BackgroundTaskWakeRegisterGenerationCapped {
+		t.Fatalf("capped register = (%q, %v), want generation_capped", outcome, err)
+	}
+
+	// Cancelled rows are never resurrected by later observations.
+	cancelReg := reg
+	cancelReg.TaskID = "55555"
+	cancelReg.ObservedEventID = "exit-c1"
+	c1, outcome, err := store.Register(ctx, cancelReg)
+	if err != nil || outcome != BackgroundTaskWakeRegisterScheduled {
+		t.Fatalf("cancel-case register = (%q, %v)", outcome, err)
+	}
+	cancelled, err := store.CancelPendingForTask(ctx, "default", "63", "55555", "delivered_mid_turn")
+	if err != nil || cancelled != 1 {
+		t.Fatalf("cancel pending for task = (%d, %v), want 1", cancelled, err)
+	}
+	if got, _, _ := store.Register(ctx, cancelReg); got.WakeID != c1.WakeID {
+		t.Fatalf("post-cancel register touched a different row: %+v", got)
+	}
+	if _, outcome, err := store.Register(ctx, cancelReg); err != nil || outcome != BackgroundTaskWakeRegisterTerminalNoop {
+		t.Fatalf("post-cancel register = (%q, %v), want terminal_noop", outcome, err)
 	}
 }

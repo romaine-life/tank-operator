@@ -39,6 +39,14 @@ type AppServerTransportOptions = {
   ) => Promise<AppServerUserInputResponse>;
   onRuntimeConfigApplied?: (threadOptions: ThreadOptions) => void;
   onRuntimeContextWindowObserved?: (tokens: number) => void;
+  // onIdleBackgroundItem surfaces item lifecycle notifications for
+  // background (unified-exec) command items that arrive while NO turn is
+  // active — a background shell finishing after its turn ended. Without
+  // this hook those notifications were silently dropped at the
+  // active-queue guard, so the shell_task.exited never published and the
+  // background-task wake never registered (the codex half of the
+  // park/re-invoke/fold contract; see claude's run_in_background parity).
+  onIdleBackgroundItem?: (event: CodexEvent) => void;
 };
 
 type PendingRequest = {
@@ -427,6 +435,22 @@ export class CodexAppServerTransport {
         isCodexContextCompactionItem(params?.item)
       ) {
         unmappedProviderEventTotal.labels(method, "context_compaction_no_active_turn").inc();
+      }
+      if (method === "item/completed" || method === "item/updated") {
+        const item = params?.item;
+        if (
+          item &&
+          typeof item === "object" &&
+          (item as JsonRecord).type === "command_execution"
+        ) {
+          const codexItem = appServerItemToCodexItem(item as JsonRecord);
+          const itemID = typeof codexItem.id === "string" ? codexItem.id : "";
+          if (itemID) this.itemsByID.set(itemID, codexItem);
+          this.opts.onIdleBackgroundItem?.({
+            type: method === "item/completed" ? "item.completed" : "item.updated",
+            item: codexItem,
+          } as CodexEvent);
+        }
       }
       return;
     }

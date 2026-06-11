@@ -32,10 +32,79 @@ export async function registerBackgroundTaskWake(cfg, payload) {
             summary: String(payload?.summary ?? ""),
             last_tool_name: String(payload?.lastToolName ?? ""),
             error: String(payload?.error ?? ""),
+            // The durable shell_task.exited event id whose observation
+            // registered this wake — the backend's re-arm discriminator: a
+            // re-registration carrying the same observation is a duplicate; a
+            // different observation of an already-fired task arms the next
+            // wake generation (the real completion after a premature fire).
+            observed_event_id: String(payload?.observedEventID ?? ""),
         }),
     });
     if (!response.ok) {
         throw new Error(`background task wake register failed: ${response.status}`);
     }
     return true;
+}
+
+// cancelBackgroundTaskWake retires the pending wake of one task because its
+// completion was already delivered into an ACTIVE turn — the model has the
+// result in hand, so a later wake would be the duplicate notification (one
+// completion arriving as both a mid-turn notification and a new turn).
+// Mirrors registerBackgroundTaskWake's disabled-vs-failed semantics.
+export async function cancelBackgroundTaskWake(cfg, payload) {
+    const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
+    const tokenPath = cfg.operatorTokenPath || "";
+    if (!baseURL || !tokenPath || !cfg.sessionId) {
+        return false;
+    }
+    const token = (await readFile(tokenPath, "utf8")).trim();
+    const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/background-task-wakes/cancel`;
+    const response = await fetch(url, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            task_id: String(payload?.taskID ?? ""),
+            reason: String(payload?.reason ?? "delivered_mid_turn"),
+        }),
+    });
+    if (!response.ok) {
+        throw new Error(`background task wake cancel failed: ${response.status}`);
+    }
+    return true;
+}
+
+// fetchUnresolvedBackgroundTasks reads the session's still-open background
+// shell tasks from the durable ledger (shell_task.started with no exited) for
+// runner-restart re-adoption: tracked tasks live in process memory, so without
+// this a restart orphaned them — the counted silent-stranding class.
+export async function fetchUnresolvedBackgroundTasks(cfg) {
+    const baseURL = trimTrailingSlashes(cfg.operatorInternalURL || "");
+    const tokenPath = cfg.operatorTokenPath || "";
+    if (!baseURL || !tokenPath || !cfg.sessionId) {
+        return [];
+    }
+    const token = (await readFile(tokenPath, "utf8")).trim();
+    const url = `${baseURL}/api/internal/sessions/${encodeURIComponent(cfg.sessionId)}/background-tasks/unresolved`;
+    const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) {
+        throw new Error(`unresolved background tasks fetch failed: ${response.status}`);
+    }
+    const body = await response.json();
+    const tasks = Array.isArray(body?.background_tasks) ? body.background_tasks : [];
+    return tasks.map((task) => ({
+        taskID: String(task?.task_id ?? ""),
+        turnID: String(task?.turn_id ?? ""),
+        status: String(task?.status ?? ""),
+        command: String(task?.command ?? ""),
+        providerItemID: String(task?.provider_item_id ?? ""),
+        processID: String(task?.process_id ?? ""),
+        description: String(task?.description ?? ""),
+        summary: String(task?.summary ?? ""),
+        startedEventID: String(task?.started_event_id ?? ""),
+    })).filter((task) => task.taskID !== "");
 }

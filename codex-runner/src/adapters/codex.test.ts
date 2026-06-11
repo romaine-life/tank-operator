@@ -518,3 +518,176 @@ test("ignores unknown Codex provider event types", () => {
   );
   assert.deepEqual(events, []);
 });
+
+// --- Idle background completion + park stamp (codex park/re-invoke/fold parity) ---
+//
+// A unified-exec shell that outlives its turn must (a) stamp the turn
+// terminal with background_work_pending so the session parks scheduled
+// instead of summoning, and (b) when its completion arrives with NO active
+// turn, publish shell_task.exited attributed to the ORIGINATING turn — the
+// durable fold edge that lets the later turn_bgtask wake turn fold into it.
+
+test("turn terminal stamps background_work_pending while a unified-exec shell runs", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const turn = acceptedTurn({ turnID: "turn-bg-1", clientNonce: "bg-1" });
+
+  const started = adapter.canonicalEventsForCodexEvent(turn, {
+    type: "item.started",
+    item: {
+      id: "item_bg_shell",
+      type: "command_execution",
+      command: "sleep 90 && echo DONE",
+      process_id: "proc-9",
+      source: "unifiedExecInteraction",
+      status: "in_progress",
+    },
+  });
+  assert.equal(started.length, 1);
+  assert.equal(started[0]!.type, "shell_task.started");
+  assert.equal(started[0]!.turn_id, "turn-bg-1");
+
+  const terminal = adapter.canonicalEventsForCodexEvent(turn, {
+    type: "turn.completed",
+  });
+  const completed = terminal.find((event) => event.type === "turn.completed");
+  assert.ok(completed, "turn.completed missing");
+  assert.equal(completed!.payload?.background_work_pending, true);
+
+  const idle = adapter.idleBackgroundShellEvents({
+    type: "item.completed",
+    item: {
+      id: "item_bg_shell",
+      type: "command_execution",
+      command: "sleep 90 && echo DONE",
+      process_id: "proc-9",
+      source: "unifiedExecInteraction",
+      status: "completed",
+      aggregated_output: "DONE",
+      exit_code: 0,
+    },
+  });
+  assert.equal(idle.length, 1);
+  assert.equal(idle[0]!.type, "shell_task.exited");
+  assert.equal(
+    idle[0]!.turn_id,
+    "turn-bg-1",
+    "idle completion must attribute to the originating turn (the fold edge)",
+  );
+  assert.equal(isTankConversationEvent(stampTankEvent(idle[0]!)), true);
+
+  // After the shell drained, a later terminal must not stamp pending.
+  const turn2 = acceptedTurn({ turnID: "turn-bg-2", clientNonce: "bg-2" });
+  const terminal2 = adapter.canonicalEventsForCodexEvent(turn2, {
+    type: "turn.completed",
+  });
+  const completed2 = terminal2.find((event) => event.type === "turn.completed");
+  assert.equal(completed2!.payload?.background_work_pending, false);
+});
+
+test("idle completion for an untracked item publishes nothing", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const idle = adapter.idleBackgroundShellEvents({
+    type: "item.completed",
+    item: {
+      id: "item_unknown",
+      type: "command_execution",
+      command: "echo hi",
+      status: "completed",
+    },
+  });
+  assert.deepEqual(idle, []);
+});
+
+test("process-exit completion synthesizes exited attributed to the origin turn", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+  const turn = acceptedTurn({ turnID: "turn-pid-1", clientNonce: "pid-1" });
+  adapter.canonicalEventsForCodexEvent(turn, {
+    type: "item.started",
+    item: {
+      id: "item_pid_shell",
+      type: "command_execution",
+      command: "sleep 75 && echo DONE",
+      process_id: "424242",
+      source: "unifiedExecStartup",
+      status: "in_progress",
+    },
+  });
+  // Startup items defer until turn-end promotion (the live session-161
+  // shape: shell_task.started and the bwp-stamped terminal land together).
+  const terminal = adapter.canonicalEventsForCodexEvent(turn, { type: "turn.completed" });
+  assert.equal(
+    terminal.find((event) => event.type === "turn.completed")?.payload?.background_work_pending,
+    true,
+  );
+  const pending = adapter.pendingBackgroundTasks();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0]!.processID, 424242);
+
+  const exited = adapter.completeBackgroundShellByExit(pending[0]!.taskID);
+  assert.equal(exited.length, 1);
+  assert.equal(exited[0]!.type, "shell_task.exited");
+  assert.equal(exited[0]!.turn_id, "turn-pid-1");
+  assert.equal(exited[0]!.payload?.completion_source, "process_exit_observed");
+  assert.equal(isTankConversationEvent(stampTankEvent(exited[0]!)), true);
+  assert.deepEqual(adapter.pendingBackgroundTasks(), []);
+  // Second call is a no-op (already drained) — watcher double-fire safety.
+  assert.deepEqual(adapter.completeBackgroundShellByExit(pending[0]!.taskID), []);
+});
+
+test("command signatures normalize shell quoting for /proc matching", async () => {
+  const { normalizeCommandSignature } = await import("../runner.js");
+  // The live shapes from slot-1 session 161: codex REPORTS -lc with
+  // quotes; the spawned process's argv is -c without quotes.
+  const reported = "/bin/sh -lc 'sleep 60 && echo FINAL_ROUND_DONE'";
+  const cmdline = "/bin/sh -c sleep 60 && echo FINAL_ROUND_DONE ";
+  assert.equal(
+    normalizeCommandSignature(cmdline).includes(normalizeCommandSignature(reported)),
+    true,
+  );
+});
+
+test("adoptBackgroundTask re-seeds a restart-orphaned shell into the watcher and idle paths", () => {
+  const adapter = new CodexTankEventAdapter(cfg());
+
+  assert.equal(
+    adapter.adoptBackgroundTask("777", {
+      turnID: "turn-origin",
+      providerItemID: "call_adopted",
+      command: "/bin/sh -lc 'sleep 600'",
+      processID: 777,
+    }),
+    true,
+  );
+  // Adopted shells are watcher-visible like live-tracked ones.
+  const pending = adapter.pendingBackgroundTasks();
+  assert.equal(pending.length, 1);
+  assert.equal(pending[0].taskID, "777");
+  assert.equal(pending[0].command, "/bin/sh -lc 'sleep 600'");
+
+  // Double adoption is a no-op.
+  assert.equal(
+    adapter.adoptBackgroundTask("777", {
+      turnID: "turn-other",
+      providerItemID: "x",
+      command: "y",
+      processID: null,
+    }),
+    false,
+  );
+
+  // A late idle item notification for the adopted task maps onto the
+  // ORIGINATING turn — the fold edge survives the restart.
+  const events = adapter.idleBackgroundShellEvents({
+    type: "item.completed",
+    item: {
+      id: "call_adopted",
+      type: "command_execution",
+      command: "/bin/sh -lc 'sleep 600'",
+      status: "completed",
+      process_id: "777",
+    },
+  } as never);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].type, "shell_task.exited");
+  assert.equal(events[0].turn_id, "turn-origin");
+});
