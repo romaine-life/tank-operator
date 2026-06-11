@@ -14,11 +14,17 @@ import (
 )
 
 const (
-	// strandedTurnSweepInterval mirrors the launch sweep: stranding is a rare
-	// durability gap, not a latency-sensitive path. The cost of a slow tick is
-	// only how long a stranded turn shows as submitted/streaming before it
-	// flips to failed.
-	strandedTurnSweepInterval = 60 * time.Second
+	// strandedTurnSweepInterval. Unlike the launch sweep's cheap lone-event
+	// probe, FindStrandedTurns scans the full 30-day turn.submitted window
+	// with three correlated subqueries — at the launch sweep's 60s cadence on
+	// both replicas it kept the B1ms instance pinned after the historical
+	// drain (sustained TankPgConnectionPollFailing / select_session_events
+	// P99, observed 2026-06-11 post-#1055). Stranding detection tolerates
+	// large latency by construction: candidates already sit ≥30 minutes
+	// behind the quiet-window floor, so a 15-minute cadence adds at most
+	// ~50% to time-to-terminal while cutting steady-state query load 15×
+	// per replica.
+	strandedTurnSweepInterval = 15 * time.Minute
 	// strandedTurnMinAgeSubmitted is the age floor for a never-claimed strand.
 	// A healthy runner claims a deliverable submit_turn within seconds (it is
 	// a queue pop), so thirty quiet minutes is many multiples of headroom. The
