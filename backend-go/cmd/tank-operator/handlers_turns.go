@@ -38,7 +38,7 @@ const (
 // the persister uses, so the backend-as-producer path is visible to the
 // alert that the runner-as-producer path already feeds.
 func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, event map[string]any) error {
-	if err := s.sessionEvents.Upsert(ctx, event); err != nil {
+	if _, err := s.sessionEvents.Upsert(ctx, event); err != nil {
 		var schemaErr *conversation.SchemaError
 		if errors.As(err, &schemaErr) {
 			recordSessionEventPersistSchemaRejected()

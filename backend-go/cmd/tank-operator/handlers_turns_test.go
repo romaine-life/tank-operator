@@ -44,12 +44,12 @@ type recordingSessionEventStore struct {
 	err           error
 }
 
-func (r *recordingSessionEventStore) Upsert(_ context.Context, event map[string]any) error {
+func (r *recordingSessionEventStore) Upsert(_ context.Context, event map[string]any) (bool, error) {
 	if r.err != nil {
-		return r.err
+		return false, r.err
 	}
 	r.upserts = append(r.upserts, event)
-	return nil
+	return true, nil
 }
 
 func (r *recordingSessionEventStore) OrderKeyForTimelineID(_ context.Context, _, timelineID string) (string, error) {

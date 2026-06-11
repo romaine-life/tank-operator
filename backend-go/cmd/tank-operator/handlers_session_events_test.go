@@ -21,8 +21,8 @@ type fakeSessionEventStore struct {
 	shellTasks []map[string]any
 }
 
-func (s fakeSessionEventStore) Upsert(_ context.Context, _ map[string]any) error {
-	return nil
+func (s fakeSessionEventStore) Upsert(_ context.Context, _ map[string]any) (bool, error) {
+	return true, nil
 }
 
 func (s fakeSessionEventStore) ShellTaskEvents(_ context.Context, _ string) ([]map[string]any, error) {

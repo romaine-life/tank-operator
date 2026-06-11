@@ -77,7 +77,7 @@ func (e providerHealthEmitter) Upsert(ctx context.Context, event map[string]any)
 	if e.events == nil {
 		return nil
 	}
-	if err := e.events.Upsert(ctx, event); err != nil {
+	if _, err := e.events.Upsert(ctx, event); err != nil {
 		return err
 	}
 	return e.materializer.RefreshEvent(ctx, event)
@@ -373,12 +373,8 @@ func main() {
 		}
 		activityEmitter = emitter
 		sessionBus.SetLifecycleEmitter(emitter)
-		persisterStore := transcriptMaterializingEventStore{
-			SessionEventStore: sessionEventsStore,
-			materializer:      transcriptMaterializer,
-		}
 		go func() {
-			if err := sessionBus.RunEventPersister(ctx, persisterStore, promPersisterMetrics{}); err != nil {
+			if err := sessionBus.RunEventPersister(ctx, sessionEventsStore, transcriptMaterializer, promPersisterMetrics{}); err != nil {
 				slog.Error("session bus event persister stopped", "error", err)
 			}
 		}()
