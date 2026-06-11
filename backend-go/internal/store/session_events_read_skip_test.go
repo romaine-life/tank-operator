@@ -40,9 +40,9 @@ func TestDecodeStoredSessionEventSkipsRetiredShapes(t *testing.T) {
 
 	before := testutil.ToFloat64(sessionEventReadRejectedTotal.WithLabelValues("schema_rejected"))
 	retired := []byte(`{
-		"id": "turn-1:tool.approval_requested:x",
-		"event_id": "turn-1:tool.approval_requested:x",
-		"type": "tool.approval_requested",
+		"id": "turn-1:legacy.retired_event:x",
+		"event_id": "turn-1:legacy.retired_event:x",
+		"type": "legacy.retired_event",
 		"actor": "tool",
 		"source": "claude",
 		"session_id": "288",

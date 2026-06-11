@@ -1027,7 +1027,7 @@ func (StubSessionEventStore) CountUserMessages(_ context.Context, _ string) (int
 
 // sessionEventReadRejectedTotal counts stored ledger rows the CURRENT schema
 // cannot validate — overwhelmingly retired event types from old sessions
-// (e.g. tool.approval_requested). The read path skips such rows instead of
+// (event types the schema has since retired). The read path skips such rows instead of
 // failing the whole session's projection: before this, one retired-type row
 // made a session permanently un-projectable (the session-288 resync failures
 // during the tank-operator#1051 recovery). The WRITE path still hard-rejects
