@@ -11596,6 +11596,7 @@ function RunTurnActivityScreen({
               aria-label="Turn prompt"
               data-collapsed={selectedTurnContextCollapsed ? "true" : "false"}
               data-context-loaded={selectedTurnContext ? "true" : "false"}
+              data-section-divider={showTurnSectionDivider ? "true" : undefined}
             >
               <div className="run-turn-view-context-head">
                 <span className="run-turn-view-context-label">Prompt</span>

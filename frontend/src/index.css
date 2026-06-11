@@ -4561,6 +4561,11 @@ button:disabled {
   gap: 0.25rem;
 }
 
+.run-turn-view-context[data-section-divider="true"] {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
 .run-turn-view-context-unavailable {
   min-height: 1.5rem;
   margin-left: calc(2.625rem + 0.55rem);
@@ -9261,8 +9266,8 @@ textarea.run-files-viewer-editor:focus {
 
 .run-turn-view-activity-divider {
   flex: 0 0 auto;
-  margin-top: calc(-1 * var(--space-3) - 11px);
-  margin-bottom: calc(var(--space-3) + 11px);
+  margin-top: 0;
+  margin-bottom: 0;
 }
 
 .run-turn-activity-content {
