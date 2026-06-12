@@ -34,21 +34,45 @@ import (
 // runs at orchestrator startup and on a periodic loop so a
 // post-deploy backlog clears on its own.
 //
-// Safety: consumers younger than MinAge are kept regardless, so a
-// session whose registry row exists but whose runner hasn't yet
-// listed (the create-time race) is never deleted. The orchestrator's
-// own scope_token is the only filter — cross-scope orchestrators (prod
-// + a test slot sharing one NATS) each sweep only their own
-// consumers.
+// Safety: two complementary guards on two different clocks.
+//
+//   - MinAge (consumer-creation clock, here): consumers younger than
+//     MinAge are kept regardless, so a consumer created before its
+//     session row is readable by the sweep (the create-time race) is
+//     never deleted.
+//   - Liveness recency union (sessions.updated_at clock, in the
+//     LiveSessionIDs source): sessions rows are soft-deleted — deletion
+//     flips visible=false and bumps updated_at, it never removes the
+//     row — so the production live set is
+//     sessionregistry.ListLiveIDsForScope: visible sessions UNION
+//     sessions updated within the recency window (24 h). The union
+//     keeps a just-deleted session's consumers alive while its runner
+//     drains in-flight commands; MinAge cannot cover that race because
+//     a months-old consumer passes the age check the instant its row
+//     goes invisible. (The retired row-exists predicate made the sweep
+//     blind: every id ever created counted live, so nothing was ever
+//     an orphan.)
+//
+// The orchestrator's own scope_token is the only other filter —
+// cross-scope orchestrators (prod + a test slot sharing one NATS) each
+// sweep only their own consumers.
 
 // SweepConfig configures one sweep pass. LiveSessionIDs is the
 // authoritative set of session_ids in this scope that own legitimate
 // consumers; anything not in this set is deletion-eligible (subject
 // to MinAge).
 type SweepConfig struct {
+	// LiveSessionIDs holds the session ids whose consumers must
+	// survive the pass. Production wiring builds it from
+	// sessionregistry.ListLiveIDsForScope (visible sessions plus
+	// recently-updated soft-deleted sessions) — NOT from bare row
+	// existence, which can never shrink because sessions rows are
+	// never hard-deleted.
 	LiveSessionIDs map[string]struct{}
 	// MinAge caps how recent a consumer can be before the sweep
 	// considers it. Defaults to 15 minutes; tests can dial down.
+	// Guards the create race only — see the package comment above
+	// for why the delete race needs the liveness recency union.
 	MinAge time.Duration
 	// Now returns wall time for the age check. Hook for tests.
 	Now func() time.Time

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -246,20 +247,65 @@ func bugLabelFromScan(id sql.NullInt64, name, slug sql.NullString) *sessionmodel
 	}
 }
 
-// ListAllIDsForScope returns every session_id in this orchestrator's
-// scope, regardless of owner. Used by the NATS orphan-consumer sweep
-// to decide which JetStream durable consumers still belong to a live
-// session — the sweep's "live" predicate is just "row exists in this
-// scope", visible or not. Soft-deleted (visible=false) rows still
-// count as live for the sweep purpose because the pod and its
-// consumers may still be terminating.
+// DefaultLiveSessionRecencyWindow is the recency safety margin
+// ListLiveIDsForScope unions into the visible-rows liveness set.
+//
+// Why 24 h: every delete path (MarkDeleted, ClaimIdleForReap,
+// MarkScopeRetired) bumps updated_at = now() in the same UPDATE that
+// flips visible = false, so the window — measured from updated_at —
+// restarts at deletion time and keeps a just-deleted session counted
+// live while its pod terminates and its runner drains in-flight
+// commands against the durable consumers. The real drain tail is
+// minutes (pod termination grace + final durable event publication);
+// 24 h is a deliberately deep margin because the asymmetry is extreme:
+// holding a dead session's consumers one extra day costs a few KB of
+// JetStream metadata and one hourly sweep pass of patience, while
+// deleting a consumer a still-draining runner holds strands its final
+// events. A full day also rides out operator pauses, NATS/orchestrator
+// restarts, and clock skew without tuning.
+const DefaultLiveSessionRecencyWindow = 24 * time.Hour
+
+// ListLiveIDsForScope returns the session_ids in this orchestrator's
+// scope whose JetStream consumers the orphan-consumer sweep must treat
+// as live, regardless of owner: every VISIBLE row, plus any row —
+// visible or not — whose updated_at falls within updatedWithin of the
+// database clock (updatedWithin <= 0 defaults to
+// DefaultLiveSessionRecencyWindow).
+//
+// Why visibility + recency instead of row existence: sessions rows are
+// never hard-deleted — deletion only flips visible = false — so the
+// predecessor predicate ("row exists in this scope", the retired
+// ListAllIDsForScope) classified every session id ever created as live
+// forever. The sweep could not identify a single orphan, the
+// tank_session_bus_orphan_consumers gauge read 0, and stranded
+// consumers accumulated unchecked against the JetStream memory cap —
+// the exact failure mode the sweep was built to remediate.
+//
+// The recency union is the delete-race half of the sweep's safety
+// story and pairs with — but cannot be replaced by — the sweep's
+// MinAge guard: MinAge runs on the CONSUMER's creation clock and
+// protects the create race (consumer created before its session row is
+// readable), but a months-old consumer passes MinAge the instant its
+// row goes invisible. Only the row-side updated_at clock, which every
+// delete bumps, protects the consumer-still-draining-after-delete
+// window.
 //
 // Scope-wide rather than per-owner because consumer names encode
 // (scope, session_id) only — there is no owner dimension on the
-// consumer side.
-func (s *Store) ListAllIDsForScope(ctx context.Context) (map[string]struct{}, error) {
-	const q = `SELECT session_id FROM sessions WHERE session_scope = $1`
-	rows, err := s.pool.Query(ctx, q, s.scope)
+// consumer side. The comparison runs on the database clock (now())
+// because updated_at is written with now() by every sessions writer,
+// keeping the recency check in a single clock domain.
+func (s *Store) ListLiveIDsForScope(ctx context.Context, updatedWithin time.Duration) (map[string]struct{}, error) {
+	if updatedWithin <= 0 {
+		updatedWithin = DefaultLiveSessionRecencyWindow
+	}
+	const q = `
+		SELECT session_id
+		FROM sessions
+		WHERE session_scope = $1
+		  AND (visible OR updated_at >= now() - make_interval(secs => $2))
+	`
+	rows, err := s.pool.Query(ctx, q, s.scope, updatedWithin.Seconds())
 	if err != nil {
 		return nil, err
 	}

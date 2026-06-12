@@ -19,11 +19,11 @@ func TestDecodeConsumerSessionID(t *testing.T) {
 	}
 
 	cases := []struct {
-		name           string
-		consumerName   string
-		myScopeToken   string
-		wantSessionID  string
-		wantOK         bool
+		name          string
+		consumerName  string
+		myScopeToken  string
+		wantSessionID string
+		wantOK        bool
 	}{
 		{
 			name:          "data-plane consumer in our scope decodes session id",
@@ -135,13 +135,13 @@ func TestRunConsumerSweepDeletesOrphansOldEnough(t *testing.T) {
 
 	source := &fakeSweepSource{
 		consumers: []*jetstream.ConsumerInfo{
-			mkConsumer("claude_"+scopeToken+"_"+live216, 60, now),            // live, skip
-			mkConsumer("claude_control_"+scopeToken+"_"+live216, 60, now),    // live, skip
-			mkConsumer("claude_"+scopeToken+"_"+dead404, 60, now),            // orphan, delete
-			mkConsumer("claude_control_"+scopeToken+"_"+dead404, 60, now),    // orphan, delete
-			mkConsumer("codex_"+scopeToken+"_"+dead505, 60, now),             // orphan, delete
-			mkConsumer("claude_"+scopeToken+"_"+dead404, 1, now),             // too-young duplicate, skip
-			mkConsumer("tank-session-event-persister-"+scopeToken, 999, now), // persister, skip
+			mkConsumer("claude_"+scopeToken+"_"+live216, 60, now),                // live, skip
+			mkConsumer("claude_control_"+scopeToken+"_"+live216, 60, now),        // live, skip
+			mkConsumer("claude_"+scopeToken+"_"+dead404, 60, now),                // orphan, delete
+			mkConsumer("claude_control_"+scopeToken+"_"+dead404, 60, now),        // orphan, delete
+			mkConsumer("codex_"+scopeToken+"_"+dead505, 60, now),                 // orphan, delete
+			mkConsumer("claude_"+scopeToken+"_"+dead404, 1, now),                 // too-young duplicate, skip
+			mkConsumer("tank-session-event-persister-"+scopeToken, 999, now),     // persister, skip
 			mkConsumer("claude_"+ScopeToken("test-slot-3")+"_"+dead404, 60, now), // other scope, skip
 		},
 	}
@@ -187,6 +187,96 @@ func TestRunConsumerSweepDeletesOrphansOldEnough(t *testing.T) {
 		"claude_" + scopeToken + "_" + dead404:         true,
 		"claude_control_" + scopeToken + "_" + dead404: true,
 		"codex_" + scopeToken + "_" + dead505:          true,
+	}
+	for _, name := range source.deleted {
+		if !wantDeleted[name] {
+			t.Errorf("unexpected delete of %q", name)
+		}
+		delete(wantDeleted, name)
+	}
+	for missing := range wantDeleted {
+		t.Errorf("expected delete of %q did not happen", missing)
+	}
+}
+
+// TestRunConsumerSweepLiveSetFromVisibleOrRecentSessions pins the
+// classification contract against the live-set shape the production
+// wiring now feeds in: sessionregistry.ListLiveIDsForScope returns
+// visible sessions UNION soft-deleted sessions updated within the 24h
+// recency window. Sessions rows are never hard-deleted, so the retired
+// row-exists source put every id ever created in the live set and the
+// sweep could never classify an orphan; this test is the sweep-side
+// half of that fix (the registry-side half is
+// sessionregistry.TestListLiveIDsForScope):
+//
+//   - a visible session's consumer stays SkippedLive;
+//   - an invisible-but-recently-updated (just-deleted, possibly still
+//     draining) session's consumer stays SkippedLive even though the
+//     consumer itself is months past MinAge;
+//   - an invisible+stale session's consumers are classified orphan and
+//     deleted — unless younger than MinAge, which still wins (the
+//     create-race guard is independent of the liveness source).
+func TestRunConsumerSweepLiveSetFromVisibleOrRecentSessions(t *testing.T) {
+	scope := "default"
+	scopeToken := ScopeToken(scope)
+	now := time.Date(2026, 6, 12, 6, 0, 0, 0, time.UTC)
+	enc := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+
+	const (
+		visibleID         = "310" // visible row → in live set
+		invisibleRecentID = "311" // deleted 1h ago: invisible, updated_at recent → in live set
+		invisibleStaleID  = "312" // deleted days ago: invisible, updated_at stale → NOT in live set
+	)
+	monthOld := 60 * 24 * 30 // minutes; far past MinAge, so only liveness protects
+	source := &fakeSweepSource{
+		consumers: []*jetstream.ConsumerInfo{
+			mkConsumer("claude_"+scopeToken+"_"+enc(visibleID), monthOld, now),
+			mkConsumer("claude_"+scopeToken+"_"+enc(invisibleRecentID), monthOld, now),
+			mkConsumer("claude_"+scopeToken+"_"+enc(invisibleStaleID), monthOld, now),
+			mkConsumer("claude_control_"+scopeToken+"_"+enc(invisibleStaleID), monthOld, now),
+			// Stale session but consumer younger than MinAge: the
+			// create-race guard keeps it for this pass.
+			mkConsumer("codex_"+scopeToken+"_"+enc(invisibleStaleID), 5, now),
+		},
+	}
+
+	// What ListLiveIDsForScope returns for the rows above with the 24h
+	// window: the visible session and the just-deleted session (its
+	// delete bumped updated_at); the long-deleted session falls out.
+	live := map[string]struct{}{
+		visibleID:         {},
+		invisibleRecentID: {},
+	}
+
+	result, err := RunConsumerSweep(
+		context.Background(),
+		source,
+		scope,
+		SweepConfig{
+			LiveSessionIDs: live,
+			MinAge:         15 * time.Minute,
+			Now:            func() time.Time { return now },
+		},
+	)
+	if err != nil {
+		t.Fatalf("sweep: %v", err)
+	}
+	if result.SkippedLive != 2 {
+		t.Errorf("SkippedLive = %d, want 2 (visible + invisible-but-recent)", result.SkippedLive)
+	}
+	if result.SkippedTooYoung != 1 {
+		t.Errorf("SkippedTooYoung = %d, want 1 (stale session, young consumer)", result.SkippedTooYoung)
+	}
+	if result.Orphans != 2 {
+		t.Errorf("Orphans = %d, want 2 (data + control of the invisible+stale session)", result.Orphans)
+	}
+	if result.Deleted != 2 {
+		t.Errorf("Deleted = %d, want 2", result.Deleted)
+	}
+
+	wantDeleted := map[string]bool{
+		"claude_" + scopeToken + "_" + enc(invisibleStaleID):         true,
+		"claude_control_" + scopeToken + "_" + enc(invisibleStaleID): true,
 	}
 	for _, name := range source.deleted {
 		if !wantDeleted[name] {

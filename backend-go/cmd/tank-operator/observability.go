@@ -328,7 +328,7 @@ var (
 	// successfully deleting them.
 	sessionBusOrphanConsumersGauge = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "tank_session_bus_orphan_consumers",
-		Help: "Stranded JetStream consumers observed in the most recent sweep pass (consumers whose session_id has no matching row in this scope, older than the safety threshold).",
+		Help: "Stranded JetStream consumers observed in the most recent sweep pass (consumers whose session is neither visible nor updated within the 24h recency window in this scope, older than the MinAge floor).",
 	})
 	sessionBusConsumersScannedGauge = promauto.NewGauge(prometheus.GaugeOpts{
 		Name: "tank_session_bus_consumers_scanned",

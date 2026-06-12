@@ -16,6 +16,15 @@ import (
 // reconnect window. The 15-minute MinAge inside SweepOrphanConsumers
 // is the second safety net for the same race; the initial delay
 // shaves the first sweep down to safer ground regardless.
+//
+// The third guard lives on the liveness-set side: the sweep's live set
+// is sessionregistry.ListLiveIDsForScope — visible sessions plus any
+// session updated within the last 24 h
+// (sessionregistry.DefaultLiveSessionRecencyWindow). Sessions rows are
+// soft-deleted (visible=false, updated_at bumped), so the recency
+// union keeps a just-deleted session's consumers protected while its
+// runner drains; MinAge cannot cover that race because it runs on the
+// consumer's creation clock, not the row's deletion clock.
 const (
 	orphanSweepInitialDelay = 5 * time.Minute
 	orphanSweepInterval     = 1 * time.Hour
@@ -72,7 +81,7 @@ func runOrphanConsumerSweepLoop(
 		passCtx, cancel := context.WithTimeout(ctx, orphanSweepPassTimeout)
 		defer cancel()
 
-		live, err := registry.ListAllIDsForScope(passCtx)
+		live, err := registry.ListLiveIDsForScope(passCtx, sessionregistry.DefaultLiveSessionRecencyWindow)
 		if err != nil {
 			slog.Warn("orphan consumer sweep: list live sessions failed",
 				"scope", scope, "error", err)
