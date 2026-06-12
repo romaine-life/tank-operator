@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"path"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -197,9 +198,17 @@ func StreamToWebSocket(
 				continue
 			}
 			if s, _ := msg["stdin"].(string); s != "" {
+				// Blocking send (issue #1079 item 6): the old drop-on-full
+				// default silently swallowed keystrokes under burst typing
+				// or a slow exec consumer — corrupted stdin with no signal.
+				// Backpressure now propagates to the browser's WS buffer;
+				// ctx unblocks when the socket goes away. A wedged exec
+				// delays a queued cancel frame behind this send — closing
+				// the tab (ctx) remains the escape hatch.
 				select {
 				case stdinCh <- []byte(s):
-				default:
+				case <-ctx.Done():
+					return
 				}
 			}
 			if c, _ := msg["cancel"].(bool); c {
@@ -259,11 +268,16 @@ func StreamToWebSocket(
 }
 
 // jsonWriter writes data as {"stream":"...","data":"..."} JSON frames to browser.
+// Browser write errors flip `dead` (issue #1079 item 6 — they were silently
+// ignored): subsequent frames skip the dead socket instead of spamming it,
+// while the observer keeps receiving stdout so server-side consumers stay
+// whole. The main loop's keepalive still owns the browserDead transition.
 type jsonWriter struct {
 	stream   string
 	conn     *websocket.Conn
 	ctx      context.Context
 	observer StdoutObserver
+	dead     atomic.Bool
 }
 
 func (w *jsonWriter) Write(p []byte) (int, error) {
@@ -274,8 +288,13 @@ func (w *jsonWriter) Write(p []byte) (int, error) {
 	if w.observer != nil && w.stream == "stdout" {
 		w.observer(text)
 	}
+	if w.dead.Load() {
+		return len(p), nil
+	}
 	frame, _ := json.Marshal(map[string]string{"stream": w.stream, "data": text})
-	_ = w.conn.Write(w.ctx, websocket.MessageText, frame)
+	if err := w.conn.Write(w.ctx, websocket.MessageText, frame); err != nil {
+		w.dead.Store(true)
+	}
 	return len(p), nil
 }
 
