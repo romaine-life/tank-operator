@@ -330,7 +330,12 @@ test("Turns view renders server-projected turn context outside paged activity", 
   expect(appSource.includes("selectedActivityCollapseOverride ?? selectedActivityDefaultCollapsed")).toBe(true);
   expect(appSource.includes("Object.prototype.hasOwnProperty.call(prev, turnId)")).toBe(true);
   expect(appSource.includes("{selected && showDetailActivityDivider && (")).toBe(false);
-  expect(appSource.includes("{selected && showTurnSectionDivider && (")).toBe(true);
+  expect(appSource.includes('className="run-turn-view-prompt-section"')).toBe(true);
+  expect(appSource.includes("{showTurnSectionDivider && (")).toBe(true);
+  expect(appSource.includes('data-section-divider={showTurnSectionDivider ? "true" : undefined}')).toBe(true);
+  expect(indexCssSource.includes(".run-turn-view-prompt-section")).toBe(true);
+  expect(indexCssSource.includes('.run-turn-view-body[data-section-divider="true"]')).toBe(true);
+  expect(indexCssSource.includes(".run-turn-view-prompt-section + .run-turn-view-body")).toBe(true);
   expect(appSource).not.toMatch(/run-turn-view-context-head[\s\S]{0,500}run-turn-view-context-toggle/);
   expect(appSource.includes("function RunTurnViewControls")).toBe(true);
   expect(appSource.includes('tabsClassName={activeTab === "turns" ? "run-tabs-turn-view" : undefined}')).toBe(true);

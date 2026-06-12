@@ -288,26 +288,112 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
         <span>19:04:14</span>
         <span>19:10:26</span>
       </div>
-      <div
-        className="run-turn-view-context"
-        aria-label="Turn prompt"
-        data-collapsed="false"
-        data-context-loaded="true"
-        data-design-component="TurnPromptContext"
-        data-design-state="expanded-with-divider"
-        data-inspectable
-      >
-        <div className="run-turn-view-context-head">
-          <span className="run-turn-view-context-label">Prompt</span>
+      <div className="run-turn-view-prompt-section">
+        <div
+          className="run-turn-view-context"
+          aria-label="Turn prompt"
+          data-collapsed="false"
+          data-context-loaded="true"
+          data-section-divider="true"
+          data-design-component="TurnPromptContext"
+          data-design-state="expanded-with-divider"
+          data-inspectable
+        >
+          <div className="run-turn-view-context-head">
+            <span className="run-turn-view-context-label">Prompt</span>
+          </div>
+          <TranscriptMessage variant="user" ownedByActivity>
+            <p style={{ margin: 0 }}>
+              Please inspect the completed turn with a long initiating prompt.
+              The divider owns section collapse controls while the prompt label
+              stays as plain section chrome.
+            </p>
+          </TranscriptMessage>
         </div>
-        <TranscriptMessage variant="user" ownedByActivity>
+        <div
+          className="run-turn-activity-divider run-turn-view-activity-divider"
+          data-design-component="TurnSectionDivider"
+          data-design-state="prompt-and-activity-controls-present"
+          data-inspectable
+        >
+          <div
+            className="run-turn-activity-divider-controls"
+            role="group"
+            aria-label="Turn section collapse controls"
+          >
+            <button
+              type="button"
+              className="run-turn-activity-divider-toggle"
+              data-direction="up"
+              aria-expanded={true}
+              aria-label="Collapse user message"
+              title="Collapse user message"
+            >
+              <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
+              <ChevronUpIcon
+                className="run-turn-activity-divider-toggle-chevron"
+                size={13}
+                strokeWidth={2.3}
+                aria-hidden="true"
+              />
+            </button>
+            <button
+              type="button"
+              className="run-turn-activity-divider-toggle"
+              data-direction="both"
+              aria-label="Show agent activity and collapse user message"
+              title="Show agent activity and collapse user message"
+            >
+              <ChevronUpIcon
+                className="run-turn-activity-divider-toggle-chevron"
+                size={11}
+                strokeWidth={2.3}
+                aria-hidden="true"
+              />
+              <ChevronDownIcon
+                className="run-turn-activity-divider-toggle-chevron"
+                size={11}
+                strokeWidth={2.3}
+                aria-hidden="true"
+              />
+            </button>
+            <button
+              type="button"
+              className="run-turn-activity-divider-toggle"
+              data-direction="down"
+              aria-expanded={true}
+              aria-label="Collapse agent activity"
+              title="Collapse agent activity"
+            >
+              <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
+              <ChevronDownIcon
+                className="run-turn-activity-divider-toggle-chevron"
+                size={13}
+                strokeWidth={2.3}
+                aria-hidden="true"
+              />
+            </button>
+          </div>
+        </div>
+      </div>
+      <div
+        className="run-turn-view-body run-transcript run-transcript-claude"
+        data-section-divider="true"
+      >
+        <RunningTool highlighted={highlighted} />
+        <TranscriptMessage variant="assistant" highlighted={highlighted} ownedByActivity showAssistantAvatar>
           <p style={{ margin: 0 }}>
-            Please inspect the completed turn with a long initiating prompt.
-            The divider owns section collapse controls while the prompt label
-            stays as plain section chrome.
+            I found the highlight hook and the active turn data attribute.
           </p>
         </TranscriptMessage>
       </div>
+    </div>
+  );
+}
+
+function TurnPromptStateSpecimens() {
+  return (
+    <div style={{ display: "grid", gap: 12 }}>
       <div
         className="run-turn-view-context"
         aria-label="Turn prompt collapsed"
@@ -343,79 +429,6 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
         <div className="run-turn-view-context-unavailable" role="status">
           Prompt context unavailable
         </div>
-      </div>
-      <div
-        className="run-turn-activity-divider run-turn-view-activity-divider"
-        data-design-component="TurnSectionDivider"
-        data-design-state="prompt-and-activity-controls-present"
-        data-inspectable
-      >
-        <div
-          className="run-turn-activity-divider-controls"
-          role="group"
-          aria-label="Turn section collapse controls"
-        >
-          <button
-            type="button"
-            className="run-turn-activity-divider-toggle"
-            data-direction="up"
-            aria-expanded={true}
-            aria-label="Collapse user message"
-            title="Collapse user message"
-          >
-            <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
-            <ChevronUpIcon
-              className="run-turn-activity-divider-toggle-chevron"
-              size={13}
-              strokeWidth={2.3}
-              aria-hidden="true"
-            />
-          </button>
-          <button
-            type="button"
-            className="run-turn-activity-divider-toggle"
-            data-direction="both"
-            aria-label="Show agent activity and collapse user message"
-            title="Show agent activity and collapse user message"
-          >
-            <ChevronUpIcon
-              className="run-turn-activity-divider-toggle-chevron"
-              size={11}
-              strokeWidth={2.3}
-              aria-hidden="true"
-            />
-            <ChevronDownIcon
-              className="run-turn-activity-divider-toggle-chevron"
-              size={11}
-              strokeWidth={2.3}
-              aria-hidden="true"
-            />
-          </button>
-          <button
-            type="button"
-            className="run-turn-activity-divider-toggle"
-            data-direction="down"
-            aria-expanded={true}
-            aria-label="Collapse agent activity"
-            title="Collapse agent activity"
-          >
-            <MinusIcon size={11} strokeWidth={2.4} aria-hidden="true" />
-            <ChevronDownIcon
-              className="run-turn-activity-divider-toggle-chevron"
-              size={13}
-              strokeWidth={2.3}
-              aria-hidden="true"
-            />
-          </button>
-        </div>
-      </div>
-      <div className="run-turn-view-body run-transcript run-transcript-claude">
-        <RunningTool highlighted={highlighted} />
-        <TranscriptMessage variant="assistant" highlighted={highlighted} ownedByActivity showAssistantAvatar>
-          <p style={{ margin: 0 }}>
-            I found the highlight hook and the active turn data attribute.
-          </p>
-        </TranscriptMessage>
       </div>
     </div>
   );
@@ -667,6 +680,13 @@ export function StyleguidePortfolioTranscript() {
               />
             </div>
           </div>
+        </section>
+
+        <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>
+          <h2 style={{ margin: 0, color: "var(--text-primary)", fontSize: "var(--text-lg)" }}>
+            turn prompt states
+          </h2>
+          <TurnPromptStateSpecimens />
         </section>
 
         <section style={{ ...sectionStyle, display: "grid", gap: 12 }}>

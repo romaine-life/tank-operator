@@ -4649,6 +4649,11 @@ button:disabled {
   gap: 0.25rem;
 }
 
+.run-turn-view-context[data-section-divider="true"] {
+  padding-bottom: var(--space-2);
+  border-bottom: 0;
+}
+
 .run-turn-view-context-unavailable {
   min-height: 1.5rem;
   margin-left: calc(2.625rem + 0.55rem);
@@ -4754,6 +4759,13 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.run-turn-view-prompt-section {
+  display: grid;
+  gap: 0;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+
 .run-turn-view-body {
   flex: 1 1 auto;
   min-height: 0;
@@ -4762,6 +4774,28 @@ button:disabled {
   align-content: start;
   gap: var(--space-3);
   padding: 0 var(--space-3) var(--space-3);
+}
+
+/* Gap between the locked divider and the scrolling activity body. This is a
+   MARGIN (outside the scroller), never padding-top (inside it): a scroll
+   container's padding-top scrolls away with its content, so a padding-based
+   gap collapses from its at-rest size down to the clip edge the moment the
+   user scrolls — the original "buffer is one size at the top, smaller once you
+   scroll down" bug. The parent .run-turn-view flex gap is var(--space-3);
+   subtracting back to var(--space-2) leaves a persistent var(--space-2) inset,
+   so the body's clip edge sits one --space-2 below the divider and activity
+   content keeps that same gap at the top and while scrolled. */
+.run-turn-view-prompt-section + .run-turn-view-body[data-section-divider="true"] {
+  margin-top: calc(var(--space-2) - var(--space-3));
+}
+
+.run-turn-view-body[data-section-divider="true"] {
+  /* No scrollable top padding: the divider gap is the margin above, not
+     padding inside the scroller (padding-top scrolls away with the content).
+     Overrides the var(--space-5) top padding .run-transcript applies to the
+     free-standing main transcript, which here would re-create the collapsing
+     buffer. */
+  padding-top: 0;
 }
 
 .run-turn-view-body.run-transcript {
@@ -9398,8 +9432,7 @@ textarea.run-files-viewer-editor:focus {
 
 .run-turn-view-activity-divider {
   flex: 0 0 auto;
-  margin-top: calc(-1 * var(--space-3) - 11px);
-  margin-bottom: calc(var(--space-3) + 11px);
+  margin: 0;
 }
 
 .run-turn-activity-content {
@@ -10582,7 +10615,7 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript {
   --run-transcript-active-rail-left: 0.2rem;
   --run-transcript-message-inset-left: 0.7rem;
-  --run-transcript-row-gap: var(--space-3);
+  --run-transcript-row-gap: var(--space-2);
   display: grid;
   grid-template-columns: minmax(0, 1fr);
   grid-auto-rows: max-content;
@@ -10803,7 +10836,15 @@ textarea.run-files-viewer-editor:focus {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
 }
 
-.run-transcript [data-slot="message"][data-variant="user"] .run-transcript-message-content {
+/* User-message bubble. Applies in the main transcript and in the Turns-view
+   prompt context: the prompt is a user message too, so it carries the same
+   bubble everywhere else gives user turns. Without the second selector the
+   prompt rendered as bare text (its container is .run-turn-view-context, not
+   .run-transcript), which left the prompt→divider→activity boundary visually
+   asymmetric — the agent bubble painted a crisp edge near the divider while the
+   plain prompt left empty canvas above it. */
+.run-transcript [data-slot="message"][data-variant="user"] .run-transcript-message-content,
+.run-turn-view-context [data-slot="message"][data-variant="user"] .run-transcript-message-content {
   grid-column: 2;
   grid-row: 1;
   justify-self: start;
