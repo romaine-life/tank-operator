@@ -27,7 +27,7 @@ The checkout response provides the assigned slot and validation URL. If Tank's U
 When the environment is up, hot-swap code into the test environment. We want to
 save time, so don't do full image builds if you can avoid it.
 
-Use the Glimmung `inspect_browser_url` tool for browser validation and screenshots when appropriate. If you place screenshots in the session, they should go under workspace/screenshots.
+Use the Glimmung `inspect_browser_url` tool for browser validation and screenshots when appropriate. When you cite an inspection screenshot as evidence, do not cite only the Glimmung artifact URL. Also place a copy in the caller session workspace under `/workspace/screenshots/` and include that local path in the final answer or PR evidence. Prefer the tool's workspace screenshot option when available; if the tool cannot save a local copy, use a local download/copy workaround or state explicitly that the local copy failed.
 
 You are free to come up with a test case for the feature. This is not mandatory, but if you assess that you have tools to craft a test case, do so. It is also acceptable to say that a feature is not easy to test, or tools are missing.
 

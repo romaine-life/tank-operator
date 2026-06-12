@@ -130,7 +130,10 @@ hardcode the ephemeral slot/pod names.
    - Confirm the served `index.html` references the hashed JS from your local
      `frontend/dist` (e.g. `index-XXXX.js`) and that `/healthz` returns 200.
    - For visual proof, `inspect_browser_url` against the slot URL (auth cookie
-     per [docs/testing.md](../../../../../../../docs/testing.md)).
+     per [docs/testing.md](../../../../../../../docs/testing.md)). When citing
+     the screenshot as evidence, also save a local workspace copy under
+     `/workspace/screenshots/`; prefer `save_screenshot_to_workspace=True`
+     when the Glimmung MCP tool exposes it.
    - Log it: `record_test_slot_hot_swap(project: "tank-operator",
      operation: "hot_swap", status: "persisted", slot_index: N, summary: ...)`.
 
