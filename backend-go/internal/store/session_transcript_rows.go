@@ -36,6 +36,19 @@ type SessionTranscriptRowStore interface {
 	ListAround(ctx context.Context, tankSessionID, rowCursor string, rowsBefore, rowsAfter int) (TranscriptRowPage, error)
 	ResolveCursorForTimelineID(ctx context.Context, tankSessionID, timelineID string) (string, error)
 	NeedsBackfill(ctx context.Context, tankSessionID string) (bool, error)
+	// MaxEndOrderKey returns the projection's high-water mark: the largest
+	// end_order_key across the session's materialized rows ('' when the
+	// session has no rows). It is what /timeline responses mint as
+	// live_order_key — the SSE resume cursor — instead of the raw event
+	// ledger's tail: projection is async (#1056), so a cursor minted from
+	// the ledger can sit AHEAD of the rows, and the SSE delta's strict
+	// end_order_key > cursor filter would then make the not-yet-projected
+	// rows permanently undeliverable to that stream (a turn terminal caught
+	// in the upsert→refresh window rendered the turn perpetually active
+	// until manual reload — issue #1077 item 2). Minting from the rows
+	// flips the error direction to harmless duplicates: rows replayed on
+	// the stream are idempotent replace-by-id upserts in the SPA.
+	MaxEndOrderKey(ctx context.Context, tankSessionID string) (string, error)
 }
 
 type TranscriptRowPage struct {
@@ -112,6 +125,26 @@ func (s *transcriptRowStore) UpsertRows(ctx context.Context, tankSessionID strin
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// MaxEndOrderKey rides the session_transcript_rows_end_order index
+// ((tank_session_id, end_order_key, row_cursor) — DESC LIMIT 1).
+func (s *transcriptRowStore) MaxEndOrderKey(ctx context.Context, tankSessionID string) (string, error) {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	var key string
+	err := s.pool.QueryRow(ctx, `
+		SELECT end_order_key FROM session_transcript_rows
+		WHERE tank_session_id = $1
+		ORDER BY end_order_key DESC
+		LIMIT 1
+	`, storageKey).Scan(&key)
+	if err == pgx.ErrNoRows {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return key, nil
 }
 
 func (s *transcriptRowStore) ListChangedAfterOrderKey(ctx context.Context, tankSessionID, afterOrderKey string, rows int) (TranscriptRowDeltaPage, error) {
@@ -758,6 +791,10 @@ func reverseRows(rows []map[string]any, cursors []string) {
 }
 
 type StubSessionTranscriptRowStore struct{}
+
+func (StubSessionTranscriptRowStore) MaxEndOrderKey(context.Context, string) (string, error) {
+	return "", nil
+}
 
 func (StubSessionTranscriptRowStore) ReplaceForTurn(context.Context, string, string, []map[string]any) error {
 	return nil

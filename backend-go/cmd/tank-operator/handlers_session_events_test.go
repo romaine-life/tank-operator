@@ -157,6 +157,7 @@ type fakeSessionTranscriptRowStore struct {
 	needsErr        error
 	needsCalls      int
 	replaceSessions []string
+	maxEndOrderKey  string
 }
 
 func (s *fakeSessionTranscriptRowStore) ReplaceForTurn(context.Context, string, string, []map[string]any) error {
@@ -978,5 +979,55 @@ func TestWriteSSEJSONEventUsesOrderKeyAsEventID(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Fatalf("SSE body missing %q:\n%s", want, body)
 		}
+	}
+}
+
+func (f *fakeSessionTranscriptRowStore) MaxEndOrderKey(context.Context, string) (string, error) {
+	return f.maxEndOrderKey, nil
+}
+
+// TestSessionTimelineLiveOrderKeyComesFromProjectionHighWater pins the SSE
+// resume-cursor source (issue #1077 item 2): projection is async, so the raw
+// ledger tail can sit AHEAD of the materialized rows; a cursor minted from
+// the ledger makes the not-yet-projected rows permanently undeliverable on
+// the strict end_order_key > cursor SSE delta. live_order_key must therefore
+// be the rows' high-water mark — duplicates on replay are harmless
+// (replace-by-id upserts), missed rows are not.
+func TestSessionTimelineLiveOrderKeyComesFromProjectionHighWater(t *testing.T) {
+	app := adminTestServer(t)
+	// Ledger tail deliberately ahead of the projection: order_key 999.
+	eventStore := fakeSessionEventStore{
+		pages: map[string]store.SessionEventPage{
+			"": {
+				Events: []map[string]any{
+					projectionTestEvent("turn-1:user", "999", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+						"text": "hello",
+					}),
+				},
+				FoundOldest: true,
+				FoundNewest: true,
+			},
+		},
+	}
+	rowStore := &fakeSessionTranscriptRowStore{
+		maxEndOrderKey: "042-projected-high-water",
+		pages: map[string]store.TranscriptRowPage{
+			"latest:80": {FoundOldest: true, FoundNewest: true},
+		},
+	}
+	app.sessionEvents = eventStore
+	app.transcriptRows = rowStore
+	app.sessionScope = "default"
+
+	req := httptest.NewRequest(http.MethodGet, "/api/sessions/63/timeline", nil)
+	body, status, err := app.sessionTimelineBody(context.Background(), req, auth.User{
+		Email: otherUser,
+		Role:  auth.RoleUser,
+	}, "63", "default")
+	if err != nil || status != http.StatusOK {
+		t.Fatalf("timeline status=%d err=%v", status, err)
+	}
+	if got, _ := body["live_order_key"].(string); got != "042-projected-high-water" {
+		t.Fatalf("live_order_key = %q, want the projection high-water mark, never the ledger tail (999)", got)
 	}
 }
