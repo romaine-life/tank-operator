@@ -92,16 +92,20 @@ func TestEventIdentityUniqueness(t *testing.T) {
 		for _, q := range []string{
 			`DROP INDEX IF EXISTS session_events_event_identity`,
 			`CREATE INDEX IF NOT EXISTS session_events_event_id ON session_events (tank_session_id, event_id)`,
-			`INSERT INTO session_events (tank_session_id, order_key, event_id, turn_id, event_type, payload)
-			 VALUES
-			   ($1, '0000000000100-00000001-turn_x:turn.command_failed', 'turn_x:turn.command_failed', 'turn_x', 'turn.command_failed', '{"payload":{"reason":"earliest"}}'::jsonb),
-			   ($1, '0000000000200-00000002-turn_x:turn.command_failed', 'turn_x:turn.command_failed', 'turn_x', 'turn.command_failed', '{"payload":{"reason":"middle"}}'::jsonb),
-			   ($1, '0000000000300-00000003-turn_x:turn.command_failed', 'turn_x:turn.command_failed', 'turn_x', 'turn.command_failed', '{"payload":{"reason":"latest"}}'::jsonb),
-			   ($1, '0000000000400-00000004-turn_y:turn.claimed', 'turn_y:turn.claimed', 'turn_y', 'turn.claimed', '{"payload":{}}'::jsonb)`,
 		} {
-			if _, err := pool.Exec(ctx, q, sessionmodel.SessionStorageKey(scope, "u2")); err != nil {
-				t.Fatalf("seed pre-0151 state: %v", err)
+			if _, err := pool.Exec(ctx, q); err != nil {
+				t.Fatalf("restore pre-0151 indexes: %v", err)
 			}
+		}
+		if _, err := pool.Exec(ctx, `
+			INSERT INTO session_events (tank_session_id, order_key, event_id, turn_id, event_type, payload)
+			VALUES
+			  ($1, '0000000000100-00000001-turn_x:turn.command_failed', 'turn_x:turn.command_failed', 'turn_x', 'turn.command_failed', '{"payload":{"reason":"earliest"}}'::jsonb),
+			  ($1, '0000000000200-00000002-turn_x:turn.command_failed', 'turn_x:turn.command_failed', 'turn_x', 'turn.command_failed', '{"payload":{"reason":"middle"}}'::jsonb),
+			  ($1, '0000000000300-00000003-turn_x:turn.command_failed', 'turn_x:turn.command_failed', 'turn_x', 'turn.command_failed', '{"payload":{"reason":"latest"}}'::jsonb),
+			  ($1, '0000000000400-00000004-turn_y:turn.claimed', 'turn_y:turn.claimed', 'turn_y', 'turn.claimed', '{"payload":{}}'::jsonb)
+		`, sessionmodel.SessionStorageKey(scope, "u2")); err != nil {
+			t.Fatalf("seed pre-0151 duplicates: %v", err)
 		}
 
 		if _, err := pool.Exec(ctx, eventIdentityUniquenessSQL); err != nil {
