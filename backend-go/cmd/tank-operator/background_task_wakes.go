@@ -479,17 +479,27 @@ func (s *appServer) failExceededBackgroundTaskWakes(ctx context.Context, now tim
 		recordBackgroundTaskWakeFire(provider, "attempt_cap_exceeded")
 		s.resolveFailedWake(ctx, row.OwnerEmail, row.SessionID,
 			conversation.TurnIDForClientNonce(row.ClientNonce), row.ClientNonce, provider,
-			true, sessionactivity.AwayErrorReasonBackgroundTaskWake)
+			sessionactivity.AwayErrorReasonBackgroundTaskWake)
 	}
 }
 
 func (s *appServer) fireBackgroundTaskWake(ctx context.Context, row pgstore.BackgroundTaskWake, now time.Time) error {
 	provider := strings.TrimSpace(row.Provider)
+	// Liveness ladder, mirroring fireScheduledWakeup: missing row /
+	// terminating / Failed are durably dead — fail fast and ring. Any other
+	// non-Active status (Pending) is the K8s watch's transient probe-blip
+	// shape, so defer instead of terminal-failing; the defer keeps the claim's
+	// attempt bump, so a never-recovering session is bounded by
+	// pgstore.MaxBackgroundTaskWakeAttempts and rings through FailExceeded.
 	if row.SessionStatus == "" {
 		return s.failBackgroundTaskWake(ctx, row, provider, "session_not_found")
 	}
-	if row.SessionStatus != "Active" || row.SessionTerminated {
+	if row.SessionTerminated || row.SessionStatus == "Failed" {
 		return s.failBackgroundTaskWake(ctx, row, provider, "session_not_active")
+	}
+	if row.SessionStatus != "Active" {
+		recordBackgroundTaskWakeFire(provider, "deferred_session_not_active")
+		return s.backgroundTaskWakes.ReleaseRetainingAttempt(ctx, row.WakeID)
 	}
 	// Soft-defer when the session is waiting on an AskUserQuestion answer:
 	// injecting a turn now would feed the SDK a non-answer and strand the
@@ -559,9 +569,13 @@ func (s *appServer) failBackgroundTaskWake(ctx context.Context, row pgstore.Back
 		return err
 	}
 	recordBackgroundTaskWakeFire(provider, backgroundTaskWakeFireFailureLabel(reason))
+	// Every durable failure rings: the promised background-task report broke
+	// while the user was away, whether the command bounced (enqueue_failed) or
+	// the session died (session_not_found / session_not_active). Transient
+	// non-Active sessions never get here — the fire ladder defers them.
 	s.resolveFailedWake(ctx, row.OwnerEmail, row.SessionID,
 		conversation.TurnIDForClientNonce(row.ClientNonce), row.ClientNonce, provider,
-		strings.HasPrefix(reason, "enqueue_failed"), sessionactivity.AwayErrorReasonBackgroundTaskWake)
+		sessionactivity.AwayErrorReasonBackgroundTaskWake)
 	return errors.New(reason)
 }
 
