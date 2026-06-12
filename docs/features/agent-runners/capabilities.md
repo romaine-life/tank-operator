@@ -191,8 +191,17 @@ Contract impact:
   a settled prose response plus `ANTIGRAVITY_TURN_SETTLE_MS` (default 2s) of
   transcript silence, so the answer-first sequence stays inside one turn with
   a correct `background_work_pending` stamp — no false `ready`/ring, no
-  untracked self-wake relay. A window miss degrades to the relay+fold
-  machinery, never to incorrectness.
+  untracked self-wake relay. Only a genuinely NEW step may move the boundary:
+  a dedupe-suppressed replayed step (rewrite-rewind) is invisible to the
+  window, because a replay can only cancel — the re-arm lives behind the
+  dedupe gate — and a cancel with no possible re-arm pins the turn forever
+  (sessions 828/829, 2026-06-12: final answer published, settle armed, the
+  rewrite that appended it replayed the whole history inside the 2s window,
+  no `turn.completed` ever, data-plane consumer blocked at
+  `max_ack_pending=1`). The window's failure modes are asymmetric by design:
+  an early close degrades to the relay+fold machinery (cosmetic), a
+  never-close violates "exactly one durable terminal per turn" and is
+  structurally excluded by replay invisibility.
   `tank_antigravity_runner_turn_settle_total{outcome}` counts quiet vs
   extended boundaries.
 - **The pending-set is the load-bearing signal.** agy routes all background work
@@ -232,7 +241,12 @@ Evidence:
   (`TestTurnSettleKeepsAnswerFirstBurstInOneTurn` replays slot-1 round 1's
   exact answer-first burst into one terminal;
   `TestTurnSettleQuietCompletesAfterWindow`,
-  `TestTurnSettleZeroCompletesImmediately`).
+  `TestTurnSettleZeroCompletesImmediately`;
+  `TestTurnSettleSurvivesTranscriptRewriteReplay` pins the 828/829 wedge —
+  the window armed by the final prose fires through a full-history replay;
+  `TestReplayedTaskSignalsKeepPendingSetSettled` pins the companion guard —
+  a replayed RUNNING marker cannot resurrect a completed task into
+  `background_work_pending` at the terminal).
 - Fold edge: `backend-go/cmd/antigravity-runner/main_test.go`
   (`TestTaskLifecycleEventsPublishDurableFoldEdge`,
   `TestTaskLifecycleStartWhileIdlePublishesNothing`);
@@ -283,9 +297,15 @@ Contract impact:
   into the next attaching turn and does not manufacture a phantom
   agent-continuation relay — only a genuinely new idle MODEL step is agy
   self-continuing (the no-untracked-resumption rule).
-- Replayed bytes still count as transcript movement (submit-ack watchdog
-  clears, settle window extends); only the durable publish is suppressed, so
-  turn-boundary semantics are unchanged.
+- Replayed bytes prove aliveness only: the submit-ack watchdog clears, and
+  nothing else moves. The durable publish is suppressed, the settle window is
+  untouched (a replay can only cancel, never re-arm — cancel-on-replay is the
+  828/829 forever-pinned-turn wedge), and the background-task pending-set
+  ignores replayed signals (`runnerState.completedTasks`: task ids are never
+  reused, so "completed once" is terminal — a replayed RUNNING marker must not
+  transiently resurrect a dead task into a terminal's
+  `background_work_pending` stamp, and a replayed completion must not reset
+  the consumed relay attribution).
 - Scoped to process memory deliberately: agy process death is
   session-terminal (no revival), so no replay must survive a restart that the
   tailer's startup byte-cursor skip does not already cover.

@@ -158,23 +158,41 @@ semantics.**
 
 The runner therefore publishes `turn.completed` only after a settled prose
 response has been followed by `ANTIGRAVITY_TURN_SETTLE_MS` (default 2s) of
-transcript silence; any further step cancels an armed window and a later
-settled prose re-arms it. Observed intra-burst gaps are ~600ms, so the default
-is ~3x margin. The prose itself streams to the user immediately — only the
-turn-status transition waits.
+transcript silence; any further **genuinely new** step cancels an armed window
+and a later settled prose re-arms it. Observed intra-burst gaps are ~600ms, so
+the default is ~3x margin. The prose itself streams to the user immediately —
+only the turn-status transition waits.
+
+**Replayed steps are invisible to the window.** A dedupe-suppressed step (a
+rewrite-rewind re-delivering history — see the next section) must not cancel
+an armed window, because a replay can only cancel: the re-arm lives behind the
+session-scoped dedupe, so a suppressed settled prose can never re-arm what a
+suppressed step cancelled. agy appends its final prose *via* an in-place
+rewrite, so the final answer's own write replays the whole history into the
+armed window it just created. When replays could cancel, that pinned the turn
+forever: no `turn.completed`, the data-plane command un-acked behind
+`max_ack_pending=1`, the session stuck `streaming` with no summon and no way
+to prompt out (sessions 828 and 829, 2026-06-12; only Stop's control-plane
+interrupt could resolve them). Replayed bytes prove aliveness — they clear the
+submit-ack watchdog — and influence nothing else.
+`TestTurnSettleSurvivesTranscriptRewriteReplay` guards this.
 
 This is what keeps the answer-first sequence ("I'll set a timer" → turn would
 have closed → schedule tool call lands seconds later) inside ONE turn: the
 task starts in-turn with clean attribution, the terminal's
 `background_work_pending` is evaluated after the burst truly ended, the
 session parks without a false `ready`/ring, and no untracked self-wake relay
-is manufactured. If agy ever pauses longer than the window mid-burst, the turn
-closes early and the continuation machinery (relay + fold + causal-adjacency
-attribution) handles it exactly as before — the window failing re-admits a
-cosmetic flicker for that turn, never incorrectness.
+is manufactured. The window's failure modes are deliberately asymmetric. If
+agy ever pauses longer than the window mid-burst, the turn closes **early**
+and the continuation machinery (relay + fold + causal-adjacency attribution)
+handles it exactly as before — a cosmetic flicker for that turn. The failure
+direction the design must never admit is **never-close**: a turn with no
+terminal violates the Agent Runners contract (exactly one durable terminal
+per submitted turn) and strands the session.
 `tank_antigravity_runner_turn_settle_total{outcome="extended"}` counts how
 often bursts continue past a settled prose (the answer-first frequency);
-`outcome="quiet"` counts silence-confirmed boundaries.
+`outcome="quiet"` counts silence-confirmed boundaries. After the replay fix,
+`extended` counts only genuine answer-first continuations, not replay noise.
 
 Revisit if `agy` ever ships an explicit end-of-processing marker in its
 transcript or logs — that signal should replace the window outright.
@@ -196,8 +214,16 @@ fires per write, far denser than any sampler) landed inside the sub-second
 truncate window. **The replay is a race**: zero on light sessions, routine on
 real workloads with large step outputs (sessions 791/792/793 all hit it
 repeatedly; 791's trigger was a ~30KB tool-result write). Replayed bytes are
-*real transcript movement* (they clear the submit-ack watchdog and extend the
-settle window) but they are **not new work**.
+**not new work**; they prove only that agy's writer is alive. They clear the
+submit-ack watchdog and influence nothing else: the durable publish is
+suppressed, the settle window is untouched (cancel-on-replay was the 828/829
+forever-pinned-turn wedge — see "Silence Is the Boundary"), and the
+background-task pending-set ignores them (`runnerState.completedTasks`: agy
+task ids are never reused, so a completed id is terminal — a replayed RUNNING
+marker must not transiently resurrect a dead task into a terminal's
+`background_work_pending` stamp, which would strand the session `scheduled`,
+and a replayed `sender=` completion must not reset the consumed
+self-continuation attribution).
 
 Step dedupe is therefore **session-scoped** (`runnerState.seenSteps`, keyed by
 `providerStepID` + status), never per-turn. A (step, status) pair publishes
