@@ -30,16 +30,17 @@ var (
 )
 
 type Info struct {
-	ID           string  `json:"id"`
-	SessionScope string  `json:"session_scope,omitempty"`
-	PodName      *string `json:"pod_name"`
-	Owner        string  `json:"owner"`
-	Status       string  `json:"status"`
-	Mode         string  `json:"mode"`
-	SessionImage string  `json:"session_image,omitempty"`
-	RequestedAt  *string `json:"requested_at"`
-	CreatedAt    *string `json:"created_at"`
-	ReadyAt      *string `json:"ready_at"`
+	ID                   string                            `json:"id"`
+	SessionScope         string                            `json:"session_scope,omitempty"`
+	PodName              *string                           `json:"pod_name"`
+	Owner                string                            `json:"owner"`
+	Status               string                            `json:"status"`
+	Mode                 string                            `json:"mode"`
+	SessionImage         string                            `json:"session_image,omitempty"`
+	SessionImageMetadata sessionmodel.ImageVersionMetadata `json:"session_image_metadata,omitempty"`
+	RequestedAt          *string                           `json:"requested_at"`
+	CreatedAt            *string                           `json:"created_at"`
+	ReadyAt              *string                           `json:"ready_at"`
 	// Name is the session's human-facing title. As of the name/display_name
 	// inversion it is always present (NON-NULL): created sessions are
 	// assigned the canonical SessionDisplayName default when the user gives
@@ -278,6 +279,7 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		Status:                         status,
 		Mode:                           sessionmodel.NormalizeSessionMode(record.Mode),
 		SessionImage:                   record.SessionImage,
+		SessionImageMetadata:           record.SessionImageMetadata.Clone(),
 		RequestedAt:                    firstString(record.RequestedAt, record.CreatedAt),
 		CreatedAt:                      optionalString(record.CreatedAt),
 		ReadyAt:                        optionalString(record.ReadyAt),

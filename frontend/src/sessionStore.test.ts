@@ -318,6 +318,11 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
       visible: true,
       status: "Active",
       session_image: "romainecr.azurecr.io/claude-container:claude-abc",
+      session_image_metadata: {
+        built_at: "2026-06-11T08:06:08Z",
+        git_sha: "532dd02176ac6d0013478aaf63ee419a3eb17d24",
+        ignored: 42,
+      },
       model: "gpt-5.5",
       effort: "xhigh",
       runtime_model: "gpt-5.5",
@@ -333,6 +338,10 @@ test("normalizeSessionRowUpdate rejects malformed payloads", () => {
   expect(good!.row.id).toBe("8");
   expect(good!.row.name).toBe("session-8");
   expect(good!.row.session_image).toBe("romainecr.azurecr.io/claude-container:claude-abc");
+  expect(good!.row.session_image_metadata).toEqual({
+    built_at: "2026-06-11T08:06:08Z",
+    git_sha: "532dd02176ac6d0013478aaf63ee419a3eb17d24",
+  });
   expect(good!.row.model).toBe("gpt-5.5");
   expect(good!.row.effort).toBe("xhigh");
   expect(good!.row.runtime_model).toBe("gpt-5.5");

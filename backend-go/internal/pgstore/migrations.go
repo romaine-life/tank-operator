@@ -1791,6 +1791,13 @@ var schemaMigrations = []migration{
 		updated_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (tank_session_id, turn_id)
 	)`},
+
+	// Store the human-facing release metadata that describes the session image
+	// stamped at create time. Kept separate from session_image so immutable
+	// fingerprint tags stay machine-useful while the UI can show PR, commit,
+	// workflow, and build timestamp context for existing sessions.
+	{ID: "0146", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS session_image_metadata jsonb NOT NULL DEFAULT '{}'::jsonb`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

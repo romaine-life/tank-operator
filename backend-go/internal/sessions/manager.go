@@ -220,15 +220,18 @@ func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.Man
 	if sessionmodel.IsAntigravityMode(mode) {
 		if antigravityImage != "" {
 			opts.AntigravitySessionImage = antigravityImage
+			opts.AntigravitySessionImageMetadata = sessionmodel.ImageVersionMetadata{"source": "test_slot_override"}
 			kind = "antigravity"
 		}
 	} else if sessionmodel.IsCodexMode(mode) {
 		if codexImage != "" {
 			opts.CodexSessionImage = codexImage
+			opts.CodexSessionImageMetadata = sessionmodel.ImageVersionMetadata{"source": "test_slot_override"}
 			kind = "codex"
 		}
 	} else if claudeImage != "" {
 		opts.SessionImage = claudeImage
+		opts.SessionImageMetadata = sessionmodel.ImageVersionMetadata{"source": "test_slot_override"}
 		kind = "claude"
 	}
 	if kind == "" {
@@ -463,6 +466,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.Effort = effort
 	m.applyImageOverride(ctx, &manifestOpts, mode)
 	sessionImage := sessionmodel.ResolvedSessionImage(mode, manifestOpts)
+	sessionImageMetadata := sessionmodel.ResolvedSessionImageMetadata(mode, manifestOpts)
 
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)
@@ -498,22 +502,23 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	}
 	if m.registry != nil {
 		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
-			ID:             sessionID,
-			Email:          owner,
-			Mode:           mode,
-			Scope:          m.manifestOpts.SessionScope,
-			PodName:        podName,
-			SessionImage:   sessionImage,
-			Visible:        true,
-			Name:           storedName,
-			RequestedAt:    requestedAt,
-			UpdatedAt:      requestedAt,
-			Repos:          repos,
-			Capabilities:   capabilities,
-			Model:          model,
-			Effort:         effort,
-			AgentAvatarID:  assignment.AgentAvatarID,
-			SystemAvatarID: assignment.SystemAvatarID,
+			ID:                   sessionID,
+			Email:                owner,
+			Mode:                 mode,
+			Scope:                m.manifestOpts.SessionScope,
+			PodName:              podName,
+			SessionImage:         sessionImage,
+			SessionImageMetadata: sessionImageMetadata,
+			Visible:              true,
+			Name:                 storedName,
+			RequestedAt:          requestedAt,
+			UpdatedAt:            requestedAt,
+			Repos:                repos,
+			Capabilities:         capabilities,
+			Model:                model,
+			Effort:               effort,
+			AgentAvatarID:        assignment.AgentAvatarID,
+			SystemAvatarID:       assignment.SystemAvatarID,
 		}); regErr != nil {
 			slog.Warn("create registry upsert failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
@@ -560,46 +565,48 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		bugLabel = bugLabels[0]
 	}
 	info := Info{
-		ID:             sessionID,
-		PodName:        &podName,
-		Owner:          owner,
-		Status:         "Pending",
-		Mode:           mode,
-		SessionImage:   sessionImage,
-		RequestedAt:    &requestedAt,
-		CreatedAt:      createdAt,
-		Name:           storedName,
-		Repos:          repos,
-		Capabilities:   capabilities,
-		BugLabel:       bugLabel,
-		BugLabels:      bugLabels,
-		Model:          model,
-		Effort:         effort,
-		AgentAvatarID:  assignment.AgentAvatarID,
-		SystemAvatarID: assignment.SystemAvatarID,
+		ID:                   sessionID,
+		PodName:              &podName,
+		Owner:                owner,
+		Status:               "Pending",
+		Mode:                 mode,
+		SessionImage:         sessionImage,
+		SessionImageMetadata: sessionImageMetadata,
+		RequestedAt:          &requestedAt,
+		CreatedAt:            createdAt,
+		Name:                 storedName,
+		Repos:                repos,
+		Capabilities:         capabilities,
+		BugLabel:             bugLabel,
+		BugLabels:            bugLabels,
+		Model:                model,
+		Effort:               effort,
+		AgentAvatarID:        assignment.AgentAvatarID,
+		SystemAvatarID:       assignment.SystemAvatarID,
 	}
 
 	// Refresh the registry row with the K8s-assigned created_at so the
 	// snapshot's CreatedAt matches the pod object's creation timestamp.
 	if m.registry != nil && createdAt != nil {
 		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
-			ID:             sessionID,
-			Email:          owner,
-			Mode:           mode,
-			Scope:          m.manifestOpts.SessionScope,
-			PodName:        podName,
-			SessionImage:   sessionImage,
-			Visible:        true,
-			Name:           storedName,
-			RequestedAt:    requestedAt,
-			CreatedAt:      *createdAt,
-			UpdatedAt:      requestedAt,
-			Repos:          repos,
-			Capabilities:   capabilities,
-			Model:          model,
-			Effort:         effort,
-			AgentAvatarID:  assignment.AgentAvatarID,
-			SystemAvatarID: assignment.SystemAvatarID,
+			ID:                   sessionID,
+			Email:                owner,
+			Mode:                 mode,
+			Scope:                m.manifestOpts.SessionScope,
+			PodName:              podName,
+			SessionImage:         sessionImage,
+			SessionImageMetadata: sessionImageMetadata,
+			Visible:              true,
+			Name:                 storedName,
+			RequestedAt:          requestedAt,
+			CreatedAt:            *createdAt,
+			UpdatedAt:            requestedAt,
+			Repos:                repos,
+			Capabilities:         capabilities,
+			Model:                model,
+			Effort:               effort,
+			AgentAvatarID:        assignment.AgentAvatarID,
+			SystemAvatarID:       assignment.SystemAvatarID,
 		}); regErr != nil {
 			slog.Warn("create registry created_at refresh failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)

@@ -23,7 +23,9 @@ func TestAdminAppVersionRequiresAdmin(t *testing.T) {
 
 func TestAdminAppVersionReportsConfiguredImageTags(t *testing.T) {
 	t.Setenv("TANK_OPERATOR_IMAGE", "romainecr.azurecr.io/tank-operator:app-abc123")
+	t.Setenv("TANK_OPERATOR_IMAGE_METADATA", `{"built_at":"2026-06-11T08:06:08Z","git_sha":"532dd02176ac6d0013478aaf63ee419a3eb17d24","git_ref":"main","commit_url":"https://github.com/romaine-life/tank-operator/commit/532dd02176ac6d0013478aaf63ee419a3eb17d24","pr_number":"1049","pr_url":"https://github.com/romaine-life/tank-operator/pull/1049","workflow_run_url":"https://github.com/romaine-life/tank-operator/actions/runs/27332914448","repository":"romaine-life/tank-operator","actor":"github-actions[bot]"}`)
 	t.Setenv("SESSION_IMAGE", "romainecr.azurecr.io/claude-container:claude-def456")
+	t.Setenv("SESSION_IMAGE_METADATA", `{"built_at":"2026-06-10T18:00:00Z","git_sha":"abcdef0123456789","pr_number":"1001"}`)
 	t.Setenv("CODEX_SESSION_IMAGE", "romainecr.azurecr.io/codex-container:codex-789")
 	t.Setenv("ANTIGRAVITY_SESSION_IMAGE", "romainecr.azurecr.io/antigravity-container:antigravity-012")
 	t.Setenv("SESSION_REGISTRY_SCOPE", "tank-operator-slot-6")
@@ -36,6 +38,15 @@ func TestAdminAppVersionReportsConfiguredImageTags(t *testing.T) {
 	}
 	if body.AntigravitySessionImage.Tag != "antigravity-012" {
 		t.Fatalf("antigravity tag = %#v", body.AntigravitySessionImage)
+	}
+	if body.AppImage.Display != "2026-06-11 08:06 UTC / 532dd02 / PR #1049" {
+		t.Fatalf("app display = %q", body.AppImage.Display)
+	}
+	if body.AppImage.CommitURL == "" || body.AppImage.PRURL == "" || body.AppImage.WorkflowRunURL == "" {
+		t.Fatalf("app metadata links missing: %#v", body.AppImage)
+	}
+	if body.SessionImage.Display != "2026-06-10 18:00 UTC / abcdef0 / PR #1001" {
+		t.Fatalf("session display = %q", body.SessionImage.Display)
 	}
 	if body.SessionScope != "tank-operator-slot-6" || body.PodName != "tank-operator-6d7" || body.FetchedAt == "" {
 		t.Fatalf("metadata = %#v", body)

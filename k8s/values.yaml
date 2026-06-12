@@ -5,6 +5,16 @@ image:
   # exact image CI just produced â€” no implicit `:latest` drift.
   tag: "app-70b73abdbd29c512084aedada5a9997238b5fe9bfa67c814c05bdfaa8e678e50"
   pullPolicy: IfNotPresent
+  metadata:
+    built_at: ""
+    git_sha: ""
+    git_ref: ""
+    commit_url: ""
+    pr_number: ""
+    pr_url: ""
+    workflow_run_url: ""
+    repository: ""
+    actor: ""
 
 # normal: regular chart render
 # warm: per-slot baseline resources, no long-running app/proxy pods
@@ -60,6 +70,37 @@ session:
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
   antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-78fd2668ff2a598de5a2d7793ef39269ce44c15c57d2cad4806575120f352ca5
+  imageMetadata:
+    claude:
+      built_at: ""
+      git_sha: ""
+      git_ref: ""
+      commit_url: ""
+      pr_number: ""
+      pr_url: ""
+      workflow_run_url: ""
+      repository: ""
+      actor: ""
+    codex:
+      built_at: ""
+      git_sha: ""
+      git_ref: ""
+      commit_url: ""
+      pr_number: ""
+      pr_url: ""
+      workflow_run_url: ""
+      repository: ""
+      actor: ""
+    antigravity:
+      built_at: ""
+      git_sha: ""
+      git_ref: ""
+      commit_url: ""
+      pr_number: ""
+      pr_url: ""
+      workflow_run_url: ""
+      repository: ""
+      actor: ""
   # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
   # orchestrator namespace where the antigravity-api-proxy mounts it; agy
   # session pods never mount it (they get a placeholder + proxy injection).

@@ -105,6 +105,73 @@ var (
 	}
 )
 
+// ImageVersionMetadata is the human-facing release context attached to an
+// immutable image ref. Keys are snake_case so the map can be passed straight
+// through JSON to the frontend and through Helm values/env vars.
+type ImageVersionMetadata map[string]string
+
+var imageVersionMetadataKeys = map[string]struct{}{
+	"actor":            {},
+	"built_at":         {},
+	"commit_url":       {},
+	"git_ref":          {},
+	"git_sha":          {},
+	"pr_number":        {},
+	"pr_url":           {},
+	"repository":       {},
+	"source":           {},
+	"workflow_run_url": {},
+}
+
+func NormalizeImageVersionMetadata(in ImageVersionMetadata) ImageVersionMetadata {
+	if len(in) == 0 {
+		return nil
+	}
+	out := ImageVersionMetadata{}
+	for key, value := range in {
+		key = strings.TrimSpace(strings.ToLower(key))
+		value = strings.TrimSpace(value)
+		if key == "" || value == "" {
+			continue
+		}
+		if _, ok := imageVersionMetadataKeys[key]; !ok {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func ParseImageVersionMetadata(raw string) ImageVersionMetadata {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal([]byte(raw), &parsed); err != nil {
+		return nil
+	}
+	return NormalizeImageVersionMetadata(ImageVersionMetadata(parsed))
+}
+
+func DecodeImageVersionMetadata(raw []byte) ImageVersionMetadata {
+	if len(raw) == 0 {
+		return nil
+	}
+	var parsed map[string]string
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return nil
+	}
+	return NormalizeImageVersionMetadata(ImageVersionMetadata(parsed))
+}
+
+func (m ImageVersionMetadata) Clone() ImageVersionMetadata {
+	return NormalizeImageVersionMetadata(m)
+}
+
 type SessionRecord struct {
 	ID      string
 	Email   string
@@ -116,6 +183,11 @@ type SessionRecord struct {
 	// session metadata; clients should display it as "what this session booted
 	// from" rather than recomputing from today's chart values.
 	SessionImage string
+	// SessionImageMetadata is the release/build metadata that was current for
+	// SessionImage at create time. It is stored with the session so old
+	// sessions keep pointing at the PR, commit, workflow, and build timestamp
+	// they actually booted from.
+	SessionImageMetadata ImageVersionMetadata
 	// Name is the session's human-facing title. It is always present
 	// (NON-NULL): Manager.Create assigns the canonical SessionDisplayName
 	// default when the user supplies none, and SetName reassigns that
@@ -267,16 +339,19 @@ var noClaudeHijackModes = map[string]bool{
 }
 
 type ManifestOptions struct {
-	SessionImage            string
-	CodexSessionImage       string
-	AntigravitySessionImage string
-	SessionsNamespace       string
-	SessionScope            string
-	SessionServiceAccount   string
-	SessionConfigMap        string
-	ArgoCDTrackingApp       string
-	SandboxAgentPort        int
-	TankOperatorInternalURL string
+	SessionImage                    string
+	CodexSessionImage               string
+	AntigravitySessionImage         string
+	SessionImageMetadata            ImageVersionMetadata
+	CodexSessionImageMetadata       ImageVersionMetadata
+	AntigravitySessionImageMetadata ImageVersionMetadata
+	SessionsNamespace               string
+	SessionScope                    string
+	SessionServiceAccount           string
+	SessionConfigMap                string
+	ArgoCDTrackingApp               string
+	SandboxAgentPort                int
+	TankOperatorInternalURL         string
 	// Optional: in-cluster Service IPs for host alias injection.
 	OAuthGatewayIP        string
 	APIProxyIP            string
@@ -373,6 +448,16 @@ func ResolvedSessionImage(mode string, opts ManifestOptions) string {
 		return opts.CodexSessionImage
 	}
 	return opts.SessionImage
+}
+
+func ResolvedSessionImageMetadata(mode string, opts ManifestOptions) ImageVersionMetadata {
+	if IsAntigravityMode(mode) {
+		return opts.AntigravitySessionImageMetadata.Clone()
+	}
+	if IsCodexMode(mode) {
+		return opts.CodexSessionImageMetadata.Clone()
+	}
+	return opts.SessionImageMetadata.Clone()
 }
 
 func NormalizeSessionCapabilities(in []string) ([]string, error) {
