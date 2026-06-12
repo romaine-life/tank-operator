@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -261,5 +262,95 @@ func TestPostgresBackgroundTaskWakeGenerationsRearmAfterPrematureFire(t *testing
 	}
 	if _, outcome, err := store.Register(ctx, cancelReg); err != nil || outcome != BackgroundTaskWakeRegisterTerminalNoop {
 		t.Fatalf("post-cancel register = (%q, %v), want terminal_noop", outcome, err)
+	}
+}
+
+// TestPostgresBackgroundTaskWakeAttemptCap pins the fire attempt cap's SQL
+// arms (the scheduled-wakeup store carries the symmetric predicates and
+// FailExceeded shape — same contract, same query structure):
+//   - a row at MaxBackgroundTaskWakeAttempts is never claimable again,
+//   - FailExceeded leaves a capped row alone while its final claim is still
+//     fresh (the last attempt may legitimately be mid-fire),
+//   - once the claim is stale, FailExceeded terminals it durably with the
+//     attempt_cap_exceeded last_error,
+//   - the pass is idempotent.
+func TestPostgresBackgroundTaskWakeAttemptCap(t *testing.T) {
+	pool := newBackgroundTaskWakeTestPool(t)
+	ctx := context.Background()
+	store := NewBackgroundTaskWakeStore(pool, "default")
+
+	reg := RegisterBackgroundTaskWakeRequest{
+		SessionScope:    "default",
+		SessionID:       "63",
+		OwnerEmail:      "user@example.com",
+		Provider:        "claude",
+		TaskID:          "task-cap",
+		TaskStatus:      "completed",
+		Description:     "wake repeatedly",
+		ObservedEventID: "exit-cap",
+		RegisteredAt:    time.Now().Add(-time.Hour),
+	}
+	row, _, err := store.Register(ctx, reg)
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Simulate a wake whose fires kept half-finishing: at the cap, claim
+	// fresh (final attempt possibly still mid-fire).
+	if _, err := pool.Exec(ctx, `
+		UPDATE session_background_task_wakes
+		SET status = 'claiming', attempt_count = $2, locked_at = now()
+		WHERE wake_id = $1
+	`, row.WakeID, MaxBackgroundTaskWakeAttempts); err != nil {
+		t.Fatalf("seed capped row: %v", err)
+	}
+
+	claimed, err := store.ClaimDue(ctx, time.Now().Add(time.Hour), 10, time.Nanosecond)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	for _, c := range claimed {
+		if c.WakeID == row.WakeID {
+			t.Fatalf("capped row was claimed again (attempts=%d)", c.AttemptCount)
+		}
+	}
+
+	// Fresh claim → FailExceeded must not touch it.
+	failed, err := store.FailExceeded(ctx, time.Now(), 10, time.Hour)
+	if err != nil {
+		t.Fatalf("FailExceeded (fresh): %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("FailExceeded terminaled a fresh final attempt: %+v", failed)
+	}
+
+	// Stale claim → durable terminal with the cap reason.
+	if _, err := pool.Exec(ctx, `
+		UPDATE session_background_task_wakes SET locked_at = now() - interval '1 hour'
+		WHERE wake_id = $1
+	`, row.WakeID); err != nil {
+		t.Fatalf("stale the claim: %v", err)
+	}
+	failed, err = store.FailExceeded(ctx, time.Now(), 10, time.Minute)
+	if err != nil {
+		t.Fatalf("FailExceeded (stale): %v", err)
+	}
+	if len(failed) != 1 || failed[0].WakeID != row.WakeID {
+		t.Fatalf("FailExceeded = %+v, want exactly the capped row", failed)
+	}
+	if failed[0].Status != BackgroundTaskWakeFailed {
+		t.Fatalf("status = %q, want failed", failed[0].Status)
+	}
+	if !strings.HasPrefix(failed[0].LastError, "attempt_cap_exceeded") {
+		t.Fatalf("last_error = %q, want attempt_cap_exceeded prefix", failed[0].LastError)
+	}
+
+	// Idempotent: nothing left to terminal.
+	failed, err = store.FailExceeded(ctx, time.Now(), 10, time.Minute)
+	if err != nil {
+		t.Fatalf("FailExceeded (second pass): %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("second pass terminaled %d rows, want 0", len(failed))
 	}
 }

@@ -435,6 +435,7 @@ func (s *appServer) processBackgroundTaskWakes(ctx context.Context, now time.Tim
 	} else {
 		slog.Warn("background task wake due count failed", "error", err)
 	}
+	s.failExceededBackgroundTaskWakes(ctx, now)
 	rows, err := s.backgroundTaskWakes.ClaimDue(ctx, now, backgroundTaskWakeBatchLimit, backgroundTaskWakeClaimStaleAfter)
 	if err != nil {
 		return err
@@ -450,6 +451,36 @@ func (s *appServer) processBackgroundTaskWakes(ctx context.Context, now time.Tim
 		}
 	}
 	return nil
+}
+
+// failExceededBackgroundTaskWakes terminals wakes stuck at the fire attempt
+// cap. ClaimDue refuses rows at pgstore.MaxBackgroundTaskWakeAttempts, so
+// without this pass a wake whose fire kept half-finishing (MarkFired/
+// MarkFailed never landed) would sit in 'claiming' limbo forever — pending to
+// HasPending and the "scheduled" activity status, invisible to the user. The
+// store stamps the durable 'failed' terminal; this runs the same post-failure
+// bookkeeping as the MarkFailed path in failBackgroundTaskWake: count it and
+// ring the away-error summon — the promised background-task report broke while
+// the user was away, exactly like any failed wake.
+func (s *appServer) failExceededBackgroundTaskWakes(ctx context.Context, now time.Time) {
+	rows, err := s.backgroundTaskWakes.FailExceeded(ctx, now, backgroundTaskWakeBatchLimit, backgroundTaskWakeClaimStaleAfter)
+	if err != nil {
+		slog.Warn("background task wake attempt-cap sweep failed", "error", err)
+		return
+	}
+	for _, row := range rows {
+		provider := strings.TrimSpace(row.Provider)
+		slog.Warn("background task wake failed at attempt cap",
+			"wake_id", row.WakeID,
+			"session_id", row.SessionID,
+			"task_id", row.TaskID,
+			"provider", provider,
+			"attempts", row.AttemptCount)
+		recordBackgroundTaskWakeFire(provider, "attempt_cap_exceeded")
+		s.resolveFailedWake(ctx, row.OwnerEmail, row.SessionID,
+			conversation.TurnIDForClientNonce(row.ClientNonce), row.ClientNonce, provider,
+			true, sessionactivity.AwayErrorReasonBackgroundTaskWake)
+	}
 }
 
 func (s *appServer) fireBackgroundTaskWake(ctx context.Context, row pgstore.BackgroundTaskWake, now time.Time) error {
