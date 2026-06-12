@@ -21,6 +21,13 @@ func TestSessionRunOptionsExposeTankOwnedCreateAndRunConfig(t *testing.T) {
 	if !slices.Contains(opts.CreateModes, sessionmodel.CodexGUIMode) {
 		t.Fatalf("create_modes = %v, want codex_gui", opts.CreateModes)
 	}
+	if !slices.Contains(opts.CreateModes, sessionmodel.ClaudeSecondaryGUIMode) ||
+		!slices.Contains(opts.CreateModes, sessionmodel.ClaudeSecondaryConfigMode) {
+		t.Fatalf("create_modes = %v, want claude secondary modes", opts.CreateModes)
+	}
+	if !slices.Contains(opts.SDKChatModes, sessionRunOptionMode{Mode: sessionmodel.ClaudeSecondaryGUIMode, Provider: "claude"}) {
+		t.Fatalf("sdk_chat_modes = %v, want claude secondary gui as claude provider", opts.SDKChatModes)
+	}
 	if slices.Contains(opts.CreateModes, sessionmodel.CodexExecGUIMode) ||
 		slices.Contains(opts.CreateModes, sessionmodel.CodexAppServerMode) {
 		t.Fatalf("create_modes = %v, want retired Codex GUI modes excluded", opts.CreateModes)

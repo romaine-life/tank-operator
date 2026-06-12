@@ -1334,7 +1334,7 @@ func skillPromptTrigger(provider, skillName string) string {
 
 func sdkProviderForMode(mode string) (string, bool) {
 	switch sessionmodel.NormalizeSessionMode(mode) {
-	case sessionmodel.ClaudeGUIMode:
+	case sessionmodel.ClaudeGUIMode, sessionmodel.ClaudeSecondaryGUIMode:
 		return "claude", true
 	case sessionmodel.CodexGUIMode:
 		return "codex", true

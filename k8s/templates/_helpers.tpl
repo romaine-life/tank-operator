@@ -13,6 +13,14 @@ claude-code-credentials
 {{- end -}}
 {{- end -}}
 
+{{- define "tank-operator.claudeSecondaryCredentialsKvKey" -}}
+{{- if eq .Values.namespaces.orchestrator "tank-operator" -}}
+claude-secondary-code-credentials
+{{- else -}}
+{{ printf "%s-claude-secondary-code-credentials" .Values.namespaces.orchestrator }}
+{{- end -}}
+{{- end -}}
+
 {{- define "tank-operator.codexCredentialsKvKey" -}}
 {{- if eq .Values.namespaces.orchestrator "tank-operator" -}}
 codex-credentials
@@ -120,6 +128,10 @@ antigravity-credentials
 {{- .Values.apiProxy.serviceHost -}}
 {{- end -}}
 
+{{- define "tank-operator.claudeSecondaryApiProxyHost" -}}
+{{- .Values.claudeSecondaryApiProxy.serviceHost -}}
+{{- end -}}
+
 {{- define "tank-operator.codexApiProxyHost" -}}
 {{- .Values.codexApiProxy.serviceHost -}}
 {{- end -}}
@@ -134,6 +146,10 @@ antigravity-credentials
 
 {{- define "tank-operator.claudeCredentialsSecret" -}}
 {{- .Values.externalSecret.claudeCredentials.secretName -}}
+{{- end -}}
+
+{{- define "tank-operator.claudeSecondaryCredentialsSecret" -}}
+{{- .Values.externalSecret.claudeSecondaryCredentials.secretName -}}
 {{- end -}}
 
 {{- define "tank-operator.credentialRefresherConfigSecret" -}}

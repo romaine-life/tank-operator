@@ -255,11 +255,22 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 			},
 		},
 		{
+			mode: "claude_secondary_config",
+			wantFiles: map[string]string{
+				".claude/settings.json": `"theme":"dark"`,
+				".claude.json":          `"hasCompletedOnboarding": true`,
+			},
+		},
+		{
 			mode:      "codex_cli",
 			wantFiles: map[string]string{".codex/config.toml": `cli_auth_credentials_store = "file"`},
 		},
 		{
 			mode:      "claude_gui",
+			wantFiles: nil, // non-wizard, no seeding
+		},
+		{
+			mode:      "claude_secondary_gui",
 			wantFiles: nil, // non-wizard, no seeding
 		},
 	}
@@ -298,7 +309,7 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 				}
 			}
 
-			if tc.mode == "claude_gui" {
+			if tc.mode == "claude_gui" || tc.mode == "claude_secondary_gui" {
 				// Non-wizard modes still get the shared git template
 				// bootstrap. They must not receive provider wizard config.
 				for _, suffix := range []string{
@@ -308,7 +319,8 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 				} {
 					path := filepath.Join(home, suffix)
 					if _, err := os.Stat(path); !os.IsNotExist(err) {
-						t.Errorf("non-wizard mode wrote provider seed %s: %v", path, err)
+						data, _ := os.ReadFile(path)
+						t.Errorf("non-wizard mode wrote provider seed %s: %v\ncontent:\n%s\nscript output:\n%s", path, err, string(data), string(out))
 					}
 				}
 			}
@@ -635,19 +647,14 @@ func mustOutputEnv(t *testing.T, env []string, name string, args ...string) []by
 }
 
 func isolatedGitEnv(home string) []string {
-	env := make([]string, 0, len(os.Environ())+4)
-	for _, item := range os.Environ() {
-		if strings.HasPrefix(item, "HOME=") ||
-			strings.HasPrefix(item, "XDG_CONFIG_HOME=") ||
-			strings.HasPrefix(item, "GIT_CONFIG") {
-			continue
-		}
-		env = append(env, item)
-	}
-	return append(env,
-		"HOME="+home,
-		"XDG_CONFIG_HOME="+filepath.Join(home, ".config"),
-		"GIT_CONFIG_GLOBAL="+filepath.Join(home, ".gitconfig"),
+	env := []string{
+		"HOME=" + home,
+		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
+		"GIT_CONFIG_GLOBAL=" + filepath.Join(home, ".gitconfig"),
 		"GIT_CONFIG_NOSYSTEM=1",
-	)
+	}
+	if path := os.Getenv("PATH"); path != "" {
+		env = append(env, "PATH="+path)
+	}
+	return env
 }

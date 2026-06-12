@@ -95,10 +95,11 @@ type Manager struct {
 	onImageOverrideApplied func(scope, mode, kind string)
 
 	// Resolved ClusterIPs for host-alias injection.
-	oauthGatewayIP        string
-	apiProxyIP            string
-	codexAPIProxyIP       string
-	antigravityAPIProxyIP string
+	oauthGatewayIP            string
+	apiProxyIP                string
+	claudeSecondaryAPIProxyIP string
+	codexAPIProxyIP           string
+	antigravityAPIProxyIP     string
 
 	localCounter     int64
 	localCounterLock sync.Mutex
@@ -106,10 +107,11 @@ type Manager struct {
 
 // ManagerOptions configures a new Manager.
 type ManagerOptions struct {
-	ManifestOpts      sessionmodel.ManifestOptions
-	OAuthGatewayHost  string
-	APIProxyHost      string
-	CodexAPIProxyHost string
+	ManifestOpts                sessionmodel.ManifestOptions
+	OAuthGatewayHost            string
+	APIProxyHost                string
+	ClaudeSecondaryAPIProxyHost string
+	CodexAPIProxyHost           string
 	// AntigravityAPIProxyHost is the in-cluster antigravity-api-proxy Service
 	// (fronts cloudcode-pa.googleapis.com). agy_gui pods host-alias the Google
 	// data-plane host to this proxy so the refresh token stays in the proxy.
@@ -145,6 +147,9 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 	}
 	if opts.APIProxyHost != "" {
 		m.apiProxyIP = resolveIP(opts.APIProxyHost)
+	}
+	if opts.ClaudeSecondaryAPIProxyHost != "" {
+		m.claudeSecondaryAPIProxyIP = resolveIP(opts.ClaudeSecondaryAPIProxyHost)
 	}
 	if opts.CodexAPIProxyHost != "" {
 		m.codexAPIProxyIP = resolveIP(opts.CodexAPIProxyHost)
@@ -307,6 +312,9 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	if m.apiProxyIP == "" {
 		m.apiProxyIP = resolveIP(os.Getenv("CLAUDE_API_PROXY_HOST"))
 	}
+	if m.claudeSecondaryAPIProxyIP == "" {
+		m.claudeSecondaryAPIProxyIP = resolveIP(os.Getenv("CLAUDE_SECONDARY_API_PROXY_HOST"))
+	}
 	if m.codexAPIProxyIP == "" {
 		m.codexAPIProxyIP = resolveIP(os.Getenv("CODEX_API_PROXY_HOST"))
 	}
@@ -335,6 +343,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts := m.manifestOpts
 	manifestOpts.OAuthGatewayIP = m.oauthGatewayIP
 	manifestOpts.APIProxyIP = m.apiProxyIP
+	manifestOpts.ClaudeSecondaryAPIProxyIP = m.claudeSecondaryAPIProxyIP
 	manifestOpts.CodexAPIProxyIP = m.codexAPIProxyIP
 	manifestOpts.AntigravityAPIProxyIP = m.antigravityAPIProxyIP
 	manifestOpts.GlimmungContextJSON = contextJSON

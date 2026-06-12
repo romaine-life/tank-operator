@@ -7,6 +7,9 @@
 export const MODES = [
   "claude_cli",
   "claude_gui",
+  "claude_secondary_cli",
+  "claude_secondary_gui",
+  "claude_secondary_config",
   "api_key",
   "config",
   "codex_cli",
@@ -18,6 +21,9 @@ export const MODES = [
 export const MODE_LABELS: Record<(typeof MODES)[number], string> = {
   claude_cli: "claude-cli",
   claude_gui: "claude-gui",
+  claude_secondary_cli: "claude2-cli",
+  claude_secondary_gui: "claude2-gui",
+  claude_secondary_config: "claude2-cfg",
   api_key: "api",
   config: "config",
   codex_cli: "codex-cli",
@@ -29,6 +35,9 @@ export const MODE_LABELS: Record<(typeof MODES)[number], string> = {
 export const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
   claude_cli: "Claude CLI",
   claude_gui: "Claude GUI",
+  claude_secondary_cli: "Claude secondary CLI",
+  claude_secondary_gui: "Claude secondary GUI",
+  claude_secondary_config: "Claude secondary config",
   api_key: "Claude API key",
   config: "Claude config",
   codex_cli: "Codex CLI",
@@ -37,9 +46,13 @@ export const MODE_FULL_LABELS: Record<(typeof MODES)[number], string> = {
   codex_app_server: "Codex App Server",
   codex_config: "Codex config",
 };
-export const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "codex">> = {
+export const MODE_ICONS: Partial<
+  Record<(typeof MODES)[number], "anthropic" | "anthropic_secondary" | "codex">
+> = {
   claude_cli: "anthropic",
   claude_gui: "anthropic",
+  claude_secondary_cli: "anthropic_secondary",
+  claude_secondary_gui: "anthropic_secondary",
   codex_cli: "codex",
   codex_gui: "codex",
   codex_exec_gui: "codex",
@@ -48,6 +61,8 @@ export const MODE_ICONS: Partial<Record<(typeof MODES)[number], "anthropic" | "c
 export const MODE_INTERACTIONS: Partial<Record<(typeof MODES)[number], "gui" | "cli">> = {
   claude_cli: "cli",
   claude_gui: "gui",
+  claude_secondary_cli: "cli",
+  claude_secondary_gui: "gui",
   codex_cli: "cli",
   codex_gui: "gui",
   codex_exec_gui: "gui",

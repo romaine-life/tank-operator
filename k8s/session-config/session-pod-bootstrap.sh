@@ -128,7 +128,7 @@ start_spirelens_tailnet
 install_agent_git_template
 
 case "$mode" in
-  codex_config | codex_cli | codex_gui | codex_exec_gui | codex_app_server)
+  codex_config|codex_cli|codex_gui|codex_exec_gui|codex_app_server)
     mkdir -p "$HOME/.codex"
     # cli_auth_credentials_store=file forces the file-backed store.
     # Codex defaults to the OS keychain, which doesn't exist in a
@@ -148,7 +148,7 @@ notification_condition = "always"
 notification_method = "bel"
 TOML
     ;;
-  config)
+  config|claude_secondary_config)
     # Minimal seeds for the claude credentials-refresh wizard. The
     # save-credentials button later reads $HOME/.claude/.credentials.json
     # out of the pod — we deliberately do not pre-seed that file; the
@@ -161,7 +161,7 @@ JSON
 {"hasCompletedOnboarding": true}
 JSON
     ;;
-  antigravity_cli | antigravity_gui)
+  antigravity_cli|antigravity_gui)
     AGY_HOME="${HOME}/.gemini/antigravity-cli"
     mkdir -p "${AGY_HOME}/cache"
     mkdir -p "${HOME}/.gemini/config"
@@ -226,4 +226,3 @@ esac
 # Ensure TERM is always set to xterm-256color in interactive shell sessions
 echo "export TERM=xterm-256color" >> "${HOME}/.bashrc"
 echo "export TERM=xterm-256color" >> "${HOME}/.bash_profile"
-
