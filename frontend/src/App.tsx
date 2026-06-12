@@ -11318,6 +11318,11 @@ function RunTurnActivityScreen({
       true;
   const showPromptContextShell = Boolean(selected);
   const canTogglePromptContext = Boolean(selectedTurnContext);
+  const canToggleTurnSections =
+    canTogglePromptContext && canToggleDetailActivity;
+  const turnSectionCycleLabel = detailActivityCollapsed
+    ? "Show agent activity and collapse user message"
+    : "Show user message and collapse agent activity";
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) =>
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
@@ -11779,6 +11784,48 @@ function RunTurnActivityScreen({
                   <ChevronUpIcon
                     className="run-turn-activity-divider-toggle-chevron"
                     size={13}
+                    strokeWidth={2.3}
+                    aria-hidden="true"
+                  />
+                </button>
+                <button
+                  type="button"
+                  className="run-turn-activity-divider-toggle"
+                  data-direction="both"
+                  disabled={!canToggleTurnSections}
+                  onClick={() => {
+                    if (!canToggleTurnSections) return;
+                    const nextActivityCollapsed = !detailActivityCollapsed;
+                    const nextContextCollapsed = detailActivityCollapsed;
+                    setCollapsedContextTurnIds((prev) => ({
+                      ...prev,
+                      [selected.turnId]: nextContextCollapsed,
+                    }));
+                    setCollapsedActivityTurnIds((prev) => ({
+                      ...prev,
+                      [selected.turnId]: nextActivityCollapsed,
+                    }));
+                  }}
+                  aria-label={
+                    canToggleTurnSections
+                      ? turnSectionCycleLabel
+                      : "Cannot cycle turn sections"
+                  }
+                  title={
+                    canToggleTurnSections
+                      ? turnSectionCycleLabel
+                      : "Cannot cycle turn sections"
+                  }
+                >
+                  <ChevronUpIcon
+                    className="run-turn-activity-divider-toggle-chevron"
+                    size={11}
+                    strokeWidth={2.3}
+                    aria-hidden="true"
+                  />
+                  <ChevronDownIcon
+                    className="run-turn-activity-divider-toggle-chevron"
+                    size={11}
                     strokeWidth={2.3}
                     aria-hidden="true"
                   />
