@@ -705,6 +705,16 @@ func (b *Bus) RunEventPersister(ctx context.Context, store EventStore, refresher
 	if store == nil {
 		return fmt.Errorf("session event store unavailable")
 	}
+	// Re-assert the stream on every (re)start: JetStream here is
+	// memory-only, so a full NATS restart erases the stream AND every
+	// durable consumer; the boot-time ensure alone could never heal that
+	// (issue #1076 item 3). With the supervised restart loop in main, a
+	// persister death from "stream not found" re-creates the stream and
+	// the consumer on the next attempt instead of staying dead for the
+	// pod's lifetime.
+	if err := b.ensureStream(ctx); err != nil {
+		return fmt.Errorf("ensure stream: %w", err)
+	}
 	consumer, err := b.js.CreateOrUpdateConsumer(ctx, b.stream, jetstream.ConsumerConfig{
 		Name:          EventPersisterConsumerName(b.scope),
 		Durable:       EventPersisterConsumerName(b.scope),

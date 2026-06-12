@@ -829,6 +829,58 @@ func recordStrandedLaunchSwept(result string) {
 // written for a turn nothing else would ever have terminaled; sustained
 // nonzero rate means submit_turn commands or runners are dying and pages via
 // TankStrandedTurnsSwept.
+// tank_session_bus_persister_restart_total — supervised persister
+// restarts. The persister start was previously fire-once; any error
+// (consumer create during a NATS restart, stream missing after a
+// memory-only JetStream wipe) silenced persistence for the pod's
+// lifetime. A restart here is the supervision WORKING; a sustained rate
+// means the bus substrate is flapping.
+var sessionBusPersisterRestartTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "tank_session_bus_persister_restart_total",
+		Help: "Supervised session-bus event persister restarts after an error return.",
+	},
+)
+
+func recordPersisterRestart() {
+	sessionBusPersisterRestartTotal.Inc()
+}
+
+// Session-bus stream occupancy against configured limits. The stream
+// evicts oldest-first across commands AND events when full; evicted
+// commands are undetectable after the fact, so TankSessionBusStreamNearCapacity
+// fires on approach (see k8s/templates/observability.yaml).
+var (
+	sessionBusStreamMessages = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_bus_stream_messages",
+		Help: "Messages currently retained in the session bus stream.",
+	})
+	sessionBusStreamBytes = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_bus_stream_bytes",
+		Help: "Bytes currently retained in the session bus stream.",
+	})
+	sessionBusStreamMaxMsgs = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_bus_stream_max_messages",
+		Help: "Configured MaxMsgs limit of the session bus stream.",
+	})
+	sessionBusStreamMaxBytes = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_bus_stream_max_bytes",
+		Help: "Configured MaxBytes limit of the session bus stream.",
+	})
+	sessionBusStreamConsumers = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_bus_stream_consumers",
+		Help: "Durable consumers currently attached to the session bus stream.",
+	})
+)
+
+func recordSessionBusStreamUsage(usage sessionbus.StreamUsage) {
+	sessionBusStreamMessages.Set(float64(usage.Messages))
+	sessionBusStreamBytes.Set(float64(usage.Bytes))
+	sessionBusStreamMaxMsgs.Set(float64(usage.MaxMsgs))
+	sessionBusStreamMaxBytes.Set(float64(usage.MaxBytes))
+	sessionBusStreamConsumers.Set(float64(usage.ConsumerCount))
+}
+
 var strandedTurnSweptTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_stranded_turn_swept_total",

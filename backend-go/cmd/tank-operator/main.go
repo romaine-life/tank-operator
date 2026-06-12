@@ -397,8 +397,55 @@ func main() {
 		activityEmitter = emitter
 		sessionBus.SetLifecycleEmitter(emitter)
 		go func() {
-			if err := sessionBus.RunEventPersister(ctx, sessionEventsStore, transcriptMaterializer, promPersisterMetrics{}); err != nil {
-				slog.Error("session bus event persister stopped", "error", err)
+			// Supervised: the persister is the only writer of runner
+			// events into the durable ledger, and the previous fire-once
+			// goroutine merely logged its death — one transient error at
+			// start (a CreateOrUpdateConsumer failure during a NATS
+			// restart) silenced persistence for the pod's lifetime,
+			// masked by the second replica until both hit the same
+			// transient (issue #1076 item 3). Each retry re-runs the
+			// stream AND consumer ensure inside RunEventPersister, so a
+			// memory-only JetStream that lost everything heals here too.
+			delay := time.Second
+			for {
+				err := sessionBus.RunEventPersister(ctx, sessionEventsStore, transcriptMaterializer, promPersisterMetrics{})
+				if ctx.Err() != nil {
+					return
+				}
+				recordPersisterRestart()
+				slog.Error("session bus event persister stopped; restarting",
+					"error", err, "delay", delay.String())
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(delay):
+				}
+				if delay < 30*time.Second {
+					delay *= 2
+				}
+			}
+		}()
+		go func() {
+			// Stream-occupancy sampler: the bus stream silently evicts the
+			// OLDEST messages — durable commands included — when its
+			// limits fill (LimitsPolicy/DiscardOld). Evicted commands are
+			// undetectable after the fact, so the alert must fire on
+			// APPROACH; these gauges feed it.
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				usageCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				if usage, err := sessionBus.StreamUsage(usageCtx); err == nil {
+					recordSessionBusStreamUsage(usage)
+				} else if ctx.Err() == nil {
+					slog.Warn("session bus stream usage sample failed", "error", err)
+				}
+				cancel()
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
 			}
 		}()
 	}
