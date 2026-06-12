@@ -124,13 +124,12 @@ export function canonicalEventsForClaudeMessage(
                 block: item,
               });
         const name = typeof item.name === "string" ? item.name : "tool";
-        // AskUserQuestion produces no item events. The runner's canUseTool
-        // pauses the active turn with durable turn.awaiting_input carrying the
+        // AskUserQuestion produces no ordinary item.started event. The runner's
+        // Tank MCP tool publishes durable turn.awaiting_input carrying the
         // Tank-canonical questions (claudeQuestionsToTankShape); the transcript
         // renders the question card in Turn activity, so there is no dangling
         // "started" tool item.
-        // (Previously this emitted item.started plus an in-turn approval-request event.)
-        if (name !== "AskUserQuestion") {
+        if (!isTankAskUserQuestionToolName(name)) {
           events.push(
             itemEvent({
               sessionID: cfg.sessionId,
@@ -193,6 +192,7 @@ export function canonicalEventsForClaudeMessage(
       if (!block || typeof block !== "object") return [];
       const item = block as Record<string, unknown>;
       if (item.type !== "tool_result") return [];
+      if (isTankAskUserQuestionToolResult(item)) return [];
       const providerItemID =
         typeof item.tool_use_id === "string" && item.tool_use_id
           ? item.tool_use_id
@@ -260,6 +260,32 @@ export function canonicalEventsForClaudeMessage(
     ];
   }
   return [];
+}
+
+function isTankAskUserQuestionToolName(name: string): boolean {
+  return name === "AskUserQuestion" || name === "mcp__tank__AskUserQuestion";
+}
+
+function isTankAskUserQuestionToolResult(
+  item: Record<string, unknown>,
+): boolean {
+  const meta = item._meta;
+  if (
+    meta &&
+    typeof meta === "object" &&
+    (meta as { tankAskUserQuestion?: unknown }).tankAskUserQuestion === true
+  ) {
+    return true;
+  }
+  const structuredContent = item.structuredContent;
+  if (
+    structuredContent &&
+    typeof structuredContent === "object" &&
+    "answers" in structuredContent
+  ) {
+    return true;
+  }
+  return false;
 }
 
 export function claudeTaskIdentifiers(

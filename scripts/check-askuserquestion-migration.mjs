@@ -6,14 +6,16 @@
 // tool_result answers, AskUserQuestion-specific user-message display kinds, or
 // a provider callback that permanently owns the Tank-visible turn boundary.
 //
-// NEW model: invoking AskUserQuestion publishes a runner invocation event plus
-// a distinct derived `assistant_message.created` event on the asking turn. That
-// assistant message is the terminal transcript response and links to a normal
-// numbered question turn whose durable `turn.awaiting_input` owns the question
-// card/pages. Answering records `turn.input_answered` for the question turn,
-// writes a normal `user_message.created` + `turn.submitted` continuation turn
-// for the visible answer, and delivers the answer to the paused provider
-// callback over the control plane as `input_reply`.
+// NEW model: invoking AskUserQuestion routes to Tank's SDK MCP tool
+// (`mcp__tank__AskUserQuestion`), which publishes a runner invocation event
+// plus a distinct derived `assistant_message.created` event on the asking turn.
+// That assistant message is the terminal transcript response and links to a
+// normal numbered question turn whose durable `turn.awaiting_input` owns the
+// question card/pages. Answering records `turn.input_answered` for the question
+// turn, writes a normal `user_message.created` + `turn.submitted` continuation
+// turn for the visible answer, and delivers the answer to the paused MCP tool
+// over the control plane as `input_reply`. Claude SDK permissions remain in
+// bypass mode; AskUserQuestion must not be implemented through canUseTool.
 //
 // This guard forbids retired AskUserQuestion surfaces and requires the durable
 // handoff/continuation pieces so neither model can drift back. Fail-on-match is
@@ -137,6 +139,14 @@ const forbidden = [
     name: "removed AskUserQuestion deny+interrupt handoff",
     pattern: /AskUserQuestion[\s\S]{0,900}deny[\s\S]{0,300}interrupt:\s*true/,
   },
+  {
+    name: "removed Claude canUseTool AskUserQuestion handoff",
+    pattern: /canUseTool[\s\S]{0,1000}AskUserQuestion|AskUserQuestion[\s\S]{0,1000}canUseTool/,
+  },
+  {
+    name: "removed AskUserQuestion permission-callback parking",
+    pattern: /permission callback[\s\S]{0,500}(pending|parked)|pending[\s\S]{0,500}permission callback/,
+  },
 ];
 
 const required = [
@@ -221,6 +231,21 @@ const required = [
     file: "claude-runner/src/runner.ts",
     name: "Claude runner records AskUserQuestion handoff",
     pattern: /\bpauseTurnForInput\b/,
+  },
+  {
+    file: "claude-runner/src/runner.ts",
+    name: "Claude runner routes AskUserQuestion through Tank MCP alias",
+    pattern: /TANK_MCP_SERVER_NAME\s*=\s*"tank"[\s\S]{0,400}TANK_ASK_USER_QUESTION_TOOL\s*=\s*"AskUserQuestion"[\s\S]{0,400}TANK_ASK_USER_QUESTION_TOOL_ALIAS[\s\S]{0,200}mcp__/,
+  },
+  {
+    file: "claude-runner/src/runner.ts",
+    name: "Claude SDK options install AskUserQuestion alias",
+    pattern: /toolAliases:\s*\{[\s\S]{0,200}TANK_ASK_USER_QUESTION_TOOL[\s\S]{0,200}TANK_ASK_USER_QUESTION_TOOL_ALIAS/,
+  },
+  {
+    file: "claude-runner/src/runner.ts",
+    name: "Claude runner uses SDK bypass mode after removing permission interception",
+    pattern: /permissionMode:\s*"bypassPermissions"[\s\S]{0,120}allowDangerouslySkipPermissions:\s*true/,
   },
   {
     file: "claude-runner/src/runner.ts",

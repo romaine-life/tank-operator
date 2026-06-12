@@ -533,6 +533,48 @@ test("logUnhandledSdkMessage logs unknown types even with no identifying fields"
   assert.equal(parsed.type, "future_unknown_kind");
 });
 
+test("permission_denied frames become durable failed tool items", async () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    handleEvent: (message: unknown) => Promise<void>;
+    activeTurn: unknown;
+    sink: { upsert: (event: TankConversationEvent) => Promise<void> };
+  };
+  const events: TankConversationEvent[] = [];
+  runner.activeTurn = {
+    turnID: "turn-active",
+    clientNonce: "turn-active",
+    started: true,
+    interrupted: false,
+    terminalEmitted: false,
+  };
+  runner.sink = {
+    async upsert(event) {
+      events.push(event);
+    },
+  };
+
+  await runner.handleEvent({
+    type: "system",
+    subtype: "permission_denied",
+    tool_name: "mcp__github__create_pull_request",
+    tool_use_id: "toolu_pr",
+    agent_id: "agent-1",
+    decision_reason_type: "rule",
+    decision_reason: "not allowed",
+    message: "Permission denied",
+    uuid: "evt-denied",
+  });
+
+  assert.equal(events.length, 1);
+  assert.equal(events[0]?.type, "item.failed");
+  assert.equal(events[0]?.provider_item_id, "toolu_pr");
+  assert.deepEqual(events[0]?.payload?.permission_denied, {
+    agent_kind: "subagent",
+    decision: "rule",
+    decision_reason: "not allowed",
+  });
+});
+
 // Regression test for the "Stop doesn't interrupt deep tool-use loops"
 // failure mode that PR #481's durable-stop migration left open. Before
 // the data/control plane split, both submit_turn and interrupt_turn rode
@@ -671,19 +713,15 @@ test("acceptCommandTurn emits turn.claimed before provider output", async () => 
   );
 });
 
-// canUseTool is the AskUserQuestion pause point. When the agent invokes
-// AskUserQuestion the runner publishes durable turn.awaiting_input, keeps the
-// turn active, and resolves only when input_reply arrives for the same
-// turn/tool item.
-test("canUseTool pauses the active turn and resumes from input_reply", async () => {
+// The Tank-owned AskUserQuestion MCP tool publishes durable turn.awaiting_input,
+// keeps the turn active, and resolves only when input_reply arrives for the
+// same durable question target.
+test("Tank AskUserQuestion MCP tool pauses the active turn and resumes from input_reply", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    canUseTool: (
-      toolName: string,
-      input: unknown,
-      ctx: { toolUseID?: string },
-    ) => Promise<{
-      behavior: string;
-      updatedInput?: { answers?: Record<string, string> };
+    handleTankAskUserQuestion: (input: unknown) => Promise<{
+      isError?: boolean;
+      content: Array<{ type: string; text?: string }>;
+      structuredContent?: { answers?: Record<string, string> };
     }>;
     acceptInputReply: (record: unknown) => Promise<void>;
     activeTurn: unknown;
@@ -736,15 +774,11 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
     commandRecord: {},
   };
 
-  const resultPromise = runner.canUseTool(
-    "AskUserQuestion",
-    {
-      questions: [
-        { question: "Which auth method?", options: [{ label: "OAuth" }] },
-      ],
-    },
-    { toolUseID: "toolu_ask" },
-  );
+  const resultPromise = runner.handleTankAskUserQuestion({
+    questions: [
+      { question: "Which auth method?", options: [{ label: "OAuth" }] },
+    ],
+  });
   await new Promise((resolve) => setImmediate(resolve));
 
   assert.deepEqual(
@@ -769,21 +803,25 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
   assert.deepEqual(
     outcomes,
     [],
-    "AskUserQuestion is the Tank-visible response, but the provider command stays in flight for callback recovery",
+    "AskUserQuestion is the Tank-visible response, but the provider command stays in flight for MCP reply delivery",
   );
+  const payload = (awaiting as {
+    payload?: { provider_item_id?: string; provider_timeline_id?: string };
+  }).payload;
 
   await runner.acceptInputReply({
     type: "input_reply",
     client_nonce: "answer-continuation",
     target_turn_id: "turn-active",
-    target_timeline_id: "turn-active:item:toolu_ask",
-    target_provider_item_id: "toolu_ask",
+    target_timeline_id: payload?.provider_timeline_id,
+    target_provider_item_id: payload?.provider_item_id,
     answers: { "Which auth method?": ["OAuth"] },
     annotations: { "Which auth method?": { notes: "matches the IdP" } },
   });
   const result = await resultPromise;
-  assert.equal(result.behavior, "allow");
-  assert.deepEqual(result.updatedInput?.answers, {
+  assert.equal(result.isError, undefined);
+  assert.match(result.content[0]?.text ?? "", /User answered/);
+  assert.deepEqual(result.structuredContent?.answers, {
     "Which auth method?": "OAuth\n\nmatches the IdP",
   });
   assert.ok(
@@ -792,15 +830,10 @@ test("canUseTool pauses the active turn and resumes from input_reply", async () 
   );
 });
 
-test("canUseTool delivers free-form Other text to Claude instead of synthetic label", async () => {
+test("Tank AskUserQuestion MCP tool delivers free-form Other text instead of synthetic label", async () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    canUseTool: (
-      toolName: string,
-      input: unknown,
-      ctx: { toolUseID?: string },
-    ) => Promise<{
-      behavior: string;
-      updatedInput?: { answers?: Record<string, string> };
+    handleTankAskUserQuestion: (input: unknown) => Promise<{
+      structuredContent?: { answers?: Record<string, string> };
     }>;
     acceptInputReply: (record: unknown) => Promise<void>;
     activeTurn: unknown;
@@ -840,34 +873,36 @@ test("canUseTool delivers free-form Other text to Claude instead of synthetic la
     commandRecord: {},
   };
 
-  const resultPromise = runner.canUseTool(
-    "AskUserQuestion",
-    {
-      questions: [
-        {
-          question: "Proceed?",
-          allowFreeForm: true,
-          options: [{ label: "Yes" }],
-        },
-      ],
-    },
-    { toolUseID: "toolu_ask" },
-  );
+  const resultPromise = runner.handleTankAskUserQuestion({
+    questions: [
+      {
+        question: "Proceed?",
+        allowFreeForm: true,
+        options: [{ label: "Yes" }],
+      },
+    ],
+  });
   await new Promise((resolve) => setImmediate(resolve));
+  const pending = (runner as unknown as {
+    pendingInputReplies: Map<
+      string,
+      { providerItemID: string; timelineID: string }
+    >;
+  }).pendingInputReplies.values().next().value;
+  assert.ok(pending, "AskUserQuestion should park a pending input reply");
 
   await runner.acceptInputReply({
     type: "input_reply",
     client_nonce: "answer-continuation",
     target_turn_id: "turn-active",
-    target_timeline_id: "turn-active:item:toolu_ask",
-    target_provider_item_id: "toolu_ask",
+    target_timeline_id: pending.timelineID,
+    target_provider_item_id: pending.providerItemID,
     answers: { "Proceed?": ["Other"] },
     annotations: { "Proceed?": { notes: "Use the dedicated test database." } },
   });
 
   const result = await resultPromise;
-  assert.equal(result.behavior, "allow");
-  assert.deepEqual(result.updatedInput?.answers, {
+  assert.deepEqual(result.structuredContent?.answers, {
     "Proceed?": "Use the dedicated test database.",
   });
 });
@@ -906,22 +941,6 @@ test("acceptInputReply redelivers when the provider callback is not recreated ye
   assert.equal(nakDelay, 1000);
 });
 
-test("canUseTool auto-allows non-AskUserQuestion tools unchanged", async () => {
-  const runner = new Runner(runnerConfig()) as unknown as {
-    canUseTool: (
-      toolName: string,
-      input: unknown,
-      ctx: { toolUseID?: string },
-    ) => Promise<{ behavior: string; updatedInput?: unknown }>;
-  };
-  const input = { command: "ls -la" };
-  const result = await runner.canUseTool("Bash", input, {
-    toolUseID: "toolu_bash",
-  });
-  assert.equal(result.behavior, "allow");
-  assert.equal(result.updatedInput, input);
-});
-
 // ensureSdkQuery is the load-bearing pinning point for model + effort.
 // These tests pin the contract:
 //   1. First submit_turn with values pins them into SDK Options.
@@ -942,6 +961,10 @@ test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
       model?: string;
       effort?: string;
       stderr?: (data: string) => void;
+      permissionMode?: string;
+      allowDangerouslySkipPermissions?: boolean;
+      toolAliases?: Record<string, string>;
+      mcpServers?: Record<string, unknown>;
     }) => unknown;
     pinnedModel: string | null;
     pinnedEffort: string | null;
@@ -953,6 +976,10 @@ test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
       model?: string;
       effort?: string;
       stderr?: (data: string) => void;
+      permissionMode?: string;
+      allowDangerouslySkipPermissions?: boolean;
+      toolAliases?: Record<string, string>;
+      mcpServers?: Record<string, unknown>;
     } | null;
   } = { opts: null };
   runner.launchSdkQuery = (opts) => {
@@ -974,6 +1001,13 @@ test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
   assert.equal(captured.opts.model, "claude-haiku-4-5");
   assert.equal(captured.opts.effort, "low");
   assert.equal(typeof captured.opts.stderr, "function");
+  assert.equal(captured.opts.permissionMode, "bypassPermissions");
+  assert.equal(captured.opts.allowDangerouslySkipPermissions, true);
+  assert.equal(
+    captured.opts.toolAliases?.AskUserQuestion,
+    "mcp__tank__AskUserQuestion",
+  );
+  assert.ok(captured.opts.mcpServers?.tank, "Tank MCP server should be wired");
 });
 
 test("ensureSdkQuery stderr callback logs redacted Claude SDK stderr", () => {

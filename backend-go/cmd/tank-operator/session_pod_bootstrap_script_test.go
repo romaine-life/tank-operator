@@ -250,14 +250,14 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 		{
 			mode: "config",
 			wantFiles: map[string]string{
-				".claude/settings.json": `"theme":"dark"`,
+				".claude/settings.json": `"theme": "dark"`,
 				".claude.json":          `"hasCompletedOnboarding": true`,
 			},
 		},
 		{
 			mode: "claude_secondary_config",
 			wantFiles: map[string]string{
-				".claude/settings.json": `"theme":"dark"`,
+				".claude/settings.json": `"theme": "dark"`,
 				".claude.json":          `"hasCompletedOnboarding": true`,
 			},
 		},
@@ -266,12 +266,16 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 			wantFiles: map[string]string{".codex/config.toml": `cli_auth_credentials_store = "file"`},
 		},
 		{
-			mode:      "claude_gui",
-			wantFiles: nil, // non-wizard, no seeding
+			mode: "claude_gui",
+			wantFiles: map[string]string{
+				".claude/settings.json": `"skipDangerousModePermissionPrompt": true`,
+			},
 		},
 		{
-			mode:      "claude_secondary_gui",
-			wantFiles: nil, // non-wizard, no seeding
+			mode: "claude_secondary_gui",
+			wantFiles: map[string]string{
+				".claude/settings.json": `"skipDangerousModePermissionPrompt": true`,
+			},
 		},
 	}
 
@@ -311,10 +315,10 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 
 			if tc.mode == "claude_gui" || tc.mode == "claude_secondary_gui" {
 				// Non-wizard modes still get the shared git template
-				// bootstrap. They must not receive provider wizard config.
+				// bootstrap and Claude runtime settings. They must not
+				// receive provider wizard onboarding or unrelated seeds.
 				for _, suffix := range []string{
 					".codex/config.toml",
-					".claude/settings.json",
 					".claude.json",
 				} {
 					path := filepath.Join(home, suffix)
@@ -557,6 +561,7 @@ exit 0
 		"SPIRELENS_TAILSCALE_AUTHKEY_EXPIRY_SECONDS=1200",
 		"FAKE_TAILNET_LOG="+tailnetLog,
 		"FAKE_CURL_LOG="+curlLog,
+		"WRITE_CLAUDE_SETTINGS_SCRIPT="+filepath.Join(t.TempDir(), "missing-write-claude-settings.sh"),
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {

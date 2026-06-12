@@ -118,6 +118,19 @@ install_agent_git_template() {
   fi
 }
 
+write_claude_settings() {
+  script="${WRITE_CLAUDE_SETTINGS_SCRIPT:-/opt/tank/session-config/write-claude-settings.sh}"
+  if [ -f "$script" ]; then
+    sh "$script" "$HOME/.claude/settings.json"
+    return
+  fi
+  echo "session-pod-bootstrap: missing $script; writing minimal Claude settings" >&2
+  mkdir -p "$HOME/.claude"
+  cat > "$HOME/.claude/settings.json" <<'JSON'
+{"theme":"dark","permissions":{"defaultMode":"bypassPermissions","allow":["Read","LS","Grep","Glob","Edit","Write","MultiEdit","NotebookEdit","Bash","WebFetch","WebSearch","TodoWrite"]},"skipDangerousModePermissionPrompt":true}
+JSON
+}
+
 mode="${TANK_SESSION_MODE:-}"
 if [ -z "$mode" ]; then
   echo "session-pod-bootstrap: TANK_SESSION_MODE unset; nothing to seed" >&2
@@ -128,6 +141,9 @@ start_spirelens_tailnet
 install_agent_git_template
 
 case "$mode" in
+  claude_cli|claude_gui|claude_secondary_cli|claude_secondary_gui)
+    write_claude_settings
+    ;;
   codex_config|codex_cli|codex_gui|codex_exec_gui|codex_app_server)
     mkdir -p "$HOME/.codex"
     # cli_auth_credentials_store=file forces the file-backed store.
@@ -154,9 +170,7 @@ TOML
     # out of the pod — we deliberately do not pre-seed that file; the
     # user must complete /login.
     mkdir -p "$HOME/.claude"
-    cat > "$HOME/.claude/settings.json" <<'JSON'
-{"theme":"dark"}
-JSON
+    write_claude_settings
     cat > "$HOME/.claude.json" <<'JSON'
 {"hasCompletedOnboarding": true}
 JSON
