@@ -170,6 +170,7 @@ import {
   logSessionEventStreamEvent,
   type SilenceWatchdog,
 } from "./sessionEventStreamTelemetry";
+import { createStreamBackoff } from "./streamBackoff";
 import {
   DEFAULT_NAVIGATION_MODE,
   type NavigationMode,
@@ -385,6 +386,15 @@ const CliProcessTerminal = lazy(() =>
 const TURN_ACTIVITY_LIVE_REFRESH_DELAY_MS = 120;
 const TURN_ACTIVITY_LIVE_REFRESH_RETRY_DELAY_MS = 1_500;
 const TURN_ACTIVITY_LIVE_REFRESH_MAX_ATTEMPTS = 3;
+// Minimum spacing between resync_required-triggered full snapshot
+// refreshes on the session-list stream. Each full resync is a snapshot
+// GET plus a near-immediate stream reopen (ticket mint + auth), so a
+// server-side resync storm must not translate 1:1 into client load.
+// Inside the window the stream falls back to the backoff-delayed
+// reopen without the snapshot fetch; the reopened stream re-signals
+// resync_required if a snapshot is still needed once the window has
+// elapsed.
+const SESSION_LIST_RESYNC_MIN_INTERVAL_MS = 5_000;
 
 type ToolKind = "mcp" | "shell";
 // TurnActivityPageInfo (the per-turn /activity page directory) and the rule for
@@ -14413,6 +14423,11 @@ function ChatPane({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const sdkEventSourceRef = useRef<EventSource | null>(null);
   const sdkEventReconnectTimerRef = useRef<number | null>(null);
+  // Per-stream reconnect-delay policy: exponential backoff with jitter
+  // instead of a flat 1s retry, so a backend disruption doesn't get a
+  // synchronized ticket-mint herd from every open tab. reset() fires on
+  // the stream's "ready" event.
+  const sdkEventStreamBackoffRef = useRef(createStreamBackoff());
   const historyRefreshRef = useRef<Promise<unknown> | null>(null);
   const sdkWindowEpochRef = useRef(0);
   const wasVisibleRef = useRef(visible);
@@ -17658,7 +17673,7 @@ function ChatPane({
       sdkEventSourceRef.current?.close();
       sdkEventSourceRef.current = null;
       void openSdkEventStream();
-    }, 1000);
+    }, sdkEventStreamBackoffRef.current.nextDelay());
   }
 
   async function openSdkEventStream(): Promise<EventSource | null> {
@@ -17705,6 +17720,7 @@ function ChatPane({
     silenceWatchdogRef.current.reset();
     source.addEventListener("ready", () => {
       setSdkConnectionState("connected");
+      sdkEventStreamBackoffRef.current.reset();
       silenceWatchdogRef.current?.reset();
       logSessionEventStreamEvent("ready", { sessionMode: session.mode });
     });
@@ -21328,6 +21344,38 @@ function AuthenticatedApp() {
     let source: EventSource | null = null;
     let cancelled = false;
     let reopenTimer: number | null = null;
+    let parkedUntilVisible = false;
+    const backoff = createStreamBackoff();
+
+    // Error-path reopen discipline (the initial open below stays
+    // unconditional): exponential backoff with jitter instead of a flat
+    // 1s loop, and no reopens while the tab is hidden — every reopen
+    // costs the backend a stream-ticket mint plus auth, so a
+    // backgrounded tab parks here during an outage and the
+    // visibilitychange listener reopens it when the user returns.
+    const scheduleErrorReopen = () => {
+      if (cancelled || reopenTimer !== null) return;
+      if (document.visibilityState === "hidden") {
+        parkedUntilVisible = true;
+        return;
+      }
+      reopenTimer = window.setTimeout(() => {
+        reopenTimer = null;
+        if (cancelled) return;
+        if (document.visibilityState === "hidden") {
+          parkedUntilVisible = true;
+          return;
+        }
+        void open();
+      }, backoff.nextDelay());
+    };
+    const reopenWhenVisible = () => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      if (!parkedUntilVisible) return;
+      parkedUntilVisible = false;
+      void open();
+    };
+    document.addEventListener("visibilitychange", reopenWhenVisible);
 
     const open = async () => {
       if (cancelled) return;
@@ -21340,8 +21388,7 @@ function AuthenticatedApp() {
           },
         );
       } catch {
-        if (cancelled) return;
-        reopenTimer = window.setTimeout(() => void open(), 1000);
+        scheduleErrorReopen();
         return;
       }
       if (cancelled) {
@@ -21349,6 +21396,9 @@ function AuthenticatedApp() {
         return;
       }
       source = nextSource;
+      nextSource.addEventListener("ready", () => {
+        backoff.reset();
+      });
       nextSource.addEventListener("pinned-repos", (event) => {
         const message = event as MessageEvent;
         let parsed: Partial<PinnedReposResponse> | null = null;
@@ -21366,20 +21416,21 @@ function AuthenticatedApp() {
         if (source === nextSource) source = null;
         if (cancelled) return;
         void refreshPinnedRepos();
-        reopenTimer = window.setTimeout(() => void open(), 1000);
+        scheduleErrorReopen();
       });
       nextSource.onerror = () => {
         nextSource.close();
         if (source === nextSource) source = null;
         if (cancelled) return;
         void refreshPinnedRepos();
-        reopenTimer = window.setTimeout(() => void open(), 1000);
+        scheduleErrorReopen();
       };
     };
 
     void open();
     return () => {
       cancelled = true;
+      document.removeEventListener("visibilitychange", reopenWhenVisible);
       if (reopenTimer != null) window.clearTimeout(reopenTimer);
       source?.close();
     };
@@ -21992,6 +22043,43 @@ function AuthenticatedApp() {
     let source: EventSource | null = null;
     let cancelled = false;
     let reopenTimer: number | null = null;
+    let parkedUntilVisible = false;
+    let lastResyncReopenAt = 0;
+    const backoff = createStreamBackoff();
+
+    // Error-path reopen discipline (the initial open below stays
+    // unconditional): exponential backoff with jitter instead of a flat
+    // 1s loop, and no reopens while the tab is hidden — every reopen
+    // costs the backend a stream-ticket mint plus auth and a possible
+    // catch-up read, so a backgrounded tab parks here during an outage
+    // and the visibilitychange listener reopens it when the user
+    // returns.
+    const scheduleErrorReopen = () => {
+      if (cancelled || reopenTimer !== null) return;
+      if (document.visibilityState === "hidden") {
+        parkedUntilVisible = true;
+        return;
+      }
+      reopenTimer = window.setTimeout(() => {
+        reopenTimer = null;
+        if (cancelled) return;
+        if (document.visibilityState === "hidden") {
+          parkedUntilVisible = true;
+          return;
+        }
+        void open();
+      }, backoff.nextDelay());
+    };
+    const reopenSessionListWhenVisible = () => {
+      if (cancelled || document.visibilityState !== "visible") return;
+      if (!parkedUntilVisible) return;
+      parkedUntilVisible = false;
+      void open();
+    };
+    document.addEventListener(
+      "visibilitychange",
+      reopenSessionListWhenVisible,
+    );
 
     const open = async () => {
       if (cancelled) return;
@@ -22016,8 +22104,7 @@ function AuthenticatedApp() {
           { stream: "session-list", sessionScope: effectiveSessionScope },
         );
       } catch {
-        if (cancelled) return;
-        reopenTimer = window.setTimeout(() => void open(), 1000);
+        scheduleErrorReopen();
         return;
       }
       if (cancelled) {
@@ -22117,6 +22204,7 @@ function AuthenticatedApp() {
           parsed = undefined;
         }
         logSessionListStreamSignal({ signal: "ready", detail: parsed });
+        backoff.reset();
       });
       nextSource.addEventListener("resync_required", (event) => {
         const message = event as MessageEvent;
@@ -22138,10 +22226,28 @@ function AuthenticatedApp() {
         activitySnapshotAppliedRef.current = false;
         nextSource.close();
         if (source === nextSource) source = null;
-        void refresh();
-        // Refresh hydrates the snapshot; open() resumes the stream
-        // from a fresh cursor on the next tick.
-        reopenTimer = window.setTimeout(() => void open(), 250);
+        if (cancelled) return;
+        const now = Date.now();
+        if (now - lastResyncReopenAt >= SESSION_LIST_RESYNC_MIN_INTERVAL_MS) {
+          lastResyncReopenAt = now;
+          void refresh();
+          // Refresh hydrates the snapshot; open() resumes the stream
+          // from a fresh cursor on the next tick.
+          reopenTimer = window.setTimeout(() => {
+            reopenTimer = null;
+            void open();
+          }, 250);
+        } else {
+          // Resync storm guard: the server invalidated the cursor again
+          // inside the minimum window. Skip the snapshot fetch and fall
+          // back to the backoff-delayed reopen; the reopened stream
+          // re-signals resync_required if a snapshot is still needed
+          // once the window has elapsed.
+          reopenTimer = window.setTimeout(() => {
+            reopenTimer = null;
+            void open();
+          }, backoff.nextDelay());
+        }
       });
       nextSource.addEventListener("stream-error", (event) => {
         const message = event as MessageEvent;
@@ -22154,20 +22260,22 @@ function AuthenticatedApp() {
         logSessionListStreamSignal({ signal: "stream-error", detail: parsed });
         nextSource.close();
         if (source === nextSource) source = null;
-        if (cancelled) return;
-        reopenTimer = window.setTimeout(() => void open(), 1000);
+        scheduleErrorReopen();
       });
       nextSource.onerror = () => {
         nextSource.close();
         if (source === nextSource) source = null;
-        if (cancelled) return;
-        reopenTimer = window.setTimeout(() => void open(), 1000);
+        scheduleErrorReopen();
       };
     };
 
     void open();
     return () => {
       cancelled = true;
+      document.removeEventListener(
+        "visibilitychange",
+        reopenSessionListWhenVisible,
+      );
       if (reopenTimer != null) window.clearTimeout(reopenTimer);
       source?.close();
     };
