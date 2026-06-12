@@ -188,6 +188,11 @@ type scheduledWakeupStore interface {
 	ListBySession(context.Context, string, string) ([]pgstore.ScheduledWakeup, error)
 	MarkFired(context.Context, string, string) (pgstore.ScheduledWakeup, error)
 	MarkFailed(context.Context, string, string) (pgstore.ScheduledWakeup, error)
+	// ReleaseRetainingAttempt is the bounded transient-session defer: it
+	// returns a claimed wake to 'scheduled' (locked_at cleared) while KEEPING
+	// the claim's attempt bump, so a session stuck non-Active reaches the
+	// attempt cap and rings through FailExceeded instead of deferring forever.
+	ReleaseRetainingAttempt(context.Context, string) error
 	ScheduledDueCount(context.Context, time.Time) (int, error)
 	CancelPendingForSession(context.Context, string, string) ([]pgstore.ScheduledWakeup, error)
 }
@@ -214,6 +219,11 @@ type backgroundTaskWakeStore interface {
 	MarkFired(context.Context, string, string) error
 	MarkFailed(context.Context, string, string) error
 	Release(context.Context, string) error
+	// ReleaseRetainingAttempt mirrors scheduledWakeupStore's: the bounded
+	// transient-session defer keeps the attempt bump so the cap, not eternity,
+	// bounds a never-recovering session — unlike Release, whose refund is for
+	// the turn-coupled defers (needs_input / active turn).
+	ReleaseRetainingAttempt(context.Context, string) error
 	DueCount(context.Context, time.Time) (int, error)
 	CancelPendingForSession(context.Context, string, string) (int64, error)
 	CancelPendingForTask(context.Context, string, string, string, string) (int64, error)

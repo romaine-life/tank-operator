@@ -1068,7 +1068,7 @@ func scheduledWakeupRegisterResultLabel(result string) string {
 
 func scheduledWakeupFireResultLabel(result string) string {
 	switch result {
-	case "ok", "already_fired", "session_not_found", "session_not_active", "enqueue_failed", "attempt_cap_exceeded", "store_error", "event_error", "failed":
+	case "ok", "already_fired", "deferred_session_not_active", "session_not_found", "session_not_active", "enqueue_failed", "attempt_cap_exceeded", "store_error", "event_error", "failed":
 		return result
 	default:
 		return "other"
@@ -1114,7 +1114,7 @@ func agentContinuationResultLabel(result string) string {
 
 func backgroundTaskWakeFireResultLabel(result string) string {
 	switch result {
-	case "ok", "deferred_needs_input", "deferred_active_turn", "already_fired", "session_not_found", "session_not_active", "enqueue_failed", "attempt_cap_exceeded", "store_error", "failed":
+	case "ok", "deferred_needs_input", "deferred_active_turn", "deferred_session_not_active", "already_fired", "session_not_found", "session_not_active", "enqueue_failed", "attempt_cap_exceeded", "store_error", "failed":
 		return result
 	default:
 		return "other"

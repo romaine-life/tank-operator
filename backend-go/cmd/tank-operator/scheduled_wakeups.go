@@ -124,9 +124,24 @@ func (s *appServer) handleInternalRegisterScheduledWakeup(w http.ResponseWriter,
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	// The wake row is what parks the session: recompute the durable activity
+	// summary now so the fold lands the non-summoning "scheduled" status from
+	// the row write instead of flashing "ready" until the next chat event
+	// (docs/scheduled-turn-continuity.md "Race"). scheduled_wakeup.updated is
+	// not a lifecycle chat event, so persistScheduledWakeupEvent alone never
+	// triggers this; the cancel path already refreshes for the same reason.
+	if s.activityRefresher != nil {
+		if err := s.activityRefresher.RefreshSessionActivity(r.Context(), caller.Email, s.sessionScope, sessionID); err != nil {
+			slog.Warn("register scheduled wakeup: activity refresh failed", "session_id", sessionID, "wakeup_id", row.WakeupID, "error", err)
+		}
+	}
 	recordScheduledWakeupRegister(provider, "ok")
+	// Echo the row's ACTUAL status: Register's ON CONFLICT returns the existing
+	// row untouched, which can already be fired/failed/cancelled (a runner
+	// retry after the wake resolved). Reporting an unconditional "scheduled"
+	// would tell the runner a dead wake is pending.
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"status":       "scheduled",
+		"status":       string(row.Status),
 		"wakeup_id":    row.WakeupID,
 		"client_nonce": row.ClientNonce,
 		"due_at":       row.DueAt.Format(time.RFC3339Nano),
@@ -330,17 +345,30 @@ func (s *appServer) failExceededScheduledWakeups(ctx context.Context, now time.T
 		recordScheduledWakeupFire(provider, "attempt_cap_exceeded")
 		s.resolveFailedWake(ctx, row.OwnerEmail, row.SessionID,
 			conversation.TurnIDForClientNonce(row.ClientNonce), row.ClientNonce, provider,
-			true, sessionactivity.AwayErrorReasonScheduledWakeup)
+			sessionactivity.AwayErrorReasonScheduledWakeup)
 	}
 }
 
 func (s *appServer) fireScheduledWakeup(ctx context.Context, row pgstore.ScheduledWakeup, now time.Time) error {
 	provider := strings.TrimSpace(row.Provider)
+	// Liveness ladder (docs/scheduled-turn-continuity.md "Failure model"):
+	// missing row / terminating / Failed are durably dead — fail fast and ring.
+	// Any other non-Active status (Pending) is transient by construction: the
+	// K8s watch flips the row Active → Pending on ANY probe blip
+	// (sessioncontroller/writer.go EventTypePodNotReady), so a 10s kubelet
+	// hiccup at fire time must defer the wake, not terminal it. The defer keeps
+	// the claim's attempt bump, so a session that never recovers is bounded by
+	// pgstore.MaxScheduledWakeupAttempts and terminals — ringing — through the
+	// FailExceeded pass.
 	if row.SessionStatus == "" {
 		return s.failScheduledWakeup(ctx, row, provider, "session_not_found")
 	}
-	if row.SessionStatus != "Active" || row.SessionTerminated {
+	if row.SessionTerminated || row.SessionStatus == "Failed" {
 		return s.failScheduledWakeup(ctx, row, provider, "session_not_active")
+	}
+	if row.SessionStatus != "Active" {
+		recordScheduledWakeupFire(provider, "deferred_session_not_active")
+		return s.scheduledWakeups.ReleaseRetainingAttempt(ctx, row.WakeupID)
 	}
 	// Durable double-fire guard on re-claims, mirroring the background-task
 	// wake session-655 fix: if this wake's deterministic turn already EXISTS in
@@ -445,43 +473,44 @@ func (s *appServer) failScheduledWakeup(ctx context.Context, row pgstore.Schedul
 		return err
 	}
 	recordScheduledWakeupFire(provider, scheduledWakeupFireFailureLabel(reason))
-	// Resolve the session out of the non-summoning "scheduled" status. A fire
-	// attempt that bounced while the session was alive (enqueue_failed) is an
-	// away-error: emit a durable, away-tagged terminal so the activity fold lands
-	// error+away_error and the SPA rings the same summon a normal hand-off gets —
-	// the agent's self-scheduled continuation broke while the user was away.
-	// session_not_found / session_not_active mean the session is gone or dying,
-	// so its own lifecycle owns visibility; just recompute so it leaves
-	// "scheduled" without an away ring.
+	// Every reason that reaches MarkFailed is a durable failure of a promised
+	// continuation — the agent parked itself on this wake and the wake will
+	// never come. Per docs/scheduled-turn-continuity.md "Failure model", that
+	// must ring the away-error summon regardless of WHY it broke: a publish
+	// bounce (enqueue_failed) and a dead session (session_not_found /
+	// session_not_active) are equally invisible to a user who left on the
+	// promise of a wake. Transient non-Active sessions never get here — the
+	// fire ladder defers them instead.
 	s.resolveFailedWake(ctx, row.OwnerEmail, row.SessionID,
 		conversation.TurnIDForClientNonce(row.ClientNonce), row.ClientNonce, provider,
-		strings.HasPrefix(reason, "enqueue_failed"), sessionactivity.AwayErrorReasonScheduledWakeup)
+		sessionactivity.AwayErrorReasonScheduledWakeup)
 	return errors.New(reason)
 }
 
 // resolveFailedWake takes a session out of the non-summoning "scheduled" status
-// after a wake fire attempt failed. When ring is true (session alive, command
-// bounced) it persists a durable, away-tagged turn.command_failed so the
-// activity fold lands error+away_error and the SPA rings the turn-complete
-// summon. It always recomputes the activity summary so the would-be
-// "scheduled"/"ready" state resolves even when no terminal is emitted. Shared by
-// the scheduled-wakeup and background-task-wake fire paths.
-func (s *appServer) resolveFailedWake(ctx context.Context, owner, sessionID, turnID, clientNonce, runtime string, ring bool, awayReason string) {
-	if ring {
-		storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
-		event := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
-			SessionID:         sessionID,
-			SessionStorageKey: storageKey,
-			Email:             owner,
-			TurnID:            turnID,
-			ClientNonce:       clientNonce,
-			Runtime:           runtime,
-			Reason:            awayReason,
-			Now:               time.Now().UTC(),
-		})
-		if err := s.persistBackendEvent(ctx, storageKey, event); err != nil {
-			slog.Warn("failed wake away-error persist failed", "session_id", sessionID, "error", err)
-		}
+// after a wake durably failed. Every durable wake failure is an away-error —
+// the agent parked itself on a promised continuation the user is guaranteed
+// not to be watching — so it always persists a durable, away-tagged
+// turn.command_failed (the ring carrier: the activity fold lands
+// error+away_error and the SPA rings the turn-complete summon) and recomputes
+// the activity summary so the would-be "scheduled" state resolves. Shared by
+// the scheduled-wakeup and background-task-wake MarkFailed and FailExceeded
+// (attempt-cap) paths; deferrals never come here. See
+// docs/scheduled-turn-continuity.md "Failure model".
+func (s *appServer) resolveFailedWake(ctx context.Context, owner, sessionID, turnID, clientNonce, runtime string, awayReason string) {
+	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
+	event := conversation.TurnCommandFailedEventMap(conversation.TurnCommandFailedArgs{
+		SessionID:         sessionID,
+		SessionStorageKey: storageKey,
+		Email:             owner,
+		TurnID:            turnID,
+		ClientNonce:       clientNonce,
+		Runtime:           runtime,
+		Reason:            awayReason,
+		Now:               time.Now().UTC(),
+	})
+	if err := s.persistBackendEvent(ctx, storageKey, event); err != nil {
+		slog.Warn("failed wake away-error persist failed", "session_id", sessionID, "error", err)
 	}
 	if s.activityRefresher != nil {
 		if err := s.activityRefresher.RefreshSessionActivity(ctx, owner, s.sessionScope, sessionID); err != nil {

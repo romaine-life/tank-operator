@@ -177,6 +177,142 @@ func TestPostgresBackgroundTaskWakeReleaseRequeues(t *testing.T) {
 	}
 }
 
+// TestPostgresBackgroundTaskWakeReleaseRetainingAttemptIsCapBounded pins the
+// transient-session defer's durability contract: ReleaseRetainingAttempt
+// returns the claim to 'scheduled' WITHOUT refunding the attempt bump (each
+// defer burns one of MaxBackgroundTaskWakeAttempts), and once the attempts are
+// exhausted the released 'scheduled' row is refused by ClaimDue and terminaled
+// immediately by FailExceeded — the bounded path through which a
+// never-recovering Pending session still rings.
+func TestPostgresBackgroundTaskWakeReleaseRetainingAttemptIsCapBounded(t *testing.T) {
+	pool := newBackgroundTaskWakeTestPool(t)
+	ctx := context.Background()
+	store := NewBackgroundTaskWakeStore(pool, "default")
+
+	row, _, err := store.Register(ctx, RegisterBackgroundTaskWakeRequest{
+		SessionScope: "default",
+		SessionID:    "63",
+		OwnerEmail:   "user@example.com",
+		Provider:     "claude",
+		TaskID:       "task-defer",
+		TaskStatus:   "completed",
+		RegisteredAt: time.Now().Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	// Claim/defer cycles burn one attempt each, unlike Release's refund.
+	for attempt := 1; attempt <= MaxBackgroundTaskWakeAttempts; attempt++ {
+		claimed, err := store.ClaimDue(ctx, time.Now(), 10, 2*time.Minute)
+		if err != nil {
+			t.Fatalf("claim %d: %v", attempt, err)
+		}
+		var got *BackgroundTaskWake
+		for i := range claimed {
+			if claimed[i].WakeID == row.WakeID {
+				got = &claimed[i]
+			}
+		}
+		if got == nil {
+			t.Fatalf("claim %d did not return the deferred wake", attempt)
+		}
+		if got.AttemptCount != attempt {
+			t.Fatalf("claim %d attempt_count = %d, want %d (defers must retain the bump)", attempt, got.AttemptCount, attempt)
+		}
+		if err := store.ReleaseRetainingAttempt(ctx, row.WakeID); err != nil {
+			t.Fatalf("release %d: %v", attempt, err)
+		}
+	}
+
+	// At the cap the released row is 'scheduled': ClaimDue refuses it and
+	// FailExceeded terminals it immediately (no stale-claim wait needed).
+	claimed, err := store.ClaimDue(ctx, time.Now(), 10, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("claim at cap: %v", err)
+	}
+	for _, c := range claimed {
+		if c.WakeID == row.WakeID {
+			t.Fatalf("capped deferred wake was claimed again: %+v", c)
+		}
+	}
+	failed, err := store.FailExceeded(ctx, time.Now(), 10, time.Hour)
+	if err != nil {
+		t.Fatalf("FailExceeded: %v", err)
+	}
+	if len(failed) != 1 || failed[0].WakeID != row.WakeID {
+		t.Fatalf("FailExceeded = %+v, want exactly the capped deferred wake", failed)
+	}
+	if failed[0].Status != BackgroundTaskWakeFailed || !strings.HasPrefix(failed[0].LastError, "attempt_cap_exceeded") {
+		t.Fatalf("terminal = (%q, %q), want failed/attempt_cap_exceeded", failed[0].Status, failed[0].LastError)
+	}
+}
+
+// TestPostgresScheduledWakeupReleaseRetainingAttemptIsCapBounded mirrors the
+// background sibling for the scheduled-wakeup store — symmetric predicates,
+// NOT shared code (see TestPostgresScheduledWakeupAttemptCap's history).
+func TestPostgresScheduledWakeupReleaseRetainingAttemptIsCapBounded(t *testing.T) {
+	pool := newBackgroundTaskWakeTestPool(t)
+	ctx := context.Background()
+	store := NewScheduledWakeupStore(pool, "default")
+
+	row, err := store.Register(ctx, RegisterScheduledWakeupRequest{
+		SessionScope:   "default",
+		SessionID:      "63",
+		OwnerEmail:     "user@example.com",
+		Provider:       "claude",
+		Prompt:         "resume",
+		ProviderItemID: "toolu_defer",
+		ScheduledAt:    time.Now().Add(-time.Minute),
+		DueAt:          time.Now().Add(-time.Minute),
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	for attempt := 1; attempt <= MaxScheduledWakeupAttempts; attempt++ {
+		claimed, err := store.ClaimDue(ctx, time.Now(), 10, 2*time.Minute)
+		if err != nil {
+			t.Fatalf("claim %d: %v", attempt, err)
+		}
+		var got *ScheduledWakeup
+		for i := range claimed {
+			if claimed[i].WakeupID == row.WakeupID {
+				got = &claimed[i]
+			}
+		}
+		if got == nil {
+			t.Fatalf("claim %d did not return the deferred wakeup", attempt)
+		}
+		if got.AttemptCount != attempt {
+			t.Fatalf("claim %d attempt_count = %d, want %d (defers must retain the bump)", attempt, got.AttemptCount, attempt)
+		}
+		if err := store.ReleaseRetainingAttempt(ctx, row.WakeupID); err != nil {
+			t.Fatalf("release %d: %v", attempt, err)
+		}
+	}
+
+	claimed, err := store.ClaimDue(ctx, time.Now(), 10, 2*time.Minute)
+	if err != nil {
+		t.Fatalf("claim at cap: %v", err)
+	}
+	for _, c := range claimed {
+		if c.WakeupID == row.WakeupID {
+			t.Fatalf("capped deferred wakeup was claimed again: %+v", c)
+		}
+	}
+	failed, err := store.FailExceeded(ctx, time.Now(), 10, time.Hour)
+	if err != nil {
+		t.Fatalf("FailExceeded: %v", err)
+	}
+	if len(failed) != 1 || failed[0].WakeupID != row.WakeupID {
+		t.Fatalf("FailExceeded = %+v, want exactly the capped deferred wakeup", failed)
+	}
+	if failed[0].Status != ScheduledWakeupFailed || !strings.HasPrefix(failed[0].LastError, "attempt_cap_exceeded") {
+		t.Fatalf("terminal = (%q, %q), want failed/attempt_cap_exceeded", failed[0].Status, failed[0].LastError)
+	}
+}
+
 // TestPostgresBackgroundTaskWakeGenerationsRearmAfterPrematureFire pins the
 // re-arm machinery end to end: a fired wake registered from observation A is
 // re-armed by a DIFFERENT observation B (the real completion arriving after a

@@ -106,9 +106,11 @@ const maxBackgroundTaskWakeGenerations = 3
 // rows at or over the cap, so a wake whose fire keeps half-finishing (claim
 // landed but MarkFired/MarkFailed never did) is not reclaimed every stale tick
 // forever — an eventual re-fire past the session bus's 24h msg-id dedupe
-// window would run the same wake turn twice. Soft-defers don't burn attempts:
-// Release undoes the claim's bump. Capped rows are not left in limbo:
-// FailExceeded terminals them.
+// window would run the same wake turn twice. Turn-coupled soft-defers
+// (needs_input, active turn) don't burn attempts: Release undoes the claim's
+// bump. Transient-session defers DO burn attempts (ReleaseRetainingAttempt),
+// so the cap also bounds how long a never-recovering Pending session can
+// defer. Capped rows are not left in limbo: FailExceeded terminals them.
 const MaxBackgroundTaskWakeAttempts = 5
 
 // backgroundTaskWakeAttemptCapError is the durable last_error stamped by
@@ -496,6 +498,31 @@ func (s *BackgroundTaskWakeStore) Release(ctx context.Context, wakeID string) er
 		SET status = 'scheduled',
 			locked_at = NULL,
 			attempt_count = GREATEST(attempt_count - 1, 0),
+			updated_at = now()
+		WHERE wake_id = $1
+	`, strings.TrimSpace(wakeID))
+	return err
+}
+
+// ReleaseRetainingAttempt returns a claimed wake to 'scheduled' without firing
+// or failing it, KEEPING the claim's attempt_count bump. It is the
+// bounded-defer sibling of Release, used when the wake's session exists but is
+// transiently not Active (a kubelet probe blip flips the durable session row
+// Active → Pending): the wake must survive the blip instead of
+// terminal-failing, but a session that never recovers must not defer invisibly
+// forever — each deferred claim still burns a fire attempt, so
+// MaxBackgroundTaskWakeAttempts bounds the deferral and FailExceeded then
+// terminals the wake WITH the away-error ring. Release's refund stays correct
+// for the turn-coupled defers (needs_input, active turn), whose resolution is
+// owned by the turn lifecycle itself.
+func (s *BackgroundTaskWakeStore) ReleaseRetainingAttempt(ctx context.Context, wakeID string) error {
+	if s == nil || s.pool == nil {
+		return errors.New("background task wake store unavailable")
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE session_background_task_wakes
+		SET status = 'scheduled',
+			locked_at = NULL,
 			updated_at = now()
 		WHERE wake_id = $1
 	`, strings.TrimSpace(wakeID))
