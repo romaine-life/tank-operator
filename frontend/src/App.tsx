@@ -19555,7 +19555,6 @@ function ChatPane({
           (activeTab === "chat" || activeTab === "turns") && !publicView
         }
         composerWrapRef={composerWrapRef}
-        composerWrapStyle={chatFontScaleStyle}
         composerWrapClassName={[
           "run-composer-wrap-runpane",
           dragActive ? "run-composer-wrap-drag" : "",

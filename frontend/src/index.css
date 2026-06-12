@@ -7193,8 +7193,7 @@ button:disabled {
 }
 
 .run-composer-wrap-runpane {
-  --run-composer-transcript-content-offset: calc(0.7rem + 2.625rem + 0.55rem);
-  padding-left: calc(var(--space-5) + var(--run-composer-transcript-content-offset));
+  padding-left: var(--space-5);
 }
 
 /* Floating UI that belongs to the transcript scroller. The wrapper is an
@@ -7633,6 +7632,7 @@ button:disabled {
     inset 0 1px 0 rgba(147, 197, 253, 0.12)
   );
   position: relative;
+  isolation: isolate;
   border-color: var(--run-composer-active-accent-soft);
   background:
     var(--run-composer-active-wash),
@@ -7652,7 +7652,7 @@ button:disabled {
   left: 0.55rem;
   top: 0.62rem;
   bottom: 0.62rem;
-  z-index: 6;
+  z-index: 0;
   width: 2px;
   border-radius: 999px;
   background: linear-gradient(

@@ -4,6 +4,7 @@ import { test, expect } from "vitest";
 
 const indexCssSource = readFileSync(join(import.meta.dirname, "index.css"), "utf8");
 const appSource = readFileSync(join(import.meta.dirname, "App.tsx"), "utf8");
+const workspaceShellSource = readFileSync(join(import.meta.dirname, "WorkspaceShell.tsx"), "utf8");
 const portfolioTranscriptSource = readFileSync(
   join(import.meta.dirname, "styleguide/portfolio-transcript.tsx"),
   "utf8",
@@ -45,6 +46,20 @@ test("chat composer slash command highlight is drawn behind textarea text", () =
   expect(tokenRule).toMatch(/color:\s*transparent;/);
   expect(tokenRule).toMatch(/font-weight:\s*700;/);
   expect(tokenRule).toMatch(/line-height:\s*1\.22;/);
+});
+
+test("interactive composer active rail does not paint over the textarea", () => {
+  const interactiveRule = cssRule(".run-composer.run-composer-interactive");
+  expect(interactiveRule).toMatch(/position:\s*relative;/);
+  expect(interactiveRule).toMatch(/isolation:\s*isolate;/);
+
+  const railRule = cssRule(".run-composer.run-composer-interactive::before");
+  expect(railRule).toMatch(/position:\s*absolute;/);
+  expect(railRule).toMatch(/z-index:\s*0;/);
+
+  const contentRule = cssRule(".run-composer.run-composer-interactive > *");
+  expect(contentRule).toMatch(/position:\s*relative;/);
+  expect(contentRule).toMatch(/z-index:\s*1;/);
 });
 
 test("chat composer cost estimate keeps a fixed-width footprint", () => {
@@ -124,12 +139,28 @@ test("run pane keeps the composer inside the viewport at high browser zoom", () 
   expect(composerWrapRule).toMatch(/padding:\s*var\(--space-3\)\s+var\(--space-5\)\s+max\(var\(--space-5\),\s*env\(safe-area-inset-bottom\)\);/);
 
   const runPaneComposerWrapRule = cssRule(".run-composer-wrap-runpane");
-  expect(runPaneComposerWrapRule).toMatch(/--run-composer-transcript-content-offset:\s*calc\(0\.7rem\s+\+\s+2\.625rem\s+\+\s+0\.55rem\);/);
-  expect(runPaneComposerWrapRule).toMatch(/padding-left:\s*calc\(var\(--space-5\)\s+\+\s+var\(--run-composer-transcript-content-offset\)\);/);
+  expect(runPaneComposerWrapRule).toMatch(/padding-left:\s*var\(--space-5\);/);
+  expect(runPaneComposerWrapRule).not.toMatch(/run-composer-transcript-content-offset/);
 
   expect(appSource).toMatch(/composerWrapClassName=\{\[\s*"run-composer-wrap-runpane",[\s\S]*?dragActive \? "run-composer-wrap-drag" : "",[\s\S]*?\]\.filter\(Boolean\)\.join\(" "\)\}/);
+  expect(appSource).not.toMatch(/composerWrapStyle=\{chatFontScaleStyle\}/);
   expect(portfolioTranscriptSource).toMatch(/composerWrapClassName="run-composer-wrap-runpane"/);
   expect(indexCssSource).toMatch(/@media \(max-width:\s*760px\)\s*\{[\s\S]*?\.run-composer-wrap-runpane\s*\{[\s\S]*?padding-left:\s*var\(--space-3\);/);
+});
+
+test("session font scaling does not leak into the shared composer", () => {
+  expect(appSource).toMatch(/style=\{chatFontScaleStyle\}/);
+  expect(appSource).not.toMatch(/composerWrapStyle=\{chatFontScaleStyle\}/);
+
+  expect(workspaceShellSource).toMatch(
+    /<section className=\{\["run-panel", className\]\.filter\(Boolean\)\.join\(" "\)\}>/,
+  );
+  expect(workspaceShellSource).not.toMatch(
+    /<section[^>]*className=\{\["run-panel", className\]\.filter\(Boolean\)\.join\(" "\)\}[^>]*style=\{style\}/,
+  );
+  expect(workspaceShellSource).toMatch(
+    /<main[\s\S]*?className=\{\["run-main", bodyClassName\]\.filter\(Boolean\)\.join\(" "\)\}[\s\S]*?style=\{style\}/,
+  );
 });
 
 test("composer footer reflows controls instead of clipping them under zoom", () => {
