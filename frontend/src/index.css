@@ -5663,6 +5663,10 @@ button:disabled {
   min-width: 0;
 }
 
+.run-session-data-card.is-name .run-session-data-card-top {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .run-session-data-card.is-good {
   border-color: rgba(52, 211, 153, 0.2);
   background: rgba(52, 211, 153, 0.06);
@@ -5778,6 +5782,11 @@ button:disabled {
   gap: 0.45rem var(--space-3);
   margin: 0;
   padding-left: calc(2rem + var(--space-3));
+}
+
+.run-session-data-detail-stack {
+  display: grid;
+  gap: var(--space-2);
 }
 
 .run-session-data-fact {
@@ -5955,6 +5964,10 @@ button:disabled {
     grid-template-columns: 1.75rem minmax(0, 1fr);
     align-items: start;
     gap: var(--space-2);
+  }
+
+  .run-session-data-card.is-name .run-session-data-card-top {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .run-session-data-card-icon {

@@ -54,6 +54,10 @@ jobs:
         with:
           node-version: 22
 
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.16.3
+
       - name: Check removed runtime surfaces
         run: node scripts/check-removed-chat-runtime.mjs
 
@@ -70,3 +74,8 @@ jobs:
 
       - name: Check Claude agent authority surface
         run: node scripts/check-claude-agent-authority.mjs
+
+      - name: Check Tank HTTP routes redirect to HTTPS
+        run: |
+          node scripts/check-tank-http-route-security.mjs --self-test
+          node scripts/check-tank-http-route-security.mjs

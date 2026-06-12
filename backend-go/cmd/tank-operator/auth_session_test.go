@@ -406,7 +406,13 @@ func (r *testSessionRegistry) SetBugLabels(_ context.Context, owner, sessionID s
 	r.records[owner][sessionID] = record
 	return nil
 }
-func (r *testSessionRegistry) SetTestState(_ context.Context, _, _ string, _ map[string]any) error {
+func (r *testSessionRegistry) SetTestState(_ context.Context, owner, sessionID string, state map[string]any) error {
+	if r.records == nil || r.records[owner] == nil {
+		return nil
+	}
+	record := r.records[owner][sessionID]
+	record.TestState = state
+	r.records[owner][sessionID] = record
 	return nil
 }
 func (r *testSessionRegistry) SetRolloutState(_ context.Context, _, _ string, _ map[string]any) error {

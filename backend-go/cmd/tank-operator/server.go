@@ -91,6 +91,10 @@ type appServer struct {
 	// then 503s loudly rather than mis-routing the request.
 	mcpGitHub AppServerMCPGitHub
 
+	// glimmung returns checked-out test-slot leases from the Session Data page.
+	// nil when the auth.romaine.life-audience projected SA token is unavailable.
+	glimmung AppServerGlimmung
+
 	// providerHealth drives the transcript-surfaced "<provider>
 	// sign-in expired" banner. The poll loop owns Layer 1 and the
 	// post-transition fan-out; this handle is used by handleCreateSession
@@ -387,6 +391,7 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/sessions/{session_id}/open-target", s.handleSetOpenTarget)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/bug-label", s.handleSetSessionBugLabel)
 	mux.HandleFunc("POST /api/sessions/{session_id}/test-state", s.handleSetTestState)
+	mux.HandleFunc("POST /api/sessions/{session_id}/test-slot/return", s.handleReturnTestSlot)
 	mux.HandleFunc("POST /api/sessions/{session_id}/rollout-state", s.handleSetRolloutState)
 	mux.HandleFunc("POST /api/sessions/{session_id}/save-credentials", s.handleSaveCredentials)
 	mux.HandleFunc("POST /api/sessions/{session_id}/paste-image", s.handlePasteImage)

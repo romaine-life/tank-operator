@@ -8461,6 +8461,7 @@ function SessionDataScreen({
   onOpenTranscript,
   onBugLabelSave,
   onBugLabelsSave,
+  onReturnTestSlot,
   onRename,
   readOnly,
 }: {
@@ -8470,6 +8471,7 @@ function SessionDataScreen({
   onOpenTranscript: () => void;
   onBugLabelSave: (name: string | null) => Promise<void>;
   onBugLabelsSave: (names: string[]) => Promise<void>;
+  onReturnTestSlot?: () => Promise<void>;
   onRename?: (next: string) => Promise<void>;
   readOnly?: boolean;
 }) {
@@ -8551,6 +8553,7 @@ function SessionDataScreen({
                 onOpenTranscript={onOpenTranscript}
                 onBugLabelSave={onBugLabelSave}
                 onBugLabelsSave={onBugLabelsSave}
+                onReturnTestSlot={onReturnTestSlot}
                 readOnly={readOnly}
               />
             </div>
@@ -8571,6 +8574,7 @@ function SessionDataCardDetails({
   onOpenTranscript,
   onBugLabelSave,
   onBugLabelsSave,
+  onReturnTestSlot,
   readOnly,
 }: {
   row: SessionDataStatusRow;
@@ -8582,6 +8586,7 @@ function SessionDataCardDetails({
   onOpenTranscript: () => void;
   onBugLabelSave: (name: string | null) => Promise<void>;
   onBugLabelsSave: (names: string[]) => Promise<void>;
+  onReturnTestSlot?: () => Promise<void>;
   readOnly?: boolean;
 }) {
   switch (row.id) {
@@ -8603,21 +8608,10 @@ function SessionDataCardDetails({
       );
     case "test":
       return (
-        <SessionDataFacts
-          facts={[
-            [
-              "Slot",
-              session.test_state?.slot_index != null
-                ? String(session.test_state.slot_index)
-                : "Not assigned",
-            ],
-            [
-              "URL",
-              session.test_state?.url
-                ? session.test_state.url
-                : "No test environment URL",
-            ],
-          ]}
+        <SessionDataTestSlotDetails
+          session={session}
+          onReturnTestSlot={onReturnTestSlot}
+          readOnly={readOnly}
         />
       );
     case "context":
@@ -8704,6 +8698,82 @@ function SessionDataCardDetails({
         />
       );
   }
+}
+
+function SessionDataTestSlotDetails({
+  session,
+  onReturnTestSlot,
+  readOnly,
+}: {
+  session: Session;
+  onReturnTestSlot?: () => Promise<void>;
+  readOnly?: boolean;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const active = Boolean(session.test_state?.active);
+  const canReturn = active && Boolean(onReturnTestSlot) && !readOnly;
+  const returnSlot = async () => {
+    if (!onReturnTestSlot || busy) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onReturnTestSlot();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="run-session-data-detail-stack">
+      <SessionDataFacts
+        facts={[
+          [
+            "Slot",
+            session.test_state?.slot_index != null
+              ? String(session.test_state.slot_index)
+              : "Not assigned",
+          ],
+          [
+            "URL",
+            session.test_state?.url
+              ? session.test_state.url
+              : "No test environment URL",
+          ],
+        ]}
+      />
+      {(active || readOnly) && (
+        <div className="run-session-data-actions">
+          {canReturn ? (
+            <button
+              type="button"
+              className="run-session-data-action"
+              disabled={busy}
+              aria-busy={busy || undefined}
+              onClick={() => void returnSlot()}
+            >
+              {busy ? (
+                <Loader2Icon
+                  className="run-session-data-action-icon run-spin"
+                  aria-hidden="true"
+                />
+              ) : (
+                <RotateCcwIcon
+                  className="run-session-data-action-icon"
+                  aria-hidden="true"
+                />
+              )}
+              <span>{busy ? "Returning…" : "Return lease"}</span>
+            </button>
+          ) : readOnly ? (
+            <span className="run-session-data-readonly">Read-only session</span>
+          ) : null}
+        </div>
+      )}
+      {error && <div className="run-session-data-name-error">{error}</div>}
+    </div>
+  );
 }
 
 function SessionDataFacts({ facts }: { facts: Array<[string, string]> }) {
@@ -17808,6 +17878,38 @@ function ChatPane({
     onSessionPatch(session.id, { test_state: null, rollout_state: nextState });
   }
 
+  async function returnTestSlot(): Promise<void> {
+    const res = await authedFetch(
+      scopedSessionPathForPane(
+        `/api/sessions/${encodeURIComponent(session.id)}/test-slot/return`,
+      ),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      },
+    );
+    if (!res.ok) {
+      let detail = `return test slot failed: ${res.status}`;
+      try {
+        const data = await res.json();
+        if (typeof data?.detail === "string") detail = data.detail;
+      } catch {
+        // Keep the status-only detail when the response is not JSON.
+      }
+      throw new Error(detail);
+    }
+    const updated = normalizeSession(await res.json());
+    const nextTestState = updated.test_state ?? null;
+    const nextRolloutState = updated.rollout_state ?? null;
+    setTestState(nextTestState);
+    setRolloutState(nextRolloutState);
+    onSessionPatch(session.id, {
+      test_state: nextTestState,
+      rollout_state: nextRolloutState,
+    });
+  }
+
   async function saveSessionBugLabel(name: string | null): Promise<void> {
     const res = await authedFetch(
       scopedSessionPathForPane(`/api/sessions/${session.id}/bug-label`),
@@ -19984,6 +20086,7 @@ function ChatPane({
                 }}
                 onBugLabelSave={saveSessionBugLabel}
                 onBugLabelsSave={saveSessionBugLabels}
+                onReturnTestSlot={readOnly ? undefined : returnTestSlot}
                 onRename={
                   readOnly
                     ? undefined
