@@ -42,7 +42,7 @@ const (
 // SessionStore tombstones the id on receipt, so a session deleted
 // during the disconnect window is correctly removed from the cache
 // on reconnect.
-func (s *appServer) writeSessionRowUpdatesPage(ctx context.Context, w http.ResponseWriter, owner, scope string, cursor *int64) (bool, int, error) {
+func (s *appServer) writeSessionRowUpdatesPage(ctx context.Context, w http.ResponseWriter, owner, scope string, cursor *int64, delivered map[string]int64) (bool, int, error) {
 	if s.pgPool == nil {
 		return false, 0, nil
 	}
@@ -56,6 +56,20 @@ func (s *appServer) writeSessionRowUpdatesPage(ctx context.Context, w http.Respo
 	}
 	count := 0
 	for _, record := range records {
+		// The drain cursor advances over every row the drain PROCESSED,
+		// whether or not it re-emits: rows the live NATS path already
+		// delivered (per the per-session high-water map) are skipped so a
+		// heartbeat re-drain doesn't systematically double-send the whole
+		// recent window, but they still move the floor forward. Rows the
+		// live path MISSED (dropped wake channel, NATS blip,
+		// cross-replica reordering of the global row_version sequence)
+		// are emitted here — this is the convergence path that makes an
+		// open sidebar consistent within one heartbeat instead of only on
+		// browser reconnect.
+		*cursor = record.RowVersion
+		if delivered != nil && record.RowVersion <= delivered[record.ID] {
+			continue
+		}
 		payload, err := sessioncontroller.MarshalRowUpdate(record)
 		if err != nil {
 			slog.Warn("session row updates page: marshal failed",
@@ -64,7 +78,9 @@ func (s *appServer) writeSessionRowUpdatesPage(ctx context.Context, w http.Respo
 			continue
 		}
 		writeRawSSEEvent(w, "session-row", fmt.Sprintf("%d", record.RowVersion), payload)
-		*cursor = record.RowVersion
+		if delivered != nil {
+			delivered[record.ID] = record.RowVersion
+		}
 		count++
 		sessionListStreamEmittedTotal.Inc()
 	}
@@ -277,12 +293,19 @@ func unmarshalJSONBField(raw []byte) map[string]any {
 // defensive check turns any producer-side scope regression into a
 // counter increment instead of silently mutating the SPA's cache.
 //
-// A payload whose cursor is ≤ the current cursor was already streamed
-// during catch-up or is a duplicate — skip rather than re-emit.
-func (s *appServer) emitSessionRowPayload(w http.ResponseWriter, cursor *int64, expectedScope string, payload []byte) {
+// Duplicate suppression is PER SESSION, not stream-global: row_version
+// is one global sequence published post-commit by two replicas, so a
+// late-arriving lower-version payload for a DIFFERENT session is not a
+// duplicate — the old stream-global cursor dropped it though it was
+// never delivered (issue #1077 item 3), and worse, advancing the drain
+// floor here let the heartbeat re-drain skip rows the live path missed.
+// The drain cursor is therefore owned exclusively by the catch-up
+// query; live emissions only update the per-session high-water map.
+func (s *appServer) emitSessionRowPayload(w http.ResponseWriter, delivered map[string]int64, expectedScope string, payload []byte) {
 	var probe struct {
 		Cursor string `json:"cursor"`
 		Row    struct {
+			ID           string `json:"id"`
 			SessionScope string `json:"session_scope"`
 		} `json:"row"`
 	}
@@ -302,11 +325,14 @@ func (s *appServer) emitSessionRowPayload(w http.ResponseWriter, cursor *int64, 
 	if err != nil || rowVersion <= 0 {
 		return
 	}
-	if rowVersion <= *cursor {
+	sessionID := strings.TrimSpace(probe.Row.ID)
+	if sessionID != "" && rowVersion <= delivered[sessionID] {
 		return
 	}
 	writeRawSSEEvent(w, "session-row", probe.Cursor, payload)
-	*cursor = rowVersion
+	if sessionID != "" {
+		delivered[sessionID] = rowVersion
+	}
 	sessionListStreamEmittedTotal.Inc()
 }
 

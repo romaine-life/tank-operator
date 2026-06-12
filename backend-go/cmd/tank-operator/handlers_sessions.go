@@ -563,12 +563,20 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 	}
 	defer unsubscribe()
 
+	// delivered is the per-session live high-water map: row_version is one
+	// GLOBAL sequence published post-commit by two replicas, so duplicate
+	// suppression must be per session — a stream-global cursor dropped
+	// late-arriving lower-version payloads for other sessions and, worse,
+	// advanced the drain floor past rows the live path never delivered
+	// (issue #1077 item 3). The drain cursor below is owned exclusively by
+	// the catch-up/heartbeat re-drain query.
+	delivered := map[string]int64{}
 	// Catch up from the sessions table for any row that changed past
 	// the cursor and before the NATS subscription was active. Pages
 	// capped at listEventStreamPageLimit; we loop until the page is
 	// short.
 	for {
-		hasMore, written, err := s.writeSessionRowUpdatesPage(r.Context(), w, owner, sessionScope, &cursor)
+		hasMore, written, err := s.writeSessionRowUpdatesPage(r.Context(), w, owner, sessionScope, &cursor, delivered)
 		if err != nil {
 			recordSessionListStreamError()
 			writeSSEJSONEvent(w, "stream-error", "", map[string]any{
@@ -604,10 +612,35 @@ func (s *appServer) handleSessionsEvents(w http.ResponseWriter, r *http.Request)
 			if !ok {
 				return
 			}
-			s.emitSessionRowPayload(w, &cursor, sessionScope, payload)
+			s.emitSessionRowPayload(w, delivered, sessionScope, payload)
 			flusher.Flush()
 		case <-keepalive.C:
 			sessionListStreamHeartbeatTotal.Inc()
+			// Heartbeat re-drain: the wake channel is drop-on-full and a
+			// NATS blip loses published payloads outright, so an open
+			// stream that only forwarded live payloads could hold a stale
+			// sidebar indefinitely (the per-session transcript stream has
+			// re-drained on heartbeat since the resync work; this brings
+			// the list stream up to that contract). The drain cursor only
+			// ever advances through this query, so anything the live path
+			// missed is still beyond it; rows already live-delivered are
+			// skipped via the per-session map. Steady-state cost: one
+			// indexed keyset query returning zero rows per heartbeat.
+			for {
+				hasMore, _, err := s.writeSessionRowUpdatesPage(r.Context(), w, owner, sessionScope, &cursor, delivered)
+				if err != nil {
+					recordSessionListStreamError()
+					writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+						"reason": "heartbeat_redrain_failed",
+						"detail": err.Error(),
+					})
+					flusher.Flush()
+					return
+				}
+				if !hasMore {
+					break
+				}
+			}
 			fmt.Fprint(w, ": keep-alive\n\n")
 			flusher.Flush()
 		}
