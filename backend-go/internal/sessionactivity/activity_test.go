@@ -349,3 +349,31 @@ func TestDeriveActivitySummaryTurnFailedStillErrors(t *testing.T) {
 		t.Fatalf("ActiveTurnID should clear on turn.failed; got %#v", got.ActiveTurnID)
 	}
 }
+
+// TestChatActivityDeltaClassPartition pins the shared class partition the
+// persister's per-batch coalescing and the emitter's gate both dispatch on
+// (#1077 item 7). A type the classifier maps to "" must be exactly a type
+// the emitter would no-op on, and every lifecycle chat type must land in
+// the lifecycle class — otherwise coalescing would silently drop a refresh
+// the emitter used to run.
+func TestChatActivityDeltaClassPartition(t *testing.T) {
+	if got := ChatActivityDeltaClass("context.compacted"); got != ActivityClassCompaction {
+		t.Fatalf("context.compacted class = %q, want %q", got, ActivityClassCompaction)
+	}
+	if got := ChatActivityDeltaClass("user_message.created"); got != ActivityClassUserMessage {
+		t.Fatalf("user_message.created class = %q, want %q", got, ActivityClassUserMessage)
+	}
+	for _, eventType := range LifecycleChatEventTypes {
+		if got := ChatActivityDeltaClass(eventType); got != ActivityClassLifecycle {
+			t.Fatalf("lifecycle type %q class = %q, want %q", eventType, got, ActivityClassLifecycle)
+		}
+	}
+	for _, eventType := range []string{"item.started", "item.completed", "shell_task.updated", "stream.delta", ""} {
+		if got := ChatActivityDeltaClass(eventType); got != "" {
+			t.Fatalf("non-activity type %q class = %q, want \"\" (no-op)", eventType, got)
+		}
+		if IsLifecycleChatEventType(eventType) {
+			t.Fatalf("type %q is lifecycle per IsLifecycleChatEventType but classifier returned no class", eventType)
+		}
+	}
+}
