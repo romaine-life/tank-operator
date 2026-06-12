@@ -644,6 +644,7 @@ export function StyleguidePortfolioTranscript() {
                 }
                 bodyClassName={transcriptActive ? "styleguide-surface-active styleguide-transcript-surface-active" : undefined}
                 bodyAriaLabel={turnViewActive ? "Turn view" : "Transcript"}
+                composerWrapClassName="run-composer-wrap-runpane"
                 floatingBetweenBodyAndComposer={
                   <button
                     className="run-transcript-edge-cue run-transcript-edge-cue-bottom run-transcript-edge-cue-pending"
@@ -716,6 +717,7 @@ export function StyleguidePortfolioTranscript() {
               body={<TranscriptSpecimen highlightTarget="user" />}
               bodyClassName="styleguide-surface-active styleguide-transcript-surface-active"
               bodyAriaLabel="Transcript"
+              composerWrapClassName="run-composer-wrap-runpane"
               composer={<ComposerSpecimen state={composerState} active />}
             />
           </div>

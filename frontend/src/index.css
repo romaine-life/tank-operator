@@ -7150,6 +7150,11 @@ button:disabled {
   position: relative;
 }
 
+.run-composer-wrap-runpane {
+  --run-composer-transcript-content-offset: calc(0.7rem + 2.625rem + 0.55rem);
+  padding-left: calc(var(--space-5) + var(--run-composer-transcript-content-offset));
+}
+
 /* Floating UI that belongs to the transcript scroller. The wrapper is an
    overlay matching the scroll surface; children opt back into pointer events. */
 .run-floating-between {
@@ -8302,6 +8307,10 @@ button:disabled {
 @media (max-width: 760px) {
   .run-composer-wrap {
     padding-inline: var(--space-3);
+  }
+
+  .run-composer-wrap-runpane {
+    padding-left: var(--space-3);
   }
 
   .run-composer-drop-overlay {

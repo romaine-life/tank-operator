@@ -19061,7 +19061,10 @@ function ChatPane({
         }
         composerWrapRef={composerWrapRef}
         composerWrapStyle={chatFontScaleStyle}
-        composerWrapClassName={dragActive ? "run-composer-wrap-drag" : ""}
+        composerWrapClassName={[
+          "run-composer-wrap-runpane",
+          dragActive ? "run-composer-wrap-drag" : "",
+        ].filter(Boolean).join(" ")}
         onComposerWrapDragOver={(e) => {
           if (!supportsFileAttachments) return;
           e.preventDefault();
