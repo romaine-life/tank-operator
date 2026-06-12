@@ -345,6 +345,10 @@ func TestFoldMemoSerializationRoundTrip(t *testing.T) {
 	}
 }
 
+func (s *memoryFoldRowsStore) RewriteEpoch(context.Context, string) (int64, error) {
+	return 0, nil
+}
+
 func (s *memoryFoldRowsStore) MaxEndOrderKey(context.Context, string) (string, error) {
 	return "", nil
 }

@@ -681,8 +681,16 @@ func TestRefreshEventBatchInputAnsweredEscalatesOnce(t *testing.T) {
 	}
 }
 
+func (s *recordingTranscriptRowsStore) RewriteEpoch(context.Context, string) (int64, error) {
+	return 0, nil
+}
+
 func (s *recordingTranscriptRowsStore) MaxEndOrderKey(context.Context, string) (string, error) {
 	return "", nil
+}
+
+func (s *lockingTranscriptRowsStore) RewriteEpoch(context.Context, string) (int64, error) {
+	return 0, nil
 }
 
 func (s *lockingTranscriptRowsStore) MaxEndOrderKey(context.Context, string) (string, error) {

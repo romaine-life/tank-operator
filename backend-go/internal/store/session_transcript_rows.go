@@ -49,6 +49,11 @@ type SessionTranscriptRowStore interface {
 	// flips the error direction to harmless duplicates: rows replayed on
 	// the stream are idempotent replace-by-id upserts in the SPA.
 	MaxEndOrderKey(ctx context.Context, tankSessionID string) (string, error)
+	// RewriteEpoch returns the session's wholesale-rewrite epoch (bumped by
+	// every ReplaceForSession-class rewrite; 0 before the first). Open SSE
+	// streams watch it to detect row deletions they cannot otherwise see
+	// (issue #1077 item 4).
+	RewriteEpoch(ctx context.Context, tankSessionID string) (int64, error)
 }
 
 type TranscriptRowPage struct {
@@ -381,15 +386,38 @@ func (s *transcriptRowStore) replaceForSessionTx(ctx context.Context, tx pgx.Tx,
 	if err := insertTranscriptRows(ctx, tx, storageKey, entries); err != nil {
 		return err
 	}
+	// rewrite_epoch advances on every wholesale rewrite (issue #1077 item
+	// 4): the row-delta SSE stream cannot express deletions, so open
+	// streams watch this epoch and resync when it moves.
 	_, err := tx.Exec(ctx, `
 		INSERT INTO session_transcript_row_backfills (
-			tank_session_id, projection_version, completed_at
-		) VALUES ($1, $2, now())
+			tank_session_id, projection_version, completed_at, rewrite_epoch
+		) VALUES ($1, $2, now(), 1)
 		ON CONFLICT (tank_session_id) DO UPDATE
 		SET projection_version = EXCLUDED.projection_version,
-			completed_at = now()
+			completed_at = now(),
+			rewrite_epoch = session_transcript_row_backfills.rewrite_epoch + 1
 	`, storageKey, transcriptRowBackfillVersion)
 	return err
+}
+
+// RewriteEpoch returns the session's wholesale-rewrite epoch (0 when the
+// session has never been backfilled/rewritten). One PK lookup; the SSE
+// stream's ghost-row guard.
+func (s *transcriptRowStore) RewriteEpoch(ctx context.Context, tankSessionID string) (int64, error) {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	var epoch int64
+	err := s.pool.QueryRow(ctx, `
+		SELECT rewrite_epoch FROM session_transcript_row_backfills
+		WHERE tank_session_id = $1
+	`, storageKey).Scan(&epoch)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	return epoch, nil
 }
 
 func (s *transcriptRowStore) upsertRowsTx(ctx context.Context, tx pgx.Tx, storageKey string, entries []map[string]any) error {
@@ -799,6 +827,10 @@ func reverseRows(rows []map[string]any, cursors []string) {
 }
 
 type StubSessionTranscriptRowStore struct{}
+
+func (StubSessionTranscriptRowStore) RewriteEpoch(context.Context, string) (int64, error) {
+	return 0, nil
+}
 
 func (StubSessionTranscriptRowStore) MaxEndOrderKey(context.Context, string) (string, error) {
 	return "", nil

@@ -914,8 +914,15 @@ stages (#1051 B2-B5) change its cost profile, never its ownership.
   dismissing terminal exactly like an answer so the question_set page
   renders the resolved state. The SPA locks dismissed cards like answered
   ones (the backend 409s answers to any terminal'd question turn).
-- **Known remainder:** wholesale session-scope row rewrites
-  (`ReplaceForSession` — projection-version bumps, materialize-on-read
-  backfills) still cannot express row DELETIONS to an open stream; ghost
-  rows persist until reload. Tracked as the open tail of issue #1077 item 4
-  (epoch marker / `resync_required` on rewrite).
+- **Deletion guard (rewrite epoch):** wholesale session-scope rewrites
+  (`ReplaceForSession` — projection-version backfills, fold heals,
+  materialize-on-read) can DROP rows, which the row-delta stream cannot
+  express. Migration 0156 adds `rewrite_epoch` to
+  `session_transcript_row_backfills`; every wholesale rewrite bumps it, and
+  each open `/events` stream snapshots the epoch at open and re-checks it on
+  every wake/heartbeat (one PK lookup) — a bump ends the stream with
+  `resync_required{reason:"projection_rewritten"}`, handing the tab to the
+  SPA's existing snapshot-and-reopen handler. Per-turn replaces (the normal
+  incremental flow) deliberately do not bump: their row sets are stable
+  within a projection version, and bumping would resnapshot every viewer on
+  every batch.
