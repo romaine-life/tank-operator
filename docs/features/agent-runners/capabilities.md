@@ -559,3 +559,50 @@ catch strands faster. Do not "simplify" the pause exclusion into an age
 floor: a question can legitimately wait longer than any floor, and a false
 terminal on a question turn is unrecoverable without ledger surgery
 (tank-operator PR B remediation, 2026-06-12).
+
+
+## Supervised session bus (connection immortality + consumer self-healing)
+
+Status: shipped (2026-06-12, issue #1076 item 1)
+
+Intent:
+The session pod outliving a NATS disruption is the durability boundary the
+conversation protocol promises, so the runner's bus must never give up
+while the process lives. Previously every runner was mortal: the NATS
+client defaulted to 10 reconnect attempts x 2s, consumers were started
+exactly once at boot, and an iterator crash was only logged — any NATS
+outage longer than ~25 seconds (a rolling restart of the memory-only
+JetStream, a node drain) left a deaf-but-alive zombie process holding the
+session forever, with /healthz answering 200 unconditionally.
+
+SharedSessionBus now connects with maxReconnectAttempts -1 +
+waitOnFirstConnect (boot blocks until NATS is reachable instead of
+failing fast), and both consumers run under superviseConsumer: when an
+iterator ends or throws, the durable is re-ensured (idempotent; also
+recreates one a memory-only JetStream lost across a restart) and
+consumption resumes with capped exponential backoff (1s..30s; the reset
+requires real progress so an instantly-dying iterator cannot thrash). A
+PERMANENT connection close — only possible terminally with unlimited
+reconnects (authorization revoked, protocol-fatal) — exits the process
+loudly so the kubelet restarts the container (session pods run
+restartPolicy Always); durable consumers redeliver anything un-acked.
+/healthz now returns 503 once the connection is permanently closed, and
+both runner containers carry a livenessProbe (new pods only) as the
+belt-and-braces for wedged-event-loop states the exit path cannot see.
+
+Observability: tank_runner_nats_connection_status_total{type} (bounded)
+and tank_runner_bus_consumer_restart_total{kind}. A sustained restart
+rate means JetStream state is flapping; status churn without restarts is
+ordinary reconnection riding out a NATS blip.
+
+Affected contracts:
+- Agent Runners ("orchestrator rollout and runner-process restart are
+  inside the durability boundary" — now NATS disruptions are too, for
+  new session pods)
+- Observability (two new bounded counters)
+
+Retirement note:
+Pre-deploy session pods keep the mortal behavior until they are recycled
+— a deploy cannot repair a live pod's runner (session lifecycle
+contract). No wire shape changed: subjects, durable names, and consumer
+configs are identical, so old and new runners coexist freely.
