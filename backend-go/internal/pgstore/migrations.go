@@ -2134,6 +2134,15 @@ func applyMigration(ctx context.Context, conn *pgxpool.Conn, m migration, sum st
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 
+	// Migrations own their per-migration budget: the pool's server-side
+	// statement_timeout (30s, an operational guard for request-path
+	// queries) would abort long one-shot work like index builds. SET
+	// LOCAL scopes the override to this transaction only.
+	if _, err := tx.Exec(mctx, "SET LOCAL statement_timeout = '120s'"); err != nil {
+		metrics.RecordMigrationFailed(m.ID)
+		return fmt.Errorf("pgstore: migration %s set timeout: %w", m.ID, err)
+	}
+
 	if _, err := tx.Exec(mctx, m.SQL); err != nil {
 		metrics.RecordMigrationFailed(m.ID)
 		return fmt.Errorf("pgstore: migration %s failed: %w", m.ID, err)
