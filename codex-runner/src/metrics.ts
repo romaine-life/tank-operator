@@ -16,6 +16,44 @@ export const registry = new Registry();
 registry.setDefaultLabels({ mode: RUNNER_MODE });
 collectDefaultMetrics({ register: registry });
 
+// Supervised session-bus lifecycle (issue #1076 item 1): connection
+// status churn and consumer restarts. Bounded label sets — the recorders
+// below collapse unknown values.
+export const busConsumerRestartTotal = new Counter({
+  name: "tank_runner_bus_consumer_restart_total",
+  help: "Supervised session-bus consumer iterators that ended/crashed and were restarted, by plane.",
+  labelNames: ["kind"],
+  registers: [registry],
+});
+
+export const natsConnectionStatusTotal = new Counter({
+  name: "tank_runner_nats_connection_status_total",
+  help: "NATS connection lifecycle events observed by the runner, by bounded status type.",
+  labelNames: ["type"],
+  registers: [registry],
+});
+
+export function recordBusConsumerRestart(kind: string): void {
+  const bounded = kind === "command" || kind === "control" ? kind : "other";
+  busConsumerRestartTotal.inc({ kind: bounded });
+}
+
+const BOUNDED_NATS_STATUS = new Set([
+  "disconnect",
+  "reconnecting",
+  "reconnect",
+  "staleConnection",
+  "error",
+  "update",
+  "ldm",
+]);
+
+export function recordNatsConnectionStatus(type: string): void {
+  natsConnectionStatusTotal.inc({
+    type: BOUNDED_NATS_STATUS.has(type) ? type : "other",
+  });
+}
+
 export const commandsConsumedTotal = new Counter({
   name: "tank_runner_commands_consumed_total",
   help: "Session commands consumed from the JetStream command subject.",
@@ -186,6 +224,22 @@ export function recordTurnTerminal(
   turnDurationSeconds.labels(outcome).observe((Date.now() - start) / 1000);
 }
 
+let healthCheck: (() => boolean) | null = null;
+
+// setBusHealthCheck wires /healthz to the session bus once it exists
+// (the metrics server starts before the bus is constructed at boot).
+export function setBusHealthCheck(fn: () => boolean): void {
+  healthCheck = fn;
+}
+
+function safeHealthy(): boolean {
+  try {
+    return healthCheck ? healthCheck() : true;
+  } catch {
+    return true;
+  }
+}
+
 export function startMetricsServer(port: number): Server {
   const server = createServer((req, res) => {
     if (!req.url) {
@@ -208,6 +262,15 @@ export function startMetricsServer(port: number): Server {
       return;
     }
     if (req.url === "/healthz") {
+      // Liveness: false only when the session bus connection is
+      // PERMANENTLY closed (the bus also exits the process on that path;
+      // the probe is the belt-and-braces, and catches a wedged event loop
+      // by simply not answering). Healthy until a bus registers.
+      if (healthCheck && !safeHealthy()) {
+        res.statusCode = 503;
+        res.end("session bus connection closed");
+        return;
+      }
       res.statusCode = 200;
       res.end("ok");
       return;

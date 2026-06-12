@@ -23,6 +23,16 @@ export interface SessionBusDependencies {
   DeliverPolicy: Record<string, string>;
   ReplayPolicy: Record<string, string>;
   nanos: (millis: number) => unknown;
+  /** Connection lifecycle events (disconnect/reconnecting/reconnect/...). */
+  onConnectionStatus?: (type: string) => void;
+  /** A supervised consumer iterator ended/crashed and is being restarted. */
+  onConsumerRestart?: (kind: "command" | "control") => void;
+  /**
+   * The connection closed PERMANENTLY despite unlimited reconnects
+   * (auth revoked, protocol-fatal). Default: process.exit(1) so the
+   * container restarts. Tests override.
+   */
+  onFatalConnectionLoss?: (err: Error | null) => void;
 }
 
 export interface InputReplyAnnotation {
@@ -106,6 +116,7 @@ export class SessionCommandRecord implements SessionCommand {
 }
 
 export class SharedSessionBus {
+  isHealthy(): boolean;
   constructor(
     cfg: SessionBusConfig,
     provider: "claude" | "codex" | string,
