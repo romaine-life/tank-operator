@@ -577,10 +577,18 @@ def _repo_path_from_arguments(arguments: dict) -> Path:
     return path
 
 
-def _break_glass_approval_url(session_id: str, repo_slug: str, reason: str, source: str) -> str:
+def _break_glass_approval_url(
+    session_id: str,
+    repo_slug: str,
+    reason: str,
+    source: str,
+    session_scope: str | None = None,
+) -> str:
+    scope = (session_scope or ORIGIN_SESSION_SCOPE or "default").strip() or "default"
     params = {
         "intent": "git-break-glass",
         "session_id": session_id,
+        "session_scope": scope,
         "repo": repo_slug,
         "source": source,
     }
@@ -1477,6 +1485,7 @@ AUTH_ROMAINE_FORWARD_HEADER = "X-Auth-Romaine-Token"
 ORIGIN_SESSION_FORWARD_HEADER = "X-Tank-Origin-Session-Id"
 ORIGIN_SESSION_AVATAR_FORWARD_HEADER = "X-Tank-Origin-Session-Avatar-Id"
 ORIGIN_SESSION_ID = (os.environ.get("SESSION_ID") or "").strip()
+ORIGIN_SESSION_SCOPE = (os.environ.get("SESSION_SCOPE") or "default").strip() or "default"
 ORIGIN_SESSION_AVATAR_ID = (os.environ.get("AGENT_AVATAR_ID") or "").strip()
 
 # Caller-context headers identify the session pod that is making an MCP call.

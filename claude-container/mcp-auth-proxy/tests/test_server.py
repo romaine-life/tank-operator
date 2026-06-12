@@ -326,8 +326,21 @@ def test_break_glass_approval_url_carries_request_context() -> None:
     assert url.startswith("https://auth.romaine.life/admin?")
     assert "intent=git-break-glass" in url
     assert "session_id=95" in url
+    assert "session_scope=default" in url
     assert "repo=romaine-life%2Ftank-operator" in url
     assert "reason=need+to+repair+a+branch+conflict" in url
+
+
+def test_break_glass_approval_url_carries_slot_scope() -> None:
+    url = _break_glass_approval_url(
+        "95",
+        "romaine-life/tank-operator",
+        "",
+        "agent",
+        session_scope="tank-operator-slot-6",
+    )
+
+    assert "session_scope=tank-operator-slot-6" in url
 
 
 def test_break_glass_mcp_lists_no_tools_before_activation(monkeypatch, tmp_path) -> None:
