@@ -1832,7 +1832,74 @@ var schemaMigrations = []migration{
 	{ID: "0149", SQL: `CREATE INDEX IF NOT EXISTS session_events_input_pause
 		ON session_events (tank_session_id, turn_id)
 		WHERE event_type IN ('turn.awaiting_input', 'turn.input_answered')`},
+
+	// Remediation for the stranded-turn sweep's first-day false positives
+	// (2026-06-11/12): the sweep wrote turn.command_failed terminals onto
+	// AskUserQuestion turns that legitimately never carry a terminal under
+	// their own id — destroying pending questions (the /answer endpoint
+	// 409s once a terminal exists), painting healthy transcripts failed,
+	// and ringing false summons. This deletes exactly those rows (sweep
+	// reasons + pause linkage, the inverse of the FindStrandedTurns
+	// exclusion added alongside migration 0149) and drops the derived
+	// projection state for every affected session so the next read
+	// rebuilds it from the corrected ledger: the backfills row makes
+	// NeedsBackfill report stale, and a missing fold_state/fold_turns row
+	// re-seeds the checkpointed fold by design. Durable activity summaries
+	// for affected sessions self-correct on the next refresh (read-state
+	// update or lifecycle event); the false 'error' pill on an idle
+	// corrupted session clears the moment it is opened. Bounded: the
+	// time floor matches the sweep's first production pass, and the row
+	// population was ~164 events across ~50 sessions when written.
+	{ID: "0150", SQL: falseSweepTerminalRemediationSQL},
 }
+
+// falseSweepTerminalRemediationSQL is migration 0150, named so the
+// integration test can exercise the exact production statement against
+// seeded corruption (a fresh test schema applies 0150 before any rows
+// exist, so the test re-runs the statement after seeding).
+const falseSweepTerminalRemediationSQL = `
+	WITH false_terminals AS (
+		DELETE FROM session_events cf
+		WHERE cf.event_type = 'turn.command_failed'
+			AND cf.created_at >= timestamptz '2026-06-11 18:00+00'
+			AND (
+				cf.payload -> 'payload' ->> 'reason' LIKE 'submit_command_lost%'
+				OR cf.payload -> 'payload' ->> 'reason' LIKE 'turn_progress_lost%'
+				OR cf.payload -> 'payload' ->> 'reason' = 'stranded_continuation_swept'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM session_events pause
+				WHERE pause.tank_session_id = cf.tank_session_id
+					AND pause.event_type IN ('turn.awaiting_input', 'turn.input_answered')
+					AND (
+						pause.turn_id = cf.turn_id
+						OR pause.payload -> 'payload' ->> 'asking_turn_id' = cf.turn_id
+						OR pause.payload -> 'payload' ->> 'question_turn_id' = cf.turn_id
+					)
+			)
+		RETURNING cf.tank_session_id
+	),
+	affected AS (
+		SELECT DISTINCT tank_session_id FROM false_terminals
+	),
+	drop_backfills AS (
+		DELETE FROM session_transcript_row_backfills b
+		USING affected a
+		WHERE b.tank_session_id = a.tank_session_id
+	),
+	drop_fold_state AS (
+		DELETE FROM session_transcript_fold_state f
+		USING affected a
+		WHERE f.tank_session_id = a.tank_session_id
+	),
+	drop_fold_turns AS (
+		DELETE FROM session_transcript_fold_turns f
+		USING affected a
+		WHERE f.tank_session_id = a.tank_session_id
+	)
+	SELECT count(*) FROM affected
+`
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
 // serialize schema-migration runs across replicas via pg_advisory_lock. Any
