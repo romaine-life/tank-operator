@@ -6973,6 +6973,11 @@ button:disabled {
   background-clip: padding-box;
 }
 
+.run-main[aria-label="Turn view"] {
+  overflow-y: hidden;
+  scrollbar-gutter: auto;
+}
+
 .run-main[aria-label="Transcript"],
 .run-main[aria-label="Turn view"],
 .run-main[aria-label="New session setup"],

@@ -52,6 +52,7 @@ test("isValidRepoSlug trims whitespace before validating", () => {
 test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
   for (const mode of [
     "claude_gui",
+    "claude_secondary_gui",
     "codex_gui",
     "antigravity_gui",
   ]) {
@@ -59,6 +60,8 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
   }
   for (const mode of [
     "claude_cli",
+    "claude_secondary_cli",
+    "claude_secondary_config",
     "codex_cli",
     "config",
     "codex_config",
@@ -73,6 +76,7 @@ test("REPO_SUPPORTED_MODES matches the SDK-runner modes only", () => {
 
 test("modeSupportsRepos round-trips the supported-modes set", () => {
   expect(modeSupportsRepos("claude_gui")).toBe(true);
+  expect(modeSupportsRepos("claude_secondary_gui")).toBe(true);
   expect(modeSupportsRepos("claude_cli")).toBe(false);
 });
 

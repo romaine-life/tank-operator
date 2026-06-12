@@ -47,3 +47,11 @@ test("Turns view shares the transcript focus rail + wash affordance", () => {
     true,
   );
 });
+
+test("Turns view clips the outer main scrollbar", () => {
+  // The turn-detail body owns scrolling. Keeping .run-main scrollable on this
+  // surface paints a second inert scrollbar beside the real activity scroller.
+  expect(indexCssSource).toMatch(
+    /\.run-main\[aria-label="Turn view"\]\s*\{[\s\S]*?overflow-y:\s*hidden;/,
+  );
+});

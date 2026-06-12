@@ -15,16 +15,20 @@
 // On error: log and keep running. Single-turn failures shouldn't kill the
 // runner; persistent failures will surface via session-bus publish errors.
 
+import { readFileSync } from "node:fs";
 import {
+  createSdkMcpServer,
   query,
-  type CanUseTool,
   type EffortLevel,
-  type PermissionResult,
+  type McpServerConfig,
   type Query,
   type SDKMessage,
   type SDKUserMessage,
   type Options,
+  tool,
 } from "@anthropic-ai/claude-agent-sdk";
+import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import {
   canonicalEventsForClaudeMessage,
   claudeQuestionsToTankShape,
@@ -44,6 +48,7 @@ import {
 } from "../../runner-shared/conversation.js";
 import {
   askUserQuestionHandoffEvents,
+  itemEvent,
   itemTimelineID,
   shellTaskEvent,
   stampTankEvent,
@@ -79,6 +84,7 @@ import {
   recordTurnStart,
   recordTurnTerminal,
   scheduledWakeupRegisterTotal,
+  toolPermissionDeniedTotal,
   unmappedProviderEventTotal,
 } from "./metrics.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
@@ -472,6 +478,27 @@ function answersForClaudeInput(
   return out;
 }
 
+function askUserQuestionToolResult(
+  answers: Record<string, string>,
+): CallToolResult {
+  const lines = Object.entries(answers).map(
+    ([question, answer]) => `${question}\n${answer}`,
+  );
+  return {
+    content: [
+      {
+        type: "text",
+        text:
+          lines.length > 0
+            ? `User answered:\n\n${lines.join("\n\n")}`
+            : "User answered with no selected options or notes.",
+      },
+    ],
+    structuredContent: { answers },
+    _meta: { tankAskUserQuestion: true },
+  };
+}
+
 type InputReplyAnswerShape =
   | "selection_only"
   | "free_form_only"
@@ -545,8 +572,7 @@ type PendingInputReply = {
   turn: PendingTurn;
   providerItemID: string;
   timelineID: string;
-  input: unknown;
-  resolve: (result: PermissionResult) => void;
+  resolve: (result: CallToolResult) => void;
 };
 
 type InterruptOutcome = "interrupted" | "not_found" | "publish_failed";
@@ -566,6 +592,54 @@ type InterruptOutcome = "interrupted" | "not_found" | "publish_failed";
 //     (server-side allowlist)
 const DEFAULT_MODEL = "claude-opus-4-8";
 const DEFAULT_EFFORT: EffortLevel = "high";
+const TANK_MCP_SERVER_NAME = "tank";
+const TANK_ASK_USER_QUESTION_TOOL = "AskUserQuestion";
+const TANK_ASK_USER_QUESTION_TOOL_ALIAS = `mcp__${TANK_MCP_SERVER_NAME}__${TANK_ASK_USER_QUESTION_TOOL}`;
+
+const askUserQuestionInputSchema = {
+  question: z
+    .string()
+    .optional()
+    .describe("Single question text when not using the questions array."),
+  questions: z
+    .array(
+      z
+        .object({
+          question: z.string().describe("Question text shown to the user."),
+          options: z
+            .array(
+              z
+                .object({
+                  label: z.string().describe("Selectable answer label."),
+                  description: z.string().optional(),
+                  preview: z.string().optional(),
+                })
+                .passthrough(),
+            )
+            .optional(),
+          allowFreeForm: z.boolean().optional(),
+        })
+        .passthrough(),
+    )
+    .optional()
+    .describe("One or more questions to ask the user."),
+  options: z
+    .array(
+      z
+        .object({
+          label: z.string().describe("Selectable answer label."),
+          description: z.string().optional(),
+          preview: z.string().optional(),
+        })
+        .passthrough(),
+    )
+    .optional()
+    .describe("Options for the single-question shorthand."),
+  allowFreeForm: z
+    .boolean()
+    .optional()
+    .describe("Whether the user may answer with free-form text."),
+};
 
 // AsyncQueue is a one-writer-many-no-readers queue that yields each
 // pushed item exactly once. The SDK consumes this as the prompt source.
@@ -665,6 +739,62 @@ function parsePositiveEnvInt(
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function loadConfiguredMcpServers(path: string): Record<string, McpServerConfig> {
+  const trimmed = path.trim();
+  if (!trimmed) return {};
+  try {
+    const parsed = JSON.parse(readFileSync(trimmed, "utf8")) as {
+      mcpServers?: Record<string, McpServerConfig>;
+    };
+    return parsed.mcpServers && typeof parsed.mcpServers === "object"
+      ? parsed.mcpServers
+      : {};
+  } catch (err) {
+    const code = (err as { code?: string } | null)?.code;
+    if (code !== "ENOENT") throw err;
+    return {};
+  }
+}
+
+function isClaudePermissionDeniedEvent(
+  event: ClaudeProviderEvent,
+): event is ClaudeProviderEvent & {
+  type: "system";
+  subtype: "permission_denied";
+  tool_name?: string;
+  tool_use_id?: string;
+  agent_id?: string;
+  decision_reason_type?: string;
+  decision_reason?: string;
+  message?: string;
+  uuid?: string;
+} {
+  return event.type === "system" && event.subtype === "permission_denied";
+}
+
+function permissionDeniedLabels(event: {
+  tool_name?: string;
+  agent_id?: string;
+  decision_reason_type?: string;
+}): {
+  agentKind: "parent" | "subagent";
+  toolFamily: "mcp" | "local" | "other";
+  server: string;
+  decision: string;
+} {
+  const toolName = String(event.tool_name ?? "");
+  const mcpMatch = /^mcp__([^_]+(?:_[^_]+)*)__(.+)$/.exec(toolName);
+  const toolFamily = mcpMatch ? "mcp" : toolName ? "local" : "other";
+  const server = mcpMatch?.[1] ?? "none";
+  const decision = String(event.decision_reason_type ?? "unknown").trim();
+  return {
+    agentKind: event.agent_id ? "subagent" : "parent",
+    toolFamily,
+    server: server || "none",
+    decision: decision || "unknown",
+  };
+}
+
 export class Runner {
   private readonly sink: SessionEventSink;
   private readonly commandBus: SessionCommandBus;
@@ -694,6 +824,7 @@ export class Runner {
   private readonly firedBackgroundTaskWakes = new Set<string>();
   private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
+  private tankAskUserQuestionSequence = 0;
   // Model + effort are pinned at pod boot from the first submit_turn
   // that arrives, with the DEFAULT_* fallbacks above for empty fields.
   // Once set, both are sealed for the runner's lifetime — the SDK's
@@ -848,25 +979,19 @@ export class Runner {
       }),
     );
 
+    const mcpServers = {
+      ...loadConfiguredMcpServers(this.cfg.mcpConfig),
+      [TANK_MCP_SERVER_NAME]: this.createTankMcpServer(),
+    };
     const options: Options = {
       cwd: this.cfg.workspace,
       // The api-proxy injects OAuth from KV when the placeholder bearer
       // is seen — both the SDK and the raw CLI go through this path.
-      //
-      // permissionMode is `default` (not `bypassPermissions`) because
-      // `canUseTool` is only invoked under permission-prompting modes;
-      // `bypassPermissions` short-circuits the entire permission system
-      // and means AskUserQuestion can never reach our gate. The
-      // `canUseTool` callback below auto-allows everything except
-      // AskUserQuestion, so non-AskUserQuestion tools retain the same
-      // zero-friction shape as before.
-      permissionMode: "default",
-      // canUseTool turns AskUserQuestion into a Tank-visible handoff:
-      // it publishes durable turn.awaiting_input and then leaves only the
-      // provider callback pending until the user's input_reply arrives. All
-      // other tools pass through unconditionally — see the callback for the
-      // policy.
-      canUseTool: this.canUseTool,
+      permissionMode: "bypassPermissions",
+      allowDangerouslySkipPermissions: true,
+      toolAliases: {
+        [TANK_ASK_USER_QUESTION_TOOL]: TANK_ASK_USER_QUESTION_TOOL_ALIAS,
+      },
       // Resume an on-disk JSONL if one exists from a prior process
       // life (e.g., claude-runner restart within the same pod).
       // First boot with no JSONL: no-op.
@@ -875,7 +1000,7 @@ export class Runner {
       // renders stream_event deltas live and snapshots to the canonical
       // assistant message when it arrives.
       includePartialMessages: true,
-      mcpServers: undefined, // file-mounted via --mcp-config below
+      mcpServers,
       // Bare mode would skip CLAUDE.md / skills / hooks; we want those.
       model,
       effort,
@@ -950,6 +1075,48 @@ export class Runner {
     return query({ prompt: this.userQueue, options });
   }
 
+  private createTankMcpServer(): McpServerConfig {
+    return createSdkMcpServer({
+      name: TANK_MCP_SERVER_NAME,
+      version: "1.0.0",
+      instructions:
+        "Use AskUserQuestion when you need a blocking answer from the Tank user before proceeding.",
+      alwaysLoad: true,
+      tools: [
+        tool(
+          TANK_ASK_USER_QUESTION_TOOL,
+          "Ask the Tank user one or more blocking questions and wait for the answer.",
+          askUserQuestionInputSchema,
+          async (input) => this.handleTankAskUserQuestion(input),
+          { alwaysLoad: true },
+        ),
+      ],
+    });
+  }
+
+  private handleTankAskUserQuestion(input: unknown): Promise<CallToolResult> {
+    const turn = this.activeTurn;
+    if (!turn) {
+      return Promise.resolve({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "AskUserQuestion cannot pause the turn because no active Tank turn exists.",
+          },
+        ],
+      });
+    }
+    const providerItemID = this.nextTankAskUserQuestionProviderItemID(turn);
+    const questions = claudeQuestionsToTankShape(input);
+    return this.pauseTurnForInput(turn, questions, providerItemID);
+  }
+
+  private nextTankAskUserQuestionProviderItemID(turn: PendingTurn): string {
+    this.tankAskUserQuestionSequence += 1;
+    return `tank_ask_user_question_${turn.turnID}_${this.tankAskUserQuestionSequence}`;
+  }
+
   private async handleEvent(message: SDKMessage): Promise<void> {
     const providerEvent = message as ClaudeProviderEvent;
     // The per-turn `result` message carries ModelUsage with the provider's
@@ -959,6 +1126,10 @@ export class Runner {
       this.maybeReportContextWindow(message);
     }
     const activeTurn = await this.ensureActiveTurn(providerEvent);
+    if (isClaudePermissionDeniedEvent(providerEvent)) {
+      await this.handlePermissionDenied(providerEvent, activeTurn);
+      return;
+    }
     if (
       activeTurn?.terminalEmitted &&
       !isClaudeTaskLifecycleMessage(providerEvent)
@@ -1064,6 +1235,69 @@ export class Runner {
     await this.maybeRegisterBackgroundTaskWake(
       providerEvent,
       observedShellTaskExitEventID,
+    );
+  }
+
+  private async handlePermissionDenied(
+    event: ClaudeProviderEvent & {
+      tool_name?: string;
+      tool_use_id?: string;
+      agent_id?: string;
+      decision_reason_type?: string;
+      decision_reason?: string;
+      message?: string;
+      uuid?: string;
+    },
+    turn: PendingTurn | null,
+  ): Promise<void> {
+    const labels = permissionDeniedLabels(event);
+    toolPermissionDeniedTotal
+      .labels(
+        labels.agentKind,
+        labels.toolFamily,
+        labels.server,
+        labels.decision,
+      )
+      .inc();
+    console.warn(
+      JSON.stringify({
+        msg: "claude_tool_permission_denied",
+        agent_kind: labels.agentKind,
+        tool_family: labels.toolFamily,
+        server: labels.server,
+        decision: labels.decision,
+        tool_name: event.tool_name ?? "",
+        tool_use_id: event.tool_use_id ?? "",
+        agent_id: event.agent_id ?? "",
+      }),
+    );
+    if (!turn || turn.terminalEmitted) return;
+    await dispatch(
+      this.sink,
+      itemEvent({
+        sessionID: this.cfg.sessionId,
+        turnID: turn.turnID,
+        source: "claude",
+        type: "item.failed",
+        providerItemID:
+          typeof event.tool_use_id === "string" && event.tool_use_id
+            ? event.tool_use_id
+            : `permission_denied_${Date.now()}`,
+        actor: "tool",
+        providerEventID: event.uuid,
+        payload: {
+          kind: "tool",
+          title: event.tool_name ?? "Tool",
+          name: event.tool_name ?? "tool",
+          error: event.message ?? "Permission denied",
+          outcome: { kind: "execution_failed", reason: "provider_item_error" },
+          permission_denied: {
+            agent_kind: labels.agentKind,
+            decision: labels.decision,
+            decision_reason: event.decision_reason,
+          },
+        },
+      }),
     );
   }
 
@@ -1792,39 +2026,8 @@ export class Runner {
     return false;
   }
 
-  // canUseTool records a question handoff when the agent invokes
-  // AskUserQuestion.
-  // Non-AskUserQuestion tools auto-allow (preserving the prior
-  // `bypassPermissions` posture). For AskUserQuestion we publish durable
-  // `turn.awaiting_input`, then keep the provider callback pending until an
-  // input_reply control command arrives for the same question-set target. The
-  // submit command remains in flight so runner restarts can recreate the
-  // callback before the user answers.
-  private readonly canUseTool: CanUseTool = (
-    toolName,
-    input,
-    { toolUseID },
-  ) => {
-    if (toolName !== "AskUserQuestion") {
-      return Promise.resolve({
-        behavior: "allow",
-        updatedInput: input,
-      } satisfies PermissionResult);
-    }
-    const turn = this.activeTurn;
-    if (!toolUseID || !turn) {
-      return Promise.resolve({
-        behavior: "deny",
-        message:
-          "AskUserQuestion cannot pause the turn (missing tool_use_id or active turn)",
-      } satisfies PermissionResult);
-    }
-    const questions = claudeQuestionsToTankShape(input);
-    return this.pauseTurnForInput(turn, questions, toolUseID, input);
-  };
-
-  // pauseTurnForInput publishes durable turn.awaiting_input for an
-  // AskUserQuestion handoff and resolves only when input_reply arrives.
+  // pauseTurnForInput publishes durable turn.awaiting_input for the Tank-owned
+  // AskUserQuestion MCP tool and resolves only when input_reply arrives.
   // Mirrors applyInterruptToTurn's durable-first posture: publish with retry,
   // and fall back to turn.failed if the pause publish ultimately fails so
   // the turn never strands without a terminal.
@@ -1832,12 +2035,16 @@ export class Runner {
     turn: PendingTurn,
     questions: unknown,
     providerItemID: string,
-    input: unknown,
-  ): Promise<PermissionResult> {
+  ): Promise<CallToolResult> {
     if (turn.terminalEmitted) {
       return {
-        behavior: "deny",
-        message: "Turn already ended before AskUserQuestion could pause.",
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "Turn already ended before AskUserQuestion could pause.",
+          },
+        ],
       };
     }
     const timelineID = itemTimelineID(turn.turnID, providerItemID);
@@ -1851,12 +2058,11 @@ export class Runner {
       questions: questions as unknown[],
     });
     const replyKey = inputReplyKey(turn.turnID, timelineID, providerItemID);
-    const waitForReply = new Promise<PermissionResult>((resolve) => {
+    const waitForReply = new Promise<CallToolResult>((resolve) => {
       this.pendingInputReplies.set(replyKey, {
         turn,
         providerItemID,
         timelineID,
-        input,
         resolve,
       });
     });
@@ -1884,9 +2090,13 @@ export class Runner {
       }
     }
     return {
-      behavior: "deny",
-      message: "Failed to persist AskUserQuestion pause.",
-      interrupt: true,
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: "Failed to persist AskUserQuestion pause.",
+        },
+      ],
     };
   }
 
@@ -1921,15 +2131,11 @@ export class Runner {
     }
     this.pendingInputReplies.delete(key);
     await this.rotateTurnForInputReply(pending.turn, record);
-    pending.resolve({
-      behavior: "allow",
-      updatedInput: {
-        ...(typeof pending.input === "object" && pending.input !== null
-          ? pending.input
-          : {}),
-        answers: answersForClaudeInput(record.answers, record.annotations),
-      },
-    } satisfies PermissionResult);
+    pending.resolve(
+      askUserQuestionToolResult(
+        answersForClaudeInput(record.answers, record.annotations),
+      ),
+    );
     await this.commandBus.markCompleted(record);
   }
 

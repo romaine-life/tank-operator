@@ -45,6 +45,16 @@ the rest of the product reconstruct what happened.
   the ledger.
 - Tool approval replies are routed to the intended provider item and resolved
   durably.
+- Claude parent agents and Claude subagents share the same session-pod
+  authority boundary. Local tool authority is blanket pod authority, and MCP
+  authority is generated at server granularity from the mounted `.mcp.json`
+  (`mcp__server`), not maintained as per-tool rules. A configured MCP server
+  that the parent can use must not be denied solely because the call originates
+  inside a subagent.
+- Claude AskUserQuestion is a Tank-owned SDK MCP tool
+  (`mcp__tank__AskUserQuestion`) that parks a durable `turn.awaiting_input`.
+  It must not depend on Claude's permission callback path; permission mode and
+  human-question handoff are separate runner concerns.
 - Runner events must wake transcript and session-list followers after
   persistence.
 - A runner must not require an open browser to continue work.
@@ -123,6 +133,12 @@ the rest of the product reconstruct what happened.
   labels, free-form-only notes, and selected-labels-plus-notes so a durable
   `turn.input_answered` row with annotations can be compared against what the
   runner actually normalized for provider delivery.
+- Claude tool permission denials are counted at the runner/provider boundary:
+  `tank_runner_tool_permission_denied_total{agent_kind,tool_family,server,decision}`
+  distinguishes parent versus subagent origin, MCP versus local tools, the MCP
+  server name when applicable, and the bounded SDK decision class. A subagent
+  denial for a configured MCP server is a runner authority regression, not a
+  user-debuggable provider detail.
 - Background-task wakes are counted on both sides so a regression localizes
   between detection, registration, and firing: the runner's
   `tank_runner_background_task_wake_total{result}` and the orchestrator's
