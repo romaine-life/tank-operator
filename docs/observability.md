@@ -251,10 +251,20 @@ All metric names are prefixed `tank_`. The full namespace:
   so deleted sessions leak consumers indefinitely (observed at 725
   consumers / 6 live sessions on 2026-05-25, ~50 % of the JetStream
   RAM budget). The orchestrator runs `SweepOrphanConsumers` on a
-  5-minute initial delay then hourly; each pass lists consumers,
-  decodes session_id, deletes any orphan older than 15 minutes
-  (`MinAge` floor). The gauges are last-pass snapshots; the
-  `_deleted_total` / `_delete_errors_total` counters are cumulative.
+  5-minute initial delay then hourly; each pass lists consumers and
+  decodes session_id. A consumer is an orphan when its session is
+  neither visible nor updated within the last 24 h
+  (`sessionregistry.ListLiveIDsForScope` — sessions rows are
+  soft-deleted, never removed, so bare row existence is NOT a liveness
+  predicate: it classified every id ever created as live and pinned
+  this gauge at 0 while consumers accumulated). Two guards on two
+  clocks protect the races: the 15-minute `MinAge` floor
+  (consumer-creation clock) covers consumers created before their
+  session row is readable, and the 24 h recency union
+  (sessions.updated_at clock, bumped by every delete path) covers
+  just-deleted sessions whose runners are still draining. The gauges
+  are last-pass snapshots; the `_deleted_total` /
+  `_delete_errors_total` counters are cumulative.
   Alerts: `TankSessionBusOrphanSweepFailing` (sweep itself broken),
   `TankSessionBusOrphanConsumersHigh` (sweep running but backlog
   growing). See `backend-go/internal/sessionbus/sweep.go` for the
