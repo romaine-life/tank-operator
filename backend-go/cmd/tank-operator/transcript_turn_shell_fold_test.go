@@ -116,4 +116,3 @@ func TestTurnShellFoldFixtureShellParity(t *testing.T) {
 		})
 	}
 }
-

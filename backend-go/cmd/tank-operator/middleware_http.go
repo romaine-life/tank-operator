@@ -242,4 +242,3 @@ func extractDetailField(body *bytes.Buffer) string {
 	}
 	return string(bytes.TrimSpace(first))
 }
-

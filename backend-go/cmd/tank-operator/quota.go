@@ -109,4 +109,3 @@ func (q *SpawnQuotaTracker) CheckRate(sub string, ceiling int) bool {
 	q.counts[sub]++
 	return true
 }
-
