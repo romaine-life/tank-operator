@@ -40,11 +40,22 @@ type jwksCache struct {
 	keys       map[string]*rsa.PublicKey
 	fetchedAt  time.Time
 	httpClient *http.Client
+	kidMissRefreshAt time.Time
 }
 
 var romaineLifeJWKS = &jwksCache{
 	httpClient: &http.Client{Timeout: jwksHTTPTimeout},
 }
+
+// jwksKidMissRefreshInterval rate-limits refresh-on-unknown-kid. A kid
+// miss inside the cache TTL is either a freshly rotated signing key (the
+// break-glass `az keyvault key rotate auth-jwt-signing` path and normal
+// rotation both mint tokens the stale cache rejects — previously a
+// hard auth outage for up to the full 10-minute TTL, issue #1079) or
+// attacker-supplied garbage. One refresh per interval picks rotations up
+// in seconds while keeping forged-kid spam from becoming an upstream
+// fetch amplifier.
+const jwksKidMissRefreshInterval = 30 * time.Second
 
 func (c *jwksCache) getKey(ctx context.Context, url, kid string) (*rsa.PublicKey, error) {
 	c.mu.RLock()
@@ -53,21 +64,21 @@ func (c *jwksCache) getKey(ctx context.Context, url, kid string) (*rsa.PublicKey
 			c.mu.RUnlock()
 			return key, nil
 		}
-		c.mu.RUnlock()
-		return nil, fmt.Errorf("unknown kid %q", kid)
 	}
 	c.mu.RUnlock()
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if time.Since(c.fetchedAt) < jwksCacheTTL {
-		if key, ok := c.keys[kid]; ok {
-			return key, nil
-		}
-		return nil, fmt.Errorf("unknown kid %q", kid)
+	if key, ok := c.keys[kid]; ok && time.Since(c.fetchedAt) < jwksCacheTTL {
+		return key, nil
 	}
-	if err := c.refresh(ctx, url); err != nil {
-		return nil, err
+	// Refresh when the TTL lapsed OR the kid is unknown (rate-limited):
+	// a rotated key must authenticate within seconds, not after the TTL.
+	if time.Since(c.fetchedAt) >= jwksCacheTTL || time.Since(c.kidMissRefreshAt) >= jwksKidMissRefreshInterval {
+		c.kidMissRefreshAt = time.Now()
+		if err := c.refresh(ctx, url); err != nil {
+			return nil, err
+		}
 	}
 	if key, ok := c.keys[kid]; ok {
 		return key, nil

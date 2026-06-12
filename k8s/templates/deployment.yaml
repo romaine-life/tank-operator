@@ -285,6 +285,17 @@ spec:
             - name: static-override
               mountPath: {{ .Values.staticOverride.mountPath | quote }}
             {{- end }}
+          # Burstable QoS (issue #1079 item 6): with no resources at all the
+          # orchestrator ran BestEffort — first evicted under node pressure
+          # and with zero CPU guarantee for the persister. Requests are the
+          # guarantee; the memory limit is the runaway guard; no CPU limit
+          # (throttling the persister is worse than contention).
+          resources:
+            requests:
+              cpu: {{ .Values.orchestrator.resources.requests.cpu | quote }}
+              memory: {{ .Values.orchestrator.resources.requests.memory | quote }}
+            limits:
+              memory: {{ .Values.orchestrator.resources.limits.memory | quote }}
           lifecycle:
             preStop:
               exec:

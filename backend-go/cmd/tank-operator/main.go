@@ -357,6 +357,16 @@ func main() {
 	// updates can drain HTTP cleanly.
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
+	// Two-phase shutdown (issue #1079 item 6): background workers run on
+	// workerCtx, which is NOT cancelled by SIGTERM — it is cancelled
+	// explicitly AFTER the HTTP server finishes draining. Previously every
+	// worker shared the signal context, so the persister, refreshers, and
+	// wake loops died at T0 while HTTP kept accepting work for up to 30
+	// more seconds: turns accepted during the drain got durable rows but
+	// no projection refresh or SSE wake until another pod's heartbeat
+	// caught up — a visible per-deploy hiccup.
+	workerCtx, stopWorkers := context.WithCancel(context.Background())
+	defer stopWorkers()
 	// Build the shared RowWriter that the K8s watch and chat-activity
 	// emitter call through. Per docs/session-list-redesign.md Phase 4
 	// the durable sessions row is the only persistent state â€” the prior
@@ -408,15 +418,15 @@ func main() {
 			// memory-only JetStream that lost everything heals here too.
 			delay := time.Second
 			for {
-				err := sessionBus.RunEventPersister(ctx, sessionEventsStore, transcriptMaterializer, promPersisterMetrics{})
-				if ctx.Err() != nil {
+				err := sessionBus.RunEventPersister(workerCtx, sessionEventsStore, transcriptMaterializer, promPersisterMetrics{})
+				if workerCtx.Err() != nil {
 					return
 				}
 				recordPersisterRestart()
 				slog.Error("session bus event persister stopped; restarting",
 					"error", err, "delay", delay.String())
 				select {
-				case <-ctx.Done():
+				case <-workerCtx.Done():
 					return
 				case <-time.After(delay):
 				}
@@ -434,15 +444,15 @@ func main() {
 			ticker := time.NewTicker(time.Minute)
 			defer ticker.Stop()
 			for {
-				usageCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+				usageCtx, cancel := context.WithTimeout(workerCtx, 10*time.Second)
 				if usage, err := sessionBus.StreamUsage(usageCtx); err == nil {
 					recordSessionBusStreamUsage(usage)
-				} else if ctx.Err() == nil {
+				} else if workerCtx.Err() == nil {
 					slog.Warn("session bus stream usage sample failed", "error", err)
 				}
 				cancel()
 				select {
-				case <-ctx.Done():
+				case <-workerCtx.Done():
 					return
 				case <-ticker.C:
 				}
@@ -468,7 +478,7 @@ func main() {
 				LeaseNamespace: orchestratorNamespace,
 				Identity:       strings.TrimSpace(os.Getenv("HOSTNAME")),
 			}
-			if err := sessioncontroller.RunK8sWatch(ctx, cfg); err != nil && !errors.Is(err, context.Canceled) {
+			if err := sessioncontroller.RunK8sWatch(workerCtx, cfg); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("session controller k8s watch stopped", "error", err)
 			}
 		}()
@@ -490,7 +500,7 @@ func main() {
 			slog.Error("pgstats poller init failed", "error", err)
 		} else {
 			go func() {
-				if err := poller.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				if err := poller.Run(workerCtx); err != nil && !errors.Is(err, context.Canceled) {
 					slog.Error("pgstats poller stopped", "error", err)
 				}
 			}()
@@ -520,7 +530,7 @@ func main() {
 		})
 		if len(providerConfigs) > 0 {
 			go func() {
-				if err := providerHealthManager.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+				if err := providerHealthManager.Run(workerCtx); err != nil && !errors.Is(err, context.Canceled) {
 					slog.Error("providerhealth manager stopped", "error", err)
 				}
 			}()
@@ -600,7 +610,7 @@ func main() {
 	}
 	if scheduledWakeupStore != nil && sessionBus != nil {
 		go func() {
-			if err := runScheduledWakeupLoop(ctx, srv, scheduledWakeupDefaultInterval); err != nil && !errors.Is(err, context.Canceled) {
+			if err := runScheduledWakeupLoop(workerCtx, srv, scheduledWakeupDefaultInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("scheduled wakeup loop stopped", "error", err)
 			}
 		}()
@@ -610,7 +620,7 @@ func main() {
 	// registers the natural terminal. Postgres-only — the stub store is nil.
 	if backgroundTaskWakeStore != nil && sessionBus != nil {
 		go func() {
-			if err := runBackgroundTaskWakeLoop(ctx, srv, backgroundTaskWakeDefaultInterval); err != nil && !errors.Is(err, context.Canceled) {
+			if err := runBackgroundTaskWakeLoop(workerCtx, srv, backgroundTaskWakeDefaultInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("background task wake loop stopped", "error", err)
 			}
 		}()
@@ -623,7 +633,7 @@ func main() {
 	// turn.command_failed. Postgres-only — the stub store returns no rows.
 	if pgPool != nil {
 		go func() {
-			if err := runStrandedLaunchSweepLoop(ctx, srv, strandedLaunchSweepInterval); err != nil && !errors.Is(err, context.Canceled) {
+			if err := runStrandedLaunchSweepLoop(workerCtx, srv, strandedLaunchSweepInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("stranded launch sweep loop stopped", "error", err)
 			}
 		}()
@@ -636,7 +646,7 @@ func main() {
 	// 2026-06-11 incident stranded five sessions exactly this way.
 	if pgPool != nil {
 		go func() {
-			if err := runStrandedTurnSweepLoop(ctx, srv, strandedTurnSweepInterval); err != nil && !errors.Is(err, context.Canceled) {
+			if err := runStrandedTurnSweepLoop(workerCtx, srv, strandedTurnSweepInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("stranded turn sweep loop stopped", "error", err)
 			}
 		}()
@@ -656,7 +666,7 @@ func main() {
 		reapInterval := time.Duration(envInt("REAPER_INTERVAL_SECONDS", 900)) * time.Second
 		if idleTimeout > 0 {
 			go func() {
-				if err := runIdleSessionReaper(ctx, srv, sessionRegStore, reapInterval, idleTimeout); err != nil && !errors.Is(err, context.Canceled) {
+				if err := runIdleSessionReaper(workerCtx, srv, sessionRegStore, reapInterval, idleTimeout); err != nil && !errors.Is(err, context.Canceled) {
 					slog.Error("idle session reaper stopped", "error", err)
 				}
 			}()
@@ -669,7 +679,7 @@ func main() {
 	// session bus (the publish target).
 	if pendingLaunchStore != nil && sessionBus != nil {
 		go func() {
-			if err := runLaunchDispatchLoop(ctx, srv, launchDispatchInterval); err != nil && !errors.Is(err, context.Canceled) {
+			if err := runLaunchDispatchLoop(workerCtx, srv, launchDispatchInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("launch dispatch loop stopped", "error", err)
 			}
 		}()
@@ -752,6 +762,14 @@ func main() {
 			slog.Error("server shutdown failed", "error", err)
 		}
 		cancel()
+		// Phase 2: HTTP intake is closed — every accepted request has
+		// returned — NOW stop the background workers, and give the
+		// persister/refreshers a short grace to finish in-flight batches
+		// (their loops exit on workerCtx; the grace is bounded well inside
+		// the pod's terminationGracePeriod).
+		slog.Info("http drained; stopping background workers")
+		stopWorkers()
+		time.Sleep(5 * time.Second)
 		if err := <-serverErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
 			slog.Error("server failed during shutdown", "error", err)
 			os.Exit(1)

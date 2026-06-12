@@ -56,6 +56,15 @@ orchestrator:
   replicas: 2
   terminationGracePeriodSeconds: 75
   preStopSleepSeconds: 20
+  # Burstable QoS for the orchestrator: requests guarantee scheduling
+  # weight + eviction protection for the persister/SSE fabric; the memory
+  # limit guards against runaway growth; CPU is deliberately unlimited.
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
   podDisruptionBudget:
     enabled: true
     minAvailable: 1
