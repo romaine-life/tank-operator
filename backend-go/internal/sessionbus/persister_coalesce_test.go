@@ -23,7 +23,7 @@ func coalesceIn(eventType, orderKey string, inserted bool) *inflightSessionEvent
 func TestCoalesceActivityEventsLastPerClass(t *testing.T) {
 	batch := []*inflightSessionEvent{
 		coalesceIn("turn.submitted", "001", true),
-		coalesceIn("item.completed", "002", true),  // not an activity class: no emit
+		coalesceIn("item.completed", "002", true), // not an activity class: no emit
 		coalesceIn("context.compacted", "003", true),
 		coalesceIn("turn.claimed", "004", true),
 		coalesceIn("user_message.created", "005", true),

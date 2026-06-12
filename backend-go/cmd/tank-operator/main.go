@@ -344,6 +344,7 @@ func main() {
 			TankOperatorInternalURL:         tankOperatorInternalURL,
 			NATSURL:                         envDefault("NATS_URL", ""),
 			NATSStream:                      envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+			NATSCommandStream:               envDefault("NATS_COMMAND_STREAM", "TANK_SESSION_COMMANDS"),
 			NATSAuthSecret:                  envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
 			SpireLensTailscaleOIDCClientID:  envDefault("SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", ""),
 			SpireLensTailscaleTailnet:       envDefault("SESSION_SPIRELENS_TAILSCALE_TAILNET", ""),
@@ -469,6 +470,9 @@ func main() {
 				usageCtx, cancel := context.WithTimeout(workerCtx, 10*time.Second)
 				if usage, err := sessionBus.StreamUsage(usageCtx); err == nil {
 					recordSessionBusStreamUsage(usage)
+				}
+				if usage, err := sessionBus.CommandStreamUsage(usageCtx); err == nil {
+					recordSessionBusCommandStreamUsage(usage)
 				} else if workerCtx.Err() == nil {
 					slog.Warn("session bus stream usage sample failed", "error", err)
 				}
@@ -1039,6 +1043,7 @@ func buildSessionBus(scope string) *sessionbus.Bus {
 		URL:               url,
 		Token:             os.Getenv("NATS_TOKEN"),
 		Stream:            envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+		CommandStream:     envDefault("NATS_COMMAND_STREAM", "TANK_SESSION_COMMANDS"),
 		Scope:             scope,
 		Replicas:          replicas,
 		WakeMetrics:       promWakeMetrics{},

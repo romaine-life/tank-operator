@@ -365,7 +365,7 @@ const CHECKS = [
     file: "frontend/src/migrationPolicy.test.ts",
     description: "assertion now expects setRunStatus(\"stopping\") to be ABSENT in cancelRun body",
     kind: "grep-present",
-    pattern: /cancelRunBody\.includes\(\s*'setRunStatus\("stopping"\)'\s*\)\s*,\s*false/,
+    pattern: /cancelRunBody\.includes\(\s*'setRunStatus\("stopping"\)'\s*\)\s*\)\s*\.toBe\(\s*false\s*\)|cancelRunBody\.includes\(\s*'setRunStatus\("stopping"\)'\s*\)\s*,\s*false/,
   },
   {
     id: "migration-test-no-stale-true-assertion",
@@ -381,7 +381,7 @@ const CHECKS = [
     file: "frontend/src/migrationPolicy.test.ts",
     description: "complementary assertion: stopRequested absent from cancelRun body",
     kind: "grep-present",
-    pattern: /cancelRunBody\.includes\(\s*['"]stopRequested['"]\s*\)\s*,\s*false/,
+    pattern: /cancelRunBody\.includes\(\s*['"]stopRequested['"]\s*\)\s*\)\s*\.toBe\(\s*false\s*\)|cancelRunBody\.includes\(\s*['"]stopRequested['"]\s*\)\s*,\s*false/,
   },
   {
     id: "migration-test-no-stoppingTargetRef",
@@ -389,7 +389,7 @@ const CHECKS = [
     file: "frontend/src/migrationPolicy.test.ts",
     description: "complementary assertion: stoppingTargetRef absent from cancelRun body",
     kind: "grep-present",
-    pattern: /cancelRunBody\.includes\(\s*['"]stoppingTargetRef['"]\s*\)\s*,\s*false/,
+    pattern: /cancelRunBody\.includes\(\s*['"]stoppingTargetRef['"]\s*\)\s*\)\s*\.toBe\(\s*false\s*\)|cancelRunBody\.includes\(\s*['"]stoppingTargetRef['"]\s*\)\s*,\s*false/,
   },
 
   // ────────────────────────── Observability ──────────────────────────

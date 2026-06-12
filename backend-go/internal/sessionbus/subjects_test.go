@@ -114,3 +114,34 @@ func TestEventPersisterConsumerIsScopePartitioned(t *testing.T) {
 		t.Fatalf("persister durable name must not use legacy shared consumer name")
 	}
 }
+
+// TestCommandStreamSubjectsLockstepWithRunner pins the command stream's
+// `tank.cmd.>` namespace against the exact values the runner-side lockstep
+// test pins (claude-runner/src/sessionbus/sessionBusSubjects.test.ts) — the
+// runner's durable consumer filters must match the backend's command-stream
+// publish subjects byte for byte (issue #1076 item 2).
+func TestCommandStreamSubjectsLockstepWithRunner(t *testing.T) {
+	if got := CommandStreamSubject("tank-operator-slot-3:17", "codex_gui"); got != "tank.cmd.dGFuay1vcGVyYXRvci1zbG90LTM.MTc.commands.codex_gui" {
+		t.Fatalf("CommandStreamSubject = %q", got)
+	}
+	if got := ControlStreamSubject("tank-operator-slot-3:17", "codex-gui"); got != "tank.cmd.dGFuay1vcGVyYXRvci1zbG90LTM.MTc.control.codex-gui" {
+		t.Fatalf("ControlStreamSubject = %q", got)
+	}
+	// Events stay on the legacy namespace — the streams must never overlap.
+	if got := SessionEventSubject("tank-operator-slot-3:17"); got != "tank.session.dGFuay1vcGVyYXRvci1zbG90LTM.MTc.events" {
+		t.Fatalf("SessionEventSubject = %q", got)
+	}
+}
+
+// TestCommandStreamRoutingMirrorsLegacyRouting — the control/data plane
+// split is identical on both namespaces.
+func TestCommandStreamRoutingMirrorsLegacyRouting(t *testing.T) {
+	for _, commandType := range []string{CommandInterrupt, CommandInputReply, CommandStopBackgroundTask, CommandSubmitTurn} {
+		command := Command{Type: commandType, SessionStorageKey: "63", Provider: "claude"}
+		legacyControl := SubjectForCommand(command) == ControlSubject("63", "claude")
+		splitControl := CommandStreamSubjectForCommand(command) == ControlStreamSubject("63", "claude")
+		if legacyControl != splitControl {
+			t.Fatalf("routing diverged for %s: legacy control=%v split control=%v", commandType, legacyControl, splitControl)
+		}
+	}
+}

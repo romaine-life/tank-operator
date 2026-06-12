@@ -197,6 +197,8 @@ spec:
               value: {{ .Values.sessionBus.url | quote }}
             - name: NATS_STREAM
               value: {{ .Values.sessionBus.stream | quote }}
+            - name: NATS_COMMAND_STREAM
+              value: {{ .Values.sessionBus.commandStream | quote }}
             - name: NATS_STREAM_REPLICAS
               value: {{ .Values.sessionBus.streamReplicas | quote }}
             - name: NATS_AUTH_SECRET

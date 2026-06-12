@@ -665,3 +665,30 @@ configs are identical, so old and new runners coexist freely.
 - **Non-goal:** cross-pod resurrection. Session-pod death remains terminal;
   every recovery path above is scoped to runner/container restarts inside a
   live pod.
+
+## Command-stream isolation (WorkQueue split)
+
+- **Status:** shipped (issue #1076 item 2)
+- **Intent:** a flood session's EVENTS must never evict another session's
+  undelivered durable COMMANDS. The combined LimitsPolicy/DiscardOld stream
+  silently dropped oldest messages — including other sessions' queued
+  `submit_turn`/`interrupt_turn`/`input_reply` — with zero detection.
+- **Mechanism:** durable commands ride the `TANK_SESSION_COMMANDS`
+  WorkQueue stream on the parallel `tank.cmd.>` namespace (JetStream forbids
+  overlapping subjects across streams). WorkQueue retention deletes each
+  command when its (single, filter-exclusive) consumer acks it; `DiscardNew`
+  REJECTS publishes at limit pressure — a failed submit instead of someone
+  else's silent loss. All three runners (claude, codex, antigravity) bind
+  their data/control durables to it via `NATS_COMMAND_STREAM`; events keep
+  riding `TANK_SESSION_BUS`. The orphan-consumer sweep scans both streams.
+- **Cutover:** the backend dual-publishes every command to the legacy
+  `tank.session.…` command subjects with the same msg-id, so pre-split
+  session pods (whose runners can only be replaced by pod recreation — the
+  migration checklist's pre-deploy-pod clause) keep a byte-identical wire.
+  The command stream's 24h MaxAge bounds their never-consumed copies.
+  Follow-up: remove the dual-publish once pre-split pods age out.
+- **Observability:** `tank_session_bus_command_stream_messages`/`_bytes`
+  gauges (WorkQueue steady state ≈ 0; growth = missing consumers or
+  pre-split copies approaching the rejection threshold);
+  command-stream publish failures ride the existing
+  publish-failure counter with `cmd_stream_`-prefixed reasons.

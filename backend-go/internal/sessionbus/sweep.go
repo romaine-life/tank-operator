@@ -113,8 +113,27 @@ func (b *Bus) SweepOrphanConsumers(ctx context.Context, cfg SweepConfig) (SweepR
 	if b == nil || b.js == nil {
 		return SweepResult{}, errors.New("session bus unavailable")
 	}
+	// Both streams carry per-session durable consumers now: runner command
+	// consumers live on the WorkQueue command stream (issue #1076 item 2);
+	// the legacy stream keeps pre-split pods' consumers (and the
+	// persister's, which the sweep's name filter already exempts). Sweeping
+	// only one would leave the other accumulating against the 256Mi memory
+	// JetStream — the 725-consumer incident shape with an alert blind.
 	source := &busConsumerSweepSource{js: b.js, stream: b.stream}
-	return RunConsumerSweep(ctx, source, b.scope, cfg)
+	result, err := RunConsumerSweep(ctx, source, b.scope, cfg)
+	if err != nil {
+		return result, err
+	}
+	commandSource := &busConsumerSweepSource{js: b.js, stream: b.commandStream}
+	commandResult, err := RunConsumerSweep(ctx, commandSource, b.scope, cfg)
+	result.Scanned += commandResult.Scanned
+	result.SkippedOutOfScope += commandResult.SkippedOutOfScope
+	result.SkippedLive += commandResult.SkippedLive
+	result.SkippedTooYoung += commandResult.SkippedTooYoung
+	result.Orphans += commandResult.Orphans
+	result.Deleted += commandResult.Deleted
+	result.Errors += commandResult.Errors
+	return result, err
 }
 
 // RunConsumerSweep is the pure-logic core of the sweep, taking an

@@ -1,4 +1,4 @@
-﻿package sessionbus
+package sessionbus
 
 import (
 	"context"

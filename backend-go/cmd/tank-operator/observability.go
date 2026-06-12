@@ -881,6 +881,25 @@ func recordSessionBusStreamUsage(usage sessionbus.StreamUsage) {
 	sessionBusStreamConsumers.Set(float64(usage.ConsumerCount))
 }
 
+// Command-stream occupancy (issue #1076 item 2). WorkQueue steady state is
+// near-zero; sustained growth means missing consumers or pre-split copies
+// approaching the DiscardNew rejection threshold — alert BEFORE the limit,
+// because a rejected publish is a failed submit.
+var sessionBusCommandStreamMessages = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "tank_session_bus_command_stream_messages",
+	Help: "Messages currently retained by the WorkQueue command stream.",
+})
+
+var sessionBusCommandStreamBytes = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "tank_session_bus_command_stream_bytes",
+	Help: "Bytes currently retained by the WorkQueue command stream.",
+})
+
+func recordSessionBusCommandStreamUsage(usage sessionbus.StreamUsage) {
+	sessionBusCommandStreamMessages.Set(float64(usage.Messages))
+	sessionBusCommandStreamBytes.Set(float64(usage.Bytes))
+}
+
 var strandedTurnSweptTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_stranded_turn_swept_total",

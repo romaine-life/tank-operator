@@ -837,15 +837,24 @@ The backend validates ownership, then performs two writes in this order:
    POST collapses to one durable row at the Postgres UNIQUE constraint.
 2. **Publish a durable JetStream `interrupt_turn` command** on the
    per-session/per-provider **control-plane subject**
-   (`tank.session.<scope-token>.<session-token>.control.<provider>`), not the command subject
+   (`tank.cmd.<scope-token>.<session-token>.control.<provider>`), not the command subject
    used for `submit_turn`. Runners consume the command
    from a dedicated control-plane JetStream consumer (separate
    `durable_name`, separate `filter_subject`, higher `max_ack_pending`)
    and abort the matching active turn from inside the session pod.
 
-The data plane (`tank.session.<scope-token>.<session-token>.commands.<provider>`) and the
-control plane (`tank.session.<scope-token>.<session-token>.control.<provider>`) are
-deliberately separate JetStream subjects with separate durable consumers.
+The data plane (`tank.cmd.<scope-token>.<session-token>.commands.<provider>`) and the
+control plane (`tank.cmd.<scope-token>.<session-token>.control.<provider>`) are
+deliberately separate JetStream subjects with separate durable consumers,
+and both live on the dedicated `TANK_SESSION_COMMANDS` WorkQueue stream
+(issue #1076 item 2): events stay on the `tank.session.>` bus stream, so a
+flood session's events can never evict another session's undelivered
+commands, and command-stream limit pressure REJECTS new publishes
+(`DiscardNew` — a loud `turn.command_failed` at the submit boundary)
+instead of silently evicting. During the cutover the backend dual-publishes
+every command to the legacy `tank.session.…` command subjects too, so
+pre-split session pods' durable consumers keep a byte-identical wire until
+those pods age out.
 The data-plane consumer runs `max_ack_pending=1` so a long-running
 `submit_turn` is processed end-to-end before the next one starts; that's
 correct for turn serialization but fatal for stop semantics if interrupts
