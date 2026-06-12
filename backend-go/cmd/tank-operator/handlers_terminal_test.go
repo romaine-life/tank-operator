@@ -32,6 +32,7 @@ func TestCliProcessLaunchForMode_ConfigWizards(t *testing.T) {
 	}{
 		{sessionmodel.CodexConfigMode, []string{"-lc", "codex login --device-auth; exec bash"}},
 		{sessionmodel.ConfigMode, []string{"-lc", "claude /login; exec bash"}},
+		{sessionmodel.ClaudeSecondaryConfigMode, []string{"-lc", "claude /login; exec bash"}},
 		{sessionmodel.AntigravityConfigMode, []string{"-lc", "agy; exec bash"}},
 		{sessionmodel.AntigravityCLIMode, []string{"-lc", "agy; exec bash"}},
 	}

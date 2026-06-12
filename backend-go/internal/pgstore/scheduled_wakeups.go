@@ -345,6 +345,32 @@ func (s *ScheduledWakeupStore) MarkFailed(ctx context.Context, wakeupID, reason 
 	`, strings.TrimSpace(wakeupID), strings.TrimSpace(reason)))
 }
 
+// ReleaseRetainingAttempt returns a claimed wakeup to 'scheduled' without
+// firing or failing it, KEEPING the claim's attempt_count bump. It is the
+// bounded-defer path for a session that exists but is transiently not Active —
+// any kubelet probe blip flips the durable session row Active → Pending
+// (sessioncontroller writer), and terminal-failing the wake on that blip
+// permanently killed the agent's continuation. The wake must instead survive
+// the blip; but a session that never recovers must not defer invisibly
+// forever, so each deferred claim still burns a fire attempt and
+// MaxScheduledWakeupAttempts bounds the deferral — FailExceeded then terminals
+// the wake WITH the away-error ring. Contrast BackgroundTaskWakeStore.Release,
+// which refunds the attempt for turn-coupled defers whose resolution is owned
+// by the turn lifecycle itself.
+func (s *ScheduledWakeupStore) ReleaseRetainingAttempt(ctx context.Context, wakeupID string) error {
+	if s == nil || s.pool == nil {
+		return errors.New("scheduled wakeup store unavailable")
+	}
+	_, err := s.pool.Exec(ctx, `
+		UPDATE session_scheduled_wakeups
+		SET status = 'scheduled',
+			locked_at = NULL,
+			updated_at = now()
+		WHERE wakeup_id = $1
+	`, strings.TrimSpace(wakeupID))
+	return err
+}
+
 func (s *ScheduledWakeupStore) ScheduledDueCount(ctx context.Context, now time.Time) (int, error) {
 	if s == nil || s.pool == nil {
 		return 0, errors.New("scheduled wakeup store unavailable")

@@ -6,8 +6,12 @@ self-resume rings the summon via the durable `away_error` bit; (3) cancel +
 prompt-mid-sleep take-over (a `cancelled` wake state). As-built refinements over
 the original sketch below: the ring keys off the durable `away_error` provenance
 bit (not prior status, which flickers through `scheduled -> submitted -> error`);
-and a direct `scheduled -> ready` is a cancel/clear and does NOT ring — the
-genuine end-of-chain hand-off arrives as `streaming -> ready`.
+a direct `scheduled -> ready` is a cancel/clear and does NOT ring — the
+genuine end-of-chain hand-off arrives as `streaming -> ready`; and the failure
+model (decision 4) was hardened by #1091/#1079: fire attempts are capped, a
+transiently non-Active (`Pending`) session defers the wake instead of
+terminal-failing it, and every durable fire failure — dead session included —
+rings.
 Extends [tank-conversation-protocol.md](tank-conversation-protocol.md) (state
 machine, provider self-scheduled wakeups, AskUserQuestion pause/resume) and the
 [transcript](features/transcript/contract.md) and
@@ -105,12 +109,22 @@ path).
    wins" question: the end is the sole settled record *because the sleeps are
    inside the turn.*
 
-4. **Failure model.**
-   - *Fire attempted, then failed* (publish/NATS failure; session momentarily not
-     Active): durable error -> **rings**. This is recording the outcome of an
-     action the orchestrator is actively taking, not a timer. `MarkFailed` must
-     stop being a silent DB write and emit a durable, provenance-tagged error
-     event the fold can see.
+4. **Failure model.** Recording the outcome of an action the orchestrator is
+   actively taking, not a timer. As built (#1091 fire-attempt caps, #1079
+   transient defer), a fire-time claim resolves by session state:
+
+   | session state at fire | action | rings? |
+   | --- | --- | --- |
+   | `Active`, publish/NATS bounced (`enqueue_failed`) | durable `MarkFailed` terminal | **yes** |
+   | transiently not `Active` (`Pending` — the K8s watch flips the row on ANY probe blip) | **defer**: release the claim and retry next tick; each defer still burns a fire attempt (`deferred_session_not_active`) | no — a deferral is not an outcome; the attempt cap bounds it, and exhaustion terminals via `FailExceeded` → **rings** |
+   | dead: row missing (`session_not_found`), `Failed`, or terminating (`session_not_active`) | durable `MarkFailed` terminal, fail fast | **yes** |
+   | attempt cap exhausted (fires kept half-finishing, or the session never recovered) | durable `failed` terminal via the `FailExceeded` sweep | **yes** |
+
+   `MarkFailed`/`FailExceeded` are never silent DB writes: every durable wake
+   failure emits the durable, provenance-tagged `turn.command_failed` ring
+   carrier and recomputes activity (`resolveFailedWake`) — a broken self-resume
+   is invisible to a user who left on the promise of a wake, whether the
+   command bounced or the session died under it. Only a deferral emits nothing.
    - *Fire never happened* (loop regressed, row never claimed): **fleet metric +
      operator alert only** — the due-gauge climbing while fire-rate sits at zero
      is "wakeups stopped firing," at fleet blast radius, on the existing Grafana

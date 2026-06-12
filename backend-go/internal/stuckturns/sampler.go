@@ -342,8 +342,14 @@ type ListerFromQuery struct {
 	Pool PGQuerier
 }
 
-// listStuckTurnsSQL selects durably accepted-but-unprogressed rows for
-// one scope. The activity_summary->>'updated_at' comparison is a TEXT
+// listStuckTurnsSQL selects durably wedged turn states for one scope:
+// accepted-but-unprogressed (submitted/claimed) AND mid-flight states
+// that stopped updating (streaming/stopping) — the latter were blind
+// spots (issue #1079 item 6): a runner dying mid-stream or a stop that
+// never terminal'd sat invisible to this gauge for the multi-hour gap
+// before the stranded-turn sweep's progressed floor. The staleness
+// threshold ($2) is what separates a healthy long turn (its activity
+// updated_at keeps moving with every event) from a wedge. The activity_summary->>'updated_at' comparison is a TEXT
 // lexicographic compare against an RFC3339-Z threshold (NOT a
 // timestamptz cast — a single malformed row must not error the whole
 // detector). status='Active' + terminating_at IS NULL excludes
@@ -359,7 +365,7 @@ FROM sessions
 WHERE session_scope = $1
   AND status = 'Active'
   AND terminating_at IS NULL
-  AND activity_summary->>'status' IN ('submitted','claimed')
+  AND activity_summary->>'status' IN ('submitted','claimed','streaming','stopping')
   AND activity_summary->>'updated_at' IS NOT NULL
   AND activity_summary->>'updated_at' < $2
 ORDER BY activity_summary->>'updated_at' ASC

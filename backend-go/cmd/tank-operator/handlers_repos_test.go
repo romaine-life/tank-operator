@@ -205,19 +205,22 @@ func TestValidatePinnedRepoSlugs(t *testing.T) {
 // instead of silently dropping.
 func TestSessionModeSupportsRepos(t *testing.T) {
 	cases := map[string]bool{
-		sessionmodel.ClaudeGUIMode:      true,
-		sessionmodel.CodexGUIMode:       true,
-		sessionmodel.CodexExecGUIMode:   false,
-		sessionmodel.CodexAppServerMode: false,
-		sessionmodel.ClaudeCLIMode:      false,
-		sessionmodel.CodexCLIMode:       false,
-		sessionmodel.CodexConfigMode:    false,
-		"gemini_gui":                    false,
-		"gemini_test":                   false,
-		"gemini_config":                 false,
-		sessionmodel.APIKeyMode:         false,
-		sessionmodel.ConfigMode:         false,
-		"":                              true, // normalizes to ClaudeGUIMode (DefaultSessionMode)
+		sessionmodel.ClaudeGUIMode:             true,
+		sessionmodel.ClaudeSecondaryGUIMode:    true,
+		sessionmodel.CodexGUIMode:              true,
+		sessionmodel.CodexExecGUIMode:          false,
+		sessionmodel.CodexAppServerMode:        false,
+		sessionmodel.ClaudeCLIMode:             false,
+		sessionmodel.ClaudeSecondaryCLIMode:    false,
+		sessionmodel.ClaudeSecondaryConfigMode: false,
+		sessionmodel.CodexCLIMode:              false,
+		sessionmodel.CodexConfigMode:           false,
+		"gemini_gui":                           false,
+		"gemini_test":                          false,
+		"gemini_config":                        false,
+		sessionmodel.APIKeyMode:                false,
+		sessionmodel.ConfigMode:                false,
+		"":                                     true, // normalizes to ClaudeGUIMode (DefaultSessionMode)
 	}
 	for mode, want := range cases {
 		if got := sessionModeSupportsRepos(mode); got != want {

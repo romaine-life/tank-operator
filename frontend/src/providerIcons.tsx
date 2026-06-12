@@ -1,10 +1,17 @@
 type ProviderIconProps = {
-  provider: "anthropic" | "codex" | "pi" | "antigravity";
+  provider:
+    | "anthropic"
+    | "anthropic_secondary"
+    | "codex"
+    | "pi"
+    | "antigravity";
   className?: string;
 };
 
+type SvgProviderIcon = "anthropic" | "pi" | "antigravity";
+
 const ICONS: Record<
-  Exclude<ProviderIconProps["provider"], "codex">,
+  SvgProviderIcon,
   { path: string; viewBox: string; fill: string }
 > = {
   anthropic: {
@@ -38,7 +45,9 @@ export function ProviderIcon({ provider, className }: ProviderIconProps) {
     );
   }
 
-  const icon = ICONS[provider as Exclude<ProviderIconProps["provider"], "codex">];
+  const iconKey: SvgProviderIcon =
+    provider === "anthropic_secondary" ? "anthropic" : provider;
+  const icon = ICONS[iconKey];
 
   return (
     <svg

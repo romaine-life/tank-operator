@@ -267,9 +267,12 @@ A conversation projection has these UI states:
   emitter applies it from the durable wake tables (`HasPending`), not from the
   chat-event stream. It resolves to `streaming` (the wake fired a new turn), to
   `ready` (cancel or a prompt-mid-sleep take-over — a direct `scheduled -> ready`
-  that does not ring), or to `error` with `away_error=true` (a fire attempt
-  failed while the session was alive — a broken self-resume that rings the
-  summon). See [scheduled-turn-continuity.md](scheduled-turn-continuity.md).
+  that does not ring), or to `error` with `away_error=true` (the wake durably
+  failed — publish bounce, dead session, or fire-attempt cap exhausted — a
+  broken self-resume that rings the summon). A session that is transiently not
+  Active at fire time (a probe blip flipping the row to Pending) defers the
+  wake instead of failing it, bounded by the fire-attempt cap.
+  See [scheduled-turn-continuity.md](scheduled-turn-continuity.md).
 - `stopping`: a user-initiated stop has landed on the durable ledger; the
   runner has not yet emitted a terminal event.
 - `stopped`: the active turn ended by user interrupt or runner shutdown, not by
@@ -1012,10 +1015,13 @@ semantic `question_set` page (`metaKind: "awaiting_input"`, carrying the
 questions + target ids) on the question turn. The main transcript gets only the
 derived assistant question message, with an affordance to open the question set.
 
-- **Claude**: the runner's `canUseTool` callback, on AskUserQuestion, publishes
-  `turn.awaiting_input` and keeps the permission callback pending. When
-  `input_reply` arrives, the runner resolves the callback with
-  `{behavior:"allow", updatedInput:{answers}}` so the provider turn continues.
+- **Claude**: the runner exposes a Tank-owned SDK MCP server named `tank` and
+  aliases provider `AskUserQuestion` calls to `mcp__tank__AskUserQuestion`.
+  The MCP handler publishes `turn.awaiting_input` and keeps that tool call
+  pending. When `input_reply` arrives, the runner resolves the MCP call with
+  the user's answers so the provider turn continues. Claude SDK permissions run
+  in bypass mode; AskUserQuestion is not implemented through permission
+  interception.
 - **Codex** (`codex_gui`): on the App Server's `item/tool/requestUserInput`,
   the runner publishes `turn.awaiting_input`, keeps the JSON-RPC request
   pending, then responds with the submitted answers when `input_reply` arrives.

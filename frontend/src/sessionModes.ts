@@ -1,4 +1,8 @@
-export type Provider = "anthropic" | "codex" | "antigravity";
+export type Provider =
+  | "anthropic"
+  | "anthropic_secondary"
+  | "codex"
+  | "antigravity";
 export type SessionInteraction = "gui" | "cli";
 
 export const SESSION_MODE_ORDER = [
@@ -6,6 +10,9 @@ export const SESSION_MODE_ORDER = [
   "claude_cli",
   "claude_gui",
   "config",
+  "claude_secondary_cli",
+  "claude_secondary_gui",
+  "claude_secondary_config",
   "codex_cli",
   "codex_gui",
   "codex_exec_gui",
@@ -21,6 +28,8 @@ export type DefaultSessionMode = Extract<
   SessionMode,
   | "claude_cli"
   | "claude_gui"
+  | "claude_secondary_cli"
+  | "claude_secondary_gui"
   | "codex_cli"
   | "codex_gui"
   | "antigravity_cli"
@@ -80,6 +89,39 @@ export const SESSION_MODE_CONTRACT = {
   },
   config: {
     provider: "anthropic",
+    interaction: null,
+    defaultSelectable: false,
+    configCredentials: true,
+    chatSurface: false,
+    sdkChat: false,
+    workspaceFiles: false,
+    repos: false,
+    rollout: null,
+  },
+  claude_secondary_cli: {
+    provider: "anthropic_secondary",
+    interaction: "cli",
+    defaultSelectable: true,
+    configCredentials: false,
+    chatSurface: false,
+    sdkChat: false,
+    workspaceFiles: false,
+    repos: false,
+    rollout: "claude",
+  },
+  claude_secondary_gui: {
+    provider: "anthropic_secondary",
+    interaction: "gui",
+    defaultSelectable: true,
+    configCredentials: false,
+    chatSurface: true,
+    sdkChat: true,
+    workspaceFiles: true,
+    repos: true,
+    rollout: "gui",
+  },
+  claude_secondary_config: {
+    provider: "anthropic_secondary",
     interaction: null,
     defaultSelectable: false,
     configCredentials: true,
@@ -191,6 +233,7 @@ function modeSet(
 
 export const PROVIDERS: readonly Provider[] = [
   "anthropic",
+  "anthropic_secondary",
   "codex",
   "antigravity",
 ];

@@ -70,6 +70,28 @@ test("RunPrefs persists provider model and effort across page reloads", () => {
   );
 });
 
+test("Claude secondary uses the shared Claude run options and prefs", () => {
+  expect(appSource).toMatch(
+    /function providerUsesClaudeOptions\(provider: Provider\): boolean \{[\s\S]{0,100}provider === "anthropic" \|\| provider === "anthropic_secondary";/,
+  );
+  expect(appSource).toMatch(
+    /function selectedModelIdForProvider\([\s\S]{0,260}providerUsesClaudeOptions\(provider\)[\s\S]{0,140}prefs\.claudeModelId \|\| defaultModelForProvider\(provider, runOptions\)/,
+  );
+  expect(appSource).toMatch(
+    /function selectedEffortIdForProvider\([\s\S]{0,260}providerUsesClaudeOptions\(provider\)[\s\S]{0,140}prefs\.claudeEffort \|\| defaultEffortForProvider\(provider, runOptions\)/,
+  );
+  expect(appSource).toMatch(
+    /const seedEffort = providerUsesEffort\(modeProvider\)[\s\S]{0,80}\? selectedHomeEffortId/,
+  );
+  expect(appSource).toMatch(
+    /setModelPrefForProvider\([\s\S]{0,80}selectedProvider,[\s\S]{0,80}model\.id,[\s\S]{0,80}setRunPref/,
+  );
+  expect(appSource).toMatch(/providerUsesEffort\(selectedProvider\) && \(/);
+  expect(appSource).toMatch(
+    /setEffortPrefForProvider\([\s\S]{0,80}selectedProvider,[\s\S]{0,80}effort\.id,[\s\S]{0,80}setRunPref/,
+  );
+});
+
 test("initialMessageMode is an ephemeral run preference that resets to direct on fresh loads", () => {
   expect(appSource).toMatch(/initialMessageMode:\s*InitialMessageMode;/);
   expect(appSource).toMatch(

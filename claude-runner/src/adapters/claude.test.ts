@@ -269,10 +269,10 @@ test("adapter does not mark Claude assistant text with tool_use as final", () =>
 });
 
 test("adapter emits no item events for Claude AskUserQuestion (the runner pauses the turn awaiting input)", () => {
-  // AskUserQuestion is handled by the runner's canUseTool, which pauses the
+  // AskUserQuestion is handled by the runner's Tank MCP tool, which pauses the
   // active turn with durable turn.awaiting_input carrying the Tank-canonical
-  // questions. The adapter must NOT emit a dangling item.started / approval
-  // event for this provider callback.
+  // questions. The adapter must NOT emit a dangling item.started event for this
+  // provider call.
   const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
     type: "assistant",
     uuid: "claude-msg-ask",
@@ -283,6 +283,44 @@ test("adapter emits no item events for Claude AskUserQuestion (the runner pauses
           id: "toolu_ask",
           name: "AskUserQuestion",
           input: { question: "Proceed?" },
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(events, []);
+});
+
+test("adapter emits no item events for Tank AskUserQuestion MCP alias", () => {
+  const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
+    type: "assistant",
+    uuid: "claude-msg-ask",
+    message: {
+      content: [
+        {
+          type: "tool_use",
+          id: "toolu_ask",
+          name: "mcp__tank__AskUserQuestion",
+          input: { question: "Proceed?" },
+        },
+      ],
+    },
+  });
+
+  assert.deepEqual(events, []);
+});
+
+test("adapter emits no item events for Tank AskUserQuestion MCP result", () => {
+  const events = canonicalEventsForClaudeMessage(cfg(), turn(), {
+    type: "user",
+    uuid: "claude-tool-result-ask",
+    message: {
+      content: [
+        {
+          type: "tool_result",
+          tool_use_id: "toolu_ask",
+          content: [{ type: "text", text: "User answered:\n\nProceed?\nYes" }],
+          structuredContent: { answers: { "Proceed?": "Yes" } },
         },
       ],
     },
