@@ -31,12 +31,21 @@ import (
 type RowWriterMetrics interface {
 	RecordRowUpdate(eventType string)
 	RecordRowUpdateFailure(eventType string)
+	// RecordRowActivityWriteSuperseded fires when an activity_summary
+	// write is dropped by the stale-write guard: the stored summary's
+	// last_order_key is newer than the one this write derived from, so
+	// last-write-wins would have regressed the durable status (the
+	// "stuck working forever" class — a stale concurrent refresh
+	// overwriting a terminal). Steady-state expectation: rare; sustained
+	// rates mean refreshers are racing far behind the ledger.
+	RecordRowActivityWriteSuperseded()
 }
 
 type noopRowWriterMetrics struct{}
 
-func (noopRowWriterMetrics) RecordRowUpdate(_ string)        {}
-func (noopRowWriterMetrics) RecordRowUpdateFailure(_ string) {}
+func (noopRowWriterMetrics) RecordRowUpdate(_ string)          {}
+func (noopRowWriterMetrics) RecordRowUpdateFailure(_ string)   {}
+func (noopRowWriterMetrics) RecordRowActivityWriteSuperseded() {}
 
 // TransitionOutcome is what callers learn about the result of
 // RecordTransition. After Phase 4 there is no durable ledger to dedup
@@ -132,12 +141,16 @@ func (w *RowWriter) RecordTransition(ctx context.Context, event Event) (Transiti
 // effect" (session.created / .deleted / .name_changed — those are
 // owned by sessionregistry.Store's write methods).
 type rowColumnChanges struct {
-	status           string // empty means leave unchanged
-	readyAt          *time.Time
-	terminatingAt    *time.Time
-	activitySummary  []byte // marshaled JSON; nil means leave unchanged
-	compactionCount  *int64 // nil means leave unchanged
-	userMessageCount *int64 // nil means leave unchanged
+	status          string // empty means leave unchanged
+	readyAt         *time.Time
+	terminatingAt   *time.Time
+	activitySummary []byte // marshaled JSON; nil means leave unchanged
+	// activityLastOrderKey is the ledger high-water mark the summary in
+	// activitySummary was derived from (empty when the fold saw no
+	// events). It feeds the stale-write guard in applyRowColumnChanges.
+	activityLastOrderKey string
+	compactionCount      *int64 // nil means leave unchanged
+	userMessageCount     *int64 // nil means leave unchanged
 }
 
 func deriveRowColumnChanges(event Event) (rowColumnChanges, bool) {
@@ -161,7 +174,8 @@ func deriveRowColumnChanges(event Event) (rowColumnChanges, bool) {
 		if err != nil {
 			return rowColumnChanges{}, false
 		}
-		return rowColumnChanges{activitySummary: body}, true
+		lastOrderKey, _ := event.Payload["last_order_key"].(string)
+		return rowColumnChanges{activitySummary: body, activityLastOrderKey: lastOrderKey}, true
 	case EventTypeCompactionChanged:
 		count, ok := compactionCountFromPayload(event.Payload)
 		if !ok {
@@ -258,10 +272,43 @@ func (w *RowWriter) applyRowColumnChanges(ctx context.Context, event Event, c ro
 		"row_version = nextval('sessions_row_version_seq')",
 		"updated_at = now()",
 	)
-	q := "UPDATE sessions SET " + strings.Join(setParts, ", ") +
-		" WHERE email = $1 AND session_scope = $2 AND session_id = $3"
-	_, err := w.Pool.Exec(ctx, q, args...)
-	return err
+	where := " WHERE email = $1 AND session_scope = $2 AND session_id = $3"
+	if c.activitySummary != nil {
+		// Stale-write guard for the activity summary. Refreshes are
+		// concurrent by design (per-event persister workers on two
+		// replicas, the read-state HTTP path, wake/cancel paths) and each
+		// is a read-fold-write with no transaction spanning the read and
+		// the write — unguarded, a refresh that folded an older ledger
+		// tail can land last and durably overwrite a terminal status
+		// ("stuck working forever", a wake-fire gate that defers
+		// forever). Only a summary derived from an equal-or-newer ledger
+		// position may replace the stored one. Equal must pass: read-state
+		// refreshes legitimately recompute unread counts against the same
+		// tail. A keyless new summary (fold saw no events) may never
+		// replace a keyed one.
+		args = append(args, c.activityLastOrderKey)
+		where += fmt.Sprintf(
+			" AND (activity_summary IS NULL OR COALESCE(activity_summary ->> 'last_order_key', '') <= $%d)",
+			len(args),
+		)
+	}
+	q := "UPDATE sessions SET " + strings.Join(setParts, ", ") + where
+	tag, err := w.Pool.Exec(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	if c.activitySummary != nil && tag.RowsAffected() == 0 {
+		// Either the row is gone (already a silent no-op before the
+		// guard) or a newer summary superseded this write. The durable
+		// state is correct either way; surface it for operators only.
+		w.Metrics.RecordRowActivityWriteSuperseded()
+		slog.Debug("sessioncontroller: stale activity summary write dropped",
+			"session_id", event.SessionID,
+			"scope", event.SessionScope,
+			"last_order_key", c.activityLastOrderKey,
+		)
+	}
+	return nil
 }
 
 func parsePayloadTime(payload map[string]any, key string) *time.Time {
