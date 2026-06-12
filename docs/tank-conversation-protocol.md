@@ -1043,15 +1043,20 @@ AskUserQuestion pauses the same turn (`turn.awaiting_input`):
 
 When the in-pod agent invokes the AskUserQuestion tool, the asking turn
 pauses while waiting for user input. The runner captures the Tank-canonical
-questions and publishes durable `turn.awaiting_input`:
+questions and publishes durable `turn.awaiting_input` **on a freshly minted
+question turn** (the JSON example previously showed the asking turn here —
+that was never the wire shape):
 
 ```json
 {
   "type": "turn.awaiting_input",
   "actor": "runner",
   "source": "claude",
-  "turn_id": "<asking turn>",
+  "turn_id": "<question turn: turn_question-<hash>>",
+  "client_nonce": "question-<hash>",
   "payload": {
+    "asking_turn_id": "<asking turn>",
+    "question_turn_id": "<question turn>",
     "questions": [ { "question": "Which auth method should we use?", "...": "Tank-canonical shape" } ],
     "provider_item_id": "toolu_...",
     "timeline_id": "item_..."
@@ -1059,15 +1064,43 @@ questions and publishes durable `turn.awaiting_input`:
 }
 ```
 
-`turn.awaiting_input` is not a turn terminal. The runner may keep the provider
-callback parked, but Tank UI treats AskUserQuestion as a turn boundary: the
-asking turn records `turn.awaiting_input.invocation` plus a derived
-`assistant_message.created` question message, and the next numbered question
-turn records `turn.awaiting_input`. The run-state becomes `needs_input`, and
-`activeTurnId` is the question turn. The turn-page projection renders a
-semantic `question_set` page (`metaKind: "awaiting_input"`, carrying the
-questions + target ids) on the question turn. The main transcript gets only the
-derived assistant question message, with an affordance to open the question set.
+### Question turns are first-class numbered turns (frontend-facing contract)
+
+Every AskUserQuestion handoff mints a UNIQUE question turn:
+`questionClientNonce(askingTurnID, providerTimelineID)` →
+`turn_question-<hash>` (deterministic per asking turn × provider item, so a
+redelivered handoff re-derives the same id, while a provider re-ask — new
+item id — mints a new one). The runner publishes that turn's own
+`turn.submitted` followed by `turn.awaiting_input`; the durable
+turn-number allocator numbers it like any user-visible turn (only
+`turn_bgtask-` continuations are excluded — migration 0139), so the
+question turn is navigable at `/sessions/{id}/turns/{n}` and renders its
+own `question_set` page. While the question is pending, the activity fold
+points `active_turn_id` at the QUESTION turn (this is what the SPA's Stop
+targets). The ASKING turn separately records
+`turn.awaiting_input.invocation` plus the derived
+`assistant_message.created` question card; the main transcript shows only
+that card, with an affordance to open the question set.
+
+`turn.awaiting_input` is not a turn terminal, but the question turn's
+lifecycle is closed — it always ends in exactly one of:
+
+| terminal on the question turn | meaning | written by |
+|---|---|---|
+| `turn.input_answered` | the user answered; the answer also becomes the user's continuation turn (`answer-<hash>` nonce) | backend answer handler (`actor=user source=tank`) |
+| `turn.interrupted{reason:"question_dismissed_by_stop"}` | the user clicked Stop instead of answering; the runner settled the provider pause without an answer | runner (issue #1078 item 2) |
+| `turn.interrupted{reason:"superseded_by_answer"}` | a restart re-ask was resolved by the durable answer to the ORIGINAL card; this re-asked shell closes unanswered | runner (issue #1078 item 3) |
+
+Any terminal on the question turn makes the backend's
+`turnAwaitingQuestionTarget` reject further answers (HTTP 409 "question
+turn is not awaiting input") — the durable ledger, not the SPA's render
+state, is the answerability boundary. Known render edge: an already-open
+tab keeps showing a dismissed card as answerable until the projection
+refreshes, because the awaiting card's `answered` flag flips without an
+`end_order_key` advance — tracked as issue #1077 item 4. The stranded-turn
+sweep excludes awaiting-input turns (#1069), so an un-terminated question
+turn is never false-failed; the terminals above exist so question turns
+do not sit open forever in the first place.
 
 - **Claude**: the runner exposes a Tank-owned SDK MCP server named `tank` and
   aliases provider `AskUserQuestion` calls to `mcp__tank__AskUserQuestion`.
