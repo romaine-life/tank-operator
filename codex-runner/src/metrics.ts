@@ -98,6 +98,26 @@ export const backgroundTaskWakeTotal = new Counter({
   registers: [registry],
 });
 
+export const inputReplyRecoveryTotal = new Counter({
+  name: "tank_runner_input_reply_recovery_total",
+  help: "input_reply deliveries that needed a non-exact path: fallback turn-id match after a restart re-ask, parked awaiting a pause, unparked into a fresh pause, expired unmatched, or evicted by cap (issue #1078 item 3).",
+  labelNames: ["path"],
+  registers: [registry],
+});
+
+export const askUserQuestionDismissedTotal = new Counter({
+  name: "tank_runner_ask_user_question_dismissed_total",
+  help: "Pending AskUserQuestion pauses settled without an answer because the user stopped the turn (issue #1078 item 2).",
+  registers: [registry],
+});
+
+export const threadResumeTotal = new Counter({
+  name: "tank_runner_thread_resume_total",
+  help: "codex app-server thread continuity at (re)start: resumed (prior thread restored), fresh (no prior thread), failed (resume attempt fell back to a fresh thread — conversation context lost).",
+  labelNames: ["result"],
+  registers: [registry],
+});
+
 export const providerErrorTotal = new Counter({
   name: "tank_runner_provider_error_total",
   help: "Errors raised by the provider SDK (the query iterator or interrupt() call).",

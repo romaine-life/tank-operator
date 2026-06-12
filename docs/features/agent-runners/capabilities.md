@@ -622,3 +622,46 @@ Pre-deploy session pods keep the mortal behavior until they are recycled
 — a deploy cannot repair a live pod's runner (session lifecycle
 contract). No wire shape changed: subjects, durable names, and consumer
 configs are identical, so old and new runners coexist freely.
+
+## Runner correctness cluster (issue #1078)
+
+- **Status:** shipped
+- **Intent:** close the runner-side holes the 2026-06-12 audit traced
+  hop-by-hop: a single failed natural-terminal publish bricking the claude
+  data plane; Stop during AskUserQuestion wedging the provider pause; durable
+  answers lost across runner restarts; codex restarts losing the whole
+  conversation; a dead SDK query loop leaving a live-but-inert process.
+- **Terminal publish:** every turn terminal that settles a session command
+  rides `publishTurnTerminalOrDefer` — bounded retry, then park + NAK so
+  JetStream redelivery retries the PUBLISH (never the prompt). Mid-flight
+  redeliveries reattach to the live turn (in-memory dedup by turn identity,
+  including pre-rotation identities). Ordinary durable event publishes carry
+  a short in-place retry (`SESSION_DURABLE_PUBLISH_ATTEMPTS`, default 3) so
+  transient NATS blips no longer hole the ledger silently.
+- **Stop-during-question:** question identifiers resolve to the asking turn;
+  the pending provider callback settles without an answer; the question
+  shell closes with `turn.interrupted{question_dismissed_by_stop}`. See
+  docs/tank-conversation-protocol.md → "Stop while AskUserQuestion is
+  pending".
+- **Answer recovery:** unmatched `input_reply` parks under heartbeat
+  (default 15m) and drains into the re-asked pause; fallback matching by
+  the stable asking-turn id; superseded re-asked shells close durably.
+- **SDK loop death (claude):** `run()` ending while not shutting down drains
+  command-bearing turns to `turn.failed{sdk_loop_dead}` and exits 1 — the
+  kubelet restarts the runner container (`continue: true` resumes the
+  on-disk JSONL); pod death remains terminal by design.
+- **Codex thread continuity:** the app-server thread id persists to
+  `<workspace>/.tank/codex-thread-id` and is `thread/resume`d after a
+  runner/app-server restart, falling back to a fresh thread on any error
+  (`tank_runner_thread_resume_total{result}`). The app-server child clears
+  on exit so the next turn can respawn it; control RPCs carry a bounded
+  timeout (`SESSION_CODEX_CONTROL_TIMEOUT_MS`, default 30s) — `turn/start`
+  deliberately does not (its response arrives at turn end).
+- **Background-task stops:** `thread/backgroundTerminals/clean` is
+  clean-ALL-only, so stopping one task resolves the target AND every
+  collateral victim honestly as `stopped` and suppresses their wake
+  registration one-shot (`backgroundTaskWakeTotal{result="suppressed_stopped"}`)
+  — a deliberately killed task must not summon a wake.
+- **Non-goal:** cross-pod resurrection. Session-pod death remains terminal;
+  every recovery path above is scoped to runner/container restarts inside a
+  live pod.

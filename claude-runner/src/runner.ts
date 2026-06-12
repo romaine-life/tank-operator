@@ -86,6 +86,9 @@ import {
   scheduledWakeupRegisterTotal,
   toolPermissionDeniedTotal,
   unmappedProviderEventTotal,
+  terminalPublishDeferredTotal,
+  inputReplyRecoveryTotal,
+  askUserQuestionDismissedTotal,
 } from "./metrics.js";
 import { extractWakeup, type WakeupRequest } from "./wakeup.js";
 import { registerScheduledWakeup } from "../../runner-shared/scheduledWakeup.js";
@@ -109,6 +112,7 @@ interface DispatchSink {
 export async function dispatch(
   sink: DispatchSink,
   message: TankConversationEvent,
+  attempts = DURABLE_PUBLISH_ATTEMPTS,
 ): Promise<boolean> {
   const stamped = stampTankEvent(message);
   if (!isDurableTankConversationEvent(stamped)) {
@@ -139,14 +143,24 @@ export async function dispatch(
       }),
     );
   }
-  try {
-    await sink.upsert(sizeGuard.event as unknown as StampedTankEvent);
-  } catch (err) {
-    console.error("session bus publish failed:", err);
-    natsPublishFailureTotal.inc();
-    return false;
+  // Bounded in-place retry (issue #1078, "non-terminal durable events are
+  // fire-once"): a transient publish failure used to hole the ledger
+  // silently for every non-terminal event. Ordering is safe — the order_key
+  // was stamped above, so a retried event still sorts where it was created
+  // even if a later event lands first. Terminal publishes pass attempts=1
+  // because publishTerminalWithRetry owns their (longer) retry schedule.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await sink.upsert(sizeGuard.event as unknown as StampedTankEvent);
+      return true;
+    } catch (err) {
+      console.error("session bus publish failed:", err);
+      natsPublishFailureTotal.inc();
+      if (attempt >= attempts - 1) return false;
+      const delay = DURABLE_PUBLISH_BACKOFF_MS * 2 ** attempt;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
   }
-  return true;
 }
 
 // logUnhandledSdkMessage emits a structured JSON log line for SDK messages
@@ -527,6 +541,16 @@ export interface PendingTurn {
   finalAnswer?: ClaudeTurnContext["finalAnswer"];
   commandRecord?: SessionCommandRecord;
   stopCommandHeartbeat?: () => void;
+  // pendingTerminal parks a turn terminal whose publish exhausted retries
+  // (issue #1078 item 1). The submit_turn command is NAK'd; on JetStream
+  // redelivery acceptCommandTurn's reattach path retries the PUBLISH of
+  // this exact event instead of re-running the prompt.
+  pendingTerminal?: TankConversationEvent;
+  pendingTerminalType?: "turn.completed" | "turn.failed" | "turn.interrupted";
+  // Identities this turn answered to before AskUserQuestion rotations
+  // (issue #1078 item 6): a redelivery of the ORIGINAL submit_turn must
+  // still find the rotated turn instead of re-running the prompt.
+  priorIdentities?: string[];
   // interruptOnStart carries any interrupt_turn record(s) that landed on
   // the control consumer before the matching submit_turn had been
   // dispatched on the runner. acceptCommandTurn drains pendingInterrupts
@@ -572,7 +596,28 @@ type PendingInputReply = {
   turn: PendingTurn;
   providerItemID: string;
   timelineID: string;
+  // Question-shell identity (issue #1078 item 2): the SPA's Stop targets
+  // activity.active_turn_id, which the fold points at the QUESTION turn
+  // while a question is pending — interrupts must be resolvable from these
+  // ids back to the asking turn.
+  questionTurnID: string;
+  questionClientNonce: string;
   resolve: (result: CallToolResult) => void;
+};
+
+// ParkedInputReply holds a durable answer that arrived while no question
+// pause was registered (issue #1078 item 3: runner restart → the
+// redelivered submit_turn replays the turn for minutes before the SDK
+// re-asks). The JetStream heartbeat keeps the control command alive —
+// parking must NOT burn the control plane's max_deliver budget the way
+// the old nak(1s) loop did. pauseTurnForInput drains matching entries the
+// moment a pause registers; the expiry timer is the bounded failure path.
+type ParkedInputReply = {
+  record: SessionCommandRecord;
+  targetTurnID: string;
+  receivedAtMs: number;
+  stopCommandHeartbeat: () => void;
+  expireTimer: ReturnType<typeof setTimeout>;
 };
 
 type InterruptOutcome = "interrupted" | "not_found" | "publish_failed";
@@ -721,6 +766,59 @@ const TERMINAL_PUBLISH_BACKOFF_MS = parsePositiveEnvInt(
   500,
 );
 
+// DURABLE_PUBLISH_* bound dispatch()'s in-place retry for ordinary durable
+// events (issue #1078: fire-once publishes silently holed the ledger on
+// transient NATS blips). Short schedule: streaming dispatches are awaited
+// sequentially, so the worst-case added latency during an outage is
+// attempts × backoff on the hot path. Terminals use TERMINAL_PUBLISH_*
+// via publishTerminalWithRetry instead.
+const DURABLE_PUBLISH_ATTEMPTS = parsePositiveEnvInt(
+  process.env.SESSION_DURABLE_PUBLISH_ATTEMPTS,
+  3,
+);
+const DURABLE_PUBLISH_BACKOFF_MS = parsePositiveEnvInt(
+  process.env.SESSION_DURABLE_PUBLISH_BACKOFF_MS,
+  200,
+);
+
+// How long a NAK'd submit_turn whose terminal publish was deferred waits
+// before JetStream redelivers it for a republish attempt (issue #1078
+// item 1). Long enough for a NATS blip to clear; short enough that the
+// UI's wedged "streaming" state resolves promptly.
+const TERMINAL_REDELIVERY_NAK_MS = parsePositiveEnvInt(
+  process.env.SESSION_TERMINAL_REDELIVERY_NAK_MS,
+  5_000,
+);
+
+// Parked input_reply bounds (issue #1078 item 3): a durable answer that
+// arrives while no question pause is registered (runner restart replay)
+// waits under heartbeat for the re-asked pause instead of burning the
+// control plane's max_deliver budget in seconds. The expiry is generous
+// because the redelivered submit_turn replays the whole turn before the
+// SDK re-asks.
+const PARKED_INPUT_REPLY_MS = parsePositiveEnvInt(
+  process.env.SESSION_PARKED_INPUT_REPLY_MS,
+  15 * 60_000,
+);
+const MAX_PARKED_INPUT_REPLIES = parsePositiveEnvInt(
+  process.env.SESSION_MAX_PARKED_INPUT_REPLIES,
+  8,
+);
+
+// Caps for the per-process background-task ownership maps (issue #1078,
+// "unbounded in-process maps"): a long-lived pod that runs thousands of
+// background tasks must not grow these forever. Oldest-first eviction;
+// an evicted owner only means a very late lifecycle frame for an ancient
+// task falls back to the unbound-frame log path.
+const MAX_TRACKED_BACKGROUND_TASKS = parsePositiveEnvInt(
+  process.env.SESSION_MAX_TRACKED_BACKGROUND_TASKS,
+  1024,
+);
+const MAX_FIRED_BACKGROUND_WAKES = parsePositiveEnvInt(
+  process.env.SESSION_MAX_FIRED_BACKGROUND_WAKES,
+  4096,
+);
+
 // Before interrupting a Claude turn, ask the SDK to background any
 // in-flight foreground Bash/subagent work. This mirrors Claude Code's Ctrl+B
 // boundary: the active agent turn stops, but long-running shell work remains
@@ -737,6 +835,34 @@ function parsePositiveEnvInt(
 ): number {
   const parsed = Number.parseInt((value ?? "").trim(), 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// boundedMapSet / boundedSetAdd keep the per-process tracking collections
+// finite on long-lived pods (issue #1078, "unbounded in-process maps").
+// JS Maps/Sets iterate in insertion order, so deleting the first key is
+// oldest-first eviction.
+export function boundedMapSet<K, V>(
+  map: Map<K, V>,
+  key: K,
+  value: V,
+  max: number,
+): void {
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) {
+    const oldest = map.keys().next();
+    if (oldest.done) break;
+    map.delete(oldest.value);
+  }
+}
+
+export function boundedSetAdd<T>(set: Set<T>, value: T, max: number): void {
+  set.add(value);
+  while (set.size > max) {
+    const oldest = set.values().next();
+    if (oldest.done) break;
+    set.delete(oldest.value);
+  }
 }
 
 function loadConfiguredMcpServers(path: string): Record<string, McpServerConfig> {
@@ -806,6 +932,9 @@ export class Runner {
   // Linear-scan; expected depth is 0–1 in steady state.
   private readonly pendingInterrupts: BufferedInterrupt[] = [];
   private readonly pendingInputReplies = new Map<string, PendingInputReply>();
+  // Durable answers waiting for their question pause to (re)register —
+  // see ParkedInputReply. Bounded by MAX_PARKED_INPUT_REPLIES.
+  private readonly parkedInputReplies: ParkedInputReply[] = [];
   // Claude background shell tasks report their lifecycle through system
   // task_* frames. The start frame is turn-scoped, but progress and final
   // notification can arrive after the foreground turn has already completed.
@@ -929,6 +1058,48 @@ export class Runner {
         await this.interruptActiveTurn("runner_shutdown");
       }
       this.userQueue.close();
+    }
+    if (!signal.aborted) {
+      // Issue #1078 item 5: the SDK query loop is dead but the open NATS
+      // socket would keep Node alive — a permanently inert runner whose
+      // consumers are stopped and whose sdkQuery is never rebuilt; every
+      // later turn would sit unconsumed until the stranded-turn sweep
+      // false-failed it hours later. Drain in-flight turns to durable
+      // failures and exit: the kubelet restarts the runner container
+      // (session pods default restartPolicy=Always; pod death — the
+      // terminal-by-design case — is not this) and `continue: true`
+      // resumes the on-disk JSONL transcript.
+      await this.drainTurnsForFatalExit();
+      console.error(
+        "claude-runner: SDK query loop ended while not shutting down; exiting so the container restarts",
+      );
+      this.exitProcess(1);
+    }
+  }
+
+  // exitProcess is a seam for tests; production always process.exit(1)s.
+  exitProcess: (code: number) => void = (code) => process.exit(code);
+
+  private async drainTurnsForFatalExit(): Promise<void> {
+    const turns = [this.activeTurn, ...this.pendingTurns];
+    for (const turn of turns) {
+      if (!turn || turn.terminalEmitted || !turn.commandRecord) continue;
+      await this.publishTurnTerminalOrDefer(
+        turn,
+        turnEvent({
+          sessionID: this.cfg.sessionId,
+          turnID: turn.turnID,
+          clientNonce: turn.clientNonce,
+          source: "claude",
+          type: "turn.failed",
+          reason: "sdk_loop_dead",
+          error:
+            "the SDK query loop died; the runner restarted and this turn was not re-run",
+        }),
+        "turn.failed",
+      ).catch((err) =>
+        console.error("fatal-exit turn drain failed:", err),
+      );
     }
   }
 
@@ -1196,25 +1367,31 @@ export class Runner {
     let observedShellTaskExitEventID = "";
     for (const event of canonicalEvents) {
       this.rememberClaudeTaskOwner(event, adapterTurn ?? activeTurn);
-      const dispatched = await dispatch(this.sink, event);
+      const terminalType =
+        event.type === "turn.completed" ||
+        event.type === "turn.failed" ||
+        event.type === "turn.interrupted"
+          ? event.type
+          : null;
+      if (terminalType && activeTurn) {
+        // Natural terminals ride the bounded-retry + park-for-redelivery
+        // path (issue #1078 item 1). The pre-fix shape used plain dispatch:
+        // one failed publish meant markCommandTerminal never ran, the
+        // working() heartbeat extended the un-acked submit_turn forever,
+        // and max_ack_pending=1 silently blocked every future turn until
+        // pod restart.
+        await this.publishTurnTerminalOrDefer(activeTurn, event, terminalType);
+        continue;
+      }
+      const dispatched = terminalType
+        ? await this.publishTerminalWithRetry(event)
+        : await dispatch(this.sink, event);
       if (dispatched && event.type === "shell_task.exited") {
         // The durable observation identity of this terminal — the wake
         // registration's re-arm discriminator.
         observedShellTaskExitEventID = String(
           (event as { event_id?: unknown }).event_id ?? "",
         );
-      }
-      if (
-        event.type === "turn.completed" ||
-        event.type === "turn.failed" ||
-        event.type === "turn.interrupted"
-      ) {
-        if (dispatched && activeTurn) {
-          activeTurn.terminalEmitted = true;
-          if (activeTurn.commandRecord) {
-            await this.markCommandTerminal(activeTurn, event.type);
-          }
-        }
       }
     }
     if (canonicalEvents.length > 0) {
@@ -1323,8 +1500,8 @@ export class Runner {
     if (turn.terminalEmitted) return;
     const error = claudeRateLimitError(message);
     providerFailureClassTotal.labels("rate_limit").inc();
-    const dispatched = await dispatch(
-      this.sink,
+    const published = await this.publishTurnTerminalOrDefer(
+      turn,
       turnEvent({
         sessionID: this.cfg.sessionId,
         turnID: turn.turnID,
@@ -1335,16 +1512,10 @@ export class Runner {
         error,
         providerEventID: message.uuid,
       }),
+      "turn.failed",
     );
-    if (!dispatched) return;
-    turn.terminalEmitted = true;
     this.signalStopToSdk();
-    await this.markCommandTerminal(turn, "turn.failed").catch((markErr) =>
-      console.error(
-        "session command rate-limit terminal mark failed:",
-        markErr,
-      ),
-    );
+    if (!published) return;
     if (this.activeTurn === turn) {
       this.activeTurn = null;
     }
@@ -1410,8 +1581,8 @@ export class Runner {
       `provider rate-limit retry stall: ${retryCount} api_retry{error:rate_limit} frames over ` +
       `${Math.round(stalledMs / 1000)}s with no turn progress ` +
       `(no turn.started, no provider output)`;
-    const dispatched = await dispatch(
-      this.sink,
+    const published = await this.publishTurnTerminalOrDefer(
+      turn,
       turnEvent({
         sessionID: this.cfg.sessionId,
         turnID: turn.turnID,
@@ -1422,17 +1593,14 @@ export class Runner {
         error,
         providerEventID: message.uuid,
       }),
+      "turn.failed",
     );
-    if (!dispatched) return;
-    turn.terminalEmitted = true;
     this.signalStopToSdk();
+    if (!published) return;
     this.removePendingTurn(turn);
     if (this.activeTurn === turn) {
       this.activeTurn = null;
     }
-    await this.markCommandTerminal(turn, "turn.failed").catch((markErr) =>
-      console.error("provider retry-stall terminal mark failed:", markErr),
-    );
   }
 
   private removePendingTurn(turn: PendingTurn): void {
@@ -1471,9 +1639,11 @@ export class Runner {
       event.actor === "tool" &&
       event.provider_item_id
     ) {
-      this.backgroundToolUseTurns.set(
+      boundedMapSet(
+        this.backgroundToolUseTurns,
         String(event.provider_item_id),
         this.snapshotTurnContext(turn),
+        MAX_TRACKED_BACKGROUND_TASKS,
       );
       return;
     }
@@ -1491,7 +1661,14 @@ export class Runner {
         : typeof event.payload?.task_id === "string"
           ? event.payload.task_id
           : "";
-    if (taskID) this.backgroundTaskTurns.set(taskID, owner);
+    if (taskID) {
+      boundedMapSet(
+        this.backgroundTaskTurns,
+        taskID,
+        owner,
+        MAX_TRACKED_BACKGROUND_TASKS,
+      );
+    }
     const toolUseID =
       typeof event.payload?.tool_use_id === "string"
         ? event.payload.tool_use_id
@@ -1499,7 +1676,14 @@ export class Runner {
             event.provider_item_id !== taskID
           ? event.provider_item_id
           : "";
-    if (toolUseID) this.backgroundToolUseTurns.set(toolUseID, owner);
+    if (toolUseID) {
+      boundedMapSet(
+        this.backgroundToolUseTurns,
+        toolUseID,
+        owner,
+        MAX_TRACKED_BACKGROUND_TASKS,
+      );
+    }
   }
 
   private snapshotTurnContext(turn: ClaudeTurnContext): ClaudeTurnContext {
@@ -1610,6 +1794,18 @@ export class Runner {
     }
     if (await this.finalizeCommandIfAlreadyTerminal(record, clientNonce)) {
       commandsConsumedTotal.labels("submit_turn", "already_terminal").inc();
+      // A terminal landed through another path (interrupt fallback) while a
+      // natural terminal sat parked — drop the stale parked state.
+      this.discardParkedTerminal(clientNonce);
+      return;
+    }
+    // Redelivery of a turn this process already owns (issue #1078 items 1+6):
+    // retry the parked terminal publish, or reattach a lapsed delivery to the
+    // still-running turn. Never re-feed the prompt to the SDK.
+    const existing = this.findTurnForKey(clientNonce);
+    if (existing) {
+      commandsConsumedTotal.labels("submit_turn", "redelivered").inc();
+      await this.reattachRedeliveredCommand(existing, record);
       return;
     }
     if (this.commandBus.attemptsExceeded(record)) {
@@ -1737,6 +1933,18 @@ export class Runner {
     for (const turn of this.pendingTurns) {
       if (this.turnMatchesTarget(turn, key)) return turn;
     }
+    // Stop during AskUserQuestion (issue #1078 item 2): while a question is
+    // pending the fold points activity.active_turn_id at the QUESTION turn,
+    // so the SPA's Stop targets an id no PendingTurn carries. Resolve
+    // question identifiers to the asking turn — the turn that is actually
+    // paused. Pre-fix this buffered → 30s orphan timer → bogus
+    // turn.failed{interrupt_orphaned} on the question shell while the
+    // asking turn's provider pause stayed wedged until pod restart.
+    for (const entry of this.pendingInputReplies.values()) {
+      if (key === entry.questionTurnID || key === entry.questionClientNonce) {
+        return entry.turn;
+      }
+    }
     return null;
   }
 
@@ -1816,6 +2024,22 @@ export class Runner {
     const syntheticTurnID = buf.targetKey.startsWith("turn_")
       ? buf.targetKey
       : turnIDForClientNonce(buf.targetKey);
+    // Ledger already-terminal check (issue #1078: codex had this, claude
+    // didn't): a Stop racing a just-completed turn must not write a
+    // contradictory second terminal onto a turn the ledger already closed.
+    try {
+      const terminal = await this.sink.findTurnTerminal(syntheticTurnID);
+      if (terminal) {
+        interruptOutcomeTotal.labels("turn_already_terminal").inc();
+        await this.commandBus.markCompleted(record);
+        return;
+      }
+    } catch (err) {
+      console.warn(
+        "findTurnTerminal failed for orphan check; falling through to interrupt_orphaned:",
+        err,
+      );
+    }
     const published = await this.publishTerminalWithRetry(
       turnEvent({
         sessionID: this.cfg.sessionId,
@@ -1869,6 +2093,13 @@ export class Runner {
       return;
     }
     turn.interrupted = true;
+    // Settle any pending question pause on this turn FIRST (issue
+    // #1078 item 2): resolve the provider tool callback so the SDK's
+    // pending tool promise unwinds instead of pausing forever, and close
+    // the question shell durably — turnAwaitingQuestionTarget treats any
+    // terminal on the question turn as not-awaiting, so the card stops
+    // accepting answers at the backend boundary.
+    await this.dismissPendingQuestionsForTurn(turn);
     if (reason === "client_interrupt") {
       this.signalStopToSdk();
     }
@@ -1924,6 +2155,45 @@ export class Runner {
       record,
       new Error("turn.interrupted publish failed after retry"),
     );
+  }
+
+  // dismissPendingQuestionsForTurn settles every pending question pause
+  // on `turn` without an answer (issue #1078 item 2). The resolve
+  // unblocks the SDK's pending tool callback (the interrupt then unwinds
+  // the turn normally); the question shell gets a durable turn.interrupted so
+  // the sweep, the answer handler's 409 arm, and the transcript all see a
+  // closed turn instead of a forever-awaiting shell.
+  private async dismissPendingQuestionsForTurn(turn: PendingTurn): Promise<void> {
+    for (const [key, entry] of [...this.pendingInputReplies]) {
+      if (entry.turn !== turn) continue;
+      this.pendingInputReplies.delete(key);
+      askUserQuestionDismissedTotal.inc();
+      entry.resolve({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "The user stopped the turn; this question was dismissed without an answer.",
+          },
+        ],
+      });
+      const published = await this.publishTerminalWithRetry(
+        turnEvent({
+          sessionID: this.cfg.sessionId,
+          turnID: entry.questionTurnID,
+          clientNonce: entry.questionClientNonce,
+          source: "claude",
+          type: "turn.interrupted",
+          reason: "question_dismissed_by_stop",
+        }),
+      );
+      if (!published) {
+        console.error(
+          "question shell terminal publish failed after retry:",
+          JSON.stringify({ question_turn_id: entry.questionTurnID }),
+        );
+      }
+    }
   }
 
   private signalStopToSdk(): void {
@@ -2021,7 +2291,9 @@ export class Runner {
         const delay = TERMINAL_PUBLISH_BACKOFF_MS * 2 ** (attempt - 1);
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
-      if (await dispatch(this.sink, event)) return true;
+      // attempts=1: this loop owns the terminal retry schedule; nesting
+      // dispatch()'s own in-place retry would multiply the backoffs.
+      if (await dispatch(this.sink, event, 1)) return true;
     }
     return false;
   }
@@ -2063,6 +2335,8 @@ export class Runner {
         turn,
         providerItemID,
         timelineID,
+        questionTurnID: handoff.questionTurnID,
+        questionClientNonce: handoff.questionClientNonce,
         resolve,
       });
     });
@@ -2071,7 +2345,14 @@ export class Runner {
       (await dispatch(this.sink, handoff.questionMessage)) &&
       (await dispatch(this.sink, handoff.questionSubmitted)) &&
       (await this.publishTerminalWithRetry(handoff.awaitingInput));
-    if (published) return waitForReply;
+    if (published) {
+      // A durable answer may already be parked from before a restart —
+      // deliver it now that the pause exists (issue #1078 item 3).
+      void this.drainParkedInputRepliesFor(turn).catch((err) =>
+        console.error("parked input_reply drain failed:", err),
+      );
+      return waitForReply;
+    }
     this.pendingInputReplies.delete(replyKey);
     const fallback = await this.publishTerminalWithRetry(
       turnEvent({
@@ -2102,34 +2383,61 @@ export class Runner {
 
   private async acceptInputReply(record: SessionCommandRecord): Promise<void> {
     commandsConsumedTotal.labels("input_reply", "accepted").inc();
+    const outcome = await this.deliverInputReply(record);
+    if (outcome === "no_pending") {
+      // Runner restart (issue #1078 item 3): the durable answer arrived
+      // while no question pause is registered — the redelivered submit_turn
+      // is replaying the whole turn (minutes) before the SDK re-asks. The
+      // old nak(1s) loop burned the control plane's max_deliver budget in
+      // ~10s and the answer was lost forever. Park under heartbeat instead;
+      // pauseTurnForInput drains the park the moment a pause registers.
+      this.parkInputReply(record);
+    }
+  }
+
+  // deliverInputReply matches a durable answer to a registered question
+  // pause and resolves it. Exact (turn, timeline, item) key first; then the
+  // restart fallback — after a restart the SDK re-asks with a NEW provider
+  // item id, so the recreated pause is keyed by ids the durable answer has
+  // never seen, while the ASKING turn id is stable across redelivery.
+  private async deliverInputReply(
+    record: SessionCommandRecord,
+  ): Promise<"delivered" | "failed" | "no_pending"> {
     const targetTurnID = String(record.target_turn_id ?? "").trim();
     const targetTimelineID = String(record.target_timeline_id ?? "").trim();
     const targetProviderItemID = String(
       record.target_provider_item_id ?? "",
     ).trim();
-    const key = inputReplyKey(
+    const exactKey = inputReplyKey(
       targetTurnID,
       targetTimelineID,
       targetProviderItemID,
     );
-    const pending = this.pendingInputReplies.get(key);
+    let pendingKey = exactKey;
+    let pending = this.pendingInputReplies.get(exactKey);
     if (!pending) {
-      // Runner restart/race: the durable answer can arrive before the redelivered
-      // submit_turn has recreated the provider callback. Keep the control
-      // command alive so it can redeliver once pauseTurnForInput is pending.
-      commandsConsumedTotal.labels("input_reply", "not_ready").inc();
-      record.nak(1_000);
-      return;
+      for (const [candidateKey, candidate] of this.pendingInputReplies) {
+        if (
+          this.turnMatchesTarget(candidate.turn, targetTurnID) ||
+          candidate.questionTurnID === targetTurnID
+        ) {
+          pending = candidate;
+          pendingKey = candidateKey;
+          inputReplyRecoveryTotal.labels("fallback_matched").inc();
+          break;
+        }
+      }
     }
+    if (!pending) return "no_pending";
     if (pending.turn.terminalEmitted) {
       commandsConsumedTotal.labels("input_reply", "not_found").inc();
       await this.commandBus.markFailed(
         record,
         new Error("input_reply target is not awaiting input"),
       );
-      return;
+      return "failed";
     }
-    this.pendingInputReplies.delete(key);
+    this.pendingInputReplies.delete(pendingKey);
     await this.rotateTurnForInputReply(pending.turn, record);
     pending.resolve(
       askUserQuestionToolResult(
@@ -2137,6 +2445,117 @@ export class Runner {
       ),
     );
     await this.commandBus.markCompleted(record);
+    if (
+      pending.providerItemID &&
+      targetProviderItemID &&
+      pending.providerItemID !== targetProviderItemID
+    ) {
+      // Fallback match across a re-ask: the user answered the ORIGINAL
+      // card; the re-asked question shell would otherwise sit awaiting
+      // forever. Close it as superseded — best-effort.
+      const closed = await this.publishTerminalWithRetry(
+        turnEvent({
+          sessionID: this.cfg.sessionId,
+          turnID: pending.questionTurnID,
+          clientNonce: pending.questionClientNonce,
+          source: "claude",
+          type: "turn.interrupted",
+          reason: "superseded_by_answer",
+        }),
+      );
+      if (!closed) {
+        console.error(
+          "superseded question shell close failed:",
+          JSON.stringify({ question_turn_id: pending.questionTurnID }),
+        );
+      }
+    }
+    return "delivered";
+  }
+
+  private parkInputReply(record: SessionCommandRecord): void {
+    const targetTurnID = String(record.target_turn_id ?? "").trim();
+    inputReplyRecoveryTotal.labels("parked").inc();
+    commandsConsumedTotal.labels("input_reply", "parked").inc();
+    while (this.parkedInputReplies.length >= MAX_PARKED_INPUT_REPLIES) {
+      const evicted = this.parkedInputReplies.shift();
+      if (!evicted) break;
+      clearTimeout(evicted.expireTimer);
+      evicted.stopCommandHeartbeat();
+      inputReplyRecoveryTotal.labels("evicted").inc();
+      void this.commandBus
+        .markFailed(
+          evicted.record,
+          new Error("parked input_reply evicted by newer replies"),
+        )
+        .catch((err) =>
+          console.error("parked input_reply eviction mark failed:", err),
+        );
+    }
+    const stopHeartbeat = this.commandBus.startCommandHeartbeat(record);
+    const expireTimer = setTimeout(() => {
+      void this.expireParkedInputReply(record).catch((err) =>
+        console.error("expireParkedInputReply failed:", err),
+      );
+    }, PARKED_INPUT_REPLY_MS);
+    if (typeof (expireTimer as { unref?: () => void }).unref === "function") {
+      (expireTimer as { unref: () => void }).unref();
+    }
+    this.parkedInputReplies.push({
+      record,
+      targetTurnID,
+      receivedAtMs: Date.now(),
+      stopCommandHeartbeat: stopHeartbeat,
+      expireTimer,
+    });
+  }
+
+  private async expireParkedInputReply(
+    record: SessionCommandRecord,
+  ): Promise<void> {
+    const idx = this.parkedInputReplies.findIndex(
+      (parked) => parked.record === record,
+    );
+    if (idx < 0) return; // already drained into a registered pause
+    const parked = this.parkedInputReplies[idx]!;
+    this.parkedInputReplies.splice(idx, 1);
+    parked.stopCommandHeartbeat();
+    inputReplyRecoveryTotal.labels("expired").inc();
+    await this.commandBus.markFailed(
+      record,
+      new Error(
+        "input_reply never matched a question pause within the parking window",
+      ),
+    );
+  }
+
+  // drainParkedInputRepliesFor delivers parked answers whose target matches
+  // the turn that just (re)registered a question pause. Called by
+  // pauseTurnForInput after the pause is durably published.
+  private async drainParkedInputRepliesFor(turn: PendingTurn): Promise<void> {
+    const matching: ParkedInputReply[] = [];
+    const remaining: ParkedInputReply[] = [];
+    for (const parked of this.parkedInputReplies) {
+      if (this.turnMatchesTarget(turn, parked.targetTurnID)) {
+        matching.push(parked);
+      } else {
+        remaining.push(parked);
+      }
+    }
+    if (matching.length === 0) return;
+    this.parkedInputReplies.length = 0;
+    this.parkedInputReplies.push(...remaining);
+    for (const parked of matching) {
+      clearTimeout(parked.expireTimer);
+      parked.stopCommandHeartbeat();
+      inputReplyRecoveryTotal.labels("unparked").inc();
+      const outcome = await this.deliverInputReply(parked.record);
+      if (outcome === "no_pending") {
+        // The pause vanished between drain selection and delivery (terminal
+        // race) — re-park rather than dropping the durable answer.
+        this.parkInputReply(parked.record);
+      }
+    }
   }
 
   private async rotateTurnForInputReply(
@@ -2148,6 +2567,11 @@ export class Runner {
       throw new Error("input_reply missing continuation client_nonce");
     }
     const previousTurnID = turn.turnID;
+    turn.priorIdentities = [
+      ...(turn.priorIdentities ?? []),
+      turn.turnID,
+      turn.clientNonce,
+    ];
     turn.clientNonce = continuationClientNonce;
     turn.turnID = turnIDForClientNonce(continuationClientNonce);
     turn.started = true;
@@ -2295,14 +2719,113 @@ export class Runner {
   }
 
   private turnMatchesTarget(
-    turn: Pick<PendingTurn, "turnID" | "clientNonce">,
+    turn: Pick<PendingTurn, "turnID" | "clientNonce" | "priorIdentities">,
     targetTurnID = "",
   ): boolean {
     return (
       !targetTurnID ||
       targetTurnID === turn.turnID ||
-      targetTurnID === turn.clientNonce
+      targetTurnID === turn.clientNonce ||
+      (turn.priorIdentities?.includes(targetTurnID) ?? false)
     );
+  }
+
+  // publishTurnTerminalOrDefer is the single path every turn terminal that
+  // settles a session command takes (issue #1078 item 1). Success: mark the
+  // turn terminal and ack the command. Exhausted retries: park the event on
+  // the turn, stop the heartbeat, and NAK the command so JetStream
+  // redelivery retries the PUBLISH (acceptCommandTurn → reattach), never
+  // the prompt.
+  private async publishTurnTerminalOrDefer(
+    turn: PendingTurn,
+    event: TankConversationEvent,
+    type: "turn.completed" | "turn.failed" | "turn.interrupted",
+  ): Promise<boolean> {
+    if (turn.terminalEmitted) return true;
+    const published = await this.publishTerminalWithRetry(event);
+    if (published) {
+      turn.terminalEmitted = true;
+      turn.pendingTerminal = undefined;
+      turn.pendingTerminalType = undefined;
+      if (turn.commandRecord) {
+        await this.markCommandTerminal(turn, type);
+      }
+      return true;
+    }
+    this.deferTerminalForRedelivery(turn, event, type);
+    return false;
+  }
+
+  private deferTerminalForRedelivery(
+    turn: PendingTurn,
+    event: TankConversationEvent,
+    type: "turn.completed" | "turn.failed" | "turn.interrupted",
+  ): void {
+    terminalPublishDeferredTotal.inc();
+    console.error(
+      "turn terminal publish exhausted retries; parking for redelivery",
+      JSON.stringify({ turn_id: turn.turnID, terminal_type: type }),
+    );
+    turn.pendingTerminal = event;
+    turn.pendingTerminalType = type;
+    turn.stopCommandHeartbeat?.();
+    turn.stopCommandHeartbeat = undefined;
+    const record = turn.commandRecord;
+    turn.commandRecord = undefined;
+    if (record) {
+      try {
+        record.nak(TERMINAL_REDELIVERY_NAK_MS);
+      } catch (err) {
+        console.error("terminal-deferral NAK failed:", err);
+      }
+    }
+  }
+
+  // reattachRedeliveredCommand handles a submit_turn redelivery that matches
+  // a turn this process already knows (issue #1078 items 1 + 6). Two cases:
+  // a parked terminal (the publish failed earlier — retry it now), or a
+  // genuinely in-flight turn whose ack_wait lapsed (blocked event loop, NATS
+  // blip) — reattach the fresh delivery so the eventual terminal acks it,
+  // instead of double-executing the prompt.
+  private async reattachRedeliveredCommand(
+    turn: PendingTurn,
+    record: SessionCommandRecord,
+  ): Promise<void> {
+    if (turn.pendingTerminal && turn.pendingTerminalType) {
+      turn.commandRecord = record;
+      const event = turn.pendingTerminal;
+      const type = turn.pendingTerminalType;
+      const published = await this.publishTerminalWithRetry(event);
+      if (published) {
+        turn.terminalEmitted = true;
+        turn.pendingTerminal = undefined;
+        turn.pendingTerminalType = undefined;
+        await this.markCommandTerminal(turn, type);
+        this.removePendingTurn(turn);
+        if (this.activeTurn === turn) this.activeTurn = null;
+        return;
+      }
+      this.deferTerminalForRedelivery(turn, event, type);
+      return;
+    }
+    // Mid-flight redelivery: supersede the lapsed delivery with the fresh
+    // one. Acking the new delivery acks the message (same stream sequence).
+    turn.stopCommandHeartbeat?.();
+    turn.commandRecord = record;
+    turn.stopCommandHeartbeat = this.commandBus.startCommandHeartbeat(record);
+  }
+
+  // discardParkedTerminal cleans in-memory parked state when a redelivered
+  // command's ledger check found a terminal that landed through another
+  // path (e.g. an interrupt fallback) while the natural terminal was parked.
+  private discardParkedTerminal(targetKey: string): void {
+    const turn = this.findTurnForKey(targetKey);
+    if (!turn || !turn.pendingTerminal) return;
+    turn.pendingTerminal = undefined;
+    turn.pendingTerminalType = undefined;
+    turn.terminalEmitted = true;
+    this.removePendingTurn(turn);
+    if (this.activeTurn === turn) this.activeTurn = null;
   }
 
   private async markCommandTerminal(
@@ -2344,8 +2867,8 @@ export class Runner {
       // sentinel for the extended-thinking resume bug (session 340); it
       // must stay at zero after the SDK ^0.3.158 bump.
       providerFailureClassTotal.labels(classifyProviderFailure(message)).inc();
-      const dispatched = await dispatch(
-        this.sink,
+      await this.publishTurnTerminalOrDefer(
+        turn,
         turnEvent({
           sessionID: this.cfg.sessionId,
           turnID: turn.turnID,
@@ -2355,9 +2878,9 @@ export class Runner {
           reason: "provider_failure",
           error: message,
         }),
+        "turn.failed",
       );
-      if (!dispatched) return;
-      turn.terminalEmitted = true;
+      return;
     }
     await this.markCommandTerminal(turn, "turn.failed").catch((markErr) =>
       console.error(
@@ -2425,7 +2948,11 @@ export class Runner {
     // durably; this set only avoids repeat HTTP calls.
     const dedupeKey = `${terminal.taskID}${observedEventID}`;
     if (this.firedBackgroundTaskWakes.has(dedupeKey)) return;
-    this.firedBackgroundTaskWakes.add(dedupeKey);
+    boundedSetAdd(
+      this.firedBackgroundTaskWakes,
+      dedupeKey,
+      MAX_FIRED_BACKGROUND_WAKES,
+    );
     try {
       const registered = await registerBackgroundTaskWake(this.cfg, {
         ...terminal,

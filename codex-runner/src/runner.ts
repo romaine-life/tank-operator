@@ -11,9 +11,11 @@
 //
 // Multi-turn coordination is explicit: only one runStreamed in flight
 // at a time. The Thread object keeps the conversation context across
-// turns. Codex SDK persists threads to ~/.codex/sessions, which only helps
-// runner-process restarts inside the same live session pod; session pod death
-// is terminal and out of scope.
+// turns. On the app-server path the thread id is persisted to the
+// workspace and `thread/resume`d after a runner/app-server restart
+// (issue #1078 item 4 — before that wiring, every restart was total
+// conversation amnesia despite codex's on-disk ~/.codex/sessions);
+// session pod death is terminal and out of scope.
 //
 // Output contract: the adapter at adapters/codex.ts converts raw codex SDK
 // events into Tank conversation events; the runner stamps and publishes
@@ -66,11 +68,13 @@ import {
 import { truncateEventIfOversized } from "../../runner-shared/sessionBus.js";
 import { reportRuntimeConfig } from "../../runner-shared/runtimeConfig.js";
 import {
+  askUserQuestionDismissedTotal,
   backgroundTaskWakeTotal,
   backgroundWatchTotal,
   commandsConsumedTotal,
   eventTruncatedTotal,
   inputReplyAnswerShapeTotal,
+  inputReplyRecoveryTotal,
   interruptOutcomeTotal,
   natsPublishFailureTotal,
   providerErrorTotal,
@@ -94,6 +98,24 @@ import {
 const INTERRUPT_BUFFER_MS = parsePositiveEnvInt(
   process.env.SESSION_INTERRUPT_BUFFER_MS,
   30_000,
+);
+
+// Parked input_reply bounds (issue #1078 item 3) — see ParkedInputReply.
+const PARKED_INPUT_REPLY_MS = parsePositiveEnvInt(
+  process.env.SESSION_PARKED_INPUT_REPLY_MS,
+  15 * 60_000,
+);
+const MAX_PARKED_INPUT_REPLIES = parsePositiveEnvInt(
+  process.env.SESSION_MAX_PARKED_INPUT_REPLIES,
+  8,
+);
+
+// Cap for the fired-background-wake dedupe set (issue #1078, "unbounded
+// in-process maps"); oldest-first eviction, registration stays idempotent
+// at the backend (ON CONFLICT wake_id).
+const MAX_FIRED_BACKGROUND_WAKES = parsePositiveEnvInt(
+  process.env.SESSION_MAX_FIRED_BACKGROUND_WAKES,
+  4096,
 );
 
 // TERMINAL_PUBLISH_* bound how hard we retry a durable terminal publish
@@ -272,6 +294,10 @@ export type AcceptedTurn = CodexAdapterTurn & {
   claimedAtMs?: number;
   interruptRecords?: SessionCommandRecord[];
   stopCommandHeartbeat?: () => void;
+  // Identities this turn answered to before AskUserQuestion rotations
+  // (issue #1078): targeting by the ORIGINAL submit identity must still
+  // find the rotated turn.
+  priorIdentities?: string[];
   // Set true when the run-loop dequeues a turn and finds a pre-arrived
   // interrupt waiting in pendingInterrupts; the AbortController is
   // pre-fired and the codex thread's runStreamed rejects without
@@ -285,7 +311,27 @@ type PendingInputReply = {
   turn: AcceptedTurn;
   timelineID: string;
   providerItemID: string;
+  // Question-shell identity (issue #1078 item 2): the SPA's Stop targets
+  // activity.active_turn_id, which the fold points at the QUESTION turn
+  // while a question is pending — interrupts must be resolvable from
+  // these ids back to the asking turn.
+  questionTurnID: string;
+  questionClientNonce: string;
   resolve: (response: AppServerUserInputResponse) => void;
+};
+
+// ParkedInputReply holds a durable answer that arrived while no question
+// pause was registered (issue #1078 item 3: runner restart — the
+// redelivered submit_turn replays the turn for minutes before the
+// app-server re-asks). The JetStream heartbeat keeps the control command
+// alive instead of burning max_deliver in seconds; pauseTurnForInput
+// drains matching entries the moment a pause registers.
+type ParkedInputReply = {
+  record: SessionCommandRecord;
+  targetTurnID: string;
+  receivedAtMs: number;
+  stopCommandHeartbeat: () => void;
+  expireTimer: ReturnType<typeof setTimeout>;
 };
 
 export function threadOptionsForCommand(
@@ -400,14 +446,30 @@ interface TankAskUserQuestion {
   secret: boolean;
 }
 
+
+// boundedSetAdd keeps a per-process dedupe set finite on long-lived pods
+// (issue #1078, "unbounded in-process maps"). JS Sets iterate in insertion
+// order, so deleting the first value is oldest-first eviction.
+function boundedSetAdd<T>(set: Set<T>, value: T, max: number): void {
+  set.add(value);
+  while (set.size > max) {
+    const oldest = set.values().next();
+    if (oldest.done) break;
+    set.delete(oldest.value);
+  }
+}
+
+const MAX_COLLATERAL_STOPS = 256;
+
 export function interruptTargetMatchesTurn(
   targetTurnID: string,
-  turn: Pick<AcceptedTurn, "turnID" | "clientNonce">,
+  turn: Pick<AcceptedTurn, "turnID" | "clientNonce" | "priorIdentities">,
 ): boolean {
   return (
     !targetTurnID ||
     targetTurnID === turn.turnID ||
-    targetTurnID === turn.clientNonce
+    targetTurnID === turn.clientNonce ||
+    (turn.priorIdentities?.includes(targetTurnID) ?? false)
   );
 }
 
@@ -442,6 +504,9 @@ export class Runner {
   private currentAbort: AbortController | null = null;
   private currentTurn: AcceptedTurn | null = null;
   private readonly pendingInputReplies = new Map<string, PendingInputReply>();
+  // Durable answers waiting for their question pause to (re)register —
+  // see ParkedInputReply. Bounded by MAX_PARKED_INPUT_REPLIES.
+  private readonly parkedInputReplies: ParkedInputReply[] = [];
   private interruptRequested = false;
   private readonly pendingInterrupts: SessionCommandRecord[] = [];
   // orphanInterrupts holds interrupt_turn records whose target_turn_id
@@ -832,6 +897,8 @@ export class Runner {
         turn,
         timelineID,
         providerItemID: request.providerItemID,
+        questionTurnID: handoff.questionTurnID,
+        questionClientNonce: handoff.questionClientNonce,
         resolve,
       });
     });
@@ -840,38 +907,207 @@ export class Runner {
       (await dispatch(this.sink, handoff.questionMessage)) &&
       (await dispatch(this.sink, handoff.questionSubmitted)) &&
       (await this.publishTerminalWithRetry(handoff.awaitingInput));
-    if (published) return waitForReply;
+    if (published) {
+      // A durable answer may already be parked from before a restart —
+      // deliver it now that the pause exists (issue #1078 item 3).
+      void this.drainParkedInputRepliesFor(turn).catch((err) =>
+        console.error("parked input_reply drain failed:", err),
+      );
+      return waitForReply;
+    }
     this.pendingInputReplies.delete(key);
     throw new Error("failed to persist AskUserQuestion pause");
   }
 
   private async acceptInputReply(record: SessionCommandRecord): Promise<void> {
     commandsConsumedTotal.labels("input_reply", "accepted").inc();
+    const outcome = await this.deliverInputReply(record);
+    if (outcome === "no_pending") {
+      // Runner restart (issue #1078 item 3): the durable answer arrived
+      // while no question pause is registered — the redelivered submit_turn
+      // is replaying the turn (minutes) before the app-server re-asks. The
+      // old nak(1s) loop burned the control plane's max_deliver budget in
+      // ~10s and the answer was lost forever. Park under heartbeat instead.
+      this.parkInputReply(record);
+    }
+  }
+
+  // deliverInputReply matches a durable answer to a registered question
+  // pause: exact (turn, timeline, item) key first, then the restart
+  // fallback — after a restart the app-server re-asks with a NEW item id,
+  // while the ASKING turn id is stable across redelivery.
+  private async deliverInputReply(
+    record: SessionCommandRecord,
+  ): Promise<"delivered" | "no_pending"> {
     const targetTurnID = String(record.target_turn_id ?? "").trim();
     const targetTimelineID = String(record.target_timeline_id ?? "").trim();
     const targetProviderItemID = String(
       record.target_provider_item_id ?? "",
     ).trim();
-    const key = inputReplyKey(
+    const exactKey = inputReplyKey(
       targetTurnID,
       targetTimelineID,
       targetProviderItemID,
     );
-    const pending = this.pendingInputReplies.get(key);
+    let pendingKey = exactKey;
+    let pending = this.pendingInputReplies.get(exactKey);
     if (!pending) {
-      // Runner restart/race: the durable answer can arrive before the redelivered
-      // submit_turn has recreated the app-server request. Redeliver rather than
-      // failing the user's answer.
-      commandsConsumedTotal.labels("input_reply", "not_ready").inc();
-      record.nak(1_000);
-      return;
+      for (const [candidateKey, candidate] of this.pendingInputReplies) {
+        if (
+          interruptTargetMatchesTurn(targetTurnID, candidate.turn) ||
+          candidate.questionTurnID === targetTurnID
+        ) {
+          pending = candidate;
+          pendingKey = candidateKey;
+          inputReplyRecoveryTotal.labels("fallback_matched").inc();
+          break;
+        }
+      }
     }
-    this.pendingInputReplies.delete(key);
+    if (!pending) return "no_pending";
+    this.pendingInputReplies.delete(pendingKey);
     await this.rotateTurnForInputReply(pending.turn, record);
     pending.resolve({
       answers: answersForCodexInput(record.answers, record.annotations),
     });
     await this.commandBus.markCompleted(record);
+    if (
+      pending.providerItemID &&
+      targetProviderItemID &&
+      pending.providerItemID !== targetProviderItemID
+    ) {
+      // Fallback match across a re-ask: the user answered the ORIGINAL
+      // card; close the re-asked shell so it cannot sit awaiting forever.
+      const closed = await this.publishTerminalWithRetry(
+        turnEvent({
+          sessionID: this.cfg.sessionId,
+          turnID: pending.questionTurnID,
+          clientNonce: pending.questionClientNonce,
+          source: "codex",
+          type: "turn.interrupted",
+          reason: "superseded_by_answer",
+        }),
+      );
+      if (!closed) {
+        console.error(
+          "superseded question shell close failed:",
+          JSON.stringify({ question_turn_id: pending.questionTurnID }),
+        );
+      }
+    }
+    return "delivered";
+  }
+
+  private parkInputReply(record: SessionCommandRecord): void {
+    const targetTurnID = String(record.target_turn_id ?? "").trim();
+    inputReplyRecoveryTotal.labels("parked").inc();
+    commandsConsumedTotal.labels("input_reply", "parked").inc();
+    while (this.parkedInputReplies.length >= MAX_PARKED_INPUT_REPLIES) {
+      const evicted = this.parkedInputReplies.shift();
+      if (!evicted) break;
+      clearTimeout(evicted.expireTimer);
+      evicted.stopCommandHeartbeat();
+      inputReplyRecoveryTotal.labels("evicted").inc();
+      void this.commandBus
+        .markFailed(
+          evicted.record,
+          new Error("parked input_reply evicted by newer replies"),
+        )
+        .catch((err) =>
+          console.error("parked input_reply eviction mark failed:", err),
+        );
+    }
+    const stopHeartbeat = this.commandBus.startCommandHeartbeat(record);
+    const expireTimer = setTimeout(() => {
+      void this.expireParkedInputReply(record).catch((err) =>
+        console.error("expireParkedInputReply failed:", err),
+      );
+    }, PARKED_INPUT_REPLY_MS);
+    if (typeof (expireTimer as { unref?: () => void }).unref === "function") {
+      (expireTimer as { unref: () => void }).unref();
+    }
+    this.parkedInputReplies.push({
+      record,
+      targetTurnID,
+      receivedAtMs: Date.now(),
+      stopCommandHeartbeat: stopHeartbeat,
+      expireTimer,
+    });
+  }
+
+  private async expireParkedInputReply(
+    record: SessionCommandRecord,
+  ): Promise<void> {
+    const idx = this.parkedInputReplies.findIndex(
+      (parked) => parked.record === record,
+    );
+    if (idx < 0) return; // already drained into a registered pause
+    const parked = this.parkedInputReplies[idx]!;
+    this.parkedInputReplies.splice(idx, 1);
+    parked.stopCommandHeartbeat();
+    inputReplyRecoveryTotal.labels("expired").inc();
+    await this.commandBus.markFailed(
+      record,
+      new Error(
+        "input_reply never matched a question pause within the parking window",
+      ),
+    );
+  }
+
+  private async drainParkedInputRepliesFor(turn: AcceptedTurn): Promise<void> {
+    const matching: ParkedInputReply[] = [];
+    const remaining: ParkedInputReply[] = [];
+    for (const parked of this.parkedInputReplies) {
+      if (interruptTargetMatchesTurn(parked.targetTurnID, turn)) {
+        matching.push(parked);
+      } else {
+        remaining.push(parked);
+      }
+    }
+    if (matching.length === 0) return;
+    this.parkedInputReplies.length = 0;
+    this.parkedInputReplies.push(...remaining);
+    for (const parked of matching) {
+      clearTimeout(parked.expireTimer);
+      parked.stopCommandHeartbeat();
+      inputReplyRecoveryTotal.labels("unparked").inc();
+      const outcome = await this.deliverInputReply(parked.record);
+      if (outcome === "no_pending") {
+        this.parkInputReply(parked.record);
+      }
+    }
+  }
+
+  // dismissPendingQuestionsForTurn settles every pending question pause on
+  // `turn` without an answer (issue #1078 item 2): the empty resolve lets
+  // the app-server's requestUserInput unwind (a rejection here would be an
+  // unhandled rejection in handleServerRequest), and the question shell
+  // gets a durable terminal so the card stops accepting answers.
+  private async dismissPendingQuestionsForTurn(
+    turn: AcceptedTurn,
+  ): Promise<void> {
+    for (const [key, entry] of [...this.pendingInputReplies]) {
+      if (entry.turn !== turn) continue;
+      this.pendingInputReplies.delete(key);
+      askUserQuestionDismissedTotal.inc();
+      entry.resolve({ answers: {} });
+      const published = await this.publishTerminalWithRetry(
+        turnEvent({
+          sessionID: this.cfg.sessionId,
+          turnID: entry.questionTurnID,
+          clientNonce: entry.questionClientNonce,
+          source: "codex",
+          type: "turn.interrupted",
+          reason: "question_dismissed_by_stop",
+        }),
+      );
+      if (!published) {
+        console.error(
+          "question shell terminal publish failed after retry:",
+          JSON.stringify({ question_turn_id: entry.questionTurnID }),
+        );
+      }
+    }
   }
 
   private async rotateTurnForInputReply(
@@ -883,6 +1119,11 @@ export class Runner {
       throw new Error("input_reply missing continuation client_nonce");
     }
     const previousTurnID = turn.turnID;
+    turn.priorIdentities = [
+      ...(turn.priorIdentities ?? []),
+      turn.turnID,
+      turn.clientNonce,
+    ];
     turn.clientNonce = continuationClientNonce;
     turn.turnID = turnIDForClientNonce(continuationClientNonce);
     turn.turnSeq += 1;
@@ -906,6 +1147,9 @@ export class Runner {
   }
 
   private readonly firedBackgroundTaskWakes = new Set<string>();
+  // Tasks whose forced exit (deliberate stop or clean-all collateral) must
+  // not register a wake — see acceptStopBackgroundTask (issue #1078).
+  private readonly collateralStoppedTasks = new Set<string>();
   private backgroundPidWatcher: ReturnType<typeof setInterval> | null = null;
   private readonly backgroundSeenAlive = new Set<string>();
   private readonly backgroundFirstSweepMs = new Map<string, number>();
@@ -1001,21 +1245,26 @@ export class Runner {
   private async publishBackgroundExit(
     taskID: string,
     opts: { status?: string; completionSource?: string },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const events = this.codexAdapter.completeBackgroundShellByExit(taskID, {
       status: opts.status,
       completionSource: opts.completionSource,
     });
     this.backgroundSeenAlive.delete(taskID);
     this.backgroundFirstSweepMs.delete(taskID);
+    let allDispatched = events.length > 0;
     for (const canonical of events) {
       const dispatched = await dispatch(this.sink, canonical).catch((err) => {
         console.error("background shell exit publish failed:", err);
         return false;
       });
-      if (!dispatched) continue;
+      if (!dispatched) {
+        allDispatched = false;
+        continue;
+      }
       await this.maybeRegisterCodexBackgroundWake(canonical);
     }
+    return allDispatched;
   }
 
   private async maybeRegisterCodexBackgroundWake(
@@ -1034,10 +1283,23 @@ export class Runner {
     const observedEventID = String(
       (canonical as { event_id?: unknown }).event_id ?? "",
     ).trim();
+    // A task the user deliberately stopped (directly or as collateral of a
+    // clean-all) must not summon a wake for its forced exit (issue #1078).
+    // One-shot: a LATER genuine observation of the same task (the provider
+    // surfacing a real completion) re-arms normally.
+    if (this.collateralStoppedTasks.has(taskID)) {
+      this.collateralStoppedTasks.delete(taskID);
+      backgroundTaskWakeTotal.labels("suppressed_stopped").inc();
+      return;
+    }
     const dedupeKey = `${taskID}${observedEventID}`;
     if (this.firedBackgroundTaskWakes.has(dedupeKey)) return;
     if (this.currentAbort) return;
-    this.firedBackgroundTaskWakes.add(dedupeKey);
+    boundedSetAdd(
+      this.firedBackgroundTaskWakes,
+      dedupeKey,
+      MAX_FIRED_BACKGROUND_WAKES,
+    );
     const payload = (canonical.payload ?? {}) as Record<string, unknown>;
     try {
       const registered = await registerBackgroundTaskWake(this.cfg, {
@@ -1178,28 +1440,73 @@ export class Runner {
     }
     const providerItemID =
       String(record.target_provider_item_id ?? taskID).trim() || taskID;
+    // The app-server's backgroundTerminals surface is clean-ALL-only
+    // (verified against the binary): stopping one task kills every live
+    // background shell in the thread. Issue #1078: the collateral victims
+    // used to surface later through the pid watcher as `completed` and
+    // SUMMON A WAKE for work the user deliberately killed. Suppress wake
+    // registration for every task this clean takes down (the target
+    // included — a deliberate stop is not a completion), and resolve each
+    // one's durable lifecycle honestly as stopped.
+    const liveBefore = this.codexAdapter.pendingBackgroundTasks();
+    boundedSetAdd(this.collateralStoppedTasks, taskID, MAX_COLLATERAL_STOPS);
+    for (const task of liveBefore) {
+      boundedSetAdd(
+        this.collateralStoppedTasks,
+        task.taskID,
+        MAX_COLLATERAL_STOPS,
+      );
+    }
     try {
       await this.appServerTransport.cleanBackgroundTerminals();
-      const dispatched = await dispatch(
-        this.sink,
-        shellTaskEvent({
-          sessionID: this.cfg.sessionId,
-          turnID,
-          source: "codex",
-          type: "shell_task.exited",
-          taskID,
+      // Resolve the target through the adapter when it still tracks the
+      // task (keeps pending state consistent so the pid watcher cannot
+      // later re-declare completion, and consumes the wake suppression
+      // through the same maybeRegisterCodexBackgroundWake gate); fall
+      // back to the bare terminal for stops that arrive after a restart
+      // wiped adapter state.
+      let dispatched = true;
+      const targetTracked = this.codexAdapter
+        .pendingBackgroundTasks()
+        .some((task) => task.taskID === taskID);
+      if (targetTracked) {
+        dispatched = await this.publishBackgroundExit(taskID, {
           status: "stopped",
-          providerItemID,
-          providerEventID: record.command_id,
-          payload: {
+          completionSource: "client_request",
+        });
+      } else {
+        dispatched = await dispatch(
+          this.sink,
+          shellTaskEvent({
+            sessionID: this.cfg.sessionId,
+            turnID,
+            source: "codex",
+            type: "shell_task.exited",
+            taskID,
             status: "stopped",
-            stop_reason: "client_request",
-            provider_item_id: providerItemID,
-            process_id:
-              String(record.target_process_id ?? taskID).trim() || taskID,
-          },
-        }),
-      );
+            providerItemID,
+            providerEventID: record.command_id,
+            payload: {
+              status: "stopped",
+              stop_reason: "client_request",
+              provider_item_id: providerItemID,
+              process_id:
+                String(record.target_process_id ?? taskID).trim() || taskID,
+            },
+          }),
+        );
+      }
+      // Collateral victims: resolve their lifecycles now as stopped (the
+      // clean already killed the processes) instead of letting the watcher
+      // call them `completed` later.
+      for (const task of liveBefore) {
+        if (task.taskID === taskID) continue;
+        backgroundWatchTotal.labels("stopped_collateral").inc();
+        await this.publishBackgroundExit(task.taskID, {
+          status: "stopped",
+          completionSource: "collateral_stop",
+        });
+      }
       if (!dispatched) {
         await this.commandBus.markFailed(
           record,
@@ -1264,7 +1571,9 @@ export class Runner {
   // consumer's trackCommandTurnTarget call); #532 closes that path by
   // buffering with an orphan timer.
   private async acceptInterrupt(record: SessionCommandRecord): Promise<void> {
-    commandsConsumedTotal.labels("interrupt_turn", "accepted").inc();
+    // NOTE: the "accepted" consume counter is incremented by the control
+    // consumer dispatch (startControlConsumer) — incrementing here too
+    // double-counted every interrupt (issue #1078).
     const targetKey = String(
       record.target_turn_id ?? record.client_nonce ?? "",
     ).trim();
@@ -1278,10 +1587,18 @@ export class Runner {
       );
       return;
     }
+    const questionTurn = this.turnForQuestionKey(targetKey);
     if (
       this.currentTurn &&
-      interruptTargetMatchesTurn(targetKey, this.currentTurn)
+      (interruptTargetMatchesTurn(targetKey, this.currentTurn) ||
+        questionTurn === this.currentTurn)
     ) {
+      // Stop during AskUserQuestion (issue #1078 item 2): the SPA targets
+      // the QUESTION turn id while a question is pending. Settle the
+      // pending requestUserInput promise and close the question shell
+      // BEFORE aborting, so the app-server request unwinds instead of
+      // wedging the pause until pod restart.
+      await this.dismissPendingQuestionsForTurn(this.currentTurn);
       this.interruptRequested = true;
       this.currentTurn.interruptRecords ??= [];
       this.currentTurn.interruptRecords.push(record);
@@ -1304,6 +1621,19 @@ export class Runner {
     // a durable terminal (either terminated_pre_sdk when the matching
     // submit_turn lands, or orphaned when it never does).
     this.bufferOrphanInterrupt(record, targetKey);
+  }
+
+  // turnForQuestionKey resolves a question-shell identifier (the id the
+  // SPA's Stop targets while a question is pending) to the asking turn
+  // that owns the pause (issue #1078 item 2).
+  private turnForQuestionKey(key: string): AcceptedTurn | null {
+    if (!key) return null;
+    for (const entry of this.pendingInputReplies.values()) {
+      if (key === entry.questionTurnID || key === entry.questionClientNonce) {
+        return entry.turn;
+      }
+    }
+    return null;
   }
 
   private bufferOrphanInterrupt(
@@ -1457,6 +1787,10 @@ export class Runner {
         turn,
       );
       if (!pendingInterrupt) return;
+      // Every accepted interrupt drains to exactly one outcome bucket
+      // (the #532 contract); stale records cleared after their turn
+      // already ended were the silent gap in that math (issue #1078).
+      interruptOutcomeTotal.labels("turn_already_terminal").inc();
       await this.commandBus.markCompleted(
         pendingInterrupt as SessionCommandRecord,
       );

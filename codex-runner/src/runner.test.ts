@@ -214,18 +214,33 @@ test("codexQuestionsToTankShape maps codex app-server questions into the Tank sh
   );
 });
 
-test("acceptInputReply redelivers when the app-server request is not recreated yet", async () => {
+test("acceptInputReply parks under heartbeat when the app-server request is not recreated yet", async () => {
+  // Issue #1078 item 3: the old nak(1s) loop burned the control plane's
+  // max_deliver budget in ~10s while the redelivered submit_turn replayed
+  // the whole turn — the user's durable answer was lost forever. The
+  // answer now parks under a JetStream heartbeat until the re-asked pause
+  // registers (drained by pauseTurnForInput).
   const runner = new Runner(runnerConfig()) as unknown as {
     acceptInputReply: (record: unknown) => Promise<void>;
-    commandBus: { markCompleted: () => Promise<void>; markFailed: () => Promise<void> };
+    parkedInputReplies: unknown[];
+    commandBus: {
+      markCompleted: () => Promise<void>;
+      markFailed: () => Promise<void>;
+      startCommandHeartbeat: () => () => void;
+    };
   };
-  let nakDelay: number | undefined;
+  let heartbeats = 0;
+  let nakked = false;
   runner.commandBus = {
     async markCompleted() {
       assert.fail("early input_reply should not complete without a pending request");
     },
     async markFailed() {
-      assert.fail("early input_reply should redeliver instead of failing");
+      assert.fail("early input_reply should park instead of failing");
+    },
+    startCommandHeartbeat() {
+      heartbeats++;
+      return () => {};
     },
   };
 
@@ -235,12 +250,14 @@ test("acceptInputReply redelivers when the app-server request is not recreated y
     target_timeline_id: "turn-active:item:req_ask",
     target_provider_item_id: "req_ask",
     answers: { "Proceed?": ["Yes"] },
-    nak(delayMs: number) {
-      nakDelay = delayMs;
+    nak() {
+      nakked = true;
     },
   });
 
-  assert.equal(nakDelay, 1000);
+  assert.equal(nakked, false, "parking must not burn max_deliver budget");
+  assert.equal(heartbeats, 1);
+  assert.equal(runner.parkedInputReplies.length, 1);
 });
 
 test("codexQuestionsToTankShape tolerates pure free-form (null options) and drops malformed entries", () => {

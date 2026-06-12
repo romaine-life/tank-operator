@@ -913,7 +913,11 @@ time, and a corresponding durable terminal event:
   had already emitted its own terminal (`turn.completed` /
   `turn.failed`). The race is legitimate; the durable ledger shows the
   natural terminal; the UI resolves via the existing race-resolution
-  arm in `conversationReducer.ts`.
+  arm in `conversationReducer.ts`. Both runners also consult the
+  durable ledger before the `orphaned` arm writes its synthetic
+  terminal, and stale buffered interrupts cleared after their turn
+  ended drain to this bucket — every accepted interrupt still lands in
+  exactly one bucket (issue #1078).
 - `invalid_target` — `interrupt_turn` arrived with neither
   `target_turn_id` nor `client_nonce`. Backend bug; should be zero in
   production.
@@ -927,6 +931,56 @@ terminal AND a counter increment is the bug class #532 closed — see
 the issue for the post-mortem evidence (Postgres `session_events` rows
 for session 19 showing 20 of 24 item completions landing AFTER a stop
 click, with no `turn.interrupted` ever emitted).
+
+### Stop while AskUserQuestion is pending
+
+While a question is pending, the activity fold points
+`active_turn_id` at the QUESTION turn, so the SPA's Stop targets an id
+no `PendingTurn`/`AcceptedTurn` carries. Both runners resolve question
+identifiers (`question_turn_id` / question client-nonce) back to the
+ASKING turn (issue #1078 item 2). The interrupt then:
+
+1. settles the pending provider callback without an answer (Claude:
+   `isError` tool result; Codex: empty `answers` — a rejection would be
+   an unhandled rejection in the app-server transport), so the provider
+   pause unwinds instead of wedging until pod restart;
+2. publishes `turn.interrupted{reason:"question_dismissed_by_stop"}` on
+   the QUESTION turn — `turnAwaitingQuestionTarget` treats any terminal
+   as not-awaiting, so the card stops accepting answers at the backend
+   boundary (the answer POST 409s);
+3. interrupts the asking turn through the normal arm above.
+
+`tank_runner_ask_user_question_dismissed_total` counts dismissals.
+
+### Durable answers across runner restarts
+
+An `input_reply` that arrives while no question pause is registered
+(runner restart: the redelivered `submit_turn` replays the turn for
+minutes before the provider re-asks with a NEW item id) PARKS under a
+JetStream heartbeat instead of nak-looping away the control plane's
+`max_deliver` budget (issue #1078 item 3). When a pause (re)registers,
+parked answers drain into it; matching falls back from the exact
+(turn, timeline, item) key to the stable ASKING turn id, and a
+fallback-matched re-asked shell closes with
+`turn.interrupted{reason:"superseded_by_answer"}`. Unmatched parks
+expire to a durable command failure after
+`SESSION_PARKED_INPUT_REPLY_MS` (default 15m).
+`tank_runner_input_reply_recovery_total{path}` counts every non-exact
+path.
+
+### Natural-terminal publish exhaustion parks for redelivery
+
+A turn terminal whose publish exhausts retries no longer wedges the
+data plane (issue #1078 item 1 — pre-fix the `working()` heartbeat
+extended the un-acked `submit_turn` forever and `max_ack_pending=1`
+silently blocked every later turn). The runner parks the terminal
+event on the turn, stops the heartbeat, and NAKs the command;
+JetStream redelivery retries the PUBLISH through the redelivery
+reattach path — never the prompt. Redelivery of a still-running turn
+reattaches the fresh delivery for the same reason (in-memory dedup by
+turn identity, including pre-rotation identities of AskUserQuestion
+continuations). `tank_runner_terminal_publish_deferred_total` counts
+parks.
 
 **Oversized-event truncation contract (post-#532 Stage 3).** Tank
 conversation events whose JSON-encoded body would exceed NATS's
