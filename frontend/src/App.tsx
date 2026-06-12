@@ -4275,6 +4275,14 @@ function providerUsesModel(provider: Provider): boolean {
   );
 }
 
+function providerUsesClaudeOptions(provider: Provider): boolean {
+  return provider === "anthropic" || provider === "anthropic_secondary";
+}
+
+function providerUsesEffort(provider: Provider): boolean {
+  return providerUsesClaudeOptions(provider) || provider === "codex";
+}
+
 function sessionModeUsesEffort(mode: SessionMode): boolean {
   return isClaudeRunMode(mode) || isCodexRunMode(mode);
 }
@@ -5299,6 +5307,65 @@ type SetRunPref = <K extends keyof RunPrefs>(
   key: K,
   value: RunPrefs[K],
 ) => void;
+
+function selectedModelIdForProvider(
+  provider: Provider,
+  prefs: RunPrefs,
+  runOptions: SessionRunOptions | null,
+): string {
+  if (providerUsesClaudeOptions(provider)) {
+    return prefs.claudeModelId || defaultModelForProvider(provider, runOptions);
+  }
+  if (provider === "codex") {
+    return prefs.codexModelId || defaultModelForProvider(provider, runOptions);
+  }
+  if (provider === "antigravity") {
+    return (
+      prefs.antigravityModelId || defaultModelForProvider(provider, runOptions)
+    );
+  }
+  return "";
+}
+
+function selectedEffortIdForProvider(
+  provider: Provider,
+  prefs: RunPrefs,
+  runOptions: SessionRunOptions | null,
+): string {
+  if (providerUsesClaudeOptions(provider)) {
+    return prefs.claudeEffort || defaultEffortForProvider(provider, runOptions);
+  }
+  if (provider === "codex") {
+    return prefs.codexEffort || defaultEffortForProvider(provider, runOptions);
+  }
+  return "";
+}
+
+function setModelPrefForProvider(
+  provider: Provider,
+  modelId: string,
+  setRunPref: SetRunPref,
+) {
+  if (providerUsesClaudeOptions(provider)) {
+    setRunPref("claudeModelId", modelId);
+  } else if (provider === "codex") {
+    setRunPref("codexModelId", modelId);
+  } else if (provider === "antigravity") {
+    setRunPref("antigravityModelId", modelId);
+  }
+}
+
+function setEffortPrefForProvider(
+  provider: Provider,
+  effortId: string,
+  setRunPref: SetRunPref,
+) {
+  if (providerUsesClaudeOptions(provider)) {
+    setRunPref("claudeEffort", effortId);
+  } else if (provider === "codex") {
+    setRunPref("codexEffort", effortId);
+  }
+}
 
 // Phase E: type-narrow the opaque server-side run_prefs blob into the
 // SPA's RunPrefs shape. Unknown keys are dropped (a future SPA may have
@@ -23073,10 +23140,9 @@ function AuthenticatedApp() {
     const seedModel = providerUsesModel(modeProvider)
       ? selectedHomeModelId
       : "";
-    const seedEffort =
-      modeProvider === "anthropic" || modeProvider === "codex"
-        ? selectedHomeEffortId
-        : "";
+    const seedEffort = providerUsesEffort(modeProvider)
+      ? selectedHomeEffortId
+      : "";
     const sessionModel = SDK_CHAT_MODES.has(mode) ? seedModel : "";
     const sessionEffort = SDK_CHAT_MODES.has(mode) ? seedEffort : "";
     const seedInitialTurnAtCreate =
@@ -23658,25 +23724,16 @@ function AuthenticatedApp() {
   );
   const homeModelApplies =
     defaultInteraction === "gui" && homeModelOptions.length > 0;
-  const selectedHomeModelId =
-    selectedProvider === "anthropic"
-      ? runPrefs.claudeModelId ||
-        defaultModelForProvider("anthropic", sessionRunOptions)
-      : selectedProvider === "codex"
-        ? runPrefs.codexModelId ||
-          defaultModelForProvider("codex", sessionRunOptions)
-        : selectedProvider === "antigravity"
-          ? runPrefs.antigravityModelId ||
-            defaultModelForProvider("antigravity", sessionRunOptions)
-          : "";
-  const selectedHomeEffortId =
-    selectedProvider === "anthropic"
-      ? runPrefs.claudeEffort ||
-        defaultEffortForProvider("anthropic", sessionRunOptions)
-      : selectedProvider === "codex"
-        ? runPrefs.codexEffort ||
-          defaultEffortForProvider("codex", sessionRunOptions)
-        : "";
+  const selectedHomeModelId = selectedModelIdForProvider(
+    selectedProvider,
+    runPrefs,
+    sessionRunOptions,
+  );
+  const selectedHomeEffortId = selectedEffortIdForProvider(
+    selectedProvider,
+    runPrefs,
+    sessionRunOptions,
+  );
   const runOptionsReadyForHome =
     modelOptionsReady(sessionRunOptions) &&
     createModeAllowedByRunOptions(defaultSessionMode, sessionRunOptions) &&
@@ -24507,28 +24564,11 @@ function AuthenticatedApp() {
                                             selected ? "is-selected" : undefined
                                           }
                                           onClick={() => {
-                                            if (
-                                              selectedProvider === "anthropic"
-                                            ) {
-                                              setRunPref(
-                                                "claudeModelId",
-                                                model.id,
-                                              );
-                                            } else if (
-                                              selectedProvider === "codex"
-                                            ) {
-                                              setRunPref(
-                                                "codexModelId",
-                                                model.id,
-                                              );
-                                            } else if (
-                                              selectedProvider === "antigravity"
-                                            ) {
-                                              setRunPref(
-                                                "antigravityModelId",
-                                                model.id,
-                                              );
-                                            }
+                                            setModelPrefForProvider(
+                                              selectedProvider,
+                                              model.id,
+                                              setRunPref,
+                                            );
                                             setHomeModelMenuOpen(false);
                                           }}
                                           disabled={
@@ -24545,8 +24585,7 @@ function AuthenticatedApp() {
                                 </ul>
                               )}
                             </div>
-                            {(selectedProvider === "anthropic" ||
-                              selectedProvider === "codex") && (
+                            {providerUsesEffort(selectedProvider) && (
                               <div
                                 className="home-effort-grid"
                                 role="group"
@@ -24560,13 +24599,11 @@ function AuthenticatedApp() {
                                       key={effort.id}
                                       className={`home-model home-effort${selected ? " is-selected" : ""}`}
                                       onClick={() => {
-                                        if (selectedProvider === "anthropic") {
-                                          setRunPref("claudeEffort", effort.id);
-                                        } else if (
-                                          selectedProvider === "codex"
-                                        ) {
-                                          setRunPref("codexEffort", effort.id);
-                                        }
+                                        setEffortPrefForProvider(
+                                          selectedProvider,
+                                          effort.id,
+                                          setRunPref,
+                                        );
                                       }}
                                       disabled={busy || !runOptionsReadyForHome}
                                       aria-pressed={selected}
