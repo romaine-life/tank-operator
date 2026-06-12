@@ -91,6 +91,15 @@ All metric names are prefixed `tank_`. The full namespace:
   Per-sweep detail (session, turn, progressed, source) is in the
   "stranded turn swept to durable terminal" slog line. Pairs with
   `tank_stranded_launch_swept_total`, the create-flow equivalent.
+- `tank_session_bus_persister_restart_total` +
+  `tank_session_bus_stream_{messages,bytes,max_messages,max_bytes,consumers}`
+  — supervised persister restarts (a restart is the supervision working;
+  a sustained rate is a flapping substrate) and stream occupancy against
+  configured limits, sampled every minute. The stream evicts oldest-first
+  across commands AND events when full and evicted commands are
+  undetectable after the fact, so `TankSessionBusStreamNearCapacity`
+  fires on approach (80% for 10m). `TankSessionBusPersisterRestarting`
+  pages on >3 restarts in 15m.
 - `tank_runner_nats_connection_status_total{type}` /
   `tank_runner_bus_consumer_restart_total{kind}` — the supervised
   session-bus lifecycle (issue #1076 item 1): bounded connection status

@@ -144,6 +144,24 @@ spec:
             summary: "tank-operator route {{`{{ $labels.route }}`}} is returning 5xx > 0.01 req/s for 5m"
             runbook: "Inspect orchestrator logs for `http server error` lines on this route; the slog includes method, route, email, and the response detail."
 
+        - alert: TankSessionBusStreamNearCapacity
+          expr: (tank_session_bus_stream_bytes / tank_session_bus_stream_max_bytes > 0.8) or (tank_session_bus_stream_messages / tank_session_bus_stream_max_messages > 0.8)
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "session bus stream is over 80% of its retention limit for 10m"
+            runbook: "The stream evicts OLDEST messages — durable commands included — when MaxBytes/MaxMsgs fill, and evicted commands are undetectable after the fact (issue #1076 item 2). Find the flood producer (per-session event volume in session_events), and expect stranded-turn sweep terminals for any sessions whose commands were evicted if this fires through to 100%."
+
+        - alert: TankSessionBusPersisterRestarting
+          expr: increase(tank_session_bus_persister_restart_total[15m]) > 3
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "the session-bus persister restarted more than 3 times in 15m"
+            runbook: "Single restarts are the supervision working (transient NATS/Postgres errors). A sustained rate means the bus substrate or the ledger is flapping — check NATS pod restarts and TankPg* alerts."
+
         - alert: TankPgQueryP99High
           expr: histogram_quantile(0.99, sum by (le, operation) (rate(tank_pg_query_duration_seconds_bucket[5m]))) > 1
           for: 10m

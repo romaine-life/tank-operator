@@ -678,3 +678,42 @@ func (b *Bus) ensureStream(ctx context.Context) error {
 	})
 	return err
 }
+
+// StreamUsage is one sample of the bus stream's occupancy against its
+// configured limits. The stream is LimitsPolicy/DiscardOld over BOTH
+// durable commands and events (issue #1076 item 2): when MaxBytes/MaxMsgs
+// fill, the OLDEST messages are silently evicted regardless of consumer
+// interest — including other sessions' undelivered submit_turn commands.
+// Until commands move to their own interest-retained stream (a wire
+// migration; see the issue), occupancy visibility + an approach alert are
+// the guardrail: evictions of unconsumed events are detectable after the
+// fact (RecordStreamTruncationGap), evicted commands are not detectable
+// at all, so the alert has to fire BEFORE the limit.
+type StreamUsage struct {
+	Messages      uint64
+	Bytes         uint64
+	MaxMsgs       int64
+	MaxBytes      int64
+	ConsumerCount int
+}
+
+func (b *Bus) StreamUsage(ctx context.Context) (StreamUsage, error) {
+	if b == nil || b.js == nil {
+		return StreamUsage{}, fmt.Errorf("session bus unavailable")
+	}
+	stream, err := b.js.Stream(ctx, b.stream)
+	if err != nil {
+		return StreamUsage{}, err
+	}
+	info, err := stream.Info(ctx)
+	if err != nil {
+		return StreamUsage{}, err
+	}
+	return StreamUsage{
+		Messages:      info.State.Msgs,
+		Bytes:         info.State.Bytes,
+		MaxMsgs:       info.Config.MaxMsgs,
+		MaxBytes:      info.Config.MaxBytes,
+		ConsumerCount: info.State.Consumers,
+	}, nil
+}
