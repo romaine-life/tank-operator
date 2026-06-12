@@ -198,3 +198,11 @@ type failingTranscriptRowsStore struct {
 func (s *failingTranscriptRowsStore) ReplaceForTurn(context.Context, string, string, []map[string]any) error {
 	return context.DeadlineExceeded
 }
+
+func (s *orderRecordingRowsStore) MaxEndOrderKey(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (s *failingTranscriptRowsStore) MaxEndOrderKey(context.Context, string) (string, error) {
+	return "", nil
+}

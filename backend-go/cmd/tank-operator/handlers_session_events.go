@@ -63,7 +63,6 @@ func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, us
 		return nil, status, err
 	}
 
-	eventStore := s.sessionEventStoreForScope(sessionScope)
 	rowStore := s.sessionTranscriptRowStoreForScope(sessionScope)
 	readState, err := s.getSessionReadState(r, user.OwnerEmail(), sessionID, sessionScope)
 	if err != nil {
@@ -82,10 +81,15 @@ func (s *appServer) sessionTimelineBody(ctx context.Context, r *http.Request, us
 	if err != nil {
 		return nil, status, err
 	}
-	liveOrderKey := ""
-	if live, err := eventStore.LatestEvents(ctx, sessionID, 1); err == nil && len(live.Events) > 0 {
-		liveOrderKey = transcriptString(live.Events[len(live.Events)-1], "order_key")
-	} else if err != nil {
+	// live_order_key seeds the SSE resume cursor, so it must come from the
+	// PROJECTION's high-water mark, never the raw ledger tail: projection is
+	// async, a ledger-derived cursor can sit ahead of the rows, and the SSE
+	// delta's strict end_order_key > cursor filter would make the pending
+	// rows permanently undeliverable (a terminal caught in that window
+	// rendered the turn active forever). Rows-derived cursors err toward
+	// harmless duplicate replays instead.
+	liveOrderKey, err := rowStore.MaxEndOrderKey(ctx, sessionID)
+	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	body := map[string]any{

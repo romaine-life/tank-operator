@@ -331,10 +331,12 @@ func (s *appServer) publicMessageLinkTimelineBody(ctx context.Context, r *http.R
 	if err != nil {
 		return nil, status, err
 	}
-	liveOrderKey := ""
-	if live, err := s.sessionEventStoreForScope(share.SessionScope).LatestEvents(ctx, share.SessionID, 1); err == nil && len(live.Events) > 0 {
-		liveOrderKey = transcriptString(live.Events[len(live.Events)-1], "order_key")
-	} else if err != nil {
+	// Same cursor discipline as the authenticated timeline: live_order_key
+	// comes from the projection's high-water mark, not the raw ledger tail
+	// (see handlers_session_events.go — async projection makes ledger-derived
+	// cursors silently undeliverable on the SSE delta).
+	liveOrderKey, err := rowStore.MaxEndOrderKey(ctx, share.SessionID)
+	if err != nil {
 		return nil, http.StatusInternalServerError, err
 	}
 	body := map[string]any{

@@ -344,3 +344,7 @@ func TestFoldMemoSerializationRoundTrip(t *testing.T) {
 		t.Fatalf("stale memo version must not load")
 	}
 }
+
+func (s *memoryFoldRowsStore) MaxEndOrderKey(context.Context, string) (string, error) {
+	return "", nil
+}

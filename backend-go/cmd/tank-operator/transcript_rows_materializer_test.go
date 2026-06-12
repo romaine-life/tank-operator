@@ -680,3 +680,11 @@ func TestRefreshEventBatchInputAnsweredEscalatesOnce(t *testing.T) {
 		t.Fatalf("ReplaceForTurnTx calls = %d, want 0 — session re-projection covers the batch", rowStore.replaceTurnTxCalls)
 	}
 }
+
+func (s *recordingTranscriptRowsStore) MaxEndOrderKey(context.Context, string) (string, error) {
+	return "", nil
+}
+
+func (s *lockingTranscriptRowsStore) MaxEndOrderKey(context.Context, string) (string, error) {
+	return "", nil
+}
