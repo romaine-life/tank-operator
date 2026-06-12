@@ -138,8 +138,8 @@ test("run pane keeps the composer inside the viewport at high browser zoom", () 
   expect(composerWrapRule).toMatch(/padding:\s*var\(--space-3\)\s+var\(--space-5\)\s+max\(var\(--space-5\),\s*env\(safe-area-inset-bottom\)\);/);
 
   const runPaneComposerWrapRule = cssRule(".run-composer-wrap-runpane");
-  expect(runPaneComposerWrapRule).toMatch(/--run-composer-transcript-content-offset:\s*calc\(0\.7rem\s+\+\s+2\.625rem\s+\+\s+0\.55rem\);/);
-  expect(runPaneComposerWrapRule).toMatch(/padding-left:\s*calc\(var\(--space-5\)\s+\+\s+var\(--run-composer-transcript-content-offset\)\);/);
+  expect(runPaneComposerWrapRule).toMatch(/padding-left:\s*var\(--space-5\);/);
+  expect(runPaneComposerWrapRule).not.toMatch(/run-composer-transcript-content-offset/);
 
   expect(appSource).toMatch(/composerWrapClassName=\{\[\s*"run-composer-wrap-runpane",[\s\S]*?dragActive \? "run-composer-wrap-drag" : "",[\s\S]*?\]\.filter\(Boolean\)\.join\(" "\)\}/);
   expect(portfolioTranscriptSource).toMatch(/composerWrapClassName="run-composer-wrap-runpane"/);

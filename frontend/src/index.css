@@ -7193,8 +7193,7 @@ button:disabled {
 }
 
 .run-composer-wrap-runpane {
-  --run-composer-transcript-content-offset: calc(0.7rem + 2.625rem + 0.55rem);
-  padding-left: calc(var(--space-5) + var(--run-composer-transcript-content-offset));
+  padding-left: var(--space-5);
 }
 
 /* Floating UI that belongs to the transcript scroller. The wrapper is an
