@@ -826,14 +826,14 @@ func recordStrandedLaunchSwept(result string) {
 var strandedTurnSweptTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_stranded_turn_swept_total",
-		Help: "Dispatched-but-stranded turns the stranded-turn sweep observed, labeled by bounded result (failed, deferred_progressed, skipped_incomplete, persist_error).",
+		Help: "Dispatched-but-stranded turns the stranded-turn sweep observed, labeled by bounded result (failed, deferred_progressed, deferred_pipeline_quiet, skipped_incomplete, persist_error).",
 	},
 	[]string{"result"},
 )
 
 func recordStrandedTurnSwept(result string) {
 	switch result {
-	case "failed", "deferred_progressed", "skipped_incomplete", "persist_error":
+	case "failed", "deferred_progressed", "deferred_pipeline_quiet", "skipped_incomplete", "persist_error":
 	default:
 		result = "other"
 	}

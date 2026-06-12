@@ -79,7 +79,15 @@ All metric names are prefixed `tank_`. The full namespace:
   stranding floors. Bounded `result`: `failed` (terminal written — pages
   via `TankStrandedTurnsSwept`, because each one is a real delivery loss),
   `deferred_progressed` (claimed turn younger than the mid-turn floor,
-  re-checked next tick), `skipped_incomplete`, `persist_error`.
+  re-checked next tick), `deferred_pipeline_quiet` (candidates existed but
+  zero runner-produced events landed fleet-wide in the quiet window — the
+  persister/session-bus pipeline itself is suspect, so the sweep wrote
+  nothing; a sustained rate here during business hours means the event
+  pipeline is down, not that turns are stranding), `skipped_incomplete`,
+  `persist_error`. AskUserQuestion turns (the question shell, the asking
+  turn paused on the user, the answered turn whose terminal lives on the
+  rotated continuation id) are excluded in the candidate query itself and
+  never appear under any label.
   Per-sweep detail (session, turn, progressed, source) is in the
   "stranded turn swept to durable terminal" slog line. Pairs with
   `tank_stranded_launch_swept_total`, the create-flow equivalent.

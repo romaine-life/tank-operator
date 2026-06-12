@@ -213,6 +213,10 @@ func (s *activityEventStore) FindStrandedTurns(context.Context, time.Time, time.
 	return nil, nil
 }
 
+func (s *activityEventStore) HasRecentRunnerEvent(context.Context, time.Time) (bool, error) {
+	return true, nil
+}
+
 func (s *activityEventStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
 	return nil, nil
 }

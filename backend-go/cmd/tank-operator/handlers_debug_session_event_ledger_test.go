@@ -40,6 +40,10 @@ func (f *fakeDebugSessionEventLedgerStore) FindStrandedTurns(context.Context, ti
 	return nil, nil
 }
 
+func (f *fakeDebugSessionEventLedgerStore) HasRecentRunnerEvent(context.Context, time.Time) (bool, error) {
+	return true, nil
+}
+
 func (f *fakeDebugSessionEventLedgerStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
 	return nil, nil
 }

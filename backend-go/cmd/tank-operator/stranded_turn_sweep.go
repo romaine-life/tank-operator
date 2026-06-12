@@ -120,6 +120,33 @@ func (s *appServer) processStrandedTurns(ctx context.Context, now time.Time) err
 	if err != nil {
 		return err
 	}
+	if len(rows) > 0 {
+		// Pipeline-liveness gate. turn.submitted rows land over HTTP
+		// directly, so a persister / session-bus outage makes every active
+		// session look quiet while submits keep accumulating — without this
+		// gate the sweep would mass-fail healthy in-flight turns exactly
+		// when the pipeline is recovering. Runner progress anywhere in the
+		// fleet within the quiet window proves events can flow; until it
+		// does, candidates stay candidates (they re-qualify on a later tick)
+		// and nothing is written. The gate prefers a delayed terminal over a
+		// false one: a genuine strand on an otherwise idle fleet waits for
+		// the next runner event anywhere before it is failed, which is the
+		// first moment a user is looking again.
+		alive, liveErr := s.sessionEvents.HasRecentRunnerEvent(ctx, quietSince)
+		if liveErr != nil {
+			return liveErr
+		}
+		if !alive {
+			for range rows {
+				recordStrandedTurnSwept("deferred_pipeline_quiet")
+			}
+			slog.Warn("stranded turn sweep deferred: no runner events fleet-wide in the quiet window",
+				"candidates", len(rows),
+				"quiet_since", quietSince,
+			)
+			return nil
+		}
+	}
 	for _, row := range rows {
 		if row.Progressed && now.Sub(row.CreatedAt) < strandedTurnMinAgeProgressed {
 			// A claimed turn gets the longer floor; it stays a candidate on
