@@ -277,6 +277,37 @@ func IsLifecycleChatEventType(eventType string) bool {
 	return false
 }
 
+// Chat-activity delta classes. The chat-activity emitter
+// (sessioncontroller.ChatActivityEmitter) runs a DIFFERENT durable
+// recompute per class — lifecycle types refresh the activity summary,
+// context.compacted refreshes the compaction count, and
+// user_message.created refreshes the user-message count. The persister
+// coalesces its per-batch emits BY CLASS (one emit per class present,
+// keeping the last event of each), so the class partition must live in
+// one place: this classifier is the emitter's gate AND the persister's
+// coalescing key. A type the classifier doesn't know is a guaranteed
+// no-op emit, so returning "" here and skipping the emit are equivalent.
+const (
+	ActivityClassLifecycle   = "lifecycle"
+	ActivityClassCompaction  = "compaction"
+	ActivityClassUserMessage = "user_message"
+)
+
+// ChatActivityDeltaClass returns the refresh class for eventType, or ""
+// when the type does not affect any sidebar activity indicator.
+func ChatActivityDeltaClass(eventType string) string {
+	switch eventType {
+	case "context.compacted":
+		return ActivityClassCompaction
+	case "user_message.created":
+		return ActivityClassUserMessage
+	}
+	if IsLifecycleChatEventType(eventType) {
+		return ActivityClassLifecycle
+	}
+	return ""
+}
+
 func canTransitionToStopping(status string) bool {
 	switch status {
 	case "submitted", "claimed", "streaming", "needs_input", "stopping":

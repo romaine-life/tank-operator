@@ -1886,6 +1886,29 @@ var schemaMigrations = []migration{
 		updated_by text NOT NULL DEFAULT '',
 		updated_at timestamptz NOT NULL DEFAULT now()
 	)`},
+	// Activity-derivation cost (issue #1077 item 7). Both indexes carry
+	// LITERAL event-type lists because partial-index matching requires the
+	// query predicate to imply the index predicate — a runtime
+	// `= ANY($n)` parameter can never be proven, so the store queries
+	// inline the same Go constants as SQL literals. If
+	// store.LifecycleEventTypes / the unread type lists change, these
+	// predicates must change in the same PR (the store comments point
+	// here).
+	//
+	// 0153: LatestLifecycleEvents' DESC scan — previously walked every
+	// trailing item/stream row of a flood turn to accumulate 50 lifecycle
+	// rows; now an index range over only lifecycle rows.
+	{ID: "0153", SQL: `CREATE INDEX IF NOT EXISTS session_events_lifecycle
+		ON session_events (tank_session_id, order_key DESC)
+		WHERE event_type IN ('turn.submitted', 'turn.claimed', 'turn.started', 'turn.completed', 'turn.failed', 'turn.command_failed', 'turn.interrupt_requested', 'turn.interrupted', 'turn.awaiting_input', 'turn.input_answered')`},
+
+	// 0154: the unread-output scans (items + unread turn terminals). One
+	// index whose predicate is the UNION of UnreadOutputItemTypes and
+	// UnreadOutputTurnTypes — each query's literal list is a subset, so
+	// implication holds for both.
+	{ID: "0154", SQL: `CREATE INDEX IF NOT EXISTS session_events_unread_output
+		ON session_events (tank_session_id, order_key)
+		WHERE event_type IN ('item.started', 'item.completed', 'item.failed', 'shell_task.started', 'shell_task.updated', 'shell_task.exited', 'turn.failed', 'turn.command_failed', 'turn.interrupted', 'turn.awaiting_input')`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration
