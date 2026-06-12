@@ -49,6 +49,16 @@ function markdownLinkDestination(href: string): string {
   return `<${encodeURI(href).replace(/>/g, "%3E")}>`;
 }
 
+function workspaceHrefFromTarget(target: WorkspacePathTarget): string {
+  return `/workspace/${target.path}${target.line === null ? "" : `:${target.line}`}`;
+}
+
+function normalizeWorkspaceFileURLDestination(rawHref: string): string | null {
+  if (!/^file:/i.test(rawHref)) return null;
+  const target = workspacePathFromHref(rawHref, null);
+  return target ? workspaceHrefFromTarget(target) : null;
+}
+
 function isHttpUrl(href: string): boolean {
   try {
     const url = new URL(href);
@@ -235,6 +245,83 @@ function linkTargetsInTextChunk(chunk: string): string {
   return out;
 }
 
+function findUnescaped(value: string, needle: string, start: number): number {
+  for (let i = start; i < value.length; i++) {
+    if (value[i] !== needle) continue;
+    let slashCount = 0;
+    for (let j = i - 1; j >= 0 && value[j] === "\\"; j--) slashCount++;
+    if (slashCount % 2 === 0) return i;
+  }
+  return -1;
+}
+
+function rewriteWorkspaceFileMarkdownLinksInTextChunk(chunk: string): string {
+  let out = "";
+  let cursor = 0;
+  let i = 0;
+
+  while (i < chunk.length) {
+    if (chunk[i] !== "[" || chunk[i - 1] === "!") {
+      i++;
+      continue;
+    }
+    const labelEnd = findUnescaped(chunk, "]", i + 1);
+    if (labelEnd === -1 || chunk[labelEnd + 1] !== "(") {
+      i++;
+      continue;
+    }
+
+    const destStart = labelEnd + 2;
+    let destValueStart = destStart;
+    let destValueEnd = destStart;
+    let closeParenStart = -1;
+
+    if (chunk[destStart] === "<") {
+      const angleEnd = findUnescaped(chunk, ">", destStart + 1);
+      if (angleEnd === -1) {
+        i++;
+        continue;
+      }
+      destValueStart = destStart + 1;
+      destValueEnd = angleEnd;
+      closeParenStart = findUnescaped(chunk, ")", angleEnd + 1);
+    } else {
+      while (
+        destValueEnd < chunk.length &&
+        !/\s|\)/.test(chunk[destValueEnd])
+      ) {
+        destValueEnd++;
+      }
+      closeParenStart = findUnescaped(chunk, ")", destValueEnd);
+    }
+
+    if (closeParenStart === -1) {
+      i++;
+      continue;
+    }
+
+    const replacementHref = normalizeWorkspaceFileURLDestination(
+      chunk.slice(destValueStart, destValueEnd),
+    );
+    if (!replacementHref) {
+      i = closeParenStart + 1;
+      continue;
+    }
+
+    out += chunk.slice(cursor, destStart);
+    out += markdownLinkDestination(replacementHref);
+    out += chunk.slice(
+      chunk[destStart] === "<" ? destValueEnd + 1 : destValueEnd,
+      closeParenStart + 1,
+    );
+    cursor = closeParenStart + 1;
+    i = cursor;
+  }
+
+  out += chunk.slice(cursor);
+  return out;
+}
+
 function linkTargetsOutsideInlineCode(line: string): string {
   let out = "";
   let chunkStart = 0;
@@ -255,13 +342,19 @@ function linkTargetsOutsideInlineCode(line: string): string {
       continue;
     }
 
-    out += linkTargetsInTextChunk(line.slice(chunkStart, i));
+    const chunk = rewriteWorkspaceFileMarkdownLinksInTextChunk(
+      line.slice(chunkStart, i),
+    );
+    out += linkTargetsInTextChunk(chunk);
     out += line.slice(i, closing + tickRun.length);
     i = closing + tickRun.length;
     chunkStart = i;
   }
 
-  out += linkTargetsInTextChunk(line.slice(chunkStart));
+  const chunk = rewriteWorkspaceFileMarkdownLinksInTextChunk(
+    line.slice(chunkStart),
+  );
+  out += linkTargetsInTextChunk(chunk);
   return out;
 }
 
