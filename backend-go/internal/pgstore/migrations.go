@@ -1777,6 +1777,20 @@ var schemaMigrations = []migration{
 		disabled        boolean NOT NULL DEFAULT false,
 		updated_at      timestamptz NOT NULL DEFAULT now()
 	)`},
+
+	// Per-turn partition of the fold memo (tank-operator#1051 follow-up):
+	// the session row keeps the small shared context; each turn's pruned
+	// entry set lives in its own row so a fold batch loads and saves only
+	// the turns it touches, and the size cap applies per part — the
+	// monster sessions that exceeded the single-row cap (disabled_size=16
+	// on first deploy) fit comfortably partitioned.
+	{ID: "0145", SQL: `CREATE TABLE IF NOT EXISTS session_transcript_fold_turns (
+		tank_session_id text NOT NULL,
+		turn_id         text NOT NULL,
+		entries         jsonb NOT NULL,
+		updated_at      timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (tank_session_id, turn_id)
+	)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to

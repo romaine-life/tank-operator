@@ -191,9 +191,11 @@ func (s *transcriptRowStore) needsBackfill(ctx context.Context, q transcriptRowQ
 	return version != transcriptRowBackfillVersion, nil
 }
 
-// LoadFoldStateTx reads the session's checkpointed fold memo and whether the
-// fold is durably disabled for this session. A missing row is (nil, false):
-// the fold seeds on the next session-scope re-projection.
+// LoadFoldStateTx reads the session's checkpointed fold memo (the shared
+// session part only — per-turn entry sets load separately via
+// LoadFoldTurnsTx) and whether the fold is durably disabled for this session.
+// A missing row is (nil, false): the fold seeds on the next session-scope
+// re-projection.
 func (s *transcriptRowStore) LoadFoldStateTx(ctx context.Context, tx pgx.Tx, tankSessionID string) ([]byte, bool, error) {
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
 	var memo []byte
@@ -212,22 +214,81 @@ func (s *transcriptRowStore) LoadFoldStateTx(ctx context.Context, tx pgx.Tx, tan
 	return memo, disabled, nil
 }
 
-func (s *transcriptRowStore) SaveFoldStateTx(ctx context.Context, tx pgx.Tx, tankSessionID string, memo []byte) error {
+// LoadFoldTurnsTx reads the per-turn entry-set blobs for exactly the turns a
+// fold batch touches. A turn with no row simply has no entries yet.
+func (s *transcriptRowStore) LoadFoldTurnsTx(ctx context.Context, tx pgx.Tx, tankSessionID string, turnIDs []string) (map[string][]byte, error) {
+	out := map[string][]byte{}
+	if len(turnIDs) == 0 {
+		return out, nil
+	}
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
-	_, err := tx.Exec(ctx, `
+	rows, err := tx.Query(ctx, `
+		SELECT turn_id, entries
+		FROM session_transcript_fold_turns
+		WHERE tank_session_id = $1 AND turn_id = ANY($2::text[])
+	`, storageKey, turnIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var turnID string
+		var entries []byte
+		if err := rows.Scan(&turnID, &entries); err != nil {
+			return nil, err
+		}
+		out[turnID] = entries
+	}
+	return out, rows.Err()
+}
+
+// SaveFoldStateTx upserts the session part and exactly the touched turn
+// blobs — the per-batch write cost is O(touched turns), never O(session).
+func (s *transcriptRowStore) SaveFoldStateTx(ctx context.Context, tx pgx.Tx, tankSessionID string, memo []byte, turns map[string][]byte) error {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	if _, err := tx.Exec(ctx, `
 		INSERT INTO session_transcript_fold_state (tank_session_id, memo, disabled, updated_at)
 		VALUES ($1, $2, false, now())
 		ON CONFLICT (tank_session_id) DO UPDATE
 		SET memo = EXCLUDED.memo, disabled = false, updated_at = now()
-	`, storageKey, memo)
-	return err
+	`, storageKey, memo); err != nil {
+		return err
+	}
+	for turnID, entries := range turns {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO session_transcript_fold_turns (tank_session_id, turn_id, entries, updated_at)
+			VALUES ($1, $2, $3, now())
+			ON CONFLICT (tank_session_id, turn_id) DO UPDATE
+			SET entries = EXCLUDED.entries, updated_at = now()
+		`, storageKey, turnID, entries); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ReplaceFoldStateTx is the reseed write: the session part plus the COMPLETE
+// turn-blob set, with stale turn rows removed.
+func (s *transcriptRowStore) ReplaceFoldStateTx(ctx context.Context, tx pgx.Tx, tankSessionID string, memo []byte, turns map[string][]byte) error {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM session_transcript_fold_turns WHERE tank_session_id = $1
+	`, storageKey); err != nil {
+		return err
+	}
+	return s.SaveFoldStateTx(ctx, tx, tankSessionID, memo, turns)
 }
 
 // DeleteFoldStateTx invalidates the memo: a turn-scope reference projection
 // makes it stale, and the next session-scope projection reseeds it. A
-// durably disabled row is preserved.
+// durably disabled session-part row is preserved.
 func (s *transcriptRowStore) DeleteFoldStateTx(ctx context.Context, tx pgx.Tx, tankSessionID string) error {
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	if _, err := tx.Exec(ctx, `
+		DELETE FROM session_transcript_fold_turns WHERE tank_session_id = $1
+	`, storageKey); err != nil {
+		return err
+	}
 	_, err := tx.Exec(ctx, `
 		DELETE FROM session_transcript_fold_state
 		WHERE tank_session_id = $1 AND disabled = false
