@@ -63,44 +63,44 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-3dfa23f7aa7f89080d1abbdcb1f8b68b4cceb8ddadc86d57a07c484bc92e66cd
-  codexImage: romainecr.azurecr.io/codex-container:codex-7d503e605bcb784a175e87ec43573075d9f3828c8b8b65a145bb3eacd7e800b6
+  image: "romainecr.azurecr.io/claude-container:claude-b76220b5a43e07adb8419a934fd10ffb94c3f9abcb382a9fedeb02f43d7c9088"
+  codexImage: "romainecr.azurecr.io/codex-container:codex-c7d4f70190086fec69d110a73608eddb4a6f4a4e81f373d0580aa7df1fa8078d"
   # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-78fd2668ff2a598de5a2d7793ef39269ce44c15c57d2cad4806575120f352ca5
+  antigravityImage: "romainecr.azurecr.io/antigravity-container:antigravity-e8f09d4ea74906940037fd82001626a0c52380a989fa7acf3d909e047ce65a0d"
   imageMetadata:
     claude:
-      built_at: ""
-      git_sha: ""
-      git_ref: ""
-      commit_url: ""
-      pr_number: ""
-      pr_url: ""
-      workflow_run_url: ""
-      repository: ""
-      actor: ""
+      built_at: "2026-06-12T01:44:21Z"
+      git_sha: "1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      git_ref: "main"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      pr_number: "1050"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1050"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27389046126"
+      repository: "romaine-life/tank-operator"
+      actor: "tank-operator-host[bot]"
     codex:
-      built_at: ""
-      git_sha: ""
-      git_ref: ""
-      commit_url: ""
-      pr_number: ""
-      pr_url: ""
-      workflow_run_url: ""
-      repository: ""
-      actor: ""
+      built_at: "2026-06-12T01:44:21Z"
+      git_sha: "1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      git_ref: "main"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      pr_number: "1050"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1050"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27389046126"
+      repository: "romaine-life/tank-operator"
+      actor: "tank-operator-host[bot]"
     antigravity:
-      built_at: ""
-      git_sha: ""
-      git_ref: ""
-      commit_url: ""
-      pr_number: ""
-      pr_url: ""
-      workflow_run_url: ""
-      repository: ""
-      actor: ""
+      built_at: "2026-06-12T01:44:21Z"
+      git_sha: "1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      git_ref: "main"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      pr_number: "1050"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1050"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27389046126"
+      repository: "romaine-life/tank-operator"
+      actor: "tank-operator-host[bot]"
   # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
   # orchestrator namespace where the antigravity-api-proxy mounts it; agy
   # session pods never mount it (they get a placeholder + proxy injection).
