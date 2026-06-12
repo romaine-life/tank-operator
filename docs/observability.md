@@ -79,10 +79,35 @@ All metric names are prefixed `tank_`. The full namespace:
   stranding floors. Bounded `result`: `failed` (terminal written — pages
   via `TankStrandedTurnsSwept`, because each one is a real delivery loss),
   `deferred_progressed` (claimed turn younger than the mid-turn floor,
-  re-checked next tick), `skipped_incomplete`, `persist_error`.
+  re-checked next tick), `deferred_pipeline_quiet` (candidates existed but
+  zero runner-produced events landed fleet-wide in the quiet window — the
+  persister/session-bus pipeline itself is suspect, so the sweep wrote
+  nothing; a sustained rate here during business hours means the event
+  pipeline is down, not that turns are stranding), `skipped_incomplete`,
+  `persist_error`. AskUserQuestion turns (the question shell, the asking
+  turn paused on the user, the answered turn whose terminal lives on the
+  rotated continuation id) are excluded in the candidate query itself and
+  never appear under any label.
   Per-sweep detail (session, turn, progressed, source) is in the
   "stranded turn swept to durable terminal" slog line. Pairs with
   `tank_stranded_launch_swept_total`, the create-flow equivalent.
+- `tank_idle_sessions_reaped_total{result}` — durably-idle sessions the
+  idle reaper claimed (one conditional registry UPDATE: untouched
+  `updated_at` past the cutoff, settled activity status, no pending
+  wakes/launches) and deleted. Bounded `result`: `deleted`,
+  `delete_failed` (row already invisible; pod cleanup retries
+  implicitly). A spike means sessions stopped writing durable activity,
+  which is its own incident.
+- `tank_session_activity_write_superseded_total` — activity_summary
+  writes dropped by the sessions-row writer's stale-write guard: the
+  stored summary's `last_order_key` was newer than the one the dropped
+  refresh derived from. Concurrent refreshes (per-event persister workers
+  on both replicas, the read-state HTTP path, wake/cancel paths) are
+  read-fold-write with no spanning transaction; the guard is what keeps a
+  stale fold from durably overwriting a terminal status ("stuck working
+  forever"). Steady-state expectation: rare. A sustained rate means
+  refreshers persistently race behind the ledger, not corruption — the
+  guard is why nothing corrupts.
 - `tank_stream_auth_ticket_total` — browser EventSource stream-ticket
   create/validate attempts. Labels: `operation` (`create`, `validate`),
   `stream` (`session-list`, `session-events`), and bounded `result`.

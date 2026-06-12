@@ -758,6 +758,7 @@ interface Session {
   status: string;
   mode: SessionMode;
   session_image?: string;
+  session_image_metadata?: Record<string, string>;
   requested_at: string | null;
   created_at: string | null;
   ready_at: string | null;
@@ -1365,6 +1366,17 @@ function normalizeProviderRateLimitInfo(
   return Object.keys(out).length > 0 ? out : null;
 }
 
+function normalizeStringMap(value: unknown): Record<string, string> | undefined {
+  if (!isPlainRecord(value)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === "string" && raw.trim()) {
+      out[key] = raw.trim();
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function normalizeSession(session: Session): Session {
   const mode = normalizeSessionMode(session.mode) as SessionMode;
   // The backend includes an activity block on GET /api/sessions
@@ -1384,6 +1396,9 @@ function normalizeSession(session: Session): Session {
     typeof session.name === "string" && session.name ? session.name : "";
   next.session_image =
     typeof session.session_image === "string" ? session.session_image : "";
+  next.session_image_metadata = normalizeStringMap(
+    session.session_image_metadata,
+  );
   // Defend against degraded snapshots (older server, infoFromPod
   // fallback, hand-rolled JSON in tests): repos must always be an
   // array so downstream renderers can `.map` without a guard.
@@ -1568,6 +1583,19 @@ interface AdminObservabilityAlert {
 interface AdminVersionImage {
   image: string;
   tag?: string;
+  display?: string;
+  observed_at?: string;
+  built_at?: string;
+  git_sha?: string;
+  short_sha?: string;
+  git_ref?: string;
+  commit_url?: string;
+  pr_number?: string;
+  pr_url?: string;
+  workflow_run_url?: string;
+  repository?: string;
+  actor?: string;
+  source?: string;
 }
 
 interface AdminAppVersion {
@@ -10218,7 +10246,7 @@ function RunTurnViewControls({
                   {selectedEntry.turnLabel}
                 </span>
                 <span className="run-turn-view-combined-page">
-                  <span>Page {selectedEntry.pageNumber}</span>
+                  <span>Page {selectedEntry.pageNumber}</span>{" "}
                   {selectedEntryParts.isQuestion && (
                     <span
                       className="run-turn-view-combined-kind"
@@ -10256,7 +10284,7 @@ function RunTurnViewControls({
                       {entry.turnLabel}
                     </span>
                     <span className="run-turn-view-combined-page">
-                      <span>Page {entry.pageNumber}</span>
+                      <span>Page {entry.pageNumber}</span>{" "}
                       {parts.isQuestion && (
                         <span
                           className="run-turn-view-combined-kind"
@@ -11291,6 +11319,11 @@ function RunTurnActivityScreen({
       true;
   const showPromptContextShell = Boolean(selected);
   const canTogglePromptContext = Boolean(selectedTurnContext);
+  const canToggleTurnSections =
+    canTogglePromptContext && canToggleDetailActivity;
+  const turnSectionCycleLabel = detailActivityCollapsed
+    ? "Show agent activity and collapse user message"
+    : "Show user message and collapse agent activity";
   const setToolGroupOpen = useCallback((groupKey: string, open: boolean) => {
     setToolGroupOpenOverrides((prev) =>
       prev[groupKey] === open ? prev : { ...prev, [groupKey]: open },
@@ -11732,6 +11765,48 @@ function RunTurnActivityScreen({
                       <ChevronUpIcon
                         className="run-turn-activity-divider-toggle-chevron"
                         size={13}
+                        strokeWidth={2.3}
+                        aria-hidden="true"
+                      />
+                    </button>
+                    <button
+                      type="button"
+                      className="run-turn-activity-divider-toggle"
+                      data-direction="both"
+                      disabled={!canToggleTurnSections}
+                      onClick={() => {
+                        if (!canToggleTurnSections) return;
+                        const nextActivityCollapsed = !detailActivityCollapsed;
+                        const nextContextCollapsed = detailActivityCollapsed;
+                        setCollapsedContextTurnIds((prev) => ({
+                          ...prev,
+                          [selected.turnId]: nextContextCollapsed,
+                        }));
+                        setCollapsedActivityTurnIds((prev) => ({
+                          ...prev,
+                          [selected.turnId]: nextActivityCollapsed,
+                        }));
+                      }}
+                      aria-label={
+                        canToggleTurnSections
+                          ? turnSectionCycleLabel
+                          : "Cannot cycle turn sections"
+                      }
+                      title={
+                        canToggleTurnSections
+                          ? turnSectionCycleLabel
+                          : "Cannot cycle turn sections"
+                      }
+                    >
+                      <ChevronUpIcon
+                        className="run-turn-activity-divider-toggle-chevron"
+                        size={11}
+                        strokeWidth={2.3}
+                        aria-hidden="true"
+                      />
+                      <ChevronDownIcon
+                        className="run-turn-activity-divider-toggle-chevron"
+                        size={11}
                         strokeWidth={2.3}
                         aria-hidden="true"
                       />
@@ -12739,15 +12814,13 @@ function AdminVersionPanel({
 }) {
   const rows = state.summary
     ? [
-        ["App", versionImageLabel(state.summary.app_image)],
-        ["Claude sessions", versionImageLabel(state.summary.session_image)],
-        ["Codex sessions", versionImageLabel(state.summary.codex_session_image)],
-        [
-          "Antigravity sessions",
-          versionImageLabel(state.summary.antigravity_session_image),
-        ],
-        ["Scope", state.summary.session_scope],
-        ["Pod", state.summary.pod_name || "unknown"],
+        { label: "App", image: state.summary.app_image },
+        { label: "Claude sessions", image: state.summary.session_image },
+        { label: "Codex sessions", image: state.summary.codex_session_image },
+        {
+          label: "Antigravity sessions",
+          image: state.summary.antigravity_session_image,
+        },
       ]
     : [];
   return (
@@ -12777,12 +12850,20 @@ function AdminVersionPanel({
         </div>
       ) : rows.length > 0 ? (
         <div className="run-settings-rate-limit-grid">
-          {rows.map(([label, value]) => (
-            <div className="run-settings-rate-limit-row" key={label}>
-              <span>{label}</span>
-              <span title={value}>{value}</span>
+          {rows.map((row) => (
+            <div className="run-settings-rate-limit-row" key={row.label}>
+              <span>{row.label}</span>
+              <AdminVersionValue image={row.image} />
             </div>
           ))}
+          <div className="run-settings-rate-limit-row">
+            <span>Scope</span>
+            <span>{state.summary?.session_scope || "unknown"}</span>
+          </div>
+          <div className="run-settings-rate-limit-row">
+            <span>Pod</span>
+            <span>{state.summary?.pod_name || "unknown"}</span>
+          </div>
         </div>
       ) : (
         <div className="run-settings-observability-note" role="status">
@@ -12793,10 +12874,78 @@ function AdminVersionPanel({
   );
 }
 
+function AdminVersionValue({ image }: { image: AdminVersionImage }) {
+  const links = [
+    image.pr_url
+      ? { href: image.pr_url, label: image.pr_number ? `PR #${image.pr_number}` : "PR" }
+      : null,
+    image.commit_url
+      ? { href: image.commit_url, label: image.short_sha || "Commit" }
+      : null,
+    image.workflow_run_url
+      ? { href: image.workflow_run_url, label: "Workflow" }
+      : null,
+  ].filter((link): link is { href: string; label: string } => Boolean(link));
+  return (
+    <div className="run-settings-version-value" title={versionImageDetail(image)}>
+      <span className="run-settings-version-label">{versionImageLabel(image)}</span>
+      {links.length > 0 ? (
+        <span className="run-settings-version-links">
+          {links.map((link) => (
+            <a key={link.href} href={link.href} target="_blank" rel="noreferrer">
+              {link.label}
+              <ExternalLinkIcon aria-hidden="true" />
+            </a>
+          ))}
+        </span>
+      ) : null}
+      <span className="run-settings-version-detail">{versionImageDetail(image)}</span>
+    </div>
+  );
+}
+
 function versionImageLabel(image: AdminVersionImage | null | undefined): string {
+  const display = image?.display?.trim();
+  if (display) return display;
+  const built = formatVersionTimestamp(image?.built_at);
+  const short = image?.short_sha?.trim() || shortVersionSHA(image?.git_sha);
+  const pr = image?.pr_number?.trim();
+  const rich = [built, short, pr ? `PR #${pr}` : ""].filter(Boolean).join(" / ");
+  if (rich) return rich;
   const tag = image?.tag?.trim();
   const ref = image?.image?.trim();
   return tag || ref || "unknown";
+}
+
+function versionImageDetail(image: AdminVersionImage | null | undefined): string {
+  if (!image) return "";
+  return [
+    image.image,
+    image.observed_at ? `observed ${formatVersionTimestamp(image.observed_at)}` : "",
+    image.git_ref ? `ref ${image.git_ref}` : "",
+    image.repository,
+    image.actor ? `by ${image.actor}` : "",
+  ]
+    .filter(Boolean)
+    .join(" / ");
+}
+
+function shortVersionSHA(sha: string | undefined): string {
+  if (!sha) return "";
+  const trimmed = sha.trim();
+  return trimmed.length > 7 ? trimmed.slice(0, 7) : trimmed;
+}
+
+function formatVersionTimestamp(raw: string | undefined): string {
+  if (!raw) return "";
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) return raw;
+  const yyyy = date.getUTCFullYear();
+  const mm = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const dd = String(date.getUTCDate()).padStart(2, "0");
+  const hh = String(date.getUTCHours()).padStart(2, "0");
+  const min = String(date.getUTCMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hh}:${min} UTC`;
 }
 
 const PROVIDER_RATE_LIMIT_LABELS: Record<string, string> = {
@@ -15269,19 +15418,6 @@ function ChatPane({
     }
     if (visible) scheduleSdkReadStateUpdate();
   }, [session.id, visible]);
-
-  useEffect(() => {
-    if (publicView || readOnly || !visible || session.status !== "Active")
-      return;
-    const touch = () => {
-      void authedFetch(`/api/sessions/${session.id}/touch`, {
-        method: "POST",
-      }).catch(() => undefined);
-    };
-    touch();
-    const interval = window.setInterval(touch, 30_000);
-    return () => window.clearInterval(interval);
-  }, [publicView, readOnly, session.id, session.status, visible]);
 
   // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
@@ -21526,6 +21662,7 @@ function AuthenticatedApp() {
       status: row.status,
       mode: row.mode as SessionMode,
       session_image: row.session_image ?? "",
+      session_image_metadata: normalizeStringMap(row.session_image_metadata),
       requested_at: row.requested_at ?? null,
       created_at: row.created_at ?? null,
       ready_at: row.ready_at ?? null,
@@ -21581,6 +21718,7 @@ function AuthenticatedApp() {
       pod_name: raw.pod_name ?? undefined,
       session_image:
         typeof raw.session_image === "string" ? raw.session_image : undefined,
+      session_image_metadata: normalizeStringMap(raw.session_image_metadata),
       // name is the server-canonical title. Always present on the snapshot
       // wire; fall back to the empty string only to keep the type honest for
       // degraded payloads — there is no client-side slug re-derivation any more.

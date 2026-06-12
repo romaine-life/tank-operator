@@ -94,6 +94,12 @@ func TestMarshalRowUpdateIncludesSessionImage(t *testing.T) {
 		PodName:      "session-42",
 		Name:         "42",
 		SessionImage: "romainecr.azurecr.io/codex-container:codex-BRANCH",
+		SessionImageMetadata: sessionmodel.ImageVersionMetadata{
+			"built_at":  "2026-06-11T08:06:08Z",
+			"git_sha":   "532dd02176ac6d0013478aaf63ee419a3eb17d24",
+			"pr_number": "1049",
+			"pr_url":    "https://github.com/romaine-life/tank-operator/pull/1049",
+		},
 		Visible:      true,
 		Status:       "Active",
 		Repos:        []string{},
@@ -104,7 +110,8 @@ func TestMarshalRowUpdateIncludesSessionImage(t *testing.T) {
 	}
 	var decoded struct {
 		Row struct {
-			SessionImage string `json:"session_image"`
+			SessionImage         string            `json:"session_image"`
+			SessionImageMetadata map[string]string `json:"session_image_metadata"`
 		} `json:"row"`
 	}
 	if err := json.Unmarshal(payload, &decoded); err != nil {
@@ -112,6 +119,12 @@ func TestMarshalRowUpdateIncludesSessionImage(t *testing.T) {
 	}
 	if got, want := decoded.Row.SessionImage, "romainecr.azurecr.io/codex-container:codex-BRANCH"; got != want {
 		t.Fatalf("session_image = %q, want %q", got, want)
+	}
+	if got, want := decoded.Row.SessionImageMetadata["pr_url"], "https://github.com/romaine-life/tank-operator/pull/1049"; got != want {
+		t.Fatalf("session_image_metadata.pr_url = %q, want %q", got, want)
+	}
+	if got, want := decoded.Row.SessionImageMetadata["git_sha"], "532dd02176ac6d0013478aaf63ee419a3eb17d24"; got != want {
+		t.Fatalf("session_image_metadata.git_sha = %q, want %q", got, want)
 	}
 }
 

@@ -87,7 +87,8 @@ const (
 //   - turn.command_failed is terminal, so a late runner racing the sweep hits
 //     the already-terminal guard and drops the stray command;
 //   - the event_id is deterministic in turn_id, so both replicas collapse to
-//     one row at the (tank_session_id, event_id) UNIQUE constraint.
+//     one row at the session_events_event_identity unique index (real
+//     since migration 0151).
 func runStrandedTurnSweepLoop(ctx context.Context, app *appServer, interval time.Duration) error {
 	if app == nil || app.sessionEvents == nil {
 		return nil
@@ -119,6 +120,33 @@ func (s *appServer) processStrandedTurns(ctx context.Context, now time.Time) err
 	rows, err := s.sessionEvents.FindStrandedTurns(ctx, olderThan, quietSince, notBefore, strandedTurnBatchLimit)
 	if err != nil {
 		return err
+	}
+	if len(rows) > 0 {
+		// Pipeline-liveness gate. turn.submitted rows land over HTTP
+		// directly, so a persister / session-bus outage makes every active
+		// session look quiet while submits keep accumulating — without this
+		// gate the sweep would mass-fail healthy in-flight turns exactly
+		// when the pipeline is recovering. Runner progress anywhere in the
+		// fleet within the quiet window proves events can flow; until it
+		// does, candidates stay candidates (they re-qualify on a later tick)
+		// and nothing is written. The gate prefers a delayed terminal over a
+		// false one: a genuine strand on an otherwise idle fleet waits for
+		// the next runner event anywhere before it is failed, which is the
+		// first moment a user is looking again.
+		alive, liveErr := s.sessionEvents.HasRecentRunnerEvent(ctx, quietSince)
+		if liveErr != nil {
+			return liveErr
+		}
+		if !alive {
+			for range rows {
+				recordStrandedTurnSwept("deferred_pipeline_quiet")
+			}
+			slog.Warn("stranded turn sweep deferred: no runner events fleet-wide in the quiet window",
+				"candidates", len(rows),
+				"quiet_since", quietSince,
+			)
+			return nil
+		}
 	}
 	for _, row := range rows {
 		if row.Progressed && now.Sub(row.CreatedAt) < strandedTurnMinAgeProgressed {

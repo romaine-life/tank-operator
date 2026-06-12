@@ -144,6 +144,7 @@
 
   /* Spacing */
   --space-1: 0.25rem;
+  --space-1-5: 0.375rem;
   --space-2: 0.5rem;
   --space-3: 0.75rem;
   --space-4: 1rem;
@@ -6093,11 +6094,46 @@ button:disabled {
   font-size: var(--text-xs);
 }
 
-.run-settings-rate-limit-row span:last-child {
+.run-settings-rate-limit-row > span:last-child,
+.run-settings-rate-limit-row > .run-settings-version-value {
   min-width: 0;
   color: var(--text-body);
   font-family: var(--font-mono);
   overflow-wrap: anywhere;
+}
+
+.run-settings-version-value {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.run-settings-version-label {
+  color: var(--text-body);
+}
+
+.run-settings-version-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  font-family: var(--font-sans);
+}
+
+.run-settings-version-links a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  color: var(--accent-fg);
+  text-decoration: none;
+}
+
+.run-settings-version-links svg {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.run-settings-version-detail {
+  color: var(--text-muted);
+  font-size: 0.72rem;
 }
 
 .run-settings-observability {
@@ -9358,6 +9394,20 @@ textarea.run-files-viewer-editor:focus {
 
 .run-turn-activity-divider-toggle[data-direction="up"] .run-turn-activity-divider-toggle-chevron {
   transform: translateY(1px);
+}
+
+.run-turn-activity-divider-toggle[data-direction="both"] {
+  width: 28px;
+  flex-direction: column;
+  gap: 0;
+}
+
+.run-turn-activity-divider-toggle[data-direction="both"] .run-turn-activity-divider-toggle-chevron:first-child {
+  transform: translateY(2px);
+}
+
+.run-turn-activity-divider-toggle[data-direction="both"] .run-turn-activity-divider-toggle-chevron:last-child {
+  transform: translateY(-2px);
 }
 
 .run-turn-activity-divider-toggle:hover:not(:disabled),

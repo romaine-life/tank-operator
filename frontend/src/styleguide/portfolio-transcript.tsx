@@ -340,6 +340,26 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
             <button
               type="button"
               className="run-turn-activity-divider-toggle"
+              data-direction="both"
+              aria-label="Show agent activity and collapse user message"
+              title="Show agent activity and collapse user message"
+            >
+              <ChevronUpIcon
+                className="run-turn-activity-divider-toggle-chevron"
+                size={11}
+                strokeWidth={2.3}
+                aria-hidden="true"
+              />
+              <ChevronDownIcon
+                className="run-turn-activity-divider-toggle-chevron"
+                size={11}
+                strokeWidth={2.3}
+                aria-hidden="true"
+              />
+            </button>
+            <button
+              type="button"
+              className="run-turn-activity-divider-toggle"
               data-direction="down"
               aria-expanded={true}
               aria-label="Collapse agent activity"

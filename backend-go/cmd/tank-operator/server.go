@@ -46,11 +46,11 @@ type appServer struct {
 	// degraded boots and test fixtures; persistBackendEvent then skips
 	// projection (on-read resync covers it) and wakes SSE inline.
 	transcriptRefresher *asyncTranscriptRefresher
-	avatars        avatarassets.Store
-	avatarImages   avatarassets.ImageStore
-	avatarUploads  avataruploads.Store
-	pgPool         *pgxpool.Pool
-	sessionBus     sessionCommandBus
+	avatars             avatarassets.Store
+	avatarImages        avatarassets.ImageStore
+	avatarUploads       avataruploads.Store
+	pgPool              *pgxpool.Pool
+	sessionBus          sessionCommandBus
 	// rowWriter is the shared session-row transition writer (same instance
 	// the K8s watch and chat-activity emitter use). The internal
 	// provider-fatal endpoint routes runner-reported agent-process death
@@ -134,6 +134,12 @@ type appServer struct {
 	// test-env signal (SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED). false in
 	// production, where the Manager resolver is also left nil.
 	sessionImageOverridesEnabled bool
+
+	// deploymentVersions is the durable source for the admin app-version
+	// surface. Each orchestrator pod records its observed image refs and
+	// metadata at boot; the handler reads the latest observation for this
+	// session scope instead of trusting only process-local env vars.
+	deploymentVersions deploymentImageVersionStore
 }
 
 type sessionCommandBus interface {
@@ -216,6 +222,11 @@ type sessionImageOverrideStore interface {
 	Get(ctx context.Context, scope string) (pgstore.SessionImageOverride, error)
 	Upsert(ctx context.Context, ov pgstore.SessionImageOverride) error
 	Delete(ctx context.Context, scope string) (bool, error)
+}
+
+type deploymentImageVersionStore interface {
+	UpsertMany(context.Context, []pgstore.DeploymentImageVersion) error
+	LatestByScope(context.Context, string) (map[string]pgstore.DeploymentImageVersion, error)
 }
 
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
@@ -341,7 +352,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/sessions/order", s.handleReorderSessions)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)
-	mux.HandleFunc("POST /api/sessions/{session_id}/touch", s.handleTouchSession)
 	mux.HandleFunc("PATCH /api/sessions/{session_id}", s.handlePatchSession)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/open-target", s.handleSetOpenTarget)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/bug-label", s.handleSetSessionBugLabel)
@@ -596,6 +606,16 @@ func readOptionalFile(path string, fallback string) string {
 }
 
 func (s *appServer) handlePostDesignSelection(w http.ResponseWriter, r *http.Request) {
+	// The selection is written into the tank-design-selection ConfigMap and
+	// read back by agent design flows — an unauthenticated POST was both an
+	// arbitrary cluster ConfigMap write and a prompt-injection channel into
+	// whatever agent consumes /api/design/selection/latest. Same bearer
+	// gate as every other protected route: browser styleguide users send
+	// their auth.romaine.life JWT (authedFetch), in-cluster agent callers
+	// present a role=service exchange token.
+	if _, ok := s.requireAuth(w, r); !ok {
+		return
+	}
 	defer r.Body.Close()
 
 	var payload map[string]any
@@ -615,6 +635,9 @@ func (s *appServer) handlePostDesignSelection(w http.ResponseWriter, r *http.Req
 }
 
 func (s *appServer) handleGetLatestDesignSelection(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAuth(w, r); !ok {
+		return
+	}
 	selection, ok, err := s.loadLatestDesignSelection(r)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load selection"})

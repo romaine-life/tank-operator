@@ -73,8 +73,11 @@ const (
 //     already-terminal guard (runner.ts finalizeCommandIfAlreadyTerminal)
 //     drops the stray submit_turn — no double-run.
 //   - the event_id is deterministic in turn_id, so both orchestrator replicas
-//     running this loop collapse to one row at the (tank_session_id,
-//     event_id) UNIQUE constraint — no leader election needed.
+//     running this loop collapse to one row at the
+//     session_events_event_identity unique index (real since migration
+//     0151; before that this comment described a constraint that did not
+//     exist, and replica races double-wrote terminals) — no leader
+//     election needed.
 func runStrandedLaunchSweepLoop(ctx context.Context, app *appServer, interval time.Duration) error {
 	if app == nil || app.sessionEvents == nil {
 		return nil

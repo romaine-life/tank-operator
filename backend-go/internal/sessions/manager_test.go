@@ -240,7 +240,12 @@ func TestManagerCreateStoresResolvedSessionImage(t *testing.T) {
 		ManifestOpts: sessionmodel.ManifestOptions{
 			SessionImage:      pinnedClaude,
 			CodexSessionImage: pinnedCodex,
-			SessionScope:      "tank-operator-slot-1",
+			CodexSessionImageMetadata: sessionmodel.ImageVersionMetadata{
+				"built_at":  "2026-06-11T08:06:08Z",
+				"git_sha":   "532dd02176ac6d0013478aaf63ee419a3eb17d24",
+				"pr_number": "1049",
+			},
+			SessionScope: "tank-operator-slot-1",
 		},
 		ImageOverrides: overrides,
 	})
@@ -255,6 +260,9 @@ func TestManagerCreateStoresResolvedSessionImage(t *testing.T) {
 	if got := info.SessionImage; got != branchCodex {
 		t.Fatalf("Info.SessionImage = %q, want %q", got, branchCodex)
 	}
+	if got, want := info.SessionImageMetadata["source"], "test_slot_override"; got != want {
+		t.Fatalf("Info.SessionImageMetadata[source] = %q, want %q", got, want)
+	}
 	record, ok, err := registry.Get(context.Background(), "nelson@romaine.life", info.ID)
 	if err != nil || !ok {
 		t.Fatalf("registry get ok=%v err=%v", ok, err)
@@ -262,12 +270,60 @@ func TestManagerCreateStoresResolvedSessionImage(t *testing.T) {
 	if got := record.SessionImage; got != branchCodex {
 		t.Fatalf("registry SessionImage = %q, want %q", got, branchCodex)
 	}
+	if got, want := record.SessionImageMetadata["source"], "test_slot_override"; got != want {
+		t.Fatalf("registry SessionImageMetadata[source] = %q, want %q", got, want)
+	}
 	pod, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).Get(context.Background(), *info.PodName, metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got := sandboxImage(pod); got != branchCodex {
 		t.Fatalf("sandbox image = %q, want %q", got, branchCodex)
+	}
+}
+
+func TestManagerCreateStoresConfiguredSessionImageMetadata(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	registry := &managerTestRegistry{
+		avatarAssignment: sessionmodel.SessionAvatarAssignment{
+			AgentAvatarID:  "agent-1",
+			SystemAvatarID: "system-1",
+		},
+	}
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, registry, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			SessionImage:      pinnedClaude,
+			CodexSessionImage: pinnedCodex,
+			CodexSessionImageMetadata: sessionmodel.ImageVersionMetadata{
+				"built_at":         "2026-06-11T08:06:08Z",
+				"git_sha":          "532dd02176ac6d0013478aaf63ee419a3eb17d24",
+				"git_ref":          "main",
+				"pr_number":        "1049",
+				"pr_url":           "https://github.com/romaine-life/tank-operator/pull/1049",
+				"workflow_run_url": "https://github.com/romaine-life/tank-operator/actions/runs/27332914448",
+			},
+		},
+	})
+
+	info, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.CodexGUIMode,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.SessionImage; got != pinnedCodex {
+		t.Fatalf("Info.SessionImage = %q, want %q", got, pinnedCodex)
+	}
+	if got, want := info.SessionImageMetadata["pr_url"], "https://github.com/romaine-life/tank-operator/pull/1049"; got != want {
+		t.Fatalf("Info.SessionImageMetadata[pr_url] = %q, want %q", got, want)
+	}
+	record, ok, err := registry.Get(context.Background(), "nelson@romaine.life", info.ID)
+	if err != nil || !ok {
+		t.Fatalf("registry get ok=%v err=%v", ok, err)
+	}
+	if got, want := record.SessionImageMetadata["git_sha"], "532dd02176ac6d0013478aaf63ee419a3eb17d24"; got != want {
+		t.Fatalf("registry SessionImageMetadata[git_sha] = %q, want %q", got, want)
 	}
 }
 

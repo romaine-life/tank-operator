@@ -1678,3 +1678,89 @@ func authedAnswerRequest(t *testing.T, sessionID, turnID, body string) *http.Req
 	req.Header.Set("Content-Type", "application/json")
 	return req
 }
+
+// TestEnqueueSessionTurnCancelOrdering pins the take-over cancel's position
+// in the submit flow: pending wakes are cancelled only AFTER enqueueSDKTurn
+// accepts the turn. Cancelling first was two production bugs in one line —
+// any authenticated caller could destroy another user's wake chain by
+// POSTing to their session id (ownership is enforced inside enqueueSDKTurn),
+// and a rejected submission (bad body, pod restarting) silently killed the
+// agent's scheduled continuation while the sidebar kept promising
+// 'scheduled'.
+func TestEnqueueSessionTurnCancelOrdering(t *testing.T) {
+	const body = `{"client_nonce":"turn-abc_123","prompt":"hello"}`
+
+	t.Run("non-owner gets 404 and cancels nothing", func(t *testing.T) {
+		bus := &recordingSessionBus{}
+		app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
+		sched := &fakeScheduledWakeupStore{cancelReturn: 1}
+		bg := &fakeBackgroundTaskWakeStore{cancelReturn: 1}
+		app.scheduledWakeups = sched
+		app.backgroundTaskWakes = bg
+
+		req := httptest.NewRequest(http.MethodPost, "/api/sessions/63/turns", strings.NewReader(body))
+		req.SetPathValue("session_id", "63")
+		req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "intruder@example.com"))
+		req.Header.Set("Content-Type", "application/json")
+		resp := httptest.NewRecorder()
+
+		app.handleEnqueueSessionTurn(resp, req)
+
+		if resp.Code != http.StatusNotFound {
+			t.Fatalf("status = %d, want 404 for non-owner", resp.Code)
+		}
+		if sched.cancelCalls != 0 || bg.cancelCalls != 0 {
+			t.Fatalf("non-owner cancelled wakes: scheduled=%d background=%d, want 0/0", sched.cancelCalls, bg.cancelCalls)
+		}
+		if len(bus.commands) != 0 {
+			t.Fatalf("non-owner published %d commands, want 0", len(bus.commands))
+		}
+	})
+
+	t.Run("rejected submission keeps wakes armed", func(t *testing.T) {
+		bus := &recordingSessionBus{}
+		app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
+		sched := &fakeScheduledWakeupStore{cancelReturn: 1}
+		bg := &fakeBackgroundTaskWakeStore{cancelReturn: 1}
+		app.scheduledWakeups = sched
+		app.backgroundTaskWakes = bg
+
+		// Missing client_nonce: enqueueSDKTurn rejects before any durable
+		// side effect; the parked agent's wakes must survive.
+		req := authedTurnRequest(t, "63", `{"prompt":"hello"}`)
+		resp := httptest.NewRecorder()
+
+		app.handleEnqueueSessionTurn(resp, req)
+
+		if resp.Code < 400 {
+			t.Fatalf("status = %d, want a rejection", resp.Code)
+		}
+		if sched.cancelCalls != 0 || bg.cancelCalls != 0 {
+			t.Fatalf("rejected submit cancelled wakes: scheduled=%d background=%d, want 0/0", sched.cancelCalls, bg.cancelCalls)
+		}
+	})
+
+	t.Run("accepted submission cancels pending wakes", func(t *testing.T) {
+		bus := &recordingSessionBus{}
+		app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
+		sched := &fakeScheduledWakeupStore{cancelReturn: 1}
+		bg := &fakeBackgroundTaskWakeStore{cancelReturn: 0}
+		app.scheduledWakeups = sched
+		app.backgroundTaskWakes = bg
+
+		req := authedTurnRequest(t, "63", body)
+		resp := httptest.NewRecorder()
+
+		app.handleEnqueueSessionTurn(resp, req)
+
+		if resp.Code != http.StatusAccepted {
+			t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+		}
+		if sched.cancelCalls != 1 || sched.cancelSessionID != "63" {
+			t.Fatalf("scheduled cancel = calls %d session %q, want 1 / 63", sched.cancelCalls, sched.cancelSessionID)
+		}
+		if bg.cancelCalls != 1 || bg.cancelSessionID != "63" {
+			t.Fatalf("background cancel = calls %d session %q, want 1 / 63", bg.cancelCalls, bg.cancelSessionID)
+		}
+	})
+}

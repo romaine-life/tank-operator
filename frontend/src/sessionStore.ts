@@ -62,6 +62,7 @@ export interface SessionRow {
   session_scope: string;
   pod_name?: string;
   session_image?: string;
+  session_image_metadata?: Record<string, string>;
   // Server-canonical session title, always present (non-null) on the wire.
   // The trimmed user-set name when set, else a backend-derived short id
   // slug. The SPA renders this verbatim rather than deriving a local
@@ -515,6 +516,7 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       session_scope: sessionScope,
       pod_name: stringField(rowRaw, "pod_name") ?? undefined,
       session_image: stringField(rowRaw, "session_image") ?? undefined,
+      session_image_metadata: stringMapField(rowRaw, "session_image_metadata"),
       name,
       visible,
       status: stringField(rowRaw, "status") ?? "Pending",
@@ -611,6 +613,21 @@ function normalizeSessionBugLabels(value: unknown): SessionBugLabel[] {
 function stringField(value: Record<string, unknown>, key: string): string | null {
   const field = value[key];
   return typeof field === "string" && field ? field : null;
+}
+
+function stringMapField(
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, string> | undefined {
+  const field = value[key];
+  if (!field || typeof field !== "object" || Array.isArray(field)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [entryKey, entryValue] of Object.entries(field)) {
+    if (typeof entryValue === "string" && entryValue.trim()) {
+      out[entryKey] = entryValue.trim();
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function numberField(value: Record<string, unknown>, key: string): number | null {

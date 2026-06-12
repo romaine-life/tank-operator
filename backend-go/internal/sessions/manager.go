@@ -23,9 +23,7 @@ import (
 )
 
 const (
-	defaultIdleTimeout    = 5 * time.Minute
-	defaultReaperInterval = 60 * time.Second
-	podReadyTimeout       = 90 * time.Second
+	podReadyTimeout = 90 * time.Second
 )
 
 // defaultSessionScope is the production session scope. Session-image overrides
@@ -96,14 +94,6 @@ type Manager struct {
 	imageOverrides         SessionImageOverrides
 	onImageOverrideApplied func(scope, mode, kind string)
 
-	// In-memory activity tracking for reaper (single replica only).
-	mu           sync.Mutex
-	wsCount      map[string]int
-	lastActivity map[string]time.Time
-
-	idleTimeout    time.Duration
-	reaperInterval time.Duration
-
 	// Resolved ClusterIPs for host-alias injection.
 	oauthGatewayIP        string
 	apiProxyIP            string
@@ -117,8 +107,6 @@ type Manager struct {
 // ManagerOptions configures a new Manager.
 type ManagerOptions struct {
 	ManifestOpts      sessionmodel.ManifestOptions
-	IdleTimeout       time.Duration
-	ReaperInterval    time.Duration
 	OAuthGatewayHost  string
 	APIProxyHost      string
 	CodexAPIProxyHost string
@@ -135,19 +123,6 @@ type ManagerOptions struct {
 }
 
 func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace string, registry SessionRegistry, emitter RowEmitter, opts ManagerOptions) *Manager {
-	if opts.IdleTimeout == 0 {
-		opts.IdleTimeout = defaultIdleTimeout
-		if v := os.Getenv("IDLE_TIMEOUT_SECONDS"); v != "" {
-			var n int
-			fmt.Sscan(v, &n)
-			if n > 0 {
-				opts.IdleTimeout = time.Duration(n) * time.Second
-			}
-		}
-	}
-	if opts.ReaperInterval == 0 {
-		opts.ReaperInterval = defaultReaperInterval
-	}
 	if opts.ManifestOpts.SessionsNamespace == "" {
 		opts.ManifestOpts.SessionsNamespace = namespace
 	}
@@ -164,10 +139,6 @@ func NewManager(client kubernetes.Interface, restCfg *rest.Config, namespace str
 		manifestOpts:           opts.ManifestOpts,
 		imageOverrides:         opts.ImageOverrides,
 		onImageOverrideApplied: opts.OnImageOverrideApplied,
-		wsCount:                map[string]int{},
-		lastActivity:           map[string]time.Time{},
-		idleTimeout:            opts.IdleTimeout,
-		reaperInterval:         opts.ReaperInterval,
 	}
 	if opts.OAuthGatewayHost != "" {
 		m.oauthGatewayIP = resolveIP(opts.OAuthGatewayHost)
@@ -220,15 +191,18 @@ func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.Man
 	if sessionmodel.IsAntigravityMode(mode) {
 		if antigravityImage != "" {
 			opts.AntigravitySessionImage = antigravityImage
+			opts.AntigravitySessionImageMetadata = sessionmodel.ImageVersionMetadata{"source": "test_slot_override"}
 			kind = "antigravity"
 		}
 	} else if sessionmodel.IsCodexMode(mode) {
 		if codexImage != "" {
 			opts.CodexSessionImage = codexImage
+			opts.CodexSessionImageMetadata = sessionmodel.ImageVersionMetadata{"source": "test_slot_override"}
 			kind = "codex"
 		}
 	} else if claudeImage != "" {
 		opts.SessionImage = claudeImage
+		opts.SessionImageMetadata = sessionmodel.ImageVersionMetadata{"source": "test_slot_override"}
 		kind = "claude"
 	}
 	if kind == "" {
@@ -239,98 +213,6 @@ func (m *Manager) applyImageOverride(ctx context.Context, opts *sessionmodel.Man
 	if m.onImageOverrideApplied != nil {
 		m.onImageOverrideApplied(m.scope, mode, kind)
 	}
-}
-
-// StartReaper launches the idle session reaper in a background goroutine.
-func (m *Manager) StartReaper(ctx context.Context) {
-	go m.reaperLoop(ctx)
-}
-
-func (m *Manager) reaperLoop(ctx context.Context) {
-	ticker := time.NewTicker(m.reaperInterval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			m.reapIdle(ctx)
-		}
-	}
-}
-
-func (m *Manager) reapIdle(ctx context.Context) {
-	pods, err := m.client.CoreV1().Pods(m.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "app.kubernetes.io/managed-by=tank-operator",
-	})
-	if err != nil {
-		return
-	}
-	now := time.Now()
-	for _, pod := range pods.Items {
-		sessionID := sessionIDFromPod(&pod)
-		if sessionID == "" {
-			continue
-		}
-		owner := pod.Annotations["tank-operator/owner-email"]
-
-		m.mu.Lock()
-		wsCount := m.wsCount[sessionID]
-		lastAct, hasActivity := m.lastActivity[sessionID]
-		if !hasActivity {
-			// Adopt with current time so new sessions survive a full idle window.
-			m.lastActivity[sessionID] = now
-			m.mu.Unlock()
-			continue
-		}
-		m.mu.Unlock()
-
-		if wsCount > 0 {
-			continue
-		}
-		if now.Sub(lastAct) < m.idleTimeout {
-			continue
-		}
-
-		slog.Info("reaping idle session", "session_id", sessionID, "owner", owner, "idle", now.Sub(lastAct).Round(time.Second))
-		if err := m.client.CoreV1().Pods(m.namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{}); err != nil && !k8serrors.IsNotFound(err) {
-			slog.Warn("reaper delete failed", "pod", pod.Name, "err", err)
-			continue
-		}
-		m.mu.Lock()
-		delete(m.wsCount, sessionID)
-		delete(m.lastActivity, sessionID)
-		m.mu.Unlock()
-		if m.registry != nil && owner != "" {
-			if regErr := m.registry.MarkDeleted(ctx, owner, sessionID); regErr != nil {
-				slog.Warn("reaper registry mark-deleted failed",
-					"session_id", sessionID, "owner", owner, "error", regErr)
-			}
-		}
-		m.publishRow(ctx, owner, sessionID)
-	}
-}
-
-// TrackWS increments the WS connection count and returns a function to decrement.
-func (m *Manager) TrackWS(sessionID string) func() {
-	m.mu.Lock()
-	m.wsCount[sessionID]++
-	m.mu.Unlock()
-	return func() {
-		m.mu.Lock()
-		if m.wsCount[sessionID] > 0 {
-			m.wsCount[sessionID]--
-		}
-		m.lastActivity[sessionID] = time.Now()
-		m.mu.Unlock()
-	}
-}
-
-// Touch updates the last activity timestamp.
-func (m *Manager) Touch(sessionID string) {
-	m.mu.Lock()
-	m.lastActivity[sessionID] = time.Now()
-	m.mu.Unlock()
 }
 
 // CreateOptions packages the inputs to a session-create call. Replaces
@@ -463,6 +345,7 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	manifestOpts.Effort = effort
 	m.applyImageOverride(ctx, &manifestOpts, mode)
 	sessionImage := sessionmodel.ResolvedSessionImage(mode, manifestOpts)
+	sessionImageMetadata := sessionmodel.ResolvedSessionImageMetadata(mode, manifestOpts)
 
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)
@@ -498,22 +381,23 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	}
 	if m.registry != nil {
 		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
-			ID:             sessionID,
-			Email:          owner,
-			Mode:           mode,
-			Scope:          m.manifestOpts.SessionScope,
-			PodName:        podName,
-			SessionImage:   sessionImage,
-			Visible:        true,
-			Name:           storedName,
-			RequestedAt:    requestedAt,
-			UpdatedAt:      requestedAt,
-			Repos:          repos,
-			Capabilities:   capabilities,
-			Model:          model,
-			Effort:         effort,
-			AgentAvatarID:  assignment.AgentAvatarID,
-			SystemAvatarID: assignment.SystemAvatarID,
+			ID:                   sessionID,
+			Email:                owner,
+			Mode:                 mode,
+			Scope:                m.manifestOpts.SessionScope,
+			PodName:              podName,
+			SessionImage:         sessionImage,
+			SessionImageMetadata: sessionImageMetadata,
+			Visible:              true,
+			Name:                 storedName,
+			RequestedAt:          requestedAt,
+			UpdatedAt:            requestedAt,
+			Repos:                repos,
+			Capabilities:         capabilities,
+			Model:                model,
+			Effort:               effort,
+			AgentAvatarID:        assignment.AgentAvatarID,
+			SystemAvatarID:       assignment.SystemAvatarID,
 		}); regErr != nil {
 			slog.Warn("create registry upsert failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
@@ -540,11 +424,6 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		return Info{}, fmt.Errorf("create pod: %w", err)
 	}
 
-	m.mu.Lock()
-	m.lastActivity[sessionID] = time.Now()
-	m.wsCount[sessionID] = 0
-	m.mu.Unlock()
-
 	var createdAt *string
 	if !created.CreationTimestamp.IsZero() {
 		s := created.CreationTimestamp.UTC().Format("2006-01-02T15:04:05+00:00")
@@ -560,46 +439,48 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 		bugLabel = bugLabels[0]
 	}
 	info := Info{
-		ID:             sessionID,
-		PodName:        &podName,
-		Owner:          owner,
-		Status:         "Pending",
-		Mode:           mode,
-		SessionImage:   sessionImage,
-		RequestedAt:    &requestedAt,
-		CreatedAt:      createdAt,
-		Name:           storedName,
-		Repos:          repos,
-		Capabilities:   capabilities,
-		BugLabel:       bugLabel,
-		BugLabels:      bugLabels,
-		Model:          model,
-		Effort:         effort,
-		AgentAvatarID:  assignment.AgentAvatarID,
-		SystemAvatarID: assignment.SystemAvatarID,
+		ID:                   sessionID,
+		PodName:              &podName,
+		Owner:                owner,
+		Status:               "Pending",
+		Mode:                 mode,
+		SessionImage:         sessionImage,
+		SessionImageMetadata: sessionImageMetadata,
+		RequestedAt:          &requestedAt,
+		CreatedAt:            createdAt,
+		Name:                 storedName,
+		Repos:                repos,
+		Capabilities:         capabilities,
+		BugLabel:             bugLabel,
+		BugLabels:            bugLabels,
+		Model:                model,
+		Effort:               effort,
+		AgentAvatarID:        assignment.AgentAvatarID,
+		SystemAvatarID:       assignment.SystemAvatarID,
 	}
 
 	// Refresh the registry row with the K8s-assigned created_at so the
 	// snapshot's CreatedAt matches the pod object's creation timestamp.
 	if m.registry != nil && createdAt != nil {
 		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
-			ID:             sessionID,
-			Email:          owner,
-			Mode:           mode,
-			Scope:          m.manifestOpts.SessionScope,
-			PodName:        podName,
-			SessionImage:   sessionImage,
-			Visible:        true,
-			Name:           storedName,
-			RequestedAt:    requestedAt,
-			CreatedAt:      *createdAt,
-			UpdatedAt:      requestedAt,
-			Repos:          repos,
-			Capabilities:   capabilities,
-			Model:          model,
-			Effort:         effort,
-			AgentAvatarID:  assignment.AgentAvatarID,
-			SystemAvatarID: assignment.SystemAvatarID,
+			ID:                   sessionID,
+			Email:                owner,
+			Mode:                 mode,
+			Scope:                m.manifestOpts.SessionScope,
+			PodName:              podName,
+			SessionImage:         sessionImage,
+			SessionImageMetadata: sessionImageMetadata,
+			Visible:              true,
+			Name:                 storedName,
+			RequestedAt:          requestedAt,
+			CreatedAt:            *createdAt,
+			UpdatedAt:            requestedAt,
+			Repos:                repos,
+			Capabilities:         capabilities,
+			Model:                model,
+			Effort:               effort,
+			AgentAvatarID:        assignment.AgentAvatarID,
+			SystemAvatarID:       assignment.SystemAvatarID,
 		}); regErr != nil {
 			slog.Warn("create registry created_at refresh failed",
 				"session_id", sessionID, "owner", owner, "error", regErr)
@@ -628,11 +509,6 @@ func (m *Manager) Delete(ctx context.Context, owner, sessionID string) error {
 			return fmt.Errorf("delete pod: %w", delErr)
 		}
 	}
-
-	m.mu.Lock()
-	delete(m.wsCount, sessionID)
-	delete(m.lastActivity, sessionID)
-	m.mu.Unlock()
 
 	if m.registry != nil {
 		if regErr := m.registry.MarkDeleted(ctx, owner, sessionID); regErr != nil {

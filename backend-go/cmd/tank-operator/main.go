@@ -147,7 +147,8 @@ func main() {
 		// or against a restored production copy for heavy backfills. Defaults
 		// on so an unset or misspelled value cannot silently skip production
 		// migrations.
-		if envBoolDefault("RUN_MIGRATIONS", true) {
+		migrationsEnabled := envBoolDefault("RUN_MIGRATIONS", true)
+		if migrationsEnabled {
 			// The ledger-backed engine applies only un-recorded migrations, so a
 			// steady-state boot is a single SELECT — not the every-boot re-run of
 			// all statements (incl. full-table backfills) that crashlooped under
@@ -258,6 +259,22 @@ func main() {
 		)
 		os.Exit(1)
 	}
+	var deploymentVersionStore *pgstore.DeploymentImageVersionStore
+	if pgPool != nil {
+		deploymentVersionStore = pgstore.NewDeploymentImageVersionStore(pgPool)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := deploymentVersionStore.UpsertMany(ctx, observedDeploymentImageVersions(sessionScope, os.Getenv("HOSTNAME"), time.Now().UTC()))
+		cancel()
+		if err != nil {
+			if errors.Is(err, pgstore.ErrDeploymentImageVersionsUnavailable) && !envBoolDefault("RUN_MIGRATIONS", true) {
+				slog.Warn("deployment image version ledger unavailable before migrations; continuing in validation-slot mode",
+					"session_scope", sessionScope, "error", err)
+			} else {
+				slog.Error("deployment image version ledger write failed", "session_scope", sessionScope, "error", err)
+				os.Exit(1)
+			}
+		}
+	}
 
 	// Build the RowPublisher every lifecycle producer fans row updates
 	// through (Manager user-actions, sessioncontroller K8s watch,
@@ -288,23 +305,26 @@ func main() {
 
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, rowPublisher, sessions.ManagerOptions{
 		ManifestOpts: sessionmodel.ManifestOptions{
-			SessionsNamespace:              namespace,
-			SessionServiceAccount:          sessionServiceAccount,
-			SessionConfigMap:               envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
-			ArgoCDTrackingApp:              envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
-			SessionImage:                   sessionImage,
-			CodexSessionImage:              codexSessionImage,
-			AntigravitySessionImage:        antigravitySessionImage,
-			SessionScope:                   sessionScope,
-			TankOperatorInternalURL:        tankOperatorInternalURL,
-			NATSURL:                        envDefault("NATS_URL", ""),
-			NATSStream:                     envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
-			NATSAuthSecret:                 envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
-			SpireLensTailscaleOIDCClientID: envDefault("SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", ""),
-			SpireLensTailscaleTailnet:      envDefault("SESSION_SPIRELENS_TAILSCALE_TAILNET", ""),
-			SpireLensTailscaleAuthTag:      envDefault("SESSION_SPIRELENS_TAILSCALE_AUTH_TAG", sessionmodel.DefaultSpireLensTailscaleTag),
-			SpireLensHost:                  envDefault("SESSION_SPIRELENS_HOST", ""),
-			SpireLensMCPPort:               envInt("SESSION_SPIRELENS_MCP_PORT", sessionmodel.DefaultSpireLensMCPPort),
+			SessionsNamespace:               namespace,
+			SessionServiceAccount:           sessionServiceAccount,
+			SessionConfigMap:                envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
+			ArgoCDTrackingApp:               envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
+			SessionImage:                    sessionImage,
+			CodexSessionImage:               codexSessionImage,
+			AntigravitySessionImage:         antigravitySessionImage,
+			SessionImageMetadata:            sessionmodel.ParseImageVersionMetadata(os.Getenv("SESSION_IMAGE_METADATA")),
+			CodexSessionImageMetadata:       sessionmodel.ParseImageVersionMetadata(os.Getenv("CODEX_SESSION_IMAGE_METADATA")),
+			AntigravitySessionImageMetadata: sessionmodel.ParseImageVersionMetadata(os.Getenv("ANTIGRAVITY_SESSION_IMAGE_METADATA")),
+			SessionScope:                    sessionScope,
+			TankOperatorInternalURL:         tankOperatorInternalURL,
+			NATSURL:                         envDefault("NATS_URL", ""),
+			NATSStream:                      envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+			NATSAuthSecret:                  envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
+			SpireLensTailscaleOIDCClientID:  envDefault("SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", ""),
+			SpireLensTailscaleTailnet:       envDefault("SESSION_SPIRELENS_TAILSCALE_TAILNET", ""),
+			SpireLensTailscaleAuthTag:       envDefault("SESSION_SPIRELENS_TAILSCALE_AUTH_TAG", sessionmodel.DefaultSpireLensTailscaleTag),
+			SpireLensHost:                   envDefault("SESSION_SPIRELENS_HOST", ""),
+			SpireLensMCPPort:                envInt("SESSION_SPIRELENS_MCP_PORT", sessionmodel.DefaultSpireLensMCPPort),
 			// Test-slot SDK-runner hot-swap. Off by default; the chart
 			// turns this on only when the chart runs in hot test-slot mode.
 			// See scripts/check-session-pod-hot-swap-migration.mjs and
@@ -333,7 +353,6 @@ func main() {
 	// updates can drain HTTP cleanly.
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
-	mgr.StartReaper(ctx)
 	// Build the shared RowWriter that the K8s watch and chat-activity
 	// emitter call through. Per docs/session-list-redesign.md Phase 4
 	// the durable sessions row is the only persistent state â€” the prior
@@ -471,13 +490,13 @@ func main() {
 	// pre-migration (ns, sa) allowlist env was retired with that change.
 	mux := http.NewServeMux()
 	srv := &appServer{
-		k8s:                          k8sClient,
-		restCfg:                      restCfg,
-		mgr:                          mgr,
-		profiles:                     profileStore,
-		sessionEvents:                sessionEventsStore,
-		transcriptRows:               transcriptRowsStore,
-		turns:                        turnsStore,
+		k8s:            k8sClient,
+		restCfg:        restCfg,
+		mgr:            mgr,
+		profiles:       profileStore,
+		sessionEvents:  sessionEventsStore,
+		transcriptRows: transcriptRowsStore,
+		turns:          turnsStore,
 		transcriptRefresher: newAsyncTranscriptRefresher(ctx, transcriptMaterializer, func(storageKey string) {
 			if err := sessionBus.PublishSessionEventWake(context.Background(), storageKey); err != nil {
 				slog.Warn("backend async refresh wake publish failed",
@@ -514,6 +533,7 @@ func main() {
 		scheduledWakeups:         scheduledWakeupStore,
 		backgroundTaskWakes:      backgroundTaskWakeStore,
 		controlActions:           controlActionStore,
+		deploymentVersions:       deploymentVersionStore,
 	}
 	// Assign the override store only when non-nil so the appServer field stays
 	// a true nil interface in stub mode (avoids the typed-nil-pointer trap that
@@ -568,6 +588,27 @@ func main() {
 				slog.Error("stranded turn sweep loop stopped", "error", err)
 			}
 		}()
+	}
+	// The durable idle-session reaper replaced sessions.Manager's
+	// per-replica in-memory loop, whose WebSocket guard was dead code,
+	// whose only activity feed was the SPA's visible-tab touch, and whose
+	// clocks reset on every deploy — it would have deleted unattended
+	// live sessions after idleTimeout of replica uptime and never reaped
+	// abandoned ones (2026-06-12 audit, issue #1079). Idleness and the
+	// claim are one conditional registry UPDATE (see ClaimIdleForReap),
+	// so any concurrent activity write defeats the reaper atomically and
+	// both replicas collapse on the row claim; pod deletion is
+	// idempotent. Postgres-only — stub mode has no durable rows to reap.
+	if sessionRegStore != nil {
+		idleTimeout := time.Duration(envInt("IDLE_TIMEOUT_SECONDS", 0)) * time.Second
+		reapInterval := time.Duration(envInt("REAPER_INTERVAL_SECONDS", 900)) * time.Second
+		if idleTimeout > 0 {
+			go func() {
+				if err := runIdleSessionReaper(ctx, srv, sessionRegStore, reapInterval, idleTimeout); err != nil && !errors.Is(err, context.Canceled) {
+					slog.Error("idle session reaper stopped", "error", err)
+				}
+			}()
+		}
 	}
 	// Backend-owned dispatch of durable attachment launches (#865): claim ready
 	// launches whose pod is Active, materialize the staged bytes into the

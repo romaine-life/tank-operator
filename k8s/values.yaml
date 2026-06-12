@@ -3,8 +3,18 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-70b73abdbd29c512084aedada5a9997238b5fe9bfa67c814c05bdfaa8e678e50"
+  tag: "app-8f12d716e419713ce6d0a197426a3abf187fd72953f281741f698e55c91b3461"
   pullPolicy: IfNotPresent
+  metadata:
+    built_at: "2026-06-12T04:17:07Z"
+    git_sha: "6bf8e4345086cf4e612c63e2ef0700efda0e4fc5"
+    git_ref: "main"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/6bf8e4345086cf4e612c63e2ef0700efda0e4fc5"
+    pr_number: "1081"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1081"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27394130356"
+    repository: "romaine-life/tank-operator"
+    actor: "tank-operator-host[bot]"
 
 # normal: regular chart render
 # warm: per-slot baseline resources, no long-running app/proxy pods
@@ -53,13 +63,44 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: romainecr.azurecr.io/claude-container:claude-3dfa23f7aa7f89080d1abbdcb1f8b68b4cceb8ddadc86d57a07c484bc92e66cd
-  codexImage: romainecr.azurecr.io/codex-container:codex-7d503e605bcb784a175e87ec43573075d9f3828c8b8b65a145bb3eacd7e800b6
+  image: "romainecr.azurecr.io/claude-container:claude-b76220b5a43e07adb8419a934fd10ffb94c3f9abcb382a9fedeb02f43d7c9088"
+  codexImage: "romainecr.azurecr.io/codex-container:codex-c7d4f70190086fec69d110a73608eddb4a6f4a4e81f373d0580aa7df1fa8078d"
   # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: romainecr.azurecr.io/antigravity-container:antigravity-78fd2668ff2a598de5a2d7793ef39269ce44c15c57d2cad4806575120f352ca5
+  antigravityImage: "romainecr.azurecr.io/antigravity-container:antigravity-e8f09d4ea74906940037fd82001626a0c52380a989fa7acf3d909e047ce65a0d"
+  imageMetadata:
+    claude:
+      built_at: "2026-06-12T01:44:21Z"
+      git_sha: "1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      git_ref: "main"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      pr_number: "1050"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1050"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27389046126"
+      repository: "romaine-life/tank-operator"
+      actor: "tank-operator-host[bot]"
+    codex:
+      built_at: "2026-06-12T01:44:21Z"
+      git_sha: "1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      git_ref: "main"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      pr_number: "1050"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1050"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27389046126"
+      repository: "romaine-life/tank-operator"
+      actor: "tank-operator-host[bot]"
+    antigravity:
+      built_at: "2026-06-12T01:44:21Z"
+      git_sha: "1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      git_ref: "main"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      pr_number: "1050"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1050"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27389046126"
+      repository: "romaine-life/tank-operator"
+      actor: "tank-operator-host[bot]"
   # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
   # orchestrator namespace where the antigravity-api-proxy mounts it; agy
   # session pods never mount it (they get a placeholder + proxy injection).
@@ -68,13 +109,20 @@ session:
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
-  # Idle reaper: a session with no open WebSocket connections for this many
-  # seconds is deleted by the orchestrator's background sweep. 7 days is
-  # effectively "manual close only" â€” the in-app close button is the
-  # primary teardown path; this only reaps truly abandoned sessions left
-  # running over a long weekend.
+  # Idle reaper: a session whose durable row has been untouched for this
+  # many seconds (no runner events, no status transitions, no read-state
+  # refreshes) AND whose activity status is settled (ready/error) AND
+  # which holds no pending scheduled wakeup, background-task wake, or
+  # undispatched launch turn, is claimed and deleted by the durable
+  # reaper (cmd/tank-operator/idle_session_reaper.go). The claim is one
+  # conditional registry UPDATE, so any concurrent activity defeats it
+  # atomically; both replicas may run the loop. 7 days is effectively
+  # "manual close only": the in-app close button is the primary teardown
+  # path; this only reaps truly abandoned sessions. (The prior in-memory
+  # reaper's WebSocket guard was dead code and its clocks reset on every
+  # deploy. See issue #1079.)
   idleTimeoutSeconds: 604800
-  reaperIntervalSeconds: 60
+  reaperIntervalSeconds: 900
   spirelens:
     # Non-secret OIDC federation trust used by opted-in session pods to join
     # the tailnet and reach the SpireLens game-host MCP. Dormant unless a

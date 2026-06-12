@@ -478,7 +478,9 @@ Evidence:
 
 ## Stranded-turn sweep (command-plane four-outcome backstop)
 
-Status: shipped (2026-06-11, tank-operator#1051 PR 4)
+Status: shipped (2026-06-11, tank-operator#1051 PR 4); AskUserQuestion
+pause exclusion + pipeline-liveness gate (2026-06-12, the sweep's
+first-day false-positive incident)
 
 Intent:
 A durably submitted turn whose submit_turn command or runner dies has no
@@ -492,9 +494,40 @@ scheduled wakeups, agent continuations) carry the
 stranded_continuation_swept away-error reason so the sidebar rings the
 summon bell; ordinary user turns fail plainly with resubmit guidance.
 
+The sweep's turn model deliberately excludes the three legitimate
+terminal-less shapes AskUserQuestion creates — the synthetic question
+shell (turn_question-*, submitted + awaiting_input, never claimed by
+design), the asking turn paused on the user (terminal arrives only after
+a human answers, possibly days later), and the answered asking turn
+(the runner rotates the live turn to the answer nonce; the terminal lands
+under turn_answer-*, never under the asking id). On its first day in
+production the sweep wrote false turn.command_failed terminals onto all
+three shapes — 164 of 302 terminals (54%), across 50+ sessions —
+destroying pending questions (the /answer endpoint 409s once a terminal
+exists) and ringing false summons for wake-source asking turns. The
+exclusion lives in the FindStrandedTurns candidate query (pause-linkage
+NOT EXISTS over turn.awaiting_input / turn.input_answered, matched by
+turn_id, asking_turn_id, or question_turn_id, riding the
+session_events_input_pause partial index). After an answer, the
+strandable identity is the rotated continuation turn (turn_answer-*),
+which carries its own turn.submitted and is correctly swept if the
+input_reply command is lost or the rotated turn dies mid-work.
+
+The sweep also gates on fleet-wide pipeline liveness
+(HasRecentRunnerEvent): turn.submitted lands over HTTP directly, so a
+persister/session-bus outage makes every active session look quiet while
+submits accumulate — without the gate, the sweep would mass-fail healthy
+in-flight turns exactly while the pipeline recovers. Candidates found
+while zero runner-produced events landed in the quiet window are deferred
+(result=deferred_pipeline_quiet), never written. Backend-writable event
+types — including the sweep's own output — never count as proof of life.
+
 Affected contracts:
 - Agent Runners ("a durable *_requested event MUST be followed by exactly one
   durable terminal; silent strandings are a counted bug class")
+- Tank conversation protocol ("AskUserQuestion pauses the same turn" — the
+  pause states and the rotation are part of every consumer's turn model;
+  the sweep is enumerated in the protocol's consumer-audit list)
 - Observability (tank_stranded_turn_swept_total, TankStrandedTurnsSwept — the
   alert is about WHY commands die; the terminal is the recovery)
 
@@ -502,4 +535,7 @@ Retirement note:
 Scan cadence is 15 minutes because FindStrandedTurns is a heavy 30-day window
 scan; if the candidate query ever becomes incremental, the cadence can drop.
 The quiet-session predicate is the false-positive guard — do not relax it to
-catch strands faster.
+catch strands faster. Do not "simplify" the pause exclusion into an age
+floor: a question can legitimately wait longer than any floor, and a false
+terminal on a question turn is unrecoverable without ledger surgery
+(tank-operator PR B remediation, 2026-06-12).

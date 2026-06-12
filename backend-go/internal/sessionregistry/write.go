@@ -70,8 +70,8 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 	// Determine the effective visible value (default true if unset).
 	visible := record.Visible
 
-	// `repos`, `capabilities`, and `session_image` are written on INSERT (the
-	// user's selection and the resolved pod image at create time) and
+	// `repos`, `capabilities`, `session_image`, and `session_image_metadata`
+	// are written on INSERT (the user's selection and the resolved pod image at create time) and
 	// intentionally NOT overwritten on conflict — the row is owned by the create
 	// call; subsequent manager updates (SetName, mark-deleted, lifecycle row
 	// writes) must not stomp the selection. `clone_state` is not touched here at
@@ -87,18 +87,27 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		capabilities = []string{}
 	}
 	sidebarPosition := record.SidebarPosition
+	sessionImageMetadata := sessionmodel.NormalizeImageVersionMetadata(record.SessionImageMetadata)
+	sessionImageMetadataJSON := []byte(`{}`)
+	if len(sessionImageMetadata) > 0 {
+		var err error
+		sessionImageMetadataJSON, err = json.Marshal(sessionImageMetadata)
+		if err != nil {
+			return err
+		}
+	}
 	const q = `
 		INSERT INTO sessions (
 			email, session_scope, session_id,
-			mode, pod_name, name, visible, session_image,
+			mode, pod_name, name, visible, session_image, session_image_metadata,
 			requested_at, created_at, updated_at,
 			status, ready_at,
 			repos, capabilities, model, effort, agent_avatar_id, system_avatar_id, sidebar_position
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8,
-			$9, COALESCE($10, now()), $11,
-			COALESCE(NULLIF($12, ''), 'Pending'), $13,
-			$14, $15, $16, $17, NULLIF($18, ''), NULLIF($19, ''), COALESCE(NULLIF($20, 0), nextval('sessions_row_version_seq'))
+			$1, $2, $3, $4, $5, $6, $7, $8, $9,
+			$10, COALESCE($11, now()), $12,
+			COALESCE(NULLIF($13, ''), 'Pending'), $14,
+			$15, $16, $17, $18, NULLIF($19, ''), NULLIF($20, ''), COALESCE(NULLIF($21, 0), nextval('sessions_row_version_seq'))
 		)
 		ON CONFLICT (email, session_scope, session_id) DO UPDATE
 		SET mode         = EXCLUDED.mode,
@@ -107,7 +116,7 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 			visible      = EXCLUDED.visible,
 			requested_at = COALESCE(EXCLUDED.requested_at, sessions.requested_at),
 			status       = CASE
-				WHEN NULLIF($12, '') IS NULL THEN sessions.status
+				WHEN NULLIF($13, '') IS NULL THEN sessions.status
 				ELSE EXCLUDED.status
 			END,
 			ready_at     = COALESCE(EXCLUDED.ready_at, sessions.ready_at),
@@ -125,6 +134,7 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		record.Name,
 		visible,
 		strings.TrimSpace(record.SessionImage),
+		sessionImageMetadataJSON,
 		nullableTimestamp(requestedAt),
 		nullableTimestamp(createdAt),
 		updatedAt,
@@ -420,6 +430,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 	}
 	const q = `
 		SELECT sessions.mode, sessions.pod_name, sessions.name, sessions.visible, sessions.session_image,
+			sessions.session_image_metadata,
 			COALESCE(to_char(sessions.requested_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
 			COALESCE(to_char(sessions.created_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
 			COALESCE(to_char(sessions.updated_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at,
@@ -482,6 +493,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		status, readyAt, terminatingAt                                 string
 		name                                                           string
 		visible                                                        bool
+		sessionImageMetadata                                           []byte
 		activitySummary, testState, rolloutState, cloneState           []byte
 		providerRateLimitInfo                                          []byte
 		repos, capabilities                                            []string
@@ -497,7 +509,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		bugLabelsRaw                                                   []byte
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
-		&mode, &podName, &name, &visible, &sessionImage,
+		&mode, &podName, &name, &visible, &sessionImage, &sessionImageMetadata,
 		&requestedAt, &createdAt, &updatedAt,
 		&status, &readyAt, &terminatingAt,
 		&activitySummary, &testState, &rolloutState,
@@ -532,6 +544,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		Scope:                          s.scope,
 		PodName:                        podName,
 		SessionImage:                   sessionImage,
+		SessionImageMetadata:           sessionmodel.DecodeImageVersionMetadata(sessionImageMetadata),
 		Name:                           name,
 		Visible:                        visible,
 		RequestedAt:                    requestedAt,
@@ -738,6 +751,100 @@ func (s *Store) MarkDeleted(ctx context.Context, email, sessionID string) error 
 	`
 	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID)
 	return err
+}
+
+// ReapedSession is one idle session the reaper durably claimed: the row is
+// already invisible by the time the caller sees it, so the only remaining
+// work is deleting the pod and publishing the tombstone.
+type ReapedSession struct {
+	Email     string
+	SessionID string
+	PodName   string
+}
+
+// ClaimIdleForReap atomically claims up to `limit` durably-idle sessions for
+// deletion and returns them. This replaced the per-replica in-memory reaper
+// (wsCount/lastActivity), whose WebSocket guard was dead code and whose only
+// activity feed was the SPA's visible-tab touch — it would have deleted any
+// unattended-but-live session (autonomous agent mid-task, a session parked
+// on a durable wake, an MCP-spawned run) after idleTimeout of replica
+// uptime, and never reaped anything across frequent deploys.
+//
+// Durable idleness is the conjunction, evaluated and claimed in ONE
+// conditional UPDATE so any concurrent activity write defeats the reaper
+// atomically (every accepted turn, runner event, status transition, or
+// read-state refresh bumps updated_at through the sessions-row writers):
+//
+//   - visible row with a pod, untouched since the cutoff;
+//   - durable activity status is settled (ready / error / none) — a
+//     working-ish status defers reaping until the stranded-turn sweep
+//     terminals the wedged turn and the activity refresh restarts the
+//     idle clock;
+//   - no pending scheduled wakeup, background-task wake, or undispatched
+//     launch turn: a parked agent's clock is a liveness promise, not idleness.
+//
+// Claiming marks the row invisible (the same durable effect as
+// Store.MarkDeleted) before any pod deletion happens, so two replicas
+// running the reaper collapse on the row claim — no leader election needed;
+// pod deletion is idempotent.
+func (s *Store) ClaimIdleForReap(ctx context.Context, cutoff time.Time, limit int) ([]ReapedSession, error) {
+	if limit <= 0 || limit > 100 {
+		limit = 20
+	}
+	const q = `
+		UPDATE sessions s
+		SET visible     = false,
+			updated_at  = now(),
+			row_version = nextval('sessions_row_version_seq')
+		WHERE (s.email, s.session_scope, s.session_id) IN (
+			SELECT c.email, c.session_scope, c.session_id
+			FROM sessions c
+			WHERE c.session_scope = $1
+				AND c.visible
+				AND COALESCE(c.pod_name, '') <> ''
+				AND c.updated_at < $2
+				AND COALESCE(c.activity_summary ->> 'status', 'ready') IN ('ready', 'error')
+				AND NOT EXISTS (
+					SELECT 1 FROM session_scheduled_wakeups w
+					WHERE w.session_scope = c.session_scope
+						AND w.session_id = c.session_id
+						AND w.status IN ('scheduled', 'claiming')
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM session_background_task_wakes b
+					WHERE b.session_scope = c.session_scope
+						AND b.session_id = c.session_id
+						AND b.status IN ('scheduled', 'claiming')
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM session_pending_launch_turns p
+					WHERE p.session_scope = c.session_scope
+						AND p.session_id = c.session_id
+						AND p.status IN ('awaiting_bytes', 'ready', 'claiming')
+				)
+			ORDER BY c.updated_at ASC
+			LIMIT $3
+			FOR UPDATE SKIP LOCKED
+		)
+		RETURNING s.email, s.session_id, COALESCE(s.pod_name, '')
+	`
+	rows, err := s.pool.Query(ctx, q, s.scope, cutoff.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]ReapedSession, 0, limit)
+	for rows.Next() {
+		var r ReapedSession
+		if err := rows.Scan(&r.Email, &r.SessionID, &r.PodName); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // MarkScopeRetired hides every visible session row in this store's scope and

@@ -1791,7 +1791,153 @@ var schemaMigrations = []migration{
 		updated_at      timestamptz NOT NULL DEFAULT now(),
 		PRIMARY KEY (tank_session_id, turn_id)
 	)`},
+
+	// Store the human-facing release metadata that describes the session image
+	// stamped at create time. Kept separate from session_image so immutable
+	// fingerprint tags stay machine-useful while the UI can show PR, commit,
+	// workflow, and build timestamp context for existing sessions.
+	{ID: "0146", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS session_image_metadata jsonb NOT NULL DEFAULT '{}'::jsonb`},
+
+	// Deployment image/version observations. /api/admin/app-version is an
+	// operator-facing diagnostic surface; its source of truth is the durable
+	// ledger of what each orchestrator pod actually observed at boot, not only
+	// the current process environment. Multiple pods may overlap during a
+	// rolling update, so reads choose the latest observation per image kind
+	// inside the session scope.
+	{ID: "0147", SQL: `CREATE TABLE IF NOT EXISTS deployment_image_versions (
+		session_scope  text NOT NULL,
+		pod_name       text NOT NULL DEFAULT '',
+		image_kind     text NOT NULL CHECK (image_kind IN (
+			'app',
+			'session_claude',
+			'session_codex',
+			'session_antigravity'
+		)),
+		image_ref      text NOT NULL DEFAULT '',
+		image_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+		observed_at    timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (session_scope, pod_name, image_kind)
+	)`},
+	{ID: "0148", SQL: `CREATE INDEX IF NOT EXISTS deployment_image_versions_scope_kind_observed
+		ON deployment_image_versions (session_scope, image_kind, observed_at DESC)`},
+
+	// AskUserQuestion pause-event family, probed by the stranded-turn
+	// sweep's pause-linkage exclusion (FindStrandedTurns): a turn linked to
+	// a turn.awaiting_input / turn.input_answered row — riding it, or
+	// referenced by the payload's asking_turn_id / question_turn_id — is a
+	// legitimately terminal-less turn, never a strand. Partial: these are a
+	// few rows per session (179 total at creation time), so the probe is an
+	// index touch instead of a partition scan on flood-class sessions.
+	{ID: "0149", SQL: `CREATE INDEX IF NOT EXISTS session_events_input_pause
+		ON session_events (tank_session_id, turn_id)
+		WHERE event_type IN ('turn.awaiting_input', 'turn.input_answered')`},
+
+	// Remediation for the stranded-turn sweep's first-day false positives
+	// (2026-06-11/12): the sweep wrote turn.command_failed terminals onto
+	// AskUserQuestion turns that legitimately never carry a terminal under
+	// their own id — destroying pending questions (the /answer endpoint
+	// 409s once a terminal exists), painting healthy transcripts failed,
+	// and ringing false summons. This deletes exactly those rows (sweep
+	// reasons + pause linkage, the inverse of the FindStrandedTurns
+	// exclusion added alongside migration 0149) and drops the derived
+	// projection state for every affected session so the next read
+	// rebuilds it from the corrected ledger: the backfills row makes
+	// NeedsBackfill report stale, and a missing fold_state/fold_turns row
+	// re-seeds the checkpointed fold by design. Durable activity summaries
+	// for affected sessions self-correct on the next refresh (read-state
+	// update or lifecycle event); the false 'error' pill on an idle
+	// corrupted session clears the moment it is opened. Bounded: the
+	// time floor matches the sweep's first production pass, and the row
+	// population was ~164 events across ~50 sessions when written.
+	{ID: "0150", SQL: falseSweepTerminalRemediationSQL},
+
+	// Event-identity uniqueness. Multiple writers (the answer handler, both
+	// sweeps, the launch dispatcher) build events with deterministic
+	// event_ids and code comments asserted a UNIQUE
+	// (tank_session_id, event_id) constraint collapsed replica-concurrent
+	// rewrites — but the constraint never existed; session_events_event_id
+	// was a plain btree index, and the PK (tank_session_id, order_key)
+	// embeds producer wall-clock so every rebuild inserts. Production
+	// grew 110 duplicate identity groups (replica-raced sweep terminals,
+	// repeated interrupt requests, runner-restart re-claims) before the
+	// 2026-06-12 audit caught it. One transaction: drop the late copies
+	// (first durable observation wins), build the real unique index, drop
+	// the now-redundant non-unique one. Atomic by design — a duplicate
+	// committed between the DELETE's snapshot and the index build fails
+	// the build, rolls back the whole migration, and the next boot's
+	// retry re-deduplicates everything committed so far; the gap is
+	// milliseconds, so this converges. The in-transaction build holds
+	// ShareLock for the scan (~715k compact keys at creation time, well
+	// inside the 120s budget) and briefly blocks the live replica's
+	// persister upserts, which simply wait. If session_events ever grows
+	// to where the build approaches the budget, migrate this to a
+	// non-transactional CREATE INDEX CONCURRENTLY execution mode instead
+	// of raising the timeout.
+	{ID: "0151", SQL: eventIdentityUniquenessSQL},
 }
+
+// eventIdentityUniquenessSQL is migration 0151, named so the integration
+// test can re-exercise the exact production statement against seeded
+// duplicates (a fresh test schema applies 0151 before any rows exist).
+const eventIdentityUniquenessSQL = `
+	DELETE FROM session_events e
+	USING session_events keeper
+	WHERE keeper.tank_session_id = e.tank_session_id
+		AND keeper.event_id = e.event_id
+		AND keeper.order_key < e.order_key;
+	CREATE UNIQUE INDEX IF NOT EXISTS session_events_event_identity
+		ON session_events (tank_session_id, event_id);
+	DROP INDEX IF EXISTS session_events_event_id;
+`
+
+// falseSweepTerminalRemediationSQL is migration 0150, named so the
+// integration test can exercise the exact production statement against
+// seeded corruption (a fresh test schema applies 0150 before any rows
+// exist, so the test re-runs the statement after seeding).
+const falseSweepTerminalRemediationSQL = `
+	WITH false_terminals AS (
+		DELETE FROM session_events cf
+		WHERE cf.event_type = 'turn.command_failed'
+			AND cf.created_at >= timestamptz '2026-06-11 18:00+00'
+			AND (
+				cf.payload -> 'payload' ->> 'reason' LIKE 'submit_command_lost%'
+				OR cf.payload -> 'payload' ->> 'reason' LIKE 'turn_progress_lost%'
+				OR cf.payload -> 'payload' ->> 'reason' = 'stranded_continuation_swept'
+			)
+			AND EXISTS (
+				SELECT 1
+				FROM session_events pause
+				WHERE pause.tank_session_id = cf.tank_session_id
+					AND pause.event_type IN ('turn.awaiting_input', 'turn.input_answered')
+					AND (
+						pause.turn_id = cf.turn_id
+						OR pause.payload -> 'payload' ->> 'asking_turn_id' = cf.turn_id
+						OR pause.payload -> 'payload' ->> 'question_turn_id' = cf.turn_id
+					)
+			)
+		RETURNING cf.tank_session_id
+	),
+	affected AS (
+		SELECT DISTINCT tank_session_id FROM false_terminals
+	),
+	drop_backfills AS (
+		DELETE FROM session_transcript_row_backfills b
+		USING affected a
+		WHERE b.tank_session_id = a.tank_session_id
+	),
+	drop_fold_state AS (
+		DELETE FROM session_transcript_fold_state f
+		USING affected a
+		WHERE f.tank_session_id = a.tank_session_id
+	),
+	drop_fold_turns AS (
+		DELETE FROM session_transcript_fold_turns f
+		USING affected a
+		WHERE f.tank_session_id = a.tank_session_id
+	)
+	SELECT count(*) FROM affected
+`
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
 // serialize schema-migration runs across replicas via pg_advisory_lock. Any
