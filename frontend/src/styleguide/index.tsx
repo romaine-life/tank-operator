@@ -17,6 +17,7 @@ const CATEGORIES: { name: string; entries: { slug: string; label: string; sub: s
   {
     name: "foundations",
     entries: [
+      { slug: "named-surfaces", label: "named surfaces", sub: "screens, panes, components" },
       { slug: "colors", label: "colors", sub: "surface + semantic swatches" },
       { slug: "type", label: "type", sub: "Archivo scale" },
       { slug: "spacing", label: "spacing & radii", sub: "ladder" },

@@ -15,6 +15,7 @@ import { StyleguideIndex } from "./styleguide/index";
 import { StyleguideMcpIcon } from "./styleguide/mcp-icon";
 import { StyleguideModeChip } from "./styleguide/mode-chip";
 import { StyleguideModeDropdown } from "./styleguide/mode-dropdown";
+import { StyleguideNamedSurfaces } from "./styleguide/named-surfaces";
 import { StyleguideNewSessionRow } from "./styleguide/new-session-row";
 import { StyleguidePortfolioOnboarding } from "./styleguide/portfolio-onboarding";
 import { StyleguidePortfolioTranscript } from "./styleguide/portfolio-transcript";
@@ -83,6 +84,7 @@ if (typeof window !== "undefined") {
 // branching is shallow enough to read inline.
 const STYLEGUIDE_ROUTES: Record<string, () => JSX.Element> = {
   "/_styleguide": () => <StyleguideIndex />,
+  "/_styleguide/named-surfaces": () => <StyleguideNamedSurfaces />,
   "/_styleguide/colors": () => <StyleguideColors />,
   "/_styleguide/type": () => <StyleguideType />,
   "/_styleguide/spacing": () => <StyleguideSpacing />,
