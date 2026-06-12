@@ -11686,9 +11686,6 @@ function RunTurnActivityScreen({
                 data-context-loaded={selectedTurnContext ? "true" : "false"}
                 data-section-divider={showTurnSectionDivider ? "true" : undefined}
               >
-                <div className="run-turn-view-context-head">
-                  <span className="run-turn-view-context-label">Prompt</span>
-                </div>
                 {/* Always render the prompt context. When collapsed we keep a
                     minimal one-line entry (avatar at full size + ellipsis-
                     truncated text) instead of hiding the body, so the prompt

@@ -299,14 +299,11 @@ function TurnViewSpecimen({ highlighted }: { highlighted?: boolean }) {
           data-design-state="expanded-with-divider"
           data-inspectable
         >
-          <div className="run-turn-view-context-head">
-            <span className="run-turn-view-context-label">Prompt</span>
-          </div>
           <TranscriptMessage variant="user" ownedByActivity>
             <p style={{ margin: 0 }}>
               Please inspect the completed turn with a long initiating prompt.
-              The divider owns section collapse controls while the prompt label
-              stays as plain section chrome.
+              The divider owns section collapse controls while the user avatar
+              identifies the prompt context.
             </p>
           </TranscriptMessage>
         </div>
@@ -403,9 +400,6 @@ function TurnPromptStateSpecimens() {
         data-design-state="collapsed-text-preview-controls-inline"
         data-inspectable
       >
-        <div className="run-turn-view-context-head">
-          <span className="run-turn-view-context-label">Prompt</span>
-        </div>
         <TranscriptMessage variant="user" ownedByActivity compact>
           <p style={{ margin: 0 }}>
             Please inspect the completed turn with a long initiating prompt.
@@ -423,9 +417,6 @@ function TurnPromptStateSpecimens() {
         data-design-state="context-unavailable-control-disabled"
         data-inspectable
       >
-        <div className="run-turn-view-context-head">
-          <span className="run-turn-view-context-label">Prompt</span>
-        </div>
         <div className="run-turn-view-context-unavailable" role="status">
           Prompt context unavailable
         </div>

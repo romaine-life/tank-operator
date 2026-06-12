@@ -336,6 +336,9 @@ test("Turns view renders server-projected turn context outside paged activity", 
   expect(indexCssSource.includes(".run-turn-view-prompt-section")).toBe(true);
   expect(indexCssSource.includes('.run-turn-view-body[data-section-divider="true"]')).toBe(true);
   expect(indexCssSource.includes(".run-turn-view-prompt-section + .run-turn-view-body")).toBe(true);
+  expect(appSource.includes("run-turn-view-context-label")).toBe(false);
+  expect(indexCssSource.includes(".run-turn-view-context-label")).toBe(false);
+  expect(styleguidePortfolioTranscriptSource.includes("run-turn-view-context-label")).toBe(false);
   expect(appSource).not.toMatch(/run-turn-view-context-head[\s\S]{0,500}run-turn-view-context-toggle/);
   expect(appSource.includes("function RunTurnViewControls")).toBe(true);
   expect(appSource.includes('tabsClassName={activeTab === "turns" ? "run-tabs-turn-view" : undefined}')).toBe(true);
