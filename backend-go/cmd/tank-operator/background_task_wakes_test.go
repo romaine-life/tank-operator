@@ -7,23 +7,27 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionactivity"
 )
 
 type fakeBackgroundTaskWakeStore struct {
-	rows             []pgstore.BackgroundTaskWake
-	exceededRows     []pgstore.BackgroundTaskWake
-	failExceededErr  error
-	failExceededCall int
-	firedID          string
-	firedTurn        string
-	failedID         string
-	failReason       string
-	releasedID       string
-	cancelCalls      int
-	cancelSessionID  string
-	cancelTaskID     string
-	cancelReturn     int64
+	rows              []pgstore.BackgroundTaskWake
+	exceededRows      []pgstore.BackgroundTaskWake
+	failExceededErr   error
+	failExceededCall  int
+	firedID           string
+	firedTurn         string
+	failedID          string
+	failReason        string
+	releasedID        string
+	retainedReleaseID string
+	cancelCalls       int
+	cancelSessionID   string
+	cancelTaskID      string
+	cancelReturn      int64
 }
 
 func (f *fakeBackgroundTaskWakeStore) Register(context.Context, pgstore.RegisterBackgroundTaskWakeRequest) (pgstore.BackgroundTaskWake, pgstore.BackgroundTaskWakeRegisterOutcome, error) {
@@ -64,6 +68,11 @@ func (f *fakeBackgroundTaskWakeStore) MarkFailed(_ context.Context, wakeID, reas
 
 func (f *fakeBackgroundTaskWakeStore) Release(_ context.Context, wakeID string) error {
 	f.releasedID = wakeID
+	return nil
+}
+
+func (f *fakeBackgroundTaskWakeStore) ReleaseRetainingAttempt(_ context.Context, wakeID string) error {
+	f.retainedReleaseID = wakeID
 	return nil
 }
 
@@ -178,18 +187,110 @@ func TestFireBackgroundTaskWakeDefersWhenAwaitingInput(t *testing.T) {
 	}
 }
 
-func TestFireBackgroundTaskWakeFailsInactiveSessionDurably(t *testing.T) {
-	app := testTurnsApp(t, &recordingSessionBus{})
+// TestFireBackgroundTaskWakeFailsDeadSessionDurablyAndRings mirrors the
+// scheduled-wakeup dead-session ladder for the background sibling: a missing
+// session row, a terminating session, and a Failed session each get the
+// immediate durable MarkFailed terminal AND the away-error ring carrier (the
+// away-tagged turn.command_failed) — the promised background-task report broke
+// while the user was away, exactly like any failed wake.
+func TestFireBackgroundTaskWakeFailsDeadSessionDurablyAndRings(t *testing.T) {
+	cases := []struct {
+		name       string
+		mutate     func(*pgstore.BackgroundTaskWake)
+		wantReason string
+	}{
+		{
+			name:       "missing session row",
+			mutate:     func(row *pgstore.BackgroundTaskWake) { row.SessionStatus = "" },
+			wantReason: "session_not_found",
+		},
+		{
+			name: "terminating session",
+			mutate: func(row *pgstore.BackgroundTaskWake) {
+				row.SessionStatus = "Active"
+				row.SessionTerminated = true
+			},
+			wantReason: "session_not_active",
+		},
+		{
+			name:       "failed session",
+			mutate:     func(row *pgstore.BackgroundTaskWake) { row.SessionStatus = "Failed" },
+			wantReason: "session_not_active",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			app := testTurnsApp(t, &recordingSessionBus{})
+			wakes := &fakeBackgroundTaskWakeStore{}
+			app.backgroundTaskWakes = wakes
+			app.sessionEvents = &recordingSessionEventStore{}
+			row := backgroundWakeRow()
+			tc.mutate(&row)
+
+			if err := app.fireBackgroundTaskWake(context.Background(), row, time.Now().UTC()); err == nil {
+				t.Fatal("fireBackgroundTaskWake error = nil, want failure")
+			}
+			if wakes.failedID != row.WakeID || wakes.failReason != tc.wantReason {
+				t.Fatalf("failed = (%q, %q), want (%q, %s)", wakes.failedID, wakes.failReason, row.WakeID, tc.wantReason)
+			}
+			if wakes.retainedReleaseID != "" || wakes.releasedID != "" {
+				t.Fatalf("release = (%q, %q), want none (dead sessions fail fast, never defer)", wakes.retainedReleaseID, wakes.releasedID)
+			}
+			events := app.sessionEvents.(*recordingSessionEventStore).upserts
+			if len(events) != 1 {
+				t.Fatalf("event upserts = %d, want the ring carrier", len(events))
+			}
+			if got, _ := events[0]["type"].(string); got != "turn.command_failed" {
+				t.Fatalf("event type = %q, want turn.command_failed (the ring carrier)", got)
+			}
+			payload, _ := events[0]["payload"].(map[string]any)
+			if got, _ := payload["reason"].(string); got != sessionactivity.AwayErrorReasonBackgroundTaskWake {
+				t.Fatalf("ring reason = %q, want %q", got, sessionactivity.AwayErrorReasonBackgroundTaskWake)
+			}
+			if got, _ := events[0]["turn_id"].(string); got != "turn_bgtask-bocpzxcm3" {
+				t.Fatalf("ring carrier turn_id = %q, want the wake's deterministic turn", got)
+			}
+		})
+	}
+}
+
+// TestFireBackgroundTaskWakeDefersWhileSessionPending pins the transient half
+// of the liveness ladder: the K8s watch flips the durable session row Active →
+// Pending on ANY probe blip, so a wake claimed during a kubelet hiccup must
+// release its claim and retry — not terminal-fail the promised report. The
+// release RETAINS the attempt bump (unlike the needs_input / active-turn
+// defers, which refund it), so a never-recovering session is bounded by the
+// attempt cap and rings through FailExceeded.
+func TestFireBackgroundTaskWakeDefersWhileSessionPending(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus)
 	wakes := &fakeBackgroundTaskWakeStore{}
 	app.backgroundTaskWakes = wakes
+	app.sessionEvents = &recordingSessionEventStore{}
+	before := testutil.ToFloat64(backgroundTaskWakeFireTotal.WithLabelValues("claude", "deferred_session_not_active"))
 	row := backgroundWakeRow()
-	row.SessionStatus = "Failed"
+	row.SessionStatus = "Pending"
 
-	if err := app.fireBackgroundTaskWake(context.Background(), row, time.Now().UTC()); err == nil {
-		t.Fatal("fireBackgroundTaskWake error = nil, want failure")
+	if err := app.fireBackgroundTaskWake(context.Background(), row, time.Now().UTC()); err != nil {
+		t.Fatalf("fireBackgroundTaskWake returned error: %v", err)
 	}
-	if wakes.failedID != row.WakeID || wakes.failReason != "session_not_active" {
-		t.Fatalf("failed = (%q, %q), want (%q, session_not_active)", wakes.failedID, wakes.failReason, row.WakeID)
+	if wakes.retainedReleaseID != row.WakeID {
+		t.Fatalf("retained release id = %q, want %q — Pending must defer, not die", wakes.retainedReleaseID, row.WakeID)
+	}
+	if wakes.releasedID != "" {
+		t.Fatalf("refunding Release called with %q, want the attempt-retaining variant so the cap bounds the defer", wakes.releasedID)
+	}
+	if wakes.failedID != "" {
+		t.Fatalf("MarkFailed called with %q, want no terminal for a transient blip", wakes.failedID)
+	}
+	if wakes.firedID != "" || len(bus.commands) != 0 {
+		t.Fatalf("fired id = %q commands = %d, want no fire while Pending", wakes.firedID, len(bus.commands))
+	}
+	if events := app.sessionEvents.(*recordingSessionEventStore).upserts; len(events) != 0 {
+		t.Fatalf("event upserts = %d, want 0 (a defer is not a durable outcome)", len(events))
+	}
+	if after := testutil.ToFloat64(backgroundTaskWakeFireTotal.WithLabelValues("claude", "deferred_session_not_active")); after != before+1 {
+		t.Fatalf("deferred_session_not_active counter = %v, want %v", after, before+1)
 	}
 }
 

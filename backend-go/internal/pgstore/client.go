@@ -88,6 +88,18 @@ func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 	// for roles with the SUPERUSER attribute").
 	poolConfig.MaxConns = 4
 	poolConfig.MinConns = 1
+	// Operational headroom (issue #1079 item 6): a server-side statement
+	// timeout bounds any one query's hold on the 4-conn pool — a runaway
+	// scan cannot wedge the pod's entire DB capacity behind it (the
+	// migration runner overrides per-migration with its own 120s budget
+	// via SET LOCAL). 30s is far above every steady-state query's p99 and
+	// far below "the pod is effectively down".
+	if poolConfig.ConnConfig.RuntimeParams == nil {
+		poolConfig.ConnConfig.RuntimeParams = map[string]string{}
+	}
+	if _, ok := poolConfig.ConnConfig.RuntimeParams["statement_timeout"]; !ok {
+		poolConfig.ConnConfig.RuntimeParams["statement_timeout"] = "30000"
+	}
 	if cfg.QueryMetrics != nil {
 		poolConfig.ConnConfig.Tracer = NewQueryTracer(cfg.QueryMetrics)
 	}

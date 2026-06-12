@@ -408,6 +408,16 @@ Contract impact:
 - Must not clobber an in-flight question: the fire loop defers (release + retry)
   while the session's durable activity is `needs_input` (an AskUserQuestion
   awaiting an answer).
+- A transiently non-Active session defers, a dead one rings (#1079): the K8s
+  watch flips the durable session row Active → Pending on ANY probe blip, so
+  the fire loop releases the claim (`deferred_session_not_active`) and retries
+  instead of terminal-failing the promised report; the release retains the
+  attempt bump so the fire-attempt cap bounds a never-recovering session and
+  `FailExceeded` then terminals it ringing. A durably dead session (row
+  missing, `Failed`, terminating) fails fast AND emits the away-tagged
+  `turn.command_failed` ring carrier — every durable wake failure rings, none
+  resolves silently. Same ladder on the scheduled-wakeup loop. See
+  `docs/scheduled-turn-continuity.md` → "Failure model".
 - Closes a "silent stranding" — a counted bug class — rather than adding one.
 - Codex corrective observations survive force-exits: the adapter tombstones
   recently-exited shells so a late idle item notification for a task the
@@ -433,11 +443,17 @@ Evidence:
   (durable turn boundary + `source=background-task`, fire-time provider-aware
   prompt incl. demand-report / codex-idiom / unknown-status / generation-note
   assertions, defer-on-awaiting-input, defer-on-active-turn,
-  fail-on-inactive, `sdkTurnSource`, turn-id-safe nonce);
+  defer-on-pending-session with the attempt retained
+  (`TestFireBackgroundTaskWakeDefersWhileSessionPending`), dead-session
+  fail-fast + away-error ring
+  (`TestFireBackgroundTaskWakeFailsDeadSessionDurablyAndRings`),
+  `sdkTurnSource`, turn-id-safe nonce);
   `backend-go/internal/pgstore/background_task_wakes_integration_test.go`
   (`TestPostgresBackgroundTaskWakeGenerationsRearmAfterPrematureFire`: re-arm
   on new observation, duplicate no-op, generation cap, cancel-for-task,
-  no resurrection after cancel).
+  no resurrection after cancel;
+  `TestPostgresBackgroundTaskWakeReleaseRetainingAttemptIsCapBounded`: the
+  transient defer burns attempts and terminals through `FailExceeded`).
 - Codex runner: `codex-runner/src/adapters/codex.test.ts` ("turn terminal
   stamps background_work_pending while a unified-exec shell runs" — in-turn
   start, pending stamp, idle exited attributed to the originating turn,
