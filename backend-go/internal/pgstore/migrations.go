@@ -1851,7 +1851,45 @@ var schemaMigrations = []migration{
 	// time floor matches the sweep's first production pass, and the row
 	// population was ~164 events across ~50 sessions when written.
 	{ID: "0150", SQL: falseSweepTerminalRemediationSQL},
+
+	// Event-identity uniqueness. Multiple writers (the answer handler, both
+	// sweeps, the launch dispatcher) build events with deterministic
+	// event_ids and code comments asserted a UNIQUE
+	// (tank_session_id, event_id) constraint collapsed replica-concurrent
+	// rewrites — but the constraint never existed; session_events_event_id
+	// was a plain btree index, and the PK (tank_session_id, order_key)
+	// embeds producer wall-clock so every rebuild inserts. Production
+	// grew 110 duplicate identity groups (replica-raced sweep terminals,
+	// repeated interrupt requests, runner-restart re-claims) before the
+	// 2026-06-12 audit caught it. One transaction: drop the late copies
+	// (first durable observation wins), build the real unique index, drop
+	// the now-redundant non-unique one. Atomic by design — a duplicate
+	// committed between the DELETE's snapshot and the index build fails
+	// the build, rolls back the whole migration, and the next boot's
+	// retry re-deduplicates everything committed so far; the gap is
+	// milliseconds, so this converges. The in-transaction build holds
+	// ShareLock for the scan (~715k compact keys at creation time, well
+	// inside the 120s budget) and briefly blocks the live replica's
+	// persister upserts, which simply wait. If session_events ever grows
+	// to where the build approaches the budget, migrate this to a
+	// non-transactional CREATE INDEX CONCURRENTLY execution mode instead
+	// of raising the timeout.
+	{ID: "0151", SQL: eventIdentityUniquenessSQL},
 }
+
+// eventIdentityUniquenessSQL is migration 0151, named so the integration
+// test can re-exercise the exact production statement against seeded
+// duplicates (a fresh test schema applies 0151 before any rows exist).
+const eventIdentityUniquenessSQL = `
+	DELETE FROM session_events e
+	USING session_events keeper
+	WHERE keeper.tank_session_id = e.tank_session_id
+		AND keeper.event_id = e.event_id
+		AND keeper.order_key < e.order_key;
+	CREATE UNIQUE INDEX IF NOT EXISTS session_events_event_identity
+		ON session_events (tank_session_id, event_id);
+	DROP INDEX IF EXISTS session_events_event_id;
+`
 
 // falseSweepTerminalRemediationSQL is migration 0150, named so the
 // integration test can exercise the exact production statement against

@@ -315,7 +315,8 @@ func (s *appServer) handleInterruptSessionTurn(w http.ResponseWriter, r *http.Re
 	// JetStream command, so a refresh-after-stop replays the stopping
 	// projection state from the ledger instead of relying on a UI-local
 	// flag. Event_id is deterministic in target turn id, so a double-click
-	// POST collapses to one durable row at the Postgres UNIQUE constraint.
+	// POST collapses to one durable row at the
+	// session_events_event_identity unique index (migration 0151).
 	requestedEvent := conversation.TurnInterruptRequestedEventMap(conversation.TurnInterruptRequestedArgs{
 		SessionID:         sessionID,
 		SessionStorageKey: storageKey,
@@ -559,8 +560,8 @@ func (s *appServer) handleAnswerSessionTurn(w http.ResponseWriter, r *http.Reque
 	}
 
 	// Deterministic client_nonce so a double-submit of the same answer
-	// dedupes at the session_events (tank_session_id, event_id) UNIQUE
-	// constraint and the command-bus msg id. This nonce also owns the
+	// dedupes at the session_events_event_identity unique index
+	// (migration 0151) and the command-bus msg id. This nonce also owns the
 	// Tank-visible continuation turn: the provider callback may still be
 	// paused inside the original harness run, but transcript/turn state
 	// treats the answer as the user's next turn.

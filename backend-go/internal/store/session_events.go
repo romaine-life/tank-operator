@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -342,6 +343,17 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 	`
 	inserted := false
 	if err := s.pool.QueryRow(ctx, q, storageKey, orderKey, id, turnID, eventType, payload).Scan(&inserted); err != nil {
+		// A different order_key carrying an already-stored event identity
+		// is a rebuilt duplicate (replica-raced sweep terminal, repeated
+		// interrupt request, runner re-publish outside the JetStream
+		// dedupe window). The first durable observation is canonical;
+		// report not-inserted so callers skip duplicate side effects,
+		// exactly like the same-order_key ON CONFLICT path.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName == "session_events_event_identity" {
+			sessionEventDuplicateIdentityTotal.Inc()
+			return false, nil
+		}
 		return false, err
 	}
 	return inserted, nil
@@ -1148,6 +1160,22 @@ var sessionEventReadRejectedTotal = promauto.NewCounterVec(
 		Help: "Stored session_events rows skipped on read because the current schema rejects them, labeled by bounded reason (invalid_json, schema_rejected).",
 	},
 	[]string{"reason"},
+)
+
+// tank_session_event_duplicate_identity_total — inserts dropped by the
+// session_events_event_identity unique index (migration 0151): a writer
+// rebuilt an event that already exists under the same
+// (tank_session_id, event_id) with a different order_key. This is the
+// at-least-once fabric working as designed — replica-concurrent sweep
+// terminals, repeated interrupt requests, runner-restart re-publishes
+// across the JetStream dedupe window — and the first durable observation
+// stays canonical. A sustained rate from a single writer means that
+// writer is rebuilding events it should be reading.
+var sessionEventDuplicateIdentityTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "tank_session_event_duplicate_identity_total",
+		Help: "session_events inserts dropped because the event identity (tank_session_id, event_id) already exists under a different order_key.",
+	},
 )
 
 // decodeStoredSessionEvent unmarshals and validates one stored ledger row.

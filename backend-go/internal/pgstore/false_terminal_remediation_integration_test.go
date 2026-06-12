@@ -61,9 +61,11 @@ func TestFalseSweepTerminalRemediation(t *testing.T) {
 	seedEvent(t, ctx, eventStore, awaitingInputEvent("c1", storage("c1"), c1Asking, c1Question), old.Add(4*time.Second), 13)
 
 	// The false terminals: progress-lost on the asking turn, command-lost
-	// on the question shell — written twice (the two-replica duplicate the
-	// missing event-id uniqueness allowed; same event_id, distinct
-	// order_key).
+	// on the question shell. The second shell copy models the two-replica
+	// duplicate the missing event-id uniqueness allowed in production;
+	// since migration 0151 the unique index absorbs it at insert time
+	// (Upsert reports not-inserted), so it exercises the duplicate path
+	// rather than landing a second row.
 	falseAsking := commandFailed("c1", c1Asking, "c1-turn", "turn_progress_lost: a runner claimed this turn but stopped producing durable events and never wrote a terminal (runner process died mid-turn). Resubmit the message.")
 	seedEvent(t, ctx, eventStore, falseAsking, now.Add(-time.Minute), 50)
 	falseShellA := commandFailed("c1", c1Question, c1QuestionNonce, "submit_command_lost: the turn was durably submitted but no runner ever claimed it; the submit_turn command was lost (dead or wedged runner, or command-consumer exhaustion). Resubmit the message.")
@@ -75,7 +77,16 @@ func TestFalseSweepTerminalRemediation(t *testing.T) {
 	// answer handler's publish failure) — reason prefix differs, must
 	// survive the remediation untouched.
 	survivorReply := commandFailed("c1", c1Question, "answer-feedfeedfeedfeedfeedfeed", "publish_input_reply_failed: nats timeout")
-	survivorReply["event_id"] = c1Question + ":turn.command_failed:publish_input_reply"
+	// Override the FULL stored identity, not just event_id: StampEventMap
+	// mirrors event_id into uuid/id, Upsert keys the column on id, and
+	// since migration 0151 the (tank_session_id, event_id) unique index
+	// makes that identity load-bearing — an event_id-only override would
+	// silently dedupe against the false shell terminal above instead of
+	// inserting the survivor.
+	survivorIdentity := c1Question + ":turn.command_failed:publish_input_reply"
+	survivorReply["event_id"] = survivorIdentity
+	survivorReply["id"] = survivorIdentity
+	survivorReply["uuid"] = survivorIdentity
 	seedEvent(t, ctx, eventStore, survivorReply, now.Add(-50*time.Second), 53)
 
 	// Derived projection state for c1: all three must be dropped.
