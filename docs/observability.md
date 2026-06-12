@@ -944,9 +944,29 @@ These are the rules that keep Prometheus' active-series count bounded
 regardless of how many sessions, users, or upstream calls happen:
 
 - **Never label by anything that grows per user, per session, or per
-  request.** Forbidden labels (do not add): `pod`, `instance`, `email`,
-  `session_id`, `turn_id`, `user`, `request_id`, `provider_item_id`,
-  any raw URL path.
+  request — in APPLICATION code.** Forbidden labels (do not add in
+  instrumented code): `pod`, `instance`, `email`, `session_id`,
+  `turn_id`, `user`, `request_id`, `provider_item_id`, any raw URL
+  path.
+- **Scrape-identity labels are kept, never dropped.** The
+  prometheus-operator-injected `pod` and `namespace` labels are the
+  identity of the scrape target, not an application label, and the
+  rule above does not apply to them. Dropping them is not aggregation
+  — it is corruption: with no identifying label, every
+  concurrently-live target exports the SAME series, samples flap
+  last-write-wins between targets, `sum()` reads one arbitrary
+  target, and `rate()`/`increase()` see phantom counter resets on
+  every alternation. The session-pod PodMonitor learned this in the
+  sessions-828/829 incident (tank-operator#1084): with all labels
+  dropped, the two wedged pods' turn-settle counters collided into one
+  flapping series and per-pod attribution needed in-pod `curl`. The
+  PodMonitor keeps `pod` + `namespace` and drops only the redundant
+  per-target labels (`instance`, `container`, `endpoint`, `service`,
+  `job`). The cost is bounded by CONCURRENT session pods (dead pods'
+  series age out of the TSDB head), which the cost model below already
+  budgets (~1.5k series at ~50 concurrent session pods). Bare-rate
+  session-pod alerts (e.g. `TankRunnerProviderErrorRate`) fire per pod
+  series, which localizes for free.
 - **Status codes are bucketed.** Use the four-value `status_class`
   label (2xx/3xx/4xx/5xx/unknown), never the full numeric status code.
 - **Routes are matched-pattern, not raw URLs.** The HTTP middleware

@@ -65,16 +65,35 @@ spec:
 ---
 {{- end }}
 # PodMonitor: session pods. The PodMonitor scrapes the mcp-auth-proxy
-# sidecar and (for claude_gui / codex_gui sessions) the runner sidecar.
-# Session pods are ephemeral — scrape interval 15s gives the operator a
-# realistic chance of catching at least one sample from a short-lived
-# session before the pod terminates and its series ages out.
+# sidecar and (for claude_gui / codex_gui / antigravity_gui sessions)
+# the runner sidecar. Session pods are ephemeral — scrape interval 15s
+# gives the operator a realistic chance of catching at least one sample
+# from a short-lived session before the pod terminates and its series
+# ages out.
 #
-# Cardinality discipline: we drop the pod / instance labels on the
-# scrape side via metricRelabelings so the per-pod prefix the prom
-# operator auto-injects doesn't grow active series with each new
-# session pod. The metric payload's own labels (mode, mcp_server,
-# outcome, etc.) remain — those are bounded by code.
+# Scrape-identity labels are KEPT (pod, namespace) and only the
+# redundant per-target labels are dropped (instance, container,
+# endpoint, service, job). Dropping pod/namespace looked like
+# cardinality discipline but was series CORRUPTION: with every
+# identifying label stripped, all concurrently-live session pods (prod
+# AND every test slot's sessions) exported the SAME series, samples
+# flapped last-write-wins between pods, sum() read one arbitrary pod,
+# and rate()/increase() saw phantom counter resets on every
+# alternation. During the sessions-828/829 incident
+# (tank-operator#1084) the runner's turn-settle counters were
+# indistinguishable between the two wedged pods and diagnosis needed
+# in-pod curl. pod (unique per target; metric names are disjoint
+# across the two endpoints) plus namespace (separates prod from slot
+# scopes) restore per-series identity; instance (pod IP:port) is
+# redundant with pod and churnier, and container/endpoint/service/job
+# add nothing the disjoint metric names don't already encode.
+#
+# Cost: bounded by CONCURRENT session pods, not cumulative sessions —
+# dead pods stop producing samples and their series age out of the
+# TSDB head. docs/observability.md's cost model (~1.5k series at ~50
+# concurrent session pods) already budgets per-pod series; the
+# cardinality rules forbid per-session labels in APPLICATION code,
+# not the scrape topology's own target identity.
 apiVersion: monitoring.coreos.com/v1
 kind: PodMonitor
 metadata:
@@ -93,14 +112,14 @@ spec:
       scrapeTimeout: 5s
       metricRelabelings:
         - action: labeldrop
-          regex: ^(pod|instance|namespace|container|endpoint|service|job)$
+          regex: ^(instance|container|endpoint|service|job)$
     - port: runner-metrics
       path: /metrics
       interval: 15s
       scrapeTimeout: 5s
       metricRelabelings:
         - action: labeldrop
-          regex: ^(pod|instance|namespace|container|endpoint|service|job)$
+          regex: ^(instance|container|endpoint|service|job)$
 ---
 # PrometheusRule: user-trust failure alerts. Each alert names exactly the
 # class of failure it surfaces; no "high-level" health alerts that fire
