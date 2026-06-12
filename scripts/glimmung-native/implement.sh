@@ -157,7 +157,31 @@ spec:
                 '}' \
                 > "\$HOME/.claude/.credentials.json"
               chmod 600 "\$HOME/.claude/.credentials.json"
-              printf '%s\n' '{"theme":"dark","permissions":{"defaultMode":"bypassPermissions","allow":["Edit","Write","MultiEdit","NotebookEdit","Bash(go:*)","Bash(gofmt:*)","Bash(npm:*)","Bash(npx:*)","Bash(node:*)","Bash(git:*)","Bash(python3:*)","Bash(rg:*)","Bash(ls:*)","Bash(mkdir:*)","Bash(rm:*)","Bash(cp:*)","Bash(mv:*)"]},"skipDangerousModePermissionPrompt":true}' > "\$HOME/.claude/settings.json"
+              mcp_allow='[]'
+              if [ -f /workspace/.mcp.json ]; then
+                mcp_allow="\$(jq -c '[.mcpServers // {} | keys[] | "mcp__" + .]' /workspace/.mcp.json)"
+              fi
+              jq -n --argjson mcpAllow "\$mcp_allow" '{
+                theme: "dark",
+                permissions: {
+                  defaultMode: "bypassPermissions",
+                  allow: ([
+                    "Read",
+                    "LS",
+                    "Grep",
+                    "Glob",
+                    "Edit",
+                    "Write",
+                    "MultiEdit",
+                    "NotebookEdit",
+                    "Bash",
+                    "WebFetch",
+                    "WebSearch",
+                    "TodoWrite"
+                  ] + $mcpAllow | unique)
+                },
+                skipDangerousModePermissionPrompt: true
+              }' > "\$HOME/.claude/settings.json"
               printf '%s\n' \
                 '{' \
                 '  "hasCompletedOnboarding": true,' \
