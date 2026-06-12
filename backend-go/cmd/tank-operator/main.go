@@ -668,7 +668,7 @@ func main() {
 	// Per-replica idempotent — see session_row_reconcile.go.
 	if sessionRegStore != nil && rowWriter != nil {
 		go func() {
-			if err := runSessionRowReconcileLoop(ctx, srv, sessionRegStore, rowWriter, sessionRowReconcileInterval); err != nil && !errors.Is(err, context.Canceled) {
+			if err := runSessionRowReconcileLoop(workerCtx, srv, sessionRegStore, rowWriter, sessionRowReconcileInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("session row reconcile loop stopped", "error", err)
 			}
 		}()
