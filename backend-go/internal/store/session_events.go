@@ -492,7 +492,7 @@ func (s *postgresSessionEventStore) LatestEvents(ctx context.Context, tankSessio
 // rows. ~3 events per task generation; 1500 rows ≈ 500 task generations.
 const shellTaskEventScanCap = 1500
 
-// MaxOrderKeyForTurn returns the turn's latest event order key ('' when the
+// MaxOrderKeyForTurn returns the turn's latest event order key (” when the
 // turn has no events). One backward probe of the session_events_turn_order
 // index (migration 0155) — the turn-activity cache's freshness check
 // (issue #1077 item 1).

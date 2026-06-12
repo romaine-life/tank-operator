@@ -94,6 +94,7 @@ function cfg(): Config {
     natsURL: "nats://example.invalid:4222",
     natsToken: "",
     natsStream: "TANK_SESSION_BUS",
+    natsCommandStream: "TANK_SESSION_COMMANDS",
     operatorInternalURL: "",
     operatorTokenPath: "",
     workspace: "/workspace",

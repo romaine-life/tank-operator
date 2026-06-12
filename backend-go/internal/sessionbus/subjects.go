@@ -8,15 +8,32 @@ import (
 
 const (
 	defaultStream = "TANK_SESSION_BUS"
-	defaultScope  = "default"
-	subjectRoot   = "tank.session"
-	liveRoot      = "tank.live"
+	// defaultCommandStream carries durable session COMMANDS only (issue
+	// #1076 item 2). JetStream forbids overlapping subjects across
+	// streams, so the command stream owns a parallel `tank.cmd.>`
+	// namespace; the legacy stream keeps the `tank.session.>` namespace
+	// (events forever; command subjects only for pre-split session pods,
+	// fed by the dual-publish in PublishCommand until those pods age
+	// out).
+	defaultCommandStream = "TANK_SESSION_COMMANDS"
+	defaultScope         = "default"
+	subjectRoot          = "tank.session"
+	cmdRoot              = "tank.cmd"
+	liveRoot             = "tank.live"
 )
 
 func StreamName(name string) string {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return defaultStream
+	}
+	return name
+}
+
+func CommandStreamName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return defaultCommandStream
 	}
 	return name
 }
@@ -107,6 +124,36 @@ func SubjectForCommand(command Command) string {
 		return ControlSubject(command.SessionStorageKey, command.Provider)
 	}
 	return CommandSubject(command.SessionStorageKey, command.Provider)
+}
+
+// ScopedSessionCommandSubjectPrefix mirrors ScopedSessionSubjectPrefix on
+// the command stream's `tank.cmd` namespace.
+func ScopedSessionCommandSubjectPrefix(sessionStorageKey string) string {
+	scope, sessionID := StorageScopeAndSessionID(sessionStorageKey)
+	return fmt.Sprintf("%s.%s.%s", cmdRoot, ScopeToken(scope), SessionIDToken(sessionID))
+}
+
+// CommandStreamSubject / ControlStreamSubject are the command-stream twins
+// of CommandSubject / ControlSubject. They MUST stay in lockstep with
+// runner-shared/sessionBus.js's commandSubject / controlSubject — the
+// runner's durable consumer filters bind these exact shapes
+// (scripts/check-stop-request-migration.mjs grep-pins both sides).
+func CommandStreamSubject(sessionStorageKey, provider string) string {
+	return fmt.Sprintf("%s.commands.%s", ScopedSessionCommandSubjectPrefix(sessionStorageKey), sanitizeSubjectToken(provider))
+}
+
+func ControlStreamSubject(sessionStorageKey, provider string) string {
+	return fmt.Sprintf("%s.control.%s", ScopedSessionCommandSubjectPrefix(sessionStorageKey), sanitizeSubjectToken(provider))
+}
+
+// CommandStreamSubjectForCommand is SubjectForCommand on the command
+// stream's namespace; the routing rule (control vs data plane) is identical
+// by construction.
+func CommandStreamSubjectForCommand(command Command) string {
+	if command.Type == CommandInterrupt || command.Type == CommandInputReply || command.Type == CommandStopBackgroundTask {
+		return ControlStreamSubject(command.SessionStorageKey, command.Provider)
+	}
+	return CommandStreamSubject(command.SessionStorageKey, command.Provider)
 }
 
 func WakeSubject(sessionStorageKey string) string {

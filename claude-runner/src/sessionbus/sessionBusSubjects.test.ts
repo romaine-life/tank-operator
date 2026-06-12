@@ -15,13 +15,18 @@ test("runner session bus subjects include scope and session tokens", () => {
     eventSubject("tank-operator-slot-3:17"),
     "tank.session.dGFuay1vcGVyYXRvci1zbG90LTM.MTc.events",
   );
+  // Commands ride the WorkQueue command stream's parallel `tank.cmd.>`
+  // namespace (issue #1076 item 2) — JetStream forbids overlapping
+  // subjects across streams, so command/control subjects MUST diverge
+  // from the event namespace. Lockstep twins: backend-go's
+  // sessionbus.CommandStreamSubject / ControlStreamSubject.
   assert.equal(
     commandSubject("tank-operator-slot-3:17", "codex_gui"),
-    "tank.session.dGFuay1vcGVyYXRvci1zbG90LTM.MTc.commands.codex_gui",
+    "tank.cmd.dGFuay1vcGVyYXRvci1zbG90LTM.MTc.commands.codex_gui",
   );
   assert.equal(
     controlSubject("tank-operator-slot-3:17", "codex-gui"),
-    "tank.session.dGFuay1vcGVyYXRvci1zbG90LTM.MTc.control.codex-gui",
+    "tank.cmd.dGFuay1vcGVyYXRvci1zbG90LTM.MTc.control.codex-gui",
   );
   assert.equal(
     eventSubjectFilter("tank-operator-slot-3"),

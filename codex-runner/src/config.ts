@@ -13,6 +13,7 @@ export interface Config {
   natsURL: string;
   natsToken: string;
   natsStream: string;
+  natsCommandStream: string;
   operatorInternalURL: string;
   operatorTokenPath: string;
   workspace: string;
@@ -36,6 +37,7 @@ export function loadConfig(): Config {
     natsURL,
     natsToken: process.env.NATS_TOKEN?.trim() || "",
     natsStream: process.env.NATS_STREAM?.trim() || "TANK_SESSION_BUS",
+    natsCommandStream: process.env.NATS_COMMAND_STREAM?.trim() || "TANK_SESSION_COMMANDS",
     operatorInternalURL: process.env.TANK_OPERATOR_INTERNAL_URL?.trim() || "",
     operatorTokenPath: process.env.TANK_OPERATOR_TOKEN_PATH?.trim() || "",
     workspace: process.env.WORKSPACE?.trim() || "/workspace",

@@ -58,10 +58,10 @@ type projectionState struct {
 	// the card renders non-answerable and its row's end_order_key advances
 	// for SSE delivery).
 	dismissedQuestions map[string]string
-	runStatus             string
-	activeTurnID          string
-	activeItemID          string
-	needsInput            bool
+	runStatus          string
+	activeTurnID       string
+	activeItemID       string
+	needsInput         bool
 }
 
 type projectionItem struct {

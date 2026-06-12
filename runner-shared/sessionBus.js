@@ -49,6 +49,12 @@ export class SharedSessionBus {
         this.deps = deps;
         this.sessionStorageKey = cfg.sessionStorageKey || cfg.sessionId;
         this.stream = cfg.natsStream || "TANK_SESSION_BUS";
+        // Durable command consumers bind the WorkQueue command stream
+        // (issue #1076 item 2); events keep publishing to the legacy
+        // stream's subjects above. Pre-split pods run pre-split code and
+        // keep consuming the legacy stream — the backend dual-publishes
+        // until they age out.
+        this.commandStream = cfg.natsCommandStream || "TANK_SESSION_COMMANDS";
         this.runnerID = `${provider}-runner:${this.sessionStorageKey}:${randomUUID()}`;
         // Set by close(): distinguishes our own graceful shutdown from a
         // terminal connection loss in the closed() watcher below.
@@ -140,7 +146,7 @@ export class SharedSessionBus {
             while (!stopped && !signal?.aborted) {
                 let delivered = false;
                 try {
-                    const consumer = await this.js.consumers.get(this.stream, spec.name());
+                    const consumer = await this.js.consumers.get(this.commandStream, spec.name());
                     const messages = await consumer.consume(spec.consumeOpts);
                     current = messages;
                     for await (const msg of messages) {
@@ -358,16 +364,16 @@ export class SharedSessionBus {
             inactive_threshold: this.deps.nanos(7 * 24 * 60 * 60 * 1000),
         };
         try {
-            await this.jsm.consumers.add(this.stream, cfg);
+            await this.jsm.consumers.add(this.commandStream, cfg);
         }
         catch (err) {
             try {
-                await this.jsm.consumers.info(this.stream, name);
+                await this.jsm.consumers.info(this.commandStream, name);
             }
             catch {
                 throw err;
             }
-            await this.jsm.consumers.update(this.stream, name, {
+            await this.jsm.consumers.update(this.commandStream, name, {
                 ack_wait: cfg.ack_wait,
                 max_deliver: cfg.max_deliver,
                 max_ack_pending: cfg.max_ack_pending,
@@ -395,16 +401,16 @@ export class SharedSessionBus {
             inactive_threshold: this.deps.nanos(7 * 24 * 60 * 60 * 1000),
         };
         try {
-            await this.jsm.consumers.add(this.stream, cfg);
+            await this.jsm.consumers.add(this.commandStream, cfg);
         }
         catch (err) {
             try {
-                await this.jsm.consumers.info(this.stream, name);
+                await this.jsm.consumers.info(this.commandStream, name);
             }
             catch {
                 throw err;
             }
-            await this.jsm.consumers.update(this.stream, name, {
+            await this.jsm.consumers.update(this.commandStream, name, {
                 ack_wait: cfg.ack_wait,
                 max_deliver: cfg.max_deliver,
                 max_ack_pending: cfg.max_ack_pending,
@@ -483,7 +489,7 @@ export function turnIDForClientNonce(clientNonce) {
 }
 
 export function commandSubject(sessionStorageKey, provider) {
-    return `${scopedSessionSubjectPrefix(sessionStorageKey)}.commands.${sanitizeSubjectToken(provider)}`;
+    return `${scopedSessionCommandSubjectPrefix(sessionStorageKey)}.commands.${sanitizeSubjectToken(provider)}`;
 }
 
 // controlSubject mirrors backend-go's sessionbus.ControlSubject. The two
@@ -491,7 +497,7 @@ export function commandSubject(sessionStorageKey, provider) {
 // won't see interrupts. See scripts/check-stop-request-migration.mjs for
 // the regression guard that grep-pins both sides.
 export function controlSubject(sessionStorageKey, provider) {
-    return `${scopedSessionSubjectPrefix(sessionStorageKey)}.control.${sanitizeSubjectToken(provider)}`;
+    return `${scopedSessionCommandSubjectPrefix(sessionStorageKey)}.control.${sanitizeSubjectToken(provider)}`;
 }
 
 export function eventSubject(sessionStorageKey) {
@@ -505,6 +511,16 @@ export function eventSubjectFilter(scope) {
 function scopedSessionSubjectPrefix(sessionStorageKey) {
     const { scope, sessionId } = storageScopeAndSessionID(sessionStorageKey);
     return `tank.session.${scopeToken(scope)}.${sessionIDToken(sessionId)}`;
+}
+
+// scopedSessionCommandSubjectPrefix mirrors backend-go's
+// sessionbus.ScopedSessionCommandSubjectPrefix: the command stream owns the
+// parallel `tank.cmd.>` namespace because JetStream forbids overlapping
+// subjects across streams (issue #1076 item 2). MUST stay in lockstep with
+// CommandStreamSubject / ControlStreamSubject on the Go side.
+function scopedSessionCommandSubjectPrefix(sessionStorageKey) {
+    const { scope, sessionId } = storageScopeAndSessionID(sessionStorageKey);
+    return `tank.cmd.${scopeToken(scope)}.${sessionIDToken(sessionId)}`;
 }
 
 function storageScopeAndSessionID(sessionStorageKey) {

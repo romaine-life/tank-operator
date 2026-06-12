@@ -130,6 +130,7 @@ type runnerConfig struct {
 	natsURL           string
 	natsToken         string
 	natsStream        string
+	natsCommandStream string
 	workspace         string
 	agyHome           string
 	model             string
@@ -1077,6 +1078,7 @@ func loadConfig() (runnerConfig, error) {
 		natsURL:           firstNonEmpty(os.Getenv("NATS_URL"), "nats://tank-nats.nats.svc.cluster.local:4222"),
 		natsToken:         strings.TrimSpace(os.Getenv("NATS_TOKEN")),
 		natsStream:        sessionbus.StreamName(os.Getenv("NATS_STREAM")),
+		natsCommandStream: sessionbus.CommandStreamName(os.Getenv("NATS_COMMAND_STREAM")),
 		workspace:         firstNonEmpty(strings.TrimSpace(os.Getenv("WORKSPACE")), "/workspace"),
 		agyHome:           firstNonEmpty(firstEnv("ANTIGRAVITY_HOME", "AGY_HOME"), filepath.Join(home, ".gemini", "antigravity-cli")),
 		model:             strings.TrimSpace(os.Getenv("TANK_SESSION_MODEL")),
@@ -1131,10 +1133,10 @@ func connectNATS(cfg runnerConfig) (*nats.Conn, error) {
 }
 
 func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConfig, builder eventBuilder, publisher func(map[string]any) error, active *activeProcess, state *runnerState, ptmx *os.File) {
-	commandSubject := sessionbus.CommandSubject(cfg.sessionStorageKey, provider)
+	commandSubject := sessionbus.CommandStreamSubject(cfg.sessionStorageKey, provider)
 	consumerName := "antigravity_cli_data_" + sessionbus.StorageToken(cfg.sessionStorageKey)
 
-	consumer, err := js.CreateOrUpdateConsumer(ctx, cfg.natsStream, jetstream.ConsumerConfig{
+	consumer, err := js.CreateOrUpdateConsumer(ctx, cfg.natsCommandStream, jetstream.ConsumerConfig{
 		Durable:       consumerName,
 		Name:          consumerName,
 		FilterSubject: commandSubject,
@@ -1184,10 +1186,10 @@ func runDataConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConf
 }
 
 func runControlConsumer(ctx context.Context, js jetstream.JetStream, cfg runnerConfig, active *activeProcess) {
-	controlSubject := sessionbus.ControlSubject(cfg.sessionStorageKey, provider)
+	controlSubject := sessionbus.ControlStreamSubject(cfg.sessionStorageKey, provider)
 	consumerName := "antigravity_cli_control_" + sessionbus.StorageToken(cfg.sessionStorageKey)
 
-	consumer, err := js.CreateOrUpdateConsumer(ctx, cfg.natsStream, jetstream.ConsumerConfig{
+	consumer, err := js.CreateOrUpdateConsumer(ctx, cfg.natsCommandStream, jetstream.ConsumerConfig{
 		Durable:       consumerName,
 		Name:          consumerName,
 		FilterSubject: controlSubject,

@@ -372,6 +372,10 @@ type ManifestOptions struct {
 	// SDK runners use NATS JetStream for durable command/event delivery.
 	NATSURL        string
 	NATSStream     string
+	// NATSCommandStream is the WorkQueue stream the runner's durable
+	// command consumers bind (issue #1076 item 2); events keep riding
+	// NATSStream.
+	NATSCommandStream string
 	NATSAuthSecret string
 	// Model/Effort are the immutable session-owned SDK run configuration
 	// accepted at create time.
@@ -1055,6 +1059,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			},
 			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
 			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
+			map[string]any{"name": "NATS_COMMAND_STREAM", "value": opts.NATSCommandStream},
 			map[string]any{
 				"name": "NATS_TOKEN",
 				"valueFrom": map[string]any{
@@ -1198,6 +1203,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			},
 			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
 			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
+			map[string]any{"name": "NATS_COMMAND_STREAM", "value": opts.NATSCommandStream},
 			map[string]any{
 				"name": "NATS_TOKEN",
 				"valueFrom": map[string]any{
@@ -1319,6 +1325,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			},
 			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
 			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
+			map[string]any{"name": "NATS_COMMAND_STREAM", "value": opts.NATSCommandStream},
 			map[string]any{
 				"name": "NATS_TOKEN",
 				"valueFrom": map[string]any{

@@ -17,11 +17,15 @@ import (
 )
 
 type Config struct {
-	URL      string
-	Token    string
-	Stream   string
-	Scope    string
-	Replicas int
+	URL   string
+	Token string
+	// Stream is the legacy combined stream (events forever; command
+	// subjects only for pre-split session pods). CommandStream is the
+	// WorkQueue stream that owns durable commands (issue #1076 item 2).
+	Stream        string
+	CommandStream string
+	Scope         string
+	Replicas      int
 	// WakeMetrics is optional. When set, publish failures inside
 	// PublishSessionEventWake (chat per-session wake) and
 	// PublishSessionRowUpdate (sidebar row-update wire) increment
@@ -239,13 +243,14 @@ type WakeRecorder interface {
 }
 
 type Bus struct {
-	nc          *nats.Conn
-	js          jetstream.JetStream
-	stream      string
-	scope       string
-	replicas    int
-	wakeMetrics WakeMetrics
-	lifecycle   LifecycleEmitter
+	nc            *nats.Conn
+	js            jetstream.JetStream
+	stream        string
+	commandStream string
+	scope         string
+	replicas      int
+	wakeMetrics   WakeMetrics
+	lifecycle     LifecycleEmitter
 
 	persistMu sync.Mutex
 	persist   *persistDispatcher
@@ -311,12 +316,13 @@ func Connect(ctx context.Context, cfg Config) (*Bus, error) {
 		return nil, err
 	}
 	b := &Bus{
-		nc:          nc,
-		js:          js,
-		stream:      StreamName(cfg.Stream),
-		scope:       cfg.Scope,
-		replicas:    cfg.Replicas,
-		wakeMetrics: cfg.WakeMetrics,
+		nc:            nc,
+		js:            js,
+		stream:        StreamName(cfg.Stream),
+		commandStream: CommandStreamName(cfg.CommandStream),
+		scope:         cfg.Scope,
+		replicas:      cfg.Replicas,
+		wakeMetrics:   cfg.WakeMetrics,
 	}
 	if b.scope == "" {
 		b.scope = "default"
@@ -377,6 +383,22 @@ func (b *Bus) PublishCommand(ctx context.Context, command Command) error {
 	// interrupt behind an in-flight submit_turn. SubjectForCommand is the
 	// single decision point so the routing rule is unit-testable without
 	// touching JetStream.
+	// Dual-publish (issue #1076 item 2 cutover): the command stream is the
+	// authoritative wire for post-split session pods; the legacy combined
+	// stream keeps receiving every command so PRE-split pods' durable
+	// consumers stay whole (the migration checklist's pre-deploy-pod
+	// clause — their wire is byte-identical to before). Either leg failing
+	// fails the call: a half-published command silently strands whichever
+	// pod generation needed the missing leg, and both legs share the
+	// 24h msg-id duplicate window so the caller's retry is idempotent.
+	_, err = b.js.Publish(ctx, CommandStreamSubjectForCommand(command), raw, jetstream.WithMsgID(command.CommandID))
+	if err != nil {
+		b.wakeMetrics.RecordCommandPublishFailed(
+			commandKindLabel(command.Type),
+			"cmd_stream_"+classifyPublishError(err),
+		)
+		return err
+	}
 	_, err = b.js.Publish(ctx, SubjectForCommand(command), raw, jetstream.WithMsgID(command.CommandID))
 	if err != nil {
 		// The 2026-05-25 incident shape: JetStream lost quorum and
@@ -393,6 +415,31 @@ func (b *Bus) PublishCommand(ctx context.Context, command Command) error {
 		)
 	}
 	return err
+}
+
+// CommandStreamUsage samples the command stream's occupancy. With
+// WorkQueue retention the steady state is near-zero (acked commands
+// delete); growth means consumers are missing or pre-split copies are
+// accumulating toward the DiscardNew rejection threshold.
+func (b *Bus) CommandStreamUsage(ctx context.Context) (StreamUsage, error) {
+	if b == nil {
+		return StreamUsage{}, fmt.Errorf("session bus unavailable")
+	}
+	stream, err := b.js.Stream(ctx, b.commandStream)
+	if err != nil {
+		return StreamUsage{}, err
+	}
+	info, err := stream.Info(ctx)
+	if err != nil {
+		return StreamUsage{}, err
+	}
+	return StreamUsage{
+		Messages:      info.State.Msgs,
+		Bytes:         info.State.Bytes,
+		MaxMsgs:       50_000,
+		MaxBytes:      32 * 1024 * 1024,
+		ConsumerCount: info.State.Consumers,
+	}, nil
 }
 
 // classifyPublishError maps a js.Publish error into a bounded reason
@@ -675,6 +722,34 @@ func (b *Bus) ensureStream(ctx context.Context) error {
 		Replicas:    b.replicas,
 		Duplicates:  24 * time.Hour,
 		AllowMsgTTL: true,
+	})
+	if err != nil {
+		return err
+	}
+	// The command stream (issue #1076 item 2). WorkQueue retention: a
+	// message lives until the (single) matching consumer acks it, so a
+	// flood session's EVENTS can never evict another session's undelivered
+	// submit_turn — the failure class the combined LimitsPolicy/DiscardOld
+	// stream carried. Consumer filters are per-session/per-provider and
+	// non-overlapping (commands.* vs control.*), satisfying WorkQueue's
+	// exclusivity rule. DiscardNew: when limits fill, NEW publishes are
+	// REJECTED (loud — PublishCommand's error path writes a durable
+	// turn.command_failed and trips the publish-failure alert) instead of
+	// silently evicting someone else's command. MaxAge 24h bounds copies
+	// dual-published for pre-split pods that will never consume here.
+	_, err = b.js.CreateOrUpdateStream(ctx, jetstream.StreamConfig{
+		Name:        b.commandStream,
+		Description: "Tank session durable command delivery (WorkQueue; events stay on the session bus stream)",
+		Subjects:    []string{cmdRoot + ".>"},
+		Retention:   jetstream.WorkQueuePolicy,
+		Discard:     jetstream.DiscardNew,
+		MaxAge:      24 * time.Hour,
+		MaxBytes:    32 * 1024 * 1024,
+		MaxMsgs:     50_000,
+		MaxMsgSize:  2 * 1024 * 1024,
+		Storage:     jetstream.MemoryStorage,
+		Replicas:    b.replicas,
+		Duplicates:  24 * time.Hour,
 	})
 	return err
 }

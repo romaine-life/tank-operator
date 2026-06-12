@@ -281,6 +281,10 @@ avatarAssets:
 
 sessionBus:
   stream: TANK_SESSION_BUS
+  # WorkQueue stream owning durable session commands (issue #1076 item 2);
+  # events stay on `stream`. Pre-split session pods keep consuming command
+  # subjects on `stream` via the backend's dual-publish until they age out.
+  commandStream: TANK_SESSION_COMMANDS
   # JetStream Raft tolerates {1, 3, 5} replicas. R=2 needs both replicas
   # to ack to make progress (write quorum = 2 of 2) and has no tiebreaker,
   # so a single slow member halts writes — the 2026-05-25 incident shape
