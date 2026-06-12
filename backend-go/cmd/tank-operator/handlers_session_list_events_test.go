@@ -35,11 +35,11 @@ func TestEmitSessionRowPayloadAdvancesCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cursor := int64(10)
+	delivered := map[string]int64{"42": 10}
 	resp := httptest.NewRecorder()
-	srv.emitSessionRowPayload(resp, &cursor, srv.sessionScope, payload)
-	if cursor != 17 {
-		t.Fatalf("cursor = %d, want 17 (the row's row_version)", cursor)
+	srv.emitSessionRowPayload(resp, delivered, srv.sessionScope, payload)
+	if delivered["42"] != 17 {
+		t.Fatalf("delivered[42] = %d, want 17 (the row's row_version)", delivered["42"])
 	}
 	body := resp.Body.String()
 	if !strings.Contains(body, "event: session-row") {
@@ -71,11 +71,11 @@ func TestEmitSessionRowPayloadDropsCrossScope(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cursor := int64(0)
+	delivered := map[string]int64{}
 	resp := httptest.NewRecorder()
-	srv.emitSessionRowPayload(resp, &cursor, srv.sessionScope, payload)
-	if cursor != 0 {
-		t.Fatalf("cursor advanced to %d, want 0 (cross-scope payload must not move the cursor)", cursor)
+	srv.emitSessionRowPayload(resp, delivered, srv.sessionScope, payload)
+	if len(delivered) != 0 {
+		t.Fatalf("delivered = %v, want empty (cross-scope payload must not record delivery)", delivered)
 	}
 	if resp.Body.Len() != 0 {
 		t.Fatalf("emit wrote %d bytes, want 0 (cross-scope payload must drop): %q", resp.Body.Len(), resp.Body.String())
@@ -83,10 +83,11 @@ func TestEmitSessionRowPayloadDropsCrossScope(t *testing.T) {
 }
 
 // TestEmitSessionRowPayloadSkipsStaleCursor confirms the deduplication
-// invariant: a NATS payload whose cursor is ≤ the SSE handler's
-// current cursor was already emitted during catch-up. Re-emitting
-// would make the SPA's SessionStore replace the row with an older
-// snapshot.
+// invariant — PER SESSION since issue #1077 item 3: a payload whose
+// row_version is ≤ the version already delivered FOR THAT SESSION is a
+// duplicate; re-emitting would replace the SPA's row with an older
+// snapshot. (Cross-session ordering of the global sequence is no longer
+// a drop condition — see TestEmitSessionRowPayloadDeliversLateCrossSessionPayload.)
 func TestEmitSessionRowPayloadSkipsStaleCursor(t *testing.T) {
 	srv := newTestAppServer(t)
 
@@ -101,11 +102,11 @@ func TestEmitSessionRowPayloadSkipsStaleCursor(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cursor := int64(10) // ahead of the payload's row_version
+	delivered := map[string]int64{"42": 10} // ahead of the payload's row_version
 	resp := httptest.NewRecorder()
-	srv.emitSessionRowPayload(resp, &cursor, srv.sessionScope, payload)
-	if cursor != 10 {
-		t.Fatalf("cursor moved to %d, want 10 (stale payload must not rewind)", cursor)
+	srv.emitSessionRowPayload(resp, delivered, srv.sessionScope, payload)
+	if delivered["42"] != 10 {
+		t.Fatalf("delivered[42] moved to %d, want 10 (stale payload must not rewind)", delivered["42"])
 	}
 	if resp.Body.Len() != 0 {
 		t.Fatalf("emit wrote %d bytes, want 0: %q", resp.Body.Len(), resp.Body.String())
@@ -394,3 +395,37 @@ func authedListTimelineRequest(t *testing.T, _ string) *http.Request {
 
 // ignore unused
 var _ = context.Background
+
+// TestEmitSessionRowPayloadDeliversLateCrossSessionPayload pins the fix
+// for issue #1077 item 3: row_version is one GLOBAL sequence published
+// post-commit by two replicas, so a late-arriving lower-version payload
+// for a DIFFERENT session is NOT a duplicate. The old stream-global
+// cursor dropped it though it was never delivered, leaving that
+// session's sidebar row stale on an open tab indefinitely.
+func TestEmitSessionRowPayloadDeliversLateCrossSessionPayload(t *testing.T) {
+	srv := newTestAppServer(t)
+
+	payload, err := sessioncontroller.MarshalRowUpdate(sessionmodel.SessionRecord{
+		ID:         "7",
+		Email:      "u@example.com",
+		Scope:      "default",
+		Visible:    true,
+		Status:     "Active",
+		RowVersion: 9,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Another session's later version already streamed: the global
+	// sequence is past 9, but session 7 itself has never been delivered.
+	delivered := map[string]int64{"42": 20}
+	resp := httptest.NewRecorder()
+	srv.emitSessionRowPayload(resp, delivered, srv.sessionScope, payload)
+	if delivered["7"] != 9 {
+		t.Fatalf("delivered[7] = %d, want 9 (late cross-session payload must emit)", delivered["7"])
+	}
+	if !strings.Contains(resp.Body.String(), "event: session-row") {
+		t.Fatalf("late cross-session payload was dropped: %q", resp.Body.String())
+	}
+}
