@@ -13705,19 +13705,57 @@ function RunSettingsPanel({
               onRefresh={adminControls.onRefreshObservability}
             />
           </>
+        ) : adminView === "version" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">App version</h2>
+              </div>
+            </section>
+            <AdminVersionPanel
+              state={adminControls.version}
+              onRefresh={adminControls.onRefreshVersion}
+            />
+          </>
         ) : (
           <>
             <section className="run-settings-section">
               <h2 className="run-settings-title">Admin Controls</h2>
-              <AdminVersionPanel
-                state={adminControls.version}
-                onRefresh={adminControls.onRefreshVersion}
-              />
               <AdminTestSlotDefaultsPanel
                 state={adminControls.testSlotDefaults}
                 sessionRunOptions={sessionRunOptions ?? null}
                 onSave={adminControls.onSaveTestSlotDefaults}
               />
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "version")}
+              >
+                <span className="run-settings-link-label">
+                  <InfoIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>App version</span>
+                </span>
+                <span className="run-settings-scope-value">
+                  {adminControls.version.summary
+                    ? versionImageLabel(adminControls.version.summary.app_image)
+                    : adminControls.version.error
+                      ? "error"
+                      : adminControls.version.loading
+                        ? "Loading"
+                        : "Open"}
+                </span>
+              </button>
               <button
                 type="button"
                 className="run-settings-link"
