@@ -101,8 +101,20 @@ type SessionEventStore interface {
 	// the olderThan floor keeps a just-submitted turn — whose turn.submitted
 	// is written milliseconds after user_message.created in the same backend
 	// call — from ever being mistaken for a strand, and the notBefore ceiling
-	// keeps the scan off the deep history. Returns at most `limit` rows, ASC
-	// by created_at (oldest strands first).
+	// keeps the scan off the deep history.
+	//
+	// A turn whose pending-launch row (session_pending_launch_turns) is still
+	// live — status awaiting_bytes / ready / claiming — is NOT a strand
+	// regardless of age and is excluded: the launch dispatcher
+	// (cmd/tank-operator/launch_dispatch.go) may still legitimately dispatch
+	// it, e.g. a pod that takes longer than the sweep's age floor to go
+	// Active. Sweeping it would write a terminal that the later dispatch then
+	// trails with turn.submitted, wedging the session durably 'submitted'
+	// (issue #1079 item 3). Once the dispatcher's own stale deadline or
+	// attempt cap fails the row terminally (or it dispatches), the row leaves
+	// those statuses and the sweep may proceed.
+	//
+	// Returns at most `limit` rows, ASC by created_at (oldest strands first).
 	FindStrandedLaunchTurns(ctx context.Context, olderThan, notBefore time.Time, limit int) ([]StrandedLaunchTurn, error)
 	// FindStrandedTurns returns dispatched turns that stranded mid-lifecycle:
 	// a turn.submitted in [notBefore, olderThan) with no terminal event, in a
@@ -592,9 +604,11 @@ func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSe
 
 // FindStrandedLaunchTurns scans for user_message.created rows whose turn_id
 // has no sibling event of any kind, created in [notBefore, olderThan). The
-// NOT EXISTS rides the (tank_session_id, turn_id, order_key) index, and the
-// created_at predicates ride the session_events_created_at index, so the
-// outer pass is a bounded time-window scan rather than a whole-ledger fold.
+// sibling NOT EXISTS rides the (tank_session_id, turn_id, order_key) index,
+// the created_at predicates ride the session_events_created_at index, and the
+// pending-launch NOT EXISTS is a primary-key point lookup on
+// session_pending_launch_turns (tank_session_id, turn_id), so the outer pass
+// is a bounded time-window scan rather than a whole-ledger fold.
 // Scope-gated since 2026-06-12: the original "cross-session by design (no
 // tank_session_id filter)" shape let ANY orchestrator sharing the database
 // sweep EVERY scope's turns — and test-slot orchestrators run arbitrary
@@ -604,6 +618,17 @@ func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSe
 // moment migration 0150 cleaned them. Each orchestrator now sweeps only
 // sessions in its own scope (default scope owns the bare-id storage keys;
 // slot scopes own their 'scope:' prefix).
+//
+// Live pending-launch exclusion (#1079 item 3): a deferred attachment launch
+// records its user_message.created at create time and relies on the launch
+// dispatcher to write turn.submitted once the pod goes Active — which can
+// legitimately take longer than the sweep's age floor. While the launch's
+// session_pending_launch_turns row is in a status the dispatcher still acts
+// on ('awaiting_bytes', 'ready', 'claiming'), the lone user_message.created
+// is a launch in flight, not a strand, so it is excluded no matter how old.
+// The dispatcher's stale deadline / attempt cap owns terminaling those rows;
+// once a row leaves the live statuses ('dispatched', 'failed') — or never
+// existed, the pre-#865 browser-driven launches — the sweep proceeds.
 func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context, olderThan, notBefore time.Time, limit int) ([]StrandedLaunchTurn, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -632,6 +657,13 @@ func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context,
 				WHERE o.tank_session_id = e.tank_session_id
 					AND o.turn_id = e.turn_id
 					AND o.event_id <> e.event_id
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM session_pending_launch_turns pl
+				WHERE pl.tank_session_id = e.tank_session_id
+					AND pl.turn_id = e.turn_id
+					AND pl.status IN ('awaiting_bytes', 'ready', 'claiming')
 			)
 		ORDER BY e.created_at ASC
 		LIMIT $4

@@ -41,6 +41,13 @@ const (
 	// bytes, the session died before going Active, or dispatch retries were
 	// exhausted. Generous so it never races a healthy in-flight launch.
 	launchStaleDeadline = 20 * time.Minute
+	// launchAlreadyTerminalReason prefixes the durable failure recorded on a
+	// pending-launch row whose turn already carries a terminal event in the
+	// ledger. The dispatch is skipped — publishing would append turn.submitted
+	// AFTER the terminal, the runner's already-terminal guard would drop the
+	// command, and the ledger would end on turn.submitted: a session durably
+	// 'submitted' forever plus a false stuck-turn alert (#1079 item 3).
+	launchAlreadyTerminalReason = "terminal_already_present"
 )
 
 // runLaunchDispatchLoop drives backend-owned dispatch of durable attachment
@@ -138,6 +145,44 @@ func (s *appServer) processPendingLaunches(ctx context.Context, now time.Time) e
 // failure won't fix itself on retry (the SDK boundary rejected the turn), so
 // the caller should fail it now rather than retry to the attempt cap.
 func (s *appServer) dispatchPendingLaunch(ctx context.Context, launch pgstore.PendingLaunchTurn, now time.Time) (bool, error) {
+	// Already-terminal guard (#1079 item 3). The launch turn id is durable and
+	// deterministic, so ANY prior writer can have terminaled it before this
+	// claim dispatches: the stranded-launch sweep's pre-guard 15-minute race,
+	// a sibling replica's stale-launch scan, a prior attempt whose publish
+	// landed but whose MarkDispatched write was lost and whose turn already
+	// finished. Dispatching after a terminal appends turn.submitted AFTER the
+	// terminal — the runner drops the command via its own already-terminal
+	// check, the ledger ends on turn.submitted, and the session reads as
+	// durably 'submitted' forever. Check before any boundary write, pod
+	// write, or publish; on a hit, fail the pending row directly (NOT via
+	// failPendingLaunch — the turn already has its terminal, and writing a
+	// second turn.command_failed onto it is exactly the false-terminal class
+	// this guard exists to prevent) and skip the dispatch. This also keeps
+	// every downstream failure path of this attempt from double-terminaling
+	// the turn.
+	terminal, err := s.sessionEvents.FindTurnTerminal(ctx, launch.SessionID, launch.TurnID)
+	if err != nil {
+		// Transient read failure: leave the claim lease to expire and retry.
+		return false, fmt.Errorf("check turn terminal: %w", err)
+	}
+	if terminal != nil {
+		terminalType := stringMapField(terminal, "type")
+		reason := fmt.Sprintf(
+			"%s: launch turn already carries a durable %s; dispatch skipped so turn.submitted is never written after a terminal",
+			launchAlreadyTerminalReason, terminalType,
+		)
+		if err := s.pendingLaunch.MarkFailed(ctx, launch.TankSessionID, launch.TurnID, reason); err != nil {
+			recordLaunchDispatch("fail_mark_error")
+			return false, fmt.Errorf("mark already-terminal launch failed: %w", err)
+		}
+		slog.Info("launch dispatch skipped: turn already terminal",
+			"session_id", launch.SessionID,
+			"turn_id", launch.TurnID,
+			"terminal_type", terminalType)
+		recordLaunchDispatch("skipped_already_terminal")
+		return false, nil
+	}
+
 	info, err := s.mgr.GetByOwner(ctx, launch.OwnerEmail, launch.SessionID)
 	if err != nil {
 		return false, fmt.Errorf("resolve session: %w", err)

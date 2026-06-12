@@ -886,7 +886,7 @@ func recordLaunchAttachmentStaged(status string) {
 var launchDispatchTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_launch_dispatch_total",
-		Help: "Durable launch dispatch reconciler outcomes, labeled by bounded result (dispatched, retry, failed, fail_mark_error, fail_event_error).",
+		Help: "Durable launch dispatch reconciler outcomes, labeled by bounded result (dispatched, retry, failed, fail_mark_error, fail_event_error, skipped_already_terminal).",
 	},
 	[]string{"result"},
 )
