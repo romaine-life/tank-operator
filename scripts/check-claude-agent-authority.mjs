@@ -20,6 +20,37 @@ const writer = path.join(
   repoRoot,
   "k8s/session-config/write-claude-settings.sh",
 );
+const bootstrap = path.join(
+  repoRoot,
+  "k8s/session-config/session-pod-bootstrap.sh",
+);
+const configMap = path.join(
+  repoRoot,
+  "k8s/templates/session-configmap.yaml",
+);
+const launch = path.join(
+  repoRoot,
+  "k8s/session-config/claude-runner-launch.sh",
+);
+
+const bootstrapSource = await fs.readFile(bootstrap, "utf8");
+if (!/claude_cli\s*\|\s*claude_gui\)/.test(bootstrapSource)) {
+  throw new Error("session-pod-bootstrap.sh must explicitly seed Claude modes");
+}
+if (!bootstrapSource.includes("write-claude-settings.sh")) {
+  throw new Error("session-pod-bootstrap.sh must call write-claude-settings.sh");
+}
+const configMapSource = await fs.readFile(configMap, "utf8");
+if (!configMapSource.includes("write-claude-settings.sh")) {
+  throw new Error("session ConfigMap must mount write-claude-settings.sh");
+}
+const launchSource = await fs.readFile(launch, "utf8");
+if (!launchSource.includes("write-claude-settings.sh")) {
+  throw new Error("claude-runner-launch.sh must call write-claude-settings.sh");
+}
+if (/Bash\(.+\)/.test(launchSource)) {
+  throw new Error("claude-runner-launch.sh must not carry per-command Bash rules");
+}
 
 const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "tank-claude-authority-"));
 try {
