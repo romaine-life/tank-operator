@@ -192,6 +192,17 @@ type runnerState struct {
 	// agy has work in flight, so a turn.completed that lands now is mid-work and the
 	// user-facing-turn projection must not summon. See ARCHITECTURE.md.
 	pendingTasks map[string]struct{}
+	// completedTasks makes the pending-set replay-proof. noteTaskSignalLocked
+	// runs for every step including transcript-rewrite replays (it cannot use
+	// seenSteps: completions are tracked even when non-publishable), so a
+	// replayed RUNNING marker would transiently re-add a long-dead task until
+	// its replayed completion lands later in the same pass. A turn terminal
+	// reading pendingTasks inside that window would stamp a stale
+	// background_work_pending=true and strand the session as `scheduled`.
+	// agy task ids are never reused (monotonic task-N per conversation), so
+	// "completed once" is terminal for an id: replayed starts and replayed
+	// completions of a completed task are ignored outright.
+	completedTasks map[string]struct{}
 	// lastCompletedTask is the most recently completed background task id (raw, as
 	// agy writes it). It attributes the next idle self-continuation to the task that
 	// triggered it, so the relay turn folds into the originating user-facing turn.
@@ -381,6 +392,18 @@ func (s *runnerState) noteTaskSignalLocked(step AgyStep) {
 		}
 		if m := backgroundTaskStartPattern.FindStringSubmatch(contentText(step.Content)); m != nil {
 			if id := trimTaskID(m[1]); id != "" {
+				if _, done := s.completedTasks[id]; done {
+					// Replayed start of an already-completed task (transcript
+					// rewrite rewound the tailer). Re-adding it would strand a
+					// stale background_work_pending=true on any terminal that
+					// reads the set before the replayed completion re-arrives.
+					return
+				}
+				if _, already := s.pendingTasks[id]; already {
+					// Replayed start of a still-pending task: the set already
+					// holds it; re-buffering would duplicate idle start edges.
+					return
+				}
 				if s.pendingTasks == nil {
 					s.pendingTasks = map[string]struct{}{}
 				}
@@ -397,6 +420,16 @@ func (s *runnerState) noteTaskSignalLocked(step AgyStep) {
 	if strings.EqualFold(step.Source, "SYSTEM") {
 		if m := backgroundTaskDonePattern.FindStringSubmatch(contentText(step.Content)); m != nil {
 			if id := trimTaskID(m[1]); id != "" {
+				if _, done := s.completedTasks[id]; done {
+					// Replayed completion: already settled. Must not reset
+					// lastCompletedTask — a stale id here would mis-attribute
+					// the next idle self-continuation relay.
+					return
+				}
+				if s.completedTasks == nil {
+					s.completedTasks = map[string]struct{}{}
+				}
+				s.completedTasks[id] = struct{}{}
 				delete(s.pendingTasks, id)
 				s.lastCompletedTask = id
 				s.publishTaskLifecycleLocked(id, string(conversation.EventShellTaskExited), "completed", contentText(step.Content))
@@ -1397,20 +1430,10 @@ func (r *turnRun) armInterruptGrace(d time.Duration) {
 }
 
 func (r *turnRun) observeStep(path, line string, step AgyStep) error {
-	// Any transcript record — relevant or not, including the USER_EXPLICIT
-	// prompt echo — proves agy is processing; clear the submit watchdog.
+	// Any transcript record — relevant or not, replayed or not — proves agy
+	// is processing; clear the submit watchdog. Aliveness is the ONLY thing a
+	// replayed byte may influence.
 	r.noteProgress()
-	// The burst is still moving: a step after a settled prose response
-	// cancels the armed boundary window (answer-first — the prose was an
-	// ack, not the end). A later settled prose re-arms it.
-	r.mu.Lock()
-	if r.settleTimer != nil {
-		if r.settleTimer.Stop() {
-			turnSettleTotal.WithLabelValues("extended").Inc()
-		}
-		r.settleTimer = nil
-	}
-	r.mu.Unlock()
 	if !isRelevantStep(step) {
 		return nil
 	}
@@ -1420,15 +1443,37 @@ func (r *turnRun) observeStep(path, line string, step AgyStep) error {
 	// the tailer's byte cursor and re-deliver the entire prior history (see
 	// runnerState.seenSteps), so a (step, status) pair publishes only on its
 	// FIRST observation this session — under the turn that was live when it
-	// genuinely happened. The settle-cancel and noteProgress above still run
-	// for replayed bytes (real transcript movement); only the durable publish
-	// is suppressed. Per-turn dedupe here re-published all history under
+	// genuinely happened. Per-turn dedupe here re-published all history under
 	// whatever turn was live at the replay, which is how expanding turn N
 	// came to show turns 1..N (session 791).
+	//
+	// A replayed step must be invisible to the settle window too. It runs
+	// before the settle-cancel below because a replay can only cancel — the
+	// re-arm lives behind this gate, so a cancel-on-replay is unmatchable:
+	// the final settled prose arms the window, the rewrite that wrote it
+	// re-delivers the whole history, every replayed step is suppressed here,
+	// and nothing ever re-arms — the turn pins forever with the data-plane
+	// consumer (max_ack_pending=1) blocked behind it. Sessions 828/829
+	// (2026-06-12) wedged exactly this way: final answer published, settle
+	// armed, replay storm inside the 2s window, no turn.completed for 30+
+	// minutes. Replayed bytes are the tailer re-reading history, not agy
+	// doing new work; only a genuinely NEW step may move the boundary.
 	if !r.state.markStepObserved(stepSeenKey(providerID, step.Status)) {
 		stepReplaySuppressedTotal.WithLabelValues("turn").Inc()
 		return nil
 	}
+
+	// The burst is genuinely still moving: a NEW step after a settled prose
+	// response cancels the armed boundary window (answer-first — the prose
+	// was an ack, not the end). A later settled prose re-arms it.
+	r.mu.Lock()
+	if r.settleTimer != nil {
+		if r.settleTimer.Stop() {
+			turnSettleTotal.WithLabelValues("extended").Inc()
+		}
+		r.settleTimer = nil
+	}
+	r.mu.Unlock()
 
 	if err := r.ensureStarted(providerID); err != nil {
 		return err

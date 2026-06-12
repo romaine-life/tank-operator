@@ -1271,3 +1271,147 @@ func TestTurnSettleZeroCompletesImmediately(t *testing.T) {
 		t.Fatal("settleDur=0 must preserve immediate completion on settled prose")
 	}
 }
+
+// TestTurnSettleSurvivesTranscriptRewriteReplay pins the sessions-828/829
+// wedge (2026-06-12). agy appends its final settled prose via an in-place
+// truncate + full rewrite; the rewind re-delivers the entire history inside
+// the armed settle window. Replayed steps are dedupe-suppressed, so they can
+// never re-arm the window — if they are allowed to CANCEL it, the turn pins
+// forever: no turn.completed, the data-plane consumer (max_ack_pending=1)
+// blocked behind the un-acked command, the session stuck `streaming`. A
+// replayed step must be invisible to the boundary: the window armed by the
+// final prose must still fire through a replay storm.
+func TestTurnSettleSurvivesTranscriptRewriteReplay(t *testing.T) {
+	builder := eventBuilder{sessionID: "828", sessionStorageKey: "828"}
+	log := &eventLog{}
+	state := &runnerState{builder: builder, publish: log.publisher}
+	cfg := runnerConfig{sessionID: "828"}
+
+	feed := func(lines []string) {
+		t.Helper()
+		for _, line := range lines {
+			var step AgyStep
+			if err := json.Unmarshal([]byte(line), &step); err != nil {
+				t.Fatal(err)
+			}
+			if err := state.handleStep("/tmp/transcript_full.jsonl", line, step, cfg); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+
+	// Session 828's burst shape: ack prose, edit tool round, test run, final
+	// settled prose (step 57 in the live transcript).
+	burst := []string{
+		`{"step_index":53,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"I will modify app.js.","tool_calls":[{"name":"multi_replace_file_content","args":{"TargetFile":"/workspace/app.js"}}]}`,
+		`{"step_index":54,"source":"MODEL","type":"CODE_ACTION","status":"DONE","content":"The following changes were made."}`,
+		`{"step_index":55,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"I will now execute the tests.","tool_calls":[{"name":"run_command","args":{"CommandLine":"npm test"}}]}`,
+		`{"step_index":56,"source":"MODEL","type":"RUN_COMMAND","status":"DONE","content":"The command completed successfully."}`,
+		`{"step_index":57,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"I have implemented the graceful drop animation."}`,
+	}
+
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1", state)
+	run.settleDur = 80 * time.Millisecond
+	state.attachTurn(run)
+	defer state.detachTurn(run)
+
+	feed(burst)
+	publishedBeforeReplay := len(log.snapshot())
+
+	// The rewrite that appended step 57 rewinds the tailer: the ENTIRE
+	// history re-arrives while the settle window armed by step 57 is ticking.
+	feed(burst)
+
+	if got := len(log.snapshot()); got != publishedBeforeReplay {
+		t.Fatalf("replayed history published %d new events, want 0", got-publishedBeforeReplay)
+	}
+	if !waitComplete(t, run, 400*time.Millisecond) {
+		t.Fatal("settle window must survive a transcript-rewrite replay: a replayed step can never re-arm the window, so it must not cancel it (sessions 828/829 pinned forever here)")
+	}
+	if err := run.finishCompleted(); err != nil {
+		t.Fatal(err)
+	}
+	events := log.snapshot()
+	completed := 0
+	for _, event := range events {
+		if event["type"] == string(conversation.EventTurnCompleted) {
+			completed++
+		}
+	}
+	if completed != 1 {
+		t.Fatalf("turn.completed published %d times, want exactly 1", completed)
+	}
+}
+
+// TestReplayedTaskSignalsKeepPendingSetSettled is the companion guard: the
+// pending-set is maintained for EVERY step including replays (completions are
+// tracked even when non-publishable, so it cannot ride the seenSteps gate). A
+// replayed RUNNING marker for an already-completed task must not transiently
+// resurrect it — a turn terminal reading the set mid-replay would stamp a
+// stale background_work_pending=true and strand the session as `scheduled`.
+// A replayed completion must not clobber the consumed relay attribution.
+func TestReplayedTaskSignalsKeepPendingSetSettled(t *testing.T) {
+	builder := eventBuilder{sessionID: "829", sessionStorageKey: "829"}
+	log := &eventLog{}
+	state := &runnerState{builder: builder, publish: log.publisher}
+	cfg := runnerConfig{sessionID: "829"}
+
+	feed := func(line string) {
+		t.Helper()
+		var step AgyStep
+		if err := json.Unmarshal([]byte(line), &step); err != nil {
+			t.Fatal(err)
+		}
+		if err := state.handleStep("/tmp/transcript_full.jsonl", line, step, cfg); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	run := newTurnRun(builder, log.publisher, "turn-1", "nonce-1", state)
+	state.attachTurn(run)
+	defer state.detachTurn(run)
+
+	running := `{"step_index":4,"source":"MODEL","type":"RUN_COMMAND","status":"RUNNING","content":"Tool is running as a background task with task id: c7470ea1/task-62"}`
+	done := `{"step_index":6,"source":"SYSTEM","type":"SYSTEM_MESSAGE","status":"DONE","content":"[Message] timestamp=2026-06-12T03:06:09Z sender=c7470ea1/task-62 The task has finished."}`
+
+	feed(running)
+	if !state.backgroundWorkPending() {
+		t.Fatal("RUNNING marker must register the pending task")
+	}
+	feed(done)
+	if state.backgroundWorkPending() {
+		t.Fatal("completion must clear the pending task")
+	}
+
+	// The relay consumed the completion attribution.
+	state.mu.Lock()
+	state.lastCompletedTask = ""
+	state.mu.Unlock()
+
+	// A rewrite-rewind replays both signals, start first.
+	feed(running)
+	if state.backgroundWorkPending() {
+		t.Fatal("a replayed RUNNING marker must not resurrect a completed task into the pending-set (stale background_work_pending strands the session as scheduled)")
+	}
+	feed(done)
+	state.mu.Lock()
+	last := state.lastCompletedTask
+	state.mu.Unlock()
+	if last != "" {
+		t.Fatalf("a replayed completion reset lastCompletedTask to %q; stale attribution mis-labels the next self-continuation relay", last)
+	}
+
+	// Lifecycle edges stayed exactly-once through the replay.
+	started, exited := 0, 0
+	for _, event := range log.snapshot() {
+		switch event["type"] {
+		case string(conversation.EventShellTaskStarted):
+			started++
+		case string(conversation.EventShellTaskExited):
+			exited++
+		}
+	}
+	if started != 1 || exited != 1 {
+		t.Fatalf("shell_task lifecycle events = %d started / %d exited, want exactly 1 / 1", started, exited)
+	}
+}
