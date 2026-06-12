@@ -368,3 +368,75 @@ func TestHasRecentRunnerEvent(t *testing.T) {
 		t.Fatalf("alive = false after a fresh runner turn.claimed in the window")
 	}
 }
+
+// TestFindStrandedTurnsIsScopeGated pins the blast-radius boundary added
+// after issue #1079 item 4 reproduced live (2026-06-12): test-slot
+// orchestrators share the production database and run arbitrary branch
+// code, so each orchestrator's sweep may only address sessions in its own
+// scope. Default-scope storage keys are bare ids; slot scopes own their
+// 'scope:' prefix.
+func TestFindStrandedTurnsIsScopeGated(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool := newStrandedTurnTestPool(t, ctx, "stranded_scope")
+
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	old := now.Add(-3 * time.Hour)
+
+	defaultStore := store.NewPostgresSessionEventStore(pool, "default")
+	slotStore := store.NewPostgresSessionEventStore(pool, "slot-1")
+
+	defaultTurn := seedUserTurn(t, ctx, defaultStore, "d1", sessionmodel.SessionStorageKey("default", "d1"), "d1-turn", "prod strand", old, 0)
+	slotTurn := seedUserTurn(t, ctx, slotStore, "s1", sessionmodel.SessionStorageKey("slot-1", "s1"), "s1-turn", "slot strand", old, 0)
+	backdateSeededEvents(t, ctx, pool)
+
+	window := func(st store.SessionEventStore) map[string]bool {
+		t.Helper()
+		rows, err := st.FindStrandedTurns(ctx,
+			now.Add(-30*time.Minute), now.Add(-30*time.Minute), now.Add(-30*24*time.Hour), 50)
+		if err != nil {
+			t.Fatalf("FindStrandedTurns: %v", err)
+		}
+		got := map[string]bool{}
+		for _, row := range rows {
+			got[row.TankSessionID+"/"+row.TurnID] = true
+		}
+		return got
+	}
+
+	fromDefault := window(defaultStore)
+	if !fromDefault[sessionmodel.SessionStorageKey("default", "d1")+"/"+defaultTurn] {
+		t.Fatalf("default-scope sweep missed its own strand: %v", fromDefault)
+	}
+	if fromDefault[sessionmodel.SessionStorageKey("slot-1", "s1")+"/"+slotTurn] {
+		t.Fatalf("default-scope sweep crossed into slot scope: %v", fromDefault)
+	}
+
+	fromSlot := window(slotStore)
+	if !fromSlot[sessionmodel.SessionStorageKey("slot-1", "s1")+"/"+slotTurn] {
+		t.Fatalf("slot-scope sweep missed its own strand: %v", fromSlot)
+	}
+	if fromSlot[sessionmodel.SessionStorageKey("default", "d1")+"/"+defaultTurn] {
+		t.Fatalf("slot-scope sweep crossed into default scope: %v", fromSlot)
+	}
+
+	// The liveness probe is scope-bounded the same way: fresh runner
+	// progress in the slot scope must not register as proof of life for
+	// the default scope.
+	freshSlotTurn := conversation.TurnIDForClientNonce("s1-live")
+	seedEvent(t, ctx, slotStore, runnerTurnEvent("s1", sessionmodel.SessionStorageKey("slot-1", "s1"), freshSlotTurn, "turn.claimed"), now, 40)
+	aliveDefault, err := defaultStore.HasRecentRunnerEvent(ctx, now.Add(-30*time.Minute))
+	if err != nil {
+		t.Fatalf("HasRecentRunnerEvent default: %v", err)
+	}
+	if aliveDefault {
+		t.Fatalf("slot-scope runner progress satisfied the default scope's liveness gate")
+	}
+	aliveSlot, err := slotStore.HasRecentRunnerEvent(ctx, now.Add(-30*time.Minute))
+	if err != nil {
+		t.Fatalf("HasRecentRunnerEvent slot: %v", err)
+	}
+	if !aliveSlot {
+		t.Fatalf("slot scope's own runner progress did not satisfy its liveness gate")
+	}
+}
