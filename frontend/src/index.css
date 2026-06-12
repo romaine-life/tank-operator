@@ -4775,12 +4775,26 @@ button:disabled {
   padding: 0 var(--space-3) var(--space-3);
 }
 
+/* Gap between the locked divider and the scrolling activity body. This is a
+   MARGIN (outside the scroller), never padding-top (inside it): a scroll
+   container's padding-top scrolls away with its content, so a padding-based
+   gap collapses from its at-rest size down to the clip edge the moment the
+   user scrolls — the original "buffer is one size at the top, smaller once you
+   scroll down" bug. The parent .run-turn-view flex gap is var(--space-3);
+   subtracting back to var(--space-2) leaves a persistent var(--space-2) inset,
+   so the body's clip edge sits one --space-2 below the divider and activity
+   content keeps that same gap at the top and while scrolled. */
 .run-turn-view-prompt-section + .run-turn-view-body[data-section-divider="true"] {
-  margin-top: calc(-1 * var(--space-3));
+  margin-top: calc(var(--space-2) - var(--space-3));
 }
 
 .run-turn-view-body[data-section-divider="true"] {
-  padding-top: var(--space-2);
+  /* No scrollable top padding: the divider gap is the margin above, not
+     padding inside the scroller (padding-top scrolls away with the content).
+     Overrides the var(--space-5) top padding .run-transcript applies to the
+     free-standing main transcript, which here would re-create the collapsing
+     buffer. */
+  padding-top: 0;
 }
 
 .run-turn-view-body.run-transcript {
