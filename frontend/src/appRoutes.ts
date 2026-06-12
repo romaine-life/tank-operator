@@ -1,5 +1,10 @@
 export type SettingsTab = "preferences" | "admin";
-export type AdminView = "controls" | "avatars" | "report" | "observability";
+export type AdminView =
+  | "controls"
+  | "avatars"
+  | "report"
+  | "observability"
+  | "version";
 export type SessionRouteTab =
   | "turns"
   | "chat"
@@ -83,6 +88,7 @@ function parseAdminView(value: string | undefined): AdminView {
     case "avatars":
     case "report":
     case "observability":
+    case "version":
       return value;
     default:
       return "controls";
