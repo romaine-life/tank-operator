@@ -148,7 +148,8 @@ type SessionEventStore interface {
 	// HasRecentRunnerEvent reports whether any exclusively-runner-produced
 	// event (claimed/started/usage/awaiting_input, assistant messages,
 	// items, shell tasks, compactions) landed in the ledger at or after
-	// `since`, across all sessions. It is the stranded-turn sweep's
+	// `since`, across all sessions in this store's scope. It is the
+	// stranded-turn sweep's
 	// pipeline-liveness gate: turn.submitted rows are written by the
 	// backend directly over HTTP, so during a persister or session-bus
 	// outage submits keep landing while runner progress does not — every
@@ -582,8 +583,15 @@ func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSe
 // NOT EXISTS rides the (tank_session_id, turn_id, order_key) index, and the
 // created_at predicates ride the session_events_created_at index, so the
 // outer pass is a bounded time-window scan rather than a whole-ledger fold.
-// Cross-session by design (no tank_session_id filter): the sweep that calls
-// this addresses every owner/scope from the per-row payload.
+// Scope-gated since 2026-06-12: the original "cross-session by design (no
+// tank_session_id filter)" shape let ANY orchestrator sharing the database
+// sweep EVERY scope's turns — and test-slot orchestrators run arbitrary
+// branch code against the shared prod Postgres. The hazard was filed as
+// issue #1079 item 4 and reproduced live within the hour: two pre-fix slot
+// orchestrators re-wrote the #1069 false terminals onto prod sessions the
+// moment migration 0150 cleaned them. Each orchestrator now sweeps only
+// sessions in its own scope (default scope owns the bare-id storage keys;
+// slot scopes own their 'scope:' prefix).
 func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context, olderThan, notBefore time.Time, limit int) ([]StrandedLaunchTurn, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -602,6 +610,10 @@ func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context,
 			AND e.turn_id IS NOT NULL
 			AND e.created_at < $2
 			AND e.created_at >= $3
+			AND (
+				($5 = 'default' AND strpos(e.tank_session_id, ':') = 0)
+				OR ($5 <> 'default' AND e.tank_session_id LIKE $5 || ':%')
+			)
 			AND NOT EXISTS (
 				SELECT 1
 				FROM session_events o
@@ -617,6 +629,7 @@ func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context,
 		olderThan.UTC(),
 		notBefore.UTC(),
 		limit,
+		s.scope,
 	)
 	if err != nil {
 		return nil, err
@@ -654,8 +667,12 @@ func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context,
 // (tank_session_id, turn_id, order_key) and (tank_session_id,
 // created_at-capable) paths, and the pause-linkage NOT EXISTS rides the
 // session_events_input_pause partial index (a handful of rows per session at
-// most), so the outer pass is a bounded time-window scan. Cross-session by
-// design — the sweep addresses every owner/scope from the per-row payload.
+// most), so the outer pass is a bounded time-window scan. Cross-session
+// within this store's scope ONLY — the original cross-scope shape gave
+// test-slot orchestrators (arbitrary branch code, shared prod Postgres)
+// write authority over prod turn terminals; issue #1079 item 4 reproduced
+// live on 2026-06-12 when two pre-#1069 slot orchestrators re-wrote the
+// cleaned false terminals within minutes of migration 0150 deleting them.
 func (s *postgresSessionEventStore) FindStrandedTurns(ctx context.Context, olderThan, quietSince, notBefore time.Time, limit int) ([]StrandedTurn, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -682,6 +699,10 @@ func (s *postgresSessionEventStore) FindStrandedTurns(ctx context.Context, older
 			AND e.turn_id IS NOT NULL
 			AND e.created_at < $1
 			AND e.created_at >= $2
+			AND (
+				($5 = 'default' AND strpos(e.tank_session_id, ':') = 0)
+				OR ($5 <> 'default' AND e.tank_session_id LIKE $5 || ':%')
+			)
 			AND NOT EXISTS (
 				SELECT 1
 				FROM session_events t
@@ -714,6 +735,7 @@ func (s *postgresSessionEventStore) FindStrandedTurns(ctx context.Context, older
 		notBefore.UTC(),
 		quietSince.UTC(),
 		limit,
+		s.scope,
 	)
 	if err != nil {
 		return nil, err
@@ -776,10 +798,14 @@ func (s *postgresSessionEventStore) HasRecentRunnerEvent(ctx context.Context, si
 			FROM session_events
 			WHERE created_at >= $1
 				AND event_type = ANY($2)
+				AND (
+					($3 = 'default' AND strpos(tank_session_id, ':') = 0)
+					OR ($3 <> 'default' AND tank_session_id LIKE $3 || ':%')
+				)
 		)
 	`
 	var alive bool
-	if err := s.pool.QueryRow(ctx, q, since.UTC(), runnerProgressEventTypes).Scan(&alive); err != nil {
+	if err := s.pool.QueryRow(ctx, q, since.UTC(), runnerProgressEventTypes, s.scope).Scan(&alive); err != nil {
 		return false, err
 	}
 	return alive, nil
