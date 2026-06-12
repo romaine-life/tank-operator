@@ -109,3 +109,6 @@ product state.
   `antigravity-api-proxy` Envoy downstream TLS with file-based SDS and
   `watched_directory: /etc/envoy/tls`, not static `tls_certificates` file
   references.
+- Production and validation-slot Tank public routes serve browser/app traffic
+  only through HTTPS listener sets. Port-80 routes must redirect to `https`
+  with `301` and must not contain backend refs.

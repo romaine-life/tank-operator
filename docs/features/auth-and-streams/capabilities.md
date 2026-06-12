@@ -74,3 +74,31 @@ Evidence:
 - `helm template tank-operator ./k8s` covers chart rendering.
 - `docs/api-proxy-auth.md` documents the SDS rotation path and the reason
   Deployment rollouts are not the source of truth for cert uptake.
+
+## Public Tank HTTP Redirects To HTTPS
+
+Status: active
+
+Intent:
+Make browser entry to Tank secure by construction. Plain HTTP is allowed only
+as a redirect surface; app traffic must terminate on the HTTPS listener before
+it reaches the Tank backend.
+
+Affected contracts:
+- Auth And Streams
+- App Chrome
+- Session Lifecycle, for validation-slot public routes
+
+Contract impact:
+- Production `tank.romaine.life` and validation-slot
+  `*.tank.dev.romaine.life` backend routes attach only to HTTPS listener sets.
+- Routes attached to the shared port-80 Gateway listener must use
+  `RequestRedirect` to `https` with status `301`.
+- A port-80 `HTTPRoute` must not contain `backendRefs`; serving app bytes over
+  plain HTTP is a user-trust regression, not a supported fallback.
+
+Evidence:
+- `scripts/check-tank-http-route-security.mjs` renders the production chart and
+  a representative validation-slot chart, rejects any HTTP-listener backend
+  route, and requires the HTTPS redirect route.
+- The guard workflow runs the script's self-test plus the rendered-chart check.
