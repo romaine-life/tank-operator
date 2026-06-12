@@ -1618,6 +1618,14 @@ interface AdminAppVersion {
   fetched_at: string;
 }
 
+interface TestSlotSessionDefaults {
+  mode: DefaultSessionMode;
+  model: string;
+  effort: string;
+  updated_by?: string;
+  updated_at?: string;
+}
+
 interface AdminSettingsControls {
   visible: boolean;
   canViewProdSessions: boolean;
@@ -1635,8 +1643,17 @@ interface AdminSettingsControls {
     loading: boolean;
     error: string | null;
   };
+  testSlotDefaults: {
+    summary: TestSlotSessionDefaults | null;
+    loading: boolean;
+    saving: boolean;
+    error: string | null;
+  };
   onRefreshObservability: () => void;
   onRefreshVersion: () => void;
+  onSaveTestSlotDefaults: (
+    defaults: TestSlotSessionDefaults,
+  ) => Promise<void>;
   onAvatarCatalogChanged: () => Promise<void>;
   onViewingProdSessionsChange: (value: boolean) => void;
 }
@@ -4765,6 +4782,7 @@ interface SessionRunOptions {
   efforts: Partial<Record<Provider, string[]>>;
   default_models: Partial<Record<Provider, string>>;
   default_efforts: Partial<Record<Provider, string>>;
+  test_slot_defaults: TestSlotSessionDefaults;
 }
 
 function providerForRunMode(mode: SessionMode): Provider | null {
@@ -4950,6 +4968,26 @@ function normalizeSessionRunOptions(raw: unknown): SessionRunOptions {
     }
     return out;
   };
+  const normalizeTestSlotDefaults = (
+    v: unknown,
+  ): TestSlotSessionDefaults => {
+    const src = v && typeof v === "object" ? (v as Record<string, unknown>) : {};
+    const mode =
+      typeof src.mode === "string" && isDefaultSessionMode(src.mode)
+        ? src.mode
+        : "claude_gui";
+    return {
+      mode,
+      model: typeof src.model === "string" ? src.model : "",
+      effort: typeof src.effort === "string" ? src.effort : "",
+      ...(typeof src.updated_by === "string"
+        ? { updated_by: src.updated_by }
+        : {}),
+      ...(typeof src.updated_at === "string"
+        ? { updated_at: src.updated_at }
+        : {}),
+    };
+  };
   return {
     create_modes: stringArray(value.create_modes),
     sdk_chat_modes: Array.isArray(value.sdk_chat_modes)
@@ -4979,6 +5017,7 @@ function normalizeSessionRunOptions(raw: unknown): SessionRunOptions {
     efforts: stringMapArray(value.efforts),
     default_models: stringMapString(value.default_models),
     default_efforts: stringMapString(value.default_efforts),
+    test_slot_defaults: normalizeTestSlotDefaults(value.test_slot_defaults),
   };
 }
 
@@ -4986,6 +5025,13 @@ async function fetchSessionRunOptions(): Promise<SessionRunOptions> {
   const res = await authedFetch("/api/session-run-options");
   if (!res.ok) throw new Error(`session run options failed: ${res.status}`);
   return normalizeSessionRunOptions(await res.json());
+}
+
+function normalizeTestSlotSessionDefaults(
+  raw: unknown,
+): TestSlotSessionDefaults {
+  const options = normalizeSessionRunOptions({ test_slot_defaults: raw });
+  return options.test_slot_defaults;
 }
 
 function createModeAllowedByRunOptions(
@@ -12884,6 +12930,128 @@ function AdminVersionPanel({
   );
 }
 
+function AdminTestSlotDefaultsPanel({
+  state,
+  sessionRunOptions,
+  onSave,
+}: {
+  state: AdminSettingsControls["testSlotDefaults"];
+  sessionRunOptions: SessionRunOptions | null;
+  onSave: AdminSettingsControls["onSaveTestSlotDefaults"];
+}) {
+  const [draft, setDraft] = useState<TestSlotSessionDefaults>(
+    state.summary ?? { mode: "claude_gui", model: "", effort: "" },
+  );
+  useEffect(() => {
+    if (state.summary) setDraft(state.summary);
+  }, [state.summary]);
+
+  const modes = (sessionRunOptions?.sdk_chat_modes ?? [])
+    .map((entry) => entry.mode)
+    .filter(
+      (mode): mode is DefaultSessionMode =>
+        isDefaultSessionMode(mode) && SDK_CHAT_MODES.has(mode),
+    );
+  const modeChoices: DefaultSessionMode[] =
+    modes.length > 0 ? modes : ["claude_gui", "codex_gui"];
+  const modelChoices = modelOptionsForMode(draft.mode, sessionRunOptions);
+  const effortChoices = effortOptionsForMode(draft.mode, sessionRunOptions);
+  const provider = MODE_MENU_ICONS[draft.mode];
+  const modelRequired = provider === "codex" || provider === "antigravity";
+  const canSave =
+    !state.loading &&
+    !state.saving &&
+    sessionRunOptions != null &&
+    (!modelRequired || draft.model.trim() !== "");
+
+  const updateDraft = (patch: Partial<TestSlotSessionDefaults>) => {
+    setDraft((current) => ({ ...current, ...patch }));
+  };
+
+  return (
+    <div className="run-settings-diagnostics">
+      <div className="run-settings-diagnostics-head">
+        <span className="run-settings-link-label">
+          <FlaskConicalIcon
+            className="run-settings-link-icon"
+            aria-hidden="true"
+          />
+          <span>Test-slot session defaults</span>
+        </span>
+        {state.summary?.updated_at && (
+          <span className="run-settings-scope-value">
+            {formatToolFullTime(state.summary.updated_at)}
+          </span>
+        )}
+      </div>
+      <div className="run-settings-admin-form">
+        <label>
+          <span>Mode</span>
+          <select
+            value={draft.mode}
+            disabled={state.loading || state.saving}
+            onChange={(event) => {
+              const nextMode = event.target.value as DefaultSessionMode;
+              updateDraft({ mode: nextMode, model: "", effort: "" });
+            }}
+          >
+            {modeChoices.map((mode) => (
+              <option key={mode} value={mode}>
+                {MODE_LABELS[mode]}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Model</span>
+          <select
+            value={draft.model}
+            disabled={state.loading || state.saving || modelChoices.length === 0}
+            onChange={(event) => updateDraft({ model: event.target.value })}
+          >
+            {!modelRequired && <option value="">Provider default</option>}
+            {modelChoices.map((option) => (
+              <option key={option.id} value={option.id}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {effortChoices.length > 0 && (
+          <label>
+            <span>Effort</span>
+            <select
+              value={draft.effort}
+              disabled={state.loading || state.saving}
+              onChange={(event) => updateDraft({ effort: event.target.value })}
+            >
+              <option value="">Provider default</option>
+              {effortChoices.map((option) => (
+                <option key={option.id} value={option.id}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        <button
+          type="button"
+          className="btn-primary run-settings-admin-save"
+          disabled={!canSave}
+          onClick={() => void onSave(draft)}
+        >
+          {state.saving ? "Saving" : "Save"}
+        </button>
+      </div>
+      {state.error && (
+        <div className="run-settings-observability-note" role="status">
+          {state.error}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AdminVersionValue({ image }: { image: AdminVersionImage }) {
   const links = [
     image.pr_url
@@ -13356,6 +13524,7 @@ function RunSettingsPanel({
   paneFontScalePct,
   setPaneFontScale,
   adminControls,
+  sessionRunOptions,
   settingsTab: routedSettingsTab,
   adminView: routedAdminView,
   onSettingsRouteChange,
@@ -13371,6 +13540,7 @@ function RunSettingsPanel({
   paneFontScalePct: number;
   setPaneFontScale: (value: number) => void;
   adminControls?: AdminSettingsControls;
+  sessionRunOptions?: SessionRunOptions | null;
   settingsTab?: SettingsTab;
   adminView?: AdminView;
   onSettingsRouteChange?: (
@@ -13528,6 +13698,11 @@ function RunSettingsPanel({
               <AdminVersionPanel
                 state={adminControls.version}
                 onRefresh={adminControls.onRefreshVersion}
+              />
+              <AdminTestSlotDefaultsPanel
+                state={adminControls.testSlotDefaults}
+                sessionRunOptions={sessionRunOptions ?? null}
+                onSave={adminControls.onSaveTestSlotDefaults}
               />
               <button
                 type="button"
@@ -19644,6 +19819,7 @@ function ChatPane({
                 paneFontScalePct={paneFontScalePct}
                 setPaneFontScale={setPaneFontScale}
                 adminControls={adminControls}
+                sessionRunOptions={sessionRunOptions}
                 settingsTab={settingsTab}
                 adminView={adminView}
                 onSettingsRouteChange={setSettingsRoute}
@@ -20958,6 +21134,15 @@ function AuthenticatedApp() {
   const [adminVersionError, setAdminVersionError] = useState<string | null>(
     null,
   );
+  const [adminTestSlotDefaults, setAdminTestSlotDefaults] =
+    useState<TestSlotSessionDefaults | null>(null);
+  const [adminTestSlotDefaultsLoading, setAdminTestSlotDefaultsLoading] =
+    useState(false);
+  const [adminTestSlotDefaultsSaving, setAdminTestSlotDefaultsSaving] =
+    useState(false);
+  const [adminTestSlotDefaultsError, setAdminTestSlotDefaultsError] = useState<
+    string | null
+  >(null);
   const refreshAdminObservability = useCallback(async () => {
     if (!hasAdminAccess) return;
     setAdminObservabilityLoading(true);
@@ -20992,6 +21177,57 @@ function AuthenticatedApp() {
       setAdminVersionLoading(false);
     }
   }, [hasAdminAccess]);
+  const refreshAdminTestSlotDefaults = useCallback(async () => {
+    if (!hasAdminAccess) return;
+    setAdminTestSlotDefaultsLoading(true);
+    try {
+      const res = await authedFetch("/api/admin/test-slot-session-defaults");
+      if (!res.ok) {
+        throw new Error(`test-slot defaults returned ${res.status}`);
+      }
+      setAdminTestSlotDefaults(
+        normalizeTestSlotSessionDefaults(await res.json()),
+      );
+      setAdminTestSlotDefaultsError(null);
+    } catch (err) {
+      setAdminTestSlotDefaultsError(errorMessage(err));
+    } finally {
+      setAdminTestSlotDefaultsLoading(false);
+    }
+  }, [hasAdminAccess]);
+  const saveAdminTestSlotDefaults = useCallback(
+    async (defaults: TestSlotSessionDefaults) => {
+      if (!hasAdminAccess) return;
+      setAdminTestSlotDefaultsSaving(true);
+      try {
+        const res = await authedFetch("/api/admin/test-slot-session-defaults", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: defaults.mode,
+            model: defaults.model,
+            effort: defaults.effort,
+          }),
+        });
+        if (!res.ok) {
+          throw new Error(`save test-slot defaults returned ${res.status}`);
+        }
+        const updated = normalizeTestSlotSessionDefaults(await res.json());
+        setAdminTestSlotDefaults(updated);
+        setSessionRunOptions((current) =>
+          current
+            ? { ...current, test_slot_defaults: updated }
+            : current,
+        );
+        setAdminTestSlotDefaultsError(null);
+      } catch (err) {
+        setAdminTestSlotDefaultsError(errorMessage(err));
+      } finally {
+        setAdminTestSlotDefaultsSaving(false);
+      }
+    },
+    [hasAdminAccess],
+  );
   useEffect(() => {
     if (!hasAdminAccess) {
       setAdminObservabilitySummary(null);
@@ -21000,16 +21236,27 @@ function AuthenticatedApp() {
       setAdminVersionSummary(null);
       setAdminVersionError(null);
       setAdminVersionLoading(false);
+      setAdminTestSlotDefaults(null);
+      setAdminTestSlotDefaultsError(null);
+      setAdminTestSlotDefaultsLoading(false);
+      setAdminTestSlotDefaultsSaving(false);
       return;
     }
     void refreshAdminObservability();
     void refreshAdminVersion();
+    void refreshAdminTestSlotDefaults();
     const id = window.setInterval(() => {
       void refreshAdminObservability();
       void refreshAdminVersion();
+      void refreshAdminTestSlotDefaults();
     }, 30_000);
     return () => window.clearInterval(id);
-  }, [hasAdminAccess, refreshAdminObservability, refreshAdminVersion]);
+  }, [
+    hasAdminAccess,
+    refreshAdminObservability,
+    refreshAdminVersion,
+    refreshAdminTestSlotDefaults,
+  ]);
   const canViewProdSessions =
     hasAdminAccess && currentSessionScope !== PROD_SESSION_SCOPE;
   const effectiveSessionScope =
@@ -21043,8 +21290,15 @@ function AuthenticatedApp() {
           loading: adminVersionLoading,
           error: adminVersionError,
         },
+        testSlotDefaults: {
+          summary: adminTestSlotDefaults,
+          loading: adminTestSlotDefaultsLoading,
+          saving: adminTestSlotDefaultsSaving,
+          error: adminTestSlotDefaultsError,
+        },
         onRefreshObservability: refreshAdminObservability,
         onRefreshVersion: refreshAdminVersion,
+        onSaveTestSlotDefaults: saveAdminTestSlotDefaults,
         onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
         onViewingProdSessionsChange: (value: boolean) => {
           const next = value ? PROD_SESSION_SCOPE : "";
@@ -22004,6 +22258,9 @@ function AuthenticatedApp() {
   useEffect(() => {
     const context = glimmungLaunchContext.current;
     if (!user || requiresGitHubOnboarding(user) || !context) return;
+    const defaults = sessionRunOptions?.test_slot_defaults;
+    if (!defaults) return;
+    const launchDefaults = defaults;
     glimmungLaunchContext.current = null;
 
     async function launch() {
@@ -22016,7 +22273,11 @@ function AuthenticatedApp() {
           body: JSON.stringify({
             ...context,
             caller_email: user!.email,
-            mode: defaultSessionMode,
+            mode: launchDefaults.mode,
+            ...(launchDefaults.model ? { model: launchDefaults.model } : {}),
+            ...(launchDefaults.effort
+              ? { effort: launchDefaults.effort }
+              : {}),
           }),
         });
         if (!res.ok) throw new Error(`glimmung launch failed: ${res.status}`);
@@ -22034,7 +22295,7 @@ function AuthenticatedApp() {
     }
 
     void launch();
-  }, [user, defaultSessionMode]);
+  }, [user, sessionRunOptions]);
 
   // Typed session-list SSE stream. Replaces the prior wake-and-refetch
   // SSE + 1.5s pending-session polling loop + visibility/focus refetch
@@ -23888,6 +24149,7 @@ function AuthenticatedApp() {
                   paneFontScalePct={paneFontScalePct}
                   setPaneFontScale={setPaneFontScale}
                   adminControls={adminSettingsControls}
+                  sessionRunOptions={sessionRunOptions}
                   settingsTab={homeSettingsTab}
                   adminView={homeAdminView}
                   onSettingsRouteChange={setHomeSettingsRoute}

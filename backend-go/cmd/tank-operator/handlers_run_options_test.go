@@ -12,6 +12,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -57,6 +58,18 @@ func TestSessionRunOptionsExposeTankOwnedCreateAndRunConfig(t *testing.T) {
 	if opts.DefaultModels["antigravity"] != "Gemini 3.5 Flash (Medium)" {
 		t.Fatalf("antigravity default model = %q", opts.DefaultModels["antigravity"])
 	}
+	if opts.TestSlotDefaults.Mode != sessionmodel.ClaudeGUIMode || opts.TestSlotDefaults.Model != "" || opts.TestSlotDefaults.Effort != "" {
+		t.Fatalf("test slot defaults = %#v, want bare claude_gui", opts.TestSlotDefaults)
+	}
+}
+
+func TestSessionRunOptionsExposeConfiguredTestSlotDefaults(t *testing.T) {
+	opts := sessionRunOptions(testSlotDefaults{Mode: sessionmodel.CodexGUIMode, Model: "gpt-5.4-mini", Effort: "low"})
+	if opts.TestSlotDefaults.Mode != sessionmodel.CodexGUIMode ||
+		opts.TestSlotDefaults.Model != "gpt-5.4-mini" ||
+		opts.TestSlotDefaults.Effort != "low" {
+		t.Fatalf("test slot defaults = %#v", opts.TestSlotDefaults)
+	}
 }
 
 func TestHandleInternalSessionRunOptions(t *testing.T) {
@@ -101,6 +114,9 @@ func TestHandleInternalSessionRunOptions(t *testing.T) {
 
 func TestHandleSessionRunOptionsRequiresUserAuth(t *testing.T) {
 	app := testTurnsApp(t, &recordingSessionBus{})
+	app.platformSettings = &fakePlatformSettingsStore{
+		defaults: pgstore.TestSlotSessionDefaults{Mode: sessionmodel.CodexGUIMode, Model: "gpt-5.4-mini", Effort: "low"},
+	}
 	req := httptest.NewRequest(http.MethodGet, "/api/session-run-options", nil)
 	req.Header.Set("Authorization", "Bearer "+signedMainToken(t, "secret", "user@example.com"))
 	rec := httptest.NewRecorder()
@@ -117,4 +133,68 @@ func TestHandleSessionRunOptionsRequiresUserAuth(t *testing.T) {
 	if !slices.Contains(body.CreateModes, sessionmodel.CodexGUIMode) {
 		t.Fatalf("body = %#v, want codex_gui create mode", body)
 	}
+	if body.TestSlotDefaults.Mode != sessionmodel.CodexGUIMode || body.TestSlotDefaults.Model != "gpt-5.4-mini" || body.TestSlotDefaults.Effort != "low" {
+		t.Fatalf("test slot defaults = %#v", body.TestSlotDefaults)
+	}
+}
+
+func TestHandleAdminSetTestSlotSessionDefaults(t *testing.T) {
+	app := testTurnsApp(t, &recordingSessionBus{})
+	store := &fakePlatformSettingsStore{}
+	app.platformSettings = store
+	req := httptest.NewRequest(http.MethodPut, "/api/admin/test-slot-session-defaults", strings.NewReader(`{
+		"mode":"codex_gui",
+		"model":"gpt-5.4-mini",
+		"effort":"low"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleAdminSetTestSlotSessionDefaults(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if store.defaults.Mode != sessionmodel.CodexGUIMode || store.defaults.Model != "gpt-5.4-mini" || store.defaults.Effort != "low" {
+		t.Fatalf("stored defaults = %#v", store.defaults)
+	}
+}
+
+func TestHandleAdminSetTestSlotSessionDefaultsRejectsInvalidRunConfig(t *testing.T) {
+	app := testTurnsApp(t, &recordingSessionBus{})
+	app.platformSettings = &fakePlatformSettingsStore{}
+	req := httptest.NewRequest(http.MethodPut, "/api/admin/test-slot-session-defaults", strings.NewReader(`{
+		"mode":"codex_gui",
+		"model":"claude-opus-4-8"
+	}`))
+	req.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, adminEmail, auth.RoleAdmin))
+	rec := httptest.NewRecorder()
+
+	app.handleAdminSetTestSlotSessionDefaults(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "model is not available for codex") {
+		t.Fatalf("body = %s", rec.Body.String())
+	}
+}
+
+type fakePlatformSettingsStore struct {
+	defaults pgstore.TestSlotSessionDefaults
+	missing  bool
+}
+
+func (s *fakePlatformSettingsStore) GetTestSlotSessionDefaults(context.Context) (pgstore.TestSlotSessionDefaults, error) {
+	if s.missing {
+		return pgstore.TestSlotSessionDefaults{}, pgstore.ErrPlatformSettingNotFound
+	}
+	return s.defaults, nil
+}
+
+func (s *fakePlatformSettingsStore) UpsertTestSlotSessionDefaults(_ context.Context, defaults pgstore.TestSlotSessionDefaults, updatedBy string) (pgstore.TestSlotSessionDefaults, error) {
+	defaults.UpdatedBy = updatedBy
+	defaults.UpdatedAt = "2026-06-12T10:00:00.000000Z"
+	s.defaults = defaults
+	return defaults, nil
 }

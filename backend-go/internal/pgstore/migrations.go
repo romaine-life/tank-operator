@@ -1875,6 +1875,17 @@ var schemaMigrations = []migration{
 	// non-transactional CREATE INDEX CONCURRENTLY execution mode instead
 	// of raising the timeout.
 	{ID: "0151", SQL: eventIdentityUniquenessSQL},
+
+	// platform_settings owns durable operator-controlled defaults that affect
+	// product behavior across users, browsers, MCP callers, prod, and validation
+	// slots. Rows are keyed by a stable setting name and carry a JSON value so
+	// small admin controls can ship without inventing a table per setting.
+	{ID: "0152", SQL: `CREATE TABLE IF NOT EXISTS platform_settings (
+		key        text PRIMARY KEY,
+		value      jsonb NOT NULL,
+		updated_by text NOT NULL DEFAULT '',
+		updated_at timestamptz NOT NULL DEFAULT now()
+	)`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

@@ -143,10 +143,26 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
 	}
-	mode, status, detail := validateCreateSessionMode(body.Mode)
-	if status != 0 {
-		writeError(w, status, detail)
-		return
+	mode := ""
+	model := strings.TrimSpace(body.Model)
+	effort := strings.TrimSpace(body.Effort)
+	if strings.TrimSpace(body.Mode) == "" && s.localSessionScope() != prodSessionScope {
+		defaults, err := s.effectiveTestSlotSessionDefaults(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		mode = defaults.Mode
+		model = defaults.Model
+		effort = defaults.Effort
+	} else {
+		var status int
+		var detail string
+		mode, status, detail = validateCreateSessionMode(body.Mode)
+		if status != 0 {
+			writeError(w, status, detail)
+			return
+		}
 	}
 
 	repos, err := validateRepoSlugs(body.Repos)
@@ -163,7 +179,7 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		writeError(w, status, detail)
 		return
 	}
-	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
+	runConfig, status, detail := validateCreateRunConfig(mode, model, effort)
 	if status != 0 {
 		writeError(w, status, detail)
 		return
