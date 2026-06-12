@@ -156,6 +156,7 @@ import {
   TimerIcon,
   WrenchIcon,
   XIcon,
+  SaveIcon,
   type LucideIcon,
 } from "lucide-react";
 import {
@@ -8196,11 +8197,15 @@ function SessionTabMenu({
   isClosing,
   readOnly,
   onClose,
+  onSaveCredentials,
+  saveDisabled,
 }: {
   session: Session;
   isClosing: boolean;
   readOnly: boolean;
   onClose: () => void;
+  onSaveCredentials?: () => void;
+  saveDisabled?: boolean;
 }) {
   if (isClosing) {
     return (
@@ -8238,6 +8243,23 @@ function SessionTabMenu({
         className="run-tab-more-menu session-tab-menu"
         onClick={(e) => e.stopPropagation()}
       >
+        {onSaveCredentials && (
+          <DropdownMenuItem
+            className="run-tab-more-item"
+            onSelect={onSaveCredentials}
+            disabled={saveDisabled}
+            title={
+              session.mode === "codex_config"
+                ? "capture ~/.codex/auth.json from this pod and write it to KV"
+                : session.mode === "antigravity_config"
+                  ? "capture the agy OAuth token from this pod and write it to KV"
+                  : "capture ~/.claude/.credentials.json from this pod and write it to KV"
+            }
+          >
+            <SaveIcon className="run-tab-more-item-icon" />
+            <span>Save credentials</span>
+          </DropdownMenuItem>
+        )}
         <DropdownMenuItem
           className="run-tab-more-item"
           variant="destructive"
@@ -23976,6 +23998,14 @@ function AuthenticatedApp() {
                       isClosing={isClosing}
                       readOnly={readOnlySessionView}
                       onClose={() => deleteSession(s.id)}
+                      onSaveCredentials={
+                        CONFIG_MODES.has(s.mode)
+                          ? () => saveCredentials(s.id)
+                          : undefined
+                      }
+                      saveDisabled={
+                        busy || !isLive || isClosing || readOnlySessionView
+                      }
                     />
                   </div>
                   <div className="session-row-bottom">
@@ -23991,27 +24021,6 @@ function AuthenticatedApp() {
                     <SessionStats session={s} />
                     {isClosing && (
                       <span className="session-closing-chip">closing</span>
-                    )}
-                    {CONFIG_MODES.has(s.mode) && (
-                      <button
-                        className="session-action"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          saveCredentials(s.id);
-                        }}
-                        disabled={
-                          busy || !isLive || isClosing || readOnlySessionView
-                        }
-                        title={
-                          s.mode === "codex_config"
-                            ? "capture ~/.codex/auth.json from this pod and write it to KV"
-                            : s.mode === "antigravity_config"
-                              ? "capture the agy OAuth token from this pod and write it to KV"
-                              : "capture ~/.claude/.credentials.json from this pod and write it to KV"
-                        }
-                      >
-                        save
-                      </button>
                     )}
                   </div>
                 </li>
