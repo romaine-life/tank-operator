@@ -1,9 +1,0 @@
-Refactors the Go runner to maintain a continuous agy process via PTY and uses fsnotify for event-driven transcript tailing. Deletes the legacy TS runner and all associated compatibility logic in accordance with the north-star policy.
-
-## Feature Contracts
-
-Affected contracts:
-- [x] None
-
-Evidence:
-Tested functionality end-to-end locally using kubectl. Background execution timers and event handling work correctly with the new persistent runner setup.

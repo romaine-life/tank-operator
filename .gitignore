@@ -23,3 +23,9 @@ override.tf.json
 *_override.tf.json
 backend-go/antigravity-runner
 backend-go/tank-operator.exe
+
+# Session scratch/debug artifacts (2026-06-12 cleanup; never commit these)
+*.log
+/*.jsonl
+/session*.json
+/pr-body.txt
