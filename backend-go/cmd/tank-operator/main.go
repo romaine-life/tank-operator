@@ -335,11 +335,12 @@ func main() {
 			// docs in sessionmodel.ManifestOptions.HotSwapAgentRunner.
 			HotSwapAgentRunner: envBool("SESSION_AGENT_RUNNER_HOT_SWAP_ENABLED"),
 		},
-		OAuthGatewayHost:        os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
-		APIProxyHost:            os.Getenv("CLAUDE_API_PROXY_HOST"),
-		CodexAPIProxyHost:       os.Getenv("CODEX_API_PROXY_HOST"),
-		AntigravityAPIProxyHost: os.Getenv("ANTIGRAVITY_API_PROXY_HOST"),
-		ImageOverrides:          imageOverrideResolver,
+		OAuthGatewayHost:            os.Getenv("CLAUDE_OAUTH_GATEWAY_HOST"),
+		APIProxyHost:                os.Getenv("CLAUDE_API_PROXY_HOST"),
+		ClaudeSecondaryAPIProxyHost: os.Getenv("CLAUDE_SECONDARY_API_PROXY_HOST"),
+		CodexAPIProxyHost:           os.Getenv("CODEX_API_PROXY_HOST"),
+		AntigravityAPIProxyHost:     os.Getenv("ANTIGRAVITY_API_PROXY_HOST"),
+		ImageOverrides:              imageOverrideResolver,
 		OnImageOverrideApplied: func(scope, mode, kind string) {
 			recordSessionImageOverrideApplied(scope, kind)
 		},

@@ -186,7 +186,7 @@ Project metadata for Glimmung:
       "target": "/var/run/claude-runner-hot",
       "restart": "SIGHUP",
       "container": "claude-runner",
-      "pod_selector": "tank-operator/session-id,tank-operator/mode=claude_gui",
+      "pod_selector": "tank-operator/session-id,tank-operator/mode in (claude_gui,claude_secondary_gui)",
       "builder_image": "node:20-alpine"
     },
     "codex_runner": {

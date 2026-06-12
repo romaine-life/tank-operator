@@ -41,7 +41,7 @@ func cliProcessLaunchForMode(mode string) sandboxProcessCreate {
 		// blob lands at $HOME/.codex/auth.json once the user completes
 		// the device flow; the save-credentials button harvests it.
 		base.Args = []string{"-lc", "codex login --device-auth; exec bash"}
-	case sessionmodel.ConfigMode:
+	case sessionmodel.ConfigMode, sessionmodel.ClaudeSecondaryConfigMode:
 		// claude /login walks through OAuth; the resulting blob lands
 		// at $HOME/.claude/.credentials.json for the save-credentials
 		// button.

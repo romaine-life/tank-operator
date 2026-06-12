@@ -78,6 +78,7 @@ var repoSlugPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z
 func sessionModeSupportsRepos(mode string) bool {
 	switch sessionmodel.NormalizeSessionMode(mode) {
 	case sessionmodel.ClaudeGUIMode,
+		sessionmodel.ClaudeSecondaryGUIMode,
 		sessionmodel.CodexGUIMode,
 		sessionmodel.AntigravityGUIMode:
 		return true

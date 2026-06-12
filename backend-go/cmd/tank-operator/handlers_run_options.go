@@ -50,6 +50,9 @@ func sessionRunOptions(defaults ...testSlotDefaults) sessionRunOptionsResponse {
 			sessionmodel.ClaudeCLIMode,
 			sessionmodel.ClaudeGUIMode,
 			sessionmodel.ConfigMode,
+			sessionmodel.ClaudeSecondaryCLIMode,
+			sessionmodel.ClaudeSecondaryGUIMode,
+			sessionmodel.ClaudeSecondaryConfigMode,
 			sessionmodel.CodexCLIMode,
 			sessionmodel.CodexGUIMode,
 			sessionmodel.CodexConfigMode,
@@ -59,6 +62,7 @@ func sessionRunOptions(defaults ...testSlotDefaults) sessionRunOptionsResponse {
 		},
 		SDKChatModes: []sessionRunOptionMode{
 			{Mode: sessionmodel.ClaudeGUIMode, Provider: "claude"},
+			{Mode: sessionmodel.ClaudeSecondaryGUIMode, Provider: "claude"},
 			{Mode: sessionmodel.CodexGUIMode, Provider: "codex"},
 			{Mode: sessionmodel.AntigravityGUIMode, Provider: "antigravity"},
 			{Mode: sessionmodel.AntigravityCLIMode, Provider: "antigravity"},

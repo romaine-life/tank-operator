@@ -207,6 +207,9 @@ apiProxy:
   # binary so it is not confidential, but is kept out of git regardless.
   kvAntigravityClientSecretKey: antigravity-oauth-client-secret
 
+claudeSecondaryApiProxy:
+  serviceHost: claude-secondary-api-proxy.tank-operator.svc.cluster.local
+
 # Codex API proxy: a second production Envoy + ext_proc deployment using the
 # same image and UAMI as apiProxy. It fronts chatgpt.com/backend-api/codex and
 # owns the real ChatGPT OAuth refresh chain for Codex sessions in production
@@ -352,6 +355,9 @@ externalSecret:
   claudeCredentials:
     secretName: claude-code-credentials
     secretKey: claude-code-credentials
+  claudeSecondaryCredentials:
+    secretName: claude-secondary-code-credentials
+    secretKey: claude-secondary-code-credentials
   # OpenAI Codex subscription credentials. The primary Secret lives in the
   # production orchestrator namespace and is mounted by production
   # codex-api-proxy. Codex CLI/GUI session launchers write a placeholder

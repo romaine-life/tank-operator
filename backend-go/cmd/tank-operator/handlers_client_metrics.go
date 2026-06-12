@@ -341,16 +341,19 @@ func chatScrollSurfaceLabel(raw string) string {
 }
 
 var chatScrollSessionModeLabels = map[string]struct{}{
-	"api_key":          {},
-	"claude_cli":       {},
-	"claude_gui":       {},
-	"config":           {},
-	"codex_cli":        {},
-	"codex_gui":        {},
-	"codex_exec_gui":   {},
-	"codex_app_server": {},
-	"codex_config":     {},
-	"debug":            {},
+	"api_key":                 {},
+	"claude_cli":              {},
+	"claude_gui":              {},
+	"config":                  {},
+	"claude_secondary_cli":    {},
+	"claude_secondary_gui":    {},
+	"claude_secondary_config": {},
+	"codex_cli":               {},
+	"codex_gui":               {},
+	"codex_exec_gui":          {},
+	"codex_app_server":        {},
+	"codex_config":            {},
+	"debug":                   {},
 }
 
 func chatScrollSessionModeLabel(raw string) string {

@@ -20,15 +20,18 @@ import (
 var jsonUnmarshal = json.Unmarshal
 
 const (
-	APIKeyMode         = "api_key"
-	ClaudeCLIMode      = "claude_cli"
-	ClaudeGUIMode      = "claude_gui"
-	ConfigMode         = "config"
-	CodexConfigMode    = "codex_config"
-	CodexCLIMode       = "codex_cli"
-	CodexGUIMode       = "codex_gui"
-	CodexExecGUIMode   = "codex_exec_gui"
-	CodexAppServerMode = "codex_app_server"
+	APIKeyMode                = "api_key"
+	ClaudeCLIMode             = "claude_cli"
+	ClaudeGUIMode             = "claude_gui"
+	ConfigMode                = "config"
+	ClaudeSecondaryCLIMode    = "claude_secondary_cli"
+	ClaudeSecondaryGUIMode    = "claude_secondary_gui"
+	ClaudeSecondaryConfigMode = "claude_secondary_config"
+	CodexConfigMode           = "codex_config"
+	CodexCLIMode              = "codex_cli"
+	CodexGUIMode              = "codex_gui"
+	CodexExecGUIMode          = "codex_exec_gui"
+	CodexAppServerMode        = "codex_app_server"
 	// AntigravityConfigMode is the credential-mint terminal mode for
 	// Antigravity (Gemini-Ultra via Google's Antigravity CLI). The user runs
 	// `agy` in the terminal, completes the Google/Ultra login, and the
@@ -85,15 +88,18 @@ var (
 	ErrSessionOrderConflict = errors.New("session order conflict")
 
 	sessionModes = map[string]struct{}{
-		APIKeyMode:         {},
-		ClaudeCLIMode:      {},
-		ClaudeGUIMode:      {},
-		ConfigMode:         {},
-		CodexConfigMode:    {},
-		CodexCLIMode:       {},
-		CodexGUIMode:       {},
-		CodexExecGUIMode:   {},
-		CodexAppServerMode: {},
+		APIKeyMode:                {},
+		ClaudeCLIMode:             {},
+		ClaudeGUIMode:             {},
+		ConfigMode:                {},
+		ClaudeSecondaryCLIMode:    {},
+		ClaudeSecondaryGUIMode:    {},
+		ClaudeSecondaryConfigMode: {},
+		CodexConfigMode:           {},
+		CodexCLIMode:              {},
+		CodexGUIMode:              {},
+		CodexExecGUIMode:          {},
+		CodexAppServerMode:        {},
 
 		AntigravityConfigMode: {},
 		AntigravityCLIMode:    {},
@@ -327,15 +333,18 @@ var sessionConfigMounts = []struct{ key, mountPath string }{
 // talk to real Google to complete OAuth and have its token harvested, so it
 // gets no proxy hijack at all.
 var noClaudeHijackModes = map[string]bool{
-	ConfigMode:            true,
-	CodexConfigMode:       true,
-	CodexCLIMode:          true,
-	CodexGUIMode:          true,
-	CodexExecGUIMode:      true,
-	CodexAppServerMode:    true,
-	AntigravityConfigMode: true,
-	AntigravityGUIMode:    true,
-	AntigravityCLIMode:    true,
+	ConfigMode:                true,
+	ClaudeSecondaryCLIMode:    true,
+	ClaudeSecondaryGUIMode:    true,
+	ClaudeSecondaryConfigMode: true,
+	CodexConfigMode:           true,
+	CodexCLIMode:              true,
+	CodexGUIMode:              true,
+	CodexExecGUIMode:          true,
+	CodexAppServerMode:        true,
+	AntigravityConfigMode:     true,
+	AntigravityGUIMode:        true,
+	AntigravityCLIMode:        true,
 }
 
 type ManifestOptions struct {
@@ -353,10 +362,11 @@ type ManifestOptions struct {
 	SandboxAgentPort                int
 	TankOperatorInternalURL         string
 	// Optional: in-cluster Service IPs for host alias injection.
-	OAuthGatewayIP        string
-	APIProxyIP            string
-	CodexAPIProxyIP       string
-	AntigravityAPIProxyIP string
+	OAuthGatewayIP            string
+	APIProxyIP                string
+	ClaudeSecondaryAPIProxyIP string
+	CodexAPIProxyIP           string
+	AntigravityAPIProxyIP     string
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
 	// SDK runners use NATS JetStream for durable command/event delivery.
@@ -433,6 +443,15 @@ func IsCodexMode(mode string) bool {
 func IsAntigravityMode(mode string) bool {
 	switch NormalizeSessionMode(mode) {
 	case AntigravityConfigMode, AntigravityGUIMode, AntigravityCLIMode:
+		return true
+	default:
+		return false
+	}
+}
+
+func IsClaudeSecondaryMode(mode string) bool {
+	switch NormalizeSessionMode(mode) {
+	case ClaudeSecondaryCLIMode, ClaudeSecondaryGUIMode, ClaudeSecondaryConfigMode:
 		return true
 	default:
 		return false
@@ -733,9 +752,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	// SDK runner sidecar. Without this, the agent's writes wouldn't be
 	// visible in the in-browser terminal and vice versa. emptyDir lives
 	// for the pod's lifetime, matching today's "pod restart loses
-	// workspace state" semantics. claude_gui uses claude-runner;
+	// workspace state" semantics. Claude SDK GUI modes use claude-runner;
 	// Codex GUI modes use codex-runner. Both need the shared mount.
-	wantAgentRunner := mode == ClaudeGUIMode
+	wantAgentRunner := mode == ClaudeGUIMode || mode == ClaudeSecondaryGUIMode
 	wantCodexRunner := mode == CodexGUIMode || mode == CodexExecGUIMode || mode == CodexAppServerMode
 	wantAntigravityRunner := mode == AntigravityGUIMode || mode == AntigravityCLIMode
 	wantSDKRunner := wantAgentRunner || wantCodexRunner || wantAntigravityRunner
@@ -814,6 +833,33 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		if opts.APIProxyIP != "" {
 			hostAliases = append(hostAliases, map[string]any{
 				"ip":        opts.APIProxyIP,
+				"hostnames": []any{"api.anthropic.com"},
+			})
+		}
+		if opts.OAuthGatewayCAConfigMap != "" {
+			env = append(env, map[string]any{"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/oauth-gateway-ca/ca.crt"})
+			claudeVolumeMounts = append(claudeVolumeMounts, map[string]any{
+				"name":      "oauth-gateway-ca",
+				"mountPath": "/etc/oauth-gateway-ca",
+				"readOnly":  true,
+			})
+			volumes = append(volumes, map[string]any{
+				"name":      "oauth-gateway-ca",
+				"configMap": map[string]any{"name": opts.OAuthGatewayCAConfigMap},
+			})
+		}
+	}
+
+	if (mode == ClaudeSecondaryCLIMode || mode == ClaudeSecondaryGUIMode) && (opts.OAuthGatewayIP != "" || opts.ClaudeSecondaryAPIProxyIP != "") {
+		if opts.OAuthGatewayIP != "" {
+			hostAliases = append(hostAliases, map[string]any{
+				"ip":        opts.OAuthGatewayIP,
+				"hostnames": []any{"platform.claude.com"},
+			})
+		}
+		if opts.ClaudeSecondaryAPIProxyIP != "" {
+			hostAliases = append(hostAliases, map[string]any{
+				"ip":        opts.ClaudeSecondaryAPIProxyIP,
 				"hostnames": []any{"api.anthropic.com"},
 			})
 		}
@@ -967,7 +1013,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 	containers = append(containers, claudeContainer)
 
-	// SDK claude-runner sidecar - claude_gui only. Shares /workspace
+	// SDK claude-runner sidecar - Claude SDK GUI modes only. Shares /workspace
 	// with the claude container via the emptyDir above so the agent's
 	// edits show up in the terminal pane. Same image (binary baked in
 	// via the Dockerfile multi-stage build); different command + env.
@@ -1026,7 +1072,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		// NODE_EXTRA_CA_CERTS — same gateway-CA injection the claude
 		// container gets, so the SDK's spawned claude binary trusts the
 		// OAuth gateway's self-signed cert.
-		if !noClaudeHijackModes[mode] && opts.OAuthGatewayCAConfigMap != "" {
+		if (!noClaudeHijackModes[mode] || mode == ClaudeSecondaryGUIMode) && opts.OAuthGatewayCAConfigMap != "" {
 			runnerEnv = append(runnerEnv,
 				map[string]any{"name": "NODE_EXTRA_CA_CERTS", "value": "/etc/oauth-gateway-ca/ca.crt"},
 			)

@@ -34,8 +34,24 @@ const launch = path.join(
 );
 
 const bootstrapSource = await fs.readFile(bootstrap, "utf8");
-if (!/claude_cli\s*\|\s*claude_gui\)/.test(bootstrapSource)) {
-  throw new Error("session-pod-bootstrap.sh must explicitly seed Claude modes");
+const claudeModeArm = bootstrapSource.match(
+  /(?<modes>claude_cli[^\n]+)\n\s*write_claude_settings/,
+);
+const seededClaudeModes = new Set(
+  claudeModeArm?.groups?.modes
+    .replace(/\)/g, "")
+    .split("|")
+    .map((mode) => mode.trim()) ?? [],
+);
+for (const mode of [
+  "claude_cli",
+  "claude_gui",
+  "claude_secondary_cli",
+  "claude_secondary_gui",
+]) {
+  if (!seededClaudeModes.has(mode)) {
+    throw new Error(`session-pod-bootstrap.sh must explicitly seed ${mode}`);
+  }
 }
 if (!bootstrapSource.includes("write-claude-settings.sh")) {
   throw new Error("session-pod-bootstrap.sh must call write-claude-settings.sh");

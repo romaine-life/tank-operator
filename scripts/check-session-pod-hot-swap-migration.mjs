@@ -165,9 +165,9 @@ const CHECKS = [
     id: "readme-claude-runner-selector-mode",
     from: "Checkbox 1: hot-swap works",
     file: "README.md",
-    description: "agent_runner pod selector is narrowed to claude_gui session pods",
+    description: "agent_runner pod selector is narrowed to Claude SDK session pods",
     kind: "grep-present",
-    pattern: /"agent_runner"[\s\S]{0,1200}?"pod_selector"\s*:\s*"tank-operator\/session-id,tank-operator\/mode=claude_gui"/,
+    pattern: /"agent_runner"[\s\S]{0,1200}?"pod_selector"\s*:\s*"tank-operator\/session-id,tank-operator\/mode in \(claude_gui,claude_secondary_gui\)"/,
   },
   {
     id: "readme-claude-runner-restart",

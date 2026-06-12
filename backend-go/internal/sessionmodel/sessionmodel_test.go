@@ -536,6 +536,33 @@ func TestPodManifestCodexUsesAPIProxyWithoutCredentialSecret(t *testing.T) {
 	assertVolumeMount(t, codexRunner, "oauth-gateway-ca")
 }
 
+func TestPodManifestClaudeSecondaryUsesSecondaryAPIProxy(t *testing.T) {
+	manifest := PodManifest("12", "nelson@romaine.life", ClaudeSecondaryGUIMode, ManifestOptions{
+		SessionImage:              "claude-image",
+		CodexSessionImage:         "codex-image",
+		OAuthGatewayIP:            "10.0.0.40",
+		APIProxyIP:                "10.0.0.41",
+		ClaudeSecondaryAPIProxyIP: "10.0.0.42",
+		OAuthGatewayCAConfigMap:   "claude-oauth-ca",
+	})
+
+	spec := manifest["spec"].(map[string]any)
+	assertHostAlias(t, spec, "10.0.0.40", "platform.claude.com")
+	assertHostAlias(t, spec, "10.0.0.42", "api.anthropic.com")
+	assertVolume(t, spec["volumes"].([]any), "oauth-gateway-ca")
+
+	containers := spec["containers"].([]any)
+	findContainer(t, containers, "claude-runner")
+	claudeEnv := containerEnv(findContainer(t, containers, "sandbox"))
+	if got, want := claudeEnv["NODE_EXTRA_CA_CERTS"], "/etc/oauth-gateway-ca/ca.crt"; got != want {
+		t.Fatalf("sandbox NODE_EXTRA_CA_CERTS = %v, want %q", got, want)
+	}
+	runnerEnv := containerEnv(findContainer(t, containers, "claude-runner"))
+	if got, want := runnerEnv["NODE_EXTRA_CA_CERTS"], "/etc/oauth-gateway-ca/ca.crt"; got != want {
+		t.Fatalf("runner NODE_EXTRA_CA_CERTS = %v, want %q", got, want)
+	}
+}
+
 func TestPodManifestCodexRunnerAlwaysUsesAppServerTransport(t *testing.T) {
 	for _, mode := range []string{CodexGUIMode, CodexAppServerMode} {
 		t.Run(mode, func(t *testing.T) {
@@ -568,8 +595,9 @@ func TestPodManifestCodexExecGUIUsesLegacyTransport(t *testing.T) {
 
 func TestPodManifestSDKRunnersReceiveSessionBusEnv(t *testing.T) {
 	tests := map[string]string{
-		ClaudeGUIMode: "claude-runner",
-		CodexGUIMode:  "codex-runner",
+		ClaudeGUIMode:          "claude-runner",
+		ClaudeSecondaryGUIMode: "claude-runner",
+		CodexGUIMode:           "codex-runner",
 	}
 	for mode, runnerName := range tests {
 		t.Run(mode, func(t *testing.T) {

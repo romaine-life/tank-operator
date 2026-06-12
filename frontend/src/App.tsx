@@ -846,6 +846,9 @@ const MODE_LABELS: Record<SessionMode, string> = {
   claude_cli: "Claude CLI",
   claude_gui: "Claude GUI",
   config: "Claude config",
+  claude_secondary_cli: "Claude secondary CLI",
+  claude_secondary_gui: "Claude secondary GUI",
+  claude_secondary_config: "Claude secondary config",
   codex_cli: "Codex CLI",
   codex_gui: "Codex GUI",
   codex_exec_gui: "Codex Legacy",
@@ -863,6 +866,9 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
   claude_cli: "claude-cli",
   claude_gui: "claude-gui",
   config: "config",
+  claude_secondary_cli: "claude2-cli",
+  claude_secondary_gui: "claude2-gui",
+  claude_secondary_config: "claude2-cfg",
   codex_cli: "codex-cli",
   codex_gui: "codex-gui",
   codex_exec_gui: "codex-exec",
@@ -876,6 +882,8 @@ const MODE_CHIP_LABELS: Record<SessionMode, string> = {
 const MODE_CHIP_ICONS: Partial<Record<SessionMode, Provider>> = {
   claude_cli: "anthropic",
   claude_gui: "anthropic",
+  claude_secondary_cli: "anthropic_secondary",
+  claude_secondary_gui: "anthropic_secondary",
   codex_cli: "codex",
   codex_gui: "codex",
   codex_exec_gui: "codex",
@@ -894,6 +902,7 @@ const INTERACTION_OPTIONS: SessionInteraction[] = ["gui", "cli"];
 
 const PROVIDER_LABELS: Record<Provider, string> = {
   anthropic: "Claude",
+  anthropic_secondary: "Claude secondary",
   codex: "Codex",
   antigravity: "Antigravity",
 };
@@ -935,6 +944,10 @@ const PROVIDER_QUOTA_WINDOW_DEFS: Record<
     { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
     { id: "weekly", label: "Weekly", shortLabel: "Week" },
   ],
+  anthropic_secondary: [
+    { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
+    { id: "weekly", label: "Weekly", shortLabel: "Week" },
+  ],
   codex: [
     { id: "five_hour", label: "5-hour window", shortLabel: "5h" },
     { id: "weekly", label: "Weekly", shortLabel: "Week" },
@@ -948,6 +961,9 @@ const MODE_HINTS: Record<SessionMode, string> = {
   claude_gui: "GUI chat pane for the Claude Agent SDK",
   api_key: "Legacy Claude API-key session",
   config: "Log in once · seeds KV for future sessions",
+  claude_secondary_cli: "Uses secondary claude.ai login",
+  claude_secondary_gui: "Claude Agent SDK with secondary subscription",
+  claude_secondary_config: "Log in once · seeds secondary Claude KV",
   codex_cli: "Uses ChatGPT login from KV",
   codex_gui: "GUI chat pane for Codex app-server transport",
   codex_exec_gui: "Retired Codex exec GUI mode",
@@ -1514,6 +1530,15 @@ function chatModeForHomePrompt(mode: SessionMode): SessionMode {
   if (CHAT_MODES.has(mode)) return mode;
   const provider = MODE_MENU_ICONS[mode];
   return PROVIDER_INTERACTION_MODES[provider].gui ?? mode;
+}
+
+function isClaudeTerminalPreviewMode(mode: SessionMode | undefined): boolean {
+  return (
+    mode === "claude_cli" ||
+    mode === "claude_gui" ||
+    mode === "claude_secondary_cli" ||
+    mode === "claude_secondary_gui"
+  );
 }
 
 function availableInteractionFor(
@@ -3976,7 +4001,7 @@ function DemoLanding() {
           </div>
         ) : (
           <div
-            className={`demo-terminal${selected?.mode === "claude_cli" || selected?.mode === "claude_gui" ? " is-claude" : " is-codex"}`}
+            className={`demo-terminal${isClaudeTerminalPreviewMode(selected?.mode) ? " is-claude" : " is-codex"}`}
             role="img"
             aria-label="tank-operator terminal preview"
             tabIndex={0}
@@ -4224,7 +4249,7 @@ function turnIdForBrowserClientNonce(clientNonce: string): string {
 }
 
 function isClaudeRunMode(mode: SessionMode): boolean {
-  return mode === "claude_gui";
+  return mode === "claude_gui" || mode === "claude_secondary_gui";
 }
 
 function isCodexRunMode(mode: SessionMode): boolean {
@@ -4244,6 +4269,7 @@ function sessionModeUsesModel(mode: SessionMode): boolean {
 function providerUsesModel(provider: Provider): boolean {
   return (
     provider === "anthropic" ||
+    provider === "anthropic_secondary" ||
     provider === "codex" ||
     provider === "antigravity"
   );
@@ -4788,6 +4814,7 @@ interface SessionRunOptions {
 
 function providerForRunMode(mode: SessionMode): Provider | null {
   if (mode === "claude_gui") return "anthropic";
+  if (mode === "claude_secondary_gui") return "anthropic_secondary";
   if (
     mode === "codex_gui" ||
     mode === "codex_exec_gui" ||
@@ -4800,6 +4827,7 @@ function providerForRunMode(mode: SessionMode): Provider | null {
 }
 
 function runOptionsProviderKey(provider: Provider): Provider {
+  if (provider === "anthropic_secondary") return "anthropic";
   return provider;
 }
 
@@ -4942,9 +4970,20 @@ function effortDisplayLabel(
 function normalizeSessionRunOptions(raw: unknown): SessionRunOptions {
   if (!raw || typeof raw !== "object") throw new Error("invalid run options");
   const value = raw as Record<string, unknown>;
-  const providers: Provider[] = ["anthropic", "codex", "antigravity"];
+  const providers: Provider[] = [
+    "anthropic",
+    "anthropic_secondary",
+    "codex",
+    "antigravity",
+  ];
   const normalizeProvider = (provider: unknown): Provider | null => {
     if (provider === "claude" || provider === "anthropic") return "anthropic";
+    if (
+      provider === "claude_secondary" ||
+      provider === "anthropic_secondary"
+    ) {
+      return "anthropic_secondary";
+    }
     if (provider === "codex") return "codex";
     if (provider === "antigravity") return "antigravity";
     return null;

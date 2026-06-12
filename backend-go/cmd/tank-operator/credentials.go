@@ -31,6 +31,9 @@ func doSaveCredentials(w http.ResponseWriter, r *http.Request, s *appServer, ema
 	case sessionmodel.CodexConfigMode:
 		execCmd = []string{"sh", "-c", "cat $HOME/.codex/auth.json"}
 		kvKeyEnv = "CODEX_CREDENTIALS_KV_KEY"
+	case sessionmodel.ClaudeSecondaryConfigMode:
+		execCmd = []string{"sh", "-c", "cat $HOME/.claude/.credentials.json"}
+		kvKeyEnv = "CLAUDE_SECONDARY_CREDENTIALS_KV_KEY"
 	case sessionmodel.AntigravityConfigMode:
 		// agy writes the completed Google/Ultra OAuth token to a fixed file
 		// after the interactive paste-code login. Path + shape confirmed live
