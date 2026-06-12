@@ -180,6 +180,11 @@ type staticPageSnapshotStore interface {
 type scheduledWakeupStore interface {
 	Register(context.Context, pgstore.RegisterScheduledWakeupRequest) (pgstore.ScheduledWakeup, error)
 	ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.ScheduledWakeup, error)
+	// FailExceeded terminals wakes stuck at the fire attempt cap
+	// (pgstore.MaxScheduledWakeupAttempts) that ClaimDue no longer claims,
+	// returning them so the loop runs the MarkFailed bookkeeping (durable wake
+	// event + away-error ring + activity refresh).
+	FailExceeded(context.Context, time.Time, int, time.Duration) ([]pgstore.ScheduledWakeup, error)
 	ListBySession(context.Context, string, string) ([]pgstore.ScheduledWakeup, error)
 	MarkFired(context.Context, string, string) (pgstore.ScheduledWakeup, error)
 	MarkFailed(context.Context, string, string) (pgstore.ScheduledWakeup, error)
@@ -201,6 +206,11 @@ type pendingLaunchStore interface {
 type backgroundTaskWakeStore interface {
 	Register(context.Context, pgstore.RegisterBackgroundTaskWakeRequest) (pgstore.BackgroundTaskWake, pgstore.BackgroundTaskWakeRegisterOutcome, error)
 	ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.BackgroundTaskWake, error)
+	// FailExceeded terminals wakes stuck at the fire attempt cap
+	// (pgstore.MaxBackgroundTaskWakeAttempts) that ClaimDue no longer claims,
+	// returning them so the loop runs the MarkFailed bookkeeping (away-error
+	// ring + activity refresh).
+	FailExceeded(context.Context, time.Time, int, time.Duration) ([]pgstore.BackgroundTaskWake, error)
 	MarkFired(context.Context, string, string) error
 	MarkFailed(context.Context, string, string) error
 	Release(context.Context, string) error

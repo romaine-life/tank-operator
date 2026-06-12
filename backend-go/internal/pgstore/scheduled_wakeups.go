@@ -24,6 +24,20 @@ const (
 	ScheduledWakeupCancelled ScheduledWakeupStatus = "cancelled"
 )
 
+// MaxScheduledWakeupAttempts bounds futile fire retries, on the same scale as
+// the launch dispatcher's maxLaunchDispatchAttempts. ClaimDue refuses rows at
+// or over the cap, so a wake whose fire keeps half-finishing (claim landed but
+// MarkFired/MarkFailed never did — a Postgres partial outage, a crash loop) is
+// not reclaimed every stale tick forever. Without the cap an eventual re-fire
+// can outlive the session bus's 24h msg-id dedupe window and run the same wake
+// turn twice. Capped rows are not left in limbo: FailExceeded terminals them.
+const MaxScheduledWakeupAttempts = 5
+
+// scheduledWakeupAttemptCapError is the durable last_error stamped by
+// FailExceeded. Prefix-stable: cmd/tank-operator folds it into the
+// attempt_cap_exceeded fire-failure metric label.
+const scheduledWakeupAttemptCapError = "attempt_cap_exceeded"
+
 type ScheduledWakeup struct {
 	WakeupID          string
 	SessionScope      string
@@ -147,6 +161,7 @@ func (s *ScheduledWakeupStore) ClaimDue(ctx context.Context, now time.Time, limi
 			FROM session_scheduled_wakeups
 			WHERE session_scope = $1
 			  AND due_at <= $2
+			  AND attempt_count < $5
 			  AND (
 			    status = 'scheduled'
 			    OR (status = 'claiming' AND locked_at < $2 - make_interval(secs => $4::double precision))
@@ -170,7 +185,72 @@ func (s *ScheduledWakeupStore) ClaimDue(ctx context.Context, now time.Time, limi
 			COALESCE((SELECT terminating_at IS NOT NULL FROM sessions sess
 				WHERE sess.email = sw.owner_email AND sess.session_scope = sw.session_scope AND sess.session_id = sw.session_id), true) AS session_terminated
 	`
-	rows, err := s.pool.Query(ctx, q, s.scope, now.UTC(), limit, staleAfter.Seconds())
+	rows, err := s.pool.Query(ctx, q, s.scope, now.UTC(), limit, staleAfter.Seconds(), MaxScheduledWakeupAttempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []ScheduledWakeup
+	for rows.Next() {
+		row, err := scanScheduledWakeup(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// FailExceeded gives a durable 'failed' terminal to wakes whose attempt count
+// reached MaxScheduledWakeupAttempts without MarkFired/MarkFailed ever
+// landing. ClaimDue stops claiming such rows, so without this pass they would
+// sit in 'claiming' limbo forever — still "pending" to HasPending and the
+// activity fold, invisible to the user. Only rows that are demonstrably not
+// in-flight are touched: a 'claiming' row must also be stale (locked_at older
+// than staleAfter), so a capped final attempt still mid-fire is left to finish;
+// 'scheduled' rows at the cap (no live claim at all — a shape pre-cap data or
+// a future release path could produce) terminal immediately. Returns the
+// terminaled snapshots so the fire loop can run the same post-failure
+// bookkeeping as MarkFailed (durable wake event + away-error ring + activity
+// refresh).
+func (s *ScheduledWakeupStore) FailExceeded(ctx context.Context, now time.Time, limit int, staleAfter time.Duration) ([]ScheduledWakeup, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("scheduled wakeup store unavailable")
+	}
+	if limit <= 0 {
+		limit = 25
+	}
+	if staleAfter <= 0 {
+		staleAfter = 2 * time.Minute
+	}
+	const q = `
+		WITH exceeded AS (
+			SELECT wakeup_id
+			FROM session_scheduled_wakeups
+			WHERE session_scope = $1
+			  AND attempt_count >= $5
+			  AND (
+			    status = 'scheduled'
+			    OR (status = 'claiming' AND locked_at < $2::timestamptz - make_interval(secs => $4::double precision))
+			  )
+			ORDER BY due_at ASC, created_at ASC
+			LIMIT $3
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE session_scheduled_wakeups sw
+		SET status = 'failed',
+			last_error = left($6 || ': gave up after ' || sw.attempt_count || ' attempts', 2000),
+			locked_at = NULL,
+			updated_at = now()
+		FROM exceeded
+		WHERE sw.wakeup_id = exceeded.wakeup_id
+		RETURNING sw.wakeup_id, sw.session_scope, sw.session_id, sw.tank_session_id, sw.owner_email,
+			sw.provider, sw.prompt, sw.client_nonce, sw.scheduled_turn_id, sw.provider_item_id,
+			sw.scheduled_at, sw.due_at, sw.status, sw.attempt_count, sw.fired_turn_id, sw.last_error,
+			NULL::text AS session_status, NULL::boolean AS session_terminated
+	`
+	rows, err := s.pool.Query(ctx, q, s.scope, now.UTC(), limit, staleAfter.Seconds(),
+		MaxScheduledWakeupAttempts, scheduledWakeupAttemptCapError)
 	if err != nil {
 		return nil, err
 	}

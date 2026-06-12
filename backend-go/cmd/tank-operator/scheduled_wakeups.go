@@ -282,6 +282,7 @@ func (s *appServer) processScheduledWakeups(ctx context.Context, now time.Time) 
 	} else {
 		slog.Warn("scheduled wakeup due count failed", "error", err)
 	}
+	s.failExceededScheduledWakeups(ctx, now)
 	rows, err := s.scheduledWakeups.ClaimDue(ctx, now, scheduledWakeupBatchLimit, scheduledWakeupClaimStaleAfter)
 	if err != nil {
 		return err
@@ -298,6 +299,41 @@ func (s *appServer) processScheduledWakeups(ctx context.Context, now time.Time) 
 	return nil
 }
 
+// failExceededScheduledWakeups terminals wakes stuck at the fire attempt cap.
+// ClaimDue refuses rows at pgstore.MaxScheduledWakeupAttempts, so without this
+// pass a wake whose fire kept half-finishing (MarkFired/MarkFailed never
+// landed) would sit in 'claiming' limbo forever — pending to HasPending and
+// the "scheduled" activity status, invisible to the user. The store stamps the
+// durable 'failed' terminal; this runs the same post-failure bookkeeping as
+// the MarkFailed path in failScheduledWakeup: persist the wake's ledger event,
+// count it, and ring the away-error summon — the agent's self-scheduled
+// continuation broke while the user was away, exactly like any failed wake.
+func (s *appServer) failExceededScheduledWakeups(ctx context.Context, now time.Time) {
+	rows, err := s.scheduledWakeups.FailExceeded(ctx, now, scheduledWakeupBatchLimit, scheduledWakeupClaimStaleAfter)
+	if err != nil {
+		slog.Warn("scheduled wakeup attempt-cap sweep failed", "error", err)
+		return
+	}
+	for _, row := range rows {
+		provider := strings.TrimSpace(row.Provider)
+		slog.Warn("scheduled wakeup failed at attempt cap",
+			"wakeup_id", row.WakeupID,
+			"session_id", row.SessionID,
+			"provider", provider,
+			"attempts", row.AttemptCount)
+		if err := s.persistScheduledWakeupEvent(ctx, row, now); err != nil {
+			recordScheduledWakeupFire(provider, "event_error")
+			slog.Warn("capped scheduled wakeup event persist failed",
+				"wakeup_id", row.WakeupID, "session_id", row.SessionID, "error", err)
+			continue
+		}
+		recordScheduledWakeupFire(provider, "attempt_cap_exceeded")
+		s.resolveFailedWake(ctx, row.OwnerEmail, row.SessionID,
+			conversation.TurnIDForClientNonce(row.ClientNonce), row.ClientNonce, provider,
+			true, sessionactivity.AwayErrorReasonScheduledWakeup)
+	}
+}
+
 func (s *appServer) fireScheduledWakeup(ctx context.Context, row pgstore.ScheduledWakeup, now time.Time) error {
 	provider := strings.TrimSpace(row.Provider)
 	if row.SessionStatus == "" {
@@ -305,6 +341,35 @@ func (s *appServer) fireScheduledWakeup(ctx context.Context, row pgstore.Schedul
 	}
 	if row.SessionStatus != "Active" || row.SessionTerminated {
 		return s.failScheduledWakeup(ctx, row, provider, "session_not_active")
+	}
+	// Durable double-fire guard on re-claims, mirroring the background-task
+	// wake session-655 fix: if this wake's deterministic turn already EXISTS in
+	// the ledger (not just reached a terminal), a prior attempt already
+	// persisted the boundary and published the command — the claim merely went
+	// stale before MarkFired landed. Re-submitting would re-publish the same
+	// CommandID, and JetStream's msg-id dedupe only covers 24h (sessionbus
+	// Duplicates window): a row stuck in 'claiming' across a longer outage
+	// would run the same wake turn twice. The durable ledger, not the claim
+	// status, is the authority for "already fired". attempt_count == 1 is the
+	// first claim ever, so nothing can pre-exist and the happy path skips the
+	// read.
+	if row.AttemptCount > 1 {
+		wakeTurnID := conversation.TurnIDForClientNonce(row.ClientNonce)
+		if eventStore := s.sessionEventStoreForScope(row.SessionScope); eventStore != nil && wakeTurnID != "" {
+			if existing, err := eventStore.EventsForTurnAfter(ctx, row.SessionID, wakeTurnID, "", 1); err == nil && len(existing.Events) > 0 {
+				fired, err := s.scheduledWakeups.MarkFired(ctx, row.WakeupID, wakeTurnID)
+				if err != nil {
+					recordScheduledWakeupFire(provider, "store_error")
+					return err
+				}
+				if err := s.persistScheduledWakeupEvent(ctx, fired, now); err != nil {
+					recordScheduledWakeupFire(provider, "event_error")
+					return err
+				}
+				recordScheduledWakeupFire(provider, "already_fired")
+				return nil
+			}
+		}
 	}
 	resp, status, detail := s.enqueueSDKTurn(ctx, row.OwnerEmail, row.SessionID, sdkTurnRequest{
 		ClientNonce:  row.ClientNonce,

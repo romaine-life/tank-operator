@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -10,16 +11,19 @@ import (
 )
 
 type fakeBackgroundTaskWakeStore struct {
-	rows            []pgstore.BackgroundTaskWake
-	firedID         string
-	firedTurn       string
-	failedID        string
-	failReason      string
-	releasedID      string
-	cancelCalls     int
-	cancelSessionID string
-	cancelTaskID    string
-	cancelReturn    int64
+	rows             []pgstore.BackgroundTaskWake
+	exceededRows     []pgstore.BackgroundTaskWake
+	failExceededErr  error
+	failExceededCall int
+	firedID          string
+	firedTurn        string
+	failedID         string
+	failReason       string
+	releasedID       string
+	cancelCalls      int
+	cancelSessionID  string
+	cancelTaskID     string
+	cancelReturn     int64
 }
 
 func (f *fakeBackgroundTaskWakeStore) Register(context.Context, pgstore.RegisterBackgroundTaskWakeRequest) (pgstore.BackgroundTaskWake, pgstore.BackgroundTaskWakeRegisterOutcome, error) {
@@ -28,6 +32,22 @@ func (f *fakeBackgroundTaskWakeStore) Register(context.Context, pgstore.Register
 
 func (f *fakeBackgroundTaskWakeStore) ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.BackgroundTaskWake, error) {
 	return f.rows, nil
+}
+
+// FailExceeded returns the seeded capped-out rows as already-terminaled
+// 'failed' snapshots, mirroring the store's SQL terminal.
+func (f *fakeBackgroundTaskWakeStore) FailExceeded(context.Context, time.Time, int, time.Duration) ([]pgstore.BackgroundTaskWake, error) {
+	f.failExceededCall++
+	if f.failExceededErr != nil {
+		return nil, f.failExceededErr
+	}
+	out := make([]pgstore.BackgroundTaskWake, 0, len(f.exceededRows))
+	for _, row := range f.exceededRows {
+		row.Status = pgstore.BackgroundTaskWakeFailed
+		row.LastError = "attempt_cap_exceeded: gave up after " + strconv.Itoa(row.AttemptCount) + " attempts"
+		out = append(out, row)
+	}
+	return out, nil
 }
 
 func (f *fakeBackgroundTaskWakeStore) MarkFired(_ context.Context, wakeID, turnID string) error {
@@ -368,5 +388,37 @@ func TestBackgroundWakeChipTitleTracksLostObservability(t *testing.T) {
 	meta, _ := body.Entries[0]["meta"].(map[string]any)
 	if meta == nil || meta["title"] != "Background task lost from view — agent re-invoked" {
 		t.Fatalf("chip title = %#v, want lost-from-view title", meta)
+	}
+}
+
+// TestProcessBackgroundTaskWakesTerminalsCappedRows pins the background
+// sibling of the scheduled-wakeup attempt cap: the FailExceeded pass runs
+// once per tick, capped rows reach it, and the loop keeps claiming normal
+// rows afterwards (the cap sweep is additive, not a replacement for the
+// fire path).
+func TestProcessBackgroundTaskWakesTerminalsCappedRows(t *testing.T) {
+	app := testTurnsApp(t, &recordingSessionBus{})
+	wakes := &fakeBackgroundTaskWakeStore{exceededRows: []pgstore.BackgroundTaskWake{{
+		WakeID:          "bgwake_capped",
+		SessionScope:    "default",
+		SessionID:       "63",
+		TankSessionID:   "63",
+		OwnerEmail:      "user@example.com",
+		Provider:        "claude",
+		TaskID:          "task-capped",
+		TaskDescription: "report results",
+		ClientNonce:     "bgtask-task-capped",
+		RegisteredAt:    time.Date(2026, 6, 12, 7, 0, 0, 0, time.UTC),
+		DueAt:           time.Date(2026, 6, 12, 7, 5, 0, 0, time.UTC),
+		AttemptCount:    pgstore.MaxBackgroundTaskWakeAttempts,
+	}}}
+	app.backgroundTaskWakes = wakes
+	app.sessionEvents = &recordingSessionEventStore{}
+
+	if err := app.processBackgroundTaskWakes(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("processBackgroundTaskWakes: %v", err)
+	}
+	if wakes.failExceededCall != 1 {
+		t.Fatalf("FailExceeded calls = %d, want 1 per tick", wakes.failExceededCall)
 	}
 }

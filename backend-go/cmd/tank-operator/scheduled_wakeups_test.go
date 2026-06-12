@@ -5,23 +5,29 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionactivity"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
 type fakeScheduledWakeupStore struct {
-	rows            []pgstore.ScheduledWakeup
-	registerRow     pgstore.ScheduledWakeup
-	firedID         string
-	firedTurn       string
-	failedID        string
-	failReason      string
-	cancelCalls     int
-	cancelSessionID string
-	cancelReturn    int64
+	rows             []pgstore.ScheduledWakeup
+	exceededRows     []pgstore.ScheduledWakeup
+	failExceededErr  error
+	failExceededCall int
+	registerRow      pgstore.ScheduledWakeup
+	firedID          string
+	firedTurn        string
+	failedID         string
+	failReason       string
+	cancelCalls      int
+	cancelSessionID  string
+	cancelReturn     int64
 }
 
 func (f *fakeScheduledWakeupStore) Register(_ context.Context, req pgstore.RegisterScheduledWakeupRequest) (pgstore.ScheduledWakeup, error) {
@@ -49,6 +55,22 @@ func (f *fakeScheduledWakeupStore) Register(_ context.Context, req pgstore.Regis
 
 func (f *fakeScheduledWakeupStore) ClaimDue(context.Context, time.Time, int, time.Duration) ([]pgstore.ScheduledWakeup, error) {
 	return f.rows, nil
+}
+
+// FailExceeded returns the seeded capped-out rows as already-terminaled
+// 'failed' snapshots, mirroring the store's SQL terminal.
+func (f *fakeScheduledWakeupStore) FailExceeded(context.Context, time.Time, int, time.Duration) ([]pgstore.ScheduledWakeup, error) {
+	f.failExceededCall++
+	if f.failExceededErr != nil {
+		return nil, f.failExceededErr
+	}
+	out := make([]pgstore.ScheduledWakeup, 0, len(f.exceededRows))
+	for _, row := range f.exceededRows {
+		row.Status = pgstore.ScheduledWakeupFailed
+		row.LastError = "attempt_cap_exceeded: gave up after " + strconv.Itoa(row.AttemptCount) + " attempts"
+		out = append(out, row)
+	}
+	return out, nil
 }
 
 func (f *fakeScheduledWakeupStore) ListBySession(context.Context, string, string) ([]pgstore.ScheduledWakeup, error) {
@@ -321,5 +343,63 @@ func TestListScheduledWakeupsSurfacesDurableRows(t *testing.T) {
 	}
 	if row.ScheduledTurnID != "turn_abc" || row.DueAt != dueAt.Format(time.RFC3339Nano) {
 		t.Fatalf("row timing/turn = %+v", row)
+	}
+}
+
+// TestProcessScheduledWakeupsTerminalsCappedRows pins the attempt-cap
+// bookkeeping: a wake stuck at pgstore.MaxScheduledWakeupAttempts is
+// terminaled by the FailExceeded pass and gets the SAME durable trail a
+// MarkFailed wake gets — the scheduled_wakeup.updated ledger event with the
+// failed status and the cap reason — so the broken self-scheduled
+// continuation rings the away-error summon instead of sitting in 'claiming'
+// limbo forever while ClaimDue refuses it.
+func TestProcessScheduledWakeupsTerminalsCappedRows(t *testing.T) {
+	app := testTurnsApp(t, &recordingSessionBus{})
+	schedules := &fakeScheduledWakeupStore{exceededRows: []pgstore.ScheduledWakeup{{
+		WakeupID:      "wakeup_capped",
+		SessionScope:  "default",
+		SessionID:     "63",
+		TankSessionID: "63",
+		OwnerEmail:    "user@example.com",
+		Provider:      "claude",
+		Prompt:        "resume after sleep",
+		ClientNonce:   "schedule_wakeup-wakeup_capped",
+		ScheduledAt:   time.Date(2026, 6, 12, 7, 0, 0, 0, time.UTC),
+		DueAt:         time.Date(2026, 6, 12, 7, 5, 0, 0, time.UTC),
+		AttemptCount:  pgstore.MaxScheduledWakeupAttempts,
+	}}}
+	app.scheduledWakeups = schedules
+	app.sessionEvents = &recordingSessionEventStore{}
+
+	if err := app.processScheduledWakeups(context.Background(), time.Now().UTC()); err != nil {
+		t.Fatalf("processScheduledWakeups: %v", err)
+	}
+	if schedules.failExceededCall != 1 {
+		t.Fatalf("FailExceeded calls = %d, want 1 per tick", schedules.failExceededCall)
+	}
+	events := app.sessionEvents.(*recordingSessionEventStore).upserts
+	if len(events) != 2 {
+		t.Fatalf("event upserts = %d, want the wake trail AND the ring carrier", len(events))
+	}
+	if got, _ := events[0]["type"].(string); got != "scheduled_wakeup.updated" {
+		t.Fatalf("event[0] type = %q, want scheduled_wakeup.updated", got)
+	}
+	payload, _ := events[0]["payload"].(map[string]any)
+	if got, _ := payload["status"].(string); got != "failed" {
+		t.Fatalf("payload.status = %q, want failed", got)
+	}
+	if got, _ := payload["last_error"].(string); !strings.HasPrefix(got, "attempt_cap_exceeded") {
+		t.Fatalf("payload.last_error = %q, want attempt_cap_exceeded prefix", got)
+	}
+	// The capped wake is a broken self-scheduled continuation: it must ring
+	// the away-error summon exactly like any failed wake — resolveFailedWake
+	// persists the away-tagged turn.command_failed the activity fold and SPA
+	// ring key off.
+	if got, _ := events[1]["type"].(string); got != "turn.command_failed" {
+		t.Fatalf("event[1] type = %q, want turn.command_failed (the ring carrier)", got)
+	}
+	ringPayload, _ := events[1]["payload"].(map[string]any)
+	if got, _ := ringPayload["reason"].(string); got != sessionactivity.AwayErrorReasonScheduledWakeup {
+		t.Fatalf("ring reason = %q, want %q", got, sessionactivity.AwayErrorReasonScheduledWakeup)
 	}
 }

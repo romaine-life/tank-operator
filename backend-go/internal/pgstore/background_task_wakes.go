@@ -100,6 +100,22 @@ const (
 // stream; reaching it is counted, never silent.
 const maxBackgroundTaskWakeGenerations = 3
 
+// MaxBackgroundTaskWakeAttempts bounds futile fire retries of ONE wake
+// generation, on the same scale as the launch dispatcher's
+// maxLaunchDispatchAttempts and MaxScheduledWakeupAttempts. ClaimDue refuses
+// rows at or over the cap, so a wake whose fire keeps half-finishing (claim
+// landed but MarkFired/MarkFailed never did) is not reclaimed every stale tick
+// forever — an eventual re-fire past the session bus's 24h msg-id dedupe
+// window would run the same wake turn twice. Soft-defers don't burn attempts:
+// Release undoes the claim's bump. Capped rows are not left in limbo:
+// FailExceeded terminals them.
+const MaxBackgroundTaskWakeAttempts = 5
+
+// backgroundTaskWakeAttemptCapError is the durable last_error stamped by
+// FailExceeded. Prefix-stable: cmd/tank-operator folds it into the
+// attempt_cap_exceeded fire-failure metric label.
+const backgroundTaskWakeAttemptCapError = "attempt_cap_exceeded"
+
 type BackgroundTaskWakeStore struct {
 	pool  *pgxpool.Pool
 	scope string
@@ -323,6 +339,7 @@ func (s *BackgroundTaskWakeStore) ClaimDue(ctx context.Context, now time.Time, l
 			FROM session_background_task_wakes
 			WHERE session_scope = $1
 			  AND due_at <= $2
+			  AND attempt_count < $5
 			  AND (
 			    status = 'scheduled'
 			    OR (status = 'claiming' AND locked_at < $2 - make_interval(secs => $4::double precision))
@@ -351,7 +368,73 @@ func (s *BackgroundTaskWakeStore) ClaimDue(ctx context.Context, now time.Time, l
 			COALESCE((SELECT activity_summary->>'status' FROM sessions sess
 				WHERE sess.email = bw.owner_email AND sess.session_scope = bw.session_scope AND sess.session_id = bw.session_id), '') AS session_activity_status
 	`
-	rows, err := s.pool.Query(ctx, q, s.scope, now.UTC(), limit, staleAfter.Seconds())
+	rows, err := s.pool.Query(ctx, q, s.scope, now.UTC(), limit, staleAfter.Seconds(), MaxBackgroundTaskWakeAttempts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []BackgroundTaskWake
+	for rows.Next() {
+		row, err := scanBackgroundTaskWake(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+// FailExceeded gives a durable 'failed' terminal to wakes whose attempt count
+// reached MaxBackgroundTaskWakeAttempts without MarkFired/MarkFailed ever
+// landing. ClaimDue stops claiming such rows, so without this pass they would
+// sit in 'claiming' limbo forever — still "pending" to HasPending and the
+// activity fold, invisible to the user. Only rows that are demonstrably not
+// in-flight are touched: a 'claiming' row must also be stale (locked_at older
+// than staleAfter), so a capped final attempt still mid-fire is left to
+// finish; 'scheduled' rows at the cap (the pre-cap data shape a claim-bumped
+// row Released back to 'scheduled' carries) terminal immediately. Returns the
+// terminaled snapshots so the fire loop can run the same post-failure
+// bookkeeping as MarkFailed (away-error ring + activity refresh).
+func (s *BackgroundTaskWakeStore) FailExceeded(ctx context.Context, now time.Time, limit int, staleAfter time.Duration) ([]BackgroundTaskWake, error) {
+	if s == nil || s.pool == nil {
+		return nil, errors.New("background task wake store unavailable")
+	}
+	if limit <= 0 {
+		limit = 25
+	}
+	if staleAfter <= 0 {
+		staleAfter = 2 * time.Minute
+	}
+	const q = `
+		WITH exceeded AS (
+			SELECT wake_id
+			FROM session_background_task_wakes
+			WHERE session_scope = $1
+			  AND attempt_count >= $5
+			  AND (
+			    status = 'scheduled'
+			    OR (status = 'claiming' AND locked_at < $2::timestamptz - make_interval(secs => $4::double precision))
+			  )
+			ORDER BY due_at ASC, created_at ASC
+			LIMIT $3
+			FOR UPDATE SKIP LOCKED
+		)
+		UPDATE session_background_task_wakes bw
+		SET status = 'failed',
+			last_error = left($6 || ': gave up after ' || bw.attempt_count || ' attempts', 2000),
+			locked_at = NULL,
+			updated_at = now()
+		FROM exceeded
+		WHERE bw.wake_id = exceeded.wake_id
+		RETURNING bw.wake_id, bw.session_scope, bw.session_id, bw.tank_session_id, bw.owner_email,
+			bw.provider, bw.task_id, bw.task_status, bw.task_description, bw.task_summary,
+			bw.task_last_tool, bw.task_error, bw.observed_event_id, bw.generation, bw.client_nonce,
+			bw.registered_at, bw.due_at, bw.status, bw.attempt_count, bw.fired_turn_id, bw.last_error,
+			NULL::text AS session_status, NULL::boolean AS session_terminated,
+			NULL::boolean AS session_needs_input, NULL::text AS session_activity_status
+	`
+	rows, err := s.pool.Query(ctx, q, s.scope, now.UTC(), limit, staleAfter.Seconds(),
+		MaxBackgroundTaskWakeAttempts, backgroundTaskWakeAttemptCapError)
 	if err != nil {
 		return nil, err
 	}
