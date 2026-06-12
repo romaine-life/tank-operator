@@ -49,108 +49,20 @@ RUN npm prune --omit=dev
 FROM node:20-alpine
 
 ARG TARGETARCH=amd64
-ARG KUBECTL_VERSION=v1.31.0
-ARG TOFU_VERSION=1.9.0
-ARG HELM_VERSION=v3.16.3
-ARG YQ_VERSION=v4.44.3
-ARG UV_VERSION=0.5.18
-ARG TAILSCALE_VERSION=1.98.4
-ARG RUFF_VERSION=0.15.12
-ARG PYTEST_VERSION=8.4.2
-ARG GO_VERSION=1.26.2
-ARG VITE_VERSION=5.4.21
-ARG TYPESCRIPT_VERSION=5.9.3
 ARG TANK_AGENT=claude
 
-# ripgrep + make round out the bash surface (rg replaces grep for repo
-# search; make is needed for several of the consumed repos' dev flows).
-# Go is baked in so session pods can run checks for Go services instead of
-# punting those to CI or a separate agent image.
-RUN apk add --no-cache \
-        bash \
-        ca-certificates \
-        curl \
-        git \
-        github-cli \
-        gnupg \
-        jq \
-        less \
-        make \
-        openssh-client \
-        py3-pip \
-        python3 \
-        ripgrep \
-        unzip \
-        vim
-
-RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz" \
-        | tar -C /usr/local -xz
+# Baseline interactive-session tool surface shared by Claude, Codex, and
+# Antigravity. The install script stays distro-specific so this Alpine image
+# can share policy with Antigravity's Debian/glibc image without sharing a base.
+COPY session-images /opt/tank/session-images
+RUN TARGETARCH="${TARGETARCH}" sh /opt/tank/session-images/install-common-alpine.sh
 ENV PATH="/usr/local/go/bin:${PATH}"
-RUN printf '%s\n' 'export PATH="/usr/local/go/bin:${PATH}"' > /etc/profile.d/go-path.sh
-
-RUN curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/${TARGETARCH}/kubectl" \
-        -o /usr/local/bin/kubectl \
-    && chmod +x /usr/local/bin/kubectl
-
-RUN curl -fsSL "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_${TARGETARCH}.zip" \
-        -o /tmp/tofu.zip \
-    && unzip -q /tmp/tofu.zip tofu -d /usr/local/bin \
-    && chmod +x /usr/local/bin/tofu \
-    && rm /tmp/tofu.zip
-
-# helm â€” every consumed repo ships a chart; without it `helm template` /
-# `helm get manifest` debugging is missing.
-RUN curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${TARGETARCH}.tar.gz" \
-        | tar -xz -C /tmp \
-    && mv "/tmp/linux-${TARGETARCH}/helm" /usr/local/bin/helm \
-    && rm -rf "/tmp/linux-${TARGETARCH}" \
-    && chmod +x /usr/local/bin/helm
-
-# yq â€” pairs with jq for the YAML half of k8s/helm work.
-RUN curl -fsSL "https://github.com/mikefarah/yq/releases/download/${YQ_VERSION}/yq_linux_${TARGETARCH}" \
-        -o /usr/local/bin/yq \
-    && chmod +x /usr/local/bin/yq
-
-# uv â€” fast pip replacement for Python projects. Hardcoded musl x86_64 path because
-# astral-sh/uv release artifacts aren't named with docker's TARGETARCH
-# convention; the image is alpine + amd64 today.
-RUN curl -fsSL "https://github.com/astral-sh/uv/releases/download/${UV_VERSION}/uv-x86_64-unknown-linux-musl.tar.gz" \
-        | tar -xz -C /tmp \
-    && mv /tmp/uv-x86_64-unknown-linux-musl/uv /usr/local/bin/uv \
-    && mv /tmp/uv-x86_64-unknown-linux-musl/uvx /usr/local/bin/uvx \
-    && rm -rf /tmp/uv-x86_64-unknown-linux-musl \
-    && chmod +x /usr/local/bin/uv /usr/local/bin/uvx
-
-# tailscale â€” lets a session pod join the tailnet in userspace mode to reach
-# hosts that live off-cluster (e.g. the SpireLens game host on
-# tag:spirelens-host). Baked in but dormant: only a session that opts in runs
-# the join (see session-pod-bootstrap.sh + docs/tailnet-host-access.md), so the
-# binaries are present for instant, offline opt-in without changing the image.
-# Statically linked Go binaries, so they run on alpine/musl (verified on this
-# same node:20-alpine base).
-RUN curl -fsSL "https://pkgs.tailscale.com/stable/tailscale_${TAILSCALE_VERSION}_${TARGETARCH}.tgz" \
-        | tar -xz -C /tmp \
-    && mv "/tmp/tailscale_${TAILSCALE_VERSION}_${TARGETARCH}/tailscale" /usr/local/bin/tailscale \
-    && mv "/tmp/tailscale_${TAILSCALE_VERSION}_${TARGETARCH}/tailscaled" /usr/local/bin/tailscaled \
-    && rm -rf "/tmp/tailscale_${TAILSCALE_VERSION}_${TARGETARCH}" \
-    && chmod +x /usr/local/bin/tailscale /usr/local/bin/tailscaled
 
 RUN case "${TANK_AGENT}" in \
-        claude) npm install -g @anthropic-ai/claude-code "vite@${VITE_VERSION}" "typescript@${TYPESCRIPT_VERSION}" ;; \
-        codex) npm install -g @openai/codex "vite@${VITE_VERSION}" "typescript@${TYPESCRIPT_VERSION}" ;; \
+        claude) npm install -g @anthropic-ai/claude-code ;; \
+        codex) npm install -g @openai/codex ;; \
         *) echo "unsupported TANK_AGENT=${TANK_AGENT}; expected claude or codex" >&2; exit 1 ;; \
     esac
-
-# Ghostty-backed in-browser process terminal support. The frontend talks to
-# sandbox-agent's process-terminal API for the run-pane Shell view.
-RUN npm install -g @sandbox-agent/cli@0.4.2
-
-# Baseline Python dev tools expected by agent workflows. Install them in the
-# image, not per-repo, so both claude and codex sessions can assume the
-# commands exist on PATH.
-RUN pip install --no-cache-dir --break-system-packages \
-        "pytest==${PYTEST_VERSION}" \
-        "ruff==${RUFF_VERSION}"
 
 # Localhost reverse proxy that injects fresh SA-token bearer auth into
 # outbound HTTP MCP calls. Runs as a sidecar container in the session
