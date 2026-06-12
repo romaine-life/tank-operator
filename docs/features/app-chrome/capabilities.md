@@ -239,6 +239,42 @@ Evidence:
 - PRs touching kind reassignment should prove the unused-deck-entry cleanup
   is atomic with the kind flip and that used entries are preserved.
 
+## Admin App Version Ledger
+
+Status: active
+
+Intent:
+Let administrators inspect the deployed tank-operator image and session image
+lineage from Settings -> Admin using durable observations written by the
+orchestrator at boot, not process-local memory or browser inference.
+
+Affected contracts:
+- App Chrome
+- Observability, because the surface answers "what version is actually
+  deployed?" during rollout/debugging
+
+Contract impact:
+- The current app/session image refs and release metadata live in
+  `deployment_image_versions`, keyed by session scope, pod name, and image
+  kind. Rolling updates may overlap pods, so reads choose the latest durable
+  observation per kind inside the scope.
+- `/api/admin/app-version` is admin-gated and reads the durable ledger when it
+  exists. Current environment values are only the stub/pre-migration local
+  source; once the ledger is readable, missing per-kind records remain visibly
+  missing instead of being repaired in the handler.
+- The response includes `observed_at` so the UI can distinguish when the
+  orchestrator observed the image from when the image was built.
+
+Evidence:
+- `backend-go/internal/pgstore/deployment_image_versions_integration_test.go`
+  proves latest-per-kind durable reads.
+- `backend-go/cmd/tank-operator/handlers_app_version_test.go` proves the admin
+  endpoint prefers the durable ledger and does not hide partial ledger rows with
+  current env values.
+- PRs changing this surface should verify `GET /api/admin/app-version`, the
+  Settings -> Admin App version panel, and the schema migration that owns
+  `deployment_image_versions`.
+
 ## Admin Useful Files
 
 Status: active

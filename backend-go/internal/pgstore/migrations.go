@@ -1798,6 +1798,29 @@ var schemaMigrations = []migration{
 	// workflow, and build timestamp context for existing sessions.
 	{ID: "0146", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS session_image_metadata jsonb NOT NULL DEFAULT '{}'::jsonb`},
+
+	// Deployment image/version observations. /api/admin/app-version is an
+	// operator-facing diagnostic surface; its source of truth is the durable
+	// ledger of what each orchestrator pod actually observed at boot, not only
+	// the current process environment. Multiple pods may overlap during a
+	// rolling update, so reads choose the latest observation per image kind
+	// inside the session scope.
+	{ID: "0147", SQL: `CREATE TABLE IF NOT EXISTS deployment_image_versions (
+		session_scope  text NOT NULL,
+		pod_name       text NOT NULL DEFAULT '',
+		image_kind     text NOT NULL CHECK (image_kind IN (
+			'app',
+			'session_claude',
+			'session_codex',
+			'session_antigravity'
+		)),
+		image_ref      text NOT NULL DEFAULT '',
+		image_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+		observed_at    timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (session_scope, pod_name, image_kind)
+	)`},
+	{ID: "0148", SQL: `CREATE INDEX IF NOT EXISTS deployment_image_versions_scope_kind_observed
+		ON deployment_image_versions (session_scope, image_kind, observed_at DESC)`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
