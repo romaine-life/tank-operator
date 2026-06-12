@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -131,4 +135,100 @@ func TestUniqueAttachmentRelPathCapsLongNames(t *testing.T) {
 	if len(parts[1]) > 100 {
 		t.Fatalf("sanitized name not capped: len=%d", len(parts[1]))
 	}
+}
+
+func TestSafeWorkspacePathRejectsLiteralTraversal(t *testing.T) {
+	cases := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"workspace root", "/workspace", "/workspace", false},
+		{"absolute inside workspace", "/workspace/app/main.go", "/workspace/app/main.go", false},
+		{"relative inside workspace", "app/../README.md", "/workspace/README.md", false},
+		{"absolute traversal", "/workspace/../home/node/secret.txt", "", true},
+		{"relative traversal", "../etc/passwd", "", true},
+		{"absolute outside workspace", "/home/node/secret.txt", "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := safeWorkspacePath(tc.in)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("safeWorkspacePath(%q) succeeded, want error", tc.in)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("safeWorkspacePath(%q) error: %v", tc.in, err)
+			}
+			if got != tc.want {
+				t.Fatalf("safeWorkspacePath(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestWorkspacePathBoundaryCheckRejectsSymlinkEscapes(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "workspace")
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	if err := os.MkdirAll(outside, 0o755); err != nil {
+		t.Fatalf("mkdir outside: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "inside.txt"), []byte("ok"), 0o644); err != nil {
+		t.Fatalf("write inside: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("no"), 0o644); err != nil {
+		t.Fatalf("write outside: %v", err)
+	}
+	linkToOutside := filepath.Join(root, "outside-link")
+	if err := os.Symlink(outside, linkToOutside); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+
+	cases := []struct {
+		name string
+		path string
+		ok   bool
+	}{
+		{"existing file inside", filepath.Join(root, "inside.txt"), true},
+		{"new file inside", filepath.Join(root, "new.txt"), true},
+		{"literal parent outside", filepath.Join(root, "..", "outside", "secret.txt"), false},
+		{"existing file through outside symlink", filepath.Join(linkToOutside, "secret.txt"), false},
+		{"new file through outside symlink", filepath.Join(linkToOutside, "new.txt"), false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := runWorkspaceBoundaryCheck(t, root, tc.path)
+			if got.OK != tc.ok {
+				t.Fatalf("boundary check ok = %v, want %v (resolved=%q error=%q)", got.OK, tc.ok, got.ResolvedPath, got.Error)
+			}
+		})
+	}
+}
+
+func runWorkspaceBoundaryCheck(t *testing.T, root, target string) struct {
+	OK           bool   `json:"ok"`
+	Error        string `json:"error"`
+	ResolvedPath string `json:"resolved_path"`
+} {
+	t.Helper()
+	cmd := exec.Command("python3", "-c", workspacePathBoundaryCheckScript, root, target)
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("run boundary check: %v", err)
+	}
+	var body struct {
+		OK           bool   `json:"ok"`
+		Error        string `json:"error"`
+		ResolvedPath string `json:"resolved_path"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		t.Fatalf("parse boundary output %q: %v", string(out), err)
+	}
+	return body
 }

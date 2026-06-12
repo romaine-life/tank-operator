@@ -71,9 +71,15 @@ func (s *appServer) handleCaptureStaticPage(w http.ResponseWriter, r *http.Reque
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	resolvedPath, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath)
+	if err != nil {
+		recordStaticPage("capture", "bad_request")
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName,
-		[]string{"head", "-c", fmt.Sprintf("%d", maxRawBytes), "--", absPath})
+		[]string{"head", "-c", fmt.Sprintf("%d", maxRawBytes), "--", resolvedPath})
 	if err != nil {
 		recordStaticPage("capture", "exec_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
