@@ -201,6 +201,8 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
 		SessionImage:      "claude-image",
 		CodexSessionImage: "codex-image",
+		AgentAvatarID:     "jp1-grant",
+		SystemAvatarID:    "jp1-lex",
 	})
 
 	metadata := manifest["metadata"].(map[string]any)
@@ -220,6 +222,12 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	annotations := metadata["annotations"].(map[string]any)
 	if got, want := annotations["tank-operator/owner-email"], "nelson@romaine.life"; got != want {
 		t.Fatalf("owner annotation = %v, want %q", got, want)
+	}
+	if got, want := annotations["tank-operator/agent-avatar-id"], "jp1-grant"; got != want {
+		t.Fatalf("agent avatar annotation = %v, want %q", got, want)
+	}
+	if got, want := annotations["tank-operator/system-avatar-id"], "jp1-lex"; got != want {
+		t.Fatalf("system avatar annotation = %v, want %q", got, want)
 	}
 
 	spec := manifest["spec"].(map[string]any)
@@ -245,6 +253,10 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	sessionScopeRef := mcpProxyEnv["SESSION_SCOPE"].(map[string]any)["fieldRef"].(map[string]any)
 	if got, want := sessionScopeRef["fieldPath"], "metadata.labels['tank-operator/session-scope']"; got != want {
 		t.Fatalf("mcp-auth-proxy SESSION_SCOPE fieldPath = %v, want %q", got, want)
+	}
+	agentAvatarRef := mcpProxyEnv["AGENT_AVATAR_ID"].(map[string]any)["fieldRef"].(map[string]any)
+	if got, want := agentAvatarRef["fieldPath"], "metadata.annotations['tank-operator/agent-avatar-id']"; got != want {
+		t.Fatalf("mcp-auth-proxy AGENT_AVATAR_ID fieldPath = %v, want %q", got, want)
 	}
 	claude := containers[1].(map[string]any)
 	if got, want := claude["name"], "sandbox"; got != want {

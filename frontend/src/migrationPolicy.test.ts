@@ -12,6 +12,7 @@ const appSource = readSource("./App.tsx");
 const appRoutesSource = readSource("./appRoutes.ts");
 const authSource = readSource("./auth.ts");
 const conversationReducerSource = readSource("./conversationReducer.ts");
+const conversationProjectionSource = readSource("./conversationProjection.ts");
 const chatScrollTelemetrySource = readSource("./chatScrollTelemetry.ts");
 const sessionEventStreamTelemetrySource = readSource(
   "./sessionEventStreamTelemetry.ts",
@@ -341,6 +342,8 @@ test("Turns view renders server-projected turn context outside paged activity", 
   expect(styleguidePortfolioTranscriptSource.includes("run-turn-view-context-label")).toBe(false);
   expect(appSource).not.toMatch(/run-turn-view-context-head[\s\S]{0,500}run-turn-view-context-toggle/);
   expect(appSource.includes("originSessionAvatarByID")).toBe(true);
+  expect(appSource.includes("originSessionAvatarId")).toBe(true);
+  expect(conversationProjectionSource.includes("originSessionAvatarId")).toBe(true);
   expect(appSource.includes("getSessionAvatarByID(null)")).toBe(false);
   expect(appSource.includes("function RunTurnViewControls")).toBe(true);
   expect(appSource.includes('tabsClassName={activeTab === "turns" ? "run-tabs-turn-view" : undefined}')).toBe(true);

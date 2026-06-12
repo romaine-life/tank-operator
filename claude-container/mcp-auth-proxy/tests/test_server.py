@@ -224,6 +224,7 @@ def test_handler_forwards_static_caller_context_headers() -> None:
                             "X-Tank-Caller-Kind": "session",
                             "X-Tank-Caller-Session-Id": "709",
                             "X-Tank-Caller-Session-Scope": "default",
+                            "X-Tank-Origin-Session-Avatar-Id": "jp1-grant",
                         },
                     ),
                 )
@@ -247,6 +248,7 @@ def test_handler_forwards_static_caller_context_headers() -> None:
     assert headers["X-Tank-Caller-Kind"] == "session"
     assert headers["X-Tank-Caller-Session-Id"] == "709"
     assert headers["X-Tank-Caller-Session-Scope"] == "default"
+    assert headers["X-Tank-Origin-Session-Avatar-Id"] == "jp1-grant"
 
 
 async def _run_proxy_against_upstream(status_sequence: list[int], success_body: bytes = b'{"ok":true}') -> tuple[int, str, int]:

@@ -65,6 +65,11 @@
       "type": "string",
       "minLength": 1
     },
+    "origin_session_avatar_id": {
+      "description": "Assigned agent avatar id for origin_session_id. This is stamped when the originating session is outside the target session list scope, such as a production session spawning a Glimmung test-slot session, so the frontend can render the same avatar without needing to load the origin session row.",
+      "type": "string",
+      "minLength": 1
+    },
     "turn_id": {
       "type": "string",
       "minLength": 1

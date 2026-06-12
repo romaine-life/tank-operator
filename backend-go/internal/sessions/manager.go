@@ -347,6 +347,16 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	sessionImage := sessionmodel.ResolvedSessionImage(mode, manifestOpts)
 	sessionImageMetadata := sessionmodel.ResolvedSessionImageMetadata(mode, manifestOpts)
 
+	assignment, reserved, err := m.reserveSessionAvatars(ctx, owner, sessionID)
+	if err != nil {
+		return Info{}, err
+	}
+	if reserved && assignment.AgentAvatarID == "" {
+		return Info{}, fmt.Errorf("reserve session avatars: no agent avatars available")
+	}
+	manifestOpts.AgentAvatarID = assignment.AgentAvatarID
+	manifestOpts.SystemAvatarID = assignment.SystemAvatarID
+
 	manifest := sessionmodel.PodManifest(sessionID, owner, mode, manifestOpts)
 	raw, err := json.Marshal(manifest)
 	if err != nil {
@@ -372,13 +382,6 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 	// On pod-create failure after the registry write succeeds, we mark
 	// the row visible=false so the snapshot stops returning it. podName is
 	// resolved above (alongside storedName).
-	assignment, reserved, err := m.reserveSessionAvatars(ctx, owner, sessionID)
-	if err != nil {
-		return Info{}, err
-	}
-	if reserved && assignment.AgentAvatarID == "" {
-		return Info{}, fmt.Errorf("reserve session avatars: no agent avatars available")
-	}
 	if m.registry != nil {
 		if regErr := m.registry.Upsert(ctx, sessionmodel.SessionRecord{
 			ID:                   sessionID,

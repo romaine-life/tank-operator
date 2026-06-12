@@ -194,7 +194,7 @@ test("turn.usage records latest usage without closing the active turn", () => {
   expect(state.turnUsages["turn-1"]?.usageObservation).toEqual(usageObservation);
 });
 
-test("origin_session_id on user message flows onto ConversationMessage", () => {
+test("origin session fields on user message flow onto ConversationMessage", () => {
   // Cross-session handoff path: a sibling tank-operator session
   // (id=42) posted this turn via mcp-tank-operator. The orchestrator
   // stamps the originating id onto the event envelope so the renderer
@@ -206,11 +206,13 @@ test("origin_session_id on user message flows onto ConversationMessage", () => {
       client_nonce: "handoff-1",
       payload: { text: "fix the avatar bug" },
       origin_session_id: "42",
+      origin_session_avatar_id: "jp1-grant",
     } as Partial<TankConversationEvent>),
   ]);
 
   expect(state.messages.length).toBe(1);
   expect(state.messages[0]?.originSessionId).toBe("42");
+  expect(state.messages[0]?.originSessionAvatarId).toBe("jp1-grant");
 });
 
 test("user message without origin_session_id leaves originSessionId undefined", () => {
@@ -224,6 +226,7 @@ test("user message without origin_session_id leaves originSessionId undefined", 
 
   expect(state.messages.length).toBe(1);
   expect(state.messages[0]?.originSessionId).toBe(undefined);
+  expect(state.messages[0]?.originSessionAvatarId).toBe(undefined);
 });
 
 test("author_kind on user message flows onto ConversationMessage", () => {

@@ -226,23 +226,26 @@ func TestUserSubmissionEventMapsStampsOriginSessionID(t *testing.T) {
 	// turn looks today.
 	target := "63"
 	tests := []struct {
-		name     string
-		origin   string
-		expected string
+		name           string
+		origin         string
+		originAvatar   string
+		expected       string
+		expectedAvatar string
 	}{
-		{name: "sibling handoff", origin: "42", expected: "42"},
+		{name: "sibling handoff", origin: "42", originAvatar: "jp1-grant", expected: "42", expectedAvatar: "jp1-grant"},
 		{name: "absent origin", origin: "", expected: ""},
-		{name: "self handoff", origin: target, expected: ""},
+		{name: "self handoff", origin: target, originAvatar: "jp1-grant", expected: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			_, events, err := UserSubmissionEventMaps(UserSubmissionArgs{
-				SessionID:       target,
-				Email:           "human@example.com",
-				ClientNonce:     "nonce-1",
-				Text:            "hello",
-				Runtime:         "claude",
-				OriginSessionID: tt.origin,
+				SessionID:             target,
+				Email:                 "human@example.com",
+				ClientNonce:           "nonce-1",
+				Text:                  "hello",
+				Runtime:               "claude",
+				OriginSessionID:       tt.origin,
+				OriginSessionAvatarID: tt.originAvatar,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -254,6 +257,10 @@ func TestUserSubmissionEventMapsStampsOriginSessionID(t *testing.T) {
 				got, _ := event["origin_session_id"].(string)
 				if got != tt.expected {
 					t.Fatalf("event %q origin_session_id = %q, want %q", event["type"], got, tt.expected)
+				}
+				gotAvatar, _ := event["origin_session_avatar_id"].(string)
+				if gotAvatar != tt.expectedAvatar {
+					t.Fatalf("event %q origin_session_avatar_id = %q, want %q", event["type"], gotAvatar, tt.expectedAvatar)
 				}
 			}
 		})

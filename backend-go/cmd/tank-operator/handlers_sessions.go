@@ -228,8 +228,9 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	}
 	if body.InitialTurn != nil {
 		originSessionID := originSessionIDFromRequest(r, "")
+		originSessionAvatarID := originSessionAvatarIDFromRequest(r, "")
 		if initialTurn.Deferred {
-			if status, detail := s.persistInitialTurnUserMessage(r.Context(), owner, info.ID, initialTurn, launchTurnAt, authorKindForUser(user), originSessionID); status != 0 {
+			if status, detail := s.persistInitialTurnUserMessage(r.Context(), owner, info.ID, initialTurn, launchTurnAt, authorKindForUser(user), originSessionID, originSessionAvatarID); status != 0 {
 				s.rollbackCreatedSession(r.Context(), owner, info.ID, "persist deferred initial turn", detail)
 				writeError(w, status, detail)
 				return
@@ -263,21 +264,22 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 			}
 		} else {
 			if _, status, detail := s.enqueueSDKTurn(r.Context(), owner, info.ID, sdkTurnRequest{
-				ClientNonce:        initialTurn.ClientNonce,
-				RequireNonce:       true,
-				Prompt:             initialTurn.Prompt,
-				DisplayAttachments: initialTurn.DisplayAttachments,
-				Model:              runConfig.Model,
-				Effort:             runConfig.Effort,
-				PermissionMode:     initialTurn.PermissionMode,
-				SkillName:          initialTurn.SkillName,
-				FollowUp:           false,
-				AllowBeforeReady:   true,
-				SessionMode:        info.Mode,
-				CreatedAt:          launchTurnAt,
-				OrderBase:          launchTurnAt,
-				OriginSessionID:    originSessionID,
-				AuthorKind:         authorKindForUser(user),
+				ClientNonce:           initialTurn.ClientNonce,
+				RequireNonce:          true,
+				Prompt:                initialTurn.Prompt,
+				DisplayAttachments:    initialTurn.DisplayAttachments,
+				Model:                 runConfig.Model,
+				Effort:                runConfig.Effort,
+				PermissionMode:        initialTurn.PermissionMode,
+				SkillName:             initialTurn.SkillName,
+				FollowUp:              false,
+				AllowBeforeReady:      true,
+				SessionMode:           info.Mode,
+				CreatedAt:             launchTurnAt,
+				OrderBase:             launchTurnAt,
+				OriginSessionID:       originSessionID,
+				OriginSessionAvatarID: originSessionAvatarID,
+				AuthorKind:            authorKindForUser(user),
 			}); status != 0 {
 				s.rollbackCreatedSession(r.Context(), owner, info.ID, "submit initial turn", detail)
 				writeError(w, status, detail)
@@ -370,7 +372,7 @@ func (s *appServer) backfillProviderHealthBanner(ctx context.Context, owner stri
 	}
 }
 
-func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, sessionID string, turn createSessionInitialTurnRequest, createdAt time.Time, authorKind, originSessionID string) (int, string) {
+func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, sessionID string, turn createSessionInitialTurnRequest, createdAt time.Time, authorKind, originSessionID, originSessionAvatarID string) (int, string) {
 	info, err := s.mgr.GetByOwner(ctx, owner, sessionID)
 	if err != nil {
 		return http.StatusNotFound, "session not found"
@@ -381,18 +383,19 @@ func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, se
 	}
 	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
 	_, events, err := conversation.UserSubmissionEventMaps(conversation.UserSubmissionArgs{
-		SessionID:         sessionID,
-		SessionStorageKey: storageKey,
-		Email:             owner,
-		ClientNonce:       turn.ClientNonce,
-		Text:              turn.Prompt,
-		Message:           map[string]any{"role": "user", "content": turn.Prompt},
-		Attachments:       turn.DisplayAttachments,
-		Runtime:           runtime,
-		SkillName:         turn.SkillName,
-		OriginSessionID:   strings.TrimSpace(originSessionID),
-		AuthorKind:        strings.TrimSpace(authorKind),
-		Now:               createdAt.UTC(),
+		SessionID:             sessionID,
+		SessionStorageKey:     storageKey,
+		Email:                 owner,
+		ClientNonce:           turn.ClientNonce,
+		Text:                  turn.Prompt,
+		Message:               map[string]any{"role": "user", "content": turn.Prompt},
+		Attachments:           turn.DisplayAttachments,
+		Runtime:               runtime,
+		SkillName:             turn.SkillName,
+		OriginSessionID:       strings.TrimSpace(originSessionID),
+		OriginSessionAvatarID: strings.TrimSpace(originSessionAvatarID),
+		AuthorKind:            strings.TrimSpace(authorKind),
+		Now:                   createdAt.UTC(),
 	})
 	if err != nil {
 		return http.StatusBadRequest, err.Error()
@@ -938,13 +941,14 @@ func (s *appServer) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	owner := user.OwnerEmail()
 	resp, status, detail := s.enqueueSDKTurn(r.Context(), owner, sessionID, sdkTurnRequest{
-		Prompt:          body.Prompt,
-		Model:           body.Model,
-		PermissionMode:  body.PermissionMode,
-		SkillName:       body.SkillName,
-		FollowUp:        true,
-		OriginSessionID: originSessionIDFromRequest(r, ""),
-		AuthorKind:      authorKindForUser(user),
+		Prompt:                body.Prompt,
+		Model:                 body.Model,
+		PermissionMode:        body.PermissionMode,
+		SkillName:             body.SkillName,
+		FollowUp:              true,
+		OriginSessionID:       originSessionIDFromRequest(r, ""),
+		OriginSessionAvatarID: originSessionAvatarIDFromRequest(r, ""),
+		AuthorKind:            authorKindForUser(user),
 	})
 	if detail != "" {
 		writeError(w, status, detail)

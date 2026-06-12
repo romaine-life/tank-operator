@@ -775,7 +775,7 @@ func TestCreateSessionInitialTurnFailureRollsBackCreatedPod(t *testing.T) {
 func TestEnqueueSessionTurnStampsOriginSessionID(t *testing.T) {
 	bus := &recordingSessionBus{}
 	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
-	body := `{"client_nonce":"turn-origin","prompt":"forked prompt","origin_session_id":"42"}`
+	body := `{"client_nonce":"turn-origin","prompt":"forked prompt","origin_session_id":"42","origin_session_avatar_id":"jp1-grant"}`
 	req := authedTurnRequest(t, "63", body)
 	resp := httptest.NewRecorder()
 
@@ -792,6 +792,9 @@ func TestEnqueueSessionTurnStampsOriginSessionID(t *testing.T) {
 		if got, _ := event["origin_session_id"].(string); got != "42" {
 			t.Fatalf("event %q origin_session_id = %q, want 42", event["type"], got)
 		}
+		if got, _ := event["origin_session_avatar_id"].(string); got != "jp1-grant" {
+			t.Fatalf("event %q origin_session_avatar_id = %q, want jp1-grant", event["type"], got)
+		}
 	}
 }
 
@@ -801,6 +804,7 @@ func TestEnqueueSessionTurnFallsBackToOriginSessionHeader(t *testing.T) {
 	body := `{"client_nonce":"turn-origin-header","prompt":"forked prompt"}`
 	req := authedTurnRequest(t, "63", body)
 	req.Header.Set(originSessionHeader, "42")
+	req.Header.Set(originSessionAvatarHeader, "jp1-grant")
 	resp := httptest.NewRecorder()
 
 	app.handleEnqueueSessionTurn(resp, req)
@@ -815,6 +819,9 @@ func TestEnqueueSessionTurnFallsBackToOriginSessionHeader(t *testing.T) {
 	for _, event := range es.upserts {
 		if got, _ := event["origin_session_id"].(string); got != "42" {
 			t.Fatalf("event %q origin_session_id = %q, want 42", event["type"], got)
+		}
+		if got, _ := event["origin_session_avatar_id"].(string); got != "jp1-grant" {
+			t.Fatalf("event %q origin_session_avatar_id = %q, want jp1-grant", event["type"], got)
 		}
 	}
 }

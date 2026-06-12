@@ -365,8 +365,10 @@ type ManifestOptions struct {
 	NATSAuthSecret string
 	// Model/Effort are the immutable session-owned SDK run configuration
 	// accepted at create time.
-	Model  string
-	Effort string
+	Model          string
+	Effort         string
+	AgentAvatarID  string
+	SystemAvatarID string
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
 	// Repos is the validated owner/name slug list selected at session
@@ -923,6 +925,14 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				},
 			},
 		},
+		map[string]any{
+			"name": "AGENT_AVATAR_ID",
+			"valueFrom": map[string]any{
+				"fieldRef": map[string]any{
+					"fieldPath": "metadata.annotations['tank-operator/agent-avatar-id']",
+				},
+			},
+		},
 	}
 	if spireLensMCPEnabled {
 		mcpProxyEnv = append(mcpProxyEnv,
@@ -1320,6 +1330,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"tank-operator/owner-email":      owner,
 		"tank-operator/session-id":       sessionID,
 		"argocd.argoproj.io/tracking-id": argoTrackingID,
+	}
+	if opts.AgentAvatarID != "" {
+		annotations["tank-operator/agent-avatar-id"] = opts.AgentAvatarID
+	}
+	if opts.SystemAvatarID != "" {
+		annotations["tank-operator/system-avatar-id"] = opts.SystemAvatarID
 	}
 	if len(opts.Capabilities) > 0 {
 		raw, _ := json.Marshal(opts.Capabilities)

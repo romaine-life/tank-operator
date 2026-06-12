@@ -39,9 +39,10 @@ export interface ConversationMessage {
   // Originating tank-operator session id for user messages authored by
   // a sibling session via the mcp-tank-operator send_prompt /
   // spawn_run_session handoff path. The renderer treats this as an
-  // agent-authored signal, but avatar identity still has to come from a
-  // durable assigned avatar id rather than a client-side hash.
+  // agent-authored signal, but avatar identity comes from
+  // originSessionAvatarId or a loaded session row, not a client-side hash.
   originSessionId?: string;
+  originSessionAvatarId?: string;
   // Authorship attribution for user-role messages submitted by a
   // non-interactive principal (an auth.romaine.life bot token). "system"
   // tells the renderer to draw the session's system identity instead of the
@@ -515,6 +516,7 @@ function applyUserMessage(
   if (!event.timeline_id || !event.turn_id || !event.client_nonce || !text)
     return state;
   const originSessionId = stringTopLevel(event, "origin_session_id");
+  const originSessionAvatarId = stringTopLevel(event, "origin_session_avatar_id");
   const authorKind = stringTopLevel(event, "author_kind");
   const message: ConversationMessage = {
     id: event.timeline_id,
@@ -528,6 +530,7 @@ function applyUserMessage(
     sourceEventId: event.event_id,
     createdAt: event.created_at,
     ...(originSessionId ? { originSessionId } : {}),
+    ...(originSessionAvatarId ? { originSessionAvatarId } : {}),
     ...(authorKind ? { authorKind } : {}),
   };
   return {

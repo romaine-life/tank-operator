@@ -392,6 +392,9 @@ func projectUserMessageEvent(event map[string]any) map[string]any {
 	if origin := transcriptString(event, "origin_session_id"); origin != "" {
 		entry["originSessionId"] = origin
 	}
+	if originAvatar := transcriptString(event, "origin_session_avatar_id"); originAvatar != "" {
+		entry["originSessionAvatarId"] = originAvatar
+	}
 	// author_kind marks a turn authored by a non-interactive principal (a
 	// bot token). The renderer maps it to the session's system identity so
 	// the user bubble does not borrow the human owner's Gravatar.
