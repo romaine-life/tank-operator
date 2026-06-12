@@ -61,6 +61,7 @@ export interface SessionRow {
   mode: string;
   session_scope: string;
   pod_name?: string;
+  session_image?: string;
   // Server-canonical session title, always present (non-null) on the wire.
   // The trimmed user-set name when set, else a backend-derived short id
   // slug. The SPA renders this verbatim rather than deriving a local
@@ -513,6 +514,7 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
       mode: stringField(rowRaw, "mode") ?? "",
       session_scope: sessionScope,
       pod_name: stringField(rowRaw, "pod_name") ?? undefined,
+      session_image: stringField(rowRaw, "session_image") ?? undefined,
       name,
       visible,
       status: stringField(rowRaw, "status") ?? "Pending",

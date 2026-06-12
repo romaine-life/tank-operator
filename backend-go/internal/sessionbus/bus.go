@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
-	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -52,7 +52,12 @@ func (noopConnectionMetrics) RecordReconnect()  {}
 func (noopConnectionMetrics) RecordAsyncError() {}
 
 type EventStore interface {
-	Upsert(context.Context, map[string]any) error
+	// Upsert writes one event row and reports whether it was newly
+	// inserted. False means the (tank_session_id, order_key) row already
+	// existed — an at-least-once redelivery or producer republish — and
+	// the persister skips duplicate side effects (per-event counters,
+	// lifecycle emit) while still refreshing the projection.
+	Upsert(context.Context, map[string]any) (bool, error)
 }
 
 // LifecycleEmitter is the hook the persister calls after a successful
@@ -114,6 +119,49 @@ type PersisterMetrics interface {
 	// Missing nonce is therefore a producer contract violation that must be
 	// visible even when no browser is open.
 	RecordTurnTerminalMissingClientNonce(source string, eventType string)
+	// RecordDuplicatePersisted increments when an upsert reports the row
+	// already existed — an at-least-once redelivery or producer republish.
+	// Sustained nonzero rate means messages are outliving AckWait or a
+	// producer is double-publishing; pairs with RecordRedelivered.
+	RecordDuplicatePersisted()
+	// RecordRedelivered increments when a consumed message's NumDelivered
+	// exceeds 1. The 2026-06-11 incident ground both replicas over the
+	// same messages invisibly; this counter is that failure mode's direct
+	// signal.
+	RecordRedelivered()
+	// RecordPersistPhaseDuration observes one batch's wall time in a
+	// phase, "upsert" (ledger writes) or "refresh" (transcript-row
+	// projection). The incident's 10s-per-event projection cost would
+	// have been attributable from this split alone.
+	RecordPersistPhaseDuration(phase string, seconds float64)
+	// RecordPersistBatchSize observes how many events one coalesced batch
+	// carried. Large sustained batches mean the persister is draining a
+	// backlog.
+	RecordPersistBatchSize(n int)
+	// RecordProcessedEventAge sets the lag gauge: age (producer wall
+	// clock) of the newest event in the last completed batch. This is the
+	// user-trust number — "transcripts are N seconds behind".
+	RecordProcessedEventAge(seconds float64)
+	// RecordExhaustedRepair counts MAX_DELIVERIES advisory outcomes:
+	// "repaired" (the event row exists after out-of-band persistence) or
+	// "failed" (a durable ledger hole; pages).
+	RecordExhaustedRepair(outcome string)
+	// RecordStreamTruncationGap adds the number of stream sequences the
+	// retention policy discarded past the persister's ack floor — events
+	// lost before persistence, unrepairable, counted per the four-outcome
+	// contract.
+	RecordStreamTruncationGap(missing float64)
+	// RecordReconcilerRepairedHole increments per event the startup
+	// reconciler persisted that no delivery would ever have retried.
+	RecordReconcilerRepairedHole()
+	// RecordPersisterConsumerLag sets the sampled consumer gauges:
+	// undelivered backlog and in-flight unacked counts, read from
+	// JetStream consumer state — deliberately not from Postgres, so the
+	// signal survives the persister itself failing.
+	RecordPersisterConsumerLag(pending float64, ackPending float64)
+	// RecordPersisterQueueDepth sets the sampled in-process queue gauge
+	// (messages routed to per-session queues, not yet processed).
+	RecordPersisterQueueDepth(depth int)
 }
 
 type noopPersisterMetrics struct{}
@@ -124,6 +172,17 @@ func (noopPersisterMetrics) RecordTurnFailurePersisted(string, string) {}
 func (noopPersisterMetrics) RecordTurnLifecyclePersisted(string)       {}
 func (noopPersisterMetrics) RecordTurnTerminalMissingClientNonce(string, string) {
 }
+func (noopPersisterMetrics) RecordDuplicatePersisted()                  {}
+func (noopPersisterMetrics) RecordRedelivered()                         {}
+func (noopPersisterMetrics) RecordPersistPhaseDuration(string, float64) {}
+func (noopPersisterMetrics) RecordPersistBatchSize(int)                 {}
+func (noopPersisterMetrics) RecordProcessedEventAge(float64)            {}
+func (noopPersisterMetrics) RecordExhaustedRepair(string)               {}
+func (noopPersisterMetrics) RecordStreamTruncationGap(float64)          {}
+func (noopPersisterMetrics) RecordReconcilerRepairedHole()              {}
+func (noopPersisterMetrics) RecordPersisterConsumerLag(float64, float64) {
+}
+func (noopPersisterMetrics) RecordPersisterQueueDepth(int) {}
 
 // WakeMetrics receives counters for wake/event publish failures, the
 // success path, and the end-to-end persist→wake latency. The bus
@@ -187,6 +246,9 @@ type Bus struct {
 	replicas    int
 	wakeMetrics WakeMetrics
 	lifecycle   LifecycleEmitter
+
+	persistMu sync.Mutex
+	persist   *persistDispatcher
 }
 
 // SetLifecycleEmitter wires the chat→activity-delta hook the persister
@@ -580,185 +642,6 @@ func (b *Bus) SubscribeWakesForStorageKey(ctx context.Context, sessionStorageKey
 	return ch, unsubscribe, nil
 }
 
-func (b *Bus) RunEventPersister(ctx context.Context, store EventStore, metrics PersisterMetrics) error {
-	if b == nil {
-		return fmt.Errorf("session bus unavailable")
-	}
-	if metrics == nil {
-		metrics = noopPersisterMetrics{}
-	}
-	consumer, err := b.js.CreateOrUpdateConsumer(ctx, b.stream, jetstream.ConsumerConfig{
-		Name:          EventPersisterConsumerName(b.scope),
-		Durable:       EventPersisterConsumerName(b.scope),
-		Description:   "Persists session bus events to the Postgres session_events ledger",
-		DeliverPolicy: jetstream.DeliverAllPolicy,
-		AckPolicy:     jetstream.AckExplicitPolicy,
-		AckWait:       60 * time.Second,
-		MaxDeliver:    20,
-		MaxAckPending: 200,
-		FilterSubject: EventSubjectFilter(b.scope),
-	})
-	if err != nil {
-		return err
-	}
-	consumeCtx, err := consumer.Consume(func(msg jetstream.Msg) {
-		b.handlePersistMessage(ctx, store, metrics, msg)
-	})
-	if err != nil {
-		return err
-	}
-	<-ctx.Done()
-	consumeCtx.Drain()
-	<-consumeCtx.Closed()
-	return nil
-}
-
-// persistableMessage is the narrow ack/term/data surface of jetstream.Msg
-// used by handlePersistMessage. Defined here so unit tests can supply a
-// stub without spinning up an in-process NATS server.
-type persistableMessage interface {
-	Subject() string
-	Data() []byte
-	Ack() error
-	NakWithDelay(delay time.Duration) error
-	TermWithReason(reason string) error
-}
-
-// handlePersistMessage routes one bus message through the store and acks /
-// NAKs / terminates based on the outcome.
-func (b *Bus) handlePersistMessage(ctx context.Context, store EventStore, metrics PersisterMetrics, msg persistableMessage) {
-	err := b.persistOneEvent(ctx, store, metrics, msg)
-	if err == nil {
-		if ackErr := msg.Ack(); ackErr != nil {
-			slog.Warn("session bus event ack failed", "subject", msg.Subject(), "error", ackErr)
-		}
-		return
-	}
-	// Schema rejection is permanent — a retry would fail the same way.
-	// Terminate the message so it doesn't burn 20 redeliveries + 200
-	// ack-pending slots on something the persister can never accept.
-	// The metric makes the producer-side regression visible.
-	var schemaErr *conversation.SchemaError
-	if errors.As(err, &schemaErr) {
-		metrics.RecordSchemaRejected()
-		slog.Warn("session bus event terminated: schema rejected",
-			"subject", msg.Subject(),
-			"error", schemaErr.Error(),
-			"event_type", eventTypeForLog(msg.Data()),
-		)
-		_ = msg.TermWithReason("schema rejected: " + schemaErr.Error())
-		return
-	}
-	metrics.RecordTransientFailure()
-	slog.Warn("session bus event persist failed",
-		"subject", msg.Subject(),
-		"error", err,
-	)
-	_ = msg.NakWithDelay(5 * time.Second)
-}
-
-// persistOneEvent unmarshals + upserts + wakes for one message. Mirrors
-// persistEventMessage but takes the narrow persistableMessage interface so
-// it can be unit-tested without a live NATS server.
-//
-// After the chat event is durably stored and the per-session wake has
-// fired, the lifecycle emitter hook gets a chance to derive a
-// session.activity_changed sidebar delta. An emitter error is logged but
-// does not cause the persister to NAK — the chat event is already
-// durable, and the sidebar will catch up via cursor-resume on the next
-// SSE reconnect.
-func (b *Bus) persistOneEvent(ctx context.Context, store EventStore, metrics PersisterMetrics, msg persistableMessage) error {
-	var event map[string]any
-	if err := json.Unmarshal(msg.Data(), &event); err != nil {
-		// Invalid JSON is a producer-side bug that can never succeed on
-		// retry. Surface it as a schema rejection so handlePersistMessage
-		// terminates the message AND increments the producer-regression
-		// counter — without this, an encoding bug at the producer would
-		// silently terminate forever with no alert.
-		return &conversation.SchemaError{Cause: fmt.Errorf("invalid json: %w", err)}
-	}
-	if store == nil {
-		return fmt.Errorf("session event store unavailable")
-	}
-	if err := store.Upsert(ctx, event); err != nil {
-		return err
-	}
-	eventType, _ := event["type"].(string)
-	// Record turn-failure persistence right after the durable write
-	// commits. This is the observability surface that replaced the SPA
-	// run-status pill: with the pill gone, "every codex_gui session is
-	// failing" must be visible from outside the browser (Grafana / alert
-	// rules), not by looking at the pill turn red. The reason label comes
-	// from payload.reason so a Codex auth storm vs a generic
-	// provider_failure spike are distinguishable; the source label
-	// (claude/codex/tank) lets per-provider alerts fire independently.
-	if eventType == string(conversation.EventTurnFailed) || eventType == string(conversation.EventTurnCommandFailed) {
-		source, _ := event["source"].(string)
-		reason := ""
-		if payload, ok := event["payload"].(map[string]any); ok {
-			reason, _ = payload["reason"].(string)
-		}
-		if source == "" {
-			source = "unknown"
-		}
-		if reason == "" {
-			reason = "unknown"
-		}
-		metrics.RecordTurnFailurePersisted(source, reason)
-	}
-	// Silent-stranding surface: count the five lifecycle types that bound
-	// a turn (turn.submitted + the four terminal types). The
-	// TankTurnSilentStranding alert reads from the divergence between
-	// submitted and terminal counts. Filter at the call boundary so the
-	// interface contract is "this is a lifecycle event" — the impl just
-	// records.
-	if conversation.IsTurnLifecycleEvent(conversation.EventType(eventType)) {
-		metrics.RecordTurnLifecyclePersisted(eventType)
-	}
-	if conversation.IsTurnTerminalEvent(conversation.EventType(eventType)) && strings.TrimSpace(stringField(event, "client_nonce")) == "" {
-		source := strings.TrimSpace(stringField(event, "source"))
-		if source == "" {
-			source = "unknown"
-		}
-		metrics.RecordTurnTerminalMissingClientNonce(source, eventType)
-	}
-	upsertedAt := time.Now()
-	storageKey, _ := event["tank_session_id"].(string)
-	if storageKey == "" {
-		sessionID, _ := event["session_id"].(string)
-		storageKey = sessionmodel.SessionStorageKey(b.scope, sessionID)
-	}
-	if storageKey != "" && b.nc != nil {
-		subject := WakeSubject(storageKey)
-		if err := b.nc.Publish(subject, nil); err != nil {
-			return err
-		}
-		// Success path: record both the one-per-event published counter and
-		// the persist→wake latency. The latency histogram catches the "we
-		// publish but something between Upsert and Publish is slow" tail
-		// (cancelled context, slow NATS flush) that would otherwise be
-		// invisible to the existing failure counter.
-		b.wakeMetrics.RecordSessionEventWakePublished()
-		b.wakeMetrics.RecordSessionEventPersistToWakeDuration(time.Since(upsertedAt).Seconds())
-		slog.Info("session event persister wake published",
-			"subject", subject,
-			"storage_key", storageKey,
-			"event_type", stringField(event, "type"),
-			"order_key", stringField(event, "order_key"),
-			"tank_session_id", stringField(event, "tank_session_id"),
-		)
-	}
-	if b.lifecycle != nil {
-		if err := b.lifecycle.EmitChatActivityDelta(ctx, event); err != nil {
-			slog.Warn("lifecycle activity-delta emit failed",
-				"subject", msg.Subject(),
-				"error", err,
-			)
-		}
-	}
-	return nil
-}
-
 // stringField is a defensive accessor for the persister's slog lines.
 // Returns "" instead of panicking when the field is missing or not a
 // string — the persister already validates schema, so this is purely
@@ -769,16 +652,6 @@ func stringField(event map[string]any, key string) string {
 	}
 	v, _ := event[key].(string)
 	return v
-}
-
-func eventTypeForLog(data []byte) string {
-	var probe struct {
-		Type string `json:"type"`
-	}
-	if err := json.Unmarshal(data, &probe); err != nil {
-		return ""
-	}
-	return probe.Type
 }
 
 func (b *Bus) ensureStream(ctx context.Context) error {

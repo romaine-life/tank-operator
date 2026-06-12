@@ -70,14 +70,14 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 	// Determine the effective visible value (default true if unset).
 	visible := record.Visible
 
-	// `repos` and `capabilities` are written on INSERT (the user's selection at
-	// create time) and intentionally NOT overwritten on conflict — the row
-	// is owned by the create call; subsequent manager updates
-	// (SetName, mark-deleted, lifecycle row writes) must not stomp
-	// the selection. `clone_state` is not touched here at all; the
-	// repo-cloner init container writes it via its own service-principal
-	// path. Empty slice serializes to `{}` which
-	// matches the schema default.
+	// `repos`, `capabilities`, and `session_image` are written on INSERT (the
+	// user's selection and the resolved pod image at create time) and
+	// intentionally NOT overwritten on conflict — the row is owned by the create
+	// call; subsequent manager updates (SetName, mark-deleted, lifecycle row
+	// writes) must not stomp the selection. `clone_state` is not touched here at
+	// all; the repo-cloner init container writes it via its own
+	// service-principal path. Empty slice serializes to `{}` which matches the
+	// schema default.
 	repos := record.Repos
 	if repos == nil {
 		repos = []string{}
@@ -90,15 +90,15 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 	const q = `
 		INSERT INTO sessions (
 			email, session_scope, session_id,
-			mode, pod_name, name, visible,
+			mode, pod_name, name, visible, session_image,
 			requested_at, created_at, updated_at,
 			status, ready_at,
 			repos, capabilities, model, effort, agent_avatar_id, system_avatar_id, sidebar_position
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7,
-			$8, COALESCE($9, now()), $10,
-			COALESCE(NULLIF($11, ''), 'Pending'), $12,
-			$13, $14, $15, $16, NULLIF($17, ''), NULLIF($18, ''), COALESCE(NULLIF($19, 0), nextval('sessions_row_version_seq'))
+			$1, $2, $3, $4, $5, $6, $7, $8,
+			$9, COALESCE($10, now()), $11,
+			COALESCE(NULLIF($12, ''), 'Pending'), $13,
+			$14, $15, $16, $17, NULLIF($18, ''), NULLIF($19, ''), COALESCE(NULLIF($20, 0), nextval('sessions_row_version_seq'))
 		)
 		ON CONFLICT (email, session_scope, session_id) DO UPDATE
 		SET mode         = EXCLUDED.mode,
@@ -107,7 +107,7 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 			visible      = EXCLUDED.visible,
 			requested_at = COALESCE(EXCLUDED.requested_at, sessions.requested_at),
 			status       = CASE
-				WHEN NULLIF($11, '') IS NULL THEN sessions.status
+				WHEN NULLIF($12, '') IS NULL THEN sessions.status
 				ELSE EXCLUDED.status
 			END,
 			ready_at     = COALESCE(EXCLUDED.ready_at, sessions.ready_at),
@@ -124,6 +124,7 @@ func (s *Store) Upsert(ctx context.Context, record sessionmodel.SessionRecord) e
 		record.PodName,
 		record.Name,
 		visible,
+		strings.TrimSpace(record.SessionImage),
 		nullableTimestamp(requestedAt),
 		nullableTimestamp(createdAt),
 		updatedAt,
@@ -242,7 +243,7 @@ func (s *Store) SetName(ctx context.Context, email, sessionID string, name *stri
 }
 
 // SetOpenTarget records the legacy durable per-session sidebar open-target
-// preference ('' / 'chat' / 'turns'). Like SetName, missing-session is a no-op
+// preference (empty string / 'chat' / 'turns'). Like SetName, missing-session is a no-op
 // and the row_version bump keeps the row-update cursor advancing so open tabs
 // converge. Validation lives in the handler; this just persists the
 // already-checked value.
@@ -418,7 +419,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		return sessionmodel.SessionRecord{}, false, nil
 	}
 	const q = `
-		SELECT sessions.mode, sessions.pod_name, sessions.name, sessions.visible,
+		SELECT sessions.mode, sessions.pod_name, sessions.name, sessions.visible, sessions.session_image,
 			COALESCE(to_char(sessions.requested_at   AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS requested_at,
 			COALESCE(to_char(sessions.created_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS created_at,
 			COALESCE(to_char(sessions.updated_at     AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS updated_at,
@@ -477,26 +478,26 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		WHERE sessions.email = $1 AND sessions.session_scope = $2 AND sessions.session_id = $3
 	`
 	var (
-		mode, podName, requestedAt, createdAt, updatedAt              string
-		status, readyAt, terminatingAt                                string
-		name                                                          string
-		visible                                                       bool
-		activitySummary, testState, rolloutState, cloneState          []byte
-		providerRateLimitInfo                                         []byte
-		repos, capabilities                                           []string
-		model, effort, runtimeModel, runtimeEffort, runtimeAt         string
-		runtimeContextWindowSource, runtimeContextWindowAt            string
-		providerRateLimitObservedAt                                   string
-		openTarget                                                    string
-		agentAvatarID, systemAvatarID                                 string
-		runtimeContextWindowTokens, compactionCount, userMessageCount int64
-		sidebarPosition, rowVersion                                   int64
-		bugLabelID                                                    sql.NullInt64
-		bugLabelName, bugLabelSlug                                    sql.NullString
-		bugLabelsRaw                                                  []byte
+		mode, podName, sessionImage, requestedAt, createdAt, updatedAt string
+		status, readyAt, terminatingAt                                 string
+		name                                                           string
+		visible                                                        bool
+		activitySummary, testState, rolloutState, cloneState           []byte
+		providerRateLimitInfo                                          []byte
+		repos, capabilities                                            []string
+		model, effort, runtimeModel, runtimeEffort, runtimeAt          string
+		runtimeContextWindowSource, runtimeContextWindowAt             string
+		providerRateLimitObservedAt                                    string
+		openTarget                                                     string
+		agentAvatarID, systemAvatarID                                  string
+		runtimeContextWindowTokens, compactionCount, userMessageCount  int64
+		sidebarPosition, rowVersion                                    int64
+		bugLabelID                                                     sql.NullInt64
+		bugLabelName, bugLabelSlug                                     sql.NullString
+		bugLabelsRaw                                                   []byte
 	)
 	err := s.pool.QueryRow(ctx, q, normalized, s.scope, sessionID).Scan(
-		&mode, &podName, &name, &visible,
+		&mode, &podName, &name, &visible, &sessionImage,
 		&requestedAt, &createdAt, &updatedAt,
 		&status, &readyAt, &terminatingAt,
 		&activitySummary, &testState, &rolloutState,
@@ -530,6 +531,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		Mode:                           mode,
 		Scope:                          s.scope,
 		PodName:                        podName,
+		SessionImage:                   sessionImage,
 		Name:                           name,
 		Visible:                        visible,
 		RequestedAt:                    requestedAt,

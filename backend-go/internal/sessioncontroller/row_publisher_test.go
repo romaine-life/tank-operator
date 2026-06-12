@@ -85,6 +85,36 @@ func TestMarshalRowUpdateIncludesName(t *testing.T) {
 	}
 }
 
+func TestMarshalRowUpdateIncludesSessionImage(t *testing.T) {
+	payload, err := MarshalRowUpdate(sessionmodel.SessionRecord{
+		ID:           "42",
+		Email:        "user@example.com",
+		Mode:         sessionmodel.CodexGUIMode,
+		Scope:        "tank-operator-slot-1",
+		PodName:      "session-42",
+		Name:         "42",
+		SessionImage: "romainecr.azurecr.io/codex-container:codex-BRANCH",
+		Visible:      true,
+		Status:       "Active",
+		Repos:        []string{},
+		Capabilities: []string{},
+	})
+	if err != nil {
+		t.Fatalf("MarshalRowUpdate: %v", err)
+	}
+	var decoded struct {
+		Row struct {
+			SessionImage string `json:"session_image"`
+		} `json:"row"`
+	}
+	if err := json.Unmarshal(payload, &decoded); err != nil {
+		t.Fatalf("unmarshal row payload: %v", err)
+	}
+	if got, want := decoded.Row.SessionImage, "romainecr.azurecr.io/codex-container:codex-BRANCH"; got != want {
+		t.Fatalf("session_image = %q, want %q", got, want)
+	}
+}
+
 func TestPublishCurrentRowWakesTranscriptStream(t *testing.T) {
 	publisher := &recordingRowPublisher{}
 	rowPublisher := &RowPublisher{

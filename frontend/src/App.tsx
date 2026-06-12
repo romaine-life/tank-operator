@@ -112,7 +112,13 @@ import {
   CalendarIcon,
   CheckIcon,
   ChevronDownIcon,
+  ChevronFirstIcon,
+  ChevronLastIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ChevronUpIcon,
+  ChevronsLeftIcon,
+  ChevronsRightIcon,
   ClipboardListIcon,
   Code2Icon,
   CopyIcon,
@@ -751,6 +757,7 @@ interface Session {
   owner: string;
   status: string;
   mode: SessionMode;
+  session_image?: string;
   requested_at: string | null;
   created_at: string | null;
   ready_at: string | null;
@@ -1375,6 +1382,8 @@ function normalizeSession(session: Session): Session {
   // rows, older snapshots) without re-deriving a client-side slug.
   next.name =
     typeof session.name === "string" && session.name ? session.name : "";
+  next.session_image =
+    typeof session.session_image === "string" ? session.session_image : "";
   // Defend against degraded snapshots (older server, infoFromPod
   // fallback, hand-rolled JSON in tests): repos must always be an
   // array so downstream renderers can `.map` without a guard.
@@ -1556,6 +1565,21 @@ interface AdminObservabilityAlert {
   active_at?: string;
 }
 
+interface AdminVersionImage {
+  image: string;
+  tag?: string;
+}
+
+interface AdminAppVersion {
+  app_image: AdminVersionImage;
+  session_image: AdminVersionImage;
+  codex_session_image: AdminVersionImage;
+  antigravity_session_image: AdminVersionImage;
+  session_scope: string;
+  pod_name?: string;
+  fetched_at: string;
+}
+
 interface AdminSettingsControls {
   visible: boolean;
   canViewProdSessions: boolean;
@@ -1568,7 +1592,13 @@ interface AdminSettingsControls {
     loading: boolean;
     error: string | null;
   };
+  version: {
+    summary: AdminAppVersion | null;
+    loading: boolean;
+    error: string | null;
+  };
   onRefreshObservability: () => void;
+  onRefreshVersion: () => void;
   onAvatarCatalogChanged: () => Promise<void>;
   onViewingProdSessionsChange: (value: boolean) => void;
 }
@@ -9903,6 +9933,7 @@ function normalizeTurnActivityPageDirectory(
 type TurnActivityPageOptionParts = {
   pageLabel: string;
   semanticLabel: string;
+  isQuestion: boolean;
   textValue: string;
 };
 
@@ -9912,7 +9943,9 @@ function turnActivityPageOptionParts(
 ): TurnActivityPageOptionParts {
   const pageLabel = `Page ${pageNumber}`;
   let semanticLabel = "Activity";
+  let isQuestion = false;
   if (directoryItem?.kind === "question") {
+    isQuestion = true;
     if (directoryItem.questionIndex && directoryItem.questionCount) {
       semanticLabel = `Question ${directoryItem.questionIndex} of ${directoryItem.questionCount}`;
     } else {
@@ -9922,23 +9955,9 @@ function turnActivityPageOptionParts(
   return {
     pageLabel,
     semanticLabel,
+    isQuestion,
     textValue: `${pageLabel} ${semanticLabel}`,
   };
-}
-
-function TurnActivityPageOptionLabel({
-  parts,
-}: {
-  parts: TurnActivityPageOptionParts;
-}) {
-  return (
-    <span className="run-turn-view-page-option">
-      <span className="run-turn-view-page-option-index">{parts.pageLabel}</span>
-      <span className="run-turn-view-page-option-label">
-        {parts.semanticLabel}
-      </span>
-    </span>
-  );
 }
 
 type TurnViewItem = {
@@ -9986,22 +10005,30 @@ type TurnActivityLoadResult = {
   pageInfo?: TurnActivityPageInfo;
 };
 
+type CombinedDropdownEntry = {
+  key: string;
+  turnId: string;
+  turnIndex: number;
+  turnLabel: string;
+  pageNumber: number;
+  pageCount: number;
+  directoryItem?: TurnActivityPageDirectoryItem;
+};
+
 function RunTurnViewControls({
   turns,
   selectedTurnId,
   turnActivityLoadsByTurn,
   statsExpanded,
   onStatsExpandedChange,
-  onSelectTurn,
-  onActivitySelectPage,
+  onNavigate,
 }: {
   turns: TurnViewItem[];
   selectedTurnId: string | null;
   turnActivityLoadsByTurn: TurnActivityLoadStateByTurn;
   statsExpanded: boolean;
   onStatsExpandedChange: (expanded: boolean) => void;
-  onSelectTurn: (turnId: string) => void;
-  onActivitySelectPage: (turnId: string, page: number) => void;
+  onNavigate: (turnId: string, page: number) => void;
 }) {
   const selected =
     turns.find((turn) => turn.turnId === selectedTurnId) ??
@@ -10013,171 +10040,293 @@ function RunTurnViewControls({
   const selectedSnapshot = turnActivityLoadVisibleSnapshot(selectedLoadState);
   const selectedPageInfo = selectedSnapshot?.pageInfo;
   const pagerState = turnActivityPagerState(selectedPageInfo);
-  const turnIds = useMemo(() => turns.map((turn) => turn.turnId), [turns]);
-  const turnNav = useMemo(
-    () => turnViewTurnNavigation(turnIds, selected?.turnId ?? null),
-    [turnIds, selected?.turnId],
-  );
-  const pageSelectParts = turnActivityPageOptionParts(
-    pagerState.page,
-    selectedPageInfo?.pages?.find((page) => page.number === pagerState.page),
-  );
-  const pageCount = pagerState.visible ? pagerState.pageCount : 1;
-  const pageDisabledReason = !selected
-    ? "No turn selected"
-    : !pagerState.visible
-      ? "Activity pages are loading"
+
+  const combinedEntries = useMemo(() => {
+    const entries: CombinedDropdownEntry[] = [];
+    turns.forEach((turn, turnIndex) => {
+      const loadState = turnActivityLoadsByTurn[turn.turnId];
+      const snapshot = turnActivityLoadVisibleSnapshot(loadState);
+      const pageInfo = snapshot?.pageInfo;
+      const pageCount =
+        pageInfo?.pageCount && pageInfo.pageCount > 0 ? pageInfo.pageCount : 1;
+      for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+        const directoryItem = pageInfo?.pages?.find(
+          (page) => page.number === pageNumber,
+        );
+        entries.push({
+          key: `${turn.turnId}:${pageNumber}`,
+          turnId: turn.turnId,
+          turnIndex,
+          turnLabel: turn.label,
+          pageNumber,
+          pageCount,
+          directoryItem,
+        });
+      }
+    });
+    return entries;
+  }, [turns, turnActivityLoadsByTurn]);
+
+  const selectedKey = selected ? `${selected.turnId}:${pagerState.page}` : "";
+  const selectedEntry = useMemo(() => {
+    return (
+      combinedEntries.find((entry) => entry.key === selectedKey) ??
+      combinedEntries[combinedEntries.length - 1] ??
+      null
+    );
+  }, [combinedEntries, selectedKey]);
+  const selectedEntryParts = selectedEntry
+    ? turnActivityPageOptionParts(
+        selectedEntry.pageNumber,
+        selectedEntry.directoryItem,
+      )
+    : null;
+
+  const prevTurnStartEntry = useMemo(() => {
+    if (!selectedEntry || combinedEntries.length === 0) return null;
+    if (selectedEntry.pageNumber > 1) {
+      return (
+        combinedEntries.find(
+          (entry) =>
+            entry.turnId === selectedEntry.turnId && entry.pageNumber === 1,
+        ) ?? null
+      );
+    }
+    return (
+      combinedEntries.find(
+        (entry) =>
+          entry.turnIndex === selectedEntry.turnIndex - 1 &&
+          entry.pageNumber === 1,
+      ) ?? null
+    );
+  }, [combinedEntries, selectedEntry]);
+
+  const prevPageEntry = useMemo(() => {
+    if (!selectedEntry || combinedEntries.length === 0) return null;
+    const idx = combinedEntries.findIndex(
+      (entry) => entry.key === selectedEntry.key,
+    );
+    return idx > 0 ? combinedEntries[idx - 1] : null;
+  }, [combinedEntries, selectedEntry]);
+
+  const nextPageEntry = useMemo(() => {
+    if (!selectedEntry || combinedEntries.length === 0) return null;
+    const idx = combinedEntries.findIndex(
+      (entry) => entry.key === selectedEntry.key,
+    );
+    return idx >= 0 && idx < combinedEntries.length - 1
+      ? combinedEntries[idx + 1]
       : null;
-  const pageSelectDisabled =
-    pageDisabledReason != null || pagerState.pageCount <= 1;
-  const pageSelectTitle =
-    pageDisabledReason ??
-    (pagerState.pageCount <= 1
-      ? "Only one activity page is available"
-      : "Select activity page");
-  const pageButtonTitle = (
-    enabled: boolean,
-    enabledTitle: string,
-    boundaryTitle: string,
-  ) => pageDisabledReason ?? (enabled ? enabledTitle : boundaryTitle);
-  const turnDisabledReason =
-    turns.length === 0 ? "No turns are available yet" : null;
-  const turnButtonTitle = (
-    enabled: boolean,
-    enabledTitle: string,
-    boundaryTitle: string,
-  ) => turnDisabledReason ?? (enabled ? enabledTitle : boundaryTitle);
+  }, [combinedEntries, selectedEntry]);
+
+  const nextTurnEndEntry = useMemo(() => {
+    if (!selectedEntry || combinedEntries.length === 0) return null;
+    if (selectedEntry.pageNumber < selectedEntry.pageCount) {
+      return (
+        combinedEntries.find(
+          (entry) =>
+            entry.turnId === selectedEntry.turnId &&
+            entry.pageNumber === selectedEntry.pageCount,
+        ) ?? null
+      );
+    } else {
+      const nextTurnIndex = selectedEntry.turnIndex + 1;
+      const nextTurnEntries = combinedEntries.filter(
+        (entry) => entry.turnIndex === nextTurnIndex,
+      );
+      if (nextTurnEntries.length > 0) {
+        const nextPageCount = nextTurnEntries[0].pageCount;
+        return (
+          nextTurnEntries.find((entry) => entry.pageNumber === nextPageCount) ??
+          null
+        );
+      }
+      return null;
+    }
+  }, [combinedEntries, selectedEntry]);
 
   return (
     <div className="run-turn-titlebar-controls" aria-label="Turn view controls">
       <div
-        className="run-turn-view-nav run-turn-view-page-nav"
+        className="run-turn-view-nav run-turn-view-combined-nav"
         role="group"
-        aria-label="Activity page navigation"
+        aria-label="Conversation navigation"
       >
         <button
           type="button"
-          className="run-turn-view-nav-btn"
-          onClick={() =>
-            selected &&
-            pagerState.canPageFirst &&
-            onActivitySelectPage(selected.turnId, pagerState.firstPage)
+          className="run-turn-view-nav-btn run-turn-view-nav-btn-triple"
+          onClick={() => {
+            const firstEntry = combinedEntries[0];
+            if (firstEntry) onNavigate(firstEntry.turnId, firstEntry.pageNumber);
+          }}
+          disabled={
+            !selectedEntry ||
+            combinedEntries.length === 0 ||
+            selectedEntry.key === combinedEntries[0]?.key
           }
-          disabled={!pagerState.canPageFirst}
-          aria-label="First activity page"
-          title={pageButtonTitle(
-            pagerState.canPageFirst,
-            "First page",
-            "Already on first activity page",
-          )}
+          aria-label="First page of conversation"
+          title="First page of conversation"
         >
-          «
+          <ChevronFirstIcon size={14} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="run-turn-view-nav-btn run-turn-view-nav-btn-double"
+          onClick={() => {
+            if (prevTurnStartEntry) {
+              onNavigate(prevTurnStartEntry.turnId, prevTurnStartEntry.pageNumber);
+            }
+          }}
+          disabled={!prevTurnStartEntry}
+          aria-label="Start of turn or previous turn"
+          title="Start of turn or previous turn"
+        >
+          <ChevronsLeftIcon size={14} aria-hidden="true" />
         </button>
         <button
           type="button"
           className="run-turn-view-nav-btn"
-          onClick={() =>
-            selected &&
-            pagerState.canPageOlder &&
-            onActivitySelectPage(selected.turnId, pagerState.olderPage)
-          }
-          disabled={!pagerState.canPageOlder}
-          aria-label="Previous activity page"
-          title={pageButtonTitle(
-            pagerState.canPageOlder,
-            "Previous page",
-            "Already on first activity page",
-          )}
-        >
-          ‹
-        </button>
-        <Select
-          value={String(pagerState.page)}
-          onValueChange={(value) => {
-            if (!selected) return;
-            onActivitySelectPage(selected.turnId, Number(value));
+          onClick={() => {
+            if (prevPageEntry) {
+              onNavigate(prevPageEntry.turnId, prevPageEntry.pageNumber);
+            }
           }}
-          disabled={pageSelectDisabled}
+          disabled={!prevPageEntry}
+          aria-label="Previous page"
+          title="Previous page"
+        >
+          <ChevronLeftIcon size={14} aria-hidden="true" />
+        </button>
+
+        <Select
+          value={selectedEntry?.key ?? ""}
+          onValueChange={(value) => {
+            const entry = combinedEntries.find((e) => e.key === value);
+            if (entry) onNavigate(entry.turnId, entry.pageNumber);
+          }}
+          disabled={combinedEntries.length === 0}
         >
           <SelectTrigger
-            className="run-turn-view-select run-turn-view-page-select"
+            className="run-turn-view-select run-turn-view-combined-select"
             size="sm"
-            aria-label="Select activity page"
-            title={pageSelectTitle}
+            aria-label="Select turn and page"
+            title="Select turn and page"
           >
-            <TurnActivityPageOptionLabel parts={pageSelectParts} />
+            {selectedEntry && selectedEntryParts ? (
+              <span className="run-turn-view-combined-option run-turn-view-combined-option-trigger">
+                <span className="run-turn-view-combined-turn">
+                  {selectedEntry.turnLabel}
+                </span>
+                <span className="run-turn-view-combined-page">
+                  <span>Page {selectedEntry.pageNumber}</span>
+                  {selectedEntryParts.isQuestion && (
+                    <span
+                      className="run-turn-view-combined-kind"
+                      aria-label={selectedEntryParts.semanticLabel}
+                      title={selectedEntryParts.semanticLabel}
+                    >
+                      <MessageSquareIcon size={13} aria-hidden="true" />
+                    </span>
+                  )}
+                </span>
+              </span>
+            ) : (
+              <SelectValue placeholder="No turns" />
+            )}
           </SelectTrigger>
           <SelectContent
-            className="run-turn-view-select-menu run-turn-view-page-select-menu"
+            className="run-turn-view-select-menu run-turn-view-combined-select-menu"
             position="popper"
             align="end"
           >
-            {Array.from({ length: pageCount }, (_, index) => index + 1).map(
-              (pageNumber) => {
-                const directoryItem = selectedPageInfo?.pages?.find(
-                  (page) => page.number === pageNumber,
-                );
-                const optionParts = turnActivityPageOptionParts(
-                  pageNumber,
-                  directoryItem,
-                );
-                return (
-                  <SelectItem
-                    key={pageNumber}
-                    value={String(pageNumber)}
-                    textValue={optionParts.textValue}
-                    className="run-turn-view-select-item run-turn-view-page-select-item"
-                  >
-                    <TurnActivityPageOptionLabel parts={optionParts} />
-                  </SelectItem>
-                );
-              },
-            )}
+            {combinedEntries.map((entry) => {
+              const parts = turnActivityPageOptionParts(
+                entry.pageNumber,
+                entry.directoryItem,
+              );
+              return (
+                <SelectItem
+                  key={entry.key}
+                  value={entry.key}
+                  textValue={`${entry.turnLabel} Page ${entry.pageNumber} ${parts.semanticLabel}`}
+                  className="run-turn-view-select-item run-turn-view-combined-select-item"
+                >
+                  <div className="run-turn-view-combined-option">
+                    <span className="run-turn-view-combined-turn">
+                      {entry.turnLabel}
+                    </span>
+                    <span className="run-turn-view-combined-page">
+                      <span>Page {entry.pageNumber}</span>
+                      {parts.isQuestion && (
+                        <span
+                          className="run-turn-view-combined-kind"
+                          aria-label={parts.semanticLabel}
+                          title={parts.semanticLabel}
+                        >
+                          <MessageSquareIcon size={13} aria-hidden="true" />
+                        </span>
+                      )}
+                    </span>
+                  </div>
+                </SelectItem>
+              );
+            })}
           </SelectContent>
         </Select>
+
         <button
           type="button"
           className="run-turn-view-nav-btn"
-          onClick={() =>
-            selected &&
-            pagerState.canPageNewer &&
-            onActivitySelectPage(selected.turnId, pagerState.newerPage)
-          }
-          disabled={!pagerState.canPageNewer}
-          aria-label="Next activity page"
-          title={pageButtonTitle(
-            pagerState.canPageNewer,
-            "Next page",
-            "Already on last activity page",
-          )}
+          onClick={() => {
+            if (nextPageEntry) {
+              onNavigate(nextPageEntry.turnId, nextPageEntry.pageNumber);
+            }
+          }}
+          disabled={!nextPageEntry}
+          aria-label="Next page"
+          title="Next page"
         >
-          ›
+          <ChevronRightIcon size={14} aria-hidden="true" />
         </button>
         <button
           type="button"
-          className="run-turn-view-nav-btn"
-          onClick={() =>
-            selected &&
-            pagerState.canPageLast &&
-            onActivitySelectPage(selected.turnId, pagerState.lastPage)
-          }
-          disabled={!pagerState.canPageLast}
-          aria-label="Last activity page"
-          title={pageButtonTitle(
-            pagerState.canPageLast,
-            "Last page",
-            "Already on last activity page",
-          )}
+          className="run-turn-view-nav-btn run-turn-view-nav-btn-double"
+          onClick={() => {
+            if (nextTurnEndEntry) {
+              onNavigate(nextTurnEndEntry.turnId, nextTurnEndEntry.pageNumber);
+            }
+          }}
+          disabled={!nextTurnEndEntry}
+          aria-label="End of turn or next turn"
+          title="End of turn or next turn"
         >
-          »
+          <ChevronsRightIcon size={14} aria-hidden="true" />
+        </button>
+        <button
+          type="button"
+          className="run-turn-view-nav-btn run-turn-view-nav-btn-triple"
+          onClick={() => {
+            const lastEntry = combinedEntries[combinedEntries.length - 1];
+            if (lastEntry) onNavigate(lastEntry.turnId, lastEntry.pageNumber);
+          }}
+          disabled={
+            !selectedEntry ||
+            combinedEntries.length === 0 ||
+            selectedEntry.key ===
+              combinedEntries[combinedEntries.length - 1]?.key
+          }
+          aria-label="Last page of conversation"
+          title="Last page of conversation"
+        >
+          <ChevronLastIcon size={14} aria-hidden="true" />
         </button>
       </div>
+
       <button
         type="button"
         className="run-turn-view-stats-toggle"
         onClick={() => {
-          if (!selected) return;
-          onStatsExpandedChange(!statsExpanded);
+          if (selected) onStatsExpandedChange(!statsExpanded);
         }}
         disabled={!selected}
         aria-expanded={selected ? statsExpanded : false}
@@ -10203,114 +10352,6 @@ function RunTurnViewControls({
           <ChevronDownIcon size={14} aria-hidden="true" />
         )}
       </button>
-      <div
-        className="run-turn-view-nav run-turn-view-turn-nav"
-        role="group"
-        aria-label="Turn navigation"
-      >
-        <button
-          type="button"
-          className="run-turn-view-nav-btn"
-          onClick={() =>
-            turnNav.firstTurnId &&
-            turnNav.canFirst &&
-            onSelectTurn(turnNav.firstTurnId)
-          }
-          disabled={!turnNav.canFirst}
-          aria-label="First turn"
-          title={turnButtonTitle(
-            turnNav.canFirst,
-            "First turn",
-            "Already on first turn",
-          )}
-        >
-          «
-        </button>
-        <button
-          type="button"
-          className="run-turn-view-nav-btn"
-          onClick={() =>
-            turnNav.prevTurnId &&
-            turnNav.canPrev &&
-            onSelectTurn(turnNav.prevTurnId)
-          }
-          disabled={!turnNav.canPrev}
-          aria-label="Previous turn"
-          title={turnButtonTitle(
-            turnNav.canPrev,
-            "Previous turn",
-            "Already on first turn",
-          )}
-        >
-          ‹
-        </button>
-        <Select
-          value={selected?.turnId ?? ""}
-          onValueChange={onSelectTurn}
-          disabled={turns.length === 0}
-        >
-          <SelectTrigger
-            className="run-turn-view-select"
-            size="sm"
-            aria-label="Select turn"
-            title={turnDisabledReason ?? "Select turn"}
-          >
-            <SelectValue placeholder="No turns" />
-          </SelectTrigger>
-          <SelectContent
-            className="run-turn-view-select-menu"
-            position="popper"
-            align="end"
-          >
-            {turns.map((turn) => (
-              <SelectItem
-                key={turn.turnId}
-                value={turn.turnId}
-                className="run-turn-view-select-item"
-              >
-                {turn.label}
-                {turn.active ? " (running)" : ""}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <button
-          type="button"
-          className="run-turn-view-nav-btn"
-          onClick={() =>
-            turnNav.nextTurnId &&
-            turnNav.canNext &&
-            onSelectTurn(turnNav.nextTurnId)
-          }
-          disabled={!turnNav.canNext}
-          aria-label="Next turn"
-          title={turnButtonTitle(
-            turnNav.canNext,
-            "Next turn",
-            "Already on latest turn",
-          )}
-        >
-          ›
-        </button>
-        <button
-          type="button"
-          className="run-turn-view-nav-btn"
-          onClick={() =>
-            turnNav.lastTurnId &&
-            turnNav.canLast &&
-            onSelectTurn(turnNav.lastTurnId)
-          }
-          disabled={!turnNav.canLast}
-          aria-label="Last turn"
-          title={turnButtonTitle(
-            turnNav.canLast,
-            "Last turn",
-            "Already on latest turn",
-          )}
-        >
-          »
-        </button>
-      </div>
     </div>
   );
 }
@@ -12689,6 +12730,75 @@ function formatMetricCount(value: number): string {
   return value.toFixed(value < 1 ? 2 : 1).replace(/\.0$/, "");
 }
 
+function AdminVersionPanel({
+  state,
+  onRefresh,
+}: {
+  state: AdminSettingsControls["version"];
+  onRefresh: () => void;
+}) {
+  const rows = state.summary
+    ? [
+        ["App", versionImageLabel(state.summary.app_image)],
+        ["Claude sessions", versionImageLabel(state.summary.session_image)],
+        ["Codex sessions", versionImageLabel(state.summary.codex_session_image)],
+        [
+          "Antigravity sessions",
+          versionImageLabel(state.summary.antigravity_session_image),
+        ],
+        ["Scope", state.summary.session_scope],
+        ["Pod", state.summary.pod_name || "unknown"],
+      ]
+    : [];
+  return (
+    <div className="run-settings-rate-limit">
+      <div className="run-settings-diagnostics-head">
+        <span className="run-settings-link-label">
+          <InfoIcon className="run-settings-link-icon" aria-hidden="true" />
+          <span>App version</span>
+        </span>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={onRefresh}
+          title="Refresh app version"
+          aria-label="Refresh app version"
+          disabled={state.loading}
+        >
+          <RotateCcwIcon
+            aria-hidden="true"
+            className={state.loading ? "cluster-health-spin" : undefined}
+          />
+        </button>
+      </div>
+      {state.error ? (
+        <div className="run-settings-observability-note" role="status">
+          {state.error}
+        </div>
+      ) : rows.length > 0 ? (
+        <div className="run-settings-rate-limit-grid">
+          {rows.map(([label, value]) => (
+            <div className="run-settings-rate-limit-row" key={label}>
+              <span>{label}</span>
+              <span title={value}>{value}</span>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="run-settings-observability-note" role="status">
+          {state.loading ? "Loading version..." : "Version unavailable"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function versionImageLabel(image: AdminVersionImage | null | undefined): string {
+  const tag = image?.tag?.trim();
+  const ref = image?.image?.trim();
+  return tag || ref || "unknown";
+}
+
 const PROVIDER_RATE_LIMIT_LABELS: Record<string, string> = {
   provider: "Provider",
   status: "Status",
@@ -13256,6 +13366,10 @@ function RunSettingsPanel({
           <>
             <section className="run-settings-section">
               <h2 className="run-settings-title">Admin Controls</h2>
+              <AdminVersionPanel
+                state={adminControls.version}
+                onRefresh={adminControls.onRefreshVersion}
+              />
               <button
                 type="button"
                 className="run-settings-link"
@@ -17822,6 +17936,24 @@ function ChatPane({
     },
     [ensureTurnActivityLoaded, turnViewItems],
   );
+  const selectTurnAndPage = useCallback(
+    (turnId: string, page: number) => {
+      const trimmedTurnId = turnId.trim();
+      if (!trimmedTurnId) return;
+      setPendingRouteTurnNumber(null);
+      selectedTurnPageRef.current = {
+        ...selectedTurnPageRef.current,
+        [trimmedTurnId]: page,
+      };
+      setSelectedTurnId(trimmedTurnId);
+      startTurnActivityLoad(trimmedTurnId, {
+        force: true,
+        page,
+        reason: "page",
+      });
+    },
+    [startTurnActivityLoad],
+  );
   // Cold-load deep links carry a number that isn't in the loaded window. Resolve
   // it server-side from durable session_turns (not from render state, per the
   // transcript-navigation contract). Deduped via the ref so the async resolve
@@ -18848,8 +18980,7 @@ function ChatPane({
                 turnActivityLoadsByTurn={turnActivityLoadsByTurn}
                 statsExpanded={turnStatsExpanded}
                 onStatsExpandedChange={setTurnStatsExpanded}
-                onSelectTurn={selectTurnViewTurn}
-                onActivitySelectPage={selectTurnActivityPage}
+                onNavigate={selectTurnAndPage}
               />
             )}
             {!publicView && (
@@ -20666,6 +20797,12 @@ function AuthenticatedApp() {
   const [adminObservabilityError, setAdminObservabilityError] = useState<
     string | null
   >(null);
+  const [adminVersionSummary, setAdminVersionSummary] =
+    useState<AdminAppVersion | null>(null);
+  const [adminVersionLoading, setAdminVersionLoading] = useState(false);
+  const [adminVersionError, setAdminVersionError] = useState<string | null>(
+    null,
+  );
   const refreshAdminObservability = useCallback(async () => {
     if (!hasAdminAccess) return;
     setAdminObservabilityLoading(true);
@@ -20683,19 +20820,41 @@ function AuthenticatedApp() {
       setAdminObservabilityLoading(false);
     }
   }, [hasAdminAccess]);
+  const refreshAdminVersion = useCallback(async () => {
+    if (!hasAdminAccess) return;
+    setAdminVersionLoading(true);
+    try {
+      const res = await authedFetch("/api/admin/app-version");
+      if (!res.ok) {
+        throw new Error(`app version returned ${res.status}`);
+      }
+      const body = (await res.json()) as AdminAppVersion;
+      setAdminVersionSummary(body);
+      setAdminVersionError(null);
+    } catch (err) {
+      setAdminVersionError(errorMessage(err));
+    } finally {
+      setAdminVersionLoading(false);
+    }
+  }, [hasAdminAccess]);
   useEffect(() => {
     if (!hasAdminAccess) {
       setAdminObservabilitySummary(null);
       setAdminObservabilityError(null);
       setAdminObservabilityLoading(false);
+      setAdminVersionSummary(null);
+      setAdminVersionError(null);
+      setAdminVersionLoading(false);
       return;
     }
     void refreshAdminObservability();
+    void refreshAdminVersion();
     const id = window.setInterval(() => {
       void refreshAdminObservability();
+      void refreshAdminVersion();
     }, 30_000);
     return () => window.clearInterval(id);
-  }, [hasAdminAccess, refreshAdminObservability]);
+  }, [hasAdminAccess, refreshAdminObservability, refreshAdminVersion]);
   const canViewProdSessions =
     hasAdminAccess && currentSessionScope !== PROD_SESSION_SCOPE;
   const effectiveSessionScope =
@@ -20724,7 +20883,13 @@ function AuthenticatedApp() {
           loading: adminObservabilityLoading,
           error: adminObservabilityError,
         },
+        version: {
+          summary: adminVersionSummary,
+          loading: adminVersionLoading,
+          error: adminVersionError,
+        },
         onRefreshObservability: refreshAdminObservability,
+        onRefreshVersion: refreshAdminVersion,
         onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
         onViewingProdSessionsChange: (value: boolean) => {
           const next = value ? PROD_SESSION_SCOPE : "";
@@ -21360,6 +21525,7 @@ function AuthenticatedApp() {
       owner: row.owner,
       status: row.status,
       mode: row.mode as SessionMode,
+      session_image: row.session_image ?? "",
       requested_at: row.requested_at ?? null,
       created_at: row.created_at ?? null,
       ready_at: row.ready_at ?? null,
@@ -21413,6 +21579,8 @@ function AuthenticatedApp() {
       mode: String(raw.mode ?? "claude_gui"),
       session_scope: normalizeSessionScopeValue(raw.session_scope),
       pod_name: raw.pod_name ?? undefined,
+      session_image:
+        typeof raw.session_image === "string" ? raw.session_image : undefined,
       // name is the server-canonical title. Always present on the snapshot
       // wire; fall back to the empty string only to keep the type honest for
       // degraded payloads — there is no client-side slug re-derivation any more.
@@ -23373,8 +23541,7 @@ function AuthenticatedApp() {
                     turnActivityLoadsByTurn={{}}
                     statsExpanded={false}
                     onStatsExpandedChange={() => undefined}
-                    onSelectTurn={() => undefined}
-                    onActivitySelectPage={() => undefined}
+                    onNavigate={() => undefined}
                   />
                 )}
                 <RunHeaderOverflowMenu

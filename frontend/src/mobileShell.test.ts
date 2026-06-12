@@ -27,6 +27,16 @@ test("compact breakpoint in CSS matches the BP_COMPACT constant (no drift)", () 
   expect(indexCss.includes(`@media (max-width: ${BP_COMPACT}px)`), `index.css should drive compact tuning from BP_COMPACT (${BP_COMPACT}px)`).toBeTruthy();
 });
 
+test("desktop sidebar is constrained so long session lists scroll internally", () => {
+  const sidebarRule = cssRule(".sidebar");
+  expect(sidebarRule).toMatch(/overflow:\s*hidden;/);
+  expect(sidebarRule).toMatch(/min-height:\s*0;/);
+
+  expect(indexCss).toMatch(
+    /\.sidebar-list\s*\{[\s\S]*?overflow-y:\s*auto;[\s\S]*?min-height:\s*0;/,
+  );
+});
+
 test("the shell wires the compact drawer, top bar, and desktop-only gate", () => {
   // The load-bearing pieces of the compact triage shell. A change that removes
   // one without a deliberate replacement should fail here.

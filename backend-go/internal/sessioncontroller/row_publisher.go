@@ -119,11 +119,12 @@ type RowUpdatePayload struct {
 // one SessionRow shape. Internal — callers go through
 // MarshalRowUpdate.
 type rowWireShape struct {
-	ID      string `json:"id"`
-	Owner   string `json:"owner"`
-	Mode    string `json:"mode"`
-	Scope   string `json:"session_scope"`
-	PodName string `json:"pod_name,omitempty"`
+	ID           string `json:"id"`
+	Owner        string `json:"owner"`
+	Mode         string `json:"mode"`
+	Scope        string `json:"session_scope"`
+	PodName      string `json:"pod_name,omitempty"`
+	SessionImage string `json:"session_image,omitempty"`
 	// Name is always present (NON-NULL) post-inversion, so no omitempty.
 	Name            string         `json:"name"`
 	Visible         bool           `json:"visible"`
@@ -190,6 +191,7 @@ func MarshalRowUpdate(record sessionmodel.SessionRecord) ([]byte, error) {
 			Mode:                           record.Mode,
 			Scope:                          record.Scope,
 			PodName:                        record.PodName,
+			SessionImage:                   record.SessionImage,
 			Name:                           record.Name,
 			Visible:                        record.Visible,
 			Status:                         record.Status,

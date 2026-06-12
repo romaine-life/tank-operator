@@ -1562,49 +1562,57 @@ func compactProjectedTranscript(entries []map[string]any, activeTurnID string, r
 			if continuationTurns[activity.TurnID] {
 				activity.Summary["continuation"] = true
 			}
-			shellOrderKey := transcriptMapString(activity.Summary, "startOrderKey")
-			shellStartedAt := transcriptMapString(activity.Summary, "startedAt")
-			if umKey := turnUserMessageOrderKey(entries, activity.TurnID); umKey != "" && shellOrderKey <= umKey {
-				// Folded session-startup lifecycle carries order keys that predate
-				// the turn's message. The transcript row store positions a
-				// turn_activity row by activity.startOrderKey (its row cursor is
-				// startOrderKey+id), so anchor the shell's start to the turn's first
-				// real event after the message (turn.submitted/started). The
-				// lifecycle stays inside the body; only the shell's placement and
-				// reported start move to the turn's own start — never above the
-				// message it belongs to.
-				if anchor := turnFirstEntryAfter(entries, activity.TurnID, umKey); anchor != nil {
-					shellOrderKey = transcriptMapString(anchor, "orderKey")
-					activity.Summary["startOrderKey"] = shellOrderKey
-					if t := transcriptMapString(anchor, "time"); t != "" {
-						shellStartedAt = t
-						activity.Summary["startedAt"] = t
-					}
-				}
-			}
-			shell := map[string]any{
-				"id":            "turn-activity-" + activity.TurnID,
-				"kind":          "turn_activity",
-				"turnId":        activity.TurnID,
-				"time":          shellStartedAt,
-				"orderKey":      shellOrderKey,
-				"activity":      activity.Summary,
-				"activityIds":   activity.CompactedEntryIDs,
-				"sourceEventId": transcriptMapString(activity.Summary, "sourceEventId"),
-			}
-			if turnUsage := activity.Summary["turnUsage"]; turnUsage != nil {
-				shell["turnUsage"] = turnUsage
-			}
-			if usageObservation := activity.Summary["usageObservation"]; usageObservation != nil {
-				shell["usageObservation"] = usageObservation
-			}
-			out = append(out, shell)
+			out = append(out, buildTurnActivityShellRow(activity, entries))
 		}
 		if !compactedIndexes[idx] {
 			out = append(out, entry)
 		}
 	}
 	return transcriptProjection{Entries: out, ActivityBodies: bodies}
+}
+
+// buildTurnActivityShellRow builds the durable turn_activity row for one
+// turn's body. turnEntries supplies the user-message anchor lookup — entries
+// of other turns are ignored, so callers may pass the whole flat list (batch
+// pipeline) or just this turn's entries (checkpointed fold).
+func buildTurnActivityShellRow(activity turnActivityBody, turnEntries []map[string]any) map[string]any {
+	shellOrderKey := transcriptMapString(activity.Summary, "startOrderKey")
+	shellStartedAt := transcriptMapString(activity.Summary, "startedAt")
+	if umKey := turnUserMessageOrderKey(turnEntries, activity.TurnID); umKey != "" && shellOrderKey <= umKey {
+		// Folded session-startup lifecycle carries order keys that predate
+		// the turn's message. The transcript row store positions a
+		// turn_activity row by activity.startOrderKey (its row cursor is
+		// startOrderKey+id), so anchor the shell's start to the turn's first
+		// real event after the message (turn.submitted/started). The
+		// lifecycle stays inside the body; only the shell's placement and
+		// reported start move to the turn's own start — never above the
+		// message it belongs to.
+		if anchor := turnFirstEntryAfter(turnEntries, activity.TurnID, umKey); anchor != nil {
+			shellOrderKey = transcriptMapString(anchor, "orderKey")
+			activity.Summary["startOrderKey"] = shellOrderKey
+			if t := transcriptMapString(anchor, "time"); t != "" {
+				shellStartedAt = t
+				activity.Summary["startedAt"] = t
+			}
+		}
+	}
+	shell := map[string]any{
+		"id":            "turn-activity-" + activity.TurnID,
+		"kind":          "turn_activity",
+		"turnId":        activity.TurnID,
+		"time":          shellStartedAt,
+		"orderKey":      shellOrderKey,
+		"activity":      activity.Summary,
+		"activityIds":   activity.CompactedEntryIDs,
+		"sourceEventId": transcriptMapString(activity.Summary, "sourceEventId"),
+	}
+	if turnUsage := activity.Summary["turnUsage"]; turnUsage != nil {
+		shell["turnUsage"] = turnUsage
+	}
+	if usageObservation := activity.Summary["usageObservation"]; usageObservation != nil {
+		shell["usageObservation"] = usageObservation
+	}
+	return shell
 }
 
 func foldBackgroundWakeContinuationActivities(projection transcriptProjection, wakeParents map[string]string) transcriptProjection {
@@ -1768,98 +1776,28 @@ func isBackgroundTaskWakeTurnEvent(event map[string]any) bool {
 }
 
 func terminalProjectedActivities(entries []map[string]any, terminals map[string]turnTerminalProjection, backgroundWakeTurns map[string]bool, continuationTurns map[string]bool) []turnActivityBody {
-	turnIndexes := map[string][]int{}
-	turnOrder := []string{}
-	for idx, entry := range entries {
-		turnID := transcriptMapString(entry, "turnId")
-		if turnID == "" {
-			continue
-		}
-		if _, exists := turnIndexes[turnID]; !exists {
-			turnOrder = append(turnOrder, turnID)
-		}
-		turnIndexes[turnID] = append(turnIndexes[turnID], idx)
-	}
 	var activities []turnActivityBody
-	for _, turnID := range turnOrder {
-		indexes := turnIndexes[turnID]
-		terminal, ok := terminals[turnID]
+	for _, fold := range groupTurnShellFolds(entries) {
+		terminal, ok := terminals[fold.turnID]
 		if !ok {
 			continue
 		}
-		if terminal.Status == "completed" && len(terminal.FinalAnswerIDs) == 0 && turnHasAssistantMessage(entries, indexes) {
-			recordTranscriptMaterializationInvariantViolation("completed_turn_missing_final_answer", "completed")
+		if body, ok := fold.finishTerminal(terminal, backgroundWakeTurns[fold.turnID], continuationTurns[fold.turnID]); ok {
+			activities = append(activities, body)
 		}
-		finalIndexes := map[int]bool{}
-		if terminal.Status == "completed" {
-			finalIndexes = finalAnswerProjectedIndexes(entries, indexes, terminal.FinalAnswerIDs)
-			if len(terminal.FinalAnswerIDs) > 0 && len(finalIndexes) == 0 {
-				recordTranscriptMaterializationInvariantViolation("completed_turn_final_answer_missing_entry", "completed")
-			}
-		}
-		var compacted []map[string]any
-		var activityEntries []map[string]any
-		for _, idx := range indexes {
-			entry := entries[idx]
-			if (isProjectedUserMessage(entry) && !isProjectionWakePrompt(entry)) ||
-				(!backgroundWakeTurns[turnID] && isProjectionTerminalMetaEntry(entry, terminal)) ||
-				isProjectionTurnProgress(entry) {
-				continue
-			}
-			activityEntries = append(activityEntries, entry)
-			if (!finalIndexes[idx] || continuationTurns[turnID]) && !isProjectionAwaitingInputEntry(entry) {
-				compacted = append(compacted, entry)
-			}
-		}
-		if len(activityEntries) == 0 {
-			continue
-		}
-		activities = append(activities, makeTurnActivityBody(turnID, terminal.Status, activityEntries, compacted, false))
 	}
 	return activities
 }
 
 func awaitingInputHandoffProjectedActivities(entries []map[string]any, terminals map[string]turnTerminalProjection) []turnActivityBody {
-	turnIndexes := map[string][]int{}
-	turnOrder := []string{}
-	for idx, entry := range entries {
-		turnID := transcriptMapString(entry, "turnId")
-		if turnID == "" {
-			continue
-		}
-		if _, exists := turnIndexes[turnID]; !exists {
-			turnOrder = append(turnOrder, turnID)
-		}
-		turnIndexes[turnID] = append(turnIndexes[turnID], idx)
-	}
 	var activities []turnActivityBody
-	for _, turnID := range turnOrder {
-		if _, terminal := terminals[turnID]; terminal {
+	for _, fold := range groupTurnShellFolds(entries) {
+		if _, terminal := terminals[fold.turnID]; terminal {
 			continue
 		}
-		indexes := turnIndexes[turnID]
-		finalIndexes := awaitingInputAssistantMessageIndexes(entries, indexes, turnID)
-		if len(finalIndexes) == 0 {
-			continue
+		if body, ok := fold.finishAwaitingInputHandoff(); ok {
+			activities = append(activities, body)
 		}
-		var compacted []map[string]any
-		var activityEntries []map[string]any
-		for _, idx := range indexes {
-			entry := entries[idx]
-			if isProjectedUserMessage(entry) || isProjectionTurnProgress(entry) {
-				continue
-			}
-			activityEntries = append(activityEntries, entry)
-			if !finalIndexes[idx] && !isProjectionAwaitingInputEntry(entry) {
-				compacted = append(compacted, entry)
-			}
-		}
-		if len(activityEntries) == 0 {
-			continue
-		}
-		activity := makeTurnActivityBody(turnID, "completed", activityEntries, compacted, false)
-		activity.Summary["awaitingInputHandoff"] = true
-		activities = append(activities, activity)
 	}
 	return activities
 }
@@ -1868,39 +1806,16 @@ func activeProjectedActivities(entries []map[string]any, activeTurnID string, ru
 	if activeTurnID == "" {
 		return nil
 	}
-	var activityEntries []map[string]any
-	var progressEntries []map[string]any
+	fold := newTurnShellFold(activeTurnID)
 	for _, entry := range entries {
-		if transcriptMapString(entry, "turnId") != activeTurnID ||
-			transcriptMapString(entry, "turnTerminalStatus") != "" ||
-			(isProjectedUserMessage(entry) && !isProjectionWakePrompt(entry)) {
-			continue
+		if transcriptMapString(entry, "turnId") == activeTurnID {
+			fold.upsertEntry(entry)
 		}
-		if isProjectionTurnProgress(entry) {
-			progressEntries = append(progressEntries, entry)
-			continue
-		}
-		activityEntries = append(activityEntries, entry)
 	}
-	if len(activityEntries) == 0 && len(progressEntries) == 0 {
-		return nil
+	if body, ok := fold.finishActive(runStatus); ok {
+		return []turnActivityBody{body}
 	}
-	status := "active"
-	if runStatus == "needs_input" {
-		status = "needs_input"
-	}
-	compactedEntries := make([]map[string]any, 0, len(activityEntries))
-	for _, entry := range activityEntries {
-		if isProjectionAwaitingInputEntry(entry) {
-			continue
-		}
-		compactedEntries = append(compactedEntries, entry)
-	}
-	body := makeTurnActivityBody(activeTurnID, status, activityEntries, compactedEntries, true)
-	if len(progressEntries) > 0 {
-		applyActivityAnchorSummary(body.Summary, progressEntries, len(activityEntries) == 0)
-	}
-	return []turnActivityBody{body}
+	return nil
 }
 
 func projectedActivityInsertIndex(entries []map[string]any, activity turnActivityBody) int {
@@ -2100,50 +2015,6 @@ func projectionActivityEntryEndOrderKey(entry map[string]any) string {
 		transcriptMapString(entry, "activityEndOrderKey"),
 		transcriptMapString(entry, "orderKey"),
 	)
-}
-
-func finalAnswerProjectedIndexes(entries []map[string]any, indexes []int, finalAnswerIDs map[string]bool) map[int]bool {
-	out := map[int]bool{}
-	if len(finalAnswerIDs) == 0 {
-		return out
-	}
-	for _, idx := range indexes {
-		entry := entries[idx]
-		if finalAnswerIDs[transcriptMapString(entry, "id")] && isProjectedAssistantMessage(entry) {
-			out[idx] = true
-		}
-	}
-	return out
-}
-
-func awaitingInputAssistantMessageIndexes(entries []map[string]any, indexes []int, turnID string) map[int]bool {
-	out := map[int]bool{}
-	for _, idx := range indexes {
-		entry := entries[idx]
-		if !isProjectedAssistantMessage(entry) {
-			continue
-		}
-		awaiting, _ := entry["awaitingInput"].(map[string]any)
-		questionTurnID := transcriptMapString(awaiting, "questionTurnId")
-		if questionTurnID == "" || questionTurnID == turnID {
-			continue
-		}
-		askingTurnID := transcriptMapString(awaiting, "askingTurnId")
-		if askingTurnID != "" && askingTurnID != turnID {
-			continue
-		}
-		out[idx] = true
-	}
-	return out
-}
-
-func turnHasAssistantMessage(entries []map[string]any, indexes []int) bool {
-	for _, idx := range indexes {
-		if isProjectedAssistantMessage(entries[idx]) {
-			return true
-		}
-	}
-	return false
 }
 
 func projectedEntryIndex(entries []map[string]any, target map[string]any) int {

@@ -784,3 +784,38 @@ Evidence:
 - Frontend: `frontend/src/turnCostEstimateUi.test.ts` guards that the composer
   renders the restored `run-cost-estimate` context/cost chip while visible
   transcript usage messages stay retired.
+
+## Durable transcript pipeline: persister dispatch, reconciler, async backend refresh
+
+Status: shipped (2026-06-11, tank-operator#1051 PRs 1/2a)
+
+Intent:
+The session-bus persister is the sole bus-to-Postgres writer for transcript
+events, and its health is the product: when it stalls, every session freezes
+at once while runners keep working invisibly (the 2026-06-11 incident). Three
+named behaviors keep that pipeline trustworthy:
+
+- Per-session dispatch with batch coalescing: one durable consumer feeds
+  per-session serial queues over a bounded worker pool; a flood session
+  saturates one worker, and N queued events for one turn cost one projection
+  pass (RefreshEventBatch).
+- MAX_DELIVERIES advisory repair + startup reconciler: an event that exhausts
+  redelivery is re-persisted out of band or counted as lost
+  (tank_session_event_persist_exhausted_total); on boot the reconciler
+  replays the ack-floor window and repairs holes idempotently (146 events
+  recovered on first deploy).
+- Async backend refresh: backend-direct writers (submit, interrupt, sweeps)
+  persist the ledger row synchronously but run the transcript-row projection
+  on a per-session async worker with refresh-then-wake ordering, unifying
+  both write paths and keeping projection cost out of HTTP handlers.
+
+Affected contracts:
+- Transcript (session_events ownership; SSE as live follower of durable rows)
+- Observability (persister lag gauges read JetStream consumer state so the
+  signal survives the persister itself failing; TankSessionEventPersisterBacklog,
+  TankSessionEventPersistExhausted, TankSessionEventStreamTruncated)
+
+Retirement note:
+The full-batch projection (projectTranscriptEvents) is the reference
+implementation and the explicit resync path; the in-flight checkpointed-fold
+stages (#1051 B2-B5) change its cost profile, never its ownership.

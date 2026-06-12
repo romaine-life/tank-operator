@@ -12,6 +12,7 @@ test("buildSessionDataStatusRows summarizes active workflow links", () => {
     compaction_count: 2,
     runtime_context_window_tokens: 1_000_000,
     runtime_context_window_source: "provider",
+    session_image: "romainecr.azurecr.io/codex-container:codex-dcbfd775",
     bug_label: { display_name: "bug: clipped status" },
     repos: ["romaine-life/tank-operator"],
     clone_state: {
@@ -23,6 +24,7 @@ test("buildSessionDataStatusRows summarizes active workflow links", () => {
           ["transcript", "Available", "info"],
           ["test", "Active", "good"],
           ["context", "Compacted", "warning"],
+          ["session_image", "codex-dcbfd775", "info"],
           ["rollout", "Inactive", "muted"],
           ["pull_request", "Linked", "info"],
           ["bug_report", "Linked", "info"],
@@ -31,7 +33,8 @@ test("buildSessionDataStatusRows summarizes active workflow links", () => {
   expect(rows[1]?.detail).toBe("Slot 3 reserved");
   expect(rows[1]?.href).toBe("https://tank-operator-slot-3.tank.dev.romaine.life/");
   expect(rows[2]?.detail).toBe("2 compactions / 1m window / provider");
-  expect(rows[4]?.detail).toBe("romaine-life/tank-operator#123");
+  expect(rows[3]?.detail).toBe("romainecr.azurecr.io/codex-container:codex-dcbfd775");
+  expect(rows[5]?.detail).toBe("romaine-life/tank-operator#123");
 });
 
 test("buildSessionDataStatusRows surfaces repo clone issues", () => {

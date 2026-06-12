@@ -21,8 +21,8 @@ type fakeSessionEventStore struct {
 	shellTasks []map[string]any
 }
 
-func (s fakeSessionEventStore) Upsert(_ context.Context, _ map[string]any) error {
-	return nil
+func (s fakeSessionEventStore) Upsert(_ context.Context, _ map[string]any) (bool, error) {
+	return true, nil
 }
 
 func (s fakeSessionEventStore) ShellTaskEvents(_ context.Context, _ string) ([]map[string]any, error) {
@@ -35,6 +35,10 @@ func (s fakeSessionEventStore) CountContextCompactions(_ context.Context, _ stri
 
 func (s fakeSessionEventStore) CountUserMessages(_ context.Context, _ string) (int64, error) {
 	return 0, nil
+}
+
+func (s fakeSessionEventStore) FindStrandedTurns(context.Context, time.Time, time.Time, time.Time, int) ([]store.StrandedTurn, error) {
+	return nil, nil
 }
 
 func (s fakeSessionEventStore) FindStrandedLaunchTurns(context.Context, time.Time, time.Time, int) ([]store.StrandedLaunchTurn, error) {
