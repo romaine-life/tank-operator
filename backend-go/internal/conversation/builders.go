@@ -94,6 +94,7 @@ func UserSubmissionEventMaps(args UserSubmissionArgs) (string, []map[string]any,
 		payload["attachments"] = attachments
 	}
 	originSessionID := strings.TrimSpace(args.OriginSessionID)
+	originSessionAvatarID := strings.TrimSpace(args.OriginSessionAvatarID)
 	authorKind := strings.TrimSpace(args.AuthorKind)
 	for _, event := range events {
 		if args.SessionStorageKey != "" {
@@ -114,6 +115,9 @@ func UserSubmissionEventMaps(args UserSubmissionArgs) (string, []map[string]any,
 		// continues to render.
 		if originSessionID != "" && originSessionID != args.SessionID {
 			event["origin_session_id"] = originSessionID
+			if originSessionAvatarID != "" {
+				event["origin_session_avatar_id"] = originSessionAvatarID
+			}
 		}
 		// Authorship attribution for non-interactive principals (an
 		// auth.romaine.life bot token). Stamped on both boundary events so
@@ -146,7 +150,8 @@ type UserSubmissionArgs struct {
 	// spawn_run_session). Empty for human-typed browser turns. Only
 	// stamped on the emitted events when it differs from SessionID —
 	// a session sending a prompt to itself reads as a normal user turn.
-	OriginSessionID string
+	OriginSessionID       string
+	OriginSessionAvatarID string
 	// AuthorKind marks a turn submitted by a non-interactive principal so
 	// the transcript attributes it to the session's system identity rather
 	// than the human owner. Empty for human-typed turns. Currently set to

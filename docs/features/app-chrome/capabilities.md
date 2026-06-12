@@ -56,6 +56,34 @@ Evidence:
 - PRs adding browser-local settings should state the local-only scope.
 - PRs touching account/auth settings should cite Auth And Streams evidence.
 
+## Test-Slot Session Defaults
+
+Status: active
+
+Intent:
+Let admins choose the default mode/model/effort used when Glimmung or MCP agents
+spawn fresh validation sessions in test slots, so routine validation can use a
+lower-impact provider/model without each agent hard-coding that choice.
+
+Affected contracts:
+- App Chrome
+- Session Lifecycle
+
+Contract impact:
+- The default is durable platform state, not browser-local state.
+- The setting is validated against Tank-owned create modes and provider
+  model/effort allowlists before it can be saved.
+- `/api/session-run-options` and `/api/internal/session-run-options` expose the
+  effective default so the browser and MCP callers share one contract.
+- Explicit caller choices still win; omitted test-slot launch mode/model/effort
+  inherits the admin setting.
+
+Evidence:
+- Backend tests cover run-options serialization, admin validation, and slot
+  internal create inheritance.
+- Frontend tests guard that Glimmung launch uses `test_slot_defaults`, not the
+  browser's local default session mode.
+
 ## Shells Menu
 
 Status: active

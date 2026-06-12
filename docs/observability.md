@@ -91,6 +91,14 @@ All metric names are prefixed `tank_`. The full namespace:
   Per-sweep detail (session, turn, progressed, source) is in the
   "stranded turn swept to durable terminal" slog line. Pairs with
   `tank_stranded_launch_swept_total`, the create-flow equivalent.
+- `tank_runner_nats_connection_status_total{type}` /
+  `tank_runner_bus_consumer_restart_total{kind}` — the supervised
+  session-bus lifecycle (issue #1076 item 1): bounded connection status
+  events (disconnect/reconnecting/reconnect/...) and supervised consumer
+  restarts by plane. Status churn without restarts is a NATS blip being
+  ridden out; sustained restarts mean JetStream state is flapping; a
+  runner whose /healthz turns 503 has a PERMANENTLY closed connection
+  and is exiting/restarting.
 - `tank_idle_sessions_reaped_total{result}` — durably-idle sessions the
   idle reaper claimed (one conditional registry UPDATE: untouched
   `updated_at` past the cutoff, settled activity status, no pending

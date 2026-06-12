@@ -16,6 +16,16 @@ const SESSION_COMMAND_WORKING_MS = Math.max(1_000, Math.floor(SESSION_COMMAND_AC
 // dispatch (max_ack_pending=1); the control plane wants the opposite.
 // If you find yourself unifying them, re-read
 // docs/tank-conversation-protocol.md → "Durable turn interruption".
+// Supervised-consumer restart backoff. A consumer iterator ending or
+// throwing is NEVER fatal to the runner (issue #1076 item 1: the previous
+// die-once shape left a deaf-but-alive zombie process after any NATS
+// disruption — consumers were started exactly once at boot and a crash was
+// only logged). The supervisor recreates the durable (ensureConsumer is
+// idempotent and also heals a memory-only JetStream that lost the consumer
+// across a restart) and resumes consuming, backing off between attempts.
+const CONSUMER_RESTART_BASE_MS = 1_000;
+const CONSUMER_RESTART_MAX_MS = 30_000;
+
 export const SESSION_CONTROL_ACK_MS = parsePositiveInt(process.env.SESSION_CONTROL_ACK_MS, 15_000);
 export const SESSION_CONTROL_MAX_DELIVER = parsePositiveInt(process.env.SESSION_CONTROL_MAX_DELIVER, 10);
 export const SESSION_CONTROL_MAX_ACK_PENDING = parsePositiveInt(
@@ -40,28 +50,31 @@ export class SharedSessionBus {
         this.sessionStorageKey = cfg.sessionStorageKey || cfg.sessionId;
         this.stream = cfg.natsStream || "TANK_SESSION_BUS";
         this.runnerID = `${provider}-runner:${this.sessionStorageKey}:${randomUUID()}`;
+        // Set by close(): distinguishes our own graceful shutdown from a
+        // terminal connection loss in the closed() watcher below.
+        this.closing = false;
+    }
+    // isHealthy backs the runner's /healthz liveness probe: with unlimited
+    // reconnects the client is either connected, reconnecting (healthy — it
+    // will recover), or permanently closed (terminal). A closed connection
+    // also triggers onFatalConnectionLoss/process.exit, so the probe is the
+    // belt-and-braces for exit paths the watcher cannot see.
+    isHealthy() {
+        if (!this.nc) return true; // not yet connected: boot in progress
+        return !this.nc.isClosed();
     }
     async startCommandConsumer(handler, signal) {
-        await this.ensureConnected();
-        await this.ensureConsumer();
-        const consumer = await this.js.consumers.get(this.stream, this.consumerName());
-        const messages = await consumer.consume({
-            max_messages: 10,
-            threshold_messages: 5,
-            expires: 30_000,
-            idle_heartbeat: 5_000,
-        });
-        let stopped = false;
-        const stop = async () => {
-            stopped = true;
-            await messages.close();
-        };
-        signal?.addEventListener("abort", () => {
-            void stop();
-        }, { once: true });
-        void (async () => {
-            for await (const msg of messages) {
-                if (stopped || signal?.aborted) break;
+        return this.superviseConsumer({
+            kind: "command",
+            ensure: () => this.ensureConsumer(),
+            name: () => this.consumerName(),
+            consumeOpts: {
+                max_messages: 10,
+                threshold_messages: 5,
+                expires: 30_000,
+                idle_heartbeat: 5_000,
+            },
+            dispatch: async (msg) => {
                 const command = this.commandFromMessage(msg);
                 const record = new SessionCommandRecord(command, msg);
                 // Cutover hygiene: interrupts and stop_background_task are
@@ -82,7 +95,7 @@ export class SharedSessionBus {
                         command_id: command.command_id,
                         target_turn_id: command.target_turn_id,
                     });
-                    continue;
+                    return;
                 }
                 try {
                     await handler(record);
@@ -91,8 +104,74 @@ export class SharedSessionBus {
                     console.error("session bus command handler failed:", err);
                     record.nak(5_000);
                 }
+            },
+        }, signal);
+    }
+    // superviseConsumer is the immortality wrapper both consumers run
+    // under: acquire the durable, consume, and when the iterator ends or
+    // throws — NATS restart, JetStream state loss, heartbeat timeouts —
+    // re-ensure the durable (idempotent; also recreates one a memory-only
+    // JetStream lost) and resume, with capped exponential backoff. The
+    // previous shape started each consumer exactly once and a crash was
+    // only logged: any disruption left a deaf-but-alive runner holding the
+    // session forever (issue #1076 item 1). The first acquisition is
+    // awaited so boot-time misconfiguration still fails the caller loudly.
+    async superviseConsumer(spec, signal) {
+        let stopped = false;
+        let current = null;
+        const stop = async () => {
+            stopped = true;
+            try {
+                await current?.close();
             }
-        })().catch((err) => console.error("session bus command consumer crashed:", err));
+            catch {
+                // closing a dead iterator is fine
+            }
+        };
+        signal?.addEventListener("abort", () => {
+            void stop();
+        }, { once: true });
+
+        await this.ensureConnected();
+        await spec.ensure();
+
+        void (async () => {
+            let restartDelay = CONSUMER_RESTART_BASE_MS;
+            while (!stopped && !signal?.aborted) {
+                let delivered = false;
+                try {
+                    const consumer = await this.js.consumers.get(this.stream, spec.name());
+                    const messages = await consumer.consume(spec.consumeOpts);
+                    current = messages;
+                    for await (const msg of messages) {
+                        if (stopped || signal?.aborted) break;
+                        delivered = true;
+                        await spec.dispatch(msg);
+                    }
+                    if (stopped || signal?.aborted) break;
+                    console.warn(`session bus ${spec.kind} consumer iterator ended; restarting`, { runner: this.runnerID });
+                }
+                catch (err) {
+                    if (stopped || signal?.aborted) break;
+                    console.error(`session bus ${spec.kind} consumer crashed; restarting:`, err);
+                }
+                this.deps.onConsumerRestart?.(spec.kind);
+                // Reset the backoff only after real progress: an iterator
+                // that opens and instantly dies must not thrash at the base
+                // delay forever.
+                if (delivered) restartDelay = CONSUMER_RESTART_BASE_MS;
+                await delay(restartDelay);
+                restartDelay = Math.min(restartDelay * 2, CONSUMER_RESTART_MAX_MS);
+                if (stopped || signal?.aborted) break;
+                try {
+                    await this.ensureConnected();
+                    await spec.ensure();
+                }
+                catch (err) {
+                    console.error(`session bus ${spec.kind} consumer re-ensure failed; will retry:`, err);
+                }
+            }
+        })();
         return stop;
     }
     // startControlConsumer subscribes to the control-plane subject (today:
@@ -112,26 +191,17 @@ export class SharedSessionBus {
     // Durable consumer name is provider-scoped per session so a runner-
     // process restart re-attaches and any unacked control command replays.
     async startControlConsumer(handler, signal) {
-        await this.ensureConnected();
-        await this.ensureControlConsumer();
-        const consumer = await this.js.consumers.get(this.stream, this.controlConsumerName());
-        const messages = await consumer.consume({
-            max_messages: 16,
-            threshold_messages: 8,
-            expires: 30_000,
-            idle_heartbeat: 5_000,
-        });
-        let stopped = false;
-        const stop = async () => {
-            stopped = true;
-            await messages.close();
-        };
-        signal?.addEventListener("abort", () => {
-            void stop();
-        }, { once: true });
-        void (async () => {
-            for await (const msg of messages) {
-                if (stopped || signal?.aborted) break;
+        return this.superviseConsumer({
+            kind: "control",
+            ensure: () => this.ensureControlConsumer(),
+            name: () => this.controlConsumerName(),
+            consumeOpts: {
+                max_messages: 16,
+                threshold_messages: 8,
+                expires: 30_000,
+                idle_heartbeat: 5_000,
+            },
+            dispatch: async (msg) => {
                 const command = this.commandFromMessage(msg);
                 const record = new SessionCommandRecord(command, msg);
                 try {
@@ -141,9 +211,8 @@ export class SharedSessionBus {
                     console.error("session bus control handler failed:", err);
                     record.nak(2_000);
                 }
-            }
-        })().catch((err) => console.error("session bus control consumer crashed:", err));
-        return stop;
+            },
+        }, signal);
     }
     async publishEvent(event, options = {}) {
         await this.ensureConnected();
@@ -205,6 +274,7 @@ export class SharedSessionBus {
         return deliveryCount(record) > SESSION_COMMAND_MAX_DELIVER;
     }
     async close() {
+        this.closing = true;
         await this.nc?.close();
         this.nc = null;
         this.js = null;
@@ -218,9 +288,59 @@ export class SharedSessionBus {
             servers,
             token: this.cfg.natsToken || process.env.NATS_TOKEN,
             name: this.runnerID,
+            // Reconnect FOREVER. The client default (10 attempts x 2s) made
+            // every runner mortal: a NATS outage longer than ~25 seconds
+            // permanently closed the connection and left a deaf-but-alive
+            // zombie process holding the session (issue #1076 item 1). The
+            // session pod outliving a NATS disruption is exactly the
+            // durability boundary the protocol promises, so the connection
+            // must never give up while the process lives. waitOnFirstConnect
+            // makes boot block until NATS is reachable instead of failing
+            // fast — the pod stays pending-healthy and recovers on its own.
+            maxReconnectAttempts: -1,
+            reconnectTimeWait: 2_000,
+            waitOnFirstConnect: true,
         });
+        this.watchConnectionLifecycle(this.nc);
         this.js = this.deps.jetstream(this.nc);
         this.jsm = await this.deps.jetstreamManager(this.nc, { checkAPI: true });
+    }
+    // watchConnectionLifecycle surfaces reconnect churn to logs/metrics and
+    // converts a PERMANENT close into a loud process exit. With unlimited
+    // reconnects, closed() resolving means something terminal happened
+    // (authorization revoked, protocol-fatal error) — there is no in-process
+    // recovery from that state, and the previous behavior was a silent
+    // zombie. Exiting lets the kubelet restart the container (session pods
+    // run restartPolicy Always) with fresh state; durable consumers redeliver
+    // anything un-acked.
+    watchConnectionLifecycle(nc) {
+        void (async () => {
+            try {
+                for await (const status of nc.status()) {
+                    const type = String(status?.type ?? "");
+                    this.deps.onConnectionStatus?.(type);
+                    if (type === "reconnect") {
+                        console.warn("session bus reconnected", { runner: this.runnerID });
+                    }
+                    else if (type === "disconnect" || type === "reconnecting" || type === "staleConnection" || type === "error") {
+                        console.warn("session bus connection status", { type, runner: this.runnerID });
+                    }
+                }
+            }
+            catch {
+                // The status iterator ends with the connection; the closed()
+                // watcher below owns the terminal path.
+            }
+        })();
+        void nc.closed().then((err) => {
+            if (this.closing) return;
+            console.error("session bus connection closed permanently; exiting so the container restarts", {
+                runner: this.runnerID,
+                error: err ? String(err) : "",
+            });
+            const onFatal = this.deps.onFatalConnectionLoss ?? (() => process.exit(1));
+            onFatal(err ?? null);
+        });
     }
     async ensureConsumer() {
         const name = this.consumerName();
@@ -456,6 +576,10 @@ function trimTrailingSlashes(value) {
 function errorText(err) {
     if (err instanceof Error) return err.message;
     return String(err);
+}
+
+function delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function parsePositiveInt(value, fallback) {

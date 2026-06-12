@@ -65,6 +65,28 @@ func TestProjectTranscriptEventsEmitsCollapsedTurnActivityShell(t *testing.T) {
 	}
 }
 
+func TestProjectTranscriptEventsProjectsOriginSessionAvatarID(t *testing.T) {
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text": "fix the avatar bug",
+		}),
+	}
+	events[0]["origin_session_id"] = "42"
+	events[0]["origin_session_avatar_id"] = "jp1-grant"
+
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 1; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	entry := projection.Entries[0]
+	if got, want := entry["originSessionId"], "42"; got != want {
+		t.Fatalf("originSessionId = %v, want %q", got, want)
+	}
+	if got, want := entry["originSessionAvatarId"], "jp1-grant"; got != want {
+		t.Fatalf("originSessionAvatarId = %v, want %q", got, want)
+	}
+}
+
 func TestProjectTranscriptEventsSubmittedOnlyTurnGetsActiveShell(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

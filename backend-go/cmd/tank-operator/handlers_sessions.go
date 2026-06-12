@@ -157,7 +157,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		body.BugLabels = nil
 		body.InitialTurn = nil
 	}
-	mode, status, detail := validateCreateSessionMode(body.Mode)
+	mode, model, effort, status, detail := s.resolveContextSessionRunDefaults(r.Context(), body.Mode, body.Model, body.Effort)
 	if status != 0 {
 		writeError(w, status, detail)
 		return
@@ -185,7 +185,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, status, detail)
 		return
 	}
-	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
+	runConfig, status, detail := validateCreateRunConfig(mode, model, effort)
 	if status != 0 {
 		writeError(w, status, detail)
 		return
@@ -227,8 +227,10 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if body.InitialTurn != nil {
+		originSessionID := originSessionIDFromRequest(r, "")
+		originSessionAvatarID := originSessionAvatarIDFromRequest(r, "")
 		if initialTurn.Deferred {
-			if status, detail := s.persistInitialTurnUserMessage(r.Context(), owner, info.ID, initialTurn, launchTurnAt, authorKindForUser(user)); status != 0 {
+			if status, detail := s.persistInitialTurnUserMessage(r.Context(), owner, info.ID, initialTurn, launchTurnAt, authorKindForUser(user), originSessionID, originSessionAvatarID); status != 0 {
 				s.rollbackCreatedSession(r.Context(), owner, info.ID, "persist deferred initial turn", detail)
 				writeError(w, status, detail)
 				return
@@ -262,20 +264,22 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 			}
 		} else {
 			if _, status, detail := s.enqueueSDKTurn(r.Context(), owner, info.ID, sdkTurnRequest{
-				ClientNonce:        initialTurn.ClientNonce,
-				RequireNonce:       true,
-				Prompt:             initialTurn.Prompt,
-				DisplayAttachments: initialTurn.DisplayAttachments,
-				Model:              runConfig.Model,
-				Effort:             runConfig.Effort,
-				PermissionMode:     initialTurn.PermissionMode,
-				SkillName:          initialTurn.SkillName,
-				FollowUp:           false,
-				AllowBeforeReady:   true,
-				SessionMode:        info.Mode,
-				CreatedAt:          launchTurnAt,
-				OrderBase:          launchTurnAt,
-				AuthorKind:         authorKindForUser(user),
+				ClientNonce:           initialTurn.ClientNonce,
+				RequireNonce:          true,
+				Prompt:                initialTurn.Prompt,
+				DisplayAttachments:    initialTurn.DisplayAttachments,
+				Model:                 runConfig.Model,
+				Effort:                runConfig.Effort,
+				PermissionMode:        initialTurn.PermissionMode,
+				SkillName:             initialTurn.SkillName,
+				FollowUp:              false,
+				AllowBeforeReady:      true,
+				SessionMode:           info.Mode,
+				CreatedAt:             launchTurnAt,
+				OrderBase:             launchTurnAt,
+				OriginSessionID:       originSessionID,
+				OriginSessionAvatarID: originSessionAvatarID,
+				AuthorKind:            authorKindForUser(user),
 			}); status != 0 {
 				s.rollbackCreatedSession(r.Context(), owner, info.ID, "submit initial turn", detail)
 				writeError(w, status, detail)
@@ -298,6 +302,18 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	s.backfillProviderHealthBanner(r.Context(), owner, info)
 	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
 	writeJSON(w, http.StatusCreated, info)
+}
+
+func (s *appServer) resolveContextSessionRunDefaults(ctx context.Context, rawMode, rawModel, rawEffort string) (mode, model, effort string, status int, detail string) {
+	if strings.TrimSpace(rawMode) != "" {
+		mode, status, detail = validateCreateSessionMode(rawMode)
+		return mode, strings.TrimSpace(rawModel), strings.TrimSpace(rawEffort), status, detail
+	}
+	defaults, err := s.effectiveTestSlotSessionDefaults(ctx)
+	if err != nil {
+		return "", "", "", http.StatusInternalServerError, err.Error()
+	}
+	return defaults.Mode, defaults.Model, defaults.Effort, 0, ""
 }
 
 func normalizeCreateBugLabels(single *string, raw []string) ([]*sessionmodel.SessionBugLabel, error) {
@@ -356,7 +372,7 @@ func (s *appServer) backfillProviderHealthBanner(ctx context.Context, owner stri
 	}
 }
 
-func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, sessionID string, turn createSessionInitialTurnRequest, createdAt time.Time, authorKind string) (int, string) {
+func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, sessionID string, turn createSessionInitialTurnRequest, createdAt time.Time, authorKind, originSessionID, originSessionAvatarID string) (int, string) {
 	info, err := s.mgr.GetByOwner(ctx, owner, sessionID)
 	if err != nil {
 		return http.StatusNotFound, "session not found"
@@ -367,17 +383,19 @@ func (s *appServer) persistInitialTurnUserMessage(ctx context.Context, owner, se
 	}
 	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
 	_, events, err := conversation.UserSubmissionEventMaps(conversation.UserSubmissionArgs{
-		SessionID:         sessionID,
-		SessionStorageKey: storageKey,
-		Email:             owner,
-		ClientNonce:       turn.ClientNonce,
-		Text:              turn.Prompt,
-		Message:           map[string]any{"role": "user", "content": turn.Prompt},
-		Attachments:       turn.DisplayAttachments,
-		Runtime:           runtime,
-		SkillName:         turn.SkillName,
-		AuthorKind:        strings.TrimSpace(authorKind),
-		Now:               createdAt.UTC(),
+		SessionID:             sessionID,
+		SessionStorageKey:     storageKey,
+		Email:                 owner,
+		ClientNonce:           turn.ClientNonce,
+		Text:                  turn.Prompt,
+		Message:               map[string]any{"role": "user", "content": turn.Prompt},
+		Attachments:           turn.DisplayAttachments,
+		Runtime:               runtime,
+		SkillName:             turn.SkillName,
+		OriginSessionID:       strings.TrimSpace(originSessionID),
+		OriginSessionAvatarID: strings.TrimSpace(originSessionAvatarID),
+		AuthorKind:            strings.TrimSpace(authorKind),
+		Now:                   createdAt.UTC(),
 	})
 	if err != nil {
 		return http.StatusBadRequest, err.Error()
@@ -923,12 +941,14 @@ func (s *appServer) handleSendMessage(w http.ResponseWriter, r *http.Request) {
 
 	owner := user.OwnerEmail()
 	resp, status, detail := s.enqueueSDKTurn(r.Context(), owner, sessionID, sdkTurnRequest{
-		Prompt:         body.Prompt,
-		Model:          body.Model,
-		PermissionMode: body.PermissionMode,
-		SkillName:      body.SkillName,
-		FollowUp:       true,
-		AuthorKind:     authorKindForUser(user),
+		Prompt:                body.Prompt,
+		Model:                 body.Model,
+		PermissionMode:        body.PermissionMode,
+		SkillName:             body.SkillName,
+		FollowUp:              true,
+		OriginSessionID:       originSessionIDFromRequest(r, ""),
+		OriginSessionAvatarID: originSessionAvatarIDFromRequest(r, ""),
+		AuthorKind:            authorKindForUser(user),
 	})
 	if detail != "" {
 		writeError(w, status, detail)

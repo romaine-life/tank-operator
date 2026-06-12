@@ -655,6 +655,16 @@ func TestManagerCreateWritesReservedAvatarsBeforeVisibleRow(t *testing.T) {
 	if len(registry.reserveCalls) != 1 || registry.reserveCalls[0] != "42" {
 		t.Fatalf("reserve calls = %#v, want [42]", registry.reserveCalls)
 	}
+	pods, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := len(pods.Items), 1; got != want {
+		t.Fatalf("created pods = %d, want %d", got, want)
+	}
+	if got, want := pods.Items[0].Annotations["tank-operator/agent-avatar-id"], "agent-42"; got != want {
+		t.Fatalf("pod agent avatar annotation = %q, want %q", got, want)
+	}
 	for _, record := range registry.upserts {
 		if record.ID != "42" || !record.Visible {
 			continue

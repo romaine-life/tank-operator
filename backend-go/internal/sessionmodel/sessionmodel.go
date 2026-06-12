@@ -365,8 +365,10 @@ type ManifestOptions struct {
 	NATSAuthSecret string
 	// Model/Effort are the immutable session-owned SDK run configuration
 	// accepted at create time.
-	Model  string
-	Effort string
+	Model          string
+	Effort         string
+	AgentAvatarID  string
+	SystemAvatarID string
 	// GlimmungContext JSON-serialized dict (may be empty).
 	GlimmungContextJSON string
 	// Repos is the validated owner/name slug list selected at session
@@ -923,6 +925,14 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				},
 			},
 		},
+		map[string]any{
+			"name": "AGENT_AVATAR_ID",
+			"valueFrom": map[string]any{
+				"fieldRef": map[string]any{
+					"fieldPath": "metadata.annotations['tank-operator/agent-avatar-id']",
+				},
+			},
+		},
 	}
 	if spireLensMCPEnabled {
 		mcpProxyEnv = append(mcpProxyEnv,
@@ -1072,6 +1082,23 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"ports": []any{
 				map[string]any{"name": "runner-metrics", "containerPort": AgentRunnerMetricsPort},
 			},
+			"livenessProbe": map[string]any{
+				// Belt-and-braces for the runner's exit-on-permanent-close
+				// path (issue #1076 item 1): /healthz returns 503 once the
+				// session bus connection is permanently closed, and a wedged
+				// event loop simply stops answering — both restart the
+				// container. Generous thresholds: a healthy runner under
+				// reconnect churn keeps answering 200, so only true zombies
+				// trip this (30s + 4x30s = ~2.5 minutes of deadness).
+				"httpGet": map[string]any{
+					"path": "/healthz",
+					"port": "runner-metrics",
+				},
+				"initialDelaySeconds": 30,
+				"periodSeconds":       30,
+				"timeoutSeconds":      5,
+				"failureThreshold":    4,
+			},
 			"resources": agentRunnerResources(),
 		}
 		containers = append(containers, runnerContainer)
@@ -1179,6 +1206,17 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			"volumeMounts":    runnerVolumeMounts,
 			"ports": []any{
 				map[string]any{"name": "runner-metrics", "containerPort": CodexRunnerMetricsPort},
+			},
+			"livenessProbe": map[string]any{
+				// Same contract as the claude-runner probe above.
+				"httpGet": map[string]any{
+					"path": "/healthz",
+					"port": "runner-metrics",
+				},
+				"initialDelaySeconds": 30,
+				"periodSeconds":       30,
+				"timeoutSeconds":      5,
+				"failureThreshold":    4,
 			},
 			"resources": codexRunnerResources(),
 		}
@@ -1320,6 +1358,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 		"tank-operator/owner-email":      owner,
 		"tank-operator/session-id":       sessionID,
 		"argocd.argoproj.io/tracking-id": argoTrackingID,
+	}
+	if opts.AgentAvatarID != "" {
+		annotations["tank-operator/agent-avatar-id"] = opts.AgentAvatarID
+	}
+	if opts.SystemAvatarID != "" {
+		annotations["tank-operator/system-avatar-id"] = opts.SystemAvatarID
 	}
 	if len(opts.Capabilities) > 0 {
 		raw, _ := json.Marshal(opts.Capabilities)

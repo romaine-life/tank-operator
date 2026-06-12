@@ -193,17 +193,18 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	}
 
 	var body struct {
-		ClientNonce         string                               `json:"client_nonce"`
-		Prompt              string                               `json:"prompt"`
-		DisplayText         string                               `json:"display_text"`
-		DisplayAttachments  []conversation.UserMessageAttachment `json:"display_attachments"`
-		Model               string                               `json:"model"`
-		Effort              string                               `json:"effort"`
-		PermissionMode      string                               `json:"permission_mode"`
-		SkillName           string                               `json:"skill_name"`
-		FollowUp            bool                                 `json:"follow_up"`
-		OriginSessionID     string                               `json:"origin_session_id"`
-		ExistingUserMessage bool                                 `json:"existing_user_message"`
+		ClientNonce           string                               `json:"client_nonce"`
+		Prompt                string                               `json:"prompt"`
+		DisplayText           string                               `json:"display_text"`
+		DisplayAttachments    []conversation.UserMessageAttachment `json:"display_attachments"`
+		Model                 string                               `json:"model"`
+		Effort                string                               `json:"effort"`
+		PermissionMode        string                               `json:"permission_mode"`
+		SkillName             string                               `json:"skill_name"`
+		FollowUp              bool                                 `json:"follow_up"`
+		OriginSessionID       string                               `json:"origin_session_id"`
+		OriginSessionAvatarID string                               `json:"origin_session_avatar_id"`
+		ExistingUserMessage   bool                                 `json:"existing_user_message"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid body")
@@ -224,7 +225,8 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		FollowUp:                   body.FollowUp,
 		OmitUserMessage:            body.ExistingUserMessage,
 		RequireExistingUserMessage: body.ExistingUserMessage,
-		OriginSessionID:            body.OriginSessionID,
+		OriginSessionID:            originSessionIDFromRequest(r, body.OriginSessionID),
+		OriginSessionAvatarID:      originSessionAvatarIDFromRequest(r, body.OriginSessionAvatarID),
 		AuthorKind:                 authorKindForUser(user),
 	})
 	if detail != "" {
@@ -864,7 +866,8 @@ type sdkTurnRequest struct {
 	// browser-created fork. Human-typed browser turns leave it empty.
 	// Threaded into UserSubmissionArgs so the persisted user_message.created
 	// event carries it for the frontend's avatar selection.
-	OriginSessionID string
+	OriginSessionID       string
+	OriginSessionAvatarID string
 	// AuthorKind attributes the turn to a non-interactive principal (an
 	// auth.romaine.life bot token) so the transcript renders the session's
 	// system identity instead of the human owner's Gravatar. Empty for
@@ -887,6 +890,26 @@ func authorKindForUser(user auth.User) string {
 		return string(conversation.AuthorKindSystem)
 	}
 	return ""
+}
+
+func originSessionIDFromRequest(r *http.Request, explicit string) string {
+	if origin := strings.TrimSpace(explicit); origin != "" {
+		return origin
+	}
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.Header.Get(originSessionHeader))
+}
+
+func originSessionAvatarIDFromRequest(r *http.Request, explicit string) string {
+	if originAvatar := strings.TrimSpace(explicit); originAvatar != "" {
+		return originAvatar
+	}
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.Header.Get(originSessionAvatarHeader))
 }
 
 type sessionRunConfig struct {
@@ -1077,19 +1100,20 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 	}
 	storageKey := sessionmodel.SessionStorageKey(s.sessionScope, sessionID)
 	turnID, events, err := conversation.UserSubmissionEventMaps(conversation.UserSubmissionArgs{
-		SessionID:         sessionID,
-		SessionStorageKey: storageKey,
-		Email:             email,
-		ClientNonce:       clientNonce,
-		Text:              displayText,
-		Message:           map[string]any{"role": "user", "content": displayText},
-		Attachments:       displayAttachments,
-		Runtime:           provider,
-		SkillName:         skillName,
-		Display:           req.Display,
-		OriginSessionID:   strings.TrimSpace(req.OriginSessionID),
-		AuthorKind:        strings.TrimSpace(req.AuthorKind),
-		Now:               createdAt,
+		SessionID:             sessionID,
+		SessionStorageKey:     storageKey,
+		Email:                 email,
+		ClientNonce:           clientNonce,
+		Text:                  displayText,
+		Message:               map[string]any{"role": "user", "content": displayText},
+		Attachments:           displayAttachments,
+		Runtime:               provider,
+		SkillName:             skillName,
+		Display:               req.Display,
+		OriginSessionID:       strings.TrimSpace(req.OriginSessionID),
+		OriginSessionAvatarID: strings.TrimSpace(req.OriginSessionAvatarID),
+		AuthorKind:            strings.TrimSpace(req.AuthorKind),
+		Now:                   createdAt,
 	})
 	if err != nil {
 		return nil, http.StatusBadRequest, err.Error()

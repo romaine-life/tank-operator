@@ -157,7 +157,9 @@ AUTH_ROMAINE_FORWARD_HEADER = "X-Auth-Romaine-Token"
 # tank-operator/backend-go/cmd/tank-operator/handlers_internal.go;
 # changing it requires a coordinated cross-repo deploy.
 ORIGIN_SESSION_FORWARD_HEADER = "X-Tank-Origin-Session-Id"
+ORIGIN_SESSION_AVATAR_FORWARD_HEADER = "X-Tank-Origin-Session-Avatar-Id"
 ORIGIN_SESSION_ID = (os.environ.get("SESSION_ID") or "").strip()
+ORIGIN_SESSION_AVATAR_ID = (os.environ.get("AGENT_AVATAR_ID") or "").strip()
 
 # Caller-context headers identify the session pod that is making an MCP call.
 # Unlike X-Tank-Origin-Session-Id, these are not handoff/display metadata; they
@@ -644,6 +646,8 @@ async def run() -> None:
                     static_headers[CALLER_SESSION_SCOPE_FORWARD_HEADER] = SESSION_SCOPE
                 if port == TANK_OPERATOR_MCP_PORT:
                     static_headers[ORIGIN_SESSION_FORWARD_HEADER] = ORIGIN_SESSION_ID
+                    if ORIGIN_SESSION_AVATAR_ID:
+                        static_headers[ORIGIN_SESSION_AVATAR_FORWARD_HEADER] = ORIGIN_SESSION_AVATAR_ID
 
             # The SpireLens upstream is on the tailnet; route it through the
             # tailscaled outbound HTTP proxy. Every other upstream is an

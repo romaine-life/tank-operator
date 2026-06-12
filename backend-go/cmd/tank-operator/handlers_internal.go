@@ -143,10 +143,26 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
 	}
-	mode, status, detail := validateCreateSessionMode(body.Mode)
-	if status != 0 {
-		writeError(w, status, detail)
-		return
+	mode := ""
+	model := strings.TrimSpace(body.Model)
+	effort := strings.TrimSpace(body.Effort)
+	if strings.TrimSpace(body.Mode) == "" && s.localSessionScope() != prodSessionScope {
+		defaults, err := s.effectiveTestSlotSessionDefaults(r.Context())
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		mode = defaults.Mode
+		model = defaults.Model
+		effort = defaults.Effort
+	} else {
+		var status int
+		var detail string
+		mode, status, detail = validateCreateSessionMode(body.Mode)
+		if status != 0 {
+			writeError(w, status, detail)
+			return
+		}
 	}
 
 	repos, err := validateRepoSlugs(body.Repos)
@@ -163,7 +179,7 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		writeError(w, status, detail)
 		return
 	}
-	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
+	runConfig, status, detail := validateCreateRunConfig(mode, model, effort)
 	if status != 0 {
 		writeError(w, status, detail)
 		return
@@ -677,10 +693,11 @@ func (s *appServer) handleInternalSetCloneState(w http.ResponseWriter, r *http.R
 // Origin attribution: when the caller is itself a tank-operator session pod
 // (the only post-#486 caller shape — service-principal JWT minted from that
 // pod's projected SA token), the mcp-auth-proxy sidecar in the originating
-// pod stamps the X-Tank-Origin-Session-Id header on the way out. That id
+// pod stamps the X-Tank-Origin-Session-Id header on the way out. That id,
+// plus the sibling pod's assigned avatar id when available,
 // flows through the mcp-tank-operator MCP server unchanged and lands here.
 // We thread it onto the persisted user_message.created event so the
-// frontend renders the user bubble with the parent session's deterministic
+// frontend renders the user bubble with the parent session's assigned
 // avatar instead of the human owner's Gravatar. The header is advisory:
 // missing/invalid values fall through to the human-Gravatar rendering — a
 // caller cannot escalate or spoof identity by setting it, because owner
@@ -704,12 +721,13 @@ func (s *appServer) handleInternalSendMessage(w http.ResponseWriter, r *http.Req
 	}
 
 	resp, status, detail := s.enqueueSDKTurn(r.Context(), user.ActorEmail, sessionID, sdkTurnRequest{
-		Prompt:          body.Prompt,
-		Model:           body.Model,
-		PermissionMode:  body.PermissionMode,
-		SkillName:       body.SkillName,
-		FollowUp:        true,
-		OriginSessionID: strings.TrimSpace(r.Header.Get(originSessionHeader)),
+		Prompt:                body.Prompt,
+		Model:                 body.Model,
+		PermissionMode:        body.PermissionMode,
+		SkillName:             body.SkillName,
+		FollowUp:              true,
+		OriginSessionID:       strings.TrimSpace(r.Header.Get(originSessionHeader)),
+		OriginSessionAvatarID: strings.TrimSpace(r.Header.Get(originSessionAvatarHeader)),
 	})
 	if detail != "" {
 		writeError(w, status, detail)
@@ -726,6 +744,7 @@ func (s *appServer) handleInternalSendMessage(w http.ResponseWriter, r *http.Req
 // /server.py and mcp-tank-operator/src/mcp_tank_operator/{caller,client,http}.py)
 // — changing it requires a coordinated cross-repo deploy.
 const originSessionHeader = "X-Tank-Origin-Session-Id"
+const originSessionAvatarHeader = "X-Tank-Origin-Session-Avatar-Id"
 
 // requireServicePrincipal validates an inbound auth.romaine.life JWT and
 // returns the verified User iff the role claim is `service`. The
