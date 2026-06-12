@@ -9326,6 +9326,20 @@ textarea.run-files-viewer-editor:focus {
   transform: translateY(1px);
 }
 
+.run-turn-activity-divider-toggle[data-direction="both"] {
+  width: 28px;
+  flex-direction: column;
+  gap: 0;
+}
+
+.run-turn-activity-divider-toggle[data-direction="both"] .run-turn-activity-divider-toggle-chevron:first-child {
+  transform: translateY(2px);
+}
+
+.run-turn-activity-divider-toggle[data-direction="both"] .run-turn-activity-divider-toggle-chevron:last-child {
+  transform: translateY(-2px);
+}
+
 .run-turn-activity-divider-toggle:hover:not(:disabled),
 .run-turn-activity-divider-toggle:focus-visible:not(:disabled) {
   border-color: rgba(255, 255, 255, 0.22);
