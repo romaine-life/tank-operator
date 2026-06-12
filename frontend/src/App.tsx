@@ -506,6 +506,11 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
     questionIndex?: number;
     questionSet?: number;
     answered: boolean;
+    // `dismissed` is durable — set once the question turn carries a
+    // non-answer terminal (the user stopped instead of answering, or a
+    // restart re-ask was superseded by the original answer). The backend
+    // 409s answers to a dismissed question; the card must not offer them.
+    dismissed?: boolean;
     answers?: Record<string, string[]>;
     annotations?: Record<string, { preview?: string; notes?: string }>;
   };
@@ -7475,7 +7480,9 @@ function RunMessageBubble({
                 className="run-msg-question-action"
                 onClick={openQuestionTurn}
               >
-                {awaitingInput.answered ? "View questions" : "Answer in Turns"}
+                {awaitingInput.answered || awaitingInput.dismissed
+                  ? "View questions"
+                  : "Answer in Turns"}
               </button>
             )}
         </div>
@@ -9350,6 +9357,11 @@ function RunAwaitingInputCard({
   // later turn.input_answered event references this question, so a fresh tab
   // renders the resolved card. submittedSnapshot covers the post-click window.
   const answered = (aw?.answered ?? false) || submittedSnapshot !== null;
+  // dismissed: the question turn closed without an answer (durable). The
+  // backend rejects answers with 409 once any terminal exists on the
+  // question turn, so the controls must lock exactly like answered.
+  const dismissed = !answered && (aw?.dismissed ?? false);
+  const resolved = answered || dismissed;
 
   // After answering, the per-question UI stays rendered so the user
   // can scroll back in chat history and see exactly what was offered
@@ -9403,7 +9415,7 @@ function RunAwaitingInputCard({
   const hasPreviousQuestion = Boolean(questionNavigation?.previousPage);
 
   function toggleSelection(q: AskUserQuestion, label: string): void {
-    if (answered || submitting) return;
+    if (resolved || submitting) return;
     updateDraft((draft) => {
       const prev = draft.selections;
       const current = prev[q.question] ?? [];
@@ -9430,7 +9442,7 @@ function RunAwaitingInputCard({
   }
 
   async function submit(): Promise<void> {
-    if (submitting || answered || !isReady) return;
+    if (submitting || resolved || !isReady) return;
     const answers: Record<string, string[]> = {};
     const annotations: Record<string, { preview?: string; notes?: string }> =
       {};
@@ -9493,9 +9505,18 @@ function RunAwaitingInputCard({
 
   return (
     <div
-      className={`run-tool-body run-tool-ask${answered ? " run-tool-ask-locked" : ""}`}
+      className={`run-tool-body run-tool-ask${resolved ? " run-tool-ask-locked" : ""}`}
       data-answered={answered ? "true" : "false"}
+      data-dismissed={dismissed ? "true" : "false"}
     >
+      {dismissed && (
+        <div className="run-tool-ask-status" role="status" aria-live="polite">
+          <span className="run-tool-ask-status-icon" aria-hidden="true">
+            ⊘
+          </span>
+          <span>Dismissed without an answer — the turn was stopped.</span>
+        </div>
+      )}
       {answered && (
         <div
           className={`run-tool-ask-status${confirmingSubmit ? " run-tool-ask-status-pending" : ""}`}
@@ -9525,12 +9546,12 @@ function RunAwaitingInputCard({
         // (options=null + isOther=true → no preview, no selection → no
         // textarea). Tank's Other path is a first-class affordance,
         // not a side-effect of preview content.
-        const showFreeForm = !answered && q.allowFreeForm;
+        const showFreeForm = !resolved && q.allowFreeForm;
         return (
           <div key={qi} className="run-tool-ask-question">
             {q.header && <span className="run-tool-ask-chip">{q.header}</span>}
             {q.question && <p className="run-tool-ask-text">{q.question}</p>}
-            {q.options.length === 0 && q.allowFreeForm && !answered && (
+            {q.options.length === 0 && q.allowFreeForm && !resolved && (
               <p className="run-tool-ask-text run-tool-ask-text-muted">
                 No options offered — answer below.
               </p>
@@ -9554,7 +9575,7 @@ function RunAwaitingInputCard({
                     type="button"
                     className={optionClass}
                     aria-pressed={selected}
-                    disabled={submitting || answered}
+                    disabled={submitting || resolved}
                     onClick={() => toggleSelection(q, opt.label)}
                   >
                     <span
@@ -9632,7 +9653,7 @@ function RunAwaitingInputCard({
           </div>
         );
       })}
-      {!answered && (
+      {!resolved && (
         <div className="run-tool-ask-submit-row">
           {hasPreviousQuestion && (
             <button

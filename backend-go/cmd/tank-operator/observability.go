@@ -2573,6 +2573,64 @@ func recordTurnActivityPages(pageCount, eventCount int) {
 	turnActivityEventCount.Observe(float64(eventCount))
 }
 
+// Turn-activity projection cache (issue #1077 item 1): hit/stale/miss/evicted
+// classify every cache decision; the gauges expose the working set so the
+// LRU bounds are observable. A hit rate near zero on a busy session means
+// the freshness probe is broken (every probe differing) — investigate before
+// raising bounds.
+var turnActivityCacheTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_turn_activity_cache_total",
+		Help: "Turn-activity projection cache decisions: hit (served cached), stale (turn advanced), miss (first read), evicted (LRU bound).",
+	},
+	[]string{"result"},
+)
+
+var turnActivityCacheEntries = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "tank_turn_activity_cache_entries",
+	Help: "Turn-activity projection cache entry count.",
+})
+
+var turnActivityCacheEvents = promauto.NewGauge(prometheus.GaugeOpts{
+	Name: "tank_turn_activity_cache_events",
+	Help: "Total projected events held by the turn-activity cache (the LRU eviction unit).",
+})
+
+func recordTurnActivityCache(result string) {
+	switch result {
+	case "hit", "stale", "miss", "evicted":
+	default:
+		result = "other"
+	}
+	turnActivityCacheTotal.WithLabelValues(result).Inc()
+}
+
+func recordTurnActivityCacheSize(entries, events int) {
+	turnActivityCacheEntries.Set(float64(entries))
+	turnActivityCacheEvents.Set(float64(events))
+}
+
+// Background-wake origin resolutions (issue #1077 extras): the legacy
+// numeric deep-link path folded the WHOLE session ledger per hit; the memo
+// makes repeats free. The resolution is durable (parent linkage never
+// changes), so memo entries never invalidate.
+var wakeOriginResolutionTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_wake_origin_resolution_total",
+		Help: "Background-wake origin-turn resolutions for numeric deep links: memo_hit or ledger_fold.",
+	},
+	[]string{"result"},
+)
+
+func recordWakeOriginResolution(result string) {
+	switch result {
+	case "memo_hit", "ledger_fold":
+	default:
+		result = "other"
+	}
+	wakeOriginResolutionTotal.WithLabelValues(result).Inc()
+}
+
 func turnNumberMissingPhaseLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
 	case "materialize":

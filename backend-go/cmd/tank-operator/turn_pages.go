@@ -89,10 +89,33 @@ func readAllSessionEvents(ctx context.Context, eventStore store.SessionEventStor
 // experiences it. A background-task wake is a backend continuation turn, but it
 // belongs in the originating turn's activity detail.
 func readUserFacingTurnEvents(ctx context.Context, eventStore store.SessionEventStore, sessionID, turnID string) ([]map[string]any, error) {
+	events, _, _, err := readUserFacingTurnEventsWithChain(ctx, eventStore, sessionID, turnID)
+	return events, err
+}
+
+// readUserFacingTurnEventsWithChain additionally returns the candidate turn
+// ids (origin + every derivable wake-chain id, in discovery order) and the
+// max order_key observed per candidate — the turn-activity cache's
+// freshness inputs (issue #1077 item 1). The observed max equals the DB max
+// at read time because every candidate is read to exhaustion; candidates
+// with no events yet map to "".
+func readUserFacingTurnEventsWithChain(ctx context.Context, eventStore store.SessionEventStore, sessionID, turnID string) ([]map[string]any, []string, map[string]string, error) {
+	observed := map[string]string{}
+	noteObserved := func(id string, events []map[string]any) {
+		max := observed[id]
+		for _, event := range events {
+			if key, _ := event["order_key"].(string); key > max {
+				max = key
+			}
+		}
+		observed[id] = max
+	}
 	events, err := readAllTurnEvents(ctx, eventStore, sessionID, turnID)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
+	candidates := []string{turnID}
+	noteObserved(turnID, events)
 	// Transitively pull the entire background-wake continuation chain rooted at
 	// turnID. A wake turn can itself launch a background task whose terminal
 	// wakes a further continuation turn (wake-of-a-wake); the whole chain folds
@@ -107,14 +130,16 @@ func readUserFacingTurnEvents(ctx context.Context, eventStore store.SessionEvent
 			continue
 		}
 		seen[wakeTurnID] = true
+		candidates = append(candidates, wakeTurnID)
 		wakeEvents, err := readAllTurnEvents(ctx, eventStore, sessionID, wakeTurnID)
 		if err != nil {
-			return nil, err
+			return nil, nil, nil, err
 		}
+		noteObserved(wakeTurnID, wakeEvents)
 		events = append(events, wakeEvents...)
 		frontier = append(frontier, backgroundWakeTurnIDsForParentEvents(wakeEvents, wakeTurnID)...)
 	}
-	return orderedTranscriptEvents(events), nil
+	return orderedTranscriptEvents(events), candidates, observed, nil
 }
 
 func backgroundWakeTurnIDsForParentEvents(events []map[string]any, parentTurnID string) []string {
@@ -292,6 +317,7 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 	var current []map[string]any
 	var pendingQuestionPages []turnEventPage
 	pendingQuestionTimelineID := ""
+	pendingQuestionTurnID := ""
 	questionSet := 0
 
 	flush := func() {
@@ -315,11 +341,23 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 		}
 		pendingQuestionPages = nil
 		pendingQuestionTimelineID = ""
+		pendingQuestionTurnID = ""
 	}
 
 	for _, event := range ordered {
 		if len(pendingQuestionPages) > 0 {
 			if isTurnInputAnsweredForQuestion(event, pendingQuestionTimelineID) {
+				flushPendingQuestionPages(event)
+				continue
+			}
+			// A non-answer terminal on the question turn dismisses the
+			// pending question set (Stop, supersession, sweep — issue
+			// #1077 item 4): absorb it into the question pages exactly
+			// like an answer, so the page fold renders the cards
+			// dismissed instead of leaving them answerable forever. The
+			// turn shell still folds the terminal from the full event
+			// set.
+			if isQuestionDismissalTerminal(event, pendingQuestionTurnID) {
 				flushPendingQuestionPages(event)
 				continue
 			}
@@ -340,6 +378,7 @@ func splitTurnEventsIntoSemanticPages(events []map[string]any) []turnEventPage {
 			questionSet += 1
 			pendingQuestionPages = awaitingInputQuestionPages(event, questionSet)
 			pendingQuestionTimelineID = awaitingInputTimelineID(event)
+			pendingQuestionTurnID = transcriptString(event, "turn_id")
 			continue
 		}
 		current = append(current, event)
@@ -420,6 +459,20 @@ func awaitingInputTimelineID(event map[string]any) string {
 		return timelineID
 	}
 	return transcriptString(event, "timeline_id")
+}
+
+// isQuestionDismissalTerminal reports whether event is a non-answer
+// terminal on the pending question turn — the dismissal class the
+// projection's noteQuestionDismissal renders.
+func isQuestionDismissalTerminal(event map[string]any, questionTurnID string) bool {
+	if questionTurnID == "" || transcriptString(event, "turn_id") != questionTurnID {
+		return false
+	}
+	switch transcriptString(event, "type") {
+	case "turn.interrupted", "turn.failed", "turn.command_failed":
+		return true
+	}
+	return false
 }
 
 func isTurnInputAnsweredForQuestion(event map[string]any, questionTimelineID string) bool {

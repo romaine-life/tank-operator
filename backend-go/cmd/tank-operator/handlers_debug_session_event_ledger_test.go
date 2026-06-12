@@ -32,6 +32,10 @@ func (f *fakeDebugSessionEventLedgerStore) Upsert(context.Context, map[string]an
 	return true, nil
 }
 
+func (f *fakeDebugSessionEventLedgerStore) MaxOrderKeyForTurn(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
 func (f *fakeDebugSessionEventLedgerStore) ShellTaskEvents(context.Context, string) ([]map[string]any, error) {
 	return nil, nil
 }

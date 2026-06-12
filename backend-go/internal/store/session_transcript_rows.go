@@ -689,6 +689,14 @@ func transcriptRowFromEntry(entry map[string]any) (transcriptRowRecord, bool) {
 	if terminalOrderKey := transcriptRowString(entry, "turnTerminalOrderKey"); terminalOrderKey != "" && terminalOrderKey > endOrderKey {
 		endOrderKey = terminalOrderKey
 	}
+	// contentOrderKey marks an in-place payload mutation (answered/dismissed
+	// flips on awaiting cards — issue #1077 item 4). Lifting it here moves
+	// the row past open SSE cursors so the flip actually DELIVERS; row
+	// identity (row_id) and transcript position (start_order_key/row_cursor)
+	// deliberately stay untouched.
+	if contentOrderKey := transcriptRowString(entry, "contentOrderKey"); contentOrderKey != "" && contentOrderKey > endOrderKey {
+		endOrderKey = contentOrderKey
+	}
 	return transcriptRowRecord{
 		ID:            id,
 		Cursor:        startOrderKey + transcriptRowCursorSeparator + id,

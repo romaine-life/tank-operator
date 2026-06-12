@@ -308,6 +308,12 @@ func (s *appServer) handleGitHubPinnedReposEvents(w http.ResponseWriter, r *http
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	// Per-write deadlines (issue #1077): every write/flush below rides the
+	// deadline-arming wrapper so a hung or slow client errors the stream
+	// instead of pinning this goroutine forever.
+	deadlineW := newSSEDeadlineWriter(w, flusher)
+	w = deadlineW
+	flusher = deadlineW
 
 	writeSSEJSONEvent(w, "ready", "", map[string]any{"stream": streamKindPinnedRepos})
 	if err := s.writePinnedReposSnapshotEvent(r.Context(), w, owner); err != nil {

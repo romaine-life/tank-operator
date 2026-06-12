@@ -52,6 +52,12 @@ type projectionState struct {
 	awaitingInputs        []projectionAwaitingInput
 	awaitingInputTools    []projectedEntryItem
 	answeredQuestions     map[string]projectionAnsweredInput
+	// dismissedQuestions maps a QUESTION turn id to the order key of the
+	// terminal that closed it unanswered (Stop dismissal or a superseded
+	// restart re-ask — issue #1078; surfaced here per issue #1077 item 4 so
+	// the card renders non-answerable and its row's end_order_key advances
+	// for SSE delivery).
+	dismissedQuestions map[string]string
 	runStatus             string
 	activeTurnID          string
 	activeItemID          string
@@ -170,6 +176,10 @@ type projectionAnsweredInput struct {
 	Answered    bool
 	Answers     map[string]any
 	Annotations map[string]any
+	// OrderKey of the turn.input_answered event — lifts the awaiting CARD's
+	// end_order_key past open SSE cursors when the answered flag flips
+	// (issue #1077 item 4).
+	OrderKey string
 }
 
 func newProjectionState() projectionState {
@@ -286,6 +296,7 @@ func (s *projectionState) apply(event map[string]any) {
 		s.needsInput = false
 	case "turn.failed", "turn.command_failed":
 		s.applyTurnTerminal(event, "failed")
+		s.noteQuestionDismissal(event)
 		s.runStatus = "error"
 		s.activeTurnID = ""
 		s.activeItemID = ""
@@ -294,6 +305,7 @@ func (s *projectionState) apply(event map[string]any) {
 		s.applyInterruptRequested(event)
 	case "turn.interrupted":
 		s.applyTurnTerminal(event, "interrupted")
+		s.noteQuestionDismissal(event)
 		s.runStatus = "stopped"
 		s.activeTurnID = ""
 		s.activeItemID = ""
@@ -448,6 +460,7 @@ func (s *projectionState) applyInputAnswered(event map[string]any) {
 		Answered:    true,
 		Answers:     transcriptAnyMap(payload["answers"]),
 		Annotations: transcriptAnyMap(payload["annotations"]),
+		OrderKey:    transcriptString(event, "order_key"),
 	}
 	for idx := range s.messages {
 		awaiting, _ := s.messages[idx].entry["awaitingInput"].(map[string]any)
@@ -461,6 +474,61 @@ func (s *projectionState) applyInputAnswered(event map[string]any) {
 		if annotations := transcriptAnyMap(payload["annotations"]); annotations != nil {
 			awaiting["annotations"] = annotations
 		}
+		// The flip changes the row's payload without any new event for the
+		// row itself — advance contentOrderKey so the materialized row's
+		// end_order_key moves past open SSE cursors (issue #1077 item 4:
+		// a second tab used to keep an answerable card forever).
+		markEntryContentOrderKey(s.messages[idx].entry, transcriptString(event, "order_key"))
+	}
+}
+
+// markEntryContentOrderKey records the order key of the latest event that
+// mutated an entry's payload IN PLACE (answered/dismissed flips). The
+// transcript-row store lifts it into end_order_key — row identity and
+// transcript position (start_order_key / row_cursor) stay untouched.
+func markEntryContentOrderKey(entry map[string]any, orderKey string) {
+	if entry == nil || orderKey == "" {
+		return
+	}
+	if existing, _ := entry["contentOrderKey"].(string); orderKey > existing {
+		entry["contentOrderKey"] = orderKey
+	}
+}
+
+// noteQuestionDismissal marks a question turn's awaiting cards dismissed
+// when a non-answer terminal closes the question turn (Stop dismissal,
+// superseded restart re-ask, or a sweep terminal on the shell). Answered
+// cards never flip to dismissed — the answer wins.
+func (s *projectionState) noteQuestionDismissal(event map[string]any) {
+	turnID := transcriptString(event, "turn_id")
+	if turnID == "" {
+		return
+	}
+	isQuestionTurn := false
+	for _, awaiting := range s.awaitingInputs {
+		if awaiting.QuestionTurnID == turnID {
+			isQuestionTurn = true
+			break
+		}
+	}
+	if !isQuestionTurn {
+		return
+	}
+	orderKey := transcriptString(event, "order_key")
+	if s.dismissedQuestions == nil {
+		s.dismissedQuestions = map[string]string{}
+	}
+	s.dismissedQuestions[turnID] = orderKey
+	for idx := range s.messages {
+		awaiting, _ := s.messages[idx].entry["awaitingInput"].(map[string]any)
+		if awaiting == nil || transcriptMapString(awaiting, "questionTurnId") != turnID {
+			continue
+		}
+		if answered, _ := awaiting["answered"].(bool); answered {
+			continue
+		}
+		awaiting["dismissed"] = true
+		markEntryContentOrderKey(s.messages[idx].entry, orderKey)
 	}
 }
 
@@ -1117,7 +1185,7 @@ func (s *projectionState) projectFlatEntries() []map[string]any {
 	}
 	baseIndex += len(s.turnTerminals)
 	for idx, awaiting := range s.awaitingInputs {
-		card := projectAwaitingInputCard(awaiting, s.answeredQuestions[awaiting.TimelineID])
+		card := projectAwaitingInputCard(awaiting, s.answeredQuestions[awaiting.TimelineID], s.dismissedQuestions[awaiting.QuestionTurnID])
 		items = append(items, projectedEntryItem{
 			entry:    card,
 			orderKey: transcriptMapString(card, "orderKey"),
@@ -2128,10 +2196,11 @@ func isProjectionAwaitingInputEntry(entry map[string]any) bool {
 // derived assistant_message.created event. `answered` is derived from a later
 // turn.input_answered event, not a browser-local flag, so a fresh tab opened
 // after the user answered renders the resolved question set.
-func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectionAnsweredInput) map[string]any {
+func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectionAnsweredInput, dismissedOrderKey string) map[string]any {
 	summary := awaitingInputSummary(awaiting.Questions)
 	title := "I need your input"
 	answered := answer.Answered
+	dismissed := !answered && dismissedOrderKey != ""
 	orderKey := awaiting.OrderKey
 	if orderKey != "" {
 		orderKey = orderKey + "~awaiting_input"
@@ -2150,7 +2219,10 @@ func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectio
 		"question_index":       awaiting.QuestionIndex,
 		"question_set":         awaiting.QuestionSet,
 	}, answered, answer)
-	return map[string]any{
+	if dismissed {
+		awaitingInput["dismissed"] = true
+	}
+	card := map[string]any{
 		"id":             anchor + ":awaiting_input",
 		"kind":           "meta",
 		"metaKind":       "awaiting_input",
@@ -2166,6 +2238,13 @@ func projectAwaitingInputCard(awaiting projectionAwaitingInput, answer projectio
 		},
 		"awaitingInput": awaitingInput,
 	}
+	if dismissed {
+		markEntryContentOrderKey(card, dismissedOrderKey)
+	}
+	if answered {
+		markEntryContentOrderKey(card, answer.OrderKey)
+	}
+	return card
 }
 
 func projectionAwaitingInputPayloadFromMap(raw map[string]any, answered bool, answer projectionAnsweredInput) map[string]any {
