@@ -831,6 +831,31 @@ var strandedTurnSweptTotal = promauto.NewCounterVec(
 	[]string{"result"},
 )
 
+// tank_idle_sessions_reaped_total — durably-idle sessions the reaper
+// claimed and deleted, labeled by bounded result (deleted,
+// delete_failed). The claim itself is the registry's conditional UPDATE
+// (ClaimIdleForReap), so a delete_failed row is already invisible and the
+// pod is retried implicitly: it shows up podless on the next manual
+// delete or k8s GC pass. Steady state: a trickle proportional to
+// genuinely abandoned sessions; a spike means sessions stopped writing
+// durable activity (which is its own incident).
+var idleSessionsReapedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_idle_sessions_reaped_total",
+		Help: "Durably-idle sessions claimed and deleted by the idle reaper, labeled by result (deleted, delete_failed).",
+	},
+	[]string{"result"},
+)
+
+func recordIdleSessionReaped(result string) {
+	switch result {
+	case "deleted", "delete_failed":
+	default:
+		result = "other"
+	}
+	idleSessionsReapedTotal.WithLabelValues(result).Inc()
+}
+
 func recordStrandedTurnSwept(result string) {
 	switch result {
 	case "failed", "deferred_progressed", "deferred_pipeline_quiet", "skipped_incomplete", "persist_error":

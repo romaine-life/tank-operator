@@ -723,27 +723,6 @@ func (s *appServer) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, info)
 }
 
-// handleTouchSession updates the idle timer for a session.
-func (s *appServer) handleTouchSession(w http.ResponseWriter, r *http.Request) {
-	user, ok := s.requireAuth(w, r)
-	if !ok {
-		return
-	}
-	sessionID := strings.TrimSpace(r.PathValue("session_id"))
-	if sessionID == "" {
-		writeError(w, http.StatusBadRequest, "missing session_id")
-		return
-	}
-	// Verify ownership.
-	owner := user.OwnerEmail()
-	if _, err := s.mgr.GetByOwner(r.Context(), owner, sessionID); err != nil {
-		writeError(w, http.StatusNotFound, "session not found")
-		return
-	}
-	s.mgr.Touch(sessionID)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
 // handlePatchSession sets the display name.
 func (s *appServer) handlePatchSession(w http.ResponseWriter, r *http.Request) {
 	user, ok := s.requireAuth(w, r)
