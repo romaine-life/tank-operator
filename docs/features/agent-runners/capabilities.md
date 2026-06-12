@@ -475,3 +475,31 @@ Evidence:
 - Metrics: `tank_runner_provider_api_retry_total{error}` and
   `tank_runner_provider_rate_limit_decision_total{decision="retry_stall_failed"}`.
 - Docs: `docs/observability.md` runner-metrics taxonomy.
+
+## Stranded-turn sweep (command-plane four-outcome backstop)
+
+Status: shipped (2026-06-11, tank-operator#1051 PR 4)
+
+Intent:
+A durably submitted turn whose submit_turn command or runner dies has no
+other terminal writer; before the sweep such turns sat as permanent
+"submitted"/"streaming" ghosts (five sessions in the 2026-06-11 incident,
+plus 53 historical strands spanning 30 days drained on first deploy). The
+sweep terminals them with durable turn.command_failed once the whole session
+has been silent past the stranding floors (30m never-claimed / 2h mid-turn),
+never re-driving the command. Continuation strands (background-task wakes,
+scheduled wakeups, agent continuations) carry the
+stranded_continuation_swept away-error reason so the sidebar rings the
+summon bell; ordinary user turns fail plainly with resubmit guidance.
+
+Affected contracts:
+- Agent Runners ("a durable *_requested event MUST be followed by exactly one
+  durable terminal; silent strandings are a counted bug class")
+- Observability (tank_stranded_turn_swept_total, TankStrandedTurnsSwept — the
+  alert is about WHY commands die; the terminal is the recovery)
+
+Retirement note:
+Scan cadence is 15 minutes because FindStrandedTurns is a heavy 30-day window
+scan; if the candidate query ever becomes incremental, the cadence can drop.
+The quiet-session predicate is the false-positive guard — do not relax it to
+catch strands faster.

@@ -447,18 +447,28 @@ spec:
           annotations:
             summary: "turn-activity shells materialized without a durable session_turns number (phase={{`{{ $labels.phase }}`}})"
             runbook: |
-              A turn_activity shell was projected for a turn that has no
-              row in session_turns while durable numbering is active. The
-              public route /sessions/{id}/turns/{n} cannot resolve such a
-              turn and the UI cannot label it. Expectation is zero: the
-              tank_session_events_allocate_turn_number trigger numbers
-              every turn on its first session_events insert, and the
-              0086-0093 backfill numbered all pre-existing turns.
+              A turn_activity shell was projected for a USER-VISIBLE turn
+              that has no row in session_turns while durable numbering is
+              active. The public route /sessions/{id}/turns/{n} cannot
+              resolve such a turn and the UI cannot label it. Expectation
+              is zero: the tank_session_events_allocate_turn_number
+              trigger numbers every user-visible turn on its first
+              session_events insert, and the 0086-0093 backfill numbered
+              all pre-existing turns.
 
-              A nonzero rate means the allocation trigger regressed or an
-              event carrying a turn_id reached session_events without
-              firing it. Confirm the trigger is attached
-              (SELECT tgname FROM pg_trigger WHERE tgrelid =
+              Background-wake continuation turns (turn_bgtask-<task>) do
+              NOT count here: migration 0139 excludes them from the
+              allocator by design (they fold into their originating turn
+              and must never be separately navigable), and the
+              materializer's counter call site excludes them to match.
+              If this fires naming a turn_bgtask-* id, the call-site
+              exclusion regressed — see
+              TestMaterializerDoesNotCountUnnumberedWakeTurnShells.
+
+              Otherwise a nonzero rate means the allocation trigger
+              regressed or an event carrying a turn_id reached
+              session_events without firing it. Confirm the trigger is
+              attached (SELECT tgname FROM pg_trigger WHERE tgrelid =
               'session_events'::regclass) and check session_turns for the
               turn_id named in the matching slog.Warn line
               "durable turn number missing for materialized shell".
@@ -767,6 +777,144 @@ spec:
               Distinguishes from TankTurnSilentStranding (aggregate
               submitted-vs-terminal rate) by being per-session and
               durable-state-based.
+
+        # Persister backlog. The session-bus persister owns every durable
+        # transcript write: when it falls behind, every session's UI
+        # freezes at once while runners keep working invisibly — the
+        # 2026-06-11 incident (tank-operator#1051). Both gauges read
+        # JetStream consumer state, not Postgres rows, so this signal
+        # survives the persister itself failing — the persist-fed alerts
+        # (TankTurnSilentStranding, stop-chain) are blinded by exactly
+        # the failure this one detects.
+        - alert: TankSessionEventPersisterBacklog
+          expr: |
+            tank_session_event_persister_pending > 100
+              or tank_session_event_persister_processed_event_age_seconds > 60
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: "session-event persister is falling behind — transcripts are stale for every session"
+            runbook: |
+              The persister durable has a sustained undelivered backlog or
+              is processing events whose producer timestamps are over a
+              minute old. Users see every session frozen mid-turn while
+              runners continue working.
+
+              Localize with GET /api/debug/persister (per-session queue
+              depths and ages) and the phase split in
+              tank_session_event_persist_phase_seconds: a slow "refresh"
+              phase means the transcript-row projection is the cost (the
+              #1051 shape — check for a session with a giant turn); a slow
+              "upsert" phase means Postgres itself (check
+              TankPgQueryP99High). Sustained
+              tank_session_event_redelivered_total growth alongside means
+              messages are outliving AckWait and both replicas are
+              duplicating work.
+
+        # MaxDeliver exhaustion. A message that exhausts its deliveries is
+        # never redelivered to the durable — without the advisory repair
+        # path this is a silent, permanent transcript hole (the counted
+        # bug class in docs/diagnostic-discipline.md §8). outcome="failed"
+        # means the out-of-band repair ALSO failed and the hole is real
+        # until the next startup reconciler pass.
+        - alert: TankSessionEventPersistExhausted
+          expr: sum(increase(tank_session_event_persist_exhausted_total[15m])) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "session events exhausted MaxDeliver — ledger holes are being repaired or lost"
+            runbook: |
+              JetStream gave up redelivering one or more session events to
+              the persister (MaxDeliver exhausted). outcome="repaired"
+              rows were persisted out of band by the advisory handler;
+              outcome="failed" rows are durable ledger holes until an
+              orchestrator restart runs the reconciler
+              (tank_session_event_reconciler_repaired_total counts its
+              repairs). Root-cause the exhaustion itself via the persister
+              backlog runbook above — exhaustion only happens when
+              processing latency exceeded AckWait for 20 consecutive
+              deliveries.
+
+        # Stream truncation past the persister ack floor: retention
+        # (discard=old, max_msgs/max_age) deleted events the persister
+        # never persisted. Unrepairable — the events exist nowhere.
+        # Steady-state expectation is zero forever; any increase means a
+        # backlog was left unaddressed long enough for retention to eat
+        # unpersisted history.
+        - alert: TankSessionEventStreamTruncated
+          expr: increase(tank_session_event_stream_truncated_past_ack_floor_total[1h]) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "stream retention discarded events before the persister stored them — permanent ledger loss"
+            runbook: |
+              The TANK_SESSION_BUS stream's first sequence moved past the
+              persister consumer's ack floor: retention deleted messages
+              that were never written to session_events. The transcript
+              ledger is permanently missing those events. This only
+              happens after a long-unaddressed persister backlog
+              (TankSessionEventPersisterBacklog fires first, hours
+              earlier). Quantify the gap from the counter value and the
+              reconciler's startup log line ("stream truncated past
+              persister ack floor"), then assess which sessions lost
+              events via the per-session order_key continuity.
+
+        # Checkpointed-fold shadow divergence. Sampled folded batches
+        # re-derive their written shells from the reference projection;
+        # a divergence means the fold wrote rows the reference disagrees
+        # with. It is auto-healed in the same transaction (the reference
+        # re-projection overwrites and reseeds), so users never keep the
+        # wrong rows — but the defect class must page, because every
+        # unsampled fold batch with the same shape went uncorrected
+        # until its next resync.
+        - alert: TankTranscriptFoldShadowDivergence
+          expr: sum(increase(tank_transcript_fold_shadow_total{result="divergence"}[1h])) > 0
+          labels:
+            severity: critical
+          annotations:
+            summary: "checkpointed-fold shadow compare diverged from the reference projection"
+            runbook: |
+              The slog.Error "transcript fold shadow divergence" names the
+              session and row ids. Reproduce by replaying that session's
+              ledger through TestFoldCheckpointEquivalenceOverFixtures-style
+              prefix replay (capture the ledger via
+              GET /api/debug/session-event-ledger, add it as a fixture).
+              Mitigate immediately by disabling the fold for the affected
+              session (UPDATE session_transcript_fold_state SET memo=NULL,
+              disabled=true WHERE tank_session_id='<id>') or fleet-wide by
+              deleting all fold state — the reference pipeline is the
+              always-correct fallback-free path and serves every read
+              shape on its own.
+
+        # Stranded-turn sweep activity. The sweep is the command-plane
+        # four-outcome backstop: it terminals turns whose submit_turn
+        # command or runner died silently. Each swept turn is a real
+        # delivery loss the user experienced as a frozen chip, so any
+        # sweep activity warrants a look at WHY commands are dying.
+        - alert: TankStrandedTurnsSwept
+          expr: sum(increase(tank_stranded_turn_swept_total{result="failed"}[30m])) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: "the stranded-turn sweep is terminaling turns — submit commands or runners are dying"
+            runbook: |
+              The sweep wrote durable turn.command_failed terminals for
+              turns that were durably submitted but never finished, in
+              sessions silent past the stranding floors. The terminal
+              itself is correct recovery; this alert is about the cause.
+              The slog line "stranded turn swept to durable terminal"
+              carries session_id, turn_id, progressed, and source per
+              sweep. progressed=false means no runner ever claimed the
+              command (runner-consumer MaxDeliver exhaustion, dead runner
+              process, or a publish that never landed — check the
+              command-publish failure counter and the runner pod's
+              restart count); progressed=true means a runner died
+              mid-turn (check that pod's previous-container logs). A
+              burst right after deploying the sweep is expected drain of
+              historical strands; a steady rate afterward is live command
+              loss.
 
         # Background-task wake fire failures. A Claude run_in_background task
         # that finishes while the session is idle registers a durable wake in

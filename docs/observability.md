@@ -40,6 +40,49 @@ All metric names are prefixed `tank_`. The full namespace:
   `tank_session_event_stream_lag_seconds` histogram. Same names as the
   prior expvar counters (`_total` suffix added where missing per Prom
   convention).
+- `tank_session_event_persister_*` + the persister dispatch group —
+  health of the durable transcript pipeline (tank-operator#1051).
+  Counters: `tank_session_event_persist_duplicate_total` (at-least-once
+  redeliveries deduped at the upsert), `tank_session_event_redelivered_total`
+  (messages whose `NumDelivered` exceeded 1 — outlived AckWait),
+  `tank_session_event_persist_exhausted_total{outcome=repaired|failed}`
+  (MaxDeliver exhaustion advisory repairs),
+  `tank_session_event_stream_truncated_past_ack_floor_total` (retention
+  discarded unpersisted events — permanent loss), and
+  `tank_session_event_reconciler_repaired_total` (startup-reconciler hole
+  repairs). Histograms:
+  `tank_session_event_persist_phase_seconds{phase=upsert|refresh}` (the
+  split that localizes "Postgres slow" vs "projection slow") and
+  `tank_session_event_persist_batch_size`. Gauges:
+  `tank_session_event_persister_pending` / `_ack_pending` (sampled from
+  JetStream consumer state, deliberately not from Postgres so the signal
+  survives the persister failing), `_queue_depth` (in-process per-session
+  queues), and `_processed_event_age_seconds` (how far behind users'
+  transcripts are). Per-session detail lives in
+  `GET /api/debug/persister`, never in labels.
+- `tank_transcript_fold_total{result}` + `tank_transcript_fold_duration_seconds`
+  — the checkpointed transcript fold (tank-operator#1051 B2+B3): per-batch
+  outcomes of the persist-path projection. `folded` is the fast path (no
+  ledger read); `reseeded` and `invalidated` are memo lifecycle around the
+  reference projection; `resync` means a structure-class event correctly sent
+  the batch to the reference path; `disabled`/`disabled_size` mark sessions
+  durably opted out (memo over the size cap — always batch-projected, the
+  pre-fold behavior); `load_error` means fold state was unreadable and the
+  reference path covered. A sustained zero `folded` rate on a busy
+  background-task session means the fast path stopped engaging. The
+  fixture-replay equivalence harness
+  (`TestFoldCheckpointEquivalenceOverFixtures`) is the correctness gate.
+- `tank_stranded_turn_swept_total{result}` — the command-plane
+  four-outcome backstop (tank-operator#1051 PR 4): dispatched turns whose
+  submit_turn command or runner died silently, swept to a durable
+  `turn.command_failed` once the whole session has been quiet past the
+  stranding floors. Bounded `result`: `failed` (terminal written — pages
+  via `TankStrandedTurnsSwept`, because each one is a real delivery loss),
+  `deferred_progressed` (claimed turn younger than the mid-turn floor,
+  re-checked next tick), `skipped_incomplete`, `persist_error`.
+  Per-sweep detail (session, turn, progressed, source) is in the
+  "stranded turn swept to durable terminal" slog line. Pairs with
+  `tank_stranded_launch_swept_total`, the create-flow equivalent.
 - `tank_stream_auth_ticket_total` — browser EventSource stream-ticket
   create/validate attempts. Labels: `operation` (`create`, `validate`),
   `stream` (`session-list`, `session-events`), and bounded `result`.
@@ -761,6 +804,35 @@ structured `slog` line per call (`caller_email`, `session_scope`,
 `result` labels: `ok`, `empty`, `forbidden`, `store_error`,
 `not_configured`.
 
+## Persister debug surface
+
+`GET /api/debug/persister` (admin-only) lists the session-event
+persister's in-process per-session queues: messages consumed from the
+bus, routed to a session's serial queue, and not yet persisted. It is
+the per-entity localizer behind `TankSessionEventPersisterBacklog`:
+when the lag gauges fire, this names which session's events are queued,
+how many, and how stale — the per-session detail the cardinality rules
+keep out of metric labels. During the 2026-06-11 incident
+(tank-operator#1051) this view would have named the flood-source
+session in one request instead of a log-timestamp forensic pass.
+
+Response fields:
+
+- `queues[]` — one object per session with queued messages:
+  - `storage_key` — the session storage key (allowed here, never as a
+    metric label).
+  - `queued` — messages waiting in that session's serial queue.
+  - `active` — whether a worker is currently processing the session.
+  - `oldest_enqueued_age` — age of the oldest queued message.
+
+Reading the snapshot: an empty list while
+`tank_session_event_persister_pending` is high means JetStream delivery
+itself is stalled (consumer/connection problem); a deep queue for one
+session names the flood source (per-session isolation means only that
+session lags); many shallow queues with high processed-event age means
+Postgres-wide slowness — check the `phase=upsert` histogram and
+`TankPgQueryP99High`. The endpoint never mutates state.
+
 ## Control Action Audit Surface
 
 Privileged cross-system effects initiated from session pods through MCP
@@ -899,6 +971,17 @@ declares one rule group per subsystem:
   `turn.interrupt_requested` persist/publish failures (the durable stop
   boundary; non-zero rate means stops are losing durability or never
   reaching the runner).
+- **Persister pipeline** (tank-operator#1051):
+  `TankSessionEventPersisterBacklog` pages when the persister durable's
+  pending backlog or processed-event age is sustained — every session's
+  transcript freezes at once while runners keep working, and the
+  persist-fed alerts (silent stranding, stop chain) are blinded by
+  exactly this failure, which is why these gauges read JetStream
+  consumer state instead. `TankSessionEventPersistExhausted` pages on
+  any MaxDeliver exhaustion (repaired out of band or a real ledger
+  hole). `TankSessionEventStreamTruncated` pages when retention
+  discarded events the persister never stored — permanent, unrepairable
+  loss that only follows a long-unaddressed backlog.
 - **Transcript navigation**: `TankChatScrollUserAtBottomLatched` fires
   when BOTH the browser-side NavigationMode state machine reports
   rising "entered historical-anchor" transitions AND the

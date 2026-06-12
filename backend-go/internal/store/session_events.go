@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
@@ -21,7 +24,15 @@ import (
 // Turn activity detail reads; historical transcript navigation uses the
 // materialized session_transcript_rows read model.
 type SessionEventStore interface {
-	Upsert(ctx context.Context, event map[string]any) error
+	// Upsert writes one event row keyed by (tank_session_id, order_key).
+	// The returned bool reports whether the row was newly inserted: false
+	// means a row with that key already existed (an at-least-once
+	// redelivery or a producer republish) and was overwritten in place.
+	// The persister uses the report to skip duplicate side effects
+	// (lifecycle emit, per-event counters) without skipping the
+	// projection refresh a redelivered-after-failed-refresh event still
+	// needs.
+	Upsert(ctx context.Context, event map[string]any) (inserted bool, err error)
 	ListBySession(ctx context.Context, tankSessionID string, cursor SessionEventCursor, limit int) (SessionEventPage, error)
 	HasOrderKey(ctx context.Context, tankSessionID, orderKey string) (bool, error)
 	// OrderKeyForTimelineID resolves a rendered transcript entry id
@@ -92,6 +103,17 @@ type SessionEventStore interface {
 	// keeps the scan off the deep history. Returns at most `limit` rows, ASC
 	// by created_at (oldest strands first).
 	FindStrandedLaunchTurns(ctx context.Context, olderThan, notBefore time.Time, limit int) ([]StrandedLaunchTurn, error)
+	// FindStrandedTurns returns dispatched turns that stranded mid-lifecycle:
+	// a turn.submitted in [notBefore, olderThan) with no terminal event, in a
+	// session that has been completely quiet since quietSince. The quiet
+	// predicate is the false-positive guard — a turn legitimately queued
+	// behind a long-running turn, or itself mid-work, lives in a session that
+	// keeps producing events; a session with zero events for the whole quiet
+	// window cannot be making progress on anything. Progressed reports
+	// whether the runner ever claimed/started the turn, so the sweep can
+	// apply a longer age floor to mid-turn strands than to never-claimed
+	// ones. Backs cmd/tank-operator/stranded_turn_sweep.go.
+	FindStrandedTurns(ctx context.Context, olderThan, quietSince, notBefore time.Time, limit int) ([]StrandedTurn, error)
 }
 
 // StrandedLaunchTurn is one never-dispatched launch turn — exactly the fields
@@ -105,6 +127,23 @@ type StrandedLaunchTurn struct {
 	ClientNonce   string
 	Email         string
 	Runtime       string
+	CreatedAt     time.Time
+}
+
+// StrandedTurn is one dispatched-but-stranded turn: durably submitted, no
+// terminal, in a fully quiet session. Source carries the submit's
+// payload.source (e.g. "background-task", "schedule-wakeup") so the sweep can
+// classify continuation strands as away-errors; Progressed reports whether a
+// runner ever claimed/started the turn.
+type StrandedTurn struct {
+	TankSessionID string
+	SessionID     string
+	TurnID        string
+	ClientNonce   string
+	Email         string
+	Runtime       string
+	Source        string
+	Progressed    bool
 	CreatedAt     time.Time
 }
 
@@ -200,9 +239,9 @@ func NewPostgresSessionEventStore(pool *pgxpool.Pool, scope string) SessionEvent
 	return &postgresSessionEventStore{pool: pool, scope: scope}
 }
 
-func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string]any) error {
+func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string]any) (bool, error) {
 	if err := conversation.ValidateEventMap(event); err != nil {
-		return err
+		return false, err
 	}
 	doc := cloneSessionEventMap(event)
 	storageKey := stringField(doc, "tank_session_id")
@@ -211,7 +250,7 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 		storageKey = sessionmodel.SessionStorageKey(s.scope, publicSessionID)
 	}
 	if storageKey == "" {
-		return errMissingSessionEventField("tank_session_id")
+		return false, errMissingSessionEventField("tank_session_id")
 	}
 	id := stringField(doc, "id")
 	if id == "" {
@@ -221,11 +260,11 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 		id = stringField(doc, "event_id")
 	}
 	if id == "" {
-		return errMissingSessionEventField("id")
+		return false, errMissingSessionEventField("id")
 	}
 	orderKey := stringField(doc, "order_key")
 	if orderKey == "" {
-		return errMissingSessionEventField("order_key")
+		return false, errMissingSessionEventField("order_key")
 	}
 	doc["id"] = id
 	doc["tank_session_id"] = storageKey
@@ -234,11 +273,16 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 	}
 	payload, err := json.Marshal(doc)
 	if err != nil {
-		return err
+		return false, err
 	}
 	turnID := stringField(doc, "turn_id")
 	eventType := stringField(doc, "type")
 
+	// (xmax = 0) distinguishes a fresh insert (xmax 0) from a row the
+	// ON CONFLICT branch overwrote (xmax = the updating transaction).
+	// The DO UPDATE branch is kept deliberately: a producer republish
+	// with the same order_key wins last-write so a runner retry that
+	// enriched the payload is not silently dropped.
 	const q = `
 		INSERT INTO session_events (
 			tank_session_id, order_key, event_id, turn_id, event_type, payload
@@ -248,9 +292,13 @@ func (s *postgresSessionEventStore) Upsert(ctx context.Context, event map[string
 			turn_id    = EXCLUDED.turn_id,
 			event_type = EXCLUDED.event_type,
 			payload    = EXCLUDED.payload
+		RETURNING (xmax = 0)
 	`
-	_, err = s.pool.Exec(ctx, q, storageKey, orderKey, id, turnID, eventType, payload)
-	return err
+	inserted := false
+	if err := s.pool.QueryRow(ctx, q, storageKey, orderKey, id, turnID, eventType, payload).Scan(&inserted); err != nil {
+		return false, err
+	}
+	return inserted, nil
 }
 
 // ListBySession reads a single bounded page of events for one session. The
@@ -315,19 +363,14 @@ func (s *postgresSessionEventStore) listBySession(ctx context.Context, qx sessio
 		if err := rows.Scan(&payload); err != nil {
 			return SessionEventPage{}, err
 		}
-		var doc map[string]any
-		if err := json.Unmarshal(payload, &doc); err != nil {
-			return SessionEventPage{}, fmt.Errorf("session-events doc is not JSON: %w", err)
+		// Producer regressions are caught and alerted at the WRITE path;
+		// a stored row the current schema rejects (a retired event type
+		// from an old session) is skipped + counted rather than poisoning
+		// the whole session's reads — see decodeStoredSessionEvent.
+		doc, ok := decodeStoredSessionEvent(payload, tankSessionID)
+		if !ok {
+			continue
 		}
-		if err := conversation.ValidateEventMap(doc); err != nil {
-			// Per docs/migration-policy.md, the read path no longer silently
-			// filters malformed docs. The producer-side cutover (runner
-			// dispatch contract, persister schema-terminal NAK) guarantees
-			// only Tank events land in storage. A failure here means one of
-			// those guarantees regressed — surface it.
-			return SessionEventPage{}, fmt.Errorf("session-events doc rejected by schema: %w", err)
-		}
-		doc["tank_session_id"] = tankSessionID
 		out = append(out, doc)
 	}
 	if err := rows.Err(); err != nil {
@@ -388,14 +431,14 @@ func (s *postgresSessionEventStore) eventsForTurn(ctx context.Context, qx sessio
 		if err := rows.Scan(&payload); err != nil {
 			return SessionEventPage{}, err
 		}
-		var doc map[string]any
-		if err := json.Unmarshal(payload, &doc); err != nil {
-			return SessionEventPage{}, fmt.Errorf("session-events doc is not JSON: %w", err)
+		// Producer regressions are caught and alerted at the WRITE path;
+		// a stored row the current schema rejects (a retired event type
+		// from an old session) is skipped + counted rather than poisoning
+		// the whole session's reads — see decodeStoredSessionEvent.
+		doc, ok := decodeStoredSessionEvent(payload, tankSessionID)
+		if !ok {
+			continue
 		}
-		if err := conversation.ValidateEventMap(doc); err != nil {
-			return SessionEventPage{}, fmt.Errorf("session-events doc rejected by schema: %w", err)
-		}
-		doc["tank_session_id"] = tankSessionID
 		out = append(out, doc)
 	}
 	if err := rows.Err(); err != nil {
@@ -478,14 +521,13 @@ func (s *postgresSessionEventStore) FindTurnTerminal(ctx context.Context, tankSe
 	if err != nil {
 		return nil, err
 	}
-	var doc map[string]any
-	if err := json.Unmarshal(payload, &doc); err != nil {
-		return nil, fmt.Errorf("session-events doc is not JSON: %w", err)
+	// A terminal row the current schema rejects (legacy shape) cannot be
+	// interpreted by current code: treat as no usable terminal, counted
+	// by decodeStoredSessionEvent.
+	doc, ok := decodeStoredSessionEvent(payload, tankSessionID)
+	if !ok {
+		return nil, nil
 	}
-	if err := conversation.ValidateEventMap(doc); err != nil {
-		return nil, fmt.Errorf("session-events doc rejected by schema: %w", err)
-	}
-	doc["tank_session_id"] = tankSessionID
 	return doc, nil
 }
 
@@ -557,6 +599,91 @@ func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context,
 	return out, nil
 }
 
+// FindStrandedTurns scans for turn.submitted rows in [notBefore, olderThan)
+// whose turn has no terminal event of any kind and whose session has been
+// completely silent since quietSince. The created_at predicates ride the
+// session_events_created_at index and the per-turn / per-session NOT EXISTS
+// subqueries ride the (tank_session_id, turn_id, order_key) and
+// (tank_session_id, created_at-capable) paths, so the outer pass is a bounded
+// time-window scan. Cross-session by design — the sweep addresses every
+// owner/scope from the per-row payload.
+func (s *postgresSessionEventStore) FindStrandedTurns(ctx context.Context, olderThan, quietSince, notBefore time.Time, limit int) ([]StrandedTurn, error) {
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+	const q = `
+		SELECT
+			e.tank_session_id,
+			COALESCE(e.payload ->> 'session_id', '')             AS session_id,
+			e.turn_id,
+			COALESCE(e.payload ->> 'client_nonce', '')           AS client_nonce,
+			COALESCE(e.payload ->> 'email', '')                  AS email,
+			COALESCE(e.payload ->> 'runtime', '')                AS runtime,
+			COALESCE(e.payload -> 'payload' ->> 'source', '')    AS source,
+			EXISTS (
+				SELECT 1
+				FROM session_events p
+				WHERE p.tank_session_id = e.tank_session_id
+					AND p.turn_id = e.turn_id
+					AND p.event_type IN ('turn.claimed', 'turn.started')
+			) AS progressed,
+			e.created_at
+		FROM session_events e
+		WHERE e.event_type = 'turn.submitted'
+			AND e.turn_id IS NOT NULL
+			AND e.created_at < $1
+			AND e.created_at >= $2
+			AND NOT EXISTS (
+				SELECT 1
+				FROM session_events t
+				WHERE t.tank_session_id = e.tank_session_id
+					AND t.turn_id = e.turn_id
+					AND t.event_type IN ('turn.completed', 'turn.failed', 'turn.command_failed', 'turn.interrupted')
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM session_events quiet
+				WHERE quiet.tank_session_id = e.tank_session_id
+					AND quiet.created_at >= $3
+			)
+		ORDER BY e.created_at ASC
+		LIMIT $4
+	`
+	rows, err := s.pool.Query(ctx, q,
+		olderThan.UTC(),
+		notBefore.UTC(),
+		quietSince.UTC(),
+		limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	out := make([]StrandedTurn, 0, limit)
+	for rows.Next() {
+		var row StrandedTurn
+		if err := rows.Scan(
+			&row.TankSessionID,
+			&row.SessionID,
+			&row.TurnID,
+			&row.ClientNonce,
+			&row.Email,
+			&row.Runtime,
+			&row.Source,
+			&row.Progressed,
+			&row.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // LatestLifecycleEvents returns up to `limit` recent lifecycle events
 // (the turn.* lifecycle set, including turn.awaiting_input) for one session, ascending by
 // order_key. Postgres returns the slice DESC LIMIT N and we reverse in Go;
@@ -591,14 +718,14 @@ func (s *postgresSessionEventStore) LatestLifecycleEvents(ctx context.Context, t
 		if err := rows.Scan(&payload); err != nil {
 			return nil, err
 		}
-		var doc map[string]any
-		if err := json.Unmarshal(payload, &doc); err != nil {
-			return nil, fmt.Errorf("session-events doc is not JSON: %w", err)
+		// Producer regressions are caught and alerted at the WRITE path;
+		// a stored row the current schema rejects (a retired event type
+		// from an old session) is skipped + counted rather than poisoning
+		// the whole session's reads — see decodeStoredSessionEvent.
+		doc, ok := decodeStoredSessionEvent(payload, tankSessionID)
+		if !ok {
+			continue
 		}
-		if err := conversation.ValidateEventMap(doc); err != nil {
-			return nil, fmt.Errorf("session-events doc rejected by schema: %w", err)
-		}
-		doc["tank_session_id"] = tankSessionID
 		out = append(out, doc)
 	}
 	if err := rows.Err(); err != nil {
@@ -721,14 +848,14 @@ func (s *postgresSessionEventStore) ShellTaskEvents(ctx context.Context, tankSes
 		if err := rows.Scan(&payload); err != nil {
 			return nil, err
 		}
-		var doc map[string]any
-		if err := json.Unmarshal(payload, &doc); err != nil {
-			return nil, fmt.Errorf("session-events doc is not JSON: %w", err)
+		// Producer regressions are caught and alerted at the WRITE path;
+		// a stored row the current schema rejects (a retired event type
+		// from an old session) is skipped + counted rather than poisoning
+		// the whole session's reads — see decodeStoredSessionEvent.
+		doc, ok := decodeStoredSessionEvent(payload, tankSessionID)
+		if !ok {
+			continue
 		}
-		if err := conversation.ValidateEventMap(doc); err != nil {
-			return nil, fmt.Errorf("session-events doc rejected by schema: %w", err)
-		}
-		doc["tank_session_id"] = tankSessionID
 		out = append(out, doc)
 	}
 	if err := rows.Err(); err != nil {
@@ -830,7 +957,9 @@ func normalizeSessionEventLimit(limit int) int {
 // Stub for local dev where Postgres isn't configured.
 type StubSessionEventStore struct{}
 
-func (StubSessionEventStore) Upsert(_ context.Context, _ map[string]any) error { return nil }
+func (StubSessionEventStore) Upsert(_ context.Context, _ map[string]any) (bool, error) {
+	return false, nil
+}
 
 func (StubSessionEventStore) ListBySession(_ context.Context, _ string, _ SessionEventCursor, _ int) (SessionEventPage, error) {
 	return SessionEventPage{
@@ -872,6 +1001,10 @@ func (StubSessionEventStore) FindStrandedLaunchTurns(_ context.Context, _, _ tim
 	return nil, nil
 }
 
+func (StubSessionEventStore) FindStrandedTurns(_ context.Context, _, _, _ time.Time, _ int) ([]StrandedTurn, error) {
+	return nil, nil
+}
+
 func (StubSessionEventStore) LatestLifecycleEvents(_ context.Context, _ string, _ int) ([]map[string]any, error) {
 	return nil, nil
 }
@@ -890,6 +1023,48 @@ func (StubSessionEventStore) ShellTaskEvents(_ context.Context, _ string) ([]map
 
 func (StubSessionEventStore) CountUserMessages(_ context.Context, _ string) (int64, error) {
 	return 0, nil
+}
+
+// sessionEventReadRejectedTotal counts stored ledger rows the CURRENT schema
+// cannot validate — overwhelmingly retired event types from old sessions
+// (event types the schema has since retired). The read path skips such rows instead of
+// failing the whole session's projection: before this, one retired-type row
+// made a session permanently un-projectable (the session-288 resync failures
+// during the tank-operator#1051 recovery). The WRITE path still hard-rejects
+// invalid docs — producer regressions are caught there, counted by
+// tank_session_event_persist_schema_rejected_total and alerted; this counter
+// is the read-side visibility, expected nonzero only when ancient sessions
+// are read.
+var sessionEventReadRejectedTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_event_read_rejected_total",
+		Help: "Stored session_events rows skipped on read because the current schema rejects them, labeled by bounded reason (invalid_json, schema_rejected).",
+	},
+	[]string{"reason"},
+)
+
+// decodeStoredSessionEvent unmarshals and validates one stored ledger row.
+// ok=false means the row is unusable under the current schema and the caller
+// must skip it (counted + logged); the ledger row itself stays untouched.
+func decodeStoredSessionEvent(payload []byte, tankSessionID string) (map[string]any, bool) {
+	var doc map[string]any
+	if err := json.Unmarshal(payload, &doc); err != nil {
+		sessionEventReadRejectedTotal.WithLabelValues("invalid_json").Inc()
+		slog.Warn("session-events row skipped on read: not JSON",
+			"tank_session_id", tankSessionID, "error", err)
+		return nil, false
+	}
+	if err := conversation.ValidateEventMap(doc); err != nil {
+		sessionEventReadRejectedTotal.WithLabelValues("schema_rejected").Inc()
+		slog.Warn("session-events row skipped on read: rejected by current schema",
+			"tank_session_id", tankSessionID,
+			"event_id", stringField(doc, "event_id"),
+			"event_type", stringField(doc, "type"),
+			"error", err)
+		return nil, false
+	}
+	doc["tank_session_id"] = tankSessionID
+	return doc, true
 }
 
 func cloneSessionEventMap(input map[string]any) map[string]any {

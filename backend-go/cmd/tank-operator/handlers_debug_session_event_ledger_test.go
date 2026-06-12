@@ -28,11 +28,15 @@ type fakeDebugSessionEventLedgerStore struct {
 	calls         int
 }
 
-func (f *fakeDebugSessionEventLedgerStore) Upsert(context.Context, map[string]any) error {
-	return nil
+func (f *fakeDebugSessionEventLedgerStore) Upsert(context.Context, map[string]any) (bool, error) {
+	return true, nil
 }
 
 func (f *fakeDebugSessionEventLedgerStore) ShellTaskEvents(context.Context, string) ([]map[string]any, error) {
+	return nil, nil
+}
+
+func (f *fakeDebugSessionEventLedgerStore) FindStrandedTurns(context.Context, time.Time, time.Time, time.Time, int) ([]store.StrandedTurn, error) {
 	return nil, nil
 }
 

@@ -38,7 +38,7 @@ const (
 // the persister uses, so the backend-as-producer path is visible to the
 // alert that the runner-as-producer path already feeds.
 func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, event map[string]any) error {
-	if err := s.sessionEvents.Upsert(ctx, event); err != nil {
+	if _, err := s.sessionEvents.Upsert(ctx, event); err != nil {
 		var schemaErr *conversation.SchemaError
 		if errors.As(err, &schemaErr) {
 			recordSessionEventPersistSchemaRejected()
@@ -49,9 +49,6 @@ func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, 
 				"error", schemaErr.Error(),
 			)
 		}
-		return err
-	}
-	if err := s.refreshTranscriptRowsForEvent(ctx, event); err != nil {
 		return err
 	}
 	// Silent-stranding observability: bump the lifecycle counter for the
@@ -73,7 +70,18 @@ func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, 
 		}
 		recordTurnTerminalMissingClientNonce(source, eventType)
 	}
-	if s.sessionBus != nil && storageKey != "" {
+	// The transcript-row projection runs on the per-session async worker,
+	// which fires the SSE wake after the refresh completes (refresh-then-
+	// wake, same ordering the bus persister guarantees). Running it inline
+	// here was tank-operator#1051 finding 3: a whole-session re-projection
+	// inside the HTTP request, which timed out Stop on background-task-heavy
+	// sessions. The durable contract — the session_events row — was written
+	// synchronously above.
+	if s.transcriptRefresher != nil {
+		s.transcriptRefresher.enqueue(storageKey, event)
+	} else if s.sessionBus != nil && storageKey != "" {
+		// Degraded boot / test fixtures: no async worker. Rows converge via
+		// the on-read resync; signal SSE directly.
 		if err := s.sessionBus.PublishSessionEventWake(ctx, storageKey); err != nil {
 			slog.Warn("session event wake publish failed",
 				"storage_key", storageKey, "event_type", event["type"], "error", err)
@@ -81,17 +89,6 @@ func (s *appServer) persistBackendEvent(ctx context.Context, storageKey string, 
 	}
 	s.refreshActivityForBackendEvent(ctx, storageKey, event)
 	return nil
-}
-
-func (s *appServer) refreshTranscriptRowsForEvent(ctx context.Context, event map[string]any) error {
-	if s == nil || s.sessionEvents == nil || s.transcriptRows == nil {
-		return nil
-	}
-	return (transcriptRowsMaterializer{
-		events: s.sessionEvents,
-		rows:   s.transcriptRows,
-		turns:  s.turns,
-	}).RefreshEvent(ctx, event)
 }
 
 func (s *appServer) refreshActivityForBackendEvent(ctx context.Context, storageKey string, event map[string]any) {

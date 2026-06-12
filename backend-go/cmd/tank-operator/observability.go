@@ -135,6 +135,61 @@ var (
 		Help: "Persister failures the persister chose to NAK for retry (infrastructure-side, retryable).",
 	})
 
+	// Persister dispatch observability (tank-operator#1051). This group
+	// makes the 2026-06-11 failure modes directly visible: duplicate work
+	// (redeliveries grinding both replicas), MaxDeliver exhaustion (silent
+	// ledger holes), stream truncation past the ack floor (events lost
+	// before persistence), and the upsert/refresh phase split that would
+	// have localized the 10s-per-event projection cost immediately. The
+	// gauges read JetStream consumer state, not Postgres rows, so the
+	// persister's health signal survives the persister itself failing.
+	sessionEventPersistDuplicateTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_persist_duplicate_total",
+		Help: "Upserts that found the (tank_session_id, order_key) row already present (at-least-once redelivery or producer republish).",
+	})
+	sessionEventRedeliveredTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_redelivered_total",
+		Help: "Consumed bus messages whose NumDelivered exceeded 1 — messages that outlived AckWait or were NAKed.",
+	})
+	sessionEventPersistExhaustedTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "tank_session_event_persist_exhausted_total",
+		Help: "MAX_DELIVERIES advisory outcomes: repaired (event persisted out of band) or failed (durable ledger hole).",
+	}, []string{"outcome"})
+	sessionEventStreamTruncationTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_stream_truncated_past_ack_floor_total",
+		Help: "Stream sequences the retention policy discarded past the persister ack floor — events lost before persistence, unrepairable.",
+	})
+	sessionEventReconcilerRepairedTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "tank_session_event_reconciler_repaired_total",
+		Help: "Events the startup reconciler persisted that no consumer delivery would ever have retried (MaxDeliver-exhausted holes).",
+	})
+	sessionEventPersistPhaseSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Name:    "tank_session_event_persist_phase_seconds",
+		Help:    "Wall time of one persister batch per phase: upsert (ledger writes) vs refresh (transcript-row projection).",
+		Buckets: []float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30},
+	}, []string{"phase"})
+	sessionEventPersistBatchSize = promauto.NewHistogram(prometheus.HistogramOpts{
+		Name:    "tank_session_event_persist_batch_size",
+		Help:    "Events per coalesced persister batch; sustained large batches mean the persister is draining a backlog.",
+		Buckets: []float64{1, 2, 4, 8, 16, 32, 64},
+	})
+	sessionEventPersisterProcessedAgeSeconds = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_event_persister_processed_event_age_seconds",
+		Help: "Age (producer wall clock) of the newest event in the persister's last completed batch — how far behind transcripts are.",
+	})
+	sessionEventPersisterPending = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_event_persister_pending",
+		Help: "Undelivered messages on the persister durable (JetStream NumPending), sampled every 10s.",
+	})
+	sessionEventPersisterAckPending = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_event_persister_ack_pending",
+		Help: "Delivered-but-unacked messages on the persister durable (JetStream NumAckPending), sampled every 10s.",
+	})
+	sessionEventPersisterQueueDepth = promauto.NewGauge(prometheus.GaugeOpts{
+		Name: "tank_session_event_persister_queue_depth",
+		Help: "Messages routed to in-process per-session queues and not yet processed, sampled every 10s.",
+	})
+
 	// Durable per-turn failure surface (turn.failed / turn.command_failed).
 	// Replaces the SPA run-status pill as the "every session is failing"
 	// observability surface: with the pill removed, this counter is how
@@ -761,6 +816,28 @@ var strandedLaunchSweptTotal = promauto.NewCounterVec(
 
 func recordStrandedLaunchSwept(result string) {
 	strandedLaunchSweptTotal.WithLabelValues(result).Inc()
+}
+
+// Stranded-turn sweep: the command-plane four-outcome backstop
+// (tank-operator#1051 PR 4). result="failed" means a durable terminal was
+// written for a turn nothing else would ever have terminaled; sustained
+// nonzero rate means submit_turn commands or runners are dying and pages via
+// TankStrandedTurnsSwept.
+var strandedTurnSweptTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_stranded_turn_swept_total",
+		Help: "Dispatched-but-stranded turns the stranded-turn sweep observed, labeled by bounded result (failed, deferred_progressed, skipped_incomplete, persist_error).",
+	},
+	[]string{"result"},
+)
+
+func recordStrandedTurnSwept(result string) {
+	switch result {
+	case "failed", "deferred_progressed", "skipped_incomplete", "persist_error":
+	default:
+		result = "other"
+	}
+	strandedTurnSweptTotal.WithLabelValues(result).Inc()
 }
 
 var launchAttachmentStagedTotal = promauto.NewCounterVec(
@@ -2138,6 +2215,57 @@ func (promPersisterMetrics) RecordTurnTerminalMissingClientNonce(source string, 
 	recordTurnTerminalMissingClientNonce(source, eventType)
 }
 
+func (promPersisterMetrics) RecordDuplicatePersisted() {
+	sessionEventPersistDuplicateTotal.Inc()
+}
+
+func (promPersisterMetrics) RecordRedelivered() {
+	sessionEventRedeliveredTotal.Inc()
+}
+
+func (promPersisterMetrics) RecordPersistPhaseDuration(phase string, seconds float64) {
+	switch phase {
+	case "upsert", "refresh":
+	default:
+		phase = "other"
+	}
+	sessionEventPersistPhaseSeconds.WithLabelValues(phase).Observe(seconds)
+}
+
+func (promPersisterMetrics) RecordPersistBatchSize(n int) {
+	sessionEventPersistBatchSize.Observe(float64(n))
+}
+
+func (promPersisterMetrics) RecordProcessedEventAge(seconds float64) {
+	sessionEventPersisterProcessedAgeSeconds.Set(seconds)
+}
+
+func (promPersisterMetrics) RecordExhaustedRepair(outcome string) {
+	switch outcome {
+	case "repaired", "failed":
+	default:
+		outcome = "failed"
+	}
+	sessionEventPersistExhaustedTotal.WithLabelValues(outcome).Inc()
+}
+
+func (promPersisterMetrics) RecordStreamTruncationGap(missing float64) {
+	sessionEventStreamTruncationTotal.Add(missing)
+}
+
+func (promPersisterMetrics) RecordReconcilerRepairedHole() {
+	sessionEventReconcilerRepairedTotal.Inc()
+}
+
+func (promPersisterMetrics) RecordPersisterConsumerLag(pending float64, ackPending float64) {
+	sessionEventPersisterPending.Set(pending)
+	sessionEventPersisterAckPending.Set(ackPending)
+}
+
+func (promPersisterMetrics) RecordPersisterQueueDepth(depth int) {
+	sessionEventPersisterQueueDepth.Set(float64(depth))
+}
+
 // recordTurnLifecyclePersisted bumps tank_turn_lifecycle_total for the
 // five lifecycle event types that bound a turn. Callers MUST filter
 // via conversation.IsTurnLifecycleEvent before invoking this helper —
@@ -2177,6 +2305,11 @@ func transcriptRowMaterializationTriggerLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
 	case "on_demand":
 		return "on_demand"
+	case "backend_async":
+		// The backend-direct write path's per-session async refresh worker
+		// (async_transcript_refresher.go) — the projection work that used to
+		// run inline in HTTP handlers.
+		return "backend_async"
 	default:
 		return "unknown"
 	}
@@ -2184,7 +2317,7 @@ func transcriptRowMaterializationTriggerLabel(raw string) string {
 
 func transcriptRowMaterializationResultLabel(raw string) string {
 	switch strings.TrimSpace(raw) {
-	case "fresh", "backfilled", "failed", "timeout":
+	case "fresh", "backfilled", "refreshed", "failed", "timeout":
 		return strings.TrimSpace(raw)
 	default:
 		return "unknown"
@@ -2241,6 +2374,63 @@ func sessionBackgroundTasksListResultLabel(raw string) string {
 
 func recordTurnNumberMissing(phase string) {
 	turnNumberMissingTotal.WithLabelValues(turnNumberMissingPhaseLabel(phase)).Inc()
+}
+
+// Checkpointed transcript fold (tank-operator#1051 B2+B3). result tells the
+// story per batch attempt: folded (fast path), reseeded (session re-projection
+// rebuilt the memo), invalidated (turn-scope reference projection made the
+// memo stale), resync (a structure-class event sent the batch to the
+// reference path), disabled / disabled_size (session durably opted out),
+// load_error (fold state unreadable; reference path used).
+var transcriptFoldTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_transcript_fold_total",
+		Help: "Checkpointed transcript-fold batch outcomes, labeled by bounded result.",
+	},
+	[]string{"result"},
+)
+
+var transcriptFoldDurationSeconds = promauto.NewHistogram(
+	prometheus.HistogramOpts{
+		Name:    "tank_transcript_fold_duration_seconds",
+		Help:    "Wall time of successful checkpointed-fold batch applications (load excluded, save included).",
+		Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
+	},
+)
+
+func recordTranscriptFold(result string) {
+	switch result {
+	case "folded", "reseeded", "invalidated", "resync", "disabled", "disabled_size", "load_error":
+	default:
+		result = "other"
+	}
+	transcriptFoldTotal.WithLabelValues(result).Inc()
+}
+
+func recordTranscriptFoldDuration(d time.Duration) {
+	transcriptFoldDurationSeconds.Observe(d.Seconds())
+}
+
+// Production shadow-compare of the checkpointed fold (#1051 B5): sampled
+// folded batches re-derive their written shells from the reference
+// projection. divergence means the fold wrote rows the reference disagrees
+// with — auto-healed in the same transaction, but the class must page:
+// TankTranscriptFoldShadowDivergence.
+var transcriptFoldShadowTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_transcript_fold_shadow_total",
+		Help: "Sampled fold-vs-reference shadow comparisons, labeled by bounded result (match, divergence).",
+	},
+	[]string{"result"},
+)
+
+func recordTranscriptFoldShadow(result string) {
+	switch result {
+	case "match", "divergence":
+	default:
+		result = "other"
+	}
+	transcriptFoldShadowTotal.WithLabelValues(result).Inc()
 }
 
 // recordTurnActivityPages observes the page count and total event count of a

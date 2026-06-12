@@ -109,6 +109,62 @@ func TestMaterializerRecordsMissingTurnNumber(t *testing.T) {
 	}
 }
 
+// TestMaterializerDoesNotCountUnnumberedWakeTurnShells pins the migration-0139
+// contract at the observability boundary: background-wake continuation turns
+// (turn_bgtask-<task>) are excluded from durable numbering by design, so a
+// wake-turn shell materializing without a number is intended state — it must
+// not increment the missing-number counter TankTurnNumberMissing alerts on,
+// and must still render unstamped. During the 2026-06-11 incident this
+// mis-count produced 12 standing false alerts.
+func TestMaterializerDoesNotCountUnnumberedWakeTurnShells(t *testing.T) {
+	before := testutil.ToFloat64(turnNumberMissingTotal.WithLabelValues("materialize"))
+	// A wake turn with no origin-task context in the ledger: the projection
+	// cannot fold it into a parent, so it materializes as a standalone
+	// turn_bgtask-* shell — the production shape behind the false alerts.
+	wakeEvents := []map[string]any{
+		projectionTestEvent("wake-submitted", "001", "turn.submitted", "runner", "tank", "turn_bgtask-orphan", "", map[string]any{
+			"status": "submitted", "source": "background-task", "task_id": "orphan",
+			"prompt": "A background task you started earlier has finished.",
+		}),
+		projectionTestEvent("wake-tool", "002", "item.completed", "tool", "claude", "turn_bgtask-orphan", "turn_bgtask-orphan:item:tool-1", map[string]any{
+			"kind": "command_execution", "output": "ok",
+		}),
+		projectionTestEvent("wake-final", "003", "item.completed", "assistant", "claude", "turn_bgtask-orphan", "turn_bgtask-orphan:item:final", map[string]any{
+			"kind": "message", "text": "done",
+		}),
+		projectionTestEvent("wake-terminal", "004", "turn.completed", "runner", "claude", "turn_bgtask-orphan", "", projectionFinalAnswerPayload("turn_bgtask-orphan:item:final")),
+	}
+	eventStore := fakeSessionEventStore{
+		pages: map[string]store.SessionEventPage{
+			"": {Events: wakeEvents, FoundOldest: true, FoundNewest: true},
+		},
+	}
+	rowStore := &recordingTranscriptRowsStore{}
+	materializer := transcriptRowsMaterializer{
+		events: eventStore,
+		rows:   rowStore,
+		// Numbering active, and (correctly, per 0139) no row for the wake turn.
+		turns: fakeSessionTurnStore{byTurnID: map[string]int64{}},
+	}
+
+	if err := materializer.RefreshEvent(context.Background(), wakeEvents[len(wakeEvents)-1]); err != nil {
+		t.Fatalf("RefreshEvent: %v", err)
+	}
+	shell := findTurnActivityShell(rowStore.sessionEntries)
+	if shell == nil {
+		t.Fatalf("no wake turn_activity shell in session entries: %#v", rowStore.sessionEntries)
+	}
+	if got := transcriptMapString(shell, "turnId"); got != "turn_bgtask-orphan" {
+		t.Fatalf("shell turnId = %q, want the standalone wake turn", got)
+	}
+	if _, stamped := shell["turnNumber"]; stamped {
+		t.Fatalf("wake-turn shell must not be stamped: %#v", shell["turnNumber"])
+	}
+	if after := testutil.ToFloat64(turnNumberMissingTotal.WithLabelValues("materialize")); after != before {
+		t.Fatalf("missing-number counter must not count by-design-unnumbered wake turns: delta=%v", after-before)
+	}
+}
+
 // TestMaterializerSkipsStampingWhenNumberingInactive proves the stub store
 // (no-Postgres mode) neither stamps nor spams the missing-number counter.
 func TestMaterializerSkipsStampingWhenNumberingInactive(t *testing.T) {

@@ -77,7 +77,7 @@ func (e providerHealthEmitter) Upsert(ctx context.Context, event map[string]any)
 	if e.events == nil {
 		return nil
 	}
-	if err := e.events.Upsert(ctx, event); err != nil {
+	if _, err := e.events.Upsert(ctx, event); err != nil {
 		return err
 	}
 	return e.materializer.RefreshEvent(ctx, event)
@@ -376,12 +376,8 @@ func main() {
 		}
 		activityEmitter = emitter
 		sessionBus.SetLifecycleEmitter(emitter)
-		persisterStore := transcriptMaterializingEventStore{
-			SessionEventStore: sessionEventsStore,
-			materializer:      transcriptMaterializer,
-		}
 		go func() {
-			if err := sessionBus.RunEventPersister(ctx, persisterStore, promPersisterMetrics{}); err != nil {
+			if err := sessionBus.RunEventPersister(ctx, sessionEventsStore, transcriptMaterializer, promPersisterMetrics{}); err != nil {
 				slog.Error("session bus event persister stopped", "error", err)
 			}
 		}()
@@ -485,6 +481,12 @@ func main() {
 		sessionEvents:                sessionEventsStore,
 		transcriptRows:               transcriptRowsStore,
 		turns:                        turnsStore,
+		transcriptRefresher: newAsyncTranscriptRefresher(ctx, transcriptMaterializer, func(storageKey string) {
+			if err := sessionBus.PublishSessionEventWake(context.Background(), storageKey); err != nil {
+				slog.Warn("backend async refresh wake publish failed",
+					"storage_key", storageKey, "error", err)
+			}
+		}),
 		avatars:                      avatarStore,
 		avatarImages:                 avatarImageStore,
 		avatarUploads:                avatarUploadAttemptStore,
@@ -554,6 +556,19 @@ func main() {
 		go func() {
 			if err := runStrandedLaunchSweepLoop(ctx, srv, strandedLaunchSweepInterval); err != nil && !errors.Is(err, context.Canceled) {
 				slog.Error("stranded launch sweep loop stopped", "error", err)
+			}
+		}()
+	}
+	// Command-plane four-outcome backstop (#1051 PR 4): a dispatched turn
+	// whose submit_turn command or runner died gets a durable
+	// turn.command_failed once the whole session has been silent past the
+	// stranding floors. Without this, a lost command is a permanent
+	// "submitted"/"streaming" ghost only diagnosable with kubectl — the
+	// 2026-06-11 incident stranded five sessions exactly this way.
+	if pgPool != nil {
+		go func() {
+			if err := runStrandedTurnSweepLoop(ctx, srv, strandedTurnSweepInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("stranded turn sweep loop stopped", "error", err)
 			}
 		}()
 	}

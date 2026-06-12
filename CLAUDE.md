@@ -182,6 +182,13 @@ workflow and not a file read from this repo at dispatch time. Update
 `tank-operator.default` through Glimmung's admin/control-plane workflow path
 when the workflow shape changes.
 
+This applies to *unattended* workflow runs only. An interactive session
+that diagnosed a problem keeps its context and carries straight into
+implementation; do not propose abandoning a live session for a fresh
+context on this principle's authority (see
+[docs/agent-llm-task-splitting.md](docs/agent-llm-task-splitting.md),
+"When *not* to split").
+
 A single LLM doing code + tests + screenshots in one run carries each
 phase's noise into the next decision. The split is the load-bearing
 context-reduction mechanism for autonomous work â€” don't let it drift back

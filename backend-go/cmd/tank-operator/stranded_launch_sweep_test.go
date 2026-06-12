@@ -30,9 +30,9 @@ func (f *fakeStrandedLaunchStore) FindStrandedLaunchTurns(_ context.Context, old
 	return f.rows, nil
 }
 
-func (f *fakeStrandedLaunchStore) Upsert(_ context.Context, event map[string]any) error {
+func (f *fakeStrandedLaunchStore) Upsert(_ context.Context, event map[string]any) (bool, error) {
 	f.upserts = append(f.upserts, event)
-	return nil
+	return true, nil
 }
 
 func TestProcessStrandedLaunchesMarksUndispatchedLaunchFailed(t *testing.T) {

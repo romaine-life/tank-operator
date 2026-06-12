@@ -1765,11 +1765,38 @@ var schemaMigrations = []migration{
 	{ID: "0143", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS session_image text NOT NULL DEFAULT ''`},
 
+	// Checkpointed transcript-fold state (tank-operator#1051 B3): the bounded
+	// per-session fold memo the persister advances per flood-class event
+	// instead of re-reading the session ledger. memo=NULL with disabled=true
+	// durably opts a session out (memo over the size cap); a missing row just
+	// means the fold seeds on the next session-scope re-projection. Owned by
+	// backend-go/cmd/tank-operator/transcript_fold_checkpoint.go.
+	{ID: "0144", SQL: `CREATE TABLE IF NOT EXISTS session_transcript_fold_state (
+		tank_session_id text PRIMARY KEY,
+		memo            jsonb,
+		disabled        boolean NOT NULL DEFAULT false,
+		updated_at      timestamptz NOT NULL DEFAULT now()
+	)`},
+
+	// Per-turn partition of the fold memo (tank-operator#1051 follow-up):
+	// the session row keeps the small shared context; each turn's pruned
+	// entry set lives in its own row so a fold batch loads and saves only
+	// the turns it touches, and the size cap applies per part — the
+	// monster sessions that exceeded the single-row cap (disabled_size=16
+	// on first deploy) fit comfortably partitioned.
+	{ID: "0145", SQL: `CREATE TABLE IF NOT EXISTS session_transcript_fold_turns (
+		tank_session_id text NOT NULL,
+		turn_id         text NOT NULL,
+		entries         jsonb NOT NULL,
+		updated_at      timestamptz NOT NULL DEFAULT now(),
+		PRIMARY KEY (tank_session_id, turn_id)
+	)`},
+
 	// Store the human-facing release metadata that describes the session image
 	// stamped at create time. Kept separate from session_image so immutable
 	// fingerprint tags stay machine-useful while the UI can show PR, commit,
 	// workflow, and build timestamp context for existing sessions.
-	{ID: "0144", SQL: `ALTER TABLE sessions
+	{ID: "0146", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS session_image_metadata jsonb NOT NULL DEFAULT '{}'::jsonb`},
 }
 

@@ -69,6 +69,18 @@ example, "answer this question" or "rephrase this sentence". The
 split is for autonomous flows that produce code + evidence; one-shot
 operator commands don't need the overhead.
 
+**Interactive sessions are not this doc's subject.** A human-driven
+session that diagnoses an incident and then implements the fix is one
+continuous task with one owner; the accumulated diagnosis context
+(evidence, file locations, rejected hypotheses, design decisions) is
+an asset there, not a burden. Do not cite this doc to propose
+abandoning a live session and restarting implementation in a fresh
+context — context resets in interactive work have repeatedly cost
+real time re-deriving state this doc was never meant to discard. The
+context-burden argument above applies to *unattended* runs, where
+per-stage tool permissions and handoff artifacts substitute for the
+human who would otherwise catch drift.
+
 ## What goes into a project's CLAUDE.md / AGENTS.md
 
 When introducing a new agentic flow for a project, **either** reuse a
