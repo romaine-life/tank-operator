@@ -157,7 +157,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		body.BugLabels = nil
 		body.InitialTurn = nil
 	}
-	mode, status, detail := validateCreateSessionMode(body.Mode)
+	mode, model, effort, status, detail := s.resolveContextSessionRunDefaults(r.Context(), body.Mode, body.Model, body.Effort)
 	if status != 0 {
 		writeError(w, status, detail)
 		return
@@ -185,7 +185,7 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 		writeError(w, status, detail)
 		return
 	}
-	runConfig, status, detail := validateCreateRunConfig(mode, body.Model, body.Effort)
+	runConfig, status, detail := validateCreateRunConfig(mode, model, effort)
 	if status != 0 {
 		writeError(w, status, detail)
 		return
@@ -298,6 +298,18 @@ func (s *appServer) handleCreateSession(w http.ResponseWriter, r *http.Request) 
 	s.backfillProviderHealthBanner(r.Context(), owner, info)
 	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
 	writeJSON(w, http.StatusCreated, info)
+}
+
+func (s *appServer) resolveContextSessionRunDefaults(ctx context.Context, rawMode, rawModel, rawEffort string) (mode, model, effort string, status int, detail string) {
+	if strings.TrimSpace(rawMode) != "" {
+		mode, status, detail = validateCreateSessionMode(rawMode)
+		return mode, strings.TrimSpace(rawModel), strings.TrimSpace(rawEffort), status, detail
+	}
+	defaults, err := s.effectiveTestSlotSessionDefaults(ctx)
+	if err != nil {
+		return "", "", "", http.StatusInternalServerError, err.Error()
+	}
+	return defaults.Mode, defaults.Model, defaults.Effort, 0, ""
 }
 
 func normalizeCreateBugLabels(single *string, raw []string) ([]*sessionmodel.SessionBugLabel, error) {

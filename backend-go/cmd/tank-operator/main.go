@@ -275,6 +275,10 @@ func main() {
 			}
 		}
 	}
+	var platformSettingsStore *pgstore.PlatformSettingsStore
+	if pgPool != nil {
+		platformSettingsStore = pgstore.NewPlatformSettingsStore(pgPool)
+	}
 
 	// Build the RowPublisher every lifecycle producer fans row updates
 	// through (Manager user-actions, sessioncontroller K8s watch,
@@ -534,6 +538,7 @@ func main() {
 		backgroundTaskWakes:      backgroundTaskWakeStore,
 		controlActions:           controlActionStore,
 		deploymentVersions:       deploymentVersionStore,
+		platformSettings:         platformSettingsStore,
 	}
 	// Assign the override store only when non-nil so the appServer field stays
 	// a true nil interface in stub mode (avoids the typed-nil-pointer trap that

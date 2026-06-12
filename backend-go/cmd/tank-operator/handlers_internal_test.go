@@ -19,6 +19,7 @@ import (
 	ktesting "k8s.io/client-go/testing"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
+	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/profiles"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessions"
@@ -605,6 +606,66 @@ func TestHandleInternalCreateSessionSetsNameNotRequestedAt(t *testing.T) {
 	}
 	if rec2.Name != "My Recovery Session" {
 		t.Fatalf("registry record Name = %q, want \"My Recovery Session\"", rec2.Name)
+	}
+}
+
+func TestHandleInternalCreateSessionUsesTestSlotDefaultsWhenModeOmitted(t *testing.T) {
+	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := newTestSessionRegistry()
+	k8s := fake.NewSimpleClientset()
+	server := &appServer{
+		verifier:              auth.NewVerifier(jwtKey),
+		k8s:                   k8s,
+		namespace:             "tank-operator-slot-2-sessions",
+		sessionScope:          "tank-operator-slot-2",
+		sessionServiceAccount: "claude-session",
+		platformSettings: &fakePlatformSettingsStore{
+			defaults: pgstore.TestSlotSessionDefaults{
+				Mode:   sessionmodel.CodexGUIMode,
+				Model:  "gpt-5.4-mini",
+				Effort: "low",
+			},
+		},
+	}
+	server.mgr = sessions.NewManager(k8s, nil, server.namespace, registry, nil, sessions.ManagerOptions{})
+
+	tok, err := jwtKey.MintJWT(context.Background(), jwt.MapClaims{
+		"sub":         "svc:tank:session-x",
+		"email":       "pod-session-x@service.tank.romaine.life",
+		"iss":         "https://auth.romaine.life",
+		"role":        "service",
+		"actor_email": "owner@example.test",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions",
+		strings.NewReader(`{"name":"slot validation"}`))
+	req.Header.Set("Authorization", "Bearer "+tok)
+	rec := httptest.NewRecorder()
+
+	server.handleInternalCreateSession(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var info sessions.Info
+	if err := json.Unmarshal(rec.Body.Bytes(), &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode != sessionmodel.CodexGUIMode || info.Model != "gpt-5.4-mini" || info.Effort != "low" {
+		t.Fatalf("created info = mode %q model %q effort %q", info.Mode, info.Model, info.Effort)
+	}
+	rec2, ok, err := registry.Get(context.Background(), "owner@example.test", info.ID)
+	if err != nil || !ok {
+		t.Fatalf("registry Get ok=%v err=%v", ok, err)
+	}
+	if rec2.Mode != sessionmodel.CodexGUIMode || rec2.Model != "gpt-5.4-mini" || rec2.Effort != "low" {
+		t.Fatalf("registry record = mode %q model %q effort %q", rec2.Mode, rec2.Model, rec2.Effort)
 	}
 }
 

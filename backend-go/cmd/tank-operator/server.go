@@ -140,6 +140,10 @@ type appServer struct {
 	// metadata at boot; the handler reads the latest observation for this
 	// session scope instead of trusting only process-local env vars.
 	deploymentVersions deploymentImageVersionStore
+
+	// platformSettings owns durable operator-selected defaults that affect
+	// session creation across browsers, service callers, prod, and test slots.
+	platformSettings platformSettingsStore
 }
 
 type sessionCommandBus interface {
@@ -239,6 +243,11 @@ type deploymentImageVersionStore interface {
 	LatestByScope(context.Context, string) (map[string]pgstore.DeploymentImageVersion, error)
 }
 
+type platformSettingsStore interface {
+	GetTestSlotSessionDefaults(context.Context) (pgstore.TestSlotSessionDefaults, error)
+	UpsertTestSlotSessionDefaults(context.Context, pgstore.TestSlotSessionDefaults, string) (pgstore.TestSlotSessionDefaults, error)
+}
+
 func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	// Health / config / metrics.
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
@@ -274,6 +283,8 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PATCH /api/admin/avatars/{avatar_id}/kind", s.handleUpdateAvatarKind)
 	mux.HandleFunc("DELETE /api/admin/avatars/{avatar_id}", s.handleDeleteAvatar)
 	mux.HandleFunc("GET /api/admin/app-version", s.handleAdminAppVersion)
+	mux.HandleFunc("GET /api/admin/test-slot-session-defaults", s.handleAdminGetTestSlotSessionDefaults)
+	mux.HandleFunc("PUT /api/admin/test-slot-session-defaults", s.handleAdminSetTestSlotSessionDefaults)
 	mux.HandleFunc("GET /api/admin/session-report", s.handleAdminSessionReport)
 	mux.HandleFunc("POST /api/admin/session-report-shares", s.handleCreateSessionReportShare)
 	// Admin-only durable support surface for avatar upload failures. The

@@ -153,6 +153,23 @@ test("createSession forwards model and effort as session-owned config", () => {
   );
 });
 
+test("Glimmung launch uses Tank test-slot defaults instead of browser default mode", () => {
+  expect(appSource).toMatch(/test_slot_defaults: TestSlotSessionDefaults;/);
+  expect(appSource).toMatch(
+    /const defaults = sessionRunOptions\?\.test_slot_defaults;[\s\S]{0,80}if \(!defaults\) return;/,
+  );
+  const launchRequestStart = appSource.indexOf(
+    'authedFetch("/api/sessions/with-context"',
+  );
+  expect(launchRequestStart).toBeGreaterThan(0);
+  const launchRequest = appSource.slice(launchRequestStart, launchRequestStart + 700);
+  expect(launchRequest).toMatch(/mode: launchDefaults\.mode,/);
+  expect(launchRequest).toMatch(
+    /launchDefaults\.model \? \{ model: launchDefaults\.model \}/,
+  );
+  expect(launchRequest).not.toMatch(/mode: defaultSessionMode/);
+});
+
 test("forkSessionFromMessage forwards model and effort on create, not the first turn", () => {
   expect(appSource).toMatch(
     /SDK_CHAT_MODES\.has\(mode\) && \(request\.model \|\| request\.effort\)[\s\S]{0,120}\{ model: request\.model, effort: request\.effort \}/,
