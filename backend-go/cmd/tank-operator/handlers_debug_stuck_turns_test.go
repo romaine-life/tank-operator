@@ -64,23 +64,39 @@ func TestClampedQueryInt(t *testing.T) {
 
 // TestDebugStuckTurnsJSONShape pins the wire-shape contract so an
 // operator's runbook (and the TankSessionStuckInProgress alert
-// annotation) can name stable field paths. The handler integration
-// with a real pgxPool is covered by the Postgres-backed suite.
+// annotation) can name stable field paths — both stall classes. The
+// handler integration with a real pgxPool is covered by the
+// Postgres-backed suite.
 func TestDebugStuckTurnsJSONShape(t *testing.T) {
 	payload := map[string]any{
-		"description":       debugStuckTurnsDescription,
-		"scope":             "default",
-		"threshold_seconds": 600,
-		"count":             1,
+		"description":                 debugStuckTurnsDescription,
+		"scope":                       "default",
+		"threshold_seconds":           600,
+		"streaming_threshold_seconds": 1200,
+		"count":                       2,
 		"stuck_turns": []map[string]any{
 			{
 				"session_id":                      "812",
 				"mode":                            "claude_gui",
+				"phase":                           "accepted",
 				"activity_status":                 "claimed",
 				"active_turn_id":                  "turn_abc",
 				"stuck_seconds":                   720,
+				"last_event_at":                   "",
 				"provider_rate_limit_status":      "throttled",
 				"provider_rate_limit_observed_at": "2026-06-06T19:01:41Z",
+			},
+			{
+				// Session 828's incident shape (tank-operator#1085).
+				"session_id":                      "828",
+				"mode":                            "antigravity_gui",
+				"phase":                           "streaming",
+				"activity_status":                 "streaming",
+				"active_turn_id":                  "turn_7fcfb58b",
+				"stuck_seconds":                   1995,
+				"last_event_at":                   "2026-06-12T03:05:59Z",
+				"provider_rate_limit_status":      "",
+				"provider_rate_limit_observed_at": "",
 			},
 		},
 	}
@@ -91,9 +107,13 @@ func TestDebugStuckTurnsJSONShape(t *testing.T) {
 	for _, want := range []string{
 		`"scope":"default"`,
 		`"threshold_seconds":600`,
-		`"count":1`,
+		`"streaming_threshold_seconds":1200`,
+		`"count":2`,
 		`"session_id":"812"`,
+		`"phase":"accepted"`,
+		`"phase":"streaming"`,
 		`"stuck_seconds":720`,
+		`"last_event_at":"2026-06-12T03:05:59Z"`,
 		`"provider_rate_limit_status":"throttled"`,
 	} {
 		if !strings.Contains(string(encoded), want) {

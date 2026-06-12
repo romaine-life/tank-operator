@@ -745,34 +745,54 @@ spec:
         # Per-session, durable-state stuck-turn detector. A fully-wedged
         # or crashed runner emits nothing and cannot fail its own turn,
         # so the turn sits in sessions.activity_summary.status =
-        # "claimed"/"submitted" forever with no terminal. The
-        # orchestrator-side sampler (internal/stuckturns) flags such
-        # rows once they are unprogressed past the stall threshold (10m,
-        # above the runner's 240s PROVIDER_RETRY_STALL_MS terminal) and
-        # publishes the count to tank_sessions_stuck_in_progress. This
-        # is per-session and durable-state-based, complementing the
-        # aggregate, rate-based TankTurnSilentStranding above.
+        # "claimed"/"submitted" forever with no terminal — and a wedged
+        # turn BOUNDARY leaves a session "streaming" forever the same
+        # way (sessions 828/829, tank-operator#1085). The
+        # orchestrator-side sampler (internal/stuckturns) flags both
+        # classes on tank_sessions_stuck_in_progress{phase}:
+        # phase=accepted (submitted/claimed unprogressed past 10m, above
+        # the runner's 240s PROVIDER_RETRY_STALL_MS terminal) and
+        # phase=streaming (ledger fully silent past 20m with the turn
+        # still open). This is per-session and durable-state-based,
+        # complementing the aggregate, rate-based
+        # TankTurnSilentStranding above; the alert fires per phase
+        # series.
         - alert: TankSessionStuckInProgress
           expr: tank_sessions_stuck_in_progress > 0
           for: 5m
           labels:
             severity: warning
           annotations:
-            summary: "a session has been accepted-but-unprogressed (submitted/claimed) past the stall threshold"
+            summary: "a session is stalled with no durable terminal (phase {{`{{ $labels.phase }}`}}) past its stall threshold"
             runbook: |
-              The durable source of truth is sessions.activity_summary in
-              Postgres; this is the orchestrator-side complement to the
-              runner's api_retry rate-limit terminal
-              (PROVIDER_RETRY_STALL_MS, 240s). A nonzero gauge means a
-              turn was durably claimed/submitted but produced no
-              turn.started/terminal for >10m, so the runner did NOT fail
-              it (fully-wedged/crashed runner, or a stall class the runner
-              can't see).
+              The durable source of truth is Postgres; the phase label
+              says which stall class fired.
 
-              Localize with GET /api/debug/stuck-turns (lists the
-              session_ids + stuck_seconds + provider_rate_limit_status),
-              then read that session's claude-runner logs and
-              session_events.
+              phase=accepted: a turn was durably claimed/submitted but
+              produced no turn.started/terminal for >10m. The
+              orchestrator-side complement to the runner's api_retry
+              rate-limit terminal (PROVIDER_RETRY_STALL_MS, 240s): the
+              runner did NOT fail it (fully-wedged/crashed runner, or a
+              stall class the runner can't see).
+
+              phase=streaming: a turn made provider progress, then the
+              session's ledger went fully silent for >20m with no
+              terminal — the wedged-boundary class (sessions 828/829,
+              tank-operator#1085: the antigravity turn-settle window was
+              cancelled by a transcript-rewrite replay and never
+              re-armed). A streaming hit is suspicion, not a verdict — a
+              single long quiet tool call can legitimately exceed the
+              threshold; one that persists well past it is almost
+              certainly real. The stranded-turn sweep still owns the
+              durable turn.command_failed terminal at its own 2h floor;
+              this alert exists to beat the user to noticing.
+
+              Localize with GET /api/debug/stuck-turns (lists session_ids
+              + phase + stuck_seconds + last_event_at +
+              provider_rate_limit_status), then read that session's
+              runner logs and session_events tail; for antigravity also
+              check tank_antigravity_runner_turn_settle_total (a healthy
+              boundary shows a quiet outcome after the last extended).
 
               Distinguishes from TankTurnSilentStranding (aggregate
               submitted-vs-terminal rate) by being per-session and
