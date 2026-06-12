@@ -13,8 +13,22 @@ from mcp_auth_proxy.server import (
     _MAX_UPSTREAM_ATTEMPTS,
     AuthRomaineServiceProvider,
     SPIRELENS_MCP_PORT,
+    _append_ci_reminder,
+    _append_tank_publish_tool,
+    _break_glass_approval_url,
+    _activate_break_glass_mcp_config,
+    _checks_state,
     _effective_listeners,
+    _first_pr_from_response,
+    _github_tool_block_response,
+    _handle_tank_break_glass_tool,
+    _handle_break_glass_mcp,
+    _json_objects_from_mcp_body,
     _make_handler,
+    _mint_github_installation_token,
+    _parse_mcp_tool_call,
+    _push_head_with_token,
+    _repo_slug_from_remote,
 )
 
 
@@ -44,6 +58,38 @@ class _FakeHTTP:
 
     def post(self, url: str, *, headers: dict, json: dict):
         self.calls.append({"url": url, "headers": headers, "json": json})
+        return self.response
+
+
+class _FakeRawResponse:
+    def __init__(self, status: int, body: bytes) -> None:
+        self.status = status
+        self._body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def read(self) -> bytes:
+        return self._body
+
+    async def text(self) -> str:
+        return self._body.decode("utf-8")
+
+
+class _FakeRawHTTP:
+    def __init__(self, response: _FakeRawResponse) -> None:
+        self.response = response
+        self.calls: list[dict] = []
+
+    def post(self, url: str, *, headers: dict, json: dict):
+        self.calls.append({"url": url, "headers": headers, "json": json})
+        return self.response
+
+    def get(self, url: str, *, headers: dict):
+        self.calls.append({"url": url, "headers": headers})
         return self.response
 
 
@@ -145,6 +191,304 @@ def test_effective_listeners_add_spirelens_when_configured() -> None:
 
     assert listeners[:-1] == LISTENERS
     assert listeners[-1] == (SPIRELENS_MCP_PORT, upstream)
+
+
+def test_github_tool_call_parser_recognizes_create_pull_request() -> None:
+    body = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": {
+            "name": "create_pull_request",
+            "arguments": {"owner": "romaine-life", "name": "tank-operator"},
+        },
+    }).encode()
+
+    parsed = _parse_mcp_tool_call(body)
+
+    assert parsed == (
+        "create_pull_request",
+        {"owner": "romaine-life", "name": "tank-operator"},
+    )
+
+
+def test_first_pr_from_mcp_response_finds_pull_request_url() -> None:
+    response = [{
+        "result": {
+            "structuredContent": {
+                "url": "https://github.com/romaine-life/tank-operator/pull/123",
+            }
+        }
+    }]
+
+    assert _first_pr_from_response(response) == (
+        "romaine-life",
+        "tank-operator",
+        "https://github.com/romaine-life/tank-operator/pull/123",
+        123,
+    )
+
+
+def test_append_ci_reminder_augments_sse_mcp_result() -> None:
+    raw = b'data: {"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"created"}]}}\n\n'
+
+    augmented = _append_ci_reminder(raw)
+
+    text = augmented.decode()
+    assert "created" in text
+    assert "watch the PR's current HEAD CI checks until they pass" in text
+
+
+def test_mcp_sse_parser_accepts_event_prefixed_response() -> None:
+    raw = (
+        b"event: message\n"
+        b'data: {"jsonrpc":"2.0","id":"debug","result":{"structuredContent":{"token":"abc123"}}}\n\n'
+    )
+
+    parsed = _json_objects_from_mcp_body(raw)
+
+    assert parsed == [{
+        "jsonrpc": "2.0",
+        "id": "debug",
+        "result": {"structuredContent": {"token": "abc123"}},
+    }]
+
+
+def test_mint_github_installation_token_requests_write_scope() -> None:
+    body = (
+        b"event: message\n"
+        b'data: {"jsonrpc":"2.0","result":{"structuredContent":{"token":"write-token"}}}\n\n'
+    )
+    http = _FakeRawHTTP(_FakeRawResponse(200, body))
+
+    token = asyncio.run(_mint_github_installation_token(http, "auth-token", "romaine-life/tank-operator"))
+
+    assert token == "write-token"
+    assert http.calls[0]["json"]["params"]["arguments"] == {
+        "repos": ["romaine-life/tank-operator"],
+        "write": True,
+    }
+
+
+def test_push_head_with_token_bypasses_local_pre_push_hook(monkeypatch, tmp_path) -> None:
+    calls: list[tuple[tuple[str, ...], dict | None]] = []
+
+    async def fake_run_git(repo_path, *args, env=None, timeout=None):
+        calls.append((args, env))
+        return 0, "", ""
+
+    monkeypatch.setattr("mcp_auth_proxy.server._run_git", fake_run_git)
+
+    asyncio.run(_push_head_with_token(tmp_path, "tank/session/1/repo", "token"))
+
+    args, env = calls[0]
+    assert args[:3] == ("push", "--no-verify", "origin")
+    assert args[3] == "HEAD:refs/heads/tank/session/1/repo"
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GITHUB_TOKEN"] == "token"
+
+
+def test_append_tank_publish_tool_augments_event_prefixed_sse_tools_list() -> None:
+    raw = (
+        b"event: message\n"
+        b'data: {"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"read_transcript"}]}}\n\n'
+    )
+
+    augmented = _append_tank_publish_tool(raw).decode()
+
+    assert "event: message" in augmented
+    assert "publish_current_head" in augmented
+    assert "request_git_break_glass" in augmented
+
+
+def test_tank_publish_tool_is_added_to_tools_list() -> None:
+    raw = b'{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"read_transcript"}]}}'
+
+    augmented = json.loads(_append_tank_publish_tool(raw))
+
+    names = [tool["name"] for tool in augmented["result"]["tools"]]
+    assert names == ["read_transcript", "publish_current_head", "request_git_break_glass"]
+    publish = augmented["result"]["tools"][1]
+    assert publish["inputSchema"]["properties"]["repo_path"]["type"] == "string"
+    break_glass = augmented["result"]["tools"][2]
+    assert "approval URL" in break_glass["description"]
+    assert "token" not in break_glass["inputSchema"]["properties"]
+
+
+def test_break_glass_approval_url_carries_request_context() -> None:
+    url = _break_glass_approval_url(
+        "95",
+        "romaine-life/tank-operator",
+        "need to repair a branch conflict",
+        "agent",
+    )
+
+    assert url.startswith("https://auth.romaine.life/admin?")
+    assert "intent=git-break-glass" in url
+    assert "session_id=95" in url
+    assert "repo=romaine-life%2Ftank-operator" in url
+    assert "reason=need+to+repair+a+branch+conflict" in url
+
+
+def test_break_glass_mcp_lists_no_tools_before_activation(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", tmp_path)
+
+    async def run() -> dict:
+        request = type("Request", (), {"read": lambda self: asyncio.sleep(0, result=b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}')})()
+        response = await _handle_break_glass_mcp(
+            _FakeRawHTTP(_FakeRawResponse(200, b"{}")),
+            _StaticTokenProvider("service-token"),
+            request,
+        )
+        return json.loads(response.text)
+
+    payload = asyncio.run(run())
+
+    assert payload["result"]["tools"] == []
+
+
+def test_break_glass_mcp_rejects_call_before_activation(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", tmp_path)
+
+    async def run() -> dict:
+        body = {
+            "jsonrpc": "2.0",
+            "id": 8,
+            "method": "tools/call",
+            "params": {
+                "name": "mint_full_git_token",
+                "arguments": {"repo": "romaine-life/tank-operator"},
+            },
+        }
+        request = type("Request", (), {"read": lambda self: asyncio.sleep(0, result=json.dumps(body).encode("utf-8"))})()
+        response = await _handle_break_glass_mcp(
+            _FakeRawHTTP(_FakeRawResponse(200, b'{"active":true}')),
+            _StaticTokenProvider("service-token"),
+            request,
+        )
+        return json.loads(response.text)
+
+    payload = asyncio.run(run())
+
+    assert payload["error"]["code"] == -32022
+    assert "not activated" in payload["error"]["message"]
+
+
+def test_break_glass_activation_writes_separate_mcp_entry(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", tmp_path)
+    (tmp_path / ".mcp.json").write_text('{"mcpServers":{"tank-operator":{"type":"http","url":"http://127.0.0.1:9996/"}}}', encoding="utf-8")
+    (tmp_path / ".tank" / "codex").mkdir(parents=True)
+    (tmp_path / ".tank" / "codex" / "config.toml").write_text('[mcp_servers.tank-operator]\nurl = "http://127.0.0.1:9996/"\n', encoding="utf-8")
+    (tmp_path / ".tank" / "claude").mkdir(parents=True)
+    (tmp_path / ".tank" / "claude" / "settings.json").write_text('{"permissions":{"allow":["mcp__tank-operator"]}}', encoding="utf-8")
+
+    activation = _activate_break_glass_mcp_config(
+        "romaine-life/tank-operator",
+        {"event_id": "grant-1", "expires_at": "2026-06-12T23:00:00Z"},
+    )
+
+    mcp_config = json.loads((tmp_path / ".mcp.json").read_text(encoding="utf-8"))
+    assert mcp_config["mcpServers"]["tank-git-break-glass"]["url"] == "http://127.0.0.1:9999/"
+    marker = json.loads((tmp_path / ".tank" / "git-break-glass-active.json").read_text(encoding="utf-8"))
+    assert marker["repo"] == "romaine-life/tank-operator"
+    assert marker["grant_event_id"] == "grant-1"
+    assert "tank-git-break-glass" in (tmp_path / ".tank" / "codex" / "config.toml").read_text(encoding="utf-8")
+    settings = json.loads((tmp_path / ".tank" / "claude" / "settings.json").read_text(encoding="utf-8"))
+    assert "mcp__tank-git-break-glass" in settings["permissions"]["allow"]
+    assert activation["reload_required"] is True
+
+
+def test_break_glass_activation_tolerates_read_only_workspace_mcp(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", tmp_path)
+    mcp_path = tmp_path / ".mcp.json"
+    mcp_path.write_text('{"mcpServers":{"tank-operator":{"type":"http","url":"http://127.0.0.1:9996/"}}}', encoding="utf-8")
+    mcp_path.chmod(0o444)
+    (tmp_path / ".tank" / "codex").mkdir(parents=True)
+    codex_config = tmp_path / ".tank" / "codex" / "config.toml"
+    codex_config.write_text('[mcp_servers.tank-operator]\nurl = "http://127.0.0.1:9996/"\n', encoding="utf-8")
+
+    try:
+        activation = _activate_break_glass_mcp_config(
+            "romaine-life/tank-operator",
+            {"event_id": "grant-1", "expires_at": "2026-06-12T23:00:00Z"},
+        )
+    finally:
+        mcp_path.chmod(0o644)
+
+    assert activation["reload_required"] is True
+    assert str(tmp_path / ".tank" / "git-break-glass-active.json") in activation["changed_files"]
+    assert str(codex_config) in activation["changed_files"]
+    assert "tank-git-break-glass" in codex_config.read_text(encoding="utf-8")
+
+
+def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypatch) -> None:
+    http = _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}'))
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    response = asyncio.run(
+        _handle_tank_break_glass_tool(
+            http,
+            _StaticTokenProvider("service-token"),
+            9,
+            {"repo": "romaine-life/tank-operator", "reason": "need branch repair"},
+        )
+    )
+
+    payload = json.loads(response.text)
+    assert payload["result"]["structuredContent"]["approval_url"].startswith("https://auth.romaine.life/admin?")
+    assert payload["result"]["structuredContent"]["privileged_tools_visible"] is False
+    recorded_call = next(call for call in http.calls if "json" in call)
+    recorded = recorded_call["json"]
+    assert recorded["action"] == "github.break_glass.request"
+    assert recorded["source_tool"] == "request_git_break_glass"
+    assert recorded["target_ref"] == "https://github.com/romaine-life/tank-operator"
+    assert recorded["payload"]["reason"] == "need branch repair"
+    assert recorded_call["headers"]["Authorization"] == "Bearer service-token"
+
+
+def test_github_write_tool_block_response_returns_mcp_error() -> None:
+    body = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {"name": "mint_clone_token", "arguments": {"repos": ["romaine-life/tank-operator"]}},
+    }).encode()
+
+    response = _github_tool_block_response(body, "mint_clone_token")
+
+    assert response is not None
+    payload = json.loads(response.text)
+    assert payload["id"] == 7
+    assert payload["error"]["data"]["replacement_tool"] == "publish_current_head"
+    assert payload["error"]["data"]["break_glass_tool"] == "request_git_break_glass"
+
+
+def test_repo_slug_from_remote_accepts_https_and_ssh() -> None:
+    assert _repo_slug_from_remote("https://github.com/romaine-life/tank-operator.git") == (
+        "romaine-life",
+        "tank-operator",
+    )
+    assert _repo_slug_from_remote("git@github.com:romaine-life/tank-operator.git") == (
+        "romaine-life",
+        "tank-operator",
+    )
+
+
+def test_checks_state_classifies_pending_failure_and_success() -> None:
+    assert _checks_state([], None)[0] == "started"
+    failed, error, payload = _checks_state(
+        [{"name": "test", "status": "completed", "conclusion": "failure"}],
+        {"state": "success", "statuses": []},
+    )
+    assert failed == "failed"
+    assert "test: failure" in error
+    assert payload["failed"] == ["test: failure"]
+    succeeded, _, success_payload = _checks_state(
+        [{"name": "test", "status": "completed", "conclusion": "success"}],
+        {"state": "success", "statuses": []},
+    )
+    assert succeeded == "succeeded"
+    assert success_payload["completed"] == 1
 
 
 # --- retry-loop tests ----------------------------------------------

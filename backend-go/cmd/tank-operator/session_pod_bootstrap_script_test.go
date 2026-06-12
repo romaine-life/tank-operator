@@ -85,6 +85,10 @@ func TestInstallAgentPostCommitReminderScriptRunsUnderSh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve hook path: %v", err)
 	}
+	sourcePrePushHook, err := filepath.Abs("../../../.githooks/pre-push")
+	if err != nil {
+		t.Fatalf("resolve pre-push hook path: %v", err)
+	}
 
 	repoDir := t.TempDir()
 	home := t.TempDir()
@@ -93,9 +97,11 @@ func TestInstallAgentPostCommitReminderScriptRunsUnderSh(t *testing.T) {
 	mustRun(t, repoDir, "mkdir", "-p", "scripts", ".githooks")
 	copyFile(t, sourceScript, filepath.Join(repoDir, "scripts", "install-agent-post-commit-reminder.sh"), 0o755)
 	copyFile(t, sourceHook, filepath.Join(repoDir, ".githooks", "post-commit"), 0o755)
+	copyFile(t, sourcePrePushHook, filepath.Join(repoDir, ".githooks", "pre-push"), 0o755)
 
 	mustRunEnv(t, repoDir, env, "sh", "scripts/install-agent-post-commit-reminder.sh")
-	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
+	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), "[tank-agent] Local commit created")
+	assertFileContains(t, filepath.Join(repoDir, ".git", "hooks", "pre-push"), "[tank-agent] Direct git push is disabled")
 }
 
 func TestInstallAgentPostCommitReminderReplacesManagedTemplateHook(t *testing.T) {
@@ -111,6 +117,10 @@ func TestInstallAgentPostCommitReminderReplacesManagedTemplateHook(t *testing.T)
 	if err != nil {
 		t.Fatalf("resolve hook path: %v", err)
 	}
+	sourcePrePushHook, err := filepath.Abs("../../../.githooks/pre-push")
+	if err != nil {
+		t.Fatalf("resolve pre-push hook path: %v", err)
+	}
 
 	repoDir := t.TempDir()
 	home := t.TempDir()
@@ -119,8 +129,9 @@ func TestInstallAgentPostCommitReminderReplacesManagedTemplateHook(t *testing.T)
 	mustRun(t, repoDir, "mkdir", "-p", "scripts", ".githooks")
 	copyFile(t, sourceScript, filepath.Join(repoDir, "scripts", "install-agent-post-commit-reminder.sh"), 0o755)
 	copyFile(t, sourceHook, filepath.Join(repoDir, ".githooks", "post-commit"), 0o755)
+	copyFile(t, sourcePrePushHook, filepath.Join(repoDir, ".githooks", "pre-push"), 0o755)
 	writeExecutable(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), `#!/bin/sh
-echo '[tank-agent-reminder] Local commit created.'
+echo '[tank-agent] Local commit created.'
 `)
 
 	mustRunEnv(t, repoDir, env, "sh", "scripts/install-agent-post-commit-reminder.sh")
@@ -140,6 +151,10 @@ func TestInstallAgentPostCommitReminderRefusesUnmanagedHook(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve hook path: %v", err)
 	}
+	sourcePrePushHook, err := filepath.Abs("../../../.githooks/pre-push")
+	if err != nil {
+		t.Fatalf("resolve pre-push hook path: %v", err)
+	}
 
 	repoDir := t.TempDir()
 	home := t.TempDir()
@@ -148,6 +163,7 @@ func TestInstallAgentPostCommitReminderRefusesUnmanagedHook(t *testing.T) {
 	mustRun(t, repoDir, "mkdir", "-p", "scripts", ".githooks")
 	copyFile(t, sourceScript, filepath.Join(repoDir, "scripts", "install-agent-post-commit-reminder.sh"), 0o755)
 	copyFile(t, sourceHook, filepath.Join(repoDir, ".githooks", "post-commit"), 0o755)
+	copyFile(t, sourcePrePushHook, filepath.Join(repoDir, ".githooks", "pre-push"), 0o755)
 	writeExecutable(t, filepath.Join(repoDir, ".git", "hooks", "post-commit"), `#!/bin/sh
 echo custom
 `)
@@ -178,12 +194,17 @@ func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve hook path: %v", err)
 	}
+	prePushHookPath, err := filepath.Abs("../../../k8s/session-config/agent-pre-push-hook.sh")
+	if err != nil {
+		t.Fatalf("resolve pre-push hook path: %v", err)
+	}
 
 	home := t.TempDir()
 	templateDir := filepath.Join(t.TempDir(), "template")
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Env = append(isolatedGitEnv(home),
 		"AGENT_POST_COMMIT_HOOK="+hookPath,
+		"AGENT_PRE_PUSH_HOOK="+prePushHookPath,
 		"AGENT_GIT_TEMPLATE_DIR="+templateDir,
 	)
 	out, err := cmd.CombinedOutput()
@@ -191,7 +212,8 @@ func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
 		t.Fatalf("script failed under sh: %v\noutput:\n%s", err, string(out))
 	}
 
-	assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
+	assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent] Local commit created")
+	assertFileContains(t, filepath.Join(templateDir, "hooks", "pre-push"), "[tank-agent] Direct git push is disabled")
 	configured := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "init.templateDir")))
 	if configured != templateDir {
 		t.Fatalf("init.templateDir = %q, want %q", configured, templateDir)
@@ -285,7 +307,7 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 				t.Fatalf("script failed: %v\noutput:\n%s", err, string(out))
 			}
 
-			assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent-reminder] Local commit created.")
+			assertFileContains(t, filepath.Join(templateDir, "hooks", "post-commit"), "[tank-agent] Local commit created")
 			configured := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "init.templateDir")))
 			if configured != templateDir {
 				t.Fatalf("init.templateDir = %q, want %q", configured, templateDir)

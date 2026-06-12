@@ -127,6 +127,158 @@ func TestHandleInternalAppendControlActionRejectsUnsupportedActionBeforeStore(t 
 	}
 }
 
+func TestHandleInternalAppendControlActionAcceptsGitActivity(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		action     string
+		targetKind string
+		targetRef  string
+	}{
+		{
+			name:       "pull request opened",
+			action:     "github.pull_request.open",
+			targetKind: "github_pull_request",
+			targetRef:  "https://github.com/romaine-life/tank-operator/pull/857",
+		},
+		{
+			name:       "commit pushed",
+			action:     "github.commit.push",
+			targetKind: "github_commit",
+			targetRef:  "https://github.com/romaine-life/tank-operator/commit/abcdef1234567890",
+		},
+		{
+			name:       "commit ci",
+			action:     "github.commit.ci",
+			targetKind: "github_commit",
+			targetRef:  "https://github.com/romaine-life/tank-operator/commit/abcdef1234567890",
+		},
+		{
+			name:       "pull request mergeability",
+			action:     "github.pull_request.mergeability",
+			targetKind: "github_pull_request",
+			targetRef:  "https://github.com/romaine-life/tank-operator/pull/857",
+		},
+		{
+			name:       "break glass requested",
+			action:     "github.break_glass.request",
+			targetKind: "github_repository",
+			targetRef:  "https://github.com/romaine-life/tank-operator",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &fakeControlActionStore{}
+			app := controlActionTestServer(t, store)
+			body := `{
+				"event_id": "git_1",
+				"invocation_id": "git_invocation_1",
+				"source_service": "mcp-github",
+				"source_tool": "create_pull_request",
+				"action": "` + tc.action + `",
+				"status": "succeeded",
+				"target_kind": "` + tc.targetKind + `",
+				"target_ref": "` + tc.targetRef + `",
+				"repo_owner": "romaine-life",
+				"repo_name": "tank-operator"
+			}`
+			req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/control-actions", strings.NewReader(body))
+			req.SetPathValue("session_id", "47")
+			req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+			rec := httptest.NewRecorder()
+
+			app.handleInternalAppendControlAction(rec, req)
+
+			if rec.Code != http.StatusCreated {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if len(store.appendCalls) != 1 {
+				t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+			}
+			if got := store.appendCalls[0].Action; got != tc.action {
+				t.Fatalf("action = %q, want %q", got, tc.action)
+			}
+		})
+	}
+}
+
+func TestHandleInternalGrantGitBreakGlassPersistsGrant(t *testing.T) {
+	store := &fakeControlActionStore{}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodPost, "/api/internal/sessions/47/git-break-glass/grants", strings.NewReader(`{
+		"repo": "romaine-life/tank-operator",
+		"ttl_seconds": 900,
+		"operations": ["mint_full_git_token"],
+		"request_event_id": "request-1",
+		"reason": "repair branch"
+	}`))
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGrantGitBreakGlass(rec, req)
+
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(store.appendCalls) != 1 {
+		t.Fatalf("append calls = %d, want 1", len(store.appendCalls))
+	}
+	got := store.appendCalls[0]
+	if got.Action != "github.break_glass.grant" || got.Status != "succeeded" {
+		t.Fatalf("grant action/status = %s/%s", got.Action, got.Status)
+	}
+	if got.RepoOwner != "romaine-life" || got.RepoName != "tank-operator" {
+		t.Fatalf("repo = %s/%s", got.RepoOwner, got.RepoName)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(got.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["request_event_id"] != "request-1" {
+		t.Fatalf("request_event_id = %v", payload["request_event_id"])
+	}
+}
+
+func TestHandleInternalGetGitBreakGlassGrantReturnsActiveGrant(t *testing.T) {
+	expiresAt := time.Now().UTC().Add(time.Hour).Format(time.RFC3339)
+	payload, _ := json.Marshal(map[string]any{
+		"expires_at": expiresAt,
+		"operations": []string{"mint_full_git_token"},
+		"reason":     "repair branch",
+	})
+	store := &fakeControlActionStore{
+		listRows: []pgstore.ControlActionEvent{{
+			EventID:   "grant-1",
+			Action:    "github.break_glass.grant",
+			Status:    "succeeded",
+			RepoOwner: "romaine-life",
+			RepoName:  "tank-operator",
+			TargetRef: "https://github.com/romaine-life/tank-operator",
+			Payload:   payload,
+		}},
+	}
+	app := controlActionTestServer(t, store)
+	req := httptest.NewRequest(http.MethodGet, "/api/internal/sessions/47/git-break-glass/grant?repo=romaine-life/tank-operator", nil)
+	req.SetPathValue("session_id", "47")
+	req.Header.Set("Authorization", "Bearer "+signedServiceToken(t, "pod-47@service.tank.romaine.life", "owner@example.test"))
+	rec := httptest.NewRecorder()
+
+	app.handleInternalGetGitBreakGlassGrant(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["active"] != true || body["event_id"] != "grant-1" {
+		t.Fatalf("body = %#v", body)
+	}
+	if store.listOwner != "owner@example.test" || store.listSession != "47" {
+		t.Fatalf("list lookup = owner %q session %q", store.listOwner, store.listSession)
+	}
+}
+
 func TestHandleListControlActionsScopesBrowserRead(t *testing.T) {
 	prNumber := 857
 	store := &fakeControlActionStore{

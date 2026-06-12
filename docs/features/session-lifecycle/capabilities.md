@@ -270,3 +270,50 @@ touches) into the reap predicate. Browser disconnects are explicitly
 inside the durability boundary, so presence can never be evidence of
 abandonment. If reap latency ever matters, lower the interval, not the
 evidence bar.
+## Governed Git publish path
+
+Status: in progress
+
+Intent:
+Tank sessions should not rely on an agent remembering to push, open a PR, or
+watch checks. For selected GitHub repos, session startup creates a
+Tank-owned `tank/session/<session-id>/<repo>` branch and draft PR. Every local
+commit is auto-published through the Tank MCP `publish_current_head` path,
+which owns the GitHub write token inside the session sidecar, records the
+commit in the control-action ledger, and starts CI/mergeability watching.
+
+Affected contracts:
+- Session Lifecycle
+- Agent Runners
+- Observability
+
+Contract impact:
+- `repo-cloner` prepares the governed branch and draft PR before the repo is
+  marked cloned.
+- The user-facing sandbox has no normal direct-push path. The `pre-push` hook
+  fails loudly, and the localhost GitHub MCP proxy denies raw write-token and
+  file/PR write tools in normal mode.
+- The `post-commit` hook calls the Tank MCP publish tool rather than printing
+  reminder-only guidance.
+- Commit publication, CI state, PR creation, and mergeability are durable
+  `control_action_events`, so the UI can show PR/commit evidence after reload.
+
+Open hardening:
+- Network/RBAC policy still needs a dedicated pass if the threat model includes
+  a deliberately direct in-cluster call to `mcp-github`. The normal agent path
+  is governed, but this capability is not a complete adversarial sandbox until
+  direct service egress is denied or scoped to the sidecar.
+- Break-glass does not advertise privileged Git options in the normal MCP tool
+  list. The visible normal-mode surface is the narrow
+  `request_git_break_glass` request tool, which records the request and returns
+  an auth.romaine.life approval URL without minting or revealing a token. Grants
+  are stored as `github.break_glass.grant` control-action events with repo,
+  operation, and TTL scope. Once an active grant exists, calling
+  `request_git_break_glass` again activates a separate `tank-git-break-glass`
+  MCP server for the session/repo and writes runtime MCP config for Codex and
+  Claude. That privileged server lists no tools before activation, rechecks the
+  grant on every list/call, and records token/push use as
+  `github.break_glass.token` or `github.break_glass.push`. The auth.romaine.life
+  console is expected to approve by calling Tank's internal grant endpoint;
+  until that callback exists in the auth app, operators can exercise the Tank
+  side by creating the same internal grant directly.

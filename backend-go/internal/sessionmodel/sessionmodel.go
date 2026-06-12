@@ -748,6 +748,7 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 				map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
 				map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 				map[string]any{"name": "AGENT_POST_COMMIT_HOOK", "value": "/opt/tank/agent-post-commit-hook.sh"},
+				map[string]any{"name": "AGENT_PRE_PUSH_HOOK", "value": "/opt/tank/agent-pre-push-hook.sh"},
 			},
 			"volumeMounts": []any{
 				map[string]any{
@@ -760,6 +761,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 					"name":      "session-config",
 					"mountPath": "/opt/tank/agent-post-commit-hook.sh",
 					"subPath":   "agent-post-commit-hook.sh",
+					"readOnly":  true,
+				},
+				map[string]any{
+					"name":      "session-config",
+					"mountPath": "/opt/tank/agent-pre-push-hook.sh",
+					"subPath":   "agent-pre-push-hook.sh",
 					"readOnly":  true,
 				},
 				map[string]any{
@@ -875,6 +882,12 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	}
 
 	mcpProxyVolumeMounts := append([]any{}, configMounts...)
+	if wantSDKRunner {
+		mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
+			"name":      "workspace",
+			"mountPath": "/workspace",
+		})
+	}
 	mcpProxyVolumeMounts = append(mcpProxyVolumeMounts, map[string]any{
 		"name":      "auth-romaine-sa-token",
 		"mountPath": "/var/run/secrets/auth.romaine.life",
@@ -882,6 +895,9 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 	})
 	mcpProxyEnv := []any{
 		map[string]any{"name": "MCP_AUTH_PROXY_METRICS_PORT", "value": itoa(MCPAuthProxyMetricsPort)},
+		map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
+		map[string]any{"name": "MCP_GITHUB_URL", "value": "http://mcp-github.mcp-github.svc:80"},
+		map[string]any{"name": "WORKSPACE", "value": "/workspace"},
 		// Session identity forwarded by mcp-auth-proxy on outbound calls to
 		// Tank/Glimmung MCP servers. SESSION_ID still feeds the older
 		// X-Tank-Origin-Session-Id handoff-avatar path for mcp-tank-operator;

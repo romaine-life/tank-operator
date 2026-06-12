@@ -1,0 +1,15 @@
+#!/bin/sh
+repo_root=$(git rev-parse --show-toplevel 2>/dev/null || printf '%s\n' "")
+hook="$repo_root/k8s/session-config/agent-pre-push-hook.sh"
+if [ -f "$hook" ]; then
+  exec sh "$hook" "$@"
+fi
+
+cat <<'EOF'
+
+[tank-agent] Direct git push is disabled in Tank normal mode. Use the Tank MCP
+publish_current_head tool so Tank owns the branch, credential, CI watcher, and
+mergeability check.
+
+EOF
+exit 1

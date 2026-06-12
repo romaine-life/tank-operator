@@ -11,6 +11,7 @@ export type SessionRouteTab =
   | "chat"
   | "static"
   | "session-data"
+  | "pull-requests"
   | "files"
   | "background";
 export type HomeRouteTab = "chat";
@@ -231,6 +232,20 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
   // The file-browser pane is routed at the surface level, and may include a
   // workspace-relative file path so transcript file links can open the same
   // preview in a new tab.
+  if (parts[2] === "pull-requests" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "pull-requests",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      filePath: null,
+      fileLine: null,
+      ...defaultSettingsRoute,
+    };
+  }
   if (parts[2] === "files" && parts.length >= 3) {
     const target = parts.length > 3 ? parts.slice(3).join("/") : "";
     if (target && !validWorkspaceRoutePath(target)) return null;
@@ -316,6 +331,8 @@ export function buildSessionRouteUrl(
     suffix = `/static/${staticPath.split("/").map(encodeURIComponent).join("/")}`;
   } else if (tab === "session-data") {
     suffix = "/session-data";
+  } else if (tab === "pull-requests") {
+    suffix = "/pull-requests";
   } else if (tab === "files") {
     const routedFilePath = filePath
       ? filePath.split("/").map(encodeURIComponent).join("/")
