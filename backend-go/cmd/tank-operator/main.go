@@ -147,7 +147,8 @@ func main() {
 		// or against a restored production copy for heavy backfills. Defaults
 		// on so an unset or misspelled value cannot silently skip production
 		// migrations.
-		if envBoolDefault("RUN_MIGRATIONS", true) {
+		migrationsEnabled := envBoolDefault("RUN_MIGRATIONS", true)
+		if migrationsEnabled {
 			// The ledger-backed engine applies only un-recorded migrations, so a
 			// steady-state boot is a single SELECT — not the every-boot re-run of
 			// all statements (incl. full-table backfills) that crashlooped under
@@ -257,6 +258,22 @@ func main() {
 			"ANTIGRAVITY_SESSION_IMAGE", antigravitySessionImage,
 		)
 		os.Exit(1)
+	}
+	var deploymentVersionStore *pgstore.DeploymentImageVersionStore
+	if pgPool != nil {
+		deploymentVersionStore = pgstore.NewDeploymentImageVersionStore(pgPool)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := deploymentVersionStore.UpsertMany(ctx, observedDeploymentImageVersions(sessionScope, os.Getenv("HOSTNAME"), time.Now().UTC()))
+		cancel()
+		if err != nil {
+			if errors.Is(err, pgstore.ErrDeploymentImageVersionsUnavailable) && !envBoolDefault("RUN_MIGRATIONS", true) {
+				slog.Warn("deployment image version ledger unavailable before migrations; continuing in validation-slot mode",
+					"session_scope", sessionScope, "error", err)
+			} else {
+				slog.Error("deployment image version ledger write failed", "session_scope", sessionScope, "error", err)
+				os.Exit(1)
+			}
+		}
 	}
 
 	// Build the RowPublisher every lifecycle producer fans row updates
@@ -474,13 +491,13 @@ func main() {
 	// pre-migration (ns, sa) allowlist env was retired with that change.
 	mux := http.NewServeMux()
 	srv := &appServer{
-		k8s:                          k8sClient,
-		restCfg:                      restCfg,
-		mgr:                          mgr,
-		profiles:                     profileStore,
-		sessionEvents:                sessionEventsStore,
-		transcriptRows:               transcriptRowsStore,
-		turns:                        turnsStore,
+		k8s:            k8sClient,
+		restCfg:        restCfg,
+		mgr:            mgr,
+		profiles:       profileStore,
+		sessionEvents:  sessionEventsStore,
+		transcriptRows: transcriptRowsStore,
+		turns:          turnsStore,
 		transcriptRefresher: newAsyncTranscriptRefresher(ctx, transcriptMaterializer, func(storageKey string) {
 			if err := sessionBus.PublishSessionEventWake(context.Background(), storageKey); err != nil {
 				slog.Warn("backend async refresh wake publish failed",
@@ -517,6 +534,7 @@ func main() {
 		scheduledWakeups:         scheduledWakeupStore,
 		backgroundTaskWakes:      backgroundTaskWakeStore,
 		controlActions:           controlActionStore,
+		deploymentVersions:       deploymentVersionStore,
 	}
 	// Assign the override store only when non-nil so the appServer field stays
 	// a true nil interface in stub mode (avoids the typed-nil-pointer trap that

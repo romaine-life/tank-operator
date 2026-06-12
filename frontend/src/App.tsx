@@ -1584,6 +1584,7 @@ interface AdminVersionImage {
   image: string;
   tag?: string;
   display?: string;
+  observed_at?: string;
   built_at?: string;
   git_sha?: string;
   short_sha?: string;
@@ -12869,6 +12870,7 @@ function versionImageDetail(image: AdminVersionImage | null | undefined): string
   if (!image) return "";
   return [
     image.image,
+    image.observed_at ? `observed ${formatVersionTimestamp(image.observed_at)}` : "",
     image.git_ref ? `ref ${image.git_ref}` : "",
     image.repository,
     image.actor ? `by ${image.actor}` : "",
