@@ -176,3 +176,26 @@ Named behaviors in the session-bar surface. See
   unchanged; bug labels are a separate grouping.
 - **Non-goal:** labels are not task state, ownership queues, or GitHub issue
   mirrors. They intentionally do not imply open/closed ordering semantics.
+
+## bounded-activity-derivation
+
+- **Status:** shipped (issue #1077 item 7)
+- **Intent:** The sidebar's activity/unread derivation must cost a bounded
+  amount of database work per durable batch, independent of flood size or
+  unread-backlog depth — a flood session (the #1051 class) must not become a
+  read-side DoS through its own status pill.
+- **Runtime behavior:** the session-bus persister coalesces activity emits
+  per refresh class per batch (`coalesceActivityEvents`: one
+  `EmitChatActivityDelta` for the LAST inserted event of each class —
+  lifecycle, compaction, user-message). Each emit's recompute reads durable
+  state through partial indexes (migrations 0153/0154) whose predicates are
+  kept in provable lockstep with `store.LifecycleEventTypes` /
+  `UnreadOutput*Types` by inlining literal type lists
+  (`TestActivityPartialIndexPredicatesLockstepWithStoreTypeLists`).
+- **Saturation semantics:** the unread-output count scans at most
+  `unreadScanCap` (2000) candidate rows per count and saturates there — the
+  badge is a signal, not an audit. Read-state advancement (the cursor) is
+  unaffected; only the displayed magnitude is capped.
+- **Non-goal:** per-event emit fidelity. The last event of a class carries
+  the whole batch by design because every class recomputes from durable
+  state; restoring per-event emits restores the unbounded derivation cost.
