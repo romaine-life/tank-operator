@@ -5,6 +5,8 @@
 // focused single-element views.
 
 import { useState } from "react";
+
+import { authedFetch } from "../auth";
 import {
   captionStyle,
   headStyle,
@@ -49,7 +51,7 @@ export function StyleguideInspector({ children }: { children: React.ReactNode })
     setSelectedBox(inspectBoxFor(target));
     setSelectionStatus("posting selection...");
 
-    void fetch("/api/design/selection", {
+    void authedFetch("/api/design/selection", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(nextSelection),
