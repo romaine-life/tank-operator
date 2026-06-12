@@ -2093,9 +2093,9 @@ export class Runner {
       return;
     }
     turn.interrupted = true;
-    // Settle any pending AskUserQuestion pause on this turn FIRST (issue
-    // #1078 item 2): resolve the provider callback so the SDK's canUseTool
-    // promise unwinds instead of holding the turn paused forever, and close
+    // Settle any pending question pause on this turn FIRST (issue
+    // #1078 item 2): resolve the provider tool callback so the SDK's
+    // pending tool promise unwinds instead of pausing forever, and close
     // the question shell durably — turnAwaitingQuestionTarget treats any
     // terminal on the question turn as not-awaiting, so the card stops
     // accepting answers at the backend boundary.
@@ -2157,10 +2157,10 @@ export class Runner {
     );
   }
 
-  // dismissPendingQuestionsForTurn settles every pending AskUserQuestion
-  // pause on `turn` without an answer (issue #1078 item 2). The resolve
-  // unblocks the SDK's canUseTool promise (the interrupt then unwinds the
-  // turn normally); the question shell gets a durable turn.interrupted so
+  // dismissPendingQuestionsForTurn settles every pending question pause
+  // on `turn` without an answer (issue #1078 item 2). The resolve
+  // unblocks the SDK's pending tool callback (the interrupt then unwinds
+  // the turn normally); the question shell gets a durable turn.interrupted so
   // the sweep, the answer handler's 409 arm, and the transcript all see a
   // closed turn instead of a forever-awaiting shell.
   private async dismissPendingQuestionsForTurn(turn: PendingTurn): Promise<void> {

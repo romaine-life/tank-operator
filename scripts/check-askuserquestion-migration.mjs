@@ -248,9 +248,17 @@ const required = [
     pattern: /permissionMode:\s*"bypassPermissions"[\s\S]{0,120}allowDangerouslySkipPermissions:\s*true/,
   },
   {
+    // #1078 reshaped acceptInputReply into a thin gate over
+    // deliverInputReply (exact-key match, restart fallback, parking);
+    // the answer-conversion contract now lives in deliverInputReply.
     file: "claude-runner/src/runner.ts",
     name: "Claude runner accepts input_reply",
-    pattern: /\bacceptInputReply\b[\s\S]{0,1600}answersForClaudeInput/,
+    pattern: /\bacceptInputReply\b[\s\S]{0,600}deliverInputReply/,
+  },
+  {
+    file: "claude-runner/src/runner.ts",
+    name: "Claude runner delivers input_reply answers to the paused callback",
+    pattern: /\bdeliverInputReply\b[\s\S]{0,4000}answersForClaudeInput/,
   },
   {
     file: "claude-runner/src/runner.ts",
@@ -283,9 +291,17 @@ const required = [
     pattern: /requestAppServerUserInput[\s\S]{0,1200}pauseTurnForInput/,
   },
   {
+    // #1078 reshaped acceptInputReply into a thin gate over
+    // deliverInputReply (exact-key match, restart fallback, parking);
+    // the answer-conversion contract now lives in deliverInputReply.
     file: "codex-runner/src/runner.ts",
     name: "Codex runner accepts input_reply",
-    pattern: /\bacceptInputReply\b[\s\S]{0,1200}answersForCodexInput/,
+    pattern: /\bacceptInputReply\b[\s\S]{0,600}deliverInputReply/,
+  },
+  {
+    file: "codex-runner/src/runner.ts",
+    name: "Codex runner delivers input_reply answers to the paused request",
+    pattern: /\bdeliverInputReply\b[\s\S]{0,4000}answersForCodexInput/,
   },
   {
     file: "codex-runner/src/runner.ts",
