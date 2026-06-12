@@ -651,6 +651,17 @@ func main() {
 	// so any concurrent activity write defeats the reaper atomically and
 	// both replicas collapse on the row claim; pod deletion is
 	// idempotent. Postgres-only — stub mode has no durable rows to reap.
+	// Rows↔pods backstop: marks visible Pending/Active rows whose pod
+	// vanished without a watch transition as Failed (crash between row
+	// write and pod create, force-deleted pods, missed watch events).
+	// Per-replica idempotent — see session_row_reconcile.go.
+	if sessionRegStore != nil && rowWriter != nil {
+		go func() {
+			if err := runSessionRowReconcileLoop(ctx, srv, sessionRegStore, rowWriter, sessionRowReconcileInterval); err != nil && !errors.Is(err, context.Canceled) {
+				slog.Error("session row reconcile loop stopped", "error", err)
+			}
+		}()
+	}
 	if sessionRegStore != nil {
 		idleTimeout := time.Duration(envInt("IDLE_TIMEOUT_SECONDS", 0)) * time.Second
 		reapInterval := time.Duration(envInt("REAPER_INTERVAL_SECONDS", 900)) * time.Second

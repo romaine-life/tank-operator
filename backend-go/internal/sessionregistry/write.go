@@ -787,6 +787,55 @@ type ReapedSession struct {
 // Store.MarkDeleted) before any pod deletion happens, so two replicas
 // running the reaper collapse on the row claim — no leader election needed;
 // pod deletion is idempotent.
+// StalePodBackedRow is one visible, pod-backed sessions row whose pod the
+// reconciler must verify against the cluster.
+type StalePodBackedRow struct {
+	Email     string
+	SessionID string
+	PodName   string
+	Status    string
+}
+
+// ListStalePodBackedRows returns visible rows in this scope that claim a
+// live pod (status Pending/Active) but have not been touched since the
+// cutoff. The session-row reconciler diffs them against actual cluster
+// pods: a row whose pod vanished without a watch transition — backend
+// crash between row write and pod create, pod force-deletion/node GC
+// swallowing the Terminating update, a missed watch event — otherwise
+// shows Pending/Active forever with no pod behind it (issue #1079
+// item 2). The staleness floor keeps freshly-created rows (whose pods
+// are seconds away) out of the candidate set.
+func (s *Store) ListStalePodBackedRows(ctx context.Context, cutoff time.Time, limit int) ([]StalePodBackedRow, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	const q = `
+		SELECT email, session_id, COALESCE(pod_name, ''), status
+		FROM sessions
+		WHERE session_scope = $1
+			AND visible
+			AND COALESCE(pod_name, '') <> ''
+			AND status IN ('Pending', 'Active')
+			AND updated_at < $2
+		ORDER BY updated_at ASC
+		LIMIT $3
+	`
+	rows, err := s.pool.Query(ctx, q, s.scope, cutoff.UTC(), limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make([]StalePodBackedRow, 0, limit)
+	for rows.Next() {
+		var r StalePodBackedRow
+		if err := rows.Scan(&r.Email, &r.SessionID, &r.PodName, &r.Status); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) ClaimIdleForReap(ctx context.Context, cutoff time.Time, limit int) ([]ReapedSession, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20

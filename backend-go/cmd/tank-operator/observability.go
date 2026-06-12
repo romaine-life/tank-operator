@@ -905,6 +905,28 @@ var idleSessionsReapedTotal = promauto.NewCounterVec(
 	[]string{"result"},
 )
 
+// tank_session_rows_reconciled_total — the rows↔pods reconciler's
+// outcomes. pod_missing_failed is the backstop firing (a visible
+// Pending/Active row whose pod vanished without a watch transition was
+// marked Failed); steady-state expectation is near zero, and a sustained
+// rate means the watch is missing events or pods are being force-killed.
+var sessionRowsReconciledTotal = promauto.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "tank_session_rows_reconciled_total",
+		Help: "Stale pod-backed session rows reconciled against the cluster, by bounded result (pod_missing_failed, transition_failed).",
+	},
+	[]string{"result"},
+)
+
+func recordSessionRowReconciled(result string) {
+	switch result {
+	case "pod_missing_failed", "transition_failed":
+	default:
+		result = "other"
+	}
+	sessionRowsReconciledTotal.WithLabelValues(result).Inc()
+}
+
 func recordIdleSessionReaped(result string) {
 	switch result {
 	case "deleted", "delete_failed":

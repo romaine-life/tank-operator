@@ -1011,3 +1011,69 @@ func (r *managerTestRegistry) Reorder(_ context.Context, _ string, orderedIDs []
 }
 
 func (r *managerTestRegistry) MarkDeleted(context.Context, string, string) error { return nil }
+
+// upsertFailingRegistry satisfies SessionRegistry with a failing Upsert —
+// the create-path rollback contract's trigger.
+type upsertFailingRegistry struct{}
+
+func (upsertFailingRegistry) List(context.Context, string) ([]sessionmodel.SessionRecord, error) {
+	return nil, nil
+}
+func (upsertFailingRegistry) NextSessionID(context.Context) (string, error) { return "77", nil }
+func (upsertFailingRegistry) Upsert(context.Context, sessionmodel.SessionRecord) error {
+	return errors.New("postgres unavailable")
+}
+func (upsertFailingRegistry) SetName(context.Context, string, string, *string) error { return nil }
+func (upsertFailingRegistry) SetOpenTarget(context.Context, string, string, string) error {
+	return nil
+}
+func (upsertFailingRegistry) SetBugLabel(context.Context, string, string, *sessionmodel.SessionBugLabel) error {
+	return nil
+}
+func (upsertFailingRegistry) SetBugLabels(context.Context, string, string, []*sessionmodel.SessionBugLabel) error {
+	return nil
+}
+func (upsertFailingRegistry) SetTestState(context.Context, string, string, map[string]any) error {
+	return nil
+}
+func (upsertFailingRegistry) SetRolloutState(context.Context, string, string, map[string]any) error {
+	return nil
+}
+func (upsertFailingRegistry) SetCloneState(context.Context, string, string, map[string]any) error {
+	return nil
+}
+func (upsertFailingRegistry) Reorder(context.Context, string, []string) ([]string, error) {
+	return nil, nil
+}
+func (upsertFailingRegistry) MarkDeleted(context.Context, string, string) error { return nil }
+
+// TestManagerCreateAbortsWhenRegistryWriteFails pins the rollback half of
+// issue #1079 item 2: the durable session row is the contract's
+// precondition for live state, so a failed registry write must abort the
+// create BEFORE the pod exists — proceeding minted an invisible,
+// unkillable orphan pod (no row, no sidebar entry, no reaper claim) every
+// time Postgres blipped at create, and the user's retry minted another.
+func TestManagerCreateAbortsWhenRegistryWriteFails(t *testing.T) {
+	client := fake.NewSimpleClientset()
+	mgr := NewManager(client, nil, sessionmodel.SessionsNamespace, upsertFailingRegistry{}, nil, ManagerOptions{
+		ManifestOpts: sessionmodel.ManifestOptions{
+			SessionImage:      "claude-image",
+			CodexSessionImage: "codex-image",
+		},
+	})
+
+	if _, err := mgr.Create(context.Background(), CreateOptions{
+		Owner: "nelson@romaine.life",
+		Mode:  sessionmodel.ClaudeCLIMode,
+	}); err == nil {
+		t.Fatal("Create succeeded despite registry write failure")
+	}
+
+	pods, err := client.CoreV1().Pods(sessionmodel.SessionsNamespace).List(context.Background(), metav1.ListOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pods.Items) != 0 {
+		t.Fatalf("pods created = %d, want 0 (no orphan pod without a durable row)", len(pods.Items))
+	}
+}

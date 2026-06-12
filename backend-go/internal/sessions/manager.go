@@ -402,8 +402,15 @@ func (m *Manager) Create(ctx context.Context, opts CreateOptions) (Info, error) 
 			AgentAvatarID:        assignment.AgentAvatarID,
 			SystemAvatarID:       assignment.SystemAvatarID,
 		}); regErr != nil {
-			slog.Warn("create registry upsert failed",
-				"session_id", sessionID, "owner", owner, "error", regErr)
+			// Abort BEFORE the pod exists. The lifecycle contract is
+			// "Create produces a durable session row before user-visible
+			// live state depends on it" — proceeding here used to mint an
+			// invisible, unkillable orphan pod (no row → no sidebar entry,
+			// no delete button, no reaper claim) every time Postgres
+			// blipped at create, and the user's retry minted another
+			// (issue #1079 item 2). Failing the create is recoverable; an
+			// orphan pod is not.
+			return Info{}, fmt.Errorf("create session row: %w", regErr)
 		}
 		if len(opts.BugLabels) > 0 {
 			if regErr := m.registry.SetBugLabels(ctx, owner, sessionID, opts.BugLabels); regErr != nil {

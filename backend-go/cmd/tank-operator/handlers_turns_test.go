@@ -1657,9 +1657,10 @@ func sdkSessionPod(name, sessionID, email, mode, runnerContainer string) *corev1
 			Name:      name,
 			Namespace: sessionmodel.SessionsNamespace,
 			Labels: map[string]string{
-				"tank-operator/session-id": sessionID,
-				"tank-operator/owner":      sessionmodel.OwnerLabel(email),
-				"tank-operator/mode":       mode,
+				"app.kubernetes.io/managed-by": "tank-operator",
+				"tank-operator/session-id":     sessionID,
+				"tank-operator/owner":          sessionmodel.OwnerLabel(email),
+				"tank-operator/mode":           mode,
 			},
 			Annotations: map[string]string{
 				"tank-operator/owner-email": email,
