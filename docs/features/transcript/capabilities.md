@@ -11,10 +11,38 @@ Status: active
 Intent:
 Copying a transcript message link mints a durable opaque bearer share token so
 the URL can open for unauthenticated viewers without exposing transcripts by
-guessable `session` and `message` query parameters alone. The public view is a
-read-only transcript surface: no session sidebar, no composer, no Files,
-Settings, Background, or mutable controls. The Turns detail view remains
-available because it is part of understanding the transcript.
+guessable `session` and `message` query parameters alone. **Message-link
+shares grant the whole session read-only (owner decision 2026-06-12, #1077):**
+the link anchors the viewer at the shared message but the token authorizes the
+full transcript (any anchor/cursor, full back/forward pagination) and the
+Turns views (any turn's activity detail in the shared session), not just a
+window around one message. The token is a 32-byte opaque random hex value
+(`messageLinkShareTokenBytes`), non-enumerable, scoped to exactly one session
+(`share.SessionScope` + `share.SessionID` from the validated row — never
+caller-supplied session ids). The public view is a read-only transcript
+surface: no session sidebar, no composer, no Files, Settings, Background, or
+mutable controls.
+
+Share-token route surface (complete enumeration — every route that accepts the
+token; all GET-only, all reads scoped to the share row's session):
+- `GET /api/public/message-links/{token}` — session metadata + redacted owner.
+- `GET /api/public/message-links/{token}/timeline` — transcript rows; honors
+  the same anchor/cursor read intents as the authenticated timeline, scoped to
+  `share.SessionID`.
+- `GET /api/public/message-links/{token}/turns/{turn_id}/activity` — turn
+  activity pages for any turn in the shared session.
+- `GET /api/public/message-links/{token}/avatars` and
+  `.../avatars/{avatar_id}/{image,backing}` — only the session's assigned
+  agent/system avatar ids are served.
+- `GET /` with `?share={token}` — the SPA shell / JSON message-link contract
+  (`handleTankMessageLink`), which inlines the same public timeline body.
+- `GET /api/public/session-report-shares/{token}` shares the token store but
+  is a separate snapshot surface; report tokens fail closed on message-link
+  routes (no registered session) and message-link tokens fail closed on the
+  report route (snapshot decode rejects them).
+There is no write-method registration under `/api/public/`; minting shares
+stays on the authenticated, owner-scoped
+`POST /api/sessions/{session_id}/message-links`.
 
 Affected contracts:
 - Transcript
@@ -23,21 +51,41 @@ Affected contracts:
 - App Chrome
 
 Contract impact:
-- Public reads are explicitly bearer-token gated through
-  `/api/public/message-links/{token}` and
-  `/api/public/message-links/{token}/timeline`; unauthenticated access to the
-  authenticated session API remains unsupported.
-- The copied link still targets durable transcript-row identities and can page
+- Public reads are explicitly bearer-token gated; unauthenticated access to
+  the authenticated session API remains unsupported.
+- The copied link still targets durable transcript-row identities and pages
   the same server-owned transcript row model as authenticated timeline reads.
+- Public timeline and public turn-activity reads materialize-on-read
+  (`ensureSessionTranscriptRows`) exactly like the authenticated timeline and
+  fail closed with 503 `transcript materialization failed` — after a
+  projection-version bump a share link serves the re-projected session
+  immediately instead of stale/empty rows that only an authenticated read
+  would repair.
+- Live updates: public viewers are **snapshot-on-load**. There is no public
+  SSE path — `/api/sessions/{id}/events` requires a browser stream ticket
+  minted through bearer auth, and the SPA's `publicView` mode never opens the
+  event stream (`openSdkEventStream` returns early). Reloading or paging
+  re-reads the durable projection. Building a token-scoped public stream is a
+  deliberate non-goal until the product asks for it; do not bolt the
+  authenticated stream-ticket path onto share tokens.
 - The public SPA route renders a distinct full-screen workspace without the
   authenticated app sidebar or composer, preserving App Chrome's ownership of
-  signed-in navigation.
+  signed-in navigation. `publicView` routes timeline and turn-activity
+  fetches through the `/api/public/message-links/...` endpoints with plain
+  `fetch` (no Authorization header) and gates off composer, quote/fork,
+  read-state writes, background/control fetches, and SSE.
 
 Evidence:
 - Backend: `backend-go/cmd/tank-operator/handlers_message_link_share_test.go`
-  covers share creation and unauthenticated public timeline reads.
+  covers share creation, unauthenticated whole-session timeline reads
+  (`TestHandlePublicMessageLinkTimelineMaterializesStaleTranscriptRowsBeforeRead`),
+  arbitrary-turn activity reads with materialize-on-read
+  (`TestHandlePublicMessageLinkTurnActivityMaterializesAndServesArbitraryTurn`),
+  503 fail-closed on materialization failure, and the GET-only route guard
+  (`TestPublicMessageLinkRoutesAreGETOnly`).
 - Frontend: `frontend/src/migrationPolicy.test.ts` pins the public message-link
-  shell and public API path wiring.
+  shell, the public API path wiring for both timeline and turn-activity, and
+  the hidden-composer invariant.
 
 ## Compact Agent Activity
 

@@ -173,6 +173,19 @@ func (s *appServer) handlePublicMessageLinkTurnActivity(w http.ResponseWriter, r
 		writeError(w, http.StatusBadRequest, "turn_id is required")
 		return
 	}
+	// Materialize-on-read, mirroring the authenticated transcript path
+	// (handlers_session_events.go). A share link grants the whole session
+	// read-only, so a projection-version bump must not leave the share view
+	// stale until some authenticated read happens to re-materialize the
+	// session. The activity body itself reads the raw ledger, but the
+	// projection (turn shells, turn numbers, transcript rows the public SPA
+	// renders around this detail) has to be current for the same request.
+	if err := s.ensureSessionTranscriptRows(r.Context(), share.SessionID, share.SessionScope); err != nil {
+		err = fmt.Errorf("transcript materialization failed: %w", err)
+		recordMessageLinkShare("resolve", messageLinkShareResolveResult(http.StatusServiceUnavailable, err))
+		writeError(w, http.StatusServiceUnavailable, err.Error())
+		return
+	}
 	events, err := readUserFacingTurnEvents(r.Context(), s.sessionEventStoreForScope(share.SessionScope), share.SessionID, turnID)
 	if err != nil {
 		recordMessageLinkShare("resolve", "store_error")
@@ -327,6 +340,14 @@ func (s *appServer) publicMessageLinkTimelineBody(ctx context.Context, r *http.R
 	}
 	recordSessionEventTimelineRequest(intent.metricLabel)
 	rowStore := s.sessionTranscriptRowStoreForScope(share.SessionScope)
+	// Materialize-on-read, same as the authenticated timeline
+	// (handlers_session_events.go sessionTimelineBody): after a
+	// projection-version bump every session's transcript rows are stale, and
+	// the share link must serve the re-projected session immediately instead
+	// of stale/empty rows until an authenticated read materializes it.
+	if err := s.ensureSessionTranscriptRows(ctx, share.SessionID, share.SessionScope); err != nil {
+		return nil, http.StatusServiceUnavailable, fmt.Errorf("transcript materialization failed: %w", err)
+	}
 	page, targetCursor, status, err := runSessionTranscriptRowRead(ctx, rowStore, share.SessionID, intent)
 	if err != nil {
 		return nil, status, err
