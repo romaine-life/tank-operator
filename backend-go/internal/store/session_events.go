@@ -218,6 +218,21 @@ type StrandedTurn struct {
 // counted as unread output via UnreadOutputItemTypes below — the user
 // should still see "1 new" when a tool errors — it just doesn't taint
 // the session-level status.
+// sqlLiteralList renders a compile-time Go string slice as a SQL
+// `IN (...)` literal list. The store's hot fold/unread queries inline
+// their event-type sets as LITERALS instead of `= ANY($n)` parameters
+// because the partial indexes serving them (migrations 0153/0154) can
+// only match when the planner can PROVE the query predicate implies the
+// index predicate — impossible with a runtime array. Inputs are package
+// constants, never caller data.
+func sqlLiteralList(values []string) string {
+	quoted := make([]string, len(values))
+	for i, v := range values {
+		quoted[i] = "'" + strings.ReplaceAll(v, "'", "''") + "'"
+	}
+	return strings.Join(quoted, ", ")
+}
+
 var LifecycleEventTypes = []string{
 	"turn.submitted",
 	"turn.claimed",
@@ -868,16 +883,19 @@ func (s *postgresSessionEventStore) LatestLifecycleEvents(ctx context.Context, t
 		limit = 500
 	}
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
-	const q = `
+	// Literal type list so the session_events_lifecycle partial index
+	// (migration 0153) provably matches — keep in lockstep with that
+	// migration's predicate.
+	q := fmt.Sprintf(`
 		SELECT payload
 		FROM session_events
 		WHERE tank_session_id = $1
-			AND event_type = ANY($2::text[])
+			AND event_type IN (%s)
 			AND order_key <> ''
 		ORDER BY order_key DESC
-		LIMIT $3
-	`
-	rows, err := s.pool.Query(ctx, q, storageKey, LifecycleEventTypes, limit)
+		LIMIT $2
+	`, sqlLiteralList(LifecycleEventTypes))
+	rows, err := s.pool.Query(ctx, q, storageKey, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -949,18 +967,34 @@ func (s *postgresSessionEventStore) countDistinctField(
 	} else {
 		selectExpr = fmt.Sprintf("payload->>'%s'", field)
 	}
+	// Two cost bounds (issue #1077 item 7), on top of the
+	// session_events_unread_output partial index (migration 0154, whose
+	// predicate is the union of both unread type lists — the literal list
+	// here is a subset, so the implication holds):
+	//   - the type list is inlined as literals so the partial index can
+	//     provably match (a runtime ANY($n) never can);
+	//   - the scan is capped at unreadScanCap rows via an inner LIMIT, so
+	//     a never-read flood session (every spawn_run_session, any
+	//     unattended wake loop) costs a bounded index range instead of
+	//     O(entire unread backlog) on EVERY lifecycle event. The count
+	//     saturates at the cap — the badge is a signal, not an audit.
 	q := fmt.Sprintf(`
-		SELECT COUNT(DISTINCT %s)
-		FROM session_events
-		WHERE tank_session_id = $1
-			AND event_type = ANY($2::text[])
-			AND COALESCE(payload->>'actor', '') <> 'user'
-			AND %s IS NOT NULL
-			AND %s <> ''
-	`, selectExpr, selectExpr, selectExpr)
-	args := []any{storageKey, types}
+		SELECT COUNT(DISTINCT %s) FROM (
+			SELECT %s
+			FROM session_events
+			WHERE tank_session_id = $1
+				AND event_type IN (%s)
+				AND COALESCE(payload->>'actor', '') <> 'user'
+				AND %s IS NOT NULL
+				AND %s <> ''
+				%s
+			ORDER BY order_key
+			LIMIT %d
+		) bounded(%s)
+	`, "value", selectExpr, sqlLiteralList(types), selectExpr, selectExpr,
+		cursorClause(afterOrderKey), unreadScanCap, "value")
+	args := []any{storageKey}
 	if strings.TrimSpace(afterOrderKey) != "" {
-		q += " AND order_key > $3"
 		args = append(args, afterOrderKey)
 	}
 	var n int
@@ -968,6 +1002,17 @@ func (s *postgresSessionEventStore) countDistinctField(
 		return 0, err
 	}
 	return n, nil
+}
+
+// unreadScanCap bounds how many unread-candidate rows one count scans.
+// Far above any badge's useful range; far below a flood backlog.
+const unreadScanCap = 2000
+
+func cursorClause(afterOrderKey string) string {
+	if strings.TrimSpace(afterOrderKey) == "" {
+		return ""
+	}
+	return "AND order_key > $2"
 }
 
 // CountContextCompactions counts every durable context.compacted event for a

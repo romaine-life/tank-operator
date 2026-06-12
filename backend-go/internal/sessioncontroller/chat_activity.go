@@ -150,9 +150,10 @@ func (e *ChatActivityEmitter) EmitChatActivityDelta(ctx context.Context, event m
 		metrics = noopLifecycleEmitterMetrics{}
 	}
 	eventType, _ := event["type"].(string)
-	isCompaction := eventType == contextCompactedEventType
-	isUserMessage := eventType == userMessageCreatedEventType
-	if !isCompaction && !isUserMessage && !sessionactivity.IsLifecycleChatEventType(eventType) {
+	// Class partition is shared with the persister's per-batch
+	// coalescing — see sessionactivity.ChatActivityDeltaClass.
+	class := sessionactivity.ChatActivityDeltaClass(eventType)
+	if class == "" {
 		return nil
 	}
 	storageKey, _ := event["tank_session_id"].(string)
@@ -177,10 +178,10 @@ func (e *ChatActivityEmitter) EmitChatActivityDelta(ctx context.Context, event m
 		// emit; the sidebar dropped the row on session.deleted.
 		return nil
 	}
-	if isCompaction {
+	switch class {
+	case sessionactivity.ActivityClassCompaction:
 		return e.refreshCompactionCount(ctx, owner, publicID, event)
-	}
-	if isUserMessage {
+	case sessionactivity.ActivityClassUserMessage:
 		return e.refreshUserMessageCount(ctx, owner, publicID)
 	}
 	return e.RefreshSessionActivity(ctx, owner, publicID)

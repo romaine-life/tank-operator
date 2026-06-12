@@ -15,6 +15,7 @@ import (
 	"github.com/nats-io/nats.go/jetstream"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
+	"github.com/romaine-life/tank-operator/backend-go/internal/sessionactivity"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
 )
 
@@ -293,13 +294,42 @@ func (d *persistDispatcher) processBatch(ctx context.Context, storageKey string,
 	}
 
 	if d.bus != nil && d.bus.lifecycle != nil {
+		// Coalesce activity emits per refresh CLASS per batch (issue
+		// #1077 item 7). The dispatcher's batches are per-session
+		// (#1052), and each emit class recomputes its indicator from
+		// durable state — so the LAST inserted event of each class
+		// carries the whole batch for that class: emitting per event ran
+		// the unread/lifecycle derivation queries up to batch-size times
+		// per flood batch for identical results. Coalescing must be
+		// per-class, not global: a batch of [context.compacted,
+		// turn.completed] needs BOTH the compaction-count refresh and the
+		// activity refresh, and the emitter dispatches on the event's
+		// type. Duplicates (inserted=false) keep skipping side effects as
+		// before. The classifier is shared with the emitter's gate
+		// (sessionactivity.ChatActivityDeltaClass) so a class this filter
+		// drops is exactly a class the emitter would no-op on.
+		lastPerClass := map[string]map[string]any{}
 		for _, in := range persisted {
 			if !in.inserted {
 				continue
 			}
-			if err := d.bus.lifecycle.EmitChatActivityDelta(ctx, in.event); err != nil {
+			if class := sessionactivity.ChatActivityDeltaClass(stringField(in.event, "type")); class != "" {
+				lastPerClass[class] = in.event
+			}
+		}
+		for _, class := range []string{
+			sessionactivity.ActivityClassLifecycle,
+			sessionactivity.ActivityClassCompaction,
+			sessionactivity.ActivityClassUserMessage,
+		} {
+			event, ok := lastPerClass[class]
+			if !ok {
+				continue
+			}
+			if err := d.bus.lifecycle.EmitChatActivityDelta(ctx, event); err != nil {
 				slog.Warn("lifecycle activity-delta emit failed",
-					"subject", in.msg.Subject(),
+					"class", class,
+					"order_key", stringField(event, "order_key"),
 					"error", err,
 				)
 			}
