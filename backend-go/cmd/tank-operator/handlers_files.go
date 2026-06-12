@@ -184,6 +184,30 @@ finally:
 print(json.dumps({"abs_path": abs_path, "id": candidate}))
 `
 
+const workspacePathBoundaryCheckScript = `import json
+import os
+import sys
+
+root = os.path.realpath(sys.argv[1])
+target = sys.argv[2]
+
+if os.path.lexists(target):
+    resolved = os.path.realpath(target)
+else:
+    parent = os.path.realpath(os.path.dirname(target) or ".")
+    resolved = os.path.normpath(os.path.join(parent, os.path.basename(target)))
+
+if resolved != root and not resolved.startswith(root + os.sep):
+    print(json.dumps({
+        "ok": False,
+        "error": "path escapes workspace",
+        "resolved_path": resolved,
+    }))
+    raise SystemExit(0)
+
+print(json.dumps({"ok": True, "resolved_path": resolved}))
+`
+
 type mcpServerEntry struct {
 	Name      string `json:"name"`
 	Transport string `json:"transport"`
@@ -257,6 +281,11 @@ func (s *appServer) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	resolvedPath, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	script := fmt.Sprintf(
 		`python3 - %s %s <<'PY'
@@ -300,7 +329,7 @@ for name in os.listdir(p):
 entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
 print(json.dumps({"path": rel_path, "entries": entries}))
 PY`,
-		shellQuote(absPath),
+		shellQuote(resolvedPath),
 		shellQuote(workspaceRelPath(absPath)),
 	)
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName, []string{"bash", "-lc", script})
@@ -353,6 +382,11 @@ func (s *appServer) handleGetFileContent(w http.ResponseWriter, r *http.Request)
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	resolvedPath, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	script := fmt.Sprintf(
 		`python3 - %s %d %s <<'PY'
@@ -382,7 +416,7 @@ print(json.dumps({
     "binary": binary,
 }))
 PY`,
-		shellQuote(absPath),
+		shellQuote(resolvedPath),
 		maxFileBytes,
 		shellQuote(workspaceRelPath(absPath)),
 	)
@@ -423,9 +457,14 @@ func (s *appServer) handleGetFileRaw(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	resolvedPath, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName,
-		[]string{"head", "-c", fmt.Sprintf("%d", maxRawBytes), "--", absPath})
+		[]string{"head", "-c", fmt.Sprintf("%d", maxRawBytes), "--", resolvedPath})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -458,6 +497,11 @@ func (s *appServer) handleWalkFiles(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	resolvedPath, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 
 	script := fmt.Sprintf(
 		`python3 - %s <<'PY'
@@ -479,7 +523,7 @@ for current, dirs, files in os.walk(p):
             paths.append(rel)
 print(json.dumps({"paths": paths}))
 PY`,
-		shellQuote(absPath),
+		shellQuote(resolvedPath),
 	)
 	out, err := kubeexec.Capture(r.Context(), s.k8s, s.restCfg, s.namespace, podName, []string{"bash", "-lc", script})
 	if err != nil {
@@ -718,6 +762,10 @@ func (s *appServer) handleWriteFile(w http.ResponseWriter, r *http.Request) {
 	}
 	absPath, err := safeWorkspacePath(filePath)
 	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := s.resolveInPodWorkspacePath(r.Context(), podName, absPath); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -1098,6 +1146,37 @@ func (s *appServer) resolveSessionPodForRead(ctx context.Context, user auth.User
 // shellQuote single-quotes a string for use in shell commands.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func (s *appServer) resolveInPodWorkspacePath(ctx context.Context, podName, absPath string) (string, error) {
+	out, err := kubeexec.Capture(ctx, s.k8s, s.restCfg, s.namespace, podName, []string{
+		"python3",
+		"-c",
+		workspacePathBoundaryCheckScript,
+		workspaceRoot,
+		absPath,
+	})
+	if err != nil {
+		return "", fmt.Errorf("validate workspace path: %w", err)
+	}
+	var body struct {
+		OK           bool   `json:"ok"`
+		Error        string `json:"error"`
+		ResolvedPath string `json:"resolved_path"`
+	}
+	if err := json.Unmarshal(out, &body); err != nil {
+		return "", fmt.Errorf("parse workspace path validation: %w", err)
+	}
+	if !body.OK {
+		if strings.TrimSpace(body.Error) != "" {
+			return "", fmt.Errorf("%s: %s", body.Error, absPath)
+		}
+		return "", fmt.Errorf("path escapes workspace: %s", absPath)
+	}
+	if body.ResolvedPath == "" {
+		return "", fmt.Errorf("workspace path validation returned empty path")
+	}
+	return body.ResolvedPath, nil
 }
 
 func workspaceRelPath(absPath string) string {

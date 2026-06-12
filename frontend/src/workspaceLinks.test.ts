@@ -105,3 +105,29 @@ test("does not rewrite existing markdown links", () => {
 
   expect(linkTextTargetsInMarkdown(markdown)).toBe(markdown);
 });
+
+test("rewrites agy workspace file markdown links before hardening", () => {
+  const markdown = [
+    "See [visual_verification_report.md](file:///workspace/chess-tactics/visual_verification_report.md).",
+    "Open [app.js](<file:///workspace/chess-tactics/frontend/app.js:42> \"source\").",
+    "Keep [host file](file:///home/node/secret.txt) blocked.",
+  ].join("\n");
+
+  expect(linkTextTargetsInMarkdown(markdown)).toBe([
+    "See [visual_verification_report.md](</workspace/chess-tactics/visual_verification_report.md>).",
+    "Open [app.js](</workspace/chess-tactics/frontend/app.js:42> \"source\").",
+    "Keep [host file](file:///home/node/secret.txt) blocked.",
+  ].join("\n"));
+});
+
+test("does not rewrite agy file links inside inline or fenced code", () => {
+  const markdown = [
+    "Use `[app.js](file:///workspace/chess-tactics/frontend/app.js)` literally.",
+    "",
+    "```",
+    "[style.css](file:///workspace/chess-tactics/frontend/style.css)",
+    "```",
+  ].join("\n");
+
+  expect(linkTextTargetsInMarkdown(markdown)).toBe(markdown);
+});
