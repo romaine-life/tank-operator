@@ -186,13 +186,12 @@ func (s *appServer) handlePublicMessageLinkTurnActivity(w http.ResponseWriter, r
 		writeError(w, http.StatusServiceUnavailable, err.Error())
 		return
 	}
-	events, err := readUserFacingTurnEvents(r.Context(), s.sessionEventStoreForScope(share.SessionScope), share.SessionID, turnID)
+	pages, err := s.ensureTurnActivityCache().projectionFor(r.Context(), s.sessionEventStoreForScope(share.SessionScope), share.SessionScope, share.SessionID, turnID)
 	if err != nil {
 		recordMessageLinkShare("resolve", "store_error")
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	pages := projectTurnPages(turnID, events)
 	selected := defaultTurnActivityPageNumber(pages)
 	if requested := strings.TrimSpace(r.URL.Query().Get("page")); requested != "" {
 		if n, convErr := strconv.Atoi(requested); convErr == nil {

@@ -611,6 +611,7 @@ func main() {
 		sessionServiceAccount:    sessionServiceAccount,
 		designSelectionNamespace: designSelectionNamespace,
 		spawnQuota:               NewSpawnQuotaTracker(),
+		turnActivity:             newTurnActivityCache(),
 		mcpGitHub:                buildMCPGitHubClient(),
 		glimmung:                 buildGlimmungClient(),
 		providerHealth:           providerHealthManager,

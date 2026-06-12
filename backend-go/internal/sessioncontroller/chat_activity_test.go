@@ -221,6 +221,10 @@ func (s *activityEventStore) FindStrandedLaunchTurns(context.Context, time.Time,
 	return nil, nil
 }
 
+func (s *activityEventStore) MaxOrderKeyForTurn(context.Context, string, string) (string, error) {
+	return "", nil
+}
+
 func (s *activityEventStore) ShellTaskEvents(context.Context, string) ([]map[string]any, error) {
 	return nil, nil
 }

@@ -25,6 +25,10 @@ func (s fakeSessionEventStore) Upsert(_ context.Context, _ map[string]any) (bool
 	return true, nil
 }
 
+func (s fakeSessionEventStore) MaxOrderKeyForTurn(_ context.Context, _, _ string) (string, error) {
+	return "", nil
+}
+
 func (s fakeSessionEventStore) ShellTaskEvents(_ context.Context, _ string) ([]map[string]any, error) {
 	return s.shellTasks, nil
 }

@@ -147,12 +147,11 @@ func (s *appServer) handleSessionTurnActivity(w http.ResponseWriter, r *http.Req
 		return
 	}
 	turnID = resolvedTurnID
-	events, err := readUserFacingTurnEvents(r.Context(), eventStore, sessionID, turnID)
+	pages, err := s.ensureTurnActivityCache().projectionFor(r.Context(), eventStore, sessionScope, sessionID, turnID)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	pages := projectTurnPages(turnID, events)
 	recordTurnActivityPages(len(pages.Pages), pages.TotalEventCount)
 
 	// Default to the pending question page when the turn is paused for
@@ -319,7 +318,24 @@ func (s *appServer) handleResolveSessionTurnNumber(w http.ResponseWriter, r *htt
 // continuation chain belongs to the one turn that started it, so a deep link to
 // a historical wake-turn number lands on that turn rather than a synthetic wake
 // turn the transcript projection otherwise hides.
+// wakeOriginMemoCap bounds the wake-origin memo; far above any session's
+// realistic wake-turn deep-link variety.
+const wakeOriginMemoCap = 1024
+
 func (s *appServer) resolveBackgroundWakeOriginTurn(ctx context.Context, sessionScope, sessionID, wakeTurnID string) (store.TurnNumberResolution, bool, error) {
+	// The wake→origin linkage is durable (a wake turn's parent never
+	// changes), so a successful resolution memoizes forever (issue #1077:
+	// the unmemoized path folds the WHOLE session ledger per numeric
+	// deep-link hit).
+	memoKey := sessionScope + "\x1f" + sessionID + "\x1f" + wakeTurnID
+	s.wakeOriginMu.Lock()
+	if cached, ok := s.wakeOriginMemo[memoKey]; ok {
+		s.wakeOriginMu.Unlock()
+		recordWakeOriginResolution("memo_hit")
+		return cached, true, nil
+	}
+	s.wakeOriginMu.Unlock()
+	recordWakeOriginResolution("ledger_fold")
 	events, err := readAllSessionEvents(ctx, s.sessionEventStoreForScope(sessionScope), sessionID)
 	if err != nil {
 		return store.TurnNumberResolution{}, false, err
@@ -333,7 +349,24 @@ func (s *appServer) resolveBackgroundWakeOriginTurn(ctx context.Context, session
 	if err != nil || !ok {
 		return store.TurnNumberResolution{}, false, err
 	}
-	return turnStore.ResolveTurnNumber(ctx, sessionID, number)
+	resolution, ok, err := turnStore.ResolveTurnNumber(ctx, sessionID, number)
+	if err == nil && ok {
+		s.wakeOriginMu.Lock()
+		if s.wakeOriginMemo == nil {
+			s.wakeOriginMemo = map[string]store.TurnNumberResolution{}
+		}
+		if len(s.wakeOriginMemo) >= wakeOriginMemoCap {
+			// Durable entries never invalidate, so any eviction policy is
+			// safe; drop an arbitrary entry to stay bounded.
+			for k := range s.wakeOriginMemo {
+				delete(s.wakeOriginMemo, k)
+				break
+			}
+		}
+		s.wakeOriginMemo[memoKey] = resolution
+		s.wakeOriginMu.Unlock()
+	}
+	return resolution, ok, err
 }
 
 func (s *appServer) handleSessionTimeline(w http.ResponseWriter, r *http.Request) {
@@ -373,6 +406,12 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
+	// Per-write deadlines (issue #1077): every write/flush below rides the
+	// deadline-arming wrapper so a hung or slow client errors the stream
+	// instead of pinning this goroutine forever.
+	deadlineW := newSSEDeadlineWriter(w, flusher)
+	w = deadlineW
+	flusher = deadlineW
 
 	cursor := sessionEventCursorFromRequest(r)
 	if ok, err := s.sessionEventCursorExists(r.Context(), eventStore, sessionID, cursor); err != nil {

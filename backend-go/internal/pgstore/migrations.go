@@ -1909,6 +1909,17 @@ var schemaMigrations = []migration{
 	{ID: "0154", SQL: `CREATE INDEX IF NOT EXISTS session_events_unread_output
 		ON session_events (tank_session_id, order_key)
 		WHERE event_type IN ('item.started', 'item.completed', 'item.failed', 'shell_task.started', 'shell_task.updated', 'shell_task.exited', 'turn.failed', 'turn.command_failed', 'turn.interrupted', 'turn.awaiting_input')`},
+
+	// 0155 (issue #1077 item 1): the general turn-scoped read index. Every
+	// per-turn read (EventsForTurnAfter pagination, the turn-activity
+	// endpoint, wake-chain adoption, the cache's freshness probe) filters
+	// on (tank_session_id, turn_id) ordered by order_key — but the only
+	// indexes carrying turn_id were terminal-filtered partials (0049/0050)
+	// or missing order_key (0149), so a long turn's read scanned the whole
+	// session partition. Unfiltered by design: it serves the hot path, not
+	// a predicate subset.
+	{ID: "0155", SQL: `CREATE INDEX IF NOT EXISTS session_events_turn_order
+		ON session_events (tank_session_id, turn_id, order_key)`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

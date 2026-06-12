@@ -92,6 +92,11 @@ type SessionEventStore interface {
 	// method reached by type assertion) so it survives the materializing store
 	// wrapper that fronts the local scope.
 	ShellTaskEvents(ctx context.Context, tankSessionID string) ([]map[string]any, error)
+	// MaxOrderKeyForTurn returns the turn's latest event order key ('' when
+	// the turn has no events) — one backward probe of the
+	// session_events_turn_order index. The turn-activity projection cache's
+	// freshness check (issue #1077 item 1).
+	MaxOrderKeyForTurn(ctx context.Context, tankSessionID, turnID string) (string, error)
 	// FindStrandedLaunchTurns returns deferred-launch turns that were durably
 	// recorded (a lone user_message.created) but never dispatched: their
 	// turn_id carries no other event of any kind. This is the cross-session
@@ -483,6 +488,36 @@ func (s *postgresSessionEventStore) LatestEvents(ctx context.Context, tankSessio
 // after afterOrderKey. Paging this to exhaustion reads a whole turn regardless
 // of size — the basis for turn-activity pagination, which must never truncate
 // the turn's terminal the way a single bounded EventsForTurn does.
+// shellTaskEventScanCap bounds ShellTaskEvents to the most recent lifecycle
+// rows. ~3 events per task generation; 1500 rows ≈ 500 task generations.
+const shellTaskEventScanCap = 1500
+
+// MaxOrderKeyForTurn returns the turn's latest event order key ('' when the
+// turn has no events). One backward probe of the session_events_turn_order
+// index (migration 0155) — the turn-activity cache's freshness check
+// (issue #1077 item 1).
+func (s *postgresSessionEventStore) MaxOrderKeyForTurn(ctx context.Context, tankSessionID, turnID string) (string, error) {
+	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	const q = `
+		SELECT order_key
+		FROM session_events
+		WHERE tank_session_id = $1
+			AND turn_id = $2
+			AND order_key <> ''
+		ORDER BY order_key DESC
+		LIMIT 1
+	`
+	var orderKey string
+	err := s.pool.QueryRow(ctx, q, storageKey, turnID).Scan(&orderKey)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	return orderKey, nil
+}
+
 func (s *postgresSessionEventStore) EventsForTurnAfter(ctx context.Context, tankSessionID, turnID, afterOrderKey string, limit int) (SessionEventPage, error) {
 	return s.eventsForTurn(ctx, s.pool, tankSessionID, turnID, afterOrderKey, limit)
 }
@@ -1046,14 +1081,24 @@ func (s *postgresSessionEventStore) CountContextCompactions(ctx context.Context,
 // event ledger on each poll.
 func (s *postgresSessionEventStore) ShellTaskEvents(ctx context.Context, tankSessionID string) ([]map[string]any, error) {
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
+	// Bounded (issue #1077): this serves the Background screen per visit and
+	// previously scanned every shell-task row a session ever produced. The
+	// inner DESC LIMIT keeps the most RECENT lifecycle rows (riding the 0140
+	// partial index); the outer ASC restores fold order. Tasks whose start
+	// frame falls outside the cap fold incompletely — acceptable for a
+	// status screen, and far above any real concurrent-task count.
 	const q = `
-		SELECT payload
-		FROM session_events
-		WHERE tank_session_id = $1
-			AND event_type IN ('shell_task.started', 'shell_task.updated', 'shell_task.exited')
+		SELECT payload FROM (
+			SELECT payload, order_key
+			FROM session_events
+			WHERE tank_session_id = $1
+				AND event_type IN ('shell_task.started', 'shell_task.updated', 'shell_task.exited')
+			ORDER BY order_key DESC
+			LIMIT $2
+		) recent
 		ORDER BY order_key ASC
 	`
-	rows, err := s.pool.Query(ctx, q, storageKey)
+	rows, err := s.pool.Query(ctx, q, storageKey, shellTaskEventScanCap)
 	if err != nil {
 		return nil, err
 	}
@@ -1191,6 +1236,10 @@ func (StubSessionEventStore) LatestEvents(_ context.Context, _ string, _ int) (S
 		FoundOldest: true,
 		FoundNewest: true,
 	}, nil
+}
+
+func (StubSessionEventStore) MaxOrderKeyForTurn(_ context.Context, _, _ string) (string, error) {
+	return "", nil
 }
 
 func (StubSessionEventStore) EventsForTurnAfter(_ context.Context, _, _, _ string, _ int) (SessionEventPage, error) {

@@ -68,3 +68,39 @@ func TestTranscriptRowFromEntryDropsStartupSessionStatusMessages(t *testing.T) {
 		t.Fatalf("provider recovery status row should remain visible")
 	}
 }
+
+// TestTranscriptRowFromEntryLiftsContentOrderKey pins issue #1077 item 4's
+// delivery mechanism: an in-place payload mutation (answered/dismissed flips
+// on awaiting cards) advances end_order_key past open SSE cursors while row
+// identity and transcript position stay fixed.
+func TestTranscriptRowFromEntryLiftsContentOrderKey(t *testing.T) {
+	row, ok := transcriptRowFromEntry(map[string]any{
+		"id":              "msg-1",
+		"kind":            "message",
+		"orderKey":        "005",
+		"contentOrderKey": "009",
+	})
+	if !ok {
+		t.Fatal("entry rejected")
+	}
+	if row.EndOrderKey != "009" {
+		t.Fatalf("EndOrderKey = %q, want 009 (lifted by contentOrderKey)", row.EndOrderKey)
+	}
+	if row.StartOrderKey != "005" || row.Cursor != "005\x1fmsg-1" {
+		t.Fatalf("row position must not move: start=%q cursor=%q", row.StartOrderKey, row.Cursor)
+	}
+
+	// A stale contentOrderKey (≤ the entry's own key) never lowers the bound.
+	row, ok = transcriptRowFromEntry(map[string]any{
+		"id":              "msg-2",
+		"kind":            "message",
+		"orderKey":        "010",
+		"contentOrderKey": "007",
+	})
+	if !ok {
+		t.Fatal("entry rejected")
+	}
+	if row.EndOrderKey != "010" {
+		t.Fatalf("EndOrderKey = %q, want 010", row.EndOrderKey)
+	}
+}

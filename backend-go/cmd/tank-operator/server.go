@@ -83,6 +83,18 @@ type appServer struct {
 	// rationale and what to design back in next time.
 	spawnQuota *SpawnQuotaTracker
 
+	// turnActivity memoizes turn-page projections keyed by the turn's (and
+	// its wake chain's) ledger high-water marks — see turn_activity_cache.go
+	// (issue #1077 item 1). Never nil; constructed at boot and in fixtures
+	// via ensureTurnActivityCache.
+	turnActivity *turnActivityCache
+
+	// wakeOriginMemo memoizes background-wake → origin-turn resolutions for
+	// numeric deep links. The linkage is durable so entries never
+	// invalidate; bounded FIFO-ish eviction at wakeOriginMemoCap.
+	wakeOriginMu   sync.Mutex
+	wakeOriginMemo map[string]store.TurnNumberResolution
+
 	// mcpGitHub drives GET /api/github/repos — the picker's "All repos"
 	// section. Mints an on-behalf-of service JWT for the SPA caller
 	// (auth.romaine.life #43) and proxies the call to mcp-github.

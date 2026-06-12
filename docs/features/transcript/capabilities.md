@@ -867,3 +867,55 @@ Retirement note:
 The full-batch projection (projectTranscriptEvents) is the reference
 implementation and the explicit resync path; the in-flight checkpointed-fold
 stages (#1051 B2-B5) change its cost profile, never its ownership.
+
+## Bounded turn-activity reads (projection cache)
+
+- **Status:** shipped (issue #1077 item 1)
+- **Intent:** one viewer on a flood-class turn must not reproduce the #1051
+  incident on the read side: the `/turns/{id}/activity` endpoint re-read the
+  whole turn (plus its wake chain) and re-rendered every page per request,
+  against the SPA's 120ms-debounced refetch per live batch.
+- **Mechanism:** `turnActivityCache` (cmd/tank-operator/turn_activity_cache.go)
+  memoizes full `projectTurnPages` projections keyed by per-candidate-turn
+  ledger high-water marks (origin + derivable wake-chain ids). Freshness is
+  one backward index probe per candidate (`MaxOrderKeyForTurn`, riding
+  migration 0155's `session_events_turn_order` — the first unfiltered
+  `(tank_session_id, turn_id, order_key)` index). Misses single-flight per
+  key; entries evict LRU by total projected-event count
+  (`TURN_ACTIVITY_CACHE_MAX_ENTRIES` / `_MAX_EVENTS`). Serves both the
+  authenticated activity endpoint and the public share-link turn view.
+  Numeric deep links to wake turns memoize their origin resolution
+  (`tank_wake_origin_resolution_total`) instead of folding the whole session
+  ledger per hit.
+- **Observability:** `tank_turn_activity_cache_total{result}` (hit / stale /
+  miss / evicted), `tank_turn_activity_cache_entries`,
+  `tank_turn_activity_cache_events`.
+- **Non-goal:** a durable shared page store. The cache is per-replica memory;
+  a restart refolds on first read. If hit rates prove insufficient under
+  multi-replica fan-out, the documented escalation is persisting sealed
+  pages keyed by (turn_id, end_order_key) — the page model's immutability
+  invariant supports it.
+
+## Awaiting-card state delivery (answered/dismissed flips)
+
+- **Status:** shipped (issue #1077 item 4, completing #1078's stop semantics)
+- **Intent:** a payload-only mutation of an existing transcript row (the
+  awaiting card's `answered` flip — and now `dismissed`) must DELIVER over
+  the row SSE stream. Pre-fix the flip happened without an `end_order_key`
+  advance, so the strictly-greater delta filter never resent the row: a
+  second tab kept an answerable card forever.
+- **Mechanism:** the projection stamps `contentOrderKey` (the order key of
+  the mutating event) on entries it mutates in place
+  (`markEntryContentOrderKey`); the row store lifts it into `end_order_key`
+  while row identity (`row_id`) and position (`start_order_key`,
+  `row_cursor`) stay fixed. Question turns closed by a non-answer terminal
+  (`question_dismissed_by_stop`, `superseded_by_answer`, sweep terminals)
+  mark their cards `dismissed`; the Turns question pages absorb the
+  dismissing terminal exactly like an answer so the question_set page
+  renders the resolved state. The SPA locks dismissed cards like answered
+  ones (the backend 409s answers to any terminal'd question turn).
+- **Known remainder:** wholesale session-scope row rewrites
+  (`ReplaceForSession` — projection-version bumps, materialize-on-read
+  backfills) still cannot express row DELETIONS to an open stream; ghost
+  rows persist until reload. Tracked as the open tail of issue #1077 item 4
+  (epoch marker / `resync_required` on rewrite).
