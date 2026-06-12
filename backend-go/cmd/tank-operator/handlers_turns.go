@@ -224,7 +224,7 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		FollowUp:                   body.FollowUp,
 		OmitUserMessage:            body.ExistingUserMessage,
 		RequireExistingUserMessage: body.ExistingUserMessage,
-		OriginSessionID:            body.OriginSessionID,
+		OriginSessionID:            originSessionIDFromRequest(r, body.OriginSessionID),
 		AuthorKind:                 authorKindForUser(user),
 	})
 	if detail != "" {
@@ -887,6 +887,16 @@ func authorKindForUser(user auth.User) string {
 		return string(conversation.AuthorKindSystem)
 	}
 	return ""
+}
+
+func originSessionIDFromRequest(r *http.Request, explicit string) string {
+	if origin := strings.TrimSpace(explicit); origin != "" {
+		return origin
+	}
+	if r == nil {
+		return ""
+	}
+	return strings.TrimSpace(r.Header.Get(originSessionHeader))
 }
 
 type sessionRunConfig struct {

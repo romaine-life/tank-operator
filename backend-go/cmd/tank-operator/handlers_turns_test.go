@@ -795,6 +795,30 @@ func TestEnqueueSessionTurnStampsOriginSessionID(t *testing.T) {
 	}
 }
 
+func TestEnqueueSessionTurnFallsBackToOriginSessionHeader(t *testing.T) {
+	bus := &recordingSessionBus{}
+	app := testTurnsApp(t, bus, sdkSessionPod("session-63", "63", "user@example.com", sessionmodel.ClaudeGUIMode, "claude-runner"))
+	body := `{"client_nonce":"turn-origin-header","prompt":"forked prompt"}`
+	req := authedTurnRequest(t, "63", body)
+	req.Header.Set(originSessionHeader, "42")
+	resp := httptest.NewRecorder()
+
+	app.handleEnqueueSessionTurn(resp, req)
+
+	if resp.Code != http.StatusAccepted {
+		t.Fatalf("status = %d body = %s", resp.Code, resp.Body.String())
+	}
+	es := app.sessionEvents.(*recordingSessionEventStore)
+	if len(es.upserts) != 2 {
+		t.Fatalf("session-event upserts = %d, want 2", len(es.upserts))
+	}
+	for _, event := range es.upserts {
+		if got, _ := event["origin_session_id"].(string); got != "42" {
+			t.Fatalf("event %q origin_session_id = %q, want 42", event["type"], got)
+		}
+	}
+}
+
 // TestAuthorKindForUser pins the principal taxonomy that maps an authenticated
 // caller to the durable author_kind stamped on user_message.created. The two
 // non-interactive principals — the k8s-exchange service identity that launches

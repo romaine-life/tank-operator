@@ -7146,6 +7146,7 @@ function RunMessageBubble({
   entry,
   avatar,
   systemAvatar,
+  originSessionAvatarByID,
   sessionId,
   highlighted,
   showTimestamps,
@@ -7165,6 +7166,7 @@ function RunMessageBubble({
   entry: TranscriptEntry;
   avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
+  originSessionAvatarByID?: (sessionId: string) => AgentAvatar | null;
   sessionId: string;
   highlighted: boolean;
   showTimestamps: boolean;
@@ -7442,13 +7444,14 @@ function RunMessageBubble({
           // identity from the origin id.
           const originId = entry.originSessionId;
           if (originId) {
+            const originAvatar = originSessionAvatarByID?.(originId) ?? null;
             return (
               <span
                 className="run-msg-avatar"
                 data-origin-session-id={originId}
               >
                 <SessionAvatarIcon
-                  avatar={getSessionAvatarByID(null)}
+                  avatar={originAvatar}
                   className="run-msg-ai-icon"
                 />
               </span>
@@ -10942,6 +10945,7 @@ function RunTurnActivityGroup({
   onOpenChange,
   avatar,
   systemAvatar,
+  originSessionAvatarByID,
   sessionId,
   showThinking,
   autoExpandTools,
@@ -10965,6 +10969,7 @@ function RunTurnActivityGroup({
   onOpenChange: (open: boolean) => void;
   avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
+  originSessionAvatarByID?: (sessionId: string) => AgentAvatar | null;
   sessionId: string;
   showThinking: boolean;
   autoExpandTools: boolean;
@@ -11217,6 +11222,7 @@ function RunTurnActivityGroup({
                         entry={child.entry}
                         avatar={avatar}
                         systemAvatar={systemAvatar}
+                        originSessionAvatarByID={originSessionAvatarByID}
                         sessionId={sessionId}
                         highlighted={
                           compactedEntryIds.has(child.entry.id) &&
@@ -11244,6 +11250,7 @@ function RunTurnActivityGroup({
             entry={entry}
             avatar={avatar}
             systemAvatar={systemAvatar}
+            originSessionAvatarByID={originSessionAvatarByID}
             sessionId={sessionId}
             highlighted={highlightedEntryId === entry.id}
             showTimestamps={showTimestamps}
@@ -11263,6 +11270,7 @@ function RunTurnActivityScreen({
   selectedTurnId,
   avatar,
   systemAvatar,
+  originSessionAvatarByID,
   sessionId,
   sessionMode,
   showThinking,
@@ -11284,6 +11292,7 @@ function RunTurnActivityScreen({
   selectedTurnId: string | null;
   avatar: AgentAvatar | null;
   systemAvatar: AgentAvatar | null;
+  originSessionAvatarByID?: (sessionId: string) => AgentAvatar | null;
   sessionId: string;
   sessionMode: string;
   showThinking: boolean;
@@ -11655,6 +11664,7 @@ function RunTurnActivityScreen({
         entry={group.entry}
         avatar={avatar}
         systemAvatar={systemAvatar}
+        originSessionAvatarByID={originSessionAvatarByID}
         sessionId={sessionId}
         highlighted={false}
         showTimestamps={showTimestamps}
@@ -11677,6 +11687,7 @@ function RunTurnActivityScreen({
       entry={entry}
       avatar={avatar}
       systemAvatar={systemAvatar}
+      originSessionAvatarByID={originSessionAvatarByID}
       sessionId={sessionId}
       highlighted={false}
       showTimestamps={showTimestamps}
@@ -11742,9 +11753,6 @@ function RunTurnActivityScreen({
                 data-context-loaded={selectedTurnContext ? "true" : "false"}
                 data-section-divider={showTurnSectionDivider ? "true" : undefined}
               >
-                <div className="run-turn-view-context-head">
-                  <span className="run-turn-view-context-label">Prompt</span>
-                </div>
                 {/* Always render the prompt context. When collapsed we keep a
                     minimal one-line entry (avatar at full size + ellipsis-
                     truncated text) instead of hiding the body, so the prompt
@@ -11754,6 +11762,7 @@ function RunTurnActivityScreen({
                     entry={selectedTurnContext}
                     avatar={avatar}
                     systemAvatar={systemAvatar}
+                    originSessionAvatarByID={originSessionAvatarByID}
                     sessionId={sessionId}
                     highlighted={false}
                     showTimestamps={showTimestamps}
@@ -12062,6 +12071,7 @@ export function RunMessages({
   entries,
   avatar,
   systemAvatar = null,
+  originSessionAvatarByID,
   sessionId,
   sessionMode = "unknown",
   telemetrySurface = "session",
@@ -12097,6 +12107,7 @@ export function RunMessages({
   entries: TranscriptEntry[];
   avatar: AgentAvatar | null;
   systemAvatar?: AgentAvatar | null;
+  originSessionAvatarByID?: (sessionId: string) => AgentAvatar | null;
   sessionId: string;
   sessionMode?: string;
   telemetrySurface?: string;
@@ -12565,6 +12576,7 @@ export function RunMessages({
             }}
             avatar={avatar}
             systemAvatar={systemAvatar}
+            originSessionAvatarByID={originSessionAvatarByID}
             sessionId={sessionId}
             showThinking={showThinking}
             autoExpandTools={autoExpandTools}
@@ -12594,6 +12606,7 @@ export function RunMessages({
           entry={g.entry}
           avatar={avatar}
           systemAvatar={systemAvatar}
+          originSessionAvatarByID={originSessionAvatarByID}
           sessionId={sessionId}
           highlighted={highlightedEntryId === g.entry.id}
           showTimestamps={showTimestamps}
@@ -12614,6 +12627,7 @@ export function RunMessages({
       systemAvatar,
       highlightedEntryId,
       loadingActivityTurns,
+      originSessionAvatarByID,
       turnActivityPageInfo,
       onActivitySelectPage,
       onFork,
@@ -14100,6 +14114,7 @@ type SessionLocation = {
 
 function ChatPane({
   session,
+  sessions,
   visible,
   onSessionPatch,
   onConnectionLabelChange,
@@ -14126,6 +14141,7 @@ function ChatPane({
   avatarEditorOpenRequest = 0,
 }: {
   session: Session;
+  sessions?: readonly Session[];
   visible: boolean;
   onSessionPatch: (id: string, patch: Partial<Session>) => void;
   onConnectionLabelChange: (id: string, label: string | null) => void;
@@ -18017,6 +18033,15 @@ function ChatPane({
     () => getSessionAvatarByID(session.agent_avatar_id),
     [avatarCatalogVersion, session.agent_avatar_id],
   );
+  const originSessionAvatarByID = useCallback(
+    (originSessionId: string): AgentAvatar | null => {
+      const origin = (sessions ?? [session]).find(
+        (candidate) => candidate.id === originSessionId,
+      );
+      return getSessionAvatarByID(origin?.agent_avatar_id);
+    },
+    [avatarCatalogVersion, session, sessions],
+  );
   const systemAvatar = useMemo(
     () => getSystemAvatarByID(session.system_avatar_id),
     [avatarCatalogVersion, session.system_avatar_id],
@@ -19734,6 +19759,7 @@ function ChatPane({
                   selectedTurnId={effectiveSelectedTurnId}
                   avatar={sessionAvatar}
                   systemAvatar={systemAvatar}
+                  originSessionAvatarByID={originSessionAvatarByID}
                   sessionId={session.id}
                   sessionMode={session.mode}
                   showThinking={runPrefs.showThinking}
@@ -19931,6 +19957,7 @@ function ChatPane({
                   entries={renderedEntries}
                   avatar={sessionAvatar}
                   systemAvatar={systemAvatar}
+                  originSessionAvatarByID={originSessionAvatarByID}
                   sessionId={session.id}
                   sessionMode={session.mode}
                   pendingScrollMessageId={effectivePendingScrollMessageId}
@@ -24754,6 +24781,7 @@ function AuthenticatedApp() {
                   <div key={s.id} className="run-body" hidden={active !== s.id}>
                     <ChatPane
                       session={s}
+                      sessions={sessions}
                       visible={active === s.id}
                       onSessionPatch={patchSession}
                       onConnectionLabelChange={updateSessionConnectionLabel}
