@@ -87,7 +87,8 @@ const (
 //   - turn.command_failed is terminal, so a late runner racing the sweep hits
 //     the already-terminal guard and drops the stray command;
 //   - the event_id is deterministic in turn_id, so both replicas collapse to
-//     one row at the (tank_session_id, event_id) UNIQUE constraint.
+//     one row at the session_events_event_identity unique index (real
+//     since migration 0151).
 func runStrandedTurnSweepLoop(ctx context.Context, app *appServer, interval time.Duration) error {
 	if app == nil || app.sessionEvents == nil {
 		return nil
