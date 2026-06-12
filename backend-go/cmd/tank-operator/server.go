@@ -486,6 +486,8 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/provider-fatal", s.handleInternalProviderFatal)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/agent-continuation", s.handleInternalAgentContinuation)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
+	mux.HandleFunc("POST /api/internal/sessions/{session_id}/git-break-glass/grants", s.handleInternalGrantGitBreakGlass)
+	mux.HandleFunc("GET /api/internal/sessions/{session_id}/git-break-glass/grant", s.handleInternalGetGitBreakGlassGrant)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/rollout-state", s.handleInternalSetRolloutState)

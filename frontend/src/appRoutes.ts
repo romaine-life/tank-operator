@@ -10,6 +10,7 @@ export type SessionRouteTab =
   | "chat"
   | "static"
   | "session-data"
+  | "pull-requests"
   | "files"
   | "background";
 export type HomeRouteTab = "chat";
@@ -197,6 +198,18 @@ export function readSessionRouteFromPathname(pathname: string): SessionRoute | n
       ...defaultSettingsRoute,
     };
   }
+  if (parts[2] === "pull-requests" && parts.length === 3) {
+    return {
+      sessionId: parts[1],
+      tab: "pull-requests",
+      turnNumber: null,
+      turnSegmentPresent: false,
+      pageNumber: null,
+      pageSegmentPresent: false,
+      staticPath: null,
+      ...defaultSettingsRoute,
+    };
+  }
   // The file-browser and background panes are routed at the surface level so they
   // are addressable and reload-stable and appear in the breadcrumb. Their deeper
   // internal state (file path, selected file, background view) stays client-side
@@ -277,6 +290,8 @@ export function buildSessionRouteUrl(
     suffix = `/static/${staticPath.split("/").map(encodeURIComponent).join("/")}`;
   } else if (tab === "session-data") {
     suffix = "/session-data";
+  } else if (tab === "pull-requests") {
+    suffix = "/pull-requests";
   } else if (tab === "files") {
     suffix = "/files";
   } else if (tab === "background") {

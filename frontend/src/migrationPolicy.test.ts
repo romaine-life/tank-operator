@@ -564,7 +564,7 @@ test("turn internals move out of the transcript into a turn view", () => {
   // and every primary surface is URL-addressable, including the file-browser and
   // background panes; the definition is multi-line, turns-first.
   expect(appRoutesSource).toMatch(
-    /export type SessionRouteTab =[\s\S]*?"turns"[\s\S]*?"chat"[\s\S]*?"static"[\s\S]*?"session-data"[\s\S]*?"files"[\s\S]*?"background"/,
+    /export type SessionRouteTab =[\s\S]*?"turns"[\s\S]*?"chat"[\s\S]*?"static"[\s\S]*?"session-data"[\s\S]*?"pull-requests"[\s\S]*?"files"[\s\S]*?"background"/,
   );
   expect(appRoutesSource.includes('export type AppRouteTab = "settings" | "help" | "cluster";')).toBe(true);
   expect(appRoutesSource.includes("readAppRouteFromPathname")).toBe(true);
@@ -903,7 +903,7 @@ test("home splash test action stays disabled on the splash page", () => {
 
 test("pull request composer action persists before a PR URL exists", () => {
   expect(appSource).toMatch(/function ComposerToolButtons\(/);
-  expect(appSource).toMatch(/const pullRequestURL = testState\?\.pull_request_url\?\.trim\(\) \|\| "";/);
+  expect(appSource).toMatch(/const pullRequestURL =\s*agentGitActivity\.pullRequests\[0\]\?\.href \|\|\s*testState\?\.pull_request_url\?\.trim\(\) \|\|\s*"";/);
   expect(appSource).toMatch(/pullRequestURL \? \([\s\S]*?href=\{pullRequestURL\}[\s\S]*?\) : \([\s\S]*?disabled[\s\S]*?aria-label="Pull request link unavailable"/);
   expect((appSource.match(/pullRequest=\{\{\}\}/g) ?? []).length).toBe(2);
   expect(appSource.includes("testState?.active && testState.pull_request_url")).toBe(false);

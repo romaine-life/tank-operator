@@ -86,6 +86,24 @@ function actionTitle(action: string | undefined): string {
       return "GitHub PR merge";
     case "github.pull_request.ready_for_review":
       return "GitHub PR ready";
+    case "github.pull_request.open":
+      return "GitHub PR opened";
+    case "github.pull_request.mergeability":
+      return "GitHub PR mergeability";
+    case "github.commit.push":
+      return "Git push";
+    case "github.commit.write":
+      return "GitHub commit";
+    case "github.commit.ci":
+      return "GitHub CI";
+    case "github.break_glass.request":
+      return "GitHub break-glass request";
+    case "github.break_glass.grant":
+      return "GitHub break-glass grant";
+    case "github.break_glass.token":
+      return "GitHub break-glass token";
+    case "github.break_glass.push":
+      return "GitHub break-glass push";
     default:
       return "Control action";
   }

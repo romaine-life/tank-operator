@@ -1,11 +1,14 @@
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 )
@@ -107,6 +110,171 @@ func (s *appServer) handleListControlActions(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusOK, out)
 }
 
+func (s *appServer) handleInternalGrantGitBreakGlass(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "POST /api/internal/sessions/{session_id}/git-break-glass/grants")
+	if user == nil {
+		return
+	}
+	if s.controlActions == nil {
+		recordControlActionEvent("", "", "", "", "store_unavailable")
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	if sessionID == "" {
+		writeError(w, http.StatusBadRequest, "session_id is required")
+		return
+	}
+	var body struct {
+		Repo           string   `json:"repo"`
+		TTLSeconds     int      `json:"ttl_seconds"`
+		Operations     []string `json:"operations"`
+		RequestEventID string   `json:"request_event_id"`
+		Reason         string   `json:"reason"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxControlActionPayloadBytes)).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid body")
+		return
+	}
+	repo := strings.TrimSpace(body.Repo)
+	owner, name, ok := strings.Cut(repo, "/")
+	if !ok || strings.TrimSpace(owner) == "" || strings.TrimSpace(name) == "" {
+		writeError(w, http.StatusBadRequest, "repo must be a GitHub slug like owner/name")
+		return
+	}
+	ttl := body.TTLSeconds
+	if ttl <= 0 {
+		ttl = 3600
+	}
+	if ttl > 24*3600 {
+		ttl = 24 * 3600
+	}
+	operations := normalizeBreakGlassOperations(body.Operations)
+	now := time.Now().UTC()
+	expiresAt := now.Add(time.Duration(ttl) * time.Second)
+	payload, _ := json.Marshal(map[string]any{
+		"approved_by":      user.ActorEmail,
+		"expires_at":       expiresAt.Format(time.RFC3339),
+		"ttl_seconds":      ttl,
+		"operations":       operations,
+		"request_event_id": strings.TrimSpace(body.RequestEventID),
+		"reason":           strings.TrimSpace(body.Reason),
+	})
+	event := pgstore.ControlActionEvent{
+		EventID:       "tank-break-glass-grant-" + sessionID + "-" + randomHex(12),
+		InvocationID:  "tank-break-glass-grant-" + randomHex(12),
+		OwnerEmail:    user.ActorEmail,
+		SessionScope:  s.sessionScope,
+		SessionID:     sessionID,
+		SourceService: "tank-operator",
+		SourceTool:    "git_break_glass_approval",
+		Action:        "github.break_glass.grant",
+		Status:        "succeeded",
+		TargetKind:    "github_repository",
+		TargetRef:     "https://github.com/" + repo,
+		RepoOwner:     owner,
+		RepoName:      name,
+		Payload:       payload,
+	}
+	row, err := s.controlActions.Append(r.Context(), event)
+	if err != nil {
+		recordControlActionEvent(event.SourceService, event.SourceTool, event.Action, event.Status, "store_error")
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	recordControlActionEvent(row.SourceService, row.SourceTool, row.Action, row.Status, "ok")
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"active":        true,
+		"event_id":      row.EventID,
+		"repo":          repo,
+		"expires_at":    expiresAt.Format(time.RFC3339),
+		"operations":    operations,
+		"session_id":    sessionID,
+		"session_scope": s.sessionScope,
+	})
+}
+
+func (s *appServer) handleInternalGetGitBreakGlassGrant(w http.ResponseWriter, r *http.Request) {
+	user := s.requireServicePrincipal(w, r, "GET /api/internal/sessions/{session_id}/git-break-glass/grant")
+	if user == nil {
+		return
+	}
+	if s.controlActions == nil {
+		writeError(w, http.StatusServiceUnavailable, "control action store unavailable")
+		return
+	}
+	sessionID := strings.TrimSpace(r.PathValue("session_id"))
+	repo := strings.TrimSpace(r.URL.Query().Get("repo"))
+	if sessionID == "" || repo == "" {
+		writeError(w, http.StatusBadRequest, "session_id and repo are required")
+		return
+	}
+	rows, err := s.controlActions.ListBySession(r.Context(), user.ActorEmail, s.sessionScope, sessionID, 200)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	now := time.Now().UTC()
+	for _, row := range rows {
+		if row.Action != "github.break_glass.grant" || row.Status != "succeeded" {
+			continue
+		}
+		if row.RepoOwner+"/"+row.RepoName != repo {
+			continue
+		}
+		var payload struct {
+			ExpiresAt  string   `json:"expires_at"`
+			Operations []string `json:"operations"`
+			Reason     string   `json:"reason"`
+		}
+		_ = json.Unmarshal(row.Payload, &payload)
+		expiresAt, err := time.Parse(time.RFC3339, strings.TrimSpace(payload.ExpiresAt))
+		if err != nil || !expiresAt.After(now) {
+			continue
+		}
+		writeJSON(w, http.StatusOK, map[string]any{
+			"active":        true,
+			"event_id":      row.EventID,
+			"repo":          repo,
+			"expires_at":    expiresAt.UTC().Format(time.RFC3339),
+			"operations":    normalizeBreakGlassOperations(payload.Operations),
+			"reason":        payload.Reason,
+			"session_id":    sessionID,
+			"session_scope": s.sessionScope,
+		})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"active": false, "repo": repo, "session_id": sessionID})
+}
+
+func normalizeBreakGlassOperations(in []string) []string {
+	allowed := map[string]bool{"mint_full_git_token": true, "push_current_head": true}
+	seen := map[string]bool{}
+	out := []string{}
+	for _, raw := range in {
+		op := strings.TrimSpace(raw)
+		if allowed[op] && !seen[op] {
+			out = append(out, op)
+			seen[op] = true
+		}
+	}
+	if len(out) == 0 {
+		out = []string{"mint_full_git_token", "push_current_head"}
+	}
+	return out
+}
+
+func randomHex(n int) string {
+	if n <= 0 {
+		n = 12
+	}
+	buf := make([]byte, n)
+	if _, err := rand.Read(buf); err != nil {
+		return strconv.FormatInt(time.Now().UnixNano(), 36)
+	}
+	return hex.EncodeToString(buf)
+}
+
 func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope, sessionID string) (pgstore.ControlActionEvent, error) {
 	payload := body.Payload
 	if len(payload) == 0 {
@@ -123,7 +291,17 @@ func controlActionFromJSON(body controlActionEventJSON, ownerEmail, defaultScope
 	}
 	action := strings.TrimSpace(body.Action)
 	switch action {
-	case "github.pull_request.merge", "github.pull_request.ready_for_review":
+	case "github.pull_request.merge",
+		"github.pull_request.ready_for_review",
+		"github.pull_request.open",
+		"github.pull_request.mergeability",
+		"github.commit.write",
+		"github.commit.push",
+		"github.commit.ci",
+		"github.break_glass.request",
+		"github.break_glass.grant",
+		"github.break_glass.token",
+		"github.break_glass.push":
 	default:
 		return pgstore.ControlActionEvent{}, errors.New("unsupported control action")
 	}

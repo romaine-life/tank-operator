@@ -199,10 +199,11 @@ func TestPodManifestSpireLensCapabilityWiresTailnetMCP(t *testing.T) {
 
 func TestPodManifestCompatibilityCore(t *testing.T) {
 	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
-		SessionImage:      "claude-image",
-		CodexSessionImage: "codex-image",
-		AgentAvatarID:     "jp1-grant",
-		SystemAvatarID:    "jp1-lex",
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		TankOperatorInternalURL: "http://tank-operator.test",
+		AgentAvatarID:           "jp1-grant",
+		SystemAvatarID:          "jp1-lex",
 	})
 
 	metadata := manifest["metadata"].(map[string]any)
@@ -245,7 +246,17 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 	// sidecar to exchange for a role=service JWT against
 	// /api/auth/exchange/k8s. See romaine-life/tank-operator#486.
 	assertVolumeMount(t, mcpProxy, "auth-romaine-sa-token")
+	assertVolumeMount(t, mcpProxy, "workspace")
 	mcpProxyEnv := containerEnv(mcpProxy)
+	if got, want := mcpProxyEnv["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.test"; got != want {
+		t.Fatalf("mcp-auth-proxy TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)
+	}
+	if got, want := mcpProxyEnv["MCP_GITHUB_URL"], "http://mcp-github.mcp-github.svc:80"; got != want {
+		t.Fatalf("mcp-auth-proxy MCP_GITHUB_URL = %v, want %q", got, want)
+	}
+	if got, want := mcpProxyEnv["WORKSPACE"], "/workspace"; got != want {
+		t.Fatalf("mcp-auth-proxy WORKSPACE = %v, want %q", got, want)
+	}
 	sessionIDRef := mcpProxyEnv["SESSION_ID"].(map[string]any)["fieldRef"].(map[string]any)
 	if got, want := sessionIDRef["fieldPath"], "metadata.labels['tank-operator/session-id']"; got != want {
 		t.Fatalf("mcp-auth-proxy SESSION_ID fieldPath = %v, want %q", got, want)
@@ -487,12 +498,16 @@ func TestPodManifestSelectedReposAddsRepoClonerInitContainer(t *testing.T) {
 	if got, want := env["AGENT_POST_COMMIT_HOOK"], "/opt/tank/agent-post-commit-hook.sh"; got != want {
 		t.Fatalf("AGENT_POST_COMMIT_HOOK = %v, want %q", got, want)
 	}
+	if got, want := env["AGENT_PRE_PUSH_HOOK"], "/opt/tank/agent-pre-push-hook.sh"; got != want {
+		t.Fatalf("AGENT_PRE_PUSH_HOOK = %v, want %q", got, want)
+	}
 	sessionIDRef := env["SESSION_ID"].(map[string]any)["fieldRef"].(map[string]any)
 	if got, want := sessionIDRef["fieldPath"], "metadata.labels['tank-operator/session-id']"; got != want {
 		t.Fatalf("SESSION_ID fieldPath = %v, want %q", got, want)
 	}
 	assertVolumeMount(t, cloner, "session-config")
 	assertConfigMapMountSubPath(t, cloner, "/opt/tank/agent-post-commit-hook.sh", "agent-post-commit-hook.sh")
+	assertConfigMapMountSubPath(t, cloner, "/opt/tank/agent-pre-push-hook.sh", "agent-pre-push-hook.sh")
 	assertVolumeMount(t, cloner, "workspace")
 	assertVolumeMount(t, cloner, "auth-romaine-sa-token")
 }
