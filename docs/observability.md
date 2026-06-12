@@ -283,37 +283,60 @@ All metric names are prefixed `tank_`. The full namespace:
   lifecycle is closed, so silent-stranding does not fire, but an
   already-open browser tab cannot correlate the terminal to its local
   run latch and may keep follow-up input queued until refresh.
-- `tank_sessions_stuck_in_progress` — the session-lifecycle
-  observability surface for the wedged/crashed-runner stall. A
-  last-pass gauge of sessions whose durable
-  `sessions.activity_summary.status` is `submitted`/`claimed`
-  (accepted, no provider progress) and whose `activity_summary`
-  `updated_at` is older than the stall threshold (default 10m,
-  deliberately above the runner's 240s `PROVIDER_RETRY_STALL_MS`
-  terminal). It is the orchestrator-side complement to the runner's
-  `api_retry{rate_limit}` terminal: the runner force-fails its own turn
-  on a bounded retry storm, but a fully-wedged or crashed runner emits
-  nothing and cannot fail its own turn, so the only durable footprint is
-  this no-terminal `submitted`/`claimed` row. Steady state is 0. The
-  sampler runs every 60s in `internal/stuckturns.Sampler`; per-session
-  detail (session_id, stuck_seconds, provider rate-limit state) rides
-  the per-session `slog.Warn` line and the
+- `tank_sessions_stuck_in_progress{phase}` — the session-lifecycle
+  observability surface for stalled-with-no-terminal sessions, one
+  last-pass gauge series per bounded stall class:
+  - `phase="accepted"` — sessions whose durable
+    `sessions.activity_summary.status` is `submitted`/`claimed`
+    (accepted, no provider progress) and whose `activity_summary`
+    `updated_at` is older than the accepted threshold (default 10m,
+    deliberately above the runner's 240s `PROVIDER_RETRY_STALL_MS`
+    terminal). The orchestrator-side complement to the runner's
+    `api_retry{rate_limit}` terminal: a fully-wedged or crashed runner
+    emits nothing and cannot fail its own turn, so the only durable
+    footprint is this no-terminal `submitted`/`claimed` row.
+  - `phase="streaming"` — sessions whose status is `streaming` and
+    whose LAST LEDGER EVENT (latest `session_events` row by
+    `order_key`, an O(1) PK backward scan per candidate) is older than
+    the streaming threshold (default 20m). The staleness basis differs
+    deliberately: `activity_summary.updated_at` only moves when the
+    fold output changes, so a healthy long streaming turn keeps its
+    `turn.started` timestamp for its whole life — only ledger silence
+    distinguishes a wedged turn boundary from a live turn. This class
+    exists because of sessions 828/829 (tank-operator#1085): the
+    antigravity turn-settle window was cancelled by a
+    transcript-rewrite replay and never re-armed, leaving turns open
+    and ledger-silent for 30+ minutes while the accepted-only gauge
+    read 0. A streaming hit is suspicion, not a verdict (a single long
+    quiet tool call can legitimately exceed the threshold); it
+    localizes, while the stranded-turn sweep keeps writing the durable
+    `turn.command_failed` terminal at its conservative 2h floor.
+  Steady state is 0 for both phases. The sampler runs every 60s in
+  `internal/stuckturns.Sampler`, listing each class independently (an
+  error in one class leaves the other refreshing); per-session detail
+  (session_id, phase, stuck_seconds, last_event_at, provider rate-limit
+  state) rides the per-session `slog.Warn` line and the
   `GET /api/debug/stuck-turns` endpoint, never a metric label, per the
   cardinality rules. Drives the `TankSessionStuckInProgress` alert,
-  which is per-session and durable-state-based — the localizing
-  complement to the aggregate, rate-based `TankTurnSilentStranding`.
+  which fires per phase series and is per-session and
+  durable-state-based — the localizing complement to the aggregate,
+  rate-based `TankTurnSilentStranding`.
 - `tank_stuck_turn_sample_errors_total{reason}` — stuck-turn sampler
-  pass errors. Bounded `reason`: `list` (the durable query failed),
+  pass errors. Bounded `reason`: `list` (the accepted-class query
+  failed), `list_streaming` (the streaming-class query failed),
   collapsing anything else to `other`. A nonzero rate means the
-  detector itself is blind (the gauge is not being refreshed), so the
-  absence of `TankSessionStuckInProgress` cannot be trusted.
+  detector is blind for that class (its gauge series is not being
+  refreshed), so the absence of `TankSessionStuckInProgress` cannot be
+  trusted.
 - `tank_admin_debug_stuck_turns_reads_total{result}` — admin reads of
   `GET /api/debug/stuck-turns` (the per-session localizer for the
-  stuck-turn story). Bounded `result` labels: `ok`, `empty`,
-  `forbidden`, `store_error`, `not_configured`. Pair with the
+  stuck-turn story, both phases; `streaming_threshold_seconds` tunes
+  the streaming class per request). Bounded `result` labels: `ok`,
+  `empty`, `forbidden`, `store_error`, `not_configured`. Pair with the
   `TankSessionStuckInProgress` alert: when the gauge is nonzero, the
-  runbook points operators here for the session_ids + stuck_seconds +
-  provider rate-limit state of the wedged turns.
+  runbook points operators here for the session_ids + phase +
+  stuck_seconds + last_event_at + provider rate-limit state of the
+  wedged turns.
 - `tank_turn_interrupt_request_total` — counter of stop requests posted
   to `/interrupt`. Single label `outcome` with bounded values:
   `persisted`, `already_terminal`, `terminal_lookup_failed`,
@@ -776,44 +799,57 @@ the caller. Emits a structured `slog` line per call
 
 ## Stuck turn debug surface
 
-`GET /api/debug/stuck-turns` (admin-only) lists the turns the
-orchestrator-side detector has flagged as durably accepted but
-unprogressed: sessions whose `sessions.activity_summary.status` is
-`submitted`/`claimed` and whose `activity_summary.updated_at` is older
-than the threshold, with no terminal event resolving the turn. It is
-the per-session localizer for the stuck-turn observability story: when
-the `TankSessionStuckInProgress` gauge is nonzero, the alert runbook
+`GET /api/debug/stuck-turns` (admin-only) lists the sessions the
+orchestrator-side detector has flagged as stalled with no terminal, in
+both stall classes: `phase=accepted` (status `submitted`/`claimed`
+with `activity_summary.updated_at` older than the accepted threshold)
+and `phase=streaming` (status `streaming` whose last `session_events`
+row is older than the streaming threshold — the wedged-boundary class,
+sessions 828/829, tank-operator#1085). It is the per-session localizer
+for the stuck-turn observability story: when any
+`TankSessionStuckInProgress` series is nonzero, the alert runbook
 directs the operator here to enumerate the wedged turns without
 kubectl.
 
 A row here means the runner did NOT fail the turn itself — it is the
 orchestrator-side complement to the runner's `api_retry` rate-limit
-terminal (`PROVIDER_RETRY_STALL_MS`, 240s). The default threshold
-(600s) sits above the runner's 240s terminal so a turn the runner-side
-terminal would have resolved never appears here; only the genuine wedge
-(fully-wedged/crashed runner, or a stall class the runner cannot see)
-does.
+terminal (`PROVIDER_RETRY_STALL_MS`, 240s). The default accepted
+threshold (600s) sits above the runner's 240s terminal so a turn the
+runner-side terminal would have resolved never appears here; only the
+genuine wedge (fully-wedged/crashed runner, a stall class the runner
+cannot see, or a wedged turn boundary) does. A streaming row is
+suspicion, not a verdict — a single long quiet tool call can
+legitimately exceed the threshold.
 
 Query params:
 
-- `threshold_seconds` — accepted-but-unprogressed age cutoff. Defaults
-  to `600`, clamped to `[60, 86400]`.
-- `limit` — max rows returned. Defaults to `100`, clamped to
+- `threshold_seconds` — accepted-class age cutoff
+  (`activity_summary.updated_at` basis). Defaults to `600`, clamped to
+  `[60, 86400]`.
+- `streaming_threshold_seconds` — streaming-class ledger-silence
+  cutoff (last `session_events` row basis). Defaults to `1200`, same
+  clamps.
+- `limit` — max rows returned per class. Defaults to `100`, clamped to
   `[1, 500]`.
 - `session_scope` — defaults to this orchestrator's scope.
 
 Response fields:
 
-- `scope`, `threshold_seconds`, `count` — echo the resolved query and
-  the number of stuck turns.
+- `scope`, `threshold_seconds`, `streaming_threshold_seconds`,
+  `count` — echo the resolved query and the number of stuck turns
+  across both classes.
 - `stuck_turns[]` — one object per wedged turn:
   - `session_id` — public session id (allowed here and in the slog
     line, never as a metric label).
   - `mode` — the session mode (e.g. `claude_gui`).
-  - `activity_status` — `submitted` or `claimed`.
+  - `phase` — `accepted` or `streaming`.
+  - `activity_status` — `submitted`, `claimed`, or `streaming`.
   - `active_turn_id` — the durably claimed turn, `""` if absent.
-  - `stuck_seconds` — how long it has been accepted-but-unprogressed,
-    computed from `activity_summary.updated_at`.
+  - `stuck_seconds` — how long the session has been stalled, computed
+    from the phase's basis: `activity_summary.updated_at` for
+    accepted, the last ledger event for streaming.
+  - `last_event_at` — RFC3339-Z timestamp of the session's last
+    `session_events` row (streaming rows; `""` on accepted rows).
   - `provider_rate_limit_status` — the last provider rate-limit status
     the runner reported on this session (`provider_rate_limit_info`),
     `""` if none. A throttled value distinguishes "wedged on upstream
@@ -821,10 +857,13 @@ Response fields:
   - `provider_rate_limit_observed_at` — RFC3339-Z timestamp of that
     observation, `""` if none.
 
-To localize a listed session, read its claude-runner logs and its
-`session_events` ledger. The endpoint never mutates state. Emits a
-structured `slog` line per call (`caller_email`, `session_scope`,
-`threshold_seconds`, `count`) and increments
+To localize a listed session, read its runner logs and its
+`session_events` ledger tail; for antigravity sessions also check
+`tank_antigravity_runner_turn_settle_total` (a healthy boundary shows
+a `quiet` outcome after the last `extended`). The endpoint never
+mutates state. Emits a structured `slog` line per call
+(`caller_email`, `session_scope`, `threshold_seconds`,
+`streaming_threshold_seconds`, `count`) and increments
 `tank_admin_debug_stuck_turns_reads_total{result}` at `/metrics`.
 `result` labels: `ok`, `empty`, `forbidden`, `store_error`,
 `not_configured`.

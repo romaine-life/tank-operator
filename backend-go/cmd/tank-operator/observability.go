@@ -12,6 +12,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionbus"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessioncontroller"
+	"github.com/romaine-life/tank-operator/backend-go/internal/stuckturns"
 )
 
 // Observability is a real Prometheus surface scraped by the
@@ -346,25 +347,30 @@ var (
 		Help: "Orphan-sweep passes, partitioned by outcome (ok / error). Steady-state expectation: ok dominates; error > 0 means the sweep itself is failing (NATS unreachable, list consumers timing out, etc).",
 	}, []string{"result"})
 
-	// Stuck-turn detector observability. A fully-wedged or crashed
-	// runner emits nothing and cannot fail its own turn, so the turn
-	// sits in sessions.activity_summary.status="claimed"/"submitted"
-	// forever with no terminal. internal/stuckturns.Sampler queries the
-	// durable sessions table every 60s for the orchestrator's local
-	// scope and flags rows accepted-but-unprogressed past the stall
-	// threshold (default 10m, deliberately above the runner's 240s
-	// PROVIDER_RETRY_STALL_MS terminal). The gauge is the alertable
-	// surface; the per-session detail (session_id, stuck_seconds,
-	// provider rate-limit state) rides the slog.Warn line and the
-	// GET /api/debug/stuck-turns endpoint, never a metric label, per the
-	// docs/observability.md cardinality rules.
-	sessionsStuckInProgressGauge = promauto.NewGauge(prometheus.GaugeOpts{
+	// Stuck-turn detector observability. internal/stuckturns.Sampler
+	// queries the durable sessions table every 60s for the
+	// orchestrator's local scope and flags two stall classes on one
+	// gauge, split by the bounded phase label:
+	//   - phase="accepted": activity_summary submitted/claimed past the
+	//     accepted threshold (default 10m, deliberately above the
+	//     runner's 240s PROVIDER_RETRY_STALL_MS terminal) — the
+	//     fully-wedged/crashed runner that never made provider progress.
+	//   - phase="streaming": activity_summary streaming whose LAST
+	//     LEDGER EVENT is older than the streaming threshold (default
+	//     20m) — the wedged-boundary class (turn open, ledger silent, no
+	//     terminal; sessions 828/829, tank-operator#1085).
+	// The gauge is the alertable surface; the per-session detail
+	// (session_id, phase, stuck_seconds, provider rate-limit state)
+	// rides the slog.Warn line and the GET /api/debug/stuck-turns
+	// endpoint, never a metric label, per the docs/observability.md
+	// cardinality rules.
+	sessionsStuckInProgressGauge = promauto.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "tank_sessions_stuck_in_progress",
-		Help: "Sessions whose durable activity_summary is submitted/claimed (accepted, no provider progress) longer than the stall threshold; orchestrator-side complement to the runner's PROVIDER_RETRY_STALL_MS terminal; steady state 0; last-pass snapshot.",
-	})
+		Help: "Sessions stalled with no durable terminal, by bounded phase: accepted (submitted/claimed past the stall threshold, no provider progress) or streaming (provider progressed but the ledger went silent past the streaming threshold — the wedged-boundary class). Steady state 0; last-pass snapshot.",
+	}, []string{"phase"})
 	stuckTurnSampleErrorTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "tank_stuck_turn_sample_errors_total",
-		Help: "Stuck-turn sampler pass errors, labeled by bounded reason (list).",
+		Help: "Stuck-turn sampler pass errors, labeled by bounded reason (list, list_streaming).",
 	}, []string{"reason"})
 
 	// Per-event-type emit counter — the candidate-C stethoscope. When
@@ -1693,13 +1699,21 @@ func debugStuckTurnsResultLabel(result string) string {
 
 // stuckTurnMetricsAdapter binds the orchestrator's promauto-registered
 // stuck-turn gauge + sample-error counter to the
-// `stuckturns.Metrics` interface. SetStuckCount writes the last-pass
-// snapshot to the unlabeled gauge; RecordSampleError maps any reason
-// other than the known "list" to "other" so the counter stays bounded.
+// `stuckturns.Metrics` interface. SetStuckCount writes one phase's
+// last-pass snapshot; the phase label is bounded to the sampler's
+// Phase* constants (anything else collapses to "other" so a future
+// caller bug cannot mint label values). RecordSampleError maps any
+// reason other than the known per-class reasons to "other" so the
+// counter stays bounded.
 type stuckTurnMetricsAdapter struct{}
 
-func (stuckTurnMetricsAdapter) SetStuckCount(n int) {
-	sessionsStuckInProgressGauge.Set(float64(n))
+func (stuckTurnMetricsAdapter) SetStuckCount(phase string, n int) {
+	switch phase {
+	case stuckturns.PhaseAccepted, stuckturns.PhaseStreaming:
+	default:
+		phase = "other"
+	}
+	sessionsStuckInProgressGauge.WithLabelValues(phase).Set(float64(n))
 }
 
 func (stuckTurnMetricsAdapter) RecordSampleError(reason string) {
@@ -1710,6 +1724,8 @@ func stuckTurnSampleErrorReasonLabel(reason string) string {
 	switch strings.TrimSpace(reason) {
 	case "list":
 		return "list"
+	case "list_streaming":
+		return "list_streaming"
 	default:
 		return "other"
 	}

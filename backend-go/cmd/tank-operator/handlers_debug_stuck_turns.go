@@ -1,24 +1,31 @@
-// Admin-only debug surface for orchestrator-detected stuck turns:
-// sessions whose durable activity_summary is submitted/claimed
-// (accepted, no provider progress) and whose updated_at is older than
-// the stall threshold, with no terminal event resolving the turn.
+// Admin-only debug surface for orchestrator-detected stuck turns, in
+// two stall classes mirroring the sampler:
+//
+//   - phase=accepted: durable activity_summary submitted/claimed
+//     (accepted, no provider progress) with updated_at older than
+//     threshold_seconds.
+//   - phase=streaming: durable activity_summary streaming whose last
+//     session_events row is older than streaming_threshold_seconds —
+//     the wedged-boundary class (turn open, ledger silent, no
+//     terminal; sessions 828/829, tank-operator#1085).
 //
 // This is the per-entity localizer for the stuck-turn observability
 // story. The aggregate signal is the tank_sessions_stuck_in_progress
-// gauge plus the TankSessionStuckInProgress alert; this endpoint
-// resolves "which session_ids, for how long, with what provider
-// rate-limit state" once the alert fires — without kubectl, per the
-// observability contract (operators diagnose from /metrics +
+// gauge (phase label) plus the TankSessionStuckInProgress alert; this
+// endpoint resolves "which session_ids, for how long, with what
+// provider rate-limit state" once the alert fires — without kubectl,
+// per the observability contract (operators diagnose from /metrics +
 // /api/debug + slog + Grafana alone).
 //
 // A row here means the runner did NOT fail the turn itself: it is the
 // orchestrator-side complement to the runner's api_retry rate-limit
-// terminal (PROVIDER_RETRY_STALL_MS, 240s). The threshold default
-// (10m) sits deliberately above 240s so a turn the runner-side
-// terminal would have resolved never appears here — only the genuine
-// wedge (fully-wedged/crashed runner, or a stall class the runner
-// cannot see) does. Inspect the listed session_id's claude-runner logs
-// and session_events to localize the cause.
+// terminal (PROVIDER_RETRY_STALL_MS, 240s). The accepted threshold
+// default (10m) sits deliberately above 240s so a turn the runner-side
+// terminal would have resolved never appears here. A streaming row is
+// suspicion, not a verdict — a single long quiet tool call can
+// legitimately exceed the threshold; inspect the listed session_id's
+// runner logs, its session_events tail, and (for antigravity) the
+// runner's turn-settle metrics to localize the cause.
 //
 // Auth: Tank admin power required. Emits a structured slog audit line
 // per call.
@@ -34,11 +41,12 @@ import (
 )
 
 const (
-	debugStuckTurnsDefaultThresholdSeconds = 600
-	debugStuckTurnsMinThresholdSeconds     = 60
-	debugStuckTurnsMaxThresholdSeconds     = 86400
-	debugStuckTurnsDefaultLimit            = 100
-	debugStuckTurnsMaxLimit                = 500
+	debugStuckTurnsDefaultThresholdSeconds          = 600
+	debugStuckTurnsDefaultStreamingThresholdSeconds = 1200
+	debugStuckTurnsMinThresholdSeconds              = 60
+	debugStuckTurnsMaxThresholdSeconds              = 86400
+	debugStuckTurnsDefaultLimit                     = 100
+	debugStuckTurnsMaxLimit                         = 500
 )
 
 func (s *appServer) handleDebugStuckTurns(w http.ResponseWriter, r *http.Request) {
@@ -71,6 +79,12 @@ func (s *appServer) handleDebugStuckTurns(w http.ResponseWriter, r *http.Request
 		debugStuckTurnsMinThresholdSeconds,
 		debugStuckTurnsMaxThresholdSeconds,
 	)
+	streamingThresholdSeconds := clampedQueryInt(
+		r.URL.Query().Get("streaming_threshold_seconds"),
+		debugStuckTurnsDefaultStreamingThresholdSeconds,
+		debugStuckTurnsMinThresholdSeconds,
+		debugStuckTurnsMaxThresholdSeconds,
+	)
 	limit := clampedQueryInt(
 		r.URL.Query().Get("limit"),
 		debugStuckTurnsDefaultLimit,
@@ -78,14 +92,14 @@ func (s *appServer) handleDebugStuckTurns(w http.ResponseWriter, r *http.Request
 		debugStuckTurnsMaxLimit,
 	)
 
-	threshold := time.Duration(thresholdSeconds) * time.Second
 	now := time.Now()
-	olderThan := now.Add(-threshold).UTC().Format(time.RFC3339)
+	lister := stuckturns.ListerFromQuery{Pool: s.pgPool}
 
-	rows, err := stuckturns.ListerFromQuery{Pool: s.pgPool}.ListStuckTurns(r.Context(), scope, olderThan, limit)
+	olderThan := now.Add(-time.Duration(thresholdSeconds) * time.Second).UTC().Format(time.RFC3339)
+	accepted, err := lister.ListStuckTurns(r.Context(), scope, olderThan, limit)
 	if err != nil {
 		recordDebugStuckTurnsRead("store_error")
-		slog.Warn("debug stuck-turns: list failed",
+		slog.Warn("debug stuck-turns: accepted-class list failed",
 			"caller_email", user.Email,
 			"session_scope", scope,
 			"threshold_seconds", thresholdSeconds,
@@ -95,22 +109,47 @@ func (s *appServer) handleDebugStuckTurns(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	lastEventBefore := now.Add(-time.Duration(streamingThresholdSeconds) * time.Second).UTC()
+	streaming, err := lister.ListStreamingStuckTurns(r.Context(), scope, lastEventBefore, limit)
+	if err != nil {
+		recordDebugStuckTurnsRead("store_error")
+		slog.Warn("debug stuck-turns: streaming-class list failed",
+			"caller_email", user.Email,
+			"session_scope", scope,
+			"streaming_threshold_seconds", streamingThresholdSeconds,
+			"error", err,
+		)
+		writeError(w, http.StatusInternalServerError, "stuck-turns list failed: "+err.Error())
+		return
+	}
+
+	rows := append(append([]stuckturns.StuckTurn{}, accepted...), streaming...)
 	stuckTurns := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
+		basis := row.ActivityUpdatedAt
+		if row.Phase == stuckturns.PhaseStreaming {
+			basis = row.LastEventAt
+		}
 		stuckSeconds := row.StuckSeconds
-		if stuckSeconds == 0 && !row.ActivityUpdatedAt.IsZero() {
-			stuckSeconds = int64(now.Sub(row.ActivityUpdatedAt).Seconds())
+		if stuckSeconds == 0 && !basis.IsZero() {
+			stuckSeconds = int64(now.Sub(basis).Seconds())
 		}
 		observedAt := ""
 		if row.ProviderRateLimitObservedAt != nil {
 			observedAt = row.ProviderRateLimitObservedAt.UTC().Format(time.RFC3339)
 		}
+		lastEventAt := ""
+		if !row.LastEventAt.IsZero() {
+			lastEventAt = row.LastEventAt.UTC().Format(time.RFC3339)
+		}
 		stuckTurns = append(stuckTurns, map[string]any{
 			"session_id":                      row.SessionID,
 			"mode":                            row.Mode,
+			"phase":                           row.Phase,
 			"activity_status":                 row.ActivityStatus,
 			"active_turn_id":                  row.ActiveTurnID,
 			"stuck_seconds":                   stuckSeconds,
+			"last_event_at":                   lastEventAt,
 			"provider_rate_limit_status":      row.ProviderRateLimitStatus,
 			"provider_rate_limit_observed_at": observedAt,
 		})
@@ -125,15 +164,17 @@ func (s *appServer) handleDebugStuckTurns(w http.ResponseWriter, r *http.Request
 		"caller_email", user.Email,
 		"session_scope", scope,
 		"threshold_seconds", thresholdSeconds,
+		"streaming_threshold_seconds", streamingThresholdSeconds,
 		"count", len(stuckTurns),
 	)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"description":       debugStuckTurnsDescription,
-		"scope":             scope,
-		"threshold_seconds": thresholdSeconds,
-		"count":             len(stuckTurns),
-		"stuck_turns":       stuckTurns,
+		"description":                 debugStuckTurnsDescription,
+		"scope":                       scope,
+		"threshold_seconds":           thresholdSeconds,
+		"streaming_threshold_seconds": streamingThresholdSeconds,
+		"count":                       len(stuckTurns),
+		"stuck_turns":                 stuckTurns,
 	})
 }
 
@@ -156,19 +197,28 @@ func clampedQueryInt(raw string, def, min, max int) int {
 // debugStuckTurnsDescription rides in the JSON payload so an operator
 // running `curl | jq` understands the surface without leaving the
 // terminal.
-const debugStuckTurnsDescription = `Orchestrator-detected stuck turns: sessions durably accepted (activity_summary.status submitted/claimed) with no provider progress past the threshold.
+const debugStuckTurnsDescription = `Orchestrator-detected stuck turns, two stall classes by phase:
 
-This pairs with the TankSessionStuckInProgress alert and is the
-orchestrator-side complement to the runner's api_retry rate-limit
-terminal (PROVIDER_RETRY_STALL_MS, 240s). A row here means the runner
-did NOT fail the turn itself — either a fully-wedged or crashed runner
-that can emit nothing, or a stall class the runner cannot see. The
-default threshold (600s) sits above the runner's 240s terminal so a
-turn the runner-side terminal would have resolved never appears here.
+phase=accepted — sessions durably accepted (activity_summary.status
+submitted/claimed) with no provider progress past threshold_seconds
+(default 600s, above the runner's 240s PROVIDER_RETRY_STALL_MS
+terminal so a turn the runner would have resolved never appears here).
 
-To localize the cause for a listed session_id, read that session's
-claude-runner logs and its session_events ledger. Each row carries
-stuck_seconds (how long it has been accepted-but-unprogressed) and the
-last provider_rate_limit_status the runner reported, if any.
+phase=streaming — sessions whose provider progressed (streaming) but
+whose ledger went silent: the last session_events row is older than
+streaming_threshold_seconds (default 1200s). This is the
+wedged-boundary class (turn open, no terminal — sessions 828/829,
+tank-operator#1085). A streaming row is suspicion, not a verdict: a
+single long quiet tool call can legitimately exceed the threshold.
+
+This pairs with the TankSessionStuckInProgress alert. A row here means
+the runner did NOT fail the turn itself — a fully-wedged or crashed
+runner that can emit nothing, a stall class the runner cannot see, or
+a wedged turn boundary. To localize the cause for a listed session_id,
+read that session's runner logs, its session_events tail
+(last_event_at is the staleness anchor for streaming rows), and for
+antigravity the runner's turn-settle metrics. Each row carries
+stuck_seconds and the last provider_rate_limit_status the runner
+reported, if any.
 
 The endpoint never mutates state.`
