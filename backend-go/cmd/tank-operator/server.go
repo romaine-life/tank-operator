@@ -607,6 +607,16 @@ func readOptionalFile(path string, fallback string) string {
 }
 
 func (s *appServer) handlePostDesignSelection(w http.ResponseWriter, r *http.Request) {
+	// The selection is written into the tank-design-selection ConfigMap and
+	// read back by agent design flows — an unauthenticated POST was both an
+	// arbitrary cluster ConfigMap write and a prompt-injection channel into
+	// whatever agent consumes /api/design/selection/latest. Same bearer
+	// gate as every other protected route: browser styleguide users send
+	// their auth.romaine.life JWT (authedFetch), in-cluster agent callers
+	// present a role=service exchange token.
+	if _, ok := s.requireAuth(w, r); !ok {
+		return
+	}
 	defer r.Body.Close()
 
 	var payload map[string]any
@@ -626,6 +636,9 @@ func (s *appServer) handlePostDesignSelection(w http.ResponseWriter, r *http.Req
 }
 
 func (s *appServer) handleGetLatestDesignSelection(w http.ResponseWriter, r *http.Request) {
+	if _, ok := s.requireAuth(w, r); !ok {
+		return
+	}
 	selection, ok, err := s.loadLatestDesignSelection(r)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load selection"})
