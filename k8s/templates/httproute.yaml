@@ -8,10 +8,6 @@ spec:
   hostnames:
     - {{ include "tank-operator.ingressHostname" . }}
   parentRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: {{ .Values.ingress.gatewayName }}
-      namespace: {{ .Values.ingress.gatewayNamespace }}
     - group: gateway.networking.x-k8s.io
       kind: XListenerSet
       name: {{ include "tank-operator.routeListenerSetName" . }}
@@ -30,4 +26,29 @@ spec:
           name: tank-operator
           port: 80
           weight: 1
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: tank-operator-http-redirect
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+spec:
+  hostnames:
+    - {{ include "tank-operator.ingressHostname" . }}
+  parentRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: {{ .Values.ingress.gatewayName }}
+      namespace: {{ .Values.ingress.gatewayNamespace }}
+      sectionName: http
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      filters:
+        - type: RequestRedirect
+          requestRedirect:
+            scheme: https
+            statusCode: 301
 {{- end }}
