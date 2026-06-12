@@ -37,32 +37,19 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/antigra
 # Stage 1: runtime image.
 FROM node:20-bookworm-slim AS runtime
 
+ARG TARGETARCH=amd64
 # Pinned Antigravity CLI release. Bump these together; the manifest + chart
 # never fetch at runtime.
 ARG AGY_BUILD=1.0.6-6458082025406464
 ARG AGY_SHA512=1b57977be08398b0344ef5019089683c0aae9829545cdf3056c9a1d02b949ea98db6e643ef96ef4f6877654f4d48d5267035ef8a27652a8e023f65b91c06df76
-ARG SANDBOX_AGENT_VERSION=0.4.2
 
-# python3 + pip are for the mcp-auth-proxy sidecar (a Python package shared with
-# the claude/codex images); the rest round out the in-pod shell surface.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        bash \
-        ca-certificates \
-        curl \
-        git \
-        jq \
-        less \
-        openssh-client \
-        python3 \
-        python3-pip \
-        ripgrep \
-        vim \
-    && rm -rf /var/lib/apt/lists/*
-
-# Ghostty-backed in-browser process terminal — the same package the Alpine
-# session images bake. The antigravity_config mode exposes this so the user can
-# run `agy` and complete the interactive Google/Ultra login.
-RUN npm install -g "@sandbox-agent/cli@${SANDBOX_AGENT_VERSION}"
+# Baseline interactive-session tool surface shared by Claude, Codex, and
+# Antigravity. This Debian/glibc image uses a sibling installer to the Alpine
+# Claude/Codex image so the tool policy stays common while the base stays valid
+# for agy's native binary.
+COPY session-images /opt/tank/session-images
+RUN TARGETARCH="${TARGETARCH}" sh /opt/tank/session-images/install-common-debian.sh
+ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Antigravity CLI (`agy`): pinned native binary from the public GCS bucket,
 # sha512-verified. The tarball expands to a single `antigravity` binary; we
