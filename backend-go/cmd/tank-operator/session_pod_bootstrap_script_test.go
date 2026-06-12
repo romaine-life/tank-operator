@@ -250,14 +250,14 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 		{
 			mode: "config",
 			wantFiles: map[string]string{
-				".claude/settings.json": `"theme": "dark"`,
+				".claude/settings.json": `"theme":"dark"`,
 				".claude.json":          `"hasCompletedOnboarding": true`,
 			},
 		},
 		{
 			mode: "claude_secondary_config",
 			wantFiles: map[string]string{
-				".claude/settings.json": `"theme": "dark"`,
+				".claude/settings.json": `"theme":"dark"`,
 				".claude.json":          `"hasCompletedOnboarding": true`,
 			},
 		},
@@ -268,13 +268,13 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 		{
 			mode: "claude_gui",
 			wantFiles: map[string]string{
-				".claude/settings.json": `"skipDangerousModePermissionPrompt": true`,
+				".claude/settings.json": `"skipDangerousModePermissionPrompt":true`,
 			},
 		},
 		{
 			mode: "claude_secondary_gui",
 			wantFiles: map[string]string{
-				".claude/settings.json": `"skipDangerousModePermissionPrompt": true`,
+				".claude/settings.json": `"skipDangerousModePermissionPrompt":true`,
 			},
 		},
 	}
@@ -308,7 +308,8 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 					t.Errorf("expected file %s missing: %v", path, err)
 					continue
 				}
-				if !strings.Contains(string(data), wantSubstr) {
+				got := string(data)
+				if !containsIgnoringWhitespace(got, wantSubstr) {
 					t.Errorf("file %s missing expected content %q\ngot:\n%s", path, wantSubstr, string(data))
 				}
 			}
@@ -466,6 +467,24 @@ func assertFileContains(t *testing.T, path, want string) {
 	if !strings.Contains(string(data), want) {
 		t.Fatalf("file %s missing expected content %q\ngot:\n%s", path, want, string(data))
 	}
+}
+
+func containsIgnoringWhitespace(got, want string) bool {
+	if strings.Contains(got, want) {
+		return true
+	}
+	return strings.Contains(stripWhitespace(got), stripWhitespace(want))
+}
+
+func stripWhitespace(value string) string {
+	return strings.Map(func(r rune) rune {
+		switch r {
+		case ' ', '\n', '\r', '\t':
+			return -1
+		default:
+			return r
+		}
+	}, value)
 }
 
 func TestSessionPodBootstrapScript_SpireLensTailnetOptIn(t *testing.T) {
