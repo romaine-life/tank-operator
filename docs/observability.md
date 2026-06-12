@@ -422,6 +422,14 @@ All metric names are prefixed `tank_`. The full namespace:
   This localizes "typed answer text disappeared" reports between durable
   persistence (`turn.input_answered.payload.annotations`) and provider
   delivery without per-session labels.
+  `tank_runner_tool_permission_denied_total{agent_kind,tool_family,server,decision}`
+  counts Claude SDK permission-denied frames after the runner observes them.
+  `agent_kind` is `parent` or `subagent`; `tool_family` is `mcp`, `local`, or
+  `other`; `server` carries the MCP server name or `none`; `decision` is the
+  SDK's bounded decision class. The user-trust signature for the Claude
+  subagent authority regression is a nonzero
+  `{agent_kind="subagent",tool_family="mcp",server="<configured server>"}`
+  series while the parent can use that server.
 - `tank_antigravity_runner_*` — Antigravity/Gemini pod-side runner metrics.
   This runner has its own namespace because it drives the native `agy` binary
   rather than the Claude/Codex SDK path. `tank_antigravity_runner_provider_error_total{reason}`

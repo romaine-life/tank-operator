@@ -58,7 +58,7 @@ export const providerErrorTotal = new Counter({
 // error, not just that one occurred. The load-bearing class is
 // `thinking_block_modified`: the extended-thinking resume bug behind
 // session 340, where resuming a long interleaved-thinking turn (e.g.
-// after an AskUserQuestion permission-pause) replays the latest
+// after an AskUserQuestion pause/resume) replays the latest
 // assistant message with a mutated `thinking`/`redacted_thinking` block
 // and Anthropic rejects it with a 400 ("thinking blocks ... cannot be
 // modified"). The SDK owns the message array and the replay, so this is
@@ -112,6 +112,13 @@ export const providerControlTotal = new Counter({
   name: "tank_runner_provider_control_total",
   help: "Provider control-plane calls issued by the runner, such as interrupt and background foreground tasks.",
   labelNames: ["action", "outcome"],
+  registers: [registry],
+});
+
+export const toolPermissionDeniedTotal = new Counter({
+  name: "tank_runner_tool_permission_denied_total",
+  help: "Claude SDK tool permission denials observed by the runner, split by parent/subagent origin, tool family, MCP server when applicable, and bounded decision reason.",
+  labelNames: ["agent_kind", "tool_family", "server", "decision"],
   registers: [registry],
 });
 
