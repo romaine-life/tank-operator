@@ -199,8 +199,16 @@ func (s *failingTranscriptRowsStore) ReplaceForTurn(context.Context, string, str
 	return context.DeadlineExceeded
 }
 
+func (s *orderRecordingRowsStore) RewriteEpoch(context.Context, string) (int64, error) {
+	return 0, nil
+}
+
 func (s *orderRecordingRowsStore) MaxEndOrderKey(context.Context, string) (string, error) {
 	return "", nil
+}
+
+func (s *failingTranscriptRowsStore) RewriteEpoch(context.Context, string) (int64, error) {
+	return 0, nil
 }
 
 func (s *failingTranscriptRowsStore) MaxEndOrderKey(context.Context, string) (string, error) {

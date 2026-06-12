@@ -1920,6 +1920,15 @@ var schemaMigrations = []migration{
 	// a predicate subset.
 	{ID: "0155", SQL: `CREATE INDEX IF NOT EXISTS session_events_turn_order
 		ON session_events (tank_session_id, turn_id, order_key)`},
+
+	// 0156 (issue #1077 item 4, deletion half): wholesale session-scope row
+	// rewrites (projection-version backfills, fold heals,
+	// materialize-on-read) can DROP rows, which the row-delta SSE stream
+	// cannot express — open tabs held ghost rows forever. Every
+	// replaceForSessionTx bumps this epoch; streams snapshot it at open and
+	// emit resync_required on change.
+	{ID: "0156", SQL: `ALTER TABLE session_transcript_row_backfills
+		ADD COLUMN IF NOT EXISTS rewrite_epoch bigint NOT NULL DEFAULT 0`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

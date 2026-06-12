@@ -452,6 +452,24 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	// Ghost-row guard (issue #1077 item 4): the row-delta protocol cannot
+	// express deletions, so a wholesale rewrite (projection-version
+	// backfill, fold heal, materialize-on-read) invalidates every open
+	// stream's world view. Snapshot the rewrite epoch AFTER the
+	// materialize-on-read above so this stream's own backfill doesn't
+	// immediately resync it; any later bump resyncs on the next wake or
+	// heartbeat tick.
+	rewriteEpoch, err := rowStore.RewriteEpoch(r.Context(), sessionID)
+	if err != nil {
+		recordSessionEventStreamError()
+		writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+			"reason": "rewrite_epoch_failed",
+			"detail": err.Error(),
+		})
+		flusher.Flush()
+		return
+	}
+
 	writeSSEJSONEvent(w, "ready", "", map[string]any{
 		"session_id":     sessionID,
 		"last_order_key": cursor.AfterOrderKey,
@@ -523,6 +541,36 @@ func (s *appServer) handleSessionEventStream(w http.ResponseWriter, r *http.Requ
 
 	wakeReason := sessionEventStreamWakeInitial
 	for {
+		if wakeReason != sessionEventStreamWakeInitial && wakeReason != sessionEventStreamWakeDrain {
+			currentEpoch, epochErr := rowStore.RewriteEpoch(r.Context(), sessionID)
+			if epochErr != nil {
+				recordSessionEventStreamError()
+				writeSSEJSONEvent(w, "stream-error", "", map[string]any{
+					"reason": "rewrite_epoch_failed",
+					"detail": epochErr.Error(),
+				})
+				flusher.Flush()
+				return
+			}
+			if currentEpoch != rewriteEpoch {
+				// Rows may have been DELETED under this stream — the delta
+				// protocol cannot say so. Hand the tab back to the snapshot
+				// path (the SPA's existing resync_required handler).
+				sessionEventStreamResyncTotal.Add(1)
+				slog.Info("session event stream resync after rewrite",
+					"session_id", sessionID,
+					"stream_id", streamID,
+					"epoch_before", rewriteEpoch,
+					"epoch_after", currentEpoch,
+				)
+				writeSSEJSONEvent(w, "resync_required", "", map[string]any{
+					"reason":         "projection_rewritten",
+					"last_order_key": cursor.AfterOrderKey,
+				})
+				flusher.Flush()
+				return
+			}
+		}
 		cursorBefore := cursor.AfterOrderKey
 		hasMore, count, err := s.writeSessionEventStreamPage(r.Context(), w, rowStore, sessionID, &cursor, state)
 		if err != nil {

@@ -986,6 +986,10 @@ func TestWriteSSEJSONEventUsesOrderKeyAsEventID(t *testing.T) {
 	}
 }
 
+func (f *fakeSessionTranscriptRowStore) RewriteEpoch(context.Context, string) (int64, error) {
+	return 0, nil
+}
+
 func (f *fakeSessionTranscriptRowStore) MaxEndOrderKey(context.Context, string) (string, error) {
 	return f.maxEndOrderKey, nil
 }
