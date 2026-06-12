@@ -56,7 +56,12 @@ payload field, or a new turn-id shape MUST enumerate every read-side consumer
 and state for each whether it consumes the new shape or is intentionally
 inert: the transcript projection (`transcript_projection.go`), the transcript
 row materializer, the turn pager, chat activity, the Background-activity
-screen, read-state cursors, and deep links. Producer-side completeness is not
+screen, read-state cursors, deep links, and the stranded-turn sweep
+(`FindStrandedTurns` — any turn shape that legitimately never receives a
+terminal under its own id, like the AskUserQuestion question shell, paused
+asking turn, and rotated continuation, must be excluded from its candidate
+model or the sweep writes false `turn.command_failed` terminals onto it;
+this happened in production on the sweep's first day, 2026-06-12). Producer-side completeness is not
 completeness. Precedent: tank-operator#1030 introduced `agent-continuation`
 turns (a new source, a new no-user-message turn shape, a new terminal flag)
 with zero read-model changes; the relay rendered as a standalone turn and the

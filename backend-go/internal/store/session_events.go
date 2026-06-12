@@ -74,10 +74,10 @@ type SessionEventStore interface {
 	// Bounded and indexed by the session_events_context_compacted partial index
 	// so it stays cheap regardless of total ledger size.
 	CountContextCompactions(ctx context.Context, tankSessionID string) (int64, error)
-		// CountUserMessages returns the total number of durable user_message.created
-		// events recorded for a session across its whole history — one per human
-		// back-and-forth submission. It is durable row metadata recomputed by the
-		// chat-activity emitter on each
+	// CountUserMessages returns the total number of durable user_message.created
+	// events recorded for a session across its whole history — one per human
+	// back-and-forth submission. It is durable row metadata recomputed by the
+	// chat-activity emitter on each
 	// user_message.created upsert. Bounded and indexed by the
 	// session_events_user_message_by_session partial index so it stays cheap
 	// regardless of total ledger size. Background-task wake continuations do not
@@ -113,7 +113,53 @@ type SessionEventStore interface {
 	// whether the runner ever claimed/started the turn, so the sweep can
 	// apply a longer age floor to mid-turn strands than to never-claimed
 	// ones. Backs cmd/tank-operator/stranded_turn_sweep.go.
+	//
+	// AskUserQuestion turns are NOT strands, ever, and are excluded by the
+	// pause-linkage predicate. The system creates three legitimate
+	// terminal-less turn shapes (the 2026-06-12 incident: the sweep's first
+	// day in production wrote false turn.command_failed terminals onto all
+	// three, destroying pending questions and corrupting healthy
+	// transcripts):
+	//
+	//   1. the synthetic question shell (turn_question-*): the runner
+	//      publishes turn.submitted + turn.awaiting_input riding the
+	//      question turn id, and the /answer handler later adds
+	//      turn.input_answered there. It is never claimed and never
+	//      receives a terminal — by design.
+	//   2. the asking turn paused on the user: it stays claimed/started
+	//      with no terminal until the human answers, which can
+	//      legitimately take days. The awaiting_input payload links it via
+	//      asking_turn_id.
+	//   3. the answered asking turn: the runner rotates the live turn to
+	//      the answer's nonce (turn_answer-*) and the terminal lands under
+	//      the rotated id; the original asking turn's closure IS the
+	//      input_answered + rotation, not a terminal of its own.
+	//
+	// A turn linked to any turn.awaiting_input / turn.input_answered row —
+	// riding it as turn_id, or referenced by the payload's asking_turn_id /
+	// question_turn_id — is therefore permanently outside the sweep's
+	// model. The strandable identity after an answer is the rotated
+	// continuation turn (turn_answer-*), which carries its own
+	// turn.submitted: if the input_reply command is lost, THAT turn is
+	// correctly found (never claimed); if the rotated turn dies mid-work
+	// with no follow-up question, it is correctly found (progressed, no
+	// pause linkage of its own).
 	FindStrandedTurns(ctx context.Context, olderThan, quietSince, notBefore time.Time, limit int) ([]StrandedTurn, error)
+	// HasRecentRunnerEvent reports whether any exclusively-runner-produced
+	// event (claimed/started/usage/awaiting_input, assistant messages,
+	// items, shell tasks, compactions) landed in the ledger at or after
+	// `since`, across all sessions. It is the stranded-turn sweep's
+	// pipeline-liveness gate: turn.submitted rows are written by the
+	// backend directly over HTTP, so during a persister or session-bus
+	// outage submits keep landing while runner progress does not — every
+	// active session then looks "quiet" and the sweep would mass-fail
+	// healthy in-flight turns exactly when the pipeline is recovering.
+	// Backend-writable types (terminals, boundary events) deliberately do
+	// not count as proof of life, so the sweep's own output can never
+	// satisfy its own gate. Rides the session_events_created_at index; the
+	// probed window is minutes wide, so the scan is bounded regardless of
+	// ledger size.
+	HasRecentRunnerEvent(ctx context.Context, since time.Time) (bool, error)
 }
 
 // StrandedLaunchTurn is one never-dispatched launch turn — exactly the fields
@@ -600,13 +646,16 @@ func (s *postgresSessionEventStore) FindStrandedLaunchTurns(ctx context.Context,
 }
 
 // FindStrandedTurns scans for turn.submitted rows in [notBefore, olderThan)
-// whose turn has no terminal event of any kind and whose session has been
-// completely silent since quietSince. The created_at predicates ride the
-// session_events_created_at index and the per-turn / per-session NOT EXISTS
-// subqueries ride the (tank_session_id, turn_id, order_key) and
-// (tank_session_id, created_at-capable) paths, so the outer pass is a bounded
-// time-window scan. Cross-session by design — the sweep addresses every
-// owner/scope from the per-row payload.
+// whose turn has no terminal event of any kind, no AskUserQuestion pause
+// linkage (see the interface doc for the three legitimate terminal-less turn
+// shapes), and whose session has been completely silent since quietSince.
+// The created_at predicates ride the session_events_created_at index, the
+// per-turn / per-session NOT EXISTS subqueries ride the
+// (tank_session_id, turn_id, order_key) and (tank_session_id,
+// created_at-capable) paths, and the pause-linkage NOT EXISTS rides the
+// session_events_input_pause partial index (a handful of rows per session at
+// most), so the outer pass is a bounded time-window scan. Cross-session by
+// design — the sweep addresses every owner/scope from the per-row payload.
 func (s *postgresSessionEventStore) FindStrandedTurns(ctx context.Context, olderThan, quietSince, notBefore time.Time, limit int) ([]StrandedTurn, error) {
 	if limit <= 0 || limit > 500 {
 		limit = 100
@@ -639,6 +688,17 @@ func (s *postgresSessionEventStore) FindStrandedTurns(ctx context.Context, older
 				WHERE t.tank_session_id = e.tank_session_id
 					AND t.turn_id = e.turn_id
 					AND t.event_type IN ('turn.completed', 'turn.failed', 'turn.command_failed', 'turn.interrupted')
+			)
+			AND NOT EXISTS (
+				SELECT 1
+				FROM session_events pause
+				WHERE pause.tank_session_id = e.tank_session_id
+					AND pause.event_type IN ('turn.awaiting_input', 'turn.input_answered')
+					AND (
+						pause.turn_id = e.turn_id
+						OR pause.payload -> 'payload' ->> 'asking_turn_id' = e.turn_id
+						OR pause.payload -> 'payload' ->> 'question_turn_id' = e.turn_id
+					)
 			)
 			AND NOT EXISTS (
 				SELECT 1
@@ -682,6 +742,47 @@ func (s *postgresSessionEventStore) FindStrandedTurns(ctx context.Context, older
 		return nil, err
 	}
 	return out, nil
+}
+
+// runnerProgressEventTypes is the exclusively-runner-produced event set that
+// counts as proof the runner→JetStream→persister pipeline is moving. It
+// deliberately omits every type the backend can write directly (turn
+// terminals, turn.submitted, user_message.created, turn.input_answered,
+// scheduled_wakeup.updated, session.status): during a persister outage those
+// keep landing over HTTP while runner progress does not, and the sweep's own
+// turn.command_failed output must never satisfy the sweep's own liveness
+// gate. turn.interrupted is also omitted — it is runner-published today, but
+// it is a terminal, and keeping terminals out of the liveness set keeps the
+// invariant simple: progress, not closure, proves the pipeline.
+var runnerProgressEventTypes = []string{
+	"turn.claimed",
+	"turn.started",
+	"turn.usage",
+	"turn.awaiting_input",
+	"assistant_message.created",
+	"item.started",
+	"item.completed",
+	"item.failed",
+	"shell_task.started",
+	"shell_task.updated",
+	"shell_task.exited",
+	"context.compacted",
+}
+
+func (s *postgresSessionEventStore) HasRecentRunnerEvent(ctx context.Context, since time.Time) (bool, error) {
+	const q = `
+		SELECT EXISTS (
+			SELECT 1
+			FROM session_events
+			WHERE created_at >= $1
+				AND event_type = ANY($2)
+		)
+	`
+	var alive bool
+	if err := s.pool.QueryRow(ctx, q, since.UTC(), runnerProgressEventTypes).Scan(&alive); err != nil {
+		return false, err
+	}
+	return alive, nil
 }
 
 // LatestLifecycleEvents returns up to `limit` recent lifecycle events
@@ -1003,6 +1104,12 @@ func (StubSessionEventStore) FindStrandedLaunchTurns(_ context.Context, _, _ tim
 
 func (StubSessionEventStore) FindStrandedTurns(_ context.Context, _, _, _ time.Time, _ int) ([]StrandedTurn, error) {
 	return nil, nil
+}
+
+func (StubSessionEventStore) HasRecentRunnerEvent(_ context.Context, _ time.Time) (bool, error) {
+	// No ledger, no proof of life. The sweep paths gate on a real store
+	// before consulting this, so the stub value is never load-bearing.
+	return false, nil
 }
 
 func (StubSessionEventStore) LatestLifecycleEvents(_ context.Context, _ string, _ int) ([]map[string]any, error) {

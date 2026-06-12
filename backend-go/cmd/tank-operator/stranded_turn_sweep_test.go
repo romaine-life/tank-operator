@@ -15,12 +15,19 @@ import (
 // arguments the loop computed.
 type fakeStrandedTurnStore struct {
 	store.StubSessionEventStore
-	rows     []store.StrandedTurn
-	upserts  []map[string]any
-	gotOlder time.Time
-	gotQuiet time.Time
-	gotFloor time.Time
-	gotLimit int
+	rows []store.StrandedTurn
+	// pipelineQuiet simulates a fleet with zero runner-produced events in
+	// the quiet window (persister / session-bus outage). The zero value
+	// means "pipeline alive", so the pre-gate tests exercise the normal
+	// sweep path unchanged.
+	pipelineQuiet    bool
+	livenessCalls    int
+	gotLivenessSince time.Time
+	upserts          []map[string]any
+	gotOlder         time.Time
+	gotQuiet         time.Time
+	gotFloor         time.Time
+	gotLimit         int
 }
 
 func (f *fakeStrandedTurnStore) FindStrandedTurns(_ context.Context, olderThan, quietSince, notBefore time.Time, limit int) ([]store.StrandedTurn, error) {
@@ -29,6 +36,12 @@ func (f *fakeStrandedTurnStore) FindStrandedTurns(_ context.Context, olderThan, 
 	f.gotFloor = notBefore
 	f.gotLimit = limit
 	return f.rows, nil
+}
+
+func (f *fakeStrandedTurnStore) HasRecentRunnerEvent(_ context.Context, since time.Time) (bool, error) {
+	f.livenessCalls++
+	f.gotLivenessSince = since
+	return !f.pipelineQuiet, nil
 }
 
 func (f *fakeStrandedTurnStore) Upsert(_ context.Context, event map[string]any) (bool, error) {
@@ -221,5 +234,83 @@ func TestProcessStrandedTurnsSkipsIncompleteRow(t *testing.T) {
 	}
 	if len(fake.upserts) != 0 {
 		t.Fatalf("upserts = %d, want 0 for incomplete row", len(fake.upserts))
+	}
+}
+
+// TestProcessStrandedTurnsDefersWhenPipelineQuiet pins the liveness gate:
+// candidates found while ZERO runner-produced events landed fleet-wide in
+// the quiet window mean the persister/session-bus pipeline itself is
+// suspect (turn.submitted lands over HTTP even during an outage, so every
+// active session looks quiet) — the sweep must write nothing and leave the
+// candidates for a later tick.
+func TestProcessStrandedTurnsDefersWhenPipelineQuiet(t *testing.T) {
+	now := time.Date(2026, 6, 12, 3, 0, 0, 0, time.UTC)
+	fake := &fakeStrandedTurnStore{
+		pipelineQuiet: true,
+		rows: []store.StrandedTurn{
+			{
+				TankSessionID: "901", SessionID: "901", TurnID: "turn_a",
+				ClientNonce: "a", Runtime: "claude",
+				CreatedAt: now.Add(-time.Hour),
+			},
+			{
+				TankSessionID: "902", SessionID: "902", TurnID: "turn_b",
+				ClientNonce: "b", Runtime: "codex", Progressed: true,
+				CreatedAt: now.Add(-3 * time.Hour),
+			},
+		},
+	}
+	app := &appServer{sessionEvents: fake, sessionScope: "default"}
+
+	if err := app.processStrandedTurns(context.Background(), now); err != nil {
+		t.Fatalf("processStrandedTurns: %v", err)
+	}
+	if len(fake.upserts) != 0 {
+		t.Fatalf("upserts = %d, want 0 while the pipeline is quiet", len(fake.upserts))
+	}
+	if fake.livenessCalls != 1 {
+		t.Fatalf("liveness probes = %d, want 1", fake.livenessCalls)
+	}
+	if want := now.Add(-strandedTurnQuietWindow); !fake.gotLivenessSince.Equal(want) {
+		t.Fatalf("liveness since = %s, want quietSince %s", fake.gotLivenessSince, want)
+	}
+}
+
+// TestProcessStrandedTurnsSkipsLivenessProbeWithoutCandidates pins the cost
+// contract: the liveness probe is one extra indexed query per tick that
+// found candidates, not per tick.
+func TestProcessStrandedTurnsSkipsLivenessProbeWithoutCandidates(t *testing.T) {
+	now := time.Date(2026, 6, 12, 3, 0, 0, 0, time.UTC)
+	fake := &fakeStrandedTurnStore{}
+	app := &appServer{sessionEvents: fake, sessionScope: "default"}
+
+	if err := app.processStrandedTurns(context.Background(), now); err != nil {
+		t.Fatalf("processStrandedTurns: %v", err)
+	}
+	if fake.livenessCalls != 0 {
+		t.Fatalf("liveness probes = %d, want 0 when no candidates", fake.livenessCalls)
+	}
+}
+
+// TestProcessStrandedTurnsSweepsWhenPipelineAlive is the positive control
+// for the gate: with runner progress in the window, candidates are swept
+// exactly as before the gate existed.
+func TestProcessStrandedTurnsSweepsWhenPipelineAlive(t *testing.T) {
+	now := time.Date(2026, 6, 12, 3, 0, 0, 0, time.UTC)
+	fake := &fakeStrandedTurnStore{rows: []store.StrandedTurn{{
+		TankSessionID: "903", SessionID: "903", TurnID: "turn_c",
+		ClientNonce: "c", Runtime: "claude",
+		CreatedAt: now.Add(-time.Hour),
+	}}}
+	app := &appServer{sessionEvents: fake, sessionScope: "default"}
+
+	if err := app.processStrandedTurns(context.Background(), now); err != nil {
+		t.Fatalf("processStrandedTurns: %v", err)
+	}
+	if fake.livenessCalls != 1 {
+		t.Fatalf("liveness probes = %d, want 1", fake.livenessCalls)
+	}
+	if len(fake.upserts) != 1 {
+		t.Fatalf("upserts = %d, want 1 with a live pipeline", len(fake.upserts))
 	}
 }

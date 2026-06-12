@@ -1821,6 +1821,17 @@ var schemaMigrations = []migration{
 	)`},
 	{ID: "0148", SQL: `CREATE INDEX IF NOT EXISTS deployment_image_versions_scope_kind_observed
 		ON deployment_image_versions (session_scope, image_kind, observed_at DESC)`},
+
+	// AskUserQuestion pause-event family, probed by the stranded-turn
+	// sweep's pause-linkage exclusion (FindStrandedTurns): a turn linked to
+	// a turn.awaiting_input / turn.input_answered row — riding it, or
+	// referenced by the payload's asking_turn_id / question_turn_id — is a
+	// legitimately terminal-less turn, never a strand. Partial: these are a
+	// few rows per session (179 total at creation time), so the probe is an
+	// index touch instead of a partition scan on flood-class sessions.
+	{ID: "0149", SQL: `CREATE INDEX IF NOT EXISTS session_events_input_pause
+		ON session_events (tank_session_id, turn_id)
+		WHERE event_type IN ('turn.awaiting_input', 'turn.input_answered')`},
 }
 
 // migrationsAdvisoryLockKey is an arbitrary stable 64-bit value used to
