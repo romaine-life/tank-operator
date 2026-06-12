@@ -65,9 +65,19 @@ const (
 //
 // Safety:
 //   - strandedLaunchMinAge keeps a healthy, still-in-flight launch out of the
-//     candidate set, and any dispatched turn has its turn.submitted written
-//     in the same backend call as user_message.created, so "lone
-//     user_message.created older than the floor" is an unambiguous strand.
+//     candidate set, and a non-deferred turn has its turn.submitted written
+//     in the same backend call as user_message.created.
+//   - a durable deferred launch (#865) is dispatched by the backend launch
+//     reconciler (launch_dispatch.go), which can legitimately fire later than
+//     strandedLaunchMinAge when the pod is slow to go Active. The age floor
+//     alone therefore does NOT make its lone user_message.created a strand:
+//     FindStrandedLaunchTurns excludes any turn whose
+//     session_pending_launch_turns row is still live (awaiting_bytes / ready /
+//     claiming), so this sweep can never write a terminal that a later
+//     dispatch trails with turn.submitted (#1079 item 3). The dispatcher's
+//     stale deadline / attempt cap fails those rows terminally; only after a
+//     row leaves the live statuses (or never existed — the pre-#865
+//     browser-driven launches) does the sweep consider the turn.
 //   - turn.command_failed is a terminal event (conversation.IsTurnTerminalEvent),
 //     so on the rare chance the browser dispatches late, the runner's
 //     already-terminal guard (runner.ts finalizeCommandIfAlreadyTerminal)

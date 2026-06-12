@@ -11,7 +11,9 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/romaine-life/tank-operator/backend-go/internal/conversation"
 	"github.com/romaine-life/tank-operator/backend-go/internal/sessionmodel"
+	"github.com/romaine-life/tank-operator/backend-go/internal/store"
 )
 
 // newPendingLaunchTestPool provisions an isolated schema, runs all migrations,
@@ -285,6 +287,153 @@ func TestPendingLaunchStoreFindStale(t *testing.T) {
 	}
 	if len(stale) != 0 {
 		t.Fatalf("FindStale after dispatch = %+v, want none", stale)
+	}
+}
+
+// seedLaunchUserMessage durably records ONLY the user_message.created half of
+// the turn boundary pair — exactly what the deferred-launch create path
+// writes: turn.submitted is the launch dispatcher's job, possibly much later.
+// Returns the deterministic launch turn id.
+func seedLaunchUserMessage(t *testing.T, ctx context.Context, st store.SessionEventStore, sessionID, storageKey, nonce, text string, at time.Time) string {
+	t.Helper()
+	_, events, err := conversation.UserSubmissionEventMaps(conversation.UserSubmissionArgs{
+		SessionID:         sessionID,
+		SessionStorageKey: storageKey,
+		Email:             "user@example.com",
+		ClientNonce:       nonce,
+		Text:              text,
+		Message:           map[string]any{"role": "user", "content": text},
+		Runtime:           "claude",
+		Now:               at,
+	})
+	if err != nil {
+		t.Fatalf("build launch turn %s: %v", nonce, err)
+	}
+	for _, event := range events {
+		if event["type"] != string(conversation.EventUserMessageCreated) {
+			continue
+		}
+		seedEvent(t, ctx, st, event, at, 0)
+	}
+	return conversation.TurnIDForClientNonce(nonce)
+}
+
+// TestFindStrandedLaunchTurnsExcludesLivePendingLaunch pins the sweep half of
+// the #1079 item 3 deferred-launch race: a lone user_message.created older
+// than the sweep's age floor is NOT a strand while its pending-launch row is
+// in a status the dispatcher still acts on (awaiting_bytes / ready /
+// claiming) — a pod that takes longer than the floor to go Active must not
+// get a sweep terminal that the eventual dispatch then trails with
+// turn.submitted. Once the row is terminal (failed via the dispatcher's stale
+// deadline / attempt cap, or dispatched) — or never existed (the pre-#865
+// browser-driven launches) — the sweep proceeds. Runs the real migrations so
+// the NOT EXISTS against session_pending_launch_turns is exercised exactly as
+// production runs it.
+func TestFindStrandedLaunchTurnsExcludesLivePendingLaunch(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	pool := newStrandedTurnTestPool(t, ctx, "stranded_launch")
+
+	const (
+		owner = "nelson@romaine.life"
+		scope = "default"
+	)
+	eventStore := store.NewPostgresSessionEventStore(pool, scope)
+	launchStore := NewPendingLaunchStore(pool, scope)
+	now := time.Now().UTC().Truncate(time.Millisecond)
+	old := now.Add(-3 * time.Hour)
+	storage := func(sessionID string) string { return sessionmodel.SessionStorageKey(scope, sessionID) }
+
+	register := func(sessionID, nonce string, attachments int) string {
+		t.Helper()
+		turnID := conversation.TurnIDForClientNonce(nonce)
+		if _, err := launchStore.Register(ctx, RegisterPendingLaunchRequest{
+			SessionScope: scope, SessionID: sessionID, TurnID: turnID, ClientNonce: nonce,
+			OwnerEmail: owner, Runtime: "claude", BasePrompt: "x", AttachmentCount: attachments,
+		}); err != nil {
+			t.Fatalf("Register %s: %v", nonce, err)
+		}
+		return turnID
+	}
+	requireStatus := func(sessionID, turnID string, want PendingLaunchStatus) {
+		t.Helper()
+		row, err := launchStore.Get(ctx, storage(sessionID), turnID)
+		if err != nil {
+			t.Fatalf("Get %s/%s: %v", sessionID, turnID, err)
+		}
+		if row.Status != want {
+			t.Fatalf("pending launch %s/%s status = %q, want %q", sessionID, turnID, row.Status, want)
+		}
+	}
+
+	// Live statuses — the dispatcher may still act on these rows, so each
+	// lone user_message.created is a launch in flight, not a strand.
+	awaitingTurn := register("801", "launch-801", 1) // bytes still staging
+	seedLaunchUserMessage(t, ctx, eventStore, "801", storage("801"), "launch-801", "awaiting bytes", old)
+	requireStatus("801", awaitingTurn, PendingLaunchAwaitingBytes)
+
+	readyTurn := register("802", "launch-802", 0) // zero attachments → ready at register
+	seedLaunchUserMessage(t, ctx, eventStore, "802", storage("802"), "launch-802", "ready to dispatch", old)
+	requireStatus("802", readyTurn, PendingLaunchReady)
+
+	// claiming: a real ClaimReady lease against an Active session (the only
+	// session row inserted, so the join claims exactly this launch).
+	insertSessionRow(t, ctx, pool, owner, scope, "803", "Active")
+	claimingTurn := register("803", "launch-803", 0)
+	seedLaunchUserMessage(t, ctx, eventStore, "803", storage("803"), "launch-803", "mid dispatch", old)
+	claimed, err := launchStore.ClaimReady(ctx, now, 10, time.Minute)
+	if err != nil {
+		t.Fatalf("ClaimReady: %v", err)
+	}
+	if len(claimed) != 1 || claimed[0].TurnID != claimingTurn {
+		t.Fatalf("claimed = %+v, want exactly %s", claimed, claimingTurn)
+	}
+	requireStatus("803", claimingTurn, PendingLaunchClaiming)
+
+	// Terminal rows — the dispatcher is done with these, so an old lone
+	// user_message.created is a genuine strand again.
+	failedTurn := register("804", "launch-804", 1)
+	seedLaunchUserMessage(t, ctx, eventStore, "804", storage("804"), "launch-804", "failed at the cap", old)
+	if err := launchStore.MarkFailed(ctx, storage("804"), failedTurn, "launch_dispatch_failed (attempt 5): test"); err != nil {
+		t.Fatalf("MarkFailed: %v", err)
+	}
+	requireStatus("804", failedTurn, PendingLaunchFailed)
+
+	dispatchedTurn := register("805", "launch-805", 0)
+	seedLaunchUserMessage(t, ctx, eventStore, "805", storage("805"), "launch-805", "dispatched but submit lost", old)
+	if err := launchStore.MarkDispatched(ctx, storage("805"), dispatchedTurn, dispatchedTurn); err != nil {
+		t.Fatalf("MarkDispatched: %v", err)
+	}
+	requireStatus("805", dispatchedTurn, PendingLaunchDispatched)
+
+	// No pending row at all: the pre-#865 browser-driven launch strand.
+	legacyTurn := seedLaunchUserMessage(t, ctx, eventStore, "806", storage("806"), "launch-806", "browser-era strand", old)
+
+	backdateSeededEvents(t, ctx, pool)
+
+	rows, err := eventStore.FindStrandedLaunchTurns(ctx, now.Add(-15*time.Minute), now.Add(-30*24*time.Hour), 100)
+	if err != nil {
+		t.Fatalf("FindStrandedLaunchTurns: %v", err)
+	}
+	got := map[string]bool{}
+	for _, row := range rows {
+		got[row.TankSessionID+"/"+row.TurnID] = true
+	}
+
+	for key, want := range map[string]bool{
+		storage("801") + "/" + awaitingTurn:   false, // live: awaiting_bytes
+		storage("802") + "/" + readyTurn:      false, // live: ready
+		storage("803") + "/" + claimingTurn:   false, // live: claiming
+		storage("804") + "/" + failedTurn:     true,  // dispatcher failed the row terminally
+		storage("805") + "/" + dispatchedTurn: true,  // no live claim left; lone event = strand
+		storage("806") + "/" + legacyTurn:     true,  // no pending row at all
+	} {
+		if got[key] != want {
+			t.Fatalf("strand membership for %s = %v, want %v (got %v)", key, got[key], want, got)
+		}
+	}
+	if len(got) != 3 {
+		t.Fatalf("stranded rows = %d (%v), want exactly 3", len(got), got)
 	}
 }
 
