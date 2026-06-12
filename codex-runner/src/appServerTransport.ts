@@ -1,10 +1,12 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { ThreadOptions } from "@openai/codex-sdk";
 
 import type { CodexEvent } from "./sessionEvents.js";
-import { providerControlTotal, providerErrorTotal, unmappedProviderEventTotal } from "./metrics.js";
+import { providerControlTotal, providerErrorTotal, threadResumeTotal, unmappedProviderEventTotal } from "./metrics.js";
 
 type JsonRecord = Record<string, unknown>;
 const require = createRequire(import.meta.url);
@@ -152,6 +154,20 @@ class AsyncEventQueue {
   }
 }
 
+// CONTROL_REQUEST_TIMEOUT_MS bounds the short-lived control RPCs
+// (initialize, thread/start, thread/resume, backgroundTerminals/clean,
+// turn/interrupt). turn/start is deliberately NOT bounded — its JSON-RPC
+// response arrives when the turn ENDS, which is minutes for real work.
+// Pre-fix a hung app-server child left these promises pending forever
+// (issue #1078: "no request timeout, no provider-fatal report").
+const CONTROL_REQUEST_TIMEOUT_MS = (() => {
+  const parsed = Number.parseInt(
+    (process.env.SESSION_CODEX_CONTROL_TIMEOUT_MS ?? "").trim(),
+    10,
+  );
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
+})();
+
 export class CodexAppServerTransport {
   private child: ChildProcessWithoutNullStreams | null = null;
   private nextID = 1;
@@ -180,6 +196,14 @@ export class CodexAppServerTransport {
     this.child = child;
     child.once("exit", (code, signal) => {
       const err = new Error(`codex app-server exited with ${signal ?? `code ${code ?? 1}`}`);
+      // Issue #1078: pre-fix the dead child stayed referenced — start()
+      // no-op'd forever and every later request wrote into a destroyed
+      // stdin. Clearing both lets the next turn respawn the server and
+      // thread/resume restore the conversation.
+      this.child = null;
+      this.threadID = null;
+      providerErrorTotal.labels("app_server_exit").inc();
+      console.error("codex app-server child exited:", err.message);
       for (const pending of this.pending.values()) pending.reject(err);
       this.pending.clear();
       this.activeQueue?.push({ kind: "error", error: err });
@@ -197,7 +221,7 @@ export class CodexAppServerTransport {
     await this.request("initialize", {
       clientInfo: { name: "tank-operator", title: "Tank Operator", version: "dev" },
       capabilities: { experimentalApi: true },
-    });
+    }, CONTROL_REQUEST_TIMEOUT_MS);
     this.notify("initialized");
   }
 
@@ -215,7 +239,7 @@ export class CodexAppServerTransport {
     try {
       await this.request("thread/backgroundTerminals/clean", {
         threadId: threadID,
-      });
+      }, CONTROL_REQUEST_TIMEOUT_MS);
       providerControlTotal.labels("background_terminals_clean", "sent").inc();
     } catch (err) {
       providerControlTotal.labels("background_terminals_clean", "failed").inc();
@@ -316,34 +340,111 @@ export class CodexAppServerTransport {
 
   private async ensureThread(threadOptions: ThreadOptions): Promise<string> {
     if (this.threadID) return this.threadID;
+    const threadConfig = {
+      features: { default_mode_request_user_input: true },
+      ...(threadOptions.model ? { model: threadOptions.model } : {}),
+      ...(threadOptions.modelReasoningEffort
+        ? { model_reasoning_effort: threadOptions.modelReasoningEffort }
+        : {}),
+    };
+    // Thread continuity across runner/app-server restarts (issue #1078
+    // item 4): codex persists sessions under ~/.codex/sessions, but the
+    // header comment claiming that helped restarts was false as wired —
+    // nothing ever called thread/resume, so every restart was total
+    // conversation amnesia. The thread id is persisted to the workspace
+    // (which outlives runner-container restarts; pod death is terminal by
+    // design and out of scope) and resumed best-effort: any failure falls
+    // back to a fresh thread, which is exactly the pre-fix behavior.
+    const persisted = this.readPersistedThreadID();
+    if (persisted) {
+      try {
+        const response = await this.request("thread/resume", {
+          threadId: persisted,
+          cwd: this.opts.cwd,
+          sandbox: "danger-full-access",
+          approvalPolicy: "never",
+          config: threadConfig,
+        }, CONTROL_REQUEST_TIMEOUT_MS) as JsonRecord;
+        const thread = response?.thread as JsonRecord | undefined;
+        const id = typeof thread?.id === "string" ? thread.id : persisted;
+        this.threadID = id;
+        this.persistThreadID(id);
+        threadResumeTotal.labels("resumed").inc();
+        this.opts.onRuntimeConfigApplied?.(threadOptions);
+        this.activeQueue?.push({ kind: "event", event: { type: "thread.started", thread_id: id } });
+        return id;
+      } catch (err) {
+        threadResumeTotal.labels("failed").inc();
+        console.warn(
+          "codex thread/resume failed; starting a fresh thread (conversation context lost):",
+          err,
+        );
+      }
+    }
     const response = await this.request("thread/start", {
       cwd: this.opts.cwd,
       sandbox: "danger-full-access",
       approvalPolicy: "never",
-      config: {
-        features: { default_mode_request_user_input: true },
-        ...(threadOptions.model ? { model: threadOptions.model } : {}),
-        ...(threadOptions.modelReasoningEffort
-          ? { model_reasoning_effort: threadOptions.modelReasoningEffort }
-          : {}),
-      },
-    }) as JsonRecord;
+      config: threadConfig,
+    }, CONTROL_REQUEST_TIMEOUT_MS) as JsonRecord;
     const thread = response.thread as JsonRecord | undefined;
     const id = typeof thread?.id === "string" ? thread.id : undefined;
     if (!id) throw new Error("codex app-server thread/start response did not include thread.id");
     this.threadID = id;
+    this.persistThreadID(id);
+    threadResumeTotal.labels(persisted ? "failed_then_fresh" : "fresh").inc();
     this.opts.onRuntimeConfigApplied?.(threadOptions);
     this.activeQueue?.push({ kind: "event", event: { type: "thread.started", thread_id: id } });
     return id;
   }
 
-  private request(method: string, params: unknown): Promise<unknown> {
+  private threadStatePath(): string {
+    return join(this.opts.cwd, ".tank", "codex-thread-id");
+  }
+
+  private readPersistedThreadID(): string | null {
+    try {
+      const raw = readFileSync(this.threadStatePath(), "utf8").trim();
+      return raw || null;
+    } catch {
+      return null;
+    }
+  }
+
+  private persistThreadID(id: string): void {
+    try {
+      mkdirSync(dirname(this.threadStatePath()), { recursive: true });
+      writeFileSync(this.threadStatePath(), `${id}\n`, "utf8");
+    } catch (err) {
+      console.warn("codex thread id persist failed (resume after restart unavailable):", err);
+    }
+  }
+
+  private request(method: string, params: unknown, timeoutMs?: number): Promise<unknown> {
     const child = this.child;
     if (!child) return Promise.reject(new Error("codex app-server is not running"));
     const id = this.nextID++;
     const message = JSON.stringify({ id, method, params });
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      if (timeoutMs && timeoutMs > 0) {
+        timer = setTimeout(() => {
+          if (!this.pending.delete(id)) return;
+          providerErrorTotal.labels("app_server_timeout").inc();
+          reject(new Error(`codex app-server ${method} timed out after ${timeoutMs}ms`));
+        }, timeoutMs);
+        (timer as { unref?: () => void }).unref?.();
+      }
+      this.pending.set(id, {
+        resolve: (value: unknown) => {
+          if (timer) clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (err: unknown) => {
+          if (timer) clearTimeout(timer);
+          reject(err);
+        },
+      });
       child.stdin.write(`${message}\n`);
     });
   }
@@ -623,7 +724,7 @@ export class CodexAppServerTransport {
       void this.request("turn/interrupt", {
         threadId: control.threadID,
         turnId: turnID,
-      }).then(() => {
+      }, CONTROL_REQUEST_TIMEOUT_MS).then(() => {
         providerControlTotal.labels("interrupt", "sent").inc();
       }).catch((err) => {
         providerControlTotal.labels("interrupt", "failed").inc();
