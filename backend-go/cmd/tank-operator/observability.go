@@ -2010,6 +2010,23 @@ func (promRowWriterMetrics) RecordRowUpdateFailure(eventType string) {
 	sessionRowUpdatesTotal.WithLabelValues(eventType, "failed").Inc()
 }
 
+// tank_session_activity_write_superseded_total — activity_summary writes
+// dropped by the writer's stale-write guard (the stored summary's
+// last_order_key was newer than the one this refresh derived from).
+// Steady-state expectation: rare. A sustained rate means refreshers are
+// persistently racing behind the ledger (replica clock/lag pathology),
+// not that anything is corrupt — the guard is WHY nothing is corrupt.
+var sessionActivityWriteSupersededTotal = promauto.NewCounter(
+	prometheus.CounterOpts{
+		Name: "tank_session_activity_write_superseded_total",
+		Help: "activity_summary writes dropped because a newer summary (by last_order_key) was already stored.",
+	},
+)
+
+func (promRowWriterMetrics) RecordRowActivityWriteSuperseded() {
+	sessionActivityWriteSupersededTotal.Inc()
+}
+
 // promLifecycleEmitterMetrics satisfies
 // sessioncontroller.LifecycleEmitterMetrics for the chat→activity-
 // summary bridge. Emitted=true increments {outcome="emitted"}, false

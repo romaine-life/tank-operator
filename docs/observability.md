@@ -91,6 +91,16 @@ All metric names are prefixed `tank_`. The full namespace:
   Per-sweep detail (session, turn, progressed, source) is in the
   "stranded turn swept to durable terminal" slog line. Pairs with
   `tank_stranded_launch_swept_total`, the create-flow equivalent.
+- `tank_session_activity_write_superseded_total` — activity_summary
+  writes dropped by the sessions-row writer's stale-write guard: the
+  stored summary's `last_order_key` was newer than the one the dropped
+  refresh derived from. Concurrent refreshes (per-event persister workers
+  on both replicas, the read-state HTTP path, wake/cancel paths) are
+  read-fold-write with no spanning transaction; the guard is what keeps a
+  stale fold from durably overwriting a terminal status ("stuck working
+  forever"). Steady-state expectation: rare. A sustained rate means
+  refreshers persistently race behind the ledger, not corruption — the
+  guard is why nothing corrupts.
 - `tank_stream_auth_ticket_total` — browser EventSource stream-ticket
   create/validate attempts. Labels: `operation` (`create`, `validate`),
   `stream` (`session-list`, `session-events`), and bounded `result`.
