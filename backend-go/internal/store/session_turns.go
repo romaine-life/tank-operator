@@ -88,18 +88,33 @@ func (s *sessionTurnStore) ResolveTurnNumber(ctx context.Context, tankSessionID 
 }
 
 func (s *sessionTurnStore) TurnNumberForTurnID(ctx context.Context, tankSessionID, turnID string) (int64, bool, error) {
+	return s.turnNumberForTurnID(ctx, s.pool, tankSessionID, turnID)
+}
+
+// TurnNumberForTurnIDTx is the in-transaction twin — see
+// TurnNumbersForSessionTx for why in-transaction callers must not read on
+// the pool.
+func (s *sessionTurnStore) TurnNumberForTurnIDTx(ctx context.Context, tx pgx.Tx, tankSessionID, turnID string) (int64, bool, error) {
+	return s.turnNumberForTurnID(ctx, tx, tankSessionID, turnID)
+}
+
+type sessionTurnRowQueryer interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func (s *sessionTurnStore) turnNumberForTurnID(ctx context.Context, q sessionTurnRowQueryer, tankSessionID, turnID string) (int64, bool, error) {
 	turnID = strings.TrimSpace(turnID)
 	if turnID == "" {
 		return 0, false, nil
 	}
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
-	const q = `
+	const query = `
 		SELECT turn_number
 		FROM session_turns
 		WHERE tank_session_id = $1 AND turn_id = $2
 	`
 	var number int64
-	if err := s.pool.QueryRow(ctx, q, storageKey, turnID).Scan(&number); err != nil {
+	if err := q.QueryRow(ctx, query, storageKey, turnID).Scan(&number); err != nil {
 		if err == pgx.ErrNoRows {
 			return 0, false, nil
 		}
@@ -109,13 +124,30 @@ func (s *sessionTurnStore) TurnNumberForTurnID(ctx context.Context, tankSessionI
 }
 
 func (s *sessionTurnStore) TurnNumbersForSession(ctx context.Context, tankSessionID string) (map[string]int64, error) {
+	return s.turnNumbersForSession(ctx, s.pool, tankSessionID)
+}
+
+// TurnNumbersForSessionTx is the in-transaction twin: callers already inside
+// a materialization transaction must read on the transaction's connection.
+// Reading on the pool from inside an open transaction is how the
+// 2026-06-12 pool deadlock formed (every pool connection held by the very
+// transactions doing the acquiring — see #1065).
+func (s *sessionTurnStore) TurnNumbersForSessionTx(ctx context.Context, tx pgx.Tx, tankSessionID string) (map[string]int64, error) {
+	return s.turnNumbersForSession(ctx, tx, tankSessionID)
+}
+
+type sessionTurnQueryer interface {
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+func (s *sessionTurnStore) turnNumbersForSession(ctx context.Context, q sessionTurnQueryer, tankSessionID string) (map[string]int64, error) {
 	storageKey := sessionmodel.SessionStorageKey(s.scope, tankSessionID)
-	const q = `
+	const query = `
 		SELECT turn_id, turn_number
 		FROM session_turns
 		WHERE tank_session_id = $1
 	`
-	rows, err := s.pool.Query(ctx, q, storageKey)
+	rows, err := q.Query(ctx, query, storageKey)
 	if err != nil {
 		return nil, err
 	}

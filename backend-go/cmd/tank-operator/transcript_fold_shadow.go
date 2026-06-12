@@ -64,7 +64,7 @@ func (m transcriptRowsMaterializer) shadowCompareFoldTx(
 		cursor = page.NextOrderKey
 	}
 	projection := projectTranscriptEvents(events)
-	if numbers, ok := m.turnNumbersForSession(ctx, sessionID); ok {
+	if numbers, ok := m.turnNumbersForSession(ctx, tx, sessionID); ok {
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
 	reference := map[string]map[string]any{}

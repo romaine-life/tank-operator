@@ -30,11 +30,15 @@ import (
 // Versioning: bump sessionFoldMemoVersion whenever the memo shape or the
 // projection semantics it snapshots change; a version mismatch on load is a
 // resync, never a best-effort read of stale state.
-const sessionFoldMemoVersion = 1
+const sessionFoldMemoVersion = 2
 
-// sessionFoldMemoMaxBytes caps the serialized memo. A session whose memo
-// outgrows it has the fold disabled durably (always batch-projected, exactly
-// the pre-fold behavior) and counted — never silently truncated.
+// sessionFoldMemoMaxBytes caps each serialized memo PART: the shared
+// session part and every per-turn entry blob individually. A session with a
+// part over the cap has the fold disabled durably (always batch-projected,
+// exactly the pre-fold behavior) and counted — never silently truncated.
+// Partitioning is what lets the incident-class sessions fold: their v1
+// single-blob memos exceeded the cap (disabled_size=16 on first deploy),
+// while their largest single turn fits comfortably.
 const sessionFoldMemoMaxBytes = 1_500_000
 
 type sessionFoldMemo struct {
@@ -57,10 +61,14 @@ type sessionFoldMemo struct {
 	WakeParents           map[string]string `json:"wake_parents,omitempty"`
 	ContinuationTurns     map[string]bool   `json:"continuation_turns,omitempty"`
 
-	// Turns holds pruned entries keyed by the turn the entry RENDERS under —
-	// wake/continuation entries are stored under their originating parent,
-	// matching the batch pipeline's fold-into-parent semantics.
-	Turns map[string]*turnFoldEntries `json:"turns,omitempty"`
+	// Turns holds pruned entries keyed by the entry's ORIGINAL turn. It is
+	// deliberately excluded from the session part's serialization: each
+	// turn's entry set persists as its own row
+	// (session_transcript_fold_turns), loaded per batch for exactly the
+	// turns the batch touches. TouchedTurns tracks which sets this in-memory
+	// fold pass modified, so the save writes only those.
+	Turns        map[string]*turnFoldEntries `json:"-"`
+	TouchedTurns map[string]bool             `json:"-"`
 }
 
 type turnFoldEntries struct {
@@ -116,6 +124,7 @@ func newSessionFoldMemo() *sessionFoldMemo {
 		WakeParents:           map[string]string{},
 		ContinuationTurns:     map[string]bool{},
 		Turns:                 map[string]*turnFoldEntries{},
+		TouchedTurns:          map[string]bool{},
 	}
 }
 
@@ -283,6 +292,7 @@ func (m *sessionFoldMemo) routeEntry(entry map[string]any, turnID string) (strin
 		m.Turns[turnID] = turn
 	}
 	turn.upsert(pruneFoldEntry(entry))
+	m.TouchedTurns[turnID] = true
 	return render, foldApplied
 }
 
@@ -522,15 +532,30 @@ func buildSessionFoldMemo(events []map[string]any) *sessionFoldMemo {
 	return memo
 }
 
-func marshalSessionFoldMemo(memo *sessionFoldMemo) ([]byte, bool) {
+// marshalSessionFoldMemo serializes the session part plus the given turn
+// sets (touched-only for fold saves; all for reseeds). fits=false when any
+// single part exceeds the cap.
+func marshalSessionFoldMemo(memo *sessionFoldMemo, turnIDs []string) ([]byte, map[string][]byte, bool) {
 	if memo == nil {
-		return nil, false
+		return nil, nil, false
 	}
 	raw, err := json.Marshal(memo)
 	if err != nil || len(raw) > sessionFoldMemoMaxBytes {
-		return nil, false
+		return nil, nil, false
 	}
-	return raw, true
+	turns := map[string][]byte{}
+	for _, turnID := range turnIDs {
+		set := memo.Turns[turnID]
+		if set == nil {
+			continue
+		}
+		blob, err := json.Marshal(set)
+		if err != nil || len(blob) > sessionFoldMemoMaxBytes {
+			return nil, nil, false
+		}
+		turns[turnID] = blob
+	}
+	return raw, turns, true
 }
 
 func unmarshalSessionFoldMemo(raw []byte) *sessionFoldMemo {
@@ -572,15 +597,55 @@ func unmarshalSessionFoldMemo(raw []byte) *sessionFoldMemo {
 	if memo.ContinuationTurns == nil {
 		memo.ContinuationTurns = map[string]bool{}
 	}
-	if memo.Turns == nil {
-		memo.Turns = map[string]*turnFoldEntries{}
+	memo.Turns = map[string]*turnFoldEntries{}
+	memo.TouchedTurns = map[string]bool{}
+	return &memo
+}
+
+// attachFoldTurnBlobs deserializes per-turn entry sets into a loaded memo.
+// A blob that fails to decode poisons the memo (returns false) — the caller
+// falls back to the reference path, which reseeds.
+func attachFoldTurnBlobs(memo *sessionFoldMemo, blobs map[string][]byte) bool {
+	for turnID, blob := range blobs {
+		var set turnFoldEntries
+		if err := json.Unmarshal(blob, &set); err != nil {
+			return false
+		}
+		if set.Entries == nil {
+			set.Entries = map[string]map[string]any{}
+		}
+		memo.Turns[turnID] = &set
 	}
-	for _, turn := range memo.Turns {
-		if turn != nil && turn.Entries == nil {
-			turn.Entries = map[string]map[string]any{}
+	return true
+}
+
+// foldTurnIDsToLoad computes the turn entry sets a batch needs: the batch's
+// own turns, their render parents, and — for any parent shell rebuild — every
+// wake child of those parents (the family closure mergeBackgroundWake needs).
+func (m *sessionFoldMemo) foldTurnIDsToLoad(events []map[string]any) []string {
+	need := map[string]bool{}
+	for _, event := range events {
+		turnID := transcriptString(event, "turn_id")
+		if turnID == "" {
+			continue
+		}
+		need[turnID] = true
+		if parent := m.WakeParents[turnID]; parent != "" {
+			need[parent] = true
 		}
 	}
-	return &memo
+	// Family closure: children of every needed parent.
+	for wakeID, parent := range m.WakeParents {
+		if need[parent] {
+			need[wakeID] = true
+		}
+	}
+	out := make([]string, 0, len(need))
+	for turnID := range need {
+		out = append(out, turnID)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // foldBatch applies a sorted batch of events to the memo. It returns the set

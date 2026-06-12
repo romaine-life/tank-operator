@@ -67,6 +67,7 @@ func (s *memoryFoldEventStore) ListBySessionTx(_ context.Context, _ pgx.Tx, _ st
 type memoryFoldRowsStore struct {
 	rows         map[string]map[string]any
 	foldMemo     []byte
+	foldTurns    map[string][]byte
 	foldDisabled bool
 	inTx         bool
 }
@@ -118,21 +119,44 @@ func (s *memoryFoldRowsStore) LoadFoldStateTx(context.Context, pgx.Tx, string) (
 	return s.foldMemo, s.foldDisabled, nil
 }
 
-func (s *memoryFoldRowsStore) SaveFoldStateTx(_ context.Context, _ pgx.Tx, _ string, memo []byte) error {
+func (s *memoryFoldRowsStore) LoadFoldTurnsTx(_ context.Context, _ pgx.Tx, _ string, turnIDs []string) (map[string][]byte, error) {
+	out := map[string][]byte{}
+	for _, turnID := range turnIDs {
+		if blob, ok := s.foldTurns[turnID]; ok {
+			out[turnID] = blob
+		}
+	}
+	return out, nil
+}
+
+func (s *memoryFoldRowsStore) SaveFoldStateTx(_ context.Context, _ pgx.Tx, _ string, memo []byte, turns map[string][]byte) error {
 	s.foldMemo = append([]byte(nil), memo...)
+	if s.foldTurns == nil {
+		s.foldTurns = map[string][]byte{}
+	}
+	for turnID, blob := range turns {
+		s.foldTurns[turnID] = append([]byte(nil), blob...)
+	}
 	s.foldDisabled = false
 	return nil
+}
+
+func (s *memoryFoldRowsStore) ReplaceFoldStateTx(ctx context.Context, tx pgx.Tx, sessionID string, memo []byte, turns map[string][]byte) error {
+	s.foldTurns = map[string][]byte{}
+	return s.SaveFoldStateTx(ctx, tx, sessionID, memo, turns)
 }
 
 func (s *memoryFoldRowsStore) DeleteFoldStateTx(context.Context, pgx.Tx, string) error {
 	if !s.foldDisabled {
 		s.foldMemo = nil
+		s.foldTurns = nil
 	}
 	return nil
 }
 
 func (s *memoryFoldRowsStore) DisableFoldTx(context.Context, pgx.Tx, string) error {
 	s.foldMemo = nil
+	s.foldTurns = nil
 	s.foldDisabled = true
 	return nil
 }
@@ -290,13 +314,20 @@ func TestFoldCheckpointEquivalenceOverFixtures(t *testing.T) {
 func TestFoldMemoSerializationRoundTrip(t *testing.T) {
 	events := foldFixtureEvents(t, "slot1_session_161_events.json")
 	memo := buildSessionFoldMemo(events)
-	raw, ok := marshalSessionFoldMemo(memo)
+	allTurns := make([]string, 0, len(memo.Turns))
+	for turnID := range memo.Turns {
+		allTurns = append(allTurns, turnID)
+	}
+	raw, turnBlobs, ok := marshalSessionFoldMemo(memo, allTurns)
 	if !ok {
-		t.Fatalf("memo did not marshal within the size cap (len would exceed %d)", sessionFoldMemoMaxBytes)
+		t.Fatalf("memo did not marshal within the per-part size cap (%d)", sessionFoldMemoMaxBytes)
 	}
 	back := unmarshalSessionFoldMemo(raw)
 	if back == nil {
 		t.Fatalf("memo failed to unmarshal")
+	}
+	if !attachFoldTurnBlobs(back, turnBlobs) {
+		t.Fatalf("turn blobs failed to attach")
 	}
 	if back.LastOrderKey != memo.LastOrderKey {
 		t.Fatalf("LastOrderKey lost in round trip")

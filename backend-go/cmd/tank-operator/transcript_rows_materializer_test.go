@@ -92,7 +92,7 @@ func (s *lockingTranscriptRowsStore) LoadFoldStateTx(context.Context, pgx.Tx, st
 	return s.foldMemo, s.foldDisabled, nil
 }
 
-func (s *lockingTranscriptRowsStore) SaveFoldStateTx(_ context.Context, _ pgx.Tx, _ string, memo []byte) error {
+func (s *lockingTranscriptRowsStore) SaveFoldStateTx(_ context.Context, _ pgx.Tx, _ string, memo []byte, _ map[string][]byte) error {
 	if !s.lockHeld {
 		s.t.Fatal("SaveFoldStateTx called outside materialization lock")
 	}
@@ -100,6 +100,17 @@ func (s *lockingTranscriptRowsStore) SaveFoldStateTx(_ context.Context, _ pgx.Tx
 	s.foldDisabled = false
 	s.foldSaves++
 	return nil
+}
+
+func (s *lockingTranscriptRowsStore) ReplaceFoldStateTx(ctx context.Context, tx pgx.Tx, sessionID string, memo []byte, turns map[string][]byte) error {
+	return s.SaveFoldStateTx(ctx, tx, sessionID, memo, turns)
+}
+
+func (s *lockingTranscriptRowsStore) LoadFoldTurnsTx(context.Context, pgx.Tx, string, []string) (map[string][]byte, error) {
+	if !s.lockHeld {
+		s.t.Fatal("LoadFoldTurnsTx called outside materialization lock")
+	}
+	return map[string][]byte{}, nil
 }
 
 func (s *lockingTranscriptRowsStore) DeleteFoldStateTx(context.Context, pgx.Tx, string) error {

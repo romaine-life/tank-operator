@@ -29,7 +29,9 @@ type transcriptRowsMaterializationTxStore interface {
 	// Checkpointed-fold state (tank-operator#1051 B3), advanced in the same
 	// transaction as the row writes it describes.
 	LoadFoldStateTx(context.Context, pgx.Tx, string) ([]byte, bool, error)
-	SaveFoldStateTx(context.Context, pgx.Tx, string, []byte) error
+	LoadFoldTurnsTx(context.Context, pgx.Tx, string, []string) (map[string][]byte, error)
+	SaveFoldStateTx(ctx context.Context, tx pgx.Tx, tankSessionID string, memo []byte, turns map[string][]byte) error
+	ReplaceFoldStateTx(ctx context.Context, tx pgx.Tx, tankSessionID string, memo []byte, turns map[string][]byte) error
 	DeleteFoldStateTx(context.Context, pgx.Tx, string) error
 	DisableFoldTx(context.Context, pgx.Tx, string) error
 }
@@ -241,7 +243,7 @@ func (m transcriptRowsMaterializer) refreshSessionBatch(ctx context.Context, ses
 			}
 			projection := projectTranscriptEvents(turnEvents)
 			recordTranscriptProjectionInvariantViolations(sessionID, turnID, turnEvents, projection.Entries)
-			if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
+			if numbers, ok := m.turnNumbersForTurn(ctx, tx, sessionID, turnID); ok {
 				stampTurnNumbers(sessionID, numbers, projection.Entries)
 			}
 			if err := txRows.ReplaceForTurnTx(ctx, tx, sessionID, turnID, projection.Entries); err != nil {
@@ -292,6 +294,17 @@ func (m transcriptRowsMaterializer) tryFoldBatchTx(
 	if memo == nil {
 		return false, nil
 	}
+	blobs, err := txRows.LoadFoldTurnsTx(ctx, tx, sessionID, memo.foldTurnIDsToLoad(events))
+	if err != nil {
+		slog.Warn("fold turn-set load failed; using reference projection",
+			"session_id", sessionID, "error", err)
+		recordTranscriptFold("load_error")
+		return false, nil
+	}
+	if !attachFoldTurnBlobs(memo, blobs) {
+		recordTranscriptFold("load_error")
+		return false, nil
+	}
 	// Turn-less events ride their own UpsertRows path and never touch
 	// shells; their presence alongside foldable events is fine, but they are
 	// handled by the caller, so only attempt the fold when every event in
@@ -320,7 +333,7 @@ func (m transcriptRowsMaterializer) tryFoldBatchTx(
 		if !emit {
 			continue
 		}
-		if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
+		if numbers, ok := m.turnNumbersForTurn(ctx, tx, sessionID, turnID); ok {
 			stampTurnNumbers(sessionID, numbers, []map[string]any{row})
 		}
 		rows = append(rows, row)
@@ -330,14 +343,14 @@ func (m transcriptRowsMaterializer) tryFoldBatchTx(
 			return false, err
 		}
 	}
-	encoded, fits := marshalSessionFoldMemo(memo)
+	encoded, turnBlobs, fits := marshalSessionFoldMemo(memo, sortedFoldTurnIDs(memo.TouchedTurns))
 	if !fits {
-		// The rows just written are correct; only the memo outgrew its cap.
-		// Durably opt the session out so it batch-projects from here on.
+		// The rows just written are correct; only a memo part outgrew its
+		// cap. Durably opt the session out so it batch-projects from here on.
 		recordTranscriptFold("disabled_size")
 		return true, txRows.DisableFoldTx(ctx, tx, sessionID)
 	}
-	if err := txRows.SaveFoldStateTx(ctx, tx, sessionID, encoded); err != nil {
+	if err := txRows.SaveFoldStateTx(ctx, tx, sessionID, encoded, turnBlobs); err != nil {
 		return false, err
 	}
 	recordTranscriptFold("folded")
@@ -373,13 +386,17 @@ func (m transcriptRowsMaterializer) resyncSessionTx(
 		return err
 	}
 	memo := buildSessionFoldMemo(events)
-	encoded, fits := marshalSessionFoldMemo(memo)
+	allTurns := make([]string, 0, len(memo.Turns))
+	for turnID := range memo.Turns {
+		allTurns = append(allTurns, turnID)
+	}
+	encoded, turnBlobs, fits := marshalSessionFoldMemo(memo, allTurns)
 	if !fits {
 		recordTranscriptFold("disabled_size")
 		return rowsStore.DisableFoldTx(ctx, tx, sessionID)
 	}
 	recordTranscriptFold("reseeded")
-	return rowsStore.SaveFoldStateTx(ctx, tx, sessionID, encoded)
+	return rowsStore.ReplaceFoldStateTx(ctx, tx, sessionID, encoded, turnBlobs)
 }
 
 func (m transcriptRowsMaterializer) RefreshEvent(ctx context.Context, event map[string]any) error {
@@ -415,7 +432,7 @@ func (m transcriptRowsMaterializer) RefreshEvent(ctx context.Context, event map[
 	}
 	projection := projectTranscriptEvents(turnEvents)
 	recordTranscriptProjectionInvariantViolations(sessionID, turnID, turnEvents, projection.Entries)
-	if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
+	if numbers, ok := m.turnNumbersForTurn(ctx, nil, sessionID, turnID); ok {
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
 	return m.rows.ReplaceForTurn(ctx, sessionID, turnID, projection.Entries)
@@ -451,7 +468,7 @@ func (m transcriptRowsMaterializer) refreshEventTx(
 	}
 	projection := projectTranscriptEvents(turnEvents)
 	recordTranscriptProjectionInvariantViolations(sessionID, turnID, turnEvents, projection.Entries)
-	if numbers, ok := m.turnNumbersForTurn(ctx, sessionID, turnID); ok {
+	if numbers, ok := m.turnNumbersForTurn(ctx, tx, sessionID, turnID); ok {
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
 	if err := rows.ReplaceForTurnTx(ctx, tx, sessionID, turnID, projection.Entries); err != nil {
@@ -570,7 +587,7 @@ func (m transcriptRowsMaterializer) refreshSession(ctx context.Context, sessionI
 	}
 	projection := projectTranscriptEvents(events)
 	recordTranscriptProjectionInvariantViolations(sessionID, "", events, projection.Entries)
-	if numbers, ok := m.turnNumbersForSession(ctx, sessionID); ok {
+	if numbers, ok := m.turnNumbersForSession(ctx, nil, sessionID); ok {
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
 	if err := m.rows.ReplaceForSession(ctx, sessionID, projection.Entries); err != nil {
@@ -606,7 +623,7 @@ func (m transcriptRowsMaterializer) backfillSessionEventsTx(
 	}
 	projection := projectTranscriptEvents(events)
 	recordTranscriptProjectionInvariantViolations(sessionID, "", events, projection.Entries)
-	if numbers, ok := m.turnNumbersForSession(ctx, sessionID); ok {
+	if numbers, ok := m.turnNumbersForSession(ctx, tx, sessionID); ok {
 		stampTurnNumbers(sessionID, numbers, projection.Entries)
 	}
 	if err := rowsStore.ReplaceForSessionTx(ctx, tx, sessionID, projection.Entries); err != nil {
@@ -692,11 +709,11 @@ func turnNumberingActive(s store.SessionTurnStore) bool {
 // next event) rather than recording a false miss. ok is true with an empty map
 // only when the turn genuinely has no number yet, which the stamping pass then
 // records as a missing-number invariant violation.
-func (m transcriptRowsMaterializer) turnNumbersForTurn(ctx context.Context, sessionID, turnID string) (map[string]int64, bool) {
+func (m transcriptRowsMaterializer) turnNumbersForTurn(ctx context.Context, tx pgx.Tx, sessionID, turnID string) (map[string]int64, bool) {
 	if !turnNumberingActive(m.turns) || strings.TrimSpace(turnID) == "" {
 		return nil, false
 	}
-	number, ok, err := m.turns.TurnNumberForTurnID(ctx, sessionID, turnID)
+	number, ok, err := m.readTurnNumberForTurnID(ctx, tx, sessionID, turnID)
 	if err != nil {
 		slog.Warn("read durable turn number", "session_id", sessionID, "turn_id", turnID, "error", err)
 		return nil, false
@@ -710,16 +727,44 @@ func (m transcriptRowsMaterializer) turnNumbersForTurn(ctx context.Context, sess
 // turnNumbersForSession returns the whole-session {turn_id: number} map for the
 // session/backfill projection paths. ok follows the same contract as
 // turnNumbersForTurn.
-func (m transcriptRowsMaterializer) turnNumbersForSession(ctx context.Context, sessionID string) (map[string]int64, bool) {
+func (m transcriptRowsMaterializer) turnNumbersForSession(ctx context.Context, tx pgx.Tx, sessionID string) (map[string]int64, bool) {
 	if !turnNumberingActive(m.turns) {
 		return nil, false
 	}
-	numbers, err := m.turns.TurnNumbersForSession(ctx, sessionID)
+	numbers, err := m.readTurnNumbersForSession(ctx, tx, sessionID)
 	if err != nil {
 		slog.Warn("read durable turn numbers", "session_id", sessionID, "error", err)
 		return nil, false
 	}
 	return numbers, true
+}
+
+// sessionTurnTxReader is the optional in-transaction surface of the turn
+// store. Inside a materialization transaction the turn-number reads MUST ride
+// the transaction's connection: reading on the pool from inside an open
+// transaction is how the 2026-06-12 pool deadlock formed (every pool
+// connection held by the very transactions doing the acquiring — #1065).
+type sessionTurnTxReader interface {
+	TurnNumbersForSessionTx(ctx context.Context, tx pgx.Tx, tankSessionID string) (map[string]int64, error)
+	TurnNumberForTurnIDTx(ctx context.Context, tx pgx.Tx, tankSessionID, turnID string) (int64, bool, error)
+}
+
+func (m transcriptRowsMaterializer) readTurnNumbersForSession(ctx context.Context, tx pgx.Tx, sessionID string) (map[string]int64, error) {
+	if tx != nil {
+		if reader, ok := m.turns.(sessionTurnTxReader); ok {
+			return reader.TurnNumbersForSessionTx(ctx, tx, sessionID)
+		}
+	}
+	return m.turns.TurnNumbersForSession(ctx, sessionID)
+}
+
+func (m transcriptRowsMaterializer) readTurnNumberForTurnID(ctx context.Context, tx pgx.Tx, sessionID, turnID string) (int64, bool, error) {
+	if tx != nil {
+		if reader, ok := m.turns.(sessionTurnTxReader); ok {
+			return reader.TurnNumberForTurnIDTx(ctx, tx, sessionID, turnID)
+		}
+	}
+	return m.turns.TurnNumberForTurnID(ctx, sessionID, turnID)
 }
 
 // stampTurnNumbers sets turnNumber on every turn-tagged transcript row from
