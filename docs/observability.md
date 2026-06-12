@@ -91,6 +91,13 @@ All metric names are prefixed `tank_`. The full namespace:
   Per-sweep detail (session, turn, progressed, source) is in the
   "stranded turn swept to durable terminal" slog line. Pairs with
   `tank_stranded_launch_swept_total`, the create-flow equivalent.
+- `tank_idle_sessions_reaped_total{result}` — durably-idle sessions the
+  idle reaper claimed (one conditional registry UPDATE: untouched
+  `updated_at` past the cutoff, settled activity status, no pending
+  wakes/launches) and deleted. Bounded `result`: `deleted`,
+  `delete_failed` (row already invisible; pod cleanup retries
+  implicitly). A spike means sessions stopped writing durable activity,
+  which is its own incident.
 - `tank_session_activity_write_superseded_total` — activity_summary
   writes dropped by the sessions-row writer's stale-write guard: the
   stored summary's `last_order_key` was newer than the one the dropped

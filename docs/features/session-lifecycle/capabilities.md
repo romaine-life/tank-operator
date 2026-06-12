@@ -230,3 +230,48 @@ Evidence:
   `TestAntigravityRunnerLaunchFailsWithMalformedMCPConfig`) asserts the launch
   script materializes the native MCP config and fails before runner exec when
   `mcp.json` is absent or malformed.
+
+
+## Durable idle-session reaper
+
+Status: shipped (2026-06-12, issue #1079 item 1)
+
+Intent:
+Truly abandoned sessions (left running past `idleTimeoutSeconds`, default
+7 days) are deleted without ever endangering unattended-but-live work.
+The prior reaper lived in sessions.Manager on per-replica in-memory
+state: its WebSocket guard (`TrackWS`) had zero call sites, its only
+activity feed was the SPA's visible-tab 30s touch endpoint, and its
+clocks reset on every deploy. It would have deleted any unattended live
+session (autonomous agent mid-task, a session parked on a durable
+ScheduleWakeup, an MCP `spawn_run_session`) after idleTimeout of replica
+uptime, while never reaping anything across frequent deploys. Pod
+deletion is terminal by design, which made that shape a latent destroyer
+of live work.
+
+The replacement is durable end to end. `sessionregistry.ClaimIdleForReap`
+evaluates idleness and claims the row in ONE conditional UPDATE: visible
+row with a pod, `updated_at` past the cutoff (every accepted turn, runner
+event, status transition, and read-state refresh bumps it through the
+sessions-row writers), settled activity status (`ready`/`error`; a
+working-ish status defers to the stranded-turn sweep, whose terminal
+restarts the idle clock), and no pending scheduled wakeup /
+background-task wake / undispatched launch turn (a parked agent's clock
+is a liveness promise, not idleness). Claiming marks the row invisible
+before any pod deletion, so concurrent activity defeats the reaper
+atomically and both replicas collapse on the claim with no leader
+election. `Manager.Delete` is reused as the executor (pod delete +
+idempotent re-mark + sidebar tombstone publish). The SPA's `/touch`
+endpoint and loop were retired with the in-memory state.
+
+Affected contracts:
+- Session Lifecycle ("session-pod deletion is terminal"; the reaper now
+  consumes only durable session state)
+- Observability (`tank_idle_sessions_reaped_total{result}`)
+
+Retirement note:
+Do not reintroduce browser-presence signals (WebSocket counts, tab
+touches) into the reap predicate. Browser disconnects are explicitly
+inside the durability boundary, so presence can never be evidence of
+abandonment. If reap latency ever matters, lower the interval, not the
+evidence bar.

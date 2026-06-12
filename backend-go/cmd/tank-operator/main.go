@@ -353,7 +353,6 @@ func main() {
 	// updates can drain HTTP cleanly.
 	ctx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
-	mgr.StartReaper(ctx)
 	// Build the shared RowWriter that the K8s watch and chat-activity
 	// emitter call through. Per docs/session-list-redesign.md Phase 4
 	// the durable sessions row is the only persistent state â€” the prior
@@ -589,6 +588,27 @@ func main() {
 				slog.Error("stranded turn sweep loop stopped", "error", err)
 			}
 		}()
+	}
+	// The durable idle-session reaper replaced sessions.Manager's
+	// per-replica in-memory loop, whose WebSocket guard was dead code,
+	// whose only activity feed was the SPA's visible-tab touch, and whose
+	// clocks reset on every deploy — it would have deleted unattended
+	// live sessions after idleTimeout of replica uptime and never reaped
+	// abandoned ones (2026-06-12 audit, issue #1079). Idleness and the
+	// claim are one conditional registry UPDATE (see ClaimIdleForReap),
+	// so any concurrent activity write defeats the reaper atomically and
+	// both replicas collapse on the row claim; pod deletion is
+	// idempotent. Postgres-only — stub mode has no durable rows to reap.
+	if sessionRegStore != nil {
+		idleTimeout := time.Duration(envInt("IDLE_TIMEOUT_SECONDS", 0)) * time.Second
+		reapInterval := time.Duration(envInt("REAPER_INTERVAL_SECONDS", 900)) * time.Second
+		if idleTimeout > 0 {
+			go func() {
+				if err := runIdleSessionReaper(ctx, srv, sessionRegStore, reapInterval, idleTimeout); err != nil && !errors.Is(err, context.Canceled) {
+					slog.Error("idle session reaper stopped", "error", err)
+				}
+			}()
+		}
 	}
 	// Backend-owned dispatch of durable attachment launches (#865): claim ready
 	// launches whose pod is Active, materialize the staged bytes into the

@@ -15415,19 +15415,6 @@ function ChatPane({
     if (visible) scheduleSdkReadStateUpdate();
   }, [session.id, visible]);
 
-  useEffect(() => {
-    if (publicView || readOnly || !visible || session.status !== "Active")
-      return;
-    const touch = () => {
-      void authedFetch(`/api/sessions/${session.id}/touch`, {
-        method: "POST",
-      }).catch(() => undefined);
-    };
-    touch();
-    const interval = window.setInterval(touch, 30_000);
-    return () => window.clearInterval(interval);
-  }, [publicView, readOnly, session.id, session.status, visible]);
-
   // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
     if (!running && queuedMessages.length > 0) {

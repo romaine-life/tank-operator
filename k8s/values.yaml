@@ -109,13 +109,20 @@ session:
   configMap: tank-session-config
   serviceAccount: claude-session
   registryScope: default
-  # Idle reaper: a session with no open WebSocket connections for this many
-  # seconds is deleted by the orchestrator's background sweep. 7 days is
-  # effectively "manual close only" â€” the in-app close button is the
-  # primary teardown path; this only reaps truly abandoned sessions left
-  # running over a long weekend.
+  # Idle reaper: a session whose durable row has been untouched for this
+  # many seconds (no runner events, no status transitions, no read-state
+  # refreshes) AND whose activity status is settled (ready/error) AND
+  # which holds no pending scheduled wakeup, background-task wake, or
+  # undispatched launch turn, is claimed and deleted by the durable
+  # reaper (cmd/tank-operator/idle_session_reaper.go). The claim is one
+  # conditional registry UPDATE, so any concurrent activity defeats it
+  # atomically; both replicas may run the loop. 7 days is effectively
+  # "manual close only": the in-app close button is the primary teardown
+  # path; this only reaps truly abandoned sessions. (The prior in-memory
+  # reaper's WebSocket guard was dead code and its clocks reset on every
+  # deploy. See issue #1079.)
   idleTimeoutSeconds: 604800
-  reaperIntervalSeconds: 60
+  reaperIntervalSeconds: 900
   spirelens:
     # Non-secret OIDC federation trust used by opted-in session pods to join
     # the tailnet and reach the SpireLens game-host MCP. Dormant unless a

@@ -352,7 +352,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /api/sessions/order", s.handleReorderSessions)
 	mux.HandleFunc("DELETE /api/sessions/{session_id}", s.handleDeleteSession)
 	mux.HandleFunc("GET /api/sessions/{session_id}", s.handleGetSession)
-	mux.HandleFunc("POST /api/sessions/{session_id}/touch", s.handleTouchSession)
 	mux.HandleFunc("PATCH /api/sessions/{session_id}", s.handlePatchSession)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/open-target", s.handleSetOpenTarget)
 	mux.HandleFunc("PUT /api/sessions/{session_id}/bug-label", s.handleSetSessionBugLabel)
