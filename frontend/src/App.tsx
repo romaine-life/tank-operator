@@ -10246,7 +10246,7 @@ function RunTurnViewControls({
                   {selectedEntry.turnLabel}
                 </span>
                 <span className="run-turn-view-combined-page">
-                  <span>Page {selectedEntry.pageNumber}</span>
+                  <span>Page {selectedEntry.pageNumber}</span>{" "}
                   {selectedEntryParts.isQuestion && (
                     <span
                       className="run-turn-view-combined-kind"
@@ -10284,7 +10284,7 @@ function RunTurnViewControls({
                       {entry.turnLabel}
                     </span>
                     <span className="run-turn-view-combined-page">
-                      <span>Page {entry.pageNumber}</span>
+                      <span>Page {entry.pageNumber}</span>{" "}
                       {parts.isQuestion && (
                         <span
                           className="run-turn-view-combined-kind"
