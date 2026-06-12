@@ -47,6 +47,20 @@ test("chat composer slash command highlight is drawn behind textarea text", () =
   expect(tokenRule).toMatch(/line-height:\s*1\.22;/);
 });
 
+test("interactive composer active rail does not paint over the textarea", () => {
+  const interactiveRule = cssRule(".run-composer.run-composer-interactive");
+  expect(interactiveRule).toMatch(/position:\s*relative;/);
+  expect(interactiveRule).toMatch(/isolation:\s*isolate;/);
+
+  const railRule = cssRule(".run-composer.run-composer-interactive::before");
+  expect(railRule).toMatch(/position:\s*absolute;/);
+  expect(railRule).toMatch(/z-index:\s*0;/);
+
+  const contentRule = cssRule(".run-composer.run-composer-interactive > *");
+  expect(contentRule).toMatch(/position:\s*relative;/);
+  expect(contentRule).toMatch(/z-index:\s*1;/);
+});
+
 test("chat composer cost estimate keeps a fixed-width footprint", () => {
   const composerRule = cssRule(".run-cost-estimate");
   expect(composerRule).toMatch(/width:\s*11rem;/);
