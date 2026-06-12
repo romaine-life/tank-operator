@@ -25,6 +25,7 @@ import (
 	"github.com/romaine-life/tank-operator/backend-go/internal/avatarassets"
 	"github.com/romaine-life/tank-operator/backend-go/internal/avataruploads"
 	"github.com/romaine-life/tank-operator/backend-go/internal/conversationreadstate"
+	"github.com/romaine-life/tank-operator/backend-go/internal/glimmung"
 	"github.com/romaine-life/tank-operator/backend-go/internal/mcpgithub"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstats"
 	"github.com/romaine-life/tank-operator/backend-go/internal/pgstore"
@@ -60,6 +61,26 @@ func buildMCPGitHubClient() *mcpgithub.Client {
 		ExchangeURL:  envDefault("MCP_GITHUB_EXCHANGE_URL", mcpgithub.DefaultExchangeURL),
 		MCPGitHubURL: envDefault("MCP_GITHUB_URL", mcpgithub.DefaultMCPGitHubURL),
 		SATokenPath:  saPath,
+	})
+}
+
+// buildGlimmungClient wires the narrow Session Data "return test slot" path.
+// It uses the same auth.romaine.life-audience projected SA token as the
+// mcp-github picker, exchanging it for a service JWT before calling Glimmung.
+func buildGlimmungClient() *glimmung.Client {
+	saPath := strings.TrimSpace(os.Getenv("GLIMMUNG_SA_TOKEN_PATH"))
+	if saPath == "" {
+		saPath = glimmung.DefaultSATokenPath
+	}
+	if _, err := os.Stat(saPath); err != nil {
+		slog.Warn("glimmung client disabled (auth-romaine projected SA token volume not mounted); test-slot return will 503",
+			"path", saPath, "error", err)
+		return nil
+	}
+	return glimmung.NewClient(glimmung.Options{
+		BaseURL:     envDefault("GLIMMUNG_BASE_URL", glimmung.DefaultBaseURL),
+		ExchangeURL: envDefault("GLIMMUNG_EXCHANGE_URL", glimmung.DefaultExchangeURL),
+		SATokenPath: saPath,
 	})
 }
 
@@ -581,6 +602,7 @@ func main() {
 		designSelectionNamespace: designSelectionNamespace,
 		spawnQuota:               NewSpawnQuotaTracker(),
 		mcpGitHub:                buildMCPGitHubClient(),
+		glimmung:                 buildGlimmungClient(),
 		providerHealth:           providerHealthManager,
 		scheduledWakeups:         scheduledWakeupStore,
 		backgroundTaskWakes:      backgroundTaskWakeStore,
