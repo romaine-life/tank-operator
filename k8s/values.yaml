@@ -63,42 +63,42 @@ orchestrator:
 session:
   # SHA-pinned. claude-container-build.yml rewrites these tag suffixes on
   # every push to main via a `[skip ci]` follow-up commit.
-  image: "romainecr.azurecr.io/claude-container:claude-b76220b5a43e07adb8419a934fd10ffb94c3f9abcb382a9fedeb02f43d7c9088"
-  codexImage: "romainecr.azurecr.io/codex-container:codex-c7d4f70190086fec69d110a73608eddb4a6f4a4e81f373d0580aa7df1fa8078d"
+  image: "romainecr.azurecr.io/claude-container:claude-6c83908d48666508cc8e52eb900524a3bcf83705b0fc4373efbd99d5f623a261"
+  codexImage: "romainecr.azurecr.io/codex-container:codex-5dc11e73fc4ed80e093e602a25cb9e60693bec02a0c20642055c0e28bd04d551"
   # Antigravity (Gemini-Ultra via `agy`) session image — separate glibc base
   # (the others are Alpine/musl; agy is a glibc-only native binary). Powers the
   # antigravity_config credential-mint mode. session-images-build.yml rewrites
   # this tag suffix on every push to main, same as image/codexImage above.
-  antigravityImage: "romainecr.azurecr.io/antigravity-container:antigravity-e8f09d4ea74906940037fd82001626a0c52380a989fa7acf3d909e047ce65a0d"
+  antigravityImage: "romainecr.azurecr.io/antigravity-container:antigravity-5ab99cb71424266c3bf1e6d23c8b9e0ef30ffdd0854b1712ffccdf1460cf2bd3"
   imageMetadata:
     claude:
-      built_at: "2026-06-12T01:44:21Z"
-      git_sha: "1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      built_at: "2026-06-12T04:28:25Z"
+      git_sha: "865cd105c9ec34fc9d636f752217760cef09ba92"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/1f0c7e0b29f31b706f0f100cba38f457c7907847"
-      pr_number: "1050"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1050"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27389046126"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/865cd105c9ec34fc9d636f752217760cef09ba92"
+      pr_number: "1083"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1083"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27394467857"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
     codex:
-      built_at: "2026-06-12T01:44:21Z"
-      git_sha: "1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      built_at: "2026-06-12T04:28:25Z"
+      git_sha: "865cd105c9ec34fc9d636f752217760cef09ba92"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/1f0c7e0b29f31b706f0f100cba38f457c7907847"
-      pr_number: "1050"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1050"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27389046126"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/865cd105c9ec34fc9d636f752217760cef09ba92"
+      pr_number: "1083"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1083"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27394467857"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
     antigravity:
-      built_at: "2026-06-12T01:44:21Z"
-      git_sha: "1f0c7e0b29f31b706f0f100cba38f457c7907847"
+      built_at: "2026-06-12T04:28:25Z"
+      git_sha: "865cd105c9ec34fc9d636f752217760cef09ba92"
       git_ref: "main"
-      commit_url: "https://github.com/romaine-life/tank-operator/commit/1f0c7e0b29f31b706f0f100cba38f457c7907847"
-      pr_number: "1050"
-      pr_url: "https://github.com/romaine-life/tank-operator/pull/1050"
-      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27389046126"
+      commit_url: "https://github.com/romaine-life/tank-operator/commit/865cd105c9ec34fc9d636f752217760cef09ba92"
+      pr_number: "1083"
+      pr_url: "https://github.com/romaine-life/tank-operator/pull/1083"
+      workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27394467857"
       repository: "romaine-life/tank-operator"
       actor: "tank-operator-host[bot]"
   # Harvested Antigravity OAuth blob. The Secret + ESO now live ONLY in the
