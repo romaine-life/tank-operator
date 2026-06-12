@@ -354,3 +354,76 @@ func TestPostgresBackgroundTaskWakeAttemptCap(t *testing.T) {
 		t.Fatalf("second pass terminaled %d rows, want 0", len(failed))
 	}
 }
+
+// TestPostgresScheduledWakeupAttemptCap mirrors the background cap test for
+// the scheduled-wakeup store — the predicates are symmetric but NOT shared
+// code, and the first version of FailExceeded carried a Postgres
+// type-inference bug ($2 appearing only inside `$2 - make_interval(...)`
+// resolves as interval, not timestamptz) that only a real round trip
+// catches. Never assume the sibling query is covered by symmetry.
+func TestPostgresScheduledWakeupAttemptCap(t *testing.T) {
+	pool := newBackgroundTaskWakeTestPool(t)
+	ctx := context.Background()
+	store := NewScheduledWakeupStore(pool, "default")
+
+	row, err := store.Register(ctx, RegisterScheduledWakeupRequest{
+		SessionScope:    "default",
+		SessionID:       "63",
+		OwnerEmail:      "user@example.com",
+		Provider:        "claude",
+		Prompt:          "resume",
+		ScheduledTurnID: "turn_sched",
+		ProviderItemID:  "toolu_cap",
+		ScheduledAt:     time.Now().Add(-time.Hour),
+		DueAt:           time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE session_scheduled_wakeups
+		SET status = 'claiming', attempt_count = $2, locked_at = now()
+		WHERE wakeup_id = $1
+	`, row.WakeupID, MaxScheduledWakeupAttempts); err != nil {
+		t.Fatalf("seed capped row: %v", err)
+	}
+
+	claimed, err := store.ClaimDue(ctx, time.Now().Add(time.Hour), 10, time.Nanosecond)
+	if err != nil {
+		t.Fatalf("ClaimDue: %v", err)
+	}
+	for _, c := range claimed {
+		if c.WakeupID == row.WakeupID {
+			t.Fatalf("capped row was claimed again")
+		}
+	}
+
+	failed, err := store.FailExceeded(ctx, time.Now(), 10, time.Hour)
+	if err != nil {
+		t.Fatalf("FailExceeded (fresh): %v", err)
+	}
+	if len(failed) != 0 {
+		t.Fatalf("FailExceeded terminaled a fresh final attempt: %+v", failed)
+	}
+
+	if _, err := pool.Exec(ctx, `
+		UPDATE session_scheduled_wakeups SET locked_at = now() - interval '1 hour'
+		WHERE wakeup_id = $1
+	`, row.WakeupID); err != nil {
+		t.Fatalf("stale the claim: %v", err)
+	}
+	failed, err = store.FailExceeded(ctx, time.Now(), 10, time.Minute)
+	if err != nil {
+		t.Fatalf("FailExceeded (stale): %v", err)
+	}
+	if len(failed) != 1 || failed[0].WakeupID != row.WakeupID {
+		t.Fatalf("FailExceeded = %+v, want exactly the capped row", failed)
+	}
+	if failed[0].Status != ScheduledWakeupFailed {
+		t.Fatalf("status = %q, want failed", failed[0].Status)
+	}
+	if !strings.HasPrefix(failed[0].LastError, "attempt_cap_exceeded") {
+		t.Fatalf("last_error = %q, want attempt_cap_exceeded prefix", failed[0].LastError)
+	}
+}

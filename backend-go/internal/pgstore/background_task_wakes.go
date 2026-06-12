@@ -413,7 +413,7 @@ func (s *BackgroundTaskWakeStore) FailExceeded(ctx context.Context, now time.Tim
 			  AND attempt_count >= $5
 			  AND (
 			    status = 'scheduled'
-			    OR (status = 'claiming' AND locked_at < $2 - make_interval(secs => $4::double precision))
+			    OR (status = 'claiming' AND locked_at < $2::timestamptz - make_interval(secs => $4::double precision))
 			  )
 			ORDER BY due_at ASC, created_at ASC
 			LIMIT $3
