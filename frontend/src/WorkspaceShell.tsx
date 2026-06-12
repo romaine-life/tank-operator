@@ -103,7 +103,7 @@ export function WorkspaceShell({
   const hasFloating = floatingBetweenBodyAndComposer != null;
 
   return (
-    <section className={["run-panel", className].filter(Boolean).join(" ")} style={style}>
+    <section className={["run-panel", className].filter(Boolean).join(" ")}>
       {hasHeader && (
         <header className="run-header">
           {title != null && <div className="run-header-title">{title}</div>}
@@ -121,6 +121,7 @@ export function WorkspaceShell({
       <div className={["run-main-frame", hasFloating ? "run-main-frame-floating" : ""].join(" ")}>
         <main
           className={["run-main", bodyClassName].filter(Boolean).join(" ")}
+          style={style}
           ref={bodyRef}
           tabIndex={-1}
           aria-label={bodyAriaLabel}
