@@ -211,10 +211,6 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 	}
 
 	owner := user.OwnerEmail()
-	// Prompt-mid-sleep = take-over: a user turn to a parked (scheduled) session
-	// cancels its pending self-scheduled wake(s), so the session does not fold
-	// back to "scheduled" after this turn finishes. No-op when nothing is pending.
-	s.cancelPendingWakesForSession(r.Context(), sessionID)
 	resp, status, detail := s.enqueueSDKTurn(r.Context(), owner, sessionID, sdkTurnRequest{
 		ClientNonce:                body.ClientNonce,
 		RequireNonce:               true,
@@ -235,6 +231,25 @@ func (s *appServer) handleEnqueueSessionTurn(w http.ResponseWriter, r *http.Requ
 		writeError(w, status, detail)
 		return
 	}
+	// Prompt-mid-sleep = take-over: an ACCEPTED user turn to a parked
+	// (scheduled) session cancels its pending self-scheduled wake(s), so the
+	// session does not fold back to "scheduled" after this turn finishes.
+	// No-op when nothing is pending. This runs strictly after enqueueSDKTurn
+	// succeeds, for two reasons that are both production bugs when the
+	// cancel runs first:
+	//   1. Ownership: enqueueSDKTurn enforces GetByOwner. A cancel before it
+	//      let any authenticated caller destroy another user's wake chain by
+	//      POSTing to their session id and eating the 404.
+	//   2. Failed submissions are not take-overs: a 400/404/503 (pod
+	//      restarting, invalid body) must leave the wakes armed — the
+	//      durable 'scheduled' promise in the sidebar stays true and the
+	//      wake still fires. Cancelling first silently killed the agent's
+	//      continuation and stranded the session in 'scheduled' forever.
+	// The cancel is deliberately not pre-publish: a due wake firing inside
+	// this tiny accept→cancel window just enqueues a turn that serializes
+	// behind this one on the data plane (max_ack_pending=1) — harmless,
+	// unlike either failure above.
+	s.cancelPendingWakesForSession(r.Context(), sessionID)
 	writeJSON(w, http.StatusAccepted, resp)
 }
 
