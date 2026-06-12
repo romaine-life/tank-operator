@@ -461,6 +461,7 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // RunMessageBubble uses this as an agent-authored signal, but it must
   // not synthesize a local avatar identity from the id.
   originSessionId?: string;
+  originSessionAvatarId?: string;
   // For user-role messages submitted by a non-interactive principal (an
   // auth.romaine.life bot token): "system". RunMessageBubble renders the
   // session's system identity for these instead of the human owner's
@@ -5330,6 +5331,8 @@ function transcriptComparable(entries: TranscriptEntry[]): string {
           role: entry.role,
           text: entry.text,
           attachments: entry.attachments,
+          originSessionId: entry.originSessionId,
+          originSessionAvatarId: entry.originSessionAvatarId,
           durationMs: (entry as Record<string, unknown>).durationMs,
           turnTerminalStatus: entry.turnTerminalStatus,
           turnTerminalAt: entry.turnTerminalAt,
@@ -7444,7 +7447,10 @@ function RunMessageBubble({
           // identity from the origin id.
           const originId = entry.originSessionId;
           if (originId) {
-            const originAvatar = originSessionAvatarByID?.(originId) ?? null;
+            const originAvatar =
+              getSessionAvatarByID(entry.originSessionAvatarId) ??
+              originSessionAvatarByID?.(originId) ??
+              null;
             return (
               <span
                 className="run-msg-avatar"
@@ -23319,6 +23325,9 @@ function AuthenticatedApp() {
           prompt,
           follow_up: false,
           origin_session_id: request.sourceSession.id,
+          ...(request.sourceSession.agent_avatar_id
+            ? { origin_session_avatar_id: request.sourceSession.agent_avatar_id }
+            : {}),
         }),
       });
       if (!turnRes.ok) {

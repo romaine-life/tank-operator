@@ -39,6 +39,27 @@ function ev(
   };
 }
 
+test("origin session avatar id projects onto user message entry", () => {
+  const projection = projectConversationState(
+    reduceConversationEvents([
+      ev("1", "user_message.created", {
+        actor: "user",
+        client_nonce: "handoff-1",
+        payload: { text: "fix the avatar bug" },
+        origin_session_id: "42",
+        origin_session_avatar_id: "jp1-grant",
+      } as Partial<TankConversationEvent>),
+    ]),
+  );
+
+  const entry = projection.entries[0];
+  expect(entry?.kind).toBe("message");
+  if (entry?.kind === "message") {
+    expect(entry.originSessionId).toBe("42");
+    expect(entry.originSessionAvatarId).toBe("jp1-grant");
+  }
+});
+
 test("turn.interrupt_requested renders a 'Stop requested' meta chip at its order_key", () => {
   const projection = projectConversationState(
     reduceConversationEvents([

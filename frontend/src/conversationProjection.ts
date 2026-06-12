@@ -26,9 +26,10 @@ export interface ConversationMessageEntry extends ConversationEntryBase {
   attachments?: MessageAttachmentDisplay[];
   // Set when a user-role message was posted by a sibling tank-operator
   // session via the mcp-tank-operator handoff path. The renderer uses
-  // this to pick the parent session's avatar instead of the human
-  // owner's Gravatar. See conversationReducer.applyUserMessage.
+  // originSessionAvatarId, with originSessionId as a lookup fallback, to
+  // pick the parent session's avatar instead of the human owner's Gravatar.
   originSessionId?: string;
+  originSessionAvatarId?: string;
   // Set when a user-role message was authored by a non-interactive
   // principal (an auth.romaine.life bot token). "system" tells the renderer
   // to draw the session's system identity instead of the human owner's
@@ -166,6 +167,9 @@ export function projectConversationState(
               orderKey: message.orderKey,
               ...(message.originSessionId
                 ? { originSessionId: message.originSessionId }
+                : {}),
+              ...(message.originSessionAvatarId
+                ? { originSessionAvatarId: message.originSessionAvatarId }
                 : {}),
               ...(message.authorKind ? { authorKind: message.authorKind } : {}),
               ...(message.severity ? { severity: message.severity } : {}),
