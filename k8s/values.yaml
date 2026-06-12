@@ -3,18 +3,18 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-70b73abdbd29c512084aedada5a9997238b5fe9bfa67c814c05bdfaa8e678e50"
+  tag: "app-def73434c98cd1ba698bfc4ae1fe0bdc4c763dd216881895669260b2a4dc8671"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: ""
-    git_sha: ""
-    git_ref: ""
-    commit_url: ""
-    pr_number: ""
-    pr_url: ""
-    workflow_run_url: ""
-    repository: ""
-    actor: ""
+    built_at: "2026-06-12T01:44:06Z"
+    git_sha: "1f0c7e0b29f31b706f0f100cba38f457c7907847"
+    git_ref: "main"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/1f0c7e0b29f31b706f0f100cba38f457c7907847"
+    pr_number: "1050"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1050"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27389046112"
+    repository: "romaine-life/tank-operator"
+    actor: "tank-operator-host[bot]"
 
 # normal: regular chart render
 # warm: per-slot baseline resources, no long-running app/proxy pods
