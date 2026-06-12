@@ -10772,7 +10772,15 @@ textarea.run-files-viewer-editor:focus {
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.02) inset;
 }
 
-.run-transcript [data-slot="message"][data-variant="user"] .run-transcript-message-content {
+/* User-message bubble. Applies in the main transcript and in the Turns-view
+   prompt context: the prompt is a user message too, so it carries the same
+   bubble everywhere else gives user turns. Without the second selector the
+   prompt rendered as bare text (its container is .run-turn-view-context, not
+   .run-transcript), which left the prompt→divider→activity boundary visually
+   asymmetric — the agent bubble painted a crisp edge near the divider while the
+   plain prompt left empty canvas above it. */
+.run-transcript [data-slot="message"][data-variant="user"] .run-transcript-message-content,
+.run-turn-view-context [data-slot="message"][data-variant="user"] .run-transcript-message-content {
   grid-column: 2;
   grid-row: 1;
   justify-self: start;
