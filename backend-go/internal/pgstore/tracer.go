@@ -164,6 +164,7 @@ var knownTables = []string{
 	"session_pending_launch_turns",
 	"session_scheduled_wakeups",
 	"session_transcript_fold_state",
+	"session_transcript_fold_turns",
 	"session_transcript_materialization_locks",
 	"session_transcript_row_backfills",
 	"session_transcript_rows",
@@ -173,6 +174,9 @@ var knownTables = []string{
 	"session_counters",
 	"conversation_read_state",
 	"static_page_snapshots",
+	"deployment_image_versions",
+	"platform_settings",
+	"schema_migrations",
 }
 
 // tableFromSQL pulls the first known table name out of a SELECT/INSERT/

@@ -42,3 +42,21 @@ func TestOperationFromSQL(t *testing.T) {
 		}
 	}
 }
+
+// TestOperationFromSQLKnowsRecentTables pins the #1077-adjacent alert gap:
+// tables added by migrations 0145/0147/0152 ran hot as operation="other"
+// (TankPgUnmappedOperation flood, 2026-06-12) — invisible in the latency
+// dashboards exactly while the Pg p99 alert was firing.
+func TestOperationFromSQLKnowsRecentTables(t *testing.T) {
+	cases := map[string]string{
+		"SELECT memo FROM session_transcript_fold_turns WHERE tank_session_id = $1": "select_session_transcript_fold_turns",
+		"INSERT INTO deployment_image_versions (scope) VALUES ($1)":                 "insert_deployment_image_versions",
+		"SELECT value FROM platform_settings WHERE key = $1":                        "select_platform_settings",
+		"SELECT id FROM schema_migrations":                                          "select_schema_migrations",
+	}
+	for sql, want := range cases {
+		if got := operationFromSQL(sql); got != want {
+			t.Errorf("operationFromSQL(%q) = %q, want %q", sql, got, want)
+		}
+	}
+}
