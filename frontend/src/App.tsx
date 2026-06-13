@@ -13500,10 +13500,6 @@ function AdminHiddenTranscriptsPanel({
             onChange={(event) => {
               const nextKey = event.target.value;
               setSelectedKey(nextKey);
-              const nextSession = sessions.find(
-                (session) => adminHiddenSessionKey(session) === nextKey,
-              );
-              if (nextSession) onOpenSession(nextSession, sessionScope);
             }}
           >
             {sessions.length === 0 ? (
@@ -24539,6 +24535,9 @@ function AuthenticatedApp() {
   const turnCompleteSoundVolumePct = Math.round(
     runPrefs.turnCompleteSoundVolume * 100,
   );
+  const sidebarSessions = sessions.filter(
+    (session) => session.read_only_hidden !== true,
+  );
 
   // The sidebar contents have exactly one source of truth. On the desktop shell
   // they render inline as the grid's first column; on a compact viewport the
@@ -24588,10 +24587,10 @@ function AuthenticatedApp() {
           </button>
         </div>
         <ul className="sessions">
-          {sessions.length === 0 ? (
+          {sidebarSessions.length === 0 ? (
             <li className="sessions-empty">no sessions</li>
           ) : (
-            sessions.map((s) => {
+            sidebarSessions.map((s) => {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
