@@ -72,8 +72,8 @@ import {
   inputReplyAnswerShapeTotal,
   interruptOutcomeTotal,
   natsPublishFailureTotal,
-  optionsOverrideIgnoredTotal,
   optionsPinnedTotal,
+  optionsRepinnedTotal,
   providerApiRetryTotal,
   providerControlTotal,
   providerErrorTotal,
@@ -942,7 +942,7 @@ function permissionDeniedLabels(event: {
 export class Runner {
   private readonly sink: SessionEventSink;
   private readonly commandBus: SessionCommandBus;
-  private readonly userQueue = new AsyncQueue<SDKUserMessage>();
+  private userQueue = new AsyncQueue<SDKUserMessage>();
   private readonly pendingTurns: PendingTurn[] = [];
   // pendingInterrupts holds interrupt_turn records that landed before
   // the matching submit_turn was dispatched on this runner. See the
@@ -972,17 +972,20 @@ export class Runner {
   private activeTurn: PendingTurn | null = null;
   private sdkQuery: Query | null = null;
   private tankAskUserQuestionSequence = 0;
-  // Model + effort are pinned at pod boot from the first submit_turn
-  // that arrives, with the DEFAULT_* fallbacks above for empty fields.
-  // Once set, both are sealed for the runner's lifetime — the SDK's
-  // Options object is consumed by query() at construction and cannot
-  // be re-keyed without tearing the iterator down. Subsequent commands
-  // whose model/effort differ are honored only for "what did the user
-  // pick" metrics (optionsOverrideIgnoredTotal) and otherwise ignored.
-  // The dropdown lock in the SPA reflects this contract so users don't
-  // expect a mid-session switch to take effect.
+  // Model + effort are pinned from the first submit_turn that arrives, with
+  // the DEFAULT_* fallbacks above for empty fields. The SDK's Options object
+  // is consumed by query() at construction and cannot be re-keyed on a live
+  // query — so a mid-session model/effort change is applied by RE-PINNING: at
+  // an idle turn boundary the runner tears down the current query and rebuilds
+  // it with provider-session resume + the new options (see ensureSdkQuery /
+  // performRebuild). The invariant is "sealed within a turn; re-pinnable
+  // between turns," not "pod-lifetime." pendingRepin holds a requested change
+  // until the next idle boundary; rebuildInProgress lets run()'s loop tell an
+  // intentional query teardown from a fatal one.
   private pinnedModel: string | null = null;
   private pinnedEffort: EffortLevel | null = null;
+  private pendingRepin: { model: string; effort: EffortLevel } | null = null;
+  private rebuildInProgress = false;
   private sdkStderrBuffer = "";
   // reportedContextWindowTokens latches the per-turn ModelUsage context
   // window so the runner POSTs it to the orchestrator exactly once per
@@ -1008,8 +1011,11 @@ export class Runner {
   // before constructing query(). resolveSdkReady is called exactly once
   // by ensureSdkQuery; second-and-onward submit_turns hit the no-op
   // early-return.
-  private readonly sdkReady: Promise<void>;
+  private sdkReady: Promise<void>;
   private resolveSdkReady: () => void = () => {};
+  // runSignal is the run() abort signal, stored so performRebuild (driven from
+  // the command consumer) can bail when the runner is shutting down.
+  private runSignal: AbortSignal | null = null;
 
   constructor(private readonly cfg: Config) {
     this.sink = new SessionEventSink(cfg);
@@ -1051,6 +1057,7 @@ export class Runner {
       this.sdkQuery?.interrupt();
     };
     signal.addEventListener("abort", onAbort, { once: true });
+    this.runSignal = signal;
     try {
       // Block until the first submit_turn arrives (ensureSdkQuery resolves
       // sdkReady after pinning options and constructing query()), or until
@@ -1061,9 +1068,35 @@ export class Runner {
       if (signal.aborted || !this.sdkQuery) {
         return;
       }
-      for await (const message of this.sdkQuery) {
+      // Outer loop: a mid-session re-pin (performRebuild) swaps this.sdkQuery
+      // for a fresh query that resumed the conversation under the new model.
+      // When the old query's iterator unwinds we re-enter on the new one; only
+      // a genuine query end (this.sdkQuery unchanged) falls through to the
+      // fatal drain below.
+      while (!signal.aborted) {
+        const pass: Query | null = this.sdkQuery;
+        if (!pass) break;
+        try {
+          for await (const message of pass) {
+            if (signal.aborted) break;
+            await this.handleEvent(message);
+          }
+        } catch (err) {
+          if (this.rebuildInProgress || this.sdkQuery !== pass) {
+            console.warn(
+              "claude-runner: prior SDK query unwound during model re-pin:",
+              err,
+            );
+          } else {
+            throw err;
+          }
+        }
         if (signal.aborted) break;
-        await this.handleEvent(message);
+        if (this.sdkQuery !== pass) {
+          // Intentional rebuild: consume the freshly-resumed query.
+          continue;
+        }
+        break;
       }
     } catch (err) {
       console.error("SDK query exited with error:", err);
@@ -1122,30 +1155,25 @@ export class Runner {
     }
   }
 
-  // ensureSdkQuery is the one-time pinning point for model + effort.
-  // First call: read the command's model/effort (with DEFAULT_* fallback
-  // when empty), build SDK Options, construct query(), and unblock
-  // run()'s for-await loop. Subsequent calls: compare the incoming
-  // values against the pinned ones and bump optionsOverrideIgnoredTotal
-  // when they differ — the override is intentionally a no-op because
-  // Options is sealed by the running query iterator.
+  // ensureSdkQuery pins model + effort and constructs query() lazily from the
+  // first submit_turn (so the user's dropdown pick drives the model). On a
+  // later turn whose model/effort differ from what's pinned it does NOT ignore
+  // the change: it schedules a re-pin (pendingRepin) that performRebuild
+  // applies at the next idle turn boundary by rebuilding query() with
+  // provider-session resume. model/effort are sealed within a turn, re-pinnable
+  // between turns.
   private ensureSdkQuery(record: SessionCommandRecord): void {
     const requestedModel = String(record.model ?? "").trim();
     const requestedEffort = String(record.effort ?? "").trim();
     if (this.sdkQuery !== null) {
-      if (requestedModel && requestedModel !== this.pinnedModel) {
-        optionsOverrideIgnoredTotal.labels("model").inc();
-        console.warn(
-          "session command requested model override; ignoring (model is pinned for the runner's lifetime)",
-          { requested: requestedModel, pinned: this.pinnedModel },
-        );
-      }
-      if (requestedEffort && requestedEffort !== this.pinnedEffort) {
-        optionsOverrideIgnoredTotal.labels("effort").inc();
-        console.warn(
-          "session command requested effort override; ignoring (effort is pinned for the runner's lifetime)",
-          { requested: requestedEffort, pinned: this.pinnedEffort },
-        );
+      const model = requestedModel || this.pinnedModel || DEFAULT_MODEL;
+      const effort = (requestedEffort ||
+        this.pinnedEffort ||
+        DEFAULT_EFFORT) as EffortLevel;
+      if (model !== this.pinnedModel || effort !== this.pinnedEffort) {
+        // Apply on the next idle boundary (acceptCommandTurn), not here:
+        // Options is sealed on the running query and must be rebuilt.
+        this.pendingRepin = { model, effort };
       }
       return;
     }
@@ -1157,17 +1185,29 @@ export class Runner {
     // wire-shape regression would surface as the SDK rejecting the value
     // (visible via providerErrorTotal{kind="query"}).
     const effort = (requestedEffort || DEFAULT_EFFORT) as EffortLevel;
-    const providerSessionID = commandProviderSessionID(record);
+    this.buildSdkQuery(model, effort, commandProviderSessionID(record));
+  }
+
+  // buildSdkQuery constructs query() with the given pinned model/effort and
+  // (when present) a provider-session resume id, wires the runtime-config
+  // report, and unblocks run()'s loop. It runs for the first pin
+  // (ensureSdkQuery) and every mid-session re-pin (performRebuild). It reads
+  // this.userQueue at call time, so performRebuild installs a fresh queue
+  // before calling.
+  private buildSdkQuery(
+    model: string,
+    effort: EffortLevel,
+    providerSessionID: string,
+  ): void {
     this.pinnedModel = model;
     this.pinnedEffort = effort;
     optionsPinnedTotal.labels(model, effort).inc();
     console.log(
       JSON.stringify({
-        msg: "claude-runner pinning SDK options from first turn",
+        msg: "claude-runner pinning SDK options",
         model,
         effort,
         provider_session_id: providerSessionID,
-        source_command_id: record.id,
       }),
     );
 
@@ -1213,6 +1253,51 @@ export class Runner {
     // returns HTTP 401 under the subscription-OAuth proxy, so Claude sessions
     // never got a window from it.
     this.resolveSdkReady();
+  }
+
+  // performRebuild applies a scheduled model/effort re-pin (pendingRepin) at an
+  // idle turn boundary: it builds + swaps in a fresh query() that resumes the
+  // live conversation under the new options, THEN tears down the old idle
+  // query. Building before teardown means run()'s outer loop sees this.sdkQuery
+  // already swapped when the old iterator unwinds, so it re-enters on the new
+  // query instead of falling through to the fatal drain. Only ever called when
+  // idle (activeTurn === null, nothing queued) — the data-plane consumer's
+  // max_ack_pending=1 guarantees that at acceptCommandTurn time.
+  private async performRebuild(): Promise<void> {
+    const repin = this.pendingRepin;
+    this.pendingRepin = null;
+    if (!repin || this.runSignal?.aborted) {
+      return;
+    }
+    const oldQuery = this.sdkQuery;
+    const oldQueue = this.userQueue;
+    // The live conversation's provider session id (latched from SDK events),
+    // not the command's stale id — this is what resumes the running thread.
+    const resumeID = this.reportedProviderSessionID;
+    this.rebuildInProgress = true;
+    try {
+      // Build + swap the new query FIRST: fresh input queue + sdkReady gate,
+      // and reset the per-process context-window latch so the new model
+      // re-reports its window.
+      this.userQueue = new AsyncQueue<SDKUserMessage>();
+      this.sdkReady = new Promise<void>((resolve) => {
+        this.resolveSdkReady = resolve;
+      });
+      this.reportedContextWindowTokens = null;
+      this.buildSdkQuery(repin.model, repin.effort, resumeID);
+      optionsRepinnedTotal.labels(repin.model, repin.effort).inc();
+      // Tear down the old idle query: interrupt() + closing its prompt queue
+      // ends its iterator (the same teardown onAbort uses). run()'s outer loop
+      // then re-enters on the swapped-in new query.
+      try {
+        oldQuery?.interrupt();
+      } catch (err) {
+        console.warn("re-pin: interrupting the old query failed:", err);
+      }
+      oldQueue.close();
+    } finally {
+      this.rebuildInProgress = false;
+    }
   }
 
   private handleSdkStderr(data: string): void {
@@ -1879,18 +1964,30 @@ export class Runner {
       pendingTurn.interruptOnStart = bufferedInterrupts;
     }
     // Pin model + effort from the first submit_turn and construct the SDK
-    // query() lazily so the user's dropdown pick is what actually drives
-    // the model running in this pod. Second-and-onward calls are a no-op
-    // here (the override is logged + counted inside ensureSdkQuery). MUST
-    // happen before pushing onto userQueue: query() is what consumes the
-    // queue, and a message landing while sdkQuery is still null would sit
-    // unread until something else triggers ensureSdkQuery.
+    // query() lazily so the user's dropdown pick is what actually drives the
+    // model running in this pod. A later submit_turn whose model/effort differ
+    // schedules a re-pin inside ensureSdkQuery; we apply it just below, before
+    // this turn is fed to the SDK. MUST happen before pushing onto userQueue:
+    // query() is what consumes the queue, and a message landing while sdkQuery
+    // is still null would sit unread until something else triggers
+    // ensureSdkQuery.
     //
-    // We still pin model/effort even on the interrupt-on-start path:
-    // the user's dropdown pick remains the right choice for the pod's
-    // lifetime, even though we won't actually feed THIS turn into the
-    // SDK below.
+    // We still pin/re-pin model + effort even on the interrupt-on-start path:
+    // the user's dropdown pick is the right choice for subsequent turns even
+    // though we won't feed THIS turn into the SDK below.
     this.ensureSdkQuery(record);
+    // Apply a scheduled mid-session re-pin at this idle boundary (no active
+    // turn, nothing queued yet) before feeding the turn, so THIS turn runs on
+    // the new model. max_ack_pending=1 on the data consumer guarantees idle
+    // here; if a turn is somehow still active the re-pin stays pending for the
+    // next idle submit_turn.
+    if (
+      this.pendingRepin &&
+      this.activeTurn === null &&
+      this.pendingTurns.length === 0
+    ) {
+      await this.performRebuild();
+    }
     pendingTurn.stopCommandHeartbeat =
       this.commandBus.startCommandHeartbeat(record);
     this.pendingTurns.push(pendingTurn);
