@@ -804,6 +804,38 @@ func TestManagerSetRuntimeContextWindowPersistsAndPublishes(t *testing.T) {
 	}
 }
 
+func TestManagerSetRuntimeProviderSessionIDPersistsAndPublishes(t *testing.T) {
+	registry := &managerTestRegistry{
+		records: []sessionmodel.SessionRecord{
+			{
+				ID:      "8",
+				Email:   "nelson@romaine.life",
+				Mode:    sessionmodel.ClaudeGUIMode,
+				Visible: true,
+				Status:  "Active",
+			},
+		},
+	}
+	emitter := &recordingRowEmitter{}
+	mgr := &Manager{
+		client:    fake.NewSimpleClientset(),
+		namespace: sessionmodel.SessionsNamespace,
+		registry:  registry,
+		emitter:   emitter,
+	}
+
+	info, err := mgr.SetRuntimeProviderSessionID(context.Background(), "nelson@romaine.life", "8", "db0a8b4b-64cd-4a9a-a592-ad5622075dc8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.RuntimeProviderSessionID != "db0a8b4b-64cd-4a9a-a592-ad5622075dc8" || info.RuntimeProviderSessionObservedAt == nil || *info.RuntimeProviderSessionObservedAt == "" {
+		t.Fatalf("runtime provider session info = %#v", info)
+	}
+	if strings.Join(emitter.ids, ",") != "8" {
+		t.Fatalf("published ids = %v, want [8]", emitter.ids)
+	}
+}
+
 func assertSkillStateActive(t *testing.T, label string, state map[string]any, want bool) {
 	t.Helper()
 	if got := state["active"]; got != want {
@@ -980,6 +1012,17 @@ func (r *managerTestRegistry) SetRuntimeContextWindow(_ context.Context, email, 
 				r.records[i].RuntimeContextWindowSource = source
 				r.records[i].RuntimeContextWindowObservedAt = "2026-05-21T00:00:00Z"
 			}
+			return nil
+		}
+	}
+	return nil
+}
+
+func (r *managerTestRegistry) SetRuntimeProviderSessionID(_ context.Context, email, sessionID, providerSessionID string) error {
+	for i, record := range r.records {
+		if strings.EqualFold(record.Email, email) && record.ID == sessionID {
+			r.records[i].RuntimeProviderSessionID = providerSessionID
+			r.records[i].RuntimeProviderSessionObservedAt = "2026-05-21T00:00:00Z"
 			return nil
 		}
 	}

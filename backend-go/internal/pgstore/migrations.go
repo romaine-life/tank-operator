@@ -1929,6 +1929,13 @@ var schemaMigrations = []migration{
 	// emit resync_required on change.
 	{ID: "0156", SQL: `ALTER TABLE session_transcript_row_backfills
 		ADD COLUMN IF NOT EXISTS rewrite_epoch bigint NOT NULL DEFAULT 0`},
+
+	// The provider-native conversation id last observed by a session runner.
+	// Claude model switches require feeding this id back via explicit resume;
+	// pod-local --continue state is not durable across runner/container restarts.
+	{ID: "0157", SQL: `ALTER TABLE sessions
+		ADD COLUMN IF NOT EXISTS runtime_provider_session_id text NOT NULL DEFAULT '',
+		ADD COLUMN IF NOT EXISTS runtime_provider_session_observed_at timestamptz`},
 }
 
 // eventIdentityUniquenessSQL is migration 0151, named so the integration

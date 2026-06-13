@@ -65,6 +65,7 @@ export interface SessionCommand {
   annotations?: Record<string, InputReplyAnnotation>;
   prompt?: string;
   model?: string;
+  provider_session_id?: string;
   /**
    * Reasoning effort level. Claude accepts "low" | "medium" | "high" |
    * "xhigh" | "max"; Codex accepts "low" | "medium" | "high" | "xhigh".
@@ -104,6 +105,7 @@ export class SessionCommandRecord implements SessionCommand {
   annotations?: Record<string, InputReplyAnnotation>;
   prompt?: string;
   model?: string;
+  provider_session_id?: string;
   effort?: string;
   permission_mode?: string;
   skill_name?: string;

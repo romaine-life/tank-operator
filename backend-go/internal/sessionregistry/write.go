@@ -208,6 +208,32 @@ func (s *Store) SetRuntimeContextWindow(ctx context.Context, email, sessionID st
 	return err
 }
 
+// SetRuntimeProviderSessionID stores the latest provider-native conversation
+// id observed by the runner. This is latest-observed-wins because a provider
+// resume failure can legitimately create a new conversation id, and future
+// restarts must resume the conversation the runner is actually using now.
+func (s *Store) SetRuntimeProviderSessionID(ctx context.Context, email, sessionID, providerSessionID string) error {
+	normalized := strings.ToLower(strings.TrimSpace(email))
+	sessionID = strings.TrimSpace(sessionID)
+	providerSessionID = strings.TrimSpace(providerSessionID)
+	if normalized == "" || sessionID == "" || providerSessionID == "" {
+		return nil
+	}
+	const q = `
+		UPDATE sessions
+		SET runtime_provider_session_id          = $4,
+			runtime_provider_session_observed_at = now(),
+			updated_at                           = now(),
+			row_version                          = nextval('sessions_row_version_seq')
+		WHERE email = $1
+			AND session_scope = $2
+			AND session_id = $3
+			AND runtime_provider_session_id IS DISTINCT FROM $4
+	`
+	_, err := s.pool.Exec(ctx, q, normalized, s.scope, sessionID, providerSessionID)
+	return err
+}
+
 // SetProviderRateLimitInfo stores the latest sanitized provider rate-limit
 // payload observed by the session runner. Unlike the context window, this is
 // latest-observed-wins so an admin can see the current rejected/overage shape.
@@ -451,6 +477,8 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 			sessions.runtime_context_window_tokens,
 			sessions.runtime_context_window_source,
 			COALESCE(to_char(sessions.runtime_context_window_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_context_window_observed_at,
+			sessions.runtime_provider_session_id,
+			COALESCE(to_char(sessions.runtime_provider_session_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS runtime_provider_session_observed_at,
 			sessions.provider_rate_limit_info,
 			COALESCE(to_char(sessions.provider_rate_limit_observed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'), '') AS provider_rate_limit_observed_at,
 			sessions.compaction_count,
@@ -499,6 +527,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		repos, capabilities                                            []string
 		model, effort, runtimeModel, runtimeEffort, runtimeAt          string
 		runtimeContextWindowSource, runtimeContextWindowAt             string
+		runtimeProviderSessionID, runtimeProviderSessionObservedAt     string
 		providerRateLimitObservedAt                                    string
 		openTarget                                                     string
 		agentAvatarID, systemAvatarID                                  string
@@ -516,6 +545,7 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		&repos, &cloneState, &capabilities, &model, &effort,
 		&runtimeModel, &runtimeEffort, &runtimeAt,
 		&runtimeContextWindowTokens, &runtimeContextWindowSource, &runtimeContextWindowAt,
+		&runtimeProviderSessionID, &runtimeProviderSessionObservedAt,
 		&providerRateLimitInfo, &providerRateLimitObservedAt,
 		&compactionCount,
 		&userMessageCount,
@@ -538,46 +568,48 @@ func (s *Store) Get(ctx context.Context, owner, sessionID string) (sessionmodel.
 		mode = sessionmodel.DefaultSessionMode
 	}
 	record := sessionmodel.SessionRecord{
-		ID:                             sessionID,
-		Email:                          normalized,
-		Mode:                           mode,
-		Scope:                          s.scope,
-		PodName:                        podName,
-		SessionImage:                   sessionImage,
-		SessionImageMetadata:           sessionmodel.DecodeImageVersionMetadata(sessionImageMetadata),
-		Name:                           name,
-		Visible:                        visible,
-		RequestedAt:                    requestedAt,
-		CreatedAt:                      createdAt,
-		UpdatedAt:                      updatedAt,
-		Status:                         status,
-		ReadyAt:                        readyAt,
-		TerminatingAt:                  terminatingAt,
-		ActivitySummary:                activitySummary,
-		TestState:                      unmarshalJSONB(testState),
-		RolloutState:                   unmarshalJSONB(rolloutState),
-		Repos:                          repos,
-		CloneState:                     unmarshalJSONB(cloneState),
-		Capabilities:                   capabilities,
-		Model:                          model,
-		Effort:                         effort,
-		RuntimeModel:                   runtimeModel,
-		RuntimeEffort:                  runtimeEffort,
-		RuntimeConfiguredAt:            runtimeAt,
-		RuntimeContextWindowTokens:     runtimeContextWindowTokens,
-		RuntimeContextWindowSource:     runtimeContextWindowSource,
-		RuntimeContextWindowObservedAt: runtimeContextWindowAt,
-		ProviderRateLimitInfo:          unmarshalJSONB(providerRateLimitInfo),
-		ProviderRateLimitObservedAt:    providerRateLimitObservedAt,
-		CompactionCount:                compactionCount,
-		UserMessageCount:               userMessageCount,
-		OpenTarget:                     openTarget,
-		AgentAvatarID:                  agentAvatarID,
-		SystemAvatarID:                 systemAvatarID,
-		SidebarPosition:                sidebarPosition,
-		RowVersion:                     rowVersion,
-		BugLabel:                       bugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug),
-		BugLabels:                      bugLabelsFromJSON(bugLabelsRaw),
+		ID:                               sessionID,
+		Email:                            normalized,
+		Mode:                             mode,
+		Scope:                            s.scope,
+		PodName:                          podName,
+		SessionImage:                     sessionImage,
+		SessionImageMetadata:             sessionmodel.DecodeImageVersionMetadata(sessionImageMetadata),
+		Name:                             name,
+		Visible:                          visible,
+		RequestedAt:                      requestedAt,
+		CreatedAt:                        createdAt,
+		UpdatedAt:                        updatedAt,
+		Status:                           status,
+		ReadyAt:                          readyAt,
+		TerminatingAt:                    terminatingAt,
+		ActivitySummary:                  activitySummary,
+		TestState:                        unmarshalJSONB(testState),
+		RolloutState:                     unmarshalJSONB(rolloutState),
+		Repos:                            repos,
+		CloneState:                       unmarshalJSONB(cloneState),
+		Capabilities:                     capabilities,
+		Model:                            model,
+		Effort:                           effort,
+		RuntimeModel:                     runtimeModel,
+		RuntimeEffort:                    runtimeEffort,
+		RuntimeConfiguredAt:              runtimeAt,
+		RuntimeContextWindowTokens:       runtimeContextWindowTokens,
+		RuntimeContextWindowSource:       runtimeContextWindowSource,
+		RuntimeContextWindowObservedAt:   runtimeContextWindowAt,
+		RuntimeProviderSessionID:         runtimeProviderSessionID,
+		RuntimeProviderSessionObservedAt: runtimeProviderSessionObservedAt,
+		ProviderRateLimitInfo:            unmarshalJSONB(providerRateLimitInfo),
+		ProviderRateLimitObservedAt:      providerRateLimitObservedAt,
+		CompactionCount:                  compactionCount,
+		UserMessageCount:                 userMessageCount,
+		OpenTarget:                       openTarget,
+		AgentAvatarID:                    agentAvatarID,
+		SystemAvatarID:                   systemAvatarID,
+		SidebarPosition:                  sidebarPosition,
+		RowVersion:                       rowVersion,
+		BugLabel:                         bugLabelFromScan(bugLabelID, bugLabelName, bugLabelSlug),
+		BugLabels:                        bugLabelsFromJSON(bugLabelsRaw),
 	}
 	return record, true, nil
 }

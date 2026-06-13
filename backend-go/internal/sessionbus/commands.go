@@ -27,6 +27,7 @@ type Command struct {
 	ClientNonce       string `json:"client_nonce,omitempty"`
 	Prompt            string `json:"prompt,omitempty"`
 	Model             string `json:"model,omitempty"`
+	ProviderSessionID string `json:"provider_session_id,omitempty"`
 	// Effort is the reasoning effort level requested by the user at
 	// session creation. Claude accepts "low" | "medium" | "high" |
 	// "xhigh" | "max"; Codex accepts "low" | "medium" | "high" |
@@ -67,6 +68,7 @@ func (c Command) Normalize() Command {
 	c.ClientNonce = strings.TrimSpace(c.ClientNonce)
 	c.Prompt = strings.TrimSpace(c.Prompt)
 	c.Model = strings.TrimSpace(c.Model)
+	c.ProviderSessionID = strings.TrimSpace(c.ProviderSessionID)
 	c.Effort = strings.TrimSpace(c.Effort)
 	c.PermissionMode = strings.TrimSpace(c.PermissionMode)
 	c.SkillName = strings.TrimSpace(c.SkillName)

@@ -308,7 +308,8 @@ func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
 		"model":"gpt-5.5",
 		"effort":"xhigh",
 		"context_window_tokens":258400,
-		"context_window_source":"codex_app_server_token_usage"
+		"context_window_source":"codex_app_server_token_usage",
+		"provider_session_id":"db0a8b4b-64cd-4a9a-a592-ad5622075dc8"
 	}`))
 	req.SetPathValue("session_id", "12")
 	req.Header.Set("Authorization", "Bearer session-token")
@@ -332,6 +333,9 @@ func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
 	if body.RuntimeContextWindowTokens != 258400 || body.RuntimeContextWindowSource != "codex_app_server_token_usage" || body.RuntimeContextWindowObservedAt == nil || *body.RuntimeContextWindowObservedAt == "" {
 		t.Fatalf("runtime context window response = %#v", body)
 	}
+	if body.RuntimeProviderSessionID != "db0a8b4b-64cd-4a9a-a592-ad5622075dc8" || body.RuntimeProviderSessionObservedAt == nil || *body.RuntimeProviderSessionObservedAt == "" {
+		t.Fatalf("runtime provider session response = %#v", body)
+	}
 	record, ok, err := registry.Get(context.Background(), "owner@example.test", "12")
 	if err != nil || !ok {
 		t.Fatalf("registry Get ok=%v err=%v", ok, err)
@@ -341,6 +345,9 @@ func TestHandleInternalSessionRuntimeConfigRecordsAppliedConfig(t *testing.T) {
 	}
 	if record.RuntimeContextWindowTokens != 258400 || record.RuntimeContextWindowSource != "codex_app_server_token_usage" || record.RuntimeContextWindowObservedAt == "" {
 		t.Fatalf("registry runtime context window = %#v", record)
+	}
+	if record.RuntimeProviderSessionID != "db0a8b4b-64cd-4a9a-a592-ad5622075dc8" || record.RuntimeProviderSessionObservedAt == "" {
+		t.Fatalf("registry runtime provider session = %#v", record)
 	}
 }
 

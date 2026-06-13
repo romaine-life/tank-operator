@@ -373,6 +373,9 @@ exit 0
 		"TANK_SESSION_CONFIG_DIR="+configDir,
 		"FAKE_NODE_LOG="+nodeLog,
 		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
+		"GLIMMUNG_SUPERVISOR_CHILD=",
+		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT=",
+		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED=",
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -413,6 +416,9 @@ exit 0
 		"TANK_SESSION_CONFIG_DIR="+configDir,
 		"FAKE_NODE_LOG="+nodeLog,
 		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
+		"GLIMMUNG_SUPERVISOR_CHILD=",
+		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT=",
+		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED=",
 	)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -448,6 +454,9 @@ func TestAntigravityRunnerLaunchFailsWithMalformedMCPConfig(t *testing.T) {
 	cmd.Env = append(os.Environ(),
 		"HOME="+home,
 		"TANK_SESSION_CONFIG_DIR="+configDir,
+		"GLIMMUNG_SUPERVISOR_CHILD=",
+		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT=",
+		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED=",
 	)
 	out, err := cmd.CombinedOutput()
 	if err == nil {

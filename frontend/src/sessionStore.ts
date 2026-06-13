@@ -103,6 +103,8 @@ export interface SessionRow {
   runtime_context_window_tokens?: number;
   runtime_context_window_source?: string;
   runtime_context_window_observed_at?: string;
+  runtime_provider_session_id?: string;
+  runtime_provider_session_observed_at?: string;
   provider_rate_limit_info?: Record<string, unknown>;
   provider_rate_limit_observed_at?: string;
   // Durable per-session count of context.compacted events, projected onto the
@@ -562,6 +564,10 @@ export function normalizeSessionRowUpdate(value: unknown): SessionRowUpdatePaylo
         stringField(rowRaw, "runtime_context_window_source") ?? undefined,
       runtime_context_window_observed_at:
         stringField(rowRaw, "runtime_context_window_observed_at") ?? undefined,
+      runtime_provider_session_id:
+        stringField(rowRaw, "runtime_provider_session_id") ?? undefined,
+      runtime_provider_session_observed_at:
+        stringField(rowRaw, "runtime_provider_session_observed_at") ?? undefined,
       provider_rate_limit_info: isRecord(rowRaw.provider_rate_limit_info)
         ? (rowRaw.provider_rate_limit_info as Record<string, unknown>)
         : undefined,

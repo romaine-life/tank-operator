@@ -171,18 +171,35 @@ void test("connect uses per-session user and projected token file authenticator"
 });
 
 void test("connect rejects partial per-session NATS auth config", async () => {
-  const { deps } = fakeDeps({ iterators: [blockingIterator([])] });
-  const cfg = {
-    ...busConfig(),
-    natsToken: "",
-    natsUser: "slot-a:63",
-    natsPasswordFile: "",
-  };
-  const bus = new SharedSessionBus(cfg as never, "claude", deps as never);
-  await assert.rejects(
-    () => bus.startCommandConsumer(async () => {}, undefined as never),
-    /NATS_USER and NATS_PASSWORD_FILE must be set together/,
-  );
+  const previousUser = process.env.NATS_USER;
+  const previousPasswordFile = process.env.NATS_PASSWORD_FILE;
+  delete process.env.NATS_USER;
+  delete process.env.NATS_PASSWORD_FILE;
+  try {
+    const { deps } = fakeDeps({ iterators: [blockingIterator([])] });
+    const cfg = {
+      ...busConfig(),
+      natsToken: "",
+      natsUser: "slot-a:63",
+      natsPasswordFile: "",
+    };
+    const bus = new SharedSessionBus(cfg as never, "claude", deps as never);
+    await assert.rejects(
+      () => bus.startCommandConsumer(async () => {}, undefined as never),
+      /NATS_USER and NATS_PASSWORD_FILE must be set together/,
+    );
+  } finally {
+    if (previousUser === undefined) {
+      delete process.env.NATS_USER;
+    } else {
+      process.env.NATS_USER = previousUser;
+    }
+    if (previousPasswordFile === undefined) {
+      delete process.env.NATS_PASSWORD_FILE;
+    } else {
+      process.env.NATS_PASSWORD_FILE = previousPasswordFile;
+    }
+  }
 });
 
 void test("supervised consumer restarts after iterator death and redelivers", async () => {
