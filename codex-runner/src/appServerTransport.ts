@@ -168,6 +168,10 @@ const CONTROL_REQUEST_TIMEOUT_MS = (() => {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 30_000;
 })();
 
+function threadOptionsKey(o: ThreadOptions): string {
+  return `${o.model ?? ""}::${o.modelReasoningEffort ?? ""}`;
+}
+
 export class CodexAppServerTransport {
   private child: ChildProcessWithoutNullStreams | null = null;
   private nextID = 1;
@@ -184,6 +188,11 @@ export class CodexAppServerTransport {
   private readonly latestUsageByProviderTurnID = new Map<string, ObservedCodexUsage>();
   private reportedContextWindowTokens: number | null = null;
   private readonly compactedProviderTurnIDs = new Set<string>();
+  // lastAppliedThreadKey is the model/effort the live thread was started or
+  // resumed with. When a later turn carries a different model/effort the
+  // thread is dropped and re-resumed under the new config (the mid-session
+  // model switch); codex's thread/resume restores the conversation context.
+  private lastAppliedThreadKey: string | null = null;
 
   constructor(private readonly opts: AppServerTransportOptions) {}
 
@@ -339,6 +348,20 @@ export class CodexAppServerTransport {
   }
 
   private async ensureThread(threadOptions: ThreadOptions): Promise<string> {
+    const key = threadOptionsKey(threadOptions);
+    // Mid-session re-pin: if the model/effort changed since the live thread
+    // was started/resumed, drop the cached id so we re-resume the SAME
+    // conversation under the new config below — thread/resume restores context
+    // from the persisted id. This is the codex side of the mid-session model
+    // switch; the user's new pick arrives as a differing threadOptions.
+    if (
+      this.threadID &&
+      this.lastAppliedThreadKey !== null &&
+      this.lastAppliedThreadKey !== key
+    ) {
+      threadResumeTotal.labels("repin").inc();
+      this.threadID = null;
+    }
     if (this.threadID) return this.threadID;
     const threadConfig = {
       features: { default_mode_request_user_input: true },
@@ -368,6 +391,7 @@ export class CodexAppServerTransport {
         const thread = response?.thread as JsonRecord | undefined;
         const id = typeof thread?.id === "string" ? thread.id : persisted;
         this.threadID = id;
+        this.lastAppliedThreadKey = key;
         this.persistThreadID(id);
         threadResumeTotal.labels("resumed").inc();
         this.opts.onRuntimeConfigApplied?.(threadOptions);
@@ -391,6 +415,7 @@ export class CodexAppServerTransport {
     const id = typeof thread?.id === "string" ? thread.id : undefined;
     if (!id) throw new Error("codex app-server thread/start response did not include thread.id");
     this.threadID = id;
+    this.lastAppliedThreadKey = key;
     this.persistThreadID(id);
     threadResumeTotal.labels(persisted ? "failed_then_fresh" : "fresh").inc();
     this.opts.onRuntimeConfigApplied?.(threadOptions);
