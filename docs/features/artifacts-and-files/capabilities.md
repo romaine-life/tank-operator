@@ -35,3 +35,22 @@ Named behaviors in the artifacts-and-files surface. See
 - **Observability:** `tank_static_page_total{operation,result}` counts capture
   and read attempts with bounded labels
   (`ok`, `not_found`, `pod_unavailable`, `store_error`, …).
+
+## workspace-image-page-route
+
+- **Status:** shipped
+- **Intent:** Let a user open an image selected in the workspace files panel in
+  a dedicated browser tab with a stable session-scoped app URL.
+- **Entry point:** the browser's native image/link context menu on the image
+  preview, backed by the session-scoped route
+  `/sessions/{id}/files/<workspace-path>`.
+- **Render model:** the route reconstructs the files panel selection on load
+  and keeps the protected image bytes on the existing authenticated
+  `files/raw` fetch-to-blob path. The URL names the app page and selected
+  workspace path; it is not a raw protected image URL.
+- **Durable boundary:** this is still a live workspace file. Reload works while
+  the session pod and file exist; session-pod death makes the image unavailable
+  like any other pod-local workspace file.
+- **Evidence:** `frontend/src/FileImageViewer.test.tsx`,
+  `frontend/src/appRoutes.test.ts`, and a browser validation of a
+  `/sessions/{id}/files/<workspace-path>` image preview route.

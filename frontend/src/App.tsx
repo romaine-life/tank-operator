@@ -19988,6 +19988,14 @@ function ChatPane({
                           <FileImageViewer
                             src={fileRawImageUrl}
                             alt={selectedFile.path}
+                            openHref={sessionRouteUrl(
+                              session.id,
+                              "files",
+                              null,
+                              null,
+                              null,
+                              selectedFile.path,
+                            )}
                           />
                         </Suspense>
                       ) : (
