@@ -413,6 +413,16 @@ func projectUserMessageEvent(event map[string]any) map[string]any {
 	if authorKind := transcriptString(event, "author_kind"); authorKind != "" {
 		entry["authorKind"] = authorKind
 	}
+	// Per-turn run config: the model/effort this turn ran on, stamped by
+	// UserSubmissionEventMaps. Surfaced on the user-message entry so the
+	// renderer can show which model answered each turn even after a
+	// mid-session re-pin (the composer chip only shows the next turn's model).
+	if model := transcriptPayloadString(event, "model"); model != "" {
+		entry["model"] = model
+	}
+	if effort := transcriptPayloadString(event, "effort"); effort != "" {
+		entry["effort"] = effort
+	}
 	return entry
 }
 

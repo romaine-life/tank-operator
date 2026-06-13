@@ -4415,6 +4415,14 @@ button:disabled {
   color: #bfdbfe;
 }
 
+/* The per-turn model badge: which model this turn actually ran on (distinct
+   from the composer chip's next-turn selection). Subtle violet accent so it
+   reads as a distinct, meaningful indicator among the gray stat pills. */
+.run-turn-view-summary > span.run-turn-view-model {
+  background: rgba(167, 139, 250, 0.16);
+  color: #ddd6fe;
+}
+
 .collapsed-turn-mock-frame {
   width: min(100%, 48rem);
   overflow: hidden;

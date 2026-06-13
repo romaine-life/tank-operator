@@ -469,6 +469,13 @@ export type TranscriptEntry = Omit<SandboxTranscriptEntry, "role" | "kind"> & {
   // session's system identity for these instead of the human owner's
   // Gravatar. originSessionId takes precedence when both are present.
   authorKind?: string;
+  // For user-role message entries: the model/effort this turn was submitted
+  // with (the run config the runner pinned for the turn), stamped by the
+  // backend submission projection. Lets the Turns surface show which model
+  // each turn ran on even after a mid-session model/effort re-pin — the
+  // composer chip only reflects the next turn's selected model.
+  model?: string;
+  effort?: string;
   // Server-projected rows that belong only to the Turns activity surface.
   // Background wake prompts intentionally use role=user + authorKind=system so
   // the renderer shows the existing system-user identity without surfacing the
@@ -10436,6 +10443,10 @@ type TurnViewItem = {
   loaded: boolean;
   costEstimate: SessionCostEstimate | null;
   contextTokens: number | null;
+  // The model/effort this turn actually ran on (from its user-message entry),
+  // distinct from the session's next-turn selection in the composer chip.
+  model: string | null;
+  effort: string | null;
   startedAt?: string;
   completedAt?: string;
   lastActivityAt?: string;
@@ -10899,6 +10910,14 @@ function buildTurnViewItems(
   // shape) must still resolve "Turn N" instead of the "Current turn"
   // fallback label.
   const numbers = new Map<string, number>();
+  // The model/effort each turn ran on, harvested from its user-message entry
+  // (the backend stamps the resolved run config there). First user message per
+  // turn wins; surfaced on the TurnViewItem so the Turns surface can show the
+  // historical model even after a mid-session re-pin.
+  const runConfigByTurn = new Map<
+    string,
+    { model: string | null; effort: string | null }
+  >();
   const costRowsByTurn = new Map<string, Map<string, TranscriptEntry>>();
   const addCostRow = (entry: TranscriptEntry) => {
     const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
@@ -10914,6 +10933,11 @@ function buildTurnViewItems(
     const turnId = (entry.turnId ?? entry.activity?.turnId ?? "").trim();
     if (!turnId) return;
     addCostRow(entry);
+    if (isUserMessageEntry(entry) && !runConfigByTurn.has(turnId)) {
+      const m = typeof entry.model === "string" ? entry.model.trim() : "";
+      const e = typeof entry.effort === "string" ? entry.effort.trim() : "";
+      if (m || e) runConfigByTurn.set(turnId, { model: m || null, effort: e || null });
+    }
     if (!order.has(turnId)) order.set(turnId, index);
     if (!numbers.has(turnId) && typeof entry.turnNumber === "number")
       numbers.set(turnId, entry.turnNumber);
@@ -11007,6 +11031,8 @@ function buildTurnViewItems(
           contextWindow,
           turnId,
         ),
+        model: runConfigByTurn.get(turnId)?.model ?? null,
+        effort: runConfigByTurn.get(turnId)?.effort ?? null,
         startedAt,
         completedAt,
         lastActivityAt,
@@ -12111,6 +12137,20 @@ function RunTurnActivityScreen({
               )}
               {selected.completedAt && !selected.active && (
                 <span>{formatToolFullTime(selected.completedAt)}</span>
+              )}
+              {sessionMode && selected.model && (
+                <span
+                  className="run-turn-view-model"
+                  title="Model this turn ran on"
+                >
+                  {modelDisplayLabel(sessionMode as SessionMode, selected.model)}
+                  {selected.effort
+                    ? ` · ${effortDisplayLabel(
+                        sessionMode as SessionMode,
+                        selected.effort,
+                      )}`
+                    : ""}
+                </span>
               )}
               {selected.costEstimate && (
                 <ComposerCostEstimate

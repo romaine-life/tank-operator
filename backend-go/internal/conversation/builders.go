@@ -93,6 +93,23 @@ func UserSubmissionEventMaps(args UserSubmissionArgs) (string, []map[string]any,
 		payload := events[0]["payload"].(map[string]any)
 		payload["attachments"] = attachments
 	}
+	// Stamp the turn's resolved run config onto both boundary events' payloads
+	// (payload is additionalProperties:true, so no schema change). This is the
+	// durable per-turn model/effort record the transcript renders so a turn
+	// keeps showing the model it actually ran on after a mid-session re-pin.
+	turnModel := strings.TrimSpace(args.Model)
+	turnEffort := strings.TrimSpace(args.Effort)
+	if turnModel != "" || turnEffort != "" {
+		for _, event := range events {
+			payload := event["payload"].(map[string]any)
+			if turnModel != "" {
+				payload["model"] = turnModel
+			}
+			if turnEffort != "" {
+				payload["effort"] = turnEffort
+			}
+		}
+	}
 	originSessionID := strings.TrimSpace(args.OriginSessionID)
 	originSessionAvatarID := strings.TrimSpace(args.OriginSessionAvatarID)
 	authorKind := strings.TrimSpace(args.AuthorKind)
@@ -141,6 +158,14 @@ type UserSubmissionArgs struct {
 	Attachments       []UserMessageAttachment
 	Runtime           string
 	SkillName         string
+	// Model and Effort are the run config resolved for THIS turn at submit
+	// time (after any session run-config override). Stamped onto the
+	// submission events' payloads so the transcript records which model each
+	// turn actually ran on — durable per-turn history that survives a
+	// mid-session model/effort re-pin. Empty when the turn carries no explicit
+	// model (provider account default); the renderer then shows nothing.
+	Model  string
+	Effort string
 	// Display, when non-nil, is used verbatim as the user_message.created
 	// payload.display instead of being derived from SkillName/text. Display
 	// takes precedence over SkillName when both are set.

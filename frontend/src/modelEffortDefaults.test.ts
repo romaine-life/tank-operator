@@ -228,3 +228,21 @@ test("mid-session run-config: a pick PUTs /run-config and only toggles the menu 
     /run-model-trigger[\s\S]{0,400}onClick=\{\(\) => setRunModelMenuOpen\(\(v\) => !v\)\}/,
   );
 });
+
+test("per-turn model is captured from each turn's user message and shown in the turn summary", () => {
+  // Capture: the TurnViewItem builder harvests the model/effort the backend
+  // stamps on each turn's user-message entry into a per-turn map — historical,
+  // distinct from the session-level next-turn selection (selectedModelId).
+  expect(appSource).toMatch(/const runConfigByTurn = new Map</);
+  expect(appSource).toMatch(
+    /isUserMessageEntry\(entry\) && !runConfigByTurn\.has\(turnId\)[\s\S]{0,160}entry\.model/,
+  );
+  expect(appSource).toMatch(/model:\s*runConfigByTurn\.get\(turnId\)\?\.model/);
+  // Render: the turn summary shows the VIEWED turn's model via the shared
+  // label helper. It must read selected.model (per-turn), never the composer's
+  // selectedModelId (next-turn) — otherwise every historical turn would show
+  // the session's current model.
+  expect(appSource).toMatch(
+    /run-turn-view-model[\s\S]{0,220}modelDisplayLabel\(sessionMode as SessionMode,\s*selected\.model\)/,
+  );
+});

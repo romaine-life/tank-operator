@@ -257,6 +257,35 @@ func TestProjectTranscriptEventsCarriesUserAttachments(t *testing.T) {
 	}
 }
 
+func TestProjectTranscriptEventsSurfacesPerTurnModel(t *testing.T) {
+	// The per-turn run config stamped on user_message.created (the model/effort
+	// the turn ran on) survives the projection onto the user-message entry, so
+	// the Turns surface can show which model answered each turn even after a
+	// mid-session re-pin — the composer chip only reflects the next turn.
+	events := []map[string]any{
+		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{
+			"text":    "do work",
+			"display": map[string]any{"kind": "plain"},
+			"model":   "claude-opus-4-8",
+			"effort":  "high",
+		}),
+	}
+	projection := projectTranscriptEvents(events)
+	if got, want := len(projection.Entries), 1; got != want {
+		t.Fatalf("projected entries = %d, want %d: %#v", got, want, projection.Entries)
+	}
+	msg := projection.Entries[0]
+	if msg["kind"] != "message" || msg["role"] != "user" {
+		t.Fatalf("entry[0] = %#v, want user message", msg)
+	}
+	if got, _ := msg["model"].(string); got != "claude-opus-4-8" {
+		t.Fatalf("user message model = %q, want claude-opus-4-8", got)
+	}
+	if got, _ := msg["effort"].(string); got != "high" {
+		t.Fatalf("user message effort = %q, want high", got)
+	}
+}
+
 func TestProjectTranscriptEventsUsesExplicitFinalAnswerMarker(t *testing.T) {
 	events := []map[string]any{
 		projectionTestEvent("u", "001", "user_message.created", "user", "tank", "turn-1", "turn-1:user", map[string]any{

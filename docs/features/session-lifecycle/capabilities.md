@@ -132,6 +132,13 @@ Contract impact:
   silently and never interrupts a running turn.
 - The runner-reported context window is latest-observed-wins so a switch to a
   model with a different window updates the durable UI denominator.
+- Per-turn model history: because the model can change between turns, the
+  resolved model/effort for a turn is stamped onto its `user_message.created`
+  and `turn.submitted` payloads (the event payload is additionalProperties, so
+  no schema change) and surfaced on the projected user-message entry. The Turns
+  surface shows the model each turn actually ran on — distinct from the composer
+  chip, which only reflects the next turn's selection. A historical turn keeps
+  showing its own model after later re-pins.
 
 Evidence:
 - `backend-go/cmd/tank-operator/handlers_run_config_test.go` covers the
@@ -142,7 +149,13 @@ Evidence:
 - `codex-runner/src/appServerTransport.test.ts` covers re-resuming the thread
   under a new model on a mid-session change.
 - `frontend/src/modelEffortDefaults.test.ts` covers the Claude/Codex-gated
-  composer dropdown and the run-config `PUT` (option-a next-turn apply).
+  composer dropdown, the run-config `PUT` (option-a next-turn apply), and the
+  per-turn model capture-and-render guard.
+- Per-turn model history:
+  `backend-go/internal/conversation/contract_test.go` (model/effort stamped on
+  both boundary events' payloads) and
+  `backend-go/cmd/tank-operator/transcript_projection_test.go`
+  (`SurfacesPerTurnModel` — surfaced on the projected user-message entry).
 - Metrics: `tank_session_run_config_rejected_total{surface="run_config_update"}`,
   `tank_runner_options_repinned_total{model,effort}`.
 

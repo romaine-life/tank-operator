@@ -44,7 +44,10 @@ the rest of the product reconstruct what happened.
   idle turn boundary by tearing down the current provider query/thread and
   rebuilding it with provider-session resume + the new options, preserving the
   conversation. Antigravity is excluded (its model is an `agy` process-start
-  argument). The runner must not silently ignore a changed model/effort.
+  argument). The runner must not silently ignore a changed model/effort. The
+  per-turn run config is durable: the resolved model/effort is recorded on each
+  turn's submission events so the transcript shows which model answered each
+  turn, independent of the session's current (next-turn) selection.
 - Stop/interrupt remains pending until a durable interrupted, completed,
   failed, or already-terminal event resolves it.
 - Stop/interrupt against a turn that is already terminal must not create a new
