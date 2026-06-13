@@ -1838,6 +1838,8 @@ function sessionRouteUrl(
   turnNumber?: number | null,
   staticPath?: string | null,
   pageNumber?: number | null,
+  filePath?: string | null,
+  fileLine?: number | null,
 ): string {
   return buildSessionRouteUrl(
     window.location.href,
@@ -1846,6 +1848,8 @@ function sessionRouteUrl(
     turnNumber,
     staticPath,
     pageNumber,
+    filePath,
+    fileLine,
   );
 }
 
@@ -1891,9 +1895,19 @@ function replaceSessionRoute(
   tab: SessionRouteTab = "turns",
   turnNumber?: number | null,
   pageNumber?: number | null,
+  filePath?: string | null,
+  fileLine?: number | null,
 ): void {
   if (routeHasMessageTarget()) return;
-  const next = sessionRouteUrl(id, tab, turnNumber, null, pageNumber);
+  const next = sessionRouteUrl(
+    id,
+    tab,
+    turnNumber,
+    null,
+    pageNumber,
+    filePath,
+    fileLine,
+  );
   if (next !== window.location.href) window.history.replaceState({}, "", next);
 }
 
@@ -6831,18 +6845,40 @@ function RunMarkdownInlineCode({
   );
 }
 
-function RunMarkdownLink(props: AnchorHTMLAttributes<HTMLAnchorElement>) {
-  const { openWorkspacePath } = useContext(RunContext);
+function isPlainLeftClick(
+  event: Pick<
+    MouseEvent | ReactMouseEvent,
+    "button" | "metaKey" | "ctrlKey" | "shiftKey" | "altKey"
+  >,
+): boolean {
+  return (
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
+}
+
+export function RunMarkdownLink(
+  props: AnchorHTMLAttributes<HTMLAnchorElement>,
+) {
+  const { openWorkspacePath, workspacePathHref } = useContext(RunContext);
   const workspaceTarget =
     typeof props.href === "string" ? workspacePathFromHref(props.href) : null;
+  const href = workspaceTarget
+    ? (workspacePathHref(workspaceTarget) ?? props.href)
+    : props.href;
   return (
     <a
       {...props}
+      href={href}
       rel={workspaceTarget ? undefined : "noreferrer"}
       target={workspaceTarget ? undefined : "_blank"}
       onClick={(e) => {
         props.onClick?.(e);
         if (e.defaultPrevented || !workspaceTarget) return;
+        if (!isPlainLeftClick(e)) return;
         e.preventDefault();
         openWorkspacePath(workspaceTarget);
       }}
@@ -6867,10 +6903,11 @@ function domAnchorForLinkSegment(
 ): HTMLAnchorElement {
   const anchor = doc.createElement("a");
   anchor.className = "run-markdown-code-link";
-  anchor.href = segment.href;
-  anchor.textContent = text;
+    anchor.href = segment.href;
+    anchor.textContent = text;
   if (segment.kind === "workspace_path") {
     anchor.dataset.runWorkspaceLink = "true";
+    anchor.dataset.runWorkspaceHref = segment.href;
   } else {
     anchor.target = "_blank";
     anchor.rel = "noreferrer";
@@ -6978,17 +7015,38 @@ function linkifyCodeElement(code: HTMLElement) {
     });
 }
 
-function linkifyRenderedCodeBlockText(root: HTMLElement) {
+function syncWorkspaceLinkHrefs(
+  root: HTMLElement,
+  workspacePathHref: (target: WorkspacePathTarget) => string | undefined,
+) {
+  const anchors = root.querySelectorAll<HTMLAnchorElement>(
+    'a[data-run-workspace-link="true"]',
+  );
+  for (const anchor of anchors) {
+    const target = workspacePathFromHref(
+      anchor.dataset.runWorkspaceHref ?? anchor.getAttribute("href") ?? "",
+    );
+    if (!target) continue;
+    const href = workspacePathHref(target);
+    if (href) anchor.href = href;
+  }
+}
+
+function linkifyRenderedCodeBlockText(
+  root: HTMLElement,
+  workspacePathHref: (target: WorkspacePathTarget) => string | undefined,
+) {
   const codeElements = root.querySelectorAll<HTMLElement>(
     '[data-streamdown="code-block-body"] code',
   );
   for (const code of codeElements) {
     if (hasLinkTargets(code.textContent ?? "")) linkifyCodeElement(code);
   }
+  syncWorkspaceLinkHrefs(root, workspacePathHref);
 }
 
 function RunMarkdown({ children }: { children: string }) {
-  const { openWorkspacePath } = useContext(RunContext);
+  const { openWorkspacePath, workspacePathHref } = useContext(RunContext);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const linkedChildren = useMemo(
     () => linkTextTargetsInMarkdown(children),
@@ -7003,7 +7061,7 @@ function RunMarkdown({ children }: { children: string }) {
       if (applying) return;
       applying = true;
       try {
-        linkifyRenderedCodeBlockText(root);
+        linkifyRenderedCodeBlockText(root, workspacePathHref);
       } finally {
         applying = false;
       }
@@ -7012,7 +7070,7 @@ function RunMarkdown({ children }: { children: string }) {
     const observer = new MutationObserver(apply);
     observer.observe(root, { childList: true, subtree: true });
     return () => observer.disconnect();
-  }, [linkedChildren]);
+  }, [linkedChildren, workspacePathHref]);
 
   return (
     <div
@@ -7026,8 +7084,9 @@ function RunMarkdown({ children }: { children: string }) {
               )
             : null;
         if (!target) return;
+        if (!isPlainLeftClick(event)) return;
         const workspaceTarget = workspacePathFromHref(
-          target.getAttribute("href") ?? "",
+          target.dataset.runWorkspaceHref ?? target.getAttribute("href") ?? "",
         );
         if (!workspaceTarget) return;
         event.preventDefault();
@@ -7237,6 +7296,7 @@ interface QuestionPageNavigation {
 
 export const RunContext = createContext<{
   openWorkspacePath: (target: WorkspacePathTarget | string) => void;
+  workspacePathHref: (target: WorkspacePathTarget | string) => string | undefined;
   submitAnswer: (askingTurnId: string, payload: AnswerPayload) => Promise<void>;
   askUserQuestionDrafts: Record<string, AskUserQuestionDraft | undefined>;
   setAskUserQuestionDraft: (
@@ -7249,6 +7309,7 @@ export const RunContext = createContext<{
   user: SessionUser | null;
 }>({
   openWorkspacePath: () => {},
+  workspacePathHref: () => undefined,
   submitAnswer: async () => {},
   askUserQuestionDrafts: {},
   setAskUserQuestionDraft: () => {},
@@ -14762,12 +14823,30 @@ function ChatPane({
   // hint fade + clear-X visibility) without making the textarea controlled.
   const [composerText, setComposerText] = useState("");
   // Files-tab state — read-only browse of /workspace inside the session pod.
-  const [filesPath, setFilesPath] = useState<string>("");
+  const initialRouteFilePath =
+    initialRunRoute?.tab === "files" ? initialRunRoute.filePath : null;
+  const initialRouteFileLine =
+    initialRunRoute?.tab === "files" ? initialRunRoute.fileLine : null;
+  const [filesPath, setFilesPath] = useState<string>(
+    initialRouteFilePath ? parentFilesPath(initialRouteFilePath) : "",
+  );
   const [filesEntries, setFilesEntries] = useState<FileEntry[] | null>(null);
   const [filesLoading, setFilesLoading] = useState(false);
   const [filesError, setFilesError] = useState<string | null>(null);
-  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(null);
-  const [selectedFileLine, setSelectedFileLine] = useState<number | null>(null);
+  const [selectedFile, setSelectedFile] = useState<SelectedFile | null>(
+    initialRouteFilePath
+      ? {
+          path: initialRouteFilePath,
+          size: 0,
+          truncated: false,
+          text: "",
+          binary: false,
+        }
+      : null,
+  );
+  const [selectedFileLine, setSelectedFileLine] = useState<number | null>(
+    initialRouteFileLine,
+  );
   // Path of the HTML file currently rendered full-page in the "static" tab
   // (the sandboxed-iframe page view). Captured at click time so the render is
   // stable even if the files browser selection later changes.
@@ -16007,6 +16086,23 @@ function ChatPane({
     }
     if (route.tab === "files") {
       setActiveTab("files");
+      if (route.filePath) {
+        setFilesPath(parentFilesPath(route.filePath));
+        setSelectedFile({
+          path: route.filePath,
+          size: 0,
+          truncated: false,
+          text: "",
+          binary: false,
+        });
+        setSelectedFileLine(route.fileLine);
+      } else {
+        setFilesPath("");
+        setSelectedFile(null);
+        setSelectedFileLine(null);
+      }
+      setFileDraft(null);
+      setFileSaveError(null);
       setPendingRouteTurnNumber(null);
       setPendingTurnViewRouteAnchor(null);
       setSelectedTurnNumberAnchor(null);
@@ -16878,6 +16974,26 @@ function ChatPane({
     setSelectedFileLine(normalized.line);
     setFileDraft(null);
     setFileSaveError(null);
+  }
+
+  function workspacePathHref(
+    target: WorkspacePathTarget | string,
+  ): string | undefined {
+    if (!filesAvailable) return undefined;
+    const normalized =
+      typeof target === "string"
+        ? normalizeWorkspacePathTarget(target)
+        : target;
+    if (!normalized) return undefined;
+    return sessionRouteUrl(
+      session.id,
+      "files",
+      null,
+      null,
+      null,
+      normalized.path,
+      normalized.line,
+    );
   }
 
   async function uploadAttachment(file: File) {
@@ -18761,7 +18877,14 @@ function ChatPane({
     } else if (activeTab === "session-data") {
       replaceSessionRoute(session.id, "session-data");
     } else if (activeTab === "files") {
-      replaceSessionRoute(session.id, "files");
+      replaceSessionRoute(
+        session.id,
+        "files",
+        null,
+        null,
+        selectedFile?.path ?? null,
+        selectedFileLine,
+      );
     } else if (activeTab === "background") {
       replaceSessionRoute(session.id, "background");
     } else if (activeTab === "chat") {
@@ -18777,6 +18900,8 @@ function ChatPane({
     routeTurnUnavailable,
     routedSelectedPageNumber,
     routedSelectedTurnNumber,
+    selectedFile?.path,
+    selectedFileLine,
     session.id,
     settingsTab,
     visible,
@@ -19528,6 +19653,7 @@ function ChatPane({
     <RunContext.Provider
       value={{
         openWorkspacePath,
+        workspacePathHref,
         submitAnswer: readOnly
           ? async () => {
               throw new Error("session is read-only");
