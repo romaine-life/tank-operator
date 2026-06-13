@@ -477,6 +477,39 @@ func TestAgyArgsForConfigPassesSessionModel(t *testing.T) {
 	}
 }
 
+func TestLoadConfigReadsPerSessionNATSAuth(t *testing.T) {
+	t.Setenv("SESSION_ID", "17")
+	t.Setenv("TANK_SESSION_STORAGE_KEY", "slot-a:17")
+	t.Setenv("NATS_URL", "nats://tank-nats.nats.svc.cluster.local:4222")
+	t.Setenv("NATS_USER", "slot-a:17")
+	t.Setenv("NATS_PASSWORD_FILE", "/var/run/secrets/auth.romaine.life/token")
+	t.Setenv("NATS_TOKEN", "")
+
+	cfg, err := loadConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := cfg.natsUser, "slot-a:17"; got != want {
+		t.Fatalf("natsUser = %q, want %q", got, want)
+	}
+	if got, want := cfg.natsPasswordFile, "/var/run/secrets/auth.romaine.life/token"; got != want {
+		t.Fatalf("natsPasswordFile = %q, want %q", got, want)
+	}
+	if cfg.natsToken != "" {
+		t.Fatalf("natsToken = %q, want empty for per-session auth", cfg.natsToken)
+	}
+}
+
+func TestReadTrimmedFileRejectsEmptyNATSPasswordFile(t *testing.T) {
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readTrimmedFile(tokenFile, "NATS_PASSWORD_FILE"); err == nil {
+		t.Fatal("readTrimmedFile accepted an empty projected token")
+	}
+}
+
 func TestReportRuntimeConfigPostsAppliedModel(t *testing.T) {
 	tokenFile := t.TempDir() + "/token"
 	if err := os.WriteFile(tokenFile, []byte("session-token\n"), 0o600); err != nil {

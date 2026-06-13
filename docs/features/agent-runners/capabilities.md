@@ -623,6 +623,56 @@ Pre-deploy session pods keep the mortal behavior until they are recycled
 contract). No wire shape changed: subjects, durable names, and consumer
 configs are identical, so old and new runners coexist freely.
 
+## Per-session NATS runner credentials
+
+Status: in progress (stage 3 implemented; stage 4 blocked on legacy-flatline)
+
+Intent:
+Session pods must not share a fleet-wide NATS token. The NATS bus carries
+durable turn commands, interrupts, input replies, and runner-produced events; a
+shared token lets any compromised pod forge another session's command/event
+traffic. New GUI session pods authenticate to NATS through auth_callout using
+their projected `auth.romaine.life` audience service-account token, and receive
+permissions scoped to their own session subjects.
+
+Affected contracts:
+- Agent Runners
+- Auth And Streams
+- Observability
+
+Contract impact:
+- Claude, Codex, and Antigravity runner sidecars receive
+  `NATS_USER=<session storage key>` and
+  `NATS_PASSWORD_FILE=/var/run/secrets/auth.romaine.life/token`; they no
+  longer mount `tank-nats-auth` as `NATS_TOKEN`.
+- The NATS auth-callout validates the projected token via TokenReview, reads
+  the orchestrator-written pod labels, equality-checks the claimed storage key,
+  and returns a NATS user JWT scoped to that session's event subject and command
+  consumers.
+- JavaScript runners use the NATS authenticator hook and read the projected
+  token file during auth, so reconnects can observe Kubernetes token rotation.
+  Antigravity's Go runner reads the projected token file at boot/connect and
+  relies on the existing permanent-close container restart path if auth is
+  later revoked.
+- Stage 4 is not optional: after
+  `tank_nats_auth_callout_total{result="legacy"}` stays flat for a full
+  pre-stage-3 pod-age window, remove `NATS_CALLOUT_LEGACY_TOKEN` and the
+  session-namespace `tank-nats-auth` ExternalSecret. Until then the legacy grant
+  exists only to avoid breaking live pre-stage-3 pods.
+
+Evidence:
+- Manifest: `backend-go/internal/sessionmodel/sessionmodel_test.go`
+  (`TestPodManifestSDKRunnersReceiveSessionBusEnv`) asserts runner sidecars get
+  `NATS_USER` / `NATS_PASSWORD_FILE` and no `NATS_TOKEN`.
+- JavaScript runner: `claude-runner/src/sessionBus.test.ts`
+  (`connect uses per-session user and projected token file authenticator`) pins
+  file-backed user/pass auth.
+- Antigravity runner: `backend-go/cmd/antigravity-runner/main_test.go`
+  (`TestLoadConfigReadsPerSessionNATSAuth`,
+  `TestReadTrimmedFileRejectsEmptyNATSPasswordFile`).
+- Migration guard: `scripts/check-removed-chat-runtime.mjs` blocks reintroducing
+  shared `NATS_TOKEN` injection into session runner envs.
+
 ## Runner correctness cluster (issue #1078)
 
 - **Status:** shipped

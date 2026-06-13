@@ -622,12 +622,14 @@ func TestPodManifestSDKRunnersReceiveSessionBusEnv(t *testing.T) {
 			if got, want := env["TANK_SESSION_STORAGE_KEY"], "slot-a:12"; got != want {
 				t.Fatalf("TANK_SESSION_STORAGE_KEY = %v, want %q", got, want)
 			}
-			tokenRef := env["NATS_TOKEN"].(map[string]any)["secretKeyRef"].(map[string]any)
-			if got, want := tokenRef["name"], "tank-nats-auth"; got != want {
-				t.Fatalf("NATS_TOKEN secret name = %v, want %q", got, want)
+			if _, present := env["NATS_TOKEN"]; present {
+				t.Fatalf("runner env includes NATS_TOKEN; session pods must use per-session NATS auth")
 			}
-			if got, want := tokenRef["key"], "token"; got != want {
-				t.Fatalf("NATS_TOKEN secret key = %v, want %q", got, want)
+			if got, want := env["NATS_USER"], "slot-a:12"; got != want {
+				t.Fatalf("NATS_USER = %v, want %q", got, want)
+			}
+			if got, want := env["NATS_PASSWORD_FILE"], "/var/run/secrets/auth.romaine.life/token"; got != want {
+				t.Fatalf("NATS_PASSWORD_FILE = %v, want %q", got, want)
 			}
 			if got, want := env["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.tank-operator.svc.cluster.local"; got != want {
 				t.Fatalf("TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)

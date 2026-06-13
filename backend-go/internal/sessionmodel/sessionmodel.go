@@ -1060,15 +1060,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
 			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
 			map[string]any{"name": "NATS_COMMAND_STREAM", "value": opts.NATSCommandStream},
-			map[string]any{
-				"name": "NATS_TOKEN",
-				"valueFrom": map[string]any{
-					"secretKeyRef": map[string]any{
-						"name": opts.NATSAuthSecret,
-						"key":  "token",
-					},
-				},
-			},
+			map[string]any{"name": "NATS_USER", "value": storageKey},
+			map[string]any{"name": "NATS_PASSWORD_FILE", "value": "/var/run/secrets/auth.romaine.life/token"},
 			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
@@ -1204,15 +1197,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
 			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
 			map[string]any{"name": "NATS_COMMAND_STREAM", "value": opts.NATSCommandStream},
-			map[string]any{
-				"name": "NATS_TOKEN",
-				"valueFrom": map[string]any{
-					"secretKeyRef": map[string]any{
-						"name": opts.NATSAuthSecret,
-						"key":  "token",
-					},
-				},
-			},
+			map[string]any{"name": "NATS_USER", "value": storageKey},
+			map[string]any{"name": "NATS_PASSWORD_FILE", "value": "/var/run/secrets/auth.romaine.life/token"},
 			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
@@ -1326,12 +1312,8 @@ func PodManifest(sessionID, owner, mode string, opts ManifestOptions) map[string
 			map[string]any{"name": "NATS_URL", "value": opts.NATSURL},
 			map[string]any{"name": "NATS_STREAM", "value": opts.NATSStream},
 			map[string]any{"name": "NATS_COMMAND_STREAM", "value": opts.NATSCommandStream},
-			map[string]any{
-				"name": "NATS_TOKEN",
-				"valueFrom": map[string]any{
-					"secretKeyRef": map[string]any{"name": opts.NATSAuthSecret, "key": "token"},
-				},
-			},
+			map[string]any{"name": "NATS_USER", "value": storageKey},
+			map[string]any{"name": "NATS_PASSWORD_FILE", "value": "/var/run/secrets/auth.romaine.life/token"},
 			map[string]any{"name": "TANK_OPERATOR_INTERNAL_URL", "value": opts.TankOperatorInternalURL},
 			map[string]any{"name": "TANK_OPERATOR_TOKEN_PATH", "value": "/var/run/secrets/tank-operator/token"},
 			map[string]any{"name": "WORKSPACE", "value": "/workspace"},
