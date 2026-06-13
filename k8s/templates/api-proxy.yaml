@@ -76,6 +76,47 @@ metadata:
   namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 {{- end }}
 ---
+{{- /*
+Refresh-lease RBAC (#1079 item 6). Each ext_proc replica takes the
+api-proxy-refresh-<kv-secret-name> Lease (scoped per credential CHAIN —
+the two claude deployments share a provider name but rotate unrelated
+chains) for the duration of one OAuth token rotation, so concurrent
+replicas never double-spend a single-use refresh_token (provider reuse
+detection can revoke the whole grant family). Losers wait for the winner's rotated blob to arrive via the
+KV → ESO → file pipeline instead of calling the provider. The client
+fails OPEN when this RBAC is absent — proxies keep rotating exactly as
+before, but replicas > 1 then reintroduces the double-rotation risk, so
+keep this binding in lockstep with apiProxy.replicas. Verbs are the
+minimal get/create/update the lease client speaks; no resourceNames pin
+because RBAC cannot name-scope create and the names derive per provider
+(see api-proxy/src/tank_api_proxy/lease.py).
+*/}}
+{{- if eq (include "tank-operator.renderWarm" .) "true" }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: api-proxy-refresh-lease
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+rules:
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: api-proxy-refresh-lease
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Values.apiProxy.serviceAccount }}
+    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: api-proxy-refresh-lease
+{{- end }}
+---
 {{- if eq (include "tank-operator.renderHot" .) "true" }}
 apiVersion: v1
 kind: Service
@@ -305,7 +346,7 @@ metadata:
   labels:
     app.kubernetes.io/name: claude-api-proxy
 spec:
-  replicas: 1
+  replicas: {{ .Values.apiProxy.replicas | default 1 }}
   revisionHistoryLimit: 0
   selector:
     matchLabels:
@@ -558,7 +599,7 @@ metadata:
   labels:
     app.kubernetes.io/name: claude-secondary-api-proxy
 spec:
-  replicas: 1
+  replicas: {{ .Values.apiProxy.replicas | default 1 }}
   revisionHistoryLimit: 0
   selector:
     matchLabels:
@@ -815,7 +856,7 @@ metadata:
   labels:
     app.kubernetes.io/name: codex-api-proxy
 spec:
-  replicas: 1
+  replicas: {{ .Values.apiProxy.replicas | default 1 }}
   revisionHistoryLimit: 0
   selector:
     matchLabels:
@@ -1197,7 +1238,7 @@ metadata:
   labels:
     app.kubernetes.io/name: antigravity-api-proxy
 spec:
-  replicas: 1
+  replicas: {{ .Values.apiProxy.replicas | default 1 }}
   revisionHistoryLimit: 0
   selector:
     matchLabels:
@@ -1279,6 +1320,29 @@ spec:
           secret:
             secretName: {{ .Values.session.antigravityCredentialsSecret | default "antigravity-credentials" }}
             optional: true
+{{- end }}
+{{- /*
+Disruption protection only makes sense once apiProxy.replicas > 1; at a
+single replica a minAvailable=1 PDB wedges node drains (see pdb.yaml for
+the same reasoning on the orchestrator). Rendered alongside the
+Deployments (hot); the file-level isTestEnv gate already excludes slots.
+*/}}
+{{- if and (eq (include "tank-operator.renderHot" .) "true") (gt (int (.Values.apiProxy.replicas | default 1)) 1) }}
+{{- range $app := list "claude-api-proxy" "claude-secondary-api-proxy" "codex-api-proxy" "antigravity-api-proxy" }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $app }}
+  namespace: {{ include "tank-operator.orchestratorNamespace" $ }}
+  labels:
+    app.kubernetes.io/name: {{ $app }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ $app }}
+{{- end }}
 {{- end }}
 ---
 {{- end }}

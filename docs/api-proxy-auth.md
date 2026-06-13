@@ -183,6 +183,41 @@ Envoy's listener only fronts the provider's data plane (`chatgpt.com` or
 observable to session pods and can't be retried by Envoy's
 `retriable_status_codes: [401]` policy.
 
+### Cross-replica single-flight (the refresh lease)
+
+The in-process dedupe above only protects one pod. With
+`apiProxy.replicas > 1`, two pods hitting expiry concurrently would each
+rotate the SAME single-use refresh_token — and provider reuse detection can
+revoke the whole grant family, killing the chain for every pod until a human
+re-runs the credential wizard. So before calling the provider, `_refresh`
+takes a **rotation-scoped Kubernetes Lease**
+([lease.py](../api-proxy/src/tank_api_proxy/lease.py)):
+
+- The lease is named `api-proxy-refresh-<kv-secret-name>` — scoped per
+  credential **chain**, not per provider, because `claude-api-proxy` and
+  `claude-secondary-api-proxy` both run `PROXY_PROVIDER=claude` but rotate
+  unrelated chains backed by different KV secrets.
+- This is **not standing leader election**: a pod holds the lease only for
+  the seconds one rotation takes (TTL 120s outlives a wedged winner), then
+  releases it.
+- A pod that loses the lease does **not** call the provider. It polls its
+  mounted credentials file (`_await_peer_rotation`, 2s interval, 45s
+  budget) until the winner's rotation propagates through KV → ESO → file,
+  then adopts it. On timeout it rotates anyway — availability over strict
+  exclusivity, e.g. when the winner crashed before the write-back.
+- **Fail open**: if the Lease API is unreachable or RBAC is missing
+  (`LeaseUnavailable`), the pod proceeds exactly as the pre-lease code did.
+  A lease outage degrades to the old risk level, never to "no rotations".
+- Every outcome is counted in `tank_api_proxy_refresh_lease_total`
+  (`acquired` / `deferred_to_peer` / `proceeded_after_timeout` /
+  `unavailable`). The RBAC lives next to the proxy ServiceAccount in
+  [k8s/templates/api-proxy.yaml](../k8s/templates/api-proxy.yaml).
+
+`apiProxy.replicas` stays **1** until those metrics show clean
+acquired/deferred behavior in production; raising it also renders
+`minAvailable: 1` PDBs for the proxy Deployments. See the gating note on
+`apiProxy.replicas` in [k8s/values.yaml](../k8s/values.yaml).
+
 ## Credential refresh wizard (recovery path)
 
 When the refresh chain dies (see Failure modes below), a human re-seeds it
@@ -304,8 +339,14 @@ Per [observability.md](observability.md), the proxy exposes Prometheus
 metrics on `:9100/metrics`. Key counters:
 
 - `tank_api_proxy_refresh_result_total{result}` — `success`, `http_error`,
-  `no_refresh_token`, `request_failed`. A spike in `http_error` with no
-  matching `success` is the hot-loop signature.
+  `no_refresh_token`, `request_failed`, `deferred_to_peer`. A spike in
+  `http_error` with no matching `success` is the hot-loop signature.
+- `tank_api_proxy_refresh_lease_total{result}` — `acquired`,
+  `deferred_to_peer`, `proceeded_after_timeout`, `unavailable`. The gate
+  for raising `apiProxy.replicas` past 1: sustained `unavailable` means
+  the lease RBAC/API is broken (fail-open active, multi-replica unsafe);
+  `proceeded_after_timeout` means losers aren't seeing winners' rotations
+  propagate within 45s.
 - `tank_api_proxy_kv_persist_total{result}` — `success`, `failure`,
   `skipped`. Persistent `failure` is the restart-bomb precursor: the
   proxy is rotating fine in memory but the next restart will read stale.

@@ -204,6 +204,15 @@ apiProxy:
     tag: "api-proxy-2a178b9b70502daed371474fc5084cae7f47295d622a417f1a8a16215a72eb13"
     pullPolicy: IfNotPresent
   envoyImage: envoyproxy/envoy:v1.34-latest
+  # Replica count shared by all four proxy Deployments (claude,
+  # claude-secondary, codex, antigravity). HOLD AT 1 until the refresh
+  # lease proves itself in production: cross-replica rotation safety rides
+  # the api-proxy-refresh-<kv-secret-name> coordination.k8s.io Lease
+  # (api-proxy/src/tank_api_proxy/lease.py), and the gate for raising this
+  # is tank_api_proxy_refresh_lease_total showing acquired/deferred_to_peer
+  # outcomes with no sustained `unavailable`. Raising it also renders
+  # minAvailable=1 PDBs for each proxy.
+  replicas: 1
   serviceAccount: claude-api-proxy
   serviceHost: claude-api-proxy.tank-operator.svc.cluster.local
   configSecret: claude-api-proxy-config
