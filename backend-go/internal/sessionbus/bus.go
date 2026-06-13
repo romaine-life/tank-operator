@@ -19,6 +19,13 @@ import (
 type Config struct {
 	URL   string
 	Token string
+	// User, when set, switches authentication from the bare token to a
+	// static user/password pair (password = Token). This is stage 2 of
+	// tank-operator#1128: with authorization.auth_callout enabled on the
+	// server, the orchestrator must be a named auth_users entry so it never
+	// routes through the callout — token-only auth has no user name to
+	// exempt. Unset = pre-callout token auth, unchanged.
+	User string
 	// Stream is the legacy combined stream (events forever; command
 	// subjects only for pre-split session pods). CommandStream is the
 	// WorkQueue stream that owns durable commands (issue #1076 item 2).
@@ -303,7 +310,11 @@ func Connect(ctx context.Context, cfg Config) (*Bus, error) {
 			slog.Warn("nats async error", "error", err)
 		}),
 	}
-	if token := strings.TrimSpace(cfg.Token); token != "" {
+	if user := strings.TrimSpace(cfg.User); user != "" {
+		// #1128 stage 2: named static user (exempt from auth_callout),
+		// password carried in Token.
+		opts = append(opts, nats.UserInfo(user, strings.TrimSpace(cfg.Token)))
+	} else if token := strings.TrimSpace(cfg.Token); token != "" {
 		opts = append(opts, nats.Token(token))
 	}
 	nc, err := nats.Connect(url, opts...)

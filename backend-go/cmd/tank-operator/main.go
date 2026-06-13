@@ -1040,7 +1040,11 @@ func buildSessionBus(scope string) *sessionbus.Bus {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	bus, err := sessionbus.Connect(ctx, sessionbus.Config{
-		URL:               url,
+		URL: url,
+		// NATS_USER set = static user/password auth (#1128 stage 2: the
+		// orchestrator is an auth_callout-exempt named user; password is
+		// the same NATS_TOKEN value). Unset = legacy token auth.
+		User:              os.Getenv("NATS_USER"),
 		Token:             os.Getenv("NATS_TOKEN"),
 		Stream:            envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
 		CommandStream:     envDefault("NATS_COMMAND_STREAM", "TANK_SESSION_COMMANDS"),
