@@ -34,10 +34,10 @@ export function clampScale(scale: number): number {
 
 /**
  * Scale that makes the natural image fit fully inside the container while
- * preserving aspect ratio. Capped at 1 so small images are shown at their
- * native pixel size rather than being upscaled (matching the prior
- * `object-fit: contain` + `max-*: 100%` behaviour). Returns 1 when either
- * dimension is unknown.
+ * preserving aspect ratio. Upscales smaller screenshots so the preview is an
+ * inspectable page, not a tiny natural-size thumbnail. The viewer's maximum
+ * zoom still bounds pathological cases like 1x1 placeholder images.
+ * Returns 1 when either dimension is unknown.
  */
 export function computeFitScale(natural: Size, container: Size): number {
   if (
@@ -52,7 +52,7 @@ export function computeFitScale(natural: Size, container: Size): number {
     container.width / natural.width,
     container.height / natural.height,
   );
-  return Math.min(1, fit);
+  return clampScale(fit);
 }
 
 /** Next scale when zooming in by one button step. */
