@@ -632,8 +632,8 @@ Session pods must not share a fleet-wide NATS token. The NATS bus carries
 durable turn commands, interrupts, input replies, and runner-produced events; a
 shared token lets any compromised pod forge another session's command/event
 traffic. New GUI session pods authenticate to NATS through auth_callout using
-their projected `auth.romaine.life` audience service-account token, and receive
-permissions scoped to their own session subjects.
+their projected `https://auth.romaine.life` audience service-account token,
+and receive permissions scoped to their own session subjects.
 
 Affected contracts:
 - Agent Runners

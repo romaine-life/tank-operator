@@ -19,8 +19,9 @@ static `auth_users` entry to `$SYS.REQ.USER.AUTH`. The
 account nkey:
 
 - **Session pods** connect with `user=<storage key>`, `pass=<projected SA
-  token>` (audience `auth.romaine.life` — the MCP-gateway trust root). The
-  callout validates the token via audience-pinned `TokenReview`, takes the
+  token>` (audience `https://auth.romaine.life` — the same platform audience
+  used by auth.romaine.life's exchange path and the MCP gateway). The callout
+  validates the token via audience-pinned `TokenReview`, takes the
   **bound pod name from the token's claims**, reads the pod's
   orchestrator-written labels (`tank-operator/session-id`, `-scope`), and
   issues permissions for exactly that session:
