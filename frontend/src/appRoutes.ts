@@ -3,6 +3,7 @@ export type AdminView =
   | "controls"
   | "avatars"
   | "report"
+  | "hidden-transcripts"
   | "observability"
   | "version";
 export type SessionRouteTab =
@@ -91,6 +92,7 @@ function parseAdminView(value: string | undefined): AdminView {
       return "controls";
     case "avatars":
     case "report":
+    case "hidden-transcripts":
     case "observability":
     case "version":
       return value;

@@ -48,7 +48,10 @@ test("the shell wires the compact drawer, top bar, and desktop-only gate", () =>
 
 test("reorder-by-drag is a desktop-only enhancement (no dead gesture on touch)", () => {
   expect(appSource.includes(
-          "draggable={!isClosing && !readOnlySessionView && !isCompact}",
+          "const rowReadOnly = readOnlySessionView || s.read_only_hidden === true;",
+        ), "session rows must include read-only hidden rows in the read-only guard").toBeTruthy();
+  expect(appSource.includes(
+          "draggable={!isClosing && !rowReadOnly && !isCompact}",
         ), "session rows must be non-draggable on compact viewports").toBeTruthy();
 });
 

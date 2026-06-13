@@ -771,6 +771,7 @@ function appendQueryParam(path: string, key: string, value: string): string {
 interface Session {
   id: string;
   session_scope?: string;
+  read_only_hidden?: boolean;
   pod_name: string | null;
   owner: string;
   status: string;
@@ -1424,6 +1425,7 @@ function normalizeSession(session: Session): Session {
     : null;
   const next = mode === session.mode ? { ...session } : { ...session, mode };
   next.session_scope = normalizeSessionScopeValue(session.session_scope);
+  next.read_only_hidden = session.read_only_hidden === true;
   next.activity = activity;
   // name is the server-canonical title and is required (non-empty) on the
   // wire. Defend against degraded/hand-rolled Session objects (tests, demo
@@ -1500,6 +1502,56 @@ function normalizeSession(session: Session): Session {
       ? session.system_avatar_id
       : null;
   return next;
+}
+
+function hiddenReadOnlySessionFromAdmin(
+  session: AdminHiddenSession,
+  sessionScope: string,
+): Session {
+  return normalizeSession({
+    id: session.session_id,
+    session_scope: sessionScope,
+    read_only_hidden: true,
+    pod_name: null,
+    owner: session.owner,
+    status: session.status || "Hidden",
+    mode: (normalizeSessionMode(session.mode) || "claude_gui") as SessionMode,
+    requested_at: null,
+    created_at: session.created_at || null,
+    ready_at: null,
+    name: session.name || session.session_id,
+    repos: [],
+    clone_state: null,
+    capabilities: [],
+    user_message_count: session.transcript_row_count,
+  });
+}
+
+function sessionIdentityKey(session: Pick<Session, "id" | "session_scope">): string {
+  return `${normalizeSessionScopeValue(session.session_scope)}\n${session.id}`;
+}
+
+function mergeHiddenReadOnlySessions(
+  base: Session[],
+  hiddenSessions: Session[],
+): Session[] {
+  if (hiddenSessions.length === 0) return base;
+  const baseKeys = new Set(base.map(sessionIdentityKey));
+  const hiddenOnly = hiddenSessions.filter(
+    (session) => !baseKeys.has(sessionIdentityKey(session)),
+  );
+  return hiddenOnly.length === 0 ? base : [...base, ...hiddenOnly];
+}
+
+function upsertHiddenReadOnlySession(
+  sessions: Session[],
+  hiddenSession: Session,
+): Session[] {
+  const key = sessionIdentityKey(hiddenSession);
+  const withoutExisting = sessions.filter(
+    (session) => sessionIdentityKey(session) !== key,
+  );
+  return [...withoutExisting, hiddenSession];
 }
 
 function orderSessionsByIds(sessions: Session[], order: string[]): Session[] {
@@ -1661,6 +1713,23 @@ interface AdminAppVersion {
   fetched_at: string;
 }
 
+interface AdminHiddenSession {
+  owner: string;
+  session_id: string;
+  name: string;
+  mode: string;
+  status: string;
+  created_at: string;
+  updated_at: string;
+  transcript_row_count: number;
+}
+
+interface AdminHiddenSessionsBody {
+  scope: string;
+  owner?: string;
+  sessions?: AdminHiddenSession[];
+}
+
 interface TestSlotSessionDefaults {
   mode: DefaultSessionMode;
   model: string;
@@ -1698,6 +1767,7 @@ interface AdminSettingsControls {
     defaults: TestSlotSessionDefaults,
   ) => Promise<void>;
   onAvatarCatalogChanged: () => Promise<void>;
+  onOpenHiddenSession: (session: AdminHiddenSession, sessionScope: string) => void;
   onViewingProdSessionsChange: (value: boolean) => void;
 }
 
@@ -13374,6 +13444,141 @@ function AdminTestSlotDefaultsPanel({
   );
 }
 
+function AdminHiddenTranscriptsPanel({
+  sessionScope,
+  onOpenSession,
+}: {
+  sessionScope: string;
+  onOpenSession: (session: AdminHiddenSession, sessionScope: string) => void;
+}) {
+  const [sessions, setSessions] = useState<AdminHiddenSession[]>([]);
+  const [selectedKey, setSelectedKey] = useState("");
+  const [listLoading, setListLoading] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+
+  const selectedSession = useMemo(
+    () => sessions.find((session) => adminHiddenSessionKey(session) === selectedKey) ?? null,
+    [sessions, selectedKey],
+  );
+
+  const refreshList = useCallback(async () => {
+    setListLoading(true);
+    try {
+      const params = new URLSearchParams({
+        session_scope: sessionScope,
+        limit: "200",
+      });
+      const res = await authedFetch(`/api/admin/hidden-sessions?${params}`);
+      if (!res.ok) {
+        throw new Error(`hidden sessions returned ${res.status}`);
+      }
+      const body = (await res.json()) as AdminHiddenSessionsBody;
+      const nextSessions = Array.isArray(body.sessions) ? body.sessions : [];
+      setSessions(nextSessions);
+      setSelectedKey((current) => {
+        if (current && nextSessions.some((session) => adminHiddenSessionKey(session) === current)) {
+          return current;
+        }
+        return nextSessions[0] ? adminHiddenSessionKey(nextSessions[0]) : "";
+      });
+      setListError(null);
+    } catch (err) {
+      setListError(errorMessage(err));
+    } finally {
+      setListLoading(false);
+    }
+  }, [sessionScope]);
+
+  useEffect(() => {
+    void refreshList();
+  }, [refreshList]);
+
+  return (
+    <div className="run-settings-diagnostics admin-hidden-transcripts">
+      <div className="run-settings-diagnostics-head">
+        <span className="run-settings-link-label">
+          <SearchIcon className="run-settings-link-icon" aria-hidden="true" />
+          <span>Hidden transcripts</span>
+        </span>
+        <button
+          type="button"
+          className="run-settings-icon-btn"
+          onClick={() => void refreshList()}
+          disabled={listLoading}
+          aria-label="Refresh hidden sessions"
+        >
+          <RotateCcwIcon aria-hidden="true" />
+        </button>
+      </div>
+      <div className="admin-hidden-transcripts-toolbar">
+        <label>
+          <span>Session</span>
+          <select
+            value={selectedKey}
+            disabled={listLoading || sessions.length === 0}
+            onChange={(event) => {
+              const nextKey = event.target.value;
+              setSelectedKey(nextKey);
+            }}
+          >
+            {sessions.length === 0 ? (
+              <option value="">No hidden sessions</option>
+            ) : (
+              sessions.map((session) => (
+                <option key={adminHiddenSessionKey(session)} value={adminHiddenSessionKey(session)}>
+                  {adminHiddenSessionOptionLabel(session)}
+                </option>
+              ))
+            )}
+          </select>
+        </label>
+        {selectedSession && (
+          <div className="admin-hidden-transcripts-meta">
+            <span>{hiddenSessionModeLabel(selectedSession.mode)}</span>
+            <span>{selectedSession.status || "unknown"}</span>
+            <span>{selectedSession.transcript_row_count} rows</span>
+            <span>{formatToolFullTime(selectedSession.updated_at)}</span>
+          </div>
+        )}
+      </div>
+      {listError && (
+        <div className="run-settings-observability-note" role="status">
+          {listError}
+        </div>
+      )}
+      {selectedSession ? (
+        <div className="admin-hidden-transcripts-actions">
+          <button
+            type="button"
+            className="run-settings-test-btn"
+            onClick={() => onOpenSession(selectedSession, sessionScope)}
+          >
+            Open session
+          </button>
+          <span className="run-settings-scope-value">
+            Opens in the normal read-only session view
+          </span>
+        </div>
+      ) : (
+        <div className="admin-hidden-transcript-empty">No hidden sessions</div>
+      )}
+    </div>
+  );
+}
+
+function adminHiddenSessionKey(session: AdminHiddenSession): string {
+  return `${session.owner}\n${session.session_id}`;
+}
+
+function adminHiddenSessionOptionLabel(session: AdminHiddenSession): string {
+  const updated = formatToolFullTime(session.updated_at);
+  return [session.name || session.session_id, session.owner, updated].filter(Boolean).join(" / ");
+}
+
+function hiddenSessionModeLabel(mode: string): string {
+  return MODE_LABELS[mode as SessionMode] ?? mode;
+}
+
 function AdminVersionValue({ image }: { image: AdminVersionImage }) {
   const links = [
     image.pr_url
@@ -13908,6 +14113,7 @@ function RunSettingsPanel({
     showAdminTab &&
     (adminView === "avatars" ||
       adminView === "report" ||
+      adminView === "hidden-transcripts" ||
       adminView === "observability")
       ? "run-settings-screen run-settings-screen-wide"
       : "run-settings-screen";
@@ -14013,6 +14219,26 @@ function RunSettingsPanel({
               onRefresh={adminControls.onRefreshObservability}
             />
           </>
+        ) : adminView === "hidden-transcripts" ? (
+          <>
+            <section className="run-settings-section">
+              <div className="run-settings-admin-heading">
+                <button
+                  type="button"
+                  className="run-settings-back-btn"
+                  onClick={() => setSettingsRoute("admin", "controls")}
+                >
+                  <ArrowLeftIcon aria-hidden="true" />
+                  <span>Admin</span>
+                </button>
+                <h2 className="run-settings-title">Hidden transcripts</h2>
+              </div>
+            </section>
+            <AdminHiddenTranscriptsPanel
+              sessionScope={adminControls.reportScope}
+              onOpenSession={adminControls.onOpenHiddenSession}
+            />
+          </>
         ) : adminView === "version" ? (
           <>
             <section className="run-settings-section">
@@ -14100,6 +14326,20 @@ function RunSettingsPanel({
                   <span>Session repo report</span>
                 </span>
                 <span className="run-settings-scope-value">Draft</span>
+              </button>
+              <button
+                type="button"
+                className="run-settings-link"
+                onClick={() => setSettingsRoute("admin", "hidden-transcripts")}
+              >
+                <span className="run-settings-link-label">
+                  <SearchIcon
+                    className="run-settings-link-icon"
+                    aria-hidden="true"
+                  />
+                  <span>Hidden transcripts</span>
+                </span>
+                <span className="run-settings-scope-value">Open</span>
               </button>
               <button
                 type="button"
@@ -14677,11 +14917,24 @@ function ChatPane({
       if (publicView && publicShareTokenValue) {
         return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/timeline${query ? `?${query}` : ""}`;
       }
+      if (session.read_only_hidden === true) {
+        let path = `/api/admin/hidden-sessions/${encodeURIComponent(targetSessionId)}/timeline${query ? `?${query}` : ""}`;
+        path = appendQueryParam(path, "session_scope", sessionScope);
+        if (session.owner) path = appendQueryParam(path, "owner", session.owner);
+        return path;
+      }
       return scopedSessionPathForPane(
         `/api/sessions/${encodeURIComponent(targetSessionId)}/timeline${query ? `?${query}` : ""}`,
       );
     },
-    [publicShareTokenValue, publicView, scopedSessionPathForPane],
+    [
+      publicShareTokenValue,
+      publicView,
+      scopedSessionPathForPane,
+      session.owner,
+      session.read_only_hidden,
+      sessionScope,
+    ],
   );
   const turnActivityRequestPathForPane = useCallback(
     (turnId: string, page?: number) => {
@@ -14723,6 +14976,10 @@ function ChatPane({
       setControlActionEntries([]);
       return;
     }
+    if (readOnly) {
+      setControlActionEntries([]);
+      return;
+    }
     const res = await fetchPaneResource(
       scopedSessionPathForPane(
         `/api/sessions/${encodeURIComponent(session.id)}/control-actions`,
@@ -14733,9 +14990,19 @@ function ChatPane({
     setControlActionEntries(
       controlActionRowsToEntries(body) as TranscriptEntry[],
     );
-  }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
+  }, [
+    fetchPaneResource,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
   const fetchBackgroundTaskEntries = useCallback(async () => {
     if (publicView) {
+      setBackgroundTaskLedgerEntries([]);
+      return;
+    }
+    if (readOnly) {
       setBackgroundTaskLedgerEntries([]);
       return;
     }
@@ -14749,7 +15016,13 @@ function ChatPane({
     setBackgroundTaskLedgerEntries(
       normalizeProjectedTranscriptEntries(body.background_tasks ?? []),
     );
-  }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
+  }, [
+    fetchPaneResource,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
   const supportsFileAttachments =
     !readOnly && !publicView && sessionModeSupportsWorkspaceFiles(session.mode);
   const filesAvailable =
@@ -15756,6 +16029,7 @@ function ChatPane({
   }
   function scheduleSdkReadStateUpdate(): void {
     if (publicView) return;
+    if (readOnly) return;
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
     // Read-cursor advancement is gated on navigation mode. The durable
@@ -15783,6 +16057,7 @@ function ChatPane({
   }
   async function flushSdkReadStateUpdate(): Promise<void> {
     if (publicView) return;
+    if (readOnly) return;
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
     if (navigationModeRef.current !== "live-tail") return;
@@ -15981,13 +16256,13 @@ function ChatPane({
 
   useEffect(() => {
     visibleRef.current = visible;
-    if (!visible && sdkReadStateTimerRef.current !== null) {
+    if ((!visible || readOnly) && sdkReadStateTimerRef.current !== null) {
       window.clearTimeout(sdkReadStateTimerRef.current);
       sdkReadStateTimerRef.current = null;
       return;
     }
-    if (visible) scheduleSdkReadStateUpdate();
-  }, [session.id, visible]);
+    if (visible && !readOnly) scheduleSdkReadStateUpdate();
+  }, [readOnly, session.id, visible]);
 
   // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
@@ -18283,6 +18558,7 @@ function ChatPane({
 
   function scheduleSdkEventStreamReconnect(): void {
     if (publicView) return;
+    if (readOnly) return;
     if (sdkEventReconnectTimerRef.current !== null) {
       window.clearTimeout(sdkEventReconnectTimerRef.current);
     }
@@ -18297,6 +18573,10 @@ function ChatPane({
 
   async function openSdkEventStream(): Promise<EventSource | null> {
     if (publicView) {
+      setSdkConnectionState("idle");
+      return null;
+    }
+    if (readOnly) {
       setSdkConnectionState("idle");
       return null;
     }
@@ -18405,7 +18685,12 @@ function ChatPane({
 
   useEffect(() => {
     if (publicView) return;
-    if (!visible || !CHAT_MODES.has(session.mode) || !historyBootstrapped)
+    if (
+      readOnly ||
+      !visible ||
+      !CHAT_MODES.has(session.mode) ||
+      !historyBootstrapped
+    )
       return;
     // Long-task correlation: switching active sessions triggers a
     // reducer reset + transcript bootstrap + scroll rewire. Attribute
@@ -18440,6 +18725,7 @@ function ChatPane({
   }, [
     historyBootstrapped,
     publicView,
+    readOnly,
     visible,
     session.id,
     session.mode,
@@ -18508,7 +18794,7 @@ function ChatPane({
     [entries],
   );
   useEffect(() => {
-    if (publicView || !visible) {
+    if (publicView || !visible || readOnly) {
       setScheduledWakeupEntries([]);
       setControlActionEntries([]);
       setBackgroundTaskLedgerEntries([]);
@@ -18533,6 +18819,7 @@ function ChatPane({
     fetchBackgroundTaskEntries,
     fetchControlActionEntries,
     publicView,
+    readOnly,
     visible,
   ]);
   // Background tasks come from the durable session-level feed, not the main
@@ -21314,6 +21601,7 @@ function AuthenticatedApp() {
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
+  const [hiddenReadOnlySessions, setHiddenReadOnlySessions] = useState<Session[]>([]);
   const [sessionTurnsOpenRequests, setSessionTurnsOpenRequests] = useState<
     Record<string, number>
   >({});
@@ -21329,6 +21617,7 @@ function AuthenticatedApp() {
   // reducer mutates the canonical state via setState; the refs are
   // updated by the effects below.
   const sessionsRef = useRef<Session[]>([]);
+  const hiddenReadOnlySessionsRef = useRef<Session[]>([]);
   const sessionActivitiesRef = useRef<Record<string, SessionActivitySummary>>(
     {},
   );
@@ -21741,6 +22030,39 @@ function AuthenticatedApp() {
     [effectiveSessionScope],
   );
   const localSessionPath = useCallback((path: string) => path, []);
+  const openHiddenAdminSession = useCallback(
+    (session: AdminHiddenSession, sessionScope: string) => {
+      const hiddenSession = hiddenReadOnlySessionFromAdmin(
+        session,
+        sessionScope,
+      );
+      setHiddenReadOnlySessions((prev) =>
+        upsertHiddenReadOnlySession(prev, hiddenSession),
+      );
+      hiddenReadOnlySessionsRef.current = upsertHiddenReadOnlySession(
+        hiddenReadOnlySessionsRef.current,
+        hiddenSession,
+      );
+      setSessions((prev) => upsertHiddenReadOnlySession(prev, hiddenSession));
+      setSessionActivities((prev) => {
+        if (prev[hiddenSession.id] == null) return prev;
+        const next = { ...prev };
+        delete next[hiddenSession.id];
+        return next;
+      });
+      setClosingIds((prev) => {
+        if (!prev.has(hiddenSession.id)) return prev;
+        const next = new Set(prev);
+        next.delete(hiddenSession.id);
+        return next;
+      });
+      setNavDrawerOpen(false);
+      requestSessionTurnsOpen(hiddenSession.id);
+      replaceSessionRoute(hiddenSession.id, "turns");
+      activate(hiddenSession.id);
+    },
+    [],
+  );
   const adminSettingsControls = hasAdminAccess
     ? {
         visible: true,
@@ -21769,6 +22091,7 @@ function AuthenticatedApp() {
         onRefreshVersion: refreshAdminVersion,
         onSaveTestSlotDefaults: saveAdminTestSlotDefaults,
         onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
+        onOpenHiddenSession: openHiddenAdminSession,
         onViewingProdSessionsChange: (value: boolean) => {
           const next = value ? PROD_SESSION_SCOPE : "";
           setSessionViewScopeOverride(next);
@@ -22610,9 +22933,10 @@ function AuthenticatedApp() {
         sessionCount: listed.length,
         source: "initial",
       });
-      const sessionsFromStore = sessionStoreRef.current
-        .list()
-        .map(rowToSession);
+      const sessionsFromStore = mergeHiddenReadOnlySessions(
+        sessionStoreRef.current.list().map(rowToSession),
+        hiddenReadOnlySessionsRef.current,
+      );
       setSessions(sessionsFromStore);
       const nextActivities: Record<string, SessionActivitySummary> = {};
       for (const row of sessionStoreRef.current.list()) {
@@ -22662,6 +22986,8 @@ function AuthenticatedApp() {
     sessionStoreRef.current = new SessionStore();
     activitySnapshotAppliedRef.current = false;
     lastSoundedOrderKeyRef.current = new Map();
+    hiddenReadOnlySessionsRef.current = [];
+    setHiddenReadOnlySessions([]);
     setSessions([]);
     setSessionActivities({});
     sessionActivitiesRef.current = {};
@@ -22708,6 +23034,9 @@ function AuthenticatedApp() {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+  useEffect(() => {
+    hiddenReadOnlySessionsRef.current = hiddenReadOnlySessions;
+  }, [hiddenReadOnlySessions]);
   useEffect(() => {
     sessionActivitiesRef.current = sessionActivities;
   }, [sessionActivities]);
@@ -22893,7 +23222,10 @@ function AuthenticatedApp() {
         // store's durable sidebar_position sort mirrors what
         // refresh() does on snapshot.
         const rows = store.list();
-        const sessionsFromStore: Session[] = rows.map(rowToSession);
+        const sessionsFromStore: Session[] = mergeHiddenReadOnlySessions(
+          rows.map(rowToSession),
+          hiddenReadOnlySessionsRef.current,
+        );
         setSessions(sessionsFromStore);
         sessionsRef.current = sessionsFromStore;
 
@@ -23838,7 +24170,7 @@ function AuthenticatedApp() {
   }
 
   function beginSessionTitleEdit(session: Session) {
-    if (readOnlySessionView) return;
+    if (readOnlySessionView || session.read_only_hidden) return;
     editingSessionTitleClosingRef.current = false;
     // name is the always-present canonical title; seed the editor with it.
     // Capture the seeded value so commit can tell an untouched title from a
@@ -24233,6 +24565,9 @@ function AuthenticatedApp() {
   const turnCompleteSoundVolumePct = Math.round(
     runPrefs.turnCompleteSoundVolume * 100,
   );
+  const sidebarSessions = sessions.filter(
+    (session) => session.read_only_hidden !== true,
+  );
 
   // The sidebar contents have exactly one source of truth. On the desktop shell
   // they render inline as the grid's first column; on a compact viewport the
@@ -24282,13 +24617,14 @@ function AuthenticatedApp() {
           </button>
         </div>
         <ul className="sessions">
-          {sessions.length === 0 ? (
+          {sidebarSessions.length === 0 ? (
             <li className="sessions-empty">no sessions</li>
           ) : (
-            sessions.map((s) => {
+            sidebarSessions.map((s) => {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
+              const rowReadOnly = readOnlySessionView || s.read_only_hidden === true;
               const avatar = getSessionAvatarByID(s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(
                 s,
@@ -24304,7 +24640,7 @@ function AuthenticatedApp() {
                   key={s.id}
                   data-session-id={s.id}
                   className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
-                  draggable={!isClosing && !readOnlySessionView && !isCompact}
+                  draggable={!isClosing && !rowReadOnly && !isCompact}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
                   onDragOver={(e) => dragSessionOver(s.id, e)}
                   onDrop={(e) => dropSession(s.id, e)}
@@ -24334,7 +24670,7 @@ function AuthenticatedApp() {
                     <SessionTabMenu
                       session={s}
                       isClosing={isClosing}
-                      readOnly={readOnlySessionView}
+                      readOnly={rowReadOnly}
                       onClose={() => deleteSession(s.id)}
                       onSaveCredentials={
                         CONFIG_MODES.has(s.mode)
@@ -24342,7 +24678,7 @@ function AuthenticatedApp() {
                           : undefined
                       }
                       saveDisabled={
-                        busy || !isLive || isClosing || readOnlySessionView
+                        busy || !isLive || isClosing || rowReadOnly
                       }
                     />
                   </div>
@@ -25218,7 +25554,7 @@ function AuthenticatedApp() {
                       primeTurnCompleteSound={primeTurnCompleteSound}
                       playTurnCompleteSound={playTurnCompleteSound}
                       adminControls={adminSettingsControls}
-                      readOnly={readOnlySessionView}
+                      readOnly={readOnlySessionView || s.read_only_hidden === true}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
                       sidebarTurnsOpenRequest={
@@ -25231,7 +25567,7 @@ function AuthenticatedApp() {
                   </div>
                 ) : (
                   <div key={s.id} className="run-body" hidden={active !== s.id}>
-                    {readOnlySessionView ? (
+                    {readOnlySessionView || s.read_only_hidden === true ? (
                       <section className="run-panel">
                         <main className="run-main">
                           <div
