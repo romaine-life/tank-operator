@@ -308,6 +308,9 @@ def _append_tank_publish_tool_to_json(value) -> bool:
         has_publish = False
     has_break_glass = any(isinstance(tool, dict) and tool.get("name") == _TANK_BREAK_GLASS_TOOL for tool in tools)
     changed = False
+    for tool in tools:
+        if isinstance(tool, dict) and tool.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
+            changed = _augment_glimmung_hot_swap_tool_schema(tool) or changed
     if not has_publish:
         tools.append(
             {
@@ -377,6 +380,32 @@ def _append_tank_publish_tool_to_json(value) -> bool:
         }
     )
     return True
+
+
+def _augment_glimmung_hot_swap_tool_schema(tool: dict) -> bool:
+    schema = tool.get("inputSchema")
+    if not isinstance(schema, dict):
+        schema = {"type": "object", "properties": {}}
+        tool["inputSchema"] = schema
+    properties = schema.get("properties")
+    if not isinstance(properties, dict):
+        properties = {}
+        schema["properties"] = properties
+
+    changed = False
+    if "repo" not in properties:
+        properties["repo"] = {
+            "type": "string",
+            "description": "Optional GitHub slug, for example romaine-life/tank-operator. Used by Tank to verify the governed branch before hot-swap.",
+        }
+        changed = True
+    if "repo_path" not in properties:
+        properties["repo_path"] = {
+            "type": "string",
+            "description": "Optional absolute or /workspace-relative path to the repo. Used by Tank to verify branch, publish, PR, CI, and mergeability before hot-swap.",
+        }
+        changed = True
+    return changed
 
 
 def _append_ci_reminder(raw: bytes) -> bytes:

@@ -444,6 +444,36 @@ def test_tank_publish_tool_is_added_to_tools_list() -> None:
     assert "token" not in break_glass["inputSchema"]["properties"]
 
 
+def test_hot_swap_tool_schema_gets_repo_path_for_tank_gate() -> None:
+    raw = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "result": {
+            "tools": [
+                {
+                    "name": "apply_test_slot_hot_swap",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "project": {"type": "string"},
+                            "git_ref": {"type": "string"},
+                        },
+                        "additionalProperties": False,
+                    },
+                }
+            ]
+        },
+    }).encode("utf-8")
+
+    augmented = json.loads(_append_tank_publish_tool(raw))
+
+    hot_swap = augmented["result"]["tools"][0]
+    properties = hot_swap["inputSchema"]["properties"]
+    assert properties["repo"]["type"] == "string"
+    assert properties["repo_path"]["type"] == "string"
+    assert hot_swap["inputSchema"]["additionalProperties"] is False
+
+
 def test_break_glass_approval_url_carries_request_context() -> None:
     url = _break_glass_approval_url(
         "95",
