@@ -74,6 +74,29 @@ func TestScreenshotExtension(t *testing.T) {
 	}
 }
 
+func TestRawFileContentType(t *testing.T) {
+	cases := []struct {
+		path string
+		want string
+	}{
+		{"screenshots/1.png", "image/png"},
+		{"/workspace/screenshots/result.JPG", "image/jpeg"},
+		{"camera.heic", "image/heic"},
+		{"diagram.svg", "image/svg+xml"},
+		{"preview.webp", "image/webp"},
+		{"archive.tar.gz", "application/octet-stream"},
+		{"README", "application/octet-stream"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.path, func(t *testing.T) {
+			got := rawFileContentType(tc.path)
+			if got != tc.want {
+				t.Fatalf("rawFileContentType(%q) = %q, want %q", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestUniqueAttachmentRelPathNoCollisionForSameName is the regression
 // guard for the non-image fallback path: the SPA composer fires
 // `uploadAttachment` per file in a paste event without awaiting, so two

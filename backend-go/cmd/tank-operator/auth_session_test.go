@@ -257,6 +257,31 @@ func TestHandleCreateStreamTicketScopesPinnedReposTicket(t *testing.T) {
 	}
 }
 
+func TestHandleCreateStreamTicketScopesFileRawTicketToPath(t *testing.T) {
+	app := adminTestServer(t)
+	tickets := &fakeStreamAuthTicketStore{}
+	app.streamAuthTickets = tickets
+	app.sessionScope = "default"
+	request := httptest.NewRequest(http.MethodPost, "/api/auth/stream-ticket", strings.NewReader(`{
+		"stream": "file-raw",
+		"session_id": "63",
+		"path": "/workspace/screenshots/result.png"
+	}`))
+	request.Header.Set("Authorization", "Bearer "+signedTokenWithRole(t, otherUser, auth.RoleUser))
+	response := httptest.NewRecorder()
+
+	app.handleCreateStreamTicket(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("status = %d body = %s", response.Code, response.Body.String())
+	}
+	if tickets.created.StreamKind != streamKindFileRaw ||
+		tickets.created.SessionID != fileRawTicketResourceID("63", "screenshots/result.png") ||
+		tickets.created.SessionScope != "default" ||
+		tickets.created.Email != otherUser {
+		t.Fatalf("created ticket = %#v", tickets.created)
+	}
+}
+
 func TestHandleCreateStreamTicketDoesNotTurnClientCancelIntoStoreFailure(t *testing.T) {
 	app := adminTestServer(t)
 	tickets := &fakeStreamAuthTicketStore{createErr: context.Canceled}

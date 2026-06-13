@@ -806,8 +806,11 @@ test("pin reorder writes through the durable pinned-repos endpoint, not browser-
 
 test("browser-native protected resources are not loaded with raw API URLs", () => {
   expect(appSource.includes("src={`/api/sessions/${session.id}/files/raw")).toBe(false);
-  expect(appSource.includes("URL.createObjectURL(blob)")).toBe(true);
-  expect(appSource).toMatch(/authedFetch\([\s\S]{0,120}\/files\/raw\?path=/);
+  expect(appSource.includes("withBrowserImageMime")).toBe(false);
+  expect(appSource).toMatch(/authedFileRawURL\(session\.id, selectedFile\.path\)/);
+  expect(appSource).toMatch(/authedFileRawURL\(sessionId, target\.path\)/);
+  expect(authSource).toMatch(/stream: "file-raw"/);
+  expect(authSource).toMatch(/\/files\/raw\?path=/);
 });
 
 test("startup transcript rows come from durable conversation events", () => {

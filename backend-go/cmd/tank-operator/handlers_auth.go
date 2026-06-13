@@ -23,6 +23,7 @@ const (
 	streamKindSessionList   = "session-list"
 	streamKindSessionEvents = "session-events"
 	streamKindPinnedRepos   = "pinned-repos"
+	streamKindFileRaw       = "file-raw"
 )
 
 type gitHubInstallStateStore interface {
@@ -124,6 +125,7 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 		Stream       string `json:"stream"`
 		SessionID    string `json:"session_id"`
 		SessionScope string `json:"session_scope"`
+		Path         string `json:"path"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		recordStreamAuthTicket("create", "", "invalid")
@@ -154,6 +156,29 @@ func (s *appServer) handleCreateStreamTicket(w http.ResponseWriter, r *http.Requ
 			writeError(w, status, err.Error())
 			return
 		}
+	case streamKindFileRaw:
+		if sessionID == "" {
+			recordStreamAuthTicket("create", streamKind, "invalid")
+			writeError(w, http.StatusBadRequest, "session_id is required for file raw tickets")
+			return
+		}
+		if strings.TrimSpace(body.Path) == "" {
+			recordStreamAuthTicket("create", streamKind, "invalid")
+			writeError(w, http.StatusBadRequest, "path is required for file raw tickets")
+			return
+		}
+		absPath, err := safeWorkspacePath(body.Path)
+		if err != nil {
+			recordStreamAuthTicket("create", streamKind, "invalid")
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if _, status, err := s.authorizeSessionReadInScope(r.Context(), user, sessionID, sessionScope); err != nil {
+			recordStreamAuthTicket("create", streamKind, "denied")
+			writeError(w, status, err.Error())
+			return
+		}
+		sessionID = fileRawTicketResourceID(sessionID, workspaceRelPath(absPath))
 	default:
 		recordStreamAuthTicket("create", streamKind, "invalid")
 		writeError(w, http.StatusBadRequest, "unknown stream")

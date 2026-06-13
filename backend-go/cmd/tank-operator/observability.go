@@ -1312,7 +1312,7 @@ func streamAuthTicketOperationLabel(operation string) string {
 
 func streamAuthTicketStreamLabel(stream string) string {
 	switch stream {
-	case streamKindSessionList, streamKindSessionEvents, streamKindPinnedRepos:
+	case streamKindSessionList, streamKindSessionEvents, streamKindPinnedRepos, streamKindFileRaw:
 		return stream
 	default:
 		return "unknown"
