@@ -30,7 +30,8 @@ function renderWithRunContext(
     workspacePathHref: (target) => {
       const path = typeof target === "string" ? target : target.path;
       const line = typeof target === "string" ? null : target.line;
-      return `https://tank.example/sessions/42/files/${path}${
+      // Mirror buildSessionRouteUrl: absolute pod path, leading slash dropped.
+      return `https://tank.example/sessions/42/files/${path.replace(/^\/+/, "")}${
         line == null ? "" : `:${line}`
       }`;
     },
@@ -60,7 +61,7 @@ test("workspace markdown links expose routed hrefs and preserve modified clicks"
   const link = screen.getByRole("link", { name: "result.png" });
   expect(link).toHaveAttribute(
     "href",
-    "https://tank.example/sessions/42/files/screenshots/result.png:7",
+    "https://tank.example/sessions/42/files/workspace/screenshots/result.png:7",
   );
 
   link.setAttribute("href", "#workspace-link");
@@ -69,7 +70,7 @@ test("workspace markdown links expose routed hrefs and preserve modified clicks"
 
   fireEvent.click(link, { button: 0 });
   expect(openWorkspacePath).toHaveBeenCalledWith({
-    path: "screenshots/result.png",
+    path: "/workspace/screenshots/result.png",
     line: 7,
   });
 });

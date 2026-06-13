@@ -17255,11 +17255,9 @@ function ChatPane({
         ? normalizeWorkspacePathTarget(target)
         : target;
     if (!normalized) return;
-    // The prose linkifier yields workspace-relative paths; the files panel works
-    // in absolute pod paths, so resolve under /workspace here. (Linkifying
-    // non-workspace paths in chat prose is a deliberate v1 non-goal — reach
-    // ~/.claude etc. via the files-panel bookmarks instead.)
-    const absPath = `/workspace/${normalized.path}`;
+    // The prose linkifier yields absolute pod paths under the browsable roots
+    // (/workspace, ~/.claude, /opt/tank, /tmp), already deny-prefix filtered.
+    const absPath = normalized.path;
     setActiveTab("files");
     setFilesPath(parentDir(absPath));
     setSelectedFile({
@@ -17289,7 +17287,7 @@ function ChatPane({
       null,
       null,
       null,
-      `/workspace/${normalized.path}`,
+      normalized.path,
       normalized.line,
     );
   }

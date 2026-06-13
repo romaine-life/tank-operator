@@ -1,4 +1,12 @@
-const WORKSPACE_PATH_RE = /(?:\/workspace|workspace)\/[^\s<>"'`]+/g;
+import { READABLE_ROOTS, isDeniedPath } from "./workspaceRoots";
+
+// Roots whose paths are linkified in chat prose — the same browsable roots the
+// files panel bookmarks. `~` expands to /home/node. Anything outside these, or
+// under a secret deny-prefix, is left as plain text (the files panel is the way
+// to reach those; we don't want false links to non-files or to 403s).
+const READABLE_LINK_ROOTS = READABLE_ROOTS.map((r) => r.path);
+const WORKSPACE_PATH_RE =
+  /(?:~\/|\/home\/node\/|\/workspace\/|\/opt\/tank\/|\/tmp\/|workspace\/)[^\s<>"'`]+/g;
 const URL_RE = /https?:\/\/[^\s<>"'`]+/g;
 const TRAILING_LINK_PUNCTUATION_RE = /[.,;:!?]+$/;
 const INTERNAL_ABSOLUTE_HREF_PREFIXES = [
@@ -50,7 +58,7 @@ function markdownLinkDestination(href: string): string {
 }
 
 function workspaceHrefFromTarget(target: WorkspacePathTarget): string {
-  return `/workspace/${target.path}${target.line === null ? "" : `:${target.line}`}`;
+  return `${target.path}${target.line === null ? "" : `:${target.line}`}`;
 }
 
 function normalizeWorkspaceFileURLDestination(rawHref: string): string | null {
@@ -76,12 +84,18 @@ function splitLineSuffix(path: string): { path: string; line: number | null } {
   return { path: path.slice(0, -match[0].length), line };
 }
 
+function expandTilde(path: string): string {
+  if (path === "~") return "/home/node";
+  if (path.startsWith("~/")) return `/home/node/${path.slice(2)}`;
+  return path;
+}
+
 function isWorkspaceHrefPath(path: string): boolean {
-  return path === "/workspace" ||
-    path.startsWith("/workspace/") ||
-    path === "workspace" ||
-    path.startsWith("workspace/") ||
-    path.startsWith("./");
+  const p = expandTilde(path);
+  if (p === "workspace" || p.startsWith("workspace/") || p.startsWith("./")) {
+    return true;
+  }
+  return READABLE_LINK_ROOTS.some((r) => p === r || p.startsWith(`${r}/`));
 }
 
 export function normalizeWorkspacePathTarget(rawPath: string): WorkspacePathTarget | null {
@@ -95,14 +109,18 @@ export function normalizeWorkspacePathTarget(rawPath: string): WorkspacePathTarg
   }
   path = path.replace(/\\/g, "/");
   const lineTarget = splitLineSuffix(path);
-  path = lineTarget.path;
-  if (path === "/workspace" || path === "workspace") return null;
-  path = path.replace(/^\/workspace\/?/, "");
-  path = path.replace(/^workspace\/+/, "");
-  path = path.replace(/^\/+/, "");
-  path = path.replace(/^\.\//, "");
-  if (!path || path === ".") return null;
-  if (path.split("/").some((seg) => seg === "..")) return null;
+  path = expandTilde(lineTarget.path);
+  // Resolve to an absolute pod path. ./x , workspace/x , and bare relative paths
+  // land under /workspace; an already-absolute path keeps its root.
+  if (path.startsWith("./")) path = `/workspace/${path.slice(2)}`;
+  else if (path === "workspace" || path.startsWith("workspace/")) {
+    path = `/${path}`;
+  } else if (!path.startsWith("/")) path = `/workspace/${path}`;
+  path = path.replace(/\/{2,}/g, "/").replace(/\/+$/, "");
+  if (!path || path.split("/").some((seg) => seg === "..")) return null;
+  // Only the browsable roots are linkified, and never a secret deny-prefix.
+  if (!READABLE_LINK_ROOTS.some((r) => path.startsWith(`${r}/`))) return null;
+  if (isDeniedPath(path)) return null;
   return { path, line: lineTarget.line };
 }
 
@@ -159,7 +177,12 @@ export function workspacePathFromHref(
     return normalizeWorkspacePathTarget(trimmed);
   }
 
-  if (trimmed.startsWith("workspace/") || trimmed.startsWith("./")) {
+  if (
+    trimmed.startsWith("workspace/") ||
+    trimmed.startsWith("./") ||
+    trimmed === "~" ||
+    trimmed.startsWith("~/")
+  ) {
     return normalizeWorkspacePathTarget(trimmed);
   }
 
