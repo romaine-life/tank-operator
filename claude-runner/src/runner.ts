@@ -529,6 +529,24 @@ function inputReplyAnswerShape(
   return "empty";
 }
 
+function sanitizeProviderSessionID(value: unknown): string {
+  const id = String(value ?? "").trim();
+  if (!/^[A-Za-z0-9._:-]{1,160}$/.test(id)) return "";
+  return id;
+}
+
+function commandProviderSessionID(record: SessionCommandRecord): string {
+  return sanitizeProviderSessionID(record.provider_session_id);
+}
+
+function claudeProviderSessionID(message: ClaudeProviderEvent): string {
+  for (const key of ["session_id", "sessionId"]) {
+    const id = sanitizeProviderSessionID(message[key]);
+    if (id) return id;
+  }
+  return "";
+}
+
 export interface PendingTurn {
   turnID: string;
   clientNonce: string;
@@ -972,6 +990,7 @@ export class Runner {
   // app-server transport's first-observed latch. Stays null until the first
   // `result` message carries a usable window.
   private reportedContextWindowTokens: number | null = null;
+  private reportedProviderSessionID = "";
   // providerRetryStall tracks an in-flight Claude SDK api_retry{error:"rate_limit"}
   // storm against the turn it is stalling. It is armed on the first such frame
   // for a turn and cleared by resetProviderRetryStall() the moment the turn
@@ -1138,6 +1157,7 @@ export class Runner {
     // wire-shape regression would surface as the SDK rejecting the value
     // (visible via providerErrorTotal{kind="query"}).
     const effort = (requestedEffort || DEFAULT_EFFORT) as EffortLevel;
+    const providerSessionID = commandProviderSessionID(record);
     this.pinnedModel = model;
     this.pinnedEffort = effort;
     optionsPinnedTotal.labels(model, effort).inc();
@@ -1146,6 +1166,7 @@ export class Runner {
         msg: "claude-runner pinning SDK options from first turn",
         model,
         effort,
+        provider_session_id: providerSessionID,
         source_command_id: record.id,
       }),
     );
@@ -1163,10 +1184,14 @@ export class Runner {
       toolAliases: {
         [TANK_ASK_USER_QUESTION_TOOL]: TANK_ASK_USER_QUESTION_TOOL_ALIAS,
       },
-      // Resume an on-disk JSONL if one exists from a prior process
-      // life (e.g., claude-runner restart within the same pod).
-      // First boot with no JSONL: no-op.
-      continue: true,
+      ...(providerSessionID
+        ? { resume: providerSessionID }
+        : {
+            // Resume an on-disk JSONL if one exists from a prior process
+            // life (e.g., claude-runner restart within the same pod).
+            // First boot with no JSONL: no-op.
+            continue: true,
+          }),
       // include_partial_messages keeps the typewriter effect — the SPA
       // renders stream_event deltas live and snapshots to the canonical
       // assistant message when it arrives.
@@ -1235,6 +1260,19 @@ export class Runner {
     }).catch(console.warn);
   }
 
+  private maybeReportProviderSessionID(message: ClaudeProviderEvent): void {
+    const providerSessionID = claudeProviderSessionID(message);
+    if (!providerSessionID || providerSessionID === this.reportedProviderSessionID) {
+      return;
+    }
+    this.reportedProviderSessionID = providerSessionID;
+    void reportRuntimeConfig(this.cfg, {
+      providerSessionId: providerSessionID,
+    }).catch((err) => {
+      console.warn("provider session id report failed:", err);
+    });
+  }
+
   // launchSdkQuery wraps the SDK's query() construction in a method so
   // runner.test.ts can substitute a stub iterator without spawning the
   // real claude binary. The split has no observable runtime effect — the
@@ -1290,6 +1328,7 @@ export class Runner {
 
   private async handleEvent(message: SDKMessage): Promise<void> {
     const providerEvent = message as ClaudeProviderEvent;
+    this.maybeReportProviderSessionID(providerEvent);
     // The per-turn `result` message carries ModelUsage with the provider's
     // context window. Read it before any early-return branching below so the
     // window still latches even when the active turn was already interrupted.

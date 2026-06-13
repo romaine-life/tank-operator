@@ -249,14 +249,16 @@ type SessionRecord struct {
 	// RuntimeModel/RuntimeEffort are written by the runner after it
 	// hands options to the provider executable/SDK. This is the applied
 	// configuration surface the UI renders in the composer footer.
-	RuntimeModel                   string
-	RuntimeEffort                  string
-	RuntimeConfiguredAt            string
-	RuntimeContextWindowTokens     int64
-	RuntimeContextWindowSource     string
-	RuntimeContextWindowObservedAt string
-	ProviderRateLimitInfo          map[string]any
-	ProviderRateLimitObservedAt    string
+	RuntimeModel                     string
+	RuntimeEffort                    string
+	RuntimeConfiguredAt              string
+	RuntimeContextWindowTokens       int64
+	RuntimeContextWindowSource       string
+	RuntimeContextWindowObservedAt   string
+	RuntimeProviderSessionID         string
+	RuntimeProviderSessionObservedAt string
+	ProviderRateLimitInfo            map[string]any
+	ProviderRateLimitObservedAt      string
 
 	// CompactionCount is the durable count of context.compacted events the
 	// runner has recorded for this session. It is a projection over the
@@ -370,13 +372,13 @@ type ManifestOptions struct {
 	// ConfigMap name for the OAuth gateway CA cert.
 	OAuthGatewayCAConfigMap string
 	// SDK runners use NATS JetStream for durable command/event delivery.
-	NATSURL        string
-	NATSStream     string
+	NATSURL    string
+	NATSStream string
 	// NATSCommandStream is the WorkQueue stream the runner's durable
 	// command consumers bind (issue #1076 item 2); events keep riding
 	// NATSStream.
 	NATSCommandStream string
-	NATSAuthSecret string
+	NATSAuthSecret    string
 	// Model/Effort are the immutable session-owned SDK run configuration
 	// accepted at create time.
 	Model          string

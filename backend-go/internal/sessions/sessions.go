@@ -84,21 +84,23 @@ type Info struct {
 	// Model/Effort are the durable session-owned run options. Runtime*
 	// fields are written back by the runner after it applies the config
 	// to the provider executable/SDK.
-	Model                          string         `json:"model,omitempty"`
-	Effort                         string         `json:"effort,omitempty"`
-	RuntimeModel                   string         `json:"runtime_model,omitempty"`
-	RuntimeEffort                  string         `json:"runtime_effort,omitempty"`
-	RuntimeConfiguredAt            *string        `json:"runtime_configured_at,omitempty"`
-	RuntimeContextWindowTokens     int64          `json:"runtime_context_window_tokens,omitempty"`
-	RuntimeContextWindowSource     string         `json:"runtime_context_window_source,omitempty"`
-	RuntimeContextWindowObservedAt *string        `json:"runtime_context_window_observed_at,omitempty"`
-	ProviderRateLimitInfo          map[string]any `json:"provider_rate_limit_info,omitempty"`
-	ProviderRateLimitObservedAt    *string        `json:"provider_rate_limit_observed_at,omitempty"`
-	CompactionCount                int64          `json:"compaction_count,omitempty"`
-	UserMessageCount               int64          `json:"user_message_count,omitempty"`
-	OpenTarget                     string         `json:"open_target,omitempty"`
-	AgentAvatarID                  string         `json:"agent_avatar_id,omitempty"`
-	SystemAvatarID                 string         `json:"system_avatar_id,omitempty"`
+	Model                            string         `json:"model,omitempty"`
+	Effort                           string         `json:"effort,omitempty"`
+	RuntimeModel                     string         `json:"runtime_model,omitempty"`
+	RuntimeEffort                    string         `json:"runtime_effort,omitempty"`
+	RuntimeConfiguredAt              *string        `json:"runtime_configured_at,omitempty"`
+	RuntimeContextWindowTokens       int64          `json:"runtime_context_window_tokens,omitempty"`
+	RuntimeContextWindowSource       string         `json:"runtime_context_window_source,omitempty"`
+	RuntimeContextWindowObservedAt   *string        `json:"runtime_context_window_observed_at,omitempty"`
+	RuntimeProviderSessionID         string         `json:"runtime_provider_session_id,omitempty"`
+	RuntimeProviderSessionObservedAt *string        `json:"runtime_provider_session_observed_at,omitempty"`
+	ProviderRateLimitInfo            map[string]any `json:"provider_rate_limit_info,omitempty"`
+	ProviderRateLimitObservedAt      *string        `json:"provider_rate_limit_observed_at,omitempty"`
+	CompactionCount                  int64          `json:"compaction_count,omitempty"`
+	UserMessageCount                 int64          `json:"user_message_count,omitempty"`
+	OpenTarget                       string         `json:"open_target,omitempty"`
+	AgentAvatarID                    string         `json:"agent_avatar_id,omitempty"`
+	SystemAvatarID                   string         `json:"system_avatar_id,omitempty"`
 }
 
 type Reader struct {
@@ -272,42 +274,44 @@ func infoFromRecord(owner string, record sessionmodel.SessionRecord) Info {
 		bugLabel = bugLabels[0]
 	}
 	info := Info{
-		ID:                             record.ID,
-		SessionScope:                   scope,
-		PodName:                        optionalString(record.PodName),
-		Owner:                          owner,
-		Status:                         status,
-		Mode:                           sessionmodel.NormalizeSessionMode(record.Mode),
-		SessionImage:                   record.SessionImage,
-		SessionImageMetadata:           record.SessionImageMetadata.Clone(),
-		RequestedAt:                    firstString(record.RequestedAt, record.CreatedAt),
-		CreatedAt:                      optionalString(record.CreatedAt),
-		ReadyAt:                        optionalString(record.ReadyAt),
-		Name:                           record.Name,
-		TestState:                      record.TestState,
-		RolloutState:                   record.RolloutState,
-		Repos:                          repos,
-		CloneState:                     record.CloneState,
-		Capabilities:                   capabilities,
-		BugLabel:                       bugLabel,
-		BugLabels:                      bugLabels,
-		RowVersion:                     record.RowVersion,
-		SidebarPosition:                record.SidebarPosition,
-		Model:                          record.Model,
-		Effort:                         record.Effort,
-		RuntimeModel:                   record.RuntimeModel,
-		RuntimeEffort:                  record.RuntimeEffort,
-		RuntimeConfiguredAt:            optionalString(record.RuntimeConfiguredAt),
-		RuntimeContextWindowTokens:     record.RuntimeContextWindowTokens,
-		RuntimeContextWindowSource:     record.RuntimeContextWindowSource,
-		RuntimeContextWindowObservedAt: optionalString(record.RuntimeContextWindowObservedAt),
-		ProviderRateLimitInfo:          record.ProviderRateLimitInfo,
-		ProviderRateLimitObservedAt:    optionalString(record.ProviderRateLimitObservedAt),
-		CompactionCount:                record.CompactionCount,
-		UserMessageCount:               record.UserMessageCount,
-		OpenTarget:                     record.OpenTarget,
-		AgentAvatarID:                  record.AgentAvatarID,
-		SystemAvatarID:                 record.SystemAvatarID,
+		ID:                               record.ID,
+		SessionScope:                     scope,
+		PodName:                          optionalString(record.PodName),
+		Owner:                            owner,
+		Status:                           status,
+		Mode:                             sessionmodel.NormalizeSessionMode(record.Mode),
+		SessionImage:                     record.SessionImage,
+		SessionImageMetadata:             record.SessionImageMetadata.Clone(),
+		RequestedAt:                      firstString(record.RequestedAt, record.CreatedAt),
+		CreatedAt:                        optionalString(record.CreatedAt),
+		ReadyAt:                          optionalString(record.ReadyAt),
+		Name:                             record.Name,
+		TestState:                        record.TestState,
+		RolloutState:                     record.RolloutState,
+		Repos:                            repos,
+		CloneState:                       record.CloneState,
+		Capabilities:                     capabilities,
+		BugLabel:                         bugLabel,
+		BugLabels:                        bugLabels,
+		RowVersion:                       record.RowVersion,
+		SidebarPosition:                  record.SidebarPosition,
+		Model:                            record.Model,
+		Effort:                           record.Effort,
+		RuntimeModel:                     record.RuntimeModel,
+		RuntimeEffort:                    record.RuntimeEffort,
+		RuntimeConfiguredAt:              optionalString(record.RuntimeConfiguredAt),
+		RuntimeContextWindowTokens:       record.RuntimeContextWindowTokens,
+		RuntimeContextWindowSource:       record.RuntimeContextWindowSource,
+		RuntimeContextWindowObservedAt:   optionalString(record.RuntimeContextWindowObservedAt),
+		RuntimeProviderSessionID:         record.RuntimeProviderSessionID,
+		RuntimeProviderSessionObservedAt: optionalString(record.RuntimeProviderSessionObservedAt),
+		ProviderRateLimitInfo:            record.ProviderRateLimitInfo,
+		ProviderRateLimitObservedAt:      optionalString(record.ProviderRateLimitObservedAt),
+		CompactionCount:                  record.CompactionCount,
+		UserMessageCount:                 record.UserMessageCount,
+		OpenTarget:                       record.OpenTarget,
+		AgentAvatarID:                    record.AgentAvatarID,
+		SystemAvatarID:                   record.SystemAvatarID,
 	}
 	if activity := parseActivitySummary(record.ActivitySummary); activity != nil {
 		info.Activity = activity

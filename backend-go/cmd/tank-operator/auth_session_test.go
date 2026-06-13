@@ -478,6 +478,20 @@ func (r *testSessionRegistry) SetRuntimeContextWindow(_ context.Context, email, 
 	}
 	return nil
 }
+func (r *testSessionRegistry) SetRuntimeProviderSessionID(_ context.Context, email, sessionID, providerSessionID string) error {
+	records := r.records[email]
+	if records == nil {
+		return nil
+	}
+	record, ok := records[sessionID]
+	if !ok {
+		return nil
+	}
+	record.RuntimeProviderSessionID = providerSessionID
+	record.RuntimeProviderSessionObservedAt = time.Now().UTC().Format(time.RFC3339Nano)
+	records[sessionID] = record
+	return nil
+}
 func (r *testSessionRegistry) SetProviderRateLimitInfo(_ context.Context, email, sessionID string, info map[string]any) error {
 	records := r.records[email]
 	if records == nil {

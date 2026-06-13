@@ -756,6 +756,10 @@ type runtimeContextWindowRegistry interface {
 	SetRuntimeContextWindow(ctx context.Context, email, sessionID string, tokens int64, source string) error
 }
 
+type runtimeProviderSessionRegistry interface {
+	SetRuntimeProviderSessionID(ctx context.Context, email, sessionID, providerSessionID string) error
+}
+
 type providerRateLimitRegistry interface {
 	SetProviderRateLimitInfo(ctx context.Context, email, sessionID string, info map[string]any) error
 }
@@ -819,6 +823,21 @@ func (m *Manager) SetRuntimeContextWindow(ctx context.Context, owner, sessionID 
 		return Info{}, ErrNotFound
 	}
 	if err := registry.SetRuntimeContextWindow(ctx, owner, sessionID, tokens, source); err != nil {
+		return Info{}, err
+	}
+	m.publishRow(ctx, owner, sessionID)
+	return m.GetRegisteredByOwner(ctx, owner, sessionID)
+}
+
+// SetRuntimeProviderSessionID records the provider-native conversation id the
+// runner observed. Claude runners feed this id back into explicit resume on a
+// future process start, so the value must survive pod-local JSONL loss.
+func (m *Manager) SetRuntimeProviderSessionID(ctx context.Context, owner, sessionID, providerSessionID string) (Info, error) {
+	registry, ok := m.registry.(runtimeProviderSessionRegistry)
+	if !ok {
+		return Info{}, ErrNotFound
+	}
+	if err := registry.SetRuntimeProviderSessionID(ctx, owner, sessionID, providerSessionID); err != nil {
 		return Info{}, err
 	}
 	m.publishRow(ctx, owner, sessionID)

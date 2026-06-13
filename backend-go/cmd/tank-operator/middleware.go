@@ -16,10 +16,11 @@ import (
 const workspaceRoot = "/workspace"
 
 var (
-	turnIDPattern           = regexp.MustCompile(`^[A-Za-z0-9._-]{1,80}$`)
-	backgroundTaskIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,160}$`)
-	turnArgPattern          = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
-	skillNamePattern        = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+	turnIDPattern            = regexp.MustCompile(`^[A-Za-z0-9._-]{1,80}$`)
+	backgroundTaskIDPattern  = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,160}$`)
+	turnArgPattern           = regexp.MustCompile(`^[A-Za-z0-9._-]{1,64}$`)
+	providerSessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,160}$`)
+	skillNamePattern         = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 )
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

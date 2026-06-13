@@ -337,12 +337,13 @@ func TestEnqueueSessionTurnSeparatesDisplayTextFromRunnerPrompt(t *testing.T) {
 func TestEnqueueSessionTurnUsesSessionOwnedRunConfig(t *testing.T) {
 	bus := &recordingSessionBus{}
 	registry := newTestSessionRegistry(sessionmodel.SessionRecord{
-		ID:      "63",
-		Email:   "user@example.com",
-		Mode:    sessionmodel.ClaudeGUIMode,
-		Visible: true,
-		Model:   "claude-opus-4-7",
-		Effort:  "high",
+		ID:                       "63",
+		Email:                    "user@example.com",
+		Mode:                     sessionmodel.ClaudeGUIMode,
+		Visible:                  true,
+		Model:                    "claude-opus-4-7",
+		Effort:                   "high",
+		RuntimeProviderSessionID: "db0a8b4b-64cd-4a9a-a592-ad5622075dc8",
 	})
 	app := testTurnsAppWithRegistry(
 		t,
@@ -369,6 +370,9 @@ func TestEnqueueSessionTurnUsesSessionOwnedRunConfig(t *testing.T) {
 	got := bus.commands[0]
 	if got.Model != "claude-opus-4-7" || got.Effort != "high" {
 		t.Fatalf("command run config = model %q effort %q, want session-owned model/effort", got.Model, got.Effort)
+	}
+	if got.ProviderSessionID != "db0a8b4b-64cd-4a9a-a592-ad5622075dc8" {
+		t.Fatalf("command provider session id = %q, want durable runtime provider session id", got.ProviderSessionID)
 	}
 }
 

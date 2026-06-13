@@ -818,6 +818,8 @@ interface Session {
   runtime_context_window_tokens?: number;
   runtime_context_window_source?: string;
   runtime_context_window_observed_at?: string | null;
+  runtime_provider_session_id?: string;
+  runtime_provider_session_observed_at?: string | null;
   provider_rate_limit_info?: Record<string, unknown> | null;
   provider_rate_limit_observed_at?: string | null;
   // Durable count of context.compacted events for this session, projected from
@@ -1473,6 +1475,14 @@ function normalizeSession(session: Session): Session {
   next.runtime_context_window_observed_at =
     typeof session.runtime_context_window_observed_at === "string"
       ? session.runtime_context_window_observed_at
+      : null;
+  next.runtime_provider_session_id =
+    typeof session.runtime_provider_session_id === "string"
+      ? session.runtime_provider_session_id
+      : "";
+  next.runtime_provider_session_observed_at =
+    typeof session.runtime_provider_session_observed_at === "string"
+      ? session.runtime_provider_session_observed_at
       : null;
   next.provider_rate_limit_info = normalizeProviderRateLimitInfo(
     session.provider_rate_limit_info,
@@ -22444,6 +22454,9 @@ function AuthenticatedApp() {
       runtime_context_window_source: row.runtime_context_window_source ?? "",
       runtime_context_window_observed_at:
         row.runtime_context_window_observed_at ?? null,
+      runtime_provider_session_id: row.runtime_provider_session_id ?? "",
+      runtime_provider_session_observed_at:
+        row.runtime_provider_session_observed_at ?? null,
       provider_rate_limit_info: normalizeProviderRateLimitInfo(
         row.provider_rate_limit_info,
       ),
@@ -22518,6 +22531,14 @@ function AuthenticatedApp() {
       runtime_context_window_observed_at:
         typeof raw.runtime_context_window_observed_at === "string"
           ? raw.runtime_context_window_observed_at
+          : undefined,
+      runtime_provider_session_id:
+        typeof raw.runtime_provider_session_id === "string"
+          ? raw.runtime_provider_session_id
+          : undefined,
+      runtime_provider_session_observed_at:
+        typeof raw.runtime_provider_session_observed_at === "string"
+          ? raw.runtime_provider_session_observed_at
           : undefined,
       provider_rate_limit_info:
         normalizeProviderRateLimitInfo(raw.provider_rate_limit_info) ??

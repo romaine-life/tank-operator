@@ -975,6 +975,8 @@ test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
     launchSdkQuery: (opts: {
       model?: string;
       effort?: string;
+      continue?: boolean;
+      resume?: string;
       stderr?: (data: string) => void;
       permissionMode?: string;
       allowDangerouslySkipPermissions?: boolean;
@@ -990,6 +992,8 @@ test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
     opts: {
       model?: string;
       effort?: string;
+      continue?: boolean;
+      resume?: string;
       stderr?: (data: string) => void;
       permissionMode?: string;
       allowDangerouslySkipPermissions?: boolean;
@@ -1012,17 +1016,17 @@ test("ensureSdkQuery pins model + effort from the first submit_turn", () => {
   assert.equal(runner.pinnedModel, "claude-haiku-4-5");
   assert.equal(runner.pinnedEffort, "low");
   assert.notEqual(runner.sdkQuery, null);
-  assert.ok(captured.opts, "launchSdkQuery should have been called");
-  assert.equal(captured.opts.model, "claude-haiku-4-5");
-  assert.equal(captured.opts.effort, "low");
-  assert.equal(typeof captured.opts.stderr, "function");
-  assert.equal(captured.opts.permissionMode, "bypassPermissions");
-  assert.equal(captured.opts.allowDangerouslySkipPermissions, true);
-  assert.equal(
-    captured.opts.toolAliases?.AskUserQuestion,
-    "mcp__tank__AskUserQuestion",
-  );
-  assert.ok(captured.opts.mcpServers?.tank, "Tank MCP server should be wired");
+  const opts = captured.opts;
+  assert.ok(opts, "launchSdkQuery should have been called");
+  assert.equal(opts.model, "claude-haiku-4-5");
+  assert.equal(opts.effort, "low");
+  assert.equal(opts.continue, true);
+  assert.equal(opts.resume, undefined);
+  assert.equal(typeof opts.stderr, "function");
+  assert.equal(opts.permissionMode, "bypassPermissions");
+  assert.equal(opts.allowDangerouslySkipPermissions, true);
+  assert.equal(opts.toolAliases?.AskUserQuestion, "mcp__tank__AskUserQuestion");
+  assert.ok(opts.mcpServers?.tank, "Tank MCP server should be wired");
 });
 
 test("ensureSdkQuery stderr callback logs redacted Claude SDK stderr", () => {
@@ -1057,16 +1061,65 @@ test("ensureSdkQuery stderr callback logs redacted Claude SDK stderr", () => {
   assert.doesNotMatch(warnings.join("\n"), /sk-ant-secret|very\.secret\.token/);
 });
 
+test("ensureSdkQuery resumes explicit provider session id when command carries one", () => {
+  const runner = new Runner(runnerConfig()) as unknown as {
+    launchSdkQuery: (opts: {
+      model?: string;
+      effort?: string;
+      continue?: boolean;
+      resume?: string;
+    }) => unknown;
+    ensureSdkQuery: (record: unknown) => void;
+  };
+  const captured: {
+    opts: {
+      model?: string;
+      effort?: string;
+      continue?: boolean;
+      resume?: string;
+    } | null;
+  } = { opts: null };
+  runner.launchSdkQuery = (opts) => {
+    captured.opts = opts;
+    return { interrupt: () => {} } as unknown;
+  };
+
+  runner.ensureSdkQuery({
+    id: "cmd-1",
+    type: "submit_turn",
+    model: "claude-opus-4-8",
+    effort: "max",
+    provider_session_id: "db0a8b4b-64cd-4a9a-a592-ad5622075dc8",
+  });
+
+  const opts = captured.opts;
+  assert.ok(opts);
+  assert.equal(opts.resume, "db0a8b4b-64cd-4a9a-a592-ad5622075dc8");
+  assert.equal(opts.continue, undefined);
+  assert.equal(opts.model, "claude-opus-4-8");
+  assert.equal(opts.effort, "max");
+});
+
 test("ensureSdkQuery falls back to DEFAULT_MODEL / DEFAULT_EFFORT on empty first turn", () => {
   const runner = new Runner(runnerConfig()) as unknown as {
-    launchSdkQuery: (opts: { model?: string; effort?: string }) => unknown;
+    launchSdkQuery: (opts: {
+      model?: string;
+      effort?: string;
+      continue?: boolean;
+      resume?: string;
+    }) => unknown;
     pinnedModel: string | null;
     pinnedEffort: string | null;
     ensureSdkQuery: (record: unknown) => void;
   };
-  const captured: { opts: { model?: string; effort?: string } | null } = {
-    opts: null,
-  };
+  const captured: {
+    opts: {
+      model?: string;
+      effort?: string;
+      continue?: boolean;
+      resume?: string;
+    } | null;
+  } = { opts: null };
   runner.launchSdkQuery = (opts) => {
     captured.opts = opts;
     return { interrupt: () => {} } as unknown;
@@ -1083,9 +1136,12 @@ test("ensureSdkQuery falls back to DEFAULT_MODEL / DEFAULT_EFFORT on empty first
   // assertion and the SPA's DEFAULT_RUN_PREFS need to update together.
   assert.equal(runner.pinnedModel, "claude-opus-4-8");
   assert.equal(runner.pinnedEffort, "high");
-  assert.ok(captured.opts);
-  assert.equal(captured.opts.model, "claude-opus-4-8");
-  assert.equal(captured.opts.effort, "high");
+  const opts = captured.opts;
+  assert.ok(opts);
+  assert.equal(opts.model, "claude-opus-4-8");
+  assert.equal(opts.effort, "high");
+  assert.equal(opts.continue, true);
+  assert.equal(opts.resume, undefined);
 });
 
 test("ensureSdkQuery ignores model/effort overrides on subsequent turns", () => {

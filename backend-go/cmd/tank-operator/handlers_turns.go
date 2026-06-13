@@ -1082,6 +1082,10 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		recordSessionRunConfigRejected("turn", provider, "missing_model")
 		return nil, http.StatusBadRequest, explicitModelRequiredMessage(provider, "turns")
 	}
+	providerSessionID := ""
+	if regErr == nil && provider == "claude" {
+		providerSessionID = sanitizeProviderSessionID(registered.RuntimeProviderSessionID)
+	}
 	if !req.AllowBeforeReady {
 		if podName == nil {
 			return nil, http.StatusServiceUnavailable, "session pod not ready"
@@ -1140,6 +1144,7 @@ func (s *appServer) enqueueSDKTurn(ctx context.Context, email, sessionID string,
 		ClientNonce:       clientNonce,
 		Prompt:            prompt,
 		Model:             model,
+		ProviderSessionID: providerSessionID,
 		Effort:            effort,
 		PermissionMode:    validateTurnArg(req.PermissionMode),
 		SkillName:         skillName,
