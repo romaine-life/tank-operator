@@ -176,6 +176,9 @@ func TestSessionPodGetsOwnSubjectsOnly(t *testing.T) {
 	if err := nc.Publish("$JS.API.CONSUMER.MSG.NEXT."+defaultCommandStream+"."+durable, []byte("{}")); err != nil {
 		t.Fatalf("publish own consumer next: %v", err)
 	}
+	if err := nc.Publish("$JS.ACK."+defaultCommandStream+"."+durable+".1.2.3.4.5", []byte{}); err != nil {
+		t.Fatalf("publish own consumer ack: %v", err)
+	}
 	if violations := errs(); len(violations) != 0 {
 		t.Fatalf("own-session subjects must be allowed, got violations: %v", violations)
 	}
@@ -189,8 +192,11 @@ func TestSessionPodGetsOwnSubjectsOnly(t *testing.T) {
 	if err := nc.Publish("$JS.API.CONSUMER.MSG.NEXT."+defaultCommandStream+"."+other, []byte("{}")); err != nil {
 		t.Fatalf("publish queues locally even when denied: %v", err)
 	}
+	if err := nc.Publish("$JS.ACK."+defaultCommandStream+"."+other+".1.2.3.4.5", []byte{}); err != nil {
+		t.Fatalf("publish queues locally even when denied: %v", err)
+	}
 	violations := errs()
-	if len(violations) != 2 {
+	if len(violations) != 3 {
 		t.Fatalf("cross-session subjects must violate, got: %v", violations)
 	}
 	for _, v := range violations {

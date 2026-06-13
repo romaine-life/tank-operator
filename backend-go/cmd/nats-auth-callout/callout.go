@@ -153,6 +153,7 @@ func (s *calloutService) sessionUserJWT(req *jwt.AuthorizationRequestClaims, sto
 			"$JS.API.CONSUMER.CREATE."+s.commandStream+"."+durable+".>",
 			"$JS.API.CONSUMER.INFO."+s.commandStream+"."+durable,
 			"$JS.API.CONSUMER.MSG.NEXT."+s.commandStream+"."+durable,
+			"$JS.ACK."+s.commandStream+"."+durable+".>",
 		)
 	}
 	uc.Permissions.Pub.Allow.Add(pub...)
