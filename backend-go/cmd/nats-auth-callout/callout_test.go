@@ -42,10 +42,7 @@ func (s *stubResolver) SessionStorageKeyForPod(_ context.Context, podName string
 	return key, nil
 }
 
-const (
-	testLegacyToken = "legacy-fleet-token"
-	testCalloutPass = "callout-pw"
-)
+const testCalloutPass = "callout-pw"
 
 // startCalloutServer runs an embedded nats-server with auth_callout enabled
 // and the callout service subscribed — the REAL authorization path end to
@@ -126,7 +123,6 @@ func testService(t *testing.T) *calloutService {
 			tokens: map[string]string{"sa-token-864": "session-pod-864"},
 			pods:   map[string]string{"session-pod-864": "864"},
 		},
-		legacyToken:   testLegacyToken,
 		commandStream: defaultCommandStream,
 		providers:     defaultProviders,
 		userTTL:       time.Hour,
@@ -236,33 +232,6 @@ func TestSessionPodCannotSubscribeToOtherSubjects(t *testing.T) {
 	}
 }
 
-func TestLegacySharedTokenKeepsFullAccess(t *testing.T) {
-	svc := testService(t)
-	_, url := startCalloutServer(t, svc)
-
-	// Old pods present the fleet token via the token field (nats.Token /
-	// nats.js token:) with no username.
-	nc, err := nats.Connect(url, nats.Token(testLegacyToken))
-	if err != nil {
-		t.Fatalf("legacy pod connect: %v", err)
-	}
-	defer nc.Close()
-	errs := permissionErrors(t, nc)
-
-	if err := nc.Publish(sessionbus.SessionEventSubject("864"), []byte("{}")); err != nil {
-		t.Fatalf("legacy publish: %v", err)
-	}
-	if err := nc.Publish(sessionbus.SessionEventSubject("865"), []byte("{}")); err != nil {
-		t.Fatalf("legacy publish: %v", err)
-	}
-	if _, err := nc.SubscribeSync("tank.session.>"); err != nil {
-		t.Fatalf("legacy subscribe: %v", err)
-	}
-	if violations := errs(); len(violations) != 0 {
-		t.Fatalf("legacy token must keep pre-callout access, got: %v", violations)
-	}
-}
-
 func TestUnknownCredentialsAreRejected(t *testing.T) {
 	svc := testService(t)
 	_, url := startCalloutServer(t, svc)
@@ -270,8 +239,8 @@ func TestUnknownCredentialsAreRejected(t *testing.T) {
 	if _, err := nats.Connect(url, nats.UserInfo("864", "wrong-token")); err == nil {
 		t.Fatalf("bad SA token must be rejected at connect")
 	}
-	if _, err := nats.Connect(url, nats.Token("not-the-fleet-token")); err == nil {
-		t.Fatalf("bad legacy token must be rejected at connect")
+	if _, err := nats.Connect(url, nats.Token("shared-fleet-token")); err == nil {
+		t.Fatalf("bare shared token must be rejected at connect")
 	}
 	if _, err := nats.Connect(url); err == nil {
 		t.Fatalf("credential-less connect must be rejected")
