@@ -1,0 +1,189 @@
+{{- /*
+Per-session NATS credential issuer (tank-operator#1128).
+
+Session pods authenticate to NATS with their projected SA token (audience
+auth.romaine.life) instead of the shared fleet token; this service answers
+the NATS server's $SYS.REQ.USER.AUTH callout with a user JWT scoped to the
+pod's own session subjects. Identity is the pod's orchestrator-written
+labels, fetched via TokenReview (bound-pod claim) + pods/get — never the
+client's claimed username.
+
+Gated off by default: flipping natsCallout.enabled only deploys the issuer;
+nothing routes through it until infra-bootstrap's NATS chart turns on
+authorization.auth_callout pointing at this issuer's account key. Staging
+(issue #1128): 1) deploy this, 2) flip the NATS server config (orchestrator
+becomes a static auth_user; legacy fleet token grants full access THROUGH
+this callout), 3) flip sessionmodel to inject SA-token credentials (new
+pods only, per the migration policy's pre-deploy-pod clause), 4) once
+pre-flip pods age out, remove the legacy grant + session-namespace token
+secret. A callout outage cannot take down the command plane: the
+orchestrator never routes through it, existing connections keep their
+authorization, and a NEW pod's connect just retries (maxReconnectAttempts
+-1; JetStream redelivers).
+
+Test slots never render this (isTestEnv excluded): slot NATS runs tokenless
+single-tenant.
+*/}}
+{{- if and .Values.natsCallout.enabled (not (eq (include "tank-operator.isTestEnv" .) "true")) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: nats-auth-callout
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+---
+{{- /*
+TokenReview is a cluster-scoped create; the pod read is namespace-scoped to
+the sessions namespace only — the callout can verify session pods and
+nothing else.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: tank-nats-auth-callout-tokenreview
+rules:
+  - apiGroups: ["authentication.k8s.io"]
+    resources: ["tokenreviews"]
+    verbs: ["create"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: tank-nats-auth-callout-tokenreview
+subjects:
+  - kind: ServiceAccount
+    name: nats-auth-callout
+    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: tank-nats-auth-callout-tokenreview
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tank-nats-auth-callout-pods
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tank-nats-auth-callout-pods
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
+subjects:
+  - kind: ServiceAccount
+    name: nats-auth-callout
+    namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tank-nats-auth-callout-pods
+---
+{{- /*
+Issuer seed (account nkey that signs user JWTs; its PUBLIC key goes in the
+NATS server's auth_callout.issuer) and the callout's own static NATS user
+password. Seeded to KV out-of-band like the fleet token; see
+docs/session-bus-auth.md for the one-time `nk -gen account` step.
+*/}}
+apiVersion: external-secrets.io/v1
+kind: ExternalSecret
+metadata:
+  name: tank-nats-callout
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+spec:
+  refreshInterval: {{ .Values.externalSecret.refreshInterval }}
+  secretStoreRef:
+    name: {{ .Values.externalSecret.storeName }}
+    kind: {{ .Values.externalSecret.storeKind }}
+  target:
+    name: tank-nats-callout
+    creationPolicy: Owner
+    deletionPolicy: Retain
+  data:
+    - secretKey: issuer-seed
+      remoteRef:
+        key: {{ .Values.natsCallout.issuerSeedKvKey }}
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
+        nullBytePolicy: Ignore
+    - secretKey: password
+      remoteRef:
+        key: {{ .Values.natsCallout.passwordKvKey }}
+        conversionStrategy: Default
+        decodingStrategy: None
+        metadataPolicy: None
+        nullBytePolicy: Ignore
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nats-auth-callout
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: nats-auth-callout
+spec:
+  replicas: {{ .Values.natsCallout.replicas }}
+  revisionHistoryLimit: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nats-auth-callout
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: nats-auth-callout
+    spec:
+      serviceAccountName: nats-auth-callout
+      containers:
+        - name: callout
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["/app/nats-auth-callout"]
+          env:
+            - name: NATS_URL
+              value: {{ .Values.sessionBus.url | quote }}
+            - name: NATS_CALLOUT_USER
+              value: {{ .Values.natsCallout.user | quote }}
+            - name: NATS_CALLOUT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: tank-nats-callout
+                  key: password
+            - name: NATS_CALLOUT_ISSUER_SEED
+              valueFrom:
+                secretKeyRef:
+                  name: tank-nats-callout
+                  key: issuer-seed
+            - name: NATS_CALLOUT_LEGACY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sessionBus.authSecret }}
+                  key: token
+                  optional: true
+            - name: NATS_CALLOUT_SESSIONS_NAMESPACE
+              value: {{ include "tank-operator.sessionsNamespace" . }}
+            - name: NATS_CALLOUT_SESSION_SERVICE_ACCOUNT
+              value: {{ .Values.session.serviceAccount | quote }}
+            - name: NATS_CALLOUT_COMMAND_STREAM
+              value: {{ .Values.sessionBus.commandStream | quote }}
+            - name: METRICS_PORT
+              value: "9100"
+          ports:
+            - name: metrics
+              containerPort: 9100
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 2
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 32Mi
+            limits:
+              memory: 128Mi
+{{- end }}

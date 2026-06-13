@@ -142,6 +142,23 @@ session:
     host: nelsonlaptop
     port: 15527
 
+# Per-session NATS credential issuer (#1128): answers the NATS server's
+# auth_callout with user JWTs scoped to one session's subjects, identity
+# anchored in projected SA tokens + orchestrator-written pod labels.
+# DISABLED until the staged rollout starts; flipping `enabled` only deploys
+# the issuer — nothing routes through it until infra-bootstrap's NATS chart
+# turns on authorization.auth_callout with this issuer's account public key
+# (k8s/nats values there; both halves are documented in
+# docs/session-bus-auth.md). The KV secrets are seeded out-of-band:
+#   tank-nats-callout-issuer-seed  — `nk -gen account` seed (SA...)
+#   tank-nats-callout-password     — the callout's static NATS user password
+natsCallout:
+  enabled: false
+  replicas: 2
+  user: nats-auth-callout
+  issuerSeedKvKey: tank-nats-callout-issuer-seed
+  passwordKvKey: tank-nats-callout-password
+
 appConfig:
   configMap: tank-operator-app-config
 
