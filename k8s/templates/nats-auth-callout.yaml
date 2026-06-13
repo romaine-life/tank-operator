@@ -14,8 +14,11 @@ static auth_users, so a callout outage cannot take down the command plane:
 existing connections keep their authorization, and a NEW pod's connect just
 retries (maxReconnectAttempts -1; JetStream redelivers).
 
-Test slots never render this (isTestEnv excluded): slot NATS runs tokenless
-single-tenant.
+Test slots never render the Deployment (isTestEnv excluded): they share the
+production NATS broker and production auth-callout. Warm slot renders only the
+namespace-scoped pod-read RoleBinding below, so the production callout can bind
+projected slot tokens to the slot pod's own session labels without receiving
+cluster-wide pod read.
 */}}
 {{- if and .Values.natsCallout.enabled (not (eq (include "tank-operator.isTestEnv" .) "true")) }}
 apiVersion: v1
@@ -25,9 +28,9 @@ metadata:
   namespace: {{ include "tank-operator.orchestratorNamespace" . }}
 ---
 {{- /*
-TokenReview is a cluster-scoped create; the pod read is namespace-scoped to
-the sessions namespace only — the callout can verify session pods and
-nothing else.
+TokenReview is a cluster-scoped create. Namespace get lets the callout verify
+that candidate test-slot namespaces are Glimmung-managed tank-operator slots;
+pod reads stay namespace-scoped RoleBindings in each sessions namespace.
 */}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -37,6 +40,9 @@ rules:
   - apiGroups: ["authentication.k8s.io"]
     resources: ["tokenreviews"]
     verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -173,4 +179,34 @@ spec:
               memory: 32Mi
             limits:
               memory: 128Mi
+{{- end }}
+{{- if and .Values.natsCallout.enabled (eq (include "tank-operator.isTestEnv" .) "true") (eq (include "tank-operator.renderWarm" .) "true") }}
+---
+# Slot sessions authenticate through the single production nats-auth-callout.
+# Grant that ServiceAccount pod GET only in this slot sessions namespace; the
+# callout still validates the TokenReview subject, Glimmung namespace labels,
+# pod scope label, and claimed NATS user before issuing a per-session JWT.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: tank-nats-auth-callout-pods
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: tank-nats-auth-callout-pods
+  namespace: {{ include "tank-operator.sessionsNamespace" . }}
+subjects:
+  - kind: ServiceAccount
+    name: nats-auth-callout
+    namespace: {{ include "tank-operator.providerAuthorityNamespace" . }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: tank-nats-auth-callout-pods
 {{- end }}
