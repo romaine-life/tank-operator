@@ -47,7 +47,7 @@ import tempfile
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from uuid import uuid4
 
 from aiohttp import ClientError, ClientSession, ClientTimeout, web
@@ -91,6 +91,7 @@ _GITHUB_COMMIT_URL_RE = re.compile(r"https://github\.com/([^/\s]+)/([^/\s]+)/com
 _GITHUB_REMOTE_RE = re.compile(r"github\.com[:/]([^/\s]+)/([^/\s]+?)(?:\.git)?(?:\s|$)")
 _TANK_PUBLISH_TOOL = "publish_current_head"
 _TANK_BREAK_GLASS_TOOL = "request_git_break_glass"
+_GLIMMUNG_HOT_SWAP_TOOL = "apply_test_slot_hot_swap"
 _BREAK_GLASS_MCP_SERVER_NAME = "tank-git-break-glass"
 _BREAK_GLASS_MCP_PORT = 9999
 _BREAK_GLASS_MINT_TOKEN_TOOL = "mint_full_git_token"
@@ -510,6 +511,26 @@ async def _post_tank_pull_request_link(http: ClientSession, headers: dict[str, s
             log.warning("failed to update Tank pull request link: status=%d body=%s", resp.status, text[:500])
 
 
+async def _post_tank_hot_swap_verify(http: ClientSession, service_token: str, payload: dict) -> dict:
+    url = f"{TANK_OPERATOR_INTERNAL_URL}/api/internal/sessions/{ORIGIN_SESSION_ID}/hot-swap/verify"
+    async with http.post(
+        url,
+        headers={"Authorization": f"Bearer {service_token}", "Content-Type": "application/json"},
+        json=payload,
+    ) as resp:
+        text = await resp.text()
+    try:
+        body = json.loads(text) if text else {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Tank hot-swap verification returned invalid JSON: {text[:500]}") from exc
+    if resp.status >= 400 and not isinstance(body, dict):
+        raise RuntimeError(f"Tank hot-swap verification failed with HTTP {resp.status}: {text[:500]}")
+    if isinstance(body, dict):
+        body.setdefault("http_status", resp.status)
+        return body
+    return {"allowed": False, "http_status": resp.status, "reasons": [f"Tank hot-swap verification failed with HTTP {resp.status}"]}
+
+
 async def _run_git(repo_path: Path, *args: str, env: dict[str, str] | None = None, timeout: float = 60) -> tuple[int, str, str]:
     proc = await asyncio.create_subprocess_exec(
         "git",
@@ -575,6 +596,118 @@ def _repo_path_from_arguments(arguments: dict) -> Path:
     if not path.exists():
         raise ValueError(f"repo path does not exist: {path}")
     return path
+
+
+def _repo_path_for_hot_swap(arguments: dict) -> Path:
+    repo_path = str(arguments.get("repo_path") or "").strip()
+    repo = str(arguments.get("repo") or "").strip()
+    if repo_path or repo:
+        return _repo_path_from_arguments(arguments)
+    project = str(arguments.get("project") or "").strip()
+    if project:
+        path = (WORKSPACE_ROOT / project).resolve()
+        try:
+            path.relative_to(WORKSPACE_ROOT)
+        except ValueError as exc:
+            raise ValueError(f"project repo path must be under {WORKSPACE_ROOT}") from exc
+        if path.exists() and (path / ".git").exists():
+            return path
+    return _repo_path_from_arguments(arguments)
+
+
+def _rewrite_mcp_tool_arguments(body: bytes, arguments: dict) -> bytes:
+    payload = json.loads(body.decode("utf-8"))
+    payload["params"]["arguments"] = arguments
+    return json.dumps(payload, separators=(",", ":")).encode("utf-8")
+
+
+async def _verify_github_hot_swap_head(
+    http: ClientSession,
+    github_token: str,
+    owner: str,
+    repo: str,
+    branch: str,
+    sha: str,
+) -> dict:
+    reasons: list[str] = []
+    branch_status, branch_body = await _github_api_json(
+        http,
+        github_token,
+        "GET",
+        f"/repos/{owner}/{repo}/branches/{quote(branch, safe='')}",
+    )
+    branch_sha = ""
+    if branch_status < 400 and isinstance(branch_body, dict):
+        commit = branch_body.get("commit")
+        if isinstance(commit, dict):
+            branch_sha = str(commit.get("sha") or "")
+    if branch_sha != sha:
+        reasons.append(f"remote branch {branch} is at {branch_sha[:12] or 'unknown'}, not local HEAD {sha[:12]}")
+
+    pr_number: int | None = None
+    pr_url = ""
+    head = quote(f"{owner}:{branch}", safe="")
+    pr_status, pr_body = await _github_api_json(
+        http,
+        github_token,
+        "GET",
+        f"/repos/{owner}/{repo}/pulls?head={head}&state=open",
+    )
+    if pr_status >= 400 or not isinstance(pr_body, list) or not pr_body:
+        reasons.append(f"no open PR exists for {owner}:{branch}")
+    else:
+        pr = pr_body[0] if isinstance(pr_body[0], dict) else {}
+        pr_number = int(pr.get("number") or 0) or None
+        pr_url = str(pr.get("html_url") or "")
+        pr_head = pr.get("head")
+        pr_head_sha = str(pr_head.get("sha") or "") if isinstance(pr_head, dict) else ""
+        if pr_head_sha and pr_head_sha != sha:
+            reasons.append(f"open PR head is {pr_head_sha[:12]}, not local HEAD {sha[:12]}")
+        if pr_number is None:
+            reasons.append("open PR response did not include a PR number")
+        else:
+            detail_status, detail_body = await _github_api_json(
+                http,
+                github_token,
+                "GET",
+                f"/repos/{owner}/{repo}/pulls/{pr_number}",
+            )
+            if detail_status >= 400 or not isinstance(detail_body, dict):
+                reasons.append(f"could not read PR #{pr_number} mergeability")
+            else:
+                mergeable = detail_body.get("mergeable")
+                mergeable_state = str(detail_body.get("mergeable_state") or "")
+                if mergeable is not True or mergeable_state == "dirty":
+                    reasons.append(f"PR #{pr_number} is not confirmed mergeable: {mergeable_state or mergeable}")
+
+    check_status, check_body = await _github_api_json(
+        http,
+        github_token,
+        "GET",
+        f"/repos/{owner}/{repo}/commits/{sha}/check-runs",
+    )
+    status_status, status_body = await _github_api_json(
+        http,
+        github_token,
+        "GET",
+        f"/repos/{owner}/{repo}/commits/{sha}/status",
+    )
+    check_runs = []
+    if check_status < 400 and isinstance(check_body, dict) and isinstance(check_body.get("check_runs"), list):
+        check_runs = check_body["check_runs"]
+    combined_status = status_body if status_status < 400 and isinstance(status_body, dict) else None
+    ci_status, ci_error, ci_payload = _checks_state(check_runs, combined_status)
+    if ci_status != "succeeded":
+        reasons.append(f"CI for {sha[:12]} is not green: {ci_error}")
+    return {
+        "allowed": not reasons,
+        "reasons": reasons,
+        "branch_sha": branch_sha,
+        "pr_number": pr_number,
+        "pr_url": pr_url,
+        "ci_status": ci_status,
+        "ci": ci_payload,
+    }
 
 
 def _break_glass_approval_url(
@@ -827,7 +960,7 @@ def _checks_state(check_runs: list, combined_status: dict | None) -> tuple[str, 
             for status in statuses:
                 if status.get("state") in {"failure", "error"}:
                     failed.append(f"{status.get('context') or 'status'}: {status.get('state')}")
-        elif state == "pending":
+        elif state == "pending" and statuses:
             pending.append("combined status")
     if failed:
         return "failed", "; ".join(failed), {"pending": pending, "failed": failed, "completed": completed, "statuses": len(statuses)}
@@ -844,6 +977,7 @@ async def _watch_published_commit(
     branch: str,
     sha: str,
     invocation_id: str,
+    source_tool: str = _TANK_PUBLISH_TOOL,
 ) -> None:
     if not ORIGIN_SESSION_ID:
         return
@@ -880,7 +1014,7 @@ async def _watch_published_commit(
                     "event_id": f"tank-publish-ci-{ORIGIN_SESSION_ID}-{sha}-{attempt}",
                     "invocation_id": invocation_id,
                     "source_service": "mcp-tank-operator",
-                    "source_tool": _TANK_PUBLISH_TOOL,
+                    "source_tool": source_tool,
                     "action": "github.commit.ci",
                     "status": ci_status,
                     "target_kind": "github_commit",
@@ -924,7 +1058,7 @@ async def _watch_published_commit(
                             "event_id": f"tank-publish-mergeability-{ORIGIN_SESSION_ID}-{sha}-{attempt}",
                             "invocation_id": invocation_id,
                             "source_service": "mcp-tank-operator",
-                            "source_tool": _TANK_PUBLISH_TOOL,
+                            "source_tool": source_tool,
                             "action": "github.pull_request.mergeability",
                             "status": merge_status,
                             "target_kind": "github_pull_request",
@@ -954,7 +1088,7 @@ async def _watch_published_commit(
                 "event_id": f"tank-publish-ci-timeout-{ORIGIN_SESSION_ID}-{sha}",
                 "invocation_id": invocation_id,
                 "source_service": "mcp-tank-operator",
-                "source_tool": _TANK_PUBLISH_TOOL,
+                "source_tool": source_tool,
                 "action": "github.commit.ci",
                 "status": "failed",
                 "target_kind": "github_commit",
@@ -1057,6 +1191,104 @@ async def _handle_tank_publish_tool(
             -32011,
             str(exc),
             {"tool": _TANK_PUBLISH_TOOL, "invocation_id": invocation_id},
+        )
+
+
+async def _prepare_glimmung_hot_swap_call(
+    http: ClientSession,
+    auth_romaine_provider,
+    request_id: object,
+    body: bytes,
+    arguments: dict,
+) -> tuple[bytes, dict] | web.Response:
+    try:
+        if not ORIGIN_SESSION_ID:
+            raise ValueError("SESSION_ID is required for governed hot-swap")
+        repo_path = _repo_path_for_hot_swap(arguments)
+        git_dir = await _git_output(repo_path, "rev-parse", "--absolute-git-dir")
+        if not git_dir:
+            raise ValueError(f"{repo_path} is not a git repository")
+        branch = await _git_output(repo_path, "branch", "--show-current")
+        repo_name_from_path = repo_path.name
+        expected_branch = f"tank/session/{ORIGIN_SESSION_ID}/{repo_name_from_path}"
+        if branch != expected_branch:
+            raise ValueError(f"current branch is {branch!r}; expected Tank session branch {expected_branch!r}")
+        rc, stdout, stderr = await _run_git(repo_path, "status", "--porcelain")
+        if rc != 0:
+            raise RuntimeError(stderr or stdout or "git status failed")
+        if stdout.strip():
+            raise ValueError("worktree has uncommitted changes; commit and publish before hot-swapping")
+        sha = await _git_output(repo_path, "rev-parse", "HEAD")
+        requested_ref = str(arguments.get("git_ref") or "").strip()
+        allowed_requested_refs = {sha, branch, f"refs/heads/{branch}", "HEAD"}
+        if requested_ref and requested_ref not in allowed_requested_refs:
+            raise ValueError(f"git_ref {requested_ref!r} does not match local governed branch HEAD {sha[:12]}")
+        remote_url = await _git_output(repo_path, "config", "--get", "remote.origin.url")
+        slug = _repo_slug_from_remote(remote_url)
+        if slug is None:
+            raise ValueError(f"origin remote is not a GitHub URL: {remote_url}")
+        owner, repo = slug
+        requested_repo = str(arguments.get("repo") or "").strip()
+        if requested_repo and requested_repo != f"{owner}/{repo}":
+            raise ValueError(f"repo argument {requested_repo!r} does not match origin {owner}/{repo}")
+
+        service_token = await auth_romaine_provider.token()
+        github_token = await _mint_github_installation_token(http, service_token, f"{owner}/{repo}")
+        tank_verify = await _post_tank_hot_swap_verify(
+            http,
+            service_token,
+            {
+                "repo": f"{owner}/{repo}",
+                "branch": branch,
+                "sha": sha,
+                "artifact_kind": str(arguments.get("artifact_kind") or ""),
+                "validation_target": str(arguments.get("validation_target") or ""),
+                "source_tool": _GLIMMUNG_HOT_SWAP_TOOL,
+            },
+        )
+        live_verify = await _verify_github_hot_swap_head(http, github_token, owner, repo, branch, sha)
+        reasons: list[str] = []
+        if tank_verify.get("allowed") is not True:
+            tank_reasons = tank_verify.get("reasons")
+            if isinstance(tank_reasons, list):
+                reasons.extend(f"Tank ledger: {reason}" for reason in tank_reasons)
+            else:
+                reasons.append("Tank ledger did not confirm governed publish, green CI, and clean mergeability")
+        if live_verify.get("allowed") is not True:
+            live_reasons = live_verify.get("reasons")
+            if isinstance(live_reasons, list):
+                reasons.extend(f"GitHub live state: {reason}" for reason in live_reasons)
+            else:
+                reasons.append("GitHub live state did not confirm latest branch head, open PR, green CI, and clean mergeability")
+        if reasons:
+            raise ValueError("hot-swap blocked:\n- " + "\n- ".join(reasons))
+
+        forwarded_arguments = {
+            key: value
+            for key, value in arguments.items()
+            if key not in {"repo", "repo_path"}
+        }
+        forwarded_arguments["git_ref"] = sha
+        return _rewrite_mcp_tool_arguments(body, forwarded_arguments), {
+            "repo": f"{owner}/{repo}",
+            "branch": branch,
+            "sha": sha,
+            "pr_number": live_verify.get("pr_number") or tank_verify.get("pr_number"),
+            "artifact_kind": arguments.get("artifact_kind"),
+            "validation_target": arguments.get("validation_target"),
+        }
+    except Exception as exc:
+        log.warning("Glimmung hot-swap gate failed", exc_info=True)
+        return _mcp_error_response(
+            request_id,
+            -32030,
+            str(exc),
+            {
+                "tool": _GLIMMUNG_HOT_SWAP_TOOL,
+                "replacement_tool": _TANK_PUBLISH_TOOL,
+                "break_glass_tool": _TANK_BREAK_GLASS_TOOL,
+                "ci_enforcement": _CI_ENFORCEMENT_TEXT,
+            },
         )
 
 
@@ -1337,11 +1569,37 @@ async def _handle_break_glass_push_head(http: ClientSession, auth_romaine_provid
                 "repo_path": str(repo_path),
             },
         )
+        asyncio.create_task(
+            _watch_published_commit(
+                http,
+                auth_romaine_provider,
+                slug[0],
+                slug[1],
+                branch,
+                sha,
+                f"tank-break-glass-push-{uuid4().hex}",
+                source_tool=_BREAK_GLASS_PUSH_HEAD_TOOL,
+            )
+        )
         return _mcp_result_response(
             request_id,
             {
-                "content": [{"type": "text", "text": f"Break-glass pushed {repo_slug}@{sha[:12]} to {branch}."}],
-                "structuredContent": {"repo": repo_slug, "branch": branch, "sha": sha, "grant_event_id": grant.get("event_id")},
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            f"Break-glass pushed {repo_slug}@{sha[:12]} to {branch}. "
+                            f"Tank started CI/mergeability watching. {_CI_ENFORCEMENT_TEXT}"
+                        ),
+                    }
+                ],
+                "structuredContent": {
+                    "repo": repo_slug,
+                    "branch": branch,
+                    "sha": sha,
+                    "grant_event_id": grant.get("event_id"),
+                    "ci_watch": "started",
+                },
             },
         )
     except Exception as exc:
@@ -1693,6 +1951,7 @@ def _make_handler(
     proxy: str | None = None,
     github_activity_provider=None,
     tank_publish_provider=None,
+    glimmung_hot_swap_provider=None,
     block_github_write_tools: bool = False,
 ):
     """Build the request handler for an MCP upstream.
@@ -1775,6 +2034,24 @@ def _make_handler(
                 if params.get("name") == _TANK_PUBLISH_TOOL:
                     return await _handle_tank_publish_tool(http, tank_publish_provider, request_id, arguments)
                 return await _handle_tank_break_glass_tool(http, tank_publish_provider, request_id, arguments)
+
+        if glimmung_hot_swap_provider is not None and parsed_method is not None:
+            method, params, request_id = parsed_method
+            if method == "tools/call" and params.get("name") == _GLIMMUNG_HOT_SWAP_TOOL:
+                arguments = params.get("arguments") or {}
+                if not isinstance(arguments, dict):
+                    return _mcp_error_response(request_id, -32602, "arguments must be an object")
+                prepared = await _prepare_glimmung_hot_swap_call(
+                    http,
+                    glimmung_hot_swap_provider,
+                    request_id,
+                    body,
+                    arguments,
+                )
+                if isinstance(prepared, web.Response):
+                    record_proxy_request(mcp_label, 200)
+                    return prepared
+                body, _verification = prepared
 
         github_tool_call = _parse_mcp_tool_call(body) if github_activity_provider is not None else None
         tank_tools_list = tank_publish_provider is not None and parsed_method is not None and parsed_method[0] == "tools/list"
@@ -2048,6 +2325,7 @@ async def run() -> None:
                     proxy=request_proxy,
                     github_activity_provider=auth_romaine_provider if port == GITHUB_MCP_PORT else None,
                     tank_publish_provider=auth_romaine_provider if port == TANK_OPERATOR_MCP_PORT else None,
+                    glimmung_hot_swap_provider=auth_romaine_provider if port == GLIMMUNG_MCP_PORT else None,
                     block_github_write_tools=port == GITHUB_MCP_PORT,
                 ),
             )

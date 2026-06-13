@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import subprocess
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -21,6 +22,7 @@ from mcp_auth_proxy.server import (
     _effective_listeners,
     _first_pr_from_response,
     _github_tool_block_response,
+    _prepare_glimmung_hot_swap_call,
     _handle_tank_break_glass_tool,
     _handle_break_glass_mcp,
     _json_objects_from_mcp_body,
@@ -91,6 +93,65 @@ class _FakeRawHTTP:
     def get(self, url: str, *, headers: dict):
         self.calls.append({"url": url, "headers": headers})
         return self.response
+
+
+class _HotSwapHTTP:
+    def __init__(self, sha: str) -> None:
+        self.sha = sha
+        self.posts: list[dict] = []
+        self.requests: list[dict] = []
+
+    def post(self, url: str, *, headers: dict, json: dict):
+        self.posts.append({"url": url, "headers": headers, "json": json})
+        if "mcp-github" in url:
+            body = (
+                b"event: message\n"
+                b'data: {"jsonrpc":"2.0","result":{"structuredContent":{"token":"github-token"}}}\n\n'
+            )
+            return _FakeRawResponse(200, body)
+        return _FakeRawResponse(
+            200,
+            json_module_dumps({
+                "allowed": True,
+                "repo": "romaine-life/tank-operator",
+                "branch": "tank/session/95/tank-operator",
+                "sha": self.sha,
+                "publish_verified": True,
+                "ci_verified": True,
+                "merge_verified": True,
+                "pr_number": 1113,
+            }),
+        )
+
+    def request(self, method: str, url: str, *, headers: dict, **_kwargs):
+        self.requests.append({"method": method, "url": url, "headers": headers})
+        if "/branches/" in url:
+            return _FakeRawResponse(200, json_module_dumps({"commit": {"sha": self.sha}}))
+        if "/pulls?head=" in url:
+            return _FakeRawResponse(
+                200,
+                json_module_dumps([
+                    {
+                        "number": 1113,
+                        "html_url": "https://github.com/romaine-life/tank-operator/pull/1113",
+                        "head": {"sha": self.sha},
+                    }
+                ]),
+            )
+        if "/pulls/1113" in url:
+            return _FakeRawResponse(200, json_module_dumps({"mergeable": True, "mergeable_state": "clean"}))
+        if "/check-runs" in url:
+            return _FakeRawResponse(
+                200,
+                json_module_dumps({"check_runs": [{"name": "test", "status": "completed", "conclusion": "success"}]}),
+            )
+        if "/status" in url:
+            return _FakeRawResponse(200, json_module_dumps({"state": "success", "statuses": []}))
+        return _FakeRawResponse(404, b"{}")
+
+
+def json_module_dumps(value: dict | list) -> bytes:
+    return json.dumps(value).encode("utf-8")
 
 
 def test_auth_romaine_service_provider_exchanges_sa_token(tmp_path) -> None:
@@ -286,6 +347,59 @@ def test_push_head_with_token_bypasses_local_pre_push_hook(monkeypatch, tmp_path
     assert args[3] == "HEAD:refs/heads/tank/session/1/repo"
     assert env["GIT_TERMINAL_PROMPT"] == "0"
     assert env["GITHUB_TOKEN"] == "token"
+
+
+def test_glimmung_hot_swap_gate_rewrites_git_ref_to_verified_sha(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path
+    repo = workspace / "tank-operator"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "config", "user.email", "agent@example.test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Agent"], cwd=repo, check=True)
+    (repo / "README.md").write_text("test\n", encoding="utf-8")
+    subprocess.run(["git", "add", "README.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "initial"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "checkout", "-b", "tank/session/95/tank-operator"], cwd=repo, check=True, stdout=subprocess.DEVNULL)
+    subprocess.run(["git", "remote", "add", "origin", "https://github.com/romaine-life/tank-operator.git"], cwd=repo, check=True)
+    sha = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    monkeypatch.setattr("mcp_auth_proxy.server.WORKSPACE_ROOT", workspace)
+    monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
+
+    body = json.dumps({
+        "jsonrpc": "2.0",
+        "id": 12,
+        "method": "tools/call",
+        "params": {
+            "name": "apply_test_slot_hot_swap",
+            "arguments": {
+                "project": "tank-operator",
+                "slot_index": 2,
+                "artifact_kind": "codex_runner",
+                "validation_target": "existing_session",
+                "git_ref": "tank/session/95/tank-operator",
+                "repo_path": str(repo),
+            },
+        },
+    }).encode("utf-8")
+
+    prepared = asyncio.run(
+        _prepare_glimmung_hot_swap_call(
+            _HotSwapHTTP(sha),
+            _StaticTokenProvider("service-token"),
+            12,
+            body,
+            json.loads(body)["params"]["arguments"],
+        )
+    )
+
+    assert not hasattr(prepared, "text")
+    forwarded_body, verification = prepared
+    forwarded = json.loads(forwarded_body)
+    forwarded_args = forwarded["params"]["arguments"]
+    assert forwarded_args["git_ref"] == sha
+    assert forwarded_args["project"] == "tank-operator"
+    assert "repo_path" not in forwarded_args
+    assert verification["sha"] == sha
 
 
 def test_append_tank_publish_tool_augments_event_prefixed_sse_tools_list() -> None:
@@ -489,6 +603,11 @@ def test_repo_slug_from_remote_accepts_https_and_ssh() -> None:
 
 def test_checks_state_classifies_pending_failure_and_success() -> None:
     assert _checks_state([], None)[0] == "started"
+    succeeded_with_empty_legacy_status, _, _ = _checks_state(
+        [{"name": "test", "status": "completed", "conclusion": "success"}],
+        {"state": "pending", "statuses": [], "total_count": 0},
+    )
+    assert succeeded_with_empty_legacy_status == "succeeded"
     failed, error, payload = _checks_state(
         [{"name": "test", "status": "completed", "conclusion": "failure"}],
         {"state": "success", "statuses": []},
