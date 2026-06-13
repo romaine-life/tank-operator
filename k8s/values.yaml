@@ -323,7 +323,7 @@ sessionBus:
   tokenKvKey: tank-nats-token
   # 1128 stage 2: set to "tank-operator" together with infra-bootstrap's
   # NATS authorization.users flip. Empty = legacy bare-token auth.
-  user: ""
+  user: tank-operator
   monitorURLs:
     - http://tank-nats-0.tank-nats-headless.nats.svc.cluster.local:8222
     - http://tank-nats-1.tank-nats-headless.nats.svc.cluster.local:8222
