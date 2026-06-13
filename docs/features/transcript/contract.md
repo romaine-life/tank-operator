@@ -55,6 +55,11 @@ answer; it must not visibly move a rendered row from one surface to the other.
   when a durable event exists or can be written.
 - A first prompt typed on the splash screen must be written durably before
   startup status events.
+- Service-created GUI chat sessions must include and durably write an initial
+  prompt as part of creation. A promptless GUI session is invalid; there is no
+  debug, operator, or pod-boot-smoke exception. CLI/config sessions may exist
+  without a chat transcript because they are different products, not empty GUI
+  transcripts.
 - Old provider-specific transcript render paths must be deleted when replaced
   by Tank protocol rendering.
 - Refresh-only recovery must not be accepted as proof that live transcript

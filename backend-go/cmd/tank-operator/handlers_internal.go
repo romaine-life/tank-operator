@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/romaine-life/tank-operator/backend-go/internal/auth"
 	"github.com/romaine-life/tank-operator/backend-go/internal/kubeexec"
@@ -132,13 +133,14 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	}
 
 	var body struct {
-		Mode            string         `json:"mode"`
-		Model           string         `json:"model,omitempty"`
-		Effort          string         `json:"effort,omitempty"`
-		GlimmungContext map[string]any `json:"glimmung_context"`
-		Name            *string        `json:"name,omitempty"`
-		Repos           []string       `json:"repos"`
-		Capabilities    []string       `json:"capabilities"`
+		Mode            string                           `json:"mode"`
+		Model           string                           `json:"model,omitempty"`
+		Effort          string                           `json:"effort,omitempty"`
+		GlimmungContext map[string]any                   `json:"glimmung_context"`
+		Name            *string                          `json:"name,omitempty"`
+		Repos           []string                         `json:"repos"`
+		Capabilities    []string                         `json:"capabilities"`
+		InitialTurn     *createSessionInitialTurnRequest `json:"initial_turn,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		body.Mode = ""
@@ -184,6 +186,32 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		writeError(w, status, detail)
 		return
 	}
+	initialTurn, status, detail := validateCreateSessionInitialTurn(mode, body.InitialTurn)
+	if status != 0 {
+		writeError(w, status, detail)
+		return
+	}
+	// Service-created GUI chat sessions are agent work, not empty workspaces:
+	// they must carry the first user turn at create time. There is no
+	// debug/operator exception for promptless GUI sessions; boot-only smoke
+	// tests must use non-GUI modes or a purpose-built fixture outside the
+	// normal transcript/session product.
+	if _, isGUIChatMode := sdkProviderForMode(mode); isGUIChatMode && body.InitialTurn == nil {
+		writeError(w, http.StatusBadRequest, "initial_turn.prompt is required for service-created GUI chat sessions")
+		return
+	}
+	if body.InitialTurn != nil && initialTurn.Deferred {
+		writeError(w, http.StatusBadRequest, "initial_turn.deferred is not supported for service-created sessions")
+		return
+	}
+	if body.InitialTurn != nil && s.sessionEvents == nil {
+		writeError(w, http.StatusServiceUnavailable, "initial_turn submit path unavailable")
+		return
+	}
+	if body.InitialTurn != nil && s.sessionBus == nil {
+		writeError(w, http.StatusServiceUnavailable, "initial_turn submit path unavailable")
+		return
+	}
 
 	// Inline `name` sets the session's display title, mirroring the public
 	// create handler (handleCreateSession). This previously misrouted
@@ -192,6 +220,12 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 	// row and the UI fell back to the short pod id. RequestedAt is left to
 	// default to now for a fresh service-principal-created session (there is
 	// no initial-turn timing to backdate here).
+	launchTurnAt := time.Time{}
+	requestedAt := ""
+	if body.InitialTurn != nil {
+		launchTurnAt = time.Now().UTC()
+		requestedAt = launchTurnAt.Add(2 * time.Millisecond).Format(time.RFC3339Nano)
+	}
 	info, err := s.mgr.Create(r.Context(), sessions.CreateOptions{
 		Owner:           user.ActorEmail,
 		Mode:            mode,
@@ -201,12 +235,51 @@ func (s *appServer) handleInternalCreateSession(w http.ResponseWriter, r *http.R
 		Capabilities:    capabilities,
 		Model:           runConfig.Model,
 		Effort:          runConfig.Effort,
+		RequestedAt:     requestedAt,
 	})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	var turnResp map[string]any
+	if body.InitialTurn != nil {
+		originSessionID := originSessionIDFromRequest(r, "")
+		originSessionAvatarID := originSessionAvatarIDFromRequest(r, "")
+		turnResp, status, detail = s.enqueueSDKTurn(r.Context(), user.ActorEmail, info.ID, sdkTurnRequest{
+			ClientNonce:           initialTurn.ClientNonce,
+			RequireNonce:          true,
+			Prompt:                initialTurn.Prompt,
+			DisplayAttachments:    initialTurn.DisplayAttachments,
+			Model:                 runConfig.Model,
+			Effort:                runConfig.Effort,
+			PermissionMode:        initialTurn.PermissionMode,
+			SkillName:             initialTurn.SkillName,
+			FollowUp:              false,
+			AllowBeforeReady:      true,
+			SessionMode:           info.Mode,
+			CreatedAt:             launchTurnAt,
+			OrderBase:             launchTurnAt,
+			OriginSessionID:       originSessionID,
+			OriginSessionAvatarID: originSessionAvatarID,
+			AuthorKind:            authorKindForUser(*user),
+		})
+		if status != 0 {
+			s.rollbackCreatedSession(r.Context(), user.ActorEmail, info.ID, "submit service initial turn", detail)
+			writeError(w, status, detail)
+			return
+		}
+	}
 	sessionReposSelectedTotal.WithLabelValues(repoSelectionBucket(len(repos))).Inc()
+	if turnResp != nil {
+		writeJSON(w, http.StatusCreated, struct {
+			sessions.Info
+			InitialTurn map[string]any `json:"initial_turn,omitempty"`
+		}{
+			Info:        info,
+			InitialTurn: turnResp,
+		})
+		return
+	}
 	writeJSON(w, http.StatusCreated, info)
 }
 
