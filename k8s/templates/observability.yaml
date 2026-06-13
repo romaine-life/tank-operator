@@ -11,6 +11,7 @@ Counter/Histogram declarations in:
 
   - backend-go/cmd/tank-operator/observability.go
   - backend-go/cmd/tank-operator/middleware_http.go
+  - backend-go/cmd/nats-auth-callout/main.go
   - backend-go/internal/pgstore/tracer.go
   - claude-runner/src/metrics.ts
   - codex-runner/src/metrics.ts
@@ -120,6 +121,35 @@ spec:
       metricRelabelings:
         - action: labeldrop
           regex: ^(instance|container|endpoint|service|job)$
+{{- if and .Values.natsCallout.enabled (not (eq (include "tank-operator.isTestEnv" .) "true")) }}
+---
+# PodMonitor: nats-auth-callout (the per-session NATS credential issuer,
+# #1128). It exposes tank_nats_auth_callout_total on :9100 but has no
+# Service — it speaks NATS ($SYS.REQ.USER.AUTH), not HTTP, so there is
+# nothing for a ServiceMonitor to select; scrape the pods directly.
+# Without this, the stage-4 gate metric (result="legacy" flatline) and
+# every new-pod auth FAILURE (result=denied_*/error — the #1148
+# "Authorization Violation" class that wedges submitted turns) are
+# invisible to Prometheus. Gated to non-test envs because test slots run
+# tokenless single-tenant NATS and never render the callout. Two replicas;
+# the counter is per-pod, so the alerts below sum() across pods.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: tank-nats-auth-callout
+  namespace: {{ include "tank-operator.orchestratorNamespace" . }}
+  labels:
+    app.kubernetes.io/name: nats-auth-callout
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: nats-auth-callout
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.observability.scrapeInterval | default "30s" | quote }}
+      scrapeTimeout: 10s
+{{- end }}
 ---
 # PrometheusRule: user-trust failure alerts. Each alert names exactly the
 # class of failure it surfaces; no "high-level" health alerts that fire
@@ -1320,6 +1350,78 @@ spec:
               and `{provider}_control_{scopeToken}_{sessionIdToken}`
               (control plane); see
               backend-go/internal/sessionbus/sweep.go for the parser.
+
+    - name: tank-operator.nats-auth-callout
+      rules:
+        # Per-session NATS credential issuer (#1128). Session pods present
+        # their projected SA token to the auth-callout and receive a NATS
+        # user JWT scoped to their own session; a rejection here means the
+        # pod's runner cannot connect to the session bus and its submitted
+        # turns stay stuck with no terminal — the #1148 "Authorization
+        # Violation" failure class. denied_no_credentials is excluded: a
+        # correctly-provisioned session pod always presents its token as the
+        # password, so a no-credentials connect is a stray probe, not a
+        # stranded session.
+        - alert: TankNatsAuthCalloutDenials
+          expr: sum(rate(tank_nats_auth_callout_total{result=~"denied_token_invalid|denied_pod_unbound|denied_identity_mismatch|error"}[10m])) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "nats-auth-callout is rejecting session-pod NATS auth (result={{`{{ $labels.result }}`}})"
+            runbook: |
+              A session pod presented its projected auth.romaine.life SA
+              token to the NATS auth-callout and was rejected, or the
+              callout errored issuing the user JWT. The pod's runner cannot
+              connect to the session bus, so its submitted turns stay stuck
+              with no terminal — the #1148 failure class.
+
+              Inspect the callout logs (deployment nats-auth-callout,
+              container `callout`, namespace tank-operator) for the matching
+              slog.Warn line and value of {{`{{ $labels.result }}`}}:
+                denied_token_invalid     — TokenReview rejected the token:
+                    audience mismatch (NATS_CALLOUT_TOKEN_AUDIENCE vs the
+                    projected token's audience https://auth.romaine.life —
+                    the exact #1148 shape), expired token, or a non-session
+                    ServiceAccount subject.
+                denied_pod_unbound       — the pod carries no
+                    tank-operator/session-id label (orchestrator labelling
+                    regression).
+                denied_identity_mismatch — the client's claimed NATS_USER
+                    does not match the pod's orchestrator-written binding.
+                error                    — JWT issuance failed inside the
+                    callout (issuer seed / nkey problem).
+              Confirm tank_nats_auth_callout_total{result="session"} is
+              still incrementing (healthy pods) and grep the affected
+              session pod's runner logs for NATS "Authorization Violation".
+
+        # Stage-4 gate signal (#1128). The callout grants the legacy
+        # unrestricted permission set to any client still presenting the
+        # shared fleet token (NATS_CALLOUT_LEGACY_TOKEN). Expected ONLY for
+        # pre-stage-3 session pods that have not yet aged out (idle reaper
+        # bound ≤7d). This is the migration audit checklist's required
+        # "the old path is being used again" counter: while it fires,
+        # deleting the legacy grant would strand those live pods, so stage 4
+        # (remove NATS_CALLOUT_LEGACY_TOKEN + the sessions-namespace
+        # tank-nats-auth ExternalSecret) MUST NOT ship. Diagnostic only.
+        - alert: TankNatsAuthCalloutLegacyTokenInUse
+          expr: sum(rate(tank_nats_auth_callout_total{result="legacy"}[1h])) > 0
+          for: 5m
+          labels:
+            severity: info
+          annotations:
+            summary: "NATS auth-callout is still granting the legacy shared fleet token"
+            runbook: |
+              A client authenticated to NATS with the shared fleet token and
+              the callout issued the legacy unrestricted grant. Expected only
+              for pre-stage-3 session pods that have not yet aged out (idle
+              reaper bound ≤7d after the stage-3 session-image flip). This is
+              the #1128 stage-4 gate: when this stays at zero for a full
+              pre-stage-3 pod-age window, the legacy grant is safe to remove
+              (docs/session-bus-auth.md → Staged rollout step 4); until then
+              removing it strands live pods. Identify the lingering pods via
+              NATS connz (user="legacy-shared-token") in the nats namespace.
+              Does not page.
 
     - name: tank-operator.api-proxy
       rules:
