@@ -64,10 +64,14 @@ safe.
    The orchestrator deployment simultaneously gains `NATS_USER`; session
    pods (legacy token) now authenticate THROUGH the callout's legacy grant.
    Watch `tank_nats_auth_callout_total{result="legacy"}` count the fleet.
-3. **Flip session credentials** — `sessionmodel.go` injects the storage key
-   + SA-token path instead of `NATS_TOKEN`; runners send user/pass. New
-   pods only (migration policy, pre-deploy-pod clause); old pods keep
-   working via the legacy grant for ≤7d (idle reaper bound).
+3. **Flip session credentials** — `sessionmodel.go` injects `NATS_USER`
+   (the storage key) + `NATS_PASSWORD_FILE` (the projected
+   auth.romaine.life-audience SA token path) instead of `NATS_TOKEN`;
+   runners send user/pass. JavaScript runners read the password file from
+   the NATS authenticator so reconnects see token rotation; Antigravity's
+   Go runner exits/restarts on permanent auth closure and reads the file on
+   boot. New pods only (migration policy, pre-deploy-pod clause); old pods
+   keep working via the legacy grant for ≤7d (idle reaper bound).
 4. **Drop the legacy grant** once `legacy` flatlines: remove
    `NATS_CALLOUT_LEGACY_TOKEN` from the callout deployment and delete the
    `tank-nats-auth` ExternalSecret from the sessions namespace. This is the

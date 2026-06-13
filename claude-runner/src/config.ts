@@ -8,6 +8,8 @@ export interface Config {
   sessionStorageKey: string;
   ownerEmail: string;
   natsURL: string;
+  natsUser?: string;
+  natsPasswordFile?: string;
   natsToken: string;
   natsStream: string;
   natsCommandStream: string;
@@ -33,6 +35,8 @@ export function loadConfig(): Config {
     sessionStorageKey: process.env.TANK_SESSION_STORAGE_KEY?.trim() || sessionId,
     ownerEmail: (process.env.POD_OWNER_EMAIL ?? "").trim().toLowerCase(),
     natsURL,
+    natsUser: process.env.NATS_USER?.trim() || "",
+    natsPasswordFile: process.env.NATS_PASSWORD_FILE?.trim() || "",
     natsToken: process.env.NATS_TOKEN?.trim() || "",
     natsStream: process.env.NATS_STREAM?.trim() || "TANK_SESSION_BUS",
     natsCommandStream: process.env.NATS_COMMAND_STREAM?.trim() || "TANK_SESSION_COMMANDS",

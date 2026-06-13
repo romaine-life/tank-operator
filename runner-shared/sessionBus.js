@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 
 export const SESSION_COMMAND_ACK_MS = parsePositiveInt(process.env.SESSION_COMMAND_ACK_MS, 120_000);
@@ -290,9 +291,10 @@ export class SharedSessionBus {
         if (this.nc && this.js && this.jsm) return;
         const servers = this.cfg.natsURL || process.env.NATS_URL;
         if (!servers) throw new Error("NATS_URL is required");
+        const auth = natsAuthOptions(this.cfg);
         this.nc = await this.deps.connect({
             servers,
-            token: this.cfg.natsToken || process.env.NATS_TOKEN,
+            ...auth,
             name: this.runnerID,
             // Reconnect FOREVER. The client default (10 attempts x 2s) made
             // every runner mortal: a NATS outage longer than ~25 seconds
@@ -446,6 +448,36 @@ export class SharedSessionBus {
             runtime: this.provider,
             written_at: typeof event.written_at === "string" ? event.written_at : new Date().toISOString(),
         };
+    }
+}
+
+function natsAuthOptions(cfg) {
+    const user = String(cfg.natsUser || process.env.NATS_USER || "").trim();
+    const passwordFile = String(cfg.natsPasswordFile || process.env.NATS_PASSWORD_FILE || "").trim();
+    if ((user && !passwordFile) || (!user && passwordFile)) {
+        throw new Error("NATS_USER and NATS_PASSWORD_FILE must be set together");
+    }
+    if (user && passwordFile) {
+        return {
+            authenticator: () => ({
+                user,
+                pass: readTrimmedFile(passwordFile, "NATS_PASSWORD_FILE"),
+            }),
+        };
+    }
+    const token = String(cfg.natsToken || process.env.NATS_TOKEN || "").trim();
+    if (token) return { token };
+    return {};
+}
+
+function readTrimmedFile(path, label) {
+    try {
+        const value = readFileSync(path, "utf8").trim();
+        if (!value) throw new Error(`${label} is empty`);
+        return value;
+    }
+    catch (err) {
+        throw new Error(`${label} read failed: ${errorText(err)}`);
     }
 }
 

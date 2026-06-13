@@ -350,6 +350,15 @@ const blocked = [
   { name: "removed INTERNAL_API_ALLOWED_SUBJECTS env var", pattern: /\bINTERNAL_API_ALLOWED_SUBJECTS\b/ },
   { name: "removed parseInternalSubjects helper", pattern: /\bparseInternalSubjects\b/ },
   { name: "removed internalAllowedSubjects field", pattern: /\binternalAllowedSubjects\b/ },
+  // tank-operator#1128 stage 3: GUI session runner sidecars authenticate
+  // to NATS through auth_callout with NATS_USER=<storage key> and
+  // NATS_PASSWORD_FILE=<projected auth.romaine.life SA token>. The shared
+  // tank-nats-auth token remains only for orchestrator/callout bootstrap and
+  // pre-stage-3 pods aging out through the callout's transition grant.
+  {
+    name: "removed shared NATS token injection into session runner env",
+    pattern: /(runnerEnv|codexRunnerEnv|antigravityRunnerEnv)[\s\S]{0,600}"name":\s*"NATS_TOKEN"/,
+  },
   // Turn-complete sound was per-pane (declared inside ChatPane in
   // App.tsx) before the cutover that moved it onto the always-on
   // /api/sessions/events SSE consumer. The per-pane shape was the

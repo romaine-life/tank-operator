@@ -9,6 +9,8 @@ export interface SessionBusConfig {
   sessionStorageKey?: string;
   ownerEmail: string;
   natsURL: string;
+  natsUser?: string;
+  natsPasswordFile?: string;
   natsToken?: string;
   natsStream: string;
   operatorInternalURL: string;
