@@ -58,9 +58,6 @@ func TestInstallTankSkillsScriptRunsUnderSh(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, "skills__common__rollout__agents__openai.yaml"), []byte("agent"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, "skills__antigravity__antigravity-only__SKILL.md"), []byte("agy"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Env = append(isolatedScriptEnv(home),
@@ -73,12 +70,6 @@ func TestInstallTankSkillsScriptRunsUnderSh(t *testing.T) {
 
 	assertFileContains(t, filepath.Join(home, ".claude", "skills", "north-star", "SKILL.md"), "north")
 	assertFileContains(t, filepath.Join(home, ".codex", "skills", "north-star", "SKILL.md"), "north")
-	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "north-star", "SKILL.md"), "north")
-	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "rollout", "agents", "openai.yaml"), "agent")
-	assertFileContains(t, filepath.Join(home, ".gemini", "skills", "antigravity-only", "SKILL.md"), "agy")
-	if _, err := os.Stat(filepath.Join(home, ".claude", "skills", "antigravity-only", "SKILL.md")); !os.IsNotExist(err) {
-		t.Fatalf("antigravity-scoped skill should not install into claude, stat err: %v", err)
-	}
 }
 
 func TestInstallAgentPostCommitReminderScriptRunsUnderSh(t *testing.T) {
@@ -329,135 +320,6 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestAntigravityRunnerLaunchSeedsNativeMCPConfig(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("antigravity launch script test runs on POSIX only")
-	}
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("antigravity launch script requires jq")
-	}
-
-	scriptPath, err := filepath.Abs("../../../antigravity-container/antigravity-runner-launch.sh")
-	if err != nil {
-		t.Fatalf("resolve script path: %v", err)
-	}
-	home := t.TempDir()
-	configDir := t.TempDir()
-	fakeBin := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatalf("mkdir fake bin: %v", err)
-	}
-	nodeLog := filepath.Join(t.TempDir(), "node.log")
-
-	if err := os.WriteFile(filepath.Join(configDir, "mcp.json"), []byte(`{
-  "mcpServers": {
-    "glimmung": {"type": "http", "url": "http://127.0.0.1:9995/"},
-    "github": {"type": "http", "url": "http://127.0.0.1:9992/"}
-  }
-}`), 0o644); err != nil {
-		t.Fatalf("write mcp config: %v", err)
-	}
-	writeExecutable(t, filepath.Join(fakeBin, "runner"), `#!/bin/sh
-printf 'runner executed\n' > "$FAKE_NODE_LOG"
-exit 0
-`)
-
-	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(isolatedScriptEnvWithPath(home, fakeBin+string(os.PathListSeparator)+os.Getenv("PATH")),
-		"TANK_SESSION_CONFIG_DIR="+configDir,
-		"FAKE_NODE_LOG="+nodeLog,
-		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
-		"GLIMMUNG_SUPERVISOR_CHILD=",
-		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT=",
-		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED=",
-	)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("script failed: %v\noutput:\n%s", err, string(out))
-	}
-
-	assertFileContains(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"), `"glimmung"`)
-	assertFileContains(t, filepath.Join(home, ".gemini", "config", "mcp_config.json"), `"http://127.0.0.1:9995/"`)
-	assertFileContains(t, filepath.Join(home, ".gemini", "antigravity-cli", "antigravity-oauth-token"), `"access_token":"managed-by-tank-operator"`)
-	assertFileContains(t, nodeLog, "runner executed")
-}
-
-func TestAntigravityRunnerLaunchFailsWithoutMCPConfig(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("antigravity launch script test runs on POSIX only")
-	}
-
-	scriptPath, err := filepath.Abs("../../../antigravity-container/antigravity-runner-launch.sh")
-	if err != nil {
-		t.Fatalf("resolve script path: %v", err)
-	}
-	home := t.TempDir()
-	configDir := t.TempDir()
-	fakeBin := filepath.Join(t.TempDir(), "bin")
-	if err := os.MkdirAll(fakeBin, 0o755); err != nil {
-		t.Fatalf("mkdir fake bin: %v", err)
-	}
-	nodeLog := filepath.Join(t.TempDir(), "node.log")
-	writeExecutable(t, filepath.Join(fakeBin, "runner"), `#!/bin/sh
-printf 'runner executed\n' > "$FAKE_NODE_LOG"
-exit 0
-`)
-
-	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(isolatedScriptEnvWithPath(home, fakeBin+string(os.PathListSeparator)+os.Getenv("PATH")),
-		"TANK_SESSION_CONFIG_DIR="+configDir,
-		"FAKE_NODE_LOG="+nodeLog,
-		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
-		"GLIMMUNG_SUPERVISOR_CHILD=",
-		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT=",
-		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED=",
-	)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("script unexpectedly succeeded without mcp.json\noutput:\n%s", string(out))
-	}
-	if !strings.Contains(string(out), "required MCP config missing or empty") {
-		t.Fatalf("script output missing MCP failure reason:\n%s", string(out))
-	}
-	if _, err := os.Stat(nodeLog); !os.IsNotExist(err) {
-		t.Fatalf("runner should not run when MCP config is missing, stat err: %v", err)
-	}
-}
-
-func TestAntigravityRunnerLaunchFailsWithMalformedMCPConfig(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("antigravity launch script test runs on POSIX only")
-	}
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("antigravity launch script requires jq")
-	}
-
-	scriptPath, err := filepath.Abs("../../../antigravity-container/antigravity-runner-launch.sh")
-	if err != nil {
-		t.Fatalf("resolve script path: %v", err)
-	}
-	home := t.TempDir()
-	configDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(configDir, "mcp.json"), []byte(`{"notMcpServers":{}}`), 0o644); err != nil {
-		t.Fatalf("write malformed mcp config: %v", err)
-	}
-
-	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(isolatedScriptEnv(home),
-		"TANK_SESSION_CONFIG_DIR="+configDir,
-		"GLIMMUNG_SUPERVISOR_CHILD=",
-		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT=",
-		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED=",
-	)
-	out, err := cmd.CombinedOutput()
-	if err == nil {
-		t.Fatalf("script unexpectedly succeeded with malformed mcp.json\noutput:\n%s", string(out))
-	}
-	if !strings.Contains(string(out), "is not a valid mcpServers document") {
-		t.Fatalf("script output missing malformed MCP reason:\n%s", string(out))
 	}
 }
 

@@ -487,7 +487,6 @@ func (s *appServer) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/background-task-wakes/cancel", s.handleInternalCancelBackgroundTaskWake)
 	mux.HandleFunc("GET /api/internal/sessions/{session_id}/background-tasks/unresolved", s.handleInternalUnresolvedBackgroundTasks)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/provider-fatal", s.handleInternalProviderFatal)
-	mux.HandleFunc("POST /api/internal/sessions/{session_id}/agent-continuation", s.handleInternalAgentContinuation)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/control-actions", s.handleInternalAppendControlAction)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/test-state", s.handleInternalSetTestState)
 	mux.HandleFunc("POST /api/internal/sessions/{session_id}/pull-request-link", s.handleInternalSetPullRequestLink)

@@ -510,9 +510,9 @@ func TestApplyScheduledWakeOverride(t *testing.T) {
 		{name: "error untouched, no query", in: "error", pending: true, want: "error", wantCalls: 0},
 		{name: "needs_input untouched, no query", in: "needs_input", pending: true, want: "needs_input", wantCalls: 0},
 		{name: "nil checker never strands scheduled", in: "scheduled", nilChecker: true, want: "ready", wantCalls: 0},
-		// Antigravity path: the runner's background_work_pending annotation parks the
-		// turn with no Tank wake row — so it short-circuits the wake query and parks
-		// even when the checker is nil (agy owns its own clock, degraded boot included).
+		// A runner's background_work_pending annotation parks the turn with no
+		// Tank wake row, so it short-circuits the wake query and parks even
+		// when the checker is nil.
 		{name: "ready + bg pending -> scheduled, no wake query", in: "ready", bgPending: true, want: "scheduled", wantCalls: 0},
 		{name: "scheduled stays while bg pending, no wake query", in: "scheduled", bgPending: true, want: "scheduled", wantCalls: 0},
 		{name: "ready + bg pending parks even with nil checker", in: "ready", bgPending: true, nilChecker: true, want: "scheduled", wantCalls: 0},

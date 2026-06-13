@@ -5,11 +5,9 @@ on:
     branches: [main]
     paths:
       - 'claude-container/**'
-      - 'antigravity-container/**'
       - 'session-images/**'
       - 'claude-runner/**'
       - 'codex-runner/**'
-      - 'backend-go/cmd/antigravity-runner/**'
       - 'runner-shared/**'
       - 'scripts/check-session-image-common-tools.mjs'
       - 'scripts/image-fingerprint.sh'
@@ -48,14 +46,6 @@ jobs:
             dockerfile: claude-container/Dockerfile
             build_args: TANK_AGENT=codex
             fingerprint_paths: 'claude-container/Dockerfile session-images .dockerignore claude-container/mcp-auth-proxy claude-runner codex-runner runner-shared backend-go/go.mod backend-go/go.sum backend-go/internal backend-go/cmd/tank-supervisor'
-          # Antigravity uses its own glibc Dockerfile (agy is a glibc-only
-          # native binary), so it carries no TANK_AGENT and a distinct
-          # fingerprint path set.
-          - agent: antigravity
-            image: antigravity-container
-            dockerfile: antigravity-container/Dockerfile
-            build_args: ''
-            fingerprint_paths: 'antigravity-container session-images .dockerignore claude-container/mcp-auth-proxy backend-go/go.mod backend-go/go.sum backend-go/internal backend-go/cmd/tank-supervisor backend-go/cmd/antigravity-runner'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -107,9 +97,9 @@ jobs:
           PROOF_REPOSITORY: ${{ matrix.image }}-build-proof
         run: |
           set -euo pipefail
-          # Each agent variant builds a different image (claude/codex branch
-          # on TANK_AGENT from the shared Dockerfile; antigravity has its own),
-          # so the fingerprint must include the agent name. --image is what the
+          # Each agent variant builds a different image by branching on
+          # TANK_AGENT from the shared Dockerfile, so the fingerprint must
+          # include the agent name. --image is what the
           # script uses to namespace the alias tag, and we propagate that
           # through to ALIAS_TAG below.
           fingerprint="$(scripts/image-fingerprint.sh \
@@ -197,7 +187,6 @@ jobs:
           set -euo pipefail
           claude_tag="$(cat session-image-tags/claude.tag)"
           codex_tag="$(cat session-image-tags/codex.tag)"
-          antigravity_tag="$(cat session-image-tags/antigravity.tag)"
           built_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
           git_sha="$(git rev-parse HEAD)"
           git_ref="${GITHUB_REF_NAME:-main}"
@@ -217,7 +206,6 @@ jobs:
           python3 scripts/update-values-yaml.py --file k8s/values.yaml \
             --set session.image="romainecr.azurecr.io/claude-container:${claude_tag}" \
             --set session.codexImage="romainecr.azurecr.io/codex-container:${codex_tag}" \
-            --set session.antigravityImage="romainecr.azurecr.io/antigravity-container:${antigravity_tag}" \
             --set session.imageMetadata.claude.built_at="${built_at}" \
             --set session.imageMetadata.claude.git_sha="${git_sha}" \
             --set session.imageMetadata.claude.git_ref="${git_ref}" \
@@ -235,16 +223,7 @@ jobs:
             --set session.imageMetadata.codex.pr_url="${pr_url}" \
             --set session.imageMetadata.codex.workflow_run_url="${workflow_run_url}" \
             --set session.imageMetadata.codex.repository="${repository}" \
-            --set session.imageMetadata.codex.actor="${GITHUB_ACTOR}" \
-            --set session.imageMetadata.antigravity.built_at="${built_at}" \
-            --set session.imageMetadata.antigravity.git_sha="${git_sha}" \
-            --set session.imageMetadata.antigravity.git_ref="${git_ref}" \
-            --set session.imageMetadata.antigravity.commit_url="${commit_url}" \
-            --set session.imageMetadata.antigravity.pr_number="${pr_number}" \
-            --set session.imageMetadata.antigravity.pr_url="${pr_url}" \
-            --set session.imageMetadata.antigravity.workflow_run_url="${workflow_run_url}" \
-            --set session.imageMetadata.antigravity.repository="${repository}" \
-            --set session.imageMetadata.antigravity.actor="${GITHUB_ACTOR}"
+            --set session.imageMetadata.codex.actor="${GITHUB_ACTOR}"
 
           if git diff --quiet k8s/values.yaml; then
             echo "no session image tag or metadata change"

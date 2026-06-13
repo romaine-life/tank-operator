@@ -62,9 +62,7 @@ Contract impact:
 - Tank validates create, turn, and runtime-config model/effort values against
   the same provider-owned allowlists. Rejections are hard `400` responses with
   an actionable allowed-value list instead of a silent runner default.
-- `antigravity_gui` sessions stamp the validated create-time model into the
   pod manifest as `TANK_SESSION_MODEL`; the runner must pass that exact value
-  to `agy --model` before the first turn and echo it through the internal
   runtime-config endpoint. Missing model env is a startup failure, not a silent
   provider default.
 - `codex_exec_gui` and `codex_app_server` are retired create modes. Existing
@@ -86,11 +84,7 @@ Evidence:
   unknown-mode, unsupported-model, missing-model, and unsupported-effort
   rejection paths.
 - `backend-go/internal/sessionmodel/sessionmodel_test.go` covers
-  `TANK_SESSION_MODEL` pod env stamping for `antigravity_gui`.
-- `backend-go/cmd/antigravity-runner/main_test.go` covers the required
-  `agy --model` argument and runtime-config report for the applied model.
 - `backend-go/cmd/tank-operator/observability_test.go` covers the
-  `antigravity` provider bucket for runtime-config metrics.
 - `frontend/src/modelEffortDefaults.test.ts` covers the SPA's Tank metadata
   fetch, Claude provider-key normalization, preference reconciliation, and
   create-time readiness guard.
@@ -165,7 +159,6 @@ Contract impact:
 - A lookup failure falls back to the pinned image rather than failing session
   creation.
 - The override is durable (survives orchestrator rollout), covers Claude,
-  Codex, and Antigravity session images, and lives in shared Postgres keyed by
   scope, so a slot override can never bleed into prod or another slot.
 
 Evidence:
@@ -181,16 +174,11 @@ Evidence:
   `tank_session_image_override_write_total{action}`.
 - Operator flow: `docs/testing.md` → "Making new slot sessions inherit a change".
 
-## Antigravity proxy-owned OAuth (credential boundary)
 
 Status: in progress
 
 Intent:
-Keep the real Antigravity (Gemini-Ultra / Google) OAuth refresh token off the
-model/tool-capable runtime's filesystem. Previously `antigravity_gui` pods
 mounted the harvested OAuth blob (refresh token included) into the
-`antigravity-runner` container and copied it into agy's home — a prompt-injected
-agy could exfiltrate it. The fix gives agy the same proxy-owned boundary the
 Claude/Codex providers use.
 
 Affected contracts:
@@ -198,71 +186,43 @@ Affected contracts:
 - Observability
 
 Contract impact:
-- `antigravity_gui` pods never mount the `antigravity-credentials` Secret. The
   launch script seeds a placeholder token (`access_token:
-  "managed-by-tank-operator"`, far-future `expiry`, no refresh token) so agy
   never refreshes in place.
-- agy's `cloudcode-pa.googleapis.com` traffic is host-aliased to the production
-  `antigravity-api-proxy`, which owns the refresh token (mounted only in the
   proxy pod), injects the real access token per request, single-flight-refreshes
   against `oauth2.googleapis.com` on upstream 401, and writes rotated blobs back
-  to KV. agy (a Go binary) trusts the proxy leaf via `SSL_CERT_FILE`.
 - The credential authority is a single production deployment; validation slots
-  route to it and render no antigravity credential Secret / KV key (same slot
-  contract as claude/codex). `antigravity_config` (interactive login) is the one
-  antigravity mode NOT proxied — it reaches real Google to mint the token.
 
 Evidence:
 - `backend-go/internal/sessionmodel/sessionmodel_test.go`
-  (`TestPodManifestAntigravityGUIRunnerProxiedNoCredMount`): no `antigravity-cred`
-  mount/volume, no `ANTIGRAVITY_CRED_FILE` env, has the `cloudcode-pa` hostAlias
   + `oauth-gateway-ca` mount.
-- `api-proxy/tests/test_server.py`: the `antigravity`/`google` provider config
   (form-encoded refresh, KV-sourced client secret), `expiry` blob patch, and
   `expiry`-based freshness.
 - Migration guards: `scripts/check-removed-chat-runtime.mjs` blocks the retired
-  `ANTIGRAVITY_CRED_FILE` / `/var/run/antigravity-cred` / `AntigravityCredentialsSecret`
   surface; `scripts/check-test-slot-provider-credentials.sh` asserts slots route
-  antigravity to the production proxy and mount no antigravity credential.
-- Mechanism reference: `docs/api-proxy-auth.md` → "Antigravity (Gemini-Ultra) provider".
-- Metrics: `tank_api_proxy_*{provider="antigravity"}` (scraped via the
   `tank-api-proxy` ServiceMonitor; the provider-generic `TankApiProxy*` alerts
   cover it).
 
-## Antigravity native MCP config
 
 Status: in progress
 
 Intent:
-Give `antigravity_gui` the same Tank MCP surface as Claude and Codex GUI
 sessions. The pod-level `mcp-auth-proxy` sidecar and chart-managed
-`mcp.json` are not sufficient by themselves: `agy` discovers MCP servers from
-its native config file, `~/.gemini/config/mcp_config.json`.
 
 Affected contracts:
 - Session Lifecycle
 - Agent Runners
 
 Contract impact:
-- `antigravity_gui` runner startup copies the mounted
   `/opt/tank/session-config/mcp.json` into
-  `$HOME/.gemini/config/mcp_config.json` before the first `agy` turn.
 - The launch script validates the source is a JSON document with an
   `mcpServers` object and fails the runner if the mounted config is missing or
-  malformed. Starting an Antigravity runner without MCP tools is a startup
   failure, not a degraded mode.
 - The runtime authority remains the chart-managed session config plus the
   `mcp-auth-proxy` sidecar. No MCP bearer or upstream credential is written into
-  Antigravity's config; it contains only localhost proxy URLs.
 
 Evidence:
-- Live-binary proof against the pinned `agy` image: with only
-  `~/.gemini/config/mcp_config.json` populated in an isolated HOME, `agy`
   initialized a fake HTTP MCP server and issued `tools/list`.
 - `backend-go/cmd/tank-operator/session_pod_bootstrap_script_test.go`
-  (`TestAntigravityRunnerLaunchSeedsNativeMCPConfig` and
-  `TestAntigravityRunnerLaunchFailsWithoutMCPConfig` /
-  `TestAntigravityRunnerLaunchFailsWithMalformedMCPConfig`) asserts the launch
   script materializes the native MCP config and fails before runner exec when
   `mcp.json` is absent or malformed.
 

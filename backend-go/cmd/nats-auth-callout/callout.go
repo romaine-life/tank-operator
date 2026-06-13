@@ -72,7 +72,7 @@ const (
 	natsGlobalAccount = "$G"
 )
 
-var defaultProviders = []string{"claude", "claude_secondary", "codex", "antigravity"}
+var defaultProviders = []string{"claude", "claude_secondary", "codex"}
 
 // Handle processes one $SYS.REQ.USER.AUTH request and returns the encoded
 // authorization response JWT. Every return is a valid response document —

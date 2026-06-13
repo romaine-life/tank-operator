@@ -66,7 +66,6 @@ surfaces the `denied_*`/`error` new-pod auth-failure class.
    (the storage key) + `NATS_PASSWORD_FILE` (the projected
    auth.romaine.life-audience SA token path) instead of `NATS_TOKEN`;
    runners send user/pass. JavaScript runners read the password file from
-   the NATS authenticator so reconnects see token rotation; Antigravity's
    Go runner exits/restarts on permanent auth closure and reads the file on
    boot.
 4. **Drop the legacy grant** — completed after stage 3: the callout has no

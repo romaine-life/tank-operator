@@ -40,11 +40,10 @@ spec:
       scrapeTimeout: 10s
 ---
 {{- if not (eq (include "tank-operator.isTestEnv" .) "true") }}
-# ServiceMonitor: api-proxy deployments (Claude + Codex + Antigravity). All
+# ServiceMonitor: api-proxy deployments. All
 # Services expose the metrics sidecar port; the `provider` label on each metric
 # distinguishes them at query time. The provider-generic TankApiProxy* alerts
-# below fire per-provider via {{`{{ $labels.provider }}`}}, so antigravity is
-# covered for refresh-storm / refresh-failure / rate-limit the moment it scrapes.
+# below fire per-provider via {{`{{ $labels.provider }}`}}.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -57,7 +56,7 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/name
         operator: In
-        values: [claude-api-proxy, claude-secondary-api-proxy, codex-api-proxy, antigravity-api-proxy]
+        values: [claude-api-proxy, claude-secondary-api-proxy, codex-api-proxy]
   endpoints:
     - port: metrics
       path: /metrics
@@ -66,7 +65,7 @@ spec:
 ---
 {{- end }}
 # PodMonitor: session pods. The PodMonitor scrapes the mcp-auth-proxy
-# sidecar and (for claude_gui / codex_gui / antigravity_gui sessions)
+# sidecar and (for claude_gui / codex_gui sessions)
 # the runner sidecar. Session pods are ephemeral — scrape interval 15s
 # gives the operator a realistic chance of catching at least one sample
 # from a short-lived session before the pod terminates and its series
@@ -843,10 +842,7 @@ spec:
 
               phase=streaming: a turn made provider progress, then the
               session's ledger went fully silent for >20m with no
-              terminal — the wedged-boundary class (sessions 828/829,
-              tank-operator#1085: the antigravity turn-settle window was
-              cancelled by a transcript-rewrite replay and never
-              re-armed). A streaming hit is suspicion, not a verdict — a
+              terminal — the wedged-boundary class. A streaming hit is suspicion, not a verdict — a
               single long quiet tool call can legitimately exceed the
               threshold; one that persists well past it is almost
               certainly real. The stranded-turn sweep still owns the
@@ -856,9 +852,7 @@ spec:
               Localize with GET /api/debug/stuck-turns (lists session_ids
               + phase + stuck_seconds + last_event_at +
               provider_rate_limit_status), then read that session's
-              runner logs and session_events tail; for antigravity also
-              check tank_antigravity_runner_turn_settle_total (a healthy
-              boundary shows a quiet outcome after the last extended).
+              runner logs and session_events tail.
 
               Distinguishes from TankTurnSilentStranding (aggregate
               submitted-vs-terminal rate) by being per-session and
@@ -1442,7 +1436,7 @@ spec:
         # → chain death → wizard recovery. The keeper (run_refresh_keeper) writes
         # back on boot + before expiry, so steady-state is zero; a non-zero rate
         # over 15m means the write path itself is broken (UAMI/KV RBAC, KV
-        # outage). Provider-generic — covers claude, codex, and antigravity.
+        # outage). Provider-generic — covers managed provider proxies.
         - alert: TankApiProxyKvPersistFailing
           expr: increase(tank_api_proxy_kv_persist_total{result="failure"}[15m]) > 0
           for: 15m
@@ -1450,7 +1444,7 @@ spec:
             severity: warning
           annotations:
             summary: "api-proxy ({{`{{ $labels.provider }}`}}) cannot persist rotated tokens to KV"
-            runbook: "Rotations are succeeding in memory but not writing back to KV — the restart-bomb precursor. Grep ext-proc logs for `KV write failed`; check the api-proxy UAMI's Key Vault Secrets Officer role and KV reachability (az keyvault secret show --vault-name romaine-kv --name <provider>-credentials --query attributes.updated). Until fixed, do NOT restart the proxy pod: the next boot will re-read a stale Secret. For claude/codex this surfaces as refresh_token_reused after restart (run the credential wizard to recover); antigravity self-heals on boot because the keeper re-refreshes, but the stale KV blob should still be repaired."
+            runbook: "Rotations are succeeding in memory but not writing back to KV — the restart-bomb precursor. Grep ext-proc logs for `KV write failed`; check the api-proxy UAMI's Key Vault Secrets Officer role and KV reachability (az keyvault secret show --vault-name romaine-kv --name <provider>-credentials --query attributes.updated). Until fixed, do NOT restart the proxy pod: the next boot will re-read a stale Secret. Run the credential wizard to recover if the provider reports refresh_token_reused after restart."
 
         - alert: TankApiProxyEnvoySdsKeyRotationFailed
           expr: max_over_time(tank_api_proxy_envoy_sds_key_rotation_failed[15m]) > 0
@@ -1534,65 +1528,6 @@ spec:
           annotations:
             summary: "pod-side runner ({{`{{ $labels.mode }}`}}) provider errors > 0.1/s for 5m"
             runbook: "Inspect the affected session pod's claude-runner / codex-runner logs."
-
-        - alert: TankAntigravityRunnerProviderErrorRate
-          expr: rate(tank_antigravity_runner_provider_error_total[5m]) > 0.1
-          for: 5m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Antigravity runner provider errors > 0.1/s for 5m"
-            runbook: |
-              Inspect the affected session pod's antigravity-runner logs and
-              agy CLI logs under /home/node/.gemini/antigravity-cli/log.
-              Auxiliary userinfo/Clearcut 401s are counted separately as
-              tank_antigravity_runner_agy_diagnostic_total and are not provider
-              auth failures; real Code Assist auth failures surface through
-              tank_api_proxy_upstream_401_total{provider="antigravity"} or
-              provider_error reasons such as provider_auth_failed /
-              skill_missing. provider_executor_error names agy terminal
-              executor errors such as UNKNOWN (code 500) /
-              PlannerResponse without ModifiedResponse; provider_no_final_answer
-              names a normal-looking agy exit that produced tool activity but
-              no assistant final answer, and should be investigated as a
-              provider/runner terminal-classification incident rather than a UI
-              projection issue. transcript_event_source_unavailable /
-              transcript_event_source_error mean the local file-backed JSONL
-              event source failed; inspect
-              tank_antigravity_runner_transcript_event_source_total and the
-              antigravity-runner logs before blaming the frontend projection.
-
-        - alert: TankAntigravityTranscriptEventSourceFailure
-          expr: increase(tank_antigravity_runner_transcript_event_source_total{result=~"unavailable|error"}[15m]) > 0
-          for: 2m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Antigravity transcript event source failed"
-            runbook: |
-              The antigravity-runner could not watch agy's JSONL transcript
-              source, or the watcher errored while a turn was running. The
-              runner should fail the affected turn with provider_error reason
-              transcript_event_source_unavailable or
-              transcript_event_source_error instead of silently degrading live
-              updates. Inspect the session pod filesystem under
-              /home/node/.gemini/antigravity-cli/brain and the runner logs for
-              "antigravity transcript watcher".
-
-        - alert: TankAntigravitySkillMissing
-          expr: increase(tank_antigravity_runner_provider_error_total{reason="skill_missing"}[15m]) > 0
-          for: 2m
-          labels:
-            severity: warning
-          annotations:
-            summary: "Antigravity received a skill turn but could not load the requested SKILL.md"
-            runbook: |
-              The session should mount tank-session-config at
-              /opt/tank/session-config and run install-tank-skills.sh before
-              antigravity-runner starts. Check the pod manifest volumeMounts,
-              /home/node/.gemini/skills/<skill>/SKILL.md, and the
-              tank-session-config ConfigMap's skills__common /
-              skills__antigravity entries.
 
         - alert: TankScheduledWakeupsOverdue
           expr: max_over_time(tank_scheduled_wakeups_due[15m]) > 0

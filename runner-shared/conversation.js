@@ -13,7 +13,7 @@
 
 export const TANK_ACTORS = ["user", "assistant", "system", "tool", "runner"];
 
-export const TANK_EVENT_SOURCES = ["tank", "claude", "codex", "antigravity"];
+export const TANK_EVENT_SOURCES = ["tank", "claude", "codex"];
 
 // Tank events are durable-by-design; `live-only` was retired once the
 // producer-side live channel never landed. The enum stays single-valued so

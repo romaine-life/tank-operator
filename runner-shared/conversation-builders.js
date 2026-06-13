@@ -119,8 +119,7 @@ export function turnEvent(args) {
   if (args.finalAnswer !== undefined)
     payload.final_answer = normalizeFinalAnswer(args.finalAnswer);
   // background_work_pending stamps whether provider-tracked background work
-  // (codex unified-exec shells, agy tasks) is still in flight at this
-  // terminal; the user-facing-turn projection folds a would-be-ready
+  // is still in flight at this terminal; the user-facing-turn projection folds a would-be-ready
   // terminal to the non-summoning scheduled status when set (#906 spine).
   if (args.backgroundWorkPending !== undefined)
     payload.background_work_pending = args.backgroundWorkPending;

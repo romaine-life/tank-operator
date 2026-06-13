@@ -62,10 +62,6 @@ spec:
               value: {{ .Values.session.codexImage | quote }}
             - name: CODEX_SESSION_IMAGE_METADATA
               value: {{ .Values.session.imageMetadata.codex | default dict | toJson | quote }}
-            - name: ANTIGRAVITY_SESSION_IMAGE
-              value: {{ .Values.session.antigravityImage | quote }}
-            - name: ANTIGRAVITY_SESSION_IMAGE_METADATA
-              value: {{ .Values.session.imageMetadata.antigravity | default dict | toJson | quote }}
             - name: SESSION_SERVICE_ACCOUNT
               value: {{ include "tank-operator.sessionServiceAccount" . | quote }}
             - name: SESSION_CONFIGMAP
@@ -136,8 +132,6 @@ spec:
               value: {{ include "tank-operator.claudeSecondaryApiProxyHost" . | quote }}
             - name: CODEX_API_PROXY_HOST
               value: {{ include "tank-operator.codexApiProxyHost" . | quote }}
-            - name: ANTIGRAVITY_API_PROXY_HOST
-              value: {{ include "tank-operator.antigravityApiProxyHost" . | quote }}
             # Workload-identity wiring for the orchestrator's KV writes.
             # Used only by the break-glass save-credentials endpoint that
             # captures a logged-in blob from a config-mode pod. Steady-state
@@ -157,8 +151,6 @@ spec:
               value: {{ include "tank-operator.claudeSecondaryCredentialsKvKey" . | quote }}
             - name: CODEX_CREDENTIALS_KV_KEY
               value: {{ include "tank-operator.codexCredentialsKvKey" . | quote }}
-            - name: ANTIGRAVITY_CREDENTIALS_KV_KEY
-              value: {{ include "tank-operator.antigravityCredentialsKvKey" . | quote }}
             {{- end }}
             - name: AZURE_FEDERATED_TOKEN_FILE
               value: /var/run/secrets/azure/tokens/azure-identity-token
