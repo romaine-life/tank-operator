@@ -646,9 +646,14 @@ Contract impact:
   `NATS_PASSWORD_FILE=/var/run/secrets/auth.romaine.life/token`; they no
   longer mount `tank-nats-auth` as `NATS_TOKEN`.
 - The NATS auth-callout validates the projected token via TokenReview, reads
-  the orchestrator-written pod labels, equality-checks the claimed storage key,
-  and returns a NATS user JWT scoped to that session's event subject and command
-  consumers.
+  the orchestrator-written pod labels in the validated session authority's
+  namespace, equality-checks the claimed storage key, and returns a NATS user
+  JWT scoped to that session's event subject and command consumers. Production
+  authority is the `tank-operator-sessions` / `claude-session` pair with
+  `default` scope. Glimmung validation slots share the production broker and
+  production auth-callout, but are authorized only when the token subject,
+  Glimmung slot namespace labels, service account name, pod session-scope
+  label, and claimed NATS user all agree on the same slot scope.
 - JavaScript runners use the NATS authenticator hook and read the projected
   token file during auth, so reconnects can observe Kubernetes token rotation.
   Antigravity's Go runner reads the projected token file at boot/connect and
@@ -674,7 +679,9 @@ Evidence:
 - Observability: the callout exposes `tank_nats_auth_callout_total{result}` on
   `:9100`, scraped by the `tank-nats-auth-callout` PodMonitor in
   `k8s/templates/observability.yaml`. `TankNatsAuthCalloutDenials` pages the
-  #1148 new-pod auth-failure class (`denied_*`/`error`).
+  #1148 new-pod auth-failure class (`denied_*`/`error`), including bounded
+  denial reasons for invalid subjects, untrusted slot namespaces, and pod scope
+  mismatches.
 
 ## Runner correctness cluster (issue #1078)
 

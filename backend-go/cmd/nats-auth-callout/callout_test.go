@@ -22,20 +22,20 @@ import (
 // cluster: the Kubernetes seam under test elsewhere stays out of the
 // authorization-semantics tests.
 type stubResolver struct {
-	tokens map[string]string // SA token -> pod name
-	pods   map[string]string // pod name -> storage key
+	tokens map[string]sessionPodRef // SA token -> pod reference
+	pods   map[string]string        // namespace/pod name -> storage key
 }
 
-func (s *stubResolver) ResolvePodFromToken(_ context.Context, token string) (string, error) {
+func (s *stubResolver) ResolvePodFromToken(_ context.Context, token string) (sessionPodRef, error) {
 	pod, ok := s.tokens[token]
 	if !ok {
-		return "", errors.New("token rejected")
+		return sessionPodRef{}, errors.New("token rejected")
 	}
 	return pod, nil
 }
 
-func (s *stubResolver) SessionStorageKeyForPod(_ context.Context, podName string) (string, error) {
-	key, ok := s.pods[podName]
+func (s *stubResolver) SessionStorageKeyForPod(_ context.Context, pod sessionPodRef) (string, error) {
+	key, ok := s.pods[pod.Namespace+"/"+pod.Name]
 	if !ok {
 		return "", errors.New("no session binding")
 	}
@@ -120,8 +120,14 @@ func testService(t *testing.T) *calloutService {
 		issuer:  issuer,
 		account: natsGlobalAccount,
 		resolver: &stubResolver{
-			tokens: map[string]string{"sa-token-864": "session-pod-864"},
-			pods:   map[string]string{"session-pod-864": "864"},
+			tokens: map[string]sessionPodRef{
+				"sa-token-864": {
+					Namespace:     "tank-operator-sessions",
+					Name:          "session-pod-864",
+					ExpectedScope: defaultSessionScope,
+				},
+			},
+			pods: map[string]string{"tank-operator-sessions/session-pod-864": "864"},
 		},
 		commandStream: defaultCommandStream,
 		providers:     defaultProviders,
