@@ -95,6 +95,21 @@ class _FakeRawHTTP:
         return self.response
 
 
+class _FakeRawHTTPByMethod:
+    def __init__(self, *, get_response: _FakeRawResponse, post_response: _FakeRawResponse) -> None:
+        self.get_response = get_response
+        self.post_response = post_response
+        self.calls: list[dict] = []
+
+    def post(self, url: str, *, headers: dict, json: dict):
+        self.calls.append({"method": "POST", "url": url, "headers": headers, "json": json})
+        return self.post_response
+
+    def get(self, url: str, *, headers: dict):
+        self.calls.append({"method": "GET", "url": url, "headers": headers})
+        return self.get_response
+
+
 class _HotSwapHTTP:
     def __init__(self, sha: str) -> None:
         self.sha = sha
@@ -549,7 +564,10 @@ def test_break_glass_activation_tolerates_read_only_workspace_mcp(monkeypatch, t
 
 
 def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypatch) -> None:
-    http = _FakeRawHTTP(_FakeRawResponse(201, b'{"ok":true}'))
+    http = _FakeRawHTTPByMethod(
+        get_response=_FakeRawResponse(200, b"not-json"),
+        post_response=_FakeRawResponse(201, b'{"ok":true}'),
+    )
     monkeypatch.setattr("mcp_auth_proxy.server.ORIGIN_SESSION_ID", "95")
 
     response = asyncio.run(
@@ -564,7 +582,7 @@ def test_tank_break_glass_tool_records_request_without_revealing_token(monkeypat
     payload = json.loads(response.text)
     assert payload["result"]["structuredContent"]["approval_url"].startswith("https://auth.romaine.life/admin?")
     assert payload["result"]["structuredContent"]["privileged_tools_visible"] is False
-    recorded_call = next(call for call in http.calls if "json" in call)
+    recorded_call = next(call for call in http.calls if call.get("method") == "POST")
     recorded = recorded_call["json"]
     assert recorded["action"] == "github.break_glass.request"
     assert recorded["source_tool"] == "request_git_break_glass"
