@@ -104,7 +104,11 @@ export function breadcrumbTrail(
     ];
   }
 
-  if (location.tab === "files" || location.tab === "background") {
+  if (
+    location.tab === "files" ||
+    location.tab === "background" ||
+    location.tab === "pull-requests"
+  ) {
     return [
       {
         key: "section",

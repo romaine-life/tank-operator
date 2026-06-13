@@ -14,6 +14,7 @@ CODEX_PLACEHOLDER_ID_TOKEN="eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJlbWFpbCI6InRh
 
 configure_codex() {
   mkdir -p "$HOME/.codex"
+  mkdir -p /workspace/.tank/codex
 
   cat > "$HOME/.codex/auth.json" <<EOF
 {
@@ -43,9 +44,10 @@ EOF
     ' /workspace/.mcp.json 2>/dev/null || true)"
   fi
 
-  cat > "$HOME/.codex/config.toml" <<EOF
+  cat > "/workspace/.tank/codex/config.toml" <<EOF
 # Generated at pod start by codex-runner-launch.sh. Do not hand-edit;
-# changes will be overwritten on the next pod boot.
+# normal settings are overwritten on the next pod boot. Tank may append
+# approved runtime MCP entries such as break-glass.
 sandbox_mode = "danger-full-access"
 approval_policy = "never"
 cli_auth_credentials_store = "file"
@@ -60,6 +62,7 @@ default_mode_request_user_input = true
 
 ${mcp_block}
 EOF
+  ln -sf /workspace/.tank/codex/config.toml "$HOME/.codex/config.toml"
 
   unset OPENAI_API_KEY
   unset CODEX_API_KEY

@@ -65,21 +65,29 @@ or incomplete.
 
 Always wait for all CI checks/tests to complete successfully on GitHub before merging a PR. Merging a PR before checks finish will break the image build/tagging workflow on main. This includes the PR body checklist check (check-pr-body) — do not bypass or ignore these failures.
 
-After local commits, agents should use the tracked post-commit reminder so the
-CI/test-slot handoff contract stays visible in normal Git flow. Tank session
-bootstrap installs the hook as a Git template for every session, and
-`repo-cloner` installs it into every selected repo it clones. For ad-hoc
-existing worktrees that predate the template, run:
+Tank session repos use a governed Git flow. `repo-cloner` creates a
+Tank-owned `tank/session/<session-id>/<repo>` branch and draft PR at session
+start. The post-commit hook auto-publishes every local commit through the Tank
+MCP `publish_current_head` tool so Tank can record the commit and watch
+GitHub CI/mergeability from the first SHA. Direct `git push` is blocked in
+normal mode; use the Tank MCP publish tool to retry a failed auto-publish.
+For ad-hoc existing worktrees that predate the template, run:
 
 ```sh
 scripts/install-agent-post-commit-reminder.sh
 ```
 
-The hook template lives at `.githooks/post-commit`. It reminds the committing
-agent to push the branch, inspect the open PR's current HEAD CI checks, treat CI
-as part of the contract/test surface, resolve merge conflicts, update
-hot-swap/test-slot evidence after follow-up changes, and avoid handing off
-broken or intentionally failing CI unless explicitly stated.
+The hook templates live at `.githooks/post-commit` and `.githooks/pre-push`.
+The post-commit hook is an auto-publish trigger, not a reminder. The pre-push
+hook intentionally fails direct pushes so GitHub write credentials stay inside
+Tank-controlled MCP/server paths. CI and mergeability failures must be treated
+as unfinished work unless explicitly called out in the final handoff. If the
+governed path is insufficient, call the Tank MCP `request_git_break_glass` tool.
+Normal mode only returns an auth.romaine.life approval URL. After a short-lived
+grant exists, calling the request tool again activates the separate
+`tank-git-break-glass` MCP server for that session/repo; an existing agent may
+need to reload its MCP registry before it sees `mint_full_git_token` or
+`push_current_head`.
 
 When adding or substantially changing named product behavior, check whether the
 relevant feature folder needs a `capabilities.md` entry. Capability ledgers are
@@ -275,7 +283,11 @@ SubjectAccessReview against the synthetic
 
 Every mutation in `romaine-life/mcp-github/src/mcp_github/tools.py` resolves base refs and blob shas server-side at call time â€” `create_branch(base="main")`, `create_or_update_file(branch=â€¦)`, `delete_file(branch=â€¦)`, `commit_to_branch(branch=â€¦, base="main", files=â€¦)`. There is intentionally no `from_sha` / `sha` parameter on the public surface. The reason this matters: a prior Claude session reverted a merged PR by branching off a *cached* SHA â€” it had read `main`'s HEAD early in the session, merged a PR, then made a second PR from the cached pre-merge SHA. The narrow fix (caller still supplies SHA, but tool requires it) doesn't help, because the caller's cache is the bug. The actual fix is to never let the caller supply identifiers for "where am I branching from" or "what version of the file am I overwriting" â€” the server reads fresh on every call. `commit_to_branch` is the preferred path for any multi-file change because it lands one coherent commit instead of N consecutive `create_or_update_file` calls.
 
-Pair with: prefer the MCP write tools above over `git push` for routine mutations â€” they resolve refs server-side and dodge the cached-SHA footgun by construction. `mint_clone_token` defaults to a read-only token (`contents: read`); pass `write=True` only when a working-tree push is the right shape (large lockfiles, tool-driven multi-file refactors, anything awkward to enumerate as an explicit `files` array). Push tokens still can't force-push to protected branches â€” branch protection is the second line of defense, not this scope. The image deliberately doesn't ship a credential helper for `https://github.com`; the inline `x-access-token:<token>@github.com/...` URL form is the only auth path.
+Pair with: normal Tank sessions no longer expose raw GitHub write tokens to the
+agent shell. The Tank-owned `publish_current_head` MCP path owns session branch
+pushes, records each commit, and starts CI/mergeability watching. Direct
+`git push`, `mint_clone_token`, and GitHub MCP file/PR write tools are blocked
+in normal mode so there is one governed path from commit to CI evidence.
 
 ### azure-mcp config keys
 
