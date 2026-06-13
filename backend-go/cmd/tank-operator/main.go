@@ -271,12 +271,10 @@ func main() {
 	// every claude_gui session crashlooped).
 	sessionImage := os.Getenv("SESSION_IMAGE")
 	codexSessionImage := os.Getenv("CODEX_SESSION_IMAGE")
-	antigravitySessionImage := os.Getenv("ANTIGRAVITY_SESSION_IMAGE")
-	if sessionImage == "" || codexSessionImage == "" || antigravitySessionImage == "" {
-		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE / ANTIGRAVITY_SESSION_IMAGE to fingerprinted tags",
+	if sessionImage == "" || codexSessionImage == "" {
+		slog.Error("session image env vars missing — chart must set SESSION_IMAGE / CODEX_SESSION_IMAGE to fingerprinted tags",
 			"SESSION_IMAGE", sessionImage,
 			"CODEX_SESSION_IMAGE", codexSessionImage,
-			"ANTIGRAVITY_SESSION_IMAGE", antigravitySessionImage,
 		)
 		os.Exit(1)
 	}
@@ -330,27 +328,25 @@ func main() {
 
 	mgr := sessions.NewManager(k8sClient, restCfg, namespace, sessionReg, rowPublisher, sessions.ManagerOptions{
 		ManifestOpts: sessionmodel.ManifestOptions{
-			SessionsNamespace:               namespace,
-			SessionServiceAccount:           sessionServiceAccount,
-			SessionConfigMap:                envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
-			ArgoCDTrackingApp:               envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
-			SessionImage:                    sessionImage,
-			CodexSessionImage:               codexSessionImage,
-			AntigravitySessionImage:         antigravitySessionImage,
-			SessionImageMetadata:            sessionmodel.ParseImageVersionMetadata(os.Getenv("SESSION_IMAGE_METADATA")),
-			CodexSessionImageMetadata:       sessionmodel.ParseImageVersionMetadata(os.Getenv("CODEX_SESSION_IMAGE_METADATA")),
-			AntigravitySessionImageMetadata: sessionmodel.ParseImageVersionMetadata(os.Getenv("ANTIGRAVITY_SESSION_IMAGE_METADATA")),
-			SessionScope:                    sessionScope,
-			TankOperatorInternalURL:         tankOperatorInternalURL,
-			NATSURL:                         envDefault("NATS_URL", ""),
-			NATSStream:                      envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
-			NATSCommandStream:               envDefault("NATS_COMMAND_STREAM", "TANK_SESSION_COMMANDS"),
-			NATSAuthSecret:                  envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
-			SpireLensTailscaleOIDCClientID:  envDefault("SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", ""),
-			SpireLensTailscaleTailnet:       envDefault("SESSION_SPIRELENS_TAILSCALE_TAILNET", ""),
-			SpireLensTailscaleAuthTag:       envDefault("SESSION_SPIRELENS_TAILSCALE_AUTH_TAG", sessionmodel.DefaultSpireLensTailscaleTag),
-			SpireLensHost:                   envDefault("SESSION_SPIRELENS_HOST", ""),
-			SpireLensMCPPort:                envInt("SESSION_SPIRELENS_MCP_PORT", sessionmodel.DefaultSpireLensMCPPort),
+			SessionsNamespace:              namespace,
+			SessionServiceAccount:          sessionServiceAccount,
+			SessionConfigMap:               envDefault("SESSION_CONFIGMAP", sessionmodel.SessionConfigMap),
+			ArgoCDTrackingApp:              envDefault("ARGOCD_TRACKING_APP", "tank-operator-sessions"),
+			SessionImage:                   sessionImage,
+			CodexSessionImage:              codexSessionImage,
+			SessionImageMetadata:           sessionmodel.ParseImageVersionMetadata(os.Getenv("SESSION_IMAGE_METADATA")),
+			CodexSessionImageMetadata:      sessionmodel.ParseImageVersionMetadata(os.Getenv("CODEX_SESSION_IMAGE_METADATA")),
+			SessionScope:                   sessionScope,
+			TankOperatorInternalURL:        tankOperatorInternalURL,
+			NATSURL:                        envDefault("NATS_URL", ""),
+			NATSStream:                     envDefault("NATS_STREAM", "TANK_SESSION_BUS"),
+			NATSCommandStream:              envDefault("NATS_COMMAND_STREAM", "TANK_SESSION_COMMANDS"),
+			NATSAuthSecret:                 envDefault("NATS_AUTH_SECRET", "tank-nats-auth"),
+			SpireLensTailscaleOIDCClientID: envDefault("SESSION_SPIRELENS_TAILSCALE_OIDC_CLIENT_ID", ""),
+			SpireLensTailscaleTailnet:      envDefault("SESSION_SPIRELENS_TAILSCALE_TAILNET", ""),
+			SpireLensTailscaleAuthTag:      envDefault("SESSION_SPIRELENS_TAILSCALE_AUTH_TAG", sessionmodel.DefaultSpireLensTailscaleTag),
+			SpireLensHost:                  envDefault("SESSION_SPIRELENS_HOST", ""),
+			SpireLensMCPPort:               envInt("SESSION_SPIRELENS_MCP_PORT", sessionmodel.DefaultSpireLensMCPPort),
 			// Test-slot SDK-runner hot-swap. Off by default; the chart
 			// turns this on only when the chart runs in hot test-slot mode.
 			// See scripts/check-session-pod-hot-swap-migration.mjs and
@@ -361,7 +357,6 @@ func main() {
 		APIProxyHost:                os.Getenv("CLAUDE_API_PROXY_HOST"),
 		ClaudeSecondaryAPIProxyHost: os.Getenv("CLAUDE_SECONDARY_API_PROXY_HOST"),
 		CodexAPIProxyHost:           os.Getenv("CODEX_API_PROXY_HOST"),
-		AntigravityAPIProxyHost:     os.Getenv("ANTIGRAVITY_API_PROXY_HOST"),
 		ImageOverrides:              imageOverrideResolver,
 		OnImageOverrideApplied: func(scope, mode, kind string) {
 			recordSessionImageOverrideApplied(scope, kind)

@@ -79,8 +79,7 @@ func sessionModeSupportsRepos(mode string) bool {
 	switch sessionmodel.NormalizeSessionMode(mode) {
 	case sessionmodel.ClaudeGUIMode,
 		sessionmodel.ClaudeSecondaryGUIMode,
-		sessionmodel.CodexGUIMode,
-		sessionmodel.AntigravityGUIMode:
+		sessionmodel.CodexGUIMode:
 		return true
 	default:
 		return false

@@ -919,7 +919,7 @@ type sessionRunConfig struct {
 
 func isDefaultModelAlias(v string) bool {
 	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "default", "codex-account-default", "antigravity-default":
+	case "default", "codex-account-default":
 		return true
 	default:
 		return false
@@ -927,24 +927,19 @@ func isDefaultModelAlias(v string) bool {
 }
 
 func providerRequiresExplicitModel(provider string) bool {
-	return provider == "codex" || provider == "antigravity"
+	return provider == "codex"
 }
 
 func explicitModelRequiredMessage(provider, noun string) string {
 	switch provider {
 	case "codex":
 		return "model is required for Codex " + noun
-	case "antigravity":
-		return "model is required for Antigravity " + noun
 	default:
 		return "model is required"
 	}
 }
 
 func effortUnsupportedMessage(provider, noun string) string {
-	if provider == "antigravity" {
-		return "effort is not supported for Antigravity " + noun
-	}
 	if provider == "codex" {
 		return "effort is invalid; want one of low|medium|high|xhigh"
 	}
@@ -1228,8 +1223,6 @@ func sdkTurnSource(source string) string {
 		return string(conversation.TurnSubmittedSourceBackgroundTask)
 	case string(conversation.TurnSubmittedSourceLaunchDispatch):
 		return string(conversation.TurnSubmittedSourceLaunchDispatch)
-	case string(conversation.TurnSubmittedSourceAgentContinuation):
-		return string(conversation.TurnSubmittedSourceAgentContinuation)
 	default:
 		return "sdk"
 	}
@@ -1347,8 +1340,6 @@ func sdkProviderForMode(mode string) (string, bool) {
 		return "codex", true
 	case sessionmodel.CodexAppServerMode:
 		return "codex", true
-	case sessionmodel.AntigravityGUIMode:
-		return "antigravity", true
 	default:
 		return "", false
 	}

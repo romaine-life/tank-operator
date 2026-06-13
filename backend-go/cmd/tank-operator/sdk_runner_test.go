@@ -23,11 +23,6 @@ func TestPodHasSDKRunnerRecognizesSupportedRunnerContainers(t *testing.T) {
 			want:       true,
 		},
 		{
-			name:       "antigravity runner",
-			containers: []corev1.Container{{Name: "mcp-auth-proxy"}, {Name: "claude"}, {Name: "antigravity-runner"}},
-			want:       true,
-		},
-		{
 			name:       "terminal only",
 			containers: []corev1.Container{{Name: "mcp-auth-proxy"}, {Name: "claude"}},
 			want:       false,

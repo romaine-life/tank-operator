@@ -263,7 +263,6 @@ Two steps:
    curl -X PUT \
      https://tank-operator-slot-1.tank.dev.romaine.life/api/internal/session-scopes/tank-operator-slot-1/image-override \
      -H "Authorization: Bearer $AUTH_JWT" -H 'Content-Type: application/json' \
-     -d '{"codex_image":"romainecr.azurecr.io/codex-container:codex-<fp>","antigravity_image":"romainecr.azurecr.io/antigravity-container:antigravity-<fp>","git_ref":"<branch>"}'
    ```
 
    `GET` the same path to see what new sessions will inherit; `DELETE` it to

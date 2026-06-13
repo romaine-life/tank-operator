@@ -87,7 +87,7 @@ func TestTurnShellFoldResumable(t *testing.T) {
 // ledger closed with compacted activity — a coarse fixture-level guard on the
 // refactor, on top of the projection suite's exact-output pins.
 func TestTurnShellFoldFixtureShellParity(t *testing.T) {
-	for _, fixture := range []string{"slot1_session_159_events.json", "slot1_session_160_events.json", "slot1_session_161_events.json"} {
+	for _, fixture := range []string{"slot1_session_161_events.json"} {
 		t.Run(fixture, func(t *testing.T) {
 			raw, err := os.ReadFile("testdata/" + fixture)
 			if err != nil {

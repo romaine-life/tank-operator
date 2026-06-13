@@ -305,14 +305,13 @@ func TestPodManifestCompatibilityCore(t *testing.T) {
 // each one. A future secret mounted at a path not covered by the denylist fails
 // CI here instead of silently becoming browsable.
 func TestProjectedSecretMountsAreDenied(t *testing.T) {
-	modes := []string{ClaudeGUIMode, CodexGUIMode, AntigravityGUIMode, ClaudeSecondaryGUIMode}
+	modes := []string{ClaudeGUIMode, CodexGUIMode, ClaudeSecondaryGUIMode}
 	for _, mode := range modes {
 		t.Run(mode, func(t *testing.T) {
 			manifest := PodManifest("12", "nelson@romaine.life", mode, ManifestOptions{
-				SessionImage:            "claude-image",
-				CodexSessionImage:       "codex-image",
-				AntigravitySessionImage: "antigravity-image",
-				Repos:                   []string{"romaine-life/tank-operator"},
+				SessionImage:      "claude-image",
+				CodexSessionImage: "codex-image",
+				Repos:             []string{"romaine-life/tank-operator"},
 			})
 			spec := manifest["spec"].(map[string]any)
 
@@ -396,115 +395,6 @@ func TestPathReadable(t *testing.T) {
 			t.Errorf("PathReadable(%q) = %v, want %v", tc.path, got, tc.want)
 		}
 	}
-}
-
-func TestPodManifestAntigravityConfigUsesGlibcImageWithoutSidecar(t *testing.T) {
-	manifest := PodManifest("77", "nelson@romaine.life", AntigravityConfigMode, ManifestOptions{
-		SessionImage:            "claude-image",
-		CodexSessionImage:       "codex-image",
-		AntigravitySessionImage: "antigravity-image",
-	})
-
-	if got, want := manifest["metadata"].(map[string]any)["labels"].(map[string]any)["tank-operator/mode"], AntigravityConfigMode; got != want {
-		t.Fatalf("mode label = %v, want %q", got, want)
-	}
-
-	spec := manifest["spec"].(map[string]any)
-	containers := spec["containers"].([]any)
-
-	// antigravity_config is a single-container terminal-login pod. The glibc
-	// antigravity image lacks the (Python) mcp-auth-proxy binary, and a
-	// credential-mint login needs neither the MCP gateway sidecar nor an SDK
-	// runner — so the pod is just the `claude` (sandbox-agent terminal)
-	// container. Regression guard for the sidecar-gating branch.
-	if got, want := len(containers), 1; got != want {
-		t.Fatalf("container count = %d, want %d (claude only; no mcp-auth-proxy, no runner)", got, want)
-	}
-	claude := containers[0].(map[string]any)
-	if got, want := claude["name"], "sandbox"; got != want {
-		t.Fatalf("sole container name = %v, want %q", got, want)
-	}
-	// Stamps the dedicated glibc image, not SessionImage/CodexSessionImage.
-	if got, want := claude["image"], "antigravity-image"; got != want {
-		t.Fatalf("antigravity_config image = %v, want %q (must use AntigravitySessionImage, not the claude/codex image)", got, want)
-	}
-	for _, c := range containers {
-		if name := c.(map[string]any)["name"]; name == "mcp-auth-proxy" {
-			t.Fatal("antigravity_config must not carry the mcp-auth-proxy sidecar — the glibc image has no such binary")
-		}
-	}
-}
-
-func TestPodManifestAntigravityGUIRunnerProxiedNoCredMount(t *testing.T) {
-	// Credential-boundary contract: an antigravity_gui pod must NOT mount the
-	// real OAuth Secret. agy's Google host is host-aliased to the
-	// antigravity-api-proxy and it trusts the proxy leaf via the oauth-gateway
-	// CA; the launch script seeds a placeholder. See the antigravity-api-proxy
-	// (k8s/templates/api-proxy.yaml) and docs/api-proxy-auth.md.
-	manifest := PodManifest("88", "nelson@romaine.life", AntigravityGUIMode, ManifestOptions{
-		SessionImage:            "claude-image",
-		CodexSessionImage:       "codex-image",
-		AntigravitySessionImage: "antigravity-image",
-		NATSAuthSecret:          "tank-nats-auth",
-		AntigravityAPIProxyIP:   "10.0.0.42",
-		Model:                   "Gemini 3.1 Pro",
-	})
-
-	if got, want := manifest["metadata"].(map[string]any)["labels"].(map[string]any)["tank-operator/mode"], AntigravityGUIMode; got != want {
-		t.Fatalf("mode label = %v, want %q", got, want)
-	}
-
-	spec := manifest["spec"].(map[string]any)
-	containers := spec["containers"].([]any)
-	// GUI pod shape: mcp-auth-proxy sidecar + claude (sandbox-agent terminal) +
-	// antigravity-runner. All three run the glibc antigravity image.
-	if got, want := len(containers), 3; got != want {
-		t.Fatalf("container count = %d, want %d (mcp-auth-proxy + claude + antigravity-runner)", got, want)
-	}
-	runner := findContainer(t, containers, "antigravity-runner")
-	if got, want := runner["image"], "antigravity-image"; got != want {
-		t.Fatalf("antigravity-runner image = %v, want %q", got, want)
-	}
-	env := containerEnv(runner)
-	if got, want := env["TANK_SESSION_MODEL"], "Gemini 3.1 Pro"; got != want {
-		t.Fatalf("TANK_SESSION_MODEL = %v, want %q", got, want)
-	}
-	cmd := runner["command"].([]any)
-	if got, want := cmd[len(cmd)-1], "/opt/tank/antigravity-runner-launch.sh"; got != want {
-		t.Fatalf("runner launch = %v, want %q", got, want)
-	}
-
-	// The real OAuth Secret must NOT be mounted anywhere in the pod.
-	for _, v := range spec["volumes"].([]any) {
-		if name := v.(map[string]any)["name"]; name == "antigravity-cred" {
-			t.Fatal("antigravity_gui must NOT mount the real OAuth Secret (antigravity-cred volume present)")
-		}
-	}
-	for _, m := range runner["volumeMounts"].([]any) {
-		if name := m.(map[string]any)["name"]; name == "antigravity-cred" {
-			t.Fatal("antigravity-runner must NOT mount the antigravity-cred Secret")
-		}
-	}
-	// Built via concat so the migration guard (check-removed-chat-runtime.mjs),
-	// which blocks the retired literal, doesn't trip on this negative assertion.
-	retiredCredFileEnv := "ANTIGRAVITY_CRED" + "_FILE"
-	for _, e := range runner["env"].([]any) {
-		if name := e.(map[string]any)["name"]; name == retiredCredFileEnv {
-			t.Fatalf("%s env must be gone — the runner no longer reads a real cred file", retiredCredFileEnv)
-		}
-	}
-
-	// Instead: host-alias agy's Google host to the proxy + trust its CA.
-	assertHostAlias(t, spec, "10.0.0.42", "cloudcode-pa.googleapis.com")
-	assertHostAlias(t, spec, "10.0.0.42", "daily-cloudcode-pa.googleapis.com")
-	assertHostAlias(t, spec, "10.0.0.42", "play.googleapis.com")
-	assertHostAlias(t, spec, "10.0.0.42", "www.googleapis.com")
-	assertHostAlias(t, spec, "10.0.0.42", "oauth2.googleapis.com")
-	assertVolume(t, spec["volumes"].([]any), "oauth-gateway-ca")
-	assertVolumeMount(t, runner, "oauth-gateway-ca")
-	assertVolumeMount(t, runner, "session-config")
-	assertConfigMapMountPath(t, runner, SessionConfigDirMount)
-	assertVolumeMount(t, runner, "tank-operator-sa-token")
 }
 
 func TestPodManifestDisplayNameAnnotation(t *testing.T) {
@@ -987,56 +877,6 @@ func TestPodManifestSlotModeAttachesCodexRunnerHotSwap(t *testing.T) {
 	}
 }
 
-func TestPodManifestSlotModeAttachesAntigravityRunnerHotSwap(t *testing.T) {
-	manifest := PodManifest("63", "user@example.com", AntigravityGUIMode, ManifestOptions{
-		SessionImage:            "claude-image",
-		CodexSessionImage:       "codex-image",
-		AntigravitySessionImage: "antigravity-image",
-		HotSwapAgentRunner:      true,
-	})
-
-	spec := manifest["spec"].(map[string]any)
-	volumes := spec["volumes"].([]any)
-	assertVolume(t, volumes, "antigravity-runner-hot")
-
-	containers := spec["containers"].([]any)
-	runner := findContainer(t, containers, "antigravity-runner")
-	assertVolumeMount(t, runner, "antigravity-runner-hot")
-
-	mounts := runner["volumeMounts"].([]any)
-	var hotMountPath string
-	for _, m := range mounts {
-		mm := m.(map[string]any)
-		if mm["name"] == "antigravity-runner-hot" {
-			hotMountPath, _ = mm["mountPath"].(string)
-		}
-	}
-	if hotMountPath != "/var/run/antigravity-runner-hot" {
-		t.Fatalf("antigravity-runner-hot mountPath = %q, want /var/run/antigravity-runner-hot", hotMountPath)
-	}
-
-	env := containerEnv(runner)
-	if got, want := env["GLIMMUNG_SUPERVISOR_CHILD"], "/app/antigravity-runner-launch-binary.sh"; got != want {
-		t.Fatalf("GLIMMUNG_SUPERVISOR_CHILD = %v, want %q", got, want)
-	}
-	if got, want := env["GLIMMUNG_SUPERVISOR_HOT_ARTIFACT"], "/var/run/antigravity-runner-hot/antigravity-runner-launch-binary.sh"; got != want {
-		t.Fatalf("GLIMMUNG_SUPERVISOR_HOT_ARTIFACT = %v, want %q", got, want)
-	}
-	if got, want := env["GLIMMUNG_SUPERVISOR_RESTART_ENABLED"], "true"; got != want {
-		t.Fatalf("GLIMMUNG_SUPERVISOR_RESTART_ENABLED = %v, want %q", got, want)
-	}
-
-	cmd := runner["command"].([]any)
-	if len(cmd) != 2 || cmd[0] != "bash" || cmd[1] != "/opt/tank/antigravity-runner-launch.sh" {
-		t.Fatalf("antigravity-runner command = %v, want [bash /opt/tank/antigravity-runner-launch.sh]", cmd)
-	}
-}
-
-// TestPodManifestProdLeavesAgentRunnerUnchanged pins Checkbox 2 of
-// scripts/check-session-pod-hot-swap-migration.mjs: with testEnv disabled
-// (HotSwapAgentRunner=false, the default), the claude-runner container has
-// NO claude-runner-hot volume, NO volumeMount, and NO supervisor env vars.
-// Production sessions are byte-identical to pre-PR behavior.
 func TestPodManifestProdLeavesAgentRunnerUnchanged(t *testing.T) {
 	manifest := PodManifest("63", "user@example.com", ClaudeGUIMode, ManifestOptions{
 		SessionImage:      "claude-image",
@@ -1077,33 +917,6 @@ func TestPodManifestProdLeavesCodexRunnerUnchanged(t *testing.T) {
 	containers := spec["containers"].([]any)
 	runner := findContainer(t, containers, "codex-runner")
 	assertNoVolumeMount(t, runner, "codex-runner-hot")
-
-	env := containerEnv(runner)
-	for _, name := range []string{
-		"GLIMMUNG_SUPERVISOR_CHILD",
-		"GLIMMUNG_SUPERVISOR_HOT_ARTIFACT",
-		"GLIMMUNG_SUPERVISOR_RESTART_ENABLED",
-	} {
-		if _, present := env[name]; present {
-			t.Fatalf("env %s leaked into prod (HotSwapAgentRunner=false); value=%v", name, env[name])
-		}
-	}
-}
-
-func TestPodManifestProdLeavesAntigravityRunnerUnchanged(t *testing.T) {
-	manifest := PodManifest("63", "user@example.com", AntigravityGUIMode, ManifestOptions{
-		SessionImage:            "claude-image",
-		CodexSessionImage:       "codex-image",
-		AntigravitySessionImage: "antigravity-image",
-	})
-
-	spec := manifest["spec"].(map[string]any)
-	volumes := spec["volumes"].([]any)
-	assertNoVolume(t, volumes, "antigravity-runner-hot")
-
-	containers := spec["containers"].([]any)
-	runner := findContainer(t, containers, "antigravity-runner")
-	assertNoVolumeMount(t, runner, "antigravity-runner-hot")
 
 	env := containerEnv(runner)
 	for _, name := range []string{

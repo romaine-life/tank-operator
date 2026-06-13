@@ -114,7 +114,7 @@ test("does not rewrite existing markdown links", () => {
   expect(linkTextTargetsInMarkdown(markdown)).toBe(markdown);
 });
 
-test("rewrites agy file markdown links under browsable roots, leaves secrets blocked", () => {
+test("rewrites browsable-root file markdown links, leaves secrets blocked", () => {
   const markdown = [
     "See [visual_verification_report.md](file:///workspace/chess-tactics/visual_verification_report.md).",
     "Open [app.js](<file:///workspace/chess-tactics/frontend/app.js:42> \"source\").",
@@ -130,7 +130,7 @@ test("rewrites agy file markdown links under browsable roots, leaves secrets blo
   ].join("\n"));
 });
 
-test("does not rewrite agy file links inside inline or fenced code", () => {
+test("does not rewrite file links inside inline or fenced code", () => {
   const markdown = [
     "Use `[app.js](file:///workspace/chess-tactics/frontend/app.js)` literally.",
     "",

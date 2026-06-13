@@ -687,19 +687,6 @@ var backgroundTaskWakeRegisterTotal = promauto.NewCounterVec(
 	[]string{"provider", "result"},
 )
 
-// agentContinuationTotal counts the relay endpoint that opens a durable turn
-// boundary for a self-continuing antigravity session (agy fired its own task and
-// emitted the continuation; the runner asks the backend to author the turn it
-// then relays into). This is the antigravity peer of the background-task-wake
-// fire path — observability for "did agy's self-continuation get a durable turn?".
-var agentContinuationTotal = promauto.NewCounterVec(
-	prometheus.CounterOpts{
-		Name: "tank_agent_continuation_total",
-		Help: "Self-continuation relay turns opened by the orchestrator for self-managing agents (antigravity), labeled by provider and bounded result.",
-	},
-	[]string{"provider", "result"},
-)
-
 var backgroundTaskWakeFireTotal = promauto.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "tank_background_task_wake_fire_total",
@@ -818,13 +805,6 @@ func recordBackgroundTaskWakeRegister(provider, result string) {
 	backgroundTaskWakeRegisterTotal.WithLabelValues(
 		sessionRuntimeConfigProviderLabel(provider),
 		backgroundTaskWakeRegisterResultLabel(result),
-	).Inc()
-}
-
-func recordAgentContinuation(provider, result string) {
-	agentContinuationTotal.WithLabelValues(
-		sessionRuntimeConfigProviderLabel(provider),
-		agentContinuationResultLabel(result),
 	).Inc()
 }
 
@@ -1138,7 +1118,7 @@ func avatarUploadResultLabel(result string) string {
 
 func sessionRuntimeConfigProviderLabel(provider string) string {
 	switch provider {
-	case "claude", "codex", "antigravity":
+	case "claude", "codex":
 		return provider
 	default:
 		return "unknown"
@@ -1201,7 +1181,6 @@ func scheduledWakeupFireResultLabel(result string) string {
 func backgroundTaskWakeRegisterResultLabel(result string) string {
 	switch result {
 	case "ok", "bad_request", "forbidden", "not_found", "store_unavailable", "manager_unavailable", "store_error",
-		"rejected_antigravity",
 		// Register outcomes (pgstore.BackgroundTaskWakeRegisterOutcome): the
 		// generation machinery's decisions are first-class signals —
 		// "rearmed" measures how often a premature fire needed repair, and
@@ -1220,15 +1199,6 @@ func recordBackgroundTaskWakeCancel(result string) {
 func backgroundTaskWakeCancelResultLabel(result string) string {
 	switch result {
 	case "cancelled", "none_pending", "bad_request", "forbidden", "store_unavailable", "store_error":
-		return result
-	default:
-		return "other"
-	}
-}
-
-func agentContinuationResultLabel(result string) string {
-	switch result {
-	case "ok", "already_open", "bad_request", "forbidden", "not_found", "manager_unavailable", "enqueue_failed", "rejected_non_antigravity":
 		return result
 	default:
 		return "other"
@@ -2121,8 +2091,6 @@ func (promK8sWatchMetrics) RecordContainerTermination(container, reason string, 
 
 func boundedSessionContainer(container string) string {
 	switch strings.TrimSpace(container) {
-	case "antigravity-runner":
-		return "antigravity-runner"
 	case "claude-runner":
 		return "claude-runner"
 	case "codex":
@@ -2359,7 +2327,7 @@ func recordSessionRunConfigRejected(surface, provider, reason string) {
 		surface = "other"
 	}
 	switch provider {
-	case "claude", "codex", "antigravity", "unknown":
+	case "claude", "codex", "unknown":
 	default:
 		provider = "other"
 	}
