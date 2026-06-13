@@ -570,15 +570,12 @@ Contract impact:
   `NATS_USER=<session storage key>` and
   `NATS_PASSWORD_FILE=/var/run/secrets/auth.romaine.life/token`; they no
   longer mount `tank-nats-auth` as `NATS_TOKEN`.
-- The NATS auth-callout validates the projected token via TokenReview, reads
-  the orchestrator-written pod labels in the validated session authority's
-  namespace, equality-checks the claimed storage key, and returns a NATS user
-  JWT scoped to that session's event subject and command consumers. Production
-  authority is the `tank-operator-sessions` / `claude-session` pair with
-  `default` scope. Glimmung validation slots share the production broker and
-  production auth-callout, but are authorized only when the token subject,
-  Glimmung slot namespace labels, service account name, pod session-scope
-  label, and claimed NATS user all agree on the same slot scope.
+- The NATS auth-callout exchanges the projected token at auth.romaine.life,
+  verifies the returned service JWT, equality-checks the claimed storage key,
+  and returns a NATS user JWT scoped to that session's event subject and
+  command consumers. Production session pods exchange into `svc:tank:<id>`;
+  Glimmung validation slot pods exchange into `svc:tank:slot-N-session-<id>`,
+  which maps to the existing `tank-operator-slot-N:<id>` storage key.
 - JavaScript runners use the NATS authenticator hook and read the projected
   token file during auth, so reconnects can observe Kubernetes token rotation.
   relies on the existing permanent-close container restart path if auth is

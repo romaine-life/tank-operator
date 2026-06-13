@@ -31,6 +31,11 @@ if grep -Eq 'app.kubernetes.io/name: (claude-api-proxy|claude-secondary-api-prox
   exit 1
 fi
 
+if grep -Eq '^kind: ClusterRole(Binding)?$' <<<"${warm_rendered}"; then
+  echo "warm slot render still contains cluster-scoped RBAC" >&2
+  exit 1
+fi
+
 if grep -Eq "name: ${slot_name}-(claude-code-credentials|claude-secondary-code-credentials|codex-credentials)|key: ${slot_name}-(claude-code-credentials|claude-secondary-code-credentials|codex-credentials)" <<<"${warm_rendered}"; then
   echo "warm slot render still declares slot-owned provider credential ExternalSecrets" >&2
   exit 1

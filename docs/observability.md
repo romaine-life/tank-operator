@@ -531,14 +531,15 @@ All metric names are prefixed `tank_`. The full namespace:
 - `tank_nats_auth_callout_total{result}` — outcomes of the per-session NATS
   credential issuer (`backend-go/cmd/nats-auth-callout`, #1128). `result` is
   bounded to `session` (per-session JWT issued), `denied_no_credentials`,
-  `denied_token_invalid`, `denied_subject_invalid`,
-  `denied_subject_untrusted`, `denied_pod_unbound`,
-  `denied_pod_scope_mismatch`, `denied_identity_mismatch`, and `error`. The
+  `denied_token_invalid`, `denied_auth_exchange`,
+  `denied_auth_jwt_invalid`, `denied_subject_untrusted`,
+  `denied_identity_mismatch`, and `error`. The
   callout has no Service — it answers NATS `$SYS.REQ.USER.AUTH`, not HTTP — so
   it is scraped by the `tank-nats-auth-callout` **PodMonitor**, not a
   ServiceMonitor. `TankNatsAuthCalloutDenials` alerts on the rejection/error
   results (the #1148 new-pod auth-failure class that wedges submitted turns),
-  including Glimmung test-slot namespace/SA/scope mismatches.
+  including Glimmung test-slot auth.romaine.life exchange or identity-shape
+  mismatches.
 - `tank_schema_migration*` — startup schema-migration engine
   (`pgstore.RunMigrationsWithMetrics`) counters emitted once per boot,
   before the HTTP/`/metrics` server comes up. `tank_schema_migrations_pending`
@@ -1106,9 +1107,9 @@ declares one rule group per subsystem:
 - **NATS**: disconnect storm (>6/min for 5m).
 - **NATS auth-callout** (#1128): `TankNatsAuthCalloutDenials` (warning) fires
   when the per-session credential issuer rejects session-pod auth
-  (`denied_token_invalid`/`denied_subject_invalid`/
-  `denied_subject_untrusted`/`denied_pod_unbound`/
-  `denied_pod_scope_mismatch`/`denied_identity_mismatch`/`error`) — the #1148
+  (`denied_token_invalid`/`denied_auth_exchange`/
+  `denied_auth_jwt_invalid`/`denied_subject_untrusted`/
+  `denied_identity_mismatch`/`error`) — the #1148
   class where a pod cannot reach the session bus and its turns stay stuck with
   no terminal. The same alert covers Glimmung test-slot session runners because
   they share the production broker and callout. It depends on the

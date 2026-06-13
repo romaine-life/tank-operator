@@ -3,16 +3,16 @@ image:
   # SHA-pinned. The build workflow rewrites this line on every push to main
   # via a `[skip ci]` follow-up commit, so the cluster reconciles to the
   # exact image CI just produced â€” no implicit `:latest` drift.
-  tag: "app-f808f8ce0953fbdca16c7d4121ff28cf1f0d1be75ba2b5277a389f7792ad5a00"
+  tag: "app-3082803d85ddbe6d05a8c19bee0feb07214a1ec88eb20d67df07a540e12753ea"
   pullPolicy: IfNotPresent
   metadata:
-    built_at: "2026-06-13T18:08:53Z"
-    git_sha: "281cc30412ce0b9e091c0f5278cc62cec7465b99"
+    built_at: "2026-06-13T19:55:07Z"
+    git_sha: "8274e9278d2cd0da6dc43a78223ece670cb1b196"
     git_ref: "main"
-    commit_url: "https://github.com/romaine-life/tank-operator/commit/281cc30412ce0b9e091c0f5278cc62cec7465b99"
-    pr_number: ""
-    pr_url: ""
-    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27474833253"
+    commit_url: "https://github.com/romaine-life/tank-operator/commit/8274e9278d2cd0da6dc43a78223ece670cb1b196"
+    pr_number: "1167"
+    pr_url: "https://github.com/romaine-life/tank-operator/pull/1167"
+    workflow_run_url: "https://github.com/romaine-life/tank-operator/actions/runs/27477380960"
     repository: "romaine-life/tank-operator"
     actor: "tank-operator-host[bot]"
 
@@ -124,7 +124,7 @@ session:
 
 # Per-session NATS credential issuer (#1128): answers the NATS server's
 # auth_callout with user JWTs scoped to one session's subjects, identity
-# anchored in projected SA tokens + orchestrator-written pod labels.
+# anchored in auth.romaine.life's k8s service-principal exchange.
 # DISABLED until the staged rollout starts; flipping `enabled` only deploys
 # the issuer — nothing routes through it until infra-bootstrap's NATS chart
 # turns on authorization.auth_callout with this issuer's account public key

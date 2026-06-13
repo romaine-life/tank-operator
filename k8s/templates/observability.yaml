@@ -1356,40 +1356,33 @@ spec:
         # password, so a no-credentials connect is a stray probe, not a
         # stranded session.
         - alert: TankNatsAuthCalloutDenials
-          expr: sum by (result) (rate(tank_nats_auth_callout_total{result=~"denied_token_invalid|denied_subject_invalid|denied_subject_untrusted|denied_pod_unbound|denied_pod_scope_mismatch|denied_identity_mismatch|error"}[10m])) > 0
+          expr: sum by (result) (rate(tank_nats_auth_callout_total{result=~"denied_token_invalid|denied_auth_exchange|denied_auth_jwt_invalid|denied_subject_untrusted|denied_identity_mismatch|error"}[10m])) > 0
           for: 15m
           labels:
             severity: warning
           annotations:
             summary: "nats-auth-callout is rejecting session-pod NATS auth (result={{`{{ $labels.result }}`}})"
             runbook: |
-              A session pod presented its projected auth.romaine.life SA
-              token to the NATS auth-callout and was rejected, or the
-              callout errored issuing the user JWT. The pod's runner cannot
-              connect to the session bus, so its submitted turns stay stuck
-              with no terminal — the #1148 failure class.
+              A session pod presented its auth.romaine.life-audience pod
+              token to the NATS auth-callout and was rejected, or the callout
+              errored issuing the user JWT. The pod's runner cannot connect to
+              the session bus, so its submitted turns stay stuck with no
+              terminal — the #1148 failure class.
 
               Inspect the callout logs (deployment nats-auth-callout,
               container `callout`, namespace tank-operator) for the matching
               slog.Warn line and value of {{`{{ $labels.result }}`}}:
-                denied_token_invalid      — TokenReview rejected the token:
-                    audience mismatch (NATS_CALLOUT_TOKEN_AUDIENCE vs the
-                    projected token's audience https://auth.romaine.life —
-                    the exact #1148 shape), expired token, or TokenReview API
-                    error.
-                denied_subject_invalid    — the authenticated subject is not a
-                    Kubernetes ServiceAccount subject.
+                denied_token_invalid      — the auth exchange response could
+                    not be decoded or did not include a token.
+                denied_auth_exchange      — auth.romaine.life rejected the
+                    projected token or could not resolve pod lineage.
+                denied_auth_jwt_invalid   — auth.romaine.life returned a token
+                    the local JWKS verifier rejected.
                 denied_subject_untrusted  — the ServiceAccount is not the
-                    production session SA or a Glimmung tank-operator test-slot
-                    session SA whose namespace labels prove the slot identity.
-                denied_pod_unbound        — the pod carries no
-                    tank-operator/session-id or session-scope label
-                    (orchestrator labelling regression).
-                denied_pod_scope_mismatch — the pod's session-scope label does
-                    not match the production/default or slot authority derived
-                    from the token subject.
+                    tank per-session service principal shape
+                    (svc:tank:<id> or svc:tank:slot-N-session-<id>).
                 denied_identity_mismatch  — the client's claimed NATS_USER
-                    does not match the pod's orchestrator-written binding.
+                    does not match the auth.romaine.life service identity.
                 error                     — JWT issuance failed inside the
                     callout (issuer seed / nkey problem).
               Confirm tank_nats_auth_callout_total{result="session"} is
