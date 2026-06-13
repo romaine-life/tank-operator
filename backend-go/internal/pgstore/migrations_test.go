@@ -101,6 +101,27 @@ func TestAppliedMigration0078ChecksumIsStable(t *testing.T) {
 	t.Fatalf("migration %s not found", id)
 }
 
+func TestAppliedMigration0138ChecksumIsStable(t *testing.T) {
+	const (
+		id       = "0138"
+		checksum = "be99723e51f85af7bb67eeec24e97ad45464e090c70961f3fe4364ce6139218d"
+	)
+
+	for _, m := range schemaMigrations {
+		if m.ID != id {
+			continue
+		}
+		if got := migrationChecksum(m.SQL); got != checksum {
+			t.Fatalf("migration %s checksum = %s, want %s", id, got, checksum)
+		}
+		if !strings.Contains(m.SQL, "antigravity_image") {
+			t.Fatalf("migration %s no longer preserves the applied antigravity_image SQL", id)
+		}
+		return
+	}
+	t.Fatalf("migration %s not found", id)
+}
+
 func TestAppliedLegacyChecksumsAreAccepted(t *testing.T) {
 	cases := []struct {
 		id              string

@@ -1656,12 +1656,8 @@ var schemaMigrations = []migration{
 	{ID: "0137", SQL: `ALTER TABLE sessions
 		ADD COLUMN IF NOT EXISTS open_target text NOT NULL DEFAULT ''`},
 
-	{ID: "0138", SQL: `DO $$
-		BEGIN
-			EXECUTE 'ALTER TABLE session_image_overrides ADD COLUMN IF NOT EXISTS '
-				|| quote_ident(concat('anti', 'gravity', '_image'))
-				|| ' text';
-		END $$`},
+	{ID: "0138", SQL: `ALTER TABLE session_image_overrides
+		ADD COLUMN IF NOT EXISTS antigravity_image text`},
 
 	// Background-task wake continuation turns (turn_bgtask-<task>) are
 	// continuation mechanics, not user-visible turns: the transcript projection
