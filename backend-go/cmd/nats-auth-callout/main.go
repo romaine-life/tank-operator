@@ -27,6 +27,11 @@ import (
 // requests when authorization.auth_callout is configured.
 const natsAuthCalloutSubject = "$SYS.REQ.USER.AUTH"
 
+// defaultTokenAudience is the platform service-account token audience used
+// by auth.romaine.life's exchange path. NATS auth intentionally validates the
+// same audience instead of inventing a parallel NATS-only audience.
+const defaultTokenAudience = "https://auth.romaine.life"
+
 var calloutAuthTotal = promauto.NewCounterVec(prometheus.CounterOpts{
 	Name: "tank_nats_auth_callout_total",
 	Help: "NATS auth-callout outcomes: session (per-session JWT issued), legacy (shared-token transition grant), denied_*, error.",
@@ -131,7 +136,7 @@ func main() {
 		account: natsGlobalAccount,
 		resolver: &k8sSessionResolver{
 			client:            client,
-			audience:          env("NATS_CALLOUT_TOKEN_AUDIENCE", "auth.romaine.life"),
+			audience:          env("NATS_CALLOUT_TOKEN_AUDIENCE", defaultTokenAudience),
 			sessionsNamespace: requiredEnv("NATS_CALLOUT_SESSIONS_NAMESPACE"),
 			serviceAccount:    env("NATS_CALLOUT_SESSION_SERVICE_ACCOUNT", "claude-session"),
 		},
