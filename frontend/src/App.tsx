@@ -14902,11 +14902,24 @@ function ChatPane({
       if (publicView && publicShareTokenValue) {
         return `/api/public/message-links/${encodeURIComponent(publicShareTokenValue)}/timeline${query ? `?${query}` : ""}`;
       }
+      if (session.read_only_hidden === true) {
+        let path = `/api/admin/hidden-sessions/${encodeURIComponent(targetSessionId)}/timeline${query ? `?${query}` : ""}`;
+        path = appendQueryParam(path, "session_scope", sessionScope);
+        if (session.owner) path = appendQueryParam(path, "owner", session.owner);
+        return path;
+      }
       return scopedSessionPathForPane(
         `/api/sessions/${encodeURIComponent(targetSessionId)}/timeline${query ? `?${query}` : ""}`,
       );
     },
-    [publicShareTokenValue, publicView, scopedSessionPathForPane],
+    [
+      publicShareTokenValue,
+      publicView,
+      scopedSessionPathForPane,
+      session.owner,
+      session.read_only_hidden,
+      sessionScope,
+    ],
   );
   const turnActivityRequestPathForPane = useCallback(
     (turnId: string, page?: number) => {
@@ -14948,6 +14961,10 @@ function ChatPane({
       setControlActionEntries([]);
       return;
     }
+    if (readOnly) {
+      setControlActionEntries([]);
+      return;
+    }
     const res = await fetchPaneResource(
       scopedSessionPathForPane(
         `/api/sessions/${encodeURIComponent(session.id)}/control-actions`,
@@ -14958,9 +14975,19 @@ function ChatPane({
     setControlActionEntries(
       controlActionRowsToEntries(body) as TranscriptEntry[],
     );
-  }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
+  }, [
+    fetchPaneResource,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
   const fetchBackgroundTaskEntries = useCallback(async () => {
     if (publicView) {
+      setBackgroundTaskLedgerEntries([]);
+      return;
+    }
+    if (readOnly) {
       setBackgroundTaskLedgerEntries([]);
       return;
     }
@@ -14974,7 +15001,13 @@ function ChatPane({
     setBackgroundTaskLedgerEntries(
       normalizeProjectedTranscriptEntries(body.background_tasks ?? []),
     );
-  }, [fetchPaneResource, publicView, scopedSessionPathForPane, session.id]);
+  }, [
+    fetchPaneResource,
+    publicView,
+    readOnly,
+    scopedSessionPathForPane,
+    session.id,
+  ]);
   const supportsFileAttachments =
     !readOnly && !publicView && sessionModeSupportsWorkspaceFiles(session.mode);
   const filesAvailable =
@@ -15981,6 +16014,7 @@ function ChatPane({
   }
   function scheduleSdkReadStateUpdate(): void {
     if (publicView) return;
+    if (readOnly) return;
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
     // Read-cursor advancement is gated on navigation mode. The durable
@@ -16008,6 +16042,7 @@ function ChatPane({
   }
   async function flushSdkReadStateUpdate(): Promise<void> {
     if (publicView) return;
+    if (readOnly) return;
     if (!visibleRef.current) return;
     if (document.visibilityState !== "visible") return;
     if (navigationModeRef.current !== "live-tail") return;
@@ -16206,13 +16241,13 @@ function ChatPane({
 
   useEffect(() => {
     visibleRef.current = visible;
-    if (!visible && sdkReadStateTimerRef.current !== null) {
+    if ((!visible || readOnly) && sdkReadStateTimerRef.current !== null) {
       window.clearTimeout(sdkReadStateTimerRef.current);
       sdkReadStateTimerRef.current = null;
       return;
     }
-    if (visible) scheduleSdkReadStateUpdate();
-  }, [session.id, visible]);
+    if (visible && !readOnly) scheduleSdkReadStateUpdate();
+  }, [readOnly, session.id, visible]);
 
   // Auto-send the next queued message once the current run finishes.
   useEffect(() => {
@@ -18744,7 +18779,7 @@ function ChatPane({
     [entries],
   );
   useEffect(() => {
-    if (publicView || !visible) {
+    if (publicView || !visible || readOnly) {
       setScheduledWakeupEntries([]);
       setControlActionEntries([]);
       setBackgroundTaskLedgerEntries([]);
@@ -18769,6 +18804,7 @@ function ChatPane({
     fetchBackgroundTaskEntries,
     fetchControlActionEntries,
     publicView,
+    readOnly,
     visible,
   ]);
   // Background tasks come from the durable session-level feed, not the main
