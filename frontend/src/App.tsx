@@ -771,6 +771,7 @@ function appendQueryParam(path: string, key: string, value: string): string {
 interface Session {
   id: string;
   session_scope?: string;
+  read_only_hidden?: boolean;
   pod_name: string | null;
   owner: string;
   status: string;
@@ -1422,6 +1423,7 @@ function normalizeSession(session: Session): Session {
     : null;
   const next = mode === session.mode ? { ...session } : { ...session, mode };
   next.session_scope = normalizeSessionScopeValue(session.session_scope);
+  next.read_only_hidden = session.read_only_hidden === true;
   next.activity = activity;
   // name is the server-canonical title and is required (non-empty) on the
   // wire. Defend against degraded/hand-rolled Session objects (tests, demo
@@ -1490,6 +1492,56 @@ function normalizeSession(session: Session): Session {
       ? session.system_avatar_id
       : null;
   return next;
+}
+
+function hiddenReadOnlySessionFromAdmin(
+  session: AdminHiddenSession,
+  sessionScope: string,
+): Session {
+  return normalizeSession({
+    id: session.session_id,
+    session_scope: sessionScope,
+    read_only_hidden: true,
+    pod_name: null,
+    owner: session.owner,
+    status: session.status || "Hidden",
+    mode: (normalizeSessionMode(session.mode) || "claude_gui") as SessionMode,
+    requested_at: null,
+    created_at: session.created_at || null,
+    ready_at: null,
+    name: session.name || session.session_id,
+    repos: [],
+    clone_state: null,
+    capabilities: [],
+    user_message_count: session.transcript_row_count,
+  });
+}
+
+function sessionIdentityKey(session: Pick<Session, "id" | "session_scope">): string {
+  return `${normalizeSessionScopeValue(session.session_scope)}\n${session.id}`;
+}
+
+function mergeHiddenReadOnlySessions(
+  base: Session[],
+  hiddenSessions: Session[],
+): Session[] {
+  if (hiddenSessions.length === 0) return base;
+  const baseKeys = new Set(base.map(sessionIdentityKey));
+  const hiddenOnly = hiddenSessions.filter(
+    (session) => !baseKeys.has(sessionIdentityKey(session)),
+  );
+  return hiddenOnly.length === 0 ? base : [...base, ...hiddenOnly];
+}
+
+function upsertHiddenReadOnlySession(
+  sessions: Session[],
+  hiddenSession: Session,
+): Session[] {
+  const key = sessionIdentityKey(hiddenSession);
+  const withoutExisting = sessions.filter(
+    (session) => sessionIdentityKey(session) !== key,
+  );
+  return [...withoutExisting, hiddenSession];
 }
 
 function orderSessionsByIds(sessions: Session[], order: string[]): Session[] {
@@ -1705,6 +1757,7 @@ interface AdminSettingsControls {
     defaults: TestSlotSessionDefaults,
   ) => Promise<void>;
   onAvatarCatalogChanged: () => Promise<void>;
+  onOpenHiddenSession: (session: AdminHiddenSession, sessionScope: string) => void;
   onViewingProdSessionsChange: (value: boolean) => void;
 }
 
@@ -13372,17 +13425,17 @@ function AdminTestSlotDefaultsPanel({
   );
 }
 
-function AdminHiddenTranscriptsPanel({ sessionScope }: { sessionScope: string }) {
+function AdminHiddenTranscriptsPanel({
+  sessionScope,
+  onOpenSession,
+}: {
+  sessionScope: string;
+  onOpenSession: (session: AdminHiddenSession, sessionScope: string) => void;
+}) {
   const [sessions, setSessions] = useState<AdminHiddenSession[]>([]);
   const [selectedKey, setSelectedKey] = useState("");
   const [listLoading, setListLoading] = useState(false);
   const [listError, setListError] = useState<string | null>(null);
-  const [entries, setEntries] = useState<TranscriptEntry[]>([]);
-  const [prevCursor, setPrevCursor] = useState<string | null>(null);
-  const [foundOldest, setFoundOldest] = useState(false);
-  const [foundNewest, setFoundNewest] = useState(false);
-  const [timelineLoading, setTimelineLoading] = useState(false);
-  const [timelineError, setTimelineError] = useState<string | null>(null);
 
   const selectedSession = useMemo(
     () => sessions.find((session) => adminHiddenSessionKey(session) === selectedKey) ?? null,
@@ -13417,61 +13470,9 @@ function AdminHiddenTranscriptsPanel({ sessionScope }: { sessionScope: string })
     }
   }, [sessionScope]);
 
-  const loadTimeline = useCallback(
-    async (session: AdminHiddenSession, cursor?: string | null) => {
-      setTimelineLoading(true);
-      try {
-        const params = new URLSearchParams({
-          session_scope: sessionScope,
-          owner: session.owner,
-          rows: "80",
-        });
-        if (cursor) {
-          params.delete("rows");
-          params.set("before_cursor", cursor);
-          params.set("rows", "80");
-        } else {
-          params.set("anchor", "newest");
-        }
-        const res = await authedFetch(
-          `/api/admin/hidden-sessions/${encodeURIComponent(session.session_id)}/timeline?${params}`,
-        );
-        if (!res.ok) {
-          throw new Error(`hidden session transcript returned ${res.status}`);
-        }
-        const body = (await res.json()) as TranscriptTimelineBody;
-        setEntries(transcriptRowsFromTimelineBody(body));
-        setPrevCursor(typeof body.prev_cursor === "string" ? body.prev_cursor : null);
-        setFoundOldest(body.found_oldest === true);
-        setFoundNewest(body.found_newest === true);
-        setTimelineError(null);
-      } catch (err) {
-        setTimelineError(errorMessage(err));
-        setEntries([]);
-        setPrevCursor(null);
-        setFoundOldest(false);
-        setFoundNewest(false);
-      } finally {
-        setTimelineLoading(false);
-      }
-    },
-    [sessionScope],
-  );
-
   useEffect(() => {
     void refreshList();
   }, [refreshList]);
-
-  useEffect(() => {
-    if (!selectedSession) {
-      setEntries([]);
-      setPrevCursor(null);
-      setFoundOldest(false);
-      setFoundNewest(false);
-      return;
-    }
-    void loadTimeline(selectedSession);
-  }, [loadTimeline, selectedSession]);
 
   return (
     <div className="run-settings-diagnostics admin-hidden-transcripts">
@@ -13496,7 +13497,14 @@ function AdminHiddenTranscriptsPanel({ sessionScope }: { sessionScope: string })
           <select
             value={selectedKey}
             disabled={listLoading || sessions.length === 0}
-            onChange={(event) => setSelectedKey(event.target.value)}
+            onChange={(event) => {
+              const nextKey = event.target.value;
+              setSelectedKey(nextKey);
+              const nextSession = sessions.find(
+                (session) => adminHiddenSessionKey(session) === nextKey,
+              );
+              if (nextSession) onOpenSession(nextSession, sessionScope);
+            }}
           >
             {sessions.length === 0 ? (
               <option value="">No hidden sessions</option>
@@ -13524,47 +13532,18 @@ function AdminHiddenTranscriptsPanel({ sessionScope }: { sessionScope: string })
         </div>
       )}
       {selectedSession ? (
-        <>
-          <div className="admin-hidden-transcripts-actions">
-            <button
-              type="button"
-              className="run-settings-test-btn"
-              disabled={timelineLoading || foundOldest || !prevCursor}
-              onClick={() => void loadTimeline(selectedSession, prevCursor)}
-            >
-              Older
-            </button>
-            <button
-              type="button"
-              className="run-settings-test-btn"
-              disabled={timelineLoading || foundNewest}
-              onClick={() => void loadTimeline(selectedSession)}
-            >
-              Newest
-            </button>
-            {timelineLoading && <span className="run-settings-scope-value">Loading</span>}
-          </div>
-          {timelineError && (
-            <div className="run-settings-observability-note" role="status">
-              {timelineError}
-            </div>
-          )}
-          <div className="admin-hidden-transcript-list" aria-live="polite">
-            {entries.length === 0 && !timelineLoading ? (
-              <div className="admin-hidden-transcript-empty">No transcript rows</div>
-            ) : (
-              entries.map((entry) => (
-                <div className="admin-hidden-transcript-row" data-kind={entry.kind} key={entry.id}>
-                  <div className="admin-hidden-transcript-row-head">
-                    <span>{adminTranscriptEntryTitle(entry)}</span>
-                    <span>{adminTranscriptEntryTime(entry)}</span>
-                  </div>
-                  <pre>{adminTranscriptEntryText(entry)}</pre>
-                </div>
-              ))
-            )}
-          </div>
-        </>
+        <div className="admin-hidden-transcripts-actions">
+          <button
+            type="button"
+            className="run-settings-test-btn"
+            onClick={() => onOpenSession(selectedSession, sessionScope)}
+          >
+            Open session
+          </button>
+          <span className="run-settings-scope-value">
+            Opens in the normal read-only session view
+          </span>
+        </div>
       ) : (
         <div className="admin-hidden-transcript-empty">No hidden sessions</div>
       )}
@@ -13583,38 +13562,6 @@ function adminHiddenSessionOptionLabel(session: AdminHiddenSession): string {
 
 function hiddenSessionModeLabel(mode: string): string {
   return MODE_LABELS[mode as SessionMode] ?? mode;
-}
-
-function adminTranscriptEntryTitle(entry: TranscriptEntry): string {
-  const role = entry.role ? `${entry.role} ` : "";
-  const turn = entry.turnNumber ? `turn ${entry.turnNumber}` : entry.turnId;
-  return [role + entry.kind, turn].filter(Boolean).join(" / ");
-}
-
-function adminTranscriptEntryTime(entry: TranscriptEntry): string {
-  return (
-    formatToolFullTime(entry.completedAt) ||
-    formatToolFullTime(entry.updatedAt) ||
-    formatToolFullTime(entry.startedAt)
-  );
-}
-
-function adminTranscriptEntryText(entry: TranscriptEntry): string {
-  const record = entry as unknown as Record<string, unknown>;
-  for (const key of ["text", "taskOutput", "taskSummary", "taskDescription", "summary"]) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) return value;
-  }
-  if (entry.awaitingInput) {
-    return `${entry.awaitingInput.questionCount} question${entry.awaitingInput.questionCount === 1 ? "" : "s"}`;
-  }
-  if (entry.activity) {
-    return JSON.stringify(entry.activity, null, 2);
-  }
-  if (entry.turnUsage) {
-    return JSON.stringify(entry.turnUsage, null, 2);
-  }
-  return JSON.stringify(entry, null, 2);
 }
 
 function AdminVersionValue({ image }: { image: AdminVersionImage }) {
@@ -14272,7 +14219,10 @@ function RunSettingsPanel({
                 <h2 className="run-settings-title">Hidden transcripts</h2>
               </div>
             </section>
-            <AdminHiddenTranscriptsPanel sessionScope={adminControls.reportScope} />
+            <AdminHiddenTranscriptsPanel
+              sessionScope={adminControls.reportScope}
+              onOpenSession={adminControls.onOpenHiddenSession}
+            />
           </>
         ) : adminView === "version" ? (
           <>
@@ -18558,6 +18508,7 @@ function ChatPane({
 
   function scheduleSdkEventStreamReconnect(): void {
     if (publicView) return;
+    if (readOnly) return;
     if (sdkEventReconnectTimerRef.current !== null) {
       window.clearTimeout(sdkEventReconnectTimerRef.current);
     }
@@ -18572,6 +18523,10 @@ function ChatPane({
 
   async function openSdkEventStream(): Promise<EventSource | null> {
     if (publicView) {
+      setSdkConnectionState("idle");
+      return null;
+    }
+    if (readOnly) {
       setSdkConnectionState("idle");
       return null;
     }
@@ -18680,7 +18635,12 @@ function ChatPane({
 
   useEffect(() => {
     if (publicView) return;
-    if (!visible || !CHAT_MODES.has(session.mode) || !historyBootstrapped)
+    if (
+      readOnly ||
+      !visible ||
+      !CHAT_MODES.has(session.mode) ||
+      !historyBootstrapped
+    )
       return;
     // Long-task correlation: switching active sessions triggers a
     // reducer reset + transcript bootstrap + scroll rewire. Attribute
@@ -18715,6 +18675,7 @@ function ChatPane({
   }, [
     historyBootstrapped,
     publicView,
+    readOnly,
     visible,
     session.id,
     session.mode,
@@ -21589,6 +21550,7 @@ function AuthenticatedApp() {
   // Sessions stay mounted after first activation so chat state and websocket
   // runs survive switching. Unopened sessions do not initialize their panel.
   const [mounted, setMounted] = useState<Set<string>>(() => new Set());
+  const [hiddenReadOnlySessions, setHiddenReadOnlySessions] = useState<Session[]>([]);
   const [sessionTurnsOpenRequests, setSessionTurnsOpenRequests] = useState<
     Record<string, number>
   >({});
@@ -21604,6 +21566,7 @@ function AuthenticatedApp() {
   // reducer mutates the canonical state via setState; the refs are
   // updated by the effects below.
   const sessionsRef = useRef<Session[]>([]);
+  const hiddenReadOnlySessionsRef = useRef<Session[]>([]);
   const sessionActivitiesRef = useRef<Record<string, SessionActivitySummary>>(
     {},
   );
@@ -22016,6 +21979,39 @@ function AuthenticatedApp() {
     [effectiveSessionScope],
   );
   const localSessionPath = useCallback((path: string) => path, []);
+  const openHiddenAdminSession = useCallback(
+    (session: AdminHiddenSession, sessionScope: string) => {
+      const hiddenSession = hiddenReadOnlySessionFromAdmin(
+        session,
+        sessionScope,
+      );
+      setHiddenReadOnlySessions((prev) =>
+        upsertHiddenReadOnlySession(prev, hiddenSession),
+      );
+      hiddenReadOnlySessionsRef.current = upsertHiddenReadOnlySession(
+        hiddenReadOnlySessionsRef.current,
+        hiddenSession,
+      );
+      setSessions((prev) => upsertHiddenReadOnlySession(prev, hiddenSession));
+      setSessionActivities((prev) => {
+        if (prev[hiddenSession.id] == null) return prev;
+        const next = { ...prev };
+        delete next[hiddenSession.id];
+        return next;
+      });
+      setClosingIds((prev) => {
+        if (!prev.has(hiddenSession.id)) return prev;
+        const next = new Set(prev);
+        next.delete(hiddenSession.id);
+        return next;
+      });
+      setNavDrawerOpen(false);
+      requestSessionTurnsOpen(hiddenSession.id);
+      replaceSessionRoute(hiddenSession.id, "turns");
+      activate(hiddenSession.id);
+    },
+    [],
+  );
   const adminSettingsControls = hasAdminAccess
     ? {
         visible: true,
@@ -22044,6 +22040,7 @@ function AuthenticatedApp() {
         onRefreshVersion: refreshAdminVersion,
         onSaveTestSlotDefaults: saveAdminTestSlotDefaults,
         onAvatarCatalogChanged: refreshRuntimeAvatarCatalog,
+        onOpenHiddenSession: openHiddenAdminSession,
         onViewingProdSessionsChange: (value: boolean) => {
           const next = value ? PROD_SESSION_SCOPE : "";
           setSessionViewScopeOverride(next);
@@ -22874,9 +22871,10 @@ function AuthenticatedApp() {
         sessionCount: listed.length,
         source: "initial",
       });
-      const sessionsFromStore = sessionStoreRef.current
-        .list()
-        .map(rowToSession);
+      const sessionsFromStore = mergeHiddenReadOnlySessions(
+        sessionStoreRef.current.list().map(rowToSession),
+        hiddenReadOnlySessionsRef.current,
+      );
       setSessions(sessionsFromStore);
       const nextActivities: Record<string, SessionActivitySummary> = {};
       for (const row of sessionStoreRef.current.list()) {
@@ -22926,6 +22924,8 @@ function AuthenticatedApp() {
     sessionStoreRef.current = new SessionStore();
     activitySnapshotAppliedRef.current = false;
     lastSoundedOrderKeyRef.current = new Map();
+    hiddenReadOnlySessionsRef.current = [];
+    setHiddenReadOnlySessions([]);
     setSessions([]);
     setSessionActivities({});
     sessionActivitiesRef.current = {};
@@ -22972,6 +22972,9 @@ function AuthenticatedApp() {
   useEffect(() => {
     sessionsRef.current = sessions;
   }, [sessions]);
+  useEffect(() => {
+    hiddenReadOnlySessionsRef.current = hiddenReadOnlySessions;
+  }, [hiddenReadOnlySessions]);
   useEffect(() => {
     sessionActivitiesRef.current = sessionActivities;
   }, [sessionActivities]);
@@ -23157,7 +23160,10 @@ function AuthenticatedApp() {
         // store's durable sidebar_position sort mirrors what
         // refresh() does on snapshot.
         const rows = store.list();
-        const sessionsFromStore: Session[] = rows.map(rowToSession);
+        const sessionsFromStore: Session[] = mergeHiddenReadOnlySessions(
+          rows.map(rowToSession),
+          hiddenReadOnlySessionsRef.current,
+        );
         setSessions(sessionsFromStore);
         sessionsRef.current = sessionsFromStore;
 
@@ -24102,7 +24108,7 @@ function AuthenticatedApp() {
   }
 
   function beginSessionTitleEdit(session: Session) {
-    if (readOnlySessionView) return;
+    if (readOnlySessionView || session.read_only_hidden) return;
     editingSessionTitleClosingRef.current = false;
     // name is the always-present canonical title; seed the editor with it.
     // Capture the seeded value so commit can tell an untouched title from a
@@ -24553,6 +24559,7 @@ function AuthenticatedApp() {
               const isLive = s.status === "Active";
               const isClosing = closingIds.has(s.id);
               const isActive = active === s.id && !isClosing;
+              const rowReadOnly = readOnlySessionView || s.read_only_hidden === true;
               const avatar = getSessionAvatarByID(s.agent_avatar_id);
               const statusDotClass = sessionStatusDotClass(
                 s,
@@ -24568,7 +24575,7 @@ function AuthenticatedApp() {
                   key={s.id}
                   data-session-id={s.id}
                   className={`${isActive ? "is-open" : ""}${isClosing ? " is-closing" : ""}${skillStateClass}${draggingSessionId === s.id ? " is-dragging" : ""}${dragOverSessionId === s.id && draggingSessionId !== s.id ? " is-drag-over" : ""}`}
-                  draggable={!isClosing && !readOnlySessionView && !isCompact}
+                  draggable={!isClosing && !rowReadOnly && !isCompact}
                   onDragStart={(e) => dragSessionStart(s.id, e)}
                   onDragOver={(e) => dragSessionOver(s.id, e)}
                   onDrop={(e) => dropSession(s.id, e)}
@@ -24598,7 +24605,7 @@ function AuthenticatedApp() {
                     <SessionTabMenu
                       session={s}
                       isClosing={isClosing}
-                      readOnly={readOnlySessionView}
+                      readOnly={rowReadOnly}
                       onClose={() => deleteSession(s.id)}
                       onSaveCredentials={
                         CONFIG_MODES.has(s.mode)
@@ -24606,7 +24613,7 @@ function AuthenticatedApp() {
                           : undefined
                       }
                       saveDisabled={
-                        busy || !isLive || isClosing || readOnlySessionView
+                        busy || !isLive || isClosing || rowReadOnly
                       }
                     />
                   </div>
@@ -25482,7 +25489,7 @@ function AuthenticatedApp() {
                       primeTurnCompleteSound={primeTurnCompleteSound}
                       playTurnCompleteSound={playTurnCompleteSound}
                       adminControls={adminSettingsControls}
-                      readOnly={readOnlySessionView}
+                      readOnly={readOnlySessionView || s.read_only_hidden === true}
                       sessionScope={effectiveSessionScope}
                       avatarCatalogVersion={avatarCatalogVersion}
                       sidebarTurnsOpenRequest={
@@ -25495,7 +25502,7 @@ function AuthenticatedApp() {
                   </div>
                 ) : (
                   <div key={s.id} className="run-body" hidden={active !== s.id}>
-                    {readOnlySessionView ? (
+                    {readOnlySessionView || s.read_only_hidden === true ? (
                       <section className="run-panel">
                         <main className="run-main">
                           <div

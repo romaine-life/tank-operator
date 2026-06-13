@@ -6102,8 +6102,7 @@ button:disabled {
 
 .admin-hidden-transcripts-toolbar,
 .admin-hidden-transcripts-actions,
-.admin-hidden-transcripts-meta,
-.admin-hidden-transcript-row-head {
+.admin-hidden-transcripts-meta {
   display: flex;
   align-items: center;
   gap: var(--space-2);
@@ -6139,8 +6138,7 @@ button:disabled {
   font-size: var(--text-xs);
 }
 
-.admin-hidden-transcripts-meta span,
-.admin-hidden-transcript-row-head span:first-child {
+.admin-hidden-transcripts-meta span {
   min-height: 1.35rem;
   display: inline-flex;
   align-items: center;
@@ -6152,39 +6150,6 @@ button:disabled {
 
 .admin-hidden-transcripts-actions {
   justify-content: flex-start;
-}
-
-.admin-hidden-transcript-list {
-  max-height: min(64vh, 48rem);
-  overflow: auto;
-  display: grid;
-  gap: var(--space-2);
-  padding-right: 0.15rem;
-}
-
-.admin-hidden-transcript-row {
-  display: grid;
-  gap: var(--space-2);
-  padding: 0.7rem;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: var(--radius-md, 0.5rem);
-  background: rgba(255, 255, 255, 0.025);
-}
-
-.admin-hidden-transcript-row-head {
-  justify-content: space-between;
-  color: var(--text-muted);
-  font-size: var(--text-xs);
-}
-
-.admin-hidden-transcript-row pre {
-  margin: 0;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  color: var(--text-body);
-  font-family: var(--font-primary);
-  font-size: var(--text-sm);
-  line-height: 1.45;
 }
 
 .admin-hidden-transcript-empty {

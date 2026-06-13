@@ -28,7 +28,7 @@ func TestInstallTankDocsScriptRunsUnderSh(t *testing.T) {
 	}
 
 	cmd := exec.Command("sh", scriptPath)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(isolatedScriptEnv(t.TempDir()),
 		"INSTALL_TANK_DOCS_CONFIG_DIR="+configDir,
 		"INSTALL_TANK_DOCS_DEST_ROOT="+destRoot,
 	)
@@ -63,8 +63,7 @@ func TestInstallTankSkillsScriptRunsUnderSh(t *testing.T) {
 	}
 
 	cmd := exec.Command("sh", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
+	cmd.Env = append(isolatedScriptEnv(home),
 		"INSTALL_TANK_SKILLS_CONFIG_DIR="+configDir,
 	)
 	out, err := cmd.CombinedOutput()
@@ -367,9 +366,7 @@ exit 0
 `)
 
 	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	cmd.Env = append(isolatedScriptEnvWithPath(home, fakeBin+string(os.PathListSeparator)+os.Getenv("PATH")),
 		"TANK_SESSION_CONFIG_DIR="+configDir,
 		"FAKE_NODE_LOG="+nodeLog,
 		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
@@ -407,9 +404,7 @@ exit 0
 `)
 
 	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	cmd.Env = append(isolatedScriptEnvWithPath(home, fakeBin+string(os.PathListSeparator)+os.Getenv("PATH")),
 		"TANK_SESSION_CONFIG_DIR="+configDir,
 		"FAKE_NODE_LOG="+nodeLog,
 		"ANTIGRAVITY_RUNNER_BIN="+filepath.Join(fakeBin, "runner"),
@@ -445,8 +440,7 @@ func TestAntigravityRunnerLaunchFailsWithMalformedMCPConfig(t *testing.T) {
 	}
 
 	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
+	cmd.Env = append(isolatedScriptEnv(home),
 		"TANK_SESSION_CONFIG_DIR="+configDir,
 	)
 	out, err := cmd.CombinedOutput()
@@ -563,9 +557,7 @@ exit 0
 `)
 
 	cmd := exec.Command("bash", scriptPath)
-	cmd.Env = append(os.Environ(),
-		"HOME="+home,
-		"PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"),
+	cmd.Env = append(isolatedScriptEnvWithPath(home, fakeBin+string(os.PathListSeparator)+os.Getenv("PATH")),
 		"TANK_SESSION_MODE=claude_gui",
 		"SPIRELENS_MCP_ENABLED=true",
 		"AUTH_ROMAINE_TOKEN_PATH="+tokenPath,
@@ -679,6 +671,27 @@ func isolatedGitEnv(home string) []string {
 	}
 	if path := os.Getenv("PATH"); path != "" {
 		env = append(env, "PATH="+path)
+	}
+	return env
+}
+
+func isolatedScriptEnv(home string) []string {
+	return isolatedScriptEnvWithPath(home, os.Getenv("PATH"))
+}
+
+func isolatedScriptEnvWithPath(home, path string) []string {
+	env := []string{
+		"HOME=" + home,
+		"TMPDIR=" + os.TempDir(),
+	}
+	if path != "" {
+		env = append(env, "PATH="+path)
+	}
+	if user := os.Getenv("USER"); user != "" {
+		env = append(env, "USER="+user)
+	}
+	if shell := os.Getenv("SHELL"); shell != "" {
+		env = append(env, "SHELL="+shell)
 	}
 	return env
 }
