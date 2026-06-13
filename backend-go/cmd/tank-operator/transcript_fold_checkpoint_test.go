@@ -262,6 +262,11 @@ func TestFoldCheckpointEquivalenceOverFixtures(t *testing.T) {
 		"slot1_session_159_events.json",
 		"slot1_session_160_events.json",
 		"slot1_session_161_events.json",
+		// The #1130 shadow-divergence reproduction: session 865's ledger
+		// (the diverging flood turn + the session's non-flood context),
+		// captured 2026-06-13 while TankTranscriptFoldShadowDivergence was
+		// recurring per persist batch on its turn-activity shell.
+		"session_865_divergence_events.json",
 	}
 	for _, fixture := range fixtures {
 		for _, batchSize := range []int{1, 7, 64} {
