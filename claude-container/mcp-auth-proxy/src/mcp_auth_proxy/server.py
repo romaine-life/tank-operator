@@ -104,6 +104,7 @@ _GITHUB_WRITE_TOOL_DENYLIST = {
     "create_pull_request",
     "commit_to_branch",
     "create_or_update_file",
+    "merge_pull_request",
 }
 _CI_ENFORCEMENT_TEXT = (
     "Tank quality gate: watch the PR's current HEAD CI checks until they pass, "
@@ -264,7 +265,7 @@ def _github_tool_block_response(body: bytes, tool_name: str) -> web.Response | N
         request_id,
         -32010,
         (
-            f"GitHub MCP tool '{tool_name}' is disabled in Tank normal mode. "
+            f"GitHub MCP tool '{tool_name}' is disabled in Tank restricted Git mode. "
             "Use the Tank MCP publish_current_head tool; direct GitHub write "
             "tokens and file/PR writes are reserved for break-glass approval. "
             "If governed publish is not sufficient, call the Tank MCP "
@@ -272,6 +273,53 @@ def _github_tool_block_response(body: bytes, tool_name: str) -> web.Response | N
         ),
         {"blocked_tool": tool_name, "replacement_tool": _TANK_PUBLISH_TOOL, "break_glass_tool": _TANK_BREAK_GLASS_TOOL},
     )
+
+
+def _filter_github_write_tools(raw: bytes) -> bytes:
+    def filter_payload(payload: dict) -> dict:
+        result = payload.get("result")
+        if not isinstance(result, dict):
+            return payload
+        tools = result.get("tools")
+        if not isinstance(tools, list):
+            return payload
+        result["tools"] = [
+            tool
+            for tool in tools
+            if not (
+                isinstance(tool, dict)
+                and isinstance(tool.get("name"), str)
+                and tool["name"] in _GITHUB_WRITE_TOOL_DENYLIST
+            )
+        ]
+        return payload
+
+    text = raw.decode("utf-8", errors="replace")
+    if any(line.strip().startswith("data:") for line in text.splitlines()):
+        next_lines: list[str] = []
+        changed = False
+        for line in text.splitlines():
+            if not line.startswith("data:"):
+                next_lines.append(line)
+                continue
+            data = line[len("data:") :].strip()
+            try:
+                payload = json.loads(data)
+            except json.JSONDecodeError:
+                next_lines.append(line)
+                continue
+            filtered = filter_payload(payload)
+            next_lines.append("data: " + json.dumps(filtered, separators=(",", ":")))
+            changed = True
+        if changed:
+            return ("\n".join(next_lines) + "\n").encode("utf-8")
+        return raw
+
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
+        return raw
+    return json.dumps(filter_payload(payload), separators=(",", ":")).encode("utf-8")
 
 
 def _append_tank_publish_tool(raw: bytes) -> bytes:
@@ -2695,6 +2743,7 @@ def _make_handler(
 
         github_tool_call = _parse_mcp_tool_call(body) if github_activity_provider is not None else None
         tank_tools_list = tank_publish_provider is not None and parsed_method is not None and parsed_method[0] == "tools/list"
+        github_tools_list = block_github_write_tools and parsed_method is not None and parsed_method[0] == "tools/list"
         url = upstream + request.path_qs
 
         # Bounded-retry loop. Two failure modes are retried because the
@@ -2768,7 +2817,7 @@ def _make_handler(
                             for k, v in upstream_resp.headers.items()
                             if k.lower() not in _STRIP_RESPONSE_HEADERS
                         }
-                        if github_tool_call is not None or tank_tools_list:
+                        if github_tool_call is not None or tank_tools_list or github_tools_list:
                             response_headers.pop("Content-Length", None)
                             response_headers.pop("content-length", None)
                             response_body = await upstream_resp.read()
@@ -2792,6 +2841,8 @@ def _make_handler(
                                         response_body = _append_ci_reminder(response_body)
                                 if tank_tools_list:
                                     response_body = _append_tank_publish_tool(response_body)
+                                if github_tools_list:
+                                    response_body = _filter_github_write_tools(response_body)
                             record_proxy_request(mcp_label, status)
                             return web.Response(
                                 status=status,

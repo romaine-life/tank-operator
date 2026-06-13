@@ -21,6 +21,7 @@ from mcp_auth_proxy.server import (
     _checks_state,
     _effective_listeners,
     _first_pr_from_response,
+    _filter_github_write_tools,
     _github_tool_block_response,
     _prepare_glimmung_hot_swap_call,
     _handle_tank_break_glass_tool,
@@ -844,8 +845,27 @@ def test_github_write_tool_block_response_returns_mcp_error() -> None:
     assert response is not None
     payload = json.loads(response.text)
     assert payload["id"] == 7
+    assert "restricted Git mode" in payload["error"]["message"]
     assert payload["error"]["data"]["replacement_tool"] == "publish_current_head"
     assert payload["error"]["data"]["break_glass_tool"] == "request_git_break_glass"
+
+
+def test_filter_github_write_tools_removes_denied_tools_from_sse_list() -> None:
+    raw = (
+        b"event: message\n"
+        b'data: {"jsonrpc":"2.0","id":1,"result":{"tools":['
+        b'{"name":"get_pull_request"},'
+        b'{"name":"create_pull_request"},'
+        b'{"name":"commit_to_branch"},'
+        b'{"name":"merge_pull_request"},'
+        b'{"name":"list_pull_requests"}]}}\n\n'
+    )
+
+    filtered = _filter_github_write_tools(raw)
+    payload = json.loads(filtered.decode().split("data: ", 1)[1])
+    names = [tool["name"] for tool in payload["result"]["tools"]]
+
+    assert names == ["get_pull_request", "list_pull_requests"]
 
 
 def test_repo_slug_from_remote_accepts_https_and_ssh() -> None:
