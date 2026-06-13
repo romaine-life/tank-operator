@@ -203,6 +203,7 @@ func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
 	templateDir := filepath.Join(t.TempDir(), "template")
 	cmd := exec.Command("sh", scriptPath)
 	cmd.Env = append(isolatedGitEnv(home),
+		"TANK_RESTRICTED_GIT=true",
 		"AGENT_POST_COMMIT_HOOK="+hookPath,
 		"AGENT_PRE_PUSH_HOOK="+prePushHookPath,
 		"AGENT_GIT_TEMPLATE_DIR="+templateDir,
@@ -217,6 +218,36 @@ func TestInstallAgentGitTemplateScriptRunsUnderSh(t *testing.T) {
 	configured := strings.TrimSpace(string(mustOutputEnv(t, isolatedGitEnv(home), "git", "config", "--global", "init.templateDir")))
 	if configured != templateDir {
 		t.Fatalf("init.templateDir = %q, want %q", configured, templateDir)
+	}
+}
+
+func TestInstallAgentGitTemplateScriptNoopsOutsideRestrictedGit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("git template install script test runs on POSIX only")
+	}
+
+	scriptPath, err := filepath.Abs("../../../k8s/session-config/install-agent-git-template.sh")
+	if err != nil {
+		t.Fatalf("resolve script path: %v", err)
+	}
+	hookPath, err := filepath.Abs("../../../k8s/session-config/agent-post-commit-hook.sh")
+	if err != nil {
+		t.Fatalf("resolve hook path: %v", err)
+	}
+
+	home := t.TempDir()
+	templateDir := filepath.Join(t.TempDir(), "template")
+	cmd := exec.Command("sh", scriptPath)
+	cmd.Env = append(isolatedGitEnv(home),
+		"AGENT_POST_COMMIT_HOOK="+hookPath,
+		"AGENT_GIT_TEMPLATE_DIR="+templateDir,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("script failed under sh: %v\noutput:\n%s", err, string(out))
+	}
+	if _, err := os.Stat(filepath.Join(templateDir, "hooks", "post-commit")); !os.IsNotExist(err) {
+		t.Fatalf("post-commit hook installed without restricted git opt-in, stat err: %v", err)
 	}
 }
 
@@ -298,6 +329,7 @@ func TestSessionPodBootstrapScript_PerMode(t *testing.T) {
 			cmd := exec.Command("bash", scriptPath)
 			cmd.Env = append(isolatedGitEnv(home),
 				"TANK_SESSION_MODE="+tc.mode,
+				"TANK_RESTRICTED_GIT=true",
 				"INSTALL_AGENT_GIT_TEMPLATE_SCRIPT="+gitTemplateScript,
 				"AGENT_POST_COMMIT_HOOK="+hookPath,
 				"AGENT_GIT_TEMPLATE_DIR="+templateDir,

@@ -8,6 +8,7 @@ AUTH_EXCHANGE_URL="${AUTH_ROMAINE_EXCHANGE_URL:-https://auth.romaine.life/api/au
 MCP_GITHUB_URL="${MCP_GITHUB_URL:-http://mcp-github.mcp-github.svc:80}"
 TANK_OPERATOR_INTERNAL_URL="${TANK_OPERATOR_INTERNAL_URL:-http://tank-operator.tank-operator.svc.cluster.local}"
 GIT_CLONE_DEPTH="${GIT_CLONE_DEPTH:-50}"
+TANK_RESTRICTED_GIT="${TANK_RESTRICTED_GIT:-false}"
 
 REPOS_JSON="$(printf '%s' "$REPOS_JSON" | jq -c '[.[] | select(type == "string")]')"
 if [ "$(jq 'length' <<<"$REPOS_JSON")" -eq 0 ]; then
@@ -16,6 +17,10 @@ if [ "$(jq 'length' <<<"$REPOS_JSON")" -eq 0 ]; then
 fi
 
 mapfile -t REPOS < <(jq -r '.[]' <<<"$REPOS_JSON")
+restricted_git=false
+case "$(printf '%s' "$TANK_RESTRICTED_GIT" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) restricted_git=true ;;
+esac
 
 for slug in "${REPOS[@]}"; do
   if [[ ! "$slug" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
@@ -313,13 +318,13 @@ fi
 post_clone_state
 
 RPC_PAYLOAD="$(
-  jq -nc --argjson repos "$REPOS_JSON" '{
+  jq -nc --argjson repos "$REPOS_JSON" --argjson write "$restricted_git" '{
     "jsonrpc": "2.0",
     "id": 1,
     "method": "tools/call",
     "params": {
       "name": "mint_clone_token",
-      "arguments": {"repos": $repos, "write": true}
+      "arguments": {"repos": $repos, "write": $write}
     }
   }'
 )"
@@ -368,12 +373,14 @@ for slug in "${REPOS[@]}"; do
     origin="$(git -C "$target" config --get remote.origin.url || true)"
     if [[ "$origin" == *"github.com/${slug}.git" || "$origin" == *"github.com/${slug}" ]]; then
       echo "repo-cloner: $slug already exists at $target"
-      install_repo_agent_reminder "$slug" "$target" "best-effort"
-      if ! create_session_branch_pr "$slug" "$target"; then
-        msg="governed session branch PR setup failed"
-        set_repo_state "$slug" "failed" "$target" "$msg"
-        failures=1
-        continue
+      if [ "$restricted_git" = "true" ]; then
+        install_repo_agent_reminder "$slug" "$target" "best-effort"
+        if ! create_session_branch_pr "$slug" "$target"; then
+          msg="governed session branch PR setup failed"
+          set_repo_state "$slug" "failed" "$target" "$msg"
+          failures=1
+          continue
+        fi
       fi
       set_repo_state "$slug" "cloned" "$target"
       continue
@@ -403,17 +410,19 @@ for slug in "${REPOS[@]}"; do
     git clone "${clone_args[@]}" "https://github.com/${slug}.git" "$tmp_target"; then
     mv "$tmp_target" "$target"
     git -C "$target" config --local credential.helper ""
-    if ! create_session_branch_pr "$slug" "$target"; then
-      msg="governed session branch PR setup failed"
-      set_repo_state "$slug" "failed" "$target" "$msg"
-      failures=1
-      continue
-    fi
-    if ! install_repo_agent_reminder "$slug" "$target" "strict"; then
-      msg="agent post-commit reminder install failed"
-      set_repo_state "$slug" "failed" "$target" "$msg"
-      failures=1
-      continue
+    if [ "$restricted_git" = "true" ]; then
+      if ! create_session_branch_pr "$slug" "$target"; then
+        msg="governed session branch PR setup failed"
+        set_repo_state "$slug" "failed" "$target" "$msg"
+        failures=1
+        continue
+      fi
+      if ! install_repo_agent_reminder "$slug" "$target" "strict"; then
+        msg="agent post-commit reminder install failed"
+        set_repo_state "$slug" "failed" "$target" "$msg"
+        failures=1
+        continue
+      fi
     fi
     set_repo_state "$slug" "cloned" "$target"
   else

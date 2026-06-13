@@ -22165,6 +22165,7 @@ function AuthenticatedApp() {
   const [repoError, setRepoError] = useState<string | null>(null);
   const [homeBugLabels, setHomeBugLabels] = useState<string[]>([]);
   const [homeSpireLensMcpEnabled, setHomeSpireLensMcpEnabled] = useState(false);
+  const [homeRestrictedGitEnabled, setHomeRestrictedGitEnabled] = useState(false);
   const visibleRecentRepos = useMemo(() => {
     if (dismissedRecentRepos.length === 0) return recentRepos;
     const dismissed = new Set(
@@ -22883,6 +22884,12 @@ function AuthenticatedApp() {
       setHomeSpireLensMcpEnabled(false);
     }
   }, [defaultSessionMode, spireLensMcpAvailable]);
+
+  useEffect(() => {
+    if (!REPO_SUPPORTED_MODES.has(defaultSessionMode)) {
+      setHomeRestrictedGitEnabled(false);
+    }
+  }, [defaultSessionMode]);
 
   useEffect(() => {
     writeHomeSelectedRepos(selectedRepos);
@@ -24128,8 +24135,14 @@ function AuthenticatedApp() {
     // CLI session and get a 400.
     const repos = REPO_SUPPORTED_MODES.has(mode) ? selectedRepos : [];
     const bugLabel = homeBugLabels[0]?.trim() ?? "";
-    const capabilities =
-      spireLensMcpAvailable && homeSpireLensMcpEnabled ? ["spirelens_mcp"] : [];
+    const capabilities = [
+      ...(spireLensMcpAvailable && homeSpireLensMcpEnabled
+        ? ["spirelens_mcp"]
+        : []),
+      ...(REPO_SUPPORTED_MODES.has(mode) && homeRestrictedGitEnabled
+        ? ["restricted_git"]
+        : []),
+    ];
     const requestedName = normalizedHomeTitleNameFrom(
       homeSessionNameRef.current,
       homeEditingDefaultTitleRef.current,
@@ -25763,6 +25776,28 @@ function AuthenticatedApp() {
                               </span>
                               <span className="home-quick-sub">
                                 Game host tools
+                              </span>
+                            </span>
+                          </button>
+                        )}
+                        {REPO_SUPPORTED_MODES.has(defaultSessionMode) && (
+                          <button
+                            type="button"
+                            className={`home-quick-action home-capability-action${homeRestrictedGitEnabled ? " is-selected" : ""}`}
+                            onClick={() =>
+                              setHomeRestrictedGitEnabled((value) => !value)
+                            }
+                            disabled={busy}
+                            aria-pressed={homeRestrictedGitEnabled}
+                            title="Use experimental Tank-governed Git permissions for this session"
+                          >
+                            <GitBranchIcon className="home-quick-icon" />
+                            <span className="home-quick-main">
+                              <span className="home-quick-title">
+                                Restricted Git
+                              </span>
+                              <span className="home-quick-sub">
+                                Experimental
                               </span>
                             </span>
                           </button>

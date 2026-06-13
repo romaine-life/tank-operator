@@ -96,15 +96,19 @@ func TestNormalizeSessionCapabilities(t *testing.T) {
 	got, err := NormalizeSessionCapabilities([]string{
 		"  " + SessionCapabilitySpireLensMCP + "  ",
 		SessionCapabilitySpireLensMCP,
+		"  " + SessionCapabilityRestrictedGit + "  ",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 1 || got[0] != SessionCapabilitySpireLensMCP {
-		t.Fatalf("capabilities = %#v, want single normalized spirelens capability", got)
+	if len(got) != 2 || got[0] != SessionCapabilitySpireLensMCP || got[1] != SessionCapabilityRestrictedGit {
+		t.Fatalf("capabilities = %#v, want normalized spirelens + restricted git capabilities", got)
 	}
 	if !HasSessionCapability(got, SessionCapabilitySpireLensMCP) {
 		t.Fatalf("HasSessionCapability(%#v, %q) = false", got, SessionCapabilitySpireLensMCP)
+	}
+	if !HasSessionCapability(got, SessionCapabilityRestrictedGit) {
+		t.Fatalf("HasSessionCapability(%#v, %q) = false", got, SessionCapabilityRestrictedGit)
 	}
 
 	if _, err := NormalizeSessionCapabilities([]string{"unknown"}); err == nil {
@@ -385,6 +389,59 @@ func TestPodManifestSelectedReposAddsRepoClonerInitContainer(t *testing.T) {
 	}
 	if got, want := env["TANK_OPERATOR_INTERNAL_URL"], "http://tank-operator.test"; got != want {
 		t.Fatalf("TANK_OPERATOR_INTERNAL_URL = %v, want %q", got, want)
+	}
+	if got, want := env["TANK_RESTRICTED_GIT"], "false"; got != want {
+		t.Fatalf("TANK_RESTRICTED_GIT = %v, want %q", got, want)
+	}
+	if _, present := env["AGENT_POST_COMMIT_HOOK"]; !present {
+		t.Fatal("AGENT_POST_COMMIT_HOOK missing from repo-cloner env")
+	}
+	if _, present := env["AGENT_PRE_PUSH_HOOK"]; !present {
+		t.Fatal("AGENT_PRE_PUSH_HOOK missing from repo-cloner env")
+	}
+	sessionIDRef := env["SESSION_ID"].(map[string]any)["fieldRef"].(map[string]any)
+	if got, want := sessionIDRef["fieldPath"], "metadata.labels['tank-operator/session-id']"; got != want {
+		t.Fatalf("SESSION_ID fieldPath = %v, want %q", got, want)
+	}
+	assertVolumeMount(t, cloner, "session-config")
+	assertConfigMapMountSubPath(t, cloner, "/opt/tank/agent-post-commit-hook.sh", "agent-post-commit-hook.sh")
+	assertConfigMapMountSubPath(t, cloner, "/opt/tank/agent-pre-push-hook.sh", "agent-pre-push-hook.sh")
+	assertVolumeMount(t, cloner, "workspace")
+	assertVolumeMount(t, cloner, "auth-romaine-sa-token")
+}
+
+func TestPodManifestRestrictedGitCapabilityWiresOptInEnv(t *testing.T) {
+	manifest := PodManifest("12", "nelson@romaine.life", CodexGUIMode, ManifestOptions{
+		SessionImage:            "claude-image",
+		CodexSessionImage:       "codex-image",
+		TankOperatorInternalURL: "http://tank-operator.test",
+		Repos:                   []string{"romaine-life/tank-operator"},
+		Capabilities:            []string{SessionCapabilityRestrictedGit},
+	})
+
+	metadata := manifest["metadata"].(map[string]any)
+	annotations := metadata["annotations"].(map[string]any)
+	if got, want := annotations["tank-operator/capabilities"], `["restricted_git"]`; got != want {
+		t.Fatalf("capabilities annotation = %v, want %q", got, want)
+	}
+	spec := manifest["spec"].(map[string]any)
+	containers := spec["containers"].([]any)
+	sandbox := findContainer(t, containers, "sandbox")
+	if got, want := containerEnv(sandbox)["TANK_RESTRICTED_GIT"], "true"; got != want {
+		t.Fatalf("sandbox TANK_RESTRICTED_GIT = %v, want %q", got, want)
+	}
+	proxy := findContainer(t, containers, "mcp-auth-proxy")
+	if got, want := containerEnv(proxy)["TANK_RESTRICTED_GIT"], "true"; got != want {
+		t.Fatalf("mcp-auth-proxy TANK_RESTRICTED_GIT = %v, want %q", got, want)
+	}
+	runner := findContainer(t, containers, "codex-runner")
+	if got, want := containerEnv(runner)["TANK_RESTRICTED_GIT"], "true"; got != want {
+		t.Fatalf("codex-runner TANK_RESTRICTED_GIT = %v, want %q", got, want)
+	}
+	cloner := spec["initContainers"].([]any)[0].(map[string]any)
+	env := containerEnv(cloner)
+	if got, want := env["TANK_RESTRICTED_GIT"], "true"; got != want {
+		t.Fatalf("repo-cloner TANK_RESTRICTED_GIT = %v, want %q", got, want)
 	}
 	if got, want := env["AGENT_POST_COMMIT_HOOK"], "/opt/tank/agent-post-commit-hook.sh"; got != want {
 		t.Fatalf("AGENT_POST_COMMIT_HOOK = %v, want %q", got, want)

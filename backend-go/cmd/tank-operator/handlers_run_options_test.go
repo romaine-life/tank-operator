@@ -73,6 +73,21 @@ func TestSessionRunOptionsExposeConfiguredTestSlotDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateCreateSessionCapabilitiesRestrictsRestrictedGitToRepoModes(t *testing.T) {
+	capabilities, status, detail := validateCreateSessionCapabilities(sessionmodel.CodexGUIMode, []string{sessionmodel.SessionCapabilityRestrictedGit})
+	if status != 0 || detail != "" {
+		t.Fatalf("repo-capable restricted git status=%d detail=%q", status, detail)
+	}
+	if !slices.Equal(capabilities, []string{sessionmodel.SessionCapabilityRestrictedGit}) {
+		t.Fatalf("capabilities = %#v", capabilities)
+	}
+
+	_, status, detail = validateCreateSessionCapabilities(sessionmodel.ClaudeCLIMode, []string{sessionmodel.SessionCapabilityRestrictedGit})
+	if status != http.StatusBadRequest || !strings.Contains(detail, "requires a repo-capable session mode") {
+		t.Fatalf("terminal restricted git status=%d detail=%q", status, detail)
+	}
+}
+
 func TestHandleInternalSessionRunOptions(t *testing.T) {
 	jwtKey, err := auth.NewInMemoryJWT("svc-test-kid")
 	if err != nil {

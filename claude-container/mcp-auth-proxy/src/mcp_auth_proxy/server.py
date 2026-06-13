@@ -2375,6 +2375,12 @@ ORIGIN_SESSION_AVATAR_FORWARD_HEADER = "X-Tank-Origin-Session-Avatar-Id"
 ORIGIN_SESSION_ID = (os.environ.get("SESSION_ID") or "").strip()
 ORIGIN_SESSION_SCOPE = (os.environ.get("SESSION_SCOPE") or "default").strip() or "default"
 ORIGIN_SESSION_AVATAR_ID = (os.environ.get("AGENT_AVATAR_ID") or "").strip()
+RESTRICTED_GIT_ENABLED = (os.environ.get("TANK_RESTRICTED_GIT") or "").strip().lower() in {
+    "1",
+    "true",
+    "yes",
+    "on",
+}
 
 # Caller-context headers identify the session pod that is making an MCP call.
 # Unlike X-Tank-Origin-Session-Id, these are not handoff/display metadata; they
@@ -2957,10 +2963,20 @@ async def run() -> None:
                     extra_header_provider=extra_header_provider,
                     static_headers=static_headers,
                     proxy=request_proxy,
-                    github_activity_provider=auth_romaine_provider if port == GITHUB_MCP_PORT else None,
-                    tank_publish_provider=auth_romaine_provider if port == TANK_OPERATOR_MCP_PORT else None,
-                    glimmung_hot_swap_provider=auth_romaine_provider if port == GLIMMUNG_MCP_PORT else None,
-                    block_github_write_tools=port == GITHUB_MCP_PORT,
+                    github_activity_provider=auth_romaine_provider
+                    if RESTRICTED_GIT_ENABLED and port == GITHUB_MCP_PORT
+                    else None,
+                    tank_publish_provider=(
+                        auth_romaine_provider
+                        if RESTRICTED_GIT_ENABLED and port == TANK_OPERATOR_MCP_PORT
+                        else None
+                    ),
+                    glimmung_hot_swap_provider=(
+                        auth_romaine_provider
+                        if RESTRICTED_GIT_ENABLED and port == GLIMMUNG_MCP_PORT
+                        else None
+                    ),
+                    block_github_write_tools=RESTRICTED_GIT_ENABLED and port == GITHUB_MCP_PORT,
                 ),
             )
             runner = web.AppRunner(app)

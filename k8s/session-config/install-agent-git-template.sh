@@ -1,6 +1,11 @@
 #!/bin/sh
 set -eu
 
+case "$(printf '%s' "${TANK_RESTRICTED_GIT:-false}" | tr '[:upper:]' '[:lower:]')" in
+  1|true|yes|on) ;;
+  *) exit 0 ;;
+esac
+
 post_commit_src="${AGENT_POST_COMMIT_HOOK:-/opt/tank/session-config/agent-post-commit-hook.sh}"
 pre_push_src="${AGENT_PRE_PUSH_HOOK:-/opt/tank/session-config/agent-pre-push-hook.sh}"
 template_dir="${AGENT_GIT_TEMPLATE_DIR:-$HOME/.config/tank/git-template}"
