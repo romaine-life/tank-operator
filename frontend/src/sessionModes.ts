@@ -204,6 +204,25 @@ export const MODE_PROVIDERS: Record<SessionMode, Provider> =
     {} as Record<SessionMode, Provider>,
   );
 
+export const SESSION_MODE_LABELS: Record<SessionMode, string> = {
+  api_key: "Claude API key",
+  claude_cli: "Claude CLI",
+  claude_gui: "Claude GUI",
+  config: "Claude config",
+  claude_secondary_cli: "Claude secondary CLI",
+  claude_secondary_gui: "Claude secondary GUI",
+  claude_secondary_config: "Claude secondary config",
+  codex_cli: "Codex CLI",
+  codex_gui: "Codex GUI",
+  codex_exec_gui: "Codex Legacy",
+  codex_app_server: "Codex App Server",
+  codex_config: "Codex config",
+};
+
+export function sessionModeLabel(mode: string): string {
+  return SESSION_MODE_LABELS[mode as SessionMode] ?? mode;
+}
+
 export const DEFAULT_SESSION_MODES = modeSet(
   (contract) => contract.defaultSelectable,
 );

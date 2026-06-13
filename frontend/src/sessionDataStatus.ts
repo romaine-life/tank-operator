@@ -1,9 +1,11 @@
 import { formatCompactTokens } from "./sessionCostEstimate";
 import { normalizeBugLabelDisplayName } from "./bugLabels";
+import { sessionModeLabel } from "./sessionModes";
 
 export type StatusTone = "good" | "info" | "warning" | "danger" | "muted";
 
 export type SessionDataStatusId =
+  | "configuration"
   | "transcript"
   | "test"
   | "context"
@@ -23,6 +25,7 @@ export interface SessionDataStatusRow {
 }
 
 interface SessionDataStatusInput {
+  mode?: string | null;
   test_state?: {
     active?: boolean;
     slot_index?: number | null;
@@ -80,6 +83,7 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
   const bugCount = bugLabels.length || (bugLabel ? 1 : 0);
 
   return [
+    configurationStatus(session.mode),
     {
       id: "transcript",
       label: "Main transcript",
@@ -138,6 +142,26 @@ export function buildSessionDataStatusRows(session: SessionDataStatusInput): Ses
     },
     linkedRepoStatus(repos, session.clone_state ?? null),
   ];
+}
+
+function configurationStatus(mode: string | null | undefined): SessionDataStatusRow {
+  const normalizedMode = trimOptionalString(mode);
+  if (!normalizedMode) {
+    return {
+      id: "configuration",
+      label: "Configuration",
+      status: "Unknown",
+      detail: "Session mode was not reported",
+      tone: "muted",
+    };
+  }
+  return {
+    id: "configuration",
+    label: "Configuration",
+    status: sessionModeLabel(normalizedMode),
+    detail: `mode: ${normalizedMode}`,
+    tone: "info",
+  };
 }
 
 function testSlotDetail(slotIndex: number | null | undefined): string {
