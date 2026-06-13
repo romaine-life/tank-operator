@@ -19,6 +19,11 @@ RUN go mod download
 COPY backend-go/ ./
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tank-operator-go ./cmd/tank-operator
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/tank-supervisor ./cmd/tank-supervisor
+# Per-session NATS credential issuer (#1128). Rides the app image so it
+# deploys/rolls back in lockstep with the orchestrator that owns the
+# session subject contract; the chart runs it as its own Deployment with
+# command: /app/nats-auth-callout.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/nats-auth-callout ./cmd/nats-auth-callout
 
 FROM alpine:3.20
 RUN adduser -D -u 1000 app
@@ -26,6 +31,7 @@ WORKDIR /app
 COPY --from=frontend /build/frontend/dist /app/static
 COPY --from=backend-go /out/tank-operator-go /app/tank-operator-go
 COPY --from=backend-go /out/tank-supervisor /app/tank-supervisor
+COPY --from=backend-go /out/nats-auth-callout /app/nats-auth-callout
 ENV TANK_OPERATOR_STATIC_DIR=/app/static
 EXPOSE 8000
 USER 1000
