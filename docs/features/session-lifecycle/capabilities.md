@@ -3,6 +3,41 @@
 This ledger names session lifecycle behavior that crosses browser,
 orchestrator, database, and pod boundaries.
 
+## Soft-Deleted Session Recovery Metadata
+
+Status: in progress
+
+Intent:
+Let an admin or support agent recover the durable create-time shape of a
+soft-deleted session without direct Postgres credentials. Soft deletion is a
+sidebar tombstone, not a loss of registry metadata needed to understand or
+recreate the session.
+
+Affected contracts:
+- Session Lifecycle
+- Session Bar
+- Auth And Streams
+
+Contract impact:
+- Normal `/api/sessions` and `/api/sessions/{id}` continue to hide
+  `visible=false` rows because the product sidebar should not reopen deleted
+  sessions.
+- Admin-only `/api/debug/session-list-state` includes invisible rows for one
+  bounded owner/scope and carries the durable recreate inputs: `mode`, `name`,
+  `repos`, `capabilities`, `model`, and `effort`, plus runner-reported
+  `runtime_model`/`runtime_effort` for verification.
+- Recovery does not require browser devtools, raw database credentials, or a
+  second partial endpoint. The debug surface reads the same durable sessions
+  row that drives session-list catch-up and exposes only bounded row metadata,
+  not transcript contents or provider credentials.
+
+Evidence:
+- `backend-go/cmd/tank-operator/handlers_debug_session_list_test.go`
+  (`TestDebugRowJSONCarriesRecoveryRunConfig`) covers invisible-row recovery
+  metadata.
+- `backend-go/cmd/tank-operator/handlers_debug_session_list_test.go`
+  (`TestDebugSessionListStateAdminGate`) covers the admin/service-admin gate.
+
 ## Tank-Owned Session Run Options
 
 Status: complete
