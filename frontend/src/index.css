@@ -4668,27 +4668,25 @@ button:disabled {
 }
 
 .run-transcript-message[data-compact="true"] .run-transcript-message-content {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   column-gap: 0.65rem;
+  row-gap: 0.35rem;
   width: 100%;
 }
 
 .run-transcript-message[data-compact="true"] .run-transcript-message-text {
-  grid-column: 1;
-  grid-row: 1;
   display: block;
+  flex: 0 1 auto;
   min-width: 0;
   max-width: 100%;
 }
 
 .run-transcript-message[data-compact="true"] .run-msg-footer {
-  grid-column: 2;
-  grid-row: 1;
-  align-self: center;
-  flex-shrink: 0;
+  flex: 0 0 auto;
   margin-top: 0;
+  margin-left: auto;
   white-space: nowrap;
 }
 
@@ -9200,6 +9198,33 @@ textarea.run-files-viewer-editor:focus {
   transition: opacity var(--motion-fast, 140ms) ease;
 }
 
+.run-transcript-message:is([data-variant="assistant"], [data-variant="user"]):not([data-compact="true"])
+  .run-transcript-message-content {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  column-gap: 0.65rem;
+  row-gap: 0.35rem;
+}
+
+.run-transcript-message:is([data-variant="assistant"], [data-variant="user"]):not([data-compact="true"])
+  .run-transcript-message-text {
+  flex: 0 1 auto;
+}
+
+.run-transcript-message:is([data-variant="assistant"], [data-variant="user"]):not([data-compact="true"])
+  .run-message-attachments {
+  flex: 0 0 100%;
+}
+
+.run-transcript-message:is([data-variant="assistant"], [data-variant="user"]):not([data-compact="true"])
+  .run-msg-footer {
+  flex: 0 0 auto;
+  margin-top: 0;
+  margin-left: auto;
+  white-space: nowrap;
+}
+
 .run-transcript-message:hover .run-msg-footer,
 .run-transcript-message:focus-within .run-msg-footer {
   opacity: 1;
@@ -9406,6 +9431,7 @@ textarea.run-files-viewer-editor:focus {
   align-items: center;
   justify-content: center;
   gap: 0.2rem;
+  width: calc(96px + 0.4rem);
   border-radius: 999px;
   background: var(--bg-app);
   box-shadow: 0 0 0 5px var(--bg-app);
@@ -10880,7 +10906,7 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript-message-content {
   max-width: 100%;
   min-width: 0;
-  width: fit-content;
+  width: 100%;
   border-radius: 0.875rem;
   padding: 0.75rem 1rem;
   overflow-wrap: anywhere;
@@ -10898,7 +10924,7 @@ textarea.run-files-viewer-editor:focus {
 .run-turn-view-context [data-slot="message"][data-variant="user"] .run-transcript-message-content {
   grid-column: 2;
   grid-row: 1;
-  justify-self: start;
+  justify-self: stretch;
   background: linear-gradient(
     180deg,
     rgba(255, 255, 255, 0.085),
@@ -10971,7 +10997,7 @@ textarea.run-files-viewer-editor:focus {
 .run-transcript [data-slot="message"][data-variant="assistant"] .run-transcript-message-content {
   grid-column: 2;
   grid-row: 1;
-  justify-self: start;
+  justify-self: stretch;
   background: rgba(255, 255, 255, 0.04);
   color: var(--text-primary);
   border: 1px solid rgba(255, 255, 255, 0.06);
